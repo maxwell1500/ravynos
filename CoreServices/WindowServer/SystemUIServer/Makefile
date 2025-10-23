@@ -10,8 +10,10 @@ SRCS=           SystemUIServer.m \
 		SubmenuView.m \
                 Label.m \
                 AboutWindow.m
+RELEASE_LOGO=	hyena.png
 RESOURCES=	${.CURDIR}/../Icon.png ${.CURDIR}/ravynos-mark-64.png \
-                ${.CURDIR}/../SneakySnek.png ${.CURDIR}/kickSession
+		${SRCTOP}/Logo_Assets/${RELEASE_LOGO} \
+		${.CURDIR}/kickSession
 
 MK_WERROR=	no
 MK_PIE=		no
@@ -33,7 +35,8 @@ CFLAGS+=	-g -fobjc-arc ${OBJCFLAGS} -D__RAVYNOS__ -D__MACH__ \
 		-I${OBJTOP}/Frameworks/CoreText/CoreText.framework/Headers \
 		-I${OBJTOP}/Frameworks/QuartzCore/QuartzCore.framework/Headers \
 		-I${OBJTOP}/Frameworks/AppKit \
-		-I${OBJTOP}/Frameworks/Onyx2D/Onyx2D.framework/Headers 
+		-I${OBJTOP}/Frameworks/Onyx2D/Onyx2D.framework/Headers \
+		-DRELEASE_LOGO="@\"${RELEASE_LOGO}\""
 LDFLAGS+=	-Wl,-R'$$ORIGIN/../Resources' -L${OBJTOP}/tmp/usr/lib \
 		-L${OBJTOP}/Frameworks/Foundation/Foundation.framework \
 		-L${OBJTOP}/Frameworks/CoreGraphics/CoreGraphics.framework \

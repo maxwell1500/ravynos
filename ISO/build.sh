@@ -105,7 +105,7 @@ chroot ${uzip} pw groupmod video -m liveuser
 
 ### Install the overlays now
 cd overlays/uzip
-cp -rpvf * "${uzip}/"
+cp -rvf * "${uzip}/"
 cd ../..
 
 if [ -e "${cwd}/settings/script.ravynOS" ] ; then

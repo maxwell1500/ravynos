@@ -83,7 +83,8 @@ extern int fd;
     [logoView setImageScaling:NSImageScaleAxesIndependently];
     [logoView setImageAlignment:NSImageAlignCenter];
 
-    NSString *path = [[NSBundle mainBundle] pathForResource:@"hyena" ofType:@"png"];
+    NSString *path = [[NSBundle mainBundle] pathForResource:RELEASE_LOGO
+	ofType:@"png"];
     NSImage *logo = [[NSImage alloc] initWithContentsOfFile:path];
     [logo setScalesWhenResized:YES];
     [logoView setImage:logo];

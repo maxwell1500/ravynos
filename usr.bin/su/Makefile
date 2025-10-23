@@ -3,6 +3,7 @@
 PROG=	su
 
 LIBADD=	util pam
+LIBADD=	mach
 
 .if ${MK_AUDIT} != "no"
 CFLAGS+= -DUSE_BSM_AUDIT

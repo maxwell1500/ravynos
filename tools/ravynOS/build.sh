@@ -45,6 +45,13 @@ END
 
 
 base_build() {
+    if [ $clean -eq 1 ]; then
+	cd ${BUILDROOT}
+	for d in $(echo *|sed -E 's/(sys|CoreServices|Frameworks|SysApps)//g'); do
+	    logdate "Cleaning $d"
+	    rm -rf "${BUILDROOT}/${d}"
+	done
+    fi
     cd ${CIRRUS_WORKING_DIR}
     make -j${CORES} buildworld
     if [ $? -ne 0 ]; then exit $?; fi
@@ -52,6 +59,10 @@ base_build() {
 
 kernel_build() {
     cd ${CIRRUS_WORKING_DIR}
+    if [ $clean -eq 1 ]; then
+	logdate "Cleaning object dir"
+	rm -rf ${BUILDROOT}/sys
+    fi
     make -j${CORES} buildkernel
     if [ $? -ne 0 ]; then exit $?; fi
 }
@@ -71,6 +82,11 @@ drm_build() {
 }
 
 system_build() {
+    if [ $clean -eq 1 ]; then
+	logdate "Cleaning object dir"
+	rm -rf ${BUILDROOT}/Frameworks ${BUILDROOT}/CoreServices \
+		${BUILDROOT}/SysApps
+    fi
     cd ${CIRRUS_WORKING_DIR}
     echo "CIRRUS_CI=${CIRRUS_CI}"
     if [ "x${CIRRUS_CI}" = "xtrue" ]; then
@@ -86,6 +102,10 @@ system_build() {
 }
 
 extras_build() {
+    if [ $clean -eq 1 ]; then
+	logdate "Cleaning object dir"
+	rm -rf ${BUILDROOT}/release/dist/ravynOS
+    fi
     cd ${CIRRUS_WORKING_DIR}
     if [ ! -d neofetch ]; then
         git clone https://github.com/ravynsoft/neofetch.git
@@ -168,6 +188,19 @@ iso_build() {
     isoalt
 }
 
+cleandir() {
+    logdate "Cleaning object dir"
+    rm -rf "${BUILDROOT}"
+}
+
+logdate() {
+  echo -n ':: '
+  if ! [ "z$1" = "z" ]; then
+      echo -n "$1 "
+  fi
+  echo $(date '+%c %z')
+}
+
 set_options() {
     if [ $log -eq 1 ]; then
         if [ $preserve -eq 0 ]; then
@@ -175,15 +208,18 @@ set_options() {
         else
             exec > >(tee -a ${logfile}) 2>&1
         fi
-     fi
-    echo "ravynOS Build Tool [Prefix ${PREFIX} Cores ${CORES} Platform ${PLATFORM}]"
-    echo "Log: " $log " Preserve: " $preserve
+    fi
+    echo ":: ravynOS Build Tool [Prefix ${PREFIX} Cores ${CORES} Platform ${PLATFORM}]"
+    logdate "Starting"
 }
 
 usage() {
+    echo ""
     echo "Usage: " $(basename $0) " [-n] [-p] target [target] ..."
-    echo "    -n    No Log - do not create a log file"
-    echo "    -p    Preserve Log - append to existing file"
+    echo "    -n         No Log - do not create a log file"
+    echo "    -p         Preserve Log - append to existing file"
+    echo "    -c         Clean target before build"
+    echo "    --purge    Purge entire object dir before build"
     echo ""
     echo "Targets:"
     echo "    base kernel system extras drm basepkg kernelpkg systempkg"
@@ -193,6 +229,8 @@ usage() {
 
 preserve=0
 log=1
+purge=0
+clean=0
 logfile="build.log"
 set -A targets
 
@@ -200,12 +238,26 @@ while ! [ "z$1" = "z" ]; do
     case "$1" in
         -n) log=0 ;;
         -p) preserve=1 ;;
-        --) ;;
+	--purge) purge=1 ;;
+	-c) clean=1 ;;
+        -*) ;;
         *) targets+=("$1") ;;
     esac
     shift
 done
 set_options
+
+if [ $purge -eq 1 ]; then
+    logdate "Purging object directory ${BUILDROOT}"
+    rm -rf ${BUILDROOT}
+fi
+
+if [ ${#targets} -eq 0 ]; then
+    if [ $purge -eq 0 ]; then
+	usage
+	exit 1
+    fi
+fi
 
 set -- $targets[@]
 while ! [ "z$1" = "z" ]; do
@@ -228,3 +280,4 @@ while ! [ "z$1" = "z" ]; do
     esac
     shift
 done
+logdate "Finished"

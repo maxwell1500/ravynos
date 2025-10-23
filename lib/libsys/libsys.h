@@ -13,9 +13,7 @@
 #define _LIBSYS_H_
 
 #include <sys/types.h>
-#ifdef __MACH__
 #include <mach/mach.h>
-#endif
 
 #include <_libsys.h>
 

@@ -345,6 +345,7 @@ _DP_ssh=	crypto crypt z
 .if ${MK_LDNS} != "no"
 _DP_ssh+=	ldns
 .endif
+_DP_ssh+=	System
 _DP_edit=	tinfow
 .if ${MK_OPENSSL} != "no"
 _DP_bsnmp=	crypto
@@ -437,7 +438,6 @@ _DP_kadm5srv=	com_err hdb krb5 roken
 _DP_heimntlm=	crypto com_err krb5 roken
 _DP_hx509=	asn1 com_err crypto roken wind
 _DP_hdb=	asn1 com_err krb5 roken sqlite3
-_DP_asn1=	com_err roken
 _DP_kdc=	roken hdb hx509 krb5 heimntlm asn1 crypto
 _DP_wind=	com_err roken
 _DP_heimbase=	pthread

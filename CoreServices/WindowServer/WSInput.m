@@ -94,6 +94,18 @@ static unichar translateKeySym(xkb_keysym_t keysym) {
     }
 }
 
+static inline void utf16_to_utf8(unichar ch, char *buf) {
+    /* We know all the function keys above are in the 0xF7xx range so
+       we can cheat a little bit for speed here */
+    if((ch & 0xFF00) != 0xF700)
+        NSLog(@"ERROR: Function key code %04x not in F7XX range!", ch);
+    if(buf == NULL)
+        return;
+    buf[0] = 0xEF;
+    buf[1] = (0x9C | (ch & 0xC0)) & 0xFF;
+    buf[2] = (0x80 | (ch & 0x30) | (ch & 0xF)) & 0xFF;
+}
+
 @implementation WSInput
 
 -init {
@@ -196,8 +208,9 @@ static unichar translateKeySym(xkb_keysym_t keysym) {
                 xkb_state_key_get_utf8(xkb_state_unmodified, keycode, buf, sizeof(buf));
                 memcpy(me.charsIg, buf, sizeof(me.charsIg));
             } else {
-                me.chars[0] = nskey;
-                me.charsIg[0] = nskey;
+                memset(me.chars, 0, sizeof(me.chars));
+                utf16_to_utf8(nskey, me.chars);
+                memcpy(me.charsIg, me.chars, sizeof(me.chars));
             }
 
             // FIXME: handle autorepeat

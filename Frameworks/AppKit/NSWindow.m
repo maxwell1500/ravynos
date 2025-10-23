@@ -228,10 +228,10 @@ const float WSWindowEdgePad = 2;
     NSRect contentViewFrame;
 
     _number = (int)self;
+    _styleMask=styleMask;
     _frame=[self frameRectForContentRect:contentRect];
     _frame=[self constrainFrameRect: _frame toScreen: [NSScreen mainScreen]];
-    _styleMask=styleMask;
-   _level=NSNormalWindowLevel;
+    _level=NSNormalWindowLevel;
     struct wsRPCWindow data = {
         { kWSWindowCreate, sizeof(struct wsRPCWindow) - sizeof(struct wsRPCBase) },
         _number, _frame.origin.x, _frame.origin.y,

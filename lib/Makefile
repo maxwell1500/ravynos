@@ -177,6 +177,7 @@ SUBDIR_DEPEND_libprocstat= libkvm libutil
 SUBDIR_DEPEND_libradius= libmd
 SUBDIR_DEPEND_libsmb= libkiconv
 # See comment above about libssp_nonshared
+SUBDIR_DEPEND_libssh= libSystem
 SUBDIR_DEPEND_libsys= libcompiler_rt libssp_nonshared
 SUBDIR_DEPEND_libtacplus= libmd
 SUBDIR_DEPEND_libtiff= libz liblzma libzstd

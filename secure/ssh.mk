@@ -32,3 +32,5 @@ CFLAGS+= -include sk_config.h
 .endif
 
 CFLAGS+= -DOPENSSL_API_COMPAT=0x10100000L
+LDFLAGS+= -lSystem
+LIBADD+= System

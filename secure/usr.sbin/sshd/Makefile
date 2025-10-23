@@ -31,6 +31,8 @@ LIBADD+=	wrap
 .endif
 
 LIBADD+=	crypto
+LIBADD+=	System
+LDFLAGS+=	-lSystem
 
 .include <bsd.prog.mk>
 

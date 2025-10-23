@@ -3,8 +3,9 @@ SRCS=           LoginWindow.m \
                 DesktopWindow.m \
                 LoginBox.m \
                 Label.m 
+RELEASE_LOGO=	hyena.png
 RESOURCES=      ${SRCTOP}/Logo_Assets/ravynos-full.png \
-		${SRCTOP}/Logo_Assets/hyena.png
+		${SRCTOP}/Logo_Assets/${RELEASE_LOGO}
 
 MK_WERROR=	no
 MK_PIE=		no
@@ -16,7 +17,9 @@ CFLAGS+=	-g -fobjc-arc -I${.CURDIR} -I${MAKEOBJDIR} \
 		${OBJCFLAGS} -I${SRCTOP}/Frameworks -D__MACH__ \
 		-I${MAKEOBJDIR}/../SystemUIServer -D__RAVYNOS__ \
 		-I${SRCTOP}/Frameworks/AppKit/Headers -I${SRCTOP}/CoreServices \
-		-I${OBJTOP}/Frameworks/Foundation/Headers -I${SRCTOP}/gnu/lib/libobjc2
+		-I${OBJTOP}/Frameworks/Foundation/Headers \
+		-I${SRCTOP}/gnu/lib/libobjc2 \
+		-DRELEASE_LOGO="@\"${RELEASE_LOGO}\""
 LDFLAGS+=	-Wl,-R'$$ORIGIN/../Resources' -L${OBJTOP}/tmp/usr/lib \
 		-L${OBJTOP}/Frameworks/Foundation/Foundation.framework \
 		-L${OBJTOP}/Frameworks/AppKit/AppKit.framework \
