@@ -11,7 +11,11 @@ cd /tmp/system-overlay
 # Install our standard app bundles
 mkdir -p "${uzip}/Applications/Utilities"
 
+<<<<<<< HEAD
 ${CURL} -Lo - https://github.com/ravynsoft/Terminal_app/releases/download/v0.9.1/Terminal.txz | \
+=======
+${CURL} -Lo - https://github.com/ravynsoft/Terminal_app/releases/download/v0.9.2/Terminal.app.txz | \
+>>>>>>> staging
     tar -xf - -C "${uzip}/Applications/Utilities/"
 
 # Silence late boot messages
