@@ -10,6 +10,7 @@ MACTOP=		   ${SRCTOP}/_distribution-macOS
 BSDTOP=		   ${SRCTOP}/_FreeBSD
 CONTRIB=	   ${SRCTOP}/contrib
 OBJTOP?=	   /usr/obj/ravynOS/${TARGET}
+OBJTOOLS=	   ${OBJTOP}/tmp/obj-tools
 BUILDROOT=	   ${OBJTOP}/release/dist/ravynOS
 RAVYNOS_VERSION!=  sed -e '1q;d' ${SRCTOP}/version.txt
 RAVYNOS_CODENAME!= sed -e '2q;d' ${SRCTOP}/version.txt
@@ -26,31 +27,39 @@ GMAKE?=		gmake
 
 .include <rvn.common.mk>
 
-buildworld: _bootstrap
+_BOOTSTRAP=		_bootstrap-clang _bootstrap-xcbuild \
+			_bootstrap-ld64 _bootstrap-cctools
+_BOOTSTRAP_OBJDIRS=	${_BOOTSTRAP:S/-/\//:C/^.*$$/${OBJTOP}\/&/}
 
-_BOOTSTRAP_OBJDIRS=	\
-			${OBJTOP}/_bootstrap/clang \
-			${OBJTOP}/tmp/obj-tools
-
-${_BOOTSTRAP_OBJDIRS}:
-.for d in ${.TARGET}
+${_BOOTSTRAP_OBJDIRS}: .EXEC
+.for d in ${.TARGET} ${OBJTOOLS}
 	mkdir -p ${d}
 .endfor
 
+buildworld: _bootstrap
+
+_bootstrap: ${_BOOTSTRAP_OBJDIRS} .WAIT ${_BOOTSTRAP}
 _bootstrap-clang:
+	echo ${_BOOTSTRAP}
+#	cd ${OBJTOP}/${.TARGET:S/-/\//}; \
+#	cmake -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_BUILD_TYPE=Release \
+#		-DLLVM_ENABLE_PROJECTS='clang;lldb' \
+#		-DLLVM_ENABLE_RUNTIMES="libcxx;libcxxabi" \
+#		-DLLVM_TARGETS_TO_BUILD="X86" \
+#		-DLLVM_BUILD_LLVM_DYLIB=ON -DLLVM_LINK_LLVM_DYLIB=ON \
+#		-DLLVM_CREATE_XCODE_TOOLCHAIN=ON \
+#		-DLLVM_DEFAULT_TARGET_TRIPLE="${MACHINE:S/amd64/x86_64/}-apple-darwin" \
+#		-DLLDB_BUILD_SERVER=OFF -G "Unix Makefiles" \
+#		${CONTRIB}/llvm-project/llvm
+#	${MAKE} -C ${OBJTOP}/${.TARGET:S/-/\//} all install \
+#		DESTDIR=${OBJTOOLS}
+
+_bootstrap-xcbuild:
 	cd ${OBJTOP}/${.TARGET:S/-/\//}; \
 	cmake -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_BUILD_TYPE=Release \
-		-DLLVM_ENABLE_PROJECTS='clang;lldb' \
-		-DLLVM_ENABLE_RUNTIMES="libcxx;libcxxabi" \
-		-DLLVM_TARGETS_TO_BUILD="X86" \
-		-DLLVM_BUILD_LLVM_DYLIB=ON -DLLVM_LINK_LLVM_DYLIB=ON \
-		-DLLVM_CREATE_XCODE_TOOLCHAIN=ON \
-		-DLLVM_DEFAULT_TARGET_TRIPLE="${MACHINE:S/amd64/x86_64/}-apple-darwin" \
-		-DLLDB_BUILD_SERVER=OFF -G "Unix Makefiles" \
-		${CONTRIB}/llvm-project/llvm
-	${MAKE} -C ${OBJTOP}/${.TARGET:S/-/\//} all install \
-		DESTDIR=${OBJTOP}/tmp/obj-tools
+		-G "Unix Makefiles" ${CONTRIB}/xcbuild
+	${MAKE} -C ${OBJTOP}/${.TARGET:S/-/\//} \
+		DESTDIR=${OBJTOOLS}
 
-_bootstrap: 	${_BOOTSTRAP_OBJDIRS} \
-		.WAIT \
-		_bootstrap-clang
+_bootstrap-ld64: .PHONY
+_bootstrap-cctools: .PHONY
