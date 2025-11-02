@@ -49,7 +49,7 @@ SHA!= cd ${.CURDIR} && git log -1|head -1|cut -c8-14|tr '[a-z]' '[A-Z]'
 .include <rvn.common.mk>
 
 _BOOTSTRAP?=		_bootstrap-clang _bootstrap-xcbuild \
-			_bootstrap-cctools
+			_bootstrap-cctools _bootstrap-mig
 _BOOTSTRAP_OBJDIRS=	${_BOOTSTRAP:S/-/\//:C/^.*$$/${OBJTOP}\/&/}
 
 ${_BOOTSTRAP_OBJDIRS}:
@@ -99,7 +99,7 @@ _bootstrap-cctools: DIR=${OBJTOP}/${.TARGET:S/-/\//}
 	cd ${DIR}; \
 	cmake -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_BUILD_TYPE=Release \
 		-G "Unix Makefiles" ${CONTRIB}/cctools
-	${MAKE} -C ${OBJTOP}/${.TARGET:S/-/\//}
+	${MAKE} -C ${DIR}
 	cp -fv \
 		${DIR}/libmacho/libmacho.a ${DIR}/libstuff/libstuff.a \
 		${OBJTOOLS}/usr/lib/
@@ -109,6 +109,17 @@ _bootstrap-cctools: DIR=${OBJTOP}/${.TARGET:S/-/\//}
 		size strings strip vtool
 	cp -fv ${DIR}/misc/${f} ${OBJTOOLS}/usr/bin/
 .endfor
+
+_bootstrap-mig: DIR=${OBJTOP}/${.TARGET:S/-/\//}
+	cd ${DIR}; \
+	cmake -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_BUILD_TYPE=Release \
+		-G "Unix Makefiles" ${CONTRIB}/mig
+	${MAKE} -C ${DIR}
+	mkdir -p ${OBJTOOLS}/usr/libexec
+	cp -fv ${DIR}/migcom ${OBJTOOLS}/usr/libexec/
+	cp -fv ${CONTRIB}/mig/mig.sh ${OBJTOOLS}/usr/bin/mig
+	chmod 755 ${OBJTOOLS}/usr/bin/mig
+
 
 ${BUILDROOT}/System/Library/SystemVersion.plist: ${.CURDIR}/Library/SystemVersion.plist.in
 	sed -e 's/BUILD_STAMP/${SHA}/' <${.ALLSRC} >${.TARGET}

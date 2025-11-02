@@ -2,10 +2,15 @@
 
 ## What you need:
 * A host machine with:
-  * clang 16.x
+  * clang 16.x+
   * cmake 3.15+ and ninja
   * GNU make (gmake)
   * BSD make (bmake)
+  * zsh
+  * Python 3
+  * libpng (for xcbuild)
+
+__NOTE:__ ravynOS currently only builds on macOS!
 
 __On macOS:__
 * Have a recent Xcode installed
