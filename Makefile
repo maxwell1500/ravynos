@@ -120,6 +120,18 @@ _bootstrap-mig: DIR=${OBJTOP}/${.TARGET:S/-/\//}
 	cp -fv ${CONTRIB}/mig/mig.sh ${OBJTOOLS}/usr/bin/mig
 	chmod 755 ${OBJTOOLS}/usr/bin/mig
 
+_bootstrap-dtracectf: DIR=${OBJTOP}/${.TARGET:S/-/\//}
+	cd ${DIR}; \
+	cmake -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_BUILD_TYPE=Release \
+		-G "Unix Makefiles" ${CONTRIB}/dtrace_ctf
+	${MAKE} -C ${DIR}
+	cp -fv \
+		${DIR}/libdwarf/libdwarf.a ${DIR}/libelf/libelf.a \
+		${DIR}/libctf/libctf.a \
+		${OBJTOOLS}/usr/lib/
+.for f in ctfmerge ctfconvert ctfdump
+	cp -fv ${DIR}/tools/${f} ${OBJTOOLS}/usr/bin/
+.endfor
 
 ${BUILDROOT}/System/Library/SystemVersion.plist: ${.CURDIR}/Library/SystemVersion.plist.in
 	sed -e 's/BUILD_STAMP/${SHA}/' <${.ALLSRC} >${.TARGET}
