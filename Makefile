@@ -58,7 +58,13 @@ ${_BOOTSTRAP_OBJDIRS}:
 .endfor
 
 buildworld: _bootstrap
+buildkernel: kernel
 
+# ------------------------------------------------------------------------
+#                           BOOTSTRAP TARGETS
+#  These targets are used to build the host toolchain that will be used
+#  to build everything else
+# ------------------------------------------------------------------------
 _bootstrap: 	${_BOOTSTRAP_OBJDIRS} \
 		${OBJTOOLS} ${BUILDROOT} \
 		.WAIT \
@@ -100,6 +106,7 @@ _bootstrap-cctools: DIR=${OBJTOP}/${.TARGET:S/-/\//}
 	cmake -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_BUILD_TYPE=Release \
 		-G "Unix Makefiles" ${CONTRIB}/cctools
 	${MAKE} -C ${DIR}
+	mkdir -p ${OBJTOOLS}/usr/bin ${OBJTOOLS}/usr/lib
 	cp -fv \
 		${DIR}/libmacho/libmacho.a ${DIR}/libstuff/libstuff.a \
 		${OBJTOOLS}/usr/lib/
@@ -115,7 +122,7 @@ _bootstrap-mig: DIR=${OBJTOP}/${.TARGET:S/-/\//}
 	cmake -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_BUILD_TYPE=Release \
 		-G "Unix Makefiles" ${CONTRIB}/mig
 	${MAKE} -C ${DIR}
-	mkdir -p ${OBJTOOLS}/usr/libexec
+	mkdir -p ${OBJTOOLS}/usr/libexec ${OBJTOOLS}/usr/bin
 	cp -fv ${DIR}/migcom ${OBJTOOLS}/usr/libexec/
 	cp -fv ${CONTRIB}/mig/mig.sh ${OBJTOOLS}/usr/bin/mig
 	chmod 755 ${OBJTOOLS}/usr/bin/mig
@@ -125,6 +132,7 @@ _bootstrap-dtracectf: DIR=${OBJTOP}/${.TARGET:S/-/\//}
 	cmake -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_BUILD_TYPE=Release \
 		-G "Unix Makefiles" ${CONTRIB}/dtrace_ctf
 	${MAKE} -C ${DIR}
+	mkdir -p ${OBJTOOLS}/usr/lib ${OBJTOOLS}/usr/bin
 	cp -fv \
 		${DIR}/libdwarf/libdwarf.a ${DIR}/libelf/libelf.a \
 		${DIR}/libctf/libctf.a \
@@ -141,3 +149,19 @@ ${OBJTOOLS}: .EXEC
 
 ${BUILDROOT}: .EXEC
 	mkdir -pv ${BUILDROOT}/System/Library
+
+
+# ------------------------------------------------------------------------
+#                               OS TARGETS
+#  These targets are used to build the ravynOS components
+# ------------------------------------------------------------------------
+
+kernel: .PHONY
+	mkdir -pv ${OBJTOP}/Kernel
+	cd ${OBJTOP}/Kernel; export PATH="${OBJTOOLS}/usr/bin:${PATH}" \
+		PLATFORM=MacOSX; \
+		cmake -Wno-dev -DCMAKE_INSTALL_PREFIX=/usr \
+		-DSRCTOP=${SRCTOP} -DOBJTOOLS=${OBJTOOLS} -DMAKE=${GMAKE} \
+		-DCMAKE_BUILD_TYPE=Debug -G"Unix Makefiles" \
+		${SRCTOP}/Kernel && VERBOSE=1 \
+		MAKE=${GMAKE} MAKEFLAGS="-DVERBOSE" ${GMAKE} -C ${OBJTOP}/Kernel

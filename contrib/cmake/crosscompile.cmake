@@ -2,9 +2,8 @@ function(add_darwin_executable name)
     cmake_parse_arguments(SL "NO_STANDARD_LIBRARIES;USE_HOST_SDK" "MACOSX_VERSION_MIN" "" ${ARGN})
 
     add_executable(${name})
-    add_dependencies(${name} host_ld)
     target_compile_definitions(${name} PRIVATE __PUREDARWIN__)
-    target_link_options(${name} PRIVATE -fuse-ld=$<TARGET_FILE:host_ld>)
+    target_link_options(${name} PRIVATE -fuse-ld=${OBJTOOLS}/usr/bin/ld64)
 
     if(NOT SL_USE_HOST_SDK)
         target_compile_options(${name} PRIVATE -nostdlib -nostdinc)
@@ -27,7 +26,6 @@ function(add_darwin_static_library name)
     cmake_parse_arguments(SL "USE_HOST_SDK" "MACOSX_VERSION_MIN" "" ${ARGN})
 
     add_library(${name} STATIC)
-    add_dependencies(${name} host_libtool)
     target_compile_definitions(${name} PRIVATE __PUREDARWIN__)
 
     if(SL_MACOSX_VERSION_MIN)
@@ -53,8 +51,7 @@ function(add_darwin_shared_library name)
         add_library(${name} SHARED)
     endif()
 
-    add_dependencies(${name} host_ld)
-    target_link_options(${name} PRIVATE -fuse-ld=$<TARGET_FILE:host_ld>)
+    target_link_options(${name} PRIVATE -fuse-ld=${OBJTOOLS}/usr/bin/ld64)
     target_compile_definitions(${name} PRIVATE __PUREDARWIN__)
 
     string(SUBSTRING ${name} 0 3 name_prefix)
