@@ -1,6 +1,9 @@
-CMake harness, libfirehose, Extensions
 * Imported from GitHub: PureDarwin/PureDarwin.git
+- CMake build scripts
+- libkmod
+- Extensions
 
-xnu
 * Imported from GitHub: apple-oss-distributions/distribution-macOS.git
 * Branch: rel/macOS-12
+- xnu
+- libfirehose_kernel (part of Libraries/libdispatch)
