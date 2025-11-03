@@ -14,10 +14,10 @@ OBJTOP?=	/usr/obj/ravynOS/${TARGET}
 OBJTOOLS=	${OBJTOP}/tmp/obj-tools
 BUILDROOT=	${OBJTOP}/release
 RAVYNOS_VERSION!=  grep -A1 ProductVersion \
-			${SRCTOP}/Library/SystemVersion.plist.in | \
+			${SRCTOP}/SystemLibrary/SystemVersion.plist.in | \
 			tail -1 | sed -e 's/<\/*string>//'
 RAVYNOS_CODENAME!= grep -A1 ProductFamily \
-			${SRCTOP}/Library/SystemVersion.plist.in | \
+			${SRCTOP}/SystemLibrary/SystemVersion.plist.in | \
 			tail -1 | sed -e 's/<\/*string>//'
 .ifndef CORES
 .if ${OSNAME} == Linux
@@ -57,8 +57,14 @@ ${_BOOTSTRAP_OBJDIRS}:
 	mkdir -pv ${d}
 .endfor
 
-buildworld: _bootstrap
-buildkernel: kernel
+cleandir: .PHONY
+	rm -rf ${OBJTOP}
+
+cleanbuild: .PHONY
+	rm -rf ${BUILDROOT}
+
+buildworld: _bootstrap .WAIT
+buildkernel: _bootstrap .WAIT kernel
 
 # ------------------------------------------------------------------------
 #                           BOOTSTRAP TARGETS
@@ -69,6 +75,7 @@ _bootstrap: 	${_BOOTSTRAP_OBJDIRS} \
 		${OBJTOOLS} ${BUILDROOT} \
 		.WAIT \
 		${BUILDROOT}/System/Library/SystemVersion.plist \
+		${BUILDROOT}/System/Library/Frameworks/Kernel.framework/Versions/A/Headers \
 		${_BOOTSTRAP}
 
 _bootstrap-clang: DIR=${OBJTOP}/${.TARGET:S/-/\//}
@@ -141,7 +148,12 @@ _bootstrap-dtracectf: DIR=${OBJTOP}/${.TARGET:S/-/\//}
 	cp -fv ${DIR}/tools/${f} ${OBJTOOLS}/usr/bin/
 .endfor
 
-${BUILDROOT}/System/Library/SystemVersion.plist: ${.CURDIR}/Library/SystemVersion.plist.in
+${BUILDROOT}/System/Library/Frameworks/Kernel.framework/Versions/A/Headers: ${SRCTOP}/contrib/CarbonHeaders/*.h
+	${GMAKE} DSTROOT=${BUILDROOT} \
+		SRCROOT=${SRCTOP}/contrib/CarbonHeaders \
+		-C ${SRCTOP}/contrib/CarbonHeaders
+
+${BUILDROOT}/System/Library/SystemVersion.plist: ${.CURDIR}/SystemLibrary/SystemVersion.plist.in
 	sed -e 's/BUILD_STAMP/${SHA}/' <${.ALLSRC} >${.TARGET}
 
 ${OBJTOOLS}: .EXEC
@@ -163,5 +175,5 @@ kernel: .PHONY
 		cmake -Wno-dev -DCMAKE_INSTALL_PREFIX=/usr \
 		-DSRCTOP=${SRCTOP} -DOBJTOOLS=${OBJTOOLS} -DMAKE=${GMAKE} \
 		-DCMAKE_BUILD_TYPE=Debug -G"Unix Makefiles" \
-		${SRCTOP}/Kernel && VERBOSE=1 \
-		MAKE=${GMAKE} MAKEFLAGS="-DVERBOSE" ${GMAKE} -C ${OBJTOP}/Kernel
+		${SRCTOP}/Kernel && MAKE=${GMAKE} MAKEFLAGS="" \
+		${GMAKE} -C ${OBJTOP}/Kernel
