@@ -29,8 +29,11 @@
  */
 
 #include <ctype.h>
+#include <errno.h>
 #include "parser.h"
 #include "config.h"
+
+extern int errno;
 
 int	kw_lookup(char *word);
 int	octal(char *str);

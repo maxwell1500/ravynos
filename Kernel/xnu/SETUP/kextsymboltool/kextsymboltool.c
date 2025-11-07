@@ -39,6 +39,8 @@
 #include <uuid/uuid.h>
 #include <stdbool.h>
 
+extern int errno;
+
 #pragma mark Typedefs, Enums, Constants
 /*********************************************************************
 * Typedefs, Enums, Constants

@@ -17,9 +17,9 @@ __On macOS:__
 * If your SDKs are not in the default place inside Xcode.app, export SDKROOT=/path/to/MacOSX.sdk before running build.sh
 
 __On all platforms:__
-Set your object directory if you don't want to use _/usr/obj/ravynOS/${ARCH}_: `export OBJTOP=/path/to/build_output_dir`
+Set your object directory if you don't want to use _/usr/obj/ravynOS/${ARCH}_: `export OBJTOP=/path/to/build_output_dir` or pass it on the command line below.
 
-Run `./tools/build.sh base`
+Run `./tools/build.sh kernel base`
 
 ## Subtle changes from previous branches:
 * Versioning is now in Library/SystemVersion.plist.in, not version.txt

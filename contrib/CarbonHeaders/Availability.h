@@ -125,6 +125,13 @@
 
 #include <AvailabilityInternal.h>
 
+#ifndef __WATCHOS_PROHIBITED
+#define __WATCHOS_PROHIBITED
+#endif
+
+#ifndef __TVOS_PROHIBITED
+#define __TVOS_PROHIBITED
+#endif
 
 #ifdef __IPHONE_OS_VERSION_MIN_REQUIRED
     #define __OSX_AVAILABLE_STARTING(_mac, _iphone) __AVAILABILITY_INTERNAL##_iphone

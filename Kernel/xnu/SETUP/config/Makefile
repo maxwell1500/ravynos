@@ -8,9 +8,8 @@ include $(MakeInc_def)
 
 OBJS = externs.o main.o mkheaders.o mkioconf.o mkmakefile.o	\
 	openp.o searchp.o lexer.yy.o parser.o
-
 CFLAGS = -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION) -g -O0 -I$(SOURCE) -I.
-CFLAGS += -DYY_NO_INPUT
+CFLAGS += -DYY_NO_INPUT -I$(SRCROOT)/SETUP/config
 
 WARNFLAGS = -Wall
 

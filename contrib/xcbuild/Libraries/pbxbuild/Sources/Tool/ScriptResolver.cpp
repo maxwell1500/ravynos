@@ -117,6 +117,7 @@ resolve(
     scriptEnvironment.insertFront(ScriptInputOutputLevel(inputFiles, outputFiles, true), false);
     std::unordered_map<std::string, std::string> environmentVariables = scriptEnvironment.computeValues(pbxsetting::Condition::Empty());
 
+#if 0
     Tool::Invocation invocation;
     invocation.executable() = Tool::Invocation::Executable::External("/bin/sh");
     invocation.arguments() = { "-c", "sed -ie 's/\\/bin\\/ln/bsdln/g' " + Escape::Shell(scriptFilePath) + "; " + Escape::Shell(scriptFilePath) };
@@ -130,6 +131,7 @@ resolve(
     toolContext->invocations().push_back(invocation);
 
     toolContext->auxiliaryFiles().push_back(scriptFile);
+#endif /* 0 */
 }
 
 void Tool::ScriptResolver::

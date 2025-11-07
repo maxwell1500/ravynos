@@ -3,6 +3,7 @@ Imported from GitHub: PureDarwin/PureDarwin.git
 - dtrace_ctf
 - mig
 - cmake
+- unifdef
 
 Imported from GitHub: llvm/llvm-project.git
 Branch: release/16.x
@@ -15,3 +16,6 @@ Branch: main
 Imported from GitHub: apple-oss-distributions/CarbonHeaders.git
 - CarbonHeaders
 
+Imported from GitHub: apple-oss-distributions/distribution-macOS.git
+Branch: rel/macOS-12
+- copyfile

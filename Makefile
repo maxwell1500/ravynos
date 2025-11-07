@@ -49,7 +49,8 @@ SHA!= cd ${.CURDIR} && git log -1|head -1|cut -c8-14|tr '[a-z]' '[A-Z]'
 .include <rvn.common.mk>
 
 _BOOTSTRAP?=		_bootstrap-clang _bootstrap-xcbuild \
-			_bootstrap-cctools _bootstrap-mig
+			_bootstrap-cctools _bootstrap-mig \
+			_bootstrap-unifdef
 _BOOTSTRAP_OBJDIRS=	${_BOOTSTRAP:S/-/\//:C/^.*$$/${OBJTOP}\/&/}
 
 ${_BOOTSTRAP_OBJDIRS}:
@@ -75,7 +76,6 @@ _bootstrap: 	${_BOOTSTRAP_OBJDIRS} \
 		${OBJTOOLS} ${BUILDROOT} \
 		.WAIT \
 		${BUILDROOT}/System/Library/SystemVersion.plist \
-		${BUILDROOT}/System/Library/Frameworks/Kernel.framework/Versions/A/Headers \
 		${_BOOTSTRAP}
 
 _bootstrap-clang: DIR=${OBJTOP}/${.TARGET:S/-/\//}
@@ -148,10 +148,13 @@ _bootstrap-dtracectf: DIR=${OBJTOP}/${.TARGET:S/-/\//}
 	cp -fv ${DIR}/tools/${f} ${OBJTOOLS}/usr/bin/
 .endfor
 
-${BUILDROOT}/System/Library/Frameworks/Kernel.framework/Versions/A/Headers: ${SRCTOP}/contrib/CarbonHeaders/*.h
-	${GMAKE} DSTROOT=${BUILDROOT} \
-		SRCROOT=${SRCTOP}/contrib/CarbonHeaders \
-		-C ${SRCTOP}/contrib/CarbonHeaders
+_bootstrap-unifdef: DIR=${OBJTOP}/${.TARGET:S/-/\//}
+	cd ${DIR}; \
+	cmake -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_BUILD_TYPE=Release \
+		-G "Unix Makefiles" ${CONTRIB}/unifdef
+	${MAKE} -C ${DIR}
+	mkdir -p ${OBJTOOLS}/usr/lib ${OBJTOOLS}/usr/bin
+	cp -fv ${DIR}/unifdef ${OBJTOOLS}/usr/bin/
 
 ${BUILDROOT}/System/Library/SystemVersion.plist: ${.CURDIR}/SystemLibrary/SystemVersion.plist.in
 	sed -e 's/BUILD_STAMP/${SHA}/' <${.ALLSRC} >${.TARGET}
@@ -165,15 +168,52 @@ ${BUILDROOT}: .EXEC
 
 # ------------------------------------------------------------------------
 #                               OS TARGETS
-#  These targets are used to build the ravynOS components
+#  These targets build the ravynOS components
 # ------------------------------------------------------------------------
 
-kernel: .PHONY
+CarbonHeaders: .PHONY
+	${GMAKE} DSTROOT=${BUILDROOT} \
+		SRCROOT=${SRCTOP}/contrib/CarbonHeaders \
+		-C ${SRCTOP}/contrib/CarbonHeaders
+	cp -fv Kernel/xnu/EXTERNAL_HEADERS/Availability*.h \
+		${BUILDROOT}/usr/include/
+
+${SRCTOP}/Libraries/Libc/include/libc-features.h:
+	mkdir -p ${OBJTOP}/tmp/include
+	cmake -E env ARCHS="x86_64 arm64" \
+		SRCROOT=${SRCTOP}/Libraries/Libc \
+		DERIVED_FILES_DIR=${OBJTOP}/tmp/include \
+		VARIANT_PLATFORM_NAME=macosx \
+		perl ${SRCTOP}/Libraries/Libc/xcodescripts/generate_features.pl
+	cp -fv ${OBJTOP}/tmp/include/${MACHINE}/libc-features.h ${.TARGET}
+
+Libc: ${SRCTOP}/Libraries/Libc/include/libc-features.h
+	mkdir -pv ${OBJTOP}/Libc
+	cd ${OBJTOP}/Libc; \
+	RUNTIME_SPEC_PATH=${SRCTOP}/contrib/xcbuild/Specifications \
+	${OBJTOOLS}/usr/bin/xcbuild \
+		-project ${SRCTOP}/Libraries/Libc/Libc.xcodeproj \
+		-target libsystem_c.dylib
+	cp -Rv $$HOME/Library/Developer/Xcode/DerivedData/Build/Products/Release/* ${BUILDROOT}/
+
+libSystem_malloc:
+	# We just need the headers for now
+	mkdir -p ${BUILDROOT}/usr
+	cp -R ${SRCTOP}/Libraries/libmalloc/include ${BUILDROOT}/usr/
+
+copyfile.h: .PHONY
+	mkdir -p ${BUILDROOT}/usr/include
+	cp -fv ${CONTRIB}/copyfile/copyfile.h ${BUILDROOT}/usr/include/
+
+kernel: .PHONY CarbonHeaders Libc libSystem_malloc copyfile.h
 	mkdir -pv ${OBJTOP}/Kernel
-	cd ${OBJTOP}/Kernel; export PATH="${OBJTOOLS}/usr/bin:${PATH}" \
-		PLATFORM=MacOSX; \
+	cp -Rfv ${SRCTOP}/Kernel/xnu/libsyscall/mach/mach ${BUILDROOT}/usr/include
+	cp -Rfv ${CONTRIB}/cctools/include/mach-o ${BUILDROOT}/usr/include
+	cd ${OBJTOP}/Kernel; export PLATFORM=MacOSX ; \
 		cmake -Wno-dev -DCMAKE_INSTALL_PREFIX=/usr \
 		-DSRCTOP=${SRCTOP} -DOBJTOOLS=${OBJTOOLS} -DMAKE=${GMAKE} \
-		-DCMAKE_BUILD_TYPE=Debug -G"Unix Makefiles" \
-		${SRCTOP}/Kernel && MAKE=${GMAKE} MAKEFLAGS="" \
-		${GMAKE} -C ${OBJTOP}/Kernel
+		-DOBJTOP=${OBJTOP} -DCMAKE_BUILD_TYPE=Release \
+		-G"Unix Makefiles" ${SRCTOP}/Kernel; \
+		export MAKE=${GMAKE} MAKEFLAGS="" PATH; \
+		${GMAKE} -C ${OBJTOP}/Kernel DESTDIR=${BUILDROOT} \
+		xnu_headers.extproj install
