@@ -118,7 +118,7 @@ __BEGIN_DECLS
  * Priority keys maintained by the data structure.
  * Since the priority is packed in the node itself, it restricts keys to be 8-bits only.
  */
-#define PRIORITY_QUEUE_KEY_NONE             0
+#define PRIORITY_QUEUE_KEY_NONE             ((priority_queue_key_t)0)
 typedef uint8_t priority_queue_key_t;
 
 /*

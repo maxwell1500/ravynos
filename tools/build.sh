@@ -27,7 +27,8 @@ export MAKE BMAKE GMAKE
 export PREFIX __MAKE_CONF SRCROOT PLATFORM MAKESYSPATH
 
 PATH=${OBJTOP:-/usr/obj/ravynOS/${PLATFORM}}/tmp/obj-tools/usr/bin:${PATH}
-export PATH
+TERM=vt100
+export PATH TERM
 
 install() {
 }

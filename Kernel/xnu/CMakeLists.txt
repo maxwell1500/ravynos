@@ -25,9 +25,8 @@ externalproject_add(xnu_headers.extproj
             LIBTOOL=${OBJTOP}/tmp/obj-tools/usr/bin/libtool
             UNIFDEF=${OBJTOP}/tmp/obj-tools/usr/bin/unifdef
             DSYMUTIL=${OBJTOP}/tmp/obj-tools/usr/bin/dsymutil
-            -I${BUILDROOT}/usr/include
             SRCROOT=${CMAKE_CURRENT_SOURCE_DIR} OBJROOT=<BINARY_DIR>
-            DSTROOT=${OBJTOP}/release
+            DSTROOT=${CMAKE_CURRENT_BINARY_DIR}
     INSTALL_COMMAND true # installed during build
     USES_TERMINAL_CONFIGURE TRUE
     USES_TERMINAL_BUILD TRUE
@@ -58,37 +57,42 @@ target_include_directories(xnu_kernel_private_headers INTERFACE
     ${CMAKE_CURRENT_BINARY_DIR}/xnu_header_install/System/Library/Frameworks/Kernel.framework/Versions/A/PrivateHeaders
 )
 
-
-set(XNU_CFLAGS "--sysroot=${OBJTOP}/release -nostdinc \
-        -I${OBJTOP}/release/usr/local/include \
-        -I${OBJTOP}/release/usr/include \
-        -I${OBJTOP}/release/System/Library/Frameworks/Kernel.framework/Versions/A/PrivateHeaders \
+set(XNU_CFLAGS "\
+        --sysroot=${OBJTOP}/Kernel/xnu -nostdinc \
+        -isystem ${OBJTOP}/Kernel/xnu \
         -I${SRCTOP}/Kernel/xnu/libsyscall/wrappers \
+        -I${SRCTOP}/Kernel/xnu/EXTERNAL_HEADERS \
+        -I${OBJTOP}/release/usr/include \
         -I${OBJTOP}/Kernel/xnu/xnu_build/src/xnu-build/SETUP/config \
         -I${SRCTOP}/Kernel/xnu/SETUP/config \
+        -I${SRCTOP}/Libraries/libpthread/pthread \
         -I${SRCTOP}/Libraries/libpthread \
-        -I${SRCTOP}/Kernel/xnu/osfmk -I${SRCTOP}/Kernel/xnu/libkern \
-        -DSRCROOT=${SRCTOP}/Kernel/xnu \
+        -I${SRCTOP}/Kernel/xnu/libkern -I${SRCTOP}/Kernel/xnu/libsyscall \
+        -I${SRCTOP}/Libraries/Libc/locale \
+        -I${SRCTOP}/Libraries/Libc/locale/FreeBSD \
+        -I${SRCTOP}/Libraries/Libc/stdtime/FreeBSD \
+        -I${SRCTOP}/Libraries/Libc/darwin \
+        -I${SRCTOP}/Libraries/Libc/include \
+        -I${SRCTOP}/contrib/cctools/include/foreign \
+        -I${SRCTOP}/Kernel/xnu/osfmk \
+        -DXSRCROOT=${SRCTOP}/Kernel/xnu \
+        -I${SRCTOP}/Libraries/libplatform/include/ \
+        -DOS_WARN_RESULT='__attribute__((__warn_unused_result__))' \
+        -DOS_ALWAYS_INLINE='__attribute__((__always_inline__))' \
         -DKERNEL -DKERNEL_PRIVATE -D__swift_nonisolated_unsafe='' \
         -Wno-error=implicit-function-declaration \
         -Wno-deprecated-declarations -Wno-reserved-identifier"
 )
-
-#        -isystem ${SRCTOP}/Kernel/xnu/EXTERNAL_HEADERS \
-#
-#         \
-#         \
-#         \
-#
-#        -I${SRCTOP}/contrib/cctools/include \
-
-
 externalproject_add(xnu
     PREFIX ${CMAKE_CURRENT_BINARY_DIR}/xnu_build
     SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}
     CONFIGURE_COMMAND true # disable auto CMake configure
     BUILD_COMMAND
         cmake
+            -DCMAKE_C_COMPILER=${OBJTOP}/tmp/obj-tools/usr/bin/cc
+            -DCMAKE_CXX_COMPILER=${OBJTOP}/tmp/obj-tools/usr/bin/c++
+            -DCMAKE_C_LINKER=${OBJTOP}/tmp/obj-tools/usr/bin/ld64
+            -DCMAKE_CXX_LINKER=${OBJTOP}/tmp/obj-tools/usr/bin/ld64
             -D AVAILABILITY_PL_PATH=${SRCTOP}/Kernel/availability.pl
             -D FIREHOSE_KERNEL_LIBRARY_PATH=${SRCTOP}/Kernel/libfirehose_kernel/src
             -D FIREHOSE_KERNEL_HEADER_PATH=${SRCTOP}/Kernel/libfirehose_kernel/include
@@ -99,7 +103,6 @@ externalproject_add(xnu
     COMMAND
         ${MAKE} -C <SOURCE_DIR> install ARCH_CONFIGS=X86_64 BUILD_LTO=0
             BUILD_WERROR=0 DO_CTFMERGE=0 KERNEL_CONFIGS=RELEASE
-            CFLAGS=${XNU_CFLAGS}
             CODESIGN_ALLOCATE=${OBJTOP}/tmp/obj-tools/usr/bin/codesign_allocate
             CTFCONVERT=${OBJTOP}/tmp/obj-tools/usr/bin/ctfconvert
             CTFMERGE=${OBJTOP}/tmp/obj-tools/usr/bin/ctfmerge
@@ -115,7 +118,7 @@ externalproject_add(xnu
             DSYMUTIL=${OBJTOP}/tmp/obj-tools/usr/bin/dsymutil
             SRCROOT=${CMAKE_CURRENT_SOURCE_DIR} OBJROOT=<BINARY_DIR>
             SYMROOT=${CMAKE_CURRENT_BINARY_DIR}/xnu_sym
-            DSTROOT=${OBJTOP}/release/xnu
+            DSTROOT=${OBJTOP}/release
     INSTALL_COMMAND true # installed during build
     USES_TERMINAL_CONFIGURE TRUE
     USES_TERMINAL_BUILD TRUE

@@ -28,7 +28,9 @@ CORES!=		sysctl -n hw.ncpu
 .endif
 
 DESTDIR=
+LOGCOLORS= n
 .export DESTDIR SRCTOP OBJTOP BUILDROOT RAVYNOS_VERSION RAVYNOS_CODENAME CORES
+.export LOGCOLORS
 
 .if ${OSNAME} == Darwin
 SDKROOT?=	/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk
@@ -36,7 +38,7 @@ SDKROOT?=	/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/D
 .endif
 
 MK_WERROR=      no
-WARNS=          1
+WARNS=          0
 BMAKE?=		bmake
 GMAKE?=		gmake
 
@@ -73,8 +75,8 @@ buildkernel: _bootstrap .WAIT kernel
 #  to build everything else
 # ------------------------------------------------------------------------
 _bootstrap: 	${_BOOTSTRAP_OBJDIRS} \
-		${OBJTOOLS} ${BUILDROOT} \
 		.WAIT \
+		${OBJTOOLS} ${BUILDROOT} .WAIT \
 		${BUILDROOT}/System/Library/SystemVersion.plist \
 		${_BOOTSTRAP}
 
@@ -167,14 +169,35 @@ ${BUILDROOT}: .EXEC
 
 
 # ------------------------------------------------------------------------
-#                               OS TARGETS
-#  These targets build the ravynOS components
+#                           KERNEL TARGETS
+#  These targets build the ravynOS kernel (xnu) components
 # ------------------------------------------------------------------------
 
+# use our tools from the matching macOS
+CODESIGN_ALLOCATE=${OBJTOOLS}/usr/bin/codesign_allocate
+CTFCONVERT=${OBJTOOLS}/usr/bin/ctfconvert
+CTFMERGE=${OBJTOOLS}/usr/bin/ctfmerge
+CTFINSERT=${OBJTOOLS}/usr/bin/ctfinsert
+IIG=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/iig #${OBJTOOLS}/usr/bin/iig
+MIG=${OBJTOOLS}/usr/bin/mig
+MIGCOM=${OBJTOOLS}/usr/libexec/migcom
+STRIP=${OBJTOOLS}/usr/bin/strip
+LIPO=${OBJTOOLS}/usr/bin/lipo
+NM=${OBJTOOLS}/usr/bin/nm
+NMEDIT=${OBJTOOLS}/usr/bin/nmedit
+LIBTOOL=${OBJTOOLS}/usr/bin/libtool
+UNIFDEF=${OBJTOOLS}/usr/bin/unifdef
+DSYMUTIL=${OBJTOOLS}/usr/bin/dsymutil
+XCRUN=${OBJTOOLS}/usr/bin/xcrun
+XCBUILD=${OBJTOOLS}/usr/bin/xcbuild
+.export CODESIGN_ALLOCATE CTFCONVERT CTFMERGE CTFINSERT # IIG
+.export MIG MIGCOM STRIP LIPO NM NMEDIT UNIFDEF DSYMUTIL XCRUN XCBUILD
+
 CarbonHeaders: .PHONY
-	${GMAKE} DSTROOT=${BUILDROOT} \
-		SRCROOT=${SRCTOP}/contrib/CarbonHeaders \
-		-C ${SRCTOP}/contrib/CarbonHeaders
+	${GMAKE} DSTROOT=${BUILDROOT} SRCROOT=${CONTRIB}/CarbonHeaders \
+		-C ${CONTRIB}/CarbonHeaders
+	cp -fv ${CONTRIB}/CarbonHeaders/{ConditionalMacros,MacTypes}.h \
+		${BUILDROOT}/usr/include
 	cp -fv Kernel/xnu/EXTERNAL_HEADERS/Availability*.h \
 		${BUILDROOT}/usr/include/
 
@@ -188,13 +211,15 @@ ${SRCTOP}/Libraries/Libc/include/libc-features.h:
 	cp -fv ${OBJTOP}/tmp/include/${MACHINE}/libc-features.h ${.TARGET}
 
 Libc: ${SRCTOP}/Libraries/Libc/include/libc-features.h
-	mkdir -pv ${OBJTOP}/Libc
+	mkdir -pv ${OBJTOP}/Libc ${BUILDROOT}/usr/include/sys
 	cd ${OBJTOP}/Libc; \
 	RUNTIME_SPEC_PATH=${SRCTOP}/contrib/xcbuild/Specifications \
 	${OBJTOOLS}/usr/bin/xcbuild \
 		-project ${SRCTOP}/Libraries/Libc/Libc.xcodeproj \
 		-target libsystem_c.dylib
-	cp -Rv $$HOME/Library/Developer/Xcode/DerivedData/Build/Products/Release/* ${BUILDROOT}/
+.for f in limits.h
+	cp -Rfv $$HOME/Library/Developer/Xcode/DerivedData/Build/Products/Release/usr/include/${f} ${BUILDROOT}/usr/include/
+.endfor
 
 libSystem_malloc:
 	# We just need the headers for now
@@ -205,15 +230,28 @@ copyfile.h: .PHONY
 	mkdir -p ${BUILDROOT}/usr/include
 	cp -fv ${CONTRIB}/copyfile/copyfile.h ${BUILDROOT}/usr/include/
 
-kernel: .PHONY CarbonHeaders Libc libSystem_malloc copyfile.h
-	mkdir -pv ${OBJTOP}/Kernel
-	cp -Rfv ${SRCTOP}/Kernel/xnu/libsyscall/mach/mach ${BUILDROOT}/usr/include
-	cp -Rfv ${CONTRIB}/cctools/include/mach-o ${BUILDROOT}/usr/include
-	cd ${OBJTOP}/Kernel; export PLATFORM=MacOSX ; \
+architecture: .PHONY
+	SRCROOT=${SRCTOP}/contrib/architecture DSTROOT=${BUILDROOT} \
+		${GMAKE} -C contrib/architecture
+
+kernel: .PHONY
+	mkdir -pv ${OBJTOP}/Kernel/xnu
+	export PATH PLATFORM=MacOSX; \
+	${GMAKE} -C ${SRCTOP}/Kernel/xnu MAKE=${GMAKE} \
+		ARCH_CONFIGS=X86_64 BUILD_LTO=0 \
+		AVAILABILITY_PL_PATH=${SRCTOP}/Kernel/availability.pl \
+		BUILD_WERROR=0 DO_CTFMERGE=0 KERNEL_CONFIGS=RELEASE \
+		SRCROOT=${SRCTOP}/Kernel/xnu OBJROOT=${OBJTOP}/Kernel/xnu \
+		DSTROOT=${BUILDROOT} CODESIGN_ALLOCATE=${CODESIGN_ALLOCATE} \
+		CTFCONVERT=${CTFCONVERT} CTFMERGE=${CTFMERGE} CTFINSERT=${CTFINSERT} \
+		IIG=${IIG} MIG=${MIG} MIGCOM=${MIGCOM} STRIP=${STRIP} LIPO=${LIPO}	NM=${NM} \
+		NMEDIT=${NMEDIT} LIBTOOL=${LIBTOOL} UNIFDEF=${UNIFDEF} \
+		DSYMUTIL=${DSYMUTIL} XCRUN=${XCRUN} XCBUILD=${XCBUILD}
+	#cd ${OBJTOP}/Kernel; export PLATFORM=MacOSX ; \
 		cmake -Wno-dev -DCMAKE_INSTALL_PREFIX=/usr \
 		-DSRCTOP=${SRCTOP} -DOBJTOOLS=${OBJTOOLS} -DMAKE=${GMAKE} \
 		-DOBJTOP=${OBJTOP} -DCMAKE_BUILD_TYPE=Release \
 		-G"Unix Makefiles" ${SRCTOP}/Kernel; \
 		export MAKE=${GMAKE} MAKEFLAGS="" PATH; \
 		${GMAKE} -C ${OBJTOP}/Kernel DESTDIR=${BUILDROOT} \
-		xnu_headers.extproj install
+		xnu_headers.extproj xnu
