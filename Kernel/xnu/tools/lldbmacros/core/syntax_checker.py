@@ -1,51 +1,59 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
-helpdoc = """
-A simple utility that verifies the syntax for python scripts.
-The checks it does are :
-  * Check for 'tab' characters in .py files
-  * Compile errors in py sources
-Usage:
-  python syntax_checker.py <python_source_file> [<python_source_file> ..] 
 """
+A simple utility that verifies the syntax for Python scripts.
+The checks it does are:
+  * Check for 'tab' characters in .py files
+  * Compile errors in Python sources
+
+Usage:
+  python syntax_checker.py <python_source_file> [<python_source_file> ..]
+"""
+
 import py_compile
 import sys
 import os
 import re
 
-tabs_search_rex = re.compile("^\s*\t+",re.MULTILINE|re.DOTALL)
+tabs_search_rex = re.compile(r"^\s*\t+", re.MULTILINE | re.DOTALL)
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print >>sys.stderr, "Error: Unknown arguments"
-        print helpdoc
+        print("Error: Unknown arguments", file=sys.stderr)
+        print(__doc__)
         sys.exit(1)
+
     for fname in sys.argv[1:]:
         if not os.path.exists(fname):
-            print >>sys.stderr, "Error: Cannot recognize %s as a file" % fname
+            print(f"Error: Cannot recognize {fname} as a file", file=sys.stderr)
             sys.exit(1)
-        if fname.split('.')[-1] != 'py':
-            print "Note: %s is not a valid python file. Skipping." % fname
+
+        if not fname.endswith(".py"):
+            print(f"Note: {fname} is not a valid Python file. Skipping.")
             continue
-        fh = open(fname)
-        strdata = fh.readlines()
-        lineno = 0
+
+        with open(fname, "r", encoding="utf-8") as fh:
+            lines = fh.readlines()
+
         tab_check_status = True
-        for linedata in strdata:
-            lineno += 1
-            if len(tabs_search_rex.findall(linedata)) > 0 :
-                print >>sys.stderr, "Error: Found a TAB character at %s:%d" % (fname, lineno)
+        for lineno, line in enumerate(lines, start=1):
+            if tabs_search_rex.findall(line):
+                print(f"Error: Found a TAB character at {fname}:{lineno}", file=sys.stderr)
                 tab_check_status = False
-        if tab_check_status == False:
-            print >>sys.stderr, "Error: Syntax check failed. Please fix the errors and try again."
+
+        if not tab_check_status:
+            print("Error: Syntax check failed. Please fix the errors and try again.", file=sys.stderr)
             sys.exit(1)
-        #now check for error in compilation
+
+        # Now check for compile-time syntax errors
         try:
-            compile_result = py_compile.compile(fname, cfile="/dev/null", doraise=True)
+            py_compile.compile(fname, doraise=True)
         except py_compile.PyCompileError as exc:
-            print >>sys.stderr, str(exc)
-            print >>sys.stderr, "Error: Compilation failed. Please fix the errors and try again."
+            print(str(exc), file=sys.stderr)
+            print("Error: Compilation failed. Please fix the errors and try again.", file=sys.stderr)
             sys.exit(1)
-        print "Success: Checked %s. No syntax errors found." % fname
+
+        print(f"Success: Checked {fname}. No syntax errors found.")
+
     sys.exit(0)
 
