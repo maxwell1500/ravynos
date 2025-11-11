@@ -8,8 +8,7 @@ include $(MakeInc_def)
 
 OBJS = installfile.o
 
-CFLAGS = -isysroot $(HOST_SDKROOT) -Werror=no -mmacosx-version-min=$(HOST_OS_VERSION) -g -O0 -I$(SOURCE) -I.
-CFLAGS += -I${OBJROOT}/release/usr/include
+CFLAGS = -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION) -g -O0 -I$(SOURCE) -I.
 
 WARNFLAGS = -Wall
 

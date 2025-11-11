@@ -30,7 +30,6 @@
 #include <firehose/tracepoint_private.h>
 #include <firehose/chunk_private.h>
 #define OS_FIREHOSE_SPI 1
-#define KERNEL
 #include <os/firehose_buffer_private.h>
 #include <os/firehose.h>
 

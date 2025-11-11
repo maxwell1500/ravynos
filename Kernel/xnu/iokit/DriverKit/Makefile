@@ -40,15 +40,18 @@ COMP_FILES = ${GENERATED_HEADERS} $(GENERATED_IMPL)
 
 $(GENERATED_HEADERS) : \
 	%.h : %.iig
-	$(IIG) --def $< --header $@ --impl $(patsubst %.h,%.iig.cpp,$@) --framework-name DriverKit --deployment-target 12.0 ${OTHER_IIG_FLAGS} -- ${OTHER_IIG_CFLAGS}
+	$(IIG) --def $< --header $@ --impl $(patsubst %.h,%.iig.cpp,$@) --framework-name DriverKit ${OTHER_IIG_FLAGS} -- ${OTHER_IIG_CFLAGS}
 
 $(GENERATED_IMPL) : $(GENERATED_HEADERS)
 
-#do_build_all:: $(COMP_FILES)
+ifeq ($(REBUILD_IIG_CPP),1)
+do_build_all:: $(COMP_FILES)
+else
 do_build_all::
 	mkdir -pv $(OBJROOT)/RELEASE_$(MACHINE)/iokit/RELEASE/DriverKit
 	cp -fv $(SRCROOT)/iokit/DriverKit/*.iig.cpp \
 		$(OBJROOT)/RELEASE_$(MACHINE)/iokit/RELEASE/DriverKit/
+endif
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)

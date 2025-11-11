@@ -178,7 +178,7 @@ CODESIGN_ALLOCATE=${OBJTOOLS}/usr/bin/codesign_allocate
 CTFCONVERT=${OBJTOOLS}/usr/bin/ctfconvert
 CTFMERGE=${OBJTOOLS}/usr/bin/ctfmerge
 CTFINSERT=${OBJTOOLS}/usr/bin/ctfinsert
-IIG=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/iig #${OBJTOOLS}/usr/bin/iig
+IIG?=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/iig #${OBJTOOLS}/usr/bin/iig
 MIG=${OBJTOOLS}/usr/bin/mig
 MIGCOM=${OBJTOOLS}/usr/libexec/migcom
 STRIP=${OBJTOOLS}/usr/bin/strip
@@ -211,15 +211,14 @@ ${SRCTOP}/Libraries/Libc/include/libc-features.h:
 	cp -fv ${OBJTOP}/tmp/include/${MACHINE}/libc-features.h ${.TARGET}
 
 Libc: ${SRCTOP}/Libraries/Libc/include/libc-features.h
-	mkdir -pv ${OBJTOP}/Libc ${BUILDROOT}/usr/include/sys
+	mkdir -pv ${OBJTOP}/Libc ${BUILDROOT}/usr/include
 	cd ${OBJTOP}/Libc; \
 	RUNTIME_SPEC_PATH=${SRCTOP}/contrib/xcbuild/Specifications \
-	${OBJTOOLS}/usr/bin/xcbuild \
-		-project ${SRCTOP}/Libraries/Libc/Libc.xcodeproj \
-		-target libsystem_c.dylib
-.for f in limits.h
-	cp -Rfv $$HOME/Library/Developer/Xcode/DerivedData/Build/Products/Release/usr/include/${f} ${BUILDROOT}/usr/include/
-.endfor
+		${OBJTOOLS}/usr/bin/xcbuild \
+		-project ${SRCTOP}/Libraries/Libc/Libc.xcodeproj
+#.for f in limits.h
+#	cp -Rfv $$HOME/Library/Developer/Xcode/DerivedData/Build/Products/Release/usr/include/${f} ${BUILDROOT}/usr/include/
+#.endfor
 
 libSystem_malloc:
 	# We just need the headers for now
@@ -234,7 +233,20 @@ architecture: .PHONY
 	SRCROOT=${SRCTOP}/contrib/architecture DSTROOT=${BUILDROOT} \
 		${GMAKE} -C contrib/architecture
 
-kernel: .PHONY
+libfirehose_kernel: CarbonHeaders xnu_headers
+	mkdir -pv ${BUILDROOT}/usr/include
+	cp -fv ${SRCTOP}/Libraries/Libc/include/limits.h ${BUILDROOT}/usr/include/
+	mkdir -pv ${OBJTOP}/Kernel/libfirehose_kernel
+	export PATH PLATFORM=MacOSX; \
+		cd ${OBJTOP}/Kernel/libfirehose_kernel; cmake -Wno-dev \
+		-DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr \
+		-DSRCTOP=${SRCTOP} -DOBJTOP=${OBJTOP} \
+		-G"Unix Makefiles" ${SRCTOP}/Kernel/libfirehose_kernel
+	export PATH PLATFORM=MacOSX MAKEFLAGS="" MAKE=${GMAKE}; \
+		${GMAKE} DESTDIR=${BUILDROOT} -C ${OBJTOP}/Kernel/libfirehose_kernel
+
+
+xnu_headers:
 	mkdir -pv ${OBJTOP}/Kernel/xnu
 	export PATH PLATFORM=MacOSX; \
 	${GMAKE} -C ${SRCTOP}/Kernel/xnu MAKE=${GMAKE} \
@@ -246,12 +258,17 @@ kernel: .PHONY
 		CTFCONVERT=${CTFCONVERT} CTFMERGE=${CTFMERGE} CTFINSERT=${CTFINSERT} \
 		IIG=${IIG} MIG=${MIG} MIGCOM=${MIGCOM} STRIP=${STRIP} LIPO=${LIPO}	NM=${NM} \
 		NMEDIT=${NMEDIT} LIBTOOL=${LIBTOOL} UNIFDEF=${UNIFDEF} \
+		DSYMUTIL=${DSYMUTIL} XCRUN=${XCRUN} XCBUILD=${XCBUILD} installhdrs
+ 
+kernel: libfirehose_kernel
+	export PATH PLATFORM=MacOSX; \
+	${GMAKE} -C ${SRCTOP}/Kernel/xnu MAKE=${GMAKE} \
+		ARCH_CONFIGS=X86_64 BUILD_LTO=0 \
+		AVAILABILITY_PL_PATH=${SRCTOP}/Kernel/availability.pl \
+		BUILD_WERROR=0 DO_CTFMERGE=0 KERNEL_CONFIGS=RELEASE \
+		SRCROOT=${SRCTOP}/Kernel/xnu OBJROOT=${OBJTOP}/Kernel/xnu \
+		DSTROOT=${BUILDROOT} CODESIGN_ALLOCATE=${CODESIGN_ALLOCATE} \
+		CTFCONVERT=${CTFCONVERT} CTFMERGE=${CTFMERGE} CTFINSERT=${CTFINSERT} \
+		IIG=${IIG} MIG=${MIG} MIGCOM=${MIGCOM} STRIP=${STRIP} LIPO=${LIPO}	NM=${NM} \
+		NMEDIT=${NMEDIT} LIBTOOL=${LIBTOOL} UNIFDEF=${UNIFDEF} \
 		DSYMUTIL=${DSYMUTIL} XCRUN=${XCRUN} XCBUILD=${XCBUILD}
-	#cd ${OBJTOP}/Kernel; export PLATFORM=MacOSX ; \
-		cmake -Wno-dev -DCMAKE_INSTALL_PREFIX=/usr \
-		-DSRCTOP=${SRCTOP} -DOBJTOOLS=${OBJTOOLS} -DMAKE=${GMAKE} \
-		-DOBJTOP=${OBJTOP} -DCMAKE_BUILD_TYPE=Release \
-		-G"Unix Makefiles" ${SRCTOP}/Kernel; \
-		export MAKE=${GMAKE} MAKEFLAGS="" PATH; \
-		${GMAKE} -C ${OBJTOP}/Kernel DESTDIR=${BUILDROOT} \
-		xnu_headers.extproj xnu
