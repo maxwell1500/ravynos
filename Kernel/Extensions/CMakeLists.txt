@@ -1,3 +1,22 @@
+cmake_minimum_required(VERSION 3.15.1)
+project(Kernel)
+
+cmake_policy(SET CMP0114 NEW)
+
+set(CMAKE_INSTALL_PREFIX "")
+set(CMAKE_MACOSX_MIN_VERSION 11.0)
+
+include(ExternalProject)
+include(${SRCTOP}/contrib/cmake/asm.cmake)
+include(${SRCTOP}/contrib/cmake/bundle_resources.cmake)
+include(${SRCTOP}/contrib/cmake/circular.cmake)
+include(${SRCTOP}/contrib/cmake/crosscompile.cmake)
+include(${SRCTOP}/contrib/cmake/get_target_dependencies.cmake)
+include(${SRCTOP}/contrib/cmake/install_helpers.cmake)
+include(${SRCTOP}/contrib/cmake/kext.cmake)
+include(${SRCTOP}/contrib/cmake/mig.cmake)
+include(${SRCTOP}/contrib/cmake/suppress_warnings.cmake)
+
 #add_subdirectory(AppleAPIC)
 #add_subdirectory(AppleI386GenericPlatform)
 #add_subdirectory(AppleIntelPIIXATA)

@@ -256,10 +256,10 @@ xnu_headers:
 		SRCROOT=${SRCTOP}/Kernel/xnu OBJROOT=${OBJTOP}/Kernel/xnu \
 		DSTROOT=${BUILDROOT} CODESIGN_ALLOCATE=${CODESIGN_ALLOCATE} \
 		CTFCONVERT=${CTFCONVERT} CTFMERGE=${CTFMERGE} CTFINSERT=${CTFINSERT} \
-		IIG=${IIG} MIG=${MIG} MIGCOM=${MIGCOM} STRIP=${STRIP} LIPO=${LIPO}	NM=${NM} \
+		IIG=${IIG} MIG=${MIG} MIGCOM=${MIGCOM} STRIP=${STRIP} LIPO=${LIPO} NM=${NM} \
 		NMEDIT=${NMEDIT} LIBTOOL=${LIBTOOL} UNIFDEF=${UNIFDEF} \
 		DSYMUTIL=${DSYMUTIL} XCRUN=${XCRUN} XCBUILD=${XCBUILD} installhdrs
- 
+
 kernel: libfirehose_kernel
 	export PATH PLATFORM=MacOSX; \
 	${GMAKE} -C ${SRCTOP}/Kernel/xnu MAKE=${GMAKE} \
@@ -269,6 +269,40 @@ kernel: libfirehose_kernel
 		SRCROOT=${SRCTOP}/Kernel/xnu OBJROOT=${OBJTOP}/Kernel/xnu \
 		DSTROOT=${BUILDROOT} CODESIGN_ALLOCATE=${CODESIGN_ALLOCATE} \
 		CTFCONVERT=${CTFCONVERT} CTFMERGE=${CTFMERGE} CTFINSERT=${CTFINSERT} \
-		IIG=${IIG} MIG=${MIG} MIGCOM=${MIGCOM} STRIP=${STRIP} LIPO=${LIPO}	NM=${NM} \
+		IIG=${IIG} MIG=${MIG} MIGCOM=${MIGCOM} STRIP=${STRIP} LIPO=${LIPO} NM=${NM} \
 		NMEDIT=${NMEDIT} LIBTOOL=${LIBTOOL} UNIFDEF=${UNIFDEF} \
 		DSYMUTIL=${DSYMUTIL} XCRUN=${XCRUN} XCBUILD=${XCBUILD}
+
+libkmod: xnu_headers
+	mkdir -pv ${OBJTOP}/Kernel/libkmod/include/pthread
+	cp -fv ${SRCTOP}/Libraries/libpthread/private/{spinlock,tsd}_private.h \
+		${OBJTOP}/Kernel/libkmod/include/pthread/
+	cp -fv ${SRCTOP}/Libraries/Libc/locale/FreeBSD/{collate,lmessages,lmonetary,lnumeric,setlocale}.h \
+		${OBJTOP}/Kernel/libkmod/include/
+	cp -fv ${SRCTOP}/Libraries/Libc/stdtime/FreeBSD/timelocal.h \
+		${OBJTOP}/Kernel/libkmod/include/
+	ln -sfv B ${OBJTOP}/release/System/Library/Frameworks/System.framework/Versions/Current
+	ln -sfv Versions/Current/Headers \
+		${OBJTOP}/release/System/Library/Frameworks/System.framework/Headers
+	ln -sfv Versions/Current/PrivateHeaders \
+		${OBJTOP}/release/System/Library/Frameworks/System.framework/PrivateHeaders
+	mkdir -pv ${BUILDROOT}/usr/include/os
+	cp -fv ${CONTRIB}/os/availability.h ${BUILDROOT}/usr/include/os
+	cmake -Wno-dev -DCMAKE_INSTALL_PREFIX=/ -DCMAKE_BUILD_TYPE=Release \
+		-DSRCTOP=${SRCTOP} -DOBJTOP=${OBJTOP} \
+		-G"Unix Makefiles" ${SRCTOP}/Kernel/libkmod
+	export PATH PLATFORM=MacOSX MAKEFLAGS="" MAKE=${GMAKE}; \
+		${GMAKE} DESTDIR=${BUILDROOT} -C ${OBJTOP}/Kernel/libkmod
+
+kext: libkmod
+	mkdir -pv ${OBJTOP}/Kernel/Extensions/include/pthread
+	cp -fv ${SRCTOP}/Libraries/libpthread/private/qos_private.h \
+		${OBJTOP}/Kernel/Extensions/include/pthread/
+	cd ${OBJTOP}/Kernel/Extensions; cmake -Wno-dev \
+		-DCMAKE_INSTALL_PREFIX=/System/Library/Extensions \
+		-DCMAKE_BUILD_TYPE=Release -DSRCTOP=${SRCTOP} -DOBJTOP=${OBJTOP} \
+		-G"Unix Makefiles" ${SRCTOP}/Kernel/Extensions
+	export PATH PLATFORM=MacOSX MAKEFLAGS="" MAKE=${GMAKE}; \
+		${GMAKE} DESTDIR=${BUILDROOT} -C ${OBJTOP}/Kernel/Extensions
+
+

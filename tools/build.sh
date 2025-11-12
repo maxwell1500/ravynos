@@ -10,8 +10,6 @@ else
 fi
 CORES=${CORES:-${HW_CPUS}}
 BUILDROOT=/usr/obj/${SRCROOT}/${PLATFORM}
-TMPBIN=${BUILDROOT}/tmp/usr/bin
-TMPLEGACY=${BUILDROOT}/tmp/legacy/bin
 MAKESYSPATH=${PWD}/share/mk
 if [ "x${OSNAME}" = "xFreeBSD" ]; then
   MAKE=${MAKE:-make}
@@ -51,9 +49,20 @@ kernel_build() {
     cd ${SRCROOT}
     if [ $clean -eq 1 ]; then
 	logdate "Cleaning object dir"
-	rm -rf ${BUILDROOT}/sys
+	rm -rf ${OBJTOP}/Kernel/xnu
     fi
     ${MAKE} -j${CORES} buildkernel
+    if [ $? -ne 0 ]; then exit $?; fi
+}
+
+kext_build() {
+    cd ${SRCROOT}
+    echo BAD GIRLS DO IT WELL
+    if [ $clean -eq 1 ]; then
+      logdate "Cleaning object dir"
+      rm -rf ${OBJTOP}/Kernel/Extensions
+    fi
+    ${MAKE} -j${CORES} kext
     if [ $? -ne 0 ]; then exit $?; fi
 }
 
@@ -160,7 +169,7 @@ usage() {
     echo "    --purge    Purge entire object dir before build"
     echo ""
     echo "Targets:"
-    echo "    base kernel system extras systempkg"
+    echo "    base kernel kext system extras systempkg"
     echo "    iso isoalt install all"
     echo ""
 }
@@ -176,8 +185,8 @@ while ! [ "z$1" = "z" ]; do
     case "$1" in
         -n) log=0 ;;
         -p) preserve=1 ;;
-	--purge) purge=1 ;;
-	-c) clean=1 ;;
+	      --purge) purge=1 ;;
+	      -c) clean=1 ;;
         -*) ;;
         *) targets+=("$1") ;;
     esac
@@ -192,17 +201,18 @@ fi
 
 if [ ${#targets} -eq 0 ]; then
     if [ $purge -eq 0 ]; then
-	usage
-	exit 1
+      	usage
+      	exit 1
     fi
 fi
 
 set -- $targets[@]
 while ! [ "z$1" = "z" ]; do
-    arg=$(echo $1|sed -e 's/[\t ]*//g') # trim whitespace
+    arg=$(echo $1|sed -e 's/[ ]*//g') # trim whitespace
     case "$arg" in
         base) base_build ;;
         kernel) kernel_build ;;
+	      kext) kext_build ;;
         system) system_build ;;
         extras) extras_build ;;
         iso) iso_build ;;
@@ -211,6 +221,7 @@ while ! [ "z$1" = "z" ]; do
 	      install) install ;;
         all) kernel_build; base_build; \
              system_build; extras_build; iso_build ;;
+        *) echo target is $arg
     esac
     shift
 done
