@@ -12,19 +12,15 @@ target_sources(pthread.kext PRIVATE
 target_compile_definitions(pthread.kext PRIVATE XNU_KERNEL_PRIVATE
     MACH_KERNEL_PRIVATE ABSOLUTETIME_SCALAR_TYPE NEEDS_SCHED_CALL_T
     __PTHREAD_EXPOSE_INTERNALS__)
-target_link_libraries(pthread.kext PRIVATE pthread_common_private_headers
-    pthread_common_headers xnu_kernel_private_headers xnu_private_headers)
 target_compile_options(pthread.kext PRIVATE -Wno-sign-conversion
     -Wno-int-conversion -Wno-implicit-function-declaration
-    -Wno-incompatible-library-redeclaration
-    -I${OBJTOP}/release/usr/include -I${OBJTOP}/release/usr/local/include
-    -F${OBJTOP}/release/System/Library/Frameworks
-    -I${OBJTOP}/release/System/Library/Frameworks/System.framework/Versions/B/Headers
-    -I${OBJTOP}/release/System/Library/Frameworks/System.framework/Versions/B/PrivateHeaders
-    -I${OBJTOP}/release/System/Library/Frameworks/Kernel.framework/Versions/A/Headers
+    -Wno-incompatible-library-redeclaration -Wno-undef-prefix
+    -I${OBJTOP}/Kernel/libkmod/include
+    -I${SRCTOP}/Libraries/libpthread
     -I${OBJTOP}/release/System/Library/Frameworks/Kernel.framework/Versions/A/PrivateHeaders
-    -I${SRCTOP}/Libraries/libpthread -I${SRCTOP}/Libraries/Libc/include
-    -I${OBJTOP}/Kernel/Extensions/include
+    -I${OBJTOP}/release/System/Library/Frameworks/Kernel.framework/Versions/B/Headers
+    -I${SRCTOP}/Kernel/xnu/bsd
+    -I${OBJTOP}/release/usr/include
 )
 
 install(TARGETS pthread.kext DESTINATION System/Library/Extensions COMPONENT BaseSystem)

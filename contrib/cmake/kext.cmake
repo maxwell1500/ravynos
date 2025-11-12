@@ -17,10 +17,10 @@ function(add_kext_bundle name)
 
     if(SL_KERNEL_PRIVATE)
         target_compile_definitions(${name} PRIVATE KERNEL_PRIVATE)
-        target_link_libraries(${name} PRIVATE xnu_kernel_private_headers)
+    #    target_link_libraries(${name} PRIVATE xnu_kernel_private_headers)
     endif()
 
-    target_link_libraries(${name} PRIVATE xnu_kernel_headers AvailabilityHeaders)
+    #target_link_libraries(${name} PRIVATE xnu_kernel_headers AvailabilityHeaders)
 
     set_property(TARGET ${name} PROPERTY BUNDLE TRUE)
     set_property(TARGET ${name} PROPERTY BUNDLE_EXTENSION kext)
@@ -75,5 +75,5 @@ function(add_kmod_info target)
 
     configure_file(${SRCTOP}/contrib/cmake/templates/kmod_info.c.in ${CMAKE_CURRENT_BINARY_DIR}/kmod_info.c)
     target_sources(${target} PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/kmod_info.c)
-    target_link_libraries(${target} PRIVATE libkmod)
+ #   target_link_libraries(${target} PRIVATE libkmod)
 endfunction()

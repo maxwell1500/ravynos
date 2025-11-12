@@ -3,7 +3,7 @@ function(add_darwin_executable name)
 
     add_executable(${name})
     target_compile_definitions(${name} PRIVATE __PUREDARWIN__)
-    target_link_options(${name} PRIVATE -fuse-ld=${OBJTOOLS}/usr/bin/ld64)
+    target_link_options(${name} PRIVATE -fuse-ld=${OBJTOP}/tmp/obj-tools/usr/bin/ld64)
 
     if(NOT SL_USE_HOST_SDK)
         target_compile_options(${name} PRIVATE -nostdlib -nostdinc)
@@ -51,7 +51,7 @@ function(add_darwin_shared_library name)
         add_library(${name} SHARED)
     endif()
 
-    target_link_options(${name} PRIVATE -fuse-ld=${OBJTOOLS}/usr/bin/ld64)
+    target_link_options(${name} PRIVATE -fuse-ld=${OBJTOP}/tmp/obj-tools/usr/bin/ld64)
     target_compile_definitions(${name} PRIVATE __PUREDARWIN__)
 
     string(SUBSTRING ${name} 0 3 name_prefix)

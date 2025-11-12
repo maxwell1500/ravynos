@@ -288,7 +288,8 @@ libkmod: xnu_headers
 		${OBJTOP}/release/System/Library/Frameworks/System.framework/PrivateHeaders
 	mkdir -pv ${BUILDROOT}/usr/include/os
 	cp -fv ${CONTRIB}/os/availability.h ${BUILDROOT}/usr/include/os
-	cmake -Wno-dev -DCMAKE_INSTALL_PREFIX=/ -DCMAKE_BUILD_TYPE=Release \
+	cd ${OBJTOP}/Kernel/libkmod; cmake -Wno-dev \
+		-DCMAKE_INSTALL_PREFIX=/ -DCMAKE_BUILD_TYPE=Release \
 		-DSRCTOP=${SRCTOP} -DOBJTOP=${OBJTOP} \
 		-G"Unix Makefiles" ${SRCTOP}/Kernel/libkmod
 	export PATH PLATFORM=MacOSX MAKEFLAGS="" MAKE=${GMAKE}; \
