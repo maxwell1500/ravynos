@@ -57,7 +57,6 @@ kernel_build() {
 
 kext_build() {
     cd ${SRCROOT}
-    echo BAD GIRLS DO IT WELL
     if [ $clean -eq 1 ]; then
       logdate "Cleaning object dir"
       rm -rf ${OBJTOP}/Kernel/Extensions

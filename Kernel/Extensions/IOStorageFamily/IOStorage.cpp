@@ -31,22 +31,15 @@
 #define super IOService
 OSDefineMetaClassAndAbstractStructors(IOStorage, IOService)
 
-#if TARGET_OS_OSX
+#if TARGET_OS_OSX && defined(__x86_64__)
 #define kIOStorageSynchronizeOptionsUnsupported ( ( IOStorage::ExpansionData * ) 1 )
 
-#if defined(__x86_64__) || defined(__i386__)
 extern "C" void _ZN9IOStorage16synchronizeCacheEP9IOService( IOStorage *, IOService * );
 extern "C" void _ZN9IOStorage11synchronizeEP9IOServiceyyj( IOStorage *, IOService *, UInt64, UInt64, IOStorageSynchronizeOptions );
 
-#define storageSynchronizeOptions( storage ) ( ( OSMemberFunctionCast( void *, storage, &IOStorage::synchronizeCache ) == _ZN9IOStorage16synchronizeCacheEP9IOService ) && \
-                                               ( OSMemberFunctionCast( void *, storage, &IOStorage::synchronize      ) != _ZN9IOStorage11synchronizeEP9IOServiceyyj   ) )
-
-#else
-
-#define storageSynchronizeOptions( storage ) (1)
-
-#endif
-#endif /* TARGET_OS_OSX */
+#define storageSynchronizeOptions( storage ) ( ( OSMemberFunctionCast( void *, storage, ( void ( IOStorage::* )( IOService *                                              ) ) &IOStorage::synchronizeCache ) == _ZN9IOStorage16synchronizeCacheEP9IOService ) && \
+                                               ( OSMemberFunctionCast( void *, storage, ( void ( IOStorage::* )( IOService *, UInt64, UInt64, IOStorageSynchronizeOptions ) ) &IOStorage::synchronize      ) != _ZN9IOStorage11synchronizeEP9IOServiceyyj   ) )
+#endif /* TARGET_OS_OSX && defined(__x86_64__) */
 
 class IOStorageSyncerLock
 {
@@ -152,7 +145,7 @@ static void storageCompletion(void *   target,
     ((IOStorageSyncer *)target)->signal(status);
 }
 
-#if TARGET_OS_OSX
+#if TARGET_OS_OSX && defined(__x86_64__)
 bool IOStorage::attach(IOService * provider)
 {
     if ( super::attach( provider ) == false )
@@ -188,7 +181,7 @@ bool IOStorage::attach(IOService * provider)
 
     return true;
 }
-#endif /* TARGET_OS_OSX */
+#endif /* TARGET_OS_OSX && defined(__x86_64__) */
 
 void IOStorage::complete(IOStorageCompletion * completion,
                          IOReturn              status,
@@ -278,7 +271,7 @@ IOReturn IOStorage::write(IOService *           client,
     return syncer.wait();
 }
 
-#if TARGET_OS_OSX
+#if TARGET_OS_OSX && defined(__x86_64__)
 IOReturn IOStorage::discard(IOService * client,
                             UInt64      byteStart,
                             UInt64      byteCount)
@@ -301,7 +294,7 @@ IOReturn IOStorage::unmap(IOService *           client,
 
     return kIOReturnUnsupported;
 }
-#endif /* TARGET_OS_OSX */
+#endif /* TARGET_OS_OSX && defined(__x86_64__) */
 
 IOReturn
 IOStorage::getProvisionStatus(IOService *                       client,
@@ -360,7 +353,7 @@ IOReturn IOStorage::setPriority(IOService *       client,
     return kIOReturnUnsupported;
 }
 
-#if TARGET_OS_OSX
+#if TARGET_OS_OSX && defined(__x86_64__)
 IOReturn IOStorage::synchronizeCache(IOService * client)
 {
     //
@@ -389,7 +382,7 @@ IOReturn IOStorage::synchronize(IOService *                 client,
     /* default the barrier synchronize to full flush */
     return synchronizeCache( client );
 }
-#endif /* TARGET_OS_OSX */
+#endif /* TARGET_OS_OSX && defined(__x86_64__) */
 
 OSMetaClassDefineReservedUsed(IOStorage,  0);
 OSMetaClassDefineReservedUsed(IOStorage,  1);

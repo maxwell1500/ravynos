@@ -295,15 +295,27 @@ libkmod: xnu_headers
 	export PATH PLATFORM=MacOSX MAKEFLAGS="" MAKE=${GMAKE}; \
 		${GMAKE} DESTDIR=${BUILDROOT} -C ${OBJTOP}/Kernel/libkmod
 
-kext: libkmod
+kext: #libkmod
 	mkdir -pv ${OBJTOP}/Kernel/Extensions/include/pthread
+	mkdir -pv ${OBJTOP}/Kernel/Extensions/include/IOKit/{storage,ata}
 	cp -fv ${SRCTOP}/Libraries/libpthread/private/qos_private.h \
 		${OBJTOP}/Kernel/Extensions/include/pthread/
-	cd ${OBJTOP}/Kernel/Extensions; cmake -Wno-dev \
+	cp -fv ${SRCTOP}/Kernel/Extensions/IOATAFamily/IOATARegI386.h \
+		${OBJTOP}/Kernel/Extensions/include/IOKit/ata/
+	cp -fv ${SRCTOP}/Kernel/Extensions/IOStorageFamily/*.h \
+		${OBJTOP}/Kernel/Extensions/include/IOKit/storage/
+	cd ${OBJTOP}/Kernel/Extensions;	cmake -Wno-dev \
 		-DCMAKE_INSTALL_PREFIX=/System/Library/Extensions \
 		-DCMAKE_BUILD_TYPE=Release -DSRCTOP=${SRCTOP} -DOBJTOP=${OBJTOP} \
 		-G"Unix Makefiles" ${SRCTOP}/Kernel/Extensions
 	export PATH PLATFORM=MacOSX MAKEFLAGS="" MAKE=${GMAKE}; \
-		${GMAKE} DESTDIR=${BUILDROOT} -C ${OBJTOP}/Kernel/Extensions
+		${GMAKE} DESTDIR=${BUILDROOT} -C ${OBJTOP}/Kernel/Extensions \
+		install
 
 
+prelink:
+	${KMUTIL:-/usr/bin/kmutil} create --allow-missing-kdk -n boot \
+		--boot-path ${OBJTOP}/Kernel/kernelcache \
+		-f 'OSBundleRequired == Local-Root'  \
+		--kernel ${OBJTOP}/Kernel/xnu/RELEASE_${MACHINE:S/x/X/}/kernel \
+		--bundle-path ${OBJTOP}/Kernel/Extensions/pthread/pthread.kext
