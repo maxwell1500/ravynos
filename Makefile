@@ -93,8 +93,8 @@ _bootstrap-clang: DIR=${OBJTOP}/${.TARGET:S/-/\//}
 		${CONTRIB}/llvm-project/llvm
 	${MAKE} -C ${OBJTOP}/${.TARGET:S/-/\//} all install \
 		DESTDIR=${OBJTOOLS}
-	ln -sf ld64.lld ${OBJTOOLS}/usr/bin/ld64
-	ln -sf ld.lld ${OBJTOOLS}/usr/bin/ld
+#	ln -sf ld64.lld ${OBJTOOLS}/usr/bin/ld64
+#	ln -sf ld.lld ${OBJTOOLS}/usr/bin/ld
 
 _bootstrap-xcbuild: DIR=${OBJTOP}/${.TARGET:S/-/\//}
 	cd ${DIR}; \
@@ -113,6 +113,7 @@ _bootstrap-xcbuild: DIR=${OBJTOP}/${.TARGET:S/-/\//}
 _bootstrap-cctools: DIR=${OBJTOP}/${.TARGET:S/-/\//}
 	cd ${DIR}; \
 	cmake -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_BUILD_TYPE=Release \
+		-DSRCTOP=${SRCTOP} -DOBJTOP=${OBJTOP} \
 		-G "Unix Makefiles" ${CONTRIB}/cctools
 	${MAKE} -C ${DIR}
 	mkdir -p ${OBJTOOLS}/usr/bin ${OBJTOOLS}/usr/lib
@@ -295,7 +296,7 @@ libkmod: xnu_headers
 	export PATH PLATFORM=MacOSX MAKEFLAGS="" MAKE=${GMAKE}; \
 		${GMAKE} DESTDIR=${BUILDROOT} -C ${OBJTOP}/Kernel/libkmod
 
-kext: #libkmod
+kext: libkmod
 	mkdir -pv ${OBJTOP}/Kernel/Extensions/include/pthread
 	mkdir -pv ${OBJTOP}/Kernel/Extensions/include/IOKit/{storage,ata}
 	cp -fv ${SRCTOP}/Libraries/libpthread/private/qos_private.h \
@@ -312,10 +313,12 @@ kext: #libkmod
 		${GMAKE} DESTDIR=${BUILDROOT} -C ${OBJTOP}/Kernel/Extensions \
 		install
 
-
+KMUTIL?= /usr/bin/kmutil
 prelink:
-	${KMUTIL:-/usr/bin/kmutil} create --allow-missing-kdk -n boot \
+	${KMUTIL} create --allow-missing-kdk -n boot -z \
 		--boot-path ${OBJTOP}/Kernel/kernelcache \
 		-f 'OSBundleRequired == Local-Root'  \
 		--kernel ${OBJTOP}/Kernel/xnu/RELEASE_${MACHINE:S/x/X/}/kernel \
-		--bundle-path ${OBJTOP}/Kernel/Extensions/pthread/pthread.kext
+		-r ${BUILDROOT}/System/Library/Extensions/ \
+		-r ${SRCTOP}/Kernel/xnu/config/System.kext/PlugIns \
+		--bundle-path ${SRCTOP}/Kernel/xnu/config/System.kext

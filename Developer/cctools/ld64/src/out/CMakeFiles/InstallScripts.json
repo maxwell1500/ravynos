@@ -1,0 +1,11 @@
+{
+	"InstallScripts" : 
+	[
+		"/Users/zoe/IdeaProjects/ravynos/contrib/cctools/ld64/src/out/cmake_install.cmake",
+		"/Users/zoe/IdeaProjects/ravynos/contrib/cctools/ld64/src/out/3rd/cmake_install.cmake",
+		"/Users/zoe/IdeaProjects/ravynos/contrib/cctools/ld64/src/out/ld/cmake_install.cmake",
+		"/Users/zoe/IdeaProjects/ravynos/contrib/cctools/ld64/src/out/ld/parsers/cmake_install.cmake",
+		"/Users/zoe/IdeaProjects/ravynos/contrib/cctools/ld64/src/out/ld/passes/cmake_install.cmake"
+	],
+	"Parallel" : false
+}

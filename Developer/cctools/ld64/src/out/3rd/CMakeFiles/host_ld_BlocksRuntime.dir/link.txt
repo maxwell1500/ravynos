@@ -1,0 +1,2 @@
+/usr/bin/ar qc libld_BlocksRuntime.a CMakeFiles/host_ld_BlocksRuntime.dir/BlocksRuntime/data.c.o CMakeFiles/host_ld_BlocksRuntime.dir/BlocksRuntime/runtime.c.o
+/usr/bin/ranlib libld_BlocksRuntime.a

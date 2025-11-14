@@ -1,0 +1,41 @@
+file(REMOVE_RECURSE
+  "CMakeFiles/host_ld_libpasses.dir/bitcode_bundle.cpp.o"
+  "CMakeFiles/host_ld_libpasses.dir/bitcode_bundle.cpp.o.d"
+  "CMakeFiles/host_ld_libpasses.dir/branch_island.cpp.o"
+  "CMakeFiles/host_ld_libpasses.dir/branch_island.cpp.o.d"
+  "CMakeFiles/host_ld_libpasses.dir/branch_shim.cpp.o"
+  "CMakeFiles/host_ld_libpasses.dir/branch_shim.cpp.o.d"
+  "CMakeFiles/host_ld_libpasses.dir/code_dedup.cpp.o"
+  "CMakeFiles/host_ld_libpasses.dir/code_dedup.cpp.o.d"
+  "CMakeFiles/host_ld_libpasses.dir/compact_unwind.cpp.o"
+  "CMakeFiles/host_ld_libpasses.dir/compact_unwind.cpp.o.d"
+  "CMakeFiles/host_ld_libpasses.dir/dtrace_dof.cpp.o"
+  "CMakeFiles/host_ld_libpasses.dir/dtrace_dof.cpp.o.d"
+  "CMakeFiles/host_ld_libpasses.dir/dylibs.cpp.o"
+  "CMakeFiles/host_ld_libpasses.dir/dylibs.cpp.o.d"
+  "CMakeFiles/host_ld_libpasses.dir/got.cpp.o"
+  "CMakeFiles/host_ld_libpasses.dir/got.cpp.o.d"
+  "CMakeFiles/host_ld_libpasses.dir/huge.cpp.o"
+  "CMakeFiles/host_ld_libpasses.dir/huge.cpp.o.d"
+  "CMakeFiles/host_ld_libpasses.dir/inits.cpp.o"
+  "CMakeFiles/host_ld_libpasses.dir/inits.cpp.o.d"
+  "CMakeFiles/host_ld_libpasses.dir/objc.cpp.o"
+  "CMakeFiles/host_ld_libpasses.dir/objc.cpp.o.d"
+  "CMakeFiles/host_ld_libpasses.dir/objc_constants.cpp.o"
+  "CMakeFiles/host_ld_libpasses.dir/objc_constants.cpp.o.d"
+  "CMakeFiles/host_ld_libpasses.dir/order.cpp.o"
+  "CMakeFiles/host_ld_libpasses.dir/order.cpp.o.d"
+  "CMakeFiles/host_ld_libpasses.dir/stubs/stubs.cpp.o"
+  "CMakeFiles/host_ld_libpasses.dir/stubs/stubs.cpp.o.d"
+  "CMakeFiles/host_ld_libpasses.dir/thread_starts.cpp.o"
+  "CMakeFiles/host_ld_libpasses.dir/thread_starts.cpp.o.d"
+  "CMakeFiles/host_ld_libpasses.dir/tlvp.cpp.o"
+  "CMakeFiles/host_ld_libpasses.dir/tlvp.cpp.o.d"
+  "libhost_ld_libpasses.a"
+  "libhost_ld_libpasses.pdb"
+)
+
+# Per-language clean rules from dependency scanning.
+foreach(lang CXX)
+  include(CMakeFiles/host_ld_libpasses.dir/cmake_clean_${lang}.cmake OPTIONAL)
+endforeach()

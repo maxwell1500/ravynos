@@ -65,6 +65,11 @@ kext_build() {
     if [ $? -ne 0 ]; then exit $?; fi
 }
 
+kernelcache() {
+    ${MAKE} prelink
+    if [ $? -ne 0 ]; then exit $?; fi
+}
+
 system_build() {
     if [ $clean -eq 1 ]; then
 	logdate "Cleaning object dir"
@@ -168,7 +173,7 @@ usage() {
     echo "    --purge    Purge entire object dir before build"
     echo ""
     echo "Targets:"
-    echo "    base kernel kext system extras systempkg"
+    echo "    base kernel kext kernelcache system extras systempkg"
     echo "    iso isoalt install all"
     echo ""
 }
@@ -212,6 +217,7 @@ while ! [ "z$1" = "z" ]; do
         base) base_build ;;
         kernel) kernel_build ;;
 	      kext) kext_build ;;
+	      kernelcache) kernelcache ;;
         system) system_build ;;
         extras) extras_build ;;
         iso) iso_build ;;
