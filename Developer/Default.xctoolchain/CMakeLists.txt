@@ -6,6 +6,7 @@ add_dependencies(BootstrapTools
     host_indr host_strip host_segedit host_pagestuff host_codesign_allocate
     host_bitcode_strip host_ctf_insert host_check_dylib host_cmpdylib host_inout
     host_vtool host_nmedit host_ranlib host_migcom host_xcbuild dtrace_ctf_host
+    host_clang
 )
 
 file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/usr/libexec)
@@ -17,8 +18,6 @@ file(COPY_FILE ${CMAKE_SOURCE_DIR}/Developer/mig/mig.sh
 
 add_custom_command(TARGET BootstrapTools
     POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:host_libmacho> ${CMAKE_CURRENT_BINARY_DIR}/usr/lib/
-    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:host_libstuff> ${CMAKE_CURRENT_BINARY_DIR}/usr/lib/
     COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:host_checksyms> ${CMAKE_CURRENT_BINARY_DIR}/usr/bin/
     COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:host_lipo> ${CMAKE_CURRENT_BINARY_DIR}/usr/bin/
     COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:host_size> ${CMAKE_CURRENT_BINARY_DIR}/usr/bin/

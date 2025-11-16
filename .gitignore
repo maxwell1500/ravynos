@@ -1,3 +1,5 @@
 /.idea
-/ravynOS.xcodeproj
+ravynOS.xcodeproj
 /build.log
+.DS_Store
+/.vscode

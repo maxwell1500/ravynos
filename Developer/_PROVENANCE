@@ -1,0 +1,14 @@
+Imported from GitHub: PureDarwin/PureDarwin.git
+- cctools
+- dtrace_ctf
+- mig
+- cmake
+- unifdef
+
+Imported from GitHub: llvm/llvm-project.git
+Branch: release/16.x
+- llvm-project
+
+Imported from GitHub: darlinghq/xcbuild.git
+Branch: main
+- xcbuild
