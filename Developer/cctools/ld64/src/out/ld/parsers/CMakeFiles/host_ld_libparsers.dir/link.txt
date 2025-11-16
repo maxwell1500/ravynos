@@ -1,2 +1,0 @@
-/usr/bin/ar qc libhost_ld_libparsers.a CMakeFiles/host_ld_libparsers.dir/archive_file.cpp.o CMakeFiles/host_ld_libparsers.dir/generic_dylib_file.cpp.o CMakeFiles/host_ld_libparsers.dir/lto_file.cpp.o CMakeFiles/host_ld_libparsers.dir/macho_dylib_file.cpp.o CMakeFiles/host_ld_libparsers.dir/macho_relocatable_file.cpp.o CMakeFiles/host_ld_libparsers.dir/opaque_section_file.cpp.o CMakeFiles/host_ld_libparsers.dir/textstub_dylib_file.cpp.o
-/usr/bin/ranlib libhost_ld_libparsers.a

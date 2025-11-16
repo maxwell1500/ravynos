@@ -1,2 +1,0 @@
-/usr/bin/ar qc libld_helper.a CMakeFiles/host_ld_helper.dir/helper.c.o CMakeFiles/host_ld_helper.dir/qsort_r.c.o CMakeFiles/host_ld_helper.dir/strlcat.c.o CMakeFiles/host_ld_helper.dir/strlcpy.c.o CMakeFiles/host_ld_helper.dir/eprintf.c.o CMakeFiles/host_ld_helper.dir/md5.c.o CMakeFiles/host_ld_helper.dir/mkpath_np.c.o CMakeFiles/host_ld_helper.dir/find_executable.c.o
-/usr/bin/ranlib libld_helper.a

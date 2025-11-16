@@ -43,4 +43,7 @@ target_include_directories(host_ld PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
     parsers passes
     ${OPENSSL_INCLUDE_DIR}
+    ${CMAKE_SOURCE_DIR}/Kernel/Extensions/corecrypto/include
+    ${CMAKE_SOURCE_DIR}/Libraries/CommonCrypto/include
+    ${CMAKE_SOURCE_DIR}/Libraries/CommonCrypto/include/Private
 )
