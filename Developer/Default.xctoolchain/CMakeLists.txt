@@ -43,9 +43,9 @@ add_custom_command(TARGET BootstrapTools
     COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:host_nmedit> ${CMAKE_CURRENT_BINARY_DIR}/usr/bin/
     COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:host_ranlib> ${CMAKE_CURRENT_BINARY_DIR}/usr/bin/
     COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:host_migcom> ${CMAKE_CURRENT_BINARY_DIR}/usr/libexec/migcom
-    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_BINARY_DIR}/Developer/dtrace_ctf/tools/ctfconvert ${CMAKE_CURRENT_BINARY_DIR}/usr/bin/
-    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_BINARY_DIR}/Developer/dtrace_ctf/tools/ctfdump ${CMAKE_CURRENT_BINARY_DIR}/usr/bin/
-    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_BINARY_DIR}/Developer/dtrace_ctf/tools/ctfmerge ${CMAKE_CURRENT_BINARY_DIR}/usr/bin/
+    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_BINARY_DIR}/Developer/dtrace_ctf_host/tools/ctfconvert ${CMAKE_CURRENT_BINARY_DIR}/usr/bin/
+    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_BINARY_DIR}/Developer/dtrace_ctf_host/tools/ctfdump ${CMAKE_CURRENT_BINARY_DIR}/usr/bin/
+    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_BINARY_DIR}/Developer/dtrace_ctf_host/tools/ctfmerge ${CMAKE_CURRENT_BINARY_DIR}/usr/bin/
     COMMAND ${CMAKE_COMMAND} -E rm ${CMAKE_CURRENT_BINARY_DIR}/cmake_install.cmake
     COMMAND ${CMAKE_COMMAND} -E rm -rf ${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles
     COMMAND ${CMAKE_COMMAND} -E rm -rf ${CMAKE_CURRENT_BINARY_DIR}/libBootstrapTools.a
