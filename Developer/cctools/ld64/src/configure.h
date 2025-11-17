@@ -10,9 +10,11 @@
 #include <string.h>
 #include <dlfcn.h>
 
+#if 0
 #include "strlcat.h"
 #include "strlcpy.h"
 #include "helper.h"
+#endif
 
 #ifdef __GLIBCXX__
 #include <algorithm>

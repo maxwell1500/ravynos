@@ -29,6 +29,7 @@
 #ifndef __ADDRESSSPACE_HPP__
 #define __ADDRESSSPACE_HPP__
 
+#include <helper.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>

@@ -6,7 +6,7 @@ add_dependencies(BootstrapTools
     host_indr host_strip host_segedit host_pagestuff host_codesign_allocate
     host_bitcode_strip host_ctf_insert host_check_dylib host_cmpdylib host_inout
     host_vtool host_nmedit host_ranlib host_migcom host_xcbuild dtrace_ctf_host
-    host_clang
+    host_clang host_ld host_xar host_libxar
 )
 
 file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/usr/libexec)
@@ -18,6 +18,9 @@ file(COPY_FILE ${CMAKE_SOURCE_DIR}/Developer/mig/mig.sh
 
 add_custom_command(TARGET BootstrapTools
     POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:host_xar> ${CMAKE_CURRENT_BINARY_DIR}/usr/bin/
+    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:host_libxar> ${CMAKE_CURRENT_BINARY_DIR}/usr/lib/
+    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:host_ld> ${CMAKE_CURRENT_BINARY_DIR}/usr/bin/
     COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:host_checksyms> ${CMAKE_CURRENT_BINARY_DIR}/usr/bin/
     COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:host_lipo> ${CMAKE_CURRENT_BINARY_DIR}/usr/bin/
     COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:host_size> ${CMAKE_CURRENT_BINARY_DIR}/usr/bin/
@@ -45,6 +48,7 @@ add_custom_command(TARGET BootstrapTools
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_BINARY_DIR}/Developer/dtrace_ctf_host/tools/ctfconvert ${CMAKE_CURRENT_BINARY_DIR}/usr/bin/
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_BINARY_DIR}/Developer/dtrace_ctf_host/tools/ctfdump ${CMAKE_CURRENT_BINARY_DIR}/usr/bin/
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_BINARY_DIR}/Developer/dtrace_ctf_host/tools/ctfmerge ${CMAKE_CURRENT_BINARY_DIR}/usr/bin/
+    COMMAND ${CMAKE_COMMAND} -E create_symlink llvm-otool ${CMAKE_CURRENT_BINARY_DIR}/usr/bin/otool
     COMMAND ${CMAKE_COMMAND} -E rm ${CMAKE_CURRENT_BINARY_DIR}/cmake_install.cmake
     COMMAND ${CMAKE_COMMAND} -E rm -rf ${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles
     COMMAND ${CMAKE_COMMAND} -E rm -rf ${CMAKE_CURRENT_BINARY_DIR}/libBootstrapTools.a

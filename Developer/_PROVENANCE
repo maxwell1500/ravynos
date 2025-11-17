@@ -1,14 +1,18 @@
 Imported from GitHub: PureDarwin/PureDarwin.git
-- cctools
-- dtrace_ctf
-- mig
+- cctools (SPDX:APSL-2.0)
+- dtrace_ctf (SPDX:APSL-1.1,SPDX:CDDL-1.0,SPDX:LGPL-2.0)
+- mig (SPDX:APSL-2.0)
 - cmake
-- unifdef
+- unifdef (SPDX:BSD-2-Clause)
+
+Imported from GitHub: apple-oss-distributions/distribution-macOS.git
+Branch: rel/macOS-12.0
+- cctools/ld64 (SPDX:APSL-2.0)
 
 Imported from GitHub: llvm/llvm-project.git
 Branch: release/16.x
-- llvm-project
+- llvm-project (SPDX:Apache-2.0 WITH LLVM-Exception)
 
 Imported from GitHub: darlinghq/xcbuild.git
 Branch: main
-- xcbuild
+- xcbuild (SPDX:BSD-2-Clause,SPDX:BSD-3-Clause)
