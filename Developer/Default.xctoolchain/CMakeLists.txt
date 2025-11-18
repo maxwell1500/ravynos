@@ -49,6 +49,10 @@ add_custom_command(TARGET BootstrapTools
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_BINARY_DIR}/Developer/dtrace_ctf_host/tools/ctfdump ${CMAKE_CURRENT_BINARY_DIR}/usr/bin/
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_BINARY_DIR}/Developer/dtrace_ctf_host/tools/ctfmerge ${CMAKE_CURRENT_BINARY_DIR}/usr/bin/
     COMMAND ${CMAKE_COMMAND} -E create_symlink llvm-otool ${CMAKE_CURRENT_BINARY_DIR}/usr/bin/otool
+    COMMAND ${CMAKE_COMMAND} -E create_symlink llvm-as ${CMAKE_CURRENT_BINARY_DIR}/usr/bin/as
+    COMMAND ${CMAKE_COMMAND} -E create_symlink ld ${CMAKE_CURRENT_BINARY_DIR}/usr/bin/ld64
+    COMMAND ${CMAKE_COMMAND} -E create_symlink clang ${CMAKE_CURRENT_BINARY_DIR}/usr/bin/cc
+    COMMAND ${CMAKE_COMMAND} -E create_symlink clang++ ${CMAKE_CURRENT_BINARY_DIR}/usr/bin/c++
     COMMAND ${CMAKE_COMMAND} -E rm ${CMAKE_CURRENT_BINARY_DIR}/cmake_install.cmake
     COMMAND ${CMAKE_COMMAND} -E rm -rf ${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles
     COMMAND ${CMAKE_COMMAND} -E rm -rf ${CMAKE_CURRENT_BINARY_DIR}/libBootstrapTools.a

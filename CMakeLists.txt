@@ -17,3 +17,4 @@ include(Developer/cmake/suppress_warnings.cmake)
 
 # Bootstrap our SDK if needed
 add_subdirectory(Developer)
+add_subdirectory(Libraries)

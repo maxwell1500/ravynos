@@ -7,7 +7,7 @@ add_subdirectory(Default.xctoolchain)
 
 ExternalProject_Add(host_xcbuild
     SOURCE_DIR ${CMAKE_SOURCE_DIR}/Developer/xcbuild
-    CMAKE_ARGS -DCMAKE_INSTALL_PREFIX=${CMAKE_BINARY_DIR}/Developer/Default.xctoolchain
+    CMAKE_ARGS -DCMAKE_BUILD_RPATH=@executable_path/../lib -DCMAKE_INSTALL_RPATH=@executable_path/../lib -DCMAKE_INSTALL_PREFIX=${CMAKE_BINARY_DIR}/Developer/Default.xctoolchain
 )
 
 ExternalProject_Add(dtrace_ctf_host
@@ -37,6 +37,4 @@ ExternalProject_Add(host_clang
         -DLLVM_ENABLE_PROJECTS=clang$<SEMICOLON>lld$<SEMICOLON>lldb
         -DLLVM_INSTALL_BINUTILS_SYMLINKS=ON
         -DLLVM_ENABLE_RUNTIMES=compiler-rt$<SEMICOLON>libcxx$<SEMICOLON>libcxxabi
-    BUILD_ENVIRONMENT_MODIFICATION
-        PATH=path_list_prepend:${CMAKE_BINARY_DIR}/Developer/Default.xctoolchain/usr/bin
 )

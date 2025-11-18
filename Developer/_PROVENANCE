@@ -4,6 +4,7 @@ Imported from GitHub: PureDarwin/PureDarwin.git
 - mig (SPDX:APSL-2.0)
 - cmake
 - unifdef (SPDX:BSD-2-Clause)
+- xar (SPDX:BSD-3-Clause)
 
 Imported from GitHub: apple-oss-distributions/distribution-macOS.git
 Branch: rel/macOS-12.0

@@ -7,12 +7,13 @@
 # of patent rights can be found in the PATENTS file in the same directory.
 #
 
-cmake_minimum_required(VERSION 3.13)
 project(xcbuild C CXX)
 
+cmake_minimum_required(VERSION 3.13)
 cmake_policy(SET CMP0054 NEW)
 
 set(BUILD_SHARED_LIBS True CACHE BOOL "Build shared libraries." FORCE)
+
 set(CMAKE_SKIP_RPATH FALSE)
 
 # Output into root build directory.
