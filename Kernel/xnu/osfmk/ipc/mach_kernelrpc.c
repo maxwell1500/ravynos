@@ -26,6 +26,10 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
+ /* 
+  *  Modified Nov 2025 for ravynOS 
+  */
+
 #include <mach/mach_types.h>
 #include <mach/mach_traps.h>
 #include <mach/mach_vm_server.h>
@@ -318,7 +322,15 @@ _kernelrpc_mach_port_get_attributes_trap(struct _kernelrpc_mach_port_get_attribu
 	mach_msg_type_number_t count;
 
 	if (task != current_task()) {
-		goto done;
+		/* Removed a 'goto done' here as it will not compile with clang-16
+		 * because it bypasses initialization of a variable-length array.
+		 * This gross hack is a copy of the code from 'done' to get things
+		 * building.
+		 */
+		if (task) {
+			task_deallocate(task);
+		}
+		return rv;
 	}
 
 	// MIG does not define the type or size of the mach_port_info_t out array

@@ -84,13 +84,14 @@
 /*
  *    gcc based compiler used on Mac OS X
  */
-#if defined(__GNUC__) && ( defined(__APPLE_CPP__) || defined(__APPLE_CC__) || defined(__MACOS_CLASSIC__) )
+#if (defined(__GNUC__) || 1) && ( defined(__APPLE_CPP__) || defined(__APPLE_CC__) || defined(__MACOS_CLASSIC__) )
     #define TARGET_OS_MAC               1
+    #define TARGET_OS_OSX               1
     #define TARGET_OS_WIN32             0
     #define TARGET_OS_UNIX              0
-    #define TARGET_OS_EMBEDDED          @CONFIG_EMBEDDED@ 
-    #define TARGET_OS_IPHONE            @CONFIG_IPHONE@ 
-    #define TARGET_IPHONE_SIMULATOR     @CONFIG_IPHONE_SIMULATOR@ 
+    #define TARGET_OS_EMBEDDED          0
+    #define TARGET_OS_IPHONE            0
+    #define TARGET_IPHONE_SIMULATOR     0
     #if defined(__ppc__) 
         #define TARGET_CPU_PPC          1
         #define TARGET_CPU_PPC64        0

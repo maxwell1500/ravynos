@@ -2,12 +2,12 @@ add_subdirectory(xar)
 add_subdirectory(cctools)
 add_subdirectory(mig)
 add_subdirectory(unifdef)
-add_subdirectory(ravynOS.sdk)
-add_subdirectory(Default.xctoolchain)
+add_subdirectory(Platforms/ravynOS.platform/Developer/SDKs/ravynOS.sdk)
+add_subdirectory(Toolchains/Default.xctoolchain)
 
 ExternalProject_Add(host_xcbuild
     SOURCE_DIR ${CMAKE_SOURCE_DIR}/Developer/xcbuild
-    CMAKE_ARGS -DCMAKE_BUILD_RPATH=@executable_path/../lib -DCMAKE_INSTALL_RPATH=@executable_path/../lib -DCMAKE_INSTALL_PREFIX=${CMAKE_BINARY_DIR}/Developer/Default.xctoolchain
+    CMAKE_ARGS -DCMAKE_BUILD_RPATH=@executable_path/../lib -DCMAKE_INSTALL_RPATH=@executable_path/../lib -DCMAKE_INSTALL_PREFIX=${CMAKE_BINARY_DIR}/Developer/Toolchains/Default.xctoolchain
 )
 
 ExternalProject_Add(dtrace_ctf_host
@@ -24,17 +24,38 @@ elseif(CMAKE_HOST_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
     set(CpuArch "aarch64")
 endif()
 
-ExternalProject_Add(host_clang
+if(CMAKE_HOST_SYSTEM_NAME MATCHES "Darwin")
+    execute_process(
+        COMMAND xcrun --show-sdk-path
+        OUTPUT_VARIABLE HOST_SDKROOT
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    message("Darwin build: found sdkroot=${HOST_SDKROOT}")
+endif()
+
+file(COPY_FILE ${CMAKE_SOURCE_DIR}/Developer/mig/mig.sh ${CMAKE_BINARY_DIR}/Developer/mig/mig)
+set(MIG ${CMAKE_BINARY_DIR}/Developer/mig/mig)
+ExternalProject_Add(host_clang DEPENDS host_migcom
     SOURCE_DIR ${CMAKE_SOURCE_DIR}/Developer/llvm-project/llvm
     BINARY_DIR ${CMAKE_BINARY_DIR}/Developer/clang
     CMAKE_ARGS 
-        -Wno-dev
-        -DCMAKE_INSTALL_PREFIX=${CMAKE_BINARY_DIR}/Developer/Default.xctoolchain/usr
+        -Wno-dev -DCMAKE_OSX_SYSROOT=${HOST_SDKROOT} -DMIG=${MIG}
+        -DCMAKE_INSTALL_PREFIX=${CMAKE_BINARY_DIR}/Developer/Toolchains/Default.xctoolchain/usr
         -DCMAKE_BUILD_TYPE=Release
         -DLLVM_TARGETS_TO_BUILD=${BuildArch}
         -DLLVM_DEFAULT_TARGET_TRIPLE=${CpuArch}-ravynOS-darwin-macho
-        -DLLVM_BUILD_DOCS=OFF
+        -DLLVM_BUILD_DOCS=OFF -DLLVM_BUILD_LLVM_DYLIB=ON -DLLVM_LINK_LLVM_DYLIB=ON
+        -DLLVM_CREATE_XCODE_TOOLCHAIN=ON -DLLVM_INSTALL_BINUTILS_SYMLINKS=ON
+        -DLLVM_ENABLE_ZSTD=OFF -DLLVM_ENABLE_ZLIB=ON -DLLDB_ENABLE_LZMA=OFF
         -DLLVM_ENABLE_PROJECTS=clang$<SEMICOLON>lld$<SEMICOLON>lldb
-        -DLLVM_INSTALL_BINUTILS_SYMLINKS=ON
         -DLLVM_ENABLE_RUNTIMES=compiler-rt$<SEMICOLON>libcxx$<SEMICOLON>libcxxabi
+)
+
+add_custom_target(CarbonHeaders ALL DEPENDS BootstrapTools
+	COMMAND ${CMAKE_COMMAND} -E copy 
+		${CMAKE_SOURCE_DIR}/Developer/CarbonHeaders/{ConditionalMacros,MacTypes}.h
+		${CMAKE_SOURCE_DIR}/Kernel/xnu/EXTERNAL_HEADERS/Availability*.h
+		${CMAKE_BINARY_DIR}/sysroot/usr/include/
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/sysroot/usr/include
+    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/CarbonHeaders/TargetConditionals.h ${CMAKE_BINARY_DIR}/sysroot/usr/include/
 )

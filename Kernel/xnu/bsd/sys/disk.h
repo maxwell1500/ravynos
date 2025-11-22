@@ -348,10 +348,11 @@ typedef struct dk_apfs_wbc_range {
 #endif /* PRIVATE */
 #endif /* KERNEL */
 
+#if 0
 #ifdef PRIVATE
 #if (TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR)
 #define _DKIOCSETSTATIC                       _IO('d', 84)
 #endif /* (TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR) */
 #endif /* PRIVATE */
-
+#endif
 #endif  /* _SYS_DISK_H_ */

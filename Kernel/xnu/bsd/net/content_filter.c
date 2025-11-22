@@ -353,6 +353,7 @@
 #include <kern/task.h>
 #include <mach/task_info.h>
 
+#include <TargetConditionals.h>
 #if !TARGET_OS_OSX && !defined(XNU_TARGET_OS_OSX)
 #define MAX_CONTENT_FILTER 2
 #else

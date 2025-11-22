@@ -65,7 +65,12 @@ realpath()
 
 scriptPath=$(realpath "$0")
 scriptRoot=$(dirname "$scriptPath")
-migcomPath=$(realpath "${scriptRoot}/../libexec/migcom")
+# ravynOS build hack - check for a host_migcom executable in the same dir
+if [ -e "${scriptRoot}/migcom" ]; then
+	migcomPath=$(realpath "${scriptRoot}/host_migcom")
+else
+	migcomPath=$(realpath "${scriptRoot}/../libexec/migcom")
+fi
 
 if [ -n "${SDKROOT}" ]; then
 	sdkRoot="${SDKROOT}";

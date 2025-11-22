@@ -17,3 +17,6 @@ Branch: release/16.x
 Imported from GitHub: darlinghq/xcbuild.git
 Branch: main
 - xcbuild (SPDX:BSD-2-Clause,SPDX:BSD-3-Clause)
+
+Imported from GitHub: apple-oss-distributions/CarbonHeaders.git
+- CarbonHeaders (SPDX:APSL-2.0)

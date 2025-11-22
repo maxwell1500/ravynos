@@ -8,6 +8,7 @@
  */
 
 
+#include <TargetConditionals.h>
 #ifndef KERNEL
 
 #include "Block_private.h"

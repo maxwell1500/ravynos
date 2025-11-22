@@ -139,6 +139,7 @@ WARNFLAGS_STD := \
 	-Wno-c++98-compat \
 	-Wno-conditional-uninitialized \
 	-Wno-covered-switch-default \
+	-Wno-declaration-after-statement \
 	-Wno-disabled-macro-expansion \
 	-Wno-documentation-unknown-command \
 	-Wno-extra-semi-stmt \
@@ -150,9 +151,11 @@ WARNFLAGS_STD := \
 	-Wno-padded \
 	-Wno-partial-availability \
 	-Wno-reserved-id-macro \
+	-Wno-reserved-identifier \
 	-Wno-shift-sign-overflow \
 	-Wno-switch-enum \
 	-Wno-undef \
+	-Wno-unsafe-buffer-usage \
 	-Wno-unused-macros \
 	-Wno-used-but-marked-unused \
 	-Wno-variadic-macros \
@@ -263,8 +266,6 @@ CFLAGS_GEN = $(DEBUG_CFLAGS) -nostdinc \
 	-ferror-limit=10000 \
 	-fno-builtin \
 	-fno-common \
-	-ftrivial-auto-var-init=zero \
-	-enable-trivial-auto-var-init-zero-knowing-it-will-be-removed-from-clang \
 	-fsigned-bitfields \
 	-fmerge-all-constants \
 	-fno-c++-static-destructors \
@@ -462,7 +463,7 @@ LDFLAGS_KERNEL_GEN = \
 	-Wl,-headerpad,152
 
 # LDFLAGS_KERNEL_SDK	= -L$(SDKROOT)/usr/local/lib/kernel -lfirehose_kernel
-LDFLAGS_KERNEL_SDK	= -L$(SDKROOT)/usr/local/lib/kernel -L${OBJTOP}/Kernel/libfirehose_kernel
+LDFLAGS_KERNEL_SDK	= -L$(SDKROOT)/usr/local/lib/kernel -L${OBJROOT}/Kernel/libfirehose_kernel
 
 LDFLAGS_KERNEL_RELEASE	=
 LDFLAGS_KERNEL_DEVELOPMENT     =
@@ -679,7 +680,7 @@ INCFLAGS_IMPORT	= $(patsubst %, -I$(OBJROOT)/EXPORT_HDRS/%, $(COMPONENT_IMPORT_L
 INCFLAGS_EXTERN	= -I$(SRCROOT)/EXTERNAL_HEADERS
 INCFLAGS_GEN	= -I$(SRCROOT)/$(COMPONENT) -I$(OBJROOT)/EXPORT_HDRS/$(COMPONENT)
 INCFLAGS_LOCAL	= -I.
-INCFLAGS_SDK	= -I$(SRCTOP)/Libraries/libdispatch -I$(SRCTOP)/Kernel/xnu/libkern/firehose \
+INCFLAGS_SDK	= -I$(SRCROOT)/Libraries/libdispatch -I$(SRCROOT)/Kernel/xnu/libkern/firehose \
                   -I$(SDKROOT)/usr/local/include/kernel
 
 INCFLAGS	= $(INCFLAGS_LOCAL) $(INCFLAGS_GEN) $(INCFLAGS_IMPORT) $(INCFLAGS_EXTERN) $(INCFLAGS_MAKEFILE) $(INCFLAGS_SDK)

@@ -15,6 +15,10 @@ file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/usr/lib)
 file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/usr/bin)
 file(COPY_FILE ${CMAKE_SOURCE_DIR}/Developer/mig/mig.sh
     ${CMAKE_CURRENT_BINARY_DIR}/usr/bin/mig ONLY_IF_DIFFERENT)
+file(COPY ${CMAKE_CURRENT_SOURCE_DIR}/ToolchainInfo.plist
+    DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
+file(CREATE_LINK Default.xctoolchain
+    ${CMAKE_CURRENT_BINARY_DIR}/../XcodeDefault.xctoolchain SYMBOLIC)
 
 add_custom_command(TARGET BootstrapTools
     POST_BUILD
@@ -44,6 +48,7 @@ add_custom_command(TARGET BootstrapTools
     COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:host_vtool> ${CMAKE_CURRENT_BINARY_DIR}/usr/bin/
     COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:host_nmedit> ${CMAKE_CURRENT_BINARY_DIR}/usr/bin/
     COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:host_ranlib> ${CMAKE_CURRENT_BINARY_DIR}/usr/bin/
+    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:unifdef> ${CMAKE_CURRENT_BINARY_DIR}/usr/bin/
     COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:host_migcom> ${CMAKE_CURRENT_BINARY_DIR}/usr/libexec/migcom
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_BINARY_DIR}/Developer/dtrace_ctf_host/tools/ctfconvert ${CMAKE_CURRENT_BINARY_DIR}/usr/bin/
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_BINARY_DIR}/Developer/dtrace_ctf_host/tools/ctfdump ${CMAKE_CURRENT_BINARY_DIR}/usr/bin/
