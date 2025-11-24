@@ -12,23 +12,22 @@ function(add_kext_bundle name)
 
     target_compile_definitions(${name} PRIVATE TARGET_OS_OSX KERNEL)
     target_compile_options(${name} PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-fapple-kext>
-        -I${CMAKE_BINARY_DIR}/Kernel/libkmod/include
         -I${CMAKE_BINARY_DIR}/sysroot/System/Library/Frameworks/Kernel.framework/Versions/A/PrivateHeaders
-        -I${CMAKE_BINARY_DIR}/sysroot/System/Library/Frameworks/Kernel.framework/Versions/B/Headers
-        -I${SRCTOP}/Kernel/xnu/bsd
+        -I${CMAKE_BINARY_DIR}/sysroot/System/Library/Frameworks/Kernel.framework/Versions/A/Headers
+        -I${CMAKE_SOURCE_DIR}/Kernel/xnu/bsd
         -I${CMAKE_BINARY_DIR}/sysroot/usr/include
 )
 
     target_link_options(${name} PRIVATE "LINKER:-bundle")
     target_link_options(${name} PRIVATE "SHELL:-undefined dynamic_lookup")
-    target_link_options(${name} PRIVATE -Wl,-kext -Wl,-split_seg -Wl,-segalign)
+    target_link_options(${name} PRIVATE -Wl,-kext -Wl,-segalign,0x1000)
 
     if(SL_KERNEL_PRIVATE)
         target_compile_definitions(${name} PRIVATE KERNEL_PRIVATE)
         target_link_libraries(${name} PRIVATE ${CMAKE_BINARY_DIR}/Kernel/libkmod/libkmod.a)
     endif()
 
-    target_link_libraries(${name} PRIVATE xnu_kernel_headers)
+#    target_link_libraries(${name} PRIVATE xnu_kernel_headers)
 
     set_property(TARGET ${name} PROPERTY BUNDLE TRUE)
     set_property(TARGET ${name} PROPERTY BUNDLE_EXTENSION kext)

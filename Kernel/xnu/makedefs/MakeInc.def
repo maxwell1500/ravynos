@@ -212,9 +212,13 @@ endif
 # This can have false negatives, and is used to avoid calling CTF when we'll build a static KC
 #
 ifndef WILL_BUILD_STATIC_KC
+ifneq ($(EMBEDDED_DEVICE_MAP),)
 export WILL_BUILD_STATIC_KC := $(shell $(EMBEDDED_DEVICE_MAP) -db $(EDM_DBPATH)	\
 				-query 'SELECT COUNT(*) != 0 FROM Targets WHERE KernelPlatform IS "$(CURRENT_MACHINE_CONFIG_LC)" \
 					AND (KernelMachOArchitecture LIKE "arm64e" OR ProductType LIKE "iphone10,%")')
+else
+export WILL_BUILD_STATIC_KC := 0
+endif
 endif
 
 BUILD_STATIC_LINK := 1
@@ -440,7 +444,7 @@ SFLAGS	= $(SFLAGS_GEN) \
 #
 # Linker command
 #
-LD	= $(KC++) -nostdlib
+LD	= $(KC++) -nostdlib -fuse-ld=$(LD)
 
 #
 # Default LDFLAGS
@@ -454,11 +458,12 @@ LDFLAGS_KERNEL_GEN = \
 	-fapple-kext \
 	-Wl,-e,__start \
 	-Wl,-sectalign,__TEXT,__text,0x1000 \
+	-Wl,-sectalign,__DATA,__percpu,0x80 \
 	-Wl,-sectalign,__DATA,__common,0x1000 \
 	-Wl,-sectalign,__DATA,__bss,0x1000 \
 	-Wl,-sectcreate,__PRELINK_TEXT,__text,/dev/null \
+	-Wl,-segprot,__PRELINK_TEXT,r-x,r-x \
 	-Wl,-sectcreate,__PRELINK_INFO,__info,/dev/null \
-	-Wl,-new_linker \
 	-Wl,-pagezero_size,0x0 \
 	-Wl,-version_load_command \
 	-Wl,-function_starts \
@@ -637,6 +642,8 @@ LDFLAGS_KERNEL_DEBUGARM64 = $(LDFLAGS_KERNEL_DEVELOPMENTARM64)
 LDFLAGS_KERNEL_EXPORTS_KASANARM64 = $(LDFLAGS_KERNEL_EXPORTS_DEVELOPMENTARM64)
 LDFLAGS_KERNEL_EXPORTS_DEBUGARM64 = $(LDFLAGS_KERNEL_EXPORTS_DEVELOPMENTARM64)
 
+LDFLAGS_KERNEL_ONLY_SUBARCH_x86_64 = -Wl,-add_split_seg_info
+
 LDFLAGS_KERNEL	= $(LDFLAGS_KERNEL_GEN) \
 		  $(LDFLAGS_KERNEL_SDK) \
 		  $($(addsuffix $(CURRENT_ARCH_CONFIG),ARCH_FLAGS_)) \
@@ -645,6 +652,11 @@ LDFLAGS_KERNEL	= $(LDFLAGS_KERNEL_GEN) \
 		  $($(addsuffix $(CURRENT_ARCH_CONFIG), $(addsuffix $(CURRENT_KERNEL_CONFIG),LDFLAGS_KERNEL_))) \
 		  $(DEPLOYMENT_TARGET_FLAGS)
 
+LDFLAGS_KERNEL_ONLY   =   \
+                 $($(addsuffix $(CURRENT_ARCH_CONFIG), $(addsuffix $(CURRENT_KERNEL_CONFIG),LDFLAGS_KERNEL_ONLY_CONFIG_))) \
+                 $($(addsuffix $(ARCH_STRING_FOR_CURRENT_MACHINE_CONFIG),LDFLAGS_KERNEL_ONLY_SUBARCH_)) \
+                 -Wl,-alias_list,$(TARGET)/all-alias.exp \
+                 -Wl,-sectcreate,__LINKINFO,__symbolsets,$(TARGET)/symbolsets.plist -Wl,-segprot,__LINKINFO,r--,r--
 
 LDFLAGS_KERNEL_EXPORTS   =   \
 		  $($(addsuffix $(CURRENT_ARCH_CONFIG), $(addsuffix $(CURRENT_KERNEL_CONFIG),LDFLAGS_KERNEL_EXPORTS_))) \
@@ -774,6 +786,7 @@ export VPATH = .:$(SOURCE)
 #
 INSTALL_FLAGS = -c -S -m 0444
 DATA_INSTALL_FLAGS = -c -S -m 0644
+DATA_INSTALL_FLAGS_RO = -c -S -m 0444
 EXEC_INSTALL_FLAGS = -c -S -m 0755
 
 #

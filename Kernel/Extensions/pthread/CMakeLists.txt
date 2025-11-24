@@ -11,7 +11,7 @@ target_sources(pthread.kext PRIVATE
 
 target_compile_definitions(pthread.kext PRIVATE XNU_KERNEL_PRIVATE
     MACH_KERNEL_PRIVATE ABSOLUTETIME_SCALAR_TYPE NEEDS_SCHED_CALL_T
-    __PTHREAD_EXPOSE_INTERNALS__)
+    __PTHREAD_EXPOSE_INTERNALS__ __STDC_HOSTED__=0)
 target_compile_options(pthread.kext PRIVATE -Wno-sign-conversion
     -Wno-int-conversion -Wno-implicit-function-declaration
     -Wno-incompatible-library-redeclaration -Wno-undef-prefix
