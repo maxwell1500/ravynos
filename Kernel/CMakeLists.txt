@@ -97,6 +97,7 @@ ExternalProject_Add(xnu
 	DEPENDS xnu_headers CarbonHeaders libfirehose_kernel BootstrapTools
 )
 
+add_subdirectory(libkmod)
 
 # ${SRCTOP}/Libraries/Libc/include/libc-features.h:
 # 	mkdir -p ${OBJTOP}/tmp/include

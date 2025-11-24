@@ -1,7 +1,6 @@
 
 set(TOOLS ${TOOLCHAIN}/usr/bin)
 set(PATH "${TOOLS}:$ENV{PATH}")
-set(GMAKE /usr/bin/make)
 
 set(AS ${TOOLS}/as)
 set(CC ${TOOLS}/cc)
@@ -33,4 +32,4 @@ set(XCRUN ${TOOLS}/xcrun)
 set(ENV{RUNTIME_SPEC_PATH} ${CMAKE_SOURCE_DIR}/Developer/xcbuild/Specifications)
 set(ENV{DERIVED_DATA_DIR} ${CMAKE_CURRENT_BINARY_DIR})
 
-add_subdirectory(Libc)
+#add_subdirectory(Libc)
