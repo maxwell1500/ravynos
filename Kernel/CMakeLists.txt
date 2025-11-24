@@ -1,10 +1,9 @@
 set(TOOLS ${TOOLCHAIN}/usr/bin)
 set(PATH "${TOOLS}:$ENV{PATH}")
-set(GMAKE /usr/bin/make)
 
 set(CC ${TOOLS}/cc)
 set(CXX ${TOOLS}/c++)
-set(LD ${TOOLS}/ld64)
+set(LD ${TOOLS}/ld)
 set(AR ${TOOLS}/ar)
 set(RANLIB ${TOOLS}/ranlib)
 set(NM ${TOOLS}/nm)
@@ -26,55 +25,75 @@ set(XCRUN ${TOOLS}/xcrun)
 set(XCBUILD ${TOOLS}/xcbuild)
 set(XCODEBUILD ${TOOLS}/xcodebuild)
 
-set(MACHINE uppercase(${CMAKE_SYSTEM_PROCESSOR}))
+string(TOUPPER "${CMAKE_SYSTEM_PROCESSOR}" MACHINE)
 set(KERNEL_CONFIGS RELEASE)
 set(ARCH_CONFIGS X86_64)
 set(AVAILABILITY_PL ${CMAKE_SOURCE_DIR}/Kernel/availability.pl)
 set(AVAILABILITY_PL_PATH ${CMAKE_SOURCE_DIR}/Kernel/availability.pl)
 set(SEED_DEFINES 
-	-DRC_ENABLE_XNU_PRODUCT_INFO_FILTER
-	-DTARGET_OS_IPHONE=0
-	-DTARGET_OS_WIN32=0
-	-DTARGET_OS_OSX=1
-	-DTARGET_OS_MAC=1
-	-DTARGET_OS_SIMULATOR=0
+    -DRC_ENABLE_XNU_PRODUCT_INFO_FILTER
 )
+
+file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/sysroot/usr/include
+    ${CMAKE_BINARY_DIR}/sysroot/usr/local/include/kernel)
+file(COPY ${CMAKE_SOURCE_DIR}/Libraries/Libc/include/limits.h
+    DESTINATION ${CMAKE_BINARY_DIR}/sysroot/usr/include/)
+file(COPY ${CMAKE_SOURCE_DIR}/Libraries/libdispatch/os
+    DESTINATION ${CMAKE_BINARY_DIR}/sysroot/usr/local/include/kernel/)
 
 ExternalProject_Add(xnu_headers
     SOURCE_DIR ${CMAKE_SOURCE_DIR}/Kernel/xnu
-    CONFIGURE_COMMAND
-		${CMAKE_COMMAND} -E copy ${CMAKE_SOURCE_DIR}/Libraries/Libc/include/limits.h ${CMAKE_BINARY_DIR}/sysroot/usr/include/
+    BINARY_DIR ${CMAKE_BINARY_DIR}/Kernel/xnu
+    CONFIGURE_COMMAND ""
     BUILD_COMMAND
-    	${GMAKE} -C ${CMAKE_SOURCE_DIR}/Kernel/xnu
-			MAKE=${GMAKE} PLATFORM=MacOSX BUILD_LTO=0 BUILD_WERROR=0 DO_CTFMERGE=0 
-			XCRUN=${XCRUN} XCBUILD=${XCBUILD} XCODEBUILD=${XCODEBUILD} PATH=${PATH}
-			MIGCOM=${MIGCOM} MIG=${MIG} IIG=${IIG} SDKROOT=${RAVYN_SDKROOT}
-		    SRCROOT=${CMAKE_SOURCE_DIR}/Kernel/xnu OBJROOT=${CMAKE_BINARY_DIR}/Kernel/xnu
-		    DSTROOT=${CMAKE_BINARY_DIR}/sysroot installhdrs
+    	${GMAKE} -C <SOURCE_DIR>
+    	    PLATFORM=MacOSX BUILD_LTO=0 BUILD_WERROR=0 DO_CTFMERGE=0
+    	    SDKVERSION=${CMAKE_MACOSX_MIN_VERSION} SRCROOT=<SOURCE_DIR>
+    	    OBJROOT=<BINARY_DIR> DSTROOT=${CMAKE_BINARY_DIR}/sysroot
+            MIGCOM=${MIGCOM} MIG=${MIG} IIG=${IIG} CC=${CC} LD=${CC}
+            UNIFDEF=${UNIFDEF} CTFCONVERT=${CTFCONVERT} CTFMERGE=${CTFMERGE}
+            CTFINSERT=${CTFINSERT} AVAILABILITY_PL=${AVAILABILITY_PL}
+            AVAILABILITY_PL_PATH=${AVAILABILITY_PL_PATH}
+            KERNEL_CONFIGS=${KERNEL_CONFIGS} ARCH_CONFIGS=${ARCH_CONFIGS}
+    	    installhdrs
     INSTALL_COMMAND ""
-	DEPENDS BootstrapTools
+	DEPENDS BootstrapTools host_migcom
 )
 
 add_subdirectory(libfirehose_kernel)
 add_dependencies(libfirehose_kernel CarbonHeaders)
 
-file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/sysroot/usr/include ${CMAKE_BINARY_DIR}/sysroot/usr/local/include/kernel)
-file(COPY ${CMAKE_SOURCE_DIR}/Libraries/Libc/include/limits.h 
-	DESTINATION ${CMAKE_BINARY_DIR}/sysroot/usr/include/)
-file(COPY ${CMAKE_SOURCE_DIR}/Libraries/libdispatch/os
-	DESTINATION ${CMAKE_BINARY_DIR}/sysroot/usr/local/include/kernel/)
-
 ExternalProject_Add(xnu
     SOURCE_DIR ${CMAKE_SOURCE_DIR}/Kernel/xnu
+    BINARY_DIR ${CMAKE_BINARY_DIR}/Kernel/xnu
     CONFIGURE_COMMAND ""
     BUILD_COMMAND
-    	${GMAKE} -C ${CMAKE_SOURCE_DIR}/Kernel/xnu
-			MAKE=${GMAKE} PLATFORM=MacOSX BUILD_LTO=0 BUILD_WERROR=0 DO_CTFMERGE=0
-			XCRUN=${XCRUN} XCBUILD=${XCBUILD} XCODEBUILD=${XCODEBUILD} "PATH=${PATH}"
-			MIGCOM=${MIGCOM} MIG=${MIG} IIG=${IIG}
-		    SRCROOT=${CMAKE_SOURCE_DIR}/Kernel/xnu OBJROOT=${CMAKE_BINARY_DIR}/Kernel/xnu
-		    DSTROOT=${CMAKE_BINARY_DIR}/sysroot install
-    INSTALL_COMMAND ""
+    	${GMAKE} -C <SOURCE_DIR>
+    	    PLATFORM=MacOSX BUILD_LTO=0 BUILD_WERROR=0 DO_CTFMERGE=0
+    	    SDKVERSION=${CMAKE_MACOSX_MIN_VERSION} SRCROOT=<SOURCE_DIR>
+    	    OBJROOT=<BINARY_DIR> DSTROOT=${CMAKE_BINARY_DIR}/sysroot
+    	    SYMROOT=${CMAKE_BINARY_DIR}
+            MIGCOM=${MIGCOM} MIG=${MIG} IIG=${IIG} CC=${CC} LD=${CC}
+            UNIFDEF=${UNIFDEF} CTFCONVERT=${CTFCONVERT} CTFMERGE=${CTFMERGE}
+            CTFINSERT=${CTFINSERT} AR=${AR} NM=${NM} NMEDIT=${NMEDIT}
+            DSYMUTIL=${DSYMUTIL} LIPO=${LIPO} STRIP=${STRIP} AS=${AS}
+            AVAILABILITY_PL=${AVAILABILITY_PL} MACHINE=${MACHINE}
+            AVAILABILITY_PL_PATH=${AVAILABILITY_PL_PATH} SDKROOT=macosx
+            KERNEL_CONFIGS=${KERNEL_CONFIGS} ARCH_CONFIGS=${ARCH_CONFIGS}
+    	    all
+    INSTALL_COMMAND
+        ${GMAKE} -C <SOURCE_DIR>
+            PLATFORM=MacOSX BUILD_LTO=0 BUILD_WERROR=0 DO_CTFMERGE=0
+            SDKVERSION=${CMAKE_MACOSX_MIN_VERSION} SRCROOT=<SOURCE_DIR>
+            OBJROOT=<BINARY_DIR> DSTROOT=${CMAKE_BINARY_DIR}/sysroot
+            MIGCOM=${MIGCOM} MIG=${MIG} IIG=${IIG} CC=${CC} LD=${CC}
+            UNIFDEF=${UNIFDEF} CTFCONVERT=${CTFCONVERT} CTFMERGE=${CTFMERGE}
+            CTFINSERT=${CTFINSERT} AR=${AR} NM=${NM} NMEDIT=${NMEDIT}
+            DSYMUTIL=${DSYMUTIL} LIPO=${LIPO} STRIP=${STRIP} AS=${AS}
+            AVAILABILITY_PL=${AVAILABILITY_PL}
+            AVAILABILITY_PL_PATH=${AVAILABILITY_PL_PATH}
+            KERNEL_CONFIGS=${KERNEL_CONFIGS} ARCH_CONFIGS=${ARCH_CONFIGS}
+            install
 	DEPENDS xnu_headers CarbonHeaders libfirehose_kernel BootstrapTools
 )
 
