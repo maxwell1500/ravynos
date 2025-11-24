@@ -12,11 +12,11 @@ function(add_kext_bundle name)
 
     target_compile_definitions(${name} PRIVATE TARGET_OS_OSX KERNEL)
     target_compile_options(${name} PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-fapple-kext>
-        -I${OBJTOP}/Kernel/libkmod/include -I${OBJTOP}/Kernel/Extensions/include
-        -I${OBJTOP}/release/System/Library/Frameworks/Kernel.framework/Versions/A/PrivateHeaders
-        -I${OBJTOP}/release/System/Library/Frameworks/Kernel.framework/Versions/B/Headers
+        -I${CMAKE_BINARY_DIR}/Kernel/libkmod/include
+        -I${CMAKE_BINARY_DIR}/sysroot/System/Library/Frameworks/Kernel.framework/Versions/A/PrivateHeaders
+        -I${CMAKE_BINARY_DIR}/sysroot/System/Library/Frameworks/Kernel.framework/Versions/B/Headers
         -I${SRCTOP}/Kernel/xnu/bsd
-        -I${OBJTOP}/release/usr/include
+        -I${CMAKE_BINARY_DIR}/sysroot/usr/include
 )
 
     target_link_options(${name} PRIVATE "LINKER:-bundle")
@@ -25,10 +25,10 @@ function(add_kext_bundle name)
 
     if(SL_KERNEL_PRIVATE)
         target_compile_definitions(${name} PRIVATE KERNEL_PRIVATE)
-        target_link_libraries(${name} PRIVATE ${OBJTOP}/Kernel/libkmod/libkmod.a)
+        target_link_libraries(${name} PRIVATE ${CMAKE_BINARY_DIR}/Kernel/libkmod/libkmod.a)
     endif()
 
-#    target_link_libraries(${name} PRIVATE xnu_kernel_headers AvailabilityHeaders)
+    target_link_libraries(${name} PRIVATE xnu_kernel_headers)
 
     set_property(TARGET ${name} PROPERTY BUNDLE TRUE)
     set_property(TARGET ${name} PROPERTY BUNDLE_EXTENSION kext)
@@ -81,7 +81,7 @@ function(add_kmod_info target)
         set(KEXT_ANTIMAIN_FUNCTION "0")
     endif()
 
-    configure_file(${SRCTOP}/contrib/cmake/templates/kmod_info.c.in ${CMAKE_CURRENT_BINARY_DIR}/kmod_info.c)
+    configure_file(${CMAKE_SOURCE_DIR}/Developer/cmake/templates/kmod_info.c.in ${CMAKE_CURRENT_BINARY_DIR}/kmod_info.c)
     target_sources(${target} PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/kmod_info.c)
-    target_link_libraries(${target} PRIVATE ${OBJTOP}/Kernel/libkmod/libkmod.a)
+    target_link_libraries(${target} PRIVATE ${CMAKE_BINARY_DIR}/Kernel/libkmod/libkmod.a)
 endfunction()

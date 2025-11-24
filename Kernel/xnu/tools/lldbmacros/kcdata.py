@@ -522,7 +522,7 @@ class KCObject(object):
             self.is_array_type = True
             e_t = (self.i_flags >> 32) & 0xffffffff
             if e_t not in LEGAL_OLD_STYLE_ARRAY_TYPES:
-                raise Exception, "illegal old-style array type: %s (0x%x)" % (GetTypeNameForKey(e_t), e_t)
+                raise Exception("illegal old-style array type: %s (0x%x)" % (GetTypeNameForKey(e_t), e_t))
             e_c = self.i_flags & 0xffffffff
             e_s = KNOWN_TYPES_COLLECTION[e_t].legacy_size
             if e_s * e_c > self.i_size:
@@ -562,7 +562,7 @@ class KCObject(object):
                 nested_iterator = kcdata_item_iterator(self.i_data[:self.i_size])
                 nested_buffer = KCObject.FromKCItem(nested_iterator.next())
                 if not isinstance(nested_buffer, KCBufferObject):
-                    raise Exception, "nested buffer isn't a KCBufferObject"
+                    raise Exception("nested buffer isn't a KCBufferObject")
                 nested_buffer.ReadItems(nested_iterator)
             self.nested_kcdata = nested_buffer
 
@@ -623,7 +623,7 @@ class KCContainerObject(KCObject):
         if not o.IsContainerEnd():
             return False
         if o.i_flags != self.i_flags:
-            raise Exception, "container end marker doesn't match"
+            raise Exception("container end marker doesn't match")
         return True
 
     no_end_message = "could not find container end marker"
@@ -647,7 +647,7 @@ class KCContainerObject(KCObject):
                     print("kcdata.py WARNING: data is incomplete!", file=sys.stderr)
                     G.data_was_incomplete = True
             else:
-                raise Exception, self.no_end_message
+                raise Exception(self.no_end_message)
 
 
 
@@ -655,7 +655,7 @@ class KCBufferObject(KCContainerObject):
 
     def IsEndMarker(self,o):
         if o.IsContainerEnd():
-            raise Exception, "container end marker at the toplevel"
+            raise Exception("container end marker at the toplevel")
         return o.IsBufferEnd()
 
     no_end_message = "could not find buffer end marker"
@@ -1437,7 +1437,7 @@ def formatWaitInfoWithTurnstiles(waitinfos, tsinfos):
         if not found_pair:
             wis_tis.append((w, None))
 
-    return map(lambda (wi, ti): formatWaitInfo(wi) + formatTurnstileInfo(ti), wis_tis)
+    return map(lambda wi, ti: formatWaitInfo(wi) + formatTurnstileInfo(ti), wis_tis)
 
 def SaveStackshotReport(j, outfile_name, incomplete):
     import time
@@ -1450,7 +1450,7 @@ def SaveStackshotReport(j, outfile_name, incomplete):
     timestamp = ss.get('usecs_since_epoch', int(time.time()))
     try:
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S %z",time.gmtime(timestamp))
-    except ValueError, e:
+    except (ValueError, e):
         print("couldn't convert timestamp:", str(e))
         timestamp = None
 
@@ -1635,7 +1635,7 @@ def RunCommand(bash_cmd_string, get_stderr = True):
             output_str = subprocess.check_output(cmd_args, stderr=subprocess.STDOUT)
         else:
             output_str = subprocess.check_output(cmd_args, stderr=None)
-    except subprocess.CalledProcessError, e:
+    except (subprocess.CalledProcessError, e):
         exit_code = e.returncode
     finally:
         return (exit_code, output_str)
@@ -1703,7 +1703,7 @@ def iterate_kcdatas(kcdata_file):
                 iterator = kcdata_item_iterator(decompressed)
                 kcdata_buffer = KCObject.FromKCItem(iterator.next())
         if not isinstance(kcdata_buffer, KCBufferObject):
-            raise Exception, "unknown file type"
+            raise Exception("unknown file type")
 
         kcdata_buffer.ReadItems(iterator)
         yield kcdata_buffer
@@ -1713,7 +1713,7 @@ def iterate_kcdatas(kcdata_file):
             if kcdata_buffer.i_type == 0:
                 continue
             if not isinstance(kcdata_buffer, KCBufferObject):
-                raise Exception, "unknown file type"
+                raise Exception("unknown file type")
             kcdata_buffer.ReadItems(iterator)
             yield kcdata_buffer
 

@@ -29,6 +29,7 @@
 #ifndef _TURNSTILE_H_
 #define _TURNSTILE_H_
 
+#include <stdatomic.h>
 #include <mach/mach_types.h>
 #include <mach/kern_return.h>
 #include <sys/cdefs.h>

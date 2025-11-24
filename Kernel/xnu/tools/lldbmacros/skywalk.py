@@ -308,7 +308,7 @@ def GetStructNsSummary(ns):
 def ShowNetNS(cmd_args=None):
     """ Show the netns table
     """
-    print"\nnetns_namespaces:"
+    print("\nnetns_namespaces:")
     print(GetStructNsSummary.header)
 
     namespaces = kern.globals.netns_namespaces
@@ -733,6 +733,6 @@ def ShowProtoNS(cmd_args=None):
 
     protons_tokens = kern.globals.protons_tokens
     for pt in IterateRBTreeEntry(protons_tokens, 'struct protons_token *', 'pt_link'):
-        print("(struct protons_token *){} protocol {:3} pid {:5} epid {:5} ref {:2} flags {}".format()
+        print("(struct protons_token *){} protocol {:3} pid {:5} epid {:5} ref {:2} flags {}".format(
                 hex(pt), int(pt.pt_protocol), int(pt.pt_pid), int(pt.pt_epid),
-                int(pt.pt_refcnt.ref_count), hex(pt.pt_flags))
+                int(pt.pt_refcnt.ref_count), hex(pt.pt_flags)))

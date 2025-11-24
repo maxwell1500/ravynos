@@ -110,8 +110,8 @@ def ShowMemoryStatus(cmd_args=None):
     bucket_index = 0
     bucket_count = 20
     print(GetMemoryStatusNode.header)
-    print("{: >21s} {: >12s} {: >38s} {: >10s} {: >12s} {: >10s} {: >10s}\n".format("priority", "priority", "(pages)", "(pages)", "(pages)",)
-        "(pages)", "(pages)", "(pages)")
+    print("{: >21s} {: >12s} {: >38s} {: >10s} {: >12s} {: >10s} {: >10s}\n".format("priority", "priority", "(pages)", "(pages)", "(pages)",
+        "(pages)", "(pages)", "(pages)"))
     while bucket_index < bucket_count:
         current_bucket = kern.globals.memstat_bucket[bucket_index]
         current_list = current_bucket.list
@@ -496,8 +496,8 @@ def ShowZfreeListChain(zone, zfirst, zlimit):
         else:
             if n_unobfuscated != unsigned(znext):
                 poison_str = "INVALID"
-        print("{0: <7d} 0x{1:0>16x} 0x{2:0>16x} 0x{3:0>16x} 0x{4:0>16x} 0x{5:0>16x} {6: <14s}\n".format()
-              ShowZfreeList.elts_found, unsigned(current), unsigned(znext), unsigned(backup_val), n_unobfuscated, p_unobfuscated, poison_str)
+        print("{0: <7d} 0x{1:0>16x} 0x{2:0>16x} 0x{3:0>16x} 0x{4:0>16x} 0x{5:0>16x} {6: <14s}\n".format(
+              ShowZfreeList.elts_found, unsigned(current), unsigned(znext), unsigned(backup_val), n_unobfuscated, p_unobfuscated, poison_str))
         if unsigned(znext) == 0:
             break
         current = Cast(znext, 'void *')
@@ -614,7 +614,7 @@ def ZstackInOrder(cmd_args=None):
         Usage: zstack_inorder <btlog addr>
     """
     if not cmd_args:
-        print("Zone leak debugging: print(the stack traces starting from head to the tail. \nUsage: zstack_inorder <btlog addr>"))
+        print("Zone leak debugging: print the stack traces starting from head to the tail. \nUsage: zstack_inorder <btlog addr>")
         return
     if int(kern.globals.log_records) == 0:
         print("Zone logging not enabled. Add 'zlog=<zone name>' to boot-args.")
@@ -3759,8 +3759,8 @@ def VMObjectWalkPages(cmd_args=None, cmd_options={}):
             return
 
         if ((vmp.vmp_unused_page_bits != 0) or (vmp.vmp_unused_object_bits != 0)):
-            print(out_string + " unused bits not zero for vm_page_t: " + "{0: <#020x}".format(unsigned(vmp)) + " unused__pageq_bits: %d unused_object_bits : %d\n" % (vmp.vmp_unused_page_bits,)
-                                            vmp.vmp_unused_object_bits)
+            print(out_string + " unused bits not zero for vm_page_t: " + "{0: <#020x}".format(unsigned(vmp)) + " unused__pageq_bits: %d unused_object_bits : %d\n" % (vmp.vmp_unused_page_bits,
+                                            vmp.vmp_unused_object_bits))
             print("stopping...\n")
             return
 

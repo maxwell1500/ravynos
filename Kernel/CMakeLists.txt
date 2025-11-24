@@ -90,14 +90,16 @@ ExternalProject_Add(xnu
             UNIFDEF=${UNIFDEF} CTFCONVERT=${CTFCONVERT} CTFMERGE=${CTFMERGE}
             CTFINSERT=${CTFINSERT} AR=${AR} NM=${NM} NMEDIT=${NMEDIT}
             DSYMUTIL=${DSYMUTIL} LIPO=${LIPO} STRIP=${STRIP} AS=${AS}
-            AVAILABILITY_PL=${AVAILABILITY_PL}
+            AVAILABILITY_PL=${AVAILABILITY_PL} MACHINE=${MACHINE}
             AVAILABILITY_PL_PATH=${AVAILABILITY_PL_PATH}
             KERNEL_CONFIGS=${KERNEL_CONFIGS} ARCH_CONFIGS=${ARCH_CONFIGS}
             install
 	DEPENDS xnu_headers CarbonHeaders libfirehose_kernel BootstrapTools
 )
 
+# Build kernel extensions
 add_subdirectory(libkmod)
+add_subdirectory(Extensions)
 
 # ${SRCTOP}/Libraries/Libc/include/libc-features.h:
 # 	mkdir -p ${OBJTOP}/tmp/include
@@ -118,27 +120,6 @@ add_subdirectory(libkmod)
 # #	cp -Rfv $$HOME/Library/Developer/Xcode/DerivedData/Build/Products/Release/usr/include/${f} ${BUILDROOT}/usr/include/
 # #.endfor
 
-# libkmod: xnu_headers
-# 	mkdir -pv ${OBJTOP}/Kernel/libkmod/include/pthread
-# 	cp -fv ${SRCTOP}/Libraries/libpthread/private/{spinlock,tsd}_private.h \
-# 		${OBJTOP}/Kernel/libkmod/include/pthread/
-# 	cp -fv ${SRCTOP}/Libraries/Libc/locale/FreeBSD/{collate,lmessages,lmonetary,lnumeric,setlocale}.h \
-# 		${OBJTOP}/Kernel/libkmod/include/
-# 	cp -fv ${SRCTOP}/Libraries/Libc/stdtime/FreeBSD/timelocal.h \
-# 		${OBJTOP}/Kernel/libkmod/include/
-# 	ln -sfv B ${OBJTOP}/release/System/Library/Frameworks/System.framework/Versions/Current
-# 	ln -sfv Versions/Current/Headers \
-# 		${OBJTOP}/release/System/Library/Frameworks/System.framework/Headers
-# 	ln -sfv Versions/Current/PrivateHeaders \
-# 		${OBJTOP}/release/System/Library/Frameworks/System.framework/PrivateHeaders
-# 	mkdir -pv ${BUILDROOT}/usr/include/os
-# 	cp -fv ${CONTRIB}/os/availability.h ${BUILDROOT}/usr/include/os
-# 	cd ${OBJTOP}/Kernel/libkmod; cmake -Wno-dev \
-# 		-DCMAKE_INSTALL_PREFIX=/ -DCMAKE_BUILD_TYPE=Release \
-# 		-DSRCTOP=${SRCTOP} -DOBJTOP=${OBJTOP} \
-# 		-G"Unix Makefiles" ${SRCTOP}/Kernel/libkmod
-# 	export PATH PLATFORM=MacOSX MAKEFLAGS="" MAKE=${GMAKE}; \
-# 		${GMAKE} DESTDIR=${BUILDROOT} -C ${OBJTOP}/Kernel/libkmod
 
 # kext: libkmod
 # 	mkdir -pv ${OBJTOP}/Kernel/Extensions/include/pthread

@@ -628,8 +628,8 @@ def ShowGrrrSummary(grrr_runq):
     """ Internal function to print summary of grrr_run_queue
         params: grrr_runq - value representing struct grrr_run_queue *
     """
-    print("    GRRR Info: Count {: <10d} Weight {: <10d} Current Group {: <#012x}\n".format(grrr_runq.count,)
-        grrr_runq.weight, grrr_runq.current_group)
+    print("    GRRR Info: Count {: <10d} Weight {: <10d} Current Group {: <#012x}\n".format(grrr_runq.count,
+        grrr_runq.weight, grrr_runq.current_group))
     grrr_group_i = 0
     grrr_group_count = sizeof(grrr_runq.groups)/sizeof(grrr_runq.groups[0])
     for grrr_group_i in xrange(grrr_group_count) :
@@ -721,8 +721,8 @@ def ShowScheduler(cmd_args=None):
         pset = kern.GetValueFromAddress(unsigned(pset), 'struct processor_set *')
 
         while pset != 0:
-            print("Processor Set  {: <#012x} Count {:d} (cpu_id {:<#x}-{:<#x})\n".format(pset,)
-                unsigned(pset.cpu_set_count), pset.cpu_set_low, pset.cpu_set_hi)
+            print("Processor Set  {: <#012x} Count {:d} (cpu_id {:<#x}-{:<#x})\n".format(pset,
+                unsigned(pset.cpu_set_count), pset.cpu_set_low, pset.cpu_set_hi))
 
             rt_runq = kern.GetValueFromAddress(unsigned(addressof(pset.rt_runq)), 'struct rt_queue *')
             ShowRTRunQSummary(rt_runq)
@@ -924,8 +924,8 @@ def ParanoidIterateLinkageChain(queue_head, element_type, field_name, field_ofst
                 if unsigned(link.prev) == 0:
                     print("NULL prev pointer: queue_head {:>#18x} link: {:>#18x} next: {:>#18x} prev: {:>#18x}".format(queue_head, link, link.next, link.prev))
                 if unsigned(last_link) != unsigned(link.prev):
-                    print("Corrupt prev pointer: queue_head {:>#18x} link: {:>#18x} next: {:>#18x} prev: {:>#18x} prev link: {:>#18x} ".format()
-                            queue_head, link, link.next, link.prev, last_link)
+                    print("Corrupt prev pointer: queue_head {:>#18x} link: {:>#18x} next: {:>#18x} prev: {:>#18x} prev link: {:>#18x} ".format(
+                            queue_head, link, link.next, link.prev, last_link))
 
             addr = unsigned(link) - unsigned(elem_ofst);
             obj = kern.GetValueFromAddress(addr, element_type)
@@ -943,7 +943,7 @@ def ParanoidIterateLinkageChain(queue_head, element_type, field_name, field_ofst
         except:
             import traceback
             traceback.print_exc()
-        raise exc_info[0], exc_info[1], exc_info[2]
+        raise exc_info[0](exc_info[1]).with_traceback(exc_info[2])
 
 ParanoidIterateLinkageChain.enable_paranoia = True
 ParanoidIterateLinkageChain.enable_debug = False
@@ -1014,9 +1014,9 @@ def ShowThreadCall(prefix, call):
 
     ttd_s = kern.GetNanotimeFromAbstime(call.tc_ttd) / 1000000000.0
 
-    print("{:s}{:#018x}: {:18d} {:18d} {:03.06f} {:03.06f} {:#018x}({:#018x},{:#018x}) ({:s})".format(prefix,)
+    print("{:s}{:#018x}: {:18d} {:18d} {:03.06f} {:03.06f} {:#018x}({:#018x},{:#018x}) ({:s})".format(prefix,
             unsigned(call), call_entry.deadline, call.tc_soft_deadline, ttd_s, timer_fire_s,
-            func, param0, param1, func_name)
+            func, param0, param1, func_name))
 
 @lldb_command('showallcallouts')
 def ShowAllCallouts(cmd_args=None):
@@ -1037,13 +1037,13 @@ def ShowAllCallouts(cmd_args=None):
         for call in ParanoidIterateLinkageChain(group.pending_queue, "thread_call_t", "tc_call.q_link"):
             ShowThreadCall("\t\t", call)
 
-        print("\t" +"Delayed Queue (Absolute Time): ({:>#18x}) timer: ({:>#18x})\n".format()
-                addressof(group.delayed_queues[0]), addressof(group.delayed_timers[0]))
+        print("\t" +"Delayed Queue (Absolute Time): ({:>#18x}) timer: ({:>#18x})\n".format(
+                addressof(group.delayed_queues[0]), addressof(group.delayed_timers[0])))
         for call in ParanoidIterateLinkageChain(group.delayed_queues[0], "thread_call_t", "tc_call.q_link"):
             ShowThreadCall("\t\t", call)
 
-        print("\t" +"Delayed Queue (Continuous Time): ({:>#18x}) timer: ({:>#18x})\n".format()
-                addressof(group.delayed_queues[1]), addressof(group.delayed_timers[1]))
+        print("\t" +"Delayed Queue (Continuous Time): ({:>#18x}) timer: ({:>#18x})\n".format(
+                addressof(group.delayed_queues[1]), addressof(group.delayed_timers[1])))
         for call in ParanoidIterateLinkageChain(group.delayed_queues[1], "thread_call_t", "tc_call.q_link"):
             ShowThreadCall("\t\t", call)
 

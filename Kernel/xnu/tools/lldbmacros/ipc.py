@@ -1233,7 +1233,7 @@ def IterateAllPorts(tasklist, func, ctx, include_psets, follow_busyports, should
             if unsigned(tport) > 0:
                 try:
                     func(t, space, ctx, registeredport_idx, 0, tport, 17)
-                except Exception, e:
+                except (Exception, e):
                     print("\texception looking through registered port {:d}/{:d} in {:s}".format(tr_idx,tr_max,t))
                     pass
             tr_idx += 1
@@ -1246,7 +1246,7 @@ def IterateAllPorts(tasklist, func, ctx, include_psets, follow_busyports, should
             if unsigned(export) > 0:
                 try:
                     func(t, space, ctx, excports_idx, 0, export, 17)
-                except Exception, e:
+                except (Exception, e):
                     print("\texception looking through exception port {:d}/{:d} in {:s}".format(exidx,exmax,t))
                     pass
             exidx += 1
@@ -1278,7 +1278,7 @@ def IterateAllPorts(tasklist, func, ctx, include_psets, follow_busyports, should
                     if unsigned(export) > 0:
                         try:
                             func(t, space, ctx, excports_idx, 0, export, 17)
-                        except Exception, e:
+                        except( Exception, e):
                             print("\texception looking through exception port {:d}/{:d} in {:s}".format(exidx,exmax,t))
                             pass
                     exidx += 1

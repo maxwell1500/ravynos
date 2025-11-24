@@ -15,12 +15,14 @@ target_compile_definitions(pthread.kext PRIVATE XNU_KERNEL_PRIVATE
 target_compile_options(pthread.kext PRIVATE -Wno-sign-conversion
     -Wno-int-conversion -Wno-implicit-function-declaration
     -Wno-incompatible-library-redeclaration -Wno-undef-prefix
-    -I${OBJTOP}/Kernel/libkmod/include
-    -I${SRCTOP}/Libraries/libpthread
-    -I${OBJTOP}/release/System/Library/Frameworks/Kernel.framework/Versions/A/PrivateHeaders
-    -I${OBJTOP}/release/System/Library/Frameworks/Kernel.framework/Versions/B/Headers
-    -I${SRCTOP}/Kernel/xnu/bsd
-    -I${OBJTOP}/release/usr/include
+    -I${CMAKE_BINARY_DIR}/sysroot/usr/include
+    -I${CMAKE_BINARY_DIR}/sysroot/usr/local/include/kernel
+    -I${CMAKE_SOURCE_DIR}/Kernel/xnu/EXTERNAL_HEADERS
+    -I${CMAKE_SOURCE_DIR}/Libraries/libpthread
+    -I${CMAKE_SOURCE_DIR}/Libraries/libpthread/private
+    -I${CMAKE_BINARY_DIR}/sysroot/System/Library/Frameworks/Kernel.framework/Versions/A/Headers
+    -I${CMAKE_SOURCE_DIR}/Kernel/xnu/bsd
 )
+add_dependencies(pthread.kext xnu)
 
 install(TARGETS pthread.kext DESTINATION System/Library/Extensions COMPONENT BaseSystem)
