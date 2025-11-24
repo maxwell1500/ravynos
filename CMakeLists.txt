@@ -17,6 +17,16 @@ set(RAVYN_SDKROOT ${CMAKE_BINARY_DIR}/Developer/Platforms/ravynOS.platform/Devel
 set(TOOLCHAIN ${CMAKE_BINARY_DIR}/Developer/Toolchains/Default.xctoolchain)
 set(RUNTIME_SPEC_PATH ${CMAKE_SOURCE_DIR}/Developer/xcbuild/Specifications)
 
+if("${GMAKE}" STREQUAL "")
+    if(CMAKE_HOST_BSD)
+        set(GMAKE gmake)
+        set(BMAKE make)
+    else()
+        set(GMAKE make)
+        set(BMAKE bmake)
+    endif()
+endif()
+
 include(ExternalProject)
 include(Developer/cmake/asm.cmake)
 include(Developer/cmake/bundle_resources.cmake)
@@ -45,9 +55,9 @@ add_subdirectory(Developer)
 add_subdirectory(Libraries)
 add_subdirectory(Kernel)
 
+string(STRIP "${BUILD_STAMP}" BUILD_STAMP)
 file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/sysroot/System/Library/CoreServices")
-file(CONFIGURE @ONLY
-    OUTPUT ${CMAKE_BINARY_DIR}/sysroot/System/Library/CoreServices/SystemVersion.plist
-    CONTENT ${CMAKE_SOURCE_DIR}/SystemLibrary/SystemVersion.plist.in
-
+configure_file(${CMAKE_SOURCE_DIR}/SystemLibrary/SystemVersion.plist.in
+    ${CMAKE_BINARY_DIR}/sysroot/System/Library/CoreServices/SystemVersion.plist
+    @ONLY
 )
