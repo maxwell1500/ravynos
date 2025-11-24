@@ -26,6 +26,12 @@ void getDarwinDefines(MacroBuilder &Builder, const LangOptions &Opts,
   Builder.defineMacro("__APPLE__");
   Builder.defineMacro("__STDC_NO_THREADS__");
   Builder.defineMacro("__RAVYNOS__");
+  Builder.defineMacro("TARGET_OS_MAC", "1");
+  Builder.defineMacro("TARGET_OS_OSX", "1");
+  Builder.defineMacro("TARGET_OS_IPHONE", "0");
+  Builder.defineMacro("TARGET_OS_SIMULATOR", "0");
+  Builder.defineMacro("TARGET_OS_WIN32", "0");
+  Builder.defineMacro("TARGET_OS_UNIX", "0");
 
   // AddressSanitizer doesn't play well with source fortification, which is on
   // by default on Darwin.
