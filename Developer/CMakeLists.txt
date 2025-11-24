@@ -26,7 +26,7 @@ endif()
 
 if(CMAKE_HOST_SYSTEM_NAME MATCHES "Darwin")
     execute_process(
-        COMMAND xcrun --show-sdk-path
+        COMMAND xcrun --sdk macosx --show-sdk-path
         OUTPUT_VARIABLE HOST_SDKROOT
         OUTPUT_STRIP_TRAILING_WHITESPACE
     )
@@ -58,4 +58,15 @@ add_custom_target(CarbonHeaders ALL DEPENDS BootstrapTools
 		${CMAKE_BINARY_DIR}/sysroot/usr/include/
     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/sysroot/usr/include
     COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/CarbonHeaders/TargetConditionals.h ${CMAKE_BINARY_DIR}/sysroot/usr/include/
+)
+set(GNU_CONFIGURE_ARGS
+    --prefix=/usr --sysconfdir=/etc --bindir=/bin --sbindir=/sbin --localstatedir=/var
+)
+add_custom_target(host_gmake ALL DEPENDS BootstrapTools
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/gmake
+    COMMAND cd ${CMAKE_CURRENT_BINARY_DIR}/gmake
+        && ${CMAKE_CURRENT_SOURCE_DIR}/gmake/configure ${GNU_CONFIGURE_ARGS}
+        && ./build.sh
+    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_BINARY_DIR}/gmake/make
+        ${TOOLCHAIN}/usr/bin/
 )
