@@ -56,7 +56,18 @@ ExternalProject_Add(xnu_headers
             AVAILABILITY_PL_PATH=${AVAILABILITY_PL_PATH}
             KERNEL_CONFIGS=${KERNEL_CONFIGS} ARCH_CONFIGS=${ARCH_CONFIGS}
     	    installhdrs
-    INSTALL_COMMAND ""
+    INSTALL_COMMAND
+        ${GMAKE} -C <SOURCE_DIR>
+    	    PLATFORM=MacOSX BUILD_LTO=0 BUILD_WERROR=0 DO_CTFMERGE=0
+    	    SDKVERSION=${CMAKE_MACOSX_MIN_VERSION} SRCROOT=<SOURCE_DIR>
+    	    OBJROOT=<BINARY_DIR>
+            DSTROOT=${CMAKE_BINARY_DIR}/Developer/Platforms/ravynOS.platform/Developer/SDKs/ravynOS.sdk
+            MIGCOM=${MIGCOM} MIG=${MIG} IIG=${IIG} CC=${CC} LD=${CC}
+            UNIFDEF=${UNIFDEF} CTFCONVERT=${CTFCONVERT} CTFMERGE=${CTFMERGE}
+            CTFINSERT=${CTFINSERT} AVAILABILITY_PL=${AVAILABILITY_PL}
+            AVAILABILITY_PL_PATH=${AVAILABILITY_PL_PATH}
+            KERNEL_CONFIGS=${KERNEL_CONFIGS} ARCH_CONFIGS=${ARCH_CONFIGS}
+    	    installhdrs
 	DEPENDS BootstrapTools host_migcom
 )
 
@@ -93,33 +104,14 @@ ExternalProject_Add(xnu
             AVAILABILITY_PL=${AVAILABILITY_PL} MACHINE=${MACHINE}
             AVAILABILITY_PL_PATH=${AVAILABILITY_PL_PATH}
             KERNEL_CONFIGS=${KERNEL_CONFIGS} ARCH_CONFIGS=${ARCH_CONFIGS}
-            install
+            install && ${CMAKE_COMMAND} -E copy <BINARY_DIR>/kernel.dSYM
+            ${CMAKE_BINARY_DIR}/Developer/Platforms/ravynOS.platform/Developer/SDKs/ravynOS.sdk/System/Library/Kernels/
 	DEPENDS xnu_headers CarbonHeaders libfirehose_kernel BootstrapTools
 )
 
 # Build kernel extensions
 add_subdirectory(libkmod)
 add_subdirectory(Extensions)
-
-# ${SRCTOP}/Libraries/Libc/include/libc-features.h:
-# 	mkdir -p ${OBJTOP}/tmp/include
-# 	cmake -E env ARCHS="x86_64 arm64" \
-# 		SRCROOT=${SRCTOP}/Libraries/Libc \
-# 		DERIVED_FILES_DIR=${OBJTOP}/tmp/include \
-# 		VARIANT_PLATFORM_NAME=macosx \
-# 		perl ${SRCTOP}/Libraries/Libc/xcodescripts/generate_features.pl
-# 	cp -fv ${OBJTOP}/tmp/include/${MACHINE}/libc-features.h ${.TARGET}
-
-# Libc: ${SRCTOP}/Libraries/Libc/include/libc-features.h
-# 	mkdir -pv ${OBJTOP}/Libc ${BUILDROOT}/usr/include
-# 	cd ${OBJTOP}/Libc; \
-# 	RUNTIME_SPEC_PATH=${SRCTOP}/contrib/xcbuild/Specifications \
-# 		${OBJTOOLS}/usr/bin/xcbuild \
-# 		-project ${SRCTOP}/Libraries/Libc/Libc.xcodeproj
-# #.for f in limits.h
-# #	cp -Rfv $$HOME/Library/Developer/Xcode/DerivedData/Build/Products/Release/usr/include/${f} ${BUILDROOT}/usr/include/
-# #.endfor
-
 
 # kext: libkmod
 # 	mkdir -pv ${OBJTOP}/Kernel/Extensions/include/pthread

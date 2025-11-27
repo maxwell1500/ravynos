@@ -38,20 +38,24 @@ set(MIG ${CMAKE_BINARY_DIR}/Developer/mig/mig)
 ExternalProject_Add(host_clang DEPENDS host_migcom
     SOURCE_DIR ${CMAKE_SOURCE_DIR}/Developer/llvm-project/llvm
     BINARY_DIR ${CMAKE_BINARY_DIR}/Developer/clang
-    CMAKE_ARGS 
-        -Wno-dev -DCMAKE_OSX_SYSROOT=${HOST_SDKROOT} -DMIG=${MIG}
+    CMAKE_ARGS
+        -C ${CMAKE_CURRENT_SOURCE_DIR}/llvm-project/tapi/cmake/caches/apple-tapi.cmake
+        -Wno-dev -DCMAKE_OSX_SYSROOT=${HOST_SDKROOT}
         -DCMAKE_INSTALL_PREFIX=${CMAKE_BINARY_DIR}/Developer/Toolchains/Default.xctoolchain/usr
         -DCMAKE_BUILD_TYPE=Release
         -DLLVM_TARGETS_TO_BUILD=${BuildArch}
         -DLLVM_DEFAULT_TARGET_TRIPLE=${CpuArch}-ravynOS-darwin-macho
         -DLLVM_BUILD_DOCS=OFF -DLLVM_BUILD_LLVM_DYLIB=ON -DLLVM_LINK_LLVM_DYLIB=ON
         -DLLVM_CREATE_XCODE_TOOLCHAIN=ON -DLLVM_INSTALL_BINUTILS_SYMLINKS=ON
-        -DLLVM_ENABLE_ZSTD=OFF -DLLVM_ENABLE_ZLIB=ON -DLLDB_ENABLE_LZMA=OFF
-        -DLLVM_ENABLE_PROJECTS=clang$<SEMICOLON>lld$<SEMICOLON>lldb
-        -DLLVM_ENABLE_RUNTIMES=compiler-rt$<SEMICOLON>libcxx$<SEMICOLON>libcxxabi
+        -DLLVM_ENABLE_ZSTD=OFF -DLLVM_ENABLE_ZLIB=ON
+        -DLLVM_ENABLE_PROJECTS=clang$<SEMICOLON>lld$<SEMICOLON>tapi
+        -DLLVM_ENABLE_RUNTIMES=compiler-rt$<SEMICOLON>libcxx$<SEMICOLON>libcxxabi$<SEMICOLON>libunwind
+        -DROOT_BINARY_DIR=${ROOT_BINARY_DIR}
+        -DCLANG_TABLEGEN_EXE=${CMAKE_CURRENT_BINARY_DIR}/clang/bin/clang-tblgen
 )
 
 add_custom_target(CarbonHeaders ALL DEPENDS BootstrapTools
+    USES_TERMINAL
 	COMMAND ${CMAKE_COMMAND} -E copy 
 		${CMAKE_SOURCE_DIR}/Developer/CarbonHeaders/{ConditionalMacros,MacTypes}.h
 		${CMAKE_SOURCE_DIR}/Kernel/xnu/EXTERNAL_HEADERS/Availability*.h
@@ -63,6 +67,7 @@ set(GNU_CONFIGURE_ARGS
     --prefix=/usr --sysconfdir=/etc --bindir=/bin --sbindir=/sbin --localstatedir=/var
 )
 add_custom_target(host_gmake ALL DEPENDS BootstrapTools
+    USES_TERMINAL
     COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/gmake
     COMMAND cd ${CMAKE_CURRENT_BINARY_DIR}/gmake
         && ${CMAKE_CURRENT_SOURCE_DIR}/gmake/configure ${GNU_CONFIGURE_ARGS}

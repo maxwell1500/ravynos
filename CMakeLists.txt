@@ -13,6 +13,9 @@ set(CMAKE_MACOSX_MIN_VERSION 12.0)
 
 set(CMAKE_INSTALL_PREFIX "/usr")
 
+set(ROOT_BINARY_DIR ${CMAKE_BINARY_DIR})
+set(ROOT_SOURCE_DIR ${CMAKE_SOURCE_DIR})
+set(SYSROOT_DIR ${ROOT_BINARY_DIR}/sysroot)
 set(RAVYN_SDKROOT ${CMAKE_BINARY_DIR}/Developer/Platforms/ravynOS.platform/Developer/SDKs/ravynOS.sdk)
 set(TOOLCHAIN ${CMAKE_BINARY_DIR}/Developer/Toolchains/Default.xctoolchain)
 set(RUNTIME_SPEC_PATH ${CMAKE_SOURCE_DIR}/Developer/xcbuild/Specifications)
