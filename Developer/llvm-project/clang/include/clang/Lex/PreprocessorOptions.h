@@ -89,7 +89,7 @@ public:
   bool UsePredefines = true;
 
   /// Indicates whether to predefine target OS macros.
-  bool DefineTargetOSMacros = false;
+  bool DefineTargetOSMacros = true;
 
   /// Whether we should maintain a detailed record of all macro
   /// definitions and expansions.

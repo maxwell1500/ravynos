@@ -16,19 +16,35 @@ file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/usr/include)
 file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/usr/lib)
 file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/usr/bin)
 
-file(COPY ${CMAKE_SOURCE_DIR}/Developer/CarbonHeaders/TargetConditionals.h
+file(GLOB_RECURSE HEADER_SET LIST_DIRECTORIES false
+    ${CMAKE_SOURCE_DIR}/Developer/CarbonHeaders/TargetConditionals.h
     ${CMAKE_SOURCE_DIR}/Developer/CarbonHeaders/ConditionalMacros.h
     ${CMAKE_SOURCE_DIR}/Developer/CarbonHeaders/MacTypes.h
-    ${CMAKE_SOURCE_DIR}/Kernel/xnu/EXTERNAL_HEADERS/Availability.h
-    ${CMAKE_SOURCE_DIR}/Kernel/xnu/EXTERNAL_HEADERS/AvailabilityInternal.h
-    ${CMAKE_SOURCE_DIR}/Kernel/xnu/EXTERNAL_HEADERS/AvailabilityVersions.h
-    ${CMAKE_SOURCE_DIR}/Kernel/xnu/EXTERNAL_HEADERS/AvailabilityInternalLegacy.h
-    ${CMAKE_CURRENT_SOURCE_DIR}/os ${CMAKE_CURRENT_SOURCE_DIR}/architecture/byte_order.h
+    ${CMAKE_SOURCE_DIR}/Kernel/xnu/EXTERNAL_HEADERS/Availability*.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/os
+    ${CMAKE_CURRENT_SOURCE_DIR}/architecture/byte_order.h
     ${CMAKE_CURRENT_SOURCE_DIR}/architecture/alignment.h
     ${CMAKE_CURRENT_SOURCE_DIR}/architecture/i386
     ${CMAKE_CURRENT_SOURCE_DIR}/architecture/arm
-    DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/usr/include/
 )
-file(COPY ${CMAKE_CURRENT_BINARY_DIR}/usr/include/architecture DESTINATION
+file(COPY ${HEADER_SET} DESTINATION ${CMAKE_CURRENT_BINARY_DIR}/usr/include/)
+file(COPY ${HEADER_SET} DESTINATION
     ${CMAKE_CURRENT_BINARY_DIR}/System/Library/Frameworks/System.framework/Versions/B/PrivateHeaders/)
 add_dependencies(ravynOS_sdk CarbonHeaders)
+
+add_custom_target(sdk_Libc_manpages ALL DEPENDS ravynOS_sdk
+    COMMAND
+        SRCROOT=${CMAKE_SOURCE_DIR}/Libraries/Libc 
+        DSTROOT=${RAVYN_SDKROOT}
+        PLATFORM_NAME=macosx
+        ${CMAKE_SOURCE_DIR}/Libraries/Libc/xcodescripts/manpages.sh
+)
+
+add_custom_target(sdk_Libc_headers ALL DEPENDS ravynOS_sdk
+    COMMAND
+        SDK_INSTALL_ROOT=/
+        SRCROOT=${CMAKE_SOURCE_DIR}/Libraries/Libc 
+        DSTROOT=${RAVYN_SDKROOT}
+        PLATFORM_NAME=macosx
+        ${CMAKE_SOURCE_DIR}/Libraries/Libc/xcodescripts/headers.sh
+)
