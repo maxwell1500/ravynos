@@ -215,9 +215,9 @@ void IOHandlerDelegate::IOHandlerComplete(IOHandler &io_handler,
     io_handler.GetDebugger().GetCommandInterpreter().HandleCompletion(request);
     break;
   case Completion::Expression:
-    CommandCompletions::InvokeCommonCompletionCallbacks(
+    lldb_private::CommandCompletions::InvokeCommonCompletionCallbacks(
         io_handler.GetDebugger().GetCommandInterpreter(),
-        CommandCompletions::eVariablePathCompletion, request, nullptr);
+        lldb::eVariablePathCompletion, request, nullptr);
     break;
   }
 }
@@ -474,8 +474,15 @@ bool IOHandlerEditline::SetPrompt(llvm::StringRef prompt) {
   m_prompt = std::string(prompt);
 
 #if LLDB_ENABLE_LIBEDIT
-  if (m_editline_up)
+  if (m_editline_up) {
     m_editline_up->SetPrompt(m_prompt.empty() ? nullptr : m_prompt.c_str());
+    if (m_debugger.GetUseColor()) {
+      m_editline_up->SetPromptAnsiPrefix(
+          ansi::FormatAnsiTerminalCodes(m_debugger.GetPromptAnsiPrefix()));
+      m_editline_up->SetPromptAnsiSuffix(
+          ansi::FormatAnsiTerminalCodes(m_debugger.GetPromptAnsiSuffix()));
+    }
+  }
 #endif
   return true;
 }
@@ -545,6 +552,9 @@ bool IOHandlerEditline::GetLines(StringList &lines, bool &interrupted) {
 #if LLDB_ENABLE_LIBEDIT
   }
 #endif
+  // BEGIN SWIFT
+  m_current_lines_ptr = NULL;
+  // END SWIFT
   return success;
 }
 

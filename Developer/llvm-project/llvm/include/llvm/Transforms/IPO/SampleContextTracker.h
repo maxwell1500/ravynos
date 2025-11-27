@@ -161,6 +161,7 @@ public:
       return *this;
     }
 
+#ifndef __swift__
     bool operator==(const Iterator &Other) const {
       if (NodeQueue.empty() && Other.NodeQueue.empty())
         return true;
@@ -168,6 +169,7 @@ public:
         return false;
       return NodeQueue.front() == Other.NodeQueue.front();
     }
+#endif
 
     ContextTrieNode *operator*() const {
       assert(!NodeQueue.empty() && "Invalid access to end iterator");

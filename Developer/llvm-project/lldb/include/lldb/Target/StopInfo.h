@@ -79,6 +79,11 @@ public:
 
   virtual bool IsValidForOperatingSystemThread(Thread &thread) { return true; }
 
+  /// A Continue operation can result in a false stop event
+  /// before any execution has happened. We need to detect this
+  /// and silently continue again one more time.
+  virtual bool WasContinueInterrupted(Thread &thread) { return false; }
+
   // Sometimes the thread plan logic will know that it wants a given stop to
   // stop or not, regardless of what the ordinary logic for that StopInfo would
   // dictate.  The main example of this is the ThreadPlanCallFunction, which
@@ -109,20 +114,22 @@ public:
   static lldb::StopInfoSP CreateStopReasonWithBreakpointSiteID(
       Thread &thread, lldb::break_id_t break_id, bool should_stop);
 
-  static lldb::StopInfoSP CreateStopReasonWithWatchpointID(
-      Thread &thread, lldb::break_id_t watch_id,
-      lldb::addr_t watch_hit_addr = LLDB_INVALID_ADDRESS);
+  static lldb::StopInfoSP
+  CreateStopReasonWithWatchpointID(Thread &thread, lldb::break_id_t watch_id,
+                                   bool silently_continue = false);
 
   static lldb::StopInfoSP
   CreateStopReasonWithSignal(Thread &thread, int signo,
-                             const char *description = nullptr);
+                             const char *description = nullptr,
+                             std::optional<int> code = std::nullopt);
 
   static lldb::StopInfoSP CreateStopReasonToTrace(Thread &thread);
 
   static lldb::StopInfoSP
   CreateStopReasonWithPlan(lldb::ThreadPlanSP &plan,
                            lldb::ValueObjectSP return_valobj_sp,
-                           lldb::ExpressionVariableSP expression_variable_sp);
+                           lldb::ExpressionVariableSP expression_variable_sp,
+                           bool return_is_swift_error_value = false);
 
   static lldb::StopInfoSP
   CreateStopReasonWithException(Thread &thread, const char *description);
@@ -143,7 +150,8 @@ public:
   static lldb::StopInfoSP CreateStopReasonVForkDone(Thread &thread);
 
   static lldb::ValueObjectSP
-  GetReturnValueObject(lldb::StopInfoSP &stop_info_sp);
+  GetReturnValueObject(lldb::StopInfoSP &stop_info_sp,
+                       bool &is_swift_error_result);
 
   static lldb::ExpressionVariableSP
   GetExpressionVariable(lldb::StopInfoSP &stop_info_sp);

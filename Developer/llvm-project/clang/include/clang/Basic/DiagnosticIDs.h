@@ -32,16 +32,17 @@ namespace clang {
     enum {
       DIAG_SIZE_COMMON        =  300,
       DIAG_SIZE_DRIVER        =  300,
-      DIAG_SIZE_FRONTEND      =  150,
+      DIAG_SIZE_FRONTEND      =  151, // swift-clang has 1 extra diag
       DIAG_SIZE_SERIALIZATION =  120,
       DIAG_SIZE_LEX           =  400,
       DIAG_SIZE_PARSE         =  700,
-      DIAG_SIZE_AST           =  250,
+      DIAG_SIZE_AST           =  300,
       DIAG_SIZE_COMMENT       =  100,
       DIAG_SIZE_CROSSTU       =  100,
       DIAG_SIZE_SEMA          = 4500,
       DIAG_SIZE_ANALYSIS      =  100,
       DIAG_SIZE_REFACTORING   = 1000,
+      DIAG_SIZE_CAS           =  100,
     };
     // Start position for diagnostics.
     enum {
@@ -57,7 +58,8 @@ namespace clang {
       DIAG_START_SEMA          = DIAG_START_CROSSTU       + static_cast<int>(DIAG_SIZE_CROSSTU),
       DIAG_START_ANALYSIS      = DIAG_START_SEMA          + static_cast<int>(DIAG_SIZE_SEMA),
       DIAG_START_REFACTORING   = DIAG_START_ANALYSIS      + static_cast<int>(DIAG_SIZE_ANALYSIS),
-      DIAG_UPPER_LIMIT         = DIAG_START_REFACTORING   + static_cast<int>(DIAG_SIZE_REFACTORING)
+      DIAG_START_CAS           = DIAG_START_REFACTORING   + static_cast<int>(DIAG_SIZE_REFACTORING),
+      DIAG_UPPER_LIMIT         = DIAG_START_CAS           + static_cast<int>(DIAG_SIZE_CAS)
     };
 
     class CustomDiagInfo;
@@ -159,6 +161,10 @@ public:
     Result.Severity = Bits & 0x7;
     return Result;
   }
+
+  bool operator==(DiagnosticMapping Other) const {
+    return serialize() == Other.serialize();
+  }
 };
 
 /// Used for handling and querying diagnostic IDs.
@@ -207,6 +213,9 @@ public:
   /// Return true if the specified diagnostic is mapped to errors by
   /// default.
   static bool isDefaultMappingAsError(unsigned DiagID);
+
+  /// Get the default mapping for this diagnostic.
+  static DiagnosticMapping getDefaultMapping(unsigned DiagID);
 
   /// Determine whether the given built-in diagnostic ID is a Note.
   static bool isBuiltinNote(unsigned DiagID);

@@ -19,6 +19,8 @@
 #include "clang/Lex/Preprocessor.h"
 #include "clang/Tooling/Inclusions/HeaderAnalysis.h"
 #include "clang/Tooling/Inclusions/StandardLibrary.h"
+#include <memory>
+#include <utility>
 
 namespace clang::include_cleaner {
 namespace {
@@ -38,7 +40,8 @@ public:
                           StringRef SpelledFilename, bool IsAngled,
                           CharSourceRange FilenameRange,
                           OptionalFileEntryRef File, StringRef SearchPath,
-                          StringRef RelativePath, const Module *,
+                          StringRef RelativePath, const Module *SuggestedModule,
+                          bool ModuleImported,
                           SrcMgr::CharacteristicKind) override {
     if (!Active)
       return;
@@ -132,9 +135,9 @@ private:
                       RefType RT = RefType::Explicit) {
     if (MI.isBuiltinMacro())
       return; // __FILE__ is not a reference.
-    Recorded.MacroReferences.push_back(SymbolReference{
-        Tok.getLocation(),
-        Macro{Tok.getIdentifierInfo(), MI.getDefinitionLoc()}, RT});
+    Recorded.MacroReferences.push_back(
+        SymbolReference{Macro{Tok.getIdentifierInfo(), MI.getDefinitionLoc()},
+                        Tok.getLocation(), RT});
   }
 
   bool Active = false;
@@ -148,8 +151,9 @@ private:
 class PragmaIncludes::RecordPragma : public PPCallbacks, public CommentHandler {
 public:
   RecordPragma(const CompilerInstance &CI, PragmaIncludes *Out)
-      : SM(CI.getSourceManager()),
-        HeaderInfo(CI.getPreprocessor().getHeaderSearchInfo()), Out(Out),
+      : RecordPragma(CI.getPreprocessor(), Out) {}
+  RecordPragma(const Preprocessor &P, PragmaIncludes *Out)
+      : SM(P.getSourceManager()), HeaderInfo(P.getHeaderSearchInfo()), Out(Out),
         UniqueStrings(Arena) {}
 
   void FileChanged(SourceLocation Loc, FileChangeReason Reason,
@@ -185,7 +189,8 @@ public:
                           OptionalFileEntryRef File,
                           llvm::StringRef /*SearchPath*/,
                           llvm::StringRef /*RelativePath*/,
-                          const clang::Module * /*Imported*/,
+                          const clang::Module * /*SuggestedModule*/,
+                          bool /*ModuleImported*/,
                           SrcMgr::CharacteristicKind FileKind) override {
     FileID HashFID = SM.getFileID(HashLoc);
     int HashLine = SM.getLineNumber(HashFID, SM.getFileOffset(HashLoc));
@@ -305,7 +310,7 @@ private:
 
   bool InMainFile = false;
   const SourceManager &SM;
-  HeaderSearch &HeaderInfo;
+  const HeaderSearch &HeaderInfo;
   PragmaIncludes *Out;
   llvm::BumpPtrAllocator Arena;
   /// Intern table for strings. Contents are on the arena.
@@ -342,6 +347,12 @@ void PragmaIncludes::record(const CompilerInstance &CI) {
   CI.getPreprocessor().addPPCallbacks(std::move(Record));
 }
 
+void PragmaIncludes::record(Preprocessor &P) {
+  auto Record = std::make_unique<RecordPragma>(P, this);
+  P.addCommentHandler(Record.get());
+  P.addPPCallbacks(std::move(Record));
+}
+
 llvm::StringRef PragmaIncludes::getPublic(const FileEntry *F) const {
   auto It = IWYUPublic.find(F->getUniqueID());
   if (It == IWYUPublic.end())
@@ -350,8 +361,8 @@ llvm::StringRef PragmaIncludes::getPublic(const FileEntry *F) const {
 }
 
 static llvm::SmallVector<const FileEntry *>
-toFileEntries(llvm::ArrayRef<StringRef> FileNames, FileManager& FM) {
-    llvm::SmallVector<const FileEntry *> Results;
+toFileEntries(llvm::ArrayRef<StringRef> FileNames, FileManager &FM) {
+  llvm::SmallVector<const FileEntry *> Results;
 
   for (auto FName : FileNames) {
     // FIMXE: log the failing cases?
@@ -382,7 +393,7 @@ bool PragmaIncludes::isSelfContained(const FileEntry *FE) const {
 }
 
 bool PragmaIncludes::isPrivate(const FileEntry *FE) const {
-  return IWYUPublic.find(FE->getUniqueID()) != IWYUPublic.end();
+  return IWYUPublic.contains(FE->getUniqueID());
 }
 
 namespace {

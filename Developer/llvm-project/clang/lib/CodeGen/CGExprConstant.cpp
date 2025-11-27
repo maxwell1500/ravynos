@@ -932,12 +932,12 @@ tryEmitGlobalCompoundLiteral(ConstantEmitter &emitter,
     return ConstantAddress::invalid();
   }
 
-  auto GV = new llvm::GlobalVariable(CGM.getModule(), C->getType(),
-                                     CGM.isTypeConstant(E->getType(), true),
-                                     llvm::GlobalValue::InternalLinkage,
-                                     C, ".compoundliteral", nullptr,
-                                     llvm::GlobalVariable::NotThreadLocal,
-                    CGM.getContext().getTargetAddressSpace(addressSpace));
+  auto GV = new llvm::GlobalVariable(
+      CGM.getModule(), C->getType(),
+      CGM.isTypeConstant(E->getType(), true, false),
+      llvm::GlobalValue::InternalLinkage, C, ".compoundliteral", nullptr,
+      llvm::GlobalVariable::NotThreadLocal,
+      CGM.getContext().getTargetAddressSpace(addressSpace));
   emitter.finalize(GV);
   GV->setAlignment(Align.getAsAlign());
   CGM.setAddrOfConstantCompoundLiteral(E, GV);
@@ -1215,11 +1215,6 @@ public:
     return Visit(E->getSubExpr(), T);
   }
 
-  llvm::Constant *VisitMaterializeTemporaryExpr(MaterializeTemporaryExpr *E,
-                                                QualType T) {
-    return Visit(E->getSubExpr(), T);
-  }
-
   llvm::Constant *EmitArrayInitialization(InitListExpr *ILE, QualType T) {
     auto *CAT = CGM.getContext().getAsConstantArrayType(ILE->getType());
     assert(CAT && "can't emit array init for non-constant-bound array");
@@ -1322,7 +1317,12 @@ public:
       assert(CGM.getContext().hasSameUnqualifiedType(Ty, Arg->getType()) &&
              "argument to copy ctor is of wrong type");
 
-      return Visit(Arg, Ty);
+      // Look through the temporary; it's just converting the value to an
+      // lvalue to pass it to the constructor.
+      if (auto *MTE = dyn_cast<MaterializeTemporaryExpr>(Arg))
+        return Visit(MTE->getSubExpr(), Ty);
+      // Don't try to support arbitrary lvalue-to-rvalue conversions for now.
+      return nullptr;
     }
 
     return CGM.EmitNullConstant(Ty);
@@ -1340,6 +1340,7 @@ public:
     std::string Str;
     CGM.getContext().getObjCEncodingForType(E->getEncodedType(), Str);
     const ConstantArrayType *CAT = CGM.getContext().getAsConstantArrayType(T);
+    assert(CAT && "String data not of constant array type!");
 
     // Resize the string to the right size, adding zeros at the end, or
     // truncating as needed.
@@ -1471,8 +1472,37 @@ llvm::GlobalValue *ConstantEmitter::getCurrentAddrPrivate() {
   return global;
 }
 
+static llvm::Constant *getUnfoldableValue(llvm::Constant *C) {
+  // Look through any constant expressions that might get folded
+  while (auto CE = dyn_cast<llvm::ConstantExpr>(C)) {
+    switch (CE->getOpcode()) {
+    // Simple type changes.
+    case llvm::Instruction::BitCast:
+    case llvm::Instruction::IntToPtr:
+    case llvm::Instruction::PtrToInt:
+      break;
+
+    // GEPs, if all the indices are zero.
+    case llvm::Instruction::GetElementPtr:
+      for (unsigned i = 1, e = CE->getNumOperands(); i != e; ++i)
+        if (!CE->getOperand(i)->isNullValue())
+          return C;
+      break;
+
+    default:
+      return C;
+    }
+    C = CE->getOperand(0);
+  }
+  return C;
+}
+
 void ConstantEmitter::registerCurrentAddrPrivate(llvm::Constant *signal,
                                            llvm::GlobalValue *placeholder) {
+  // Strip anything from the signal value that might get folded into other
+  // constant expressions in the final initializer.
+  signal = getUnfoldableValue(signal);
+
   assert(!PlaceholderAddresses.empty());
   assert(PlaceholderAddresses.back().first == nullptr);
   assert(PlaceholderAddresses.back().second == placeholder);
@@ -1530,7 +1560,7 @@ namespace {
       // messing around with llvm::Constant structures, which never itself
       // does anything that should be visible in compiler output.
       for (auto &entry : Locations) {
-        assert(entry.first->getParent() == nullptr && "not a placeholder!");
+        assert(entry.first->getName() == "" && "not a placeholder!");
         entry.first->replaceAllUsesWith(entry.second);
         entry.first->eraseFromParent();
       }
@@ -1570,7 +1600,7 @@ namespace {
     }
 
     void setLocation(llvm::GlobalVariable *placeholder) {
-      assert(Locations.find(placeholder) == Locations.end() &&
+      assert(!Locations.contains(placeholder) &&
              "already found location for placeholder!");
 
       // Lazily fill in IndexValues with the values from Indices.
@@ -1653,29 +1683,22 @@ llvm::Constant *ConstantEmitter::tryEmitPrivateForVarInit(const VarDecl &D) {
   InConstantContext = D.hasConstantInitialization();
 
   QualType destType = D.getType();
-
-  // Try to emit the initializer.  Note that this can allow some things that
-  // are not allowed by tryEmitPrivateForMemory alone.
-  if (auto value = D.evaluateValue()) {
-    return tryEmitPrivateForMemory(*value, destType);
-  }
-
-  // FIXME: Implement C++11 [basic.start.init]p2: if the initializer of a
-  // reference is a constant expression, and the reference binds to a temporary,
-  // then constant initialization is performed. ConstExprEmitter will
-  // incorrectly emit a prvalue constant in this case, and the calling code
-  // interprets that as the (pointer) value of the reference, rather than the
-  // desired value of the referee.
-  if (destType->isReferenceType())
-    return nullptr;
-
   const Expr *E = D.getInit();
   assert(E && "No initializer to emit");
 
-  auto nonMemoryDestType = getNonMemoryType(CGM, destType);
-  auto C =
-    ConstExprEmitter(*this).Visit(const_cast<Expr*>(E), nonMemoryDestType);
-  return (C ? emitForMemory(C, destType) : nullptr);
+  if (!destType->isReferenceType()) {
+    QualType nonMemoryDestType = getNonMemoryType(CGM, destType);
+    if (llvm::Constant *C = ConstExprEmitter(*this).Visit(const_cast<Expr *>(E),
+                                                          nonMemoryDestType))
+      return emitForMemory(C, destType);
+  }
+
+  // Try to emit the initializer.  Note that this can allow some things that
+  // are not allowed by tryEmitPrivateForMemory alone.
+  if (APValue *value = D.evaluateValue())
+    return tryEmitPrivateForMemory(*value, destType);
+
+  return nullptr;
 }
 
 llvm::Constant *
@@ -1730,7 +1753,7 @@ llvm::Constant *ConstantEmitter::emitForMemory(CodeGenModule &CGM,
   }
 
   // Zero-extend bool.
-  if (C->getType()->isIntegerTy(1)) {
+  if (C->getType()->isIntegerTy(1) && !destType->isBitIntType()) {
     llvm::Type *boolTy = CGM.getTypes().ConvertTypeForMem(destType);
     return llvm::ConstantExpr::getZExt(C, boolTy);
   }
@@ -1742,6 +1765,11 @@ llvm::Constant *ConstantEmitter::tryEmitPrivate(const Expr *E,
                                                 QualType destType) {
   assert(!destType->isVoidType() && "can't emit a void constant");
 
+  if (!destType->isReferenceType())
+    if (llvm::Constant *C =
+            ConstExprEmitter(*this).Visit(const_cast<Expr *>(E), destType))
+      return C;
+
   Expr::EvalResult Result;
 
   bool Success = false;
@@ -1751,13 +1779,10 @@ llvm::Constant *ConstantEmitter::tryEmitPrivate(const Expr *E,
   else
     Success = E->EvaluateAsRValue(Result, CGM.getContext(), InConstantContext);
 
-  llvm::Constant *C;
   if (Success && !Result.HasSideEffects)
-    C = tryEmitPrivate(Result.Val, destType);
-  else
-    C = ConstExprEmitter(*this).Visit(const_cast<Expr*>(E), destType);
+    return tryEmitPrivate(Result.Val, destType);
 
-  return C;
+  return nullptr;
 }
 
 llvm::Constant *CodeGenModule::getNullPointer(llvm::PointerType *T, QualType QT) {
@@ -1770,10 +1795,13 @@ namespace {
 struct ConstantLValue {
   llvm::Constant *Value;
   bool HasOffsetApplied;
+  bool HasDestPointerAuth;
 
   /*implicit*/ ConstantLValue(llvm::Constant *value,
-                              bool hasOffsetApplied = false)
-    : Value(value), HasOffsetApplied(hasOffsetApplied) {}
+                              bool hasOffsetApplied = false,
+                              bool hasDestPointerAuth = false)
+    : Value(value), HasOffsetApplied(hasOffsetApplied),
+      HasDestPointerAuth(hasDestPointerAuth) {}
 
   /*implicit*/ ConstantLValue(ConstantAddress address)
     : ConstantLValue(address.getPointer()) {}
@@ -1816,6 +1844,14 @@ private:
   ConstantLValue VisitMaterializeTemporaryExpr(
                                          const MaterializeTemporaryExpr *E);
 
+  ConstantLValue emitPointerAuthSignConstant(const CallExpr *E);
+  llvm::Constant *emitPointerAuthPointer(const Expr *E);
+  unsigned emitPointerAuthKey(const Expr *E);
+  std::pair<llvm::Constant*, llvm::Constant*>
+  emitPointerAuthDiscriminator(const Expr *E);
+  llvm::Constant *tryEmitConstantSignedPointer(llvm::Constant *ptr,
+                                               PointerAuthQualifier auth);
+
   bool hasNonZeroOffset() const {
     return !Value.getLValueOffset().isZero();
   }
@@ -1832,9 +1868,6 @@ private:
       return C;
 
     llvm::Type *origPtrTy = C->getType();
-    unsigned AS = origPtrTy->getPointerAddressSpace();
-    llvm::Type *charPtrTy = CGM.Int8Ty->getPointerTo(AS);
-    C = llvm::ConstantExpr::getBitCast(C, charPtrTy);
     C = llvm::ConstantExpr::getGetElementPtr(CGM.Int8Ty, C, getOffset());
     C = llvm::ConstantExpr::getPointerCast(C, origPtrTy);
     return C;
@@ -1872,6 +1905,14 @@ llvm::Constant *ConstantLValueEmitter::tryEmit() {
   // Apply the offset if necessary and not already done.
   if (!result.HasOffsetApplied) {
     value = applyOffset(value);
+  }
+
+  // Apply pointer-auth signing from the destination type.
+  if (auto pointerAuth = DestType.getPointerAuth()) {
+    if (!result.HasDestPointerAuth) {
+      value = tryEmitConstantSignedPointer(value, pointerAuth);
+      if (!value) return nullptr;
+    }
   }
 
   // Convert to the appropriate type; this could be an lvalue for
@@ -1915,8 +1956,27 @@ ConstantLValueEmitter::tryEmitBase(const APValue::LValueBase &base) {
     if (D->hasAttr<WeakRefAttr>())
       return CGM.GetWeakRefReference(D).getPointer();
 
-    if (auto FD = dyn_cast<FunctionDecl>(D))
-      return CGM.GetAddrOfFunction(FD);
+    if (auto FD = dyn_cast<FunctionDecl>(D)) {
+      llvm::Constant *C = CGM.getRawFunctionPointer(FD);
+      if (auto pointerAuth = DestType.getPointerAuth()) {
+        C = applyOffset(C);
+        C = tryEmitConstantSignedPointer(C, pointerAuth);
+        return ConstantLValue(C, /*applied offset*/ true, /*signed*/ true);
+      }
+
+      if (CGPointerAuthInfo AuthInfo =
+              CGM.getFunctionPointerAuthInfo(DestType)) {
+        if (hasNonZeroOffset())
+          return ConstantLValue(nullptr);
+        C = CGM.getConstantSignedPointer(
+            C, AuthInfo.getKey(),
+            /*storageAddress=*/nullptr,
+            cast_or_null<llvm::Constant>(AuthInfo.getDiscriminator()));
+        return ConstantLValue(C, /*AppliedOffset=*/true, /*Signed=*/true);
+      }
+
+      return ConstantLValue(C);
+    }
 
     if (auto VD = dyn_cast<VarDecl>(D)) {
       // We can never refer to a variable with local storage.
@@ -1926,7 +1986,7 @@ ConstantLValueEmitter::tryEmitBase(const APValue::LValueBase &base) {
 
         if (VD->isLocalVarDecl()) {
           return CGM.getOrCreateStaticVarDecl(
-              *VD, CGM.getLLVMLinkageVarDefinition(VD, /*IsConstant=*/false));
+              *VD, CGM.getLLVMLinkageVarDefinition(VD));
         }
       }
     }
@@ -1944,15 +2004,8 @@ ConstantLValueEmitter::tryEmitBase(const APValue::LValueBase &base) {
   }
 
   // Handle typeid(T).
-  if (TypeInfoLValue TI = base.dyn_cast<TypeInfoLValue>()) {
-    llvm::Type *StdTypeInfoPtrTy =
-        CGM.getTypes().ConvertType(base.getTypeInfoType())->getPointerTo();
-    llvm::Constant *TypeInfo =
-        CGM.GetAddrOfRTTIDescriptor(QualType(TI.getType(), 0));
-    if (TypeInfo->getType() != StdTypeInfoPtrTy)
-      TypeInfo = llvm::ConstantExpr::getBitCast(TypeInfo, StdTypeInfoPtrTy);
-    return TypeInfo;
-  }
+  if (TypeInfoLValue TI = base.dyn_cast<TypeInfoLValue>())
+    return CGM.GetAddrOfRTTIDescriptor(QualType(TI.getType(), 0));
 
   // Otherwise, it must be an expression.
   return Visit(base.get<const Expr*>());
@@ -1986,7 +2039,7 @@ static ConstantLValue emitConstantObjCStringLiteral(const StringLiteral *S,
                                                     QualType T,
                                                     CodeGenModule &CGM) {
   auto C = CGM.getObjCRuntime().GenerateConstantString(S);
-  return C.getElementBitCast(CGM.getTypes().ConvertTypeForMem(T));
+  return C.withElementType(CGM.getTypes().ConvertTypeForMem(T));
 }
 
 ConstantLValue
@@ -2019,6 +2072,9 @@ ConstantLValueEmitter::VisitAddrLabelExpr(const AddrLabelExpr *E) {
 ConstantLValue
 ConstantLValueEmitter::VisitCallExpr(const CallExpr *E) {
   unsigned builtin = E->getBuiltinCallee();
+  if (builtin == Builtin::BI__builtin_ptrauth_sign_constant)
+    return emitPointerAuthSignConstant(E);
+
   if (builtin == Builtin::BI__builtin_function_start)
     return CGM.GetFunctionStart(
         E->getArg(0)->getAsBuiltinConstantDeclRef(CGM.getContext()));
@@ -2033,6 +2089,99 @@ ConstantLValueEmitter::VisitCallExpr(const CallExpr *E) {
     // FIXME: need to deal with UCN conversion issues.
     return CGM.GetAddrOfConstantCFString(literal);
   }
+}
+
+/// Try to emit a constant signed pointer, given a raw pointer and the
+/// destination ptrauth qualifier.
+///
+/// This can fail if the qualifier needs address discrimination and the
+/// emitter is in an abstract mode.
+llvm::Constant *
+ConstantLValueEmitter::tryEmitConstantSignedPointer(
+                                             llvm::Constant *unsignedPointer,
+                                             PointerAuthQualifier schema) {
+  assert(schema && "applying trivial ptrauth schema");
+  auto key = schema.getKey();
+
+  // Create an address placeholder if we're using address discrimination.
+  llvm::GlobalValue *storageAddress = nullptr;
+  if (schema.isAddressDiscriminated()) {
+    // We can't do this if the emitter is in an abstract state.
+    if (Emitter.isAbstract())
+      return nullptr;
+
+    storageAddress = Emitter.getCurrentAddrPrivate();
+  }
+
+  // Fetch the extra discriminator.
+  llvm::Constant *otherDiscriminator =
+    llvm::ConstantInt::get(CGM.IntPtrTy, schema.getExtraDiscriminator());
+
+  auto signedPointer =
+    CGM.getConstantSignedPointer(unsignedPointer, key, storageAddress,
+                                 otherDiscriminator);
+
+  if (schema.isAddressDiscriminated())
+    Emitter.registerCurrentAddrPrivate(signedPointer, storageAddress);
+
+  return signedPointer;
+}
+
+ConstantLValue
+ConstantLValueEmitter::emitPointerAuthSignConstant(const CallExpr *E) {
+  auto unsignedPointer = emitPointerAuthPointer(E->getArg(0));
+  auto key = emitPointerAuthKey(E->getArg(1));
+  llvm::Constant *storageAddress;
+  llvm::Constant *otherDiscriminator;
+  std::tie(storageAddress, otherDiscriminator) =
+    emitPointerAuthDiscriminator(E->getArg(2));
+
+  auto signedPointer =
+    CGM.getConstantSignedPointer(unsignedPointer, key, storageAddress,
+                                 otherDiscriminator);
+  return signedPointer;
+}
+
+llvm::Constant *ConstantLValueEmitter::emitPointerAuthPointer(const Expr *E) {
+  Expr::EvalResult result;
+  bool succeeded = E->EvaluateAsRValue(result, CGM.getContext());
+  assert(succeeded); (void) succeeded;
+
+  // The assertions here are all checked by Sema.
+  assert(result.Val.isLValue());
+  auto base = result.Val.getLValueBase().get<const ValueDecl *>();
+  if (auto decl = dyn_cast_or_null<FunctionDecl>(base)) {
+    assert(result.Val.getLValueOffset().isZero());
+    return CGM.getRawFunctionPointer(decl);
+  }
+  return ConstantEmitter(CGM, Emitter.CGF)
+           .emitAbstract(E->getExprLoc(), result.Val, E->getType());
+}
+
+unsigned ConstantLValueEmitter::emitPointerAuthKey(const Expr *E) {
+  return E->EvaluateKnownConstInt(CGM.getContext()).getZExtValue();
+}
+
+std::pair<llvm::Constant*, llvm::Constant*>
+ConstantLValueEmitter::emitPointerAuthDiscriminator(const Expr *E) {
+  E = E->IgnoreParens();
+
+  if (auto call = dyn_cast<CallExpr>(E)) {
+    if (call->getBuiltinCallee() ==
+          Builtin::BI__builtin_ptrauth_blend_discriminator) {
+      auto pointer = ConstantEmitter(CGM).emitAbstract(call->getArg(0),
+                                            call->getArg(0)->getType());
+      auto extra = ConstantEmitter(CGM).emitAbstract(call->getArg(1),
+                                            call->getArg(1)->getType());
+      return { pointer, extra };
+    }
+  }
+
+  auto result = ConstantEmitter(CGM).emitAbstract(E, E->getType());
+  if (result->getType()->isPointerTy())
+    return { result, nullptr };
+  else
+    return { nullptr, result };
 }
 
 ConstantLValue
@@ -2189,6 +2338,11 @@ llvm::Constant *ConstantEmitter::tryEmitPrivate(const APValue &Value,
 
     llvm::ArrayType *Desired =
         cast<llvm::ArrayType>(CGM.getTypes().ConvertType(DestType));
+
+    // Fix the type of incomplete arrays if the initializer isn't empty.
+    if (DestType->isIncompleteArrayType() && !Elts.empty())
+      Desired = llvm::ArrayType::get(Desired->getElementType(), Elts.size());
+
     return EmitArrayConstant(CGM, Desired, CommonElementType, NumElements, Elts,
                              Filler);
   }

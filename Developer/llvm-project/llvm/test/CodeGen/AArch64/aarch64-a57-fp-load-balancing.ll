@@ -82,8 +82,7 @@ entry:
 ; CHECK: fmadd [[y]]
 ; CHECK: fmadd [[x]]
 ; CHECK-BALFP: stp [[x]], [[y]]
-; CHECK-A53-DAG: str [[x]]
-; CHECK-A53-DAG: str [[y]]
+; CHECK-A53-DAG: stp [[x]], [[y]]
 
 define void @f2(ptr nocapture readonly %p, ptr nocapture %q) #0 {
 entry:
@@ -177,8 +176,7 @@ declare void @g(...) #1
 ; CHECK: fmadd [[y]]
 ; CHECK: fmadd [[x]]
 ; CHECK-BALFP: stp [[x]], [[y]]
-; CHECK-A53-DAG: str [[x]]
-; CHECK-A53-DAG: str [[y]]
+; CHECK-A53-DAG: stp [[x]], [[y]]
 
 define void @f4(ptr nocapture readonly %p, ptr nocapture %q) #0 {
 entry:

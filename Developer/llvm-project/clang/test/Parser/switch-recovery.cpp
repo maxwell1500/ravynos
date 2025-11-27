@@ -21,7 +21,7 @@ struct B {
   void test2() {
     enum X { Xa, Xb } x;
 
-    switch (x) { // expected-warning {{enumeration value 'Xb' not handled in switch}}
+    switch (x) { // expected-warning {{enumeration value 'Xb' not handled in switch}} expected-note {{add missing switch cases}}
     case Xa; // expected-error {{expected ':' after 'case'}}
       break;
     }
@@ -161,14 +161,14 @@ void missing_statement_case(int x) {
   switch (x) {
     case 1:
     case 0:
-  } // expected-warning {{label at end of compound statement is a C++2b extension}}
+  } // expected-warning {{label at end of compound statement is a C++23 extension}}
 }
 
 void missing_statement_default(int x) {
   switch (x) {
     case 0:
     default:
-  } // expected-warning {{label at end of compound statement is a C++2b extension}}
+  } // expected-warning {{label at end of compound statement is a C++23 extension}}
 }
 
 void pr19022_1() {
@@ -179,7 +179,7 @@ void pr19022_1() {
 void pr19022_1a(int x) {
   switch(x) {
   case 1  // expected-error{{expected ':' after 'case'}}
-  } // expected-warning {{label at end of compound statement is a C++2b extension}}
+  } // expected-warning {{label at end of compound statement is a C++23 extension}}
 }
 
 void pr19022_1b(int x) {
@@ -211,7 +211,7 @@ void pr19022_5(int x) {
   switch(x) {
   case 1: case // expected-error{{expected ':' after 'case'}}
   }  // expected-error{{expected expression}} \
-     // expected-warning {{label at end of compound statement is a C++2b extension}}
+     // expected-warning {{label at end of compound statement is a C++23 extension}}
 }
 
 namespace pr19022 {

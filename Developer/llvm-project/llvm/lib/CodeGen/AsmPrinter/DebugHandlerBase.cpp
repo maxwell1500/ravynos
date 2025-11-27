@@ -215,21 +215,26 @@ bool DebugHandlerBase::isUnsignedDIType(const DIType *Ty) {
     return isUnsignedDIType(DTy->getBaseType());
   }
 
-  auto *BTy = cast<DIBasicType>(Ty);
-  unsigned Encoding = BTy->getEncoding();
-  assert((Encoding == dwarf::DW_ATE_unsigned ||
-          Encoding == dwarf::DW_ATE_unsigned_char ||
-          Encoding == dwarf::DW_ATE_signed ||
-          Encoding == dwarf::DW_ATE_signed_char ||
-          Encoding == dwarf::DW_ATE_float || Encoding == dwarf::DW_ATE_UTF ||
-          Encoding == dwarf::DW_ATE_boolean ||
-          (Ty->getTag() == dwarf::DW_TAG_unspecified_type &&
-           Ty->getName() == "decltype(nullptr)")) &&
-         "Unsupported encoding");
-  return Encoding == dwarf::DW_ATE_unsigned ||
-         Encoding == dwarf::DW_ATE_unsigned_char ||
-         Encoding == dwarf::DW_ATE_UTF || Encoding == dwarf::DW_ATE_boolean ||
-         Ty->getTag() == dwarf::DW_TAG_unspecified_type;
+  if (auto *BTy = dyn_cast<DIBasicType>(Ty)) {
+    unsigned Encoding = BTy->getEncoding();
+    assert((Encoding == dwarf::DW_ATE_unsigned ||
+            Encoding == dwarf::DW_ATE_unsigned_char ||
+            Encoding == dwarf::DW_ATE_signed ||
+            Encoding == dwarf::DW_ATE_signed_char ||
+            Encoding == dwarf::DW_ATE_float || Encoding == dwarf::DW_ATE_UTF ||
+            Encoding == dwarf::DW_ATE_boolean ||
+            Encoding == dwarf::DW_ATE_complex_float ||
+            (Ty->getTag() == dwarf::DW_TAG_unspecified_type &&
+             Ty->getName() == "decltype(nullptr)")) &&
+           "Unsupported encoding");
+    return Encoding == dwarf::DW_ATE_unsigned ||
+           Encoding == dwarf::DW_ATE_unsigned_char ||
+           Encoding == dwarf::DW_ATE_UTF || Encoding == dwarf::DW_ATE_boolean ||
+           Ty->getTag() == dwarf::DW_TAG_unspecified_type;
+  }
+  // FIXME: the signedness should come from the expression where the type is
+  // used in, not the type itself.
+  return true;
 }
 
 static bool hasDebugInfo(const MachineModuleInfo *MMI,
@@ -273,7 +278,7 @@ void DebugHandlerBase::beginFunction(const MachineFunction *MF) {
   InstOrdering.initialize(*MF);
   if (TrimVarLocs)
     DbgValues.trimLocationRanges(*MF, LScopes, InstOrdering);
-  LLVM_DEBUG(DbgValues.dump());
+  LLVM_DEBUG(DbgValues.dump(MF->getName()));
 
   // Request labels for the full history.
   for (const auto &I : DbgValues) {
@@ -299,6 +304,7 @@ void DebugHandlerBase::beginFunction(const MachineFunction *MF) {
         Entries.front().getInstr()->getDebugVariable();
     if (DIVar->isParameter() &&
         getDISubprogram(DIVar->getScope())->describes(&MF->getFunction())) {
+
       if (!IsDescribedByReg(Entries.front().getInstr()))
         LabelsBeforeInsn[Entries.front().getInstr()] = Asm->getFunctionBegin();
       if (Entries.front().getInstr()->getDebugExpression()->isFragment()) {

@@ -12,7 +12,6 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/LTO/legacy/LTOModule.h"
-#include "llvm/ADT/Triple.h"
 #include "llvm/Bitcode/BitcodeReader.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
 #include "llvm/IR/Constants.h"
@@ -26,18 +25,20 @@
 #include "llvm/MC/MCSection.h"
 #include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/MC/MCSymbol.h"
-#include "llvm/MC/SubtargetFeature.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Object/IRObjectFile.h"
 #include "llvm/Object/MachO.h"
 #include "llvm/Object/ObjectFile.h"
+#include "llvm/Support/Error.h"
 #include "llvm/Support/FileSystem.h"
-#include "llvm/Support/Host.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Target/TargetLoweringObjectFile.h"
+#include "llvm/TargetParser/Host.h"
+#include "llvm/TargetParser/SubtargetFeature.h"
+#include "llvm/TargetParser/Triple.h"
 #include "llvm/Transforms/Utils/GlobalStatus.h"
 #include <system_error>
 using namespace llvm;
@@ -348,7 +349,7 @@ void LTOModule::addDefinedDataSymbol(ModuleSymbolTable::Symbol Sym) {
     Buffer.c_str();
   }
 
-  const GlobalValue *V = Sym.get<GlobalValue *>();
+  const GlobalValue *V = cast<GlobalValue *>(Sym);
   addDefinedDataSymbol(Buffer, V);
 }
 
@@ -406,7 +407,7 @@ void LTOModule::addDefinedFunctionSymbol(ModuleSymbolTable::Symbol Sym) {
     Buffer.c_str();
   }
 
-  const Function *F = cast<Function>(Sym.get<GlobalValue *>());
+  const Function *F = cast<Function>(cast<GlobalValue *>(Sym));
   addDefinedFunctionSymbol(Buffer, F);
 }
 
@@ -556,7 +557,7 @@ void LTOModule::addPotentialUndefinedSymbol(ModuleSymbolTable::Symbol Sym,
 
   info.name = IterBool.first->first();
 
-  const GlobalValue *decl = Sym.dyn_cast<GlobalValue *>();
+  const GlobalValue *decl = dyn_cast_if_present<GlobalValue *>(Sym);
 
   if (decl->hasExternalWeakLinkage())
     info.attributes = LTO_SYMBOL_DEFINITION_WEAKUNDEF;
@@ -569,7 +570,7 @@ void LTOModule::addPotentialUndefinedSymbol(ModuleSymbolTable::Symbol Sym,
 
 void LTOModule::parseSymbols() {
   for (auto Sym : SymTab.symbols()) {
-    auto *GV = Sym.dyn_cast<GlobalValue *>();
+    auto *GV = dyn_cast_if_present<GlobalValue *>(Sym);
     uint32_t Flags = SymTab.getSymbolFlags(Sym);
     if (Flags & object::BasicSymbolRef::SF_FormatSpecific)
       continue;
@@ -686,12 +687,19 @@ Expected<uint32_t> LTOModule::getMachOCPUType() const {
 }
 
 Expected<uint32_t> LTOModule::getMachOCPUSubType() const {
+  if (Error E = const_cast<Module *>(Mod.get())->materializeMetadata())
+    return std::move(E);
+  // If there is a ptrauth version in the module, take that into account.
+  if (std::optional<Module::PtrAuthABIVersion> ABIVersion =
+          Mod->getPtrAuthABIVersion())
+    return MachO::getCPUSubType(Triple(Mod->getTargetTriple()),
+                                ABIVersion->Version, ABIVersion->Kernel);
   return MachO::getCPUSubType(Triple(Mod->getTargetTriple()));
 }
 
 bool LTOModule::hasCtorDtor() const {
   for (auto Sym : SymTab.symbols()) {
-    if (auto *GV = Sym.dyn_cast<GlobalValue *>()) {
+    if (auto *GV = dyn_cast_if_present<GlobalValue *>(Sym)) {
       StringRef Name = GV->getName();
       if (Name.consume_front("llvm.global_")) {
         if (Name.equals("ctors") || Name.equals("dtors"))

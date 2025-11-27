@@ -22,7 +22,7 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/Analysis/ConstantFolding.h"
-#include "llvm/Analysis/EHPersonalities.h"
+#include "llvm/Analysis/ProfileSummaryInfo.h"
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineConstantPool.h"
 #include "llvm/CodeGen/MachineFrameInfo.h"
@@ -45,6 +45,7 @@
 #include "llvm/IR/Constant.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/IR/DerivedTypes.h"
+#include "llvm/IR/EHPersonalities.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/GlobalValue.h"
 #include "llvm/IR/Instruction.h"
@@ -119,7 +120,7 @@ void setUnsafeStackSize(const Function &F, MachineFrameInfo &FrameInfo) {
 
   auto *MetadataName = "unsafe-stack-size";
   if (auto &N = Existing->getOperand(0)) {
-    if (cast<MDString>(N.get())->getString() == MetadataName) {
+    if (N.equalsStr(MetadataName)) {
       if (auto &Op = Existing->getOperand(1)) {
         auto Val = mdconst::extract<ConstantInt>(Op)->getZExtValue();
         FrameInfo.setUnsafeStackSize(Val);
@@ -210,6 +211,14 @@ void MachineFunction::init() {
   if (!F.hasFnAttribute(Attribute::OptimizeForSize))
     Alignment = std::max(Alignment,
                          STI->getTargetLowering()->getPrefFunctionAlignment());
+
+  // -fsanitize=function and -fsanitize=kcfi instrument indirect function calls
+  // to load a type hash before the function label. Ensure functions are aligned
+  // by a least 4 to avoid unaligned access, which is especially important for
+  // -mno-unaligned-access.
+  if (F.hasMetadata(LLVMContext::MD_func_sanitize) ||
+      F.getMetadata(LLVMContext::MD_kcfi_type))
+    Alignment = std::max(Alignment, Align(4));
 
   if (AlignAllFunctions)
     Alignment = Align(1ULL << AlignAllFunctions);
@@ -427,8 +436,7 @@ void MachineFunction::deleteMachineInstr(MachineInstr *MI) {
   // be triggered during the implementation of support for the
   // call site info of a new architecture. If the assertion is triggered,
   // back trace will tell where to insert a call to updateCallSiteInfo().
-  assert((!MI->isCandidateForCallSiteEntry() ||
-          CallSitesInfo.find(MI) == CallSitesInfo.end()) &&
+  assert((!MI->isCandidateForCallSiteEntry() || !CallSitesInfo.contains(MI)) &&
          "Call site info was not updated!");
   // Strip it for parts. The operand array and the MI object itself are
   // independently recyclable.
@@ -772,31 +780,32 @@ MCSymbol *MachineFunction::addLandingPad(MachineBasicBlock *LandingPad) {
     if (LPI->isCleanup() && LPI->getNumClauses() != 0)
       LP.TypeIds.push_back(0);
 
+    if (LPI->isCleanup())
+      addCleanup(LandingPad);
+
     // FIXME: New EH - Add the clauses in reverse order. This isn't 100%
     //        correct, but we need to do it this way because of how the DWARF EH
     //        emitter processes the clauses.
     for (unsigned I = LPI->getNumClauses(); I != 0; --I) {
       Value *Val = LPI->getClause(I - 1);
       if (LPI->isCatch(I - 1)) {
-        LP.TypeIds.push_back(
-            getTypeIDFor(dyn_cast<GlobalValue>(Val->stripPointerCasts())));
+        addCatchTypeInfo(LandingPad,
+                         dyn_cast<GlobalValue>(Val->stripPointerCasts()));
       } else {
         // Add filters in a list.
         auto *CVal = cast<Constant>(Val);
-        SmallVector<unsigned, 4> FilterList;
+        SmallVector<const GlobalValue *, 4> FilterList;
         for (const Use &U : CVal->operands())
-          FilterList.push_back(
-              getTypeIDFor(cast<GlobalValue>(U->stripPointerCasts())));
+          FilterList.push_back(cast<GlobalValue>(U->stripPointerCasts()));
 
-        LP.TypeIds.push_back(getFilterIDFor(FilterList));
+        addFilterTypeInfo(LandingPad, FilterList);
       }
     }
 
   } else if (const auto *CPI = dyn_cast<CatchPadInst>(FirstI)) {
     for (unsigned I = CPI->arg_size(); I != 0; --I) {
-      auto *TypeInfo =
-          dyn_cast<GlobalValue>(CPI->getArgOperand(I - 1)->stripPointerCasts());
-      LP.TypeIds.push_back(getTypeIDFor(TypeInfo));
+      Value *TypeInfo = CPI->getArgOperand(I - 1)->stripPointerCasts();
+      addCatchTypeInfo(LandingPad, dyn_cast<GlobalValue>(TypeInfo));
     }
 
   } else {
@@ -804,6 +813,73 @@ MCSymbol *MachineFunction::addLandingPad(MachineBasicBlock *LandingPad) {
   }
 
   return LandingPadLabel;
+}
+
+void MachineFunction::addCatchTypeInfo(MachineBasicBlock *LandingPad,
+                                       ArrayRef<const GlobalValue *> TyInfo) {
+  LandingPadInfo &LP = getOrCreateLandingPadInfo(LandingPad);
+  for (const GlobalValue *GV : llvm::reverse(TyInfo))
+    LP.TypeIds.push_back(getTypeIDFor(GV));
+}
+
+void MachineFunction::addFilterTypeInfo(MachineBasicBlock *LandingPad,
+                                        ArrayRef<const GlobalValue *> TyInfo) {
+  LandingPadInfo &LP = getOrCreateLandingPadInfo(LandingPad);
+  std::vector<unsigned> IdsInFilter(TyInfo.size());
+  for (unsigned I = 0, E = TyInfo.size(); I != E; ++I)
+    IdsInFilter[I] = getTypeIDFor(TyInfo[I]);
+  LP.TypeIds.push_back(getFilterIDFor(IdsInFilter));
+}
+
+void MachineFunction::tidyLandingPads(DenseMap<MCSymbol *, uintptr_t> *LPMap,
+                                      bool TidyIfNoBeginLabels) {
+  for (unsigned i = 0; i != LandingPads.size(); ) {
+    LandingPadInfo &LandingPad = LandingPads[i];
+    if (LandingPad.LandingPadLabel &&
+        !LandingPad.LandingPadLabel->isDefined() &&
+        (!LPMap || (*LPMap)[LandingPad.LandingPadLabel] == 0))
+      LandingPad.LandingPadLabel = nullptr;
+
+    // Special case: we *should* emit LPs with null LP MBB. This indicates
+    // "nounwind" case.
+    if (!LandingPad.LandingPadLabel && LandingPad.LandingPadBlock) {
+      LandingPads.erase(LandingPads.begin() + i);
+      continue;
+    }
+
+    if (TidyIfNoBeginLabels) {
+      for (unsigned j = 0, e = LandingPads[i].BeginLabels.size(); j != e; ++j) {
+        MCSymbol *BeginLabel = LandingPad.BeginLabels[j];
+        MCSymbol *EndLabel = LandingPad.EndLabels[j];
+        if ((BeginLabel->isDefined() || (LPMap && (*LPMap)[BeginLabel] != 0)) &&
+            (EndLabel->isDefined() || (LPMap && (*LPMap)[EndLabel] != 0)))
+          continue;
+
+        LandingPad.BeginLabels.erase(LandingPad.BeginLabels.begin() + j);
+        LandingPad.EndLabels.erase(LandingPad.EndLabels.begin() + j);
+        --j;
+        --e;
+      }
+
+      // Remove landing pads with no try-ranges.
+      if (LandingPads[i].BeginLabels.empty()) {
+        LandingPads.erase(LandingPads.begin() + i);
+        continue;
+      }
+    }
+
+    // If there is no landing pad, ensure that the list of typeids is empty.
+    // If the only typeid is a cleanup, this is the same as having no typeids.
+    if (!LandingPad.LandingPadBlock ||
+        (LandingPad.TypeIds.size() == 1 && !LandingPad.TypeIds[0]))
+      LandingPad.TypeIds.clear();
+    ++i;
+  }
+}
+
+void MachineFunction::addCleanup(MachineBasicBlock *LandingPad) {
+  LandingPadInfo &LP = getOrCreateLandingPadInfo(LandingPad);
+  LP.TypeIds.push_back(0);
 }
 
 void MachineFunction::setCallSiteLandingPad(MCSymbol *Sym,
@@ -819,7 +895,7 @@ unsigned MachineFunction::getTypeIDFor(const GlobalValue *TI) {
   return TypeInfos.size();
 }
 
-int MachineFunction::getFilterIDFor(ArrayRef<unsigned> TyIds) {
+int MachineFunction::getFilterIDFor(std::vector<unsigned> &TyIds) {
   // If the new filter coincides with the tail of an existing filter, then
   // re-use the existing filter.  Folding filters more than this requires
   // re-ordering filters and/or their elements - probably not worth it.
@@ -1083,11 +1159,10 @@ auto MachineFunction::salvageCopySSAImpl(MachineInstr &MI)
   if (State.first.isVirtual()) {
     // Virtual register def -- we can just look up where this happens.
     MachineInstr *Inst = MRI.def_begin(State.first)->getParent();
-    for (auto &MO : Inst->operands()) {
-      if (!MO.isReg() || !MO.isDef() || MO.getReg() != State.first)
+    for (auto &MO : Inst->all_defs()) {
+      if (MO.getReg() != State.first)
         continue;
-      return ApplySubregisters(
-          {Inst->getDebugInstrNum(), Inst->getOperandNo(&MO)});
+      return ApplySubregisters({Inst->getDebugInstrNum(), MO.getOperandNo()});
     }
 
     llvm_unreachable("Vreg def with no corresponding operand?");
@@ -1102,14 +1177,13 @@ auto MachineFunction::salvageCopySSAImpl(MachineInstr &MI)
   auto RMII = CurInst->getReverseIterator();
   auto PrevInstrs = make_range(RMII, CurInst->getParent()->instr_rend());
   for (auto &ToExamine : PrevInstrs) {
-    for (auto &MO : ToExamine.operands()) {
+    for (auto &MO : ToExamine.all_defs()) {
       // Test for operand that defines something aliasing RegToSeek.
-      if (!MO.isReg() || !MO.isDef() ||
-          !TRI.regsOverlap(RegToSeek, MO.getReg()))
+      if (!TRI.regsOverlap(RegToSeek, MO.getReg()))
         continue;
 
       return ApplySubregisters(
-          {ToExamine.getDebugInstrNum(), ToExamine.getOperandNo(&MO)});
+          {ToExamine.getDebugInstrNum(), MO.getOperandNo()});
     }
   }
 
@@ -1395,7 +1469,7 @@ MachineConstantPool::~MachineConstantPool() {
 }
 
 /// Test whether the given two constants can be allocated the same constant pool
-/// entry.
+/// entry referenced by \param A.
 static bool CanShareConstantPoolEntry(const Constant *A, const Constant *B,
                                       const DataLayout &DL) {
   // Handle the trivial case quickly.
@@ -1414,6 +1488,8 @@ static bool CanShareConstantPoolEntry(const Constant *A, const Constant *B,
   uint64_t StoreSize = DL.getTypeStoreSize(A->getType());
   if (StoreSize != DL.getTypeStoreSize(B->getType()) || StoreSize > 128)
     return false;
+
+  bool ContainsUndefOrPoisonA = A->containsUndefOrPoisonElement();
 
   Type *IntTy = IntegerType::get(A->getContext(), StoreSize*8);
 
@@ -1434,7 +1510,14 @@ static bool CanShareConstantPoolEntry(const Constant *A, const Constant *B,
     B = ConstantFoldCastOperand(Instruction::BitCast, const_cast<Constant *>(B),
                                 IntTy, DL);
 
-  return A == B;
+  if (A != B)
+    return false;
+
+  // Constants only safely match if A doesn't contain undef/poison.
+  // As we'll be reusing A, it doesn't matter if B contain undef/poison.
+  // TODO: Handle cases where A and B have the same undef/poison elements.
+  // TODO: Merge A and B with mismatching undef/poison elements.
+  return !ContainsUndefOrPoisonA;
 }
 
 /// Create a new entry in the constant pool or return an existing one.
@@ -1488,6 +1571,17 @@ void MachineConstantPool::print(raw_ostream &OS) const {
     OS << ", align=" << Constants[i].getAlign().value();
     OS << "\n";
   }
+}
+
+//===----------------------------------------------------------------------===//
+// Template specialization for MachineFunction implementation of
+// ProfileSummaryInfo::getEntryCount().
+//===----------------------------------------------------------------------===//
+template <>
+std::optional<Function::ProfileCount>
+ProfileSummaryInfo::getEntryCount<llvm::MachineFunction>(
+    const llvm::MachineFunction *F) const {
+  return F->getFunction().getEntryCount();
 }
 
 #if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)

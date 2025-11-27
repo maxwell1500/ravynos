@@ -355,7 +355,10 @@ AddressClass ObjectFile::GetAddressClass(addr_t file_addr) {
           case eSectionTypeDWARFAppleTypes:
           case eSectionTypeDWARFAppleNamespaces:
           case eSectionTypeDWARFAppleObjC:
+          case eSectionTypeSwiftModules:
           case eSectionTypeDWARFGNUDebugAltLink:
+          case eSectionTypeCTF:
+          case eSectionTypeLLDBTypeSummaries:
             return AddressClass::eDebug;
           case eSectionTypeEHFrame:
           case eSectionTypeARMexidx:
@@ -437,6 +440,8 @@ AddressClass ObjectFile::GetAddressClass(addr_t file_addr) {
         return AddressClass::eRuntime;
       case eSymbolTypeReExported:
         return AddressClass::eRuntime;
+      case eSymbolTypeASTFile:
+        return AddressClass::eDebug;
       }
     }
   }
@@ -549,8 +554,15 @@ size_t ObjectFile::ReadSectionData(Section *section,
 
   // The object file now contains a full mmap'ed copy of the object file
   // data, so just use this
-  return GetData(section->GetFileOffset(), section->GetFileSize(),
-                  section_data);
+  return GetData(section->GetFileOffset(), GetSectionDataSize(section),
+                 section_data);
+}
+
+const char *
+ObjectFile::GetCStrFromSection(Section *section,
+                               lldb::offset_t section_offset) const {
+  offset_t offset = section->GetOffset() + section_offset;
+  return m_data.GetCStr(&offset);
 }
 
 bool ObjectFile::SplitArchivePathWithObject(llvm::StringRef path_with_object,
@@ -721,7 +733,6 @@ void llvm::format_provider<ObjectFile::Strata>::format(
   }
 }
 
-
 Symtab *ObjectFile::GetSymtab() {
   ModuleSP module_sp(GetModule());
   if (module_sp) {
@@ -761,3 +772,34 @@ uint32_t ObjectFile::GetCacheHash() {
   m_cache_hash = llvm::djbHash(strm.GetString());
   return *m_cache_hash;
 }
+
+namespace llvm {
+namespace json {
+
+bool fromJSON(const llvm::json::Value &value,
+              lldb_private::ObjectFile::Type &type, llvm::json::Path path) {
+  if (auto str = value.getAsString()) {
+    type = llvm::StringSwitch<ObjectFile::Type>(*str)
+               .Case("corefile", ObjectFile::eTypeCoreFile)
+               .Case("executable", ObjectFile::eTypeExecutable)
+               .Case("debuginfo", ObjectFile::eTypeDebugInfo)
+               .Case("dynamiclinker", ObjectFile::eTypeDynamicLinker)
+               .Case("objectfile", ObjectFile::eTypeObjectFile)
+               .Case("sharedlibrary", ObjectFile::eTypeSharedLibrary)
+               .Case("stublibrary", ObjectFile::eTypeStubLibrary)
+               .Case("jit", ObjectFile::eTypeJIT)
+               .Case("unknown", ObjectFile::eTypeUnknown)
+               .Default(ObjectFile::eTypeInvalid);
+
+    if (type == ObjectFile::eTypeInvalid) {
+      path.report("invalid object type");
+      return false;
+    }
+
+    return true;
+  }
+  path.report("expected string");
+  return false;
+}
+} // namespace json
+} // namespace llvm

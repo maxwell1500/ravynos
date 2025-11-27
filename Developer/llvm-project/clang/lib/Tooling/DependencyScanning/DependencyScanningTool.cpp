@@ -7,33 +7,17 @@
 //===----------------------------------------------------------------------===//
 
 #include "clang/Tooling/DependencyScanning/DependencyScanningTool.h"
+#include "CachingActions.h"
+#include "clang/CAS/IncludeTree.h"
+#include "clang/Frontend/CompilerInstance.h"
 #include "clang/Frontend/Utils.h"
-#include <optional>
+#include "clang/Tooling/DependencyScanning/ScanAndUpdateArgs.h"
+#include "llvm/CAS/ObjectStore.h"
 
 using namespace clang;
 using namespace tooling;
 using namespace dependencies;
-
-static std::vector<std::string>
-makeTUCommandLineWithoutPaths(ArrayRef<std::string> OriginalCommandLine) {
-  std::vector<std::string> Args = OriginalCommandLine;
-
-  Args.push_back("-fno-implicit-modules");
-  Args.push_back("-fno-implicit-module-maps");
-
-  // These arguments are unused in explicit compiles.
-  llvm::erase_if(Args, [](StringRef Arg) {
-    if (Arg.consume_front("-fmodules-")) {
-      return Arg.startswith("cache-path=") ||
-             Arg.startswith("prune-interval=") ||
-             Arg.startswith("prune-after=") ||
-             Arg == "validate-once-per-build-session";
-    }
-    return Arg.startswith("-fbuild-session-file=");
-  });
-
-  return Args;
-}
+using llvm::Error;
 
 DependencyScanningTool::DependencyScanningTool(
     DependencyScanningService &Service,
@@ -55,22 +39,13 @@ public:
     Dependencies.push_back(std::string(File));
   }
 
-  void handlePrebuiltModuleDependency(PrebuiltModuleDep PMD) override {
-    // Same as `handleModuleDependency`.
-  }
-
-  void handleModuleDependency(ModuleDeps MD) override {
-    // These are ignored for the make format as it can't support the full
-    // set of deps, and handleFileDependency handles enough for implicitly
-    // built modules to work.
-  }
-
+  // These are ignored for the make format as it can't support the full
+  // set of deps, and handleFileDependency handles enough for implicitly
+  // built modules to work.
+  void handlePrebuiltModuleDependency(PrebuiltModuleDep PMD) override {}
+  void handleModuleDependency(ModuleDeps MD) override {}
+  void handleDirectModuleDependency(ModuleID ID) override {}
   void handleContextHash(std::string Hash) override {}
-
-  std::string lookupModuleOutput(const ModuleID &ID,
-                                 ModuleOutputKind Kind) override {
-    llvm::report_fatal_error("unexpected call to lookupModuleOutput");
-  }
 
   void printDependencies(std::string &S) {
     assert(Opts && "Handled dependency output options.");
@@ -101,11 +76,11 @@ protected:
 } // anonymous namespace
 
 llvm::Expected<std::string> DependencyScanningTool::getDependencyFile(
-    const std::vector<std::string> &CommandLine, StringRef CWD,
-    std::optional<StringRef> ModuleName) {
+    const std::vector<std::string> &CommandLine, StringRef CWD) {
   MakeDependencyPrinterConsumer Consumer;
+  CallbackActionController Controller(nullptr);
   auto Result =
-      Worker.computeDependencies(CWD, CommandLine, Consumer, ModuleName);
+      Worker.computeDependencies(CWD, CommandLine, Consumer, Controller);
   if (Result)
     return std::move(Result);
   std::string Output;
@@ -113,9 +88,130 @@ llvm::Expected<std::string> DependencyScanningTool::getDependencyFile(
   return Output;
 }
 
+namespace {
+class EmptyDependencyConsumer : public DependencyConsumer {
+  void
+  handleDependencyOutputOpts(const DependencyOutputOptions &Opts) override {}
+
+  void handleFileDependency(StringRef Filename) override {}
+
+  void handlePrebuiltModuleDependency(PrebuiltModuleDep PMD) override {}
+
+  void handleModuleDependency(ModuleDeps MD) override {}
+
+  void handleDirectModuleDependency(ModuleID ID) override {}
+
+  void handleContextHash(std::string Hash) override {}
+};
+
+/// Returns a CAS tree containing the dependencies.
+class GetDependencyTree : public EmptyDependencyConsumer {
+public:
+  void handleCASFileSystemRootID(std::string ID) override {
+    CASFileSystemRootID = ID;
+  }
+
+  Expected<llvm::cas::ObjectProxy> getTree() {
+    if (CASFileSystemRootID) {
+      auto ID = FS.getCAS().parseID(*CASFileSystemRootID);
+      if (!ID)
+        return ID.takeError();
+      return FS.getCAS().getProxy(*ID);
+    }
+    return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                   "failed to get casfs");
+  }
+
+  GetDependencyTree(llvm::cas::CachingOnDiskFileSystem &FS) : FS(FS) {}
+
+private:
+  llvm::cas::CachingOnDiskFileSystem &FS;
+  std::optional<std::string> CASFileSystemRootID;
+};
+
+/// Returns an IncludeTree containing the dependencies.
+class GetIncludeTree : public EmptyDependencyConsumer {
+public:
+  void handleIncludeTreeID(std::string ID) override { IncludeTreeID = ID; }
+
+  Expected<cas::IncludeTreeRoot> getIncludeTree() {
+    if (IncludeTreeID) {
+      auto ID = DB.parseID(*IncludeTreeID);
+      if (!ID)
+        return ID.takeError();
+      auto Ref = DB.getReference(*ID);
+      if (!Ref)
+        return llvm::createStringError(
+            llvm::inconvertibleErrorCode(),
+            llvm::Twine("missing expected include-tree ") + ID->toString());
+      return cas::IncludeTreeRoot::get(DB, *Ref);
+    }
+    return llvm::createStringError(llvm::inconvertibleErrorCode(),
+                                   "failed to get include-tree");
+  }
+
+  GetIncludeTree(cas::ObjectStore &DB) : DB(DB) {}
+
+private:
+  cas::ObjectStore &DB;
+  std::optional<std::string> IncludeTreeID;
+};
+}
+
+llvm::Expected<llvm::cas::ObjectProxy>
+DependencyScanningTool::getDependencyTree(
+    const std::vector<std::string> &CommandLine, StringRef CWD) {
+  GetDependencyTree Consumer(*Worker.getCASFS());
+  auto Controller = createCASFSActionController(nullptr, *Worker.getCASFS());
+  auto Result =
+      Worker.computeDependencies(CWD, CommandLine, Consumer, *Controller);
+  if (Result)
+    return std::move(Result);
+  return Consumer.getTree();
+}
+
+llvm::Expected<llvm::cas::ObjectProxy>
+DependencyScanningTool::getDependencyTreeFromCompilerInvocation(
+    std::shared_ptr<CompilerInvocation> Invocation, StringRef CWD,
+    DiagnosticConsumer &DiagsConsumer, raw_ostream *VerboseOS,
+    bool DiagGenerationAsCompilation) {
+  GetDependencyTree Consumer(*Worker.getCASFS());
+  auto Controller = createCASFSActionController(nullptr, *Worker.getCASFS());
+  Worker.computeDependenciesFromCompilerInvocation(
+      std::move(Invocation), CWD, Consumer, *Controller, DiagsConsumer,
+      VerboseOS, DiagGenerationAsCompilation);
+  return Consumer.getTree();
+}
+
+Expected<cas::IncludeTreeRoot> DependencyScanningTool::getIncludeTree(
+    cas::ObjectStore &DB, const std::vector<std::string> &CommandLine,
+    StringRef CWD, LookupModuleOutputCallback LookupModuleOutput) {
+  GetIncludeTree Consumer(DB);
+  auto Controller = createIncludeTreeActionController(LookupModuleOutput, DB);
+  llvm::Error Result =
+      Worker.computeDependencies(CWD, CommandLine, Consumer, *Controller);
+  if (Result)
+    return std::move(Result);
+  return Consumer.getIncludeTree();
+}
+
+Expected<cas::IncludeTreeRoot>
+DependencyScanningTool::getIncludeTreeFromCompilerInvocation(
+    cas::ObjectStore &DB, std::shared_ptr<CompilerInvocation> Invocation,
+    StringRef CWD, LookupModuleOutputCallback LookupModuleOutput,
+    DiagnosticConsumer &DiagsConsumer, raw_ostream *VerboseOS,
+    bool DiagGenerationAsCompilation) {
+  GetIncludeTree Consumer(DB);
+  auto Controller = createIncludeTreeActionController(LookupModuleOutput, DB);
+  Worker.computeDependenciesFromCompilerInvocation(
+      std::move(Invocation), CWD, Consumer, *Controller, DiagsConsumer,
+      VerboseOS, DiagGenerationAsCompilation);
+  return Consumer.getIncludeTree();
+}
+
 llvm::Expected<P1689Rule> DependencyScanningTool::getP1689ModuleDependencyFile(
-    const CompileCommand &Command, StringRef CWD,
-    std::string &MakeformatOutput, std::string &MakeformatOutputPath) {
+    const CompileCommand &Command, StringRef CWD, std::string &MakeformatOutput,
+    std::string &MakeformatOutputPath) {
   class P1689ModuleDependencyPrinterConsumer
       : public MakeDependencyPrinterConsumer {
   public:
@@ -145,9 +241,20 @@ llvm::Expected<P1689Rule> DependencyScanningTool::getP1689ModuleDependencyFile(
     P1689Rule &Rule;
   };
 
+  class P1689ActionController : public DependencyActionController {
+  public:
+    // The lookupModuleOutput is for clang modules. P1689 format don't need it.
+    std::string lookupModuleOutput(const ModuleID &,
+                                   ModuleOutputKind Kind) override {
+      return "";
+    }
+  };
+
   P1689Rule Rule;
   P1689ModuleDependencyPrinterConsumer Consumer(Rule, Command);
-  auto Result = Worker.computeDependencies(CWD, Command.CommandLine, Consumer);
+  P1689ActionController Controller;
+  auto Result = Worker.computeDependencies(CWD, Command.CommandLine, Consumer,
+                                           Controller);
   if (Result)
     return std::move(Result);
 
@@ -157,102 +264,87 @@ llvm::Expected<P1689Rule> DependencyScanningTool::getP1689ModuleDependencyFile(
   return Rule;
 }
 
-llvm::Expected<FullDependenciesResult>
-DependencyScanningTool::getFullDependencies(
+llvm::Expected<TranslationUnitDeps>
+DependencyScanningTool::getTranslationUnitDependencies(
     const std::vector<std::string> &CommandLine, StringRef CWD,
-    const llvm::StringSet<> &AlreadySeen,
-    LookupModuleOutputCallback LookupModuleOutput,
-    std::optional<StringRef> ModuleName) {
-  FullDependencyConsumer Consumer(AlreadySeen, LookupModuleOutput,
-                                  Worker.shouldEagerLoadModules());
+    const llvm::DenseSet<ModuleID> &AlreadySeen,
+    LookupModuleOutputCallback LookupModuleOutput) {
+  FullDependencyConsumer Consumer(AlreadySeen);
+  auto Controller = createActionController(LookupModuleOutput);
   llvm::Error Result =
-      Worker.computeDependencies(CWD, CommandLine, Consumer, ModuleName);
+      Worker.computeDependencies(CWD, CommandLine, Consumer, *Controller);
   if (Result)
     return std::move(Result);
-  return Consumer.takeFullDependencies();
+  return Consumer.takeTranslationUnitDeps();
 }
 
-llvm::Expected<FullDependenciesResult>
-DependencyScanningTool::getFullDependenciesLegacyDriverCommand(
-    const std::vector<std::string> &CommandLine, StringRef CWD,
-    const llvm::StringSet<> &AlreadySeen,
-    LookupModuleOutputCallback LookupModuleOutput,
-    std::optional<StringRef> ModuleName) {
-  FullDependencyConsumer Consumer(AlreadySeen, LookupModuleOutput,
-                                  Worker.shouldEagerLoadModules());
-  llvm::Error Result =
-      Worker.computeDependencies(CWD, CommandLine, Consumer, ModuleName);
+llvm::Expected<ModuleDepsGraph> DependencyScanningTool::getModuleDependencies(
+    StringRef ModuleName, const std::vector<std::string> &CommandLine,
+    StringRef CWD, const llvm::DenseSet<ModuleID> &AlreadySeen,
+    LookupModuleOutputCallback LookupModuleOutput) {
+  FullDependencyConsumer Consumer(AlreadySeen);
+  auto Controller = createActionController(LookupModuleOutput);
+  llvm::Error Result = Worker.computeDependencies(CWD, CommandLine, Consumer,
+                                                  *Controller, ModuleName);
   if (Result)
     return std::move(Result);
-  return Consumer.getFullDependenciesLegacyDriverCommand(CommandLine);
+  return Consumer.takeModuleGraphDeps();
 }
 
-FullDependenciesResult FullDependencyConsumer::takeFullDependencies() {
-  FullDependenciesResult FDR;
-  FullDependencies &FD = FDR.FullDeps;
+TranslationUnitDeps FullDependencyConsumer::takeTranslationUnitDeps() {
+  TranslationUnitDeps TU;
 
-  FD.ID.ContextHash = std::move(ContextHash);
-  FD.FileDeps = std::move(Dependencies);
-  FD.PrebuiltModuleDeps = std::move(PrebuiltModuleDeps);
-  FD.Commands = std::move(Commands);
+  TU.ID.ContextHash = std::move(ContextHash);
+  TU.FileDeps = std::move(Dependencies);
+  TU.PrebuiltModuleDeps = std::move(PrebuiltModuleDeps);
+  TU.Commands = std::move(Commands);
+  TU.CASFileSystemRootID = std::move(CASFileSystemRootID);
+  TU.IncludeTreeID = std::move(IncludeTreeID);
 
   for (auto &&M : ClangModuleDeps) {
     auto &MD = M.second;
-    if (MD.ImportedByMainFile)
-      FD.ClangModuleDeps.push_back(MD.ID);
     // TODO: Avoid handleModuleDependency even being called for modules
     //   we've already seen.
     if (AlreadySeen.count(M.first))
       continue;
-    FDR.DiscoveredModules.push_back(std::move(MD));
+    TU.ModuleGraph.push_back(std::move(MD));
   }
+  TU.ClangModuleDeps = std::move(DirectModuleDeps);
 
-  return FDR;
+  return TU;
 }
 
-FullDependenciesResult
-FullDependencyConsumer::getFullDependenciesLegacyDriverCommand(
-    const std::vector<std::string> &OriginalCommandLine) const {
-  FullDependencies FD;
-
-  FD.DriverCommandLine = makeTUCommandLineWithoutPaths(
-      ArrayRef<std::string>(OriginalCommandLine).slice(1));
-
-  FD.ID.ContextHash = std::move(ContextHash);
-
-  FD.FileDeps.assign(Dependencies.begin(), Dependencies.end());
-
-  for (const PrebuiltModuleDep &PMD : PrebuiltModuleDeps)
-    FD.DriverCommandLine.push_back("-fmodule-file=" + PMD.PCMFile);
+ModuleDepsGraph FullDependencyConsumer::takeModuleGraphDeps() {
+  ModuleDepsGraph ModuleGraph;
 
   for (auto &&M : ClangModuleDeps) {
     auto &MD = M.second;
-    if (MD.ImportedByMainFile) {
-      FD.ClangModuleDeps.push_back(MD.ID);
-      auto PCMPath = LookupModuleOutput(MD.ID, ModuleOutputKind::ModuleFile);
-      if (EagerLoadModules) {
-        FD.DriverCommandLine.push_back("-fmodule-file=" + PCMPath);
-      } else {
-        FD.DriverCommandLine.push_back("-fmodule-map-file=" +
-                                       MD.ClangModuleMapFile);
-        FD.DriverCommandLine.push_back("-fmodule-file=" + MD.ID.ModuleName +
-                                       "=" + PCMPath);
-      }
-    }
-  }
-
-  FD.PrebuiltModuleDeps = std::move(PrebuiltModuleDeps);
-
-  FullDependenciesResult FDR;
-
-  for (auto &&M : ClangModuleDeps) {
     // TODO: Avoid handleModuleDependency even being called for modules
     //   we've already seen.
     if (AlreadySeen.count(M.first))
       continue;
-    FDR.DiscoveredModules.push_back(std::move(M.second));
+    ModuleGraph.push_back(std::move(MD));
   }
 
-  FDR.FullDeps = std::move(FD);
-  return FDR;
+  return ModuleGraph;
+}
+
+CallbackActionController::~CallbackActionController() {}
+
+std::unique_ptr<DependencyActionController>
+DependencyScanningTool::createActionController(
+    DependencyScanningWorker &Worker,
+    LookupModuleOutputCallback LookupModuleOutput) {
+  if (Worker.getScanningFormat() == ScanningOutputFormat::FullIncludeTree)
+    return createIncludeTreeActionController(LookupModuleOutput,
+                                             *Worker.getCAS());
+  if (auto CacheFS = Worker.getCASFS())
+    return createCASFSActionController(LookupModuleOutput, *CacheFS);
+  return std::make_unique<CallbackActionController>(LookupModuleOutput);
+}
+
+std::unique_ptr<DependencyActionController>
+DependencyScanningTool::createActionController(
+    LookupModuleOutputCallback LookupModuleOutput) {
+  return createActionController(Worker, std::move(LookupModuleOutput));
 }

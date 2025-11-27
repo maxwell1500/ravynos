@@ -4,6 +4,33 @@ let Definition = "target_experimental" in {
   def InjectLocalVars : Property<"inject-local-vars", "Boolean">,
     Global, DefaultTrue,
     Desc<"If true, inject local variables explicitly into the expression text. This will fix symbol resolution when there are name collisions between ivars and local variables. But it can make expressions run much more slowly.">;
+  def SwiftReadMetadataFromFileCache: Property<"swift-read-metadata-from-file-cache", "Boolean">,
+    DefaultTrue,
+    Desc<"Read Swift reflection metadata from the file cache instead of the process when possible">;
+  def SwiftUseReflectionSymbols : Property<"swift-use-reflection-symbols", "Boolean">,
+    Global, DefaultTrue,
+    Desc<"if true, optimize the loading of Swift reflection metadata by making use of available symbols.">;
+  def SwiftReadMetadataFromDSYM: Property<"swift-read-metadata-from-dsym", "Boolean">,
+    DefaultFalse,
+    Desc<"Read Swift reflection metadata from the dsym instead of the process when possible">;
+  def SwiftDiscoverImplicitSearchPaths: Property<"swift-discover-implicit-search-paths", "Boolean">,
+    DefaultTrue,
+    Desc<"Discover implicit search paths from all implicitly imported Swift modules and make them available to the expression context. A Swift module built with -serialize-debugging-options can contain additional search paths which are discovered as the module is imported. This optiondoes an eager import of all modules first to make sure all implicit search paths are availableto the expression evaluator. If the build system registers all Swift modules with the linker (Darwin: via -add_ast_path, Other platforms: -module-wrap), turning this on is not necessary.">;
+  def SwiftEnableBareSlashRegex: Property<"swift-enable-bare-slash-regex", "Boolean">,
+    DefaultFalse,
+    Desc<"Passes the -enable-bare-slash-regex compiler flag to the swift compiler.">;
+  def SwiftPluginServerForPath: Property<"swift-plugin-server-for-path",
+      "Dictionary">,
+    ElementType<"String">,
+    Desc<"A dictionary of plugin paths as keys and swift-plugin-server binaries as values">;
+  def SwiftAllowExplicitModules: Property<"swift-allow-explicit-modules", "Boolean">,
+    DefaultTrue,
+    Desc<"Allows explicit module flags to be passed through to ClangImporter.">;
+  def SwiftPCMValidation: Property<"swift-pcm-validation", "Enum">,
+    Global,
+    DefaultEnumValue<"llvm::to_underlying(AutoBool::Auto)">,
+    EnumValues<"OptionEnumValues(g_swift_pcm_validation_values)">,
+    Desc<"Enable validation when loading Clang PCM files (-fvalidate-pch, -fmodules-check-relocated).">;
 }
 
 let Definition = "target" in {
@@ -24,6 +51,15 @@ let Definition = "target" in {
     DefaultUnsignedValue<5>,
     Desc<"The maximum amount of errors to emit while parsing an expression. "
          "A value of 0 means to always continue parsing if possible.">;
+  def ExprAllocAddress: Property<"expr-alloc-address", "UInt64">,
+    DefaultUnsignedValue<0>,
+    Desc<"Start address within the process address space of memory allocation for expression evaluation.">;
+  def ExprAllocSize: Property<"expr-alloc-size", "UInt64">,
+    DefaultUnsignedValue<0>,
+    Desc<"Amount of memory in bytes to allocate for expression evaluation.">;
+  def ExprAllocAlign: Property<"expr-alloc-align", "UInt64">,
+    DefaultUnsignedValue<0>,
+    Desc<"Alignment for each memory allocation for expression evaluation.">;
   def PreferDynamic: Property<"prefer-dynamic-value", "Enum">,
     DefaultEnumValue<"eDynamicDontRunTarget">,
     EnumValues<"OptionEnumValues(g_dynamic_value_types)">,
@@ -80,9 +116,9 @@ let Definition = "target" in {
     DefaultUnsignedValue<256>,
     Desc<"Maximum number of children to expand in any level of depth.">;
   def MaxChildrenDepth: Property<"max-children-depth", "UInt64">,
-    DefaultUnsignedValue<0xFFFFFFFF>,
+    DefaultUnsignedValue<6>,
     Desc<"Maximum depth to expand children.">;
-  def MaxSummaryLength: Property<"max-string-summary-length", "SInt64">,
+  def MaxSummaryLength: Property<"max-string-summary-length", "UInt64">,
     DefaultUnsignedValue<1024>,
     Desc<"Maximum number of characters to show when using %s in summary strings.">;
   def MaxMemReadSize: Property<"max-memory-read-size", "SInt64">,
@@ -179,9 +215,33 @@ let Definition = "target" in {
   def AutoInstallMainExecutable: Property<"auto-install-main-executable", "Boolean">,
     DefaultTrue,
     Desc<"Always install the main executable when connected to a remote platform.">;
+  def SwiftFrameworkSearchPaths: Property<"swift-framework-search-paths", "FileSpecList">,
+    DefaultStringValue<"">,
+    Desc<"List of directories to be searched when locating frameworks for Swift.">;
+  def SwiftModuleSearchPaths: Property<"swift-module-search-paths", "FileSpecList">,
+    DefaultStringValue<"">,
+    Desc<"List of directories to be searched when locating modules for Swift.">;
+  def SwiftExtraClangFlags: Property<"swift-extra-clang-flags", "String">,
+    DefaultStringValue<"">,
+    Desc<"Additional -Xcc flags to be passed to the Swift ClangImporter.">;
+  def SwiftClangOverrideOptions: Property<"swift-clang-override-options", "String">,
+    DefaultStringValue<"">,
+    Desc<"Specify CCC_OVERRIDE_OPTIONS for ClangImporter flags.">;
+  def SwiftAutoImportFrameworks : Property<"swift-auto-import-frameworks", "Boolean">,
+     DefaultFalse,
+     Desc<"Automatically import all frameworks and dynamic libraries that are autolinked by Swift modules in the target.">;
+  def UseAllCompilerFlags: Property<"use-all-compiler-flags", "Boolean">,
+    DefaultTrue,
+    Desc<"Try to use compiler flags for all modules when setting up the Swift expression parser, not just the main executable.">;
+  def SDKPath: Property<"sdk-path", "FileSpec">,
+    DefaultStringValue<"">,
+    Desc<"The path to the SDK used to build the current target.">;
   def DebugUtilityExpression: Property<"debug-utility-expression", "Boolean">,
     DefaultFalse,
     Desc<"Enable debugging of LLDB-internal utility expressions.">;
+  def EnableTrampolineSupport: Property<"enable-trampoline-support", "Boolean">,
+    Global, DefaultTrue,
+    Desc<"Enable trampoline support in LLDB. Trampoline support includes stepping through trampolines directly to their targets, stepping out of trampolines directly to their callers, and automatically filtering out trampolines as possible breakpoint locations when set by name.">;
 }
 
 let Definition = "process_experimental" in {
@@ -216,7 +276,7 @@ let Definition = "process" in {
   def DisableLangRuntimeUnwindPlans: Property<"disable-language-runtime-unwindplans", "Boolean">,
     Global,
     DefaultFalse,
-    Desc<"If true, LanguageRuntime plugins' UnwindPlans will not be used when backtracing.">;
+    Desc<"If true, language runtime augmented/overidden backtraces will not be used when printing a stack trace.">;
   def DetachKeepsStopped: Property<"detach-keeps-stopped", "Boolean">,
     Global,
     DefaultFalse,
@@ -230,15 +290,26 @@ let Definition = "process" in {
   def WarningUnsupportedLanguage: Property<"unsupported-language-warnings", "Boolean">,
     DefaultTrue,
     Desc<"If true, warn when stopped in code that is written in a source language that LLDB does not support.">;
+  def WarningToolchainMismatch: Property<"toolchain-mismatch-warnings", "Boolean">,
+    DefaultTrue,
+    Desc<"If true, warn when stopped in code that was compiled by a Swift compiler different from the one embedded in LLDB.">;
   def StopOnExec: Property<"stop-on-exec", "Boolean">,
     Global,
     DefaultTrue,
     Desc<"If true, stop when the inferior exec's.">;
   def UtilityExpressionTimeout: Property<"utility-expression-timeout", "UInt64">,
+#ifdef LLDB_SANITIZED
+    DefaultUnsignedValue<60>,
+#else
     DefaultUnsignedValue<15>,
+#endif
     Desc<"The time in seconds to wait for LLDB-internal utility expressions.">;
   def InterruptTimeout: Property<"interrupt-timeout", "UInt64">,
+#ifdef LLDB_SANITIZED
+    DefaultUnsignedValue<60>,
+#else
     DefaultUnsignedValue<20>,
+#endif
     Desc<"The time in seconds to wait for an interrupt succeed in stopping the target.">;
   def SteppingRunsAllThreads: Property<"run-all-threads", "Boolean">,
     DefaultFalse,
@@ -246,6 +317,9 @@ let Definition = "process" in {
   def VirtualAddressableBits: Property<"virtual-addressable-bits", "UInt64">,
     DefaultUnsignedValue<0>,
     Desc<"The number of bits used for addressing. If the value is 39, then bits 0..38 are used for addressing. The default value of 0 means unspecified.">;
+  def HighmemVirtualAddressableBits: Property<"highmem-virtual-addressable-bits", "UInt64">,
+    DefaultUnsignedValue<0>,
+    Desc<"The number of bits used for addressing high memory, when it differs from low memory in the same Process. When this is non-zero, target.process.virtual-addressable-bits will be the value for low memory (0x000... addresses) and this setting will be the value for high memory (0xfff... addresses). When this is zero, target.process.virtual-addressable-bits applies to all addresses. It is very uncommon to use this setting.">;
   def FollowForkMode: Property<"follow-fork-mode", "Enum">,
     DefaultEnumValue<"eFollowParent">,
     EnumValues<"OptionEnumValues(g_follow_fork_mode_values)">,

@@ -7,8 +7,9 @@
 
 // Scan dependencies of the PCH:
 //
-// RUN: sed "s|DIR|%/t|g" %S/Inputs/modules-pch/cdb_pch.json > %t/cdb.json
-// RUN: clang-scan-deps -compilation-database %t/cdb.json -format experimental-full \
+// RUN: rm -f %t/cdb_pch.json
+// RUN: sed "s|DIR|%/t|g" %S/Inputs/modules-pch/cdb_pch.json > %t/cdb_pch.json
+// RUN: clang-scan-deps -compilation-database %t/cdb_pch.json -format experimental-full \
 // RUN:   -module-files-dir %t/build > %t/result_pch.json
 // RUN: cat %t/result_pch.json | sed 's:\\\\\?:/:g' | FileCheck %s -DPREFIX=%/t -check-prefix=CHECK-PCH
 //
@@ -27,6 +28,7 @@
 // CHECK-PCH-NEXT:         "[[PREFIX]]/mod_common_1.h",
 // CHECK-PCH-NEXT:         "[[PREFIX]]/module.modulemap"
 // CHECK-PCH-NEXT:       ],
+// CHECK-PCH-NEXT:       "link-libraries": [],
 // CHECK-PCH-NEXT:       "name": "ModCommon1"
 // CHECK-PCH-NEXT:     },
 // CHECK-PCH-NEXT:     {
@@ -39,6 +41,7 @@
 // CHECK-PCH-NEXT:         "[[PREFIX]]/mod_common_2.h",
 // CHECK-PCH-NEXT:         "[[PREFIX]]/module.modulemap"
 // CHECK-PCH-NEXT:       ],
+// CHECK-PCH-NEXT:       "link-libraries": [],
 // CHECK-PCH-NEXT:       "name": "ModCommon2"
 // CHECK-PCH-NEXT:     },
 // CHECK-PCH-NEXT:     {
@@ -56,6 +59,7 @@
 // CHECK-PCH-NEXT:         "[[PREFIX]]/mod_pch.h",
 // CHECK-PCH-NEXT:         "[[PREFIX]]/module.modulemap"
 // CHECK-PCH-NEXT:       ],
+// CHECK-PCH-NEXT:       "link-libraries": [],
 // CHECK-PCH-NEXT:       "name": "ModPCH"
 // CHECK-PCH-NEXT:     }
 // CHECK-PCH-NEXT:   ],
@@ -94,8 +98,9 @@
 
 // Scan dependencies of the TU:
 //
-// RUN: sed "s|DIR|%/t|g" %S/Inputs/modules-pch/cdb_tu.json > %t/cdb.json
-// RUN: clang-scan-deps -compilation-database %t/cdb.json -format experimental-full \
+// RUN: rm -f %t/cdb_tu.json
+// RUN: sed "s|DIR|%/t|g" %S/Inputs/modules-pch/cdb_tu.json > %t/cdb_tu.json
+// RUN: clang-scan-deps -compilation-database %t/cdb_tu.json -format experimental-full \
 // RUN:   -module-files-dir %t/build > %t/result_tu.json
 // RUN: cat %t/result_tu.json | sed 's:\\\\\?:/:g' | FileCheck %s -DPREFIX=%/t -check-prefix=CHECK-TU
 //
@@ -111,6 +116,7 @@
 // CHECK-TU-NEXT:         "[[PREFIX]]/mod_tu.h",
 // CHECK-TU-NEXT:         "[[PREFIX]]/module.modulemap"
 // CHECK-TU-NEXT:       ],
+// CHECK-TU-NEXT:       "link-libraries": [],
 // CHECK-TU-NEXT:       "name": "ModTU"
 // CHECK-TU-NEXT:     }
 // CHECK-TU-NEXT:   ],
@@ -142,8 +148,9 @@
 
 // Scan dependencies of the TU that has common modules with the PCH:
 //
-// RUN: sed "s|DIR|%/t|g" %S/Inputs/modules-pch/cdb_tu_with_common.json > %t/cdb.json
-// RUN: clang-scan-deps -compilation-database %t/cdb.json -format experimental-full \
+// RUN: rm -f %t/cdb_tu_with_common.json
+// RUN: sed "s|DIR|%/t|g" %S/Inputs/modules-pch/cdb_tu_with_common.json > %t/cdb_tu_with_common.json
+// RUN: clang-scan-deps -compilation-database %t/cdb_tu_with_common.json -format experimental-full \
 // RUN:   -module-files-dir %t/build > %t/result_tu_with_common.json
 // RUN: cat %t/result_tu_with_common.json | sed 's:\\\\\?:/:g' | FileCheck %s -DPREFIX=%/t -check-prefix=CHECK-TU-WITH-COMMON
 //
@@ -159,6 +166,7 @@
 // CHECK-TU-WITH-COMMON-NEXT:         "[[PREFIX]]/mod_tu_with_common.h",
 // CHECK-TU-WITH-COMMON-NEXT:         "[[PREFIX]]/module.modulemap"
 // CHECK-TU-WITH-COMMON-NEXT:       ],
+// CHECK-TU-WITH-COMMON-NEXT:       "link-libraries": [],
 // CHECK-TU-WITH-COMMON-NEXT:       "name": "ModTUWithCommon"
 // CHECK-TU-WITH-COMMON-NEXT:     }
 // CHECK-TU-WITH-COMMON-NEXT:   ],

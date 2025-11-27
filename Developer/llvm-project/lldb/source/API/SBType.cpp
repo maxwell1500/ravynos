@@ -157,6 +157,23 @@ bool SBType::IsReferenceType() {
 
   if (!IsValid())
     return false;
+
+  // BEGIN SWIFT
+
+  // FIXME: Swift class types are really like references, they are
+  // accessed by the same operator as Values, but their value is the
+  // location of the type.  But reporting true from the Compiler Type
+  // was causing problems that I couldn't unwind this time around.  So
+  // I'll work around that here.  The only Swift types that have a value
+  // are reference types.  All other Swift types are complex.  So use that
+  // as the discriminator.
+  CompilerType type = m_opaque_sp->GetCompilerType(true); 
+  uint32_t flags = type.GetTypeInfo();
+  if (flags & eTypeIsSwift)
+    return flags & eTypeHasValue;
+
+  // END SWIFT
+
   return m_opaque_sp->GetCompilerType(true).IsReferenceType();
 }
 
@@ -809,14 +826,15 @@ const char *SBTypeMemberFunction::GetName() {
 const char *SBTypeMemberFunction::GetDemangledName() {
   LLDB_INSTRUMENT_VA(this);
 
-  if (m_opaque_sp) {
-    ConstString mangled_str = m_opaque_sp->GetMangledName();
-    if (mangled_str) {
-      Mangled mangled(mangled_str);
-      return mangled.GetDemangledName().GetCString();
-    }
-  }
-  return nullptr;
+  if (!m_opaque_sp)
+    return nullptr;
+
+  ConstString mangled_str = m_opaque_sp->GetMangledName();
+  if (!mangled_str)
+    return nullptr;
+
+  Mangled mangled(mangled_str);
+  return mangled.GetDemangledName().GetCString();
 }
 
 const char *SBTypeMemberFunction::GetMangledName() {

@@ -91,7 +91,8 @@ protected:
                              const MCSubtargetInfo &STI, raw_ostream &O);
   void printArithExtend(const MCInst *MI, unsigned OpNum,
                         const MCSubtargetInfo &STI, raw_ostream &O);
-
+  void printMemExtendImpl(bool SignExtend, bool DoShift, unsigned Width,
+                          char SrcRegKind, raw_ostream &O);
   void printMemExtend(const MCInst *MI, unsigned OpNum, raw_ostream &O,
                       char SrcRegKind, unsigned Width);
   template <char SrcRegKind, unsigned Width>
@@ -174,8 +175,8 @@ protected:
                         const MCSubtargetInfo &STI, raw_ostream &O);
   void printMatrixIndex(const MCInst *MI, unsigned OpNum,
                         const MCSubtargetInfo &STI, raw_ostream &O);
-  void printAdrpLabel(const MCInst *MI, uint64_t Address, unsigned OpNum,
-                      const MCSubtargetInfo &STI, raw_ostream &O);
+  void printAdrAdrpLabel(const MCInst *MI, uint64_t Address, unsigned OpNum,
+                         const MCSubtargetInfo &STI, raw_ostream &O);
   void printBarrierOption(const MCInst *MI, unsigned OpNum,
                           const MCSubtargetInfo &STI, raw_ostream &O);
   void printBarriernXSOption(const MCInst *MI, unsigned OpNum,

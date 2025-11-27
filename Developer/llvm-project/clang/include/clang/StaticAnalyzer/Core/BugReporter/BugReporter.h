@@ -19,6 +19,7 @@
 #include "clang/Basic/SourceLocation.h"
 #include "clang/Lex/Preprocessor.h"
 #include "clang/StaticAnalyzer/Core/BugReporter/BugReporterVisitors.h"
+#include "clang/StaticAnalyzer/Core/BugReporter/BugSuppression.h"
 #include "clang/StaticAnalyzer/Core/BugReporter/BugType.h"
 #include "clang/StaticAnalyzer/Core/CheckerManager.h"
 #include "clang/StaticAnalyzer/Core/PathSensitive/ExplodedGraph.h"
@@ -595,6 +596,9 @@ private:
   /// A vector of BugReports for tracking the allocated pointers and cleanup.
   std::vector<BugReportEquivClass *> EQClassesVector;
 
+  /// User-provided in-code suppressions.
+  BugSuppression UserSuppressions;
+
 public:
   BugReporter(BugReporterData &d);
   virtual ~BugReporter();
@@ -608,8 +612,9 @@ public:
 
   /// Iterator over the set of BugReports tracked by the BugReporter.
   using EQClasses_iterator = llvm::FoldingSet<BugReportEquivClass>::iterator;
-  EQClasses_iterator EQClasses_begin() { return EQClasses.begin(); }
-  EQClasses_iterator EQClasses_end() { return EQClasses.end(); }
+  llvm::iterator_range<EQClasses_iterator> equivalenceClasses() {
+    return EQClasses;
+  }
 
   ASTContext &getContext() { return D.getASTContext(); }
 

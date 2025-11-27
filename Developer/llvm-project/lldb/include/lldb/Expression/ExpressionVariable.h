@@ -18,20 +18,20 @@
 #include "lldb/Core/ValueObject.h"
 #include "lldb/Utility/ConstString.h"
 #include "lldb/lldb-public.h"
+#include "llvm/Support/ExtensibleRTTI.h"
 
 namespace lldb_private {
 
 class ExpressionVariable
-    : public std::enable_shared_from_this<ExpressionVariable> {
+    : public std::enable_shared_from_this<ExpressionVariable>,
+      public llvm::RTTIExtends<ExpressionVariable, llvm::RTTIRoot> {
 public:
-  // See TypeSystem.h for how to add subclasses to this.
-  enum LLVMCastKind { eKindClang, eKindSwift, eKindGo, kNumKinds };
+  /// LLVM RTTI support
+  static char ID;
 
-  LLVMCastKind getKind() const { return m_kind; }
+  ExpressionVariable();
 
-  ExpressionVariable(LLVMCastKind kind) : m_flags(0), m_kind(kind) {}
-
-  virtual ~ExpressionVariable();
+  virtual ~ExpressionVariable() = default;
 
   std::optional<uint64_t> GetByteSize() { return m_frozen_sp->GetByteSize(); }
 
@@ -99,8 +99,9 @@ public:
     EVTypeIsReference = 1 << 6, ///< The original type of this variable is a
                                 ///reference, so materialize the value rather
                                 ///than the location
-    EVBareRegister = 1 << 7 ///< This variable is a direct reference to $pc or
-                            ///some other entity.
+    EVBareRegister = 1 << 7, ///< This variable is a direct reference to $pc or
+                             ///some other entity.
+    EVIsSwiftFixedBuffer = 1 << 8 ///< A Swift global in a fixed-size buffer.
   };
 
   typedef uint16_t FlagType;
@@ -110,7 +111,6 @@ public:
   // these should be private
   lldb::ValueObjectSP m_frozen_sp;
   lldb::ValueObjectSP m_live_sp;
-  LLVMCastKind m_kind;
 };
 
 /// \class ExpressionVariableList ExpressionVariable.h
@@ -201,14 +201,14 @@ private:
   std::vector<lldb::ExpressionVariableSP> m_variables;
 };
 
-class PersistentExpressionState : public ExpressionVariableList {
+class PersistentExpressionState
+    : public ExpressionVariableList,
+      public llvm::RTTIExtends<PersistentExpressionState, llvm::RTTIRoot> {
 public:
-  // See TypeSystem.h for how to add subclasses to this.
-  enum LLVMCastKind { eKindClang, eKindSwift, eKindGo, kNumKinds };
+  /// LLVM RTTI support
+  static char ID;
 
-  LLVMCastKind getKind() const { return m_kind; }
-
-  PersistentExpressionState(LLVMCastKind kind) : m_kind(kind) {}
+  PersistentExpressionState();
 
   virtual ~PersistentExpressionState();
 
@@ -234,13 +234,13 @@ public:
 
   void RegisterExecutionUnit(lldb::IRExecutionUnitSP &execution_unit_sp);
 
+  void RegisterSymbol(ConstString name, lldb::addr_t address);
+
 protected:
   virtual llvm::StringRef
   GetPersistentVariablePrefix(bool is_error = false) const = 0;
 
 private:
-  LLVMCastKind m_kind;
-
   typedef std::set<lldb::IRExecutionUnitSP> ExecutionUnitSet;
   ExecutionUnitSet
       m_execution_units; ///< The execution units that contain valuable symbols.

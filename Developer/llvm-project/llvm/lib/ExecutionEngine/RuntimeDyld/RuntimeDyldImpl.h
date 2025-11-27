@@ -15,7 +15,6 @@
 
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringMap.h"
-#include "llvm/ADT/Triple.h"
 #include "llvm/ExecutionEngine/RTDyldMemoryManager.h"
 #include "llvm/ExecutionEngine/RuntimeDyld.h"
 #include "llvm/ExecutionEngine/RuntimeDyldChecker.h"
@@ -23,9 +22,10 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/Format.h"
-#include "llvm/Support/Host.h"
 #include "llvm/Support/Mutex.h"
 #include "llvm/Support/SwapByteOrder.h"
+#include "llvm/TargetParser/Host.h"
+#include "llvm/TargetParser/Triple.h"
 #include <deque>
 #include <map>
 #include <system_error>
@@ -447,6 +447,16 @@ protected:
   // Return true if the relocation R may require allocating a stub.
   virtual bool relocationNeedsStub(const RelocationRef &R) const {
     return true;    // Conservative answer
+  }
+
+  // Return true if the relocation R may require allocating a DLL import stub.
+  virtual bool relocationNeedsDLLImportStub(const RelocationRef &R) const {
+    return false;
+  }
+
+  // Add the size of a DLL import stub to the buffer size
+  virtual unsigned sizeAfterAddingDLLImportStub(unsigned Size) const {
+    return Size;
   }
 
 public:

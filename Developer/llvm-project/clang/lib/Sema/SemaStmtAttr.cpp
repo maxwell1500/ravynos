@@ -53,6 +53,13 @@ static Attr *handleFallThroughAttr(Sema &S, Stmt *St, const ParsedAttr &A,
 
 static Attr *handleSuppressAttr(Sema &S, Stmt *St, const ParsedAttr &A,
                                 SourceRange Range) {
+  if (A.getAttributeSpellingListIndex() == SuppressAttr::CXX11_gsl_suppress &&
+      A.getNumArgs() < 1) {
+    // Suppression attribute with GSL spelling requires at least 1 argument.
+    S.Diag(A.getLoc(), diag::err_attribute_too_few_arguments) << A << 1;
+    return nullptr;
+  }
+
   std::vector<StringRef> DiagnosticIdentifiers;
   for (unsigned I = 0, E = A.getNumArgs(); I != E; ++I) {
     StringRef RuleName;
@@ -60,8 +67,6 @@ static Attr *handleSuppressAttr(Sema &S, Stmt *St, const ParsedAttr &A,
     if (!S.checkStringLiteralArgumentAttr(A, I, RuleName, nullptr))
       return nullptr;
 
-    // FIXME: Warn if the rule name is unknown. This is tricky because only
-    // clang-tidy knows about available rules.
     DiagnosticIdentifiers.push_back(RuleName);
   }
 
@@ -215,6 +220,59 @@ static Attr *handleNoMergeAttr(Sema &S, Stmt *St, const ParsedAttr &A,
   return ::new (S.Context) NoMergeAttr(S.Context, A);
 }
 
+template <typename OtherAttr, int DiagIdx>
+static bool CheckStmtInlineAttr(Sema &SemaRef, const Stmt *OrigSt,
+                                const Stmt *CurSt,
+                                const AttributeCommonInfo &A) {
+  CallExprFinder OrigCEF(SemaRef, OrigSt);
+  CallExprFinder CEF(SemaRef, CurSt);
+
+  // If the call expressions lists are equal in size, we can skip
+  // previously emitted diagnostics. However, if the statement has a pack
+  // expansion, we have no way of telling which CallExpr is the instantiated
+  // version of the other. In this case, we will end up re-diagnosing in the
+  // instantiation.
+  // ie: [[clang::always_inline]] non_dependent(), (other_call<Pack>()...)
+  // will diagnose nondependent again.
+  bool CanSuppressDiag =
+      OrigSt && CEF.getCallExprs().size() == OrigCEF.getCallExprs().size();
+
+  if (!CEF.foundCallExpr()) {
+    return SemaRef.Diag(CurSt->getBeginLoc(),
+                        diag::warn_attribute_ignored_no_calls_in_stmt)
+           << A;
+  }
+
+  for (const auto &Tup :
+       llvm::zip_longest(OrigCEF.getCallExprs(), CEF.getCallExprs())) {
+    // If the original call expression already had a callee, we already
+    // diagnosed this, so skip it here. We can't skip if there isn't a 1:1
+    // relationship between the two lists of call expressions.
+    if (!CanSuppressDiag || !(*std::get<0>(Tup))->getCalleeDecl()) {
+      const Decl *Callee = (*std::get<1>(Tup))->getCalleeDecl();
+      if (Callee &&
+          (Callee->hasAttr<OtherAttr>() || Callee->hasAttr<FlattenAttr>())) {
+        SemaRef.Diag(CurSt->getBeginLoc(),
+                     diag::warn_function_stmt_attribute_precedence)
+            << A << (Callee->hasAttr<OtherAttr>() ? DiagIdx : 1);
+        SemaRef.Diag(Callee->getBeginLoc(), diag::note_conflicting_attribute);
+      }
+    }
+  }
+
+  return false;
+}
+
+bool Sema::CheckNoInlineAttr(const Stmt *OrigSt, const Stmt *CurSt,
+                             const AttributeCommonInfo &A) {
+  return CheckStmtInlineAttr<AlwaysInlineAttr, 0>(*this, OrigSt, CurSt, A);
+}
+
+bool Sema::CheckAlwaysInlineAttr(const Stmt *OrigSt, const Stmt *CurSt,
+                                 const AttributeCommonInfo &A) {
+  return CheckStmtInlineAttr<NoInlineAttr, 2>(*this, OrigSt, CurSt, A);
+}
+
 static Attr *handleNoInlineAttr(Sema &S, Stmt *St, const ParsedAttr &A,
                                 SourceRange Range) {
   NoInlineAttr NIA(S.Context, A);
@@ -224,19 +282,8 @@ static Attr *handleNoInlineAttr(Sema &S, Stmt *St, const ParsedAttr &A,
     return nullptr;
   }
 
-  CallExprFinder CEF(S, St);
-  if (!CEF.foundCallExpr()) {
-    S.Diag(St->getBeginLoc(), diag::warn_attribute_ignored_no_calls_in_stmt)
-        << A;
+  if (S.CheckNoInlineAttr(/*OrigSt=*/nullptr, St, A))
     return nullptr;
-  }
-
-  for (const auto *CallExpr : CEF.getCallExprs()) {
-    const Decl *Decl = CallExpr->getCalleeDecl();
-    if (Decl->hasAttr<AlwaysInlineAttr>() || Decl->hasAttr<FlattenAttr>())
-      S.Diag(St->getBeginLoc(), diag::warn_function_stmt_attribute_precedence)
-          << A << (Decl->hasAttr<AlwaysInlineAttr>() ? 0 : 1);
-  }
 
   return ::new (S.Context) NoInlineAttr(S.Context, A);
 }
@@ -250,19 +297,8 @@ static Attr *handleAlwaysInlineAttr(Sema &S, Stmt *St, const ParsedAttr &A,
     return nullptr;
   }
 
-  CallExprFinder CEF(S, St);
-  if (!CEF.foundCallExpr()) {
-    S.Diag(St->getBeginLoc(), diag::warn_attribute_ignored_no_calls_in_stmt)
-        << A;
+  if (S.CheckAlwaysInlineAttr(/*OrigSt=*/nullptr, St, A))
     return nullptr;
-  }
-
-  for (const auto *CallExpr : CEF.getCallExprs()) {
-    const Decl *Decl = CallExpr->getCalleeDecl();
-    if (Decl->hasAttr<NoInlineAttr>() || Decl->hasAttr<FlattenAttr>())
-      S.Diag(St->getBeginLoc(), diag::warn_function_stmt_attribute_precedence)
-          << A << (Decl->hasAttr<NoInlineAttr>() ? 2 : 1);
-  }
 
   return ::new (S.Context) AlwaysInlineAttr(S.Context, A);
 }
@@ -459,7 +495,9 @@ static Attr *ProcessStmtAttribute(Sema &S, Stmt *St, const ParsedAttr &A,
       !(A.existsInTarget(S.Context.getTargetInfo()) ||
         (S.Context.getLangOpts().SYCLIsDevice && Aux &&
          A.existsInTarget(*Aux)))) {
-    S.Diag(A.getLoc(), A.isDeclspecAttribute()
+    S.Diag(A.getLoc(), A.isRegularKeywordAttribute()
+                           ? (unsigned)diag::err_keyword_not_supported_on_target
+                       : A.isDeclspecAttribute()
                            ? (unsigned)diag::warn_unhandled_ms_attribute_ignored
                            : (unsigned)diag::warn_unknown_attribute_ignored)
         << A << A.getRange();
@@ -495,7 +533,7 @@ static Attr *ProcessStmtAttribute(Sema &S, Stmt *St, const ParsedAttr &A,
     // declaration attribute is not written on a statement, but this code is
     // needed for attributes in Attr.td that do not list any subjects.
     S.Diag(A.getRange().getBegin(), diag::err_decl_attribute_invalid_on_stmt)
-        << A << St->getBeginLoc();
+        << A << A.isRegularKeywordAttribute() << St->getBeginLoc();
     return nullptr;
   }
 }

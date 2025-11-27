@@ -44,7 +44,10 @@ public:
     eManglingSchemeMSVC,
     eManglingSchemeItanium,
     eManglingSchemeRustV0,
-    eManglingSchemeD
+    eManglingSchemeD,
+#ifdef LLDB_ENABLE_SWIFT
+    eManglingSchemeSwift
+#endif // LLDB_ENABLE_SWIFT
   };
 
   /// Default constructor.
@@ -126,13 +129,13 @@ public:
   ///
   /// \return
   ///     A const reference to the demangled name string object.
-  ConstString GetDemangledName() const;
+  ConstString GetDemangledName(const SymbolContext *sc = nullptr) const;
 
   /// Display demangled name get accessor.
   ///
   /// \return
   ///     A const reference to the display demangled name string object.
-  ConstString GetDisplayDemangledName() const;
+  ConstString GetDisplayDemangledName(const SymbolContext *sc = nullptr) const;
 
   void SetDemangledName(ConstString name) { m_demangled = name; }
 
@@ -159,7 +162,8 @@ public:
   ///     A const reference to the preferred name string object if this
   ///     object has a valid name of that kind, else a const reference to the
   ///     other name is returned.
-  ConstString GetName(NamePreference preference = ePreferDemangled) const;
+  ConstString GetName(NamePreference preference = ePreferDemangled,
+                      const SymbolContext *sc = nullptr) const;
 
   /// Check if "name" matches either the mangled or demangled name.
   ///
@@ -184,19 +188,6 @@ public:
   /// \return
   ///     The number of bytes that this object occupies in memory.
   size_t MemorySize() const;
-
-  /// Set the string value in this object.
-  ///
-  /// If \a is_mangled is \b true, then the mangled named is set to \a name,
-  /// else the demangled name is set to \a name.
-  ///
-  /// \param[in] name
-  ///     The already const version of the name for this object.
-  ///
-  /// \param[in] is_mangled
-  ///     If \b true then \a name is a mangled name, if \b false then
-  ///     \a name is demangled.
-  void SetValue(ConstString name, bool is_mangled);
 
   /// Set the string value in this object.
   ///

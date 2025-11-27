@@ -51,12 +51,24 @@ public:
 
   enum { kDefaultTimeout = 500000u };
 
-  class ClangUserExpressionHelper : public ClangExpressionHelper {
+  enum {
+    eLanguageFlagNeedsObjectPointer = 1 << 0,
+    eLanguageFlagEnforceValidObject = 1 << 1,
+    eLanguageFlagInCPlusPlusMethod = 1 << 2,
+    eLanguageFlagInObjectiveCMethod = 1 << 3,
+    eLanguageFlagInStaticMethod = 1 << 4,
+    eLanguageFlagConstObject = 1 << 5
+  };
+
+  class ClangUserExpressionHelper
+      : public llvm::RTTIExtends<ClangUserExpressionHelper,
+                                 ClangExpressionHelper> {
   public:
+    // LLVM RTTI support
+    static char ID;
+
     ClangUserExpressionHelper(Target &target, bool top_level)
         : m_target(target), m_top_level(top_level) {}
-
-    ~ClangUserExpressionHelper() override = default;
 
     /// Return the object that the parser should use when resolving external
     /// values.  May be NULL if everything should be self-contained.
@@ -103,8 +115,8 @@ public:
   ///     definitions to be included when the expression is parsed.
   ///
   /// \param[in] language
-  ///     If not eLanguageTypeUnknown, a language to use when parsing
-  ///     the expression.  Currently restricted to those languages
+  ///     If not unknown, a language to use when parsing the
+  ///     expression.  Currently restricted to those languages
   ///     supported by Clang.
   ///
   /// \param[in] desired_type
@@ -119,7 +131,7 @@ public:
   ///     must be evaluated. For details see the comment to
   ///     `UserExpression::Evaluate`.
   ClangUserExpression(ExecutionContextScope &exe_scope, llvm::StringRef expr,
-                      llvm::StringRef prefix, lldb::LanguageType language,
+                      llvm::StringRef prefix, SourceLanguage language,
                       ResultType desired_type,
                       const EvaluateExpressionOptions &options,
                       ValueObject *ctx_obj);

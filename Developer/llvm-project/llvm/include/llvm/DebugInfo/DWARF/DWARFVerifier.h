@@ -338,6 +338,17 @@ public:
   /// \returns true if the existing Apple-style accelerator tables verify
   /// successfully, false otherwise.
   bool handleAccelTables();
+
+  /// Verify the information in the .debug_str_offsets[.dwo].
+  ///
+  /// Any errors are reported to the stream that was this object was
+  /// constructed with.
+  ///
+  /// \returns true if the .debug_line verifies successfully, false otherwise.
+  bool handleDebugStrOffsets();
+  bool verifyDebugStrOffsets(std::optional<dwarf::DwarfFormat> LegacyFormat,
+                             StringRef SectionName, const DWARFSection &Section,
+                             StringRef StrData);
 };
 
 static inline bool operator<(const DWARFVerifier::DieRangeInfo &LHS,

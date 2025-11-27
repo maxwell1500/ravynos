@@ -1,20 +1,26 @@
+set(SWIG_EXTRA_FLAGS -c++ -threads -python)
+
+if ("${SWIG_VERSION}" VERSION_LESS "4.1.0")
+  set(SWIG_EXTRA_FLAGS ${SWIG_EXTRA_FLAGS} -py3)
+  message(STATUS "SWIG version ${SWIG_VERSION} uses `-py3` flag.")
+endif()
+
 add_custom_command(
   OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/LLDBWrapPython.cpp
   OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/lldb.py
   DEPENDS ${SWIG_SOURCES}
   DEPENDS ${SWIG_INTERFACES}
   DEPENDS ${SWIG_HEADERS}
-  COMMAND ${SWIG_EXECUTABLE}
-      ${SWIG_COMMON_FLAGS}
-      -I${CMAKE_CURRENT_SOURCE_DIR}
-      -c++
-      -shadow
-      -python
-      -py3
-      -threads
-      -outdir ${CMAKE_CURRENT_BINARY_DIR}
-      -o ${CMAKE_CURRENT_BINARY_DIR}/LLDBWrapPython.cpp
-      ${CMAKE_CURRENT_SOURCE_DIR}/python.swig
+  DEPENDS lldb-sbapi-dwarf-enums
+  DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/prepare_binding_python.py
+  COMMAND ${Python3_EXECUTABLE} ${LLDB_SOURCE_DIR}/bindings/prepare_bindings.py
+      ${framework_arg}
+      --srcRoot=${LLDB_SOURCE_DIR}
+      --buildRoot=${LLDB_BINARY_DIR}
+      --targetDir=${CMAKE_CURRENT_BINARY_DIR}
+      --cfgBldDir=${CMAKE_CURRENT_BINARY_DIR}
+      --prefix=${CMAKE_BINARY_DIR}
+      ${PREPARE_BINDINGS_ARGS}
   VERBATIM
   COMMENT "Building LLDB Python wrapper")
 
@@ -93,28 +99,25 @@ function(finish_swig_python swig_target lldb_python_bindings_dir lldb_python_tar
     ${lldb_python_target_dir}
     "utils"
     FILES "${LLDB_SOURCE_DIR}/examples/python/in_call_stack.py"
-          "${LLDB_SOURCE_DIR}/examples/python/symbolication.py")
+          "${LLDB_SOURCE_DIR}/examples/python/symbolication.py"
+  )
 
   create_python_package(
     ${swig_target}
     ${lldb_python_target_dir}
     "plugins"
     FILES
-    "${LLDB_SOURCE_DIR}/examples/python/scripted_process/scripted_process.py")
-
-  create_python_package(
-    ${swig_target}
-    ${lldb_python_target_dir}
-    "plugins"
-    FILES
-    "${LLDB_SOURCE_DIR}/examples/python/scripted_process/scripted_platform.py")
+    "${LLDB_SOURCE_DIR}/examples/python/templates/parsed_cmd.py"
+    "${LLDB_SOURCE_DIR}/examples/python/templates/scripted_process.py"
+    "${LLDB_SOURCE_DIR}/examples/python/templates/scripted_platform.py"
+    "${LLDB_SOURCE_DIR}/examples/python/templates/operating_system.py")
 
   if(APPLE)
     create_python_package(
       ${swig_target}
       ${lldb_python_target_dir} "macosx"
       FILES "${LLDB_SOURCE_DIR}/examples/python/crashlog.py"
-            "${LLDB_SOURCE_DIR}/examples/python/scripted_process/crashlog_scripted_process.py"
+            "${LLDB_SOURCE_DIR}/examples/python/crashlog_scripted_process.py"
             "${LLDB_SOURCE_DIR}/examples/darwin/heap_find/heap.py")
 
     create_python_package(
@@ -192,4 +195,17 @@ function(finish_swig_python swig_target lldb_python_bindings_dir lldb_python_tar
       COMMAND ${CMAKE_COMMAND} -E copy ${PYTHON_DLL_NATIVE_PATH} ${LLDB_BIN_DIR} VERBATIM
       COMMENT "Copying Python DLL to LLDB binaries directory.")
   endif()
+
+
 endfunction()
+
+if(NOT ${LLDB_USE_STATIC_BINDINGS})
+  set(SOURCE_STATIC_BINDING ${CMAKE_CURRENT_SOURCE_DIR}/static-binding/lldb.py)
+  set(BINARY_STATIC_BINDING ${CMAKE_CURRENT_BINARY_DIR}/lldb.py)
+  set(COPY_STATIC_BINDING ${LLDB_SOURCE_DIR}/scripts/copy-static-bindings.py)
+
+  add_custom_command(TARGET swig_wrapper_python POST_BUILD VERBATIM
+    COMMAND diff -q ${SOURCE_STATIC_BINDING} ${BINARY_STATIC_BINDING} || ${CMAKE_COMMAND} -E cmake_echo_color --red "Update the static bindings by running the following command: ${COPY_STATIC_BINDING} ${CMAKE_BINARY_DIR}"
+    DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/lldb.py
+    COMMENT "Diff the static bindings")
+endif()

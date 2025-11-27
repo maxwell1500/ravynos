@@ -172,7 +172,7 @@ private:
                  Selector SelInfo, QualType T, TypeSourceInfo *ReturnTInfo,
                  DeclContext *contextDecl, bool isInstance = true,
                  bool isVariadic = false, bool isPropertyAccessor = false,
-                 bool isSynthesizedAccessorStub = false, 
+                 bool isSynthesizedAccessorStub = false,
                  bool isImplicitlyDeclared = false, bool isDefined = false,
                  ImplementationControl impControl = None,
                  bool HasRelatedResultType = false);
@@ -875,12 +875,22 @@ public:
     return Assign;
   }
 
+  /// Return true if this property has an explicitly specified getter name.
+  bool hasExplicitGetterName() const {
+    return (PropertyAttributes & ObjCPropertyAttribute::kind_getter);
+  }
+
   Selector getGetterName() const { return GetterName; }
   SourceLocation getGetterNameLoc() const { return GetterNameLoc; }
 
   void setGetterName(Selector Sel, SourceLocation Loc = SourceLocation()) {
     GetterName = Sel;
     GetterNameLoc = Loc;
+  }
+
+  /// Return true if this property has an explicitly specified setter name.
+  bool hasExplicitSetterName() const {
+    return (PropertyAttributes & ObjCPropertyAttribute::kind_setter);
   }
 
   Selector getSetterName() const { return SetterName; }
@@ -1228,7 +1238,8 @@ class ObjCInterfaceDecl : public ObjCContainerDecl
   /// which will be NULL if this class has not yet been defined.
   ///
   /// The bit indicates when we don't need to check for out-of-date
-  /// declarations. It will be set unless modules are enabled.
+  /// declarations. It will be set unless there is an ExternalASTSource that
+  /// could provide a definition.
   llvm::PointerIntPair<DefinitionData *, 1, bool> Data;
 
   ObjCInterfaceDecl(const ASTContext &C, DeclContext *DC, SourceLocation AtLoc,
@@ -1517,7 +1528,7 @@ public:
     // If the name of this class is out-of-date, bring it up-to-date, which
     // might bring in a definition.
     // Note: a null value indicates that we don't have a definition and that
-    // modules are enabled.
+    // there is a ExternalASTSource that could provide a definition.
     if (!Data.getOpaqueValue())
       getMostRecentDecl();
 
@@ -2085,7 +2096,8 @@ class ObjCProtocolDecl : public ObjCContainerDecl,
   /// which will be NULL if this class has not yet been defined.
   ///
   /// The bit indicates when we don't need to check for out-of-date
-  /// declarations. It will be set unless modules are enabled.
+  /// declarations. It will be set unless there is an ExternalASTSource that
+  /// could provide a definition.
   llvm::PointerIntPair<DefinitionData *, 1, bool> Data;
 
   ObjCProtocolDecl(ASTContext &C, DeclContext *DC, IdentifierInfo *Id,
@@ -2222,7 +2234,7 @@ public:
     // If the name of this protocol is out-of-date, bring it up-to-date, which
     // might bring in a definition.
     // Note: a null value indicates that we don't have a definition and that
-    // modules are enabled.
+    // there is a ExternalASTSource that could provide a definition.
     if (!Data.getOpaqueValue())
       getMostRecentDecl();
 
@@ -2759,17 +2771,25 @@ raw_ostream &operator<<(raw_ostream &OS, const ObjCImplementationDecl &ID);
 class ObjCCompatibleAliasDecl : public NamedDecl {
   /// Class that this is an alias of.
   ObjCInterfaceDecl *AliasedClass;
+  /// The location of the name of the referenced class.
+  SourceLocation AliasedClassLoc;
+  /// The location of the '@'.
+  SourceLocation AtLoc;
 
-  ObjCCompatibleAliasDecl(DeclContext *DC, SourceLocation L, IdentifierInfo *Id,
-                          ObjCInterfaceDecl* aliasedClass)
-      : NamedDecl(ObjCCompatibleAlias, DC, L, Id), AliasedClass(aliasedClass) {}
+  ObjCCompatibleAliasDecl(DeclContext *DC, SourceLocation NameLoc,
+                          IdentifierInfo *Id, ObjCInterfaceDecl *AliasedClass,
+                          SourceLocation AliasedClassLoc, SourceLocation AtLoc)
+      : NamedDecl(ObjCCompatibleAlias, DC, NameLoc, Id),
+        AliasedClass(AliasedClass), AliasedClassLoc(AliasedClassLoc),
+        AtLoc(AtLoc) {}
 
   void anchor() override;
 
 public:
-  static ObjCCompatibleAliasDecl *Create(ASTContext &C, DeclContext *DC,
-                                         SourceLocation L, IdentifierInfo *Id,
-                                         ObjCInterfaceDecl* aliasedClass);
+  static ObjCCompatibleAliasDecl *
+  Create(ASTContext &C, DeclContext *DC, SourceLocation NameLoc,
+         IdentifierInfo *Id, ObjCInterfaceDecl *AliasedClass,
+         SourceLocation AliasedClassLoc, SourceLocation AtLoc);
 
   static ObjCCompatibleAliasDecl *CreateDeserialized(ASTContext &C,
                                                      unsigned ID);
@@ -2777,6 +2797,17 @@ public:
   const ObjCInterfaceDecl *getClassInterface() const { return AliasedClass; }
   ObjCInterfaceDecl *getClassInterface() { return AliasedClass; }
   void setClassInterface(ObjCInterfaceDecl *D) { AliasedClass = D; }
+
+  SourceLocation getClassInterfaceLoc() const { return AliasedClassLoc; }
+
+  void setClassInterfaceLoc(SourceLocation Loc) { AliasedClassLoc = Loc; }
+
+  SourceLocation getAtLoc() const { return AtLoc; }
+  void setAtLoc(SourceLocation Loc) { AtLoc = Loc; }
+
+  SourceRange getSourceRange() const override LLVM_READONLY {
+    return SourceRange(AtLoc, AtLoc);
+  }
 
   static bool classof(const Decl *D) { return classofKind(D->getKind()); }
   static bool classofKind(Kind K) { return K == ObjCCompatibleAlias; }

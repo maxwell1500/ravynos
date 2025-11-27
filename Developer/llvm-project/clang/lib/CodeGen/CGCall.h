@@ -30,6 +30,7 @@ class Value;
 namespace clang {
 class Decl;
 class FunctionDecl;
+class TargetOptions;
 class VarDecl;
 
 namespace CodeGen {
@@ -56,6 +57,36 @@ public:
   const GlobalDecl getCalleeDecl() const { return CalleeDecl; }
 };
 
+/// Information necessary for pointer authentication.
+class CGPointerAuthInfo {
+  unsigned Signed : 1;
+  unsigned Key : 31;
+  llvm::Value *Discriminator;
+
+public:
+  CGPointerAuthInfo() { Signed = false; }
+  CGPointerAuthInfo(unsigned key, llvm::Value *discriminator)
+      : Discriminator(discriminator) {
+    assert(!discriminator || discriminator->getType()->isIntegerTy() ||
+           discriminator->getType()->isPointerTy());
+    Signed = true;
+    Key = key;
+  }
+
+  explicit operator bool() const { return isSigned(); }
+
+  bool isSigned() const { return Signed; }
+
+  unsigned getKey() const {
+    assert(isSigned());
+    return Key;
+  }
+  llvm::Value *getDiscriminator() const {
+    assert(isSigned());
+    return Discriminator;
+  }
+};
+
 /// All available information about a concrete callee.
 class CGCallee {
   enum class SpecialKind : uintptr_t {
@@ -67,6 +98,10 @@ class CGCallee {
     Last = Virtual
   };
 
+  struct OrdinaryInfoStorage {
+    CGCalleeInfo AbstractInfo;
+    CGPointerAuthInfo PointerAuthInfo;
+  };
   struct BuiltinInfoStorage {
     const FunctionDecl *Decl;
     unsigned ID;
@@ -83,7 +118,7 @@ class CGCallee {
 
   SpecialKind KindOrFunctionPointer;
   union {
-    CGCalleeInfo AbstractInfo;
+    OrdinaryInfoStorage OrdinaryInfo;
     BuiltinInfoStorage BuiltinInfo;
     PseudoDestructorInfoStorage PseudoDestructorInfo;
     VirtualInfoStorage VirtualInfo;
@@ -102,15 +137,14 @@ public:
 
   /// Construct a callee.  Call this constructor directly when this
   /// isn't a direct call.
-  CGCallee(const CGCalleeInfo &abstractInfo, llvm::Value *functionPtr)
+  CGCallee(const CGCalleeInfo &abstractInfo, llvm::Value *functionPtr,
+           const CGPointerAuthInfo &pointerAuthInfo)
       : KindOrFunctionPointer(
             SpecialKind(reinterpret_cast<uintptr_t>(functionPtr))) {
-    AbstractInfo = abstractInfo;
+    OrdinaryInfo.AbstractInfo = abstractInfo;
+    OrdinaryInfo.PointerAuthInfo = pointerAuthInfo;
     assert(functionPtr && "configuring callee without function pointer");
     assert(functionPtr->getType()->isPointerTy());
-    assert(functionPtr->getType()->isOpaquePointerTy() ||
-           functionPtr->getType()->getNonOpaquePointerElementType()
-               ->isFunctionTy());
   }
 
   static CGCallee forBuiltin(unsigned builtinID,
@@ -129,12 +163,12 @@ public:
 
   static CGCallee forDirect(llvm::Constant *functionPtr,
                             const CGCalleeInfo &abstractInfo = CGCalleeInfo()) {
-    return CGCallee(abstractInfo, functionPtr);
+    return CGCallee(abstractInfo, functionPtr, CGPointerAuthInfo());
   }
 
   static CGCallee forDirect(llvm::FunctionCallee functionPtr,
                             const CGCalleeInfo &abstractInfo = CGCalleeInfo()) {
-    return CGCallee(abstractInfo, functionPtr.getCallee());
+    return CGCallee(abstractInfo, functionPtr.getCallee(), CGPointerAuthInfo());
   }
 
   static CGCallee forVirtual(const CallExpr *CE, GlobalDecl MD, Address Addr,
@@ -174,7 +208,11 @@ public:
     if (isVirtual())
       return VirtualInfo.MD;
     assert(isOrdinary());
-    return AbstractInfo;
+    return OrdinaryInfo.AbstractInfo;
+  }
+  const CGPointerAuthInfo &getPointerAuthInfo() const {
+    assert(isOrdinary());
+    return OrdinaryInfo.PointerAuthInfo;
   }
   llvm::Value *getFunctionPointer() const {
     assert(isOrdinary());
@@ -184,6 +222,10 @@ public:
     assert(isOrdinary());
     KindOrFunctionPointer =
         SpecialKind(reinterpret_cast<uintptr_t>(functionPtr));
+  }
+  void setPointerAuthInfo(CGPointerAuthInfo pointerAuth) {
+    assert(isOrdinary());
+    OrdinaryInfo.PointerAuthInfo = pointerAuth;
   }
 
   bool isVirtual() const {
@@ -376,6 +418,43 @@ public:
   bool isUnused() const { return IsUnused; }
   bool isExternallyDestructed() const { return IsExternallyDestructed; }
 };
+
+/// Helper to add attributes to \p F according to the CodeGenOptions and
+/// LangOptions without requiring a CodeGenModule to be constructed.
+void mergeDefaultFunctionDefinitionAttributes(llvm::Function &F,
+                                              const CodeGenOptions CodeGenOpts,
+                                              const LangOptions &LangOpts,
+                                              const TargetOptions &TargetOpts,
+                                              bool WillInternalize);
+
+enum class FnInfoOpts {
+  None = 0,
+  IsInstanceMethod = 1 << 0,
+  IsChainCall = 1 << 1,
+  IsDelegateCall = 1 << 2,
+};
+
+inline FnInfoOpts operator|(FnInfoOpts A, FnInfoOpts B) {
+  return static_cast<FnInfoOpts>(
+      static_cast<std::underlying_type_t<FnInfoOpts>>(A) |
+      static_cast<std::underlying_type_t<FnInfoOpts>>(B));
+}
+
+inline FnInfoOpts operator&(FnInfoOpts A, FnInfoOpts B) {
+  return static_cast<FnInfoOpts>(
+      static_cast<std::underlying_type_t<FnInfoOpts>>(A) &
+      static_cast<std::underlying_type_t<FnInfoOpts>>(B));
+}
+
+inline FnInfoOpts operator|=(FnInfoOpts A, FnInfoOpts B) {
+  A = A | B;
+  return A;
+}
+
+inline FnInfoOpts operator&=(FnInfoOpts A, FnInfoOpts B) {
+  A = A & B;
+  return A;
+}
 
 } // end namespace CodeGen
 } // end namespace clang

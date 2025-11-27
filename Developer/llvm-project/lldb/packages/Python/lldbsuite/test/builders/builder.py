@@ -36,6 +36,10 @@ class Builder:
         """Returns the ARCH_CFLAGS for the make system."""
         return []
 
+    def getSwiftTargetFlags(self, architecture):
+        """Returns TARGET_SWIFTFLAGS for the make system."""
+        return []
+
     def getMake(self, test_subdir, test_name):
         """Returns the invocation for GNU make.
         The first argument is a tuple of the relative path to the testcase
@@ -47,19 +51,31 @@ class Builder:
 
         # Construct the base make invocation.
         lldb_test = os.environ["LLDB_TEST"]
-        if not (lldb_test and configuration.test_build_dir and test_subdir
-                and test_name and (not os.path.isabs(test_subdir))):
+        if not (
+            lldb_test
+            and configuration.test_build_dir
+            and test_subdir
+            and test_name
+            and (not os.path.isabs(test_subdir))
+        ):
             raise Exception("Could not derive test directories")
-        build_dir = os.path.join(configuration.test_build_dir, test_subdir,
-                                 test_name)
+        build_dir = os.path.join(configuration.test_build_dir, test_subdir, test_name)
         src_dir = os.path.join(configuration.test_src_root, test_subdir)
         # This is a bit of a hack to make inline testcases work.
         makefile = os.path.join(src_dir, "Makefile")
         if not os.path.isfile(makefile):
             makefile = os.path.join(build_dir, "Makefile")
         return [
-            make, "VPATH=" + src_dir, "-C", build_dir, "-I", src_dir, "-I",
-            os.path.join(lldb_test, "make"), "-f", makefile
+            make,
+            "VPATH=" + src_dir,
+            "-C",
+            build_dir,
+            "-I",
+            src_dir,
+            "-I",
+            os.path.join(lldb_test, "make"),
+            "-f",
+            makefile,
         ]
 
     def getCmdLine(self, d):
@@ -76,7 +92,7 @@ class Builder:
             append_vars = ["CFLAGS", "CFLAGS_EXTRAS", "LD_EXTRAS"]
             if k in append_vars and k in os.environ:
                 v = os.environ[k] + " " + v
-            return '%s=%s' % (k, v)
+            return "%s=%s" % (k, v)
 
         cmdline = [setOrAppendVariable(k, v) for k, v in list(d.items())]
 
@@ -98,7 +114,25 @@ class Builder:
         if not cc and configuration.compiler:
             cc = configuration.compiler
         if cc:
-            return ["CC=\"%s\"" % cc]
+            return ['CC="%s"' % cc]
+        return []
+
+    def getSwiftCSpec(self):
+        """
+        Helper function to return the key-value string to specify the Swift
+        compiler used for the make system.
+        """
+        if configuration.swiftCompiler:
+            return ['SWIFTC="{}"'.format(configuration.swiftCompiler)]
+        return []
+
+    def getPythonSpec(self):
+        """
+        Helper function to return the key-value string to specify the Python
+        interpreter used for the make system.
+        """
+        if configuration.python:
+            return ['PYTHON="{}"'.format(configuration.python)]
         return []
 
     def getSDKRootSpec(self):
@@ -116,19 +150,33 @@ class Builder:
         module cache used for the make system.
         """
         if configuration.clang_module_cache_dir:
-            return ["CLANG_MODULE_CACHE_DIR={}".format(
-                configuration.clang_module_cache_dir)]
+            return [
+                "CLANG_MODULE_CACHE_DIR={}".format(configuration.clang_module_cache_dir)
+            ]
         return []
 
     def getLibCxxArgs(self):
         if configuration.libcxx_include_dir and configuration.libcxx_library_dir:
-            libcpp_args = ["LIBCPP_INCLUDE_DIR={}".format(configuration.libcxx_include_dir),
-                           "LIBCPP_LIBRARY_DIR={}".format(configuration.libcxx_library_dir)]
+            libcpp_args = [
+                "LIBCPP_INCLUDE_DIR={}".format(configuration.libcxx_include_dir),
+                "LIBCPP_LIBRARY_DIR={}".format(configuration.libcxx_library_dir),
+            ]
             if configuration.libcxx_include_target_dir:
-                libcpp_args.append("LIBCPP_INCLUDE_TARGET_DIR={}".format(
-                    configuration.libcxx_include_target_dir))
+                libcpp_args.append(
+                    "LIBCPP_INCLUDE_TARGET_DIR={}".format(
+                        configuration.libcxx_include_target_dir
+                    )
+                )
             return libcpp_args
         return []
+
+    def getLLDBSwiftLibs(self):
+        if configuration.swift_libs_dir:
+            return ["SWIFT_LIBS_DIR={}".format(configuration.swift_libs_dir)]
+        return []
+
+    def getLLDBObjRoot(self):
+        return ["LLDB_OBJ_ROOT={}".format(configuration.lldb_obj_root)]
 
     def _getDebugInfoArgs(self, debug_info):
         if debug_info is None:
@@ -141,19 +189,39 @@ class Builder:
             return ["MAKE_DSYM=NO", "MAKE_GMODULES=YES"]
         return None
 
-    def getBuildCommand(self, debug_info, architecture=None, compiler=None,
-            dictionary=None, testdir=None, testname=None, make_targets=None):
+    def getBuildCommand(
+        self,
+        debug_info,
+        architecture=None,
+        compiler=None,
+        dictionary=None,
+        testdir=None,
+        testname=None,
+        make_targets=None,
+    ):
         debug_info_args = self._getDebugInfoArgs(debug_info)
         if debug_info_args is None:
             return None
         if make_targets is None:
             make_targets = ["all"]
         command_parts = [
-            self.getMake(testdir, testname), debug_info_args, make_targets,
-            self.getArchCFlags(architecture), self.getArchSpec(architecture),
-            self.getCCSpec(compiler), self.getExtraMakeArgs(),
-            self.getSDKRootSpec(), self.getModuleCacheSpec(),
-            self.getLibCxxArgs(), self.getCmdLine(dictionary)]
+            self.getMake(testdir, testname),
+            debug_info_args,
+            make_targets,
+            self.getArchCFlags(architecture),
+            self.getArchSpec(architecture),
+            self.getSwiftTargetFlags(architecture),
+            self.getCCSpec(compiler),
+            self.getSwiftCSpec(),
+            self.getPythonSpec(),
+            self.getExtraMakeArgs(),
+            self.getSDKRootSpec(),
+            self.getModuleCacheSpec(),
+            self.getLibCxxArgs(),
+            self.getLLDBSwiftLibs(),
+            self.getLLDBObjRoot(),
+            self.getCmdLine(dictionary),
+        ]
         command = list(itertools.chain(*command_parts))
 
         return command

@@ -184,6 +184,10 @@ public:
   MLocTracker *MTracker;
   MachineFunction &MF;
   bool ShouldEmitDebugEntryValues;
+  // BEGIN SWIFT
+  /// Whether this is a Swift async function.
+  bool IsSwiftAsyncFunction = false;
+  // END SWIFT
 
   /// Record of all changes in variable locations at a block position. Awkwardly
   /// we allow inserting either before or after the point: MBB != nullptr
@@ -479,6 +483,15 @@ public:
 
     // Now map variables to their picked LocIdxes.
     for (const auto &Var : VLocs) {
+      // BEGIN SWIFT
+      // Async support: Don't track spills for entry values.
+      // TODO: Skipping all entry values is a big hammer, we really
+      // only want to to skip spills.
+      if (IsSwiftAsyncFunction && Var.second.Properties.DIExpr &&
+          Var.second.Properties.DIExpr->isEntryValue())
+        continue;
+      // END SWIFT
+
       loadVarInloc(MBB, DbgOpStore, ValueToLoc, Var.first, Var.second);
     }
     flushDbgValues(MBB.begin(), &MBB);
@@ -601,7 +614,7 @@ public:
     if (Var.getInlinedAt())
       return false;
 
-    if (Expr->getNumElements() > 0)
+    if (Expr->getNumElements() > 0 && !Expr->isDeref())
       return false;
 
     return true;
@@ -826,6 +839,13 @@ public:
       // was found, or the existing list with the substitution MLoc -> NewLoc
       // otherwise.
       SmallVector<ResolvedDbgOp> DbgOps;
+      // BEGIN SWIFT
+      // Async support: Don't track spills for entry values.
+      if (IsSwiftAsyncFunction && ActiveVLocIt->second.Properties.DIExpr &&
+          ActiveVLocIt->second.Properties.DIExpr->isEntryValue())
+        DbgOps.push_back(MLoc);
+      else
+      // END SWIFT
       if (NewLoc) {
         ResolvedDbgOp OldOp(MLoc);
         ResolvedDbgOp NewOp(*NewLoc);
@@ -899,12 +919,19 @@ public:
       auto ActiveVLocIt = ActiveVLocs.find(Var);
       assert(ActiveVLocIt != ActiveVLocs.end());
 
-      // Update all instances of Src in the variable's tracked values to Dst.
-      std::replace(ActiveVLocIt->second.Ops.begin(),
-                   ActiveVLocIt->second.Ops.end(), SrcOp, DstOp);
+      // BEGIN SWIFT
+      // Async support: Don't track transfers for entry values.
+      if (IsSwiftAsyncFunction && ActiveVLocIt->second.Properties.DIExpr &&
+          ActiveVLocIt->second.Properties.DIExpr->isEntryValue()) {
+        // Leave SrcOp in-situ.
+      } else
+      // END SWIFT
+        // Update all instances of Src in the variable's tracked values to Dst.
+        std::replace(ActiveVLocIt->second.Ops.begin(),
+                     ActiveVLocIt->second.Ops.end(), SrcOp, DstOp);
 
       MachineInstr *MI = MTracker->emitLoc(ActiveVLocIt->second.Ops, Var,
-                                           ActiveVLocIt->second.Properties);
+                                             ActiveVLocIt->second.Properties);
       PendingDbgValues.push_back(MI);
     }
     ActiveMLocs[Src].clear();
@@ -1394,8 +1421,26 @@ bool InstrRefBasedLDV::transferDebugValue(const MachineInstr &MI) {
   // MLocTracker needs to know that this register is read, even if it's only
   // read by a debug inst.
   for (const MachineOperand &MO : MI.debug_operands())
-    if (MO.isReg() && MO.getReg() != 0)
-      (void)MTracker->readReg(MO.getReg());
+    if (MO.isReg() && MO.getReg() != 0) {
+      ValueIDNum RegId = MTracker->readReg(MO.getReg());
+
+      // BEGIN SWIFT
+      // Swift async function handling.
+      auto *Expr = MI.getDebugExpression();
+      const llvm::MachineFunction *MF = MI.getParent()->getParent();
+      if (isSwiftAsyncContext(*MF, MO.getReg())) {
+        // In Swift async functions entry values are preferred, since they
+        // can be evaluated in both live frames and virtual backtraces.
+        IsSwiftAsyncFunction = true;
+        if (TTracker)
+          TTracker->IsSwiftAsyncFunction = true;
+        if (!Expr || !Expr->isEntryValue()) {
+          if (TTracker)
+            TTracker->recoverAsEntryValue(V, Properties, RegId);
+        }
+      }
+    }
+  // END SWIFT
 
   // If we're preparing for the second analysis (variables), the machine value
   // locations are already solved, and we report this DBG_VALUE and the value
@@ -1544,12 +1589,12 @@ std::optional<ValueIDNum> InstrRefBasedLDV::getValueForInstrRef(
       if (Size != MainRegSize || Offset) {
         // Enumerate all subregisters, searching.
         Register NewReg = 0;
-        for (MCSubRegIterator SRI(Reg, TRI, false); SRI.isValid(); ++SRI) {
-          unsigned Subreg = TRI->getSubRegIndex(Reg, *SRI);
+        for (MCPhysReg SR : TRI->subregs(Reg)) {
+          unsigned Subreg = TRI->getSubRegIndex(Reg, SR);
           unsigned SubregSize = TRI->getSubRegIdxSize(Subreg);
           unsigned SubregOffset = TRI->getSubRegIdxOffset(Subreg);
           if (SubregSize == Size && SubregOffset == Offset) {
-            NewReg = *SRI;
+            NewReg = SR;
             break;
           }
         }
@@ -2066,12 +2111,12 @@ bool InstrRefBasedLDV::transferSpillOrRestoreInst(MachineInstr &MI) {
     };
 
     // Then, transfer subreg bits.
-    for (MCSubRegIterator SRI(Reg, TRI, false); SRI.isValid(); ++SRI) {
+    for (MCPhysReg SR : TRI->subregs(Reg)) {
       // Ensure this reg is tracked,
-      (void)MTracker->lookupOrTrackRegister(*SRI);
-      unsigned SubregIdx = TRI->getSubRegIndex(Reg, *SRI);
+      (void)MTracker->lookupOrTrackRegister(SR);
+      unsigned SubregIdx = TRI->getSubRegIndex(Reg, SR);
       unsigned SpillID = MTracker->getLocID(Loc, SubregIdx);
-      DoTransfer(*SRI, SpillID);
+      DoTransfer(SR, SpillID);
     }
 
     // Directly lookup size of main source reg, and transfer.
@@ -2101,10 +2146,10 @@ bool InstrRefBasedLDV::transferSpillOrRestoreInst(MachineInstr &MI) {
       MTracker->setReg(DestReg, ReadValue);
     };
 
-    for (MCSubRegIterator SRI(Reg, TRI, false); SRI.isValid(); ++SRI) {
-      unsigned Subreg = TRI->getSubRegIndex(Reg, *SRI);
+    for (MCPhysReg SR : TRI->subregs(Reg)) {
+      unsigned Subreg = TRI->getSubRegIndex(Reg, SR);
       unsigned SpillID = MTracker->getLocID(*Loc, Subreg);
-      DoTransfer(*SRI, SpillID);
+      DoTransfer(SR, SpillID);
     }
 
     // Directly look up this registers slot idx by size, and transfer.
@@ -2513,8 +2558,8 @@ void InstrRefBasedLDV::placeMLocPHIs(
     Register R = MTracker->LocIdxToLocID[L];
     SmallSet<Register, 8> FoundRegUnits;
     bool AnyIllegal = false;
-    for (MCRegUnitIterator RUI(R.asMCReg(), TRI); RUI.isValid(); ++RUI) {
-      for (MCRegUnitRootIterator URoot(*RUI, TRI); URoot.isValid(); ++URoot){
+    for (MCRegUnit Unit : TRI->regunits(R.asMCReg())) {
+      for (MCRegUnitRootIterator URoot(Unit, TRI); URoot.isValid(); ++URoot) {
         if (!MTracker->isRegisterTracked(*URoot)) {
           // Not all roots were loaded into the tracking map: this register
           // isn't actually def'd anywhere, we only read from it. Generate PHIs
@@ -3179,7 +3224,7 @@ void InstrRefBasedLDV::buildVLocValueMap(
     SmallPtrSet<MachineBasicBlock *, 32> DefBlocks;
     for (const MachineBasicBlock *ExpMBB : BlocksToExplore) {
       auto &TransferFunc = AllTheVLocs[ExpMBB->getNumber()].Vars;
-      if (TransferFunc.find(Var) != TransferFunc.end())
+      if (TransferFunc.contains(Var))
         DefBlocks.insert(const_cast<MachineBasicBlock *>(ExpMBB));
     }
 
@@ -3295,7 +3340,7 @@ void InstrRefBasedLDV::buildVLocValueMap(
         // to be visited next time around.
         for (auto *s : MBB->successors()) {
           // Ignore out of scope / not-to-be-explored successors.
-          if (LiveInIdx.find(s) == LiveInIdx.end())
+          if (!LiveInIdx.contains(s))
             continue;
 
           if (BBToOrder[s] > BBToOrder[MBB]) {
@@ -3411,7 +3456,7 @@ void InstrRefBasedLDV::initialSetup(MachineFunction &MF) {
   for (MachineBasicBlock *MBB : RPOT)
     processMBB(MBB);
   for (MachineBasicBlock &MBB : MF)
-    if (BBToOrder.find(&MBB) == BBToOrder.end())
+    if (!BBToOrder.contains(&MBB))
       processMBB(&MBB);
 
   // Order value substitutions by their "source" operand pair, for quick lookup.
@@ -3487,6 +3532,9 @@ bool InstrRefBasedLDV::depthFirstVLocAndEmit(
     DenseMap<DebugVariable, unsigned> &AllVarsNumbering,
     const TargetPassConfig &TPC) {
   TTracker = new TransferTracker(TII, MTracker, MF, *TRI, CalleeSavedRegs, TPC);
+  // BEGIN SWIFT
+  TTracker->IsSwiftAsyncFunction = IsSwiftAsyncFunction;
+  // END SWIFT
   unsigned NumLocs = MTracker->getNumLocs();
   VTracker = nullptr;
 
@@ -3666,6 +3714,9 @@ bool InstrRefBasedLDV::ExtendRanges(MachineFunction &MF,
       new MLocTracker(MF, *TII, *TRI, *MF.getSubtarget().getTargetLowering());
   VTracker = nullptr;
   TTracker = nullptr;
+  // BEGIN SWIFT
+  IsSwiftAsyncFunction = false;
+  // END SWIFT
 
   SmallVector<MLocTransferMap, 32> MLocTransfer;
   SmallVector<VLocTracker, 8> vlocs;
@@ -3716,7 +3767,12 @@ bool InstrRefBasedLDV::ExtendRanges(MachineFunction &MF,
 
     unsigned BlockNo = Num.getBlock();
     LocIdx LocNo = Num.getLoc();
-    Num = MInLocs[BlockNo][LocNo.asU64()];
+    ValueIDNum ResolvedValue = MInLocs[BlockNo][LocNo.asU64()];
+    // If there is no resolved value for this live-in then it is not directly
+    // reachable from the entry block -- model it as a PHI on entry to this
+    // block, which means we leave the ValueIDNum unchanged.
+    if (ResolvedValue != ValueIDNum::EmptyValue)
+      Num = ResolvedValue;
   }
   // Later, we'll be looking up ranges of instruction numbers.
   llvm::sort(DebugPHINumToValue);
@@ -4050,10 +4106,7 @@ public:
   /// ValueIsPHI - Check if the instruction that defines the specified value
   /// is a PHI instruction.
   static LDVSSAPhi *ValueIsPHI(BlockValueNum Val, LDVSSAUpdater *Updater) {
-    auto PHIIt = Updater->PHIs.find(Val);
-    if (PHIIt == Updater->PHIs.end())
-      return nullptr;
-    return PHIIt->second;
+    return Updater->PHIs.lookup(Val);
   }
 
   /// ValueIsNewPHI - Like ValueIsPHI but also check if the PHI has no source
@@ -4195,7 +4248,7 @@ std::optional<ValueIDNum> InstrRefBasedLDV::resolveDbgPHIsImpl(
     // Are all these things actually defined?
     for (auto &PHIIt : PHI->IncomingValues) {
       // Any undef input means DBG_PHIs didn't dominate the use point.
-      if (Updater.UndefMap.find(&PHIIt.first->BB) != Updater.UndefMap.end())
+      if (Updater.UndefMap.contains(&PHIIt.first->BB))
         return std::nullopt;
 
       ValueIDNum ValueToCheck;

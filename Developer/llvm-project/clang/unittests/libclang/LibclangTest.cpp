@@ -6,7 +6,9 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "TestUtils.h"
 #include "clang-c/Index.h"
+#include "clang-c/Refactor.h"
 #include "clang-c/Rewrite.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Debug.h"
@@ -14,7 +16,7 @@
 #include "llvm/Support/Path.h"
 #include "llvm/Support/raw_ostream.h"
 #include "gtest/gtest.h"
-#include "TestUtils.h"
+#include <cstring>
 #include <fstream>
 #include <functional>
 #include <map>
@@ -355,6 +357,194 @@ TEST(libclang, ModuleMapDescriptor) {
   clang_ModuleMapDescriptor_dispose(MMD);
 }
 
+TEST_F(LibclangParseTest, GlobalOptions) {
+  EXPECT_EQ(clang_CXIndex_getGlobalOptions(Index), CXGlobalOpt_None);
+}
+
+class LibclangIndexOptionsTest : public LibclangParseTest {
+  virtual void AdjustOptions(CXIndexOptions &Opts) {}
+
+protected:
+  void CreateIndex() override {
+    CXIndexOptions Opts;
+    memset(&Opts, 0, sizeof(Opts));
+    Opts.Size = sizeof(CXIndexOptions);
+    AdjustOptions(Opts);
+    Index = clang_createIndexWithOptions(&Opts);
+    ASSERT_TRUE(Index);
+  }
+};
+
+TEST_F(LibclangIndexOptionsTest, GlobalOptions) {
+  EXPECT_EQ(clang_CXIndex_getGlobalOptions(Index), CXGlobalOpt_None);
+}
+
+class LibclangIndexingEnabledIndexOptionsTest
+    : public LibclangIndexOptionsTest {
+  void AdjustOptions(CXIndexOptions &Opts) override {
+    Opts.ThreadBackgroundPriorityForIndexing = CXChoice_Enabled;
+  }
+};
+
+TEST_F(LibclangIndexingEnabledIndexOptionsTest, GlobalOptions) {
+  EXPECT_EQ(clang_CXIndex_getGlobalOptions(Index),
+            CXGlobalOpt_ThreadBackgroundPriorityForIndexing);
+}
+
+class LibclangIndexingDisabledEditingEnabledIndexOptionsTest
+    : public LibclangIndexOptionsTest {
+  void AdjustOptions(CXIndexOptions &Opts) override {
+    Opts.ThreadBackgroundPriorityForIndexing = CXChoice_Disabled;
+    Opts.ThreadBackgroundPriorityForEditing = CXChoice_Enabled;
+  }
+};
+
+TEST_F(LibclangIndexingDisabledEditingEnabledIndexOptionsTest, GlobalOptions) {
+  EXPECT_EQ(clang_CXIndex_getGlobalOptions(Index),
+            CXGlobalOpt_ThreadBackgroundPriorityForEditing);
+}
+
+class LibclangBothEnabledIndexOptionsTest : public LibclangIndexOptionsTest {
+  void AdjustOptions(CXIndexOptions &Opts) override {
+    Opts.ThreadBackgroundPriorityForIndexing = CXChoice_Enabled;
+    Opts.ThreadBackgroundPriorityForEditing = CXChoice_Enabled;
+  }
+};
+
+TEST_F(LibclangBothEnabledIndexOptionsTest, GlobalOptions) {
+  EXPECT_EQ(clang_CXIndex_getGlobalOptions(Index),
+            CXGlobalOpt_ThreadBackgroundPriorityForAll);
+}
+
+class LibclangPreambleStorageTest : public LibclangParseTest {
+  std::string Main = "main.cpp";
+
+protected:
+  std::string PreambleDir;
+  void InitializePreambleDir() {
+    llvm::SmallString<128> PathBuffer(TestDir);
+    llvm::sys::path::append(PathBuffer, "preambles");
+    namespace fs = llvm::sys::fs;
+    ASSERT_FALSE(fs::create_directory(PathBuffer, false, fs::perms::owner_all));
+
+    PreambleDir = static_cast<std::string>(PathBuffer);
+    FilesAndDirsToRemove.insert(PreambleDir);
+  }
+
+public:
+  void CountPreamblesInPreambleDir(int PreambleCount) {
+    // For some reason, the preamble is not created without '\n' before `int`.
+    WriteFile(Main, "\nint main() {}");
+
+    TUFlags |= CXTranslationUnit_CreatePreambleOnFirstParse;
+    ClangTU = clang_parseTranslationUnit(Index, Main.c_str(), nullptr, 0,
+                                         nullptr, 0, TUFlags);
+
+    int FileCount = 0;
+
+    namespace fs = llvm::sys::fs;
+    std::error_code EC;
+    for (fs::directory_iterator File(PreambleDir, EC), FileEnd;
+         File != FileEnd && !EC; File.increment(EC)) {
+      ++FileCount;
+
+      EXPECT_EQ(File->type(), fs::file_type::regular_file);
+
+      const auto Filename = llvm::sys::path::filename(File->path());
+      EXPECT_EQ(Filename.size(), std::strlen("preamble-%%%%%%.pch"));
+      EXPECT_TRUE(Filename.startswith("preamble-"));
+      EXPECT_TRUE(Filename.endswith(".pch"));
+
+      const auto Status = File->status();
+      ASSERT_TRUE(Status);
+      if (false) {
+        // The permissions assertion below fails, because the .pch.tmp file is
+        // created with default permissions and replaces the .pch file along
+        // with its permissions. Therefore the permissions set in
+        // TempPCHFile::create() don't matter in the end.
+        EXPECT_EQ(Status->permissions(), fs::owner_read | fs::owner_write);
+      }
+    }
+
+    EXPECT_EQ(FileCount, PreambleCount);
+  }
+};
+
+class LibclangNotOverriddenPreambleStoragePathTest
+    : public LibclangPreambleStorageTest {
+protected:
+  void CreateIndex() override {
+    InitializePreambleDir();
+    LibclangPreambleStorageTest::CreateIndex();
+  }
+};
+
+class LibclangSetPreambleStoragePathTest : public LibclangPreambleStorageTest {
+  virtual bool StorePreamblesInMemory() { return false; }
+  virtual const char *PreambleStoragePath() = 0;
+
+protected:
+  void CreateIndex() override {
+    InitializePreambleDir();
+
+    CXIndexOptions Opts{};
+    Opts.Size = sizeof(CXIndexOptions);
+    Opts.StorePreamblesInMemory = StorePreamblesInMemory();
+    Opts.PreambleStoragePath = PreambleStoragePath();
+    Index = clang_createIndexWithOptions(&Opts);
+    ASSERT_TRUE(Index);
+  }
+};
+
+class LibclangNullPreambleStoragePathTest
+    : public LibclangSetPreambleStoragePathTest {
+  const char *PreambleStoragePath() override { return nullptr; }
+};
+class LibclangEmptyPreambleStoragePathTest
+    : public LibclangSetPreambleStoragePathTest {
+  const char *PreambleStoragePath() override { return ""; }
+};
+class LibclangPreambleDirPreambleStoragePathTest
+    : public LibclangSetPreambleStoragePathTest {
+  const char *PreambleStoragePath() override { return PreambleDir.c_str(); }
+};
+
+class LibclangStoreInMemoryNullPreambleStoragePathTest
+    : public LibclangNullPreambleStoragePathTest {
+  bool StorePreamblesInMemory() override { return true; }
+};
+class LibclangStoreInMemoryEmptyPreambleStoragePathTest
+    : public LibclangEmptyPreambleStoragePathTest {
+  bool StorePreamblesInMemory() override { return true; }
+};
+class LibclangStoreInMemoryPreambleDirPreambleStoragePathTest
+    : public LibclangPreambleDirPreambleStoragePathTest {
+  bool StorePreamblesInMemory() override { return true; }
+};
+
+TEST_F(LibclangNotOverriddenPreambleStoragePathTest, CountPreambles) {
+  CountPreamblesInPreambleDir(0);
+}
+TEST_F(LibclangNullPreambleStoragePathTest, CountPreambles) {
+  CountPreamblesInPreambleDir(0);
+}
+TEST_F(LibclangEmptyPreambleStoragePathTest, CountPreambles) {
+  CountPreamblesInPreambleDir(0);
+}
+TEST_F(LibclangPreambleDirPreambleStoragePathTest, CountPreambles) {
+  CountPreamblesInPreambleDir(1);
+}
+TEST_F(LibclangStoreInMemoryNullPreambleStoragePathTest, CountPreambles) {
+  CountPreamblesInPreambleDir(0);
+}
+TEST_F(LibclangStoreInMemoryEmptyPreambleStoragePathTest, CountPreambles) {
+  CountPreamblesInPreambleDir(0);
+}
+TEST_F(LibclangStoreInMemoryPreambleDirPreambleStoragePathTest,
+       CountPreambles) {
+  CountPreamblesInPreambleDir(0);
+}
+
 TEST_F(LibclangParseTest, AllSkippedRanges) {
   std::string Header = "header.h", Main = "main.cpp";
   WriteFile(Header,
@@ -515,6 +705,8 @@ TEST_F(LibclangReparseTest, ReparseWithModule) {
   WriteFile(HeaderName, std::string(HeaderTop) + HeaderBottom);
   WriteFile(ModName, ModFile);
 
+  // Removing recursively is necessary to delete the module cache.
+  RemoveTestDirRecursivelyDuringTeardown = true;
   std::string ModulesCache = std::string("-fmodules-cache-path=") + TestDir;
   const char *Args[] = { "-fmodules", ModulesCache.c_str(),
                          "-I", TestDir.c_str() };
@@ -564,6 +756,74 @@ TEST_F(LibclangReparseTest, clang_parseTranslationUnit2FullArgv) {
   DisplayDiagnostics();
 }
 
+TEST(libclang, RefactoringAction) {
+  std::string Name =
+      clang_getCString(clang_RefactoringActionType_getName(CXRefactor_Rename));
+  EXPECT_EQ(Name, "Rename");
+}
+
+TEST_F(LibclangParseTest, RefactoringFindRenamedCursor) {
+  std::string Filename = "test.cpp";
+  WriteFile(Filename, "int renamable = 0;\n");
+
+  ClangTU = clang_parseTranslationUnit(Index, Filename.c_str(), nullptr, 0,
+                                       nullptr, 0, TUFlags);
+  CXSourceLocation Loc = clang_getLocation(
+      ClangTU, clang_getFile(ClangTU, Filename.c_str()), 1, 5);
+  CXSourceRange Range = clang_getRange(Loc, Loc);
+  CXCursor Cursor;
+  EXPECT_EQ(CXError_Success,
+            clang_Refactoring_findRenamedCursor(ClangTU, Loc, Range, &Cursor));
+  EXPECT_EQ(Cursor.kind, CXCursor_VarDecl);
+}
+
+TEST_F(LibclangParseTest, RefactoringRenameIndexedUnsavedFiles) {
+  std::string Filename = "test.cpp";
+  std::string PartialSource = "class Test { };\n";
+  WriteFile(Filename, PartialSource);
+  std::string FullSource = PartialSource + "Test t;\n";
+
+  CXIndexedSymbolLocation IndexedLocations[2] = {
+      {{1, 7}, CXCursor_DeclRefExpr}, {{2, 1}, CXCursor_DeclRefExpr}};
+  CXIndexedSymbol Symbols[1] = {
+      {IndexedLocations, 2, CXCursor_DeclRefExpr, /*Name=*/"Test"}};
+
+  CXIndex Idx = clang_createIndex(0, 0);
+
+  auto test = [&](CXUnsavedFile *File = nullptr) -> CXSymbolOccurrencesInFile {
+    CXSymbolOccurrencesResult Result;
+    CXErrorCode Err = clang_Refactoring_findSymbolOccurrencesInIndexedFile(
+        Symbols, 1, Idx, Filename.c_str(), nullptr, 0, File, File ? 1 : 0,
+        /*Options=*/nullptr, &Result);
+    EXPECT_EQ(CXError_Success, Err);
+    unsigned NumFiles = clang_SymbolOccurrences_getNumFiles(Result);
+    EXPECT_EQ(NumFiles, 1u);
+    CXSymbolOccurrencesInFile Occurrences;
+    clang_SymbolOccurrences_getOccurrencesForFile(Result, 0, &Occurrences);
+    return Occurrences;
+  };
+  CXSymbolOccurrencesInFile FileOccurrences = test();
+  EXPECT_EQ(FileOccurrences.NumOccurrences, 1u);
+  EXPECT_EQ(clang_getCString(FileOccurrences.Filename), Filename);
+  EXPECT_EQ(FileOccurrences.Occurrences[0].NumNamePieces, 1u);
+  EXPECT_EQ(FileOccurrences.Occurrences[0].NamePieces[0].Begin.Line, 1u);
+  EXPECT_EQ(FileOccurrences.Occurrences[0].NamePieces[0].Begin.Column, 7u);
+
+  CXUnsavedFile UnsavedFile = {Filename.c_str(), FullSource.c_str(),
+                               FullSource.size()};
+  CXSymbolOccurrencesInFile UnsavedFileOccurrences = test(&UnsavedFile);
+  EXPECT_EQ(UnsavedFileOccurrences.NumOccurrences, 2u);
+  EXPECT_EQ(clang_getCString(UnsavedFileOccurrences.Filename), Filename);
+  EXPECT_EQ(UnsavedFileOccurrences.Occurrences[0].NumNamePieces, 1u);
+  EXPECT_EQ(UnsavedFileOccurrences.Occurrences[0].NamePieces[0].Begin.Line, 1u);
+  EXPECT_EQ(UnsavedFileOccurrences.Occurrences[0].NamePieces[0].Begin.Column,
+            7u);
+  EXPECT_EQ(UnsavedFileOccurrences.Occurrences[1].NumNamePieces, 1u);
+  EXPECT_EQ(UnsavedFileOccurrences.Occurrences[1].NamePieces[0].Begin.Line, 2u);
+  EXPECT_EQ(UnsavedFileOccurrences.Occurrences[1].NamePieces[0].Begin.Column,
+            1u);
+}
+
 class LibclangPrintingPolicyTest : public LibclangParseTest {
 public:
   CXPrintingPolicy Policy = nullptr;
@@ -591,87 +851,6 @@ TEST_F(LibclangPrintingPolicyTest, SetAndGetProperties) {
       clang_PrintingPolicy_setProperty(Policy, Property, Value);
       EXPECT_EQ(Value, clang_PrintingPolicy_getProperty(Policy, Property));
     }
-  }
-}
-
-TEST_F(LibclangReparseTest, PreprocessorSkippedRanges) {
-  std::string Header = "header.h", Main = "main.cpp";
-  WriteFile(Header,
-    "#ifdef MANGOS\n"
-    "printf(\"mmm\");\n"
-    "#endif");
-  WriteFile(Main,
-    "#include \"header.h\"\n"
-    "#ifdef GUAVA\n"
-    "#endif\n"
-    "#ifdef KIWIS\n"
-    "printf(\"mmm!!\");\n"
-    "#endif");
-
-  for (int i = 0; i != 3; ++i) {
-    unsigned flags = TUFlags | CXTranslationUnit_PrecompiledPreamble;
-    if (i == 2)
-      flags |= CXTranslationUnit_CreatePreambleOnFirstParse;
-
-    if (i != 0)
-       clang_disposeTranslationUnit(ClangTU);  // dispose from previous iter
-
-    // parse once
-    ClangTU = clang_parseTranslationUnit(Index, Main.c_str(), nullptr, 0,
-                                         nullptr, 0, flags);
-    if (i != 0) {
-      // reparse
-      ASSERT_TRUE(ReparseTU(0, nullptr /* No unsaved files. */));
-    }
-
-    // Check all ranges are there
-    CXSourceRangeList *Ranges = clang_getAllSkippedRanges(ClangTU);
-    EXPECT_EQ(3U, Ranges->count);
-
-    CXSourceLocation cxl;
-    unsigned line;
-    cxl = clang_getRangeStart(Ranges->ranges[0]);
-    clang_getSpellingLocation(cxl, nullptr, &line, nullptr, nullptr);
-    EXPECT_EQ(1U, line);
-    cxl = clang_getRangeEnd(Ranges->ranges[0]);
-    clang_getSpellingLocation(cxl, nullptr, &line, nullptr, nullptr);
-    EXPECT_EQ(3U, line);
-
-    cxl = clang_getRangeStart(Ranges->ranges[1]);
-    clang_getSpellingLocation(cxl, nullptr, &line, nullptr, nullptr);
-    EXPECT_EQ(2U, line);
-    cxl = clang_getRangeEnd(Ranges->ranges[1]);
-    clang_getSpellingLocation(cxl, nullptr, &line, nullptr, nullptr);
-    EXPECT_EQ(3U, line);
-
-    cxl = clang_getRangeStart(Ranges->ranges[2]);
-    clang_getSpellingLocation(cxl, nullptr, &line, nullptr, nullptr);
-    EXPECT_EQ(4U, line);
-    cxl = clang_getRangeEnd(Ranges->ranges[2]);
-    clang_getSpellingLocation(cxl, nullptr, &line, nullptr, nullptr);
-    EXPECT_EQ(6U, line);
-
-    clang_disposeSourceRangeList(Ranges);
-
-    // Check obtaining ranges by each file works
-    CXFile cxf = clang_getFile(ClangTU, Header.c_str());
-    Ranges = clang_getSkippedRanges(ClangTU, cxf);
-    EXPECT_EQ(1U, Ranges->count);
-    cxl = clang_getRangeStart(Ranges->ranges[0]);
-    clang_getSpellingLocation(cxl, nullptr, &line, nullptr, nullptr);
-    EXPECT_EQ(1U, line);
-    clang_disposeSourceRangeList(Ranges);
-
-    cxf = clang_getFile(ClangTU, Main.c_str());
-    Ranges = clang_getSkippedRanges(ClangTU, cxf);
-    EXPECT_EQ(2U, Ranges->count);
-    cxl = clang_getRangeStart(Ranges->ranges[0]);
-    clang_getSpellingLocation(cxl, nullptr, &line, nullptr, nullptr);
-    EXPECT_EQ(2U, line);
-    cxl = clang_getRangeStart(Ranges->ranges[1]);
-    clang_getSpellingLocation(cxl, nullptr, &line, nullptr, nullptr);
-    EXPECT_EQ(4U, line);
-    clang_disposeSourceRangeList(Ranges);
   }
 }
 
@@ -945,6 +1124,114 @@ void Class1::fun() {}
   ASSERT_TRUE(typeRefCsr.has_value());
   EXPECT_EQ(fromCXString(clang_getCursorSpelling(*typeRefCsr)),
             "class ns1::Class1");
+}
+
+TEST_F(LibclangParseTest, BinaryOperator) {
+  std::string Main = "main.cpp";
+  WriteFile(Main, "int foo() { return 5 + 9; }");
+  ClangTU = clang_parseTranslationUnit(Index, Main.c_str(), nullptr, 0, nullptr,
+                                       0, TUFlags);
+
+  Traverse([](CXCursor cursor, CXCursor parent) -> CXChildVisitResult {
+    if (cursor.kind == CXCursor_BinaryOperator) {
+      EXPECT_EQ(clang_getCursorBinaryOperatorKind(cursor),
+                CXBinaryOperator_Add);
+      return CXChildVisit_Break;
+    }
+
+    return CXChildVisit_Recurse;
+  });
+}
+
+TEST_F(LibclangParseTest, UnaryOperator) {
+  std::string Main = "main.cpp";
+  WriteFile(Main, "int foo() { int a = 5; return a++; }");
+  ClangTU = clang_parseTranslationUnit(Index, Main.c_str(), nullptr, 0, nullptr,
+                                       0, TUFlags);
+
+  Traverse([](CXCursor cursor, CXCursor parent) -> CXChildVisitResult {
+    if (cursor.kind == CXCursor_UnaryOperator) {
+      EXPECT_EQ(clang_getCursorUnaryOperatorKind(cursor),
+                CXUnaryOperator_PostInc);
+      return CXChildVisit_Break;
+    }
+
+    return CXChildVisit_Recurse;
+  });
+}
+
+TEST_F(LibclangParseTest, VisitStaticAssertDecl_noMessage) {
+  const char testSource[] = R"cpp(static_assert(true))cpp";
+  std::string fileName = "main.cpp";
+  WriteFile(fileName, testSource);
+  const char *Args[] = {"-xc++"};
+  ClangTU = clang_parseTranslationUnit(Index, fileName.c_str(), Args, 1,
+                                       nullptr, 0, TUFlags);
+
+  std::optional<CXCursor> staticAssertCsr;
+  Traverse([&](CXCursor cursor, CXCursor parent) -> CXChildVisitResult {
+    if (cursor.kind == CXCursor_StaticAssert) {
+      staticAssertCsr.emplace(cursor);
+      return CXChildVisit_Break;
+    }
+    return CXChildVisit_Recurse;
+  });
+  ASSERT_TRUE(staticAssertCsr.has_value());
+  Traverse(*staticAssertCsr, [](CXCursor cursor, CXCursor parent) {
+    EXPECT_EQ(cursor.kind, CXCursor_CXXBoolLiteralExpr);
+    return CXChildVisit_Break;
+  });
+  EXPECT_EQ(fromCXString(clang_getCursorSpelling(*staticAssertCsr)), "");
+}
+
+TEST_F(LibclangParseTest, VisitStaticAssertDecl_exprMessage) {
+  const char testSource[] = R"cpp(
+template <unsigned s>
+constexpr unsigned size(const char (&)[s])
+{
+    return s - 1;
+}
+
+struct Message {
+    static constexpr char message[] = "Hello World!";
+    constexpr const char* data() const { return message;}
+    constexpr unsigned size() const
+    {
+        return ::size(message);
+    }
+};
+Message message;
+static_assert(true, message);
+)cpp";
+  std::string fileName = "main.cpp";
+  WriteFile(fileName, testSource);
+  const char *Args[] = {"-xc++", "-std=c++26"};
+  ClangTU = clang_parseTranslationUnit(Index, fileName.c_str(), Args,
+                                       std::size(Args), nullptr, 0, TUFlags);
+  ASSERT_EQ(clang_getNumDiagnostics(ClangTU), 0u);
+  std::optional<CXCursor> staticAssertCsr;
+  Traverse([&](CXCursor cursor, CXCursor parent) -> CXChildVisitResult {
+    if (cursor.kind == CXCursor_StaticAssert) {
+      staticAssertCsr.emplace(cursor);
+    }
+    return CXChildVisit_Continue;
+  });
+  ASSERT_TRUE(staticAssertCsr.has_value());
+  int argCnt = 0;
+  Traverse(*staticAssertCsr, [&argCnt](CXCursor cursor, CXCursor parent) {
+    switch (argCnt) {
+    case 0:
+      EXPECT_EQ(cursor.kind, CXCursor_CXXBoolLiteralExpr);
+      break;
+    case 1:
+      EXPECT_EQ(cursor.kind, CXCursor_DeclRefExpr);
+      break;
+    }
+    ++argCnt;
+    return CXChildVisit_Continue;
+  });
+  ASSERT_EQ(argCnt, 2);
+  EXPECT_EQ(fromCXString(clang_getCursorSpelling(*staticAssertCsr)), "");
 }
 
 class LibclangRewriteTest : public LibclangParseTest {

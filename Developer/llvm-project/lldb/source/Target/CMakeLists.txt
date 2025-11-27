@@ -6,6 +6,7 @@ lldb_tablegen(TargetPropertiesEnum.inc -gen-lldb-property-enum-defs
   SOURCE TargetProperties.td
   TARGET LLDBTargetPropertiesEnumGen)
 
+# TODO: Add property `NO_PLUGIN_DEPENDENCIES` to lldbTarget
 add_lldb_library(lldbTarget
   ABI.cpp
   AssertFrameRecognizer.cpp
@@ -32,6 +33,7 @@ add_lldb_library(lldbTarget
   QueueList.cpp
   RegisterContext.cpp
   RegisterContextUnwind.cpp
+  RegisterFlags.cpp
   RegisterNumber.cpp
   RemoteAwarePlatform.cpp
   SectionLoadHistory.cpp
@@ -65,6 +67,7 @@ add_lldb_library(lldbTarget
   ThreadPlanStepOverRange.cpp
   ThreadPlanStepRange.cpp
   ThreadPlanStepThrough.cpp
+  ThreadPlanStepThroughGenericTrampoline.cpp
   ThreadPlanStepUntil.cpp
   ThreadPlanTracer.cpp
   ThreadPlanStack.cpp
@@ -76,6 +79,7 @@ add_lldb_library(lldbTarget
   UnixSignals.cpp
   UnwindAssembly.cpp
   UnwindLLDB.cpp
+  VerboseTrapFrameRecognizer.cpp
 
   LINK_LIBS
     lldbBreakpoint
@@ -91,6 +95,11 @@ add_lldb_library(lldbTarget
     Support
     MC
   )
+if(CMAKE_CXX_COMPILER_ID STREQUAL Clang)
+  target_compile_options(lldbTarget PRIVATE -Wno-dollar-in-identifier-extension)
+elseif(MSVC)
+  target_compile_options(lldbTarget PRIVATE /permissive-)
+endif()
 
 add_dependencies(lldbTarget
   LLDBTargetPropertiesGen

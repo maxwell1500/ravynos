@@ -63,6 +63,7 @@ class ConceptDecl;
 class TagDecl;
 class TemplateParameterList;
 class Type;
+class Attr;
 
 enum {
   TypeAlignmentInBits = 4,
@@ -137,6 +138,99 @@ using CanQualType = CanQual<Type>;
 #define TYPE(Class, Base) class Class##Type;
 #include "clang/AST/TypeNodes.inc"
 
+/// Pointer-authentication qualifiers.
+class PointerAuthQualifier {
+  enum {
+    EnabledShift = 0,
+    EnabledBits = 1,
+    EnabledMask = 1 << EnabledShift,
+    AddressDiscriminatedShift = EnabledShift + EnabledBits,
+    AddressDiscriminatedBits = 1,
+    AddressDiscriminatedMask = 1 << AddressDiscriminatedBits,
+    KeyShift = AddressDiscriminatedShift + AddressDiscriminatedBits,
+    KeyBits = 14,
+    KeyMask = ((1 << KeyBits) - 1) << KeyShift,
+    DiscriminatorShift = KeyShift + KeyBits,
+    DiscriminatorBits = 16
+  };
+
+  // bits:     |0      |1      |2..15|16   ...   31|
+  //           |Enabled|Address|Key  |Discriminator|
+  uint32_t Data;
+
+public:
+  enum {
+    /// The maximum supported pointer-authentication key.
+    MaxKey = (1u << KeyBits) - 1,
+
+    /// The maximum supported pointer-authentication discriminator.
+    MaxDiscriminator = (1u << DiscriminatorBits) - 1
+  };
+
+public:
+  PointerAuthQualifier() : Data(0) {}
+  PointerAuthQualifier(unsigned key, bool isAddressDiscriminated,
+                       unsigned extraDiscriminator)
+    : Data(EnabledMask
+           | (isAddressDiscriminated ? AddressDiscriminatedMask : 0)
+           | (key << KeyShift)
+           | (extraDiscriminator << DiscriminatorShift)) {
+    assert(key <= MaxKey);
+    assert(extraDiscriminator <= MaxDiscriminator);
+  }
+
+  bool isPresent() const {
+    return Data != 0;
+  }
+
+  explicit operator bool() const {
+    return isPresent();
+  }
+
+  unsigned getKey() const {
+    assert(isPresent());
+    return (Data & KeyMask) >> KeyShift;
+  }
+
+  bool isAddressDiscriminated() const {
+    assert(isPresent());
+    return (Data & AddressDiscriminatedMask) >> AddressDiscriminatedShift;
+  }
+
+  unsigned getExtraDiscriminator() const {
+    assert(isPresent());
+    return (Data >> DiscriminatorShift);
+  }
+
+  friend bool operator==(PointerAuthQualifier lhs, PointerAuthQualifier rhs) {
+    return lhs.Data == rhs.Data;
+  }
+  friend bool operator!=(PointerAuthQualifier lhs, PointerAuthQualifier rhs) {
+    return lhs.Data != rhs.Data;
+  }
+
+  uint32_t getAsOpaqueValue() const {
+    return Data;
+  }
+
+  // Deserialize pointer-auth qualifiers from an opaque representation.
+  static PointerAuthQualifier fromOpaqueValue(uint32_t opaque) {
+    PointerAuthQualifier result;
+    result.Data = opaque;
+    return result;
+  }
+
+  std::string getAsString() const;
+  std::string getAsString(const PrintingPolicy &Policy) const;
+
+  bool isEmptyWhenPrinted(const PrintingPolicy &Policy) const;
+  void print(raw_ostream &OS, const PrintingPolicy &Policy) const;
+
+  void Profile(llvm::FoldingSetNodeID &ID) const {
+    ID.AddInteger(Data);
+  }
+};
+
 /// The collection of all-type qualifiers we support.
 /// Clang supports five independent qualifiers:
 /// * C99: const, volatile, and restrict
@@ -192,6 +286,8 @@ public:
     FastMask = (1 << FastWidth) - 1
   };
 
+  Qualifiers() : Mask(0), PtrAuth() {}
+
   /// Returns the common set of qualifiers while removing them from
   /// the given sets.
   static Qualifiers removeCommonQualifiers(Qualifiers &L, Qualifiers &R) {
@@ -227,6 +323,13 @@ public:
       L.removeAddressSpace();
       R.removeAddressSpace();
     }
+
+    if (L.PtrAuth == R.PtrAuth) {
+      Q.PtrAuth = L.PtrAuth;
+      L.PtrAuth = PointerAuthQualifier();
+      R.PtrAuth = PointerAuthQualifier();
+    }
+
     return Q;
   }
 
@@ -249,15 +352,16 @@ public:
   }
 
   // Deserialize qualifiers from an opaque representation.
-  static Qualifiers fromOpaqueValue(unsigned opaque) {
+  static Qualifiers fromOpaqueValue(uint64_t opaque) {
     Qualifiers Qs;
-    Qs.Mask = opaque;
+    Qs.Mask = uint32_t(opaque);
+    Qs.PtrAuth = PointerAuthQualifier::fromOpaqueValue(uint32_t(opaque >> 32));
     return Qs;
   }
 
   // Serialize these qualifiers into an opaque representation.
-  unsigned getAsOpaqueValue() const {
-    return Mask;
+  uint64_t getAsOpaqueValue() const {
+    return uint64_t(Mask) | (uint64_t(PtrAuth.getAsOpaqueValue()) << 32);
   }
 
   bool hasConst() const { return Mask & Const; }
@@ -405,6 +509,16 @@ public:
     setAddressSpace(space);
   }
 
+  PointerAuthQualifier getPointerAuth() const {
+    return PtrAuth;
+  }
+  void setPointerAuth(PointerAuthQualifier q) {
+    PtrAuth = q;
+  }
+  void removePtrAuth() {
+    PtrAuth = PointerAuthQualifier();
+  }
+
   // Fast qualifiers are those that can be allocated directly
   // on a QualType object.
   bool hasFastQualifiers() const { return getFastQualifiers(); }
@@ -427,7 +541,9 @@ public:
 
   /// Return true if the set contains any qualifiers which require an ExtQuals
   /// node to be allocated.
-  bool hasNonFastQualifiers() const { return Mask & ~FastMask; }
+  bool hasNonFastQualifiers() const {
+    return (Mask & ~FastMask) || PtrAuth;
+  }
   Qualifiers getNonFastQualifiers() const {
     Qualifiers Quals = *this;
     Quals.setFastQualifiers(0);
@@ -435,8 +551,8 @@ public:
   }
 
   /// Return true if the set contains any qualifiers.
-  bool hasQualifiers() const { return Mask; }
-  bool empty() const { return !Mask; }
+  bool hasQualifiers() const { return Mask || PtrAuth; }
+  bool empty() const { return !hasQualifiers(); }
 
   /// Add the qualifiers from the given set to this set.
   void addQualifiers(Qualifiers Q) {
@@ -453,6 +569,9 @@ public:
       if (Q.hasObjCLifetime())
         addObjCLifetime(Q.getObjCLifetime());
     }
+
+    if (Q.PtrAuth)
+      PtrAuth = Q.PtrAuth;
   }
 
   /// Remove the qualifiers from the given set from this set.
@@ -470,6 +589,9 @@ public:
       if (getAddressSpace() == Q.getAddressSpace())
         removeAddressSpace();
     }
+
+    if (PtrAuth == Q.PtrAuth)
+      PtrAuth = PointerAuthQualifier();
   }
 
   /// Add the qualifiers from the given set to this set, given that
@@ -481,7 +603,10 @@ public:
            !hasObjCGCAttr() || !qs.hasObjCGCAttr());
     assert(getObjCLifetime() == qs.getObjCLifetime() ||
            !hasObjCLifetime() || !qs.hasObjCLifetime());
+    assert(!PtrAuth || !qs.PtrAuth || PtrAuth == qs.PtrAuth);
     Mask |= qs.Mask;
+    if (qs.PtrAuth)
+      PtrAuth = qs.PtrAuth;
   }
 
   /// Returns true if address space A is equal to or a superset of B.
@@ -534,6 +659,8 @@ public:
            // be changed.
            (getObjCGCAttr() == other.getObjCGCAttr() || !hasObjCGCAttr() ||
             !other.hasObjCGCAttr()) &&
+           // Pointer-auth qualifiers must match exactly.
+           PtrAuth == other.PtrAuth &&
            // ObjC lifetime qualifiers must match exactly.
            getObjCLifetime() == other.getObjCLifetime() &&
            // CVR qualifiers may subset.
@@ -566,8 +693,12 @@ public:
   /// another set of qualifiers, not considering qualifier compatibility.
   bool isStrictSupersetOf(Qualifiers Other) const;
 
-  bool operator==(Qualifiers Other) const { return Mask == Other.Mask; }
-  bool operator!=(Qualifiers Other) const { return Mask != Other.Mask; }
+  bool operator==(Qualifiers Other) const {
+    return Mask == Other.Mask && PtrAuth == Other.PtrAuth;
+  }
+  bool operator!=(Qualifiers Other) const {
+    return Mask != Other.Mask || PtrAuth != Other.PtrAuth;
+  }
 
   explicit operator bool() const { return hasQualifiers(); }
 
@@ -605,12 +736,15 @@ public:
 
   void Profile(llvm::FoldingSetNodeID &ID) const {
     ID.AddInteger(Mask);
+    PtrAuth.Profile(ID);
   }
 
 private:
   // bits:     |0 1 2|3|4 .. 5|6  ..  8|9   ...   31|
   //           |C R V|U|GCAttr|Lifetime|AddressSpace|
   uint32_t Mask = 0;
+
+  PointerAuthQualifier PtrAuth;
 
   static const uint32_t UMask = 0x8;
   static const uint32_t UShift = 3;
@@ -899,11 +1033,23 @@ public:
   /// Return true if this is a trivially relocatable type.
   bool isTriviallyRelocatableType(const ASTContext &Context) const;
 
+  /// Return true if this is a trivially equality comparable type.
+  bool isTriviallyEqualityComparableType(const ASTContext &Context) const;
+
   /// Returns true if it is a class and it might be dynamic.
   bool mayBeDynamicClass() const;
 
   /// Returns true if it is not a class or if the class might not be dynamic.
   bool mayBeNotDynamicClass() const;
+
+  /// Returns true if it is a WebAssembly Reference Type.
+  bool isWebAssemblyReferenceType() const;
+
+  /// Returns true if it is a WebAssembly Externref Type.
+  bool isWebAssemblyExternrefType() const;
+
+  /// Returns true if it is a WebAssembly Funcref Type.
+  bool isWebAssemblyFuncrefType() const;
 
   // Don't promise in the API that anything besides 'const' can be
   // easily added.
@@ -945,7 +1091,6 @@ public:
   void removeLocalConst();
   void removeLocalVolatile();
   void removeLocalRestrict();
-  void removeLocalCVRQualifiers(unsigned Mask);
 
   void removeLocalFastQualifiers() { Value.setInt(0); }
   void removeLocalFastQualifiers(unsigned Mask) {
@@ -1206,6 +1351,14 @@ public:
   // true when Type is objc's weak and weak is enabled but ARC isn't.
   bool isNonWeakInMRRWithObjCWeak(const ASTContext &Context) const;
 
+  PointerAuthQualifier getPointerAuth() const;
+
+  bool hasAddressDiscriminatedPointerAuth() const {
+    if (auto ptrauth = getPointerAuth())
+      return ptrauth.isAddressDiscriminated();
+    return false;
+  }
+
   enum PrimitiveDefaultInitializeKind {
     /// The type does not fall into any of the following categories. Note that
     /// this case is zero-valued so that values of this enum can be used as a
@@ -1250,6 +1403,9 @@ public:
     /// The type is an Objective-C retainable pointer type that is qualified
     /// with the ARC __weak qualifier.
     PCK_ARCWeak,
+
+    /// The type is an address-discriminated signed pointer type.
+    PCK_PtrAuth,
 
     /// The type is a struct containing a field whose type is neither
     /// PCK_Trivial nor PCK_VolatileTrivial.
@@ -1647,7 +1803,8 @@ protected:
     unsigned : NumTypeBits;
 
     /// The kind (BuiltinType::Kind) of builtin type this is.
-    unsigned Kind : 8;
+    static constexpr unsigned NumOfBuiltinTypeBits = 9;
+    unsigned Kind : NumOfBuiltinTypeBits;
   };
 
   /// FunctionTypeBitfields store various bits belonging to FunctionProtoType.
@@ -1767,7 +1924,7 @@ protected:
 
     /// The kind of vector, either a generic vector type or some
     /// target-specific vector type such as for AltiVec or Neon.
-    unsigned VecKind : 3;
+    unsigned VecKind : 4;
     /// The number of elements in the vector.
     uint32_t NumElements;
   };
@@ -2029,6 +2186,17 @@ public:
   /// Returns true for SVE scalable vector types.
   bool isSVESizelessBuiltinType() const;
 
+  /// Returns true for RVV scalable vector types.
+  bool isRVVSizelessBuiltinType() const;
+
+  /// Check if this is a WebAssembly Externref Type.
+  bool isWebAssemblyExternrefType() const;
+
+  /// Returns true if this is a WebAssembly table type: either an array of
+  /// reference types, or a pointer to a reference type (which can only be
+  /// created by array to pointer decay).
+  bool isWebAssemblyTableType() const;
+
   /// Determines if this is a sizeless type supported by the
   /// 'arm_sve_vector_bits' type attribute, which can be applied to a single
   /// SVE vector or predicate, excluding tuple types such as svint32x4_t.
@@ -2038,6 +2206,16 @@ public:
   /// This is used to represent fixed-length SVE vectors created with the
   /// 'arm_sve_vector_bits' type attribute as VectorType.
   QualType getSveEltType(const ASTContext &Ctx) const;
+
+  /// Determines if this is a sizeless type supported by the
+  /// 'riscv_rvv_vector_bits' type attribute, which can be applied to a single
+  /// RVV vector or mask.
+  bool isRVVVLSBuiltinType() const;
+
+  /// Returns the representative type for the element of an RVV builtin type.
+  /// This is used to represent fixed-length RVV vectors created with the
+  /// 'riscv_rvv_vector_bits' type attribute as VectorType.
+  QualType getRVVEltType(const ASTContext &Ctx) const;
 
   /// Types are partitioned into 3 broad categories (C99 6.2.5p1):
   /// object types, function types, and incomplete types.
@@ -2273,7 +2451,11 @@ public:
   /// Check if the type is the CUDA device builtin texture type.
   bool isCUDADeviceBuiltinTextureType() const;
 
+  bool isRVVType(unsigned ElementCount) const;
+
   bool isRVVType() const;
+
+  bool isRVVType(unsigned Bitwidth, bool IsFloat) const;
 
   /// Return the implicit lifetime for this type, which must not be dependent.
   Qualifiers::ObjCLifetime getObjCARCImplicitLifetime() const;
@@ -2640,6 +2822,9 @@ public:
 // RVV Types
 #define RVV_TYPE(Name, Id, SingletonId) Id,
 #include "clang/Basic/RISCVVTypes.def"
+// WebAssembly reference types
+#define WASM_TYPE(Name, Id, SingletonId) Id,
+#include "clang/Basic/WebAssemblyReferenceTypes.def"
 // All other builtin types
 #define BUILTIN_TYPE(Id, SingletonId) Id,
 #define LAST_BUILTIN_TYPE(Id) LastKind = Id
@@ -2653,6 +2838,10 @@ private:
       : Type(Builtin, QualType(),
              K == Dependent ? TypeDependence::DependentInstantiation
                             : TypeDependence::None) {
+    static_assert(Kind::LastKind <
+                      (1 << BuiltinTypeBitfields::NumOfBuiltinTypeBits) &&
+                  "Defined builtin type exceeds the allocated space for serial "
+                  "numbering");
     BuiltinTypeBits.Kind = K;
   }
 
@@ -2687,6 +2876,8 @@ public:
   }
 
   bool isSVEBool() const { return getKind() == Kind::SveBool; }
+
+  bool isSVECount() const { return getKind() == Kind::SveCount; }
 
   /// Determines whether the given kind corresponds to a placeholder type.
   static bool isPlaceholderTypeKind(Kind K) {
@@ -3385,7 +3576,10 @@ public:
     SveFixedLengthDataVector,
 
     /// is AArch64 SVE fixed-length predicate vector
-    SveFixedLengthPredicateVector
+    SveFixedLengthPredicateVector,
+
+    /// is RISC-V RVV fixed-length data vector
+    RVVFixedLengthDataVector,
   };
 
 protected:
@@ -3924,7 +4118,7 @@ public:
     /// The number of types in the exception specification.
     /// A whole unsigned is not needed here and according to
     /// [implimits] 8 bits would be enough here.
-    unsigned NumExceptionType = 0;
+    uint16_t NumExceptionType = 0;
   };
 
 protected:
@@ -4880,13 +5074,24 @@ public:
 private:
   friend class ASTContext; // ASTContext creates these
 
+  const Attr *Attribute;
+
   QualType ModifiedType;
   QualType EquivalentType;
 
   AttributedType(QualType canon, attr::Kind attrKind, QualType modified,
                  QualType equivalent)
+      : AttributedType(canon, attrKind, nullptr, modified, equivalent) {}
+
+  AttributedType(QualType canon, const Attr *attr, QualType modified,
+                 QualType equivalent);
+
+private:
+  AttributedType(QualType canon, attr::Kind attrKind, const Attr *attr,
+                 QualType modified, QualType equivalent)
       : Type(Attributed, canon, equivalent->getDependence()),
-        ModifiedType(modified), EquivalentType(equivalent) {
+        Attribute(attr), ModifiedType(modified),
+        EquivalentType(equivalent) {
     AttributedTypeBits.AttrKind = attrKind;
   }
 
@@ -4894,6 +5099,8 @@ public:
   Kind getAttrKind() const {
     return static_cast<Kind>(AttributedTypeBits.AttrKind);
   }
+
+  const Attr *getAttr() const { return Attribute; }
 
   QualType getModifiedType() const { return ModifiedType; }
   QualType getEquivalentType() const { return EquivalentType; }
@@ -4920,28 +5127,11 @@ public:
 
   bool isMSTypeSpec() const;
 
+  bool isWebAssemblyFuncrefSpec() const;
+
   bool isCallingConv() const;
 
   std::optional<NullabilityKind> getImmediateNullability() const;
-
-  /// Retrieve the attribute kind corresponding to the given
-  /// nullability kind.
-  static Kind getNullabilityAttrKind(NullabilityKind kind) {
-    switch (kind) {
-    case NullabilityKind::NonNull:
-      return attr::TypeNonNull;
-
-    case NullabilityKind::Nullable:
-      return attr::TypeNullable;
-
-    case NullabilityKind::NullableResult:
-      return attr::TypeNullableResult;
-
-    case NullabilityKind::Unspecified:
-      return attr::TypeNullUnspecified;
-    }
-    llvm_unreachable("Unknown nullability kind.");
-  }
 
   /// Strip off the top-level nullability annotation on the given
   /// type, if it's there.
@@ -6608,7 +6798,7 @@ class alignas(8) TypeSourceInfo {
 
   QualType Ty;
 
-  TypeSourceInfo(QualType ty) : Ty(ty) {}
+  TypeSourceInfo(QualType ty, size_t DataSize); // implemented in TypeLoc.h
 
 public:
   /// Return the type wrapped by this type source info.
@@ -6749,15 +6939,6 @@ inline void QualType::removeLocalVolatile() {
   removeLocalFastQualifiers(Qualifiers::Volatile);
 }
 
-inline void QualType::removeLocalCVRQualifiers(unsigned Mask) {
-  assert(!(Mask & ~Qualifiers::CVRMask) && "mask has non-CVR bits");
-  static_assert((int)Qualifiers::CVRMask == (int)Qualifiers::FastMask,
-                "Fast bits differ from CVR bits!");
-
-  // Fast path: we don't need to touch the slow qualifiers.
-  removeLocalFastQualifiers(Mask);
-}
-
 /// Check if this type has any address space qualifier.
 inline bool QualType::hasAddressSpace() const {
   return getQualifiers().hasAddressSpace();
@@ -6771,6 +6952,11 @@ inline LangAS QualType::getAddressSpace() const {
 /// Return the gc attribute of this type.
 inline Qualifiers::GC QualType::getObjCGCAttr() const {
   return getQualifiers().getObjCGCAttr();
+}
+
+/// Return the pointer-auth qualifier of this type.
+inline PointerAuthQualifier QualType::getPointerAuth() const {
+  return getQualifiers().getPointerAuth();
 }
 
 inline bool QualType::hasNonTrivialToPrimitiveDefaultInitializeCUnion() const {
@@ -7151,6 +7337,27 @@ inline bool Type::isRVVType() const {
   return
 #include "clang/Basic/RISCVVTypes.def"
     false; // end of boolean or operation.
+}
+
+inline bool Type::isRVVType(unsigned ElementCount) const {
+  bool Ret = false;
+#define RVV_VECTOR_TYPE(Name, Id, SingletonId, NumEls, ElBits, NF, IsSigned,   \
+                        IsFP)                                                  \
+  if (NumEls == ElementCount)                                                  \
+    Ret |= isSpecificBuiltinType(BuiltinType::Id);
+#include "clang/Basic/RISCVVTypes.def"
+  return Ret;
+}
+
+inline bool Type::isRVVType(unsigned Bitwidth, bool IsFloat) const {
+  bool Ret = false;
+#define RVV_TYPE(Name, Id, SingletonId)
+#define RVV_VECTOR_TYPE(Name, Id, SingletonId, NumEls, ElBits, NF, IsSigned,   \
+                        IsFP)                                                  \
+  if (ElBits == Bitwidth && IsFloat == IsFP)                                   \
+    Ret |= isSpecificBuiltinType(BuiltinType::Id);
+#include "clang/Basic/RISCVVTypes.def"
+  return Ret;
 }
 
 inline bool Type::isTemplateTypeParmType() const {

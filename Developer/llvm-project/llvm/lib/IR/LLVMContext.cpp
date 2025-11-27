@@ -66,6 +66,7 @@ LLVMContext::LLVMContext() : pImpl(new LLVMContextImpl(*this)) {
          "cfguardtarget operand bundle id drifted!");
   (void)CFGuardTargetEntry;
 
+
   auto *PreallocatedEntry = pImpl->getOrInsertBundleTag("preallocated");
   assert(PreallocatedEntry->second == LLVMContext::OB_preallocated &&
          "preallocated operand bundle id drifted!");
@@ -91,6 +92,11 @@ LLVMContext::LLVMContext() : pImpl(new LLVMContextImpl(*this)) {
   assert(KCFIEntry->second == LLVMContext::OB_kcfi &&
          "kcfi operand bundle id drifted!");
   (void)KCFIEntry;
+
+  auto *ConvergenceCtrlEntry = pImpl->getOrInsertBundleTag("convergencectrl");
+  assert(ConvergenceCtrlEntry->second == LLVMContext::OB_convergencectrl &&
+         "convergencectrl operand bundle id drifted!");
+  (void)ConvergenceCtrlEntry;
 
   SyncScope::ID SingleThreadSSID =
       pImpl->getOrInsertSyncScopeID("singlethread");
@@ -369,9 +375,9 @@ std::unique_ptr<DiagnosticHandler> LLVMContext::getDiagnosticHandler() {
 }
 
 void LLVMContext::setOpaquePointers(bool Enable) const {
-  pImpl->setOpaquePointers(Enable);
+  assert(Enable && "Cannot disable opaque pointers");
 }
 
 bool LLVMContext::supportsTypedPointers() const {
-  return !pImpl->getOpaquePointers();
+  return false;
 }

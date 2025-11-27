@@ -623,6 +623,9 @@ public:
   }
 
   LLVM_DUMP_METHOD void dump(llvm::raw_ostream &OS);
+
+  void mergePropInfoIntoGetter(const ObjCPropertyInfo &pInfo);
+  void mergePropInfoIntoSetter(const ObjCPropertyInfo &pInfo);
 };
 
 inline bool operator==(const ObjCMethodInfo &LHS, const ObjCMethodInfo &RHS) {
@@ -659,6 +662,10 @@ class TagInfo : public CommonTypeInfo {
   unsigned IsFlagEnum : 1;
 
 public:
+  std::optional<std::string> SwiftImportAs;
+  std::optional<std::string> SwiftRetainOp;
+  std::optional<std::string> SwiftReleaseOp;
+
   std::optional<EnumExtensibilityKind> EnumExtensibility;
 
   TagInfo() : HasFlagEnum(0), IsFlagEnum(0) {}
@@ -676,6 +683,13 @@ public:
   TagInfo &operator|=(const TagInfo &RHS) {
     static_cast<CommonTypeInfo &>(*this) |= RHS;
 
+    if (!SwiftImportAs)
+      SwiftImportAs = RHS.SwiftImportAs;
+    if (!SwiftRetainOp)
+      SwiftRetainOp = RHS.SwiftRetainOp;
+    if (!SwiftReleaseOp)
+      SwiftReleaseOp = RHS.SwiftReleaseOp;
+
     if (!HasFlagEnum)
       setFlagEnum(RHS.isFlagEnum());
 
@@ -692,6 +706,9 @@ public:
 
 inline bool operator==(const TagInfo &LHS, const TagInfo &RHS) {
   return static_cast<const CommonTypeInfo &>(LHS) == RHS &&
+         LHS.SwiftImportAs == RHS.SwiftImportAs &&
+         LHS.SwiftRetainOp == RHS.SwiftRetainOp &&
+         LHS.SwiftReleaseOp == RHS.SwiftReleaseOp &&
          LHS.isFlagEnum() == RHS.isFlagEnum() &&
          LHS.EnumExtensibility == RHS.EnumExtensibility;
 }
@@ -729,5 +746,52 @@ inline bool operator!=(const TypedefInfo &LHS, const TypedefInfo &RHS) {
 }
 } // namespace api_notes
 } // namespace clang
+
+#include "llvm/ADT/ArrayRef.h"
+
+namespace clang {
+namespace api_notes {
+/// The file extension used for the source representation of API notes.
+static const char SOURCE_APINOTES_EXTENSION[] = "apinotes";
+
+/// Opaque context ID used to refer to an Objective-C class or protocol or a C++
+/// namespace.
+class ContextID {
+public:
+  unsigned Value;
+
+  explicit ContextID(unsigned value) : Value(value) { }
+};
+
+enum class ContextKind : uint8_t {
+  ObjCClass = 0,
+  ObjCProtocol = 1,
+  Namespace = 2
+};
+
+struct Context {
+  ContextID id;
+  ContextKind kind;
+
+  Context(ContextID id, ContextKind kind) : id(id), kind(kind) {}
+};
+
+/// A temporary reference to an Objective-C selector, suitable for
+/// referencing selector data on the stack.
+///
+/// Instances of this struct do not store references to any of the
+/// data they contain; it is up to the user to ensure that the data
+/// referenced by the identifier list persists.
+struct ObjCSelectorRef {
+  unsigned NumPieces;
+  llvm::ArrayRef<llvm::StringRef> Identifiers;
+};
+
+/// Descripts a series of options for a module
+struct ModuleOptions {
+  bool SwiftInferImportAsMember = false;
+};
+}
+}
 
 #endif

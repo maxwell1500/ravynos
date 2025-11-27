@@ -260,11 +260,6 @@ module cxx_decls_merged {
   header "cxx-decls-merged.h"
 }
 
-module config {
-  header "config.h"
-  config_macros [exhaustive] WANT_FOO, WANT_BAR
-}
-
 module diag_flags {
   header "diag_flags.h"
 }
@@ -481,5 +476,10 @@ module template_nontrivial0 {
 
 module template_nontrivial1 {
   header "template-nontrivial1.h"
+  export *
+}
+
+module objc_redef_indirect {
+  header "objc_redef_indirect.h"
   export *
 }

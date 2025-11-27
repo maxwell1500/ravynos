@@ -12,7 +12,9 @@
 #include "lldb/Core/PluginManager.h"
 #include "lldb/Symbol/CompileUnit.h"
 #include "lldb/Symbol/ObjectFile.h"
+#include "lldb/Symbol/SymbolContext.h"
 #include "lldb/Symbol/SymbolFileOnDemand.h"
+#include "lldb/Symbol/TypeList.h"
 #include "lldb/Symbol/TypeMap.h"
 #include "lldb/Symbol/TypeSystem.h"
 #include "lldb/Symbol/VariableList.h"
@@ -104,6 +106,12 @@ SymbolFile *SymbolFile::FindPlugin(ObjectFileSP objfile_sp) {
   return best_symfile_up.release();
 }
 
+std::vector<lldb::DataBufferSP>
+SymbolFile::GetASTData(lldb::LanguageType language) {
+  // SymbolFile subclasses must add this functionality
+  return std::vector<lldb::DataBufferSP>();
+}
+
 uint32_t
 SymbolFile::ResolveSymbolContext(const SourceLocationSpec &src_location_spec,
                                  lldb::SymbolContextItem resolve_scope,
@@ -132,17 +140,6 @@ void SymbolFile::FindFunctions(const RegularExpression &regex,
 void SymbolFile::GetMangledNamesForFunction(
     const std::string &scope_qualified_name,
     std::vector<ConstString> &mangled_names) {}
-
-void SymbolFile::FindTypes(
-    ConstString name, const CompilerDeclContext &parent_decl_ctx,
-    uint32_t max_matches,
-    llvm::DenseSet<lldb_private::SymbolFile *> &searched_symbol_files,
-    TypeMap &types) {}
-
-void SymbolFile::FindTypes(llvm::ArrayRef<CompilerContext> pattern,
-                           LanguageSet languages,
-                           llvm::DenseSet<SymbolFile *> &searched_symbol_files,
-                           TypeMap &types) {}
 
 void SymbolFile::AssertModuleLock() {
   // The code below is too expensive to leave enabled in release builds. It's

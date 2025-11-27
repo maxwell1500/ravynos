@@ -15,6 +15,7 @@
 #include "llvm/CodeGen/MachineFunction.h"
 #include "llvm/CodeGen/MachineInstr.h"
 #include "llvm/CodeGen/MachineOperand.h"
+#include "llvm/CodeGen/MachineRegisterInfo.h"
 #include "llvm/CodeGen/TargetLowering.h"
 #include "llvm/CodeGen/TargetRegisterInfo.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
@@ -138,6 +139,9 @@ void DbgValueHistoryMap::trimLocationRanges(
   // references if any entries are removed.
   SmallVector<size_t, 4> Offsets;
 
+  LLVM_DEBUG(dbgs() << "Trimming location ranges for function '" << MF.getName()
+                    << "'\n");
+
   for (auto &Record : VarEntries) {
     auto &HistoryMapEntries = Record.second;
     if (HistoryMapEntries.empty())
@@ -182,6 +186,25 @@ void DbgValueHistoryMap::trimLocationRanges(
       if (!EI->isDbgValue())
         continue;
 
+      // BEGIN SWIFT
+      // Swift async function handling.
+      {
+        bool skipAsyncEntryValue = false;
+        auto &MI = *EI->getInstr();
+        auto *Expr = MI.getDebugExpression();
+        for (const MachineOperand &MO : MI.debug_operands()) {
+          if (MO.isReg() && MO.getReg() != 0)
+            if (Expr && Expr->isEntryValue() &&
+                isSwiftAsyncContext(MF, MO.getReg())) {
+              skipAsyncEntryValue = true;
+              break;
+            }
+        }
+        if (skipAsyncEntryValue)
+          continue;
+      }
+      // END SWIFT
+
       // Index of the entry which closes this range.
       EntryIndex EndIndex = EI->getEndIndex();
       // If this range is closed bump the reference count of the closing entry.
@@ -213,6 +236,8 @@ void DbgValueHistoryMap::trimLocationRanges(
         // count of the closing entry, if one exists.
         if (EndIndex != NoEntry)
           ReferenceCount[EndIndex] -= 1;
+        LLVM_DEBUG(dbgs() << "Dropping value outside scope range of variable: ";
+                   StartMI->print(llvm::dbgs()););
       }
     }
 
@@ -253,6 +278,8 @@ void DbgValueHistoryMap::trimLocationRanges(
     // ToRemove indices are valid after each erase.
     for (EntryIndex Idx : llvm::reverse(ToRemove))
       HistoryMapEntries.erase(HistoryMapEntries.begin() + Idx);
+    LLVM_DEBUG(llvm::dbgs() << "New HistoryMap('" << LocalVar->getName()
+                            << "') size: " << HistoryMapEntries.size() << "\n");
   }
 }
 
@@ -555,8 +582,8 @@ void llvm::calculateDbgEntityHistory(const MachineFunction *MF,
 }
 
 #if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
-LLVM_DUMP_METHOD void DbgValueHistoryMap::dump() const {
-  dbgs() << "DbgValueHistoryMap:\n";
+LLVM_DUMP_METHOD void DbgValueHistoryMap::dump(StringRef FuncName) const {
+  dbgs() << "DbgValueHistoryMap('" << FuncName << "'):\n";
   for (const auto &VarRangePair : *this) {
     const InlinedEntity &Var = VarRangePair.first;
     const Entries &Entries = VarRangePair.second;

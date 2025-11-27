@@ -42,6 +42,8 @@ def color_diagnostics_eq: Joined<["--"], "color-diagnostics=">,
 def defaultlib : P<"defaultlib", "Add the library to the list of input files">;
 def delayload : P<"delayload", "Delay loaded DLL name">;
 def diasdkdir : P<"diasdkdir", "Set the location of the DIA SDK">;
+def dwodir : P<"dwodir",
+    "Directory to store .dwo files when LTO and debug fission are used">;
 def entry   : P<"entry", "Name of entry point symbol">;
 def errorlimit : P<"errorlimit",
     "Maximum number of errors to emit before stopping (0 = no limit)">;
@@ -230,6 +232,7 @@ defm demangle : B<"demangle",
 def include_optional : Joined<["/", "-", "/?", "-?"], "includeoptional:">,
     HelpText<"Add symbol as undefined, but allow it to remain undefined">;
 def kill_at : F<"kill-at">;
+defm lld_allow_duplicate_weak : B_priv<"lld-allow-duplicate-weak">;
 def lldmingw : F<"lldmingw">;
 def noseh : F<"noseh">;
 def osversion : P_priv<"osversion">;
@@ -293,6 +296,7 @@ def lldmap_file : P_priv<"lldmap">;
 def map : F<"map">;
 def map_file : P_priv<"map">;
 def map_info : P<"mapinfo", "Include the specified information in a map file">;
+def print_search_paths : F<"print-search-paths">;
 def show_timing : F<"time">;
 def summary : F<"summary">;
 

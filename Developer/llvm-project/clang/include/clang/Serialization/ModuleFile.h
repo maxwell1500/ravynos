@@ -61,13 +61,15 @@ enum ModuleKind {
 
 /// The input file info that has been loaded from an AST file.
 struct InputFileInfo {
+  std::string FilenameAsRequested;
   std::string Filename;
   uint64_t ContentHash;
   off_t StoredSize;
   time_t StoredTime;
   bool Overridden;
   bool Transient;
-  bool TopLevelModuleMap;
+  bool TopLevel;
+  bool ModuleMap;
 };
 
 /// The input file that has been loaded from this AST file, along with
@@ -136,6 +138,17 @@ public:
   /// The file name of the module file.
   std::string FileName;
 
+  /// The \c ActionCache key for this module, or empty.
+  std::string ModuleCacheKey;
+
+  /// The CAS filesystem root ID for implicit modules built with the dependency
+  /// scanner, or empty.
+  std::string CASFileSystemRootID;
+
+  /// The include-tree root ID for implicit modules built with the dependency
+  /// scanner, or empty.
+  std::string IncludeTreeID;
+
   /// The name of the module.
   std::string ModuleName;
 
@@ -164,6 +177,9 @@ public:
   /// Whether this precompiled header is a relocatable PCH file.
   bool RelocatablePCH = false;
 
+  /// Whether this module file is a standard C++ module.
+  bool StandardCXXModule = false;
+
   /// Whether timestamps are included in this module file.
   bool HasTimestamps = false;
 
@@ -184,6 +200,9 @@ public:
   /// The bit vector denoting usage of each header search entry (true = used).
   llvm::BitVector SearchPathUsage;
 
+  /// The bit vector denoting usage of each VFS entry (true = used).
+  llvm::BitVector VFSUsage;
+
   /// Whether this module has been directly imported by the
   /// user.
   bool DirectlyImported = false;
@@ -193,7 +212,7 @@ public:
 
   /// The memory buffer that stores the data associated with
   /// this AST file, owned by the InMemoryModuleCache.
-  llvm::MemoryBuffer *Buffer;
+  llvm::MemoryBuffer *Buffer = nullptr;
 
   /// The size of this file, in bits.
   uint64_t SizeInBits = 0;
@@ -240,7 +259,10 @@ public:
   /// The cursor to the start of the input-files block.
   llvm::BitstreamCursor InputFilesCursor;
 
-  /// Offsets for all of the input file entries in the AST file.
+  /// Absolute offset of the start of the input-files block.
+  uint64_t InputFilesOffsetBase = 0;
+
+  /// Relative offsets for all of the input file entries in the AST file.
   const llvm::support::unaligned_uint64_t *InputFileOffsets = nullptr;
 
   /// The input files that have been loaded from this AST file.
@@ -283,9 +305,6 @@ public:
   /// Offsets for all of the source location entries in the
   /// AST file.
   const uint32_t *SLocEntryOffsets = nullptr;
-
-  /// SLocEntries that we're going to preload.
-  SmallVector<uint64_t, 4> PreloadSLocEntries;
 
   /// Remapping table for source locations in this module.
   ContinuousRangeMap<SourceLocation::UIntTy, SourceLocation::IntTy, 2>
@@ -370,12 +389,6 @@ public:
 
   const PPEntityOffset *PreprocessedEntityOffsets = nullptr;
   unsigned NumPreprocessedEntities = 0;
-
-  /// Base ID for preprocessed skipped ranges local to this module.
-  unsigned BasePreprocessedSkippedRangeID = 0;
-
-  const PPSkippedRange *PreprocessedSkippedRangeOffsets = nullptr;
-  unsigned NumPreprocessedSkippedRanges = 0;
 
   // === Header search information ===
 

@@ -22,7 +22,9 @@
 
 using namespace lldb_private;
 
-REPL::REPL(LLVMCastKind kind, Target &target) : m_target(target), m_kind(kind) {
+char REPL::ID;
+
+REPL::REPL(Target &target) : m_target(target) {
   // Make sure all option values have sane defaults
   Debugger &debugger = m_target.GetDebugger();
   debugger.SetShowProgress(false);
@@ -55,14 +57,14 @@ lldb::REPLSP REPL::Create(Status &err, lldb::LanguageType language,
 }
 
 std::string REPL::GetSourcePath() {
-  ConstString file_basename = GetSourceFileBasename();
+  llvm::StringRef file_basename = GetSourceFileBasename();
   FileSpec tmpdir_file_spec = HostInfo::GetProcessTempDir();
   if (tmpdir_file_spec) {
     tmpdir_file_spec.SetFilename(file_basename);
     m_repl_source_path = tmpdir_file_spec.GetPath();
   } else {
     tmpdir_file_spec = FileSpec("/tmp");
-    tmpdir_file_spec.AppendPathComponent(file_basename.GetStringRef());
+    tmpdir_file_spec.AppendPathComponent(file_basename);
   }
 
   return tmpdir_file_spec.GetPath();
@@ -115,10 +117,11 @@ const char *REPL::IOHandlerGetFixIndentationCharacters() {
   return (m_enable_auto_indent ? GetAutoIndentCharacters() : nullptr);
 }
 
-ConstString REPL::IOHandlerGetControlSequence(char ch) {
+llvm::StringRef REPL::IOHandlerGetControlSequence(char ch) {
+  static constexpr llvm::StringLiteral control_sequence(":quit\n");
   if (ch == 'd')
-    return ConstString(":quit\n");
-  return ConstString();
+    return control_sequence;
+  return {};
 }
 
 const char *REPL::IOHandlerGetCommandPrefix() { return ":"; }
@@ -233,7 +236,7 @@ void REPL::IOHandlerInputComplete(IOHandler &io_handler, std::string &code) {
     ExecutionContext exe_ctx(m_target.GetProcessSP()
                                  ->GetThreadList()
                                  .GetSelectedThread()
-                                 ->GetSelectedFrame()
+                                 ->GetSelectedFrame(DoNoSelectMostRelevantFrame)
                                  .get());
 
     lldb::ProcessSP process_sp(exe_ctx.GetProcessSP());
@@ -308,7 +311,8 @@ void REPL::IOHandlerInputComplete(IOHandler &io_handler, std::string &code) {
         Thread *thread = exe_ctx.GetThreadPtr();
         if (thread && thread->UnwindInnermostExpression().Success()) {
           thread->SetSelectedFrameByIndex(0, false);
-          exe_ctx.SetFrameSP(thread->GetSelectedFrame());
+          exe_ctx.SetFrameSP(
+              thread->GetSelectedFrame(DoNoSelectMostRelevantFrame));
         }
       }
 
@@ -320,9 +324,22 @@ void REPL::IOHandlerInputComplete(IOHandler &io_handler, std::string &code) {
       expr_options.SetUseDynamic(m_varobj_options.use_dynamic);
       expr_options.SetGenerateDebugInfo(true);
       expr_options.SetREPLEnabled(true);
+      expr_options.SetTrapExceptions(false);
       expr_options.SetColorizeErrors(colorize_err);
       expr_options.SetPoundLine(m_repl_source_path.c_str(),
                                 m_code.GetSize() + 1);
+
+      // There is no point in trying to run REPL expressions on just the
+      // current thread of the program, since the REPL tracks the states of
+      // individual threads as you would in a regular debugging session.
+      // Interrupting the process to switch from one thread to many has
+      // observable effects (for instance it causes anything waiting in the
+      // kernel to be interrupted). Since we aren't getting any benefit from
+      // doing this in the REPL, let's not.
+      expr_options.SetStopOthers(false);
+
+      // Don't time out REPL expressions.
+      expr_options.SetTimeout(std::nullopt);
 
       expr_options.SetLanguage(GetLanguage());
 
@@ -331,6 +348,13 @@ void REPL::IOHandlerInputComplete(IOHandler &io_handler, std::string &code) {
       if (!persistent_state)
         return;
 
+      if (!persistent_state)
+      {
+        error_sp->PutCString("error getting the expression "
+                             "context for the REPL.\n");
+        io_handler.SetIsDone(true);
+        return;
+      }
       const size_t var_count_before = persistent_state->GetSize();
 
       const char *expr_prefix = nullptr;
@@ -341,9 +365,11 @@ void REPL::IOHandlerInputComplete(IOHandler &io_handler, std::string &code) {
                                    expr_prefix, result_valobj_sp, error,
                                    nullptr); // fixed expression
 
-      // CommandInterpreter &ci = debugger.GetCommandInterpreter();
-
-      if (process_sp && process_sp->IsAlive()) {
+      if (llvm::Error err = OnExpressionEvaluated(exe_ctx, code, expr_options,
+                                                  execution_results,
+                                                  result_valobj_sp, error)) {
+        *error_sp << llvm::toString(std::move(err)) << "\n";
+      } else if (process_sp && process_sp->IsAlive()) {
         bool add_to_code = true;
         bool handled = false;
         if (result_valobj_sp) {
@@ -514,7 +540,7 @@ void REPL::IOHandlerComplete(IOHandler &io_handler,
   // Strip spaces from the line and see if we had only spaces
   if (request.GetRawLine().trim().empty()) {
     // Only spaces on this line, so just indent
-    request.AddCompletion(m_indent_str);
+    request.AddCompletion(m_indent_str, "", CompletionMode::Partial);
     return;
   }
 

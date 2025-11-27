@@ -7,6 +7,7 @@ set(LLVM_LINK_COMPONENTS
 
 add_subdirectory(Core)
 add_subdirectory(Inclusions)
+add_subdirectory(Refactor)
 add_subdirectory(Refactoring)
 add_subdirectory(ASTDiff)
 add_subdirectory(DumpTool)
@@ -53,6 +54,8 @@ else()
     list(APPEND implicitDirs -I ${implicitDir})
   endforeach()
 
+  include(GetClangResourceDir)
+  get_clang_resource_dir(resource_dir PREFIX ${LLVM_BINARY_DIR})
   add_custom_command(
       COMMENT Generate ASTNodeAPI.json
       OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/ASTNodeAPI.json
@@ -61,7 +64,7 @@ else()
       $<TARGET_FILE:clang-ast-dump>
         # Skip this in debug mode because parsing AST.h is too slow
         --skip-processing=${skip_expensive_processing}
-        -I ${LLVM_BINARY_DIR}/lib/clang/${CLANG_VERSION_MAJOR}/include
+        -I ${resource_dir}/include
         -I ${CLANG_SOURCE_DIR}/include
         -I ${LLVM_BINARY_DIR}/tools/clang/include
         -I ${LLVM_BINARY_DIR}/include
@@ -133,4 +136,6 @@ add_clang_library(clangTooling
   clangRewrite
   clangSerialization
   clangToolingCore
+  clangToolingRefactor
+  clangToolingRefactoring
   )

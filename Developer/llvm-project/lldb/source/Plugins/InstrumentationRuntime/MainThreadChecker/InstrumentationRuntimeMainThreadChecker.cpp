@@ -23,6 +23,14 @@
 #include "lldb/Target/Target.h"
 #include "lldb/Target/Thread.h"
 #include "lldb/Utility/RegularExpression.h"
+#ifdef LLDB_ENABLE_SWIFT
+#include "Plugins/Process/Utility/HistoryThread.h"
+#include "Plugins/TypeSystem/Swift/SwiftASTContext.h"
+#include "swift/AST/ASTContext.h"
+#include "swift/AST/NameLookup.h"
+#include "swift/ClangImporter/ClangImporter.h"
+#include "llvm/BinaryFormat/Dwarf.h"
+#endif // LLDB_ENABLE_SWIFT
 
 #include <memory>
 
@@ -73,6 +81,89 @@ bool InstrumentationRuntimeMainThreadChecker::CheckIfRuntimeIsValid(
   return symbol != nullptr;
 }
 
+#ifdef LLDB_ENABLE_SWIFT
+static std::string TranslateObjCNameToSwiftName(std::string className,
+                                                std::string selector,
+                                                StackFrameSP swiftFrame) {
+  if (className.empty() || selector.empty())
+    return "";
+  ModuleSP swiftModule = swiftFrame->GetFrameCodeAddress().GetModule();
+  if (!swiftModule)
+    return "";
+
+  auto type_system_or_err = swiftModule->GetTypeSystemForLanguage(lldb::eLanguageTypeSwift);
+  if (!type_system_or_err) {
+    llvm::consumeError(type_system_or_err.takeError());
+    return "";
+  }
+
+  auto *ts = llvm::dyn_cast_or_null<TypeSystemSwift>(type_system_or_err->get());
+  if (!ts)
+    return "";
+  const SymbolContext *sc = nullptr;
+  if (swiftFrame)
+    sc = &swiftFrame->GetSymbolContext(eSymbolContextFunction);
+  auto *ctx = ts->GetSwiftASTContext(sc);
+  if (!ctx)
+    return "";
+  swift::ClangImporter *imp = ctx->GetClangImporter();
+  if (!imp)
+    return "";
+
+  size_t numArguments = llvm::StringRef(selector).count(':');
+  llvm::SmallVector<llvm::StringRef, 4> parts;
+  llvm::StringRef(selector).split(parts, ":", /*MaxSplit*/ -1,
+      /*KeepEmpty*/ false);
+
+  llvm::SmallVector<swift::Identifier, 2> selectorIdentifiers;
+  for (size_t i = 0; i < parts.size(); i++) {
+    selectorIdentifiers.push_back(ctx->GetIdentifier(parts[i]));
+  }
+
+  class MyConsumer : public swift::VisibleDeclConsumer {
+  public:
+    swift::ObjCSelector selectorToLookup;
+    swift::DeclName result;
+
+    MyConsumer(swift::ObjCSelector selector) : selectorToLookup(selector) {}
+
+     void foundDecl(swift::ValueDecl *VD,
+                           swift::DeclVisibilityKind Reason,
+                           swift::DynamicLookupInfo) override{
+      if (result)
+        return; // Take the first result.
+      swift::ClassDecl *cls = llvm::dyn_cast<swift::ClassDecl>(VD);
+      if (!cls)
+        return;
+      auto funcs = cls->lookupDirect(selectorToLookup, true);
+      if (funcs.size() == 0)
+        return;
+
+      // If the decl is actually an accessor, use the property name instead.
+      swift::AbstractFunctionDecl *decl = funcs.front();
+      if (auto accessor = llvm::dyn_cast<swift::AccessorDecl>(decl)) {
+        result = accessor->getStorage()->getName();
+        return;
+      }
+
+      result = decl->getName();
+    }
+  };
+
+  ThreadSafeASTContext ast_ctx = ctx->GetASTContext();
+  MyConsumer consumer(swift::ObjCSelector(**ast_ctx, numArguments,
+                                          selectorIdentifiers));
+  // FIXME(mracek): Switch to a new API that translates the Clang class name
+  // to Swift class name, once this API exists. Now we assume they are the same.
+  imp->lookupValue(ctx->GetIdentifier(className), consumer);
+
+  if (!consumer.result)
+    return "";
+  llvm::SmallString<32> scratchSpace;
+  return className + "." + consumer.result.getString(scratchSpace).str();
+}
+#endif // LLDB_ENABLE_SWIFT
+
 StructuredData::ObjectSP
 InstrumentationRuntimeMainThreadChecker::RetrieveReportData(
     ExecutionContextRef exe_ctx_ref) {
@@ -81,7 +172,8 @@ InstrumentationRuntimeMainThreadChecker::RetrieveReportData(
     return StructuredData::ObjectSP();
 
   ThreadSP thread_sp = exe_ctx_ref.GetThreadSP();
-  StackFrameSP frame_sp = thread_sp->GetSelectedFrame();
+  StackFrameSP frame_sp =
+      thread_sp->GetSelectedFrame(DoNoSelectMostRelevantFrame);
   ModuleSP runtime_module_sp = GetRuntimeModuleSP();
   Target &target = process_sp->GetTarget();
 
@@ -131,8 +223,19 @@ InstrumentationRuntimeMainThreadChecker::RetrieveReportData(
       responsible_frame = frame;
 
     lldb::addr_t PC = addr.GetLoadAddress(&target);
-    trace->AddItem(StructuredData::ObjectSP(new StructuredData::Integer(PC)));
+    trace->AddIntegerItem(PC);
   }
+
+#ifdef LLDB_ENABLE_SWIFT
+  if (responsible_frame) {
+    if (responsible_frame->GetLanguage().name == llvm::dwarf::DW_LNAME_Swift) {
+      std::string swiftApiName =
+          TranslateObjCNameToSwiftName(className, selector, responsible_frame);
+      if (swiftApiName != "")
+        apiName = swiftApiName;
+    }
+  }
+#endif // LLDB_ENABLE_SWIFT
 
   auto *d = new StructuredData::Dictionary();
   auto dict_sp = StructuredData::ObjectSP(d);
@@ -251,7 +354,7 @@ InstrumentationRuntimeMainThreadChecker::GetBacktracesFromExtendedStopInfo(
   std::vector<lldb::addr_t> PCs;
   auto trace = info->GetObjectForDotSeparatedPath("trace")->GetAsArray();
   trace->ForEach([&PCs](StructuredData::Object *PC) -> bool {
-    PCs.push_back(PC->GetAsInteger()->GetValue());
+    PCs.push_back(PC->GetUnsignedIntegerValue());
     return true;
   });
 
@@ -260,7 +363,7 @@ InstrumentationRuntimeMainThreadChecker::GetBacktracesFromExtendedStopInfo(
 
   StructuredData::ObjectSP thread_id_obj =
       info->GetObjectForDotSeparatedPath("tid");
-  tid_t tid = thread_id_obj ? thread_id_obj->GetIntegerValue() : 0;
+  tid_t tid = thread_id_obj ? thread_id_obj->GetUnsignedIntegerValue() : 0;
 
   // We gather symbolication addresses above, so no need for HistoryThread to
   // try to infer the call addresses.

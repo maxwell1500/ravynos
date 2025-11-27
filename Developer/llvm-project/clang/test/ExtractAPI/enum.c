@@ -1,8 +1,9 @@
+// XFAIL: *
 // RUN: rm -rf %t
 // RUN: split-file %s %t
 // RUN: sed -e "s@INPUT_DIR@%{/t:regex_replacement}@g" \
 // RUN: %t/reference.output.json.in >> %t/reference.output.json
-// RUN: %clang_cc1 -extract-api -triple arm64-apple-macosx \
+// RUN: %clang_cc1 -extract-api --pretty-sgf -triple arm64-apple-macosx \
 // RUN:   -x c-header %t/input.h -o %t/output.json -verify
 
 // Generator version is not consistent across test runs, normalize it.
@@ -153,6 +154,10 @@ enum {
           "kind": "typeIdentifier",
           "preciseIdentifier": "c:i",
           "spelling": "unsigned int"
+        },
+        {
+          "kind": "text",
+          "spelling": ";"
         }
       ],
       "docComment": {
@@ -160,12 +165,12 @@ enum {
           {
             "range": {
               "end": {
-                "character": 22,
-                "line": 1
+                "character": 21,
+                "line": 0
               },
               "start": {
-                "character": 5,
-                "line": 1
+                "character": 4,
+                "line": 0
               }
             },
             "text": "Kinds of vehicles"
@@ -182,8 +187,8 @@ enum {
       },
       "location": {
         "position": {
-          "character": 6,
-          "line": 2
+          "character": 5,
+          "line": 1
         },
         "uri": "file://INPUT_DIR/input.h"
       },
@@ -224,8 +229,8 @@ enum {
       },
       "location": {
         "position": {
-          "character": 3,
-          "line": 3
+          "character": 2,
+          "line": 2
         },
         "uri": "file://INPUT_DIR/input.h"
       },
@@ -267,8 +272,8 @@ enum {
       },
       "location": {
         "position": {
-          "character": 3,
-          "line": 4
+          "character": 2,
+          "line": 3
         },
         "uri": "file://INPUT_DIR/input.h"
       },
@@ -305,12 +310,12 @@ enum {
           {
             "range": {
               "end": {
-                "character": 45,
-                "line": 5
+                "character": 44,
+                "line": 4
               },
               "start": {
-                "character": 15,
-                "line": 5
+                "character": 14,
+                "line": 4
               }
             },
             "text": "Move this to the top! -Sheldon"
@@ -327,8 +332,8 @@ enum {
       },
       "location": {
         "position": {
-          "character": 3,
-          "line": 5
+          "character": 2,
+          "line": 4
         },
         "uri": "file://INPUT_DIR/input.h"
       },
@@ -370,8 +375,8 @@ enum {
       },
       "location": {
         "position": {
-          "character": 3,
-          "line": 6
+          "character": 2,
+          "line": 5
         },
         "uri": "file://INPUT_DIR/input.h"
       },
@@ -413,8 +418,8 @@ enum {
       },
       "location": {
         "position": {
-          "character": 3,
-          "line": 7
+          "character": 2,
+          "line": 6
         },
         "uri": "file://INPUT_DIR/input.h"
       },
@@ -461,6 +466,10 @@ enum {
           "kind": "typeIdentifier",
           "preciseIdentifier": "c:c",
           "spelling": "unsigned char"
+        },
+        {
+          "kind": "text",
+          "spelling": ";"
         }
       ],
       "identifier": {
@@ -473,8 +482,8 @@ enum {
       },
       "location": {
         "position": {
-          "character": 6,
-          "line": 10
+          "character": 5,
+          "line": 9
         },
         "uri": "file://INPUT_DIR/input.h"
       },
@@ -515,8 +524,8 @@ enum {
       },
       "location": {
         "position": {
-          "character": 3,
-          "line": 11
+          "character": 2,
+          "line": 10
         },
         "uri": "file://INPUT_DIR/input.h"
       },
@@ -558,8 +567,8 @@ enum {
       },
       "location": {
         "position": {
-          "character": 3,
-          "line": 12
+          "character": 2,
+          "line": 11
         },
         "uri": "file://INPUT_DIR/input.h"
       },
@@ -601,8 +610,8 @@ enum {
       },
       "location": {
         "position": {
-          "character": 3,
-          "line": 13
+          "character": 2,
+          "line": 12
         },
         "uri": "file://INPUT_DIR/input.h"
       },
@@ -644,8 +653,8 @@ enum {
       },
       "location": {
         "position": {
-          "character": 3,
-          "line": 14
+          "character": 2,
+          "line": 13
         },
         "uri": "file://INPUT_DIR/input.h"
       },
@@ -684,6 +693,10 @@ enum {
           "kind": "typeIdentifier",
           "preciseIdentifier": "c:i",
           "spelling": "unsigned int"
+        },
+        {
+          "kind": "text",
+          "spelling": ";"
         }
       ],
       "identifier": {
@@ -696,8 +709,8 @@ enum {
       },
       "location": {
         "position": {
-          "character": 1,
-          "line": 17
+          "character": 0,
+          "line": 16
         },
         "uri": "file://INPUT_DIR/input.h"
       },
@@ -732,8 +745,8 @@ enum {
       },
       "location": {
         "position": {
-          "character": 3,
-          "line": 18
+          "character": 2,
+          "line": 17
         },
         "uri": "file://INPUT_DIR/input.h"
       },
@@ -772,6 +785,10 @@ enum {
           "kind": "typeIdentifier",
           "preciseIdentifier": "c:i",
           "spelling": "unsigned int"
+        },
+        {
+          "kind": "text",
+          "spelling": ";"
         }
       ],
       "identifier": {
@@ -784,8 +801,8 @@ enum {
       },
       "location": {
         "position": {
-          "character": 1,
-          "line": 21
+          "character": 0,
+          "line": 20
         },
         "uri": "file://INPUT_DIR/input.h"
       },
@@ -820,8 +837,8 @@ enum {
       },
       "location": {
         "position": {
-          "character": 3,
-          "line": 22
+          "character": 2,
+          "line": 21
         },
         "uri": "file://INPUT_DIR/input.h"
       },

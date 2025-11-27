@@ -714,8 +714,8 @@ void Options::HandleOptionArgumentCompletion(
     }
   }
 
-  if (completion_mask & CommandCompletions::eSourceFileCompletion ||
-      completion_mask & CommandCompletions::eSymbolCompletion) {
+  if (completion_mask & lldb::eSourceFileCompletion ||
+      completion_mask & lldb::eSymbolCompletion) {
     for (size_t i = 0; i < opt_element_vector.size(); i++) {
       int cur_defs_index = opt_element_vector[i].opt_defs_index;
 
@@ -748,7 +748,7 @@ void Options::HandleOptionArgumentCompletion(
     }
   }
 
-  CommandCompletions::InvokeCommonCompletionCallbacks(
+  lldb_private::CommandCompletions::InvokeCommonCompletionCallbacks(
       interpreter, completion_mask, request, filter_up.get());
 }
 
@@ -778,6 +778,19 @@ void OptionGroupOptions::Append(OptionGroup *group, uint32_t src_mask,
       m_option_defs.push_back(group_option_defs[i]);
       m_option_defs.back().usage_mask = dst_mask;
     }
+  }
+}
+
+void OptionGroupOptions::Append(
+    OptionGroup *group, llvm::ArrayRef<llvm::StringRef> exclude_long_options) {
+  auto group_option_defs = group->GetDefinitions();
+  for (uint32_t i = 0; i < group_option_defs.size(); ++i) {
+    const auto &definition = group_option_defs[i];
+    if (llvm::is_contained(exclude_long_options, definition.long_option))
+      continue;
+
+    m_option_infos.push_back(OptionInfo(group, i));
+    m_option_defs.push_back(definition);
   }
 }
 
@@ -918,8 +931,7 @@ llvm::Expected<Args> Options::ParseAlias(const Args &args,
   Option *long_options = GetLongOptions();
 
   if (long_options == nullptr) {
-    return llvm::make_error<llvm::StringError>("Invalid long options",
-                                               llvm::inconvertibleErrorCode());
+    return llvm::createStringError("Invalid long options");
   }
 
   std::string short_options = BuildShortOptions(long_options);
@@ -944,8 +956,7 @@ llvm::Expected<Args> Options::ParseAlias(const Args &args,
       break;
 
     if (val == '?') {
-      return llvm::make_error<llvm::StringError>(
-          "Unknown or ambiguous option", llvm::inconvertibleErrorCode());
+      return llvm::createStringError("Unknown or ambiguous option");
     }
 
     if (val == 0)
@@ -967,9 +978,8 @@ llvm::Expected<Args> Options::ParseAlias(const Args &args,
 
     // See if the option takes an argument, and see if one was supplied.
     if (long_options_index == -1) {
-      return llvm::make_error<llvm::StringError>(
-          llvm::formatv("Invalid option with value '{0}'.", char(val)).str(),
-          llvm::inconvertibleErrorCode());
+      return llvm::createStringError(
+          llvm::formatv("Invalid option with value '{0}'.", char(val)).str());
     }
 
     StreamString option_str;
@@ -982,11 +992,10 @@ llvm::Expected<Args> Options::ParseAlias(const Args &args,
     switch (has_arg) {
     case OptionParser::eRequiredArgument:
       if (OptionParser::GetOptionArgument() == nullptr) {
-        return llvm::make_error<llvm::StringError>(
+        return llvm::createStringError(
             llvm::formatv("Option '{0}' is missing argument specifier.",
                           option_str.GetString())
-                .str(),
-            llvm::inconvertibleErrorCode());
+                .str());
       }
       [[fallthrough]];
     case OptionParser::eOptionalArgument:
@@ -995,12 +1004,11 @@ llvm::Expected<Args> Options::ParseAlias(const Args &args,
     case OptionParser::eNoArgument:
       break;
     default:
-      return llvm::make_error<llvm::StringError>(
+      return llvm::createStringError(
           llvm::formatv("error with options table; invalid value in has_arg "
                         "field for option '{0}'.",
                         char(val))
-              .str(),
-          llvm::inconvertibleErrorCode());
+              .str());
     }
     // Find option in the argument list; also see if it was supposed to take an
     // argument and if one was supplied.  Remove option (and argument, if
@@ -1248,8 +1256,7 @@ llvm::Expected<Args> Options::Parse(const Args &args,
   Status error;
   Option *long_options = GetLongOptions();
   if (long_options == nullptr) {
-    return llvm::make_error<llvm::StringError>("Invalid long options.",
-                                               llvm::inconvertibleErrorCode());
+    return llvm::createStringError("Invalid long options.");
   }
 
   std::string short_options = BuildShortOptions(long_options);
@@ -1309,9 +1316,8 @@ llvm::Expected<Args> Options::Parse(const Args &args,
       if (!platform_sp && require_validation) {
         // Caller requires validation but we cannot validate as we don't have
         // the mandatory platform against which to validate.
-        return llvm::make_error<llvm::StringError>(
-            "cannot validate options: no platform available",
-            llvm::inconvertibleErrorCode());
+        return llvm::createStringError(
+            "cannot validate options: no platform available");
       }
 
       bool validation_failed = false;

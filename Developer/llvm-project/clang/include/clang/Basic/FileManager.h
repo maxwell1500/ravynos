@@ -248,6 +248,10 @@ public:
     return FS;
   }
 
+  /// Enable or disable tracking of VFS usage. Used to not track full header
+  /// search and implicit modulemap lookup.
+  void trackVFSUsage(bool Active);
+
   void setVirtualFileSystem(IntrusiveRefCntPtr<llvm::vfs::FileSystem> FS) {
     this->FS = std::move(FS);
   }
@@ -276,18 +280,28 @@ public:
   /// MemoryBuffer if successful, otherwise returning null.
   llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>>
   getBufferForFile(const FileEntry *Entry, bool isVolatile = false,
-                   bool RequiresNullTerminator = true);
+                   bool RequiresNullTerminator = true,
+                   std::optional<cas::ObjectRef> *CASContents = nullptr);
   llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>>
   getBufferForFile(StringRef Filename, bool isVolatile = false,
-                   bool RequiresNullTerminator = true) {
+                   bool RequiresNullTerminator = true,
+                   std::optional<cas::ObjectRef> *CASContents = nullptr) {
     return getBufferForFileImpl(Filename, /*FileSize=*/-1, isVolatile,
-                                RequiresNullTerminator);
+                                RequiresNullTerminator, CASContents);
   }
+
+  /// This is a convenience method that opens a file, gets the \p cas::ObjectRef
+  /// for its contents if supported by the file system, and then closes the
+  /// file. If both the buffer and its `cas::ObjectRef` are needed use \p
+  /// getBufferForFile to avoid the extra file lookup.
+  llvm::ErrorOr<std::optional<cas::ObjectRef>>
+  getObjectRefForFileContent(const Twine &Filename);
 
 private:
   llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>>
   getBufferForFileImpl(StringRef Filename, int64_t FileSize, bool isVolatile,
-                       bool RequiresNullTerminator);
+                       bool RequiresNullTerminator,
+                       std::optional<cas::ObjectRef> *CASContents);
 
 public:
   /// Get the 'stat' information for the given \p Path.
@@ -320,7 +334,7 @@ public:
   /// This is a very expensive operation, despite its results being cached,
   /// and should only be used when the physical layout of the file system is
   /// required, which is (almost) never.
-  StringRef getCanonicalName(const DirectoryEntry *Dir);
+  StringRef getCanonicalName(DirectoryEntryRef Dir);
 
   /// Retrieve the canonical name for a given file.
   ///
@@ -329,6 +343,13 @@ public:
   /// required, which is (almost) never.
   StringRef getCanonicalName(const FileEntry *File);
 
+private:
+  /// Retrieve the canonical name for a given file or directory.
+  ///
+  /// The first param is a key in the CanonicalNames array.
+  StringRef getCanonicalName(const void *Entry, StringRef Name);
+
+public:
   void PrintStats() const;
 };
 

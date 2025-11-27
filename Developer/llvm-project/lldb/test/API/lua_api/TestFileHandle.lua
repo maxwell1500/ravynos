@@ -9,14 +9,14 @@ function _T:TestLegacyFileOutScript()
     f:close()
 
     f = io.open(self.output, 'r')
-    assertEquals(read_file_non_empty_lines(f), {'2', 'FOO'})
+    assertEqual(read_file_non_empty_lines(f), {'2', 'FOO'})
     f:close()
 end
 
 function _T:TestLegacyFileOut()
     local f = io.open(self.output, 'w')
     self.debugger:SetOutputFile(f)
-    self:handle_command('p/x 3735928559', false)
+    self:handle_command('expression/x 3735928559', false)
     f:close()
 
     f = io.open(self.output, 'r')

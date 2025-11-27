@@ -49,6 +49,7 @@ struct StaticDiagInfoDescriptionStringTable {
 #include "clang/Basic/DiagnosticSemaKinds.inc"
 #include "clang/Basic/DiagnosticAnalysisKinds.inc"
 #include "clang/Basic/DiagnosticRefactoringKinds.inc"
+#include "clang/Basic/DiagnosticCASKinds.inc"
   // clang-format on
 #undef DIAG
 };
@@ -70,6 +71,7 @@ const StaticDiagInfoDescriptionStringTable StaticDiagInfoDescriptions = {
 #include "clang/Basic/DiagnosticSemaKinds.inc"
 #include "clang/Basic/DiagnosticAnalysisKinds.inc"
 #include "clang/Basic/DiagnosticRefactoringKinds.inc"
+#include "clang/Basic/DiagnosticCASKinds.inc"
   // clang-format on
 #undef DIAG
 };
@@ -95,6 +97,7 @@ const uint32_t StaticDiagInfoDescriptionOffsets[] = {
 #include "clang/Basic/DiagnosticSemaKinds.inc"
 #include "clang/Basic/DiagnosticAnalysisKinds.inc"
 #include "clang/Basic/DiagnosticRefactoringKinds.inc"
+#include "clang/Basic/DiagnosticCASKinds.inc"
   // clang-format on
 #undef DIAG
 };
@@ -166,6 +169,7 @@ VALIDATE_DIAG_SIZE(CROSSTU)
 VALIDATE_DIAG_SIZE(SEMA)
 VALIDATE_DIAG_SIZE(ANALYSIS)
 VALIDATE_DIAG_SIZE(REFACTORING)
+VALIDATE_DIAG_SIZE(CAS)
 #undef VALIDATE_DIAG_SIZE
 #undef STRINGIFY_NAME
 
@@ -197,6 +201,7 @@ const StaticDiagInfoRec StaticDiagInfo[] = {
 #include "clang/Basic/DiagnosticSemaKinds.inc"
 #include "clang/Basic/DiagnosticAnalysisKinds.inc"
 #include "clang/Basic/DiagnosticRefactoringKinds.inc"
+#include "clang/Basic/DiagnosticCASKinds.inc"
 // clang-format on
 #undef DIAG
 };
@@ -239,6 +244,7 @@ CATEGORY(CROSSTU, COMMENT)
 CATEGORY(SEMA, CROSSTU)
 CATEGORY(ANALYSIS, SEMA)
 CATEGORY(REFACTORING, ANALYSIS)
+CATEGORY(CAS, REFACTORING)
 #undef CATEGORY
 
   // Avoid out of bounds reads.
@@ -256,7 +262,7 @@ CATEGORY(REFACTORING, ANALYSIS)
   return Found;
 }
 
-static DiagnosticMapping GetDefaultDiagMapping(unsigned DiagID) {
+DiagnosticMapping DiagnosticIDs::getDefaultMapping(unsigned DiagID) {
   DiagnosticMapping Info = DiagnosticMapping::Make(
       diag::Severity::Fatal, /*IsUser=*/false, /*IsPragma=*/false);
 
@@ -291,21 +297,6 @@ namespace {
       return StringRef(NameStr, NameLen);
     }
   };
-}
-
-// Unfortunately, the split between DiagnosticIDs and Diagnostic is not
-// particularly clean, but for now we just implement this method here so we can
-// access GetDefaultDiagMapping.
-DiagnosticMapping &
-DiagnosticsEngine::DiagState::getOrAddMapping(diag::kind Diag) {
-  std::pair<iterator, bool> Result =
-      DiagMap.insert(std::make_pair(Diag, DiagnosticMapping()));
-
-  // Initialize the entry if we added it.
-  if (Result.second)
-    Result.first->second = GetDefaultDiagMapping(Diag);
-
-  return Result.first->second;
 }
 
 static const StaticDiagCategoryRec CategoryNameTable[] = {
@@ -449,7 +440,7 @@ bool DiagnosticIDs::isBuiltinExtensionDiag(unsigned DiagID,
     return false;
 
   EnabledByDefault =
-      GetDefaultDiagMapping(DiagID).getSeverity() != diag::Severity::Ignored;
+      getDefaultMapping(DiagID).getSeverity() != diag::Severity::Ignored;
   return true;
 }
 
@@ -457,7 +448,7 @@ bool DiagnosticIDs::isDefaultMappingAsError(unsigned DiagID) {
   if (DiagID >= diag::DIAG_UPPER_LIMIT)
     return false;
 
-  return GetDefaultDiagMapping(DiagID).getSeverity() >= diag::Severity::Error;
+  return getDefaultMapping(DiagID).getSeverity() >= diag::Severity::Error;
 }
 
 /// getDescription - Given a diagnostic ID, return a description of the

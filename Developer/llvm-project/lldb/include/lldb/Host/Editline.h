@@ -164,6 +164,10 @@ public:
   /// of Editline.
   static Editline *InstanceFor(::EditLine *editline);
 
+  static void
+  DisplayCompletions(Editline &editline,
+                     llvm::ArrayRef<CompletionResult::Completion> results);
+
   /// Sets a string to be used as a prompt, or combined with a line number to
   /// form a prompt.
   void SetPrompt(const char *prompt);
@@ -212,6 +216,14 @@ public:
     m_fix_indentation_callback_chars = indent_chars;
   }
 
+  void SetPromptAnsiPrefix(std::string prefix) {
+    m_prompt_ansi_prefix = std::move(prefix);
+  }
+
+  void SetPromptAnsiSuffix(std::string suffix) {
+    m_prompt_ansi_suffix = std::move(suffix);
+  }
+
   void SetSuggestionAnsiPrefix(std::string prefix) {
     m_suggestion_ansi_prefix = std::move(prefix);
   }
@@ -246,9 +258,8 @@ private:
   void SetCurrentLine(int line_index);
 
   /// Determines the width of the prompt in characters.  The width is guaranteed
-  /// to be the same for
-  /// all lines of the current multi-line session.
-  int GetPromptWidth();
+  /// to be the same for all lines of the current multi-line session.
+  size_t GetPromptWidth();
 
   /// Returns true if the underlying EditLine session's keybindings are
   /// Emacs-based, or false if
@@ -400,6 +411,8 @@ private:
   CompleteCallbackType m_completion_callback;
   SuggestionCallbackType m_suggestion_callback;
 
+  std::string m_prompt_ansi_prefix;
+  std::string m_prompt_ansi_suffix;
   std::string m_suggestion_ansi_prefix;
   std::string m_suggestion_ansi_suffix;
 

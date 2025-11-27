@@ -30,6 +30,9 @@ else()
   list(APPEND SCUDO_CFLAGS -O3)
 endif()
 
+append_list_if(COMPILER_RT_HAS_WTHREAD_SAFETY_FLAG -Werror=thread-safety
+  SCUDO_CFLAGS)
+
 set(SCUDO_LINK_FLAGS)
 
 list(APPEND SCUDO_LINK_FLAGS -Wl,-z,defs,-z,now,-z,relro)
@@ -68,6 +71,9 @@ set(SCUDO_HEADERS
   list.h
   local_cache.h
   memtag.h
+  mem_map.h
+  mem_map_base.h
+  mem_map_fuchsia.h
   mutex.h
   options.h
   platform.h
@@ -82,6 +88,7 @@ set(SCUDO_HEADERS
   stack_depot.h
   stats.h
   string_utils.h
+  timing.h
   tsd_exclusive.h
   tsd_shared.h
   tsd.h
@@ -100,11 +107,21 @@ set(SCUDO_SOURCES
   flags.cpp
   fuchsia.cpp
   linux.cpp
+  mem_map.cpp
+  mem_map_fuchsia.cpp
   release.cpp
   report.cpp
   rss_limit_checker.cpp
   string_utils.cpp
+  timing.cpp
   )
+
+# Temporary hack until LLVM libc supports inttypes.h print format macros
+# See: https://github.com/llvm/llvm-project/issues/63317#issuecomment-1591906241
+if(LLVM_LIBC_INCLUDE_SCUDO)
+  list(REMOVE_ITEM SCUDO_HEADERS timing.h)
+  list(REMOVE_ITEM SCUDO_SOURCES timing.cpp)
+endif()
 
 # Enable the necessary instruction set for scudo_crc32.cpp, if available.
 # Newer compiler versions use -mcrc32 rather than -msse4.2.

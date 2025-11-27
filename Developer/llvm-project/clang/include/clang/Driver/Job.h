@@ -33,9 +33,11 @@ class Tool;
 struct CrashReportInfo {
   StringRef Filename;
   StringRef VFSPath;
+  StringRef IndexStorePath;
 
-  CrashReportInfo(StringRef Filename, StringRef VFSPath)
-      : Filename(Filename), VFSPath(VFSPath) {}
+  CrashReportInfo(StringRef Filename, StringRef VFSPath,
+                  StringRef IndexStorePath)
+      : Filename(Filename), VFSPath(VFSPath), IndexStorePath(IndexStorePath) {}
 };
 
 // Encodes the kind of response file supported for a command invocation.
@@ -116,6 +118,9 @@ class Command {
   /// The executable to run.
   const char *Executable;
 
+  /// Optional argument to prepend.
+  const char *PrependArg;
+
   /// The list of program arguments (not including the implicit first
   /// argument, which will be the executable).
   llvm::opt::ArgStringList Arguments;
@@ -140,6 +145,7 @@ class Command {
 
   /// See Command::setEnvironment
   std::vector<const char *> Environment;
+  std::vector<const char *> EnvironmentDisplay;
 
   /// Optional redirection for stdin, stdout, stderr.
   std::vector<std::optional<std::string>> RedirectFiles;
@@ -169,7 +175,8 @@ public:
   Command(const Action &Source, const Tool &Creator,
           ResponseFileSupport ResponseSupport, const char *Executable,
           const llvm::opt::ArgStringList &Arguments, ArrayRef<InputInfo> Inputs,
-          ArrayRef<InputInfo> Outputs = std::nullopt);
+          ArrayRef<InputInfo> Outputs = std::nullopt,
+          const char *PrependArg = nullptr);
   // FIXME: This really shouldn't be copyable, but is currently copied in some
   // error handling in Driver::generateCompilationDiagnostics.
   Command(const Command &) = default;
@@ -214,6 +221,9 @@ public:
     Arguments = std::move(List);
   }
 
+  /// Sets the environment to display in `-###`.
+  virtual void setEnvironmentDisplay(llvm::ArrayRef<const char *> Display);
+
   void replaceExecutable(const char *Exe) { Executable = Exe; }
 
   const char *getExecutable() const { return Executable; }
@@ -242,7 +252,8 @@ public:
              ResponseFileSupport ResponseSupport, const char *Executable,
              const llvm::opt::ArgStringList &Arguments,
              ArrayRef<InputInfo> Inputs,
-             ArrayRef<InputInfo> Outputs = std::nullopt);
+             ArrayRef<InputInfo> Outputs = std::nullopt,
+             const char *PrependArg = nullptr);
 
   void Print(llvm::raw_ostream &OS, const char *Terminator, bool Quote,
              CrashReportInfo *CrashInfo = nullptr) const override;
@@ -253,21 +264,22 @@ public:
   void setEnvironment(llvm::ArrayRef<const char *> NewEnvironment) override;
 };
 
-/// Like Command, but always pretends that the wrapped command succeeded.
-class ForceSuccessCommand : public Command {
+/// Automatically cache -cc1 commands when possible.
+class CachingCC1Command : public CC1Command {
 public:
-  ForceSuccessCommand(const Action &Source_, const Tool &Creator_,
-                      ResponseFileSupport ResponseSupport,
-                      const char *Executable_,
-                      const llvm::opt::ArgStringList &Arguments_,
-                      ArrayRef<InputInfo> Inputs,
-                      ArrayRef<InputInfo> Outputs = std::nullopt);
+  CachingCC1Command(const Action &Source, const Tool &Creator,
+                    ResponseFileSupport ResponseSupport, const char *Executable,
+                    const llvm::opt::ArgStringList &Arguments,
+                    ArrayRef<InputInfo> Inputs,
+                    ArrayRef<InputInfo> Outputs = std::nullopt);
 
   void Print(llvm::raw_ostream &OS, const char *Terminator, bool Quote,
              CrashReportInfo *CrashInfo = nullptr) const override;
 
   int Execute(ArrayRef<std::optional<StringRef>> Redirects, std::string *ErrMsg,
               bool *ExecutionFailed) const override;
+
+  void setEnvironment(llvm::ArrayRef<const char *> NewEnvironment) override;
 };
 
 /// JobList - A sequence of jobs to perform.

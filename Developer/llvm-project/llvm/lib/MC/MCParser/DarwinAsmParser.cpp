@@ -9,7 +9,6 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSwitch.h"
-#include "llvm/ADT/Triple.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/BinaryFormat/MachO.h"
 #include "llvm/MC/MCContext.h"
@@ -27,6 +26,7 @@
 #include "llvm/Support/SMLoc.h"
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/TargetParser/Triple.h"
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -194,6 +194,10 @@ public:
     addDirectiveHandler<&DarwinAsmParser::parseBuildVersion>(".build_version");
     addDirectiveHandler<&DarwinAsmParser::parseDirectiveCGProfile>(
         ".cg_profile");
+    addDirectiveHandler<&DarwinAsmParser::parsePtrAuthABIVersion>(
+      ".ptrauth_abi_version");
+    addDirectiveHandler<&DarwinAsmParser::parsePtrAuthKernelABIVersion>(
+      ".ptrauth_kernel_abi_version");
 
     LastVersionDirective = SMLoc();
   }
@@ -467,6 +471,9 @@ public:
   void checkVersion(StringRef Directive, StringRef Arg, SMLoc Loc,
                     Triple::OSType ExpectedOS);
   bool parseDirectiveCGProfile(StringRef Directive, SMLoc Loc);
+
+  bool parsePtrAuthABIVersion(StringRef Directive, SMLoc Loc);
+  bool parsePtrAuthKernelABIVersion(StringRef Directive, SMLoc Loc);
 };
 
 } // end anonymous namespace
@@ -1130,7 +1137,7 @@ bool DarwinAsmParser::parseVersionMin(StringRef Directive, SMLoc Loc,
   if (isSDKVersionToken(getLexer().getTok()) && parseSDKVersion(SDKVersion))
     return true;
 
-  if (parseToken(AsmToken::EndOfStatement))
+  if (parseEOL())
     return addErrorSuffix(Twine(" in '") + Directive + "' directive");
 
   Triple::OSType ExpectedOS = getOSTypeFromMCVM(Type);
@@ -1147,6 +1154,7 @@ static Triple::OSType getOSTypeFromPlatform(MachO::PlatformType Type) {
   case MachO::PLATFORM_IOS:     return Triple::IOS;
   case MachO::PLATFORM_TVOS:    return Triple::TvOS;
   case MachO::PLATFORM_WATCHOS: return Triple::WatchOS;
+  case MachO::PLATFORM_XROS:    return Triple::XROS;
   case MachO::PLATFORM_BRIDGEOS:         /* silence warning */ break;
   case MachO::PLATFORM_DRIVERKIT:
     return Triple::DriverKit;
@@ -1154,6 +1162,7 @@ static Triple::OSType getOSTypeFromPlatform(MachO::PlatformType Type) {
   case MachO::PLATFORM_IOSSIMULATOR:     /* silence warning */ break;
   case MachO::PLATFORM_TVOSSIMULATOR:    /* silence warning */ break;
   case MachO::PLATFORM_WATCHOSSIMULATOR: /* silence warning */ break;
+  case MachO::PLATFORM_XROS_SIMULATOR:   /* silence warning */ break;
   }
   llvm_unreachable("Invalid mach-o platform type");
 }
@@ -1167,14 +1176,13 @@ bool DarwinAsmParser::parseBuildVersion(StringRef Directive, SMLoc Loc) {
     return TokError("platform name expected");
 
   unsigned Platform = StringSwitch<unsigned>(PlatformName)
-    .Case("macos", MachO::PLATFORM_MACOS)
-    .Case("ios", MachO::PLATFORM_IOS)
-    .Case("tvos", MachO::PLATFORM_TVOS)
-    .Case("watchos", MachO::PLATFORM_WATCHOS)
-    .Case("macCatalyst", MachO::PLATFORM_MACCATALYST)
-    .Case("driverkit", MachO::PLATFORM_DRIVERKIT)
-    .Default(0);
-  if (Platform == 0)
+#define PLATFORM(platform, id, name, build_name, target, tapi_target,          \
+                 marketing)                                                    \
+  .Case(#build_name, MachO::PLATFORM_##platform)
+#include "llvm/BinaryFormat/MachO.def"
+                          .Default(MachO::PLATFORM_UNKNOWN);
+
+  if (Platform == MachO::PLATFORM_UNKNOWN)
     return Error(PlatformLoc, "unknown platform name");
 
   if (getLexer().isNot(AsmToken::Comma))
@@ -1191,7 +1199,7 @@ bool DarwinAsmParser::parseBuildVersion(StringRef Directive, SMLoc Loc) {
   if (isSDKVersionToken(getLexer().getTok()) && parseSDKVersion(SDKVersion))
     return true;
 
-  if (parseToken(AsmToken::EndOfStatement))
+  if (parseEOL())
     return addErrorSuffix(" in '.build_version' directive");
 
   Triple::OSType ExpectedOS
@@ -1205,6 +1213,46 @@ bool DarwinAsmParser::parseBuildVersion(StringRef Directive, SMLoc Loc) {
 ///   ::= .cg_profile from, to, count
 bool DarwinAsmParser::parseDirectiveCGProfile(StringRef S, SMLoc Loc) {
   return MCAsmParserExtension::ParseDirectiveCGProfile(S, Loc);
+}
+
+/// parsePtrAuthABIVersion
+///   ::= .ptrauth_abi_version version
+bool DarwinAsmParser::parsePtrAuthABIVersion(StringRef Directive, SMLoc Loc) {
+  int64_t PtrAuthABIVersion;
+  if (getParser().parseIntToken(PtrAuthABIVersion,
+               "expected integer version in '.ptrauth_abi_version' directive"))
+    return true;
+
+  if (PtrAuthABIVersion > 63 || PtrAuthABIVersion < 0)
+    return TokError("invalid ptrauth ABI version number");
+
+  if (parseToken(AsmToken::EndOfStatement))
+    return addErrorSuffix(" in '.ptrauth_abi_version' directive");
+
+  getStreamer().EmitPtrAuthABIVersion(PtrAuthABIVersion,
+                                      /*PtrAuthKernelABIVersion=*/false);
+  return false;
+}
+
+/// parsePtrAuthKernelABIVersion
+///   ::= .ptrauth_kernel_abi_version version
+bool DarwinAsmParser::parsePtrAuthKernelABIVersion(StringRef Directive,
+                                                   SMLoc Loc) {
+  int64_t PtrAuthKernelABIVersion;
+  if (getParser().parseIntToken(PtrAuthKernelABIVersion,
+                                "expected integer version in "
+                                "'.ptrauth_kernel_abi_version' directive"))
+    return true;
+
+  if (PtrAuthKernelABIVersion > 63 || PtrAuthKernelABIVersion < 0)
+    return TokError("invalid ptrauth kernel ABI version number");
+
+  if (parseToken(AsmToken::EndOfStatement))
+    return addErrorSuffix(" in '.ptrauth_kernel_abi_version' directive");
+
+  getStreamer().EmitPtrAuthABIVersion(PtrAuthKernelABIVersion,
+                                      /*PtrAuthKernelABIVersion=*/true);
+  return false;
 }
 
 namespace llvm {

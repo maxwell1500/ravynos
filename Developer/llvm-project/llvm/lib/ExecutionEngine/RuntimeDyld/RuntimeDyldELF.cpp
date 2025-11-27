@@ -15,12 +15,12 @@
 #include "Targets/RuntimeDyldELFMips.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/ADT/Triple.h"
 #include "llvm/BinaryFormat/ELF.h"
 #include "llvm/Object/ELFObjectFile.h"
 #include "llvm/Object/ObjectFile.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/MemoryBuffer.h"
+#include "llvm/TargetParser/Triple.h"
 
 using namespace llvm;
 using namespace llvm::object;
@@ -426,13 +426,15 @@ void RuntimeDyldELF::resolveAArch64Relocation(const SectionEntry &Section,
     break;
   case ELF::R_AARCH64_ABS16: {
     uint64_t Result = Value + Addend;
-    assert(static_cast<int64_t>(Result) >= INT16_MIN && Result < UINT16_MAX);
+    assert(Result == static_cast<uint64_t>(llvm::SignExtend64(Result, 16)) ||
+           (Result >> 16) == 0);
     write(isBE, TargetPtr, static_cast<uint16_t>(Result & 0xffffU));
     break;
   }
   case ELF::R_AARCH64_ABS32: {
     uint64_t Result = Value + Addend;
-    assert(static_cast<int64_t>(Result) >= INT32_MIN && Result < UINT32_MAX);
+    assert(Result == static_cast<uint64_t>(llvm::SignExtend64(Result, 32)) ||
+           (Result >> 32) == 0);
     write(isBE, TargetPtr, static_cast<uint32_t>(Result & 0xffffffffU));
     break;
   }
@@ -477,7 +479,9 @@ void RuntimeDyldELF::resolveAArch64Relocation(const SectionEntry &Section,
 
     assert(isInt<16>(BranchImm));
 
-    *TargetPtr &= 0xfff8001fU;
+    uint32_t RawInstr = *(support::little32_t *)TargetPtr;
+    *(support::little32_t *)TargetPtr = RawInstr & 0xfff8001fU;
+
     // Immediate:15:2 goes in bits 18:5 of TBZ, TBNZ
     or32le(TargetPtr, (BranchImm & 0x0000FFFC) << 3);
     break;
@@ -1124,7 +1128,8 @@ uint32_t RuntimeDyldELF::getMatchingLoRelocation(uint32_t RelType,
 bool RuntimeDyldELF::resolveAArch64ShortBranch(
     unsigned SectionID, relocation_iterator RelI,
     const RelocationValueRef &Value) {
-  uint64_t Address;
+  uint64_t TargetOffset;
+  unsigned TargetSectionID;
   if (Value.SymbolName) {
     auto Loc = GlobalSymbolTable.find(Value.SymbolName);
 
@@ -1133,23 +1138,32 @@ bool RuntimeDyldELF::resolveAArch64ShortBranch(
       return false;
 
     const auto &SymInfo = Loc->second;
-    Address =
-        uint64_t(Sections[SymInfo.getSectionID()].getLoadAddressWithOffset(
-            SymInfo.getOffset()));
+
+    TargetSectionID = SymInfo.getSectionID();
+    TargetOffset = SymInfo.getOffset();
   } else {
-    Address = uint64_t(Sections[Value.SectionID].getLoadAddress());
+    TargetSectionID = Value.SectionID;
+    TargetOffset = 0;
   }
-  uint64_t Offset = RelI->getOffset();
-  uint64_t SourceAddress = Sections[SectionID].getLoadAddressWithOffset(Offset);
+
+  // We don't actually know the load addresses at this point, so if the
+  // branch is cross-section, we don't know exactly how far away it is.
+  if (TargetSectionID != SectionID)
+    return false;
+
+  uint64_t SourceOffset = RelI->getOffset();
 
   // R_AARCH64_CALL26 requires immediate to be in range -2^27 <= imm < 2^27
   // If distance between source and target is out of range then we should
   // create thunk.
-  if (!isInt<28>(Address + Value.Addend - SourceAddress))
+  if (!isInt<28>(TargetOffset + Value.Addend - SourceOffset))
     return false;
 
-  resolveRelocation(Sections[SectionID], Offset, Address, RelI->getType(),
-                    Value.Addend);
+  RelocationEntry RE(SectionID, SourceOffset, RelI->getType(), Value.Addend);
+  if (Value.SymbolName)
+    addRelocationForSymbol(RE, Value.SymbolName);
+  else
+    addRelocationForSection(RE, Value.SectionID);
 
   return true;
 }
@@ -1282,6 +1296,7 @@ RuntimeDyldELF::processRelocationRef(
     }
     case SymbolRef::ST_Data:
     case SymbolRef::ST_Function:
+    case SymbolRef::ST_Other:
     case SymbolRef::ST_Unknown: {
       Value.SymbolName = TargetName.data();
       Value.Addend = Addend;
@@ -2405,6 +2420,7 @@ Error RuntimeDyldELF::finalizeLoad(const ObjectFile &Obj,
     }
   }
 
+  GOTOffsetMap.clear();
   GOTSectionID = 0;
   CurrentGOTIndex = 0;
 

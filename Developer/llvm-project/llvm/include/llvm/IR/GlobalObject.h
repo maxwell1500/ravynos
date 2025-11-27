@@ -82,6 +82,12 @@ public:
     return decodeMaybeAlign(AlignmentData);
   }
 
+  /// Sets the alignment attribute of the GlobalObject.
+  void setAlignment(Align Align);
+
+  /// Sets the alignment attribute of the GlobalObject.
+  /// This method will be deprecated as the alignment property should always be
+  /// defined.
   void setAlignment(MaybeAlign Align);
 
   unsigned getGlobalObjectSubClassData() const {
@@ -137,6 +143,7 @@ public:
   void addTypeMetadata(unsigned Offset, Metadata *TypeID);
   void setVCallVisibilityMetadata(VCallVisibility Visibility);
   VCallVisibility getVCallVisibility() const;
+  std::pair<uint64_t, uint64_t> getVTableOffsetRange() const;
 
   /// Returns true if the alignment of the value can be unilaterally
   /// increased.

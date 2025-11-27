@@ -59,7 +59,7 @@ namespace detail {
 
 template <typename T>
 using EnableIfTrivial =
-    std::enable_if_t<llvm::is_trivially_move_constructible<T>::value &&
+    std::enable_if_t<std::is_trivially_move_constructible<T>::value &&
                      std::is_trivially_destructible<T>::value>;
 template <typename CallableT, typename ThisT>
 using EnableUnlessSameType =
@@ -99,11 +99,11 @@ protected:
   template <typename T> struct AdjustedParamTBase {
     static_assert(!std::is_reference<T>::value,
                   "references should be handled by template specialization");
-    using type = std::conditional_t<
-        llvm::is_trivially_copy_constructible<T>::value &&
-            llvm::is_trivially_move_constructible<T>::value &&
-            IsSizeLessThanThresholdT<T>::value,
-        T, T &>;
+    using type =
+        std::conditional_t<std::is_trivially_copy_constructible<T>::value &&
+                               std::is_trivially_move_constructible<T>::value &&
+                               IsSizeLessThanThresholdT<T>::value,
+                           T, T &>;
   };
 
   // This specialization ensures that 'AdjustedParam<V<T>&>' or
@@ -172,16 +172,15 @@ protected:
   bool isInlineStorage() const { return CallbackAndInlineFlag.getInt(); }
 
   bool isTrivialCallback() const {
-    return CallbackAndInlineFlag.getPointer().template is<TrivialCallback *>();
+    return isa<TrivialCallback *>(CallbackAndInlineFlag.getPointer());
   }
 
   CallPtrT getTrivialCallback() const {
-    return CallbackAndInlineFlag.getPointer().template get<TrivialCallback *>()->CallPtr;
+    return cast<TrivialCallback *>(CallbackAndInlineFlag.getPointer())->CallPtr;
   }
 
   NonTrivialCallbacks *getNonTrivialCallbacks() const {
-    return CallbackAndInlineFlag.getPointer()
-        .template get<NonTrivialCallbacks *>();
+    return cast<NonTrivialCallbacks *>(CallbackAndInlineFlag.getPointer());
   }
 
   CallPtrT getCallPtr() const {
@@ -410,6 +409,37 @@ public:
   }
 };
 
+template <typename CallTy> struct FunctionObjectCallback {
+  void *Context;
+  CallTy *Callback;
+};
+
+namespace detail {
+template <typename FuncTy, typename CallTy>
+struct functionObjectToCCallbackRefImpl;
+
+template <typename FuncTy, typename Ret, typename... Args>
+struct functionObjectToCCallbackRefImpl<FuncTy, Ret(Args...)> {
+  static FunctionObjectCallback<Ret(void *, Args...)> impl(FuncTy &F) {
+    auto Func = +[](void *C, Args... V) -> Ret {
+      return (*reinterpret_cast<std::decay_t<FuncTy> *>(C))(
+          std::forward<Args>(V)...);
+    };
+
+    return {&F, Func};
+  }
+};
+} // namespace detail
+
+/// Returns a function pointer and context pair suitable for use as a C
+/// callback.
+///
+/// \param F the function object to turn into a C callback. The returned
+///   callback has the same lifetime as F.
+template <typename CallTy, typename FuncTy>
+auto functionObjectToCCallbackRef(FuncTy &F) {
+  return detail::functionObjectToCCallbackRefImpl<FuncTy, CallTy>::impl(F);
+}
 } // end namespace llvm
 
 #endif // LLVM_ADT_FUNCTIONEXTRAS_H

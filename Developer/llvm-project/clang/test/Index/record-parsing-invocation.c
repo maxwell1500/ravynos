@@ -1,3 +1,4 @@
+// RUN: export LSAN_OPTIONS=detect_leaks=0
 // RUN: rm -rf %t
 // RUN: mkdir %t
 // RUN: env CINDEXTEST_INVOCATION_EMISSION_PATH=%t not c-index-test -test-load-source all %s
@@ -24,5 +25,5 @@
 #  pragma clang __debug parser_crash
 #endif
 
-// CHECK: {"toolchain":"{{.*}}","libclang.operation":"parse","libclang.opts":1,"args":["clang","-fno-spell-checking","{{.*}}record-parsing-invocation.c","-Xclang","-detailed-preprocessing-record","-fallow-editor-placeholders"]}
-// CHECK-UNSAVED: {"toolchain":"{{.*}}","libclang.operation":"parse","libclang.opts":1,"args":["clang","-fno-spell-checking","{{.*}}record-parsing-invocation.c","-Xclang","-detailed-preprocessing-record","-fallow-editor-placeholders"],"unsaved_file_hashes":[{"name":"{{.*}}record-parsing-invocation.c","md5":"aee23773de90e665992b48209351d70e"}]}
+// CHECK: {"toolchain":"{{.*}}","signature":"{{.*}}","libclang.operation":"parse","libclang.opts":1,"args":["clang","-fno-spell-checking","{{.*}}record-parsing-invocation.c","-Xclang","-detailed-preprocessing-record","-fallow-editor-placeholders"]}
+// CHECK-UNSAVED: {"toolchain":"{{.*}}","signature":"{{.*}}","libclang.operation":"parse","libclang.opts":1,"args":["clang","-fno-spell-checking","{{.*}}record-parsing-invocation.c","-Xclang","-detailed-preprocessing-record","-fallow-editor-placeholders"],"unsaved_file_hashes":[{"name":"{{.*}}record-parsing-invocation.c","md5":"aee23773de90e665992b48209351d70e"}]}

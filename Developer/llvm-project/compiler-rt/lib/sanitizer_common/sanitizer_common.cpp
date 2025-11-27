@@ -61,6 +61,26 @@ void NORETURN ReportMmapFailureAndDie(uptr size, const char *mem_type,
   UNREACHABLE("unable to mmap");
 }
 
+void NORETURN ReportMunmapFailureAndDie(void *addr, uptr size, error_t err,
+                                        bool raw_report) {
+  static int recursion_count;
+  if (raw_report || recursion_count) {
+    // If raw report is requested or we went into recursion just die.  The
+    // Report() and CHECK calls below may call munmap recursively and fail.
+    RawWrite("ERROR: Failed to munmap\n");
+    Die();
+  }
+  recursion_count++;
+  Report(
+      "ERROR: %s failed to deallocate 0x%zx (%zd) bytes at address %p (error "
+      "code: %d)\n",
+      SanitizerToolName, size, size, addr, err);
+#if !SANITIZER_GO
+  DumpProcessMap();
+#endif
+  UNREACHABLE("unable to unmmap");
+}
+
 typedef bool UptrComparisonFunction(const uptr &a, const uptr &b);
 typedef bool U32ComparisonFunction(const u32 &a, const u32 &b);
 
@@ -134,20 +154,21 @@ void RemoveANSIEscapeSequencesFromString(char *str) {
   *z = '\0';
 }
 
-void LoadedModule::set(const char *module_name, uptr base_address) {
+void LoadedModule::set(const char *module_name, uptr base_address,
+                       bool instrumented) {
   clear();
   full_name_ = internal_strdup(module_name);
   base_address_ = base_address;
+  instrumented_ = instrumented;
 }
 
 void LoadedModule::set(const char *module_name, uptr base_address,
                        ModuleArch arch, u8 uuid[kModuleUUIDSize],
                        bool instrumented) {
-  set(module_name, base_address);
+  set(module_name, base_address, instrumented);
   arch_ = arch;
   internal_memcpy(uuid_, uuid, sizeof(uuid_));
   uuid_size_ = kModuleUUIDSize;
-  instrumented_ = instrumented;
 }
 
 void LoadedModule::setUuid(const char *uuid, uptr size) {

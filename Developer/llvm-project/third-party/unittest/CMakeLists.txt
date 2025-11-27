@@ -40,7 +40,17 @@ endif()
 
 # Do not build unittest libraries automatically, they will be pulled in
 # by unittests if these are built.
-set(EXCLUDE_FROM_ALL ON)
+
+set(BUILDTREE_ONLY BUILDTREE_ONLY)
+# TODO: Swift does not build as part of the LLVM unified build, so it can't find
+#       GTest when LLVM doesn't export it. Swift should be built in the unified
+#       build, but we're not there yet. Put this back once Swift gets cleaned up
+#       a bit. rdar://113340971
+# set(EXCLUDE_FROM_ALL ON)
+if (LLVM_INSTALL_GTEST)
+  set(EXCLUDE_FROM_ALL OFF)
+  set(BUILDTREE_ONLY "")
+endif ()
 
 add_llvm_library(llvm_gtest
   googletest/src/gtest-all.cc
@@ -53,7 +63,7 @@ add_llvm_library(llvm_gtest
   Support # Depends on llvm::raw_ostream
 
   # This is a library meant only for the build tree.
-  BUILDTREE_ONLY
+  ${BUILDTREE_ONLY}
 )
 
 # The googletest and googlemock sources don't presently use the 'override'
@@ -69,11 +79,21 @@ if (NOT LLVM_ENABLE_THREADS)
 endif ()
 
 target_include_directories(llvm_gtest
-  PUBLIC googletest/include googlemock/include
+  PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/googletest/include>
+         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/googlemock/include>
+         $<INSTALL_INTERFACE:include/llvm-gtest/>
+         $<INSTALL_INTERFACE:include/llvm-gmock/>
   PRIVATE googletest googlemock
   )
 
 add_subdirectory(UnitTestMain)
+
+if (LLVM_INSTALL_GTEST)
+  install(TARGETS llvm_gtest llvm_gtest_main LLVMTestingSupport LLVMTestingAnnotations
+	  ARCHIVE DESTINATION "lib${LLVM_LIBDIR_SUFFIX}" COMPONENT llvm_gtest)
+  install(DIRECTORY googletest/include/gtest/ DESTINATION include/llvm-gtest/gtest/ COMPONENT llvm_gtest)
+  install(DIRECTORY googlemock/include/gmock/ DESTINATION include/llvm-gmock/gmock/ COMPONENT llvm_gtest)
+endif()
 
 # When LLVM_LINK_LLVM_DYLIB is enabled, libLLVM.so is added to the interface
 # link libraries for gtest and gtest_main.  This means that any target, like

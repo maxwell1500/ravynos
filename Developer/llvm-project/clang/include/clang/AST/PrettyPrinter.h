@@ -58,21 +58,23 @@ struct PrintingPolicy {
   /// Create a default printing policy for the specified language.
   PrintingPolicy(const LangOptions &LO)
       : Indentation(2), SuppressSpecifiers(false),
+        SupressStorageClassSpecifiers(false),
         SuppressTagKeyword(LO.CPlusPlus), IncludeTagDefinition(false),
         SuppressScope(false), SuppressUnwrittenScope(false),
-        SuppressInlineNamespace(true), SuppressInitializers(false),
-        ConstantArraySizeAsWritten(false), AnonymousTagLocations(true),
-        SuppressStrongLifetime(false), SuppressLifetimeQualifiers(false),
+        SuppressInlineNamespace(true), SuppressElaboration(false),
+        SuppressInitializers(false), ConstantArraySizeAsWritten(false),
+        AnonymousTagLocations(true), SuppressStrongLifetime(false),
+        SuppressLifetimeQualifiers(false),
         SuppressTemplateArgsInCXXConstructors(false),
         SuppressDefaultTemplateArgs(true), Bool(LO.Bool),
         Nullptr(LO.CPlusPlus11 || LO.C2x), NullptrTypeInNamespace(LO.CPlusPlus),
-        Restrict(LO.C99), Alignof(LO.CPlusPlus11),
-        UnderscoreAlignof(LO.C11), UseVoidForZeroParams(!LO.CPlusPlus),
+        Restrict(LO.C99), Alignof(LO.CPlusPlus11), UnderscoreAlignof(LO.C11),
+        UseVoidForZeroParams(!LO.CPlusPlus),
         SplitTemplateClosers(!LO.CPlusPlus11), TerseOutput(false),
         PolishForDeclaration(false), Half(LO.Half),
         MSWChar(LO.MicrosoftExt && !LO.WChar), IncludeNewlines(true),
         MSVCFormatting(false), ConstantsAsWritten(false),
-        SuppressImplicitBase(false), FullyQualifiedName(false),
+        SuppressImplicitBase(false), UseStdFunctionForLambda(false), FullyQualifiedName(false),
         PrintCanonicalTypes(false), PrintInjectedClassNameWithArguments(true),
         UsePreferredNames(true), AlwaysIncludeTypeForTemplateArgument(false),
         CleanUglifiedParameters(false), EntireContentsOfLargeArray(true),
@@ -107,6 +109,10 @@ struct PrintingPolicy {
   /// "const int" type specifier and instead only print the "*y".
   unsigned SuppressSpecifiers : 1;
 
+  /// \brief Whether we should supress the printing of the actual storage class
+  /// specifiers for the given declaration.
+  bool SupressStorageClassSpecifiers : 1;
+
   /// Whether type printing should skip printing the tag keyword.
   ///
   /// This is used when printing the inner type of elaborated types,
@@ -138,6 +144,10 @@ struct PrintingPolicy {
   /// to inline namespaces, where the name is unambiguous with the specifier
   /// removed.
   unsigned SuppressInlineNamespace : 1;
+
+  /// Ignore qualifiers and tag keywords as specified by elaborated type sugar,
+  /// instead letting the underlying type print as normal.
+  unsigned SuppressElaboration : 1;
 
   /// Suppress printing of variable initializers.
   ///
@@ -265,6 +275,9 @@ struct PrintingPolicy {
 
   /// When true, don't print the implicit 'self' or 'this' expressions.
   unsigned SuppressImplicitBase : 1;
+
+  /// \brief Whether we should use std::function<...> for lambda record types.
+  bool UseStdFunctionForLambda : 1;
 
   /// When true, print the fully qualified name of function declarations.
   /// This is the opposite of SuppressScope and thus overrules it.

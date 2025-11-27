@@ -182,6 +182,18 @@ let Command = "breakpoint set" in {
     Arg<"Boolean">, Desc<"Set the breakpoint on exception throW.">;
   def breakpoint_set_on_catch : Option<"on-catch", "h">, Group<10>,
     Arg<"Boolean">, Desc<"Set the breakpoint on exception catcH.">;
+
+  // BEGIN SWIFT
+  def breakpoint_set_exception_typename : Option<"exception-typename", "O">,
+    Group<10>,
+    Arg<"TypeName">, Desc<"The breakpoint will only stop if an exception "
+    "Object of this type is thrown. Can be repeated multiple times to stop for "
+    "multiple object types. If you just specify the type's base name it will "
+    "match against that type in all modules, or you can specify the full type "
+    "name including modules. Other submatches are not supported at present."
+    "Only supported for Swift at present.">;
+  // END SWIFT
+
   def breakpoint_set_language : Option<"language", "L">, GroupRange<3, 8>,
     Arg<"Language">,
     Desc<"Specifies the Language to use when interpreting the breakpoint's "
@@ -206,12 +218,6 @@ let Command = "breakpoint set" in {
   def breakpoint_set_file_colon_line : Option<"joint-specifier", "y">, Group<12>, Arg<"FileLineColumn">,
     Required, Completion<"SourceFile">,
     Desc<"A specifier in the form filename:line[:column] for setting file & line breakpoints.">;
-  /* Don't add this option till it actually does something useful...
-  def breakpoint_set_exception_typename : Option<"exception-typename", "O">,
-    Arg<"TypeName">, Desc<"The breakpoint will only stop if an "
-    "exception Object of this type is thrown.  Can be repeated multiple times "
-    "to stop for multiple object types">;
-   */
 }
 
 let Command = "breakpoint clear" in {
@@ -371,7 +377,7 @@ let Command = "expression" in {
     Arg<"Language">, Desc<"Specifies the Language to use when parsing the "
     "expression.  If not set the target.language setting is used.">;
   def expression_options_apply_fixits : Option<"apply-fixits", "X">,
-    Groups<[1,2]>, Arg<"Language">, Desc<"If true, simple fix-it hints will be "
+    Groups<[1,2]>, Arg<"Boolean">, Desc<"If true, simple fix-it hints will be "
     "automatically applied to the expression.">;
   def expression_options_description_verbosity :
     Option<"description-verbosity", "v">, Group<1>,
@@ -386,6 +392,17 @@ let Command = "expression" in {
     Arg<"Boolean">,
     Desc<"Controls whether the expression can fall back to being JITted if it's "
     "not supported by the interpreter (defaults to true).">;
+  def persistent_result : Option<"persistent-result", "\\x01">, Groups<[1,2]>,
+    Arg<"Boolean">,
+    Desc<"Persist expression result in a variable for subsequent use. "
+    "Expression results will be labeled with $-prefixed variables, e.g. $0, "
+    "$1, etc. Defaults to true.">;
+  // BEGIN SWIFT
+  def bind_generic_types : Option<"bind-generic-types", "\\x31">,
+    EnumArg<"BindGenTypeParamValue">, Desc<"Controls whether any "
+    "generic types in the current context should be bound to their dynamic "
+    "type before evaluating. Defaults to auto.">;
+  // END SWIFT
 }
 
 let Command = "frame diag" in {
@@ -789,16 +806,25 @@ let Command = "script add" in {
   def script_add_function : Option<"function", "f">, Group<1>,
     Arg<"PythonFunction">,
     Desc<"Name of the Python function to bind to this command name.">;
-  def script_add_class : Option<"class", "c">, Group<2>, Arg<"PythonClass">,
-  Desc<"Name of the Python class to bind to this command name.">;
+  def script_add_class : Option<"class", "c">, Groups<[2,3]>,
+    Arg<"PythonClass">,
+    Desc<"Name of the Python class to bind to this command name.">;
   def script_add_help : Option<"help", "h">, Group<1>, Arg<"HelpText">,
-  Desc<"The help text to display for this command.">;
-  def script_add_overwrite : Option<"overwrite", "o">, Groups<[1,2]>,
-  Desc<"Overwrite an existing command at this node.">;
+    Desc<"The help text to display for this command.">;
+    def script_add_overwrite : Option<"overwrite", "o">,
+    Desc<"Overwrite an existing command at this node.">;
   def script_add_synchronicity : Option<"synchronicity", "s">,
     EnumArg<"ScriptedCommandSynchronicity">,
     Desc<"Set the synchronicity of this command's executions with regard to "
     "LLDB event system.">;
+  def script_add_completion_type : Option<"completion-type", "C">,
+    Groups<[1,2]>, EnumArg<"CompletionType">,
+    Desc<"Specify which completion type the command should use - if none is "
+    "specified, the command won't use auto-completion.">;
+  def script_add_parsed_command : Option<"parsed", "p">, Group<3>,
+    Desc<"Make a parsed command. The command class will provide the command "
+    "definition by implementing get_options and get_arguments.">;
+
 }
 
 let Command = "container add" in {
@@ -1012,7 +1038,7 @@ let Command = "target stop hook add" in {
 
 let Command = "thread backtrace" in {
   def thread_backtrace_count : Option<"count", "c">, Group<1>, Arg<"Count">,
-  Desc<"How many frames to display (-1 for all)">;
+  Desc<"How many frames to display (0 for all)">;
   def thread_backtrace_start : Option<"start", "s">, Group<1>,
   Arg<"FrameIndex">, Desc<"Frame in which to start the backtrace">;
   def thread_backtrace_extended : Option<"extended", "e">, Group<1>,

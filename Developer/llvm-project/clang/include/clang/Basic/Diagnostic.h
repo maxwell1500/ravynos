@@ -39,6 +39,7 @@
 
 namespace llvm {
 class Error;
+class format_object_base;
 class raw_ostream;
 } // namespace llvm
 
@@ -1552,6 +1553,9 @@ inline DiagnosticBuilder DiagnosticsEngine::Report(SourceLocation Loc,
 const StreamingDiagnostic &operator<<(const StreamingDiagnostic &DB,
                                       llvm::Error &&E);
 
+const StreamingDiagnostic &operator<<(const StreamingDiagnostic &DB,
+                                      const llvm::format_object_base &Fmt);
+
 inline DiagnosticBuilder DiagnosticsEngine::Report(unsigned DiagID) {
   return Report(SourceLocation(), DiagID);
 }
@@ -1565,7 +1569,7 @@ inline DiagnosticBuilder DiagnosticsEngine::Report(unsigned DiagID) {
 /// currently in-flight diagnostic.
 class Diagnostic {
   const DiagnosticsEngine *DiagObj;
-  StringRef StoredDiagMessage;
+  std::optional<StringRef> StoredDiagMessage;
 
 public:
   explicit Diagnostic(const DiagnosticsEngine *DO) : DiagObj(DO) {}

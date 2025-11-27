@@ -33,9 +33,11 @@ public:
   }
 
   bool MightHaveChildren() override { return true; }
-  bool Update() override;
-  size_t CalculateNumChildren() override { return m_elements.size(); }
-  ValueObjectSP GetChildAtIndex(size_t idx) override;
+  lldb::ChildCacheState Update() override;
+  llvm::Expected<uint32_t> CalculateNumChildren() override {
+    return m_elements.size();
+  }
+  ValueObjectSP GetChildAtIndex(uint32_t idx) override;
 
 private:
   ConstString GetDataContainerMemberName();
@@ -76,13 +78,13 @@ ConstString GenericBitsetFrontEnd::GetDataContainerMemberName() {
   llvm_unreachable("Unknown StdLib enum");
 }
 
-bool GenericBitsetFrontEnd::Update() {
+lldb::ChildCacheState GenericBitsetFrontEnd::Update() {
   m_elements.clear();
   m_first = nullptr;
 
   TargetSP target_sp = m_backend.GetTargetSP();
   if (!target_sp)
-    return false;
+    return lldb::ChildCacheState::eRefetch;
 
   size_t size = 0;
 
@@ -90,12 +92,12 @@ bool GenericBitsetFrontEnd::Update() {
     size = arg->value.getLimitedValue();
 
   m_elements.assign(size, ValueObjectSP());
-  m_first = m_backend.GetChildMemberWithName(GetDataContainerMemberName(), true)
-                .get();
-  return false;
+  m_first =
+      m_backend.GetChildMemberWithName(GetDataContainerMemberName()).get();
+  return lldb::ChildCacheState::eRefetch;
 }
 
-ValueObjectSP GenericBitsetFrontEnd::GetChildAtIndex(size_t idx) {
+ValueObjectSP GenericBitsetFrontEnd::GetChildAtIndex(uint32_t idx) {
   if (idx >= m_elements.size() || !m_first)
     return ValueObjectSP();
 
@@ -111,7 +113,7 @@ ValueObjectSP GenericBitsetFrontEnd::GetChildAtIndex(size_t idx) {
         type.GetBitSize(ctx.GetBestExecutionContextScope());
     if (!bit_size || *bit_size == 0)
       return {};
-    chunk = m_first->GetChildAtIndex(idx / *bit_size, true);
+    chunk = m_first->GetChildAtIndex(idx / *bit_size);
   } else {
     type = m_first->GetCompilerType();
     chunk = m_first->GetSP();

@@ -159,6 +159,8 @@ void DirectCallEdge::ParseSymbolFileAndResolve(ModuleList &images) {
            lazy_callee.symbol_name);
 
   auto resolve_lazy_callee = [&]() -> Function * {
+    if (!lazy_callee.symbol_name)
+      return nullptr;
     ConstString callee_name{lazy_callee.symbol_name};
     SymbolContextList sc_list;
     images.FindFunctionSymbols(callee_name, eFunctionNameTypeAuto, sc_list);
@@ -231,11 +233,15 @@ Function *IndirectCallEdge::GetCallee(ModuleList &images,
 //
 Function::Function(CompileUnit *comp_unit, lldb::user_id_t func_uid,
                    lldb::user_id_t type_uid, const Mangled &mangled, Type *type,
-                   const AddressRange &range)
+                   const AddressRange &range, bool canThrow, bool is_generic_trampoline)
     : UserID(func_uid), m_comp_unit(comp_unit), m_type_uid(type_uid),
-      m_type(type), m_mangled(mangled), m_block(func_uid), m_range(range),
-      m_frame_base(), m_flags(), m_prologue_byte_size(0) {
+      m_type(type), m_mangled(mangled),
+      m_is_generic_trampoline(is_generic_trampoline), m_block(func_uid),
+      m_range(range), m_frame_base(), m_flags(), m_prologue_byte_size(0) {
   m_block.SetParentScope(this);
+  if (canThrow)
+    m_flags.Set(flagsFunctionCanThrow);
+    
   assert(comp_unit != nullptr);
 }
 
@@ -371,6 +377,15 @@ void Function::GetDescription(Stream *s, lldb::DescriptionLevel level,
     s->AsRawOstream() << ", name = \"" << name << '"';
   if (mangled)
     s->AsRawOstream() << ", mangled = \"" << mangled << '"';
+  if (level == eDescriptionLevelVerbose) {
+    *s << ", decl_context = {";
+    auto decl_context = GetCompilerContext();
+    // Drop the function itself from the context chain.
+    if (decl_context.size())
+      decl_context.pop_back();
+    llvm::interleaveComma(decl_context, *s, [&](auto &ctx) { ctx.Dump(*s); });
+    *s << "}";
+  }
   *s << ", range = ";
   Address::DumpStyle fallback_style;
   if (level == eDescriptionLevelVerbose)
@@ -483,18 +498,24 @@ bool Function::IsTopLevelFunction() {
   return result;
 }
 
-ConstString Function::GetDisplayName() const {
-  return m_mangled.GetDisplayDemangledName();
+ConstString Function::GetDisplayName(const SymbolContext *sc) const {
+  if (!m_mangled)
+    return GetName();
+  return m_mangled.GetDisplayDemangledName(sc);
 }
 
 CompilerDeclContext Function::GetDeclContext() {
-  ModuleSP module_sp = CalculateSymbolContextModule();
-
-  if (module_sp) {
+  if (ModuleSP module_sp = CalculateSymbolContextModule())
     if (SymbolFile *sym_file = module_sp->GetSymbolFile())
       return sym_file->GetDeclContextForUID(GetID());
-  }
-  return CompilerDeclContext();
+  return {};
+}
+
+std::vector<CompilerContext> Function::GetCompilerContext() {
+  if (ModuleSP module_sp = CalculateSymbolContextModule())
+    if (SymbolFile *sym_file = module_sp->GetSymbolFile())
+      return sym_file->GetCompilerContextForUID(GetID());
+  return {};
 }
 
 Type *Function::GetType() {
@@ -651,10 +672,10 @@ lldb::LanguageType Function::GetLanguage() const {
   return lldb::eLanguageTypeUnknown;
 }
 
-ConstString Function::GetName() const {
-  return m_mangled.GetName();
+ConstString Function::GetName(const SymbolContext *sc) const {
+  return m_mangled.GetName(Mangled::ePreferDemangled, sc);
 }
 
-ConstString Function::GetNameNoArguments() const {
-  return m_mangled.GetName(Mangled::ePreferDemangledWithoutArguments);
+ConstString Function::GetNameNoArguments(const SymbolContext *sc) const {
+  return m_mangled.GetName(Mangled::ePreferDemangledWithoutArguments, sc);
 }

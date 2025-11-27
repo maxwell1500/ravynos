@@ -16,6 +16,7 @@
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/ADT/StringSwitch.h"
@@ -38,9 +39,10 @@ using namespace driver;
 Command::Command(const Action &Source, const Tool &Creator,
                  ResponseFileSupport ResponseSupport, const char *Executable,
                  const llvm::opt::ArgStringList &Arguments,
-                 ArrayRef<InputInfo> Inputs, ArrayRef<InputInfo> Outputs)
+                 ArrayRef<InputInfo> Inputs, ArrayRef<InputInfo> Outputs,
+                 const char *PrependArg)
     : Source(Source), Creator(Creator), ResponseSupport(ResponseSupport),
-      Executable(Executable), Arguments(Arguments) {
+      Executable(Executable), PrependArg(PrependArg), Arguments(Arguments) {
   for (const auto &II : Inputs)
     if (II.isFilename())
       InputInfoList.push_back(II);
@@ -77,6 +79,8 @@ static bool skipArgs(const char *Flag, bool HaveCrashVFS, int &SkipNum,
     .Default(false);
   if (IsInclude)
     return !HaveCrashVFS;
+  if (StringRef(Flag).startswith("-index-store-path"))
+    return true;
 
   // The remaining flags are treated as a single argument.
 
@@ -97,6 +101,8 @@ static bool skipArgs(const char *Flag, bool HaveCrashVFS, int &SkipNum,
   if (IsInclude)
     return !HaveCrashVFS;
   if (FlagRef.startswith("-fmodules-cache-path="))
+    return true;
+  if (FlagRef.startswith("-fapinotes-cache-path="))
     return true;
 
   SkipNum = 0;
@@ -144,6 +150,10 @@ void Command::buildArgvForResponseFile(
   for (const auto *InputName : InputFileList)
     Inputs.insert(InputName);
   Out.push_back(Executable);
+
+  if (PrependArg)
+    Out.push_back(PrependArg);
+
   // In a file list, build args vector ignoring parameters that will go in the
   // response file (elements of the InputFileList vector)
   bool FirstInput = true;
@@ -200,6 +210,15 @@ rewriteIncludes(const llvm::ArrayRef<const char *> &Args, size_t Idx,
 
 void Command::Print(raw_ostream &OS, const char *Terminator, bool Quote,
                     CrashReportInfo *CrashInfo) const {
+  // Print the environment to display, if relevant.
+  if (!EnvironmentDisplay.empty()) {
+    OS << " env";
+    for (const char *NameValue : EnvironmentDisplay) {
+      OS << ' ';
+      llvm::sys::printArg(OS, NameValue, /*Quote=*/true);
+    }
+  }
+
   // Always quote the exe.
   OS << ' ';
   llvm::sys::printArg(OS, Executable, /*Quote=*/true);
@@ -209,9 +228,13 @@ void Command::Print(raw_ostream &OS, const char *Terminator, bool Quote,
   if (ResponseFile != nullptr) {
     buildArgvForResponseFile(ArgsRespFile);
     Args = ArrayRef<const char *>(ArgsRespFile).slice(1); // no executable name
+  } else if (PrependArg) {
+    OS << ' ';
+    llvm::sys::printArg(OS, PrependArg, /*Quote=*/true);
   }
 
   bool HaveCrashVFS = CrashInfo && !CrashInfo->VFSPath.empty();
+  bool HaveIndexStorePath = CrashInfo && !CrashInfo->IndexStorePath.empty();
   for (size_t i = 0, e = Args.size(); i < e; ++i) {
     const char *const Arg = Args[i];
 
@@ -276,6 +299,24 @@ void Command::Print(raw_ostream &OS, const char *Terminator, bool Quote,
     llvm::sys::printArg(OS, ModCachePath, Quote);
   }
 
+  if (CrashInfo && HaveIndexStorePath) {
+    SmallString<128> IndexStoreDir;
+
+    if (HaveCrashVFS) {
+      IndexStoreDir = llvm::sys::path::parent_path(
+          llvm::sys::path::parent_path(CrashInfo->VFSPath));
+      llvm::sys::path::append(IndexStoreDir, "index-store");
+    } else {
+      IndexStoreDir = "index-store";
+    }
+
+    OS << ' ';
+    llvm::sys::printArg(OS, "-index-store-path", Quote);
+    OS << ' ';
+    llvm::sys::printArg(OS, IndexStoreDir.c_str(), Quote);
+  }
+
+
   if (ResponseFile != nullptr) {
     OS << "\n Arguments passed via response file:\n";
     writeResponseFile(OS);
@@ -301,6 +342,11 @@ void Command::setEnvironment(llvm::ArrayRef<const char *> NewEnvironment) {
   Environment.push_back(nullptr);
 }
 
+void Command::setEnvironmentDisplay(llvm::ArrayRef<const char *> Display) {
+  EnvironmentDisplay.reserve(Display.size());
+  EnvironmentDisplay.assign(Display.begin(), Display.end());
+}
+
 void Command::setRedirectFiles(
     const std::vector<std::optional<std::string>> &Redirects) {
   RedirectFiles = Redirects;
@@ -321,6 +367,8 @@ int Command::Execute(ArrayRef<std::optional<StringRef>> Redirects,
   SmallVector<const char *, 128> Argv;
   if (ResponseFile == nullptr) {
     Argv.push_back(Executable);
+    if (PrependArg)
+      Argv.push_back(PrependArg);
     Argv.append(Arguments.begin(), Arguments.end());
     Argv.push_back(nullptr);
   } else {
@@ -382,9 +430,10 @@ CC1Command::CC1Command(const Action &Source, const Tool &Creator,
                        ResponseFileSupport ResponseSupport,
                        const char *Executable,
                        const llvm::opt::ArgStringList &Arguments,
-                       ArrayRef<InputInfo> Inputs, ArrayRef<InputInfo> Outputs)
+                       ArrayRef<InputInfo> Inputs, ArrayRef<InputInfo> Outputs,
+                       const char *PrependArg)
     : Command(Source, Creator, ResponseSupport, Executable, Arguments, Inputs,
-              Outputs) {
+              Outputs, PrependArg) {
   InProcess = true;
 }
 
@@ -436,30 +485,6 @@ void CC1Command::setEnvironment(llvm::ArrayRef<const char *> NewEnvironment) {
   // We don't support set a new environment when calling into ExecuteCC1Tool()
   llvm_unreachable(
       "The CC1Command doesn't support changing the environment vars!");
-}
-
-ForceSuccessCommand::ForceSuccessCommand(
-    const Action &Source_, const Tool &Creator_,
-    ResponseFileSupport ResponseSupport, const char *Executable_,
-    const llvm::opt::ArgStringList &Arguments_, ArrayRef<InputInfo> Inputs,
-    ArrayRef<InputInfo> Outputs)
-    : Command(Source_, Creator_, ResponseSupport, Executable_, Arguments_,
-              Inputs, Outputs) {}
-
-void ForceSuccessCommand::Print(raw_ostream &OS, const char *Terminator,
-                            bool Quote, CrashReportInfo *CrashInfo) const {
-  Command::Print(OS, "", Quote, CrashInfo);
-  OS << " || (exit 0)" << Terminator;
-}
-
-int ForceSuccessCommand::Execute(ArrayRef<std::optional<StringRef>> Redirects,
-                                 std::string *ErrMsg,
-                                 bool *ExecutionFailed) const {
-  int Status = Command::Execute(Redirects, ErrMsg, ExecutionFailed);
-  (void)Status;
-  if (ExecutionFailed)
-    *ExecutionFailed = false;
-  return 0;
 }
 
 void JobList::Print(raw_ostream &OS, const char *Terminator, bool Quote,

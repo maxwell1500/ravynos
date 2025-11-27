@@ -1,8 +1,9 @@
+// XFAIL: *
 // RUN: rm -rf %t
 // RUN: split-file %s %t
 // RUN: sed -e "s@INPUT_DIR@%{/t:regex_replacement}@g" \
 // RUN: %t/reference.output.json.in >> %t/reference.output.json
-// RUN: %clang_cc1 -extract-api -triple arm64-apple-macosx \
+// RUN: %clang_cc1 -extract-api --pretty-sgf -triple arm64-apple-macosx \
 // RUN:   -x c-header %t/input.h -o %t/output.json -verify
 
 // Generator version is not consistent across test runs, normalize it.
@@ -94,6 +95,10 @@ struct Vehicle {
           "kind": "typeIdentifier",
           "preciseIdentifier": "c:i",
           "spelling": "unsigned int"
+        },
+        {
+          "kind": "text",
+          "spelling": ";"
         }
       ],
       "docComment": {
@@ -101,12 +106,12 @@ struct Vehicle {
           {
             "range": {
               "end": {
-                "character": 29,
-                "line": 3
+                "character": 28,
+                "line": 2
               },
               "start": {
-                "character": 9,
-                "line": 3
+                "character": 8,
+                "line": 2
               }
             },
             "text": "The type of vehicle."
@@ -123,8 +128,8 @@ struct Vehicle {
       },
       "location": {
         "position": {
-          "character": 5,
-          "line": 4
+          "character": 4,
+          "line": 3
         },
         "uri": "file://INPUT_DIR/input.h"
       },
@@ -159,8 +164,8 @@ struct Vehicle {
       },
       "location": {
         "position": {
-          "character": 9,
-          "line": 5
+          "character": 8,
+          "line": 4
         },
         "uri": "file://INPUT_DIR/input.h"
       },
@@ -202,8 +207,8 @@ struct Vehicle {
       },
       "location": {
         "position": {
-          "character": 9,
-          "line": 6
+          "character": 8,
+          "line": 5
         },
         "uri": "file://INPUT_DIR/input.h"
       },
@@ -241,6 +246,10 @@ struct Vehicle {
         {
           "kind": "identifier",
           "spelling": "Vehicle"
+        },
+        {
+          "kind": "text",
+          "spelling": ";"
         }
       ],
       "docComment": {
@@ -248,12 +257,12 @@ struct Vehicle {
           {
             "range": {
               "end": {
-                "character": 14,
-                "line": 1
+                "character": 13,
+                "line": 0
               },
               "start": {
-                "character": 5,
-                "line": 1
+                "character": 4,
+                "line": 0
               }
             },
             "text": "A Vehicle"
@@ -270,8 +279,8 @@ struct Vehicle {
       },
       "location": {
         "position": {
-          "character": 8,
-          "line": 2
+          "character": 7,
+          "line": 1
         },
         "uri": "file://INPUT_DIR/input.h"
       },
@@ -308,6 +317,10 @@ struct Vehicle {
         {
           "kind": "identifier",
           "spelling": "type"
+        },
+        {
+          "kind": "text",
+          "spelling": ";"
         }
       ],
       "identifier": {
@@ -320,8 +333,8 @@ struct Vehicle {
       },
       "location": {
         "position": {
-          "character": 7,
-          "line": 7
+          "character": 6,
+          "line": 6
         },
         "uri": "file://INPUT_DIR/input.h"
       },
@@ -359,6 +372,10 @@ struct Vehicle {
         {
           "kind": "identifier",
           "spelling": "information"
+        },
+        {
+          "kind": "text",
+          "spelling": ";"
         }
       ],
       "identifier": {
@@ -371,8 +388,8 @@ struct Vehicle {
       },
       "location": {
         "position": {
-          "character": 7,
-          "line": 13
+          "character": 6,
+          "line": 12
         },
         "uri": "file://INPUT_DIR/input.h"
       },

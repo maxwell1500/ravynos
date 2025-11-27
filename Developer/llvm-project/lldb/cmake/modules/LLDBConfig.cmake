@@ -7,6 +7,7 @@ set(LLDB_INCLUDE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
 set(LLDB_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR})
 set(LLDB_BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR})
+set(LLDB_OBJ_DIR ${CMAKE_CURRENT_BINARY_DIR})
 
 if(CMAKE_SOURCE_DIR STREQUAL CMAKE_BINARY_DIR)
   message(FATAL_ERROR
@@ -56,7 +57,17 @@ macro(add_optional_dependency variable description package found)
   message(STATUS "${description}: ${${variable}}")
 endmacro()
 
-add_optional_dependency(LLDB_ENABLE_SWIG "Enable SWIG to generate LLDB bindings" SWIG SWIG_FOUND VERSION 3)
+add_optional_dependency(LLDB_ENABLE_SWIG "Enable SWIG to generate LLDB bindings" SWIG SWIG_FOUND VERSION 4)
+
+# BEGIN SWIFT MOD
+if (LLDB_ENABLE_SWIG)
+  set(LLDB_ENABLE_STATIC_BINDINGS FALSE)
+else()
+  set(LLDB_ENABLE_STATIC_BINDINGS TRUE)
+endif()
+option(LLDB_USE_STATIC_BINDINGS "Use the static Python bindings." ${LLDB_ENABLE_STATIC_BINDINGS})
+# END SWIFT MOD
+
 add_optional_dependency(LLDB_ENABLE_LIBEDIT "Enable editline support in LLDB" LibEdit LibEdit_FOUND)
 add_optional_dependency(LLDB_ENABLE_CURSES "Enable curses support in LLDB" CursesAndPanel CURSESANDPANEL_FOUND)
 add_optional_dependency(LLDB_ENABLE_LZMA "Enable LZMA compression support in LLDB" LibLZMA LIBLZMA_FOUND)
@@ -71,6 +82,24 @@ option(LLDB_NO_INSTALL_DEFAULT_RPATH "Disable default RPATH settings in binaries
 option(LLDB_USE_SYSTEM_DEBUGSERVER "Use the system's debugserver for testing (Darwin only)." OFF)
 option(LLDB_SKIP_STRIP "Whether to skip stripping of binaries when installing lldb." OFF)
 option(LLDB_SKIP_DSYM "Whether to skip generating a dSYM when installing lldb." OFF)
+option(LLDB_ENFORCE_STRICT_TEST_REQUIREMENTS
+  "Fail to configure if certain requirements are not met for testing." OFF)
+
+# BEGIN SWIFT MOD
+option(LLDB_ENABLE_WERROR "Fail and stop if a warning is triggered." ${LLVM_ENABLE_WERROR})
+if(LLDB_ENABLE_SWIFT_SUPPORT)
+  add_definitions( -DLLDB_ENABLE_SWIFT )
+else()
+  # LLVM_DISTRIBUTION_COMPONENTS may have swift-specific things in them (e.g.
+  # repl_swift). This may be set in a cache where LLDB_ENABLE_SWIFT_SUPPORT does
+  # not yet have a value. We have to touch up LLVM_DISTRIBUTION_COMPONENTS after
+  # the fact.
+  if(LLVM_DISTRIBUTION_COMPONENTS)
+    list(REMOVE_ITEM LLVM_DISTRIBUTION_COMPONENTS repl_swift)
+    set(LLVM_DISTRIBUTION_COMPONENTS ${LLVM_DISTRIBUTION_COMPONENTS} CACHE STRING "" FORCE)
+  endif()
+endif()
+# END SWIFT CODE
 
 set(LLDB_GLOBAL_INIT_DIRECTORY "" CACHE STRING
   "Path to the global lldbinit directory. Relative paths are resolved relative to the
@@ -93,6 +122,13 @@ if(LLDB_BUILD_FRAMEWORK)
   set(LLDB_FRAMEWORK_VERSION A CACHE STRING "LLDB.framework version (default is A)")
   set(LLDB_FRAMEWORK_BUILD_DIR bin CACHE STRING "Output directory for LLDB.framework")
   set(LLDB_FRAMEWORK_INSTALL_DIR Library/Frameworks CACHE STRING "Install directory for LLDB.framework")
+  if (LLDB_ENABLE_SWIFT_SUPPORT)
+    set(should_copy_swift_resources ON)
+  else()
+    set(should_copy_swift_resources OFF)
+  endif()
+
+  set(LLDB_FRAMEWORK_COPY_SWIFT_RESOURCES ${should_copy_swift_resources} CACHE BOOL "Copy the Swift headers into the resource directory of the LLDB.framework")
 
   get_filename_component(LLDB_FRAMEWORK_ABSOLUTE_BUILD_DIR ${LLDB_FRAMEWORK_BUILD_DIR} ABSOLUTE
     BASE_DIR ${CMAKE_BINARY_DIR}/${CMAKE_CFG_INTDIR})
@@ -182,6 +218,21 @@ else ()
 endif ()
 include_directories("${CMAKE_CURRENT_BINARY_DIR}/../clang/include")
 
+if(LLDB_ENABLE_SWIFT_SUPPORT)
+  if(NOT LLDB_BUILT_STANDALONE)
+    if (LLVM_EXTERNAL_SWIFT_SOURCE_DIR)
+      include_directories(${LLVM_EXTERNAL_SWIFT_SOURCE_DIR}/include)
+      include_directories(${LLVM_EXTERNAL_SWIFT_SOURCE_DIR}/stdlib/public/SwiftShims)
+    else ()
+      include_directories(${CMAKE_SOURCE_DIR}/tools/swift/include)
+      include_directories(${CMAKE_SOURCE_DIR}/tools/swift/stdlib/public/SwiftShims)
+    endif ()
+    include_directories("${CMAKE_CURRENT_BINARY_DIR}/../swift/include")
+  else ()
+    include_directories("${SWIFT_INCLUDE_DIRS}")
+  endif()
+endif()
+
 # GCC silently accepts any -Wno-<foo> option, but warns about those options
 # being unrecognized only if the compilation triggers other warnings to be
 # printed. Therefore, check for whether the compiler supports options in the
@@ -223,6 +274,15 @@ endif()
 # Use the Unicode (UTF-16) APIs by default on Win32
 if (CMAKE_SYSTEM_NAME MATCHES "Windows")
     add_definitions( -D_UNICODE -DUNICODE )
+endif()
+
+if(LLDB_ENABLE_WERROR)
+  set(flag_werror "-Werror")
+  if(MSVC)
+    set(flag_werror "/WX")
+  endif()
+  set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${flag_werror}")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${flag_werror}")
 endif()
 
 # If LLDB_VERSION_* is specified, use it, if not use LLVM_VERSION_*.
@@ -280,30 +340,6 @@ if (NOT LLVM_INSTALL_TOOLCHAIN_ONLY)
   endif()
 endif()
 
-
-# If LLDB is building against a prebuilt Clang, then the Clang resource
-# directory that LLDB is using for its embedded Clang instance needs to point
-# to the resource directory of the used Clang installation.
-if (NOT TARGET clang-resource-headers)
-  set(LLDB_CLANG_RESOURCE_DIR_NAME "${LLVM_VERSION_MAJOR}")
-  # Iterate over the possible places where the external resource directory
-  # could be and pick the first that exists.
-  foreach(CANDIDATE "${Clang_DIR}/../.." "${LLVM_DIR}" "${LLVM_LIBRARY_DIRS}"
-                    "${LLVM_BUILD_LIBRARY_DIR}"
-                    "${LLVM_LIBRARY_DIR}")
-    # Build the resource directory path by appending 'clang/<version number>'.
-    set(CANDIDATE_RESOURCE_DIR "${CANDIDATE}/clang/${LLDB_CLANG_RESOURCE_DIR_NAME}")
-    if (IS_DIRECTORY "${CANDIDATE_RESOURCE_DIR}")
-      set(LLDB_EXTERNAL_CLANG_RESOURCE_DIR "${CANDIDATE_RESOURCE_DIR}")
-      break()
-    endif()
-  endforeach()
-
-  if (NOT LLDB_EXTERNAL_CLANG_RESOURCE_DIR)
-    message(FATAL_ERROR "Expected directory for clang-resource headers not found: ${LLDB_EXTERNAL_CLANG_RESOURCE_DIR}")
-  endif()
-endif()
-
 # Find Apple-specific libraries or frameworks that may be needed.
 if (APPLE)
   if(NOT APPLE_EMBEDDED)
@@ -344,6 +380,21 @@ endif()
 if ((CMAKE_SYSTEM_NAME MATCHES "Android") AND LLVM_BUILD_STATIC AND
     ((ANDROID_ABI MATCHES "armeabi") OR (ANDROID_ABI MATCHES "mips")))
   add_definitions(-DANDROID_USE_ACCEPT_WORKAROUND)
+endif()
+
+if (CMAKE_SYSTEM_NAME MATCHES "Linux")
+  check_cxx_source_compiles(
+    "#include <asm/ptrace.h>
+     struct user_sve_header hdr;
+     int main(void){return 0;}
+    "
+    user_sve_header_available)
+  if(user_sve_header_available)
+    set(LLDB_HAVE_USER_SVE_HEADER ON)
+    message(STATUS "AArch64 SVE support enabled.")
+  else()
+    message(STATUS "AArch64 SVE support disabled.")
+  endif()
 endif()
 
 include(LLDBGenerateConfig)

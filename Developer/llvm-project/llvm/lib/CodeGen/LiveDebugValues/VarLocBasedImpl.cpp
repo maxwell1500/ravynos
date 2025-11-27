@@ -426,6 +426,8 @@ private:
       assert(MI.isDebugValue() && "not a DBG_VALUE");
       assert((MI.isDebugValueList() || MI.getNumOperands() == 4) &&
              "malformed DBG_VALUE");
+      if (Expr && Expr->isEntryValue())
+        EVKind = EntryValueLocKind::EntryValueKind;
       for (const MachineOperand &Op : MI.debug_operands()) {
         MachineLoc ML = GetLocForOp(Op);
         auto It = find(Locs, ML);
@@ -443,8 +445,7 @@ private:
 
       // We create the debug entry values from the factory functions rather
       // than from this ctor.
-      assert(EVKind != EntryValueLocKind::EntryValueKind &&
-             !isEntryBackupLoc());
+      assert(!isEntryBackupLoc());
     }
 
     static MachineLoc GetLocForOp(const MachineOperand &Op) {
@@ -1116,7 +1117,7 @@ VarLocBasedLDV::~VarLocBasedLDV() = default;
 /// location, erase the variable from the Vars set.
 void VarLocBasedLDV::OpenRangesSet::erase(const VarLoc &VL) {
   // Erasure helper.
-  auto DoErase = [VL, this](DebugVariable VarToErase) {
+  auto DoErase = [&VL, this](DebugVariable VarToErase) {
     auto *EraseFrom = VL.isEntryBackupLoc() ? &EntryValuesBackupVars : &Vars;
     auto It = EraseFrom->find(VarToErase);
     if (It != EraseFrom->end()) {
@@ -1312,7 +1313,7 @@ void VarLocBasedLDV::cleanupEntryValueTransfers(
     return;
 
   auto TransRange = EntryValTransfers.equal_range(TRInst);
-  for (auto TDPair : llvm::make_range(TransRange.first, TransRange.second)) {
+  for (auto &TDPair : llvm::make_range(TransRange.first, TransRange.second)) {
     const VarLoc &EmittedEV = VarLocIDs[TDPair.second];
     if (std::tie(EntryVL.Var, EntryVL.Locs[0].Value.RegNo, EntryVL.Expr) ==
         std::tie(EmittedEV.Var, EmittedEV.Locs[0].Value.RegNo,
@@ -1347,7 +1348,7 @@ void VarLocBasedLDV::removeEntryValue(const MachineInstr &MI,
   // Try to get non-debug instruction responsible for the DBG_VALUE.
   const MachineInstr *TransferInst = nullptr;
   Register Reg = MI.getDebugOperand(0).getReg();
-  if (Reg.isValid() && RegSetInstrs.find(Reg) != RegSetInstrs.end())
+  if (Reg.isValid() && RegSetInstrs.contains(Reg))
     TransferInst = RegSetInstrs.find(Reg)->second;
 
   // Case of the parameter's DBG_VALUE at the start of entry MBB.
@@ -2151,7 +2152,9 @@ bool VarLocBasedLDV::isEntryValueCandidate(
 
   // TODO: Add support for parameters that have a pre-existing debug expressions
   // (e.g. fragments).
-  if (MI.getDebugExpression()->getNumElements() > 0)
+  // A simple deref expression is equivalent to an indirect debug value.
+  const DIExpression *Expr = MI.getDebugExpression();
+  if (Expr->getNumElements() > 0 && !Expr->isDeref())
     return false;
 
   return true;
@@ -2160,8 +2163,8 @@ bool VarLocBasedLDV::isEntryValueCandidate(
 /// Collect all register defines (including aliases) for the given instruction.
 static void collectRegDefs(const MachineInstr &MI, DefinedRegsSet &Regs,
                            const TargetRegisterInfo *TRI) {
-  for (const MachineOperand &MO : MI.operands()) {
-    if (MO.isReg() && MO.isDef() && MO.getReg() && MO.getReg().isPhysical()) {
+  for (const MachineOperand &MO : MI.all_defs()) {
+    if (MO.getReg() && MO.getReg().isPhysical()) {
       Regs.insert(MO.getReg());
       for (MCRegAliasIterator AI(MO.getReg(), TRI, true); AI.isValid(); ++AI)
         Regs.insert(*AI);

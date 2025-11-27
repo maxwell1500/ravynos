@@ -13,6 +13,7 @@
 #include "lldb/Breakpoint/BreakpointResolver.h"
 #include "lldb/Breakpoint/BreakpointResolverName.h"
 #include "lldb/Core/PluginInterface.h"
+#include "lldb/Core/StructuredDataImpl.h"
 #include "lldb/Core/Value.h"
 #include "lldb/Core/ValueObject.h"
 #include "lldb/Expression/LLVMUserExpression.h"
@@ -67,10 +68,43 @@ public:
 
   virtual lldb::LanguageType GetLanguageType() const = 0;
 
-  virtual bool GetObjectDescription(Stream &str, ValueObject &object) = 0;
+  /// Return the preferred language runtime instance, which in most cases will
+  /// be the current instance.
+  virtual LanguageRuntime *GetPreferredLanguageRuntime(ValueObject &in_value) {
+    return nullptr;
+  }
 
-  virtual bool GetObjectDescription(Stream &str, Value &value,
-                                    ExecutionContextScope *exe_scope) = 0;
+  virtual llvm::Error GetObjectDescription(Stream &str,
+                                           ValueObject &object) = 0;
+
+  virtual llvm::Error
+  GetObjectDescription(Stream &str, Value &value,
+                       ExecutionContextScope *exe_scope) = 0;
+
+  struct VTableInfo {
+    Address addr; /// Address of the vtable's virtual function table
+    Symbol *symbol; /// The vtable symbol from the symbol table
+  };
+  /// Get the vtable information for a given value.
+  ///
+  /// \param[in] in_value
+  ///     The value object to try and extract the VTableInfo from.
+  ///
+  /// \param[in] check_type
+  ///     If true, the compiler type of \a in_value will be checked to see if
+  ///     it is an instance to, or pointer or reference to a class or struct
+  ///     that has a vtable. If the type doesn't meet the requirements, an
+  ///     error will be returned explaining why the type isn't suitable.
+  ///
+  /// \return
+  ///     An error if anything goes wrong while trying to extract the vtable
+  ///     or if \a check_type is true and the type doesn't have a vtable.
+  virtual llvm::Expected<VTableInfo> GetVTableInfo(ValueObject &in_value,
+                                                   bool check_type) {
+    return llvm::createStringError(
+        std::errc::invalid_argument,
+        "language doesn't support getting vtable information");
+  }
 
   // this call should return true if it could set the name and/or the type
   virtual bool GetDynamicTypeAndAddress(ValueObject &in_value,
@@ -98,6 +132,23 @@ public:
   // type and the discovered dynamic type
   virtual TypeAndOrName FixUpDynamicType(const TypeAndOrName &type_and_or_name,
                                          ValueObject &static_value) = 0;
+
+  /// This allows a language runtime to adjust references depending on the type.
+  /// \return true if the resulting address needs to be dereferenced.
+  virtual std::pair<lldb::addr_t, bool> FixupPointerValue(lldb::addr_t addr,
+                                                          CompilerType type) {
+    return {addr, false};
+  }
+
+  /// This allows a language runtime to adjust references depending on the type.
+  virtual lldb::addr_t FixupAddress(lldb::addr_t addr, CompilerType type,
+                                    Status &error) {
+    return addr;
+  }
+
+  /// \return whether the dynamic value stored in a Swift fixed buffer
+  /// fits into that buffer or is indirect and allocated on the heap.
+  virtual bool IsStoredInlineInBuffer(CompilerType type) { return true; }
 
   virtual void SetExceptionBreakpoints() {}
 
@@ -164,6 +215,11 @@ public:
     return false;
   }
 
+  // FIXME: This should be upstreamed into llvm.org, but only
+  // SwiftLanguageRuntime overrides this. That means that upstreaming in its
+  // current form would be introducing dead code into llvm.org
+  virtual bool IsSymbolARuntimeThunk(const Symbol &symbol) { return false; }
+
   // Given the name of a runtime symbol (e.g. in Objective-C, an ivar offset
   // symbol), try to determine from the runtime what the value of that symbol
   // would be. Useful when the underlying binary is stripped.
@@ -173,6 +229,27 @@ public:
 
   virtual bool isA(const void *ClassID) const { return ClassID == &ID; }
   static char ID;
+
+  /// Query the runtime for language specific metadata about the given frame.
+  ///
+  /// Properties that are common to all languages are exposed as dedicated APIs
+  /// of \c Frame and \c Function. This function complements those APIs by
+  /// producing a \c StructuredData instance that encapsulates non-common
+  /// properties about the frame and function.
+  ///
+  /// \param[in] frame
+  ///     The frame to compute metadata for.
+  ///
+  /// \return
+  ///     Returns a StructuredData containing the metadata.
+  virtual StructuredDataImpl *GetLanguageSpecificData(StackFrame &frame) {
+    return nullptr;
+  }
+
+  virtual void FindFunctionPointersInCall(StackFrame &frame,
+                                          std::vector<Address> &addresses,
+                                          bool debug_only = true,
+                                          bool resolve_thunks = true){};
 
   /// A language runtime may be able to provide a special UnwindPlan for
   /// the frame represented by the register contents \a regctx when that

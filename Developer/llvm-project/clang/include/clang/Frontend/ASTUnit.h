@@ -119,11 +119,13 @@ private:
   std::shared_ptr<PreprocessorOptions>    PPOpts;
   IntrusiveRefCntPtr<ASTReader> Reader;
   bool HadModuleLoaderFatalFailure = false;
+  bool StorePreamblesInMemory = false;
 
   struct ASTWriterData;
   std::unique_ptr<ASTWriterData> WriterData;
 
   FileSystemOptions FileSystemOpts;
+  std::string PreambleStoragePath;
 
   /// The AST consumer that received information about the translation
   /// unit as it was parsed or loaded.
@@ -641,7 +643,7 @@ public:
   bool visitLocalTopLevelDecls(void *context, DeclVisitorFn Fn);
 
   /// Get the PCH file if one was included.
-  const FileEntry *getPCHFile();
+  OptionalFileEntryRef getPCHFile();
 
   /// Returns true if the ASTUnit was constructed from a serialized
   /// module file.
@@ -687,17 +689,16 @@ public:
   /// lifetime is expected to extend past that of the returned ASTUnit.
   ///
   /// \returns - The initialized ASTUnit or null if the AST failed to load.
-  static std::unique_ptr<ASTUnit>
-  LoadFromASTFile(const std::string &Filename,
-                  const PCHContainerReader &PCHContainerRdr, WhatToLoad ToLoad,
-                  IntrusiveRefCntPtr<DiagnosticsEngine> Diags,
-                  const FileSystemOptions &FileSystemOpts,
-                  bool UseDebugInfo = false, bool OnlyLocalDecls = false,
-                  CaptureDiagsKind CaptureDiagnostics = CaptureDiagsKind::None,
-                  bool AllowASTWithCompilerErrors = false,
-                  bool UserFilesAreVolatile = false,
-                  IntrusiveRefCntPtr<llvm::vfs::FileSystem> VFS =
-                      llvm::vfs::getRealFileSystem());
+  static std::unique_ptr<ASTUnit> LoadFromASTFile(
+      const std::string &Filename, const PCHContainerReader &PCHContainerRdr,
+      WhatToLoad ToLoad, IntrusiveRefCntPtr<DiagnosticsEngine> Diags,
+      const FileSystemOptions &FileSystemOpts,
+      std::shared_ptr<HeaderSearchOptions> HSOpts, bool OnlyLocalDecls = false,
+      CaptureDiagsKind CaptureDiagnostics = CaptureDiagsKind::None,
+      bool AllowASTWithCompilerErrors = false,
+      bool UserFilesAreVolatile = false,
+      IntrusiveRefCntPtr<llvm::vfs::FileSystem> VFS =
+          llvm::vfs::getRealFileSystem());
 
 private:
   /// Helper function for \c LoadFromCompilerInvocation() and
@@ -802,6 +803,13 @@ public:
   ///
   /// \param ResourceFilesPath - The path to the compiler resource files.
   ///
+  /// \param StorePreamblesInMemory - Whether to store PCH in memory. If false,
+  /// PCH are stored in temporary files.
+  ///
+  /// \param PreambleStoragePath - The path to a directory, in which to create
+  /// temporary PCH files. If empty, the default system temporary directory is
+  /// used. This parameter is ignored if \p StorePreamblesInMemory is true.
+  ///
   /// \param ModuleFormat - If provided, uses the specific module format.
   ///
   /// \param ErrAST - If non-null and parsing failed without any AST to return
@@ -816,11 +824,12 @@ public:
   ///
   // FIXME: Move OnlyLocalDecls, UseBumpAllocator to setters on the ASTUnit, we
   // shouldn't need to specify them at construction time.
-  static ASTUnit *LoadFromCommandLine(
+  static std::unique_ptr<ASTUnit> LoadFromCommandLine(
       const char **ArgBegin, const char **ArgEnd,
       std::shared_ptr<PCHContainerOperations> PCHContainerOps,
       IntrusiveRefCntPtr<DiagnosticsEngine> Diags, StringRef ResourceFilesPath,
-      bool OnlyLocalDecls = false,
+      bool StorePreamblesInMemory = false,
+      StringRef PreambleStoragePath = StringRef(), bool OnlyLocalDecls = false,
       CaptureDiagsKind CaptureDiagnostics = CaptureDiagsKind::None,
       ArrayRef<RemappedFile> RemappedFiles = std::nullopt,
       bool RemappedFilesKeepOriginalName = true,

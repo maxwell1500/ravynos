@@ -14,11 +14,14 @@
 #include "clang/Basic/DiagnosticOptions.h"
 #include "clang/Basic/FileEntry.h"
 #include "clang/Basic/LangStandard.h"
+#include "clang/CAS/IncludeTree.h"
 #include "clang/Basic/Sarif.h"
+#include "clang/Basic/Stack.h"
 #include "clang/Frontend/ASTUnit.h"
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Frontend/FrontendDiagnostic.h"
 #include "clang/Frontend/FrontendPluginRegistry.h"
+#include "clang/Frontend/IncludeTreePPActions.h"
 #include "clang/Frontend/LayoutOverrideSource.h"
 #include "clang/Frontend/MultiplexConsumer.h"
 #include "clang/Frontend/SARIFDiagnosticPrinter.h"
@@ -306,7 +309,7 @@ operator+=(SmallVectorImpl<char> &Includes, StringRef RHS) {
 static void addHeaderInclude(StringRef HeaderName,
                              SmallVectorImpl<char> &Includes,
                              const LangOptions &LangOpts,
-                             bool IsExternC) {
+                             llvm::PrefixMapper &PrefixMapper, bool IsExternC) {
   if (IsExternC && LangOpts.CPlusPlus)
     Includes += "extern \"C\" {\n";
   if (LangOpts.ObjC)
@@ -314,7 +317,13 @@ static void addHeaderInclude(StringRef HeaderName,
   else
     Includes += "#include \"";
 
-  Includes += HeaderName;
+  if (PrefixMapper.empty() || llvm::sys::path::is_relative(HeaderName)) {
+    Includes += HeaderName;
+  } else {
+    SmallString<128> MappedPath;
+    PrefixMapper.map(HeaderName, MappedPath);
+    Includes += MappedPath;
+  }
 
   Includes += "\"\n";
   if (IsExternC && LangOpts.CPlusPlus)
@@ -329,8 +338,9 @@ static void addHeaderInclude(StringRef HeaderName,
 /// \param Includes Will be augmented with the set of \#includes or \#imports
 /// needed to load all of the named headers.
 static std::error_code collectModuleHeaderIncludes(
-    const LangOptions &LangOpts, FileManager &FileMgr, DiagnosticsEngine &Diag,
-    ModuleMap &ModMap, clang::Module *Module, SmallVectorImpl<char> &Includes) {
+    const LangOptions &LangOpts, llvm::PrefixMapper &PrefixMapper,
+    FileManager &FileMgr, DiagnosticsEngine &Diag, ModuleMap &ModMap,
+    clang::Module *Module, SmallVectorImpl<char> &Includes) {
   // Don't collect any headers for unavailable modules.
   if (!Module->isAvailable())
     return std::error_code();
@@ -359,27 +369,27 @@ static std::error_code collectModuleHeaderIncludes(
       // the module map file) so this will find the same file that we found
       // while parsing the module map.
       addHeaderInclude(H.PathRelativeToRootModuleDirectory, Includes, LangOpts,
-                       Module->IsExternC);
+                       PrefixMapper, Module->IsExternC);
     }
   }
   // Note that Module->PrivateHeaders will not be a TopHeader.
 
-  if (Module::Header UmbrellaHeader = Module->getUmbrellaHeader()) {
-    Module->addTopHeader(UmbrellaHeader.Entry);
+  if (std::optional<Module::Header> UmbrellaHeader =
+          Module->getUmbrellaHeaderAsWritten()) {
+    Module->addTopHeader(UmbrellaHeader->Entry);
     if (Module->Parent)
       // Include the umbrella header for submodules.
-      addHeaderInclude(UmbrellaHeader.PathRelativeToRootModuleDirectory,
-                       Includes, LangOpts, Module->IsExternC);
-  } else if (Module::DirectoryName UmbrellaDir = Module->getUmbrellaDir()) {
+      addHeaderInclude(UmbrellaHeader->PathRelativeToRootModuleDirectory,
+                       Includes, LangOpts, PrefixMapper, Module->IsExternC);
+  } else if (std::optional<Module::DirectoryName> UmbrellaDir =
+                 Module->getUmbrellaDirAsWritten()) {
     // Add all of the headers we find in this subdirectory.
     std::error_code EC;
     SmallString<128> DirNative;
-    llvm::sys::path::native(UmbrellaDir.Entry->getName(), DirNative);
+    llvm::sys::path::native(UmbrellaDir->Entry.getName(), DirNative);
 
     llvm::vfs::FileSystem &FS = FileMgr.getVirtualFileSystem();
-    SmallVector<
-        std::pair<std::string, OptionalFileEntryRefDegradesToFileEntryPtr>, 8>
-        Headers;
+    SmallVector<std::pair<std::string, FileEntryRef>, 8> Headers;
     for (llvm::vfs::recursive_directory_iterator Dir(FS, DirNative, EC), End;
          Dir != End && !EC; Dir.increment(EC)) {
       // Check whether this entry has an extension typically associated with
@@ -406,7 +416,7 @@ static std::error_code collectModuleHeaderIncludes(
       for (int I = 0; I != Dir.level() + 1; ++I, ++PathIt)
         Components.push_back(*PathIt);
       SmallString<128> RelativeHeader(
-          UmbrellaDir.PathRelativeToRootModuleDirectory);
+          UmbrellaDir->PathRelativeToRootModuleDirectory);
       for (auto It = Components.rbegin(), End = Components.rend(); It != End;
            ++It)
         llvm::sys::path::append(RelativeHeader, *It);
@@ -424,16 +434,15 @@ static std::error_code collectModuleHeaderIncludes(
     for (auto &H : Headers) {
       // Include this header as part of the umbrella directory.
       Module->addTopHeader(H.second);
-      addHeaderInclude(H.first, Includes, LangOpts, Module->IsExternC);
+      addHeaderInclude(H.first, Includes, LangOpts, PrefixMapper,
+                       Module->IsExternC);
     }
   }
 
   // Recurse into submodules.
-  for (clang::Module::submodule_iterator Sub = Module->submodule_begin(),
-                                      SubEnd = Module->submodule_end();
-       Sub != SubEnd; ++Sub)
+  for (auto *Submodule : Module->submodules())
     if (std::error_code Err = collectModuleHeaderIncludes(
-            LangOpts, FileMgr, Diag, ModMap, *Sub, Includes))
+            LangOpts, PrefixMapper, FileMgr, Diag, ModMap, Submodule, Includes))
       return Err;
 
   return std::error_code();
@@ -448,7 +457,8 @@ static bool loadModuleMapForModuleBuild(CompilerInstance &CI, bool IsSystem,
 
   // Map the current input to a file.
   FileID ModuleMapID = SrcMgr.getMainFileID();
-  const FileEntry *ModuleMap = SrcMgr.getFileEntryForID(ModuleMapID);
+  OptionalFileEntryRef ModuleMap = SrcMgr.getFileEntryRefForID(ModuleMapID);
+  assert(ModuleMap && "MainFileID without FileEntry");
 
   // If the module map is preprocessed, handle the initial line marker;
   // line directives are not part of the module map syntax in general.
@@ -461,7 +471,7 @@ static bool loadModuleMapForModuleBuild(CompilerInstance &CI, bool IsSystem,
   }
 
   // Load the module map file.
-  if (HS.loadModuleMapFile(ModuleMap, IsSystem, ModuleMapID, &Offset,
+  if (HS.loadModuleMapFile(*ModuleMap, IsSystem, ModuleMapID, &Offset,
                            PresumedModuleMapFile))
     return true;
 
@@ -470,10 +480,11 @@ static bool loadModuleMapForModuleBuild(CompilerInstance &CI, bool IsSystem,
 
   // Infer framework module if possible.
   if (HS.getModuleMap().canInferFrameworkModule(ModuleMap->getDir())) {
-    SmallString<128> InferredFrameworkPath = ModuleMap->getDir()->getName();
+    SmallString<128> InferredFrameworkPath = ModuleMap->getDir().getName();
     llvm::sys::path::append(InferredFrameworkPath,
                             CI.getLangOpts().ModuleName + ".framework");
-    if (auto Dir = CI.getFileManager().getDirectory(InferredFrameworkPath))
+    if (auto Dir =
+            CI.getFileManager().getOptionalDirectoryRef(InferredFrameworkPath))
       (void)HS.getModuleMap().inferFrameworkModule(*Dir, IsSystem, nullptr);
   }
 
@@ -510,7 +521,10 @@ static Module *prepareToBuildModule(CompilerInstance &CI,
 
   // Inform the preprocessor that includes from within the input buffer should
   // be resolved relative to the build directory of the module map file.
-  CI.getPreprocessor().setMainFileDir(M->Directory);
+  CI.getPreprocessor().setMainFileDir(*M->Directory);
+
+  if (auto CacheKey = CI.getCompileJobCacheKey())
+    M->setModuleCacheKey(CacheKey->toString());
 
   // If the module was inferred from a different module map (via an expanded
   // umbrella module definition), track that fact.
@@ -519,20 +533,141 @@ static Module *prepareToBuildModule(CompilerInstance &CI,
   StringRef OriginalModuleMapName = CI.getFrontendOpts().OriginalModuleMap;
   if (!OriginalModuleMapName.empty()) {
     auto OriginalModuleMap =
-        CI.getFileManager().getFile(OriginalModuleMapName,
-                                    /*openFile*/ true);
+        CI.getFileManager().getOptionalFileRef(OriginalModuleMapName,
+                                               /*openFile*/ true);
     if (!OriginalModuleMap) {
       CI.getDiagnostics().Report(diag::err_module_map_not_found)
         << OriginalModuleMapName;
       return nullptr;
     }
-    if (*OriginalModuleMap != CI.getSourceManager().getFileEntryForID(
-                                 CI.getSourceManager().getMainFileID())) {
+    if (*OriginalModuleMap != CI.getSourceManager().getFileEntryRefForID(
+                                  CI.getSourceManager().getMainFileID())) {
       M->IsInferred = true;
-      CI.getPreprocessor().getHeaderSearchInfo().getModuleMap()
-        .setInferredModuleAllowedBy(M, *OriginalModuleMap);
+      auto FileCharacter =
+          M->IsSystem ? SrcMgr::C_System_ModuleMap : SrcMgr::C_User_ModuleMap;
+      FileID OriginalModuleMapFID = CI.getSourceManager().getOrCreateFileID(
+          *OriginalModuleMap, FileCharacter);
+      CI.getPreprocessor()
+          .getHeaderSearchInfo()
+          .getModuleMap()
+          .setInferredModuleAllowedBy(M, OriginalModuleMapFID);
     }
   }
+
+  // If we're being run from the command-line, the module build stack will not
+  // have been filled in yet, so complete it now in order to allow us to detect
+  // module cycles.
+  SourceManager &SourceMgr = CI.getSourceManager();
+  if (SourceMgr.getModuleBuildStack().empty())
+    SourceMgr.pushModuleBuildStack(CI.getLangOpts().CurrentModule,
+                                   FullSourceLoc(SourceLocation(), SourceMgr));
+  return M;
+}
+
+static Expected<Module *> makeIncludeTreeModule(CompilerInstance &CI,
+                                                cas::IncludeTree::Module Mod,
+                                                Module *Parent) {
+  ModuleMap &MMap = CI.getPreprocessor().getHeaderSearchInfo().getModuleMap();
+  auto Flags = Mod.getFlags();
+  Module *M = nullptr;
+  bool NewModule = false;
+  std::tie(M, NewModule) = MMap.findOrCreateModule(
+      Mod.getName(), Parent, Flags.IsFramework, Flags.IsExplicit);
+  assert(NewModule);
+  M->Kind = Module::IncludeTreeModuleMap;
+  M->IsExternC = Flags.IsExternC;
+  M->IsSystem = Flags.IsSystem;
+  M->InferSubmodules = Flags.InferSubmodules;
+  M->InferExplicitSubmodules = Flags.InferExplicitSubmodules;
+  M->InferExportWildcard = Flags.InferExportWildcard;
+  M->UseExportAsModuleLinkName = Flags.UseExportAsModuleLinkName;
+  M->ExportAsModule = Mod.getExportAsModule();
+
+  auto ExportList = Mod.getExports();
+  if (!ExportList)
+    return ExportList.takeError();
+  if (*ExportList) {
+    if ((*ExportList)->hasGlobalWildcard())
+      M->Exports.push_back(Module::ExportDecl(nullptr, true));
+
+    llvm::Error Err = (*ExportList)->forEachExplicitExport([&](auto Export) {
+      Module::UnresolvedExportDecl UED;
+      SmallVector<StringRef> ModuleComponents;
+      Export.ModuleName.split(ModuleComponents, '.');
+      for (StringRef Name : ModuleComponents)
+        UED.Id.push_back({std::string(Name), SourceLocation()});
+      UED.Wildcard = Export.Wildcard;
+      M->UnresolvedExports.push_back(std::move(UED));
+      return llvm::Error::success();
+    });
+    if (Err)
+      return std::move(Err);
+  }
+
+  auto LinkLibs = Mod.getLinkLibraries();
+  if (!LinkLibs)
+    return LinkLibs.takeError();
+  if (*LinkLibs) {
+    llvm::Error Err = (*LinkLibs)->forEachLinkLibrary([&](auto LL) {
+      M->LinkLibraries.emplace_back(std::string(LL.Library), LL.IsFramework);
+      return llvm::Error::success();
+    });
+    if (Err)
+      return std::move(Err);
+  }
+
+  llvm::Error Err = Mod.forEachSubmodule([&](cas::IncludeTree::Module Sub) {
+    return makeIncludeTreeModule(CI, Sub, M).takeError();
+  });
+  if (Err)
+    return std::move(Err);
+  return M;
+}
+
+/// Loads the include tree modulemap \p MM.
+/// \returns true if there was an error.
+static bool loadIncludeTreeModuleMap(CompilerInstance &CI,
+                                     cas::IncludeTree::ModuleMap MM) {
+  llvm::Error Err = MM.forEachModule([&](auto M) -> llvm::Error {
+    return makeIncludeTreeModule(CI, M, /*Parent=*/nullptr).takeError();
+  });
+  if (Err) {
+    CI.getDiagnostics().Report(diag::err_fe_unable_to_load_include_tree)
+        << CI.getFrontendOpts().CASIncludeTreeID << std::move(Err);
+    return true;
+  }
+  return false;
+}
+
+static Module *prepareToBuildModule(CompilerInstance &CI,
+                                    cas::IncludeTree::ModuleMap MM) {
+  if (CI.getLangOpts().CurrentModule.empty()) {
+    CI.getDiagnostics().Report(diag::err_missing_module_name);
+
+    // FIXME: Eventually, we could consider asking whether there was just
+    // a single module described in the module map, and use that as a
+    // default. Then it would be fairly trivial to just "compile" a module
+    // map with a single module (the common case).
+    return nullptr;
+  }
+
+  if (loadIncludeTreeModuleMap(CI, MM))
+    return nullptr;
+
+  // Dig out the module definition.
+  HeaderSearch &HS = CI.getPreprocessor().getHeaderSearchInfo();
+  Module *M = HS.lookupModule(CI.getLangOpts().CurrentModule, SourceLocation(),
+                              /*AllowSearch=*/false);
+  if (!M) {
+    CI.getDiagnostics().Report(diag::err_missing_module_include_tree)
+        << CI.getLangOpts().CurrentModule
+        << CI.getFrontendOpts().CASIncludeTreeID;
+
+    return nullptr;
+  }
+
+  if (auto CacheKey = CI.getCompileJobCacheKey())
+    M->setModuleCacheKey(CacheKey->toString());
 
   // If we're being run from the command-line, the module build stack will not
   // have been filled in yet, so complete it now in order to allow us to detect
@@ -552,11 +687,13 @@ getInputBufferForModule(CompilerInstance &CI, Module *M) {
   // Collect the set of #includes we need to build the module.
   SmallString<256> HeaderContents;
   std::error_code Err = std::error_code();
-  if (Module::Header UmbrellaHeader = M->getUmbrellaHeader())
-    addHeaderInclude(UmbrellaHeader.PathRelativeToRootModuleDirectory,
-                     HeaderContents, CI.getLangOpts(), M->IsExternC);
+  if (std::optional<Module::Header> UmbrellaHeader =
+          M->getUmbrellaHeaderAsWritten())
+    addHeaderInclude(UmbrellaHeader->PathRelativeToRootModuleDirectory,
+                     HeaderContents, CI.getLangOpts(), CI.getPrefixMapper(),
+                     M->IsExternC);
   Err = collectModuleHeaderIncludes(
-      CI.getLangOpts(), FileMgr, CI.getDiagnostics(),
+      CI.getLangOpts(), CI.getPrefixMapper(), FileMgr, CI.getDiagnostics(),
       CI.getPreprocessor().getHeaderSearchInfo().getModuleMap(), M,
       HeaderContents);
 
@@ -614,7 +751,7 @@ bool FrontendAction::BeginSourceFile(CompilerInstance &CI,
     std::unique_ptr<ASTUnit> AST = ASTUnit::LoadFromASTFile(
         std::string(InputFile), CI.getPCHContainerReader(),
         ASTUnit::LoadPreprocessorOnly, ASTDiags, CI.getFileSystemOpts(),
-        CI.getCodeGenOpts().DebugTypeExtRefs);
+        /*HeaderSearchOptions=*/nullptr);
     if (!AST)
       return false;
 
@@ -682,7 +819,7 @@ bool FrontendAction::BeginSourceFile(CompilerInstance &CI,
     std::unique_ptr<ASTUnit> AST = ASTUnit::LoadFromASTFile(
         std::string(InputFile), CI.getPCHContainerReader(),
         ASTUnit::LoadEverything, Diags, CI.getFileSystemOpts(),
-        CI.getCodeGenOpts().DebugTypeExtRefs);
+        CI.getHeaderSearchOptsPtr());
 
     if (!AST)
       return false;
@@ -769,6 +906,7 @@ bool FrontendAction::BeginSourceFile(CompilerInstance &CI,
     FileManager &FileMgr = CI.getFileManager();
     PreprocessorOptions &PPOpts = CI.getPreprocessorOpts();
     StringRef PCHInclude = PPOpts.ImplicitPCHInclude;
+    CI.getLangOpts().NeededByPCHOrCompilationUsesPCH = true;
     std::string SpecificModuleCachePath = CI.getSpecificModuleCachePath();
     if (auto PCHDir = FileMgr.getOptionalDirectoryRef(PCHInclude)) {
       std::error_code EC;
@@ -798,6 +936,9 @@ bool FrontendAction::BeginSourceFile(CompilerInstance &CI,
     }
   }
 
+  if (CI.getFrontendOpts().ProgramAction == frontend::GeneratePCH)
+    CI.getLangOpts().NeededByPCHOrCompilationUsesPCH = true;
+
   // Set up the preprocessor if needed. When parsing model files the
   // preprocessor of the original source is reused.
   if (!isModelParsingAction())
@@ -821,11 +962,9 @@ bool FrontendAction::BeginSourceFile(CompilerInstance &CI,
              "trying to build a header unit without a Pre-processor?");
       HeaderSearch &HS = CI.getPreprocessor().getHeaderSearchInfo();
       // Relative searches begin from CWD.
-      const DirectoryEntry *Dir = nullptr;
-      if (auto DirOrErr = CI.getFileManager().getDirectory("."))
-        Dir = *DirOrErr;
-      SmallVector<std::pair<const FileEntry *, const DirectoryEntry *>, 1> CWD;
-      CWD.push_back({nullptr, Dir});
+      auto Dir = CI.getFileManager().getOptionalDirectoryRef(".");
+      SmallVector<std::pair<const FileEntry *, DirectoryEntryRef>, 1> CWD;
+      CWD.push_back({nullptr, *Dir});
       OptionalFileEntryRef FE =
           HS.LookupFile(FileName, SourceLocation(),
                         /*Angled*/ Input.getKind().getHeaderUnitKind() ==
@@ -848,6 +987,48 @@ bool FrontendAction::BeginSourceFile(CompilerInstance &CI,
     if (CI.getLangOpts().ModuleName.empty())
       CI.getLangOpts().ModuleName = std::string(FileName);
     CI.getLangOpts().CurrentModule = CI.getLangOpts().ModuleName;
+  }
+
+  auto reportError = [&](llvm::Error &&E) -> bool {
+    std::string IncludeTreeID =
+        CI.getOrCreateObjectStore().getID(Input.getIncludeTree()).toString();
+    CI.getDiagnostics().Report(diag::err_fe_unable_to_load_include_tree)
+        << IncludeTreeID << llvm::toString(std::move(E));
+    return false;
+  };
+
+  std::optional<cas::IncludeTreeRoot> IncludeTreeRoot;
+  std::optional<cas::IncludeTree::File> IncludeTreePCH;
+  if (Input.isIncludeTree()) {
+    if (llvm::Error E = cas::IncludeTreeRoot::get(CI.getOrCreateObjectStore(),
+                                                  Input.getIncludeTree())
+                            .moveInto(IncludeTreeRoot))
+      return reportError(std::move(E));
+
+    Expected<std::unique_ptr<PPCachedActions>> PPCachedAct =
+        createPPActionsFromIncludeTree(*IncludeTreeRoot);
+    if (!PPCachedAct)
+      return reportError(PPCachedAct.takeError());
+    CI.getPreprocessor().setPPCachedActions(std::move(*PPCachedAct));
+    CI.getFrontendOpts().IncludeTimestamps = false;
+
+    if (llvm::Error E = IncludeTreeRoot->getPCH().moveInto(IncludeTreePCH))
+      return reportError(std::move(E));
+
+    auto ModMap = IncludeTreeRoot->getModuleMap();
+    if (!ModMap)
+      return reportError(ModMap.takeError());
+    if (*ModMap) {
+      if (CI.getFrontendOpts().ProgramAction == frontend::GenerateModule) {
+        auto *CurrentModule = prepareToBuildModule(CI, **ModMap);
+        if (!CurrentModule)
+          return false;
+        CI.getLangOpts().setCompilingModule(LangOptions::CMK_ModuleMap);
+      } else {
+        if (loadIncludeTreeModuleMap(CI, **ModMap))
+          return false;
+      }
+    }
   }
 
   if (!CI.InitializeSourceManager(Input))
@@ -910,12 +1091,19 @@ bool FrontendAction::BeginSourceFile(CompilerInstance &CI,
 
   // If we were asked to load any module map files, do so now.
   for (const auto &Filename : CI.getFrontendOpts().ModuleMapFiles) {
-    if (auto File = CI.getFileManager().getFile(Filename))
+    if (auto File = CI.getFileManager().getOptionalFileRef(Filename))
       CI.getPreprocessor().getHeaderSearchInfo().loadModuleMapFile(
           *File, /*IsSystem*/false);
     else
       CI.getDiagnostics().Report(diag::err_module_map_not_found) << Filename;
   }
+
+  // Provide any modules from the action cache.
+  for (const auto &KeyPair : CI.getFrontendOpts().ModuleCacheKeys)
+    if (CI.addCachedModuleFile(KeyPair.first, KeyPair.second,
+                               "-fmodule-file-cache-key"))
+      return false;
+
 
   // If compiling implementation of a module, load its module map file now.
   (void)CI.getPreprocessor().getCurrentModuleImplementation();
@@ -958,7 +1146,8 @@ bool FrontendAction::BeginSourceFile(CompilerInstance &CI,
       CI.setASTReader(static_cast<ASTReader *>(FinalReader.get()));
       CI.getASTContext().setExternalSource(source);
     } else if (CI.getLangOpts().Modules ||
-               !CI.getPreprocessorOpts().ImplicitPCHInclude.empty()) {
+               !CI.getPreprocessorOpts().ImplicitPCHInclude.empty() ||
+               IncludeTreePCH) {
       // Use PCM or PCH.
       assert(hasPCHSupport() && "This action does not have PCH support!");
       ASTDeserializationListener *DeserialListener =
@@ -976,12 +1165,27 @@ bool FrontendAction::BeginSourceFile(CompilerInstance &CI,
             DeserialListener, DeleteDeserialListener);
         DeleteDeserialListener = true;
       }
-      if (!CI.getPreprocessorOpts().ImplicitPCHInclude.empty()) {
+      if (!CI.getPreprocessorOpts().ImplicitPCHInclude.empty() ||
+          IncludeTreePCH) {
+        StringRef PCHPath;
+        DisableValidationForModuleKind DisableValidation;
+        std::unique_ptr<llvm::MemoryBuffer> PCHBuffer;
+        if (IncludeTreePCH) {
+          // No need to do any validation.
+          DisableValidation = DisableValidationForModuleKind::All;
+          if (llvm::Error E =
+                  IncludeTreePCH->getMemoryBuffer().moveInto(PCHBuffer))
+            return reportError(std::move(E));
+          PCHPath = PCHBuffer->getBufferIdentifier();
+        } else {
+          PCHPath = CI.getPreprocessorOpts().ImplicitPCHInclude;
+          DisableValidation =
+              CI.getPreprocessorOpts().DisablePCHOrModuleValidation;
+        }
         CI.createPCHExternalASTSource(
-            CI.getPreprocessorOpts().ImplicitPCHInclude,
-            CI.getPreprocessorOpts().DisablePCHOrModuleValidation,
+            PCHPath, DisableValidation,
             CI.getPreprocessorOpts().AllowPCHWithCompilerErrors,
-            DeserialListener, DeleteDeserialListener);
+            DeserialListener, DeleteDeserialListener, std::move(PCHBuffer));
         if (!CI.getASTContext().getExternalSource())
           return false;
       }
@@ -995,6 +1199,10 @@ bool FrontendAction::BeginSourceFile(CompilerInstance &CI,
                                                       DeleteDeserialListener);
       }
     }
+
+    if (!CI.getFrontendOpts().CASIncludeTreeID.empty())
+      CI.getASTContext().setCASIncludeTreeID(
+          CI.getFrontendOpts().CASIncludeTreeID);
 
     CI.setASTConsumer(std::move(Consumer));
     if (!CI.hasASTConsumer())
@@ -1117,6 +1325,9 @@ void FrontendAction::EndSourceFile() {
   // FrontendAction.
   CI.clearOutputFiles(/*EraseFiles=*/shouldEraseOutputFiles());
 
+  // The resources are owned by AST when the current file is AST.
+  // So we reset the resources here to avoid users accessing it
+  // accidently.
   if (isCurrentFileAST()) {
     if (DisableFree) {
       CI.resetAndLeakPreprocessor();
@@ -1147,6 +1358,10 @@ void ASTFrontendAction::ExecuteAction() {
   CompilerInstance &CI = getCompilerInstance();
   if (!CI.hasPreprocessor())
     return;
+  // This is a fallback: If the client forgets to invoke this, we mark the
+  // current stack as the bottom. Though not optimal, this could help prevent
+  // stack overflow during deep recursion.
+  clang::noteBottomOfStack();
 
   // FIXME: Move the truncation aspect of this into Sema, we delayed this till
   // here so the source manager would be initialized.

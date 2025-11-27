@@ -13,6 +13,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include "lldb/Breakpoint/BreakpointList.h"
@@ -23,21 +24,35 @@
 #include "lldb/Core/ModuleList.h"
 #include "lldb/Core/StructuredDataImpl.h"
 #include "lldb/Core/UserSettingsController.h"
+#include "lldb/Core/SwiftScratchContextReader.h"
 #include "lldb/Expression/Expression.h"
 #include "lldb/Host/ProcessLaunchInfo.h"
+#include "lldb/Interpreter/OptionValueBoolean.h"
+#include "lldb/Interpreter/OptionValueEnumeration.h"
+#include "lldb/Interpreter/OptionValueFileSpec.h"
+#include "lldb/Symbol/SymbolContext.h"
 #include "lldb/Symbol/TypeSystem.h"
+#include "lldb/Target/ABI.h"
 #include "lldb/Target/ExecutionContextScope.h"
 #include "lldb/Target/PathMappingList.h"
 #include "lldb/Target/SectionLoadHistory.h"
 #include "lldb/Target/Statistics.h"
 #include "lldb/Target/ThreadSpec.h"
 #include "lldb/Utility/ArchSpec.h"
+#include "lldb/Utility/Args.h"
 #include "lldb/Utility/Broadcaster.h"
 #include "lldb/Utility/LLDBAssert.h"
 #include "lldb/Utility/Timeout.h"
 #include "lldb/lldb-public.h"
 
+#include <optional>
+
 namespace lldb_private {
+
+class ClangModulesDeclVendor;
+class SwiftPersistentExpressionState;
+class SharedMutex;
+class SwiftASTContextForExpressions;
 
 OptionEnumValues GetDynamicValueTypes();
 
@@ -147,11 +162,43 @@ public:
 
   void AppendExecutableSearchPaths(const FileSpec &);
 
+  FileSpec &GetSDKPath();
+
   FileSpecList GetDebugFileSearchPaths();
 
   FileSpecList GetClangModuleSearchPaths();
 
+  FileSpecList GetSwiftFrameworkSearchPaths();
+
+  FileSpecList GetSwiftModuleSearchPaths();
+
+  llvm::StringRef GetSwiftExtraClangFlags() const;
+
+  llvm::StringRef GetSwiftClangOverrideOptions() const;
+
+  bool GetSwiftReadMetadataFromFileCache() const;
+
+  bool GetSwiftUseReflectionSymbols() const;
+  
+  bool GetSwiftReadMetadataFromDSYM() const;
+
+  bool GetSwiftDiscoverImplicitSearchPaths() const;
+
+  bool GetSwiftEnableBareSlashRegex() const;
+
+  bool GetSwiftAllowExplicitModules() const;
+
+  AutoBool GetSwiftPCMValidation() const;
+
+  Args GetSwiftPluginServerForPath() const;
+
+  bool GetSwiftAutoImportFrameworks() const;
+
   bool GetEnableAutoImportClangModules() const;
+
+  bool GetUseAllCompilerFlags() const;
+
+  void SetUseAllCompilerFlags(bool b);
 
   ImportStdModule GetImportStdModule() const;
 
@@ -198,11 +245,17 @@ public:
 
   bool GetBreakpointsConsultPlatformAvoidList();
 
-  lldb::LanguageType GetLanguage() const;
+  SourceLanguage GetLanguage() const;
 
   llvm::StringRef GetExpressionPrefixContents();
 
   uint64_t GetExprErrorLimit() const;
+
+  uint64_t GetExprAllocAddress() const;
+
+  uint64_t GetExprAllocSize() const;
+
+  uint64_t GetExprAllocAlign() const;
 
   bool GetUseHexImmediates() const;
 
@@ -249,6 +302,12 @@ public:
   void SetDebugUtilityExpression(bool debug);
 
   bool GetDebugUtilityExpression() const;
+
+  /// Trampoline support includes stepping through trampolines directly to their
+  /// targets, stepping out of trampolines directly to their callers, and
+  /// automatically filtering out trampolines as possible breakpoint locations
+  /// when set by name.
+  bool GetEnableTrampolineSupport() const;
 
 private:
   // Callbacks for m_launch_info.
@@ -300,9 +359,18 @@ public:
     m_execution_policy = policy;
   }
 
-  lldb::LanguageType GetLanguage() const { return m_language; }
+  SourceLanguage GetLanguage() const { return m_language; }
 
-  void SetLanguage(lldb::LanguageType language) { m_language = language; }
+  void SetLanguage(lldb::LanguageType language_type) {
+    m_language = SourceLanguage(language_type);
+  }
+
+  /// Set the language using a pair of language code and version as
+  /// defined by the DWARF 6 specification.
+  /// WARNING: These codes may change until DWARF 6 is finalized.
+  void SetLanguage(uint16_t name, uint32_t version) {
+    m_language = SourceLanguage(name, version);
+  }
 
   bool DoesCoerceToId() const { return m_coerce_to_id; }
 
@@ -384,6 +452,28 @@ public:
 
   void SetREPLEnabled(bool b) { m_repl = b; }
 
+  bool GetPlaygroundTransformEnabled() const { return m_playground; }
+
+  void SetPlaygroundTransformEnabled(bool b) {
+    m_playground = b;
+  }
+
+  lldb::BindGenericTypes GetBindGenericTypes() const {
+    return m_bind_generic_types;
+  }
+
+  void SetBindGenericTypes(lldb::BindGenericTypes b) {
+    m_bind_generic_types = b;
+  }
+
+  bool GetPlaygroundTransformHighPerformance() const {
+    return m_playground_transforms_hp;
+  }
+
+  void SetPlaygroundTransformHighPerformance(bool b) {
+    m_playground_transforms_hp = b;
+  }
+
   void SetCancelCallback(lldb::ExpressionCancelCallback callback, void *baton) {
     m_cancel_callback_baton = baton;
     m_cancel_callback = callback;
@@ -413,9 +503,13 @@ public:
 
   uint32_t GetPoundLineLine() const { return m_pound_line_line; }
 
-  void SetResultIsInternal(bool b) { m_result_is_internal = b; }
+  uint32_t GetExpressionNumber() const;
 
-  bool GetResultIsInternal() const { return m_result_is_internal; }
+  void SetSuppressPersistentResult(bool b) { m_suppress_persistent_result = b; }
+
+  bool GetSuppressPersistentResult() const {
+    return m_suppress_persistent_result;
+  }
 
   void SetAutoApplyFixIts(bool b) { m_auto_apply_fixits = b; }
 
@@ -431,9 +525,13 @@ public:
 
   void SetIsForUtilityExpr(bool b) { m_running_utility_expression = b; }
 
+  void SetPreparePlaygroundStubFunctions(bool b) { m_prepare_playground_stub_functions = b; }
+
+  bool GetPreparePlaygroundStubFunctions() const { return m_prepare_playground_stub_functions; }
+
 private:
   ExecutionPolicy m_execution_policy = default_execution_policy;
-  lldb::LanguageType m_language = lldb::eLanguageTypeUnknown;
+  SourceLanguage m_language;
   std::string m_prefix;
   bool m_coerce_to_id = false;
   bool m_unwind_on_error = true;
@@ -444,25 +542,33 @@ private:
   bool m_debug = false;
   bool m_trap_exceptions = true;
   bool m_repl = false;
+  bool m_playground = false;
+  bool m_playground_transforms_hp = true;
   bool m_generate_debug_info = false;
   bool m_ansi_color_errors = false;
-  bool m_result_is_internal = false;
+  bool m_suppress_persistent_result = false;
   bool m_auto_apply_fixits = true;
   uint64_t m_retries_with_fixits = 1;
   /// True if the executed code should be treated as utility code that is only
   /// used by LLDB internally.
   bool m_running_utility_expression = false;
 
+  lldb::BindGenericTypes m_bind_generic_types = lldb::eBindAuto;
+
   lldb::DynamicValueType m_use_dynamic = lldb::eNoDynamicValues;
   Timeout<std::micro> m_timeout = default_timeout;
   Timeout<std::micro> m_one_thread_timeout = std::nullopt;
   lldb::ExpressionCancelCallback m_cancel_callback = nullptr;
+  mutable uint32_t m_expr_number = 0; // A 1 based integer that increases with
+                                      // each expression type (normal, expr,
+                                      // function, etc)
   void *m_cancel_callback_baton = nullptr;
   // If m_pound_line_file is not empty and m_pound_line_line is non-zero, use
   // #line %u "%s" before the expression content to remap where the source
   // originates
   mutable std::string m_pound_line_file;
   mutable uint32_t m_pound_line_line = 0;
+  bool m_prepare_playground_stub_functions = true;
 };
 
 // Target
@@ -504,9 +610,9 @@ public:
 
     ~TargetEventData() override;
 
-    static ConstString GetFlavorString();
+    static llvm::StringRef GetFlavorString();
 
-    ConstString GetFlavor() const override {
+    llvm::StringRef GetFlavor() const override {
       return TargetEventData::GetFlavorString();
     }
 
@@ -545,6 +651,17 @@ public:
   static void SetDefaultArchitecture(const ArchSpec &arch);
 
   bool IsDummyTarget() const { return m_is_dummy_target; }
+
+  const std::string &GetLabel() const { return m_label; }
+
+  /// Set a label for a target.
+  ///
+  /// The label cannot be used by another target or be only integral.
+  ///
+  /// \return
+  ///     The label for this target or an error if the label didn't match the
+  ///     requirements.
+  llvm::Error SetLabel(llvm::StringRef label);
 
   /// Find a binary on the system and return its Module,
   /// or return an existing Module that is already in the Target.
@@ -660,7 +777,7 @@ public:
   // Use this to create a breakpoint from a load address and a module file spec
   lldb::BreakpointSP CreateAddressInModuleBreakpoint(lldb::addr_t file_addr,
                                                      bool internal,
-                                                     const FileSpec *file_spec,
+                                                     const FileSpec &file_spec,
                                                      bool request_hardware);
 
   // Use this to create Address breakpoints:
@@ -920,7 +1037,7 @@ public:
       LoadDependentFiles load_dependent_files = eLoadDependentsDefault);
 
   bool LoadScriptingResources(std::list<Status> &errors,
-                              Stream *feedback_stream = nullptr,
+                              Stream &feedback_stream,
                               bool continue_on_error = true) {
     return m_images.LoadScriptingResourcesInTarget(
         this, errors, feedback_stream, continue_on_error);
@@ -1120,7 +1237,8 @@ public:
 
   llvm::Expected<lldb::TypeSystemSP>
   GetScratchTypeSystemForLanguage(lldb::LanguageType language,
-                                  bool create_on_demand = true);
+                                  bool create_on_demand = true,
+                                  const char *compiler_options = nullptr);
 
   std::vector<lldb::TypeSystemSP>
   GetScratchTypeSystems(bool create_on_demand = true);
@@ -1128,13 +1246,20 @@ public:
   PersistentExpressionState *
   GetPersistentExpressionStateForLanguage(lldb::LanguageType language);
 
+#ifdef LLDB_ENABLE_SWIFT
+  SwiftPersistentExpressionState *
+  GetSwiftPersistentExpressionState(ExecutionContextScope &exe_scope);
+#endif // LLDB_ENABLE_SWIFT
+
+  const TypeSystemMap &GetTypeSystemMap();
+
   // Creates a UserExpression for the given language, the rest of the
   // parameters have the same meaning as for the UserExpression constructor.
   // Returns a new-ed object which the caller owns.
 
   UserExpression *
   GetUserExpressionForLanguage(llvm::StringRef expr, llvm::StringRef prefix,
-                               lldb::LanguageType language,
+                               SourceLanguage language,
                                Expression::ResultType desired_type,
                                const EvaluateExpressionOptions &options,
                                ValueObject *ctx_obj, Status &error);
@@ -1157,6 +1282,30 @@ public:
   llvm::Expected<std::unique_ptr<UtilityFunction>>
   CreateUtilityFunction(std::string expression, std::string name,
                         lldb::LanguageType language, ExecutionContext &exe_ctx);
+
+
+#ifdef LLDB_ENABLE_SWIFT
+  /// Get the lock guarding the scratch typesystem from being re-initialized.
+  std::shared_mutex &GetSwiftScratchContextLock() {
+    return m_scratch_typesystem_lock;
+  }
+
+  std::optional<SwiftScratchContextReader>
+  GetSwiftScratchContext(Status &error, ExecutionContextScope &exe_scope,
+                         bool create_on_demand = true);
+
+  /// Return whether this is the Swift REPL.
+  bool IsSwiftREPL();
+
+  bool IsSwiftCxxInteropEnabled();
+
+  bool IsEmbeddedSwift();
+private:
+  void DisplayFallbackSwiftContextErrors(
+      SwiftASTContextForExpressions *swift_ast_ctx);
+#endif // LLDB_ENABLE_SWIFT
+
+public:
 
   // Install any files through the platform that need be to installed prior to
   // launching or attaching.
@@ -1241,6 +1390,10 @@ public:
   ///     if none can be found.
   llvm::Expected<lldb_private::Address> GetEntryPointAddress();
 
+  CompilerType GetRegisterType(const std::string &name,
+                               const lldb_private::RegisterFlags &flags,
+                               uint32_t byte_size);
+
   // Target Stop Hooks
   class StopHook : public UserID {
   public:
@@ -1287,8 +1440,8 @@ public:
 
     bool GetAutoContinue() const { return m_auto_continue; }
 
-    void GetDescription(Stream *s, lldb::DescriptionLevel level) const;
-    virtual void GetSubclassDescription(Stream *s,
+    void GetDescription(Stream &s, lldb::DescriptionLevel level) const;
+    virtual void GetSubclassDescription(Stream &s,
                                         lldb::DescriptionLevel level) const = 0;
 
   protected:
@@ -1311,7 +1464,7 @@ public:
 
     StopHookResult HandleStop(ExecutionContext &exc_ctx,
                               lldb::StreamSP output_sp) override;
-    void GetSubclassDescription(Stream *s,
+    void GetSubclassDescription(Stream &s,
                                 lldb::DescriptionLevel level) const override;
 
   private:
@@ -1333,7 +1486,7 @@ public:
     Status SetScriptCallback(std::string class_name,
                              StructuredData::ObjectSP extra_args_sp);
 
-    void GetSubclassDescription(Stream *s,
+    void GetSubclassDescription(Stream &s,
                                 lldb::DescriptionLevel level) const override;
 
   private:
@@ -1424,9 +1577,20 @@ public:
 
   void SetREPL(lldb::LanguageType language, lldb::REPLSP repl_sp);
 
+  /// Enable the use of a separate sscratch type system per lldb::Module.
+  void SetUseScratchTypesystemPerModule(bool value) {
+    m_use_scratch_typesystem_per_module = value;
+  }
+  bool UseScratchTypesystemPerModule() const {
+    return m_use_scratch_typesystem_per_module;
+  }
+
+public:
   StackFrameRecognizerManager &GetFrameRecognizerManager() {
     return *m_frame_recognizer_manager_up;
   }
+
+  void SaveScriptedLaunchInfo(lldb_private::ProcessInfo &process_info);
 
   /// Add a signal for the target.  This will get copied over to the process
   /// if the signal exists on that target.  Only the values with Yes and No are
@@ -1506,6 +1670,7 @@ protected:
   /// detect that code is running on the private state thread.
   std::recursive_mutex m_private_mutex;
   Arch m_arch;
+  std::string m_label;
   ModuleList m_images; ///< The list of images for this process (shared
                        /// libraries and anything dynamically loaded).
   SectionLoadHistory m_section_load_history;
@@ -1525,6 +1690,7 @@ protected:
   lldb::SearchFilterSP m_search_filter_sp;
   PathMappingList m_image_search_paths;
   TypeSystemMap m_scratch_type_system_map;
+  std::map<lldb::LanguageType, bool> m_cant_make_scratch_type_system;
 
   typedef std::map<lldb::LanguageType, lldb::REPLSP> REPLMap;
   REPLMap m_repl_map;
@@ -1549,6 +1715,15 @@ protected:
   /// more usefully in the Dummy target where you can't know exactly what
   /// signals you will have.
   llvm::StringMap<DummySignalValues> m_dummy_signals;
+
+  bool m_use_scratch_typesystem_per_module = false;
+  bool m_did_display_scratch_fallback_warning = false;
+  typedef std::pair<lldb_private::Module *, char> ModuleLanguage;
+  llvm::DenseMap<ModuleLanguage, lldb::TypeSystemSP>
+      m_scratch_typesystem_for_module;
+
+  /// Guards the scratch typesystem from being re-initialized.
+  std::shared_mutex m_scratch_typesystem_lock;
 
   static void ImageSearchPathsChanged(const PathMappingList &path_list,
                                       void *baton);
@@ -1599,6 +1774,16 @@ private:
 
   Target(const Target &) = delete;
   const Target &operator=(const Target &) = delete;
+
+#ifdef LLDB_ENABLE_SWIFT
+  LazyBool m_is_swift_cxx_interop_enabled = eLazyBoolCalculate;
+#endif // LLDB_ENABLE_SWIFT
+
+private:
+  void CallLocateModuleCallbackIfSet(const ModuleSpec &module_spec,
+                                     lldb::ModuleSP &module_sp,
+                                     FileSpec &symbol_file_spec,
+                                     bool &did_create_module);
 };
 
 } // namespace lldb_private

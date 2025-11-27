@@ -35,9 +35,16 @@ class Value;
 /// Pass to remove unused function declarations.
 class GlobalDCEPass : public PassInfoMixin<GlobalDCEPass> {
 public:
+  GlobalDCEPass(bool InLTOPostLink = false) : InLTOPostLink(InLTOPostLink) {}
+
   PreservedAnalyses run(Module &M, ModuleAnalysisManager &);
 
+  void printPipeline(raw_ostream &OS,
+                     function_ref<StringRef(StringRef)> MapClassName2PassName);
+
 private:
+  bool InLTOPostLink = false;
+
   SmallPtrSet<GlobalValue*, 32> AliveGlobals;
 
   /// Global -> Global that uses this global.
@@ -54,14 +61,16 @@ private:
   DenseMap<Metadata *, SmallSet<std::pair<GlobalVariable *, uint64_t>, 4>>
       TypeIdMap;
 
-  // Global variables which are vtables, and which we have enough information
-  // about to safely do dead virtual function elimination.
-  SmallPtrSet<GlobalValue *, 32> VFESafeVTables;
+  /// VTable -> set of vfuncs. This only contains vtables for which we have
+  /// enough information to safely do dead virtual function elimination, and
+  /// only contains vfuncs that are within the range specified in
+  /// !vcall_visibility).
+  DenseMap<GlobalValue *, SmallPtrSet<GlobalValue *, 8>> VFESafeVTablesAndFns;
 
   void UpdateGVDependencies(GlobalValue &GV);
   void MarkLive(GlobalValue &GV,
                 SmallVectorImpl<GlobalValue *> *Updates = nullptr);
-  bool RemoveUnusedGlobalValue(GlobalValue &GV);
+  void PropagateLivenessInGlobalValues();
 
   // Dead virtual function elimination.
   void AddVirtualFunctionDependencies(Module &M);
@@ -70,6 +79,9 @@ private:
   void ScanVTableLoad(Function *Caller, Metadata *TypeId, uint64_t CallOffset);
 
   void ComputeDependencies(Value *V, SmallPtrSetImpl<GlobalValue *> &U);
+
+  GlobalValue *TargetFromConditionalUsedIfLive(MDNode *M);
+  void PropagateLivenessToConditionallyUsed(Module &M);
 };
 
 }

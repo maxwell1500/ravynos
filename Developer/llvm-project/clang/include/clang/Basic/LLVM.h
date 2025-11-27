@@ -19,9 +19,6 @@
 // dependencies.
 // Casting.h has complex templates that cannot be easily forward declared.
 #include "llvm/Support/Casting.h"
-// None.h includes an enumerator that is desired & cannot be forward declared
-// without a definition of NoneType.
-#include "llvm/ADT/None.h"
 // Add this header as a workaround to prevent `too few template arguments for
 // class template 'SmallVector'` building error with build compilers like XL.
 #include "llvm/ADT/SmallVector.h"
@@ -37,7 +34,6 @@ namespace llvm {
   template<unsigned InternalLen> class SmallString;
   template<typename T, unsigned N> class SmallVector;
   template<typename T> class SmallVectorImpl;
-  template <typename T> using Optional = std::optional<T>;
   template <class T> class Expected;
 
   template<typename T>
@@ -51,6 +47,14 @@ namespace llvm {
   class raw_ostream;
   class raw_pwrite_stream;
   // TODO: DenseMap, ...
+
+  namespace cas {
+  class ActionCache;
+  class ObjectStore;
+  class CASID;
+  class ObjectProxy;
+  class ObjectRef;
+  } // namespace cas
 }
 
 
@@ -69,7 +73,6 @@ namespace clang {
   // ADT's.
   using llvm::ArrayRef;
   using llvm::MutableArrayRef;
-  using llvm::Optional;
   using llvm::OwningArrayRef;
   using llvm::SaveAndRestore;
   using llvm::SmallString;
@@ -89,6 +92,14 @@ namespace clang {
 
   using llvm::raw_ostream;
   using llvm::raw_pwrite_stream;
+
+  namespace cas {
+  using llvm::cas::ActionCache;
+  using llvm::cas::CASID;
+  using llvm::cas::ObjectProxy;
+  using llvm::cas::ObjectRef;
+  using llvm::cas::ObjectStore;
+  } // namespace cas
 } // end namespace clang.
 
 #endif

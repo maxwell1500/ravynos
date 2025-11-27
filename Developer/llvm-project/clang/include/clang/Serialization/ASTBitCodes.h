@@ -41,7 +41,7 @@ namespace serialization {
 /// Version 4 of AST files also requires that the version control branch and
 /// revision match exactly, since there is no backward compatibility of
 /// AST files at this time.
-const unsigned VERSION_MAJOR = 25;
+const unsigned VERSION_MAJOR = 30;
 
 /// AST file minor version number supported by this version of
 /// Clang.
@@ -51,7 +51,7 @@ const unsigned VERSION_MAJOR = 25;
 /// for the previous version could still support reading the new
 /// version by ignoring new kinds of subblocks), this number
 /// should be increased.
-const unsigned VERSION_MINOR = 0;
+const unsigned VERSION_MINOR = 1;
 
 /// An ID number that refers to an identifier in an AST file.
 ///
@@ -360,6 +360,17 @@ enum ControlRecordTypes {
 
   /// Record code for the module build directory.
   MODULE_DIRECTORY,
+
+  /// Record code for the (optional) \c ActionCache  key for this module.
+  MODULE_CACHE_KEY,
+
+  /// Record code for the (optional) CAS filesystem root ID for implicit modules
+  /// built with the dependency scanner.
+  CASFS_ROOT_ID,
+
+  /// Record code for the (optional) include-tree ID for implicit modules
+  /// built with the dependency scanner.
+  CAS_INCLUDE_TREE_ID,
 };
 
 /// Record types that occur within the options block inside
@@ -375,9 +386,6 @@ enum OptionsRecordTypes {
 
   /// Record code for the target options table.
   TARGET_OPTIONS,
-
-  /// Record code for the filesystem options table.
-  FILE_SYSTEM_OPTIONS,
 
   /// Record code for the headers search options table.
   HEADER_SEARCH_OPTIONS,
@@ -400,11 +408,17 @@ enum UnhashedControlBlockRecordTypes {
   /// Record code for the headers search paths.
   HEADER_SEARCH_PATHS,
 
+  /// Record code for the filesystem options table.
+  FILE_SYSTEM_OPTIONS,
+
   /// Record code for \#pragma diagnostic mappings.
   DIAG_PRAGMA_MAPPINGS,
 
   /// Record code for the indices of used header search entries.
   HEADER_SEARCH_ENTRY_USAGE,
+
+  /// Record code for the indices of used VFSs.
+  VFS_USAGE,
 };
 
 /// Record code for extension blocks.
@@ -524,13 +538,7 @@ enum ASTRecordTypes {
   /// of source-location information.
   SOURCE_LOCATION_OFFSETS = 14,
 
-  /// Record code for the set of source location entries
-  /// that need to be preloaded by the AST reader.
-  ///
-  /// This set contains the source location entry for the
-  /// predefines buffer and for any file entries that need to be
-  /// preloaded.
-  SOURCE_LOCATION_PRELOADS = 15,
+  // ID 15 used to be for source location entry preloads.
 
   /// Record code for the set of ext_vector type names.
   EXT_VECTOR_DECLS = 16,
@@ -696,12 +704,14 @@ enum ASTRecordTypes {
   /// Record code for \#pragma float_control options.
   FLOAT_CONTROL_PRAGMA_OPTIONS = 65,
 
-  /// Record code for included files.
-  PP_INCLUDED_FILES = 66,
+  /// ID 66 used to be the list of included files.
 
   /// Record code for an unterminated \#pragma clang assume_nonnull begin
   /// recorded in a preamble.
   PP_ASSUME_NONNULL_LOC = 67,
+
+  /// Record code for \#pragma clang unsafe_buffer_usage begin/end
+  PP_UNSAFE_BUFFER_USAGE = 68,
 };
 
 /// Record types used within a source manager block.
@@ -1096,6 +1106,11 @@ enum PredefinedTypeIDs {
 // \brief RISC-V V types with auto numeration
 #define RVV_TYPE(Name, Id, SingletonId) PREDEF_TYPE_##Id##_ID,
 #include "clang/Basic/RISCVVTypes.def"
+// \brief WebAssembly reference types with auto numeration
+#define WASM_TYPE(Name, Id, SingletonId) PREDEF_TYPE_##Id##_ID,
+#include "clang/Basic/WebAssemblyReferenceTypes.def"
+  // Sentinel value. Considered a predefined type but not useable as one.
+  PREDEF_TYPE_LAST_ID
 };
 
 /// The number of predefined type IDs that are reserved for
@@ -1103,7 +1118,13 @@ enum PredefinedTypeIDs {
 ///
 /// Type IDs for non-predefined types will start at
 /// NUM_PREDEF_TYPE_IDs.
-const unsigned NUM_PREDEF_TYPE_IDS = 300;
+const unsigned NUM_PREDEF_TYPE_IDS = 500;
+
+// Ensure we do not overrun the predefined types we reserved
+// in the enum PredefinedTypeIDs above.
+static_assert(PREDEF_TYPE_LAST_ID < NUM_PREDEF_TYPE_IDS,
+              "Too many enumerators in PredefinedTypeIDs. Review the value of "
+              "NUM_PREDEF_TYPE_IDS");
 
 /// Record codes for each kind of type.
 ///

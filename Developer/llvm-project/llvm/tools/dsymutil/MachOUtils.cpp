@@ -10,6 +10,7 @@
 #include "BinaryHolder.h"
 #include "DebugMap.h"
 #include "LinkUtils.h"
+#include "llvm/ADT/SmallString.h"
 #include "llvm/CodeGen/NonRelocatableStringpool.h"
 #include "llvm/MC/MCAsmLayout.h"
 #include "llvm/MC/MCAssembler.h"
@@ -29,24 +30,30 @@ namespace dsymutil {
 namespace MachOUtils {
 
 llvm::Error ArchAndFile::createTempFile() {
-  llvm::SmallString<128> TmpModel;
-  llvm::sys::path::system_temp_directory(true, TmpModel);
-  llvm::sys::path::append(TmpModel, "dsym.tmp%%%%%.dwarf");
-  Expected<sys::fs::TempFile> T = sys::fs::TempFile::create(TmpModel);
+  SmallString<256> SS;
+  std::error_code EC = sys::fs::createTemporaryFile("dsym", "dwarf", FD, SS);
 
-  if (!T)
-    return T.takeError();
+  if (EC)
+    return errorCodeToError(EC);
 
-  File = std::make_unique<sys::fs::TempFile>(std::move(*T));
+  Path = SS.str();
+
   return Error::success();
 }
 
-llvm::StringRef ArchAndFile::path() const { return File->TmpName; }
+llvm::StringRef ArchAndFile::getPath() const {
+  assert(!Path.empty() && "path called before createTempFile");
+  return Path;
+}
+
+int ArchAndFile::getFD() const {
+  assert((FD != -1) && "path called before createTempFile");
+  return FD;
+}
 
 ArchAndFile::~ArchAndFile() {
-  if (File)
-    if (auto E = File->discard())
-      llvm::consumeError(std::move(E));
+  if (!Path.empty())
+    sys::fs::remove(Path);
 }
 
 std::string getArchName(StringRef Arch) {
@@ -78,14 +85,21 @@ static bool runLipo(StringRef SDKPath, SmallVectorImpl<StringRef> &Args) {
 
 bool generateUniversalBinary(SmallVectorImpl<ArchAndFile> &ArchFiles,
                              StringRef OutputFileName,
-                             const LinkOptions &Options, StringRef SDKPath) {
+                             const LinkOptions &Options, StringRef SDKPath,
+                             bool Fat64) {
   // No need to merge one file into a universal fat binary.
   if (ArchFiles.size() == 1) {
-    if (auto E = ArchFiles.front().File->keep(OutputFileName)) {
-      WithColor::error() << "while keeping " << ArchFiles.front().path()
-                         << " as " << OutputFileName << ": "
-                         << toString(std::move(E)) << "\n";
-      return false;
+    llvm::StringRef TmpPath = ArchFiles.front().getPath();
+    if (auto EC = sys::fs::rename(TmpPath, OutputFileName)) {
+      // If we can't rename, try to copy to work around cross-device link
+      // issues.
+      EC = sys::fs::copy_file(TmpPath, OutputFileName);
+      if (EC) {
+        WithColor::error() << "while keeping " << TmpPath << " as "
+                           << OutputFileName << ": " << EC.message() << "\n";
+        return false;
+      }
+      sys::fs::remove(TmpPath);
     }
     return true;
   }
@@ -95,15 +109,19 @@ bool generateUniversalBinary(SmallVectorImpl<ArchAndFile> &ArchFiles,
   Args.push_back("-create");
 
   for (auto &Thin : ArchFiles)
-    Args.push_back(Thin.path());
+    Args.push_back(Thin.getPath());
 
-  // Align segments to match dsymutil-classic alignment
+  // Align segments to match dsymutil-classic alignment.
   for (auto &Thin : ArchFiles) {
     Thin.Arch = getArchName(Thin.Arch);
     Args.push_back("-segalign");
     Args.push_back(Thin.Arch);
     Args.push_back("20");
   }
+
+  // Use a 64-bit fat header if requested.
+  if (Fat64)
+    Args.push_back("-fat64");
 
   Args.push_back("-output");
   Args.push_back(OutputFileName.data());
@@ -323,8 +341,9 @@ static bool createDwarfSegment(uint64_t VMAddr, uint64_t FileOffset,
       VMAddr = alignTo(VMAddr, Alignment);
       FileOffset = alignTo(FileOffset, Alignment);
       if (FileOffset > UINT32_MAX)
-        return error("section " + Sec->getName() + "'s file offset exceeds 4GB."
-            " Refusing to produce an invalid Mach-O file.");
+        return error("section " + Sec->getName() +
+                     "'s file offset exceeds 4GB."
+                     " Refusing to produce an invalid Mach-O file.");
     }
     Writer.writeSection(Layout, *Sec, VMAddr, FileOffset, 0, 0, 0);
 
@@ -390,6 +409,19 @@ bool generateDsymCompanion(
   bool Is64Bit = Writer.is64Bit();
   MachO::symtab_command SymtabCmd = InputBinary.getSymtabLoadCommand();
 
+  // Get the ptrauth ABI version (for arm64 subtypes).
+  std::optional<unsigned> PtrAuthABIVersion;
+  bool PtrAuthKernelABIVersion = false;
+  unsigned CPUType = InputBinary.getHeader().cputype;
+  unsigned CPUSubTypeField = InputBinary.getHeader().cpusubtype;
+  if (CPUType == MachO::CPU_TYPE_ARM64 &&
+      MachO::CPU_SUBTYPE_ARM64E_IS_VERSIONED_PTRAUTH_ABI(CPUSubTypeField)) {
+    PtrAuthABIVersion =
+        MachO::CPU_SUBTYPE_ARM64E_PTRAUTH_VERSION(CPUSubTypeField);
+    PtrAuthKernelABIVersion =
+        MachO::CPU_SUBTYPE_ARM64E_IS_KERNEL_PTRAUTH_ABI(CPUSubTypeField);
+  }
+
   // Compute the number of load commands we will need.
   unsigned LoadCommandSize = 0;
   unsigned NumLoadCommands = 0;
@@ -409,7 +441,7 @@ bool generateDsymCompanion(
       ++NumLoadCommands;
       LoadCommandSize += sizeof(UUIDCmd);
       break;
-   case MachO::LC_BUILD_VERSION: {
+    case MachO::LC_BUILD_VERSION: {
       MachO::build_version_command Cmd;
       memset(&Cmd, 0, sizeof(Cmd));
       Cmd = InputBinary.getBuildVersionLoadCommand(LCI);
@@ -510,7 +542,9 @@ bool generateDsymCompanion(
   SymtabStart = alignTo(SymtabStart, 0x1000);
 
   // We gathered all the information we need, start emitting the output file.
-  Writer.writeHeader(MachO::MH_DSYM, NumLoadCommands, LoadCommandSize, false);
+  Writer.writeHeader(MachO::MH_DSYM, NumLoadCommands, LoadCommandSize,
+                     /*SubsectionsViaSymbols=*/false, PtrAuthABIVersion,
+                     PtrAuthKernelABIVersion);
 
   // Write the load commands.
   assert(OutFile.tell() == HeaderSize);

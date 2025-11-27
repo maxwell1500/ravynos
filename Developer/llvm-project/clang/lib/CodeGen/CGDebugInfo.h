@@ -29,7 +29,9 @@
 #include "llvm/IR/DebugInfo.h"
 #include "llvm/IR/ValueHandle.h"
 #include "llvm/Support/Allocator.h"
+#include <map>
 #include <optional>
+#include <string>
 
 namespace llvm {
 class MDNode;
@@ -56,7 +58,7 @@ class CGDebugInfo {
   friend class ApplyDebugLocation;
   friend class SaveAndRestoreLocation;
   CodeGenModule &CGM;
-  const codegenoptions::DebugInfoKind DebugKind;
+  const llvm::codegenoptions::DebugInfoKind DebugKind;
   bool DebugTypeExtRefs;
   llvm::DIBuilder DBuilder;
   llvm::DICompileUnit *TheCU = nullptr;
@@ -80,12 +82,11 @@ class CGDebugInfo {
 #define EXT_OPAQUE_TYPE(ExtType, Id, Ext) \
   llvm::DIType *Id##Ty = nullptr;
 #include "clang/Basic/OpenCLExtensionTypes.def"
+#define WASM_TYPE(Name, Id, SingletonId) llvm::DIType *SingletonId = nullptr;
+#include "clang/Basic/WebAssemblyReferenceTypes.def"
 
   /// Cache of previously constructed Types.
   llvm::DenseMap<const void *, llvm::TrackingMDRef> TypeCache;
-
-  std::map<llvm::StringRef, llvm::StringRef, std::greater<llvm::StringRef>>
-      DebugPrefixMap;
 
   /// Cache that maps VLA types to size expressions for that type,
   /// represented by instantiated Metadata nodes.
@@ -190,7 +191,15 @@ class CGDebugInfo {
   llvm::DIType *CreateType(const FunctionType *Ty, llvm::DIFile *F);
   /// Get structure or union type.
   llvm::DIType *CreateType(const RecordType *Tyg);
-  llvm::DIType *CreateTypeDefinition(const RecordType *Ty);
+
+  /// Create definition for the specified 'Ty'.
+  ///
+  /// \returns A pair of 'llvm::DIType's. The first is the definition
+  /// of the 'Ty'. The second is the type specified by the preferred_name
+  /// attribute on 'Ty', which can be a nullptr if no such attribute
+  /// exists.
+  std::pair<llvm::DIType *, llvm::DIType *>
+  CreateTypeDefinition(const RecordType *Ty);
   llvm::DICompositeType *CreateLimitedType(const RecordType *Ty);
   void CollectContainingType(const CXXRecordDecl *RD,
                              llvm::DICompositeType *CT);
@@ -274,6 +283,12 @@ class CGDebugInfo {
       llvm::DenseSet<CanonicalDeclPtr<const CXXRecordDecl>> &SeenTypes,
       llvm::DINode::DIFlags StartingFlags);
 
+  /// Helper function that returns the llvm::DIType that the
+  /// PreferredNameAttr attribute on \ref RD refers to. If no such
+  /// attribute exists, returns nullptr.
+  llvm::DIType *GetPreferredNameType(const CXXRecordDecl *RD,
+                                     llvm::DIFile *Unit);
+
   struct TemplateArgs {
     const TemplateParameterList *TList;
     llvm::ArrayRef<TemplateArgument> Args;
@@ -320,9 +335,24 @@ class CGDebugInfo {
   }
 
   /// Create new bit field member.
-  llvm::DIType *createBitFieldType(const FieldDecl *BitFieldDecl,
-                                   llvm::DIScope *RecordTy,
-                                   const RecordDecl *RD);
+  llvm::DIDerivedType *createBitFieldType(const FieldDecl *BitFieldDecl,
+                                          llvm::DIScope *RecordTy,
+                                          const RecordDecl *RD);
+
+  /// Create an anonnymous zero-size separator for bit-field-decl if needed on
+  /// the target.
+  llvm::DIDerivedType *createBitFieldSeparatorIfNeeded(
+      const FieldDecl *BitFieldDecl, const llvm::DIDerivedType *BitFieldDI,
+      llvm::ArrayRef<llvm::Metadata *> PreviousFieldsDI, const RecordDecl *RD);
+
+  // A cache that maps artificial inlined function names used for
+  // __builtin_verbose_trap to subprograms.
+  llvm::StringMap<llvm::DISubprogram *> InlinedTrapFuncMap;
+
+  // A function that returns the subprogram corresponding to the artificial
+  // inlined function for traps.
+  llvm::DISubprogram *createInlinedTrapSubprogram(StringRef FuncName,
+                                                  llvm::DIFile *FileScope);
 
   /// Helpers for collecting fields of a record.
   /// @{
@@ -487,10 +517,9 @@ public:
 
   /// Emit call to \c llvm.dbg.declare for an argument variable
   /// declaration.
-  llvm::DILocalVariable *EmitDeclareOfArgVariable(const VarDecl *Decl,
-                                                  llvm::Value *AI,
-                                                  unsigned ArgNo,
-                                                  CGBuilderTy &Builder);
+  llvm::DILocalVariable *
+  EmitDeclareOfArgVariable(const VarDecl *Decl, llvm::Value *AI, unsigned ArgNo,
+                           CGBuilderTy &Builder, bool UsePointerValue = false);
 
   /// Emit call to \c llvm.dbg.declare for the block-literal argument
   /// to a block invocation function.
@@ -580,6 +609,19 @@ public:
   ParamDecl2StmtTy &getCoroutineParameterMappings() {
     return CoroutineParameterMappings;
   }
+
+  // Create a debug location from `TrapLocation` that adds an artificial inline
+  // frame where the frame name is
+  //
+  // * `<Prefix>: <FailureMsg>` if `<FailureMsg>` is not empty.
+  // * `<Prefix>` if `<FailureMsg>` is empty. Note `<Prefix>` must
+  //   contain a space.
+  //
+  // Currently `<Prefix>` is always "__llvm_verbose_trap".
+  //
+  // This is used to store failure reasons for traps.
+  llvm::DILocation *CreateTrapFailureMessageFor(llvm::DebugLoc TrapLocation,
+                                                StringRef FailureMsg);
 
 private:
   /// Emit call to llvm.dbg.declare for a variable declaration.
@@ -811,7 +853,13 @@ public:
   ApplyDebugLocation(ApplyDebugLocation &&Other) : CGF(Other.CGF) {
     Other.CGF = nullptr;
   }
-  ApplyDebugLocation &operator=(ApplyDebugLocation &&) = default;
+
+  // Define copy assignment operator.
+  ApplyDebugLocation &operator=(ApplyDebugLocation &&Other) {
+    CGF = Other.CGF;
+    Other.CGF = nullptr;
+    return *this;
+  }
 
   ~ApplyDebugLocation();
 

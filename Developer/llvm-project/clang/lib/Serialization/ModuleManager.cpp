@@ -42,8 +42,18 @@ using namespace clang;
 using namespace serialization;
 
 ModuleFile *ModuleManager::lookupByFileName(StringRef Name) const {
-  auto Entry = FileMgr.getFile(Name, /*OpenFile=*/false,
-                               /*CacheFailure=*/false);
+  auto Entry = FileMgr.getOptionalFileRef(Name, /*OpenFile=*/false,
+                                          /*CacheFailure=*/false);
+#if !defined(__APPLE__)
+  if (Entry) {
+    // On Linux ext4 FileManager's inode caching system does not
+    // provide us correct behaviour for ModuleCache directories.
+    // inode can be reused after PCM delete resulting in cache misleading.
+    if (auto BypassFile = FileMgr.getBypassFile(*Entry))
+      Entry = *BypassFile;
+  }
+#endif
+
   if (Entry)
     return lookup(*Entry);
 
@@ -59,11 +69,7 @@ ModuleFile *ModuleManager::lookupByModuleName(StringRef Name) const {
 }
 
 ModuleFile *ModuleManager::lookup(const FileEntry *File) const {
-  auto Known = Modules.find(File);
-  if (Known == Modules.end())
-    return nullptr;
-
-  return Known->second;
+  return Modules.lookup(File);
 }
 
 std::unique_ptr<llvm::MemoryBuffer>
@@ -452,8 +458,29 @@ bool ModuleManager::lookupModuleFile(StringRef FileName, off_t ExpectedSize,
   // Open the file immediately to ensure there is no race between stat'ing and
   // opening the file.
   OptionalFileEntryRef FileOrErr =
-      expectedToOptional(FileMgr.getFileRef(FileName, /*OpenFile=*/true,
-                                            /*CacheFailure=*/false));
+      FileMgr.getOptionalFileRef(FileName, /*OpenFile=*/true,
+                                 /*CacheFailure=*/false);
+#if !defined(__APPLE__)
+  if (FileOrErr) {
+    // On Linux ext4 FileManager's inode caching system does not
+    // provide us correct behaviour for ModuleCache directories.
+    // inode can be reused after PCM delete resulting in cache misleading.
+    // Only use the bypass file if bypass succeed in case the underlying file
+    // system doesn't support bypass (thus there is no need for the workaround).
+    if (auto Bypass = FileMgr.getBypassFile(*FileOrErr))
+      FileOrErr = *Bypass;
+  }
+#endif
+
+  // If the file is known to the module cache but not in the filesystem, it is
+  // a memory buffer. Create a virtual file for it.
+  if (!FileOrErr) {
+    if (auto *KnownBuffer = getModuleCache().lookupPCM(FileName)) {
+      FileOrErr =
+          FileMgr.getVirtualFileRef(FileName, KnownBuffer->getBufferSize(), 0);
+    }
+  }
+
   if (!FileOrErr)
     return false;
 

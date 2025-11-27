@@ -27,6 +27,7 @@
 #include "lldb/Core/StructuredDataImpl.h"
 #include "lldb/Core/ValueObject.h"
 #include "lldb/Core/ValueObjectConstResult.h"
+#include "lldb/DataFormatters/DataVisualization.h"
 #include "lldb/Expression/DiagnosticManager.h"
 #include "lldb/Expression/ExpressionVariable.h"
 #include "lldb/Expression/REPL.h"
@@ -42,10 +43,13 @@
 #include "lldb/Symbol/Function.h"
 #include "lldb/Symbol/ObjectFile.h"
 #include "lldb/Symbol/Symbol.h"
+#include "lldb/Symbol/SymbolFile.h"
+#include "lldb/Symbol/SymbolVendor.h"
 #include "lldb/Target/ABI.h"
 #include "lldb/Target/Language.h"
 #include "lldb/Target/LanguageRuntime.h"
 #include "lldb/Target/Process.h"
+#include "lldb/Target/RegisterTypeBuilder.h"
 #include "lldb/Target/SectionLoadList.h"
 #include "lldb/Target/StackFrame.h"
 #include "lldb/Target/StackFrameRecognizer.h"
@@ -68,6 +72,12 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <sstream>
+
+#ifdef LLDB_ENABLE_SWIFT
+#include "Plugins/TypeSystem/Swift/SwiftASTContext.h"
+#include "Plugins/ExpressionParser/Swift/SwiftPersistentExpressionState.h"
+#endif // LLDB_ENABLE_SWIFT
 
 using namespace lldb;
 using namespace lldb_private;
@@ -271,6 +281,16 @@ void Target::SetREPL(lldb::LanguageType language, lldb::REPLSP repl_sp) {
   lldbassert(!m_repl_map.count(language));
 
   m_repl_map[language] = repl_sp;
+
+  if (language == eLanguageTypeSwift) {
+    // The DWARFImporter always claims to be able to load a module, even if it
+    // doesn't exist, because it doesn't "import" anything until the first type is
+    // requested. To make the REPL behave more like the compiler and diagnose when
+    // Clang modules can't be located up front, the DWARFImporter is disabled in
+    // the REPL. There are use-cases for loading Clang types from debug info, but
+    // this needs a better diagnostic mechanism before it can be enabled.
+    ModuleList::GetGlobalModuleListProperties().SetUseSwiftDWARFImporter(repl_sp == NULL);
+  }
 }
 
 void Target::Destroy() {
@@ -292,6 +312,7 @@ void Target::Destroy() {
   m_stop_hooks.clear();
   m_stop_hook_next_id = 0;
   m_suppress_stop_hooks = false;
+  m_repl_map.clear();
   Args signal_args;
   ClearDummySignals(signal_args);
 }
@@ -370,9 +391,15 @@ BreakpointSP Target::CreateBreakpoint(const FileSpecList *containingModules,
       break;
 
     case eInlineBreakpointsHeaders:
-      if (remapped_file.IsSourceImplementationFile())
-        check_inlines = eLazyBoolNo;
-      else
+      if (remapped_file.IsSourceImplementationFile()) {
+        // Swift can inline a lot of code from other swift files so always
+        // check inlines for swift source files
+        static ConstString g_swift_extension("swift");
+        if (remapped_file.GetFileNameExtension() == g_swift_extension)
+          check_inlines = eLazyBoolYes;
+        else
+          check_inlines = eLazyBoolNo;
+      } else
         check_inlines = eLazyBoolYes;
       break;
 
@@ -438,12 +465,12 @@ BreakpointSP Target::CreateBreakpoint(const Address &addr, bool internal,
 
 lldb::BreakpointSP
 Target::CreateAddressInModuleBreakpoint(lldb::addr_t file_addr, bool internal,
-                                        const FileSpec *file_spec,
+                                        const FileSpec &file_spec,
                                         bool request_hardware) {
   SearchFilterSP filter_sp(
       new SearchFilterForUnconstrainedSearches(shared_from_this()));
   BreakpointResolverSP resolver_sp(new BreakpointResolverAddress(
-      nullptr, file_addr, file_spec ? *file_spec : FileSpec()));
+      nullptr, file_addr, file_spec));
   return CreateBreakpoint(filter_sp, resolver_sp, internal, request_hardware,
                           false);
 }
@@ -461,7 +488,7 @@ BreakpointSP Target::CreateBreakpoint(
     if (skip_prologue == eLazyBoolCalculate)
       skip_prologue = GetSkipPrologue() ? eLazyBoolYes : eLazyBoolNo;
     if (language == lldb::eLanguageTypeUnknown)
-      language = GetLanguage();
+      language = GetLanguage().AsLanguageType();
 
     BreakpointResolverSP resolver_sp(new BreakpointResolverName(
         nullptr, func_name, func_name_type_mask, language, Breakpoint::Exact,
@@ -487,7 +514,7 @@ Target::CreateBreakpoint(const FileSpecList *containingModules,
     if (skip_prologue == eLazyBoolCalculate)
       skip_prologue = GetSkipPrologue() ? eLazyBoolYes : eLazyBoolNo;
     if (language == lldb::eLanguageTypeUnknown)
-      language = GetLanguage();
+      language = GetLanguage().AsLanguageType();
 
     BreakpointResolverSP resolver_sp(
         new BreakpointResolverName(nullptr, func_names, func_name_type_mask,
@@ -516,7 +543,7 @@ Target::CreateBreakpoint(const FileSpecList *containingModules,
         skip_prologue = eLazyBoolNo;
     }
     if (language == lldb::eLanguageTypeUnknown)
-      language = GetLanguage();
+      language = GetLanguage().AsLanguageType();
 
     BreakpointResolverSP resolver_sp(new BreakpointResolverName(
         nullptr, func_names, num_names, func_name_type_mask, language, offset,
@@ -790,19 +817,18 @@ bool Target::ProcessIsValid() {
 }
 
 static bool CheckIfWatchpointsSupported(Target *target, Status &error) {
-  uint32_t num_supported_hardware_watchpoints;
-  Status rc = target->GetProcessSP()->GetWatchpointSupportInfo(
-      num_supported_hardware_watchpoints);
+  std::optional<uint32_t> num_supported_hardware_watchpoints =
+      target->GetProcessSP()->GetWatchpointSlotCount();
 
   // If unable to determine the # of watchpoints available,
   // assume they are supported.
-  if (rc.Fail())
+  if (!num_supported_hardware_watchpoints)
     return true;
 
   if (num_supported_hardware_watchpoints == 0) {
     error.SetErrorStringWithFormat(
         "Target supports (%u) hardware watchpoint slots.\n",
-        num_supported_hardware_watchpoints);
+        *num_supported_hardware_watchpoints);
     return false;
   }
   return true;
@@ -851,6 +877,18 @@ WatchpointSP Target::CreateWatchpoint(lldb::addr_t addr, size_t size,
   if (ABISP abi = m_process_sp->GetABI())
     addr = abi->FixDataAddress(addr);
 
+  // LWP_TODO this sequence is looking for an existing watchpoint
+  // at the exact same user-specified address, disables the new one
+  // if addr/size/type match.  If type/size differ, disable old one.
+  // This isn't correct, we need both watchpoints to use a shared
+  // WatchpointResource in the target, and expand the WatchpointResource
+  // to handle the needs of both Watchpoints.
+  // Also, even if the addresses don't match, they may need to be
+  // supported by the same WatchpointResource, e.g. a watchpoint
+  // watching 1 byte at 0x102 and a watchpoint watching 1 byte at 0x103.
+  // They're in the same word and must be watched by a single hardware
+  // watchpoint register.
+
   std::unique_lock<std::recursive_mutex> lock;
   this->GetWatchpointList().GetListMutex(lock);
   WatchpointSP matched_sp = m_watchpoint_list.FindByAddress(addr);
@@ -858,14 +896,15 @@ WatchpointSP Target::CreateWatchpoint(lldb::addr_t addr, size_t size,
     size_t old_size = matched_sp->GetByteSize();
     uint32_t old_type =
         (matched_sp->WatchpointRead() ? LLDB_WATCH_TYPE_READ : 0) |
-        (matched_sp->WatchpointWrite() ? LLDB_WATCH_TYPE_WRITE : 0);
+        (matched_sp->WatchpointWrite() ? LLDB_WATCH_TYPE_WRITE : 0) |
+        (matched_sp->WatchpointModify() ? LLDB_WATCH_TYPE_MODIFY : 0);
     // Return the existing watchpoint if both size and type match.
     if (size == old_size && kind == old_type) {
       wp_sp = matched_sp;
       wp_sp->SetEnabled(false, notify);
     } else {
       // Nil the matched watchpoint; we will be creating a new one.
-      m_process_sp->DisableWatchpoint(matched_sp.get(), notify);
+      m_process_sp->DisableWatchpoint(matched_sp, notify);
       m_watchpoint_list.Remove(matched_sp->GetID(), true);
     }
   }
@@ -876,7 +915,7 @@ WatchpointSP Target::CreateWatchpoint(lldb::addr_t addr, size_t size,
     m_watchpoint_list.Add(wp_sp, true);
   }
 
-  error = m_process_sp->EnableWatchpoint(wp_sp.get(), notify);
+  error = m_process_sp->EnableWatchpoint(wp_sp, notify);
   LLDB_LOGF(log, "Target::%s (creation of watchpoint %s with id = %u)\n",
             __FUNCTION__, error.Success() ? "succeeded" : "failed",
             wp_sp->GetID());
@@ -885,11 +924,6 @@ WatchpointSP Target::CreateWatchpoint(lldb::addr_t addr, size_t size,
     // Enabling the watchpoint on the device side failed. Remove the said
     // watchpoint from the list maintained by the target instance.
     m_watchpoint_list.Remove(wp_sp->GetID(), true);
-    // See if we could provide more helpful error message.
-    if (!OptionGroupWatchpoint::IsWatchSizeSupported(size))
-      error.SetErrorStringWithFormat(
-          "watch size of %" PRIu64 " is not supported", (uint64_t)size);
-
     wp_sp.reset();
   } else
     m_last_created_watchpoint = wp_sp;
@@ -1189,7 +1223,7 @@ bool Target::RemoveAllWatchpoints(bool end_to_end) {
     if (!wp_sp)
       return false;
 
-    Status rc = m_process_sp->DisableWatchpoint(wp_sp.get());
+    Status rc = m_process_sp->DisableWatchpoint(wp_sp);
     if (rc.Fail())
       return false;
   }
@@ -1218,7 +1252,7 @@ bool Target::DisableAllWatchpoints(bool end_to_end) {
     if (!wp_sp)
       return false;
 
-    Status rc = m_process_sp->DisableWatchpoint(wp_sp.get());
+    Status rc = m_process_sp->DisableWatchpoint(wp_sp);
     if (rc.Fail())
       return false;
   }
@@ -1245,7 +1279,7 @@ bool Target::EnableAllWatchpoints(bool end_to_end) {
     if (!wp_sp)
       return false;
 
-    Status rc = m_process_sp->EnableWatchpoint(wp_sp.get());
+    Status rc = m_process_sp->EnableWatchpoint(wp_sp);
     if (rc.Fail())
       return false;
   }
@@ -1308,7 +1342,7 @@ bool Target::DisableWatchpointByID(lldb::watch_id_t watch_id) {
 
   WatchpointSP wp_sp = m_watchpoint_list.FindByID(watch_id);
   if (wp_sp) {
-    Status rc = m_process_sp->DisableWatchpoint(wp_sp.get());
+    Status rc = m_process_sp->DisableWatchpoint(wp_sp);
     if (rc.Success())
       return true;
 
@@ -1327,7 +1361,7 @@ bool Target::EnableWatchpointByID(lldb::watch_id_t watch_id) {
 
   WatchpointSP wp_sp = m_watchpoint_list.FindByID(watch_id);
   if (wp_sp) {
-    Status rc = m_process_sp->EnableWatchpoint(wp_sp.get());
+    Status rc = m_process_sp->EnableWatchpoint(wp_sp);
     if (rc.Success())
       return true;
 
@@ -1391,8 +1425,8 @@ static void LoadScriptingResourceForModule(const ModuleSP &module_sp,
                                            Target *target) {
   Status error;
   StreamString feedback_stream;
-  if (module_sp && !module_sp->LoadScriptingResourceInTarget(
-                       target, error, &feedback_stream)) {
+  if (module_sp && !module_sp->LoadScriptingResourceInTarget(target, error,
+                                                             feedback_stream)) {
     if (error.AsCString())
       target->GetDebugger().GetErrorStream().Printf(
           "unable to load scripting data for module %s - error reported was "
@@ -1403,6 +1437,94 @@ static void LoadScriptingResourceForModule(const ModuleSP &module_sp,
   if (feedback_stream.GetSize())
     target->GetDebugger().GetErrorStream().Printf("%s\n",
                                                   feedback_stream.GetData());
+}
+
+// Load type summaries embedded in the binary. These are type summaries provided
+// by the authors of the code.
+static void LoadTypeSummariesForModule(ModuleSP module_sp) {
+  auto *sections = module_sp->GetSectionList();
+  if (!sections)
+    return;
+
+  auto summaries_sp =
+      sections->FindSectionByType(eSectionTypeLLDBTypeSummaries, true);
+  if (!summaries_sp)
+    return;
+
+  Log *log = GetLog(LLDBLog::DataFormatters);
+  const char *module_name = module_sp->GetFileSpec().GetFilename().GetCString();
+
+  TypeCategoryImplSP category;
+  DataVisualization::Categories::GetCategory(ConstString("default"), category);
+
+  // The type summary record is serialized as follows.
+  //
+  // Each record contains, in order:
+  //   * Version number of the record format
+  //   * The remaining size of the record
+  //   * The size of the type identifier
+  //   * The type identifier, either a type name, or a regex
+  //   * The size of the summary string
+  //   * The summary string
+  //
+  // Integers are encoded using ULEB.
+  //
+  // Strings are encoded with first a length (ULEB), then the string contents,
+  // and lastly a null terminator. The length includes the null.
+
+  DataExtractor extractor;
+  auto section_size = summaries_sp->GetSectionData(extractor);
+  lldb::offset_t offset = 0;
+  while (offset < section_size) {
+    // Skip null bytes. Can happen with alignment padding.
+    while (true) {
+      auto next_offset = offset;
+      if (extractor.GetU8(&next_offset) != 0) {
+        break;
+      }
+      // Move past the null byte, using the advanced offset.
+      offset = next_offset;
+    }
+
+    uint64_t version = extractor.GetULEB128(&offset);
+    uint64_t record_size = extractor.GetULEB128(&offset);
+    if (record_size == 0) {
+      LLDB_LOGF(log,
+                "Skipping empty (malformed) embedded type summary of version "
+                "%llu in %s.",
+                version, module_name);
+      continue;
+    }
+
+    if (version == 1) {
+      uint64_t type_size = extractor.GetULEB128(&offset);
+      llvm::StringRef type_name = extractor.GetCStr(&offset, type_size);
+      uint64_t summary_size = extractor.GetULEB128(&offset);
+      llvm::StringRef summary_string = extractor.GetCStr(&offset, summary_size);
+      if (!type_name.empty() && !summary_string.empty()) {
+        TypeSummaryImpl::Flags flags;
+        auto summary_sp =
+            std::make_shared<StringSummaryFormat>(flags, summary_string.data());
+        FormatterMatchType match_type = eFormatterMatchExact;
+        if (type_name.front() == '^')
+          match_type = eFormatterMatchRegex;
+        category->AddTypeSummary(type_name, match_type, summary_sp);
+        LLDB_LOGF(log, "Loaded embedded type summary for '%s' from %s.",
+                  type_name.data(), module_name);
+      } else {
+        if (type_name.empty())
+          LLDB_LOGF(log, "Missing string(s) in embedded type summary in %s.",
+                    module_name);
+      }
+    } else {
+      // Skip unsupported record.
+      offset += record_size;
+      LLDB_LOGF(
+          log,
+          "Skipping unsupported embedded type summary of version %llu in %s.",
+          version, module_name);
+    }
+  }
 }
 
 void Target::ClearModules(bool delete_locations) {
@@ -1519,14 +1641,8 @@ bool Target::SetArchitecture(const ArchSpec &arch_spec, bool set_platform,
 
       if (m_arch.GetSpec().IsCompatibleMatch(other)) {
         compatible_local_arch = true;
-        bool arch_changed, vendor_changed, os_changed, os_ver_changed,
-            env_changed;
 
-        m_arch.GetSpec().PiecewiseTripleCompare(other, arch_changed,
-                                                vendor_changed, os_changed,
-                                                os_ver_changed, env_changed);
-
-        if (!arch_changed && !vendor_changed && !os_changed && !env_changed)
+        if (m_arch.GetSpec().GetTriple() == other.GetTriple())
           replace_local_arch = false;
       }
     }
@@ -1649,12 +1765,35 @@ void Target::ModulesDidLoad(ModuleList &module_list) {
     for (size_t idx = 0; idx < num_images; ++idx) {
       ModuleSP module_sp(module_list.GetModuleAtIndex(idx));
       LoadScriptingResourceForModule(module_sp, this);
+      LoadTypeSummariesForModule(module_sp);
     }
     m_breakpoint_list.UpdateBreakpoints(module_list, true, false);
     m_internal_breakpoint_list.UpdateBreakpoints(module_list, true, false);
     if (m_process_sp) {
       m_process_sp->ModulesDidLoad(module_list);
     }
+    // Notify all the ASTContext(s).
+    auto notify_callback = [&](lldb::TypeSystemSP type_system) {
+#ifdef LLDB_ENABLE_SWIFT
+      auto *swift_scratch_ctx =
+          llvm::dyn_cast_or_null<TypeSystemSwiftTypeRefForExpressions>(
+              type_system.get());
+      if (!swift_scratch_ctx)
+        return true;
+      swift_scratch_ctx->ModulesDidLoad(module_list);
+#endif // LLDB_ENABLE_SWIFT
+      return true;
+    };
+    m_scratch_type_system_map.ForEach(notify_callback);
+
+    // This is a DenseMap, but we're fine iterating over it because
+    // it doens't matter in which order we notify the ASTContext(s).
+    for (auto &language : m_scratch_typesystem_for_module) {
+      TypeSystemSP type_system = language.second;
+      notify_callback(type_system);
+    }
+
+    module_list.ClearModuleDependentCaches();
     BroadcastEvent(eBroadcastBitModulesLoaded,
                    new TargetEventData(this->shared_from_this(), module_list));
   }
@@ -2127,19 +2266,46 @@ ModuleSP Target::GetOrCreateModule(const ModuleSpec &module_spec, bool notify,
                      // of the library
     bool did_create_module = false;
     FileSpecList search_paths = GetExecutableSearchPaths();
-    // If there are image search path entries, try to use them first to acquire
-    // a suitable image.
-    if (m_image_search_paths.GetSize()) {
-      ModuleSpec transformed_spec(module_spec);
-      ConstString transformed_dir;
-      if (m_image_search_paths.RemapPath(
-              module_spec.GetFileSpec().GetDirectory(), transformed_dir)) {
-        transformed_spec.GetFileSpec().SetDirectory(transformed_dir);
-        transformed_spec.GetFileSpec().SetFilename(
-              module_spec.GetFileSpec().GetFilename());
-        error = ModuleList::GetSharedModule(transformed_spec, module_sp,
-                                            &search_paths, &old_modules,
-                                            &did_create_module);
+    FileSpec symbol_file_spec;
+
+    // Call locate module callback if set. This allows users to implement their
+    // own module cache system. For example, to leverage build system artifacts,
+    // to bypass pulling files from remote platform, or to search symbol files
+    // from symbol servers.
+    CallLocateModuleCallbackIfSet(module_spec, module_sp, symbol_file_spec,
+                                  did_create_module);
+
+    // The result of this CallLocateModuleCallbackIfSet is one of the following.
+    // 1. module_sp:loaded, symbol_file_spec:set
+    //      The callback found a module file and a symbol file for the
+    //      module_spec. We will call module_sp->SetSymbolFileFileSpec with
+    //      the symbol_file_spec later.
+    // 2. module_sp:loaded, symbol_file_spec:empty
+    //      The callback only found a module file for the module_spec.
+    // 3. module_sp:empty, symbol_file_spec:set
+    //      The callback only found a symbol file for the module. We continue
+    //      to find a module file for this module_spec and we will call
+    //      module_sp->SetSymbolFileFileSpec with the symbol_file_spec later.
+    // 4. module_sp:empty, symbol_file_spec:empty
+    //      The callback is not set. Or the callback did not find any module
+    //      files nor any symbol files. Or the callback failed, or something
+    //      went wrong. We continue to find a module file for this module_spec.
+
+    if (!module_sp) {
+      // If there are image search path entries, try to use them to acquire a
+      // suitable image.
+      if (m_image_search_paths.GetSize()) {
+        ModuleSpec transformed_spec(module_spec);
+        ConstString transformed_dir;
+        if (m_image_search_paths.RemapPath(
+                module_spec.GetFileSpec().GetDirectory(), transformed_dir)) {
+          transformed_spec.GetFileSpec().SetDirectory(transformed_dir);
+          transformed_spec.GetFileSpec().SetFilename(
+                module_spec.GetFileSpec().GetFilename());
+          error = ModuleList::GetSharedModule(transformed_spec, module_sp,
+                                              &search_paths, &old_modules,
+                                              &did_create_module);
+        }
       }
     }
 
@@ -2230,11 +2396,15 @@ ModuleSP Target::GetOrCreateModule(const ModuleSpec &module_spec, bool notify,
           });
         }
 
+        // If the locate module callback had found a symbol file, set it to the
+        // module_sp before preloading symbols.
+        if (symbol_file_spec)
+          module_sp->SetSymbolFileFileSpec(symbol_file_spec);
+
         // Preload symbols outside of any lock, so hopefully we can do this for
         // each library in parallel.
         if (GetPreloadSymbols())
           module_sp->PreloadSymbols();
-
         llvm::SmallVector<ModuleSP, 1> replaced_modules;
         for (ModuleSP &old_module_sp : old_modules) {
           if (m_images.GetIndexForModule(old_module_sp.get()) !=
@@ -2269,7 +2439,7 @@ ModuleSP Target::GetOrCreateModule(const ModuleSpec &module_spec, bool notify,
               message << " (uuid ";
 
               if (dump_uuid.IsValid())
-                dump_uuid.Dump(&message);
+                dump_uuid.Dump(message);
               else
                 message << "not specified";
 
@@ -2305,6 +2475,113 @@ ModuleSP Target::GetOrCreateModule(const ModuleSpec &module_spec, bool notify,
   return module_sp;
 }
 
+void Target::CallLocateModuleCallbackIfSet(const ModuleSpec &module_spec,
+                                           lldb::ModuleSP &module_sp,
+                                           FileSpec &symbol_file_spec,
+                                           bool &did_create_module) {
+  if (!m_platform_sp)
+    return;
+
+  Platform::LocateModuleCallback locate_module_callback =
+      m_platform_sp->GetLocateModuleCallback();
+  if (!locate_module_callback)
+    return;
+
+  FileSpec module_file_spec;
+  Status error =
+      locate_module_callback(module_spec, module_file_spec, symbol_file_spec);
+
+  // Locate module callback is set and called. Check the error.
+  Log *log = GetLog(LLDBLog::Target);
+  if (error.Fail()) {
+    LLDB_LOGF(log, "%s: locate module callback failed: %s",
+              LLVM_PRETTY_FUNCTION, error.AsCString());
+    return;
+  }
+
+  // The locate module callback was succeeded. It should returned
+  // 1. a combination of a module file and a symbol file.
+  // 2. or only a module file.
+  // 3. or only a symbol file. For example, a breakpad symbol text file.
+  //
+  // Check the module_file_spec and symbol_file_spec values.
+  // 1. module:empty  symbol:empty  -> Invalid
+  // 2. module:exists symbol:exists -> Success
+  // 3. module:exists symbol:empty  -> Success
+  // 4. module:empty  symbol:exists -> Success
+  if (!module_file_spec && !symbol_file_spec) {
+    // This is '1. module:empty symbol:empty -> Invalid'.
+    LLDB_LOGF(log,
+              "%s: locate module callback did not set both "
+              "module_file_spec and symbol_file_spec",
+              LLVM_PRETTY_FUNCTION);
+    return;
+  }
+
+  // The module file should exist.
+  if (module_file_spec && !FileSystem::Instance().Exists(module_file_spec)) {
+    LLDB_LOGF(log,
+              "%s: locate module callback set a non-existent file to "
+              "module_file_spec: %s",
+              LLVM_PRETTY_FUNCTION, module_file_spec.GetPath().c_str());
+    // Clear symbol_file_spec for the error.
+    symbol_file_spec.Clear();
+    return;
+  }
+
+  // The symbol file should exist.
+  if (symbol_file_spec && !FileSystem::Instance().Exists(symbol_file_spec)) {
+    LLDB_LOGF(log,
+              "%s: locate module callback set a non-existent file to "
+              "symbol_file_spec: %s",
+              LLVM_PRETTY_FUNCTION, symbol_file_spec.GetPath().c_str());
+    // Clear symbol_file_spec for the error.
+    symbol_file_spec.Clear();
+    return;
+  }
+
+  if (!module_file_spec && symbol_file_spec) {
+    // This is '4. module:empty symbol:exists -> Success'.
+    // The locate module callback returned only a symbol file. For example,
+    // a breakpad symbol text file. GetOrCreateModule will use this returned
+    // symbol_file_spec.
+    LLDB_LOGF(log, "%s: locate module callback succeeded: symbol=%s",
+              LLVM_PRETTY_FUNCTION, symbol_file_spec.GetPath().c_str());
+    return;
+  }
+
+  // The locate module callback returned
+  // - '2. module:exists symbol:exists -> Success'
+  //   - a combination of a module file and a symbol file.
+  // - Or '3. module:exists symbol:empty -> Success'
+  //   - only a module file.
+  // Load the module file.
+  auto cached_module_spec(module_spec);
+  cached_module_spec.GetUUID().Clear(); // Clear UUID since it may contain md5
+                                        // content hash instead of real UUID.
+  cached_module_spec.GetFileSpec() = module_file_spec;
+  cached_module_spec.GetPlatformFileSpec() = module_spec.GetFileSpec();
+  cached_module_spec.SetObjectOffset(0);
+
+  error = ModuleList::GetSharedModule(cached_module_spec, module_sp, nullptr,
+                                      nullptr, &did_create_module, false);
+  if (error.Success() && module_sp) {
+    // Succeeded to load the module file.
+    LLDB_LOGF(log, "%s: locate module callback succeeded: module=%s symbol=%s",
+              LLVM_PRETTY_FUNCTION, module_file_spec.GetPath().c_str(),
+              symbol_file_spec.GetPath().c_str());
+  } else {
+    LLDB_LOGF(log,
+              "%s: locate module callback succeeded but failed to load: "
+              "module=%s symbol=%s",
+              LLVM_PRETTY_FUNCTION, module_file_spec.GetPath().c_str(),
+              symbol_file_spec.GetPath().c_str());
+    // Clear module_sp and symbol_file_spec for the error.
+    module_sp.reset();
+    symbol_file_spec.Clear();
+  }
+}
+
 TargetSP Target::CalculateTarget() { return shared_from_this(); }
 
 ProcessSP Target::CalculateProcess() { return m_process_sp; }
@@ -2332,10 +2609,10 @@ void Target::ImageSearchPathsChanged(const PathMappingList &path_list,
 
 llvm::Expected<lldb::TypeSystemSP>
 Target::GetScratchTypeSystemForLanguage(lldb::LanguageType language,
-                                        bool create_on_demand) {
+                                        bool create_on_demand,
+                                        const char *compiler_options) {
   if (!m_valid)
-    return llvm::make_error<llvm::StringError>("Invalid Target",
-                                               llvm::inconvertibleErrorCode());
+    return llvm::createStringError("Invalid Target");
 
   if (language == eLanguageTypeMipsAssembler // GNU AS and LLVM use it for all
                                              // assembly code
@@ -2348,15 +2625,132 @@ Target::GetScratchTypeSystemForLanguage(lldb::LanguageType language,
                                  // target language.
     } else {
       if (languages_for_expressions.Empty())
-        return llvm::make_error<llvm::StringError>(
-            "No expression support for any languages",
-            llvm::inconvertibleErrorCode());
+        return llvm::createStringError(
+            "No expression support for any languages");
       language = (LanguageType)languages_for_expressions.bitvector.find_first();
     }
   }
 
-  return m_scratch_type_system_map.GetTypeSystemForLanguage(language, this,
-                                                            create_on_demand);
+  if (m_cant_make_scratch_type_system.count(language))
+    return llvm::make_error<llvm::StringError>(
+        "unable to construct scratch type system",
+        llvm::inconvertibleErrorCode());
+
+  auto type_system_or_err = m_scratch_type_system_map.GetTypeSystemForLanguage(
+      language, this, create_on_demand, compiler_options);
+  if (!type_system_or_err)
+    return type_system_or_err.takeError();
+
+#ifdef LLDB_ENABLE_SWIFT
+  if (language == eLanguageTypeSwift) {
+    if (auto *swift_scratch_ctx =
+            llvm::dyn_cast_or_null<TypeSystemSwiftTypeRefForExpressions>(
+                type_system_or_err->get())) {
+      auto *swift_ast_ctx =
+          llvm::dyn_cast_or_null<SwiftASTContextForExpressions>(
+              swift_scratch_ctx->GetSwiftASTContextOrNull(nullptr));
+      // Replace the scratch context if it contains fatal errors or
+      // needs to be replaced because new lldb::Modules were loaded.
+      if (swift_ast_ctx && (swift_ast_ctx->CheckProcessChanged() ||
+                            swift_ast_ctx->HasFatalErrors())) {
+        // If it is safe to replace the scratch context, do so. If
+        // try_lock() fails, then a higher stack frame (or another
+        // thread) is holding a read lock to the scratch context and
+        // replacing it could cause a use-after-free later on.
+        auto &lock = GetSwiftScratchContextLock();
+        if (lock.try_lock()) {
+          std::lock_guard<std::shared_mutex> unlock(lock, std::adopt_lock);
+          if (m_use_scratch_typesystem_per_module)
+            DisplayFallbackSwiftContextErrors(swift_ast_ctx);
+          else if (StreamSP errs = GetDebugger().GetAsyncErrorStream()) {
+            if (swift_ast_ctx->HasFatalErrors()) {
+              errs->Printf(
+                  "warning: Swift error in scratch context: %s.\n",
+                  swift_ast_ctx->GetFatalErrors().AsCString("unknown error"));
+              auto *module_name = GetExecutableModule()
+                                      ->GetPlatformFileSpec()
+                                      .GetFilename()
+                                      .AsCString();
+              errs->Printf("Shared Swift state for %s has developed fatal "
+                           "errors and is being discarded.\n",
+                           module_name);
+              errs->PutCString("REPL definitions and persistent names/types "
+                               "will be lost.\n\n");
+              errs->Flush();
+            }
+          }
+
+          m_scratch_type_system_map.RemoveTypeSystemsForLanguage(language);
+          type_system_or_err =
+              m_scratch_type_system_map.GetTypeSystemForLanguage(
+                  language, this, create_on_demand, compiler_options);
+          if (!type_system_or_err)
+            return type_system_or_err.takeError();
+
+          if (auto *new_swift_scratch_ctx =
+                  llvm::dyn_cast_or_null<TypeSystemSwiftTypeRefForExpressions>(
+                      type_system_or_err->get())) {
+            auto report_error = [&](std::string message) {
+              m_cant_make_scratch_type_system[language] = true;
+              m_scratch_type_system_map.RemoveTypeSystemsForLanguage(language);
+              type_system_or_err = llvm::make_error<llvm::StringError>(
+                  message, llvm::inconvertibleErrorCode());
+            };
+            auto *new_swift_ast_ctx =
+                new_swift_scratch_ctx->GetSwiftASTContext(nullptr);
+            if (!new_swift_ast_ctx)
+              report_error("Failed to construct SwiftASTContextForExpressions");
+            else if (new_swift_ast_ctx->HasFatalErrors()) {
+              DiagnosticManager diag_mgr;
+              new_swift_ast_ctx->PrintDiagnostics(diag_mgr);
+              std::string error_diagnostics = diag_mgr.GetString();
+              if (StreamSP error_stream_sp =
+                      GetDebugger().GetAsyncErrorStream()) {
+                error_stream_sp->PutCString(
+                    "Can't construct shared Swift state "
+                    "for this process after repeated "
+                    "attempts.\n");
+                error_stream_sp->PutCString("Giving up.  Fatal errors:\n");
+                error_stream_sp->PutCString(error_diagnostics.c_str());
+                error_stream_sp->Flush();
+              }
+              report_error(error_diagnostics);
+            }
+          }
+        }
+      }
+    } else if (create_on_demand) {
+      if (StreamSP error_stream_sp = GetDebugger().GetAsyncErrorStream()) {
+        auto module = GetExecutableModule();
+        const char *module_name = "[no executable module]";
+        if (module)
+          module_name = GetExecutableModule()
+                            ->GetPlatformFileSpec()
+                            .GetFilename()
+                            .AsCString();
+        error_stream_sp->Printf(
+            "Shared Swift state for %s could not be initialized.\n",
+            module_name);
+        error_stream_sp->PutCString(
+            "The REPL and expressions are unavailable.\n");
+        error_stream_sp->Flush();
+      }
+    }
+  }
+#endif // LLDB_ENABLE_SWIFT
+  return type_system_or_err;
+}
+
+const TypeSystemMap &Target::GetTypeSystemMap() {
+  return m_scratch_type_system_map;
+}
+
+CompilerType Target::GetRegisterType(const std::string &name,
+                                     const lldb_private::RegisterFlags &flags,
+                                     uint32_t byte_size) {
+  RegisterTypeBuilderSP provider = PluginManager::GetRegisterTypeBuilder(*this);
+  assert(provider);
+  return provider->GetRegisterType(name, flags, byte_size);
 }
 
 std::vector<lldb::TypeSystemSP>
@@ -2377,18 +2771,17 @@ Target::GetScratchTypeSystems(bool create_on_demand) {
     auto type_system_or_err =
         GetScratchTypeSystemForLanguage(language, create_on_demand);
     if (!type_system_or_err)
-      LLDB_LOG_ERROR(GetLog(LLDBLog::Target), type_system_or_err.takeError(),
-                     "Language '{}' has expression support but no scratch type "
-                     "system available",
-                     Language::GetNameForLanguageType(language));
+      LLDB_LOG_ERROR(
+          GetLog(LLDBLog::Target), type_system_or_err.takeError(),
+          "Language '{1}' has expression support but no scratch type "
+          "system available: {0}",
+          Language::GetNameForLanguageType(language));
     else
       if (auto ts = *type_system_or_err)
         scratch_type_systems.push_back(ts);
   }
-  std::sort(scratch_type_systems.begin(), scratch_type_systems.end(),
-            [](lldb::TypeSystemSP a, lldb::TypeSystemSP b) {
-              return a.get() <= b.get();
-            });
+
+  std::sort(scratch_type_systems.begin(), scratch_type_systems.end());
   scratch_type_systems.erase(
       std::unique(scratch_type_systems.begin(), scratch_type_systems.end()),
       scratch_type_systems.end());
@@ -2400,9 +2793,10 @@ Target::GetPersistentExpressionStateForLanguage(lldb::LanguageType language) {
   auto type_system_or_err = GetScratchTypeSystemForLanguage(language, true);
 
   if (auto err = type_system_or_err.takeError()) {
-    LLDB_LOG_ERROR(GetLog(LLDBLog::Target), std::move(err),
-                   "Unable to get persistent expression state for language {}",
-                   Language::GetNameForLanguageType(language));
+    LLDB_LOG_ERROR(
+        GetLog(LLDBLog::Target), std::move(err),
+        "Unable to get persistent expression state for language {1}: {0}",
+        Language::GetNameForLanguageType(language));
     return nullptr;
   }
 
@@ -2410,21 +2804,35 @@ Target::GetPersistentExpressionStateForLanguage(lldb::LanguageType language) {
     return ts->GetPersistentExpressionState();
 
   LLDB_LOG(GetLog(LLDBLog::Target),
-           "Unable to get persistent expression state for language {}",
+           "Unable to get persistent expression state for language {1}: {0}",
            Language::GetNameForLanguageType(language));
   return nullptr;
 }
 
+#ifdef LLDB_ENABLE_SWIFT
+SwiftPersistentExpressionState *
+Target::GetSwiftPersistentExpressionState(ExecutionContextScope &exe_scope) {
+  Status error;
+  auto maybe_swift_ast_context =
+      GetSwiftScratchContext(error, exe_scope, true);
+  if (!maybe_swift_ast_context)
+    return nullptr;
+  return (SwiftPersistentExpressionState *)
+      maybe_swift_ast_context->get()->GetPersistentExpressionState();
+}
+#endif // LLDB_ENABLE_SWIFT
+
 UserExpression *Target::GetUserExpressionForLanguage(
-    llvm::StringRef expr, llvm::StringRef prefix, lldb::LanguageType language,
+    llvm::StringRef expr, llvm::StringRef prefix, SourceLanguage language,
     Expression::ResultType desired_type,
     const EvaluateExpressionOptions &options, ValueObject *ctx_obj,
     Status &error) {
-  auto type_system_or_err = GetScratchTypeSystemForLanguage(language);
+  auto type_system_or_err =
+      GetScratchTypeSystemForLanguage(language.AsLanguageType());
   if (auto err = type_system_or_err.takeError()) {
     error.SetErrorStringWithFormat(
         "Could not find type system for language %s: %s",
-        Language::GetNameForLanguageType(language),
+        Language::GetNameForLanguageType(language.AsLanguageType()),
         llvm::toString(std::move(err)).c_str());
     return nullptr;
   }
@@ -2433,7 +2841,7 @@ UserExpression *Target::GetUserExpressionForLanguage(
   if (!ts) {
     error.SetErrorStringWithFormat(
         "Type system for language %s is no longer live",
-        Language::GetNameForLanguageType(language));
+        language.GetDescription().data());
     return nullptr;
   }
 
@@ -2442,7 +2850,7 @@ UserExpression *Target::GetUserExpressionForLanguage(
   if (!user_expr)
     error.SetErrorStringWithFormat(
         "Could not create an expression for language %s",
-        Language::GetNameForLanguageType(language));
+        language.GetDescription().data());
 
   return user_expr;
 }
@@ -2485,26 +2893,302 @@ Target::CreateUtilityFunction(std::string expression, std::string name,
     return type_system_or_err.takeError();
   auto ts = *type_system_or_err;
   if (!ts)
-    return llvm::make_error<llvm::StringError>(
+    return llvm::createStringError(
         llvm::StringRef("Type system for language ") +
-            Language::GetNameForLanguageType(language) +
-            llvm::StringRef(" is no longer live"),
-        llvm::inconvertibleErrorCode());
+        Language::GetNameForLanguageType(language) +
+        llvm::StringRef(" is no longer live"));
   std::unique_ptr<UtilityFunction> utility_fn =
       ts->CreateUtilityFunction(std::move(expression), std::move(name));
   if (!utility_fn)
-    return llvm::make_error<llvm::StringError>(
+    return llvm::createStringError(
         llvm::StringRef("Could not create an expression for language") +
-            Language::GetNameForLanguageType(language),
-        llvm::inconvertibleErrorCode());
+        Language::GetNameForLanguageType(language));
 
   DiagnosticManager diagnostics;
   if (!utility_fn->Install(diagnostics, exe_ctx))
-    return llvm::make_error<llvm::StringError>(diagnostics.GetString(),
-                                               llvm::inconvertibleErrorCode());
+    return llvm::createStringError(diagnostics.GetString());
 
   return std::move(utility_fn);
 }
+
+#ifdef LLDB_ENABLE_SWIFT
+std::optional<SwiftScratchContextReader> Target::GetSwiftScratchContext(
+    Status &error, ExecutionContextScope &exe_scope, bool create_on_demand) {
+  Log *log = GetLog(LLDBLog::Target | LLDBLog::Types | LLDBLog::Expressions);
+  LLDB_SCOPED_TIMER();
+
+  const SymbolContext *sc = nullptr;
+  Module *lldb_module = nullptr;
+  if (lldb::StackFrameSP stack_frame = exe_scope.CalculateStackFrame()) {
+    sc = &stack_frame->GetSymbolContext(lldb::eSymbolContextEverything);
+    lldb_module = sc->module_sp.get();
+  }
+  
+  // Opt into the per-module scratch context if we find incompatible triples.
+  if (!m_use_scratch_typesystem_per_module &&
+      !ModuleList::GetGlobalModuleListProperties()
+           .GetUseSwiftPreciseCompilerInvocation()) {
+    TargetSP target_sp = exe_scope.CalculateTarget();
+    if (lldb_module) {
+      auto module_arch = lldb_module->GetArchitecture();
+      auto target_arch = target_sp->GetArchitecture();
+      auto module_triple = module_arch.GetTriple();
+      auto target_triple = target_arch.GetTriple();
+      if (!module_arch.IsCompatibleMatch(target_arch) ||
+          (module_triple.isArm64e() != target_triple.isArm64e())) {
+        m_use_scratch_typesystem_per_module = true;
+        std::string module_name = lldb_module->GetSpecificationDescription();
+        const char *msg = "%sModule \"%s\" uses triple \"%s\", which is "
+                          "not compatible with the target triple \"%s\". "
+                          "Enabling per-module Swift scratch context.\n";
+
+        StreamSP errs = GetDebugger().GetAsyncErrorStream();
+        if (errs)
+          errs->Printf(msg, "warning: ", module_name.c_str(),
+                       module_triple.str().c_str(),
+                       target_triple.str().c_str());
+        if (log)
+          log->Printf(msg, "", module_name.c_str(), module_triple.str().c_str(),
+                      target_triple.str().c_str());
+      }
+    }
+  }
+
+  auto get_cached_module_ts =
+      [&](Module *lldb_module) -> TypeSystemSwiftTypeRefForExpressions * {
+    ModuleLanguage key = {lldb_module, lldb::eLanguageTypeSwift};
+    auto cached = m_scratch_typesystem_for_module.find(key);
+    if (cached != m_scratch_typesystem_for_module.end())
+      return llvm::cast<TypeSystemSwiftTypeRefForExpressions>(cached->second.get());
+    return nullptr;
+  };
+
+  auto maybe_create_fallback_context = [&]() {
+    ModuleLanguage key = {lldb_module, lldb::eLanguageTypeSwift};
+    if (auto *cached_ts = get_cached_module_ts(lldb_module)) {
+      auto *cached_ast_ctx =
+          llvm::dyn_cast_or_null<SwiftASTContextForExpressions>(
+              cached_ts->GetSwiftASTContext(sc));
+      if (cached_ast_ctx && cached_ast_ctx->HasFatalErrors() &&
+          !m_cant_make_scratch_type_system.count(lldb::eLanguageTypeSwift)) {
+        DisplayFallbackSwiftContextErrors(cached_ast_ctx);
+        // Try again.
+        // FIXME: Shouldn't this continue rather than return?
+        auto &lock = GetSwiftScratchContextLock();
+        if (!lock.try_lock()) {
+          if (log)
+            log->Printf("module scratch context has errors but couldn't "
+                        "acquire scratch context lock\n");
+          return;
+        }
+        std::lock_guard<std::shared_mutex> unlock(lock, std::adopt_lock);
+        m_scratch_typesystem_for_module.erase(key);
+        if (log)
+          log->Printf("erased module-wide scratch context with errors\n");
+        return;
+      }
+      if (log)
+        log->PutCString("returned cached module-wide scratch context");
+      return;
+    }
+
+    if (!create_on_demand) {
+      if (log)
+        log->PutCString("not allowed to create a new context");
+      return;
+    }
+
+    // Call for its side effects of establishing the Swift scratch type
+    // system.
+    auto type_system_or_err =
+        GetScratchTypeSystemForLanguage(eLanguageTypeSwift, false);
+    if (!type_system_or_err) {
+      llvm::consumeError(type_system_or_err.takeError());
+      return;
+    }
+
+    auto &lock = GetSwiftScratchContextLock();
+    if (!lock.try_lock()) {
+      if (log)
+        log->PutCString("couldn't acquire scratch context lock");
+      return;
+    }
+    std::lock_guard<std::shared_mutex> unlock(lock, std::adopt_lock);
+
+    // With the lock held, get the current scratch type system. This ensures
+    // the current instance is used even in the unlikely event it was changed
+    // during the brief window between the call to
+    // `GetScratchTypeSystemForLanguage` and taking the lock.
+    type_system_or_err = m_scratch_type_system_map.GetTypeSystemForLanguage(
+        eLanguageTypeSwift, this, false);
+    if (!type_system_or_err) {
+      llvm::consumeError(type_system_or_err.takeError());
+      return;
+    }
+
+    if (auto *global_scratch_ctx =
+            llvm::cast_or_null<TypeSystemSwiftTypeRefForExpressions>(
+                type_system_or_err->get()))
+      if (auto *swift_ast_ctx =
+              llvm::dyn_cast_or_null<SwiftASTContextForExpressions>(
+                  global_scratch_ctx->GetSwiftASTContext(sc)))
+        DisplayFallbackSwiftContextErrors(swift_ast_ctx);
+
+    auto typesystem_sp = std::make_shared<TypeSystemSwiftTypeRefForExpressions>(
+        lldb::eLanguageTypeSwift, *this, *lldb_module);
+    typesystem_sp->GetSwiftASTContext(sc);
+    m_scratch_typesystem_for_module.insert({key, typesystem_sp});
+    if (log)
+      log->PutCString("created module-wide scratch context");
+    return;
+  };
+
+  std::optional<SwiftScratchContextReader> reader;
+  if (lldb_module && m_use_scratch_typesystem_per_module) {
+    maybe_create_fallback_context();
+    std::shared_lock<std::shared_mutex> lock(GetSwiftScratchContextLock());
+    if (auto *cached_ts = get_cached_module_ts(lldb_module)) {
+      reader = SwiftScratchContextReader(std::move(lock), *cached_ts);
+      if (log)
+        log->PutCString("returned project-wide scratch context");
+    }
+  }
+  // FIXME: Don't return the project-wide context after requesting the
+  // module-wide one.
+  if (!reader) {
+    std::shared_lock<std::shared_mutex> lock(GetSwiftScratchContextLock());
+    auto type_system_or_err =
+        GetScratchTypeSystemForLanguage(eLanguageTypeSwift, create_on_demand);
+    if (type_system_or_err) {
+      if (auto *ts = llvm::cast_or_null<TypeSystemSwiftTypeRefForExpressions>(
+              type_system_or_err->get())) {
+        reader = SwiftScratchContextReader(std::move(lock), *ts);
+        if (log)
+          log->PutCString("returned project-wide scratch context");
+      }
+    } else
+      llvm::consumeError(type_system_or_err.takeError());
+  }
+
+  if (reader) {
+    // Perform compile unit imports.
+    assert(reader->get());
+    StackFrameSP frame_sp = exe_scope.CalculateStackFrame();
+    if (frame_sp && frame_sp.get()) {
+      SymbolContext sc =
+          frame_sp->GetSymbolContext(lldb::eSymbolContextEverything);
+      Status status = reader->get()->PerformCompileUnitImports(sc);
+      if (status.Fail())
+        Debugger::ReportError(status.AsCString(), GetDebugger().GetID());
+    }
+  }
+  return reader;
+}
+
+static std::shared_mutex *
+GetSwiftScratchContextMutex(const ExecutionContext *exe_ctx) {
+  if (!exe_ctx)
+    return nullptr;
+  ExecutionContextScope *exe_scope = exe_ctx->GetBestExecutionContextScope();
+  if (auto target = exe_scope->CalculateTarget())
+    return &target->GetSwiftScratchContextLock();
+  return nullptr;
+}
+
+SwiftScratchContextReader::SwiftScratchContextReader(
+    std::shared_lock<std::shared_mutex> &&lock,
+    TypeSystemSwiftTypeRefForExpressions &ts)
+    : m_lock(std::move(lock)), m_ts(&ts) {}
+
+SwiftScratchContextLock::SwiftScratchContextLock(
+    const ExecutionContext *exe_ctx) {
+  if (auto *mutex = GetSwiftScratchContextMutex(exe_ctx)) {
+    std::shared_lock<std::shared_mutex> tmp(*mutex);
+    lock.swap(tmp);
+  }
+}
+
+static std::shared_mutex *
+GetSwiftScratchContextMutex(const ExecutionContextRef *exe_ctx_ref) {
+  if (!exe_ctx_ref)
+    return nullptr;
+  ExecutionContext exe_ctx(exe_ctx_ref);
+  return GetSwiftScratchContextMutex(&exe_ctx);
+}
+
+SwiftScratchContextLock::SwiftScratchContextLock(
+    const ExecutionContextRef *exe_ctx_ref) {
+  if (auto *mutex = GetSwiftScratchContextMutex(exe_ctx_ref)) {
+    std::shared_lock<std::shared_mutex> tmp(*mutex);
+    lock.swap(tmp);
+  }
+}
+
+void Target::DisplayFallbackSwiftContextErrors(
+    SwiftASTContextForExpressions *swift_ast_ctx) {
+  assert(m_use_scratch_typesystem_per_module);
+  StreamSP errs = GetDebugger().GetAsyncErrorStream();
+  if (!errs || m_did_display_scratch_fallback_warning ||
+      !swift_ast_ctx->HasFatalErrors())
+    return;
+
+  m_did_display_scratch_fallback_warning = true;
+  errs->Printf(
+      "warning: Swift error in fallback scratch context: %s\n\nnote: This "
+      "error message is displayed only once. If the error displayed above is "
+      "due to conflicting search paths to Clang modules in different images of "
+      "the debugged executable, this can slow down debugging of Swift code "
+      "significantly, since a fresh Swift context has to be created every time "
+      "a conflict is encountered.\n\n",
+      swift_ast_ctx->GetFatalErrors().AsCString("unknown error"));
+  errs->Flush();
+}
+
+bool Target::IsSwiftREPL() {
+  return m_debugger.REPLIsActive() &&
+         GetProcessLaunchInfo().GetArg0().endswith("repl_swift");
+}
+
+bool Target::IsSwiftCxxInteropEnabled() {
+  switch (m_is_swift_cxx_interop_enabled) {
+  case eLazyBoolYes:
+    return true;
+  case eLazyBoolNo:
+    return false;
+  case eLazyBoolCalculate:
+    break;
+  }
+  AutoBool interop_enabled =
+      ModuleList::GetGlobalModuleListProperties().GetSwiftEnableCxxInterop();
+  switch (interop_enabled) {
+  case AutoBool::True:
+    m_is_swift_cxx_interop_enabled = eLazyBoolYes;
+    break;
+  case AutoBool::False:
+    m_is_swift_cxx_interop_enabled = eLazyBoolNo;
+    break;
+  case AutoBool::Auto: {
+    if (GetImages().IsEmpty())
+      m_is_swift_cxx_interop_enabled = eLazyBoolNo;
+    else
+      m_is_swift_cxx_interop_enabled =
+          GetImages().GetModuleAtIndex(0)->IsSwiftCxxInteropEnabled()
+              ? eLazyBoolYes
+              : eLazyBoolNo;
+  }
+  }
+  return m_is_swift_cxx_interop_enabled == eLazyBoolYes;
+}
+
+bool Target::IsEmbeddedSwift() {
+  if (GetImages().IsEmpty())
+    return false;
+
+  // Embedded Swift cannot be mixed with non-embedded, so checking the first
+  // module should be enough.
+  return GetImages().GetModuleAtIndex(0)->IsEmbeddedSwift();
+}
+#endif // LLDB_ENABLE_SWIFT
 
 void Target::SettingsInitialize() { Process::SettingsInitialize(); }
 
@@ -2527,6 +3211,26 @@ void Target::SetDefaultArchitecture(const ArchSpec &arch) {
            "setting target's default architecture to  {0} ({1})",
            arch.GetArchitectureName(), arch.GetTriple().getTriple());
   Target::GetGlobalProperties().SetDefaultArchitecture(arch);
+}
+
+llvm::Error Target::SetLabel(llvm::StringRef label) {
+  size_t n = LLDB_INVALID_INDEX32;
+  if (llvm::to_integer(label, n))
+    return llvm::createStringError("Cannot use integer as target label.");
+  TargetList &targets = GetDebugger().GetTargetList();
+  for (size_t i = 0; i < targets.GetNumTargets(); i++) {
+    TargetSP target_sp = targets.GetTargetAtIndex(i);
+    if (target_sp && target_sp->GetLabel() == label) {
+        return llvm::make_error<llvm::StringError>(
+            llvm::formatv(
+                "Cannot use label '{0}' since it's set in target #{1}.", label,
+                i),
+            llvm::inconvertibleErrorCode());
+    }
+  }
+
+  m_label = label.str();
+  return llvm::Error::success();
 }
 
 Target *Target::GetTargetFromContexts(const ExecutionContext *exe_ctx_ptr,
@@ -2588,7 +3292,7 @@ ExpressionResults Target::EvaluateExpression(
       auto ts = *type_system_or_err;
       if (!ts)
         LLDB_LOG_ERROR(GetLog(LLDBLog::Target), std::move(err),
-                       "Scratch type system is no longer live");
+                       "Scratch type system is no longer live: {0}");
       else
         persistent_var_sp =
             ts->GetPersistentExpressionState()->GetVariable(expr);
@@ -2680,15 +3384,13 @@ llvm::Expected<lldb_private::Address> Target::GetEntryPointAddress() {
 
   // We haven't found the entry point address. Return an appropriate error.
   if (!has_primary_executable)
-    return llvm::make_error<llvm::StringError>(
+    return llvm::createStringError(
         "No primary executable found and could not find entry point address in "
-        "any executable module",
-        llvm::inconvertibleErrorCode());
+        "any executable module");
 
-  return llvm::make_error<llvm::StringError>(
+  return llvm::createStringError(
       "Could not find entry point address for primary executable module \"" +
-          exe_module->GetFileSpec().GetFilename().GetStringRef() + "\"",
-      llvm::inconvertibleErrorCode());
+      exe_module->GetFileSpec().GetFilename().GetStringRef() + "\"");
 }
 
 lldb::addr_t Target::GetCallableLoadAddress(lldb::addr_t load_addr,
@@ -2863,7 +3565,7 @@ bool Target::RunStopHooks() {
 
       if (print_hook_header && !any_thread_matched) {
         StreamString s;
-        cur_hook_sp->GetDescription(&s, eDescriptionLevelBrief);
+        cur_hook_sp->GetDescription(s, eDescriptionLevelBrief);
         if (s.GetSize() != 0)
           output_sp->Printf("\n- Hook %" PRIu64 " (%s)\n", cur_hook_sp->GetID(),
                             s.GetData());
@@ -3082,6 +3784,17 @@ bool Target::SetSectionUnloaded(const lldb::SectionSP &section_sp,
 
 void Target::ClearAllLoadedSections() { m_section_load_history.Clear(); }
 
+void Target::SaveScriptedLaunchInfo(lldb_private::ProcessInfo &process_info) {
+  if (process_info.IsScriptedProcess()) {
+    // Only copy scripted process launch options.
+    ProcessLaunchInfo &default_launch_info = const_cast<ProcessLaunchInfo &>(
+        GetGlobalProperties().GetProcessLaunchInfo());
+    default_launch_info.SetProcessPluginName("ScriptedProcess");
+    default_launch_info.SetScriptedMetadata(process_info.GetScriptedMetadata());
+    SetProcessLaunchInfo(default_launch_info);
+  }
+}
+
 Status Target::Launch(ProcessLaunchInfo &launch_info, Stream *stream) {
   m_stats.SetLaunchOrAttachTime();
   Status error;
@@ -3111,19 +3824,7 @@ Status Target::Launch(ProcessLaunchInfo &launch_info, Stream *stream) {
 
   launch_info.GetFlags().Set(eLaunchFlagDebug);
 
-  if (launch_info.IsScriptedProcess()) {
-    // Only copy scripted process launch options.
-    ProcessLaunchInfo &default_launch_info = const_cast<ProcessLaunchInfo &>(
-        GetGlobalProperties().GetProcessLaunchInfo());
-
-    default_launch_info.SetProcessPluginName("ScriptedProcess");
-    default_launch_info.SetScriptedProcessClassName(
-        launch_info.GetScriptedProcessClassName());
-    default_launch_info.SetScriptedProcessDictionarySP(
-        launch_info.GetScriptedProcessDictionarySP());
-
-    SetProcessLaunchInfo(launch_info);
-  }
+  SaveScriptedLaunchInfo(launch_info);
 
   // Get the value of synchronous execution here.  If you wait till after you
   // have started to run, then you could have hit a breakpoint, whose command
@@ -3152,8 +3853,8 @@ Status Target::Launch(ProcessLaunchInfo &launch_info, Stream *stream) {
   // its own hijacking listener or if the process is created by the target
   // manually, without the platform).
   if (!launch_info.GetHijackListener())
-    launch_info.SetHijackListener(
-        Listener::MakeListener("lldb.Target.Launch.hijack"));
+    launch_info.SetHijackListener(Listener::MakeListener(
+        Process::LaunchSynchronousHijackListenerName.data()));
 
   // If we're not already connected to the process, and if we have a platform
   // that can launch a process for debugging, go ahead and do that here.
@@ -3181,13 +3882,14 @@ Status Target::Launch(ProcessLaunchInfo &launch_info, Stream *stream) {
       assert(m_process_sp);
     } else {
       // Use a Process plugin to construct the process.
-      const char *plugin_name = launch_info.GetProcessPluginName();
-      CreateProcess(launch_info.GetListener(), plugin_name, nullptr, false);
+      CreateProcess(launch_info.GetListener(),
+                    launch_info.GetProcessPluginName(), nullptr, false);
     }
 
     // Since we didn't have a platform launch the process, launch it here.
     if (m_process_sp) {
       m_process_sp->HijackProcessEvents(launch_info.GetHijackListener());
+      m_process_sp->SetShadowListener(launch_info.GetShadowListener());
       error = m_process_sp->Launch(launch_info);
     }
   }
@@ -3226,7 +3928,7 @@ Status Target::Launch(ProcessLaunchInfo &launch_info, Stream *stream) {
       // SyncResume hijacker.
       m_process_sp->ResumeSynchronous(stream);
     else
-      error = m_process_sp->PrivateResume();
+      error = m_process_sp->Resume();
     if (!error.Success()) {
       Status error2;
       error2.SetErrorStringWithFormat(
@@ -3329,26 +4031,27 @@ Status Target::Attach(ProcessAttachInfo &attach_info, Stream *stream) {
   ListenerSP hijack_listener_sp;
   const bool async = attach_info.GetAsync();
   if (!async) {
-    hijack_listener_sp =
-        Listener::MakeListener("lldb.Target.Attach.attach.hijack");
+    hijack_listener_sp = Listener::MakeListener(
+        Process::AttachSynchronousHijackListenerName.data());
     attach_info.SetHijackListener(hijack_listener_sp);
   }
 
   Status error;
   if (state != eStateConnected && platform_sp != nullptr &&
-      platform_sp->CanDebugProcess()) {
+      platform_sp->CanDebugProcess() && !attach_info.IsScriptedProcess()) {
     SetPlatform(platform_sp);
     process_sp = platform_sp->Attach(attach_info, GetDebugger(), this, error);
   } else {
     if (state != eStateConnected) {
-      const char *plugin_name = attach_info.GetProcessPluginName();
+      SaveScriptedLaunchInfo(attach_info);
+      llvm::StringRef plugin_name = attach_info.GetProcessPluginName();
       process_sp =
           CreateProcess(attach_info.GetListenerForProcess(GetDebugger()),
                         plugin_name, nullptr, false);
-      if (process_sp == nullptr) {
-        error.SetErrorStringWithFormat(
-            "failed to create process using plugin %s",
-            (plugin_name) ? plugin_name : "null");
+      if (!process_sp) {
+        error.SetErrorStringWithFormatv(
+            "failed to create process using plugin '{0}'",
+            plugin_name.empty() ? "<empty>" : plugin_name);
         return error;
       }
     }
@@ -3361,9 +4064,10 @@ Status Target::Attach(ProcessAttachInfo &attach_info, Stream *stream) {
     if (async) {
       process_sp->RestoreProcessEvents();
     } else {
-      state = process_sp->WaitForProcessToStop(std::nullopt, nullptr, false,
-                                               attach_info.GetHijackListener(),
-                                               stream);
+      // We are stopping all the way out to the user, so update selected frames.
+      state = process_sp->WaitForProcessToStop(
+          std::nullopt, nullptr, false, attach_info.GetHijackListener(), stream,
+          true, SelectMostRelevantFrame);
       process_sp->RestoreProcessEvents();
 
       if (state != eStateStopped) {
@@ -3620,7 +4324,7 @@ bool Target::StopHook::ExecutionContextPasses(const ExecutionContext &exc_ctx) {
   return will_run;
 }
 
-void Target::StopHook::GetDescription(Stream *s,
+void Target::StopHook::GetDescription(Stream &s,
                                       lldb::DescriptionLevel level) const {
 
   // For brief descriptions, only print the subclass description:
@@ -3629,55 +4333,55 @@ void Target::StopHook::GetDescription(Stream *s,
     return;
   }
 
-  unsigned indent_level = s->GetIndentLevel();
+  unsigned indent_level = s.GetIndentLevel();
 
-  s->SetIndentLevel(indent_level + 2);
+  s.SetIndentLevel(indent_level + 2);
 
-  s->Printf("Hook: %" PRIu64 "\n", GetID());
+  s.Printf("Hook: %" PRIu64 "\n", GetID());
   if (m_active)
-    s->Indent("State: enabled\n");
+    s.Indent("State: enabled\n");
   else
-    s->Indent("State: disabled\n");
+    s.Indent("State: disabled\n");
 
   if (m_auto_continue)
-    s->Indent("AutoContinue on\n");
+    s.Indent("AutoContinue on\n");
 
   if (m_specifier_sp) {
-    s->Indent();
-    s->PutCString("Specifier:\n");
-    s->SetIndentLevel(indent_level + 4);
-    m_specifier_sp->GetDescription(s, level);
-    s->SetIndentLevel(indent_level + 2);
+    s.Indent();
+    s.PutCString("Specifier:\n");
+    s.SetIndentLevel(indent_level + 4);
+    m_specifier_sp->GetDescription(&s, level);
+    s.SetIndentLevel(indent_level + 2);
   }
 
   if (m_thread_spec_up) {
     StreamString tmp;
-    s->Indent("Thread:\n");
+    s.Indent("Thread:\n");
     m_thread_spec_up->GetDescription(&tmp, level);
-    s->SetIndentLevel(indent_level + 4);
-    s->Indent(tmp.GetString());
-    s->PutCString("\n");
-    s->SetIndentLevel(indent_level + 2);
+    s.SetIndentLevel(indent_level + 4);
+    s.Indent(tmp.GetString());
+    s.PutCString("\n");
+    s.SetIndentLevel(indent_level + 2);
   }
   GetSubclassDescription(s, level);
 }
 
 void Target::StopHookCommandLine::GetSubclassDescription(
-    Stream *s, lldb::DescriptionLevel level) const {
+    Stream &s, lldb::DescriptionLevel level) const {
   // The brief description just prints the first command.
   if (level == eDescriptionLevelBrief) {
     if (m_commands.GetSize() == 1)
-      s->PutCString(m_commands.GetStringAtIndex(0));
+      s.PutCString(m_commands.GetStringAtIndex(0));
     return;
   }
-  s->Indent("Commands: \n");
-  s->SetIndentLevel(s->GetIndentLevel() + 4);
+  s.Indent("Commands: \n");
+  s.SetIndentLevel(s.GetIndentLevel() + 4);
   uint32_t num_commands = m_commands.GetSize();
   for (uint32_t i = 0; i < num_commands; i++) {
-    s->Indent(m_commands.GetStringAtIndex(i));
-    s->PutCString("\n");
+    s.Indent(m_commands.GetStringAtIndex(i));
+    s.PutCString("\n");
   }
-  s->SetIndentLevel(s->GetIndentLevel() - 4);
+  s.SetIndentLevel(s.GetIndentLevel() - 4);
 }
 
 // Target::StopHookCommandLine
@@ -3765,13 +4469,13 @@ Target::StopHookScripted::HandleStop(ExecutionContext &exc_ctx,
 }
 
 void Target::StopHookScripted::GetSubclassDescription(
-    Stream *s, lldb::DescriptionLevel level) const {
+    Stream &s, lldb::DescriptionLevel level) const {
   if (level == eDescriptionLevelBrief) {
-    s->PutCString(m_class_name);
+    s.PutCString(m_class_name);
     return;
   }
-  s->Indent("Class:");
-  s->Printf("%s\n", m_class_name.c_str());
+  s.Indent("Class:");
+  s.Printf("%s\n", m_class_name.c_str());
 
   // Now print the extra args:
   // FIXME: We should use StructuredData.GetDescription on the m_extra_args
@@ -3790,20 +4494,20 @@ void Target::StopHookScripted::GetSubclassDescription(
   if (num_keys == 0)
     return;
 
-  s->Indent("Args:\n");
-  s->SetIndentLevel(s->GetIndentLevel() + 4);
+  s.Indent("Args:\n");
+  s.SetIndentLevel(s.GetIndentLevel() + 4);
 
   auto print_one_element = [&s](ConstString key,
                                 StructuredData::Object *object) {
-    s->Indent();
-    s->Printf("%s : %s\n", key.GetCString(),
+    s.Indent();
+    s.Printf("%s : %s\n", key.GetCString(),
               object->GetStringValue().str().c_str());
     return true;
   };
 
   as_dict->ForEach(print_one_element);
 
-  s->SetIndentLevel(s->GetIndentLevel() - 4);
+  s.SetIndentLevel(s.GetIndentLevel() - 4);
 }
 
 static constexpr OptionEnumValueElement g_dynamic_value_types[] = {
@@ -3984,8 +4688,17 @@ static constexpr OptionEnumValueElement g_memory_module_load_level_values[] = {
     },
 };
 
+static constexpr OptionEnumValueElement g_swift_pcm_validation_values[] = {
+    {llvm::to_underlying(AutoBool::Auto), "auto",
+     "Turned on when explicit modules are enabled"},
+    {llvm::to_underlying(AutoBool::True), "true", "Enable validation."},
+    {llvm::to_underlying(AutoBool::False), "false", "Disable validation."},
+};
+
+
 #define LLDB_PROPERTIES_target
 #include "TargetProperties.inc"
+
 
 enum {
 #define LLDB_PROPERTIES_target
@@ -3998,9 +4711,9 @@ class TargetOptionValueProperties
 public:
   TargetOptionValueProperties(ConstString name) : Cloneable(name) {}
 
-  const Property *GetPropertyAtIndex(const ExecutionContext *exe_ctx,
-                                     bool will_modify,
-                                     uint32_t idx) const override {
+  const Property *
+  GetPropertyAtIndex(size_t idx,
+                     const ExecutionContext *exe_ctx = nullptr) const override {
     // When getting the value for a key from the target options, we will always
     // try and grab the setting from the current target if there is one. Else
     // we just use the one from this instance.
@@ -4081,9 +4794,9 @@ TargetProperties::TargetProperties(Target *target)
     m_experimental_properties_up =
         std::make_unique<TargetExperimentalProperties>();
     m_collection_sp->AppendProperty(
-        ConstString(Properties::GetExperimentalSettingsName()),
-        ConstString("Experimental settings - setting these won't produce "
-                    "errors if the setting is not present."),
+        Properties::GetExperimentalSettingsName(),
+        "Experimental settings - setting these won't produce "
+        "errors if the setting is not present.",
         true, m_experimental_properties_up->GetValueProperties());
   } else {
     m_collection_sp =
@@ -4092,13 +4805,13 @@ TargetProperties::TargetProperties(Target *target)
     m_experimental_properties_up =
         std::make_unique<TargetExperimentalProperties>();
     m_collection_sp->AppendProperty(
-        ConstString(Properties::GetExperimentalSettingsName()),
-        ConstString("Experimental settings - setting these won't produce "
-                    "errors if the setting is not present."),
+        Properties::GetExperimentalSettingsName(),
+        "Experimental settings - setting these won't produce "
+        "errors if the setting is not present.",
         true, m_experimental_properties_up->GetValueProperties());
     m_collection_sp->AppendProperty(
-        ConstString("process"), ConstString("Settings specific to processes."),
-        true, Process::GetGlobalProperties().GetValueProperties());
+        "process", "Settings specific to processes.", true,
+        Process::GetGlobalProperties().GetValueProperties());
     m_collection_sp->SetValueChangedCallback(
         ePropertySaveObjectsDir, [this] { CheckJITObjectsDir(); });
   }
@@ -4121,13 +4834,14 @@ void TargetProperties::UpdateLaunchInfoFromProperties() {
 
 bool TargetProperties::GetInjectLocalVariables(
     ExecutionContext *exe_ctx) const {
-  const Property *exp_property = m_collection_sp->GetPropertyAtIndex(
-      exe_ctx, false, ePropertyExperimental);
+  const Property *exp_property =
+      m_collection_sp->GetPropertyAtIndex(ePropertyExperimental, exe_ctx);
   OptionValueProperties *exp_values =
       exp_property->GetValue()->GetAsProperties();
   if (exp_values)
-    return exp_values->GetPropertyAtIndexAsBoolean(
-        exe_ctx, ePropertyInjectLocalVars, true);
+    return exp_values
+        ->GetPropertyAtIndexAs<bool>(ePropertyInjectLocalVars, exe_ctx)
+        .value_or(true);
   else
     return true;
 }
@@ -4135,100 +4849,205 @@ bool TargetProperties::GetInjectLocalVariables(
 void TargetProperties::SetInjectLocalVariables(ExecutionContext *exe_ctx,
                                                bool b) {
   const Property *exp_property =
-      m_collection_sp->GetPropertyAtIndex(exe_ctx, true, ePropertyExperimental);
+      m_collection_sp->GetPropertyAtIndex(ePropertyExperimental, exe_ctx);
   OptionValueProperties *exp_values =
       exp_property->GetValue()->GetAsProperties();
   if (exp_values)
-    exp_values->SetPropertyAtIndexAsBoolean(exe_ctx, ePropertyInjectLocalVars,
-                                            true);
+    exp_values->SetPropertyAtIndex(ePropertyInjectLocalVars, true, exe_ctx);
+}
+
+bool TargetProperties::GetSwiftReadMetadataFromFileCache() const {
+  const Property *exp_property =
+      m_collection_sp->GetPropertyAtIndex(ePropertyExperimental);
+  OptionValueProperties *exp_values =
+      exp_property->GetValue()->GetAsProperties();
+  if (exp_values)
+    return exp_values
+        ->GetPropertyAtIndexAs<bool>(ePropertySwiftReadMetadataFromFileCache)
+        .value_or(true);
+
+  return true;
+}
+
+bool TargetProperties::GetSwiftUseReflectionSymbols() const {
+  const Property *exp_property =
+      m_collection_sp->GetPropertyAtIndex(ePropertyExperimental);
+  OptionValueProperties *exp_values =
+      exp_property->GetValue()->GetAsProperties();
+  if (exp_values)
+    return exp_values
+        ->GetPropertyAtIndexAs<bool>(ePropertySwiftUseReflectionSymbols)
+        .value_or(true);
+  else
+    return true;
+}
+
+bool TargetProperties::GetSwiftReadMetadataFromDSYM() const {
+  const Property *exp_property =
+      m_collection_sp->GetPropertyAtIndex(ePropertyExperimental);
+  OptionValueProperties *exp_values =
+      exp_property->GetValue()->GetAsProperties();
+  if (exp_values)
+    return exp_values
+        ->GetPropertyAtIndexAs<bool>(ePropertySwiftReadMetadataFromDSYM)
+        .value_or(true);
+
+  return true;
+}
+
+bool TargetProperties::GetSwiftDiscoverImplicitSearchPaths() const {
+  const Property *exp_property =
+      m_collection_sp->GetPropertyAtIndex(ePropertyExperimental);
+  OptionValueProperties *exp_values =
+      exp_property->GetValue()->GetAsProperties();
+  if (exp_values)
+    return exp_values
+        ->GetPropertyAtIndexAs<bool>(ePropertySwiftDiscoverImplicitSearchPaths)
+        .value_or(true);
+
+  return true;
+}
+
+bool TargetProperties::GetSwiftEnableBareSlashRegex() const {
+  const Property *exp_property =
+      m_collection_sp->GetPropertyAtIndex(ePropertyExperimental);
+  OptionValueProperties *exp_values =
+      exp_property->GetValue()->GetAsProperties();
+  if (exp_values)
+    return exp_values
+        ->GetPropertyAtIndexAs<bool>(ePropertySwiftEnableBareSlashRegex)
+        .value_or(true);
+
+  return true;
+}
+
+bool TargetProperties::GetSwiftAllowExplicitModules() const {
+  const Property *exp_property =
+      m_collection_sp->GetPropertyAtIndex(ePropertyExperimental);
+  OptionValueProperties *exp_values =
+      exp_property->GetValue()->GetAsProperties();
+  if (exp_values)
+    return exp_values
+        ->GetPropertyAtIndexAs<bool>(ePropertySwiftAllowExplicitModules)
+        .value_or(true);
+
+  return true;
+}
+
+AutoBool TargetProperties::GetSwiftPCMValidation() const {
+  const Property *exp_property =
+      m_collection_sp->GetPropertyAtIndex(ePropertyExperimental);
+  OptionValueProperties *exp_values =
+      exp_property->GetValue()->GetAsProperties();
+  if (exp_values)
+    return exp_values
+        ->GetPropertyAtIndexAs<AutoBool>(ePropertySwiftPCMValidation)
+      .value_or(AutoBool::Auto);
+
+  return AutoBool::Auto;
+}
+
+Args TargetProperties::GetSwiftPluginServerForPath() const {
+  const uint32_t idx = ePropertySwiftPluginServerForPath;
+
+  llvm::StringMap<std::string> result;
+  Args property_plugin_server_path;
+  m_experimental_properties_up->GetValueProperties()->GetPropertyAtIndexAsArgs(
+      idx, property_plugin_server_path);
+  return property_plugin_server_path;
+}
+
+bool TargetProperties::GetSwiftAutoImportFrameworks() const {
+  const uint32_t idx = ePropertySwiftAutoImportFrameworks;
+  return GetPropertyAtIndexAs<bool>(
+      idx, g_target_properties[idx].default_uint_value != 0);
 }
 
 ArchSpec TargetProperties::GetDefaultArchitecture() const {
-  OptionValueArch *value = m_collection_sp->GetPropertyAtIndexAsOptionValueArch(
-      nullptr, ePropertyDefaultArch);
-  if (value)
-    return value->GetCurrentValue();
-  return ArchSpec();
+  const uint32_t idx = ePropertyDefaultArch;
+  return GetPropertyAtIndexAs<ArchSpec>(idx, {});
 }
 
 void TargetProperties::SetDefaultArchitecture(const ArchSpec &arch) {
-  OptionValueArch *value = m_collection_sp->GetPropertyAtIndexAsOptionValueArch(
-      nullptr, ePropertyDefaultArch);
-  if (value)
-    return value->SetCurrentValue(arch, true);
+  const uint32_t idx = ePropertyDefaultArch;
+  SetPropertyAtIndex(idx, arch);
 }
 
 bool TargetProperties::GetMoveToNearestCode() const {
   const uint32_t idx = ePropertyMoveToNearestCode;
-  return m_collection_sp->GetPropertyAtIndexAsBoolean(
-      nullptr, idx, g_target_properties[idx].default_uint_value != 0);
+  return GetPropertyAtIndexAs<bool>(
+      idx, g_target_properties[idx].default_uint_value != 0);
 }
 
 lldb::DynamicValueType TargetProperties::GetPreferDynamicValue() const {
   const uint32_t idx = ePropertyPreferDynamic;
-  return (lldb::DynamicValueType)
-      m_collection_sp->GetPropertyAtIndexAsEnumeration(
-          nullptr, idx, g_target_properties[idx].default_uint_value);
+  return GetPropertyAtIndexAs<lldb::DynamicValueType>(
+      idx, static_cast<lldb::DynamicValueType>(
+               g_target_properties[idx].default_uint_value));
 }
 
 bool TargetProperties::SetPreferDynamicValue(lldb::DynamicValueType d) {
   const uint32_t idx = ePropertyPreferDynamic;
-  return m_collection_sp->SetPropertyAtIndexAsEnumeration(nullptr, idx, d);
+  return SetPropertyAtIndex(idx, d);
 }
 
 bool TargetProperties::GetPreloadSymbols() const {
+  if (INTERRUPT_REQUESTED(m_target->GetDebugger(), 
+      "Interrupted checking preload symbols")) {
+    return false;
+  }
   const uint32_t idx = ePropertyPreloadSymbols;
-  return m_collection_sp->GetPropertyAtIndexAsBoolean(
-      nullptr, idx, g_target_properties[idx].default_uint_value != 0);
+  return GetPropertyAtIndexAs<bool>(
+      idx, g_target_properties[idx].default_uint_value != 0);
 }
 
 void TargetProperties::SetPreloadSymbols(bool b) {
   const uint32_t idx = ePropertyPreloadSymbols;
-  m_collection_sp->SetPropertyAtIndexAsBoolean(nullptr, idx, b);
+  SetPropertyAtIndex(idx, b);
 }
 
 bool TargetProperties::GetDisableASLR() const {
   const uint32_t idx = ePropertyDisableASLR;
-  return m_collection_sp->GetPropertyAtIndexAsBoolean(
-      nullptr, idx, g_target_properties[idx].default_uint_value != 0);
+  return GetPropertyAtIndexAs<bool>(
+      idx, g_target_properties[idx].default_uint_value != 0);
 }
 
 void TargetProperties::SetDisableASLR(bool b) {
   const uint32_t idx = ePropertyDisableASLR;
-  m_collection_sp->SetPropertyAtIndexAsBoolean(nullptr, idx, b);
+  SetPropertyAtIndex(idx, b);
 }
 
 bool TargetProperties::GetInheritTCC() const {
   const uint32_t idx = ePropertyInheritTCC;
-  return m_collection_sp->GetPropertyAtIndexAsBoolean(
-      nullptr, idx, g_target_properties[idx].default_uint_value != 0);
+  return GetPropertyAtIndexAs<bool>(
+      idx, g_target_properties[idx].default_uint_value != 0);
 }
 
 void TargetProperties::SetInheritTCC(bool b) {
   const uint32_t idx = ePropertyInheritTCC;
-  m_collection_sp->SetPropertyAtIndexAsBoolean(nullptr, idx, b);
+  SetPropertyAtIndex(idx, b);
 }
 
 bool TargetProperties::GetDetachOnError() const {
   const uint32_t idx = ePropertyDetachOnError;
-  return m_collection_sp->GetPropertyAtIndexAsBoolean(
-      nullptr, idx, g_target_properties[idx].default_uint_value != 0);
+  return GetPropertyAtIndexAs<bool>(
+      idx, g_target_properties[idx].default_uint_value != 0);
 }
 
 void TargetProperties::SetDetachOnError(bool b) {
   const uint32_t idx = ePropertyDetachOnError;
-  m_collection_sp->SetPropertyAtIndexAsBoolean(nullptr, idx, b);
+  SetPropertyAtIndex(idx, b);
 }
 
 bool TargetProperties::GetDisableSTDIO() const {
   const uint32_t idx = ePropertyDisableSTDIO;
-  return m_collection_sp->GetPropertyAtIndexAsBoolean(
-      nullptr, idx, g_target_properties[idx].default_uint_value != 0);
+  return GetPropertyAtIndexAs<bool>(
+      idx, g_target_properties[idx].default_uint_value != 0);
 }
 
 void TargetProperties::SetDisableSTDIO(bool b) {
   const uint32_t idx = ePropertyDisableSTDIO;
-  m_collection_sp->SetPropertyAtIndexAsBoolean(nullptr, idx, b);
+  SetPropertyAtIndex(idx, b);
 }
 
 const char *TargetProperties::GetDisassemblyFlavor() const {
@@ -4236,38 +5055,41 @@ const char *TargetProperties::GetDisassemblyFlavor() const {
   const char *return_value;
 
   x86DisassemblyFlavor flavor_value =
-      (x86DisassemblyFlavor)m_collection_sp->GetPropertyAtIndexAsEnumeration(
-          nullptr, idx, g_target_properties[idx].default_uint_value);
+      GetPropertyAtIndexAs<x86DisassemblyFlavor>(
+          idx, static_cast<x86DisassemblyFlavor>(
+                   g_target_properties[idx].default_uint_value));
+
   return_value = g_x86_dis_flavor_value_types[flavor_value].string_value;
   return return_value;
 }
 
 InlineStrategy TargetProperties::GetInlineStrategy() const {
   const uint32_t idx = ePropertyInlineStrategy;
-  return (InlineStrategy)m_collection_sp->GetPropertyAtIndexAsEnumeration(
-      nullptr, idx, g_target_properties[idx].default_uint_value);
+  return GetPropertyAtIndexAs<InlineStrategy>(
+      idx,
+      static_cast<InlineStrategy>(g_target_properties[idx].default_uint_value));
 }
 
 llvm::StringRef TargetProperties::GetArg0() const {
   const uint32_t idx = ePropertyArg0;
-  return m_collection_sp->GetPropertyAtIndexAsString(nullptr, idx,
-                                                     llvm::StringRef());
+  return GetPropertyAtIndexAs<llvm::StringRef>(
+      idx, g_target_properties[idx].default_cstr_value);
 }
 
 void TargetProperties::SetArg0(llvm::StringRef arg) {
   const uint32_t idx = ePropertyArg0;
-  m_collection_sp->SetPropertyAtIndexAsString(nullptr, idx, arg);
+  SetPropertyAtIndex(idx, arg);
   m_launch_info.SetArg0(arg);
 }
 
 bool TargetProperties::GetRunArguments(Args &args) const {
   const uint32_t idx = ePropertyRunArgs;
-  return m_collection_sp->GetPropertyAtIndexAsArgs(nullptr, idx, args);
+  return m_collection_sp->GetPropertyAtIndexAsArgs(idx, args);
 }
 
 void TargetProperties::SetRunArguments(const Args &args) {
   const uint32_t idx = ePropertyRunArgs;
-  m_collection_sp->SetPropertyAtIndexFromArgs(nullptr, idx, args);
+  m_collection_sp->SetPropertyAtIndexFromArgs(idx, args);
   m_launch_info.GetArguments() = args;
 }
 
@@ -4275,8 +5097,8 @@ Environment TargetProperties::ComputeEnvironment() const {
   Environment env;
 
   if (m_target &&
-      m_collection_sp->GetPropertyAtIndexAsBoolean(
-          nullptr, ePropertyInheritEnv,
+      GetPropertyAtIndexAs<bool>(
+          ePropertyInheritEnv,
           g_target_properties[ePropertyInheritEnv].default_uint_value != 0)) {
     if (auto platform_sp = m_target->GetPlatform()) {
       Environment platform_env = platform_sp->GetEnvironment();
@@ -4286,14 +5108,13 @@ Environment TargetProperties::ComputeEnvironment() const {
   }
 
   Args property_unset_env;
-  m_collection_sp->GetPropertyAtIndexAsArgs(nullptr, ePropertyUnsetEnvVars,
+  m_collection_sp->GetPropertyAtIndexAsArgs(ePropertyUnsetEnvVars,
                                             property_unset_env);
   for (const auto &var : property_unset_env)
     env.erase(var.ref());
 
   Args property_env;
-  m_collection_sp->GetPropertyAtIndexAsArgs(nullptr, ePropertyEnvVars,
-                                            property_env);
+  m_collection_sp->GetPropertyAtIndexAsArgs(ePropertyEnvVars, property_env);
   for (const auto &KV : Environment(property_env))
     env[KV.first()] = KV.second;
 
@@ -4310,8 +5131,8 @@ Environment TargetProperties::GetInheritedEnvironment() const {
   if (m_target == nullptr)
     return environment;
 
-  if (!m_collection_sp->GetPropertyAtIndexAsBoolean(
-          nullptr, ePropertyInheritEnv,
+  if (!GetPropertyAtIndexAs<bool>(
+          ePropertyInheritEnv,
           g_target_properties[ePropertyInheritEnv].default_uint_value != 0))
     return environment;
 
@@ -4324,7 +5145,7 @@ Environment TargetProperties::GetInheritedEnvironment() const {
     environment[KV.first()] = KV.second;
 
   Args property_unset_environment;
-  m_collection_sp->GetPropertyAtIndexAsArgs(nullptr, ePropertyUnsetEnvVars,
+  m_collection_sp->GetPropertyAtIndexAsArgs(ePropertyUnsetEnvVars,
                                             property_unset_environment);
   for (const auto &var : property_unset_environment)
     environment.erase(var.ref());
@@ -4334,7 +5155,7 @@ Environment TargetProperties::GetInheritedEnvironment() const {
 
 Environment TargetProperties::GetTargetEnvironment() const {
   Args property_environment;
-  m_collection_sp->GetPropertyAtIndexAsArgs(nullptr, ePropertyEnvVars,
+  m_collection_sp->GetPropertyAtIndexAsArgs(ePropertyEnvVars,
                                             property_environment);
   Environment environment;
   for (const auto &KV : Environment(property_environment))
@@ -4346,106 +5167,138 @@ Environment TargetProperties::GetTargetEnvironment() const {
 void TargetProperties::SetEnvironment(Environment env) {
   // TODO: Get rid of the Args intermediate step
   const uint32_t idx = ePropertyEnvVars;
-  m_collection_sp->SetPropertyAtIndexFromArgs(nullptr, idx, Args(env));
+  m_collection_sp->SetPropertyAtIndexFromArgs(idx, Args(env));
 }
 
 bool TargetProperties::GetSkipPrologue() const {
   const uint32_t idx = ePropertySkipPrologue;
-  return m_collection_sp->GetPropertyAtIndexAsBoolean(
-      nullptr, idx, g_target_properties[idx].default_uint_value != 0);
+  return GetPropertyAtIndexAs<bool>(
+      idx, g_target_properties[idx].default_uint_value != 0);
 }
 
 PathMappingList &TargetProperties::GetSourcePathMap() const {
   const uint32_t idx = ePropertySourceMap;
   OptionValuePathMappings *option_value =
-      m_collection_sp->GetPropertyAtIndexAsOptionValuePathMappings(nullptr,
-                                                                   false, idx);
+      m_collection_sp->GetPropertyAtIndexAsOptionValuePathMappings(idx);
   assert(option_value);
   return option_value->GetCurrentValue();
 }
 
 bool TargetProperties::GetAutoSourceMapRelative() const {
   const uint32_t idx = ePropertyAutoSourceMapRelative;
-  return m_collection_sp->GetPropertyAtIndexAsBoolean(
-      nullptr, idx, g_target_properties[idx].default_uint_value != 0);
+  return GetPropertyAtIndexAs<bool>(
+      idx, g_target_properties[idx].default_uint_value != 0);
 }
 
 void TargetProperties::AppendExecutableSearchPaths(const FileSpec &dir) {
   const uint32_t idx = ePropertyExecutableSearchPaths;
   OptionValueFileSpecList *option_value =
-      m_collection_sp->GetPropertyAtIndexAsOptionValueFileSpecList(nullptr,
-                                                                   false, idx);
+      m_collection_sp->GetPropertyAtIndexAsOptionValueFileSpecList(idx);
   assert(option_value);
   option_value->AppendCurrentValue(dir);
 }
 
 FileSpecList TargetProperties::GetExecutableSearchPaths() {
   const uint32_t idx = ePropertyExecutableSearchPaths;
-  const OptionValueFileSpecList *option_value =
-      m_collection_sp->GetPropertyAtIndexAsOptionValueFileSpecList(nullptr,
-                                                                   false, idx);
-  assert(option_value);
-  return option_value->GetCurrentValue();
+  return GetPropertyAtIndexAs<FileSpecList>(idx, {});
 }
 
 FileSpecList TargetProperties::GetDebugFileSearchPaths() {
   const uint32_t idx = ePropertyDebugFileSearchPaths;
-  const OptionValueFileSpecList *option_value =
-      m_collection_sp->GetPropertyAtIndexAsOptionValueFileSpecList(nullptr,
-                                                                   false, idx);
+  return GetPropertyAtIndexAs<FileSpecList>(idx, {});
+}
+
+FileSpec &TargetProperties::GetSDKPath() {
+  const uint32_t idx = ePropertySDKPath;
+  OptionValueFileSpec *option_value =
+      m_collection_sp->GetPropertyAtIndexAsOptionValueFileSpec(idx);
   assert(option_value);
   return option_value->GetCurrentValue();
+}
+
+FileSpecList TargetProperties::GetSwiftFrameworkSearchPaths() {
+  const uint32_t idx = ePropertySwiftFrameworkSearchPaths;
+  OptionValueFileSpecList *option_value =
+      m_collection_sp->GetPropertyAtIndexAsOptionValueFileSpecList(idx);
+  assert(option_value);
+  return option_value->GetCurrentValue();
+}
+
+FileSpecList TargetProperties::GetSwiftModuleSearchPaths() {
+  const uint32_t idx = ePropertySwiftModuleSearchPaths;
+  OptionValueFileSpecList *option_value =
+      m_collection_sp->GetPropertyAtIndexAsOptionValueFileSpecList(idx);
+  assert(option_value);
+  return option_value->GetCurrentValue();
+}
+
+llvm::StringRef TargetProperties::GetSwiftExtraClangFlags() const {
+  const uint32_t idx = ePropertySwiftExtraClangFlags;
+  return GetPropertyAtIndexAs<llvm::StringRef>(idx, "");
+}
+
+llvm::StringRef TargetProperties::GetSwiftClangOverrideOptions() const {
+  const uint32_t idx = ePropertySwiftClangOverrideOptions;
+  return GetPropertyAtIndexAs<llvm::StringRef>(idx, "");
 }
 
 FileSpecList TargetProperties::GetClangModuleSearchPaths() {
   const uint32_t idx = ePropertyClangModuleSearchPaths;
-  const OptionValueFileSpecList *option_value =
-      m_collection_sp->GetPropertyAtIndexAsOptionValueFileSpecList(nullptr,
-                                                                   false, idx);
-  assert(option_value);
-  return option_value->GetCurrentValue();
+  return GetPropertyAtIndexAs<FileSpecList>(idx, {});
 }
 
 bool TargetProperties::GetEnableAutoImportClangModules() const {
   const uint32_t idx = ePropertyAutoImportClangModules;
-  return m_collection_sp->GetPropertyAtIndexAsBoolean(
-      nullptr, idx, g_target_properties[idx].default_uint_value != 0);
+  return GetPropertyAtIndexAs<bool>(
+      idx, g_target_properties[idx].default_uint_value != 0);
+}
+
+bool TargetProperties::GetUseAllCompilerFlags() const {
+  const uint32_t idx = ePropertyUseAllCompilerFlags;
+  return GetPropertyAtIndexAs<bool>(
+      idx, g_target_properties[idx].default_uint_value != 0);
+}
+
+void TargetProperties::SetUseAllCompilerFlags(bool b) {
+  const uint32_t idx = ePropertyUseAllCompilerFlags;
+  SetPropertyAtIndex(idx, b);
 }
 
 ImportStdModule TargetProperties::GetImportStdModule() const {
   const uint32_t idx = ePropertyImportStdModule;
-  return (ImportStdModule)m_collection_sp->GetPropertyAtIndexAsEnumeration(
-      nullptr, idx, g_target_properties[idx].default_uint_value);
+  return GetPropertyAtIndexAs<ImportStdModule>(
+      idx, static_cast<ImportStdModule>(
+               g_target_properties[idx].default_uint_value));
 }
 
 DynamicClassInfoHelper TargetProperties::GetDynamicClassInfoHelper() const {
   const uint32_t idx = ePropertyDynamicClassInfoHelper;
-  return (DynamicClassInfoHelper)
-      m_collection_sp->GetPropertyAtIndexAsEnumeration(
-          nullptr, idx, g_target_properties[idx].default_uint_value);
+  return GetPropertyAtIndexAs<DynamicClassInfoHelper>(
+      idx, static_cast<DynamicClassInfoHelper>(
+               g_target_properties[idx].default_uint_value));
 }
 
 bool TargetProperties::GetEnableAutoApplyFixIts() const {
   const uint32_t idx = ePropertyAutoApplyFixIts;
-  return m_collection_sp->GetPropertyAtIndexAsBoolean(
-      nullptr, idx, g_target_properties[idx].default_uint_value != 0);
+  return GetPropertyAtIndexAs<bool>(
+      idx, g_target_properties[idx].default_uint_value != 0);
 }
 
 uint64_t TargetProperties::GetNumberOfRetriesWithFixits() const {
   const uint32_t idx = ePropertyRetriesWithFixIts;
-  return m_collection_sp->GetPropertyAtIndexAsUInt64(
-      nullptr, idx, g_target_properties[idx].default_uint_value);
+  return GetPropertyAtIndexAs<uint64_t>(
+      idx, g_target_properties[idx].default_uint_value);
 }
 
 bool TargetProperties::GetEnableNotifyAboutFixIts() const {
   const uint32_t idx = ePropertyNotifyAboutFixIts;
-  return m_collection_sp->GetPropertyAtIndexAsBoolean(
-      nullptr, idx, g_target_properties[idx].default_uint_value != 0);
+  return GetPropertyAtIndexAs<bool>(
+      idx, g_target_properties[idx].default_uint_value != 0);
 }
 
 FileSpec TargetProperties::GetSaveJITObjectsDir() const {
   const uint32_t idx = ePropertySaveObjectsDir;
-  return m_collection_sp->GetPropertyAtIndexAsFileSpec(nullptr, idx);
+  return GetPropertyAtIndexAs<FileSpec>(idx, {});
 }
 
 void TargetProperties::CheckJITObjectsDir() {
@@ -4461,7 +5314,7 @@ void TargetProperties::CheckJITObjectsDir() {
   if (exists && is_directory && writable)
     return;
 
-  m_collection_sp->GetPropertyAtIndex(nullptr, true, ePropertySaveObjectsDir)
+  m_collection_sp->GetPropertyAtIndex(ePropertySaveObjectsDir)
       ->GetValue()
       ->Clear();
 
@@ -4483,87 +5336,82 @@ void TargetProperties::CheckJITObjectsDir() {
 
 bool TargetProperties::GetEnableSyntheticValue() const {
   const uint32_t idx = ePropertyEnableSynthetic;
-  return m_collection_sp->GetPropertyAtIndexAsBoolean(
-      nullptr, idx, g_target_properties[idx].default_uint_value != 0);
+  return GetPropertyAtIndexAs<bool>(
+      idx, g_target_properties[idx].default_uint_value != 0);
 }
 
 uint32_t TargetProperties::GetMaxZeroPaddingInFloatFormat() const {
   const uint32_t idx = ePropertyMaxZeroPaddingInFloatFormat;
-  return m_collection_sp->GetPropertyAtIndexAsUInt64(
-      nullptr, idx, g_target_properties[idx].default_uint_value);
+  return GetPropertyAtIndexAs<uint64_t>(
+      idx, g_target_properties[idx].default_uint_value);
 }
 
 uint32_t TargetProperties::GetMaximumNumberOfChildrenToDisplay() const {
   const uint32_t idx = ePropertyMaxChildrenCount;
-  return m_collection_sp->GetPropertyAtIndexAsSInt64(
-      nullptr, idx, g_target_properties[idx].default_uint_value);
+  return GetPropertyAtIndexAs<int64_t>(
+      idx, g_target_properties[idx].default_uint_value);
 }
 
 std::pair<uint32_t, bool>
 TargetProperties::GetMaximumDepthOfChildrenToDisplay() const {
   const uint32_t idx = ePropertyMaxChildrenDepth;
   auto *option_value =
-      m_collection_sp->GetPropertyAtIndexAsOptionValueUInt64(nullptr, idx);
+      m_collection_sp->GetPropertyAtIndexAsOptionValueUInt64(idx);
   bool is_default = !option_value->OptionWasSet();
   return {option_value->GetCurrentValue(), is_default};
 }
 
 uint32_t TargetProperties::GetMaximumSizeOfStringSummary() const {
   const uint32_t idx = ePropertyMaxSummaryLength;
-  return m_collection_sp->GetPropertyAtIndexAsSInt64(
-      nullptr, idx, g_target_properties[idx].default_uint_value);
+  return GetPropertyAtIndexAs<uint64_t>(
+      idx, g_target_properties[idx].default_uint_value);
 }
 
 uint32_t TargetProperties::GetMaximumMemReadSize() const {
   const uint32_t idx = ePropertyMaxMemReadSize;
-  return m_collection_sp->GetPropertyAtIndexAsSInt64(
-      nullptr, idx, g_target_properties[idx].default_uint_value);
+  return GetPropertyAtIndexAs<uint64_t>(
+      idx, g_target_properties[idx].default_uint_value);
 }
 
 FileSpec TargetProperties::GetStandardInputPath() const {
   const uint32_t idx = ePropertyInputPath;
-  return m_collection_sp->GetPropertyAtIndexAsFileSpec(nullptr, idx);
+  return GetPropertyAtIndexAs<FileSpec>(idx, {});
 }
 
 void TargetProperties::SetStandardInputPath(llvm::StringRef path) {
   const uint32_t idx = ePropertyInputPath;
-  m_collection_sp->SetPropertyAtIndexAsString(nullptr, idx, path);
+  SetPropertyAtIndex(idx, path);
 }
 
 FileSpec TargetProperties::GetStandardOutputPath() const {
   const uint32_t idx = ePropertyOutputPath;
-  return m_collection_sp->GetPropertyAtIndexAsFileSpec(nullptr, idx);
+  return GetPropertyAtIndexAs<FileSpec>(idx, {});
 }
 
 void TargetProperties::SetStandardOutputPath(llvm::StringRef path) {
   const uint32_t idx = ePropertyOutputPath;
-  m_collection_sp->SetPropertyAtIndexAsString(nullptr, idx, path);
+  SetPropertyAtIndex(idx, path);
 }
 
 FileSpec TargetProperties::GetStandardErrorPath() const {
   const uint32_t idx = ePropertyErrorPath;
-  return m_collection_sp->GetPropertyAtIndexAsFileSpec(nullptr, idx);
+  return GetPropertyAtIndexAs<FileSpec>(idx, {});
 }
 
 void TargetProperties::SetStandardErrorPath(llvm::StringRef path) {
   const uint32_t idx = ePropertyErrorPath;
-  m_collection_sp->SetPropertyAtIndexAsString(nullptr, idx, path);
+  SetPropertyAtIndex(idx, path);
 }
 
-LanguageType TargetProperties::GetLanguage() const {
-  OptionValueLanguage *value =
-      m_collection_sp->GetPropertyAtIndexAsOptionValueLanguage(
-          nullptr, ePropertyLanguage);
-  if (value)
-    return value->GetCurrentValue();
-  return LanguageType();
+SourceLanguage TargetProperties::GetLanguage() const {
+  const uint32_t idx = ePropertyLanguage;
+  return {GetPropertyAtIndexAs<LanguageType>(idx, {})};
 }
 
 llvm::StringRef TargetProperties::GetExpressionPrefixContents() {
   const uint32_t idx = ePropertyExprPrefix;
   OptionValueFileSpec *file =
-      m_collection_sp->GetPropertyAtIndexAsOptionValueFileSpec(nullptr, false,
-                                                               idx);
+      m_collection_sp->GetPropertyAtIndexAsOptionValueFileSpec(idx);
   if (file) {
     DataBufferSP data_sp(file->GetFileContents());
     if (data_sp)
@@ -4576,89 +5424,110 @@ llvm::StringRef TargetProperties::GetExpressionPrefixContents() {
 
 uint64_t TargetProperties::GetExprErrorLimit() const {
   const uint32_t idx = ePropertyExprErrorLimit;
-  return m_collection_sp->GetPropertyAtIndexAsUInt64(
-      nullptr, idx, g_target_properties[idx].default_uint_value);
+  return GetPropertyAtIndexAs<uint64_t>(
+      idx, g_target_properties[idx].default_uint_value);
+}
+
+uint64_t TargetProperties::GetExprAllocAddress() const {
+  const uint32_t idx = ePropertyExprAllocAddress;
+  return GetPropertyAtIndexAs<uint64_t>(
+      idx, g_target_properties[idx].default_uint_value);
+}
+
+uint64_t TargetProperties::GetExprAllocSize() const {
+  const uint32_t idx = ePropertyExprAllocSize;
+  return GetPropertyAtIndexAs<uint64_t>(
+      idx, g_target_properties[idx].default_uint_value);
+}
+
+uint64_t TargetProperties::GetExprAllocAlign() const {
+  const uint32_t idx = ePropertyExprAllocAlign;
+  return GetPropertyAtIndexAs<uint64_t>(
+      idx, g_target_properties[idx].default_uint_value);
 }
 
 bool TargetProperties::GetBreakpointsConsultPlatformAvoidList() {
   const uint32_t idx = ePropertyBreakpointUseAvoidList;
-  return m_collection_sp->GetPropertyAtIndexAsBoolean(
-      nullptr, idx, g_target_properties[idx].default_uint_value != 0);
+  return GetPropertyAtIndexAs<bool>(
+      idx, g_target_properties[idx].default_uint_value != 0);
 }
 
 bool TargetProperties::GetUseHexImmediates() const {
   const uint32_t idx = ePropertyUseHexImmediates;
-  return m_collection_sp->GetPropertyAtIndexAsBoolean(
-      nullptr, idx, g_target_properties[idx].default_uint_value != 0);
+  return GetPropertyAtIndexAs<bool>(
+      idx, g_target_properties[idx].default_uint_value != 0);
 }
 
 bool TargetProperties::GetUseFastStepping() const {
   const uint32_t idx = ePropertyUseFastStepping;
-  return m_collection_sp->GetPropertyAtIndexAsBoolean(
-      nullptr, idx, g_target_properties[idx].default_uint_value != 0);
+  return GetPropertyAtIndexAs<bool>(
+      idx, g_target_properties[idx].default_uint_value != 0);
 }
 
 bool TargetProperties::GetDisplayExpressionsInCrashlogs() const {
   const uint32_t idx = ePropertyDisplayExpressionsInCrashlogs;
-  return m_collection_sp->GetPropertyAtIndexAsBoolean(
-      nullptr, idx, g_target_properties[idx].default_uint_value != 0);
+  return GetPropertyAtIndexAs<bool>(
+      idx, g_target_properties[idx].default_uint_value != 0);
 }
 
 LoadScriptFromSymFile TargetProperties::GetLoadScriptFromSymbolFile() const {
   const uint32_t idx = ePropertyLoadScriptFromSymbolFile;
-  return (LoadScriptFromSymFile)
-      m_collection_sp->GetPropertyAtIndexAsEnumeration(
-          nullptr, idx, g_target_properties[idx].default_uint_value);
+  return GetPropertyAtIndexAs<LoadScriptFromSymFile>(
+      idx, static_cast<LoadScriptFromSymFile>(
+               g_target_properties[idx].default_uint_value));
 }
 
 LoadCWDlldbinitFile TargetProperties::GetLoadCWDlldbinitFile() const {
   const uint32_t idx = ePropertyLoadCWDlldbinitFile;
-  return (LoadCWDlldbinitFile)m_collection_sp->GetPropertyAtIndexAsEnumeration(
-      nullptr, idx, g_target_properties[idx].default_uint_value);
+  return GetPropertyAtIndexAs<LoadCWDlldbinitFile>(
+      idx, static_cast<LoadCWDlldbinitFile>(
+               g_target_properties[idx].default_uint_value));
 }
 
 Disassembler::HexImmediateStyle TargetProperties::GetHexImmediateStyle() const {
   const uint32_t idx = ePropertyHexImmediateStyle;
-  return (Disassembler::HexImmediateStyle)
-      m_collection_sp->GetPropertyAtIndexAsEnumeration(
-          nullptr, idx, g_target_properties[idx].default_uint_value);
+  return GetPropertyAtIndexAs<Disassembler::HexImmediateStyle>(
+      idx, static_cast<Disassembler::HexImmediateStyle>(
+               g_target_properties[idx].default_uint_value));
 }
 
 MemoryModuleLoadLevel TargetProperties::GetMemoryModuleLoadLevel() const {
   const uint32_t idx = ePropertyMemoryModuleLoadLevel;
-  return (MemoryModuleLoadLevel)
-      m_collection_sp->GetPropertyAtIndexAsEnumeration(
-          nullptr, idx, g_target_properties[idx].default_uint_value);
+  return GetPropertyAtIndexAs<MemoryModuleLoadLevel>(
+      idx, static_cast<MemoryModuleLoadLevel>(
+               g_target_properties[idx].default_uint_value));
 }
 
 bool TargetProperties::GetUserSpecifiedTrapHandlerNames(Args &args) const {
   const uint32_t idx = ePropertyTrapHandlerNames;
-  return m_collection_sp->GetPropertyAtIndexAsArgs(nullptr, idx, args);
+  return m_collection_sp->GetPropertyAtIndexAsArgs(idx, args);
 }
 
 void TargetProperties::SetUserSpecifiedTrapHandlerNames(const Args &args) {
   const uint32_t idx = ePropertyTrapHandlerNames;
-  m_collection_sp->SetPropertyAtIndexFromArgs(nullptr, idx, args);
+  m_collection_sp->SetPropertyAtIndexFromArgs(idx, args);
 }
 
 bool TargetProperties::GetDisplayRuntimeSupportValues() const {
   const uint32_t idx = ePropertyDisplayRuntimeSupportValues;
-  return m_collection_sp->GetPropertyAtIndexAsBoolean(nullptr, idx, false);
+  return GetPropertyAtIndexAs<bool>(
+      idx, g_target_properties[idx].default_uint_value != 0);
 }
 
 void TargetProperties::SetDisplayRuntimeSupportValues(bool b) {
   const uint32_t idx = ePropertyDisplayRuntimeSupportValues;
-  m_collection_sp->SetPropertyAtIndexAsBoolean(nullptr, idx, b);
+  SetPropertyAtIndex(idx, b);
 }
 
 bool TargetProperties::GetDisplayRecognizedArguments() const {
   const uint32_t idx = ePropertyDisplayRecognizedArguments;
-  return m_collection_sp->GetPropertyAtIndexAsBoolean(nullptr, idx, false);
+  return GetPropertyAtIndexAs<bool>(
+      idx, g_target_properties[idx].default_uint_value != 0);
 }
 
 void TargetProperties::SetDisplayRecognizedArguments(bool b) {
   const uint32_t idx = ePropertyDisplayRecognizedArguments;
-  m_collection_sp->SetPropertyAtIndexAsBoolean(nullptr, idx, b);
+  SetPropertyAtIndex(idx, b);
 }
 
 const ProcessLaunchInfo &TargetProperties::GetProcessLaunchInfo() const {
@@ -4695,19 +5564,19 @@ void TargetProperties::SetProcessLaunchInfo(
 
 bool TargetProperties::GetRequireHardwareBreakpoints() const {
   const uint32_t idx = ePropertyRequireHardwareBreakpoints;
-  return m_collection_sp->GetPropertyAtIndexAsBoolean(
-      nullptr, idx, g_target_properties[idx].default_uint_value != 0);
+  return GetPropertyAtIndexAs<bool>(
+      idx, g_target_properties[idx].default_uint_value != 0);
 }
 
 void TargetProperties::SetRequireHardwareBreakpoints(bool b) {
   const uint32_t idx = ePropertyRequireHardwareBreakpoints;
-  m_collection_sp->SetPropertyAtIndexAsBoolean(nullptr, idx, b);
+  m_collection_sp->SetPropertyAtIndex(idx, b);
 }
 
 bool TargetProperties::GetAutoInstallMainExecutable() const {
   const uint32_t idx = ePropertyAutoInstallMainExecutable;
-  return m_collection_sp->GetPropertyAtIndexAsBoolean(
-      nullptr, idx, g_target_properties[idx].default_uint_value != 0);
+  return GetPropertyAtIndexAs<bool>(
+      idx, g_target_properties[idx].default_uint_value != 0);
 }
 
 void TargetProperties::Arg0ValueChangedCallback() {
@@ -4767,15 +5636,29 @@ void TargetProperties::DisableSTDIOValueChangedCallback() {
     m_launch_info.GetFlags().Clear(lldb::eLaunchFlagDisableSTDIO);
 }
 
+uint32_t EvaluateExpressionOptions::GetExpressionNumber() const {
+  if (m_expr_number == 0) {
+    static uint32_t g_expr_idx = 0;
+    m_expr_number = ++g_expr_idx;
+  }
+  return m_expr_number;
+}
+
 bool TargetProperties::GetDebugUtilityExpression() const {
   const uint32_t idx = ePropertyDebugUtilityExpression;
-  return m_collection_sp->GetPropertyAtIndexAsBoolean(
-      nullptr, idx, g_target_properties[idx].default_uint_value != 0);
+  return GetPropertyAtIndexAs<bool>(
+      idx, g_target_properties[idx].default_uint_value != 0);
+}
+
+bool TargetProperties::GetEnableTrampolineSupport() const {
+  const uint32_t idx = ePropertyEnableTrampolineSupport;
+  return GetPropertyAtIndexAs<bool>(
+      idx, g_target_properties[idx].default_uint_value != 0);
 }
 
 void TargetProperties::SetDebugUtilityExpression(bool debug) {
   const uint32_t idx = ePropertyDebugUtilityExpression;
-  m_collection_sp->SetPropertyAtIndexAsBoolean(nullptr, idx, debug);
+  SetPropertyAtIndex(idx, debug);
 }
 
 // Target::TargetEventData
@@ -4789,9 +5672,8 @@ Target::TargetEventData::TargetEventData(const lldb::TargetSP &target_sp,
 
 Target::TargetEventData::~TargetEventData() = default;
 
-ConstString Target::TargetEventData::GetFlavorString() {
-  static ConstString g_flavor("Target::TargetEventData");
-  return g_flavor;
+llvm::StringRef Target::TargetEventData::GetFlavorString() {
+  return "Target::TargetEventData";
 }
 
 void Target::TargetEventData::Dump(Stream *s) const {

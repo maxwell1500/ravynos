@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.13.4)
+cmake_minimum_required(VERSION 3.20.0)
 
 if(NOT DEFINED LLVM_COMMON_CMAKE_UTILS)
   set(LLVM_COMMON_CMAKE_UTILS ${CMAKE_CURRENT_SOURCE_DIR}/../cmake)
@@ -19,13 +19,6 @@ if (CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   project(lldb)
   set(LLDB_BUILT_STANDALONE TRUE)
   set(LLVM_INCLUDE_TESTS ON CACHE INTERNAL "")
-  if ("${CMAKE_VERSION}" VERSION_LESS "3.20.0")
-    message(WARNING
-      "Your CMake version is ${CMAKE_VERSION}. Starting with LLVM 17.0.0, the "
-      "minimum version of CMake required to build LLVM will become 3.20.0, and "
-      "using an older CMake will become an error. Please upgrade your CMake to "
-      "at least 3.20.0 now to avoid issues in the future!")
-  endif()
 endif()
 
 # Must go below project(..)
@@ -33,16 +26,41 @@ include(GNUInstallDirs)
 
 option(LLDB_INCLUDE_TESTS "Generate build targets for the LLDB unit tests." ${LLVM_INCLUDE_TESTS})
 
-if(LLDB_BUILT_STANDALONE)
-  include(LLDBStandalone)
+# BEGIN SWIFT MOD
+set(DEFAULT_LLDB_SWIFT_SUPPORT ON)
+if (LLVM_TARGET_IS_CROSSCOMPILE_HOST)
+  set(DEFAULT_LLDB_SWIFT_SUPPORT OFF)
+endif()
+option(LLDB_ENABLE_SWIFT_SUPPORT "Enable swift support" ${DEFAULT_LLDB_SWIFT_SUPPORT})
+# END SWIFT MOD
 
+if(LLDB_BUILT_STANDALONE)
   set(CMAKE_CXX_STANDARD 17 CACHE STRING "C++ standard to conform to")
   set(CMAKE_CXX_STANDARD_REQUIRED YES)
   set(CMAKE_CXX_EXTENSIONS NO)
+
+  include(LLDBStandalone)
+else()
+  set(SWIFT_BINARY_DIR ${CMAKE_BINARY_DIR})
+  set(SWIFT_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/include)
+  set(SWIFT_LIBRARY_DIR "${CMAKE_BINARY_DIR}/${CMAKE_CFG_INTDIR}/lib")
 endif()
 
 include(LLDBConfig)
 include(AddLLDB)
+
+# BEGIN - Swift Mods
+if (LLDB_ENABLE_SWIFT_SUPPORT)
+  if(EXISTS "${LLVM_EXTERNAL_SWIFT_SOURCE_DIR}")
+     list(APPEND CMAKE_MODULE_PATH
+          "${LLVM_EXTERNAL_SWIFT_SOURCE_DIR}/cmake"
+          "${LLVM_EXTERNAL_SWIFT_SOURCE_DIR}/cmake/modules")
+  elseif(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/../swift)
+     list(APPEND CMAKE_MODULE_PATH
+          "${CMAKE_CURRENT_SOURCE_DIR}/../swift/cmake"
+          "${CMAKE_CURRENT_SOURCE_DIR}/../swift/cmake/modules")
+  endif()
+endif()
 
 # Define the LLDB_CONFIGURATION_xxx matching the build type.
 if(uppercase_CMAKE_BUILD_TYPE STREQUAL "DEBUG" )
@@ -103,12 +121,15 @@ endif()
 if(CMAKE_CROSSCOMPILING AND LLDB_BUILT_STANDALONE AND NOT LLDB_TABLEGEN_EXE)
   set(LLVM_USE_HOST_TOOLS ON)
   include(CrossCompile)
-  if (NOT NATIVE_LLVM_DIR OR NOT NATIVE_Clang_DIR)
+  if (NOT LLDB_PATH_TO_NATIVE_SWIFT_BUILD OR
+      NOT NATIVE_LLVM_DIR OR
+      NOT NATIVE_Clang_DIR)
     message(FATAL_ERROR
-      "Crosscompiling standalone requires the variables NATIVE_{CLANG,LLVM}_DIR
+      "Crosscompiling standalone requires the variables LLDB_PATH_TO_NATIVE_{SWIFT,CLANG,LLVM}_BUILD
       for building the native lldb-tblgen used during the build process.")
   endif()
   llvm_create_cross_target(lldb NATIVE "" Release
+    -DSwift_DIR=${LLDB_PATH_TO_NATIVE_SWIFT_BUILD}
     -DLLVM_DIR=${NATIVE_LLVM_DIR}
     -DClang_DIR=${NATIVE_Clang_DIR})
 endif()

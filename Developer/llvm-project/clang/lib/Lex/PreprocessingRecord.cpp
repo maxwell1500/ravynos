@@ -324,23 +324,6 @@ unsigned PreprocessingRecord::allocateLoadedEntities(unsigned NumEntities) {
   return Result;
 }
 
-unsigned PreprocessingRecord::allocateSkippedRanges(unsigned NumRanges) {
-  unsigned Result = SkippedRanges.size();
-  SkippedRanges.resize(SkippedRanges.size() + NumRanges);
-  SkippedRangesAllLoaded = false;
-  return Result;
-}
-
-void PreprocessingRecord::ensureSkippedRangesLoaded() {
-  if (SkippedRangesAllLoaded || !ExternalSource)
-    return;
-  for (unsigned Index = 0; Index != SkippedRanges.size(); ++Index) {
-    if (SkippedRanges[Index].isInvalid())
-      SkippedRanges[Index] = ExternalSource->ReadSkippedRange(Index);
-  }
-  SkippedRangesAllLoaded = true;
-}
-
 void PreprocessingRecord::RegisterMacroDefinition(MacroInfo *Macro,
                                                   MacroDefinitionRecord *Def) {
   MacroDefinitions[Macro] = Def;
@@ -381,12 +364,7 @@ PreprocessingRecord::getLoadedPreprocessedEntity(unsigned Index) {
 
 MacroDefinitionRecord *
 PreprocessingRecord::findMacroDefinition(const MacroInfo *MI) {
-  llvm::DenseMap<const MacroInfo *, MacroDefinitionRecord *>::iterator Pos =
-      MacroDefinitions.find(MI);
-  if (Pos == MacroDefinitions.end())
-    return nullptr;
-
-  return Pos->second;
+  return MacroDefinitions.lookup(MI);
 }
 
 void PreprocessingRecord::addMacroExpansion(const Token &Id,
@@ -447,7 +425,6 @@ void PreprocessingRecord::Defined(const Token &MacroNameTok,
 
 void PreprocessingRecord::SourceRangeSkipped(SourceRange Range,
                                              SourceLocation EndifLoc) {
-  assert(Range.isValid());
   SkippedRanges.emplace_back(Range.getBegin(), EndifLoc);
 }
 
@@ -477,8 +454,8 @@ void PreprocessingRecord::MacroUndefined(const Token &Id,
 void PreprocessingRecord::InclusionDirective(
     SourceLocation HashLoc, const Token &IncludeTok, StringRef FileName,
     bool IsAngled, CharSourceRange FilenameRange, OptionalFileEntryRef File,
-    StringRef SearchPath, StringRef RelativePath, const Module *Imported,
-    SrcMgr::CharacteristicKind FileType) {
+    StringRef SearchPath, StringRef RelativePath, const Module *SuggestedModule,
+    bool ModuleImported, SrcMgr::CharacteristicKind FileType) {
   InclusionDirective::InclusionKind Kind = InclusionDirective::Include;
 
   switch (IncludeTok.getIdentifierInfo()->getPPKeywordID()) {
@@ -511,10 +488,9 @@ void PreprocessingRecord::InclusionDirective(
       EndLoc = EndLoc.getLocWithOffset(-1); // the InclusionDirective expects
                                             // a token range.
   }
-  clang::InclusionDirective *ID =
-      new (*this) clang::InclusionDirective(*this, Kind, FileName, !IsAngled,
-                                            (bool)Imported, File,
-                                            SourceRange(HashLoc, EndLoc));
+  clang::InclusionDirective *ID = new (*this) clang::InclusionDirective(
+      *this, Kind, FileName, !IsAngled, ModuleImported, File,
+      SourceRange(HashLoc, EndLoc));
   addPreprocessedEntity(ID);
 }
 
@@ -522,6 +498,5 @@ size_t PreprocessingRecord::getTotalMemory() const {
   return BumpAlloc.getTotalMemory()
     + llvm::capacity_in_bytes(MacroDefinitions)
     + llvm::capacity_in_bytes(PreprocessedEntities)
-    + llvm::capacity_in_bytes(LoadedPreprocessedEntities)
-    + llvm::capacity_in_bytes(SkippedRanges);
+    + llvm::capacity_in_bytes(LoadedPreprocessedEntities);
 }

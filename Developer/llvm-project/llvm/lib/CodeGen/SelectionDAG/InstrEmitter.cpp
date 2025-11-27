@@ -779,7 +779,8 @@ InstrEmitter::EmitDbgInstrRef(SDDbgValue *SD,
   // If this variable location does not depend on any instructions or contains
   // any stack locations, produce it as a standard debug value instead.
   if (any_of(SD->getLocationOps(), IsInvalidOp) ||
-      all_of(SD->getLocationOps(), IsNonInstrRefOp)) {
+      all_of(SD->getLocationOps(), IsNonInstrRefOp) ||
+      Expr->isEntryValue()) {
     if (SD->isVariadic())
       return EmitDbgValueList(SD, VRBaseMap);
     return EmitDbgValueFromSingleOp(SD, VRBaseMap);
@@ -1078,6 +1079,9 @@ EmitMachineNode(SDNode *Node, bool IsClone, bool IsCloned,
 
     if (Flags.hasNoFPExcept())
       MI->setFlag(MachineInstr::MIFlag::NoFPExcept);
+
+    if (Flags.hasUnpredictable())
+      MI->setFlag(MachineInstr::MIFlag::Unpredictable);
   }
 
   // Emit all of the actual operands of this instruction, adding them to the
@@ -1159,6 +1163,13 @@ EmitMachineNode(SDNode *Node, bool IsClone, bool IsCloned,
             UsedRegs.push_back(Reg);
         }
     }
+  }
+
+  // Add rounding control registers as implicit def for function call.
+  if (II.isCall() && MF->getFunction().hasFnAttribute(Attribute::StrictFP)) {
+    ArrayRef<MCPhysReg> RCRegs = TLI->getRoundingControlRegisters();
+    for (MCPhysReg Reg : RCRegs)
+      UsedRegs.push_back(Reg);
   }
 
   // Finally mark unused registers as dead.

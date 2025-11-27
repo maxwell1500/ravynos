@@ -73,6 +73,8 @@ add_clang_library(clangAST
   Interp/EvalEmitter.cpp
   Interp/Frame.cpp
   Interp/Function.cpp
+  Interp/InterpBuiltin.cpp
+  Interp/Floating.cpp
   Interp/Interp.cpp
   Interp/InterpBlock.cpp
   Interp/InterpFrame.cpp
@@ -105,6 +107,7 @@ add_clang_library(clangAST
   RecordLayoutBuilder.cpp
   ScanfFormatString.cpp
   SelectorLocationsKind.cpp
+  StableHash.cpp
   Stmt.cpp
   StmtCXX.cpp
   StmtIterator.cpp
@@ -130,4 +133,5 @@ add_clang_library(clangAST
   ClangAttrDocTable
   Opcodes
   omp_gen
+  intrinsics_gen
   )

@@ -31,7 +31,6 @@
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Support/raw_ostream.h"
 #include <cassert>
 #include <vector>
 
@@ -100,6 +99,8 @@ public:
   void emitDarwinTargetVariantBuildVersion(unsigned Platform, unsigned Major,
                                            unsigned Minor, unsigned Update,
                                            VersionTuple SDKVersion) override;
+  void EmitPtrAuthABIVersion(unsigned PtrAuthABIVersion,
+                             bool PtrAuthKernelABIVersion) override;
   void emitThumbFunc(MCSymbol *Func) override;
   bool emitSymbolAttribute(MCSymbol *Symbol, MCSymbolAttr Attribute) override;
   void emitSymbolDesc(MCSymbol *Symbol, unsigned DescValue) override;
@@ -159,8 +160,13 @@ static bool canGoAfterDWARF(const MCSectionMachO &MSec) {
   if (SegName == "__DATA" && (SecName == "__nl_symbol_ptr" ||
                               SecName == "__thread_ptr"))
     return true;
+
+  if (SegName == "__DATA" && SecName == "__auth_ptr")
+    return true;
+
   if (SegName == "__LLVM" && SecName == "__cg_profile")
     return true;
+
   return false;
 }
 
@@ -306,6 +312,12 @@ void MCMachOStreamer::emitDarwinTargetVariantBuildVersion(
       (MachO::PlatformType)Platform, Major, Minor, Update, SDKVersion);
 }
 
+void MCMachOStreamer::EmitPtrAuthABIVersion(unsigned PtrAuthABIVersion,
+                                            bool PtrAuthKernelABIVersion) {
+  getAssembler().setPtrAuthABIVersion(PtrAuthABIVersion);
+  getAssembler().setPtrAuthKernelABIVersion(PtrAuthKernelABIVersion);
+}
+
 void MCMachOStreamer::emitThumbFunc(MCSymbol *Symbol) {
   // Remember that the function is a thumb function. Fixup and relocation
   // values will need adjusted.
@@ -359,6 +371,7 @@ bool MCMachOStreamer::emitSymbolAttribute(MCSymbol *Sym,
   case MCSA_LGlobal:
   case MCSA_Exported:
   case MCSA_Memtag:
+  case MCSA_WeakAntiDep:
     return false;
 
   case MCSA_Global:
@@ -486,8 +499,7 @@ void MCMachOStreamer::emitInstToData(const MCInst &Inst,
 
   SmallVector<MCFixup, 4> Fixups;
   SmallString<256> Code;
-  raw_svector_ostream VecOS(Code);
-  getAssembler().getEmitter().encodeInstruction(Inst, VecOS, Fixups, STI);
+  getAssembler().getEmitter().encodeInstruction(Inst, Code, Fixups, STI);
 
   // Add the fixups and data.
   for (MCFixup &Fixup : Fixups) {
@@ -536,9 +548,7 @@ void MCMachOStreamer::finishImpl() {
 
 void MCMachOStreamer::finalizeCGProfileEntry(const MCSymbolRefExpr *&SRE) {
   const MCSymbol *S = &SRE->getSymbol();
-  bool Created;
-  getAssembler().registerSymbol(*S, &Created);
-  if (Created)
+  if (getAssembler().registerSymbol(*S))
     S->setExternal(true);
 }
 

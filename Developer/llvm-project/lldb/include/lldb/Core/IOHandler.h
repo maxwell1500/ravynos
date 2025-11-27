@@ -12,7 +12,6 @@
 #include "lldb/Core/ValueObjectList.h"
 #include "lldb/Host/Config.h"
 #include "lldb/Utility/CompletionRequest.h"
-#include "lldb/Utility/ConstString.h"
 #include "lldb/Utility/Flags.h"
 #include "lldb/Utility/Predicate.h"
 #include "lldb/Utility/Stream.h"
@@ -107,7 +106,7 @@ public:
   }
   bool SetPrompt(const char *) = delete;
 
-  virtual ConstString GetControlSequence(char ch) { return ConstString(); }
+  virtual llvm::StringRef GetControlSequence(char ch) { return {}; }
 
   virtual const char *GetCommandPrefix() { return nullptr; }
 
@@ -271,9 +270,7 @@ public:
     return true;
   }
 
-  virtual ConstString IOHandlerGetControlSequence(char ch) {
-    return ConstString();
-  }
+  virtual llvm::StringRef IOHandlerGetControlSequence(char ch) { return {}; }
 
   virtual const char *IOHandlerGetCommandPrefix() { return nullptr; }
 
@@ -295,24 +292,25 @@ protected:
 // the last line is equal to "end_line" which is specified in the constructor.
 class IOHandlerDelegateMultiline : public IOHandlerDelegate {
 public:
-  IOHandlerDelegateMultiline(const char *end_line,
+  IOHandlerDelegateMultiline(llvm::StringRef end_line,
                              Completion completion = Completion::None)
-      : IOHandlerDelegate(completion),
-        m_end_line((end_line && end_line[0]) ? end_line : "") {}
+      : IOHandlerDelegate(completion), m_end_line(end_line.str() + "\n") {}
 
   ~IOHandlerDelegateMultiline() override = default;
 
-  ConstString IOHandlerGetControlSequence(char ch) override {
+  llvm::StringRef IOHandlerGetControlSequence(char ch) override {
     if (ch == 'd')
-      return ConstString(m_end_line + "\n");
-    return ConstString();
+      return m_end_line;
+    return {};
   }
 
   bool IOHandlerIsInputComplete(IOHandler &io_handler,
                                 StringList &lines) override {
     // Determine whether the end of input signal has been entered
     const size_t num_lines = lines.GetSize();
-    if (num_lines > 0 && lines[num_lines - 1] == m_end_line) {
+    const llvm::StringRef end_line =
+        llvm::StringRef(m_end_line).drop_back(1); // Drop '\n'
+    if (num_lines > 0 && llvm::StringRef(lines[num_lines - 1]) == end_line) {
       // Remove the terminal line from "lines" so it doesn't appear in the
       // resulting input and return true to indicate we are done getting lines
       lines.PopBack();
@@ -373,7 +371,7 @@ public:
 
   void TerminalSizeChanged() override;
 
-  ConstString GetControlSequence(char ch) override {
+  llvm::StringRef GetControlSequence(char ch) override {
     return m_delegate.IOHandlerGetControlSequence(ch);
   }
 
@@ -477,6 +475,8 @@ public:
       m_stack.push_back(sp);
       // Set m_top the non-locking IsTop() call
       m_top = sp.get();
+
+      UpdateREPLIsActive();
     }
   }
 
@@ -503,8 +503,9 @@ public:
       sp->SetPopped(true);
     }
     // Set m_top the non-locking IsTop() call
-
     m_top = (m_stack.empty() ? nullptr : m_stack.back().get());
+
+    UpdateREPLIsActive();
   }
 
   std::recursive_mutex &GetMutex() { return m_mutex; }
@@ -522,8 +523,9 @@ public:
             m_stack[num_io_handlers - 2]->GetType() == second_top_type);
   }
 
-  ConstString GetTopIOHandlerControlSequence(char ch) {
-    return ((m_top != nullptr) ? m_top->GetControlSequence(ch) : ConstString());
+  llvm::StringRef GetTopIOHandlerControlSequence(char ch) {
+    return ((m_top != nullptr) ? m_top->GetControlSequence(ch)
+                               : llvm::StringRef());
   }
 
   const char *GetTopIOHandlerCommandPrefix() {
@@ -534,13 +536,68 @@ public:
     return ((m_top != nullptr) ? m_top->GetHelpPrologue() : nullptr);
   }
 
+  // Returns true if the REPL is the active IOHandler or if it is just
+  // below the Process IOHandler.
+  bool REPLIsActive() {
+    // This is calculated and cached by UpdateREPLIsActive() as IOHandlers
+    // are pushed and popped since it gets called for all process events.
+    return m_repl_active;
+  }
+
+  // Returns true if any REPL IOHandlers are anywhere on the stack
+  bool REPLIsEnabled() {
+    // This is calculated and cached by UpdateREPLIsActive() as IOHandlers
+    // are pushed and popped since it gets called for all process events.
+    return m_repl_enabled;
+  }
+
   bool PrintAsync(const char *s, size_t len, bool is_stdout);
 
 protected:
+  void UpdateREPLIsActive() {
+    m_repl_active = false;
+    m_repl_enabled = false;
+    // This function should only be called when the mutex is locked...
+    if (m_top) {
+      switch (m_top->GetType()) {
+      case IOHandler::Type::ProcessIO:
+        // Check the REPL is underneath the process IO handler...
+        if (m_stack.size() > 1) {
+          if (m_stack[m_stack.size() - 2]->GetType() == IOHandler::Type::REPL) {
+            m_repl_active = true;
+            m_repl_enabled = true;
+          }
+        }
+        break;
+
+      case IOHandler::Type::REPL:
+        m_repl_active = true;
+        m_repl_enabled = true;
+        break;
+
+      default:
+        break;
+      }
+    }
+
+    if (!m_repl_enabled) {
+      for (const auto &io_handler_sp : m_stack) {
+        if (io_handler_sp->GetType() == IOHandler::Type::REPL) {
+          m_repl_enabled = true;
+          break;
+        }
+      }
+    }
+  }
+
   typedef std::vector<lldb::IOHandlerSP> collection;
   collection m_stack;
   mutable std::recursive_mutex m_mutex;
   IOHandler *m_top = nullptr;
+  /// REPL is the active IOHandler or right underneath the process IO handler.
+  bool m_repl_active = false;
+  // REPL is on IOHandler stack somewhere
+  bool m_repl_enabled = false;
 
 private:
   IOHandlerStack(const IOHandlerStack &) = delete;

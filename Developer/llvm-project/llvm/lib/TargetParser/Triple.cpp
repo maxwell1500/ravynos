@@ -89,6 +89,36 @@ StringRef Triple::getArchTypeName(ArchType Kind) {
   llvm_unreachable("Invalid ArchType!");
 }
 
+StringRef Triple::getArchName(ArchType Kind, SubArchType SubArch) {
+  switch (Kind) {
+  case Triple::mips:
+    if (SubArch == MipsSubArch_r6)
+      return "mipsisa32r6";
+    break;
+  case Triple::mipsel:
+    if (SubArch == MipsSubArch_r6)
+      return "mipsisa32r6el";
+    break;
+  case Triple::mips64:
+    if (SubArch == MipsSubArch_r6)
+      return "mipsisa64r6";
+    break;
+  case Triple::mips64el:
+    if (SubArch == MipsSubArch_r6)
+      return "mipsisa64r6el";
+    break;
+  case Triple::aarch64:
+    if (SubArch == AArch64SubArch_arm64ec)
+      return "arm64ec";
+    if (SubArch == AArch64SubArch_arm64e)
+      return "arm64e";
+    break;
+  default:
+    break;
+  }
+  return getArchTypeName(Kind);
+}
+
 StringRef Triple::getArchTypePrefix(ArchType Kind) {
   switch (Kind) {
   default:
@@ -196,6 +226,7 @@ StringRef Triple::getVendorTypeName(VendorType Kind) {
   case PC: return "pc";
   case SCEI: return "scei";
   case SUSE: return "suse";
+  case Swift: return "swift";
   }
 
   llvm_unreachable("Invalid VendorType!");
@@ -238,11 +269,14 @@ StringRef Triple::getOSTypeName(OSType Kind) {
   case RTEMS: return "rtems";
   case Solaris: return "solaris";
   case TvOS: return "tvos";
+  case UEFI: return "uefi";
   case WASI: return "wasi";
   case WatchOS: return "watchos";
   case Win32: return "windows";
   case ZOS: return "zos";
   case ShaderModel: return "shadermodel";
+  case LiteOS: return "liteos";
+  case XROS: return "xros";
   }
 
   llvm_unreachable("Invalid OSType");
@@ -290,9 +324,25 @@ StringRef Triple::getEnvironmentTypeName(EnvironmentType Kind) {
   case Callable: return "callable";
   case Mesh: return "mesh";
   case Amplification: return "amplification";
+  case OpenHOS: return "ohos";
   }
 
   llvm_unreachable("Invalid EnvironmentType!");
+}
+
+StringRef Triple::getObjectFormatTypeName(ObjectFormatType Kind) {
+  switch (Kind) {
+  case UnknownObjectFormat: return "";
+  case COFF: return "coff";
+  case ELF: return "elf";
+  case GOFF: return "goff";
+  case MachO: return "macho";
+  case Wasm: return "wasm";
+  case XCOFF: return "xcoff";
+  case DXContainer: return "dxcontainer";
+  case SPIRV: return "spirv";
+  }
+  llvm_unreachable("unknown object format type");
 }
 
 static Triple::ArchType parseBPFArch(StringRef ArchName) {
@@ -551,6 +601,7 @@ static Triple::VendorType parseVendor(StringRef VendorName) {
     .Case("amd", Triple::AMD)
     .Case("mesa", Triple::Mesa)
     .Case("suse", Triple::SUSE)
+    .Case("swift", Triple::Swift)
     .Case("oe", Triple::OpenEmbedded)
     .Default(Triple::UnknownVendor);
 }
@@ -571,6 +622,7 @@ static Triple::OSType parseOS(StringRef OSName) {
     .StartsWith("netbsd", Triple::NetBSD)
     .StartsWith("openbsd", Triple::OpenBSD)
     .StartsWith("solaris", Triple::Solaris)
+    .StartsWith("uefi", Triple::UEFI)
     .StartsWith("win32", Triple::Win32)
     .StartsWith("windows", Triple::Win32)
     .StartsWith("zos", Triple::ZOS)
@@ -588,6 +640,8 @@ static Triple::OSType parseOS(StringRef OSName) {
     .StartsWith("tvos", Triple::TvOS)
     .StartsWith("watchos", Triple::WatchOS)
     .StartsWith("driverkit", Triple::DriverKit)
+    .StartsWith("xros", Triple::XROS)
+    .StartsWith("visionos", Triple::XROS)
     .StartsWith("mesa3d", Triple::Mesa3D)
     .StartsWith("contiki", Triple::Contiki)
     .StartsWith("amdpal", Triple::AMDPAL)
@@ -596,6 +650,7 @@ static Triple::OSType parseOS(StringRef OSName) {
     .StartsWith("wasi", Triple::WASI)
     .StartsWith("emscripten", Triple::Emscripten)
     .StartsWith("shadermodel", Triple::ShaderModel)
+    .StartsWith("liteos", Triple::LiteOS)
     .Default(Triple::UnknownOS);
 }
 
@@ -640,6 +695,7 @@ static Triple::EnvironmentType parseEnvironment(StringRef EnvironmentName) {
       .StartsWith("callable", Triple::Callable)
       .StartsWith("mesh", Triple::Mesh)
       .StartsWith("amplification", Triple::Amplification)
+      .StartsWith("ohos", Triple::OpenHOS)
       .Default(Triple::UnknownEnvironment);
 }
 
@@ -768,30 +824,6 @@ static Triple::SubArchType parseSubArch(StringRef SubArchName) {
   default:
     return Triple::NoSubArch;
   }
-}
-
-static StringRef getObjectFormatTypeName(Triple::ObjectFormatType Kind) {
-  switch (Kind) {
-  case Triple::UnknownObjectFormat:
-    return "";
-  case Triple::COFF:
-    return "coff";
-  case Triple::ELF:
-    return "elf";
-  case Triple::GOFF:
-    return "goff";
-  case Triple::MachO:
-    return "macho";
-  case Triple::Wasm:
-    return "wasm";
-  case Triple::XCOFF:
-    return "xcoff";
-  case Triple::DXContainer:
-    return "dxcontainer";
-  case Triple::SPIRV:
-    return "spirv";
-  }
-  llvm_unreachable("unknown object format type");
 }
 
 static Triple::ObjectFormatType getDefaultFormat(const Triple &T) {
@@ -1148,34 +1180,6 @@ StringRef Triple::getArchName() const {
   return StringRef(Data).split('-').first;           // Isolate first component
 }
 
-StringRef Triple::getArchName(ArchType Kind, SubArchType SubArch) const {
-  switch (Kind) {
-  case Triple::mips:
-    if (SubArch == MipsSubArch_r6)
-      return "mipsisa32r6";
-    break;
-  case Triple::mipsel:
-    if (SubArch == MipsSubArch_r6)
-      return "mipsisa32r6el";
-    break;
-  case Triple::mips64:
-    if (SubArch == MipsSubArch_r6)
-      return "mipsisa64r6";
-    break;
-  case Triple::mips64el:
-    if (SubArch == MipsSubArch_r6)
-      return "mipsisa64r6el";
-    break;
-  case Triple::aarch64:
-    if (SubArch == AArch64SubArch_arm64ec)
-      return "arm64ec";
-    break;
-  default:
-    break;
-  }
-  return getArchTypeName(Kind);
-}
-
 StringRef Triple::getVendorName() const {
   StringRef Tmp = StringRef(Data).split('-').second; // Strip first component
   return Tmp.split('-').first;                       // Isolate second component
@@ -1221,6 +1225,8 @@ VersionTuple Triple::getOSVersion() const {
     OSName = OSName.substr(OSTypeName.size());
   else if (getOS() == MacOSX)
     OSName.consume_front("macos");
+  else if (OSName.starts_with("visionos"))
+    OSName.consume_front("visionos");
 
   return parseVersionFromName(OSName);
 }
@@ -1262,6 +1268,8 @@ bool Triple::getMacOSXVersion(VersionTuple &Version) const {
     // IOS.
     Version = VersionTuple(10, 4);
     break;
+  case XROS:
+    llvm_unreachable("OSX version isn't relevant for xrOS");
   case DriverKit:
     llvm_unreachable("OSX version isn't relevant for DriverKit");
   }
@@ -1285,6 +1293,11 @@ VersionTuple Triple::getiOSVersion() const {
     if (Version.getMajor() == 0)
       return (getArch() == aarch64) ? VersionTuple(7) : VersionTuple(5);
     return Version;
+  }
+  case XROS: {
+    // xrOS 1 is aligned with iOS 17.
+    VersionTuple Version = getOSVersion();
+    return Version.withMajorReplaced(Version.getMajor() + 16);
   }
   case WatchOS:
     llvm_unreachable("conflicting triple info");
@@ -1311,6 +1324,8 @@ VersionTuple Triple::getWatchOSVersion() const {
   }
   case IOS:
     llvm_unreachable("conflicting triple info");
+  case XROS:
+    llvm_unreachable("watchOS version isn't relevant for xrOS");
   case DriverKit:
     llvm_unreachable("DriverKit doesn't have a WatchOS version");
   }

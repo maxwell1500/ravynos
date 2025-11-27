@@ -223,7 +223,11 @@ void IdentifierResolver::RemoveDecl(NamedDecl *D) {
   assert(Ptr && "Didn't find this decl on its identifier's chain!");
 
   if (isDeclPtr(Ptr)) {
-    assert(D == Ptr && "Didn't find this decl on its identifier's chain!");
+    // FIXME: The following assert fires for ObjectiveC id, SEL, and Class
+    //   declarations when the module is explicitly built. For implicit builds
+    //   it works fine. rdar://58552906
+
+    // assert(D == Ptr && "Didn't find this decl on its identifier's chain!");
     Name.setFETokenInfo(nullptr);
     return;
   }
@@ -231,9 +235,12 @@ void IdentifierResolver::RemoveDecl(NamedDecl *D) {
   return toIdDeclInfo(Ptr)->RemoveDecl(D);
 }
 
-/// begin - Returns an iterator for decls with name 'Name'.
-IdentifierResolver::iterator
-IdentifierResolver::begin(DeclarationName Name) {
+llvm::iterator_range<IdentifierResolver::iterator>
+IdentifierResolver::decls(DeclarationName Name) {
+  return {begin(Name), end()};
+}
+
+IdentifierResolver::iterator IdentifierResolver::begin(DeclarationName Name) {
   if (IdentifierInfo *II = Name.getAsIdentifierInfo())
     readingIdentifier(*II);
 
@@ -391,7 +398,7 @@ void IdentifierResolver::updatingIdentifier(IdentifierInfo &II) {
     PP.getExternalSource()->updateOutOfDateIdentifier(II);
 
   if (II.isFromAST())
-    II.setFETokenInfoChangedSinceDeserialization();
+    II.setChangedSinceDeserialization();
 }
 
 //===----------------------------------------------------------------------===//

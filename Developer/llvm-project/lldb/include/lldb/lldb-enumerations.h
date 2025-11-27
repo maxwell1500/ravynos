@@ -322,7 +322,9 @@ enum ValueType {
   eValueTypeRegister = 5,         ///< stack frame register value
   eValueTypeRegisterSet = 6, ///< A collection of stack frame register values
   eValueTypeConstResult = 7, ///< constant result variables
-  eValueTypeVariableThreadLocal = 8 ///< thread local storage variable
+  eValueTypeVariableThreadLocal = 8, ///< thread local storage variable
+  eValueTypeVTable = 9,              ///< virtual function table
+  eValueTypeVTableEntry = 10, ///< function pointer in virtual function table
 };
 
 /// Token size/granularities for Input Readers.
@@ -431,6 +433,21 @@ FLAGS_ENUM(WatchpointEventType){
     eWatchpointEventTypeThreadChanged = (1u << 11),
     eWatchpointEventTypeTypeChanged = (1u << 12)};
 
+enum WatchpointWriteType {
+  /// Don't stop when the watched memory region is written to.
+  eWatchpointWriteTypeDisabled,
+  /// Stop on any write access to the memory region, even if
+  /// the value doesn't change.  On some architectures, a write
+  /// near the memory region may be falsely reported as a match,
+  /// and notify this spurious stop as a watchpoint trap.
+  eWatchpointWriteTypeAlways,
+  /// Stop on a write to the memory region that changes its value.
+  /// This is most likely the behavior a user expects, and is the
+  /// behavior in gdb.  lldb can silently ignore writes near the
+  /// watched memory region that are reported as accesses to lldb.
+  eWatchpointWriteTypeOnModify
+};
+
 /// Programming language type.
 ///
 /// These enumerations use the same language enumerations as the DWARF
@@ -479,13 +496,30 @@ enum LanguageType {
   eLanguageTypeC_plus_plus_14 = 0x0021, ///< ISO C++:2014.
   eLanguageTypeFortran03 = 0x0022,      ///< ISO Fortran 2003.
   eLanguageTypeFortran08 = 0x0023,      ///< ISO Fortran 2008.
+  eLanguageTypeRenderScript = 0x0024,
+  eLanguageTypeBLISS = 0x0025,
+  eLanguageTypeKotlin = 0x0026,
+  eLanguageTypeZig = 0x0027,
+  eLanguageTypeCrystal = 0x0028,
+  eLanguageTypeC_plus_plus_17 = 0x002a, ///< ISO C++:2017.
+  eLanguageTypeC_plus_plus_20 = 0x002b, ///< ISO C++:2020.
+  eLanguageTypeC17 = 0x002c,
+  eLanguageTypeFortran18 = 0x002d,
+  eLanguageTypeAda2005 = 0x002e,
+  eLanguageTypeAda2012 = 0x002f,
+  eLanguageTypeHIP = 0x0030,
+  eLanguageTypeAssembly = 0x0031,
+  eLanguageTypeC_sharp = 0x0032,
+  eLanguageTypeMojo = 0x0033,
+
   // Vendor Extensions
   // Note: Language::GetNameForLanguageType
   // assumes these can be used as indexes into array language_names, and
   // Language::SetLanguageFromCString and Language::AsCString assume these can
   // be used as indexes into array g_languages.
-  eLanguageTypeMipsAssembler = 0x0024,   ///< Mips_Assembler.
-  eLanguageTypeExtRenderScript = 0x0025, ///< RenderScript.
+  eLanguageTypeMipsAssembler, ///< Mips_Assembler.
+  // Mojo will move to the common list of languages once the DWARF committee
+  // creates a language code for it.
   eNumLanguageTypes
 };
 
@@ -495,6 +529,7 @@ enum InstrumentationRuntimeType {
   eInstrumentationRuntimeTypeUndefinedBehaviorSanitizer = 0x0002,
   eInstrumentationRuntimeTypeMainThreadChecker = 0x0003,
   eInstrumentationRuntimeTypeSwiftRuntimeReporting = 0x0004,
+  eInstrumentationRuntimeTypeLibsanitizersAsan = 0x0005,
   eNumInstrumentationRuntimeTypes
 };
 
@@ -503,6 +538,16 @@ enum DynamicValueType {
   eDynamicCanRunTarget = 1,
   eDynamicDontRunTarget = 2
 };
+
+// BEGIN SWIFT
+//  Enumeration to control whether generic type parameters should be bound or
+//  not in expression evaluation.
+enum BindGenericTypes { 
+  eBindAuto = 0, 
+  eBind = 1, 
+  eDontBind = 2 
+};
+// END SWIFT
 
 enum StopShowColumn {
   eStopShowColumnAnsiOrCaret = 0,
@@ -615,6 +660,10 @@ enum CommandArgumentType {
   eArgTypeConnectURL,
   eArgTypeTargetID,
   eArgTypeStopHookID,
+  // BEGIN SWIFT
+  eArgTypeBindGenTypeParamValue,
+  // END SWIFT
+  eArgTypeCompletionType,
   eArgTypeLastArg // Always keep this entry as the last entry in this
                   // enumeration!!
 };
@@ -653,7 +702,8 @@ enum SymbolType {
   eSymbolTypeObjCClass,
   eSymbolTypeObjCMetaClass,
   eSymbolTypeObjCIVar,
-  eSymbolTypeReExported
+  eSymbolTypeReExported,
+  eSymbolTypeASTFile   // A symbol whose name is the path to a compiler AST file
 };
 
 enum SectionType {
@@ -697,6 +747,7 @@ enum SectionType {
   eSectionTypeELFRelocationEntries, ///< Elf SHT_REL or SHT_REL section
   eSectionTypeELFDynamicLinkInfo,   ///< Elf SHT_DYNAMIC section
   eSectionTypeEHFrame,
+  eSectionTypeSwiftModules,
   eSectionTypeARMexidx,
   eSectionTypeARMextab,
   eSectionTypeCompactUnwind, ///< compact unwind section in Mach-O,
@@ -720,6 +771,8 @@ enum SectionType {
   eSectionTypeDWARFDebugLocDwo,
   eSectionTypeDWARFDebugLocListsDwo,
   eSectionTypeDWARFDebugTuIndex,
+  eSectionTypeCTF,
+  eSectionTypeLLDBTypeSummaries,
 };
 
 FLAGS_ENUM(EmulateInstructionOptions){
@@ -805,7 +858,9 @@ enum StructuredDataType {
   eStructuredDataTypeFloat,
   eStructuredDataTypeBoolean,
   eStructuredDataTypeString,
-  eStructuredDataTypeDictionary
+  eStructuredDataTypeDictionary,
+  eStructuredDataTypeSignedInteger,
+  eStructuredDataTypeUnsignedInteger = eStructuredDataTypeInteger,
 };
 
 FLAGS_ENUM(TypeClass){
@@ -845,6 +900,13 @@ enum FormatterMatchType {
   eFormatterMatchCallback,
 
   eLastFormatterMatchType = eFormatterMatchCallback,
+};
+
+/// Kind of argument for generics, either bound or unbound.
+enum GenericKind {
+  eNullGenericKindType = 0,
+  eBoundGenericKindType,
+  eUnboundGenericKindType
 };
 
 /// Options that can be set for a formatter to alter its behavior. Not
@@ -1040,12 +1102,12 @@ enum PathType {
   ePathTypePythonDir,            ///< Find Python modules (PYTHONPATH) directory
   ePathTypeLLDBSystemPlugins,    ///< System plug-ins directory
   ePathTypeLLDBUserPlugins,      ///< User plug-ins directory
-  ePathTypeLLDBTempSystemDir, ///< The LLDB temp directory for this system that
-                              ///< will be cleaned up on exit
-  ePathTypeGlobalLLDBTempSystemDir, ///< The LLDB temp directory for this
-                                    ///< system, NOT cleaned up on a process
-                                    ///< exit.
-  ePathTypeClangDir ///< Find path to Clang builtin headers
+  ePathTypeLLDBTempSystemDir,    ///< The LLDB temp directory for this system that
+                                 ///< will be cleaned up on exit
+  ePathTypeGlobalLLDBTempSystemDir, ///< The LLDB temp directory for this system,
+                                    ///< NOT cleaned up on a process exit.
+  ePathTypeClangDir,                ///< Find path to Clang builtin headers
+  ePathTypeSwiftDir                 ///< Find path to Swift libraries
 };
 
 /// Kind of member function.
@@ -1078,7 +1140,15 @@ FLAGS_ENUM(TypeFlags){
     eTypeIsVector = (1u << 16),         eTypeIsScalar = (1u << 17),
     eTypeIsInteger = (1u << 18),        eTypeIsFloat = (1u << 19),
     eTypeIsComplex = (1u << 20),        eTypeIsSigned = (1u << 21),
-    eTypeInstanceIsPointer = (1u << 22)};
+    eTypeInstanceIsPointer = (1u << 22),
+    eTypeIsSwift = (1u << 23),
+    eTypeIsGenericTypeParam = (1u << 24),
+    eTypeIsProtocol = (1u << 25),
+    eTypeIsTuple = (1u << 26),
+    eTypeIsMetatype = (1u << 27),
+    eTypeHasUnboundGeneric = (1u << 28),
+    eTypeHasDynamicSelf = (1u << 29),
+    eTypeIsPack = (1u << 30)};
 
 FLAGS_ENUM(CommandFlags){
     /// eCommandRequiresTarget
@@ -1218,6 +1288,95 @@ enum DWIMPrintVerbosity {
   /// Always print a message indicating how `dwim-print` is evaluating its
   /// expression.
   eDWIMPrintVerbosityFull,
+};
+
+enum WatchpointValueKind {
+  eWatchPointValueKindInvalid = 0,
+  ///< Watchpoint was created watching a variable
+  eWatchPointValueKindVariable = 1,
+  ///< Watchpoint was created watching the result of an expression that was
+  ///< evaluated at creation time.
+  eWatchPointValueKindExpression = 2,
+};
+
+enum CompletionType {
+  eNoCompletion = 0u,
+  eSourceFileCompletion = (1u << 0),
+  eDiskFileCompletion = (1u << 1),
+  eDiskDirectoryCompletion = (1u << 2),
+  eSymbolCompletion = (1u << 3),
+  eModuleCompletion = (1u << 4),
+  eSettingsNameCompletion = (1u << 5),
+  ePlatformPluginCompletion = (1u << 6),
+  eArchitectureCompletion = (1u << 7),
+  eVariablePathCompletion = (1u << 8),
+  eRegisterCompletion = (1u << 9),
+  eBreakpointCompletion = (1u << 10),
+  eProcessPluginCompletion = (1u << 11),
+  eDisassemblyFlavorCompletion = (1u << 12),
+  eTypeLanguageCompletion = (1u << 13),
+  eFrameIndexCompletion = (1u << 14),
+  eModuleUUIDCompletion = (1u << 15),
+  eStopHookIDCompletion = (1u << 16),
+  eThreadIndexCompletion = (1u << 17),
+  eWatchpointIDCompletion = (1u << 18),
+  eBreakpointNameCompletion = (1u << 19),
+  eProcessIDCompletion = (1u << 20),
+  eProcessNameCompletion = (1u << 21),
+  eRemoteDiskFileCompletion = (1u << 22),
+  eRemoteDiskDirectoryCompletion = (1u << 23),
+  eTypeCategoryNameCompletion = (1u << 24),
+  // This item serves two purposes.  It is the last element in the enum, so
+  // you can add custom enums starting from here in your Option class. Also
+  // if you & in this bit the base code will not process the option.
+  eCustomCompletion = (1u << 25)
+};
+
+enum SymbolDownload {
+  eSymbolDownloadOff = 0,
+  eSymbolDownloadBackground = 1,
+  eSymbolDownloadForeground = 2,
+};
+
+/// Used in the SBProcess AddressMask/FixAddress methods.
+enum AddressMaskType {
+  eAddressMaskTypeCode = 0,
+  eAddressMaskTypeData,
+  eAddressMaskTypeAny,
+  eAddressMaskTypeAll = eAddressMaskTypeAny
+};
+
+/// Used in the SBProcess AddressMask/FixAddress methods.
+enum AddressMaskRange {
+  eAddressMaskRangeLow = 0,
+  eAddressMaskRangeHigh,
+  eAddressMaskRangeAny,
+  eAddressMaskRangeAll = eAddressMaskRangeAny,
+};
+
+/// Specifies if children need to be re-computed
+/// after a call to \ref SyntheticChildrenFrontEnd::Update.
+enum class ChildCacheState {
+  eRefetch = 0, ///< Children need to be recomputed dynamically.
+
+  eReuse = 1, ///< Children did not change and don't need to be recomputed;
+              ///< re-use what we computed the last time we called Update.
+};
+
+/// Used by the debugger to indicate which events are being broadcasted.
+enum DebuggerBroadcastBit {
+  eBroadcastBitProgress = (1 << 0),
+  eBroadcastBitWarning = (1 << 1),
+  eBroadcastBitError = (1 << 2),
+  eBroadcastSymbolChange = (1 << 3),
+  eBroadcastBitProgressCategory = (1 << 4),
+};
+
+/// Used for expressing severity in logs and diagnostics.
+enum Severity {
+  eSeverityError,
+  eSeverityWarning,
+  eSeverityInfo, // Equivalent to Remark used in clang.
 };
 
 } // namespace lldb

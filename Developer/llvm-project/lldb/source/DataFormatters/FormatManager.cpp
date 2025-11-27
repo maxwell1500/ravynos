@@ -18,6 +18,10 @@
 #include "lldb/Utility/Log.h"
 #include "llvm/ADT/STLExtras.h"
 
+// BEGIN SWIFT
+#include "Plugins/TypeSystem/Clang/TypeSystemClang.h"
+// END SWIFT
+
 using namespace lldb;
 using namespace lldb_private;
 using namespace lldb_private::formatters;
@@ -103,7 +107,7 @@ static bool GetFormatFromFormatName(llvm::StringRef format_name,
   if (partial_match_ok) {
     for (i = 0; i < g_num_format_infos; ++i) {
       if (llvm::StringRef(g_format_infos[i].format_name)
-              .startswith_insensitive(format_name)) {
+              .starts_with_insensitive(format_name)) {
         format = g_format_infos[i].format;
         return true;
       }
@@ -193,10 +197,17 @@ void FormatManager::GetPossibleMatches(
     entries.push_back({type_name, script_interpreter, TypeImpl(compiler_type),
                        current_flags});
 
-    ConstString display_type_name(compiler_type.GetTypeName());
+// BEGIN SWIFT
+    auto ts = compiler_type.GetTypeSystem();
+    if (ts && !ts.isa_and_nonnull<TypeSystemClang>()) {
+// END SWIFT
+    ConstString display_type_name(compiler_type.GetDisplayTypeName());
     if (display_type_name != type_name)
       entries.push_back({display_type_name, script_interpreter,
                          TypeImpl(compiler_type), current_flags});
+// BEGIN SWIFT
+    }
+// END SWIFT
   }
 
   for (bool is_rvalue_ref = true, j = true;
@@ -454,8 +465,13 @@ bool FormatManager::ShouldPrintAsOneLiner(ValueObject &valobj) {
   if (valobj.GetSummaryFormat().get() != nullptr)
     return valobj.GetSummaryFormat()->IsOneLiner();
 
+  auto num_children = valobj.GetNumChildren();
+  if (!num_children) {
+    llvm::consumeError(num_children.takeError());
+    return true;
+  }
   // no children, no party
-  if (valobj.GetNumChildren() == 0)
+  if (*num_children == 0)
     return false;
 
   // ask the type if it has any opinion about this eLazyBoolCalculate == no
@@ -474,9 +490,9 @@ bool FormatManager::ShouldPrintAsOneLiner(ValueObject &valobj) {
 
   size_t total_children_name_len = 0;
 
-  for (size_t idx = 0; idx < valobj.GetNumChildren(); idx++) {
+  for (size_t idx = 0; idx < *num_children; idx++) {
     bool is_synth_val = false;
-    ValueObjectSP child_sp(valobj.GetChildAtIndex(idx, true));
+    ValueObjectSP child_sp(valobj.GetChildAtIndex(idx));
     // something is wrong here - bail out
     if (!child_sp)
       return false;
@@ -526,7 +542,7 @@ bool FormatManager::ShouldPrintAsOneLiner(ValueObject &valobj) {
     }
 
     // if this child has children..
-    if (child_sp->GetNumChildren()) {
+    if (child_sp->HasChildren()) {
       // ...and no summary...
       // (if it had a summary and the summary wanted children, we would have
       // bailed out anyway
@@ -556,15 +572,23 @@ ConstString FormatManager::GetTypeForCache(ValueObject &valobj,
 std::vector<lldb::LanguageType>
 FormatManager::GetCandidateLanguages(lldb::LanguageType lang_type) {
   switch (lang_type) {
+  case lldb::eLanguageTypeSwift:
+    return {lldb::eLanguageTypeSwift, lldb::eLanguageTypeObjC};
+  case lldb::eLanguageTypeObjC:
+    return {lldb::eLanguageTypeObjC, lldb::eLanguageTypeSwift};
   case lldb::eLanguageTypeC:
   case lldb::eLanguageTypeC89:
   case lldb::eLanguageTypeC99:
   case lldb::eLanguageTypeC11:
+  // BEGIN SWIFT
+    return {lldb::eLanguageTypeC_plus_plus, lldb::eLanguageTypeObjC};
   case lldb::eLanguageTypeC_plus_plus:
   case lldb::eLanguageTypeC_plus_plus_03:
   case lldb::eLanguageTypeC_plus_plus_11:
   case lldb::eLanguageTypeC_plus_plus_14:
-    return {lldb::eLanguageTypeC_plus_plus, lldb::eLanguageTypeObjC};
+    // Swift can format C++ types due to Swift/C++ iterop.
+    return {lldb::eLanguageTypeC_plus_plus, lldb::eLanguageTypeObjC, lldb::eLanguageTypeSwift};
+  // END SWIFT
   default:
     return {lang_type};
   }
@@ -596,6 +620,15 @@ ImplSP FormatManager::GetHardcoded(FormattersMatchData &match_data) {
   return retval_sp;
 }
 
+namespace {
+template <typename ImplSP> const char *FormatterKind;
+template <> const char *FormatterKind<lldb::TypeFormatImplSP> = "format";
+template <> const char *FormatterKind<lldb::TypeSummaryImplSP> = "summary";
+template <> const char *FormatterKind<lldb::SyntheticChildrenSP> = "synthetic";
+} // namespace
+
+#define FORMAT_LOG(Message) "[%s] " Message, FormatterKind<ImplSP>
+
 template <typename ImplSP>
 ImplSP FormatManager::Get(ValueObject &valobj,
                           lldb::DynamicValueType use_dynamic) {
@@ -605,21 +638,19 @@ ImplSP FormatManager::Get(ValueObject &valobj,
 
   Log *log = GetLog(LLDBLog::DataFormatters);
 
-  LLDB_LOGF(log, "[%s] Search failed. Giving language a chance.", __FUNCTION__);
+  LLDB_LOGF(log, FORMAT_LOG("Search failed. Giving language a chance."));
   for (lldb::LanguageType lang_type : match_data.GetCandidateLanguages()) {
     if (LanguageCategory *lang_category = GetCategoryForLanguage(lang_type)) {
       ImplSP retval_sp;
       if (lang_category->Get(match_data, retval_sp))
         if (retval_sp) {
-          LLDB_LOGF(log, "[%s] Language search success. Returning.",
-                    __FUNCTION__);
+          LLDB_LOGF(log, FORMAT_LOG("Language search success. Returning."));
           return retval_sp;
         }
     }
   }
 
-  LLDB_LOGF(log, "[%s] Search failed. Giving hardcoded a chance.",
-            __FUNCTION__);
+  LLDB_LOGF(log, FORMAT_LOG("Search failed. Giving hardcoded a chance."));
   return GetHardcoded<ImplSP>(match_data);
 }
 
@@ -628,24 +659,23 @@ ImplSP FormatManager::GetCached(FormattersMatchData &match_data) {
   ImplSP retval_sp;
   Log *log = GetLog(LLDBLog::DataFormatters);
   if (match_data.GetTypeForCache()) {
-    LLDB_LOGF(log, "\n\n[%s] Looking into cache for type %s", __FUNCTION__,
+    LLDB_LOGF(log, "\n\n" FORMAT_LOG("Looking into cache for type %s"),
               match_data.GetTypeForCache().AsCString("<invalid>"));
     if (m_format_cache.Get(match_data.GetTypeForCache(), retval_sp)) {
       if (log) {
-        LLDB_LOGF(log, "[%s] Cache search success. Returning.", __FUNCTION__);
+        LLDB_LOGF(log, FORMAT_LOG("Cache search success. Returning."));
         LLDB_LOGV(log, "Cache hits: {0} - Cache Misses: {1}",
                   m_format_cache.GetCacheHits(),
                   m_format_cache.GetCacheMisses());
       }
       return retval_sp;
     }
-    LLDB_LOGF(log, "[%s] Cache search failed. Going normal route",
-              __FUNCTION__);
+    LLDB_LOGF(log, FORMAT_LOG("Cache search failed. Going normal route"));
   }
 
   m_categories_map.Get(match_data, retval_sp);
   if (match_data.GetTypeForCache() && (!retval_sp || !retval_sp->NonCacheable())) {
-    LLDB_LOGF(log, "[%s] Caching %p for type %s", __FUNCTION__,
+    LLDB_LOGF(log, FORMAT_LOG("Caching %p for type %s"),
               static_cast<void *>(retval_sp.get()),
               match_data.GetTypeForCache().AsCString("<invalid>"));
     m_format_cache.Set(match_data.GetTypeForCache(), retval_sp);
@@ -654,6 +684,8 @@ ImplSP FormatManager::GetCached(FormattersMatchData &match_data) {
             m_format_cache.GetCacheHits(), m_format_cache.GetCacheMisses());
   return retval_sp;
 }
+
+#undef FORMAT_LOG
 
 lldb::TypeFormatImplSP
 FormatManager::GetFormat(ValueObject &valobj,
@@ -678,12 +710,20 @@ FormatManager::FormatManager()
       m_language_categories_map(), m_named_summaries_map(this),
       m_categories_map(this), m_default_category_name(ConstString("default")),
       m_system_category_name(ConstString("system")),
-      m_vectortypes_category_name(ConstString("VectorTypes")) {
+      m_vectortypes_category_name(ConstString("VectorTypes")),
+      m_runtime_synths_category_name(ConstString("runtime-synthetics")) {
   LoadSystemFormatters();
   LoadVectorFormatters();
 
+  GetCategory(m_runtime_synths_category_name); // EnableCategory() won't enable
+                                               // a non-existant category, so
+                                               // create this one first even if
+                                               // empty
+
   EnableCategory(m_vectortypes_category_name, TypeCategoryMap::Last,
                  lldb::eLanguageTypeObjC_plus_plus);
+  EnableCategory(m_runtime_synths_category_name, TypeCategoryMap::Last,
+                 {lldb::eLanguageTypeObjC_plus_plus, lldb::eLanguageTypeSwift});
   EnableCategory(m_system_category_name, TypeCategoryMap::Last,
                  lldb::eLanguageTypeObjC_plus_plus);
 }
@@ -740,7 +780,7 @@ void FormatManager::LoadSystemFormatters() {
   fourchar_flags.SetCascades(true).SetSkipPointers(true).SetSkipReferences(
       true);
 
-  AddFormat(sys_category_sp, lldb::eFormatOSType, ConstString("FourCharCode"),
+  AddFormat(sys_category_sp, lldb::eFormatOSType, "FourCharCode",
             fourchar_flags);
 }
 
@@ -757,32 +797,19 @@ void FormatManager::LoadVectorFormatters() {
       .SetShowMembersOneLiner(true)
       .SetHideItemNames(true);
 
-  AddStringSummary(vectors_category_sp, "${var.uint128}",
-                   ConstString("builtin_type_vec128"), vector_flags);
-  AddStringSummary(vectors_category_sp, "", ConstString("float[4]"),
+  AddStringSummary(vectors_category_sp, "${var.uint128}", "builtin_type_vec128",
                    vector_flags);
-  AddStringSummary(vectors_category_sp, "", ConstString("int32_t[4]"),
-                   vector_flags);
-  AddStringSummary(vectors_category_sp, "", ConstString("int16_t[8]"),
-                   vector_flags);
-  AddStringSummary(vectors_category_sp, "", ConstString("vDouble"),
-                   vector_flags);
-  AddStringSummary(vectors_category_sp, "", ConstString("vFloat"),
-                   vector_flags);
-  AddStringSummary(vectors_category_sp, "", ConstString("vSInt8"),
-                   vector_flags);
-  AddStringSummary(vectors_category_sp, "", ConstString("vSInt16"),
-                   vector_flags);
-  AddStringSummary(vectors_category_sp, "", ConstString("vSInt32"),
-                   vector_flags);
-  AddStringSummary(vectors_category_sp, "", ConstString("vUInt16"),
-                   vector_flags);
-  AddStringSummary(vectors_category_sp, "", ConstString("vUInt8"),
-                   vector_flags);
-  AddStringSummary(vectors_category_sp, "", ConstString("vUInt16"),
-                   vector_flags);
-  AddStringSummary(vectors_category_sp, "", ConstString("vUInt32"),
-                   vector_flags);
-  AddStringSummary(vectors_category_sp, "", ConstString("vBool32"),
-                   vector_flags);
+  AddStringSummary(vectors_category_sp, "", "float[4]", vector_flags);
+  AddStringSummary(vectors_category_sp, "", "int32_t[4]", vector_flags);
+  AddStringSummary(vectors_category_sp, "", "int16_t[8]", vector_flags);
+  AddStringSummary(vectors_category_sp, "", "vDouble", vector_flags);
+  AddStringSummary(vectors_category_sp, "", "vFloat", vector_flags);
+  AddStringSummary(vectors_category_sp, "", "vSInt8", vector_flags);
+  AddStringSummary(vectors_category_sp, "", "vSInt16", vector_flags);
+  AddStringSummary(vectors_category_sp, "", "vSInt32", vector_flags);
+  AddStringSummary(vectors_category_sp, "", "vUInt16", vector_flags);
+  AddStringSummary(vectors_category_sp, "", "vUInt8", vector_flags);
+  AddStringSummary(vectors_category_sp, "", "vUInt16", vector_flags);
+  AddStringSummary(vectors_category_sp, "", "vUInt32", vector_flags);
+  AddStringSummary(vectors_category_sp, "", "vBool32", vector_flags);
 }

@@ -35,6 +35,8 @@ public:
   void emitPrologue(MachineFunction &MF, MachineBasicBlock &MBB) const override;
   void emitEpilogue(MachineFunction &MF, MachineBasicBlock &MBB) const override;
 
+  bool enableCFIFixup(MachineFunction &MF) const override;
+
   bool canUseAsPrologue(const MachineBasicBlock &MBB) const override;
 
   StackOffset getFrameIndexReference(const MachineFunction &MF, int FI,
@@ -138,6 +140,15 @@ private:
   int64_t assignSVEStackObjectOffsets(MachineFrameInfo &MF,
                                       int &MinCSFrameIndex,
                                       int &MaxCSFrameIndex) const;
+
+  bool shouldAuthenticateLR(const MachineFunction &MF) const;
+
+  MCCFIInstruction
+  createDefCFAExpressionFromSP(const TargetRegisterInfo &TRI,
+                               const StackOffset &OffsetFromSP) const;
+  MCCFIInstruction createCfaOffset(const TargetRegisterInfo &MRI, unsigned DwarfReg,
+                                   const StackOffset &OffsetFromDefCFA) const;
+
   bool shouldCombineCSRLocalStackBumpInEpilogue(MachineBasicBlock &MBB,
                                                 unsigned StackBumpBytes) const;
   void emitCalleeSavedGPRLocations(MachineBasicBlock &MBB,

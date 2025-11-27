@@ -10,10 +10,13 @@
 #define LLVM_MC_MCASMBACKEND_H
 
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/CAS/ObjectStore.h"
 #include "llvm/MC/MCDirectives.h"
+#include "llvm/MC/MCMachOCASWriter.h"
 #include "llvm/MC/MCFixup.h"
 #include "llvm/Support/Endian.h"
 #include <cstdint>
+#include <optional>
 
 namespace llvm {
 
@@ -25,7 +28,8 @@ class MCRelaxableFragment;
 class MCSymbol;
 class MCAsmLayout;
 class MCAssembler;
-class MCCFIInstruction;
+class MCContext;
+struct MCDwarfFrameInfo;
 struct MCFixupKindInfo;
 class MCInst;
 class MCObjectStreamer;
@@ -40,7 +44,8 @@ class raw_ostream;
 /// Generic interface to target specific assembler backends.
 class MCAsmBackend {
 protected: // Can only create subclasses.
-  MCAsmBackend(support::endianness Endian);
+  MCAsmBackend(support::endianness Endian,
+               unsigned RelaxFixupKind = MaxFixupKind);
 
 public:
   MCAsmBackend(const MCAsmBackend &) = delete;
@@ -48,6 +53,9 @@ public:
   virtual ~MCAsmBackend();
 
   const support::endianness Endian;
+
+  /// Fixup kind used for linker relaxation. Currently only used by RISC-V.
+  const unsigned RelaxFixupKind;
 
   /// Return true if this target might automatically pad instructions and thus
   /// need to emit padding enable/disable directives around sensative code.
@@ -71,6 +79,21 @@ public:
   /// emit the final object file.
   std::unique_ptr<MCObjectWriter>
   createObjectWriter(raw_pwrite_stream &OS) const;
+
+  // BEGIN MCCAS
+  /// Create a CAS object writer for the assembler backend.
+  std::unique_ptr<MCObjectWriter> createCASObjectWriter(
+      raw_pwrite_stream &OS, const Triple &TT, cas::ObjectStore &CAS,
+      const MCTargetOptions &MCOpts, CASBackendMode Mode,
+      std::function<const cas::ObjectProxy(
+          llvm::MachOCASWriter &, llvm::MCAssembler &,
+          const llvm::MCAsmLayout &, cas::ObjectStore &, raw_ostream *)>
+          CreateFromMcAssembler,
+      std::function<Error(cas::ObjectProxy, cas::ObjectStore &, raw_ostream &)>
+          SerializeObjectFile,
+      raw_pwrite_stream *CasIDOS = nullptr) const;
+  // END MCCAS
+
 
   /// Create an MCObjectWriter that writes two object files: a .o file which is
   /// linked into the final program and a .dwo file which is used by debuggers.
@@ -122,6 +145,14 @@ public:
                                    const MCValue &Target, uint64_t &Value,
                                    bool &WasForced) {
     llvm_unreachable("Need to implement hook if target has custom fixups");
+  }
+
+  virtual bool handleAddSubRelocations(const MCAsmLayout &Layout,
+                                       const MCFragment &F,
+                                       const MCFixup &Fixup,
+                                       const MCValue &Target,
+                                       uint64_t &FixedValue) const {
+    return false;
   }
 
   /// Apply the \p Value for given \p Fixup into the provided data fragment, at
@@ -210,8 +241,8 @@ public:
   virtual void handleAssemblerFlag(MCAssemblerFlag Flag) {}
 
   /// Generate the compact unwind encoding for the CFI instructions.
-  virtual uint32_t
-      generateCompactUnwindEncoding(ArrayRef<MCCFIInstruction>) const {
+  virtual uint32_t generateCompactUnwindEncoding(const MCDwarfFrameInfo *FI,
+                                                 const MCContext *Ctxt) const {
     return 0;
   }
 
@@ -219,6 +250,8 @@ public:
   virtual bool isMicroMips(const MCSymbol *Sym) const {
     return false;
   }
+
+  bool isDarwinCanonicalPersonality(const MCSymbol *Sym) const;
 };
 
 } // end namespace llvm

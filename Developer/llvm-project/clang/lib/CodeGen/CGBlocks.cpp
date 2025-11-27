@@ -208,13 +208,16 @@ static llvm::Constant *buildBlockDescriptor(CodeGenModule &CGM,
   // Optional copy/dispose helpers.
   bool hasInternalHelper = false;
   if (blockInfo.NeedsCopyDispose) {
+    auto &schema =
+      CGM.getCodeGenOpts().PointerAuth.BlockHelperFunctionPointers;
+
     // copy_func_helper_decl
     llvm::Constant *copyHelper = buildCopyHelper(CGM, blockInfo);
-    elements.add(copyHelper);
+    elements.addSignedPointer(copyHelper, schema, GlobalDecl(), QualType());
 
     // destroy_func_decl
     llvm::Constant *disposeHelper = buildDisposeHelper(CGM, blockInfo);
-    elements.add(disposeHelper);
+    elements.addSignedPointer(disposeHelper, schema, GlobalDecl(), QualType());
 
     if (cast<llvm::Function>(copyHelper->stripPointerCasts())
             ->hasInternalLinkage() ||
@@ -884,11 +887,26 @@ llvm::Value *CodeGenFunction::EmitBlockLiteral(const CGBlockInfo &blockInfo) {
           llvm::ConstantInt::get(IntTy, blockInfo.BlockAlign.getQuantity()),
           getIntSize(), "block.align");
     }
-    addHeaderField(blockFn, GenVoidPtrSize, "block.invoke");
-    if (!IsOpenCL)
+
+    if (!IsOpenCL) {
+      llvm::Value *blockFnPtr = llvm::ConstantExpr::getBitCast(InvokeFn, VoidPtrTy);
+      auto blockFnPtrAddr = projectField(index, "block.invoke");
+      if (auto &schema =
+          CGM.getCodeGenOpts().PointerAuth.BlockInvocationFunctionPointers) {
+        QualType type = blockInfo.getBlockExpr()->getType()
+          ->castAs<BlockPointerType>()->getPointeeType();
+        auto authInfo = EmitPointerAuthInfo(schema, blockFnPtrAddr.getPointer(),
+                                            GlobalDecl(), type);
+        blockFnPtr = EmitPointerAuthSign(authInfo, blockFnPtr);
+      }
+      Builder.CreateStore(blockFnPtr, blockFnPtrAddr);
+      offset += getPointerSize();
+      index++;
+
       addHeaderField(descriptor, getPointerSize(), "block.descriptor");
-    else if (auto *Helper =
-                 CGM.getTargetCodeGenInfo().getTargetOpenCLBlockHelper()) {
+    } else if (auto *Helper =
+                   CGM.getTargetCodeGenInfo().getTargetOpenCLBlockHelper()) {
+      addHeaderField(blockFn, GenVoidPtrSize, "block.invoke");
       for (auto I : Helper->getCustomFieldValues(*this, blockInfo)) {
         addHeaderField(
             I.first,
@@ -896,7 +914,8 @@ llvm::Value *CodeGenFunction::EmitBlockLiteral(const CGBlockInfo &blockInfo) {
                 CGM.getDataLayout().getTypeAllocSize(I.first->getType())),
             I.second);
       }
-    }
+    } else
+      addHeaderField(blockFn, GenVoidPtrSize, "block.invoke");
   }
 
   // Finally, capture all the values into the block.
@@ -1187,6 +1206,8 @@ RValue CodeGenFunction::EmitBlockCallExpr(const CallExpr *E,
   ASTContext &Ctx = getContext();
   CallArgList Args;
 
+  llvm::Value *FuncPtr = nullptr;
+
   if (getLangOpts().OpenCL) {
     // For OpenCL, BlockPtr is already casted to generic block literal.
 
@@ -1206,7 +1227,7 @@ RValue CodeGenFunction::EmitBlockCallExpr(const CallExpr *E,
     if (!isa<ParmVarDecl>(E->getCalleeDecl()))
       Func = CGM.getOpenCLRuntime().getInvokeFunction(E->getCallee());
     else {
-      llvm::Value *FuncPtr = Builder.CreateStructGEP(GenBlockTy, BlockPtr, 2);
+      FuncPtr = Builder.CreateStructGEP(GenBlockTy, BlockPtr, 2);
       Func = Builder.CreateAlignedLoad(GenericVoidPtrTy, FuncPtr,
                                        getPointerAlign());
     }
@@ -1215,7 +1236,7 @@ RValue CodeGenFunction::EmitBlockCallExpr(const CallExpr *E,
     BlockPtr = Builder.CreatePointerCast(
         BlockPtr, llvm::PointerType::get(GenBlockTy, 0), "block.literal");
     // Get pointer to the block invoke function
-    llvm::Value *FuncPtr = Builder.CreateStructGEP(GenBlockTy, BlockPtr, 3);
+    FuncPtr = Builder.CreateStructGEP(GenBlockTy, BlockPtr, 3);
 
     // First argument is a block literal casted to a void pointer
     BlockPtr = Builder.CreatePointerCast(BlockPtr, VoidPtrTy);
@@ -1238,7 +1259,14 @@ RValue CodeGenFunction::EmitBlockCallExpr(const CallExpr *E,
   Func = Builder.CreatePointerCast(Func, BlockFTyPtr);
 
   // Prepare the callee.
-  CGCallee Callee(CGCalleeInfo(), Func);
+  CGPointerAuthInfo PointerAuth;
+  if (auto &AuthSchema =
+        CGM.getCodeGenOpts().PointerAuth.BlockInvocationFunctionPointers) {
+    assert(FuncPtr != nullptr && "Missing function pointer for AuthInfo");
+    PointerAuth = EmitPointerAuthInfo(AuthSchema, FuncPtr,
+                                      GlobalDecl(), FnType);
+  }
+  CGCallee Callee(CGCalleeInfo(), Func, PointerAuth);
 
   // And call the block.
   return EmitCall(FnInfo, Callee, ReturnValue, Args);
@@ -1259,9 +1287,8 @@ Address CodeGenFunction::GetAddrOfBlockDecl(const VarDecl *variable) {
     // to byref*.
 
     auto &byrefInfo = getBlockByrefInfo(variable);
-    addr = Address(Builder.CreateLoad(addr), Int8Ty, byrefInfo.ByrefAlignment);
-
-    addr = Builder.CreateElementBitCast(addr, byrefInfo.Type, "byref.addr");
+    addr = Address(Builder.CreateLoad(addr), byrefInfo.Type,
+                   byrefInfo.ByrefAlignment);
 
     addr = emitBlockByrefAddress(addr, byrefInfo, /*follow*/ true,
                                  variable->getName());
@@ -1339,13 +1366,24 @@ static llvm::Constant *buildGlobalBlock(CodeGenModule &CGM,
 
     // Reserved
     fields.addInt(CGM.IntTy, 0);
+
+    // Function
+    if (auto &schema =
+            CGM.getCodeGenOpts().PointerAuth.BlockInvocationFunctionPointers) {
+      QualType fnType = blockInfo.getBlockExpr()
+                            ->getType()
+                            ->castAs<BlockPointerType>()
+                            ->getPointeeType();
+      fields.addSignedPointer(blockFn, schema, GlobalDecl(), fnType);
+    } else {
+      fields.add(blockFn);
+    }
   } else {
     fields.addInt(CGM.IntTy, blockInfo.BlockSize.getQuantity());
     fields.addInt(CGM.IntTy, blockInfo.BlockAlign.getQuantity());
+    // Function
+    fields.add(blockFn);
   }
-
-  // Function
-  fields.add(blockFn);
 
   if (!IsOpenCL) {
     // Descriptor
@@ -1427,7 +1465,8 @@ void CodeGenFunction::setBlockContextParameter(const ImplicitParamDecl *D,
   // directly as BlockPointer.
   BlockPointer = Builder.CreatePointerCast(
       arg,
-      BlockInfo->StructureType->getPointerTo(
+      llvm::PointerType::get(
+          getLLVMContext(),
           getContext().getLangOpts().OpenCL
               ? getContext().getTargetAddressSpace(LangAS::opencl_generic)
               : 0),
@@ -1627,6 +1666,10 @@ computeCopyInfoForBlockCapture(const BlockDecl::Capture &CI, QualType T,
     return std::make_pair(BlockCaptureEntityKind::BlockObject, Flags);
   }
 
+  if (T.hasAddressDiscriminatedPointerAuth())
+    return std::make_pair(
+             BlockCaptureEntityKind::AddressDiscriminatedPointerAuth, Flags);
+
   Flags = BLOCK_FIELD_IS_OBJECT;
   bool isBlockPointer = T->isBlockPointerType();
   if (isBlockPointer)
@@ -1647,6 +1690,10 @@ computeCopyInfoForBlockCapture(const BlockDecl::Capture &CI, QualType T,
     return std::make_pair(!isBlockPointer ? BlockCaptureEntityKind::ARCStrong
                                           : BlockCaptureEntityKind::BlockObject,
                           Flags);
+  case QualType::PCK_PtrAuth:
+    return std::make_pair(
+             BlockCaptureEntityKind::AddressDiscriminatedPointerAuth,
+             BlockFieldFlags());
   case QualType::PCK_Trivial:
   case QualType::PCK_VolatileTrivial: {
     if (!T->isObjCRetainableType())
@@ -1750,6 +1797,13 @@ static std::string getBlockCaptureStr(const CGBlockInfo::Capture &Cap,
   case BlockCaptureEntityKind::ARCStrong:
     Str += "s";
     break;
+  case BlockCaptureEntityKind::AddressDiscriminatedPointerAuth: {
+    auto PtrAuth = CaptureTy.getPointerAuth();
+    assert(PtrAuth && PtrAuth.isAddressDiscriminated());
+    Str += "p" + llvm::to_string(PtrAuth.getKey()) + "d" +
+           llvm::to_string(PtrAuth.getExtraDiscriminator());
+    break;
+  }
   case BlockCaptureEntityKind::BlockObject: {
     const VarDecl *Var = CI.getVariable();
     unsigned F = Flags.getBitMask();
@@ -1866,6 +1920,7 @@ static void pushCaptureCleanup(BlockCaptureEntityKind CaptureKind,
     }
     break;
   }
+  case BlockCaptureEntityKind::AddressDiscriminatedPointerAuth:
   case BlockCaptureEntityKind::None:
     break;
   }
@@ -1934,14 +1989,12 @@ CodeGenFunction::GenerateCopyHelperFunction(const CGBlockInfo &blockInfo) {
   auto AL = ApplyDebugLocation::CreateArtificial(*this);
 
   Address src = GetAddrOfLocalVar(&SrcDecl);
-  src = Address(Builder.CreateLoad(src), Int8Ty, blockInfo.BlockAlign);
-  src = Builder.CreateElementBitCast(src, blockInfo.StructureType,
-                                     "block.source");
+  src = Address(Builder.CreateLoad(src), blockInfo.StructureType,
+                blockInfo.BlockAlign);
 
   Address dst = GetAddrOfLocalVar(&DstDecl);
-  dst = Address(Builder.CreateLoad(dst), Int8Ty, blockInfo.BlockAlign);
-  dst =
-      Builder.CreateElementBitCast(dst, blockInfo.StructureType, "block.dest");
+  dst = Address(Builder.CreateLoad(dst), blockInfo.StructureType,
+                blockInfo.BlockAlign);
 
   for (auto &capture : blockInfo.SortedCaptures) {
     if (capture.isConstantOrTrivial())
@@ -1964,6 +2017,14 @@ CodeGenFunction::GenerateCopyHelperFunction(const CGBlockInfo &blockInfo) {
     case BlockCaptureEntityKind::ARCWeak:
       EmitARCCopyWeak(dstField, srcField);
       break;
+    case BlockCaptureEntityKind::AddressDiscriminatedPointerAuth: {
+      auto type = CI.getVariable()->getType();
+      auto ptrauth = type.getPointerAuth();
+      assert(ptrauth && ptrauth.isAddressDiscriminated());
+      EmitPointerAuthCopy(ptrauth, type, dstField, srcField);
+      // We don't need to push cleanups for ptrauth types.
+      continue;
+    }
     case BlockCaptureEntityKind::NonTrivialCStruct: {
       // If this is a C struct that requires non-trivial copy construction,
       // emit a call to its copy constructor.
@@ -2124,8 +2185,8 @@ CodeGenFunction::GenerateDestroyHelperFunction(const CGBlockInfo &blockInfo) {
   auto AL = ApplyDebugLocation::CreateArtificial(*this);
 
   Address src = GetAddrOfLocalVar(&SrcDecl);
-  src = Address(Builder.CreateLoad(src), Int8Ty, blockInfo.BlockAlign);
-  src = Builder.CreateElementBitCast(src, blockInfo.StructureType, "block");
+  src = Address(Builder.CreateLoad(src), blockInfo.StructureType,
+                blockInfo.BlockAlign);
 
   CodeGenFunction::RunCleanupsScope cleanups(*this);
 
@@ -2162,9 +2223,9 @@ public:
 
   void emitCopy(CodeGenFunction &CGF, Address destField,
                 Address srcField) override {
-    destField = CGF.Builder.CreateElementBitCast(destField, CGF.Int8Ty);
+    destField = destField.withElementType(CGF.Int8Ty);
 
-    srcField = CGF.Builder.CreateElementBitCast(srcField, CGF.Int8PtrTy);
+    srcField = srcField.withElementType(CGF.Int8PtrTy);
     llvm::Value *srcValue = CGF.Builder.CreateLoad(srcField);
 
     unsigned flags = (Flags | BLOCK_BYREF_CALLER).getBitMask();
@@ -2177,7 +2238,7 @@ public:
   }
 
   void emitDispose(CodeGenFunction &CGF, Address field) override {
-    field = CGF.Builder.CreateElementBitCast(field, CGF.Int8PtrTy);
+    field = field.withElementType(CGF.Int8PtrTy);
     llvm::Value *value = CGF.Builder.CreateLoad(field);
 
     CGF.BuildBlockRelease(value, Flags | BLOCK_BYREF_CALLER, false);
@@ -2300,6 +2361,33 @@ public:
   }
 };
 
+/// Emits the copy/dispose helpers for a __block variable with
+/// address-discriminated pointer authentication.
+class AddressDiscriminatedByrefHelpers final : public BlockByrefHelpers {
+  QualType VarType;
+
+public:
+  AddressDiscriminatedByrefHelpers(CharUnits alignment, QualType type)
+      : BlockByrefHelpers(alignment), VarType(type) {
+    assert(type.hasAddressDiscriminatedPointerAuth());
+  }
+
+  void emitCopy(CodeGenFunction &CGF, Address destField,
+                Address srcField) override {
+    CGF.EmitPointerAuthCopy(VarType.getPointerAuth(), VarType,
+                            destField, srcField);
+  }
+
+  bool needsDispose() const override { return false; }
+  void emitDispose(CodeGenFunction &CGF, Address field) override {
+    llvm_unreachable("should never be called");
+  }
+
+  void profileImpl(llvm::FoldingSetNodeID &id) const override {
+    id.AddPointer(VarType.getCanonicalType().getAsOpaquePtr());
+  }
+};
+
 /// Emits the copy/dispose helpers for a __block variable that is a non-trivial
 /// C struct.
 class NonTrivialCStructByrefHelpers final : public BlockByrefHelpers {
@@ -2369,17 +2457,15 @@ generateByrefCopyHelper(CodeGenFunction &CGF, const BlockByrefInfo &byrefInfo,
   if (generator.needsCopy()) {
     // dst->x
     Address destField = CGF.GetAddrOfLocalVar(&Dst);
-    destField = Address(CGF.Builder.CreateLoad(destField), CGF.Int8Ty,
+    destField = Address(CGF.Builder.CreateLoad(destField), byrefInfo.Type,
                         byrefInfo.ByrefAlignment);
-    destField = CGF.Builder.CreateElementBitCast(destField, byrefInfo.Type);
     destField =
         CGF.emitBlockByrefAddress(destField, byrefInfo, false, "dest-object");
 
     // src->x
     Address srcField = CGF.GetAddrOfLocalVar(&Src);
-    srcField = Address(CGF.Builder.CreateLoad(srcField), CGF.Int8Ty,
+    srcField = Address(CGF.Builder.CreateLoad(srcField), byrefInfo.Type,
                        byrefInfo.ByrefAlignment);
-    srcField = CGF.Builder.CreateElementBitCast(srcField, byrefInfo.Type);
     srcField =
         CGF.emitBlockByrefAddress(srcField, byrefInfo, false, "src-object");
 
@@ -2435,9 +2521,8 @@ generateByrefDisposeHelper(CodeGenFunction &CGF,
 
   if (generator.needsDispose()) {
     Address addr = CGF.GetAddrOfLocalVar(&Src);
-    addr = Address(CGF.Builder.CreateLoad(addr), CGF.Int8Ty,
+    addr = Address(CGF.Builder.CreateLoad(addr), byrefInfo.Type,
                    byrefInfo.ByrefAlignment);
-    addr = CGF.Builder.CreateElementBitCast(addr, byrefInfo.Type);
     addr = CGF.emitBlockByrefAddress(addr, byrefInfo, false, "object");
 
     generator.emitDispose(CGF, addr);
@@ -2503,6 +2588,11 @@ CodeGenFunction::buildByrefHelpers(llvm::StructType &byrefType,
 
     return ::buildByrefHelpers(
         CGM, byrefInfo, CXXByrefHelpers(valueAlignment, type, copyExpr));
+  }
+
+  if (type.hasAddressDiscriminatedPointerAuth()) {
+    return ::buildByrefHelpers(
+        CGM, byrefInfo, AddressDiscriminatedByrefHelpers(valueAlignment, type));
   }
 
   // If type is a non-trivial C struct type that is non-trivial to
@@ -2703,8 +2793,16 @@ void CodeGenFunction::emitByrefStructureInit(const AutoVarEmission &emission) {
   unsigned nextHeaderIndex = 0;
   CharUnits nextHeaderOffset;
   auto storeHeaderField = [&](llvm::Value *value, CharUnits fieldSize,
-                              const Twine &name) {
+                              const Twine &name, bool isFunction = false) {
     auto fieldAddr = Builder.CreateStructGEP(addr, nextHeaderIndex, name);
+    if (isFunction) {
+      if (auto &schema = CGM.getCodeGenOpts().PointerAuth
+                            .BlockByrefHelperFunctionPointers) {
+        auto pointerAuth = EmitPointerAuthInfo(schema, fieldAddr.getPointer(),
+                                               GlobalDecl(), QualType());
+        value = EmitPointerAuthSign(pointerAuth, value);
+      }
+    }
     Builder.CreateStore(value, fieldAddr);
 
     nextHeaderIndex++;
@@ -2787,9 +2885,9 @@ void CodeGenFunction::emitByrefStructureInit(const AutoVarEmission &emission) {
 
   if (helpers) {
     storeHeaderField(helpers->CopyHelper, getPointerSize(),
-                     "byref.copyHelper");
+                     "byref.copyHelper", /*function*/ true);
     storeHeaderField(helpers->DisposeHelper, getPointerSize(),
-                     "byref.disposeHelper");
+                     "byref.disposeHelper", /*function*/ true);
   }
 
   if (ByRefHasLifetime && HasByrefExtendedLayout) {

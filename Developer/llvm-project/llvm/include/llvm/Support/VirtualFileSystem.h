@@ -15,15 +15,18 @@
 #define LLVM_SUPPORT_VIRTUALFILESYSTEM_H
 
 #include "llvm/ADT/IntrusiveRefCntPtr.h"
+#include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
-#include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/Support/Chrono.h"
-#include "llvm/Support/ErrorOr.h"
 #include "llvm/Support/Errc.h"
+#include "llvm/Support/Error.h"
+#include "llvm/Support/ErrorOr.h"
+#include "llvm/Support/ExtensibleRTTI.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/SourceMgr.h"
+#include "llvm/Support/VirtualCachedDirectoryEntry.h"
 #include <cassert>
 #include <cstdint>
 #include <ctime>
@@ -40,6 +43,10 @@ namespace llvm {
 class MemoryBuffer;
 class MemoryBufferRef;
 class Twine;
+
+namespace cas {
+class ObjectRef;
+}
 
 namespace vfs {
 
@@ -132,6 +139,11 @@ public:
   virtual llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>>
   getBuffer(const Twine &Name, int64_t FileSize = -1,
             bool RequiresNullTerminator = true, bool IsVolatile = false) = 0;
+
+  /// Get the CAS reference for the contents of the file.
+  /// \returns \p None if the underlying \p FileSystem doesn't support providing
+  /// CAS references.
+  virtual llvm::ErrorOr<std::optional<cas::ObjectRef>> getObjectRefForContent();
 
   /// Closes the file.
   virtual std::error_code close() = 0;
@@ -264,8 +276,10 @@ public:
 };
 
 /// The virtual file system interface.
-class FileSystem : public llvm::ThreadSafeRefCountedBase<FileSystem> {
+class FileSystem : public llvm::ThreadSafeRefCountedBase<FileSystem>,
+                   public RTTIExtends<FileSystem, RTTIRoot> {
 public:
+  static const char ID;
   virtual ~FileSystem();
 
   /// Get the status of the entry at \p Path, if one exists.
@@ -279,7 +293,15 @@ public:
   /// closes the file.
   llvm::ErrorOr<std::unique_ptr<llvm::MemoryBuffer>>
   getBufferForFile(const Twine &Name, int64_t FileSize = -1,
-                   bool RequiresNullTerminator = true, bool IsVolatile = false);
+                   bool RequiresNullTerminator = true, bool IsVolatile = false,
+                   std::optional<cas::ObjectRef> *CASContents = nullptr);
+
+  /// This is a convenience method that opens a file, gets the \p cas::ObjectRef
+  /// for its contents if supported by the file system, and then closes the
+  /// file. If both the buffer and its `cas::ObjectRef` are needed use \p
+  /// getBufferForFile to avoid the extra file lookup.
+  llvm::ErrorOr<std::optional<cas::ObjectRef>>
+  getObjectRefForFileContent(const Twine &Name);
 
   /// Get a directory_iterator for \p Dir.
   /// \note The 'end' iterator is directory_iterator().
@@ -297,10 +319,51 @@ public:
   /// symlinks. For real file system, this uses `llvm::sys::fs::real_path`.
   /// This returns errc::operation_not_permitted if not implemented by subclass.
   virtual std::error_code getRealPath(const Twine &Path,
-                                      SmallVectorImpl<char> &Output) const;
+                                      SmallVectorImpl<char> &Output);
 
-  /// Check whether a file exists. Provided for convenience.
-  bool exists(const Twine &Path);
+  /// Gets access to the directory entry for \p Path. Among other things, this
+  /// exposes the filesystem tree's actual path to \p Path.
+  ///
+  /// If \p FollowSymlinks and \p Path refers to a symbol link, this returns
+  /// the directory entry for the link's target, evaluated recursively (as if
+  /// calling \a getRealPath()). Otherwise, it returns the entry for the
+  /// symbolic link itself (as if \a getRealPath() had been called only on the
+  /// parent path).
+  ///
+  /// For example, given:
+  ///
+  ///     /a/sym -> b
+  ///     /a/b/c
+  ///
+  /// The following table explains the object returned, and its tree path:
+  ///
+  ///     Path      Follow     NoFollow
+  ///     ====      ======     ========
+  ///     /a/sym    /a/b       /a/sym
+  ///     /a/sym/   /a/b       /a/b
+  ///     /a/sym/c  /a/b/c     /a/b/c
+  ///
+  /// Paths are made absolute before lookup.
+  ///
+  /// FIXME: Make this non-const, since it can do work? (Why is \a
+  /// getRealPath() const?)
+  ///
+  /// FIXME: Add \a getCachedDirectoryEntry(), which is const-qualified and
+  /// never does work?
+  ///
+  /// FIXME: Follow symlinks by default (can make the virtual function end in
+  /// Impl to avoid virtual/default parameter shenanigans)?
+  virtual Expected<const CachedDirectoryEntry *>
+  getDirectoryEntry(const Twine &Path, bool FollowSymlinks) const {
+    // FIXME: Consider providing a defualt imlementation that calls \a
+    // getRealPath() on the parent path and reappending the filename (assuming
+    // it exists).
+    return createFileError(Path, make_error_code(std::errc::not_supported));
+  }
+
+  /// Check whether \p Path exists. By default this uses \c status(), but
+  /// filesystems may provide a more efficient implementation if available.
+  virtual bool exists(const Twine &Path);
 
   /// Is the file mounted on a local filesystem?
   virtual std::error_code isLocal(const Twine &Path, bool &Result);
@@ -318,10 +381,20 @@ public:
   ///          platform-specific error_code.
   virtual std::error_code makeAbsolute(SmallVectorImpl<char> &Path) const;
 
+  /// Check if files are loaded from a CAS.
+  virtual bool isCASFS() const { return false; }
+
   enum class PrintType { Summary, Contents, RecursiveContents };
   void print(raw_ostream &OS, PrintType Type = PrintType::Contents,
              unsigned IndentLevel = 0) const {
     printImpl(OS, Type, IndentLevel);
+  }
+
+  using VisitCallbackTy = llvm::function_ref<void(FileSystem &)>;
+  virtual void visitChildFileSystems(VisitCallbackTy Callback) {}
+  void visit(VisitCallbackTy Callback) {
+    Callback(*this);
+    visitChildFileSystems(Callback);
   }
 
 #if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
@@ -363,7 +436,7 @@ std::unique_ptr<FileSystem> createPhysicalFileSystem();
 /// top-most (most recently added) directory are used.  When there is a file
 /// that exists in more than one file system, the file in the top-most file
 /// system overrides the other(s).
-class OverlayFileSystem : public FileSystem {
+class OverlayFileSystem : public RTTIExtends<OverlayFileSystem, FileSystem> {
   using FileSystemList = SmallVector<IntrusiveRefCntPtr<FileSystem>, 1>;
 
   /// The stack of file systems, implemented as a list in order of
@@ -371,12 +444,14 @@ class OverlayFileSystem : public FileSystem {
   FileSystemList FSList;
 
 public:
+  static const char ID;
   OverlayFileSystem(IntrusiveRefCntPtr<FileSystem> Base);
 
   /// Pushes a file system on top of the stack.
   void pushOverlay(IntrusiveRefCntPtr<FileSystem> FS);
 
   llvm::ErrorOr<Status> status(const Twine &Path) override;
+  bool exists(const Twine &Path) override;
   llvm::ErrorOr<std::unique_ptr<File>>
   openFileForRead(const Twine &Path) override;
   directory_iterator dir_begin(const Twine &Dir, std::error_code &EC) override;
@@ -384,7 +459,7 @@ public:
   std::error_code setCurrentWorkingDirectory(const Twine &Path) override;
   std::error_code isLocal(const Twine &Path, bool &Result) override;
   std::error_code getRealPath(const Twine &Path,
-                              SmallVectorImpl<char> &Output) const override;
+                              SmallVectorImpl<char> &Output) override;
 
   using iterator = FileSystemList::reverse_iterator;
   using const_iterator = FileSystemList::const_reverse_iterator;
@@ -415,19 +490,22 @@ public:
 protected:
   void printImpl(raw_ostream &OS, PrintType Type,
                  unsigned IndentLevel) const override;
+  void visitChildFileSystems(VisitCallbackTy Callback) override;
 };
 
 /// By default, this delegates all calls to the underlying file system. This
 /// is useful when derived file systems want to override some calls and still
 /// proxy other calls.
-class ProxyFileSystem : public FileSystem {
+class ProxyFileSystem : public RTTIExtends<ProxyFileSystem, FileSystem> {
 public:
+  static const char ID;
   explicit ProxyFileSystem(IntrusiveRefCntPtr<FileSystem> FS)
       : FS(std::move(FS)) {}
 
   llvm::ErrorOr<Status> status(const Twine &Path) override {
     return FS->status(Path);
   }
+  bool exists(const Twine &Path) override { return FS->exists(Path); }
   llvm::ErrorOr<std::unique_ptr<File>>
   openFileForRead(const Twine &Path) override {
     return FS->openFileForRead(Path);
@@ -442,7 +520,7 @@ public:
     return FS->setCurrentWorkingDirectory(Path);
   }
   std::error_code getRealPath(const Twine &Path,
-                              SmallVectorImpl<char> &Output) const override {
+                              SmallVectorImpl<char> &Output) override {
     return FS->getRealPath(Path, Output);
   }
   std::error_code isLocal(const Twine &Path, bool &Result) override {
@@ -451,11 +529,17 @@ public:
 
 protected:
   FileSystem &getUnderlyingFS() const { return *FS; }
+  void visitChildFileSystems(VisitCallbackTy Callback) override {
+    if (FS) {
+      Callback(*FS);
+      FS->visitChildFileSystems(Callback);
+    }
+  }
 
 private:
   IntrusiveRefCntPtr<FileSystem> FS;
 
-  virtual void anchor();
+  virtual void anchor() override;
 };
 
 namespace detail {
@@ -498,11 +582,15 @@ public:
 } // namespace detail
 
 /// An in-memory file system.
-class InMemoryFileSystem : public FileSystem {
+class InMemoryFileSystem : public RTTIExtends<InMemoryFileSystem, FileSystem> {
   std::unique_ptr<detail::InMemoryDirectory> Root;
   std::string WorkingDirectory;
   bool UseNormalizedPaths = true;
 
+public:
+  static const char ID;
+
+private:
   using MakeNodeFn = llvm::function_ref<std::unique_ptr<detail::InMemoryNode>(
       detail::NewInMemoryNodeInfo)>;
 
@@ -601,7 +689,7 @@ public:
   /// This doesn't resolve symlinks as they are not supported in in-memory file
   /// system.
   std::error_code getRealPath(const Twine &Path,
-                              SmallVectorImpl<char> &Output) const override;
+                              SmallVectorImpl<char> &Output) override;
   std::error_code isLocal(const Twine &Path, bool &Result) override;
   std::error_code setCurrentWorkingDirectory(const Twine &Path) override;
 
@@ -739,8 +827,10 @@ class RedirectingFileSystemParser;
 /// FIXME: 'use-external-name' causes behaviour that's inconsistent with how
 /// "real" filesystems behave. Maybe there should be a separate channel for
 /// this information.
-class RedirectingFileSystem : public vfs::FileSystem {
+class RedirectingFileSystem
+    : public RTTIExtends<RedirectingFileSystem, vfs::FileSystem> {
 public:
+  static const char ID;
   enum EntryKind { EK_Directory, EK_DirectoryRemap, EK_File };
   enum NameKind { NK_NotSet, NK_External, NK_Virtual };
 
@@ -872,6 +962,9 @@ public:
 
   /// Represents the result of a path lookup into the RedirectingFileSystem.
   struct LookupResult {
+    /// Chain of parent directory entries for \c E.
+    llvm::SmallVector<Entry *, 32> Parents;
+
     /// The entry the looked-up path corresponds to.
     Entry *E;
 
@@ -895,6 +988,10 @@ public:
         return FE->getExternalContentsPath();
       return std::nullopt;
     }
+
+    /// Get the (canonical) path of the found entry. This uses the as-written
+    /// path components from the VFS specification.
+    void getPath(llvm::SmallVectorImpl<char> &Path) const;
   };
 
 private:
@@ -969,6 +1066,13 @@ private:
   /// names of files.  This global value is overridable on a per-file basis.
   bool UseExternalNames = true;
 
+  /// True if this FS has redirected a lookup. This does not include
+  /// fallthrough.
+  mutable bool HasBeenUsed = false;
+
+  /// Used to enable or disable updating `HasBeenUsed`.
+  bool UsageTrackingActive = false;
+
   /// Determines the lookups to perform, as well as their order. See
   /// \c RedirectKind for details.
   RedirectKind Redirection = RedirectKind::Fallthrough;
@@ -984,9 +1088,10 @@ private:
   /// into the contents of \p From if it is a directory. Returns a LookupResult
   /// giving the matched entry and, if that entry is a FileEntry or
   /// DirectoryRemapEntry, the path it redirects to in the external file system.
-  ErrorOr<LookupResult> lookupPathImpl(llvm::sys::path::const_iterator Start,
-                                       llvm::sys::path::const_iterator End,
-                                       Entry *From) const;
+  ErrorOr<LookupResult>
+  lookupPathImpl(llvm::sys::path::const_iterator Start,
+                 llvm::sys::path::const_iterator End, Entry *From,
+                 llvm::SmallVectorImpl<Entry *> &Entries) const;
 
   /// Get the status for a path with the provided \c LookupResult.
   ErrorOr<Status> status(const Twine &CanonicalPath, const Twine &OriginalPath,
@@ -1011,10 +1116,11 @@ public:
          bool UseExternalNames, FileSystem &ExternalFS);
 
   ErrorOr<Status> status(const Twine &Path) override;
+  bool exists(const Twine &Path) override;
   ErrorOr<std::unique_ptr<File>> openFileForRead(const Twine &Path) override;
 
   std::error_code getRealPath(const Twine &Path,
-                              SmallVectorImpl<char> &Output) const override;
+                              SmallVectorImpl<char> &Output) override;
 
   llvm::ErrorOr<std::string> getCurrentWorkingDirectory() const override;
 
@@ -1038,11 +1144,17 @@ public:
 
   std::vector<llvm::StringRef> getRoots() const;
 
+  bool hasBeenUsed() const { return HasBeenUsed; };
+  void clearHasBeenUsed() { HasBeenUsed = false; }
+
+  void setUsageTrackingActive(bool Active) { UsageTrackingActive = Active; }
+
   void printEntry(raw_ostream &OS, Entry *E, unsigned IndentLevel = 0) const;
 
 protected:
   void printImpl(raw_ostream &OS, PrintType Type,
                  unsigned IndentLevel) const override;
+  void visitChildFileSystems(VisitCallbackTy Callback) override;
 };
 
 /// Collect all pairs of <virtual path, real path> entries from the

@@ -61,6 +61,18 @@ enum class DisableValidationForModuleKind {
   LLVM_MARK_AS_BITMASK_ENUM(Module)
 };
 
+/// Diagnostic options for caching related behaviors.
+enum class CachingDiagKind {
+  /// Do not emit diagnosis for caching.
+  None = 0,
+
+  /// Warning about nondeterministic caching.
+  Warning = 1,
+
+  /// Error about nondeterministic caching.
+  Error = 2
+};
+
 /// PreprocessorOptions - This class is used for passing the various options
 /// used in preprocessor initialization to InitializePreprocessor().
 class PreprocessorOptions {
@@ -69,9 +81,15 @@ public:
   std::vector<std::string> Includes;
   std::vector<std::string> MacroIncludes;
 
+  /// Perform extra checks when loading PCM files for mutable file systems.
+  bool ModulesCheckRelocated = true;
+
   /// Initialize the preprocessor with the compiler and target specific
   /// predefines.
   bool UsePredefines = true;
+
+  /// Indicates whether to predefine target OS macros.
+  bool DefineTargetOSMacros = false;
 
   /// Whether we should maintain a detailed record of all macro
   /// definitions and expansions.
@@ -220,6 +238,9 @@ public:
 
   /// Prevents intended crashes when using #pragma clang __debug. For testing.
   bool DisablePragmaDebugCrash = false;
+
+  /// Should diagnose caching related issues.
+  CachingDiagKind CachingDiagOption = CachingDiagKind::None;
 
   /// If set, the UNIX timestamp specified by SOURCE_DATE_EPOCH.
   std::optional<uint64_t> SourceDateEpoch;

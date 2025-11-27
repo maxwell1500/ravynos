@@ -1,5 +1,7 @@
 // REQUIRES: osx-ld64-live_support
 
+// REQUIRES: rdar93376238
+
 // Compiling with PGO/code coverage on Darwin should raise no warnings or errors
 // when using an exports list.
 
@@ -22,7 +24,7 @@
 //
 // RUN: %clang_pgogen -Werror -o %t.default %s
 // RUN: nm -jUg %t.default | grep -v __mh_execute_header > %t.default.exports
-// RUN: nm -jUg %t > %t.clang.exports
+// RUN: nm -jUg %t | grep -v __mh_execute_header > %t.clang.exports
 // RUN: diff %t.default.exports %t.clang.exports
 
 // 4) Ditto (3), but for GCOV.

@@ -32,6 +32,7 @@
 #include <bitset>
 #include <clocale>
 #include <csignal>
+#include <future>
 #include <string>
 #include <thread>
 #include <utility>
@@ -52,9 +53,7 @@ using namespace llvm;
 namespace {
 enum ID {
   OPT_INVALID = 0, // This is not an option ID.
-#define OPTION(PREFIX, NAME, ID, KIND, GROUP, ALIAS, ALIASARGS, FLAGS, PARAM,  \
-               HELPTEXT, METAVAR, VALUES)                                      \
-  OPT_##ID,
+#define OPTION(...) LLVM_MAKE_OPT_ID(__VA_ARGS__),
 #include "Options.inc"
 #undef OPTION
 };
@@ -67,13 +66,7 @@ enum ID {
 #undef PREFIX
 
 static constexpr opt::OptTable::Info InfoTable[] = {
-#define OPTION(PREFIX, NAME, ID, KIND, GROUP, ALIAS, ALIASARGS, FLAGS, PARAM,  \
-               HELPTEXT, METAVAR, VALUES)                                      \
-  {                                                                            \
-      PREFIX,      NAME,      HELPTEXT,                                        \
-      METAVAR,     OPT_##ID,  opt::Option::KIND##Class,                        \
-      PARAM,       FLAGS,     OPT_##GROUP,                                     \
-      OPT_##ALIAS, ALIASARGS, VALUES},
+#define OPTION(...) LLVM_CONSTRUCT_OPT_INFO(__VA_ARGS__),
 #include "Options.inc"
 #undef OPTION
 };
@@ -313,6 +306,16 @@ SBError Driver::ProcessArgs(const opt::InputArgList &args, bool &exiting) {
     if (auto arg_value = arg->getValue())
       m_option_data.m_repl_options = arg_value;
   }
+
+#ifdef LLDB_ENABLE_SWIFT
+  // For the Swift fork, we want to default to Swift if no REPL language is
+  // specified.
+  if (m_option_data.m_repl &&
+      m_option_data.m_repl_lang == eLanguageTypeUnknown) {
+    m_option_data.m_repl_lang = eLanguageTypeSwift;
+    m_debugger.SetREPLLanguage(eLanguageTypeSwift);
+  }
+#endif // LLDB_ENABLE_SWIFT
 
   // We need to process the options below together as their relative order
   // matters.
@@ -795,8 +798,6 @@ int main(int argc, char const *argv[]) {
   // Setup LLDB signal handlers once the debugger has been initialized.
   SBDebugger::PrintDiagnosticsOnError();
 
-  SBHostOS::ThreadCreated("<lldb.driver.main-thread>");
-
   signal(SIGINT, sigint_handler);
 #if !defined(_WIN32)
   signal(SIGPIPE, SIG_IGN);
@@ -821,6 +822,18 @@ int main(int argc, char const *argv[]) {
     }
   }
 
-  SBDebugger::Terminate();
+  // When terminating the debugger we have to wait on all the background tasks
+  // to complete, which can take a while. Print a message when this takes longer
+  // than 1 second.
+  {
+    std::future<void> future =
+        std::async(std::launch::async, []() { SBDebugger::Terminate(); });
+
+    if (future.wait_for(std::chrono::seconds(1)) == std::future_status::timeout)
+      fprintf(stderr, "Waiting for background tasks to complete...\n");
+
+    future.wait();
+  }
+
   return exit_code;
 }

@@ -21,6 +21,7 @@
 #include "lldb/Utility/Scalar.h"
 #include "lldb/Utility/Status.h"
 #include "lldb/lldb-types.h"
+#include "llvm/BinaryFormat/Dwarf.h"
 
 #include <cstring>
 #include <optional>
@@ -29,6 +30,7 @@ class Declaration;
 }
 
 using namespace lldb_private;
+using namespace lldb;
 
 ValueObjectDynamicValue::ValueObjectDynamicValue(
     ValueObject &parent, lldb::DynamicValueType use_dynamic)
@@ -51,6 +53,8 @@ CompilerType ValueObjectDynamicValue::GetCompilerTypeImpl() {
 ConstString ValueObjectDynamicValue::GetTypeName() {
   const bool success = UpdateValueIfNeeded(false);
   if (success) {
+    if (m_dynamic_type_info.HasType())
+      return GetCompilerType().GetTypeName();
     if (m_dynamic_type_info.HasName())
       return m_dynamic_type_info.GetName();
   }
@@ -68,6 +72,8 @@ TypeImpl ValueObjectDynamicValue::GetTypeImpl() {
 ConstString ValueObjectDynamicValue::GetQualifiedTypeName() {
   const bool success = UpdateValueIfNeeded(false);
   if (success) {
+    if (m_dynamic_type_info.HasType())
+      return GetCompilerType().GetTypeName();
     if (m_dynamic_type_info.HasName())
       return m_dynamic_type_info.GetName();
   }
@@ -77,20 +83,27 @@ ConstString ValueObjectDynamicValue::GetQualifiedTypeName() {
 ConstString ValueObjectDynamicValue::GetDisplayTypeName() {
   const bool success = UpdateValueIfNeeded(false);
   if (success) {
-    if (m_dynamic_type_info.HasType())
-      return GetCompilerType().GetDisplayTypeName();
+    if (m_dynamic_type_info.HasType()) {
+      const SymbolContext *sc = nullptr;
+      if (GetFrameSP())
+        sc = &GetFrameSP()->GetSymbolContext(eSymbolContextFunction);
+      return GetCompilerType().GetDisplayTypeName(sc);
+    }
     if (m_dynamic_type_info.HasName())
       return m_dynamic_type_info.GetName();
   }
   return m_parent->GetDisplayTypeName();
 }
 
-size_t ValueObjectDynamicValue::CalculateNumChildren(uint32_t max) {
+llvm::Expected<uint32_t>
+ValueObjectDynamicValue::CalculateNumChildren(uint32_t max) {
   const bool success = UpdateValueIfNeeded(false);
   if (success && m_dynamic_type_info.HasType()) {
     ExecutionContext exe_ctx(GetExecutionContextRef());
     auto children_count = GetCompilerType().GetNumChildren(true, &exe_ctx);
-    return children_count <= max ? children_count : max;
+    if (!children_count)
+      return children_count;
+    return *children_count <= max ? *children_count : max;
   } else
     return m_parent->GetNumChildren(max);
 }
@@ -109,6 +122,8 @@ lldb::ValueType ValueObjectDynamicValue::GetValueType() const {
 }
 
 bool ValueObjectDynamicValue::UpdateValue() {
+  Log *log = GetLog(LLDBLog::Types);
+
   SetValueIsValid(false);
   m_error.Clear();
 
@@ -133,6 +148,10 @@ bool ValueObjectDynamicValue::UpdateValue() {
     m_data.SetAddressByteSize(target->GetArchitecture().GetAddressByteSize());
   }
 
+#ifdef LLDB_ENABLE_SWIFT
+  auto swift_scratch_ctx_lock = SwiftScratchContextLock(&exe_ctx);
+#endif // LLDB_ENABLE_SWIFT
+
   // First make sure our Type and/or Address haven't changed:
   Process *process = exe_ctx.GetProcessPtr();
   if (!process)
@@ -144,16 +163,41 @@ bool ValueObjectDynamicValue::UpdateValue() {
   Value::ValueType value_type;
 
   LanguageRuntime *runtime = nullptr;
-
   lldb::LanguageType known_type = m_parent->GetObjectRuntimeLanguage();
-  if (known_type != lldb::eLanguageTypeUnknown &&
+
+#ifdef LLDB_ENABLE_SWIFT
+  // An Objective-C object inside a Swift frame.
+  if (known_type == eLanguageTypeObjC)
+    if ((exe_ctx.GetFramePtr() && exe_ctx.GetFramePtr()->GetLanguage().name ==
+                                      llvm::dwarf::DW_LNAME_Swift) ||
+        (exe_ctx.GetTargetPtr() && exe_ctx.GetTargetPtr()->IsSwiftREPL())) {
+      runtime = process->GetLanguageRuntime(lldb::eLanguageTypeSwift);
+      if (runtime)
+        found_dynamic_type = runtime->GetDynamicTypeAndAddress(
+            *m_parent, m_use_dynamic, class_type_or_name, dynamic_address,
+            value_type);
+    }
+#endif // LLDB_ENABLE_SWIFT
+  if (!found_dynamic_type &&
+      known_type != lldb::eLanguageTypeUnknown &&
       known_type != lldb::eLanguageTypeC) {
     runtime = process->GetLanguageRuntime(known_type);
-    if (runtime)
+    if (auto *preferred_runtime =
+            runtime->GetPreferredLanguageRuntime(*m_parent)) {
+      // Try the preferred runtime first.
+      found_dynamic_type = preferred_runtime->GetDynamicTypeAndAddress(
+          *m_parent, m_use_dynamic, class_type_or_name, dynamic_address,
+          value_type);
+      if (found_dynamic_type)
+        // Set the operative `runtime` for later use in this function.
+        runtime = preferred_runtime;
+    }
+    if (!found_dynamic_type)
+      // Fallback to the runtime for `known_type`.
       found_dynamic_type = runtime->GetDynamicTypeAndAddress(
           *m_parent, m_use_dynamic, class_type_or_name, dynamic_address,
           value_type);
-  } else {
+  } else if (!found_dynamic_type) {
     runtime = process->GetLanguageRuntime(lldb::eLanguageTypeC_plus_plus);
     if (runtime)
       found_dynamic_type = runtime->GetDynamicTypeAndAddress(
@@ -175,11 +219,25 @@ bool ValueObjectDynamicValue::UpdateValue() {
   m_update_point.SetUpdated();
 
   if (runtime && found_dynamic_type) {
+    if (log)
+      log->Printf("[%s %p] might have a dynamic type", GetName().GetCString(),
+                  (void *)this);
     if (class_type_or_name.HasType()) {
-      m_type_impl =
-          TypeImpl(m_parent->GetCompilerType(),
-                   runtime->FixUpDynamicType(class_type_or_name, *m_parent)
-                       .GetCompilerType());
+      // TypeSP are always generated from debug info
+      const bool prefer_parent_type = false;
+
+      if (prefer_parent_type) {
+        m_type_impl =
+            TypeImpl(m_parent->GetCompilerType(),
+                     runtime->FixUpDynamicType(class_type_or_name, *m_parent)
+                         .GetCompilerType());
+        class_type_or_name.SetCompilerType(CompilerType());
+      } else {
+        m_type_impl =
+            TypeImpl(m_parent->GetCompilerType(),
+                     runtime->FixUpDynamicType(class_type_or_name, *m_parent)
+                         .GetCompilerType());
+      }
     } else {
       m_type_impl.Clear();
     }
@@ -187,22 +245,22 @@ bool ValueObjectDynamicValue::UpdateValue() {
     m_type_impl.Clear();
   }
 
-  // If we don't have a dynamic type, then make ourselves just a echo of our
-  // parent. Or we could return false, and make ourselves an echo of our
-  // parent?
+  // If we don't have a dynamic type, set ourselves to be invalid and return
+  // false.  We used to try to produce a dynamic ValueObject that behaved "like"
+  // its parent, but that failed for ValueObjectConstResult, which is too 
+  // complex a beast to try to emulate.  If we return an invalid ValueObject,
+  // clients will end up getting the static value instead, which behaves
+  // correctly.
   if (!found_dynamic_type) {
     if (m_dynamic_type_info)
       SetValueDidChange(true);
     ClearDynamicTypeInformation();
     m_dynamic_type_info.Clear();
-    m_value = m_parent->GetValue();
-    m_error = m_value.GetValueAsData(&exe_ctx, m_data, GetModule().get());
-    return m_error.Success();
+    m_error.SetErrorString("no dynamic type found");
+    return false;
   }
 
   Value old_value(m_value);
-
-  Log *log = GetLog(LLDBLog::Types);
 
   bool has_changed_type = false;
 

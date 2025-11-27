@@ -16,7 +16,6 @@
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSwitch.h"
-#include "llvm/ADT/Triple.h"
 #include "llvm/ADT/Twine.h"
 #include "llvm/ADT/bit.h"
 #include "llvm/BinaryFormat/MachO.h"
@@ -32,12 +31,13 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/Format.h"
-#include "llvm/Support/Host.h"
 #include "llvm/Support/LEB128.h"
 #include "llvm/Support/MemoryBufferRef.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/SwapByteOrder.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/TargetParser/Host.h"
+#include "llvm/TargetParser/Triple.h"
 #include <algorithm>
 #include <cassert>
 #include <cstddef>
@@ -132,7 +132,7 @@ static unsigned getCPUType(const MachOObjectFile &O) {
 }
 
 static unsigned getCPUSubType(const MachOObjectFile &O) {
-  return O.getHeader().cpusubtype;
+  return O.getHeader().cpusubtype & ~MachO::CPU_SUBTYPE_MASK;
 }
 
 static uint32_t
@@ -2334,7 +2334,8 @@ void MachOObjectFile::getRelocationTypeName(
         "ARM64_RELOC_PAGEOFF12",          "ARM64_RELOC_GOT_LOAD_PAGE21",
         "ARM64_RELOC_GOT_LOAD_PAGEOFF12", "ARM64_RELOC_POINTER_TO_GOT",
         "ARM64_RELOC_TLVP_LOAD_PAGE21",   "ARM64_RELOC_TLVP_LOAD_PAGEOFF12",
-        "ARM64_RELOC_ADDEND"
+        "ARM64_RELOC_ADDEND",
+        "ARM64_RELOC_AUTHENTICATED_POINTER"
       };
 
       if (RType >= std::size(Table))
@@ -2671,6 +2672,8 @@ StringRef MachOObjectFile::getFileFormatName() const {
   case MachO::CPU_TYPE_X86_64:
     return "Mach-O 64-bit x86-64";
   case MachO::CPU_TYPE_ARM64:
+    if (getHeader().cpusubtype == MachO::CPU_SUBTYPE_ARM64E)
+      return "Mach-O arm64e";
     return "Mach-O arm64";
   case MachO::CPU_TYPE_POWERPC64:
     return "Mach-O 64-bit ppc64";
@@ -2989,7 +2992,7 @@ void ExportEntry::pushNode(uint64_t offset) {
   ErrorAsOutParameter ErrAsOutParam(E);
   const uint8_t *Ptr = Trie.begin() + offset;
   NodeState State(Ptr);
-  const char *error;
+  const char *error = nullptr;
   uint64_t ExportInfoSize = readULEB128(State.Current, &error);
   if (error) {
     *E = malformedError("export info size " + Twine(error) +
@@ -3124,7 +3127,7 @@ void ExportEntry::pushNode(uint64_t offset) {
 
 void ExportEntry::pushDownUntilBottom() {
   ErrorAsOutParameter ErrAsOutParam(E);
-  const char *error;
+  const char *error = nullptr;
   while (Stack.back().NextChildIndex < Stack.back().ChildCount) {
     NodeState &Top = Stack.back();
     CumulativeString.resize(Top.ParentStringLength);
@@ -3494,21 +3497,23 @@ void MachORebaseEntry::moveNext() {
     --RemainingLoopCount;
     return;
   }
-  // REBASE_OPCODE_DONE is only used for padding if we are not aligned to
-  // pointer size. Therefore it is possible to reach the end without ever having
-  // seen REBASE_OPCODE_DONE.
-  if (Ptr == Opcodes.end()) {
-    Done = true;
-    return;
-  }
+
   bool More = true;
   while (More) {
+    // REBASE_OPCODE_DONE is only used for padding if we are not aligned to
+    // pointer size. Therefore it is possible to reach the end without ever
+    // having seen REBASE_OPCODE_DONE.
+    if (Ptr == Opcodes.end()) {
+      Done = true;
+      return;
+    }
+
     // Parse next opcode and set up next loop.
     const uint8_t *OpcodeStart = Ptr;
     uint8_t Byte = *Ptr++;
     uint8_t ImmValue = Byte & MachO::REBASE_IMMEDIATE_MASK;
     uint8_t Opcode = Byte & MachO::REBASE_OPCODE_MASK;
-    uint32_t Count, Skip;
+    uint64_t Count, Skip;
     const char *error = nullptr;
     switch (Opcode) {
     case MachO::REBASE_OPCODE_DONE:
@@ -3831,15 +3836,17 @@ void MachOBindEntry::moveNext() {
     --RemainingLoopCount;
     return;
   }
-  // BIND_OPCODE_DONE is only used for padding if we are not aligned to
-  // pointer size. Therefore it is possible to reach the end without ever having
-  // seen BIND_OPCODE_DONE.
-  if (Ptr == Opcodes.end()) {
-    Done = true;
-    return;
-  }
+
   bool More = true;
   while (More) {
+    // BIND_OPCODE_DONE is only used for padding if we are not aligned to
+    // pointer size. Therefore it is possible to reach the end without ever
+    // having seen BIND_OPCODE_DONE.
+    if (Ptr == Opcodes.end()) {
+      Done = true;
+      return;
+    }
+
     // Parse next opcode and set up next loop.
     const uint8_t *OpcodeStart = Ptr;
     uint8_t Byte = *Ptr++;
@@ -3847,7 +3854,7 @@ void MachOBindEntry::moveNext() {
     uint8_t Opcode = Byte & MachO::BIND_OPCODE_MASK;
     int8_t SignExtended;
     const uint8_t *SymStart;
-    uint32_t Count, Skip;
+    uint64_t Count, Skip;
     const char *error = nullptr;
     switch (Opcode) {
     case MachO::BIND_OPCODE_DONE:
@@ -4377,18 +4384,18 @@ BindRebaseSegInfo::BindRebaseSegInfo(const object::MachOObjectFile *Obj) {
 // that fully contains a pointer at that location. Multiple fixups in a bind
 // (such as with the BIND_OPCODE_DO_BIND_ULEB_TIMES_SKIPPING_ULEB opcode) can
 // be tested via the Count and Skip parameters.
-const char * BindRebaseSegInfo::checkSegAndOffsets(int32_t SegIndex,
-                                                   uint64_t SegOffset,
-                                                   uint8_t PointerSize,
-                                                   uint32_t Count,
-                                                   uint32_t Skip) {
+const char *BindRebaseSegInfo::checkSegAndOffsets(int32_t SegIndex,
+                                                  uint64_t SegOffset,
+                                                  uint8_t PointerSize,
+                                                  uint64_t Count,
+                                                  uint64_t Skip) {
   if (SegIndex == -1)
     return "missing preceding *_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB";
   if (SegIndex >= MaxSegIndex)
     return "bad segIndex (too large)";
-  for (uint32_t i = 0; i < Count; ++i) {
-    uint32_t Start = SegOffset + i * (PointerSize + Skip);
-    uint32_t End = Start + PointerSize;
+  for (uint64_t i = 0; i < Count; ++i) {
+    uint64_t Start = SegOffset + i * (PointerSize + Skip);
+    uint64_t End = Start + PointerSize;
     bool Found = false;
     for (const SectionInfo &SI : Sections) {
       if (SI.SegmentIndex != SegIndex)

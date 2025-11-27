@@ -18,6 +18,7 @@
 #include "clang/Config/config.h"
 #include "clang/Driver/DriverDiagnostic.h"
 #include "clang/Driver/Options.h"
+#include "clang/Frontend/CompileJobCache.h"
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Frontend/CompilerInvocation.h"
 #include "clang/Frontend/FrontendDiagnostic.h"
@@ -25,6 +26,7 @@
 #include "clang/Frontend/TextDiagnosticPrinter.h"
 #include "clang/Frontend/Utils.h"
 #include "clang/FrontendTool/Utils.h"
+#include "llvm/ADT/ScopeExit.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Config/llvm-config.h"
 #include "llvm/LinkAllPasses.h"
@@ -42,6 +44,7 @@
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/TimeProfiler.h"
 #include "llvm/Support/Timer.h"
+#include "llvm/Support/VirtualOutputBackends.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Target/TargetMachine.h"
 #include <cstdio>
@@ -185,6 +188,7 @@ static int PrintSupportedCPUs(std::string TargetStr) {
 int cc1_main(ArrayRef<const char *> Argv, const char *Argv0, void *MainAddr) {
   ensureSufficientStack();
 
+  CompileJobCache JobCache;
   std::unique_ptr<CompilerInstance> Clang(new CompilerInstance());
   IntrusiveRefCntPtr<DiagnosticIDs> DiagID(new DiagnosticIDs());
 
@@ -213,9 +217,7 @@ int cc1_main(ArrayRef<const char *> Argv, const char *Argv0, void *MainAddr) {
   bool Success = CompilerInvocation::CreateFromArgs(Clang->getInvocation(),
                                                     Argv, Diags, Argv0);
 
-  if (Clang->getFrontendOpts().TimeTrace ||
-      !Clang->getFrontendOpts().TimeTracePath.empty()) {
-    Clang->getFrontendOpts().TimeTrace = 1;
+  if (!Clang->getFrontendOpts().TimeTracePath.empty()) {
     llvm::timeTraceProfilerInitialize(
         Clang->getFrontendOpts().TimeTraceGranularity, Argv0);
   }
@@ -240,10 +242,31 @@ int cc1_main(ArrayRef<const char *> Argv, const char *Argv0, void *MainAddr) {
                                   static_cast<void*>(&Clang->getDiagnostics()));
 
   DiagsBuffer->FlushDiagnostics(Clang->getDiagnostics());
-  if (!Success) {
+
+  auto FinishDiagnosticClient = [&]() {
+    // Notify the diagnostic client that all files were processed.
     Clang->getDiagnosticClient().finish();
+
+    // Our error handler depends on the Diagnostics object, which we're
+    // potentially about to delete. Uninstall the handler now so that any
+    // later errors use the default handling behavior instead.
+    llvm::remove_fatal_error_handler();
+  };
+  auto FinishDiagnosticClientScope =
+      llvm::make_scope_exit([&]() { FinishDiagnosticClient(); });
+
+  if (!Success)
     return 1;
-  }
+
+  // Initialize caching and replay, if enabled.
+  if (std::optional<int> Status = JobCache.initialize(*Clang))
+    return *Status; // FIXME: Should write out timers before exiting!
+
+  // Check for a cache hit.
+  if (std::optional<int> Status = JobCache.tryReplayCachedResult(*Clang))
+    return *Status; // FIXME: Should write out timers before exiting!
+
+  Clang->getFrontendOpts().MayEmitDiagnosticsAfterProcessingSourceFiles = true;
 
   // Execute the frontend actions.
   {
@@ -251,35 +274,44 @@ int cc1_main(ArrayRef<const char *> Argv, const char *Argv0, void *MainAddr) {
     Success = ExecuteCompilerInvocation(Clang.get());
   }
 
+  // Cache the result, and decanonicalize and finish outputs.
+  Success = JobCache.finishComputedResult(*Clang, Success);
+
   // If any timers were active but haven't been destroyed yet, print their
   // results now.  This happens in -disable-free mode.
   llvm::TimerGroup::printAll(llvm::errs());
   llvm::TimerGroup::clearAll();
 
   if (llvm::timeTraceProfilerEnabled()) {
-    SmallString<128> Path(Clang->getFrontendOpts().OutputFile);
-    llvm::sys::path::replace_extension(Path, "json");
-    if (!Clang->getFrontendOpts().TimeTracePath.empty()) {
-      // replace the suffix to '.json' directly
-      SmallString<128> TracePath(Clang->getFrontendOpts().TimeTracePath);
-      if (llvm::sys::fs::is_directory(TracePath))
-        llvm::sys::path::append(TracePath, llvm::sys::path::filename(Path));
-      Path.assign(TracePath);
-    }
-    if (auto profilerOutput = Clang->createOutputFile(
-            Path.str(), /*Binary=*/false, /*RemoveFileOnSignal=*/false,
-            /*useTemporary=*/false)) {
+    // It is possible that the compiler instance doesn't own a file manager here
+    // if we're compiling a module unit. Since the file manager are owned by AST
+    // when we're compiling a module unit. So the file manager may be invalid
+    // here.
+    //
+    // It should be fine to create file manager here since the file system
+    // options are stored in the compiler invocation and we can recreate the VFS
+    // from the compiler invocation.
+    if (!Clang->hasFileManager())
+      Clang->createFileManager(createVFSFromCompilerInvocation(
+          Clang->getInvocation(), Clang->getDiagnostics()));
+
+    llvm::vfs::OnDiskOutputBackend Backend;
+    if (std::optional<llvm::vfs::OutputFile> profilerOutput =
+            llvm::expectedToOptional(
+                Backend.createFile(Clang->getFrontendOpts().TimeTracePath,
+                                   llvm::vfs::OutputConfig()
+                                       .setTextWithCRLF()
+                                       .setNoDiscardOnSignal()
+                                       .setNoAtomicWrite()))) {
       llvm::timeTraceProfilerWrite(*profilerOutput);
-      profilerOutput.reset();
+      llvm::consumeError(profilerOutput->keep());
       llvm::timeTraceProfilerCleanup();
-      Clang->clearOutputFiles(false);
     }
   }
 
-  // Our error handler depends on the Diagnostics object, which we're
-  // potentially about to delete. Uninstall the handler now so that any
-  // later errors use the default handling behavior instead.
-  llvm::remove_fatal_error_handler();
+  // Call this before the Clang pointer is moved below.
+  FinishDiagnosticClient();
+  FinishDiagnosticClientScope.release();
 
   // When running with -disable-free, don't do any destruction or shutdown.
   if (Clang->getFrontendOpts().DisableFree) {

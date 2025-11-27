@@ -31,6 +31,7 @@
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLFunctionalExtras.h"
 #include "llvm/ADT/StringRef.h"
+#include <optional>
 #include "llvm/Support/Chrono.h"
 
 #include <atomic>
@@ -338,6 +339,12 @@ public:
                      const ModuleFunctionSearchOptions &options,
                      SymbolContextList &sc_list);
 
+  /// Find functions by compiler context.
+  void FindFunctions(llvm::ArrayRef<CompilerContext> compiler_ctx,
+                     lldb::FunctionNameType name_type_mask,
+                     const ModuleFunctionSearchOptions &options,
+                     SymbolContextList &sc_list);
+
   /// Find functions by name.
   ///
   /// If the function is an inlined function, it will have a block,
@@ -416,70 +423,19 @@ public:
   void FindGlobalVariables(const RegularExpression &regex, size_t max_matches,
                            VariableList &variable_list);
 
-  /// Find types by name.
+  /// Find types using a type-matching object that contains all search
+  /// parameters.
   ///
-  /// Type lookups in modules go through the SymbolFile. The SymbolFile needs to
-  /// be able to lookup types by basename and not the fully qualified typename.
-  /// This allows the type accelerator tables to stay small, even with heavily
-  /// templatized C++. The type search will then narrow down the search
-  /// results. If "exact_match" is true, then the type search will only match
-  /// exact type name matches. If "exact_match" is false, the type will match
-  /// as long as the base typename matches and as long as any immediate
-  /// containing namespaces/class scopes that are specified match. So to
-  /// search for a type "d" in "b::c", the name "b::c::d" can be specified and
-  /// it will match any class/namespace "b" which contains a class/namespace
-  /// "c" which contains type "d". We do this to allow users to not always
-  /// have to specify complete scoping on all expressions, but it also allows
-  /// for exact matching when required.
+  /// \see lldb_private::TypeQuery
   ///
-  /// \param[in] type_name
-  ///     The name of the type we are looking for that is a fully
-  ///     or partially qualified type name.
+  /// \param[in] query
+  ///     A type matching object that contains all of the details of the type
+  ///     search.
   ///
-  /// \param[in] exact_match
-  ///     If \b true, \a type_name is fully qualified and must match
-  ///     exactly. If \b false, \a type_name is a partially qualified
-  ///     name where the leading namespaces or classes can be
-  ///     omitted to make finding types that a user may type
-  ///     easier.
-  ///
-  /// \param[out] types
-  ///     A type list gets populated with any matches.
-  ///
-  void
-  FindTypes(ConstString type_name, bool exact_match, size_t max_matches,
-            llvm::DenseSet<lldb_private::SymbolFile *> &searched_symbol_files,
-            TypeList &types);
-
-  /// Find types by name.
-  ///
-  /// This behaves like the other FindTypes method but allows to
-  /// specify a DeclContext and a language for the type being searched
-  /// for.
-  ///
-  /// \param searched_symbol_files
-  ///     Prevents one file from being visited multiple times.
-  void
-  FindTypes(llvm::ArrayRef<CompilerContext> pattern, LanguageSet languages,
-            llvm::DenseSet<lldb_private::SymbolFile *> &searched_symbol_files,
-            TypeMap &types);
-
-  lldb::TypeSP FindFirstType(const SymbolContext &sc, ConstString type_name,
-                             bool exact_match);
-
-  /// Find types by name that are in a namespace. This function is used by the
-  /// expression parser when searches need to happen in an exact namespace
-  /// scope.
-  ///
-  /// \param[in] type_name
-  ///     The name of a type within a namespace that should not include
-  ///     any qualifying namespaces (just a type basename).
-  ///
-  /// \param[out] type_list
-  ///     A type list gets populated with any matches.
-  void FindTypesInNamespace(ConstString type_name,
-                            const CompilerDeclContext &parent_decl_ctx,
-                            size_t max_matches, TypeList &type_list);
+  /// \param[in] results
+  ///     Any matching types will be populated into the \a results object using
+  ///     TypeMap::InsertUnique(...).
+  void FindTypes(const TypeQuery &query, TypeResults &results);
 
   /// Get const accessor for the module architecture.
   ///
@@ -563,7 +519,7 @@ public:
   bool IsLoadedInTarget(Target *target);
 
   bool LoadScriptingResourceInTarget(Target *target, Status &error,
-                                     Stream *feedback_stream = nullptr);
+                                     Stream &feedback_stream);
 
   /// Get the number of compile units for this module.
   ///
@@ -861,6 +817,16 @@ public:
   ReportWarningUnsupportedLanguage(lldb::LanguageType language,
                                    std::optional<lldb::user_id_t> debugger_id);
 
+#ifdef LLDB_ENABLE_SWIFT
+  void
+  ReportWarningToolchainMismatch(CompileUnit &comp_unit,
+                                 std::optional<lldb::user_id_t> debugger_id);
+
+  bool IsSwiftCxxInteropEnabled();
+
+  bool IsEmbeddedSwift();
+#endif
+
   // Return true if the file backing this module has changed since the module
   // was originally created  since we saved the initial file modification time
   // when the module first gets created.
@@ -910,6 +876,14 @@ public:
   ///     \a path was successfully located.
   std::optional<std::string> RemapSourceFile(llvm::StringRef path) const;
   bool RemapSourceFile(const char *, std::string &) const = delete;
+
+  void ClearModuleDependentCaches();
+
+  void SetTypeSystemMap(const TypeSystemMap &type_system_map) {
+    m_type_system_map = type_system_map;
+  }
+
+  std::vector<lldb::DataBufferSP> GetASTData(lldb::LanguageType language);
 
   /// Update the ArchSpec to a more specific variant.
   bool MergeArchitecture(const ArchSpec &arch_spec);
@@ -1105,43 +1079,9 @@ protected:
 
   std::once_flag m_optimization_warning;
   std::once_flag m_language_warning;
-
-  /// Resolve a file or load virtual address.
-  ///
-  /// Tries to resolve \a vm_addr as a file address (if \a
-  /// vm_addr_is_file_addr is true) or as a load address if \a
-  /// vm_addr_is_file_addr is false) in the symbol vendor. \a resolve_scope
-  /// indicates what clients wish to resolve and can be used to limit the
-  /// scope of what is parsed.
-  ///
-  /// \param[in] vm_addr
-  ///     The load virtual address to resolve.
-  ///
-  /// \param[in] vm_addr_is_file_addr
-  ///     If \b true, \a vm_addr is a file address, else \a vm_addr
-  ///     if a load address.
-  ///
-  /// \param[in] resolve_scope
-  ///     The scope that should be resolved (see
-  ///     SymbolContext::Scope).
-  ///
-  /// \param[out] so_addr
-  ///     The section offset based address that got resolved if
-  ///     any bits are returned.
-  ///
-  /// \param[out] sc
-  //      The symbol context that has objects filled in. Each bit
-  ///     in the \a resolve_scope pertains to a member in the \a sc.
-  ///
-  /// \return
-  ///     A integer that contains SymbolContext::Scope bits set for
-  ///     each item that was successfully resolved.
-  ///
-  /// \see SymbolContext::Scope
-  uint32_t ResolveSymbolContextForAddress(lldb::addr_t vm_addr,
-                                          bool vm_addr_is_file_addr,
-                                          lldb::SymbolContextItem resolve_scope,
-                                          Address &so_addr, SymbolContext &sc);
+#ifdef LLDB_ENABLE_SWIFT
+  std::once_flag m_toolchain_mismatch_warning;
+#endif
 
   void SymbolIndicesToSymbolContextList(Symtab *symtab,
                                         std::vector<uint32_t> &symbol_indexes,
@@ -1160,12 +1100,6 @@ protected:
 private:
   Module(); // Only used internally by CreateJITModule ()
 
-  void FindTypes_Impl(
-      ConstString name, const CompilerDeclContext &parent_decl_ctx,
-      size_t max_matches,
-      llvm::DenseSet<lldb_private::SymbolFile *> &searched_symbol_files,
-      TypeMap &types);
-
   Module(const Module &) = delete;
   const Module &operator=(const Module &) = delete;
 
@@ -1175,6 +1109,10 @@ private:
   void ReportWarning(const llvm::formatv_object_base &payload);
   void ReportError(const llvm::formatv_object_base &payload);
   void ReportErrorIfModifyDetected(const llvm::formatv_object_base &payload);
+#ifdef LLDB_ENABLE_SWIFT
+  LazyBool m_is_swift_cxx_interop_enabled = eLazyBoolCalculate;
+  LazyBool m_is_embedded_swift = eLazyBoolCalculate;
+#endif
 };
 
 } // namespace lldb_private

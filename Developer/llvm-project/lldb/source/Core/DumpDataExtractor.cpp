@@ -150,8 +150,8 @@ static lldb::offset_t DumpInstructions(const DataExtractor &DE, Stream *s,
       if (bytes_consumed) {
         offset += bytes_consumed;
         const bool show_address = base_addr != LLDB_INVALID_ADDRESS;
-        const bool show_bytes = true;
-        const bool show_control_flow_kind = true;
+        const bool show_bytes = false;
+        const bool show_control_flow_kind = false;
         ExecutionContext exe_ctx;
         exe_scope->CalculateExecutionContext(exe_ctx);
         disassembler_sp->GetInstructionList().Dump(
@@ -212,7 +212,7 @@ static void DumpCharacter(Stream &s, const char c) {
     s.PutChar(c);
     return;
   }
-  s.Printf("\\x%2.2x", c);
+  s.Printf("\\x%2.2hhx", c);
 }
 
 /// Dump a floating point type.

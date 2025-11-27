@@ -12,6 +12,7 @@
 
 #include "llvm/Transforms/Utils/ModuleUtils.h"
 #include "llvm/Analysis/VectorUtils.h"
+#include "llvm/ADT/SmallString.h"
 #include "llvm/IR/DerivedTypes.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
@@ -19,6 +20,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/xxhash.h"
+
 using namespace llvm;
 
 #define DEBUG_TYPE "moduleutils"
@@ -31,11 +33,9 @@ static void appendToGlobalArray(StringRef ArrayName, Module &M, Function *F,
   // Get the current set of static global constructors and add the new ctor
   // to the list.
   SmallVector<Constant *, 16> CurrentCtors;
-  StructType *EltTy = StructType::get(
-      IRB.getInt32Ty(), PointerType::get(FnTy, F->getAddressSpace()),
-      IRB.getInt8PtrTy());
-
+  StructType *EltTy;
   if (GlobalVariable *GVCtor = M.getNamedGlobal(ArrayName)) {
+    EltTy = cast<StructType>(GVCtor->getValueType()->getArrayElementType());
     if (Constant *Init = GVCtor->getInitializer()) {
       unsigned n = Init->getNumOperands();
       CurrentCtors.reserve(n + 1);
@@ -43,6 +43,10 @@ static void appendToGlobalArray(StringRef ArrayName, Module &M, Function *F,
         CurrentCtors.push_back(cast<Constant>(Init->getOperand(i)));
     }
     GVCtor->eraseFromParent();
+  } else {
+    EltTy = StructType::get(
+        IRB.getInt32Ty(), PointerType::get(FnTy, F->getAddressSpace()),
+        IRB.getInt8PtrTy());
   }
 
   // Build a 3 field global_ctor entry.  We don't take a comdat key.
@@ -112,6 +116,44 @@ void llvm::appendToUsed(Module &M, ArrayRef<GlobalValue *> Values) {
 
 void llvm::appendToCompilerUsed(Module &M, ArrayRef<GlobalValue *> Values) {
   appendToUsedList(M, "llvm.compiler.used", Values);
+}
+
+static int compareNames(Constant *const *A, Constant *const *B) {
+  Value *AStripped = (*A)->stripPointerCasts();
+  Value *BStripped = (*B)->stripPointerCasts();
+  return AStripped->getName().compare(BStripped->getName());
+}
+
+GlobalVariable *
+llvm::setUsedInitializer(GlobalVariable &V,
+                         const SmallPtrSetImpl<GlobalValue *> &Init) {
+  if (Init.empty()) {
+    V.eraseFromParent();
+    return nullptr;
+  }
+
+  // Type of pointer to the array of pointers.
+  PointerType *Int8PtrTy = Type::getInt8PtrTy(V.getContext(), 0);
+
+  SmallVector<Constant *, 8> UsedArray;
+  for (GlobalValue *GV : Init) {
+    Constant *Cast =
+        ConstantExpr::getPointerBitCastOrAddrSpaceCast(GV, Int8PtrTy);
+    UsedArray.push_back(Cast);
+  }
+  // Sort to get deterministic order.
+  array_pod_sort(UsedArray.begin(), UsedArray.end(), compareNames);
+  ArrayType *ATy = ArrayType::get(Int8PtrTy, UsedArray.size());
+
+  Module *M = V.getParent();
+  V.removeFromParent();
+  GlobalVariable *NV =
+      new GlobalVariable(*M, ATy, false, GlobalValue::AppendingLinkage,
+                         ConstantArray::get(ATy, UsedArray), "");
+  NV->takeName(&V);
+  NV->setSection("llvm.metadata");
+  delete &V;
+  return NV;
 }
 
 static void removeFromUsedList(Module &M, StringRef Name,
@@ -390,9 +432,7 @@ bool llvm::lowerGlobalIFuncUsersAsGlobalCtor(
   const DataLayout &DL = M.getDataLayout();
 
   PointerType *TableEntryTy =
-      Ctx.supportsTypedPointers()
-          ? PointerType::get(Type::getInt8Ty(Ctx), DL.getProgramAddressSpace())
-          : PointerType::get(Ctx, DL.getProgramAddressSpace());
+      PointerType::get(Ctx, DL.getProgramAddressSpace());
 
   ArrayType *FuncPtrTableTy =
       ArrayType::get(TableEntryTy, IFuncsToLower.size());
@@ -462,9 +502,7 @@ bool llvm::lowerGlobalIFuncUsersAsGlobalCtor(
 
   InitBuilder.CreateRetVoid();
 
-  PointerType *ConstantDataTy = Ctx.supportsTypedPointers()
-                                    ? PointerType::get(Type::getInt8Ty(Ctx), 0)
-                                    : PointerType::get(Ctx, 0);
+  PointerType *ConstantDataTy = PointerType::get(Ctx, 0);
 
   // TODO: Is this the right priority? Probably should be before any other
   // constructors?

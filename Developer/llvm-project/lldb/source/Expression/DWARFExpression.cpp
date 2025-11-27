@@ -40,11 +40,16 @@
 #include "llvm/DebugInfo/DWARF/DWARFDebugLoc.h"
 #include "llvm/DebugInfo/DWARF/DWARFExpression.h"
 
+#ifdef LLDB_ENABLE_SWIFT
+#include "Plugins/LanguageRuntime/Swift/SwiftLanguageRuntime.h"
+#endif
+
 #include "Plugins/SymbolFile/DWARF/DWARFUnit.h"
 
 using namespace lldb;
 using namespace lldb_private;
 using namespace lldb_private::dwarf;
+using namespace lldb_private::plugin::dwarf;
 
 // DWARFExpression constructor
 DWARFExpression::DWARFExpression() : m_data() {}
@@ -355,39 +360,28 @@ static offset_t GetOpcodeDataSize(const DataExtractor &data,
 }
 
 lldb::addr_t DWARFExpression::GetLocation_DW_OP_addr(const DWARFUnit *dwarf_cu,
-                                                     uint32_t op_addr_idx,
                                                      bool &error) const {
   error = false;
   lldb::offset_t offset = 0;
-  uint32_t curr_op_addr_idx = 0;
   while (m_data.ValidOffset(offset)) {
     const uint8_t op = m_data.GetU8(&offset);
 
-    if (op == DW_OP_addr) {
-      const lldb::addr_t op_file_addr = m_data.GetAddress(&offset);
-      if (curr_op_addr_idx == op_addr_idx)
-        return op_file_addr;
-      ++curr_op_addr_idx;
-    } else if (op == DW_OP_GNU_addr_index || op == DW_OP_addrx) {
+    if (op == DW_OP_addr)
+      return m_data.GetAddress(&offset);
+    if (op == DW_OP_GNU_addr_index || op == DW_OP_addrx) {
       uint64_t index = m_data.GetULEB128(&offset);
-      if (curr_op_addr_idx == op_addr_idx) {
-        if (!dwarf_cu) {
-          error = true;
-          break;
-        }
-
+      if (dwarf_cu)
         return dwarf_cu->ReadAddressFromDebugAddrSection(index);
-      }
-      ++curr_op_addr_idx;
-    } else {
-      const offset_t op_arg_size =
-          GetOpcodeDataSize(m_data, offset, op, dwarf_cu);
-      if (op_arg_size == LLDB_INVALID_OFFSET) {
-        error = true;
-        break;
-      }
-      offset += op_arg_size;
+      error = true;
+      break;
     }
+    const offset_t op_arg_size =
+        GetOpcodeDataSize(m_data, offset, op, dwarf_cu);
+    if (op_arg_size == LLDB_INVALID_OFFSET) {
+      error = true;
+      break;
+    }
+    offset += op_arg_size;
   }
   return LLDB_INVALID_ADDRESS;
 }
@@ -419,13 +413,33 @@ bool DWARFExpression::Update_DW_OP_addr(const DWARFUnit *dwarf_cu,
       // the heap data so "m_data" will now correctly manage the heap data.
       m_data.SetData(encoder.GetDataBuffer());
       return true;
-    } else {
-      const offset_t op_arg_size =
-          GetOpcodeDataSize(m_data, offset, op, dwarf_cu);
-      if (op_arg_size == LLDB_INVALID_OFFSET)
-        break;
-      offset += op_arg_size;
     }
+    if (op == DW_OP_addrx) {
+      // Replace DW_OP_addrx with DW_OP_addr, since we can't modify the
+      // read-only debug_addr table.
+      // Subtract one to account for the opcode.
+      llvm::ArrayRef data_before_op = m_data.GetData().take_front(offset - 1);
+
+      // Read the addrx index to determine how many bytes it needs.
+      const lldb::offset_t old_offset = offset;
+      m_data.GetULEB128(&offset);
+      if (old_offset == offset)
+        return false;
+      llvm::ArrayRef data_after_op = m_data.GetData().drop_front(offset);
+
+      DataEncoder encoder(m_data.GetByteOrder(), m_data.GetAddressByteSize());
+      encoder.AppendData(data_before_op);
+      encoder.AppendU8(DW_OP_addr);
+      encoder.AppendAddress(file_addr);
+      encoder.AppendData(data_after_op);
+      m_data.SetData(encoder.GetDataBuffer());
+      return true;
+    }
+    const offset_t op_arg_size =
+        GetOpcodeDataSize(m_data, offset, op, dwarf_cu);
+    if (op_arg_size == LLDB_INVALID_OFFSET)
+      break;
+    offset += op_arg_size;
   }
   return false;
 }
@@ -532,6 +546,7 @@ bool DWARFExpression::LinkThreadLocalStorage(
 }
 
 static bool Evaluate_DW_OP_entry_value(std::vector<Value> &stack,
+                                       const DWARFUnit *dwarf_cu,
                                        ExecutionContext *exe_ctx,
                                        RegisterContext *reg_ctx,
                                        const DataExtractor &opcodes,
@@ -598,11 +613,10 @@ static bool Evaluate_DW_OP_entry_value(std::vector<Value> &stack,
   StackFrameSP parent_frame = nullptr;
   addr_t return_pc = LLDB_INVALID_ADDRESS;
   uint32_t current_frame_idx = current_frame->GetFrameIndex();
-  uint32_t num_frames = thread->GetStackFrameCount();
-  for (uint32_t parent_frame_idx = current_frame_idx + 1;
-       parent_frame_idx < num_frames; ++parent_frame_idx) {
+
+  for (uint32_t parent_frame_idx = current_frame_idx + 1;;parent_frame_idx++) {
     parent_frame = thread->GetStackFrameAtIndex(parent_frame_idx);
-    // Require a valid sequence of frames.
+    // If this is null, we're at the end of the stack.
     if (!parent_frame)
       break;
 
@@ -629,13 +643,6 @@ static bool Evaluate_DW_OP_entry_value(std::vector<Value> &stack,
     return false;
   }
 
-  Function *parent_func =
-      parent_frame->GetSymbolContext(eSymbolContextFunction).function;
-  if (!parent_func) {
-    LLDB_LOG(log, "Evaluate_DW_OP_entry_value: no parent function");
-    return false;
-  }
-
   // 2. Find the call edge in the parent function responsible for creating the
   //    current activation.
   Function *current_func =
@@ -649,6 +656,24 @@ static bool Evaluate_DW_OP_entry_value(std::vector<Value> &stack,
   ModuleList &modlist = target.GetImages();
   ExecutionContext parent_exe_ctx = *exe_ctx;
   parent_exe_ctx.SetFrameSP(parent_frame);
+  Function *parent_func = nullptr;
+#ifdef LLDB_ENABLE_SWIFT
+  // Swift async function arguments are represented relative to a
+  // DW_OP_entry_value that fetches the async context register. This
+  // register is known to the unwinder and can always be restored
+  // therefore it is not necessary to match up a call site parameter
+  // with it.
+  auto fn_name = current_func->GetMangled().GetMangledName().GetStringRef();
+  if (!SwiftLanguageRuntime::IsAnySwiftAsyncFunctionSymbol(fn_name)) {
+#endif
+
+  parent_func =
+    parent_frame->GetSymbolContext(eSymbolContextFunction).function;
+  if (!parent_func) {
+    LLDB_LOG(log, "Evaluate_DW_OP_entry_value: no parent function");
+    return false;
+  }
+
   if (!parent_frame->IsArtificial()) {
     // If the parent frame is not artificial, the current activation may be
     // produced by an ambiguous tail call. In this case, refuse to proceed.
@@ -682,11 +707,16 @@ static bool Evaluate_DW_OP_entry_value(std::vector<Value> &stack,
                   "to current function");
     return false;
   }
-
+#ifdef LLDB_ENABLE_SWIFT
+  }
+#endif
   // 3. Attempt to locate the DW_OP_entry_value expression in the set of
   //    available call site parameters. If found, evaluate the corresponding
   //    parameter in the context of the parent frame.
   const uint32_t subexpr_len = opcodes.GetULEB128(&opcode_offset);
+#ifdef LLDB_ENABLE_SWIFT
+  lldb::offset_t subexpr_offset = opcode_offset;
+#endif
   const void *subexpr_data = opcodes.GetData(&opcode_offset, subexpr_len);
   if (!subexpr_data) {
     LLDB_LOG(log, "Evaluate_DW_OP_entry_value: subexpr could not be read");
@@ -694,6 +724,9 @@ static bool Evaluate_DW_OP_entry_value(std::vector<Value> &stack,
   }
 
   const CallSiteParameter *matched_param = nullptr;
+#ifdef LLDB_ENABLE_SWIFT
+  if (call_edge) {
+#endif
   for (const CallSiteParameter &param : call_edge->GetCallSiteParameters()) {
     DataExtractor param_subexpr_extractor;
     if (!param.LocationInCallee.GetExpressionData(param_subexpr_extractor))
@@ -722,11 +755,27 @@ static bool Evaluate_DW_OP_entry_value(std::vector<Value> &stack,
              "Evaluate_DW_OP_entry_value: no matching call site param found");
     return false;
   }
+#ifdef LLDB_ENABLE_SWIFT
+  }
+  std::optional<DWARFExpressionList> subexpr;
+  if (!matched_param) {
+    auto *ctx_func = parent_func ? parent_func : current_func;
+    subexpr.emplace(ctx_func->CalculateSymbolContextModule(),
+                    DataExtractor(opcodes, subexpr_offset, subexpr_len),
+                    dwarf_cu);
+  }
+#endif
 
+  
   // TODO: Add support for DW_OP_push_object_address within a DW_OP_entry_value
   // subexpresion whenever llvm does.
   Value result;
+#ifdef LLDB_ENABLE_SWIFT
+  const DWARFExpressionList &param_expr =
+      matched_param ? matched_param->LocationInCaller : *subexpr;
+#else
   const DWARFExpressionList &param_expr = matched_param->LocationInCaller;
+#endif
   if (!param_expr.Evaluate(&parent_exe_ctx,
                            parent_frame->GetRegisterContext().get(),
                            LLDB_INVALID_ADDRESS,
@@ -1080,6 +1129,13 @@ bool DWARFExpression::Evaluate(
         return false;
       }
       uint8_t size = opcodes.GetU8(&offset);
+      if (size > 8) {
+        if (error_ptr)
+              error_ptr->SetErrorStringWithFormat(
+                  "Invalid address size for DW_OP_deref_size: %d\n",
+                  size);
+        return false;
+      }
       Value::ValueType value_type = stack.back().GetValueType();
       switch (value_type) {
       case Value::ValueType::HostAddress: {
@@ -1140,9 +1196,9 @@ bool DWARFExpression::Evaluate(
           uint8_t addr_bytes[8];
           Status error;
 
-          if (exe_ctx->GetTargetRef().ReadMemory(
-                  so_addr, &addr_bytes, size, error,
-                  /*force_live_memory=*/false) == size) {
+          if (target &&
+              target->ReadMemory(so_addr, &addr_bytes, size, error,
+                                 /*force_live_memory=*/false) == size) {
             ObjectFile *objfile = module_sp->GetObjectFile();
 
             stack.back().GetScalar() = DerefSizeExtractDataHelper(
@@ -1152,7 +1208,7 @@ bool DWARFExpression::Evaluate(
           } else {
             if (error_ptr)
               error_ptr->SetErrorStringWithFormat(
-                  "Failed to dereference pointer for for DW_OP_deref_size: "
+                  "Failed to dereference pointer for DW_OP_deref_size: "
                   "%s\n",
                   error.AsCString());
             return false;
@@ -1436,8 +1492,12 @@ bool DWARFExpression::Evaluate(
           return false;
         } else {
           stack.pop_back();
-          stack.back() =
-              stack.back().ResolveValue(exe_ctx) / tmp.ResolveValue(exe_ctx);
+          Scalar divisor, dividend;
+          divisor = tmp.ResolveValue(exe_ctx);
+          dividend = stack.back().ResolveValue(exe_ctx);
+          divisor.MakeSigned();
+          dividend.MakeSigned();
+          stack.back() = dividend / divisor;
           if (!stack.back().ResolveValue(exe_ctx).IsValid()) {
             if (error_ptr)
               error_ptr->SetErrorString("Divide failed.");
@@ -2565,7 +2625,7 @@ bool DWARFExpression::Evaluate(
 
     case DW_OP_GNU_entry_value:
     case DW_OP_entry_value: {
-      if (!Evaluate_DW_OP_entry_value(stack, exe_ctx, reg_ctx, opcodes, offset,
+      if (!Evaluate_DW_OP_entry_value(stack, dwarf_cu, exe_ctx, reg_ctx, opcodes, offset,
                                       error_ptr, log)) {
         LLDB_ERRORF(error_ptr, "Could not evaluate %s.",
                     DW_OP_value_to_name(op));

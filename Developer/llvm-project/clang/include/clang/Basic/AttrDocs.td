@@ -539,17 +539,41 @@ def NoMergeDocs : Documentation {
   let Category = DocCatStmt;
   let Content = [{
 If a statement is marked ``nomerge`` and contains call expressions, those call
-expressions inside the statement will not be merged during optimization. This 
+expressions inside the statement will not be merged during optimization. This
 attribute can be used to prevent the optimizer from obscuring the source
 location of certain calls. For example, it will prevent tail merging otherwise
 identical code sequences that raise an exception or terminate the program. Tail
 merging normally reduces the precision of source location information, making
 stack traces less useful for debugging. This attribute gives the user control
-over the tradeoff between code size and debug information precision. 
+over the tradeoff between code size and debug information precision.
 
-``nomerge`` attribute can also be used as function attribute to prevent all 
-calls to the specified function from merging. It has no effect on indirect 
-calls.
+``nomerge`` attribute can also be used as function attribute to prevent all
+calls to the specified function from merging. It has no effect on indirect
+calls to such functions. For example:
+
+.. code-block:: c++
+
+  [[clang::nomerge]] void foo(int) {}
+
+  void bar(int x) {
+    auto *ptr = foo;
+    if (x) foo(1); else foo(2); // will not be merged
+    if (x) ptr(1); else ptr(2); // indirect call, can be merged
+  }
+
+``nomerge`` attribute can also be used for pointers to functions to
+prevent calls through such pointer from merging. In such case the
+effect applies only to a specific function pointer. For example:
+
+.. code-block:: c++
+
+  [[clang::nomerge]] void (*foo)(int);
+
+  void bar(int x) {
+    auto *ptr = foo;
+    if (x) foo(1); else foo(2); // will not be merged
+    if (x) ptr(1); else ptr(2); // 'ptr' has no 'nomerge' attribute, can be merged
+  }
   }];
 }
 
@@ -603,6 +627,9 @@ Any variables in scope, including all arguments to the function and the
 return value must be trivially destructible. The calling convention of the
 caller and callee must match, and they must not be variadic functions or have
 old style K&R C function declarations.
+
+``clang::musttail`` provides assurances that the tail call can be optimized on
+all targets, not just one.
   }];
 }
 
@@ -1581,7 +1608,7 @@ attributes are ignored. Supported platforms are:
 ``watchos``
   Apple's watchOS operating system. The minimum deployment target is specified by
   the ``-mwatchos-version-min=*version*`` command-line argument.
-  
+
 ``driverkit``
   Apple's DriverKit userspace kernel extensions. The minimum deployment target
   is specified as part of the triple.
@@ -1700,6 +1727,165 @@ Also see the documentation for `@available
   }];
 }
 
+def PtrAuthDocs : Documentation {
+  let Category = DocCatVariable;
+  let Content = [{
+The ``__ptrauth`` qualifier allows the programmer to directly control
+how pointers are signed when they are stored in a particular variable.
+This can be used to strengthen the default protections of pointer
+authentication and make it more difficult for an attacker to escalate
+an ability to alter memory into full control of a process.
+
+.. code-block:: c
+
+  #include <ptrauth.h>
+
+  typedef void (*my_callback)(const void*);
+  my_callback __ptrauth(ptrauth_key_process_dependent_code, 1, 0xe27a) callback;
+
+The first argument to ``__ptrauth`` is the name of the signing key.
+Valid key names for the target are defined in ``<ptrauth.h>``.
+
+On ARM64, there are four keys:
+
+- ``ptrauth_key_process_independent_data``
+- ``ptrauth_key_process_dependent_data``
+- ``ptrauth_key_process_independent_code``
+- ``ptrauth_key_process_dependent_code``
+
+In general, prefer using a code key for function pointers and a data key
+for object pointers.  The ARM64 architecture allows loads and calls to
+execute more efficiently when the pointer is signed with an appropriate
+key.  Using code keys only for function pointers also substantially lessens
+the risk of creating a so-called "signing oracle" for function pointers;
+see the general pointer authentication language documentation.
+
+Using a process-dependent key provides stronger protection against
+cross-process attacks.  However, it also inhibits certain memory
+optimizations when a shared library is loaded into multiple processes.
+Using a process-independent key also allows signed pointers to be passed
+in shared memory.  Note that even the process-independent keys may change
+after a reboot, so signed values should never be serialized.
+
+The second argument to ``__ptrauth`` is a flag (0 or 1) specifying whether
+the object should use address discrimination.  If only one argument is
+given, the flag defaults to 0.  Address discrimination provides strong
+protection against attacks which copy signed pointers around in memory.
+An attacker cannot usefully copy an arbitrary signed pointer over an
+address-discriminated object.  Nor can a value taken from an
+address-discriminated object be usefully copied over some other signed
+pointer.  However, it is more expensive to copy values from one
+address-discriminated object to another, even if the other arguments to
+``__ptrauth`` are the same, and it is not valid to copy them with
+``memcpy``.  It is also not valid to map memory containing an
+address-discriminated object into different places in the address
+space, e.g. with ``mmap``.
+
+The third argument to ``__ptrauth`` is a small non-negative integer
+which allows additional discrimination between objects.  Using a
+unique extra discriminator provides strong protection against attacks
+which work by substituting one signed value for another.  For example,
+an attacker cannot usefully overwrite an object with a pointer from an
+object using a different extra discriminator; this protection is similar
+to the protection offered by address discrimination.  A unique extra
+discriminator also protects against "slide" attacks where an attacker
+alters a pointer instead of altering the memory that the pointer points to.
+The extra discriminator must be a constant expression.  On ARM64,
+its value must be between 0 and 65535.  If the argument is not provided,
+the default value is 0.  It is generally preferable not to use the value 0,
+especially with the process-independent keys, as this combination is used
+in various places in the standard language ABI.
+
+The type qualified by ``__ptrauth`` must be a pointer type.  Currently
+only C pointer types are allowed and not block pointers, Objective-C
+object pointers, or C++ references.  ``__ptrauth`` is parsed and interpreted
+using the same language rules as qualifiers like ``const`` and ``volatile``.
+For example:
+
+.. code-block:: c
+
+  __ptrauth(...) int *ex0;    /* invalid: qualifies 'int', which is not a pointer type */
+  int * __ptrauth(...) ex1;   /* valid: ex1 has qualified type */
+  int * __ptrauth(...) *ex2;  /* valid: ex2 is a pointer to a qualified object */
+
+  typedef int *intp;
+  __ptrauth(...) intp ex3;    /* valid: ex3 has qualified type */
+  intp __ptrauth(...) ex4;    /* valid: means the exact same thing as ex3 */
+
+Assigning a non-null pointer to a ``__ptrauth``-qualified l-value, or
+initializing a ``__ptrauth``-qualified object with a non-null pointer,
+causes the pointer to be signed according to the described schema before
+being stored into memory.  If such an initialization is a constant
+initialization, then the signing is also done as part of constant
+initialization: that is, it is done when the program is loaded, before
+any dynamic initialization occurs.  Loading a non-null pointer from a
+``__ptrauth``-qualified l-value causes the pointer to be authenticated
+according to the describe schema before being produced as the result
+of the expression.  A null pointer keeps its standard representation when
+stored in a ``__ptrauth``-qualified object; on a typical target where this
+is an all-zero pattern, this means that operations like ``bzero`` and
+``calloc`` do still correctly initialize objects with null.
+
+If a ``__ptrauth``-qualified l-value of function pointer type is
+used as the function operand of a call expression, the function pointer
+will be authenticated "atomically" with the call, such that an attacker
+will not be able to corrupt the destination of the call even in the
+presence of undefined behavior.  (That is, the compiler must not
+leave an un-signed pointer that it will later unconditionally trust
+in a place where it could be feasibly overwritten by an attacker,
+such as the stack or a callee-save register during an intervening call.
+The compiler is not required to protect against improbable attacks
+such as corruption of the register file, as might occur with a
+corrupted kernel.  It also need not guard against jumps to an arbitrary
+place in the instruction stream, since such jumps would require an
+attacker to already fully control the PC.)
+
+If the ABI specifies that a pointer is always signed --- that is,
+if the pointer is a function pointer and the target uses ABI function
+pointer authentication --- then signing and authenticating it as part
+of a load/store actually means resigning it to/from the standard ABI
+signature schema.  Similarly, if both operands of a simple assignment
+operator are ``__ptrauth``-qualified, the pointer copied by the
+assignment is resigned from the right-hand operand's schema to the
+left-hand operand's schema.  These resigning operations are also done
+"atomically" in the same sense as above.
+
+As a final guarantee, if the right-hand operand of an assignment or
+the expression used to initialize a ``__ptrauth``-qualified object is
+a direct reference to an object or function (e.g. ``&my_var``), the
+signing of that pointer is atomic with the evaluaton of the reference
+in this same sense.
+
+Otherwise, there are no guarantees of atomicity, and it is the
+programmer's responsibility to avoid allowing a store into a
+``__ptrauth``-qualified object to create a potential "signing oracle"
+which an attacker could use to sign an arbitrary pointer of their choice.
+Such oracles are particularly problematic when the signing uses a code
+key because the oracle could potentially be used to allow an attacker
+to construct a validly-signed function pointer, v-table entry, or
+return address that points to an arbitrary instruction, allowing them
+to completely take over the PC.  Programmers attempting to use
+``__ptrauth`` to protect a data pointer, or to protect function pointers
+on targets that do not use ABI function pointer authentication, should
+aim to maintain a "chain of authentication" from initialization all
+the way to the point at which the pointer is used.  If this is infeasible,
+they should consider using ``ptrauth_sign_generic_data`` instead.
+
+Types that are written in r-value positions, such as return types,
+parameter types, and cast types, may not be ``__ptrauth``-qualified
+at the outermost level.  This may be supported in the future.
+
+In C++, the arguments to ``__ptrauth`` may not be instantiation-dependent.
+This may be supported in the future.
+
+This feature may be tested for with ``__has_feature(ptrauth_qualifier)``.
+It is enabled whenever the ``ptrauth`` intrinsics are enabled.
+
+``<ptrauth.h>`` provides predefined qualifiers for various language
+features that implicitly use pointer authentication.
+  }];
+}
+
 def ExternalSourceSymbolDocs : Documentation {
   let Category = DocCatDecl;
   let Content = [{
@@ -1749,6 +1935,19 @@ defined_in=\ *string-literal*
   exact definition of source container is language-specific, e.g. Swift's
   source containers are modules, so ``defined_in`` should specify the Swift
   module name.
+
+USR=\ *string-literal*
+  String that specifies a unified symbol resolution (USR) value for this
+  declaration. USR string uniquely identifies this particular declaration, and
+  is typically used when constructing an index of a codebase.
+  The USR value in this attribute is expected to be generated by an external
+  compiler that compiled the native declaration using its original source
+  language. The exact format of the USR string and its other attributes
+  are determined by the specification of this declaration's source language.
+  When not specified, Clang's indexer will use the Clang USR for this symbol.
+  User can query to see if Clang supports the use of the ``USR`` clause in
+  the ``external_source_symbol`` attribute with
+  ``__has_attribute(external_source_symbol) >= 20230206``.
 
 generated_declaration
   This declaration was automatically generated by some tool.
@@ -2280,7 +2479,7 @@ as ``-mlong-calls`` and ``-mno-long-calls``.
 
 def RISCVInterruptDocs : Documentation {
   let Category = DocCatFunction;
-  let Heading = "interrupt (RISCV)";
+  let Heading = "interrupt (RISC-V)";
   let Content = [{
 Clang supports the GNU style ``__attribute__((interrupt))`` attribute on RISCV
 targets. This attribute may be attached to a function definition and instructs
@@ -2299,6 +2498,40 @@ https://riscv.org/specifications/privileged-isa/
 The RISC-V Instruction Set Manual Volume II: Privileged Architecture
 Version 1.10.
   }];
+}
+
+def RISCVRVVVectorBitsDocs : Documentation {
+  let Category = DocCatType;
+  let Content = [{
+On RISC-V targets, the ``riscv_rvv_vector_bits(N)`` attribute is used to define
+fixed-length variants of sizeless types.
+
+For example:
+
+.. code-block:: c
+
+  #include <riscv_vector.h>
+
+  #if defined(__riscv_v_fixed_vlen)
+  typedef vint8m1_t fixed_vint8m1_t __attribute__((riscv_rvv_vector_bits(__riscv_v_fixed_vlen)));
+  #endif
+
+Creates a type ``fixed_vint8m1_t_t`` that is a fixed-length variant of
+``vint8m1_t`` that contains exactly 512 bits. Unlike ``vint8m1_t``, this type
+can be used in globals, structs, unions, and arrays, all of which are
+unsupported for sizeless types.
+
+The attribute can be attached to a single RVV vector (such as ``vint8m1_t``).
+The attribute will be rejected unless
+``N==(__riscv_v_fixed_vlen*LMUL)``, the implementation defined feature macro that
+is enabled under the ``-mrvv-vector-bits`` flag. ``__riscv_v_fixed_vlen`` can
+only be a power of 2 between 64 and 65536.
+
+For types where LMUL!=1, ``__riscv_v_fixed_vlen`` needs to be scaled by the LMUL
+of the type before passing to the attribute.
+
+``vbool*_t`` types are not supported at this time.
+}];
 }
 
 def AVRInterruptDocs : Documentation {
@@ -2387,6 +2620,14 @@ function it instructs compiler to emit multiple function versions based on
 priority and target features availability. One of the versions is always
 ( implicitly or explicitly ) the ``default`` (fallback). Attribute strings can
 contain dependent features names joined by the "+" sign.
+
+For targets that support the GNU indirect function (IFUNC) feature, dispatch
+is performed by emitting an indirect function that is resolved to the appropriate
+target clone at load time. The indirect function is given the name the
+multiversioned function would have if it had been declared without the attribute.
+For backward compatibility with earlier Clang releases, a function alias with an
+``.ifunc`` suffix is also emitted. The  ``.ifunc`` suffixed symbol is a deprecated
+feature and support for it may be removed in the future.
 }];
 }
 
@@ -2434,6 +2675,13 @@ example, the following will emit 4 versions of the function:
     __attribute__((target_clones("arch=atom,avx2","arch=ivybridge","default")))
     void foo() {}
 
+For targets that support the GNU indirect function (IFUNC) feature, dispatch
+is performed by emitting an indirect function that is resolved to the appropriate
+target clone at load time. The indirect function is given the name the
+multiversioned function would have if it had been declared without the attribute.
+For backward compatibility with earlier Clang releases, a function alias with an
+``.ifunc`` suffix is also emitted. The  ``.ifunc`` suffixed symbol is a deprecated
+feature and support for it may be removed in the future.
 }];
 }
 
@@ -3883,7 +4131,7 @@ Whether a particular pointer may be "null" is an important concern when working
 with pointers in the C family of languages. The various nullability attributes
 indicate whether a particular pointer can be null or not, which makes APIs more
 expressive and can help static analysis tools identify bugs involving null
-pointers. Clang supports several kinds of nullability attributes: the 
+pointers. Clang supports several kinds of nullability attributes: the
 ``nonnull`` and ``returns_nonnull`` attributes indicate which function or
 method parameters and result types can never be null, while nullability type
 qualifiers indicate which pointer types can be null (``_Nullable``) or cannot
@@ -4059,7 +4307,7 @@ memory is not available rather than returning a null pointer:
 The ``returns_nonnull`` attribute implies that returning a null pointer is
 undefined behavior, which the optimizer may take advantage of. The ``_Nonnull``
 type qualifier indicates that a pointer cannot be null in a more general manner
-(because it is part of the type system) and does not imply undefined behavior, 
+(because it is part of the type system) and does not imply undefined behavior,
 making it more widely applicable
 }];
 }
@@ -4139,8 +4387,8 @@ def SwiftAttrDocs : Documentation {
   let Heading = "swift_attr";
   let Content = [{
 The ``swift_attr`` provides a Swift-specific annotation for the declaration
-to which the attribute appertains to. It can be used on any declaration
-in Clang. This kind of annotation is ignored by Clang as it doesn't have any
+or type to which the attribute appertains to. It can be used on any declaration
+or type in Clang. This kind of annotation is ignored by Clang as it doesn't have any
 semantic meaning in languages supported by Clang. The Swift compiler can
 interpret these annotations according to its own rules when importing C or
 Objective-C declarations.
@@ -5062,7 +5310,97 @@ the ``int`` parameter is the one that represents the error.
 def SuppressDocs : Documentation {
   let Category = DocCatStmt;
   let Content = [{
-The ``[[gsl::suppress]]`` attribute suppresses specific
+The ``suppress`` attribute suppresses unwanted warnings coming from static
+analysis tools such as the Clang Static Analyzer. The tool will not report
+any issues in source code annotated with the attribute.
+
+The attribute cannot be used to suppress traditional Clang warnings, because
+many such warnings are emitted before the attribute is fully parsed.
+Consider using ``#pragma clang diagnostic`` to control such diagnostics,
+as described in `Controlling Diagnostics via Pragmas
+<https://clang.llvm.org/docs/UsersManual.html#controlling-diagnostics-via-pragmas>`_.
+
+The ``suppress`` attribute can be placed on an individual statement in order to
+suppress warnings about undesirable behavior occurring at that statement:
+
+.. code-block:: c++
+
+  int foo() {
+    int *x = nullptr;
+    ...
+    [[clang::suppress]]
+    return *x;  // null pointer dereference warning suppressed here
+  }
+
+Putting the attribute on a compound statement suppresses all warnings in scope:
+
+.. code-block:: c++
+
+  int foo() {
+    [[clang::suppress]] {
+      int *x = nullptr;
+      ...
+      return *x;  // warnings suppressed in the entire scope
+    }
+  }
+
+The attribute can also be placed on entire declarations of functions, classes,
+variables, member variables, and so on, to suppress warnings related
+to the declarations themselves. When used this way, the attribute additionally
+suppresses all warnings in the lexical scope of the declaration:
+
+.. code-block:: c++
+
+  class [[clang::suppress]] C {
+    int foo() {
+      int *x = nullptr;
+      ...
+      return *x;  // warnings suppressed in the entire class scope
+    }
+
+    int bar();
+  };
+
+  int C::bar() {
+    int *x = nullptr;
+    ...
+    return *x;  // warning NOT suppressed! - not lexically nested in 'class C{}'
+  }
+
+Some static analysis warnings are accompanied by one or more notes, and the
+line of code against which the warning is emitted isn't necessarily the best
+for suppression purposes. In such cases the tools are allowed to implement
+additional ways to suppress specific warnings based on the attribute attached
+to a note location.
+
+For example, the Clang Static Analyzer suppresses memory leak warnings when
+the suppression attribute is placed at the allocation site (highlited by
+a "note: memory is allocated"), which may be different from the line of code
+at which the program "loses track" of the pointer (where the warning
+is ultimately emitted):
+
+.. code-block:: c
+
+  int bar1(bool coin_flip) {
+    __attribute__((suppress))
+    int *result = (int *)malloc(sizeof(int));
+    if (coin_flip)
+      return 1;  // warning about this leak path is suppressed
+
+    return *result;  // warning about this leak path is also suppressed
+  }
+
+  int bar2(bool coin_flip) {
+    int *result = (int *)malloc(sizeof(int));
+    if (coin_flip)
+      return 1;  // leak warning on this path NOT suppressed
+
+    __attribute__((suppress))
+    return *result;  // leak warning is suppressed only on this path
+  }
+
+
+When written as ``[[gsl::suppress]]``, this attribute suppresses specific
 clang-tidy diagnostics for rules of the `C++ Core Guidelines`_ in a portable
 way. The attribute can be attached to declarations, statements, and at
 namespace scope.
@@ -5166,6 +5504,9 @@ apply for values returned in callee-saved registers.
   R11. R11 can be used as a scratch register. Floating-point registers
   (XMMs/YMMs) are not preserved and need to be saved by the caller.
 
+- On AArch64 the callee preserve all general purpose registers, except X0-X8 and
+  X16-X18.
+
 The idea behind this convention is to support calls to runtime functions
 that have a hot path and a cold path. The hot path is usually a small piece
 of code that doesn't use many registers. The cold path might need to call out to
@@ -5205,6 +5546,10 @@ returned in callee-saved registers.
 - On X86-64 the callee preserves all general purpose registers, except for
   R11. R11 can be used as a scratch register. Furthermore it also preserves
   all floating-point registers (XMMs/YMMs).
+
+- On AArch64 the callee preserve all general purpose registers, except X0-X8 and
+  X16-X18. Furthermore it also preserves lower 128 bits of V8-V31 SIMD - floating
+  point registers.
 
 The idea behind this convention is to support calls to runtime functions
 that don't need to call out to any other functions.
@@ -5256,7 +5601,9 @@ considered inline.
 Not all targets support this attribute. ELF target support depends on both the
 linker and runtime linker, and is available in at least lld 4.0 and later,
 binutils 2.20.1 and later, glibc v2.11.1 and later, and FreeBSD 9.1 and later.
-Non-ELF targets currently do not support this attribute.
+Mach-O targets support it, but with slightly different semantics: the resolver
+is run at first call, instead of at load time by the runtime linker. Targets
+other than ELF and Mach-O currently do not support this attribute.
   }];
 }
 
@@ -5315,7 +5662,7 @@ takes precedence over the command line option ``-fpatchable-function-entry=N,M``
 ``M`` defaults to 0 if omitted.
 
 This attribute is only supported on
-aarch64/aarch64-be/riscv32/riscv64/i386/x86-64 targets.
+aarch64/aarch64-be/loongarch32/loongarch64/riscv32/riscv64/i386/x86-64 targets.
 }];
 }
 
@@ -6008,15 +6355,15 @@ def CFGuardDocs : Documentation {
   let Content = [{
 Code can indicate CFG checks are not wanted with the ``__declspec(guard(nocf))``
 attribute. This directs the compiler to not insert any CFG checks for the entire
-function. This approach is typically used only sparingly in specific situations 
-where the programmer has manually inserted "CFG-equivalent" protection. The 
-programmer knows that they are calling through some read-only function table 
-whose address is obtained through read-only memory references and for which the 
-index is masked to the function table limit. This approach may also be applied 
-to small wrapper functions that are not inlined and that do nothing more than 
-make a call through a function pointer. Since incorrect usage of this directive 
-can compromise the security of CFG, the programmer must be very careful using 
-the directive. Typically, this usage is limited to very small functions that 
+function. This approach is typically used only sparingly in specific situations
+where the programmer has manually inserted "CFG-equivalent" protection. The
+programmer knows that they are calling through some read-only function table
+whose address is obtained through read-only memory references and for which the
+index is masked to the function table limit. This approach may also be applied
+to small wrapper functions that are not inlined and that do nothing more than
+make a call through a function pointer. Since incorrect usage of this directive
+can compromise the security of CFG, the programmer must be very careful using
+the directive. Typically, this usage is limited to very small functions that
 only call one function.
 
 `Control Flow Guard documentation <https://docs.microsoft.com/en-us/windows/win32/secbp/pe-metadata>`
@@ -6274,6 +6621,84 @@ attribute requires a string literal argument to identify the handle being releas
   }];
 }
 
+def UnsafeBufferUsageDocs : Documentation {
+  let Category = DocCatFunction;
+  let Content = [{
+The attribute ``[[clang::unsafe_buffer_usage]]`` should be placed on functions
+that need to be avoided as they are prone to buffer overflows. It is designed to
+work together with the off-by-default compiler warning ``-Wunsafe-buffer-usage``
+to help codebases transition away from raw pointer based buffer management,
+in favor of safer abstractions such as C++20 ``std::span``. The attribute causes
+``-Wunsafe-buffer-usage`` to warn on every use of the function, and it may
+enable ``-Wunsafe-buffer-usage`` to emit automatic fix-it hints
+which would help the user replace such unsafe functions with safe
+alternatives, though the attribute can be used even when the fix can't be automated.
+
+The attribute does not suppress ``-Wunsafe-buffer-usage`` inside the function
+to which it is attached. These warnings still need to be addressed.
+
+The attribute is warranted even if the only way a function can overflow
+the buffer is by violating the function's preconditions. For example, it
+would make sense to put the attribute on function ``foo()`` below because
+passing an incorrect size parameter would cause a buffer overflow:
+
+.. code-block:: c++
+
+  [[clang::unsafe_buffer_usage]]
+  void foo(int *buf, size_t size) {
+    for (size_t i = 0; i < size; ++i) {
+      buf[i] = i;
+    }
+  }
+
+The attribute is NOT warranted when the function uses safe abstractions,
+assuming that these abstractions weren't misused outside the function.
+For example, function ``bar()`` below doesn't need the attribute,
+because assuming that the container ``buf`` is well-formed (has size that
+fits the original buffer it refers to), overflow cannot occur:
+
+.. code-block:: c++
+
+  void bar(std::span<int> buf) {
+    for (size_t i = 0; i < buf.size(); ++i) {
+      buf[i] = i;
+    }
+  }
+
+In this case function ``bar()`` enables the user to keep the buffer
+"containerized" in a span for as long as possible. On the other hand,
+Function ``foo()`` in the previous example may have internal
+consistency, but by accepting a raw buffer it requires the user to unwrap
+their span, which is undesirable according to the programming model
+behind ``-Wunsafe-buffer-usage``.
+
+The attribute is warranted when a function accepts a raw buffer only to
+immediately put it into a span:
+
+.. code-block:: c++
+
+  [[clang::unsafe_buffer_usage]]
+  void baz(int *buf, size_t size) {
+    std::span<int> sp{ buf, size };
+    for (size_t i = 0; i < sp.size(); ++i) {
+      sp[i] = i;
+    }
+  }
+
+In this case ``baz()`` does not contain any unsafe operations, but the awkward
+parameter type causes the caller to unwrap the span unnecessarily.
+Note that regardless of the attribute, code inside ``baz()`` isn't flagged
+by ``-Wunsafe-buffer-usage`` as unsafe. It is definitely undesirable,
+but if ``baz()`` is on an API surface, there is no way to improve it
+to make it as safe as ``bar()`` without breaking the source and binary
+compatibility with existing users of the function. In such cases
+the proper solution would be to create a different function (possibly
+an overload of ``baz()``) that accepts a safe container like ``bar()``,
+and then use the attribute on the original ``baz()`` to help the users
+update their code to use the new function.
+  }];
+}
+
 def DiagnoseAsBuiltinDocs : Documentation {
   let Category = DocCatFunction;
   let Content = [{
@@ -6416,6 +6841,41 @@ to and from secure state, respectively, and prevent flow of information
 to non-secure state, except via return values. See `ARMv8-M Security Extensions:
 Requirements on Development Tools - Engineering Specification Documentation
 <https://developer.arm.com/docs/ecm0359818/latest/>`_ for more information.
+  }];
+}
+
+def ArmStreamingDocs : Documentation {
+  let Category = DocCatType;
+  let Content = [{
+.. Note:: This attribute has not been implemented yet, but once it is
+   implemented, it will behave as described below.
+
+The ``__arm_streaming`` keyword is only available on AArch64 targets.
+It applies to function types and specifies that the function has a
+"streaming interface".  This means that:
+
+* the function requires the Scalable Matrix Extension (SME)
+
+* the function must be entered in streaming mode (that is, with PSTATE.SM
+  set to 1)
+
+* the function must return in streaming mode
+
+See `Procedure Call Standard for the Arm® 64-bit Architecture (AArch64)
+<https://github.com/ARM-software/abi-aa>`_ for more details about
+streaming-interface functions.
+
+Clang manages PSTATE.SM automatically; it is not the source code's
+responsibility to do this.  For example, if a normal non-streaming
+function calls an ``__arm_streaming`` function, Clang generates code
+that switches into streaming mode before calling the function and
+switches back to non-streaming mode on return.
+
+``__arm_streaming`` can appear anywhere that a standard ``[[...]]`` type
+attribute can appear.
+
+See `Arm C Language Extensions <https://github.com/ARM-software/acle>`_
+for more details about this extension, and for other related SME features.
   }];
 }
 
@@ -6809,6 +7269,66 @@ As such, this function attribute is currently only supported on X86 targets.
   }];
 }
 
+def TransparentSteppingDocs : Documentation {
+  let Category = DocCatFunction;
+  let Content = [{
+The ``transparent_stepping`` attribute is intended as a hint for debuggers that this 
+function itself is not interesting, but it calls a function that might be.  So, when 
+stepping in arrives at a function with this attribute, debuggers should transparently 
+step-in through it into the functions called by the annotated function (but not by 
+subsequent calls made by those functions), stopping at the first one its normal rules 
+for whether to stop says to stop at - or stepping out again if none qualify. Also, when 
+stepping out arrives at a function with this attribute, the debugger should continue 
+stepping out to its caller.
+
+For example:
+
+.. code-block:: c
+
+  int bar(void) {
+    return 42;
+  }
+
+  __attribute__((transparent_stepping))
+  int foo(void) {
+    return bar();
+  }
+
+  int caller(void) {
+    return foo();
+  }
+
+Stepping into ``foo`` should step directly into ``bar`` instead, and stepping out of ``bar`` 
+should stop in ``caller``.
+
+Functions with the ``transparent_stepping`` attribute can be chained together:
+
+.. code-block:: c
+
+  int baz(void) {
+    return 42;
+  }
+
+  __attribute__((transparent_stepping))
+  int bar(void) {
+    return baz();
+  }
+
+  __attribute__((transparent_stepping))
+  int foo(void) {
+    return bar();
+  }
+  
+  int caller(void) {
+    return foo();
+  }
+
+In this example, stepping into ``foo`` should step directly into ``baz``, and stepping out of 
+``baz`` should stop in ``caller``.
+  }];
+}
+
+
 def ReadOnlyPlacementDocs : Documentation {
   let Category = DocCatType;
   let Content = [{This attribute is attached to a structure, class or union declaration.
@@ -6846,4 +7366,40 @@ def ReadOnlyPlacementDocs : Documentation {
   5. A type ``Q`` inherits from type ``T`` and it does not have the
      ``enforce_read_only_placement`` attribute.
   }];
+}
+
+def WebAssemblyFuncrefDocs : Documentation {
+  let Category = DocCatType;
+  let Content = [{
+Clang supports the ``__funcref`` attribute for the WebAssembly target.
+This attribute may be attached to a function pointer type, where it modifies
+its underlying representation to be a WebAssembly ``funcref``.
+  }];
+}
+
+def CleanupDocs : Documentation {
+  let Category = DocCatType;
+  let Content = [{
+This attribute allows a function to be run when a local variable goes out of
+scope. The attribute takes the identifier of a function with a parameter type
+that is a pointer to the type with the attribute.
+
+.. code-block:: c
+
+  static void foo (int *) { ... }
+  static void bar (int *) { ... }
+  void baz (void) {
+    int x __attribute__((cleanup(foo)));
+    {
+      int y __attribute__((cleanup(bar)));
+    }
+  }
+
+The above example will result in a call to ``bar`` being passed the address of
+`y`` when ``y`` goes out of scope, then a call to ``foo`` being passed the
+address of ``x`` when ``x`` goes out of scope. If two or more variables share
+the same scope, their ``cleanup`` callbacks are invoked in the reverse order
+the variables were declared in. It is not possible to check the return value
+(if any) of these ``cleanup`` callback functions.
+}];
 }

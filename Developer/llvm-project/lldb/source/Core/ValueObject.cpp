@@ -8,6 +8,8 @@
 
 #include "lldb/Core/ValueObject.h"
 
+#include "Plugins/LanguageRuntime/ObjC/ObjCLanguageRuntime.h"
+#include "Plugins/TypeSystem/Clang/TypeSystemClang.h"
 #include "lldb/Core/Address.h"
 #include "lldb/Core/Declaration.h"
 #include "lldb/Core/Module.h"
@@ -17,6 +19,7 @@
 #include "lldb/Core/ValueObjectDynamicValue.h"
 #include "lldb/Core/ValueObjectMemory.h"
 #include "lldb/Core/ValueObjectSyntheticFilter.h"
+#include "lldb/Core/ValueObjectVTable.h"
 #include "lldb/DataFormatters/DataVisualization.h"
 #include "lldb/DataFormatters/DumpValueObjectOptions.h"
 #include "lldb/DataFormatters/FormatManager.h"
@@ -49,6 +52,11 @@
 #include "lldb/Utility/StreamString.h"
 #include "lldb/lldb-private-types.h"
 
+#ifdef LLDB_ENABLE_SWIFT
+#include "Plugins/ExpressionParser/Swift/SwiftPersistentExpressionState.h"
+#include "Plugins/TypeSystem/Swift/SwiftASTContext.h"
+#endif //LLDB_ENABLE_SWIFT
+
 #include "llvm/Support/Compiler.h"
 
 #include <algorithm>
@@ -76,6 +84,14 @@ using namespace lldb;
 using namespace lldb_private;
 
 static user_id_t g_value_obj_uid = 0;
+
+#ifdef LLDB_ENABLE_SWIFT
+static const ExecutionContextRef *GetSwiftExeCtx(ValueObject &valobj) {
+  return (valobj.GetPreferredDisplayLanguage() == eLanguageTypeSwift)
+             ? &valobj.GetExecutionContextRef()
+             : nullptr;
+}
+#endif // LLDB_ENABLE_SWIFT
 
 // ValueObject constructor
 ValueObject::ValueObject(ValueObject &parent)
@@ -211,11 +227,12 @@ bool ValueObject::UpdateFormatsIfNeeded() {
 
   bool any_change = false;
 
-  if ((m_last_format_mgr_revision != DataVisualization::GetCurrentRevision())) {
+  if (GetCompilerType().IsValid() &&
+      (m_last_format_mgr_revision != DataVisualization::GetCurrentRevision())) {
     m_last_format_mgr_revision = DataVisualization::GetCurrentRevision();
     any_change = true;
 
-    SetValueFormat(DataVisualization::GetFormat(*this, eNoDynamicValues));
+    SetValueFormat(DataVisualization::GetFormat(*this, GetDynamicValueType()));
     SetSummaryFormat(
         DataVisualization::GetSummaryFormat(*this, GetDynamicValueType()));
 #if LLDB_ENABLE_PYTHON
@@ -267,6 +284,64 @@ CompilerType ValueObject::MaybeCalculateCompleteType() {
     if (std::optional<CompilerType> complete_type =
             runtime->GetRuntimeType(compiler_type)) {
       m_override_type = *complete_type;
+      if (m_override_type.IsValid())
+        return m_override_type;
+    }
+  }
+
+  std::vector<clang::NamedDecl *> decls;
+  CompilerType class_type;
+  bool is_pointer_type = false;
+  if (TypeSystemClang::IsObjCObjectPointerType(compiler_type, &class_type))
+    is_pointer_type = true;
+  else if (TypeSystemClang::IsObjCObjectOrInterfaceType(compiler_type))
+    class_type = compiler_type;
+  else
+    return compiler_type;
+
+  ConstString class_name(class_type.GetTypeName());
+  if (!class_name)
+    return compiler_type;
+
+  // try the modules
+  if (TargetSP target_sp = GetTargetSP()) {
+    auto *persistent_state = llvm::cast<ClangPersistentVariables>(
+      target_sp->GetPersistentExpressionStateForLanguage(lldb::eLanguageTypeC));
+    if (!persistent_state)
+      return compiler_type;
+
+    if (auto clang_modules_decl_vendor =
+            persistent_state->GetClangModulesDeclVendor()) {
+      ConstString key_cs(class_name);
+      auto types = clang_modules_decl_vendor->FindTypes(
+          key_cs, /*max_matches*/ UINT32_MAX);
+      if (!types.empty()) {
+        auto module_type = types.front();
+        m_override_type =
+            is_pointer_type ? module_type.GetPointerType() : module_type;
+      }
+
+      if (m_override_type.IsValid())
+        return m_override_type;
+    }
+  }
+
+  // then try the runtime
+  if (auto *objc_language_runtime = ObjCLanguageRuntime::Get(*process_sp)) {
+    if (auto *runtime_vendor = objc_language_runtime->GetDeclVendor()) {
+      std::vector<CompilerDecl> compiler_decls;
+      runtime_vendor->FindDecls(class_name, false, UINT32_MAX, compiler_decls);
+      if (!compiler_decls.empty()) {
+        auto *ctx =
+            llvm::dyn_cast<TypeSystemClang>(compiler_decls[0].GetTypeSystem());
+        if (ctx) {
+          CompilerType runtime_type =
+              ctx->GetTypeForDecl(compiler_decls[0].GetOpaqueDecl());
+          m_override_type =
+              is_pointer_type ? runtime_type.GetPointerType() : runtime_type;
+        }
+      }
+
       if (m_override_type.IsValid())
         return m_override_type;
     }
@@ -336,7 +411,7 @@ bool ValueObject::ResolveValue(Scalar &scalar) {
   {
     ExecutionContext exe_ctx(GetExecutionContextRef());
     Value tmp_value(m_value);
-    scalar = tmp_value.ResolveValue(&exe_ctx);
+    scalar = tmp_value.ResolveValue(&exe_ctx, GetModule().get());
     if (scalar.IsValid()) {
       const uint32_t bitfield_bit_size = GetBitfieldBitSize();
       if (bitfield_bit_size)
@@ -373,12 +448,12 @@ bool ValueObject::IsLogicalTrue(Status &error) {
   return ret;
 }
 
-ValueObjectSP ValueObject::GetChildAtIndex(size_t idx, bool can_create) {
+ValueObjectSP ValueObject::GetChildAtIndex(uint32_t idx, bool can_create) {
   ValueObjectSP child_sp;
   // We may need to update our value if we are dynamic
   if (IsPossibleDynamicType())
     UpdateValueIfNeeded(false);
-  if (idx < GetNumChildren()) {
+  if (idx < GetNumChildrenIgnoringErrors()) {
     // Check if we have already made the child value object?
     if (can_create && !m_children.HasChildAtIndex(idx)) {
       // No we haven't created the child at this index, so lets have our
@@ -394,49 +469,13 @@ ValueObjectSP ValueObject::GetChildAtIndex(size_t idx, bool can_create) {
 }
 
 lldb::ValueObjectSP
-ValueObject::GetChildAtIndexPath(llvm::ArrayRef<size_t> idxs,
-                                 size_t *index_of_error) {
-  if (idxs.size() == 0)
-    return GetSP();
-  ValueObjectSP root(GetSP());
-  for (size_t idx : idxs) {
-    root = root->GetChildAtIndex(idx, true);
-    if (!root) {
-      if (index_of_error)
-        *index_of_error = idx;
-      return root;
-    }
-  }
-  return root;
-}
-
-lldb::ValueObjectSP ValueObject::GetChildAtIndexPath(
-  llvm::ArrayRef<std::pair<size_t, bool>> idxs, size_t *index_of_error) {
-  if (idxs.size() == 0)
-    return GetSP();
-  ValueObjectSP root(GetSP());
-  for (std::pair<size_t, bool> idx : idxs) {
-    root = root->GetChildAtIndex(idx.first, idx.second);
-    if (!root) {
-      if (index_of_error)
-        *index_of_error = idx.first;
-      return root;
-    }
-  }
-  return root;
-}
-
-lldb::ValueObjectSP
-ValueObject::GetChildAtNamePath(llvm::ArrayRef<ConstString> names,
-                                ConstString *name_of_error) {
+ValueObject::GetChildAtNamePath(llvm::ArrayRef<llvm::StringRef> names) {
   if (names.size() == 0)
     return GetSP();
   ValueObjectSP root(GetSP());
-  for (ConstString name : names) {
-    root = root->GetChildMemberWithName(name, true);
+  for (llvm::StringRef name : names) {
+    root = root->GetChildMemberWithName(name);
     if (!root) {
-      if (name_of_error)
-        *name_of_error = name;
       return root;
     }
   }
@@ -460,13 +499,14 @@ lldb::ValueObjectSP ValueObject::GetChildAtNamePath(
   return root;
 }
 
-size_t ValueObject::GetIndexOfChildWithName(ConstString name) {
+size_t ValueObject::GetIndexOfChildWithName(llvm::StringRef name) {
   bool omit_empty_base_classes = true;
-  return GetCompilerType().GetIndexOfChildWithName(name.GetCString(),
+  ExecutionContext exe_ctx(GetExecutionContextRef());
+  return GetCompilerType().GetIndexOfChildWithName(name, &exe_ctx,
                                                    omit_empty_base_classes);
 }
 
-ValueObjectSP ValueObject::GetChildMemberWithName(ConstString name,
+ValueObjectSP ValueObject::GetChildMemberWithName(llvm::StringRef name,
                                                   bool can_create) {
   // We may need to update our value if we are dynamic.
   if (IsPossibleDynamicType())
@@ -481,9 +521,10 @@ ValueObjectSP ValueObject::GetChildMemberWithName(ConstString name,
   if (!GetCompilerType().IsValid())
     return ValueObjectSP();
 
+  ExecutionContext exe_ctx(GetExecutionContextRef());
   const size_t num_child_indexes =
       GetCompilerType().GetIndexOfChildMemberWithName(
-          name.GetCString(), omit_empty_base_classes, child_indexes);
+          name, &exe_ctx, omit_empty_base_classes, child_indexes);
   if (num_child_indexes == 0)
     return nullptr;
 
@@ -494,7 +535,7 @@ ValueObjectSP ValueObject::GetChildMemberWithName(ConstString name,
   return child_sp;
 }
 
-size_t ValueObject::GetNumChildren(uint32_t max) {
+llvm::Expected<uint32_t> ValueObject::GetNumChildren(uint32_t max) {
   UpdateValueIfNeeded();
 
   if (max < UINT32_MAX) {
@@ -506,9 +547,22 @@ size_t ValueObject::GetNumChildren(uint32_t max) {
   }
 
   if (!m_flags.m_children_count_valid) {
-    SetNumChildren(CalculateNumChildren());
+    auto num_children_or_err = CalculateNumChildren();
+    if (num_children_or_err)
+      SetNumChildren(*num_children_or_err);
+    else
+      return num_children_or_err;
   }
   return m_children.GetChildrenCount();
+}
+
+uint32_t ValueObject::GetNumChildrenIgnoringErrors(uint32_t max) {
+  auto value_or_err = GetNumChildren(max);
+  if (value_or_err)
+    return *value_or_err;
+  LLDB_LOG_ERRORV(GetLog(LLDBLog::DataFormatters), value_or_err.takeError(),
+                  "{0}");
+  return 0;
 }
 
 bool ValueObject::MightHaveChildren() {
@@ -518,13 +572,13 @@ bool ValueObject::MightHaveChildren() {
     if (type_info & (eTypeHasChildren | eTypeIsPointer | eTypeIsReference))
       has_children = true;
   } else {
-    has_children = GetNumChildren() > 0;
+    has_children = GetNumChildrenIgnoringErrors() > 0;
   }
   return has_children;
 }
 
 // Should only be called by ValueObject::GetNumChildren()
-void ValueObject::SetNumChildren(size_t num_children) {
+void ValueObject::SetNumChildren(uint32_t num_children) {
   m_flags.m_children_count_valid = true;
   m_children.SetChildrenCount(num_children);
 }
@@ -546,15 +600,23 @@ ValueObject *ValueObject::CreateChildAtIndex(size_t idx,
   uint64_t language_flags = 0;
 
   const bool transparent_pointers = !synthetic_array_member;
-  CompilerType child_compiler_type;
 
   ExecutionContext exe_ctx(GetExecutionContextRef());
 
-  child_compiler_type = GetCompilerType().GetChildCompilerTypeAtIndex(
-      &exe_ctx, idx, transparent_pointers, omit_empty_base_classes,
-      ignore_array_bounds, child_name_str, child_byte_size, child_byte_offset,
-      child_bitfield_bit_size, child_bitfield_bit_offset, child_is_base_class,
-      child_is_deref_of_parent, this, language_flags);
+  auto child_compiler_type_or_err =
+      GetCompilerType().GetChildCompilerTypeAtIndex(
+          &exe_ctx, idx, transparent_pointers, omit_empty_base_classes,
+          ignore_array_bounds, child_name_str, child_byte_size,
+          child_byte_offset, child_bitfield_bit_size, child_bitfield_bit_offset,
+          child_is_base_class, child_is_deref_of_parent, this, language_flags);
+  CompilerType child_compiler_type;
+  if (!child_compiler_type_or_err)
+    LLDB_LOG_ERROR(GetLog(LLDBLog::Types),
+                   child_compiler_type_or_err.takeError(),
+                   "could not find child: {0}");
+  else
+    child_compiler_type = *child_compiler_type_or_err;
+
   if (child_compiler_type) {
     if (synthetic_index)
       child_byte_offset += child_byte_size * synthetic_index;
@@ -700,7 +762,7 @@ size_t ValueObject::GetPointeeData(DataExtractor &data, uint32_t item_idx,
         return 0;
       return pointee_sp->GetData(data, error);
     } else {
-      ValueObjectSP child_sp = GetChildAtIndex(0, true);
+      ValueObjectSP child_sp = GetChildAtIndex(0);
       if (child_sp.get() == nullptr)
         return 0;
       Status error;
@@ -1005,41 +1067,46 @@ ValueObject::ReadPointedString(lldb::WritableDataBufferSP &buffer_sp,
   return {total_bytes_read, was_capped};
 }
 
-const char *ValueObject::GetObjectDescription() {
+llvm::Expected<std::string> ValueObject::GetObjectDescription() {
   if (!UpdateValueIfNeeded(true))
-    return nullptr;
+    return llvm::createStringError("could not update value");
 
   // Return cached value.
   if (!m_object_desc_str.empty())
-    return m_object_desc_str.c_str();
+    return m_object_desc_str;
 
   ExecutionContext exe_ctx(GetExecutionContextRef());
   Process *process = exe_ctx.GetProcessPtr();
   if (!process)
-    return nullptr;
+    return llvm::createStringError("no process");
 
   // Returns the object description produced by one language runtime.
-  auto get_object_description = [&](LanguageType language) -> const char * {
+  auto get_object_description =
+      [&](LanguageType language) -> llvm::Expected<std::string> {
     if (LanguageRuntime *runtime = process->GetLanguageRuntime(language)) {
       StreamString s;
-      if (runtime->GetObjectDescription(s, *this)) {
-        m_object_desc_str.append(std::string(s.GetString()));
-        return m_object_desc_str.c_str();
-      }
+      if (llvm::Error error = runtime->GetObjectDescription(s, *this))
+        return error;
+      m_object_desc_str = s.GetString();
+      return m_object_desc_str;
     }
-    return nullptr;
+    return llvm::createStringError("no native language runtime");
   };
 
   // Try the native language runtime first.
   LanguageType native_language = GetObjectRuntimeLanguage();
-  if (const char *desc = get_object_description(native_language))
+  llvm::Expected<std::string> desc = get_object_description(native_language);
+  if (desc)
     return desc;
 
   // Try the Objective-C language runtime. This fallback is necessary
   // for Objective-C++ and mixed Objective-C / C++ programs.
-  if (Language::LanguageIsCFamily(native_language))
+  if (Language::LanguageIsCFamily(native_language)) {
+    // We're going to try again, so let's drop the first error.
+    llvm::consumeError(desc.takeError());
     return get_object_description(eLanguageTypeObjC);
-  return nullptr;
+  }
+  return desc;
 }
 
 bool ValueObject::GetValueAsCString(const lldb_private::TypeFormatImpl &format,
@@ -1173,6 +1240,15 @@ bool ValueObject::DumpPrintableRepresentation(
     Stream &s, ValueObjectRepresentationStyle val_obj_display,
     Format custom_format, PrintableRepresentationSpecialCases special,
     bool do_dump_error) {
+    
+  // If the ValueObject has an error, we might end up dumping the type, which
+  // is useful, but if we don't even have a type, then don't examine the object
+  // further as that's not meaningful, only the error is.
+  if (m_error.Fail() && !GetCompilerType().IsValid()) {
+    if (do_dump_error)
+      s.Printf("<%s>", m_error.AsCString());
+    return false;
+  }
 
   Flags flags(GetTypeInfo());
 
@@ -1222,7 +1298,7 @@ bool ValueObject::DumpPrintableRepresentation(
       if (flags.Test(eTypeIsArray)) {
         if ((custom_format == eFormatBytes) ||
             (custom_format == eFormatBytesWithASCII)) {
-          const size_t count = GetNumChildren();
+          const size_t count = GetNumChildrenIgnoringErrors();
 
           s << '[';
           for (size_t low = 0; low < count; low++) {
@@ -1230,7 +1306,7 @@ bool ValueObject::DumpPrintableRepresentation(
             if (low)
               s << ',';
 
-            ValueObjectSP child = GetChildAtIndex(low, true);
+            ValueObjectSP child = GetChildAtIndex(low);
             if (!child.get()) {
               s << "<invalid child>";
               continue;
@@ -1261,7 +1337,7 @@ bool ValueObject::DumpPrintableRepresentation(
                                                      // format should be printed
                                                      // directly
         {
-          const size_t count = GetNumChildren();
+          const size_t count = GetNumChildrenIgnoringErrors();
 
           Format format = FormatManager::GetSingleItemFormat(custom_format);
 
@@ -1271,7 +1347,7 @@ bool ValueObject::DumpPrintableRepresentation(
             if (low)
               s << ',';
 
-            ValueObjectSP child = GetChildAtIndex(low, true);
+            ValueObjectSP child = GetChildAtIndex(low);
             if (!child.get()) {
               s << "<invalid child>";
               continue;
@@ -1331,16 +1407,23 @@ bool ValueObject::DumpPrintableRepresentation(
       str = GetSummaryAsCString();
       break;
 
-    case eValueObjectRepresentationStyleLanguageSpecific:
-      str = GetObjectDescription();
-      break;
+    case eValueObjectRepresentationStyleLanguageSpecific: {
+      llvm::Expected<std::string> desc = GetObjectDescription();
+      if (!desc) {
+        strm << "error: " << toString(desc.takeError());
+        str = strm.GetString();
+      } else {
+        strm << *desc;
+        str = strm.GetString();
+      }
+    } break;
 
     case eValueObjectRepresentationStyleLocation:
       str = GetLocationAsCString();
       break;
 
     case eValueObjectRepresentationStyleChildrenCount:
-      strm.Printf("%" PRIu64 "", (uint64_t)GetNumChildren());
+      strm.Printf("%" PRIu64 "", (uint64_t)GetNumChildrenIgnoringErrors());
       str = strm.GetString();
       break;
 
@@ -1374,6 +1457,8 @@ bool ValueObject::DumpPrintableRepresentation(
     if (!str.empty())
       s << str;
     else {
+      // We checked for errors at the start, but do it again here in case
+      // realizing the value for dumping produced an error.
       if (m_error.Fail()) {
         if (do_dump_error)
           s.Printf("<%s>", m_error.AsCString());
@@ -1560,6 +1645,18 @@ bool ValueObject::GetDeclaration(Declaration &decl) {
   decl.Clear();
   return false;
 }
+
+#ifdef LLDB_ENABLE_SWIFT
+std::optional<SwiftScratchContextReader> ValueObject::GetSwiftScratchContext() {
+  lldb::TargetSP target_sp(GetTargetSP());
+  if (!target_sp)
+    return std::nullopt;
+  Status error;
+  ExecutionContext ctx = GetExecutionContextRef().Lock(false);
+  auto *exe_scope = ctx.GetBestExecutionContextScope();
+  return target_sp->GetSwiftScratchContext(error, *exe_scope);
+}
+#endif // LLDB_ENABLE_SWIFT
 
 void ValueObject::AddSyntheticChild(ConstString key,
                                     ValueObject *valobj) {
@@ -1848,7 +1945,7 @@ ValueObjectSP ValueObject::GetDynamicValue(DynamicValueType use_dynamic) {
   if (!IsDynamic() && m_dynamic_value == nullptr) {
     CalculateDynamicValue(use_dynamic);
   }
-  if (m_dynamic_value)
+  if (m_dynamic_value && m_dynamic_value->GetError().Success())
     return m_dynamic_value->GetSP();
   else
     return ValueObjectSP();
@@ -2146,7 +2243,7 @@ ValueObjectSP ValueObject::GetValueForExpressionPath_Impl(
       {
         child_name.SetString(temp_expression);
         ValueObjectSP child_valobj_sp =
-            root->GetChildMemberWithName(child_name, true);
+            root->GetChildMemberWithName(child_name);
 
         if (child_valobj_sp.get()) // we know we are done, so just return
         {
@@ -2165,7 +2262,7 @@ ValueObjectSP ValueObject::GetValueForExpressionPath_Impl(
               child_valobj_sp = root->GetNonSyntheticValue();
               if (child_valobj_sp.get())
                 child_valobj_sp =
-                    child_valobj_sp->GetChildMemberWithName(child_name, true);
+                    child_valobj_sp->GetChildMemberWithName(child_name);
             }
             break;
           case GetValueForExpressionPathOptions::SyntheticChildrenTraversal::
@@ -2174,7 +2271,7 @@ ValueObjectSP ValueObject::GetValueForExpressionPath_Impl(
               child_valobj_sp = root->GetSyntheticValue();
               if (child_valobj_sp.get())
                 child_valobj_sp =
-                    child_valobj_sp->GetChildMemberWithName(child_name, true);
+                    child_valobj_sp->GetChildMemberWithName(child_name);
             }
             break;
           case GetValueForExpressionPathOptions::SyntheticChildrenTraversal::
@@ -2183,12 +2280,12 @@ ValueObjectSP ValueObject::GetValueForExpressionPath_Impl(
               child_valobj_sp = root->GetNonSyntheticValue();
               if (child_valobj_sp.get())
                 child_valobj_sp =
-                    child_valobj_sp->GetChildMemberWithName(child_name, true);
+                    child_valobj_sp->GetChildMemberWithName(child_name);
             } else {
               child_valobj_sp = root->GetSyntheticValue();
               if (child_valobj_sp.get())
                 child_valobj_sp =
-                    child_valobj_sp->GetChildMemberWithName(child_name, true);
+                    child_valobj_sp->GetChildMemberWithName(child_name);
             }
             break;
           }
@@ -2216,7 +2313,7 @@ ValueObjectSP ValueObject::GetValueForExpressionPath_Impl(
         child_name.SetString(temp_expression.slice(0, next_sep_pos));
 
         ValueObjectSP child_valobj_sp =
-            root->GetChildMemberWithName(child_name, true);
+            root->GetChildMemberWithName(child_name);
         if (child_valobj_sp.get()) // store the new root and move on
         {
           root = child_valobj_sp;
@@ -2234,7 +2331,7 @@ ValueObjectSP ValueObject::GetValueForExpressionPath_Impl(
               child_valobj_sp = root->GetNonSyntheticValue();
               if (child_valobj_sp.get())
                 child_valobj_sp =
-                    child_valobj_sp->GetChildMemberWithName(child_name, true);
+                    child_valobj_sp->GetChildMemberWithName(child_name);
             }
             break;
           case GetValueForExpressionPathOptions::SyntheticChildrenTraversal::
@@ -2243,7 +2340,7 @@ ValueObjectSP ValueObject::GetValueForExpressionPath_Impl(
               child_valobj_sp = root->GetSyntheticValue();
               if (child_valobj_sp.get())
                 child_valobj_sp =
-                    child_valobj_sp->GetChildMemberWithName(child_name, true);
+                    child_valobj_sp->GetChildMemberWithName(child_name);
             }
             break;
           case GetValueForExpressionPathOptions::SyntheticChildrenTraversal::
@@ -2252,12 +2349,12 @@ ValueObjectSP ValueObject::GetValueForExpressionPath_Impl(
               child_valobj_sp = root->GetNonSyntheticValue();
               if (child_valobj_sp.get())
                 child_valobj_sp =
-                    child_valobj_sp->GetChildMemberWithName(child_name, true);
+                    child_valobj_sp->GetChildMemberWithName(child_name);
             } else {
               child_valobj_sp = root->GetSyntheticValue();
               if (child_valobj_sp.get())
                 child_valobj_sp =
-                    child_valobj_sp->GetChildMemberWithName(child_name, true);
+                    child_valobj_sp->GetChildMemberWithName(child_name);
             }
             break;
           }
@@ -2359,14 +2456,16 @@ ValueObjectSP ValueObject::GetValueForExpressionPath_Impl(
 
         // from here on we do have a valid index
         if (root_compiler_type_info.Test(eTypeIsArray)) {
-          ValueObjectSP child_valobj_sp = root->GetChildAtIndex(index, true);
+          ValueObjectSP child_valobj_sp = root->GetChildAtIndex(index);
           if (!child_valobj_sp)
             child_valobj_sp = root->GetSyntheticArrayMember(index, true);
           if (!child_valobj_sp)
             if (root->HasSyntheticValue() &&
-                root->GetSyntheticValue()->GetNumChildren() > index)
+                llvm::expectedToStdOptional(
+                    root->GetSyntheticValue()->GetNumChildren())
+                        .value_or(0) > index)
               child_valobj_sp =
-                  root->GetSyntheticValue()->GetChildAtIndex(index, true);
+                  root->GetSyntheticValue()->GetChildAtIndex(index);
           if (child_valobj_sp) {
             root = child_valobj_sp;
             remainder =
@@ -2414,7 +2513,7 @@ ValueObjectSP ValueObject::GetValueForExpressionPath_Impl(
                  options.m_synthetic_children_traversal ==
                      GetValueForExpressionPathOptions::
                          SyntheticChildrenTraversal::Both)) {
-              root = root->GetSyntheticValue()->GetChildAtIndex(index, true);
+              root = root->GetSyntheticValue()->GetChildAtIndex(index);
             } else
               root = root->GetSyntheticArrayMember(index, true);
             if (!root) {
@@ -2445,7 +2544,7 @@ ValueObjectSP ValueObject::GetValueForExpressionPath_Impl(
             return root;
           }
         } else if (root_compiler_type_info.Test(eTypeIsVector)) {
-          root = root->GetChildAtIndex(index, true);
+          root = root->GetChildAtIndex(index);
           if (!root) {
             *reason_to_stop =
                 ValueObject::eExpressionPathScanEndReasonNoSuchChild;
@@ -2480,7 +2579,7 @@ ValueObjectSP ValueObject::GetValueForExpressionPath_Impl(
             *final_result = ValueObject::eExpressionPathEndResultTypeInvalid;
             return nullptr;
           }
-          root = root->GetChildAtIndex(index, true);
+          root = root->GetChildAtIndex(index);
           if (!root) {
             *reason_to_stop =
                 ValueObject::eExpressionPathScanEndReasonNoSuchChild;
@@ -2568,11 +2667,17 @@ ValueObjectSP ValueObject::GetValueForExpressionPath_Impl(
   }
 }
 
-void ValueObject::Dump(Stream &s) { Dump(s, DumpValueObjectOptions(*this)); }
+llvm::Error ValueObject::Dump(Stream &s) {
+  return Dump(s, DumpValueObjectOptions(*this));
+}
 
-void ValueObject::Dump(Stream &s, const DumpValueObjectOptions &options) {
-  ValueObjectPrinter printer(this, &s, options);
-  printer.PrintValueObject();
+llvm::Error ValueObject::Dump(Stream &s,
+                              const DumpValueObjectOptions &options) {
+#ifdef LLDB_ENABLE_SWIFT
+  auto swift_scratch_ctx_lock = SwiftScratchContextLock(GetSwiftExeCtx(*this));
+#endif // LLDB_ENABLE_SWIFT
+  ValueObjectPrinter printer(*this, &s, options);
+  return printer.PrintValueObject();
 }
 
 ValueObjectSP ValueObject::CreateConstantValue(ConstString name) {
@@ -2606,34 +2711,30 @@ ValueObjectSP ValueObject::CreateConstantValue(ConstString name) {
 
 ValueObjectSP ValueObject::GetQualifiedRepresentationIfAvailable(
     lldb::DynamicValueType dynValue, bool synthValue) {
-  ValueObjectSP result_sp(GetSP());
-
+  ValueObjectSP result_sp;
   switch (dynValue) {
   case lldb::eDynamicCanRunTarget:
   case lldb::eDynamicDontRunTarget: {
-    if (!result_sp->IsDynamic()) {
-      if (result_sp->GetDynamicValue(dynValue))
-        result_sp = result_sp->GetDynamicValue(dynValue);
-    }
+    if (!IsDynamic())
+      result_sp = GetDynamicValue(dynValue);
   } break;
   case lldb::eNoDynamicValues: {
-    if (result_sp->IsDynamic()) {
-      if (result_sp->GetStaticValue())
-        result_sp = result_sp->GetStaticValue();
-    }
+    if (IsDynamic())
+      result_sp = GetStaticValue();
   } break;
   }
+  if (!result_sp)
+    result_sp = GetSP();
+  assert(result_sp);
 
-  if (synthValue) {
-    if (!result_sp->IsSynthetic()) {
-      if (result_sp->GetSyntheticValue())
-        result_sp = result_sp->GetSyntheticValue();
-    }
-  } else {
-    if (result_sp->IsSynthetic()) {
-      if (result_sp->GetNonSyntheticValue())
-        result_sp = result_sp->GetNonSyntheticValue();
-    }
+  bool is_synthetic = result_sp->IsSynthetic();
+  if (synthValue && !is_synthetic) {
+    if (auto synth_sp = result_sp->GetSyntheticValue())
+      return synth_sp;
+  }
+  if (!synthValue && is_synthetic) {
+    if (auto non_synth_sp = result_sp->GetNonSyntheticValue())
+      return non_synth_sp;
   }
 
   return result_sp;
@@ -2657,16 +2758,23 @@ ValueObjectSP ValueObject::Dereference(Status &error) {
     bool child_is_deref_of_parent = false;
     const bool transparent_pointers = false;
     CompilerType compiler_type = GetCompilerType();
-    CompilerType child_compiler_type;
     uint64_t language_flags = 0;
 
     ExecutionContext exe_ctx(GetExecutionContextRef());
 
-    child_compiler_type = compiler_type.GetChildCompilerTypeAtIndex(
+    CompilerType child_compiler_type;
+    auto child_compiler_type_or_err = compiler_type.GetChildCompilerTypeAtIndex(
         &exe_ctx, 0, transparent_pointers, omit_empty_base_classes,
         ignore_array_bounds, child_name_str, child_byte_size, child_byte_offset,
         child_bitfield_bit_size, child_bitfield_bit_offset, child_is_base_class,
         child_is_deref_of_parent, this, language_flags);
+    if (!child_compiler_type_or_err)
+      LLDB_LOG_ERROR(GetLog(LLDBLog::Types),
+                     child_compiler_type_or_err.takeError(),
+                     "could not find child: {0}");
+    else
+      child_compiler_type = *child_compiler_type_or_err;
+
     if (child_compiler_type && child_byte_size) {
       ConstString child_name;
       if (!child_name_str.empty())
@@ -2704,12 +2812,9 @@ ValueObjectSP ValueObject::Dereference(Status &error) {
 
   } else if (HasSyntheticValue()) {
     m_deref_valobj =
-        GetSyntheticValue()
-            ->GetChildMemberWithName(ConstString("$$dereference$$"), true)
-            .get();
+        GetSyntheticValue()->GetChildMemberWithName("$$dereference$$").get();
   } else if (IsSynthetic()) {
-    m_deref_valobj =
-        GetChildMemberWithName(ConstString("$$dereference$$"), true).get();
+    m_deref_valobj = GetChildMemberWithName("$$dereference$$").get();
   }
 
   if (m_deref_valobj) {
@@ -2774,8 +2879,42 @@ ValueObjectSP ValueObject::AddressOf(Status &error) {
   return m_addr_of_valobj_sp;
 }
 
+ValueObjectSP ValueObject::DoCast(const CompilerType &compiler_type) {
+    return ValueObjectCast::Create(*this, GetName(), compiler_type);
+}
+
 ValueObjectSP ValueObject::Cast(const CompilerType &compiler_type) {
-  return ValueObjectCast::Create(*this, GetName(), compiler_type);
+  // Only allow casts if the original type is equal or larger than the cast
+  // type, unless we know this is a load address.  Getting the size wrong for
+  // a host side storage could leak lldb memory, so we absolutely want to 
+  // prevent that.  We may not always get the right value, for instance if we
+  // have an expression result value that's copied into a storage location in
+  // the target may not have copied enough memory.  I'm not trying to fix that
+  // here, I'm just making Cast from a smaller to a larger possible in all the
+  // cases where that doesn't risk making a Value out of random lldb memory.
+  // You have to check the ValueObject's Value for the address types, since
+  // ValueObjects that use live addresses will tell you they fetch data from the
+  // live address, but once they are made, they actually don't.
+  // FIXME: Can we make ValueObject's with a live address fetch "more data" from
+  // the live address if it is still valid?
+
+  Status error;
+  CompilerType my_type = GetCompilerType();
+
+  ExecutionContextScope *exe_scope 
+      = ExecutionContext(GetExecutionContextRef())
+          .GetBestExecutionContextScope();
+  if (compiler_type.GetByteSize(exe_scope)
+      <= GetCompilerType().GetByteSize(exe_scope) 
+      || m_value.GetValueType() == Value::ValueType::LoadAddress)
+        return DoCast(compiler_type);
+
+  error.SetErrorString("Can only cast to a type that is equal to or smaller "
+                       "than the orignal type.");
+
+  return ValueObjectConstResult::Create(
+      ExecutionContext(GetExecutionContextRef()).GetBestExecutionContextScope(),
+                       error);
 }
 
 lldb::ValueObjectSP ValueObject::Clone(ConstString new_name) {
@@ -2841,7 +2980,7 @@ ValueObject::EvaluationPoint::EvaluationPoint(ExecutionContextScope *exe_scope,
         StackFrameSP frame_sp(exe_ctx.GetFrameSP());
         if (!frame_sp) {
           if (use_selected)
-            frame_sp = thread_sp->GetSelectedFrame();
+            frame_sp = thread_sp->GetSelectedFrame(DoNoSelectMostRelevantFrame);
         }
         if (frame_sp)
           m_exe_ctx_ref.SetFrameSP(frame_sp);
@@ -3130,9 +3269,18 @@ ValueObjectSP ValueObject::Persist() {
   if (!target_sp)
     return nullptr;
 
-  PersistentExpressionState *persistent_state =
-      target_sp->GetPersistentExpressionStateForLanguage(
-          GetPreferredDisplayLanguage());
+  PersistentExpressionState *persistent_state;
+#ifdef LLDB_ENABLE_SWIFT
+  if (GetPreferredDisplayLanguage() == eLanguageTypeSwift) {
+    ExecutionContext ctx = GetExecutionContextRef().Lock(false);
+    auto *exe_scope = ctx.GetBestExecutionContextScope();
+    if (!exe_scope)
+      return nullptr;
+    persistent_state = target_sp->GetSwiftPersistentExpressionState(*exe_scope);
+  } else
+#endif // LLDB_ENABLE_SWIFT
+    persistent_state = target_sp->GetPersistentExpressionStateForLanguage(
+        GetPreferredDisplayLanguage());
 
   if (!persistent_state)
     return nullptr;
@@ -3148,4 +3296,8 @@ ValueObjectSP ValueObject::Persist() {
   persistent_var_sp->m_flags |= ExpressionVariable::EVIsProgramReference;
 
   return persistent_var_sp->GetValueObject();
+}
+
+lldb::ValueObjectSP ValueObject::GetVTable() {
+  return ValueObjectVTable::Create(*this);
 }

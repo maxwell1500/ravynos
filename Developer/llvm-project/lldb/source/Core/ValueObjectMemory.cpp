@@ -121,22 +121,30 @@ ConstString ValueObjectMemory::GetTypeName() {
 }
 
 ConstString ValueObjectMemory::GetDisplayTypeName() {
+  const SymbolContext *sc = nullptr;
+  if (GetFrameSP())
+    sc = &GetFrameSP()->GetSymbolContext(eSymbolContextFunction);
+
   if (m_type_sp)
-    return m_type_sp->GetForwardCompilerType().GetDisplayTypeName();
-  return m_compiler_type.GetDisplayTypeName();
+    return m_type_sp->GetForwardCompilerType().GetDisplayTypeName(sc);
+  return m_compiler_type.GetDisplayTypeName(sc);
 }
 
-size_t ValueObjectMemory::CalculateNumChildren(uint32_t max) {
+llvm::Expected<uint32_t> ValueObjectMemory::CalculateNumChildren(uint32_t max) {
   if (m_type_sp) {
     auto child_count = m_type_sp->GetNumChildren(true);
-    return child_count <= max ? child_count : max;
+    if (!child_count)
+      return child_count;
+    return *child_count <= max ? *child_count : max;
   }
 
   ExecutionContext exe_ctx(GetExecutionContextRef());
   const bool omit_empty_base_classes = true;
   auto child_count =
       m_compiler_type.GetNumChildren(omit_empty_base_classes, &exe_ctx);
-  return child_count <= max ? child_count : max;
+  if (!child_count)
+    return child_count;
+  return *child_count <= max ? *child_count : max;
 }
 
 std::optional<uint64_t> ValueObjectMemory::GetByteSize() {

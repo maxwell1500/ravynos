@@ -19,8 +19,8 @@
 #include "clang/Frontend/TextDiagnosticPrinter.h"
 #include "clang/Frontend/Utils.h"
 #include "llvm/ADT/STLExtras.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringSwitch.h"
-#include "llvm/ADT/Triple.h"
 #include "llvm/IR/DataLayout.h"
 #include "llvm/MC/MCAsmBackend.h"
 #include "llvm/MC/MCAsmInfo.h"
@@ -44,7 +44,6 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/FormattedStream.h"
-#include "llvm/Support/Host.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Process.h"
@@ -53,6 +52,8 @@
 #include "llvm/Support/TargetSelect.h"
 #include "llvm/Support/Timer.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/TargetParser/Host.h"
+#include "llvm/TargetParser/Triple.h"
 #include <memory>
 #include <optional>
 #include <system_error>
@@ -97,7 +98,7 @@ struct AssemblerInvocation {
   std::string DwarfDebugFlags;
   std::string DwarfDebugProducer;
   std::string DebugCompilationDir;
-  std::map<const std::string, const std::string> DebugPrefixMap;
+  llvm::SmallVector<std::pair<std::string, std::string>, 0> DebugPrefixMap;
   llvm::DebugCompressionType CompressDebugSections =
       llvm::DebugCompressionType::None;
   std::string MainFileName;
@@ -142,6 +143,10 @@ struct AssemblerInvocation {
   /// Whether to emit DWARF unwind info.
   EmitDwarfUnwindType EmitDwarfUnwind;
 
+  // Whether to emit compact-unwind for non-canonical entries.
+  // Note: maybe overriden by other constraints.
+  unsigned EmitCompactUnwindNonCanonical : 1;
+
   /// The name of the relocation model to use.
   std::string RelocationModel;
 
@@ -156,6 +161,13 @@ struct AssemblerInvocation {
   /// The version of the darwin target variant SDK which was used during the
   /// compilation
   llvm::VersionTuple DarwinTargetVariantSDKVersion;
+
+  /// The ptrauth ABI version targeted by the backend.
+  unsigned PointerAuthABIVersion;
+  /// Whether the ptrauth ABI version represents a kernel ABI.
+  unsigned PointerAuthKernelABIVersion : 1;
+  /// Whether the assembler should encode the ptrauth ABI version.
+  unsigned PointerAuthABIVersionEncoded : 1;
 
   /// The name of a file to use with \c .secure_log_unique directives.
   std::string AsSecureLogFile;
@@ -181,6 +193,7 @@ public:
     DwarfVersion = 0;
     EmbedBitcode = 0;
     EmitDwarfUnwind = EmitDwarfUnwindType::Default;
+    EmitCompactUnwindNonCanonical = false;
   }
 
   static bool CreateFromArgs(AssemblerInvocation &Res,
@@ -275,8 +288,7 @@ bool AssemblerInvocation::CreateFromArgs(AssemblerInvocation &Opts,
 
   for (const auto &Arg : Args.getAllArgValues(OPT_fdebug_prefix_map_EQ)) {
     auto Split = StringRef(Arg).split('=');
-    Opts.DebugPrefixMap.insert(
-        {std::string(Split.first), std::string(Split.second)});
+    Opts.DebugPrefixMap.emplace_back(Split.first, Split.second);
   }
 
   // Frontend Options
@@ -331,6 +343,14 @@ bool AssemblerInvocation::CreateFromArgs(AssemblerInvocation &Opts,
       Args.hasArg(OPT_mincremental_linker_compatible);
   Opts.SymbolDefs = Args.getAllArgValues(OPT_defsym);
 
+  Opts.PointerAuthABIVersionEncoded =
+      Args.hasArg(OPT_fptrauth_abi_version_EQ) ||
+      Args.hasArg(OPT_fptrauth_kernel_abi_version);
+  Opts.PointerAuthABIVersion =
+    getLastArgIntValue(Args, OPT_fptrauth_abi_version_EQ, 0, Diags);
+  Opts.PointerAuthKernelABIVersion =
+      Args.hasArg(OPT_fptrauth_kernel_abi_version);
+
   // EmbedBitcode Option. If -fembed-bitcode is enabled, set the flag.
   // EmbedBitcode behaves the same for all embed options for assembly files.
   if (auto *A = Args.getLastArg(OPT_fembed_bitcode_EQ)) {
@@ -348,6 +368,9 @@ bool AssemblerInvocation::CreateFromArgs(AssemblerInvocation &Opts,
             .Case("no-compact-unwind", EmitDwarfUnwindType::NoCompactUnwind)
             .Case("default", EmitDwarfUnwindType::Default);
   }
+
+  Opts.EmitCompactUnwindNonCanonical =
+      Args.hasArg(OPT_femit_compact_unwind_non_canonical);
 
   Opts.AsSecureLogFile = Args.getLastArgValue(OPT_as_secure_log_file);
 
@@ -384,8 +407,8 @@ static bool ExecuteAssemblerImpl(AssemblerInvocation &Opts,
       MemoryBuffer::getFileOrSTDIN(Opts.InputFile, /*IsText=*/true);
 
   if (std::error_code EC = Buffer.getError()) {
-    Error = EC.message();
-    return Diags.Report(diag::err_fe_error_reading) << Opts.InputFile;
+    return Diags.Report(diag::err_fe_error_reading)
+           << Opts.InputFile << EC.message();
   }
 
   SourceMgr SrcMgr;
@@ -402,6 +425,7 @@ static bool ExecuteAssemblerImpl(AssemblerInvocation &Opts,
 
   MCTargetOptions MCOptions;
   MCOptions.EmitDwarfUnwind = Opts.EmitDwarfUnwind;
+  MCOptions.EmitCompactUnwindNonCanonical = Opts.EmitCompactUnwindNonCanonical;
   MCOptions.AsSecureLogFile = Opts.AsSecureLogFile;
 
   std::unique_ptr<MCAsmInfo> MAI(
@@ -551,6 +575,11 @@ static bool ExecuteAssemblerImpl(AssemblerInvocation &Opts,
 
   // Assembly to object compilation should leverage assembly info.
   Str->setUseAssemblerInfoForParsing(true);
+
+  // Emit the ptrauth ABI version, if any.
+  if (Opts.PointerAuthABIVersionEncoded)
+    Str->EmitPtrAuthABIVersion(Opts.PointerAuthABIVersion,
+                               Opts.PointerAuthKernelABIVersion);
 
   bool Failed = false;
 
