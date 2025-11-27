@@ -22,7 +22,6 @@
  */
 #ifndef KLD
 #include <string.h>
-#include <strings.h> /* cctools-port: For bcmp, bzero ... */
 #include <stdlib.h>
 #include <stdbool.h>
 #include <stdio.h>

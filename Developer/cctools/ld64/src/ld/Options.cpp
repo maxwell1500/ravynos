@@ -23,25 +23,18 @@
  */
 
 
-#include <ctype.h> // ld64-port
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <mach/vm_prot.h>
-#ifdef __APPLE__ // ld64-port
 #include <sys/sysctl.h>
-#endif
 #include <mach-o/dyld.h>
 #include <fcntl.h>
 #include <errno.h>
 #include <string.h>
-#ifndef __ANDROID__ // ld64-port
 #include <spawn.h>
-#endif
 #include <cxxabi.h>
 #include <Availability.h>
-#ifdef TAPI_SUPPORT
 #include <tapi/tapi.h>
-#endif /* TAPI_SUPPORT */
 
 #include <vector>
 #include <map>
@@ -71,16 +64,11 @@ namespace lto {
 // magic to place command line in crash reports
 const int crashreporterBufferSize = 2000;
 static char crashreporterBuffer[crashreporterBufferSize];
-#if defined(__has_include) && __has_include(<CrashReporterClient.h>) // ld64-port
-#define HAVE_CRASHREPORTER_HEADER 1
-#else
-#define HAVE_CRASHREPORTER_HEADER 0
-#endif
-#if __MAC_OS_X_VERSION_MIN_REQUIRED >= 1070 && HAVE_CRASHREPORTER_HEADER
+#if 0 //__MAC_OS_X_VERSION_MIN_REQUIRED >= 1070
 	#include <CrashReporterClient.h>
 	// hack until ld does not need to build on 10.6 anymore
-    struct crashreporter_annotations_t gCRAnnotations
-        __attribute__((section("__DATA," CRASHREPORTER_ANNOTATIONS_SECTION)))
+    struct crashreporter_annotations_t gCRAnnotations 
+        __attribute__((section("__DATA," CRASHREPORTER_ANNOTATIONS_SECTION))) 
         = { CRASHREPORTER_ANNOTATIONS_VERSION, 0, 0, 0, 0, 0, 0 };
 #else
 	extern "C" char* __crashreporter_info__;
@@ -223,11 +211,7 @@ Options::Options(int argc, const char* argv[])
 	  fForceObjCRelativeMethodListsOn(false), fForceObjCRelativeMethodListsOff(false), fUseObjCRelativeMethodLists(false),
 	  fSaveTempFiles(false), fLinkSnapshot(this), fSnapshotRequested(false), fPipelineFifo(NULL),
 	  fDependencyInfoPath(NULL), fBuildContextName(NULL), fTraceFileDescriptor(-1), fMaxDefaultCommonAlign(0),
-	  fUnalignedPointerTreatment(kUnalignedPointerIgnore),
-#ifdef TAPI_SUPPORT
-	  fPreferTAPIFile(false),
-#endif
-	  fOSOPrefixPath(NULL)
+	  fUnalignedPointerTreatment(kUnalignedPointerIgnore), fPreferTAPIFile(false), fOSOPrefixPath(NULL)
 {
 	this->expandResponseFiles(argc, argv);
 	this->checkForClassic(argc, argv);
@@ -949,8 +933,6 @@ static std::string replace_extension(const std::string &path, const std::string 
 	return result;
 }
 
-#ifdef TAPI_SUPPORT
-
 void Options::addTAPIInterface(tapi::LinkerInterfaceFile* interface, const char *path) const {
 #if ((TAPI_API_VERSION_MAJOR == 1 &&  TAPI_API_VERSION_MINOR >= 3) || (TAPI_API_VERSION_MAJOR > 1))
 	if (tapi::APIVersion::isAtLeast(1, 3)) {
@@ -961,11 +943,8 @@ void Options::addTAPIInterface(tapi::LinkerInterfaceFile* interface, const char 
 #endif
 }
 
-#endif /* TAPI_SUPPORT */
-
 bool Options::findFile(const std::string &path, const std::vector<std::string> &tbdExtensions, FileInfo& result) const
 {
-#ifdef TAPI_SUPPORT
 	FileInfo tbdInfo;
 	for ( const auto &ext : tbdExtensions ) {
 		auto newPath = replace_extension(path, ext);
@@ -975,22 +954,14 @@ bool Options::findFile(const std::string &path, const std::vector<std::string> &
 		if ( found )
 			break;
 	}
-#endif
 
 	FileInfo dylibInfo;
 	{
 		bool found = dylibInfo.checkFileExists(*this, path.c_str());
 		if ( fTraceDylibSearching )
 			printf("[Logging for XBS]%sfound library: '%s'\n", (found ? " " : " not "), path.c_str());
-		// ld64-port
-#ifndef TAPI_SUPPORT
-		if ( found )
-			result = dylibInfo;
-		return found;
-#endif
 	}
 
-#ifdef TAPI_SUPPORT
 	// There is only a text-based stub file or a dynamic library file.
 	if ( tbdInfo.missing() != dylibInfo.missing() ) {
 		result = tbdInfo.missing() ? dylibInfo : tbdInfo;
@@ -1020,9 +991,6 @@ bool Options::findFile(const std::string &path, const std::vector<std::string> &
 		return false;
 	}
 	return true;
-#else
-	return false;
-#endif
 }
 
 static bool startsWith(const std::string& str, const std::string& prefix)
@@ -1088,7 +1056,6 @@ Options::FileInfo Options::findFile(const std::string &path, const ld::dylib::Fi
 		}
 	}
 
-#ifdef TAPI_SUPPORT
 	// find inlined TBD file before raw path.
 	// rdar://problem/35864452
 	if (hasInlinedTAPIFile(path)) {
@@ -1096,7 +1063,6 @@ Options::FileInfo Options::findFile(const std::string &path, const ld::dylib::Fi
 		inlinedFile.isInlined = true;
 		return inlinedFile;
 	}
-#endif /* TAPI_SUPPORT */
 
 	// try raw path
 	if ( findFile(path, {".tbd"}, result) )
@@ -1105,8 +1071,6 @@ Options::FileInfo Options::findFile(const std::string &path, const ld::dylib::Fi
 	// not found
 	throwf("file not found: %s", path.c_str());
 }
-
-#ifdef TAPI_SUPPORT
 
 bool Options::hasInlinedTAPIFile(const std::string &path) const {
 	for (const auto &dylib : fTAPIFiles) {
@@ -1121,12 +1085,12 @@ tapi::LinkerInterfaceFile* Options::findTAPIFile(const std::string &path) const
 #if ((TAPI_API_VERSION_MAJOR == 1 &&  TAPI_API_VERSION_MINOR >= 3) || (TAPI_API_VERSION_MAJOR > 1))
 	tapi::LinkerInterfaceFile* interface = nullptr;
 	std::string TBDPath;
-
+	
 	// create parsing options.
 	tapi::ParsingFlags flags = tapi::ParsingFlags::None;
 	if (enforceDylibSubtypesMatch())
 		flags |= tapi::ParsingFlags::ExactCpuSubType;
-
+	
 	if (!allowWeakImports())
 		flags |= tapi::ParsingFlags::DisallowWeakImports;
 
@@ -1173,7 +1137,6 @@ tapi::LinkerInterfaceFile* Options::findTAPIFile(const std::string &path) const
 #endif
 }
 
-#endif /* TAPI_SUPPORT */
 // search for indirect dylib first using -F and -L paths first
 Options::FileInfo Options::findIndirectDylib(const std::string& installName, const ld::dylib::File* fromDylib) const
 {
@@ -4243,24 +4206,11 @@ void Options::buildSearchPaths(int argc, const char* argv[])
 			fprintf(stderr, "configured to support archs: %s\n", ALL_SUPPORTED_ARCHS);
 			 // if only -v specified, exit cleanly
 			 if ( argc == 2 ) {
-				// ld64-port:
-				//  The argc == 2 check before printing the LTO library seems an attempt
-				//  to hide the broken '-lto_library <lib>' implementation.
-				//  The library is normally loaded _after_ command parsing and therefore "-lto_library <path>"
-				//  is ignored and the library is loaded from the default path.
-				//  So as a workaround 'ld -lto_library <lib> -v' will not print the LTO version...
-				//  And as a workaround for the workaround I have added "LIBLTO=<lib>"
-				//  env. variable to ld64-port.
-#ifdef LTO_SUPPORT
 				const char* ltoVers = lto::version();
-
 				if ( ltoVers != NULL )
 					fprintf(stderr, "LTO support using: %s (static support for %d, runtime is %d)\n",
 							ltoVers, lto::static_api_version(), lto::runtime_api_version());
-#endif /* LTO_SUPPORT */
-#ifdef TAPI_SUPPORT
 				fprintf(stderr, "TAPI support using: %s\n", tapi::Version::getFullVersionAsString().c_str());
-#endif /* TAPI_SUPPORT */
 				exit(0);
 			}
 		}
@@ -4282,7 +4232,6 @@ void Options::buildSearchPaths(int argc, const char* argv[])
 			}
 			fprintf(stdout, "\n\t],\n");
 
-#ifdef LTO_SUPPORT
 			const char* ltoVers = lto::version();
 			if ( ltoVers != NULL ) {
 				fprintf(stdout, "\t\"lto\": {\n");
@@ -4291,13 +4240,11 @@ void Options::buildSearchPaths(int argc, const char* argv[])
 				fprintf(stdout, "\t\t\"version_string\": \"%s\"\n", ltoVers);
 				fprintf(stdout, "\t},\n");
 			}
-#endif /* LTO_SUPPORT */
-#ifdef TAPI_SUPPORT
+
 			fprintf(stdout, "\t\"tapi\": {\n");
 			fprintf(stdout, "\t\t\"version\": \"%s\",\n", tapi::Version::getAsString().c_str());
 			fprintf(stdout, "\t\t\"version_string\": \"%s\"\n", tapi::Version::getFullVersionAsString().c_str());
 			fprintf(stdout, "\t}\n");
-#endif /* TAPI_SUPPORT */
 			fprintf(stdout, "}\n");
 			// if only -version_json specified, exit cleanly
 			if ( argc == 2 ) {
@@ -4329,9 +4276,6 @@ void Options::buildSearchPaths(int argc, const char* argv[])
 			fDependencyInfoPath = path;
 		}
 		else if ( strcmp(argv[i], "-bitcode_bundle") == 0 ) {
-#if !defined(HAVE_XAR_XAR_H) || !defined(LTO_SUPPORT) // ld64-port
-			throwf("-bitcode_bundle support via llvm/libxar not compiled in");
-#endif // !HAVE_XAR_XAR_H || !LTO_SUPPORT
 			fBundleBitcode = true;
 		}
 		else if ( strcmp(argv[i], "-platform_version") == 0 ) {
@@ -4584,10 +4528,9 @@ void Options::parsePreCommandLineEnvironmentSettings()
 
 	// <rdar://problem/38679559> ld64 should consider RC_RELEASE when calculating a binary's UUID
 	fBuildContextName = getenv("RC_RELEASE");
-#ifdef TAPI_SUPPORT
+	
 	if (getenv("LD_PREFER_TAPI_FILE") != NULL)
 		fPreferTAPIFile = true;
-#endif
 
 }
 
@@ -5559,7 +5502,6 @@ void Options::reconfigureDefaults()
 		// if no version was explicitly set on the commandline or by an environment variable, and the
 		// the platform is macOS then set the min version to the current
 		if ( !fPlatfromVersionCmdFound && !inferredFromSDKpath && (fSDKVersion == 0) && platforms().contains(ld::Platform::macOS)
-#ifdef __APPLE__ // ld64-port
 			&& !(getenv("RC_ProjectName") && getenv("MACOSX_DEPLOYMENT_TARGET")) && (fOutputKind != Options::kObjectFile) ) {
 			int mib[2] = { CTL_KERN, KERN_OSRELEASE };
 			char kernVersStr[100];
@@ -5569,9 +5511,6 @@ void Options::reconfigureDefaults()
 				int minor = (kernVers >> 16) - 4;  // kernel major version is 4 ahead of x in 10.
 				fPlatforms.updateSDKVersion(ld::Platform::macOS, (0x000A0000 + (minor << 8)));
 			}
-#else
-			fPlatforms.updateSDKVersion(ld::Platform::macOS, parseVersionNumber32("10.6")); // ld64-port: claim we are on 10.6
-#endif
 		}
 	}
 
@@ -6467,7 +6406,7 @@ void Options::checkForClassic(int argc, const char* argv[])
 	bool newLinker = false;
 	
 	// build command line buffer in case ld crashes
-#if __MAC_OS_X_VERSION_MIN_REQUIRED >= 1070 && HAVE_CRASHREPORTER_HEADER // ld64-port: added && HAVE_CRASHREPORTER_HEADER
+#if 0 //__MAC_OS_X_VERSION_MIN_REQUIRED >= 1070
 	CRSetCrashLogMessage(crashreporterBuffer);
 #endif
 	const char* srcRoot = getenv("SRCROOT");

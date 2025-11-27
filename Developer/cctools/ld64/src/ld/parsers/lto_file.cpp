@@ -22,19 +22,16 @@
  * @APPLE_LICENSE_HEADER_END@
  */
 
-#ifdef LTO_SUPPORT
-
 #ifndef __LTO_READER_H__
 #define __LTO_READER_H__
 
 #include <stdlib.h>
-#include <pthread.h>
 #include <sys/param.h>
 #include <sys/fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <errno.h>
-#include <pthread.h> // ld64-port
+#include <pthread.h>
 #include <mach-o/dyld.h>
 #include <dlfcn.h>
 #include <atomic>
@@ -51,15 +48,6 @@
 #include "macho_relocatable_file.h"
 #include "lto_file.h"
 
-// ld64-port: We keep this even though it has been removed upstream
-// as I am not sure if it won't break anything on all supported
-// platforms.
-
-// #defines are a work around for <rdar://problem/8760268>
-#undef __STDC_LIMIT_MACROS      // ld64-port
-#undef __STDC_CONSTANT_MACROS   // ld64-port
-#define __STDC_LIMIT_MACROS 1
-#define __STDC_CONSTANT_MACROS 1
 #include "llvm-c/lto.h"
 
 
@@ -857,23 +845,11 @@ std::tuple<uint8_t *, size_t> Parser::codegen(const OptimizeOptions& options,
 	uint32_t bufSize = PATH_MAX;
 	if ( _NSGetExecutablePath(path, &bufSize) != -1 ) {
 		char* lastSlash = strrchr(path, '/');
-		struct stat statInfo; // ld64-port
 		if ( lastSlash != NULL ) {
-			// ld64-port start
-			char* lastHyphen = strrchr(path, '-');
-			if ( lastHyphen != NULL && lastHyphen <= path + PATH_MAX - 4 ) {
-				strcpy(lastHyphen+1, "as");
-				if ( stat(path, &statInfo) == 0 ) {
-					::lto_codegen_set_assembler_path(generator, path);
-					goto assembler_found;
-				}
-			}
-			// ld64-port end
 			strcpy(lastSlash+1, "as");
-			//struct stat statInfo;
+			struct stat statInfo;
 			if ( stat(path, &statInfo) == 0 )
 				::lto_codegen_set_assembler_path(generator, path);
-			assembler_found:; // ld64-port
 		}
 	}
 #endif
@@ -1763,12 +1739,7 @@ unsigned int static_api_version()
 //
 unsigned int runtime_api_version()
 {
-// ld64-port: Added #if
-#if LTO_API_VERSION >= 17
 	return ::lto_api_version();
-#else
-	return -1;
-#endif
 }
 
 
@@ -1812,25 +1783,7 @@ static std::atomic<bool> sLTOIsLoaded(false);
 
 static void *getHandle() {
   auto impl = [&]() -> void* {
-#ifndef __APPLE__ // ld64-port
-    static char lib[PATH_MAX] = "";
-    if (char *p = getenv("LIBLTO")) {
-      strlcpy(lib, p, sizeof(lib));
-    } else {
-      strlcpy(lib, sLTODylib, sizeof(lib));
-    }
-    if (!strncmp(lib, "@rpath/", strlen("@rpath/")))
-      memmove(lib, lib + strlen("@rpath/"), strlen(lib) - strlen("@rpath/") + 1);
-    char *ext = strrchr(lib, '.');
-    if (ext && !strcmp(ext, ".dylib"))
-      strcpy(ext, ".so");
-    sLTODylib = lib;
-#endif
     void *handle = ::dlopen(sLTODylib, RTLD_LAZY);
-#ifndef __APPLE__ // ld64-port
-    if (!handle)
-      handle = ::dlopen("libLTO.so", RTLD_LAZY);
-#endif
     if (handle)
       sLTOIsLoaded.store(true);
     return handle;
@@ -1880,8 +1833,6 @@ public:
 
 extern "C" {
 
-// ld64-port: Added LTO_API_VERSION checks
-
 #define WRAP_LTO_SYMBOL(RET, NAME, PARAMS, ARGS)                               \
   RET NAME PARAMS {                                                            \
     static LTOSymbol<RET PARAMS> x(#NAME);                                     \
@@ -1908,13 +1859,10 @@ WRAP_LTO_SYMBOL(lto_symbol_attributes, lto_module_get_symbol_attribute,
                 (lto_module_t mod, unsigned int index), (mod, index))
 WRAP_LTO_SYMBOL(lto_bool_t, lto_codegen_add_module,
                 (lto_code_gen_t cg, lto_module_t mod), (cg, mod))
-#if LTO_API_VERSION >= 18
 WRAP_LTO_SYMBOL(lto_bool_t, lto_module_is_thinlto, (lto_module_t mod), (mod))
-#endif
 
 WRAP_LTO_SYMBOL(void, lto_codegen_set_module,
                 (lto_code_gen_t cg, lto_module_t mod), (cg, mod))
-#if LTO_API_VERSION >= 18
 WRAP_LTO_SYMBOL(void, thinlto_codegen_add_module,
                 (thinlto_code_gen_t cg, const char *identifier,
                  const char *data, int length),
@@ -1962,7 +1910,6 @@ WRAP_LTO_SYMBOL(void, thinlto_codegen_set_codegen_only,
                 (cg, codegen_only))
 WRAP_LTO_SYMBOL(void, thinlto_debug_options,
                 (const char *const *options, int number), (options, number))
-#endif // LTO_API_VERSION >= 18
 
 WRAP_LTO_SYMBOL(lto_code_gen_t, lto_codegen_create_in_local_context, (void), ())
 WRAP_LTO_SYMBOL(void, lto_codegen_set_diagnostic_handler,
@@ -2017,4 +1964,3 @@ WRAP_LTO_SYMBOL(void, lto_codegen_add_must_preserve_symbol,
 
 #endif
 
-#endif /* LTO SUPPORT */

@@ -23,7 +23,7 @@
  */
  
 // start temp HACK for cross builds
-//extern "C" double log2 ( double ); // ld64-port: commented
+extern "C" double log2 ( double );
 //#define __MATH__
 // end temp HACK for cross builds
 
@@ -37,10 +37,7 @@
 #include <errno.h>
 #include <limits.h>
 #include <unistd.h>
-#if HAVE_EXECINFO_H // ld64-port
 #include <execinfo.h>
-#endif // HAVE_EXECINFO_H
-#include "find_executable.h" // ld64-port
 #include <mach/mach_time.h>
 #include <mach/vm_statistics.h>
 #include <mach/mach_init.h>
@@ -50,7 +47,6 @@
 #include <dlfcn.h>
 #include <AvailabilityMacros.h>
 
-#include <iostream>
 #include <string>
 #include <map>
 #include <set>
@@ -1495,14 +1491,11 @@ int main(int argc, const char* argv[])
 		// create object to track command line arguments
 		Options options(argc, argv);
 		InternalState state(options);
-
-#ifdef LTO_SUPPORT
 		
 		// allow libLTO to be overridden by command line -lto_library
 		if (const char *dylib = options.overridePathlibLTO())
 			lto::set_library(dylib);
-#endif
-
+		
 		// gather vm stats
 		if ( options.printStatistics() )
 			getVMInfo(statistics.vmStart);
@@ -1544,9 +1537,7 @@ int main(int argc, const char* argv[])
 		ld::passes::branch_island::doPass(options, state);	// must be after stubs and order pass
 		ld::passes::dtrace::doPass(options, state);
 		ld::passes::compact_unwind::doPass(options, state);  // must be after order pass
-#if defined(HAVE_XAR_XAR_H) && defined(LTO_SUPPORT) // ld64-port
 		ld::passes::bitcode_bundle::doPass(options, state);  // must be after dylib
-#endif // HAVE_XAR_XAR_H && LTO_SUPPORT
 
 		// Sort again so that we get the segments in order.
 		state.sortSections();
@@ -1614,7 +1605,6 @@ int main(int argc, const char* argv[])
 // implement assert() function to print out a backtrace before aborting
 void __assert_rtn(const char* func, const char* file, int line, const char* failedexpr)
 {
-#ifdef HAVE_EXECINFO_H // ld64-port
     Snapshot *snapshot = Snapshot::globalSnapshot;
     
     snapshot->setSnapshotMode(Snapshot::SNAPSHOT_DEBUG);
@@ -1640,7 +1630,6 @@ void __assert_rtn(const char* func, const char* file, int line, const char* fail
 		snapshot->recordAssertionMessage("%d  %p  %s + %ld\n", i, callStack[i], symboName, offset);
 	}
     fprintf(stderr, "A linker snapshot was created at:\n\t%s\n", snapshot->rootDir());
-#endif // HAVE_EXECINFO_H
 	fprintf(stderr, "ld: Assertion failed: (%s), function %s, file %s, line %d.\n", failedexpr, func, file, line);
 	_exit(1);
 }

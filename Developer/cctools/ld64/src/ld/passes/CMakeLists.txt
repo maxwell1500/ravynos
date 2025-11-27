@@ -18,15 +18,15 @@ target_sources(host_ld_libpasses PRIVATE
     inits.cpp
 )
 
-target_compile_definitions(host_ld_libpasses PRIVATE __DARWIN_UNIX03)
+add_dependencies(host_ld_libpasses host_clang)
+target_compile_definitions(host_ld_libpasses PRIVATE __DARWIN_UNIX03 _DARWIN_C_SOURCE)
 target_include_directories(host_ld_libpasses PRIVATE
-    ../../../../include
-    ../../../../include/foreign
+    ${TOOLCHAIN}/usr/include
+    ${CMAKE_SOURCE_DIR}/Libraries/libmalloc/include
     ../../abstraction
     ..
     ../..
     ../parsers
-    ../../3rd
     ../../..
 )
 set_property(TARGET host_ld_libpasses PROPERTY CXX_STANDARD 11)

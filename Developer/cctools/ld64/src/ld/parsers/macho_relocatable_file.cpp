@@ -43,7 +43,6 @@
 #include <map>
 #include <algorithm>
 #include <type_traits>
-#include <memory> // ld64-port (std::unique_ptr)
 
 #include "dwarf2.h"
 #include "debugline.h"
@@ -52,7 +51,6 @@
 #include "Bitcode.hpp"
 #include "ld.hpp"
 #include "macho_relocatable_file.h"
-#include "qsort_r.h" // ld64-port
 
 
 
@@ -1812,16 +1810,6 @@ typename A::P::uint_t Parser<A>::realAddr(typename A::P::uint_t addr)
 	return addr;
 }
 
-#if !__has_builtin(__builtin_mul_overflow) // ld64-port (clang < 3.8)
-template<typename T> 
-bool __builtin_mul_overflow(uint32_t a, uint32_t b, T *r)
-{
-	static_assert(sizeof(T) == sizeof(uint32_t), "");
-	uint64_t lr = a * b;
-	*r = (T)lr;
-	return lr > (uint64_t)uint32_t(-1);
-}
-#endif
 #define STACK_ALLOC_IF_SMALL(_type, _name, _actual_count, _maxCount) \
 	_type*  _name = NULL;   \
 	uint32_t _name##_count = 1; \

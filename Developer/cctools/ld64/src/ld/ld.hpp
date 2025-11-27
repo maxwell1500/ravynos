@@ -36,7 +36,6 @@
 #include <vector>
 #include <string>
 #include <unordered_set>
-#include <algorithm> // ld64-port: for std::find_if
 
 #include "configure.h"
 #include "PlatformSupport.h"

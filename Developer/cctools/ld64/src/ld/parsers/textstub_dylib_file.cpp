@@ -22,14 +22,11 @@
  * @APPLE_LICENSE_HEADER_END@
  */
 
-#ifdef TAPI_SUPPORT
 
 #include <sys/param.h>
 #include <sys/mman.h>
 #include <tapi/tapi.h>
 #include <vector>
-#include <memory> // ld64-port
-#include <functional> // ld64-port
 
 #include "Architectures.hpp"
 #include "Bitcode.hpp"
@@ -91,48 +88,48 @@ template <> bool File<x86_64>::useSimulatorVariant() { return true; }
 template <typename A> bool File<A>::useSimulatorVariant() { return false; }
 
 
-static ld::VersionSet mapPlatform(tapi::Platform platform, bool useSimulatorVariant) {
+static ld::VersionSet mapPlatform(uint32_t platform, bool useSimulatorVariant) {
 	ld::VersionSet platforms;
 	switch (platform) {
-	case tapi::Platform::Unknown:
+	case PLATFORM_UNKNOWN:
 		break;
-	case tapi::Platform::OSX:
+	case PLATFORM_MACOS:
 		platforms.insert(ld::Platform::macOS);
 		break;
-	case tapi::Platform::iOS:
+	case PLATFORM_IOS:
 		if (useSimulatorVariant)
 			platforms.insert(ld::Platform::iOS_simulator);
 		else
 			platforms.insert(ld::Platform::iOS);
 		break;
-	case tapi::Platform::watchOS:
+	case PLATFORM_WATCHOS:
 		if (useSimulatorVariant)
 			platforms.insert(ld::Platform::watchOS_simulator);
 		else
 			platforms.insert(ld::Platform::watchOS);
 		break;
-	case tapi::Platform::tvOS:
+	case PLATFORM_TVOS:
 		if (useSimulatorVariant)
 			platforms.insert(ld::Platform::tvOS_simulator);
 		else
 			platforms.insert(ld::Platform::tvOS);
 		break;
 	#if ((TAPI_API_VERSION_MAJOR == 1 &&  TAPI_API_VERSION_MINOR >= 2) || (TAPI_API_VERSION_MAJOR > 1))
-	case tapi::Platform::bridgeOS:
+	case PLATFORM_BRIDGEOS:
 		platforms.insert(ld::Platform::bridgeOS);
 		break;
 	#endif
 	#if ((TAPI_API_VERSION_MAJOR == 1 &&  TAPI_API_VERSION_MINOR >= 4) || (TAPI_API_VERSION_MAJOR > 1))
-	case tapi::Platform::iOSMac:
+	case PLATFORM_MACCATALYST:
 		platforms.insert(ld::Platform::iOSMac);
 		break;
-	case tapi::Platform::zippered:
-		platforms.insert(ld::Platform::macOS);
-		platforms.insert(ld::Platform::iOSMac);
-		break;
+	// case tapi::Platform::zippered:
+	// 	platforms.insert(ld::Platform::macOS);
+	// 	platforms.insert(ld::Platform::iOSMac);
+	// 	break;
 	#endif
 	#if ((TAPI_API_VERSION_MAJOR == 1 &&  TAPI_API_VERSION_MINOR >= 5) || (TAPI_API_VERSION_MAJOR > 1))
-	case tapi::Platform::DriverKit:
+	case PLATFORM_DRIVERKIT:
 		platforms.insert(ld::Platform::driverKit);
 		break;
 	#endif
@@ -260,7 +257,7 @@ void File<A>::init(tapi::LinkerInterfaceFile* file, const Options *opts, bool bu
 	} else
 #endif
 	{
-		lcPlatforms = mapPlatform(file->getPlatform(), useSimulatorVariant());
+		lcPlatforms = mapPlatform(file->getPlatformSet().front(), useSimulatorVariant());
 	}
 
 	// check cross-linking
@@ -478,5 +475,3 @@ bool isTextStubFile(const uint8_t* fileContent, uint64_t fileLength, const char*
 
 } // namespace dylib
 } // namespace textstub
-
-#endif /* TAPI_SUPPORT */

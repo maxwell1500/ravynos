@@ -425,15 +425,6 @@ private:
 	}
 };
 
-//
-// ld64-port:
-// silence a false positive uninitialized variable warning:
-// warning: '*((void*)& picker +24)' may be used uninitialized in this function
-//
-#if !defined(__clang__) && (__GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 7))
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
-#endif
 bool SymbolTable::addByName(const ld::Atom& newAtom, Options::Treatment duplicates)
 {
 	bool useNew = true;
@@ -473,10 +464,6 @@ bool SymbolTable::addByName(const ld::Atom& newAtom, Options::Treatment duplicat
 	return useNew && (existingAtom != NULL);
 }
 
-// ld64-port
-#if !defined(__clang__) && (__GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 7))
-#pragma GCC diagnostic pop
-#endif
 
 bool SymbolTable::addByContent(const ld::Atom& newAtom)
 {

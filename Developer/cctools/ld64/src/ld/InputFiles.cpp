@@ -28,11 +28,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/mman.h>
-#ifdef __APPLE__
 #include <sys/sysctl.h>
-#else // ld64-port
-#include <thread> // for std::thread
-#endif
 #include <fcntl.h>
 #include <errno.h>
 #include <limits.h>
@@ -204,20 +200,16 @@ const char* InputFiles::extractFileInfo(const uint8_t* p, unsigned len, const ch
 		return result;
 	}
 
-#ifdef LTO_SUPPORT
 	result = lto::archName(p, len);
 	if ( result != NULL  )
 		 return result;
-#endif /* LTO_SUPPORT */
 
 	const char* archiveArchName;
 	if ( ::archive::isArchiveFile(p, len, &platform, &archiveArchName) )
 		return archiveArchName;
 
-#ifdef TAPI_SUPPORT
 	if ( textstub::dylib::isTextStubFile(p, len, path) )
 		return "text-stub";
-#endif
 
 	char *unsupported = (char *)malloc(128);
 	strcpy(unsupported, "unsupported file format (");
@@ -233,8 +225,7 @@ const char* InputFiles::extractFileInfo(const uint8_t* p, unsigned len, const ch
 
 ld::File* InputFiles::makeFile(const Options::FileInfo& info, bool indirectDylib)
 {
-    bool fromSDK = _options.fromSDK(info.path);
-#ifdef TAPI_SUPPORT
+	bool fromSDK = _options.fromSDK(info.path);
 	// handle inlined framework first.
 	if (info.isInlined) {
 		auto interface = _options.findTAPIFile(info.path);
@@ -245,7 +236,6 @@ ld::File* InputFiles::makeFile(const Options::FileInfo& info, bool indirectDylib
 			throwf("could not parse inlined dylib file: %s(%s)", interface->getInstallName().c_str(), info.path);
 		return file;
 	}
-#endif /* TAPI_SUPPORT */
 	// map in whole file
 	struct stat stat_buf;
 	int fd = ::open(info.path, O_RDONLY, 0);
@@ -265,7 +255,6 @@ ld::File* InputFiles::makeFile(const Options::FileInfo& info, bool indirectDylib
 	bool isFatFile = false;
 	uint32_t sliceToUse, sliceCount;
 	const fat_header* fh = (fat_header*)p;
-        sliceCount = 0; // ld64-port
 	if ( fh->magic == OSSwapBigToHostInt32(FAT_MAGIC) ) {
 		isFatFile = true;
 		const struct fat_arch* archs = (struct fat_arch*)(p + sizeof(struct fat_header));
@@ -329,8 +318,6 @@ ld::File* InputFiles::makeFile(const Options::FileInfo& info, bool indirectDylib
 				}
 			}
 			// if requested architecture is page aligned within fat file, then remap just that portion of file
-			// ld64-port: remapping the file on Cygwin fails for an unknown reason, so always go the alternative way there
-#ifndef __CYGWIN__
 			if ( (fileOffset & PAGE_MASK) == 0 ) {
 				// unmap whole file
 				munmap((caddr_t)p, stat_buf.st_size);
@@ -340,11 +327,8 @@ ld::File* InputFiles::makeFile(const Options::FileInfo& info, bool indirectDylib
 					throwf("can't re-map file, errno=%d", errno);
 			}
 			else {
-#endif /* __CYGWIN__ */
 				p = &p[fileOffset];
-#ifndef __CYGWIN__
 			}
-#endif /* __CYGWIN__ */
 		}
 	}
 	::close(fd);
@@ -380,7 +364,6 @@ ld::File* InputFiles::makeFile(const Options::FileInfo& info, bool indirectDylib
 		return objResult;
 	}
 
-#ifdef LTO_SUPPORT
 	// see if it is an llvm object file
 	objResult = lto::parse(p, len, info.path, info.modTime, info.ordinal, _options.architecture(), _options.subArchitecture(), _options.logAllFiles(), _options.verboseOptimizationHints());
 	if ( objResult != NULL ) {
@@ -388,7 +371,6 @@ ld::File* InputFiles::makeFile(const Options::FileInfo& info, bool indirectDylib
 		OSAtomicIncrement32(&_totalObjectLoaded);
 		return objResult;
 	}
-#endif /* LTO_SUPPORT */
 
 	// see if it is a dynamic library (or text-based dynamic library)
 	ld::dylib::File* dylibResult;
@@ -401,12 +383,10 @@ ld::File* InputFiles::makeFile(const Options::FileInfo& info, bool indirectDylib
 			if ( dylibResult != NULL ) {
 				return dylibResult;
 			}
-#ifdef TAPI_SUPPORT
 			dylibResult = textstub::dylib::parse(p, len, info.path, info.modTime, _options, info.ordinal, info.options.fBundleLoader, indirectDylib, fromSDK);
 			if ( dylibResult != NULL ) {
 				return dylibResult;
 			}
-#endif /* TAPI_SUPPORT */
 			break;
 		case Options::kStaticExecutable:
 		case Options::kDyld:
@@ -443,7 +423,6 @@ ld::File* InputFiles::makeFile(const Options::FileInfo& info, bool indirectDylib
 		return archiveResult;
 	}
 	
-#ifdef LTO_SUPPORT
 	// does not seem to be any valid linker input file, check LTO misconfiguration problems
 	if ( lto::archName((uint8_t*)p, len) != NULL ) {
 		if ( lto::libLTOisLoaded() ) {
@@ -452,12 +431,7 @@ ld::File* InputFiles::makeFile(const Options::FileInfo& info, bool indirectDylib
 			throwf("lto file was built for %s which is not the architecture being linked (%s): %s", fileArchName, _options.architectureName(), info.path);
 		}
 		else {
-#ifdef __APPLE__ // ld64-port
-      const char* libLTO = "libLTO.dylib";
-#else
-      const char* libLTO = "libLTO.so";
-#endif /* __APPLE__ */
-
+			const char* libLTO = "libLTO.dylib";
 			char ldPath[PATH_MAX];
 			char tmpPath[PATH_MAX];
 			char libLTOPath[PATH_MAX];
@@ -478,7 +452,6 @@ ld::File* InputFiles::makeFile(const Options::FileInfo& info, bool indirectDylib
 			throwf("could not process llvm bitcode object file, because %s could not be loaded", libLTO);
 		}
 	}
-#endif /* LTO_SUPPORT */
 
 	if ( dylibsNotAllowed ) {
 		cpu_type_t dummy1;
@@ -487,10 +460,8 @@ ld::File* InputFiles::makeFile(const Options::FileInfo& info, bool indirectDylib
 		uint32_t ignoreOSVers;
 		if ( mach_o::dylib::isDylibFile(p, len, &dummy1, &dummy2, &ignorePlatform, &ignoreOSVers) )
 			throw "ignoring unexpected dylib file";
-#ifdef TAPI_SUPPORT
 		if ( textstub::dylib::isTextStubFile(p, len, info.path) )
 			throw "ignoring unexpected dylib text stub file";
-#endif
 	}
 
 	// error handling
@@ -1006,7 +977,6 @@ InputFiles::InputFiles(Options& opts)
 	
 	// initialize info for parsing input files on worker threads
 	unsigned int ncpus;
-#ifdef __APPLE__
 	int mib[2];
 	size_t len = sizeof(ncpus);
 	mib[0] = CTL_HW;
@@ -1014,11 +984,6 @@ InputFiles::InputFiles(Options& opts)
 	if (sysctl(mib, 2, &ncpus, &len, NULL, 0) != 0) {
 		ncpus = 1;
 	}
-#else // ld64-port
-	ncpus = std::thread::hardware_concurrency();
-	if (ncpus <= 0)
-		ncpus = 1;
-#endif
 	_availableWorkers = MIN(ncpus, files.size()); // max # workers we permit
 	_idleWorkers = 0;
 	

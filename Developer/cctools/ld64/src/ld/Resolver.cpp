@@ -1772,7 +1772,6 @@ void Resolver::linkTimeOptimize()
 	if ( ! _haveLLVMObjs )
 		return;
 
-#ifdef LTO_SUPPORT
 	// when building firmware with LTO, make sure all surprise symbols libLTO might generate are loaded if possible
 	switch ( _options.outputKind() ) {
 		case Options::kDynamicExecutable:
@@ -1928,9 +1927,6 @@ void Resolver::linkTimeOptimize()
 		this->checkDylibSymbolCollisions();
 
 	}
-#else
-    throwf("no builtin LTO support"); // ld64-port
-#endif /* LTO_SUPPORT */
 }
 
 

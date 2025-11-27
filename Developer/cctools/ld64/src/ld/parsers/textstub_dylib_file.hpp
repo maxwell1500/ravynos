@@ -25,8 +25,6 @@
 #ifndef __TEXTSTUB_DYLIB_FILE_H__
 #define __TEXTSTUB_DYLIB_FILE_H__
 
-#ifdef TAPI_SUPPORT
-
 #include "ld.hpp"
 #include "Options.h"
 
@@ -46,6 +44,5 @@ extern bool isTextStubFile(const uint8_t* fileContent, uint64_t fileLength, cons
 } // namespace dylib
 } // namespace textstub
 
-#endif /* TAPI_SUPPORT */
 
 #endif // __TEXTSTUB_DYLIB_FILE_H__

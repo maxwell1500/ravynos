@@ -28,9 +28,7 @@
 
 #include <stdint.h>
 #include <mach/machine.h>
-#ifdef TAPI_SUPPORT
 #include <tapi/tapi.h>
-#endif 
 
 #include <vector>
 #include <unordered_set>
@@ -184,7 +182,6 @@ public:
         bool missing() const { return modTime == -1; }
 	};
 
-#ifdef TAPI_SUPPORT
 	class TAPIInterface {
 	public:
 		TAPIInterface(tapi::LinkerInterfaceFile* file, const char* path, const char *installName) :
@@ -197,8 +194,7 @@ public:
 		std::string _tbdPath;
 		std::string _installName;
 	};
-#endif /* TAPI_SUPPORT */
-
+	
 	struct ExtraSection {
 		const char*				segmentName;
 		const char*				sectionName;
@@ -349,10 +345,8 @@ public:
 	bool						keepRelocations();
 	FileInfo					findFile(const std::string &path, const ld::dylib::File* fromDylib=nullptr) const;
 	bool						findFile(const std::string &path, const std::vector<std::string> &tbdExtensions, FileInfo& result) const;
-#ifdef TAPI_SUPPORT
 	bool						hasInlinedTAPIFile(const std::string &path) const;
 	tapi::LinkerInterfaceFile*	findTAPIFile(const std::string &path) const;
-#endif
 	UUIDMode					UUIDMode() const { return fUUIDMode; }
 	bool						warnStabs();
 	bool						pauseAtEnd() { return fPause; }
@@ -536,15 +530,12 @@ public:
 	uint8_t						maxDefaultCommonAlign() const { return fMaxDefaultCommonAlign; }
 	bool						hasDataSymbolMoves() const { return !fSymbolsMovesData.empty(); }
 	bool						hasCodeSymbolMoves() const { return !fSymbolsMovesCode.empty(); }
-	bool						dumpNormalizedLibArgs() const { return fDumpNormalizedLibArgs; }
 	void						writeToTraceFile(const char* buffer, size_t len) const;
 	UnalignedPointerTreatment	unalignedPointerTreatment() const { return fUnalignedPointerTreatment; }
 	bool						zeroModTimeInDebugMap() const { return fZeroModTimeInDebugMap; }
 	void						writeDependencyInfo() const;
-#ifdef TAPI_SUPPORT
 	std::vector<TAPIInterface>	&TAPIFiles() { return fTAPIFiles; }
 	void						addTAPIInterface(tapi::LinkerInterfaceFile* interface, const char *path) const;
-#endif
 	const char*					buildContextName() const { return fBuildContextName; }
 	bool 						sharedCacheEligiblePath(const char* path) const;
 	const char* 				debugMapObjectPrefixPath() const { return fOSOPrefixPath; }
@@ -899,13 +890,10 @@ private:
 	const char*							fBuildContextName;
 	mutable int							fTraceFileDescriptor;
 	uint8_t								fMaxDefaultCommonAlign;
-	bool								fDumpNormalizedLibArgs = false; // ld64-port
 	UnalignedPointerTreatment			fUnalignedPointerTreatment;
 	mutable std::vector<DependencyEntry> fDependencies;
-#ifdef TAPI_SUPPORT
 	mutable std::vector<Options::TAPIInterface> fTAPIFiles;
 	bool								fPreferTAPIFile;
-#endif
 	const char*							fOSOPrefixPath;
 };
 

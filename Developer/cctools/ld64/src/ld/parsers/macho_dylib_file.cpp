@@ -34,7 +34,6 @@
 #include <set>
 #include <map>
 #include <algorithm>
-#include <memory> // ld64-port (std::unique_ptr)
 
 #include "Architectures.hpp"
 #include "Bitcode.hpp"

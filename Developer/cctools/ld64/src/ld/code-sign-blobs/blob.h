@@ -46,7 +46,6 @@
 #include "memutils.h"
 #include <errno.h>
 #include <cstdio>
-#include <cstring> // ld64-port
 
 namespace Security {
 
@@ -181,6 +180,11 @@ public:
 		return NULL;
 	}
 	
+#if BLOB_HAS_CLONE
+	BlobType *clone() const
+	{ assert(validateBlob()); return specific(this->BlobCore::clone());	}
+#endif
+
 	static BlobType *readBlob(int fd)
 	{ return specific(BlobCore::readBlob(fd, _magic, sizeof(BlobType), 0), true); }
 

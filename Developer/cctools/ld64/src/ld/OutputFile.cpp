@@ -30,7 +30,6 @@
 #include <sys/sysctl.h>
 #include <sys/param.h>
 #include <sys/mount.h>
-#include <signal.h> // ld64-port
 #include <fcntl.h>
 #include <errno.h>
 #include <limits.h>
@@ -39,9 +38,7 @@
 #include <mach/vm_statistics.h>
 #include <mach/mach_init.h>
 #include <mach/mach_host.h>
-#ifdef HAVE_UUID_UUID_H // ld64-port
 #include <uuid/uuid.h>
-#endif
 #include <dlfcn.h>
 #include <mach-o/dyld.h>
 #include <mach-o/fat.h>
@@ -3767,15 +3764,11 @@ void OutputFile::computeContentUUID(ld::Internal& state, uint8_t* wholeBuffer)
 static int sDescriptorOfPathToRemove = -1;
 static void removePathAndExit(int sig)
 {
-#ifdef __APPLE__ // ld64-port
 	if ( sDescriptorOfPathToRemove != -1 ) {
 		char path[MAXPATHLEN];
 		if ( ::fcntl(sDescriptorOfPathToRemove, F_GETPATH, path) == 0 )
 			::unlink(path);
 	}
-#else
-	fprintf(stderr, "%s should be unreachable on non-Apple OSs; please report this!", __func__);
-#endif
 	fprintf(stderr, "ld: interrupted\n");
 	// we are in a sig handler, don't do clean ups
 	_exit(1);
@@ -3804,7 +3797,6 @@ void OutputFile::writeOutputFile(ld::Internal& state)
 		if (stat_buf.st_mode & S_IFREG) {
 			outputIsRegularFile = true;
 			// <rdar://problem/12264302> Don't use mmap on non-hfs volumes
-#ifdef __APPLE__ // ld64-port
 			struct statfs fsInfo;
 			if ( statfs(_options.outputFilePath(), &fsInfo) != -1 ) {
 				if ( (strcmp(fsInfo.f_fstypename, "hfs") == 0) || (strcmp(fsInfo.f_fstypename, "apfs") == 0) ) {
@@ -3813,11 +3805,8 @@ void OutputFile::writeOutputFile(ld::Internal& state)
 				}
 			}
 			else {
-#endif /* __APPLE__ */
 				outputIsMappableFile = false;
-#ifdef __APPLE__ // ld64-port
 			}
-#endif /* __APPLE__ */
 		} 
 		else {
 			outputIsRegularFile = false;
@@ -3832,14 +3821,12 @@ void OutputFile::writeOutputFile(ld::Internal& state)
 		char* end = strrchr(dirPath, '/');
 		if ( end != NULL ) {
 			end[1] = '\0';
-#ifdef __APPLE__ // ld64-port
 			struct statfs fsInfo;
 			if ( statfs(dirPath, &fsInfo) != -1 ) {
 				if ( (strcmp(fsInfo.f_fstypename, "hfs") == 0) || (strcmp(fsInfo.f_fstypename, "apfs") == 0) ) {
 					outputIsMappableFile = true;
 				}
 			}
-#endif /* __APPLE__ */
 		}
 	}
 	
@@ -3894,13 +3881,9 @@ void OutputFile::writeOutputFile(ld::Internal& state)
 	}
 	
 	if ( _options.UUIDMode() == Options::kUUIDRandom ) {
-#ifdef HAVE_UUID_UUID_H // ld64-port
 		uint8_t bits[16];
 		::uuid_generate_random(bits);
 		_headersAndLoadCommandAtom->setUUID(bits);
-#else
-		throwf("random uuid support via libuuid not compiled in");
-#endif
 	}
 
 	writeAtoms(state, wholeBuffer);
@@ -3937,7 +3920,6 @@ void OutputFile::writeOutputFile(ld::Internal& state)
 
 	// Rename symbol map file if needed
 	if ( _options.renameReverseSymbolMap() ) {
-#ifdef HAVE_UUID_UUID_H // ld64-port
 		assert(_options.hideSymbols() && _options.reverseSymbolMapPath() != NULL && "Must hide symbol and specify a path");
 		uuid_string_t UUIDString;
 		const uint8_t* rawUUID = _headersAndLoadCommandAtom->getUUID();
@@ -3946,9 +3928,6 @@ void OutputFile::writeOutputFile(ld::Internal& state)
 		sprintf(outputMapPath, "%s/%s.bcsymbolmap", _options.reverseSymbolMapPath(), UUIDString);
 		if ( ::rename(_options.reverseMapTempPath().c_str(), outputMapPath) != 0 )
 			throwf("could not create bcsymbolmap file: %s", outputMapPath);
-#else
-		throwf("uuid support via libuuid not compiled in");
-#endif
 	}
 }
 
@@ -5568,18 +5547,9 @@ void OutputFile::addDyldInfo(ld::Internal& state,  ld::Internal::FinalSection* s
 				}
 				// Have direct reference to weak-global.  This should be an indrect reference
 				const char* demangledName = strdup(_options.demangleSymbol(atom->name()));
-				// ld64-port: [OSXCROSS] Silence 'operator new[]' warning when linking GCC libsdtc++ statically
-				const char* fileName = strrchr(target->safeFilePath(), '/');
-				if ( !fileName )
-					fileName = target->safeFilePath();
-				else
-					fileName++; // '/'
-				if ( !getenv("OSXCROSS_GCC_LIBSTDCXX") || strncmp(atom->name(), "__Zna", 5) || strcmp(fileName, "libstdc++.a(new_opvnt.o)") ) {
-				// ld64-port end
 				warning("direct access in function '%s' from file '%s' to global weak symbol '%s' from file '%s' means the weak symbol cannot be overridden at runtime. "
 						"This was likely caused by different translation units being compiled with different visibility settings.",
 						  demangledName, atom->safeFilePath(), _options.demangleSymbol(target->name()), target->safeFilePath());
-				} // ld64-port
 			}
 			return;
 		}
@@ -6918,15 +6888,9 @@ void OutputFile::writeJSONEntry(ld::Internal& state)
 
 		// Convert the UUID to a string.
 		const uint8_t* uuid = _headersAndLoadCommandAtom->getUUID();
-
-#ifdef HAVE_UUID_UUID_H // ld64-port
 		uuid_string_t uuidString;
 
 		uuid_unparse(uuid, uuidString);
-#else
-		const char *uuidString = "";
-		throwf("uuid support via libuuid not compiled in");
-#endif
 		
 		// Enumerate the dylibs.
 		std::vector<const ld::dylib::File*> dynamicList;
@@ -7516,8 +7480,6 @@ uint32_t OutputFile::ChainedFixupBinds::ordinal(const ld::Atom* atom, uint64_t a
 		++index;
 	}
 	assert(0 && "bind ordinal missing");
-	abort();                    // ld64-port
-	__builtin_unreachable();    // ld64-port
 }
 
 
