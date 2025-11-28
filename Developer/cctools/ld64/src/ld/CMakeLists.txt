@@ -29,7 +29,7 @@ target_compile_options(host_ld PRIVATE
 target_link_libraries(host_ld PRIVATE
     host_libxar host_ld_libparsers host_ld_libpasses
     host_libstuff OpenSSL::SSL OpenSSL::Crypto
-    -L${TOOLCHAIN}/usr/lib -ltapi -Wl,-rpath,/usr/lib -Wl,-rpath,../lib
+    -L${TOOLCHAIN}/usr/lib -ltapi -Wl,-rpath,@executable_path/../lib
 )
 set_property(TARGET host_ld PROPERTY OUTPUT_NAME ld)
 

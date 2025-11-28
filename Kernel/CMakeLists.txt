@@ -104,8 +104,10 @@ ExternalProject_Add(xnu
             AVAILABILITY_PL=${AVAILABILITY_PL} MACHINE=${MACHINE}
             AVAILABILITY_PL_PATH=${AVAILABILITY_PL_PATH}
             KERNEL_CONFIGS=${KERNEL_CONFIGS} ARCH_CONFIGS=${ARCH_CONFIGS}
-            install && ${CMAKE_COMMAND} -E copy <BINARY_DIR>/kernel.dSYM
-            ${CMAKE_BINARY_DIR}/Developer/Platforms/ravynOS.platform/Developer/SDKs/ravynOS.sdk/System/Library/Kernels/
+            install && ${CMAKE_COMMAND} -E make_directory 
+            ${RAVYN_SDKROOT}/System/Library/Kernels && ${CMAKE_COMMAND} -E 
+            copy <BINARY_DIR>/RELEASE_${ARCH_CONFIGS}/kernel.dSYM
+            ${RAVYN_SDKROOT}/System/Library/Kernels/
 	DEPENDS xnu_headers CarbonHeaders libfirehose_kernel BootstrapTools
 )
 

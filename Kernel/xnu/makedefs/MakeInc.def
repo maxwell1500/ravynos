@@ -656,7 +656,8 @@ LDFLAGS_KERNEL_ONLY   =   \
                  $($(addsuffix $(CURRENT_ARCH_CONFIG), $(addsuffix $(CURRENT_KERNEL_CONFIG),LDFLAGS_KERNEL_ONLY_CONFIG_))) \
                  $($(addsuffix $(ARCH_STRING_FOR_CURRENT_MACHINE_CONFIG),LDFLAGS_KERNEL_ONLY_SUBARCH_)) \
                  -Wl,-alias_list,$(TARGET)/all-alias.exp \
-                 -Wl,-sectcreate,__LINKINFO,__symbolsets,$(TARGET)/symbolsets.plist -Wl,-segprot,__LINKINFO,r--,r--
+                 -Wl,-segprot,__LINKINFO,r--,r--
+               # -Wl,-sectcreate,__LINKINFO,__symbolsets,$(TARGET)/symbolsets.plist
 
 LDFLAGS_KERNEL_EXPORTS   =   \
 		  $($(addsuffix $(CURRENT_ARCH_CONFIG), $(addsuffix $(CURRENT_KERNEL_CONFIG),LDFLAGS_KERNEL_EXPORTS_))) \
