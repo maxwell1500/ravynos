@@ -23,13 +23,14 @@ target_compile_options(libfirehose_kernel PRIVATE -mkernel -Wno-packed
     -I${CMAKE_BINARY_DIR}/sysroot/usr/include
     -I${CMAKE_SOURCE_DIR}/Libraries/libdispatch
     -I${CMAKE_SOURCE_DIR}/Libraries/libdispatch/src/firehose
-    -I${CMAKE_BINARY_DIR}/Kernel/xnu/EXPORT_HDRS/libkern/firehose
-    -I${CMAKE_BINARY_DIR}/Kernel/xnu/EXPORT_HDRS/libkern
-    -I${CMAKE_BINARY_DIR}/Kernel/xnu/EXPORT_HDRS/osfmk
-    -I${CMAKE_BINARY_DIR}/Kernel/xnu/EXPORT_HDRS/bsd
     -I${CMAKE_SOURCE_DIR}/Kernel/xnu/EXTERNAL_HEADERS
     -I${CMAKE_SOURCE_DIR}/Libraries/libplatform/private/os
     -I${CMAKE_SOURCE_DIR}/Libraries/libpthread
+    -I${CMAKE_SOURCE_DIR}/Kernel/xnu/osfmk
+    -I${CMAKE_SOURCE_DIR}/Kernel/xnu/osfmk/libsa
+    -I${CMAKE_SOURCE_DIR}/Kernel/xnu/libkern
+    -I${CMAKE_SOURCE_DIR}/Kernel/xnu/libkern/firehose
+    -I${CMAKE_SOURCE_DIR}/Kernel/xnu/bsd
     -Wno-error=implicit-function-declaration -Wno-implicit-function-declaration
     -Wno-sign-conversion -mmacosx-version-min=${CMAKE_MACOSX_MIN_VERSION}
 )

@@ -19,11 +19,12 @@ target_compile_options(IOStorageFamily PRIVATE
     -Wno-implicit-int-conversion -Wno-sign-conversion
     -Wno-deprecated-declarations
     -Wno-incompatible-library-redeclaration -Wno-undef-prefix
-    -I${OBJTOP}/Kernel/libkmod/include -I${OBJTOP}/Kernel/Extensions/include
-    -I${OBJTOP}/release/System/Library/Frameworks/Kernel.framework/Versions/A/PrivateHeaders
-    -I${OBJTOP}/release/System/Library/Frameworks/Kernel.framework/Versions/B/Headers
-    -I${SRCTOP}/Kernel/xnu/bsd
-    -I${OBJTOP}/release/usr/include
+    -I${CMAKE_CURRENT_SOURCE_DIR}
+    -I${CMAKE_BINARY_DIR}/Kernel/libkmod/include -I${CMAKE_BINARY_DIR}/Kernel/Extensions/include
+    -I${CMAKE_BINARY_DIR}/release/System/Library/Frameworks/Kernel.framework/Versions/A/PrivateHeaders
+    -I${CMAKE_BINARY_DIR}/release/System/Library/Frameworks/Kernel.framework/Versions/B/Headers
+    -I${CMAKE_SOURCE_DIR}/Kernel/xnu/bsd
+    -I${CMAKE_BINARY_DIR}/sysroot/usr/include
 )
 set_property(TARGET IOStorageFamily PROPERTY CXX_STANDARD 11)
 install(TARGETS IOStorageFamily DESTINATION System/Library/Extensions COMPONENT BaseSystem)
@@ -63,8 +64,8 @@ file(MAKE_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/user_include/IOKit/storage)
 
 foreach(file IN LISTS HEADERS)
     add_custom_command(OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/user_include/IOKit/storage/${file}
-        COMMAND ${OBJTOP}/tmp/obj-tools/usr/bin/unifdef -UKERNEL -o ${CMAKE_CURRENT_BINARY_DIR}/user_include/IOKit/storage/${file} ${CMAKE_CURRENT_SOURCE_DIR}/${file}
-        DEPENDS ${OBJTOP}/tmp/obj-tools/usr/bin/unifdef ${CMAKE_CURRENT_SOURCE_DIR}/${file}
+        COMMAND ${CMAKE_BINARY_DIR}/tmp/obj-tools/usr/bin/unifdef -UKERNEL -o ${CMAKE_CURRENT_BINARY_DIR}/user_include/IOKit/storage/${file} ${CMAKE_CURRENT_SOURCE_DIR}/${file}
+        DEPENDS ${CMAKE_BINARY_DIR}/tmp/obj-tools/usr/bin/unifdef ${CMAKE_CURRENT_SOURCE_DIR}/${file}
         COMMENT "unifdef ${file}" VERBATIM
     )
     target_sources(IOStorageFamilyUserHeaders PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/user_include/IOKit/storage/${file})

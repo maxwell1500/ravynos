@@ -32,7 +32,7 @@ file(COPY ${HEADER_SET} DESTINATION
     ${CMAKE_CURRENT_BINARY_DIR}/System/Library/Frameworks/System.framework/Versions/B/PrivateHeaders/)
 add_dependencies(ravynOS_sdk CarbonHeaders)
 
-add_custom_target(sdk_Libc_manpages ALL DEPENDS ravynOS_sdk
+add_custom_target(sdk_Libc_manpages DEPENDS ravynOS_sdk
     COMMAND
         SRCROOT=${CMAKE_SOURCE_DIR}/Libraries/Libc 
         DSTROOT=${RAVYN_SDKROOT}
@@ -40,11 +40,13 @@ add_custom_target(sdk_Libc_manpages ALL DEPENDS ravynOS_sdk
         ${CMAKE_SOURCE_DIR}/Libraries/Libc/xcodescripts/manpages.sh
 )
 
-add_custom_target(sdk_Libc_headers ALL DEPENDS ravynOS_sdk
+add_custom_target(sdk_Libc_headers DEPENDS ravynOS_sdk
     COMMAND
         SDK_INSTALL_ROOT=/
         SRCROOT=${CMAKE_SOURCE_DIR}/Libraries/Libc 
         DSTROOT=${RAVYN_SDKROOT}
         PLATFORM_NAME=macosx
+        ARCHS=X86_64 VARIANT_PLATFORM_NAME=macosx 
+        DERIVED_FILES_DIR=${DSTROOT}/usr/include
         ${CMAKE_SOURCE_DIR}/Libraries/Libc/xcodescripts/headers.sh
 )

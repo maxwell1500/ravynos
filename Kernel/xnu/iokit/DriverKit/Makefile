@@ -48,9 +48,9 @@ ifeq ($(REBUILD_IIG_CPP),1)
 do_build_all:: $(COMP_FILES)
 else
 do_build_all::
-	mkdir -pv $(OBJROOT)/RELEASE_$(MACHINE)/iokit/RELEASE/DriverKit
+	mkdir -pv $(OBJROOT)/${KERNEL_CONFIGS}_$(MACHINE)/iokit/${KERNEL_CONFIGS}/DriverKit
 	cp -fv $(SRCROOT)/iokit/DriverKit/*.iig.cpp \
-		$(OBJROOT)/RELEASE_$(MACHINE)/iokit/RELEASE/DriverKit/
+		$(OBJROOT)/${KERNEL_CONFIGS}_$(MACHINE)/iokit/${KERNEL_CONFIGS}/DriverKit/
 endif
 
 include $(MakeInc_rule)

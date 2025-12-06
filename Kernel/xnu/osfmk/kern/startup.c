@@ -224,14 +224,14 @@ int log_leaks = 0;
 static inline void
 kernel_bootstrap_log(const char *message)
 {
-//	kprintf("kernel_bootstrap: %s\n", message);
+	kprintf("kernel_bootstrap: %s\n", message);
 	kernel_debug_string_early(message);
 }
 
 static inline void
 kernel_bootstrap_thread_log(const char *message)
 {
-//	kprintf("kernel_bootstrap_thread: %s\n", message);
+	kprintf("kernel_bootstrap_thread: %s\n", message);
 	kernel_debug_string_early(message);
 }
 

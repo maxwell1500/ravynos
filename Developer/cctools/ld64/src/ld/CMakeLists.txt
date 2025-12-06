@@ -33,15 +33,15 @@ target_link_libraries(host_ld PRIVATE
 )
 set_property(TARGET host_ld PROPERTY OUTPUT_NAME ld)
 
-file(MAKE_DIRECTORY ${RAVYN_SDKROOT}/System/Library/Frameworks/Headers/machine)
-file(MAKE_DIRECTORY ${RAVYN_SDKROOT}/System/Library/Frameworks/Headers/arm)
-file(MAKE_DIRECTORY ${RAVYN_SDKROOT}/System/Library/Frameworks/Headers/i386)
+file(MAKE_DIRECTORY ${RAVYN_SDKROOT}/System/Library/Frameworks/Kernel.framework/Versions/A/Headers/machine)
+file(MAKE_DIRECTORY ${RAVYN_SDKROOT}/System/Library/Frameworks/Kernel.framework/Versions/A/Headers/arm)
+file(MAKE_DIRECTORY ${RAVYN_SDKROOT}/System/Library/Frameworks/Kernel.framework/Versions/A/Headers/i386)
 file(COPY ${CMAKE_SOURCE_DIR}/Kernel/xnu/osfmk/machine/cpu_capabilities.h
-    DESTINATION ${RAVYN_SDKROOT}/System/Library/Frameworks/Headers/machine/)
+    DESTINATION ${RAVYN_SDKROOT}/System/Library/Frameworks/Kernel.framework/Versions/A/Headers/machine/)
 file(COPY ${CMAKE_SOURCE_DIR}/Kernel/xnu/osfmk/arm/cpu_capabilities.h
-    DESTINATION ${RAVYN_SDKROOT}/System/Library/Frameworks/Headers/arm/)
+    DESTINATION ${RAVYN_SDKROOT}/System/Library/Frameworks/Kernel.framework/Versions/A/Headers/arm/)
 file(COPY ${CMAKE_SOURCE_DIR}/Kernel/xnu/osfmk/i386/cpu_capabilities.h
-    DESTINATION ${RAVYN_SDKROOT}/System/Library/Frameworks/Headers/i386/)
+    DESTINATION ${RAVYN_SDKROOT}/System/Library/Frameworks/Kernel.framework/Versions/A/Headers/i386/)
 target_include_directories(host_ld PRIVATE
     .
     ..

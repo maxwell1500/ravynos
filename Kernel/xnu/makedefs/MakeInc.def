@@ -494,7 +494,7 @@ KERNEL_TEXT_BASE        = $(shell printf "0x%016x" \
 			  $$[ $(KERNEL_HIB_SECTION_BASE) + 0x100000 ])
 
 LDFLAGS_KERNEL_RELEASEX86_64 = \
-	-Wl,-pie \
+	-Wl,-pie -Wl,-kernel \
 	-Wl,-segaddr,__HIB,$(KERNEL_HIB_SECTION_BASE) \
 	-Wl,-image_base,$(KERNEL_TEXT_BASE) \
 	-Wl,-seg_page_size,__TEXT,0x200000 \
@@ -510,7 +510,7 @@ LDFLAGS_KERNEL_RELEASEX86_64 = \
 	-Wl,-sectalign,__HIB,__llvm_prf_data,0x1000 \
 	-Wl,-sectalign,__HIB,__textcoal_nt,0x1000 \
 	-Wl,-rename_section,__DATA,__const,__DATA_CONST,__const \
-	-Wl,-no_zero_fill_sections \
+	-Wl,-no_zero_fill_sections -Wl,-add_split_seg_info \
 	$(LDFLAGS_NOSTRIP_FLAG)
 
 ifeq ($(SAN),1)
@@ -641,8 +641,6 @@ LDFLAGS_KERNEL_DEBUGARM64 = $(LDFLAGS_KERNEL_DEVELOPMENTARM64)
 
 LDFLAGS_KERNEL_EXPORTS_KASANARM64 = $(LDFLAGS_KERNEL_EXPORTS_DEVELOPMENTARM64)
 LDFLAGS_KERNEL_EXPORTS_DEBUGARM64 = $(LDFLAGS_KERNEL_EXPORTS_DEVELOPMENTARM64)
-
-LDFLAGS_KERNEL_ONLY_SUBARCH_x86_64 = -Wl,-add_split_seg_info
 
 LDFLAGS_KERNEL	= $(LDFLAGS_KERNEL_GEN) \
 		  $(LDFLAGS_KERNEL_SDK) \

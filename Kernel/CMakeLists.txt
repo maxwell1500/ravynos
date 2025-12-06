@@ -26,13 +26,20 @@ set(XCBUILD ${TOOLS}/xcbuild)
 set(XCODEBUILD ${TOOLS}/xcodebuild)
 
 string(TOUPPER "${CMAKE_SYSTEM_PROCESSOR}" MACHINE)
-set(KERNEL_CONFIGS RELEASE)
+# Do not set these CONFIGS to multiple values! Only RELEASE|DEBUG and one arch
+set(KERNEL_CONFIGS DEBUG)
 set(ARCH_CONFIGS X86_64)
 set(AVAILABILITY_PL ${CMAKE_SOURCE_DIR}/Kernel/availability.pl)
 set(AVAILABILITY_PL_PATH ${CMAKE_SOURCE_DIR}/Kernel/availability.pl)
 set(SEED_DEFINES 
     -DRC_ENABLE_XNU_PRODUCT_INFO_FILTER
 )
+
+if("${KERNEL_CONFIGS}" STREQUAL "DEBUG")
+    set(DEBUG ".debug")
+else()
+    set(DEBUG "")
+endif()
 
 file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/sysroot/usr/include
     ${CMAKE_BINARY_DIR}/sysroot/usr/local/include/kernel)
@@ -83,7 +90,7 @@ ExternalProject_Add(xnu
     	    PLATFORM=MacOSX BUILD_LTO=0 BUILD_WERROR=0 DO_CTFMERGE=0
     	    SDKVERSION=${CMAKE_MACOSX_MIN_VERSION} SRCROOT=<SOURCE_DIR>
     	    OBJROOT=<BINARY_DIR> DSTROOT=${CMAKE_BINARY_DIR}/sysroot
-    	    SYMROOT=${CMAKE_BINARY_DIR}
+    	    SYMROOT=${CMAKE_BINARY_DIR} BUILD_STATIC_LINK=1
             MIGCOM=${MIGCOM} MIG=${MIG} IIG=${IIG} CC=${CC} LD=${CC}
             UNIFDEF=${UNIFDEF} CTFCONVERT=${CTFCONVERT} CTFMERGE=${CTFMERGE}
             CTFINSERT=${CTFINSERT} AR=${AR} NM=${NM} NMEDIT=${NMEDIT}
@@ -106,7 +113,7 @@ ExternalProject_Add(xnu
             KERNEL_CONFIGS=${KERNEL_CONFIGS} ARCH_CONFIGS=${ARCH_CONFIGS}
             install && ${CMAKE_COMMAND} -E make_directory 
             ${RAVYN_SDKROOT}/System/Library/Kernels && ${CMAKE_COMMAND} -E 
-            copy <BINARY_DIR>/RELEASE_${ARCH_CONFIGS}/kernel.dSYM
+            copy <BINARY_DIR>/${KERNEL_CONFIGS}_${ARCH_CONFIGS}/kernel${DEBUG}.dSYM
             ${RAVYN_SDKROOT}/System/Library/Kernels/
 	DEPENDS xnu_headers CarbonHeaders libfirehose_kernel BootstrapTools
 )
