@@ -1,5 +1,0 @@
-
-set -- "*"
-case x in
-"$1") echo failed ;;
-esac

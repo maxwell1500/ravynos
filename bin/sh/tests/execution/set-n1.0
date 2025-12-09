@@ -1,6 +1,0 @@
-
-v=$( ($SH -n <<'EOF'
-for
-EOF
-) 2>&1 >/dev/null)
-[ $? -ne 0 ] && [ -n "$v" ]

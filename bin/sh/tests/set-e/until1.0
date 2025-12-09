@@ -1,4 +1,0 @@
-set -e
-until false; do
-	break
-done

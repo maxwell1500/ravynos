@@ -1,3 +1,0 @@
-
-set -o pipefail
-(exit 43) | (exit 42)

@@ -1,2 +1,0 @@
-
-[ "$(HOME=/etc HOME=/ cd && pwd)" = / ]

@@ -1,5 +1,0 @@
-
-echo before: $LINENO
-dummy=$'a\0
-'
-echo after: $LINENO

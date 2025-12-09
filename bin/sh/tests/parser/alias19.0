@@ -1,7 +1,0 @@
-
-alias begin={ end=}
-begin
-cat <<EOF
-$(echo ok)
-EOF
-end

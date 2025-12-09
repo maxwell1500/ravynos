@@ -1,0 +1,5 @@
+Imported from GitHub: apple-oss-distributions/distribution-macOS.git
+Branch: rel/macOS-12
+- libpthread (SPDX:APSL-2.0)
+- libdispatch (SPDX:APSL-2.0)
+- CommonCrypto (SPDX:APSL-2.0)

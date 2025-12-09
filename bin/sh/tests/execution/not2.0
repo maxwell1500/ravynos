@@ -1,5 +1,0 @@
-
-while :; do
-	! break
-	exit 3
-done

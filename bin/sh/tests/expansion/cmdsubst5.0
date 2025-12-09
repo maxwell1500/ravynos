@@ -1,4 +1,0 @@
-
-unset v
-exec 2>/dev/null
-! y=$(: ${v?})

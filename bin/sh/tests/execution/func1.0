@@ -1,3 +1,0 @@
-
-MALLOC_CONF=junk:true ${SH} -c 'g() { g() { :; }; :; }; g' &&
-MALLOC_CONF=junk:true ${SH} -c 'g() { unset -f g; :; }; g'

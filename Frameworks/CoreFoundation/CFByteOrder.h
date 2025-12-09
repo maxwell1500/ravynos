@@ -1,10 +1,24 @@
 /* Copyright (c) 2008-2009 Christopher J. W. Lloyd
+   Copyright (c) 2025 Zoe Knox
 
-Permission is hereby granted,free of charge,to any person obtaining a copy of this software and associated documentation files (the "Software"),to deal in the Software without restriction,including without limitation the rights to use,copy,modify,merge,publish,distribute,sublicense,and/or sell copies of the Software,and to permit persons to whom the Software is furnished to do so,subject to the following conditions:
+   Permission is hereby granted,free of charge,to any person obtaining a copy of
+   this software and associated documentation files (the "Software"),to deal in
+   the Software without restriction,including without limitation the rights to
+   use,copy,modify,merge,publish,distribute,sublicense,and/or sell copies of the
+   Software,and to permit persons to whom the Software is furnished to do
+   so,subject to the following conditions:
 
-The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+   The above copyright notice and this permission notice shall be included in all
+   copies or substantial portions of the Software.
 
-THE SOFTWARE IS PROVIDED "AS IS",WITHOUT WARRANTY OF ANY KIND,EXPRESS OR IMPLIED,INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,DAMAGES OR OTHER LIABILITY,WHETHER IN AN ACTION OF CONTRACT,TORT OR OTHERWISE,ARISING FROM,OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. */
+   THE SOFTWARE IS PROVIDED "AS IS",WITHOUT WARRANTY OF ANY KIND,EXPRESS OR
+   IMPLIED,INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,FITNESS
+   FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+   COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,DAMAGES OR OTHER LIABILITY,WHETHER IN
+   AN ACTION OF CONTRACT,TORT OR OTHERWISE,ARISING FROM,OUT OF OR IN CONNECTION
+   WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+*/
+
 #import <CoreFoundation/CFBase.h>
 
 typedef enum {
@@ -47,6 +61,7 @@ COREFOUNDATION_EXPORT uint64_t CFSwapInt64HostToBig(uint64_t value);
 COREFOUNDATION_EXPORT uint64_t CFSwapInt64HostToLittle(uint64_t value);
 COREFOUNDATION_EXPORT uint64_t CFSwapInt64LittleToHost(uint64_t value);
 
+#ifndef __APPLE__
 COREFOUNDATION_EXPORT uint16_t OSReadBigInt16(const void *ptr, size_t offset);
 COREFOUNDATION_EXPORT uint32_t OSReadBigInt32(const void *ptr, size_t offset);
 COREFOUNDATION_EXPORT void OSWriteBigInt16(void *ptr, size_t offset, uint16_t value);
@@ -56,3 +71,4 @@ COREFOUNDATION_EXPORT uint64_t OSSwapInt64(uint64_t valueX);
 COREFOUNDATION_EXPORT uint64_t OSSwapBigToHostInt64(uint64_t value);
 COREFOUNDATION_EXPORT uint32_t OSSwapHostToBigInt32(uint32_t value);
 COREFOUNDATION_EXPORT uint64_t OSSwapHostToBigInt64(uint64_t value);
+#endif

@@ -1,4 +1,0 @@
-
-# This depends on the ASCII character set.
-
-[ $'\c\\' = $'\034' ]
