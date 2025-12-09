@@ -795,6 +795,10 @@ printf_init(void)
 void
 bsd_log_lock(void)
 {
+#if USLOCK_DEBUG
+	if(bsd_log_spinlock.lock_type != USLOCK_TAG)
+		simple_lock_init(&bsd_log_spinlock, 0);
+#endif
 	simple_lock(&bsd_log_spinlock, LCK_GRP_NULL);
 }
 

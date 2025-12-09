@@ -266,7 +266,7 @@ BUILD_DSYM := 1
 # We must not use -fno-keep-inline-functions, or it will remove the dtrace
 # probes from the kernel.
 #
-CFLAGS_GEN = $(DEBUG_CFLAGS) -nostdinc \
+CFLAGS_GEN = $(DEBUG_CFLAGS) -nostdinc -w \
 	-ferror-limit=10000 \
 	-fno-builtin \
 	-fno-common \

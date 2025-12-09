@@ -27,7 +27,7 @@ set(XCODEBUILD ${TOOLS}/xcodebuild)
 
 string(TOUPPER "${CMAKE_SYSTEM_PROCESSOR}" MACHINE)
 # Do not set these CONFIGS to multiple values! Only RELEASE|DEBUG and one arch
-set(KERNEL_CONFIGS DEBUG)
+set(KERNEL_CONFIGS RELEASE)
 set(ARCH_CONFIGS X86_64)
 set(AVAILABILITY_PL ${CMAKE_SOURCE_DIR}/Kernel/availability.pl)
 set(AVAILABILITY_PL_PATH ${CMAKE_SOURCE_DIR}/Kernel/availability.pl)
