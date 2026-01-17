@@ -1,3 +1,0 @@
-set -e
-! true
-exit 0

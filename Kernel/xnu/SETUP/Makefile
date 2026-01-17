@@ -6,6 +6,12 @@ export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 include $(MakeInc_cmd)
 include $(MakeInc_def)
 
+OPSYS := $(shell uname -s)
+export OPSYS
+ifeq ($(OPSYS),Linux)
+export HOST_CODESIGN=/bin/true
+endif
+
 SETUP_SUBDIRS =		\
 	config		\
 	kextsymboltool	\
