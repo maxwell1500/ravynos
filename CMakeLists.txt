@@ -1,66 +1,36 @@
-cmake_minimum_required(VERSION 3.15.1)
+cmake_minimum_required(VERSION 4.0.0)
 project(ravynOS)
 
 # ------------------------------------------------------------------------
-#                        PRODUCT VERSION KNOBS
-# ------------------------------------------------------------------------
-set(PROD_VERSION 0.6.1)
-set(PROD_FAMILY "Hyperpop Hyena")
-
-set(CMAKE_MACOSX_MIN_VERSION 12.0)
-
+#  RAVYNOS BUILD SYSTEM - TOP LEVEL
 # ------------------------------------------------------------------------
 
-set(CMAKE_INSTALL_PREFIX "/usr")
-
-set(ROOT_BINARY_DIR ${CMAKE_BINARY_DIR})
 set(ROOT_SOURCE_DIR ${CMAKE_SOURCE_DIR})
-set(SYSROOT_DIR ${ROOT_BINARY_DIR}/sysroot)
-set(RAVYN_SDKROOT ${CMAKE_BINARY_DIR}/Developer/Platforms/ravynOS.platform/Developer/SDKs/ravynOS.sdk)
-set(TOOLCHAIN ${CMAKE_BINARY_DIR}/Developer/Toolchains/Default.xctoolchain)
-set(RUNTIME_SPEC_PATH ${CMAKE_SOURCE_DIR}/Developer/xcbuild/Specifications)
+set(ROOT_BINARY_DIR ${CMAKE_BINARY_DIR})
 
-if("${GMAKE}" STREQUAL "")
-    if(CMAKE_HOST_BSD)
-        set(GMAKE gmake)
-        set(BMAKE make)
-    else()
-        set(GMAKE make)
-        set(BMAKE bmake)
-    endif()
-endif()
+include(./Developer/cmake/Version.cmake)
+include(./Developer/cmake/Paths.cmake)
+include(./Developer/cmake/Tools.cmake)
 
-include(ExternalProject)
-include(Developer/cmake/asm.cmake)
-include(Developer/cmake/bundle_resources.cmake)
-include(Developer/cmake/circular.cmake)
-include(Developer/cmake/crosscompile.cmake)
-include(Developer/cmake/get_target_dependencies.cmake)
-include(Developer/cmake/install_helpers.cmake)
-include(Developer/cmake/kext.cmake)
-include(Developer/cmake/mig.cmake)
-include(Developer/cmake/suppress_warnings.cmake)
+message(STATUS "Configuring ravynOS ${PROD_VERSION} ${PROD_FAMILY} for ${CpuArch}")
+message(STATUS "Darwin ${DARWIN_VERSION}, Apple LLVM/TAPI ${TAPI_VERSION}")
 
-if($ENV{CI})
-    execute_process(OUTPUT_VARIABLE BUILD_STAMP
-        COMMAND /bin/sh -c "echo ${CIRRUS_CHANGE_IN_REPO}|cut -c1-7|tr '[a-z]' '[A-Z]'"
-    )
-else()
-    execute_process(OUTPUT_VARIABLE BUILD_STAMP
-        COMMAND /bin/sh -c "cd ${CMAKE_SOURCE_DIR} && git log -1|head -1|cut -c8-14|tr '[a-z]' '[A-Z]'"
-    )
-endif()
+# ------------------------------------------------------------------------
+#  Top level targets
+# ------------------------------------------------------------------------
 
+add_custom_target(Darwin)
+add_custom_target(Bootstrap)
 
-# Bootstrap our SDK if needed
+# ------------------------------------------------------------------------
+
+add_custom_target(_bsHeaders)
+
+add_subdirectory(SystemLibrary)
 add_subdirectory(Developer)
-
-add_subdirectory(Libraries)
 add_subdirectory(Kernel)
+add_subdirectory(Libraries)
 
-string(STRIP "${BUILD_STAMP}" BUILD_STAMP)
-file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/sysroot/System/Library/CoreServices")
-configure_file(${CMAKE_SOURCE_DIR}/SystemLibrary/SystemVersion.plist.in
-    ${CMAKE_BINARY_DIR}/sysroot/System/Library/CoreServices/SystemVersion.plist
-    @ONLY
-)
+add_dependencies(Darwin Bootstrap libSystem xnu_headers)
+add_dependencies(Bootstrap BootstrapTools ravynOS_sdk)
+add_dependencies(_bsHeaders xnu_headers)

@@ -142,7 +142,6 @@ LEAF(_##name, 0)								;\
 2:
 
 #define UNIX_SYSCALL_NONAME(name, nargs, cerror)		 \
-	.globl	cerror								;\
 	movl	$ SYSCALL_CONSTRUCT_UNIX(SYS_##name), %eax			;\
 	UNIX_SYSCALL_SYSCALL							;\
 	jnb		2f							;\
@@ -151,7 +150,8 @@ LEAF(_##name, 0)								;\
 2:
 
 #define PSEUDO(pseudo, name, nargs, cerror)			\
-LEAF(pseudo, 0)					;\
+	.globl pseudo 					;\
+P_LEAF(pseudo, 0)					;\
 	UNIX_SYSCALL_NONAME(name, nargs, cerror)
 
 #define __SYSCALL2(pseudo, name, nargs, cerror) \
