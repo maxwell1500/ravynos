@@ -20,13 +20,12 @@ set(CMAKE_CXX_USING_LINKER_APPLE ${LD})
 set(CMAKE_LINK_DEPENDS_USE_LINKER FALSE)
 
 add_subdirectory(libfirehose_kernel)
+add_subdirectory(dyld)
 add_subdirectory(Libsystem)
 
 set(LIBCXX_FLAGS
-    "-target ${CpuArch}-apple-darwin -isysroot ${RAVYN_SDKROOT} \
+    "-target ${CpuArch}-apple-darwin -isysroot${RAVYN_SDKROOT} \
     -isystem ${SDK_SOURCE_DIR}/usr/include/c++/v1 \
-    -isystem ${RAVYN_SDKROOT}/usr/include \
-    -iframework ${RAVYN_SDKROOT}/System/Library/Frameworks \
     -stdlib++-isystem ${SDK_SOURCE_DIR}/usr/include/c++/v1 \
     --include=${RAVYN_SDKROOT}/usr/include/xlocale/_stdlib.h \
     --include=${RAVYN_SDKROOT}/usr/include/xlocale/_stdio.h \
@@ -83,7 +82,7 @@ ExternalProject_Add(libcxx DEPENDS BootstrapTools xnu_headers
         #-DLIBCXXABI_USE_LLVM_UNWINDER=ON -DLIBCXXABI_ENABLE_STATIC_UNWINDER=ON
         -DLIBCXXABI_HAS_PTHREAD_API=ON -DLIBCXXABI_USE_COMPILER_RT=ON
         -DLIBCXXABI_INCLUDE_TESTS=OFF -DLIBCXXABI_ENABLE_SHARED=OFF
-        -DLIBCXXABI_BAREMETAL=ON -DLIBCXXABI_SILENT_TERMINATE=ON
+        -DLIBCXXABI_BAREMETAL=OFF -DLIBCXXABI_SILENT_TERMINATE=ON
 
 )
 
