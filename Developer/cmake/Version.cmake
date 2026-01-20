@@ -17,13 +17,13 @@ execute_process(OUTPUT_VARIABLE DARWIN_VERSION
 string(STRIP "${DARWIN_VERSION}" DARWIN_VERSION)
 
 execute_process(OUTPUT_VARIABLE LLVM_VERSION_MAJOR
-    COMMAND grep set\.LLVM_VERSION_MAJOR /nest/ravynos/Developer/Default.xctoolchain/llvm/llvm/CMakeLists.txt
+    COMMAND grep set\.LLVM_VERSION_MAJOR ${DEVEL}/Default.xctoolchain/llvm/llvm/CMakeLists.txt
 )
 execute_process(OUTPUT_VARIABLE LLVM_VERSION_MINOR
-    COMMAND grep set\.LLVM_VERSION_MINOR /nest/ravynos/Developer/Default.xctoolchain/llvm/llvm/CMakeLists.txt
+    COMMAND grep set\.LLVM_VERSION_MINOR ${DEVEL}/Default.xctoolchain/llvm/llvm/CMakeLists.txt
 )
 execute_process(OUTPUT_VARIABLE LLVM_VERSION_PATCH
-    COMMAND grep set\.LLVM_VERSION_PATCH /nest/ravynos/Developer/Default.xctoolchain/llvm/llvm/CMakeLists.txt
+    COMMAND grep set\.LLVM_VERSION_PATCH ${DEVEL}/Default.xctoolchain/llvm/llvm/CMakeLists.txt
 )
 string(REGEX MATCH "[0-9]+" LLVM_VERSION_MAJOR "${LLVM_VERSION_MAJOR}")
 string(REGEX MATCH "[0-9]+" LLVM_VERSION_MINOR "${LLVM_VERSION_MINOR}")
