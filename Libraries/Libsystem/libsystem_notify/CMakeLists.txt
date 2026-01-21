@@ -1,7 +1,7 @@
 add_library(libsystem_notify OBJECT)
-set_property(TARGET libsystem_notify PROPERTY OUTPUT_NAME "system_notify")
-set_property(TARGET libsystem_notify PROPERTY SUFFIX ".dylib")
-set_property(TARGET libsystem_notify PROPERTY PREFIX "lib")
+set_target_properties(libsystem_notify PROPERTIES
+    OUTPUT_NAME "system_notify" SUFFIX ".dylib" PREFIX "lib" NO_SONAME true
+    MACHO_CURRENT_VERSION 241)
 
 target_sources(libsystem_notify PRIVATE
     libnotify.c notify_client.c table.c

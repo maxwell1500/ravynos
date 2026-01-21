@@ -103,6 +103,11 @@
 
 
 // <rdar://problem/13590567> optimize away dyld's initializers
+#if defined(BROKEN_VECTOR_BASE)
+#define VECTOR_NEVER_DESTRUCTED(type)
+#define VECTOR_NEVER_DESTRUCTED_EXTERN(type)
+#define VECTOR_NEVER_DESTRUCTED_IMPL(type)
+#else
 #define VECTOR_NEVER_DESTRUCTED(type) \
 	namespace std { \
 		template <> \
@@ -118,6 +123,7 @@
                template <> \
                __vector_base<type, std::allocator<type> >::~__vector_base() { } \
        }
+#endif
 
 // utilities
 namespace dyld {

@@ -55,9 +55,10 @@ target_link_options(libsystem_darwin PRIVATE
     -rdynamic -nodefaultlibs -Wl,-search_paths_first
     -Wl,-install_name,/usr/lib/system/libsystem_darwin.dylib
     -Wl,-all_load -nostdlib -L${RAVYN_SDKROOT}/usr/lib/system -umbrella System
-    -lsystem_kernel
-    #-lcompiler-rt -ldyld  -lm -lsystem_malloc -lsystem_platform
-    #-lsystem_pthread -lsystem_c -ldispatch -lxpc
+    -lsystem_kernel -L${CMAKE_CURRENT_BINARY_DIR}/../../dyld -ldyld
+    -lsystem_malloc -lsystem_platform -lsystem_pthread -lsystem_c
+    #-lcompiler-rt -ldyld  -lm
+    # -ldispatch -lxpc
 )
 
 file(GLOB darwinpvthdrs h/*.h)

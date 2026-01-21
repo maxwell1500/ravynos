@@ -1,0 +1,143 @@
+add_library(libdyld SHARED
+	./src/start_glue.s
+	./src/glue.c
+	./dyld3/Tracing.cpp
+	./dyld3/Closure.cpp
+	./src/dyldLock.cpp
+	./src/dyld_stub_binder.s
+	./dyld3/ClosureFileSystemPhysical.cpp
+	./src/dyldLibSystemGlue.c
+	./src/dyldAPIsInLibSystem.cpp
+	./src/threadLocalVariables.c
+	./src/threadLocalHelpers.s
+	./src/dyld_process_info.cpp
+	./src/dyld_process_info_notify.cpp
+	./dyld3/Diagnostics.cpp
+	./dyld3/shared-cache/DyldSharedCache.cpp
+	./dyld3/AllImages.cpp
+	./dyld3/APIs.cpp
+	./dyld3/APIs_macOS.cpp
+	./dyld3/Logging.cpp
+	./dyld3/Loading.cpp
+	./dyld3/MachOFile.cpp
+	./dyld3/MachOLoaded.cpp
+	./dyld3/MachOAnalyzer.cpp
+	./dyld3/PathOverrides.cpp
+	./dyld3/ClosureBuilder.cpp
+	./dyld3/ClosureWriter.cpp
+	./dyld3/libdyldEntryVector.cpp
+)
+set_source_files_properties(./dyld3/Loading.cpp TARGET_DIRECTORY libdyld PROPERTIES COMPILE_OPTIONS "-fvisibility=hidden")
+
+set_target_properties(libdyld PROPERTIES
+	PREFIX "lib" OUTPUT_NAME "dyld" SUFFIX ".dylib" NO_SONAME true
+	CXX_STANDARD 20 MACHO_CURRENT_VERSION 732.2)
+
+target_compile_definitions(libdyld PRIVATE
+	BUILDING_LIBDYLD FP_NAN=0 FP_INFINITE=1 FP_ZERO=2 FP_SUBNORMAL=3
+	FP_NORMAL=4 FP_SUPERNORMAL=5 WITHOUT_SANDBOX BROKEN_VECTOR_BASE
+	_USE_EXTENDED_LOCALES_ __DARWIN_C_LEVEL=__DARWIN_C_FULL
+)
+
+target_compile_options(libdyld PRIVATE
+    --target=${TARGET_TRIPLE} -w
+    --sysroot=${RAVYN_SDKROOT} -isysroot${RAVYN_SDKROOT}
+    $<$<COMPILE_LANGUAGE:C,CXX>:-include${SDK_SOURCE_DIR}/usr/include/AvailabilityInternal.h>
+    $<$<COMPILE_LANGUAGE:C,CXX>:-include${SDK_SOURCE_DIR}/usr/include/AvailabilityVersions.h>
+    $<$<COMPILE_LANGUAGE:C,CXX>:-include${SDK_SOURCE_DIR}/usr/include/AvailabilityMacros.h>
+    $<$<COMPILE_LANGUAGE:C,CXX>:-include${SDK_SOURCE_DIR}/usr/include/Availability.h>
+    $<$<COMPILE_LANGUAGE:C,CXX>:-include${SDK_SOURCE_DIR}/usr/include/mach.h>
+    $<$<COMPILE_LANGUAGE:C,CXX>:-include${ROOT_SOURCE_DIR}/Libraries/Libsystem/libsystem_c/include/xlocale/_stdlib.h>
+    -Wno-nullability-completeness -Wno-incompatible-sysroot
+    $<$<COMPILE_LANGUAGE:ASM>:-x assembler-with-cpp>
+)
+
+target_include_directories(libdyld PRIVATE
+	${SDK_SOURCE_DIR}/usr/include/c++/v1
+	${ROOT_SOURCE_DIR}/Kernel/xnu/bsd
+    ../Libsystem/libsystem_c/include
+    ../Libsystem/libsystem_c/include/xlocale
+    ../Libsystem/libsystem_c/locale
+    ../Libsystem/libsystem_c/locale/FreeBSD
+    ../Libsystem/libsystem_c/stdtime
+    ../Libsystem/libsystem_c/stdtime/FreeBSD
+	../Libsystem/libsystem_c/gen
+    ../Libsystem/liblaunch
+    ../Libsystem/private include dyld3 dyld3/shared-cache launch-cache src
+    ${ROOT_SOURCE_DIR}/Kernel/xnu/libsyscall/wrappers/libproc
+    ${ROOT_SOURCE_DIR}/Kernel/xnu/osfmk
+    ${ROOT_BINARY_DIR}/Libraries/Libsystem/libsystem_kernel/mig_hdr/include
+    ${ROOT_BINARY_DIR}/${CpuArch}
+	${ROOT_BINARY_DIR}/Kernel/xnu/EXPORT_HDRS/osfmk
+	${RAVYN_SDKROOT}/usr/local/include/kernel
+	${RAVYN_SDKROOT}/usr/local/include
+    ${ROOT_SOURCE_DIR}/Kernel/xnu/libsyscall/mach
+	${ROOT_SOURCE_DIR}/Kernel/xnu/EXTERNAL_HEADERS
+)
+
+target_link_options(libdyld PRIVATE
+    --sysroot=${RAVYN_SDKROOT} -isysroot${RAVYN_SDKROOT}
+    -nostdlib -nodefaultlibs -undefined warning
+    -Wl,-no_inits -Wl,-no_warn_unused_dylibs "-Wl,-unexported_symbol,__ZNSt3*"
+    -mmacosx-version-min=10.15 -Wl,-install_name,/usr/lib/system/libdyld.dylib
+	-L${CMAKE_CURRENT_BINARY_DIR}/../Libsystem/libsystem_malloc -lmalloc
+	-L${CMAKE_CURRENT_BINARY_DIR}/../Libsystem/libsystem_pthread -lpthread_dyld
+	-L${CMAKE_CURRENT_BINARY_DIR}/../Libsystem/libsystem_platform -lplatform_dyld
+	-L${CMAKE_CURRENT_BINARY_DIR}/../Libsystem/libsystem_kernel -lkernel_static
+	-L${CMAKE_CURRENT_BINARY_DIR}/../Libsystem/libsystem_c -lc_static
+	-L${RAVYN_SDKROOT}/usr/lib/system
+    # -lCrashReporterClient
+    -umbrella System
+    # -Wl,-upward-lsystem_platform -Wl,-upward-lsystem_malloc
+    # -Wl,-upward-lsystem_c -Wl,-upward-lsystem_pthread
+    # -Wl,-upward-lxpc
+    # -Wl,-upward-lsystem_blocks
+    -Wl,-upward-lsystem_kernel
+    # -Wl,-upward-ldispatch -Wl,-upward-lcompiler_rt
+    -lunwind -lc++ -lc++abi
+)
+
+# add_executable(dyld
+# 	./src/dyldStartup.s
+# 	./src/dyldInitialization.cpp
+# 	./src/dyld2.cpp
+# 	./dyld3/ClosureFileSystemPhysical.cpp
+# 	./src/dyldAPIs.cpp
+# 	./src/dyldExceptions.c
+# 	./src/dyld_debugger.cpp
+# 	./dyld3/Tracing.cpp
+# 	./src/glue.c
+# 	./src/ImageLoaderMegaDylib.cpp
+# 	./src/ImageLoader.cpp
+# 	./src/ImageLoaderMachO.cpp
+# 	./src/stub_binding_helper.s
+# 	./src/dyldNew.cpp
+# 	./src/ImageLoaderMachOClassic.cpp
+# 	./src/ImageLoaderMachOCompressed.cpp
+# 	./dyld3/Loading.cpp
+# 	./dyld3/Diagnostics.cpp
+# 	./dyld3/SharedCacheRuntime.cpp
+# 	./dyld3/shared-cache/DyldSharedCache.cpp
+# 	./dyld3/shared-cache/FileUtils.cpp
+# 	./dyld3/MachOLoaded.cpp
+# 	./dyld3/MachOFile.cpp
+# 	./dyld3/MachOAnalyzer.cpp
+# 	./dyld3/Closure.cpp
+# 	./dyld3/ClosureWriter.cpp
+# 	./dyld3/BootArgs.cpp
+# 	./dyld3/ClosureBuilder.cpp
+# 	./dyld3/PathOverrides.cpp
+# )
+# set_source_files_properties(./dyld3/ClosureFileSystemPhysical.cpp TARGET_DIRECTORY dyld PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
+# set_source_files_properties(./dyld3/Tracing.cpp TARGET_DIRECTORY dyld PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
+# set_source_files_properties(./src/glue.c TARGET_DIRECTORY dyld PROPERTIES COMPILE_OPTIONS "-fno-builtin")
+# set_source_files_properties(./src/ImageLoaderMachOCompressed.cpp TARGET_DIRECTORY dyld PROPERTIES COMPILE_OPTIONS "-O3")
+# set_source_files_properties(./dyld3/Loading.cpp TARGET_DIRECTORY dyld PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
+# set_source_files_properties(./dyld3/Diagnostics.cpp TARGET_DIRECTORY dyld PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
+# set_source_files_properties(./dyld3/MachOLoaded.cpp TARGET_DIRECTORY dyld PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
+# set_source_files_properties(./dyld3/MachOFile.cpp TARGET_DIRECTORY dyld PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
+# set_source_files_properties(./dyld3/MachOAnalyzer.cpp TARGET_DIRECTORY dyld PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
+# set_source_files_properties(./dyld3/Closure.cpp TARGET_DIRECTORY dyld PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
+# set_source_files_properties(./dyld3/ClosureWriter.cpp TARGET_DIRECTORY dyld PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
+# set_source_files_properties(./dyld3/ClosureBuilder.cpp TARGET_DIRECTORY dyld PROPERTIES COMPILE_OPTIONS "-fno-exceptions")
+# set_source_files_properties(./dyld3/PathOverrides.cpp TARGET_DIRECTORY dyld PROPERTIES COMPILE_OPTIONS "-fno-exceptions")

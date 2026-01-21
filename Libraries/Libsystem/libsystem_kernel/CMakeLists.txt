@@ -44,6 +44,7 @@ set(common_headers
     ${SDK_SOURCE_DIR}/usr/include
     ${SDK_SOURCE_DIR}/usr/include/c++/v1
     ${ROOT_BINARY_DIR}/Kernel/xnu/bsd
+    ${ROOT_BINARY_DIR}/${CpuArch}
     ${RAVYN_SDKROOT}/usr/local/include
 )
 
@@ -318,7 +319,8 @@ set_target_properties(libkernel_static PROPERTIES
 set_target_properties(libmach PROPERTIES OUTPUT_NAME "mach" PREFIX "lib")
 
 set_target_properties(libkernel PROPERTIES 
-    OUTPUT_NAME "system_kernel" SUFFIX ".dylib" PREFIX "lib" NO_SONAME true)
+    OUTPUT_NAME "system_kernel" SUFFIX ".dylib" PREFIX "lib" NO_SONAME true
+    MACHO_CURRENT_VERSION 6153.0.168)
 
 target_link_libraries(libkernel_static libkernel_legacy)
 
@@ -326,8 +328,8 @@ add_dependencies(libkernel_static libkernel_legacy)
 add_dependencies(libkernel xnu_headers compiler_rt libkernel_static libmach)
 
 target_link_options(libkernel PRIVATE 
-    -v -umbrella System -all_load -mmacosx-version-min=10.15
-    -nostdlib -Wl,-install_name,/usr/lib/system/libsystem_kernel.dylib
+    -umbrella System -all_load -mmacosx-version-min=10.15
+    -Wl,-install_name,/usr/lib/system/libsystem_kernel.dylib
 )
 target_link_libraries(libkernel PRIVATE libkernel_static
     libsyscalls ${CMAKE_CURRENT_BINARY_DIR}/libmach.a)

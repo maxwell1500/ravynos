@@ -111,9 +111,8 @@ struct MachOFile; // forward ref
 // A prioritized list of architectures
 class VIS_HIDDEN GradedArchs {
 public:
-    // never construct new ones - just use existing static instances
-    GradedArchs()                   = delete;
-    GradedArchs(const GradedArchs&) = delete;
+    // no ctors. we never construct new ones - just use existing
+    // static instances below
 
     static const GradedArchs&  forCurrentOS(const MachOFile* mainExecutable);
     static const GradedArchs&  forName(const char* archName, bool forMainExecutable = false);

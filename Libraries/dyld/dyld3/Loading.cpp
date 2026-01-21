@@ -39,7 +39,7 @@
 #include <System/sys/mman.h>
 #include <System/sys/csr.h>
 #include <System/machine/cpu_capabilities.h>
-#if !TARGET_OS_SIMULATOR && !TARGET_OS_DRIVERKIT
+#if !TARGET_OS_SIMULATOR && !TARGET_OS_DRIVERKIT && !defined(WITHOUT_SANDBOX)
 #include <sandbox.h>
 #include <sandbox/private.h>
 #endif
@@ -346,7 +346,7 @@ void Loader::mapAndFixupAllImages(Diagnostics& diag, bool processDOFs, bool from
 
 bool Loader::sandboxBlocked(const char* path, const char* kind)
 {
-#if TARGET_OS_SIMULATOR || TARGET_OS_DRIVERKIT
+#if TARGET_OS_SIMULATOR || TARGET_OS_DRIVERKIT || defined(WITHOUT_SANDBOX)
     // sandbox calls not yet supported in dyld_sim
     return false;
 #else

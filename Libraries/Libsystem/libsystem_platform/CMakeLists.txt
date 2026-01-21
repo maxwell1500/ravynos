@@ -1,8 +1,13 @@
 add_library(libsystem_platform SHARED)
 set_target_properties(libsystem_platform PROPERTIES
-    OUTPUT_NAME "system_platform" SUFFIX ".dylib" PREFIX "lib" NO_SONAME true)
+    OUTPUT_NAME "system_platform" SUFFIX ".dylib" PREFIX "lib" NO_SONAME true
+    MACHO_CURRENT_VERSION 220)
 
-target_sources(libsystem_platform PRIVATE
+add_library(libplatform_dyld STATIC)
+set_target_properties(libplatform_dyld PROPERTIES
+    OUTPUT_NAME "platform_dyld" PREFIX "lib")
+
+set(libplatform_sources
     simple/asl.c
     simple/getenv.c
     simple/string_io.c
@@ -51,8 +56,7 @@ target_sources(libsystem_platform PRIVATE
     atomics/init.c
     introspection/introspection.c
 )
-
-target_include_directories(libsystem_platform PRIVATE
+set(libplatform_incs
     ${ROOT_SOURCE_DIR}/Kernel/xnu/bsd
     ../libsystem_c/include
     ../private internal
@@ -61,27 +65,47 @@ target_include_directories(libsystem_platform PRIVATE
     ${CMAKE_CURRENT_BINARY_DIR}/../libsystem_kernel/mig_hdr/include
     ${ROOT_BINARY_DIR}/Kernel/xnu/EXPORT_HDRS/osfmk
     ${ROOT_SOURCE_DIR}/Kernel/xnu/libsyscall/wrappers
+    ${ROOT_SOURCE_DIR}/Kernel/xnu/libsyscall/mach
 )
-
-target_compile_definitions(libsystem_platform PRIVATE
+set(libplatform_defs
     DISPATCH_USE_DTRACE=0 voucher_mach_msg_state_t=mach_port_t;
     OS_ATOMIC_CONFIG_MEMORY_ORDER_DEPENDENCY=1
     OS_ATOMIC_CONFIG_STARVATION_FREE_ONLY=0 OS_UNFAIR_LOCK_INLINE=0
     OSATOMIC_USE_INLINED=0 OSATOMIC_DEPRECATED=0 OSSPINLOCK_USE_INLINED=0
 )
-
-target_compile_options(libsystem_platform PRIVATE
+set(libplatform_opts
     --sysroot=${RAVYN_SDKROOT} -isysroot${RAVYN_SDKROOT} -w
     -Wno-implicit-function-declaration -Wno-int-conversion -Wno-implicit-int
     -fno-stack-protector -fdollars-in-identifiers -fno-common -fverbose-asm
     -momit-leaf-frame-pointer -DPRIVATE
     $<$<COMPILE_LANGUAGE:ASM>:-x assembler-with-cpp>
 )
+target_sources(libsystem_platform PRIVATE ${libplatform_sources})
+target_include_directories(libsystem_platform PRIVATE ${libplatform_incs})
+target_compile_definitions(libsystem_platform PRIVATE ${libplatform_defs})
+target_compile_options(libsystem_platform PRIVATE ${libplatform_opts})
+
+target_sources(libplatform_dyld PRIVATE ${libplatform_sources})
+target_include_directories(libplatform_dyld PRIVATE ${libplatform_incs})
+target_compile_definitions(libplatform_dyld PRIVATE ${libplatform_defs}
+    BUILDING_VARIANT VARIANT_DYLD VARIANT_STATIC)
+target_compile_options(libplatform_dyld PRIVATE ${libplatform_opts})
 
 target_link_options(libsystem_platform PRIVATE
-    -mmacos-version-min=10.15 -v -Wl,-install_name,/usr/lib/system/libsystem_platform.dylib
-    -rdynamic -nodefaultlibs -Wl,-search_paths_first
-    -all_load -nostdlib -L${RAVYN_SDKROOT}/usr/lib/system -umbrella System -lsystem_kernel
-    #-lcompiler-rt -ldyld
+    -mmacos-version-min=10.15
+    -Wl,-install_name,/usr/lib/system/libsystem_platform.dylib
+    -nodefaultlibs -Wl,-search_paths_first -umbrella System
+    -L${RAVYN_SDKROOT}/usr/lib/system
+    -L${CMAKE_CURRENT_BINARY_DIR}/../../dyld -ldyld
+    -L${CMAKE_CURRENT_BINARY_DIR}/../libsystem_c -lsystem_c
+    -L${CMAKE_CURRENT_BINARY_DIR}/../libsystem_pthread -lpthread_dyld
+    -L${CMAKE_CURRENT_BINARY_DIR}/../libsystem_malloc -lmalloc
+    -L${CMAKE_CURRENT_BINARY_DIR}/../libsystem_kernel -lkernel_static -lmach -lsyscalls
+    #-lcompiler-rt
     -Wl,-alias_list,${CMAKE_CURRENT_SOURCE_DIR}/xcodeconfig/libplatform.aliases
+)
+
+target_link_options(libplatform_dyld PRIVATE
+    -mmacos-version-min=10.15 -nodefaultlibs -Wl,-search_paths_first
+    -all_load -undefined warning
 )

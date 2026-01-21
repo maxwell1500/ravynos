@@ -3578,7 +3578,7 @@ bool MachOAnalyzer::SectionCache::findSectionForVMAddr(uint64_t vmAddr, bool (^s
         // The section handler may also reject this section
         if ( sectionHandler != nullptr ) {
             if (!sectionHandler(*foundSectionInfo)) {
-                return nullptr;
+                return false; // was nullptr
             }
         }
 

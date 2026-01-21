@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 4.0.0)
 project(ravynOS)
+enable_language(C CXX ASM OBJC OBJCXX)
 
 # ------------------------------------------------------------------------
 #  RAVYNOS BUILD SYSTEM - TOP LEVEL
@@ -8,9 +9,7 @@ project(ravynOS)
 set(ROOT_SOURCE_DIR ${CMAKE_SOURCE_DIR})
 set(ROOT_BINARY_DIR ${CMAKE_BINARY_DIR})
 
-include(./Developer/cmake/Version.cmake)
 include(./Developer/cmake/Paths.cmake)
-include(./Developer/cmake/Tools.cmake)
 
 message(STATUS "Configuring ravynOS ${PROD_VERSION} ${PROD_FAMILY} for ${CpuArch}")
 message(STATUS "Darwin ${DARWIN_VERSION}, Apple LLVM/TAPI ${TAPI_VERSION}")

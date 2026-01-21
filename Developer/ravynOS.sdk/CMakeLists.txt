@@ -2,6 +2,8 @@ file(COPY ../ravynOS.platform/Info.plist
     DESTINATION ${ROOT_BINARY_DIR}/Developer/Platforms/ravynOS.platform/)
 file(CREATE_LINK ravynOS.platform
     ${ROOT_BINARY_DIR}/Developer/Platforms/MacOSX.platform SYMBOLIC)
+file(CREATE_LINK ravynOS.sdk
+    ${ROOT_BINARY_DIR}/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk SYMBOLIC)
 
 set(FPATH /System/Library/Frameworks/System.framework)
 
@@ -10,8 +12,9 @@ add_custom_target(ravynOS_sdkPrep ALL
     COMMAND ${CMAKE_COMMAND} -E create_symlink Versions/Current/PrivateHeaders ${RAVYN_SDKROOT}${FPATH}/PrivateHeaders
     COMMAND ${CMAKE_COMMAND} -E create_symlink Versions/Current/Resources ${RAVYN_SDKROOT}${FPATH}/Resources
     COMMAND ${CMAKE_COMMAND} -E create_symlink B ${RAVYN_SDKROOT}${FPATH}/Versions/Current
-    COMMAND ${CMAKE_COMMAND} -E create_symlink Versions/Current/System ${RAVYN_SDKROOT}${FPATH}/System
-    COMMAND ${CMAKE_COMMAND} -E create_symlink ../../../../../../usr/lib/libSystem.B.dylib ${RAVYN_SDKROOT}${FPATH}/Versions/B/System
+    COMMAND ${CMAKE_COMMAND} -E create_symlink Versions/Current/System.dylib ${RAVYN_SDKROOT}${FPATH}/System.dylib
+    COMMAND ${CMAKE_COMMAND} -E create_symlink ../../../../../../usr/lib/libSystem.B.dylib ${RAVYN_SDKROOT}${FPATH}/Versions/B/System.dylib
+    COMMAND ${CMAKE_COMMAND} -E create_symlink libSystem.B.dylib ${RAVYN_SDKROOT}/usr/lib/libSystem.dylib
     COMMAND ${CMAKE_COMMAND} -E make_directory ${RAVYN_SDKROOT}/usr/local/include
     COMMAND ${CMAKE_COMMAND} -E make_directory ${RAVYN_SDKROOT}/usr/local/lib
     COMMAND ${CMAKE_COMMAND} -E make_directory ${RAVYN_SDKROOT}/usr/local/bin
