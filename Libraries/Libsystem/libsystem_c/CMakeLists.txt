@@ -38,8 +38,8 @@ add_compile_options(
 include_directories(gen locale locale/FreeBSD stdtime/FreeBSD darwin)
 
 
-add_custom_target(features
-	COMMAND env "ARCHS=${CpuArch} "	VARIANT_PLATFORM_NAME=macosx
+add_custom_target(features DEPENDS xnu_headers
+	COMMAND env "ARCHS=${CpuArch} " VARIANT_PLATFORM_NAME=macosx
 		DERIVED_FILES_DIR=${ROOT_BINARY_DIR}
 		SRCROOT=${ROOT_SOURCE_DIR}/Libraries/Libsystem/libsystem_c
 		perl ${ROOT_SOURCE_DIR}/Libraries/Libsystem/libsystem_c/xcodescripts/generate_features.pl
@@ -1363,8 +1363,8 @@ set_target_properties(libsystem_c PROPERTIES
 
 add_custom_target(generateLinklists
 	COMMAND env 
-		NM=${NM}
-		BUILD_ARCHIVES="Base FreeBSD TRE vCancelable vDarwinExtsn vDarwinExtsnCancelable vPre1050 vLegacy vInode32"
+		NM=${NM} #vCancelable vPre1050 vDarwinExtsn vDarwinExtsnCancelable vLegacy
+		BUILD_ARCHIVES="Base FreeBSD TRE vInode32"
 		BUILT_PRODUCTS_DIR=${CMAKE_CURRENT_BINARY_DIR} 
 		DERIVED_FILES_DIR=${CMAKE_CURRENT_BINARY_DIR}
 		sh ${CMAKE_CURRENT_SOURCE_DIR}/xcodescripts/build_linklists.sh
@@ -1377,20 +1377,26 @@ add_dependencies(libsystem_c Platform
 )
 
 target_link_options(libsystem_c PRIVATE
-    -mmacos-version-min=10.15 -undefined warning
+    -mmacos-version-min=10.15 -flat_namespace -undefined warning
     -Wl,-install_name,/usr/lib/system/libsystem_c.dylib
     -rdynamic -nodefaultlibs -Wl,-search_paths_first
     -all_load -L${RAVYN_SDKROOT}/usr/lib/system -umbrella System
-    #-lCrashReporterClient -lcompiler-rt -ldyld -lkernel -lm
-    -lsystem_malloc -lsystem_platform -lsystem_pthread
-    #-Wl,-upward-ldispatch -Wl,-upward-lmacho -Wl,-upward-lsystem_asl -Wl,-upward-lsystem_blocks
+    -ldyld -lsystem_malloc -lsystem_platform -lsystem_pthread -lsystem_kernel
+    -Wl,-upward-lsystem_blocks
+    #-lCrashReporterClient -lm
+    #-Wl,-upward-ldispatch -Wl,-upward-lmacho -Wl,-upward-lsystem_asl
     #-Wl,-upward-lsystem_info -Wl,-upward-lsystem_notify -Wl,-upward-lxpc -Wl,-upward-lcorecrypto
     #-Wl,-upward-lsystem_trace
     -Wl,-interposable_list,${CMAKE_CURRENT_BINARY_DIR}/interposable.list
     -Wl,-unexported_symbols_list,${CMAKE_CURRENT_BINARY_DIR}/unexport.list
-    -Wl,-alias_list,xcodescripts/alias.list
-    -Wl,-order_file,xcodescripts/Libc.order
+    -Wl,-alias_list,${CMAKE_CURRENT_SOURCE_DIR}/xcodescripts/alias.list
+    -Wl,-order_file,${CMAKE_CURRENT_SOURCE_DIR}/xcodescripts/Libc.order
     @${CMAKE_CURRENT_BINARY_DIR}/normal.linklist
 )
 
 # FIXME: should also build `debug` variant
+
+add_custom_command(TARGET libsystem_c POST_BUILD
+	COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:libsystem_c>
+		${RAVYN_SDKROOT}/usr/lib/system/
+)

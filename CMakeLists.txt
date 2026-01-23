@@ -12,7 +12,7 @@ set(ROOT_BINARY_DIR ${CMAKE_BINARY_DIR})
 include(./Developer/cmake/Paths.cmake)
 
 message(STATUS "Configuring ravynOS ${PROD_VERSION} ${PROD_FAMILY} for ${CpuArch}")
-message(STATUS "Darwin ${DARWIN_VERSION}, Apple LLVM/TAPI ${TAPI_VERSION}")
+message(STATUS "Darwin ${DARWIN_VERSION}, Apple LLVM/TAPI ${LLVM_VERSION}")
 
 # ------------------------------------------------------------------------
 #  Top level targets

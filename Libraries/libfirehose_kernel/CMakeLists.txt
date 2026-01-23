@@ -12,7 +12,6 @@ add_library(libfirehose_kernel STATIC)
 set_target_properties(libfirehose_kernel PROPERTIES
     OUTPUT_NAME "firehose_kernel"
     PREFIX "lib"
-    NO_SONAME true
 )
 target_sources(libfirehose_kernel PRIVATE
     ../Libsystem/libdispatch/src/firehose/firehose_buffer.c
@@ -23,9 +22,7 @@ target_compile_definitions(libfirehose_kernel PRIVATE
     OS_ATOMIC_CONFIG_MEMORY_ORDER_DEPENDENCY=1 OS_ATOMIC_CONFIG_STARVATION_FREE_ONLY=0)
 
 target_compile_options(libfirehose_kernel PRIVATE -mkernel -Wno-packed
-    --sysroot=${RAVYN_SDKROOT} -isysroot ${RAVYN_SDKROOT}
-    -isystem ${RAVYN_SDKROOT}/usr/include
-    -iframework ${RAVYN_SDKROOT}/System/Library/Frameworks
+    --sysroot=${RAVYN_SDKROOT} -isysroot${RAVYN_SDKROOT}
     -mmacosx-version-min=10.15
     -Wno-error=implicit-function-declaration
     -Wno-implicit-function-declaration
@@ -39,6 +36,7 @@ target_include_directories(libfirehose_kernel PRIVATE
     ${ROOT_SOURCE_DIR}/Kernel/xnu/bsd
     ../Libsystem/private ${SDK_SOURCE_DIR}/usr/include
     ${RAVYN_SDKROOT}/usr/local/include
+    ${RAVYN_SDKROOT}/usr/local/include/kernel
 )
 
 add_dependencies(libfirehose_kernel xnu_headers)

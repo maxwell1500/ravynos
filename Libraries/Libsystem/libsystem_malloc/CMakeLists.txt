@@ -3,10 +3,6 @@ set_target_properties(libsystem_malloc PROPERTIES
     OUTPUT_NAME "system_malloc" SUFFIX ".dylib" PREFIX "lib" NO_SONAME true
     MACHO_CURRENT_VERSION 283)
 
-add_library(libmalloc STATIC)
-set_target_properties(libmalloc PROPERTIES
-    OUTPUT_NAME "malloc" PREFIX "lib")
-
 set(libmalloc_sources
     bitarray.c empty.s frozen_malloc.c legacy_malloc.c
     magazine_large.c magazine_malloc.c magazine_medium.c
@@ -16,13 +12,13 @@ set(libmalloc_sources
     purgeable_malloc.c vm.c resolver/resolver.c
 )
 set(libmalloc_incs
-    ${SDK_SOURCE_DIR}/usr/include
-    ../../../Kernel/xnu/EXTERNAL_HEADERS
+    ../../../Kernel/xnu/bsd
+    ../../../Kernel/xnu/osfmk
+    ../libsystem_c/include
     ../private internal resolver
     ../libsystem_c/darwin
     ../../../Kernel/xnu/libsyscall/mach
     ../libsystem_c/gen
-    ${RAVYN_SDKROOT}/System/Library/Frameworks/System.framework/Versions/B/PrivateHeaders
     ${RAVYN_SDKROOT}/System/Library/Frameworks/Kernel.framework/Versions/A/Headers
 )
 set(libmalloc_defs
@@ -30,10 +26,10 @@ set(libmalloc_defs
     OS_UNFAIR_LOCK_INLINE=0 _FORTIFY_SOURCE=0 NDEBUG
 )
 set(libmalloc_opts
-    --sysroot=${RAVYN_SDKROOT} -isysroot=${RAVYN_SDKROOT} -w
-    --target=${TARGET_TRIPLE} -F${RAVYN_SDKROOT}/System/Library/Frameworks
+    --sysroot=${RAVYN_SDKROOT} -isysroot${RAVYN_SDKROOT} -w
     -Wno-implicit-function-declaration -momit-leaf-frame-pointer
-    -Wno-int-conversion -Wno-implicit-int
+    -Wno-int-conversion -Wno-implicit-int -DPRIVATE
+    -include${ROOT_SOURCE_DIR}/Kernel/xnu/osfmk/i386/cpu_capabilities.h
     $<$<COMPILE_LANGUAGE:ASM>:-x assembler-with-cpp>
 )
 
@@ -42,17 +38,17 @@ target_include_directories(libsystem_malloc PRIVATE ${libmalloc_incs})
 target_compile_definitions(libsystem_malloc PRIVATE ${libmalloc_defs})
 target_compile_options(libsystem_malloc PRIVATE ${libmalloc_opts})
 
-target_sources(libmalloc PRIVATE ${libmalloc_sources})
-target_include_directories(libmalloc PRIVATE ${libmalloc_incs})
-target_compile_definitions(libmalloc PRIVATE ${libmalloc_defs})
-target_compile_options(libmalloc PRIVATE ${libmalloc_opts})
-
 target_link_options(libsystem_malloc PRIVATE
-    -mmacos-version-min=10.15 -undefined warning
+    -mmacos-version-min=10.15 -flat_namespace -undefined warning
     -Wl,-install_name,/usr/lib/system/libsystem_malloc.dylib
     -rdynamic -nodefaultlibs -Wl,-search_paths_first -all_load
     -L${RAVYN_SDKROOT}/usr/lib/system -umbrella System
-    #-lCrashReporterClient -lcompiler-rt
+    # -lCrashReporterClient
     -lsystem_platform -Wl,-upward-lsystem_c
     -Wl,-interposable_list,${CMAKE_CURRENT_SOURCE_DIR}/xcodeconfig/interposable.list
+)
+
+add_custom_command(TARGET libsystem_malloc POST_BUILD
+	COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:libsystem_malloc>
+		${RAVYN_SDKROOT}/usr/lib/system/
 )

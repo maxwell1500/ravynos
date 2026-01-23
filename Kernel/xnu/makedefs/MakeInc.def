@@ -459,7 +459,7 @@ SFLAGS	= $(SFLAGS_GEN) \
 #
 # Linker command
 #
-LD	= $(KC++) -nostdlib -fuse-ld=$(LD)
+LD	= $(KC++) -nostdlib
 
 #
 # Default LDFLAGS
@@ -469,8 +469,7 @@ LD	= $(KC++) -nostdlib -fuse-ld=$(LD)
 # headers for the load command segment and the CTF section structures.
 #
 LDFLAGS_KERNEL_GEN = \
-	-nostdlib \
-	-fapple-kext \
+	-v -ffreestanding -fapple-kext \
 	-Wl,-e,__start \
 	-Wl,-sectalign,__TEXT,__text,0x1000 \
 	-Wl,-sectalign,__DATA,__percpu,0x80 \
@@ -485,7 +484,6 @@ LDFLAGS_KERNEL_GEN = \
 	-Wl,-headerpad,152
 
 LDFLAGS_KERNEL_SDK	= -L$(SDKROOT)/usr/local/lib/kernel -lfirehose_kernel
-
 LDFLAGS_KERNEL_RELEASE	=
 LDFLAGS_KERNEL_DEVELOPMENT     =
 LDFLAGS_KERNEL_KASAN = $(LDFLAGS_KERNEL_DEVELOPMENT)

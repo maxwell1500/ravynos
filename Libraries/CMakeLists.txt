@@ -55,6 +55,7 @@ ExternalProject_Add(runtime DEPENDS xnu_headers
         -DROOT_BINARY_DIR=${ROOT_BINARY_DIR}
         -DCMAKE_C_FLAGS=${RUNTIME_FLAGS} -DCMAKE_CXX_FLAGS=${RUNTIME_FLAGS}
         -DCMAKE_C_COMPILER=${CC} -DCMAKE_CXX_COMPILER=${CXX}
+        -DCMAKE_C_COMPILER_WORKS=ON -DCMAKE_CXX_COMPILER_WORKS=ON
         -DCMAKE_ASM_COMPILER_TARGET=${CpuArch}-apple-darwin
         -DCMAKE_C_COMPILER_TARGET=${CpuArch}-apple-darwin
         -DCMAKE_CXX_COMPILER_TARGET=${CpuArch}-apple-darwin
@@ -62,10 +63,10 @@ ExternalProject_Add(runtime DEPENDS xnu_headers
         -DCMAKE_SYSROOT=${RAVYN_SDKROOT_MACOSX}
         -DCMAKE_BUILD_TYPE=Release
         -DLLVM_TARGETS_TO_BUILD=${BuildArch}
-        -DLLVM_ENABLE_RUNTIMES=compiler-rt   #builtins$<SEMICOLON>
+        -DLLVM_ENABLE_RUNTIMES=compiler-rt
         -DLLVM_RUNTIME_TARGETS=${CpuArch}-apple-darwin
         -DCOMPILER_RT_DEFAULT_TARGET_ONLY=ON -DCOMPILER_RT_BUILD_CRT=OFF
-        -DLLVM_USE_LINKER=lld
+        -DLLVM_USE_LINKER=lld -DCOMPILER_RT_OS_DIR=ravynos
         -DCOMPILER_RT_BUILD_BUILTINS=ON -DCOMPILER_RT_BUILD_SANITIZERS=OFF
         -DCOMPILER_RT_BUILD_PROFILE=ON -DCOMPILER_RT_BUILD_XRAY=OFF
         -DCOMPILER_RT_BUILD_LIBFUZZER=OFF -DCOMPILER_RT_BUILD_MEMPROF=OFF
@@ -164,9 +165,16 @@ ExternalProject_Add(libcxx DEPENDS xnu_headers libunwind
         -DCMAKE_C_COMPILER=${CC} -DCMAKE_CXX_COMPILER=${CXX}
         -DCMAKE_C_COMPILER_WORKS=ON -DCMAKE_CXX_COMPILER_WORKS=ON
         -DCMAKE_LINKER=${LD} -DCMAKE_ASM_COMPILER=${CC}
-        -DCMAKE_C_USING_LINKER_APPLE=${CC} -DCMAKE_CXX_USING_LINKER_APPLE=${CXX}
         -DCMAKE_LINK_DEPENDS_USE_LINKER=OFF
         -DCMAKE_INSTALL_PREFIX=${RAVYN_SDKROOT}/usr -DCMAKE_BUILD_TYPE=Release
+        "-DCMAKE_SHARED_LINKER_FLAGS=-Wl,-flat_namespace \
+        -Wl,-undefined,warning -Wl,-umbrella,System \
+        -Wl,-install_name,/usr/lib/system/libc++.dylib \
+        -L${ROOT_BINARY_DIR}/Libraries/llvm_target/libunwind/lib \
+        -L${ROOT_BINARY_DIR}/Libraries/llvm_target/compiler-rt/lib/ravynos \
+        -lunwind -lclang_rt.builtins-${CpuArch} -nostdlib"
+        -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON
+        -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=OFF
 
         -DLLVM_ENABLE_LIBCXX=ON
         -DLLVM_APPEND_VC_REV=OFF -DLLVM_TARGETS_TO_BUILD=${BuildArch}
@@ -180,20 +188,36 @@ ExternalProject_Add(libcxx DEPENDS xnu_headers libunwind
         -DLIBCXX_INCLUDE_DOCS=OFF -DLIBCXX_HAS_PTHREAD_API=ON
         -DLIBCXX_HAS_ATOMIC_LIB=OFF
 
-        -DLIBCXXABI_USE_LLVM_UNWINDER=ON
-        -DLIBCXXABI_HAS_PTHREAD_API=ON -DLIBCXXABI_USE_COMPILER_RT=ON
+        -DLIBCXXABI_USE_LLVM_UNWINDER=OFF
+        -DLIBCXXABI_HAS_PTHREAD_API=ON -DLIBCXXABI_USE_COMPILER_RT=OFF
         -DLIBCXXABI_INCLUDE_TESTS=OFF -DLIBCXXABI_ENABLE_SHARED=ON
         -DLIBCXXABI_SILENT_TERMINATE=ON
 )
 
 
-add_custom_target(compiler_rt)
+add_custom_target(compiler_rt DEPENDS libcxx
+    COMMAND
+        ${CMAKE_COMMAND} -E make_directory ${RAVYN_SDKROOT}/usr/lib/system &&
+        ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_BINARY_DIR}/llvm_target/compiler-rt/lib/ravynos/libclang_rt.builtins-${CpuArch}.a ${CMAKE_CURRENT_BINARY_DIR}/llvm_target/compiler-rt/lib/ravynos/libclang_rt.profile-${CpuArch}.a ${RAVYN_SDKROOT}/usr/lib/system/
+        && ${CC} -o ${RAVYN_SDKROOT}/usr/lib/system/libcompiler_rt.dylib
+        -mmacosx-version-min=10.15 -shared -nostdlib -Wl,-all_load
+        -Wl,-install_name,/usr/lib/system/libcompiler_rt.dylib
+        -Wl,-flat_namespace -Wl,-undefined,warning
+        -Wl,-current_version,${LLVM_VERSION} -nostdlib -umbrella System
+        ${RAVYN_SDKROOT}/usr/lib/system/libclang_rt.builtins-${CpuArch}.a
+        ${RAVYN_SDKROOT}/usr/lib/system/libclang_rt.profile-${CpuArch}.a
+    COMMAND
+        test -f ${RAVYN_SDKROOT}/usr/lib/libc++.dylib &&
+          mv -f ${RAVYN_SDKROOT}/usr/lib/libc++*.dylib ${RAVYN_SDKROOT}/usr/lib/system/
+          || exit 0
+)
 add_dependencies(compiler_rt libcxx libunwind runtime)
-
+add_dependencies(xnu compiler_rt)
+add_dependencies(libdyld libsystem_malloc libsystem_c libsystem_pthread)
 add_dependencies(libSystem
     xnu_headers libsystem_c libsystem_platform libsystem_pthread
     libsystem_malloc libdyld libkernel libsystem_darwin
     compiler_rt
 )
 
-# add_dependencies(Darwin libSystem libcxx)
+add_dependencies(Darwin libSystem libcxx)

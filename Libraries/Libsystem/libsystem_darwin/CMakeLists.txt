@@ -51,14 +51,14 @@ target_compile_options(libsystem_darwin PRIVATE
 )
 
 target_link_options(libsystem_darwin PRIVATE
-    -mmacos-version-min=10.15
-    -rdynamic -nodefaultlibs -Wl,-search_paths_first
+    -mmacos-version-min=10.15 -flat_namespace -undefined warning
+    -rdynamic -nodefaultlibs -Wl,-syslibroot ${RAVYN_SDKROOT}
+    -Wl,-search_paths_first
     -Wl,-install_name,/usr/lib/system/libsystem_darwin.dylib
     -Wl,-all_load -nostdlib -L${RAVYN_SDKROOT}/usr/lib/system -umbrella System
     -lsystem_kernel -L${CMAKE_CURRENT_BINARY_DIR}/../../dyld -ldyld
     -lsystem_malloc -lsystem_platform -lsystem_pthread -lsystem_c
-    #-lcompiler-rt -ldyld  -lm
-    # -ldispatch -lxpc
+    -lunwind -ldyld # -lm -ldispatch -lxpc
 )
 
 file(GLOB darwinpvthdrs h/*.h)

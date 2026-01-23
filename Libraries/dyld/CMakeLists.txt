@@ -77,25 +77,25 @@ target_include_directories(libdyld PRIVATE
 
 target_link_options(libdyld PRIVATE
     --sysroot=${RAVYN_SDKROOT} -isysroot${RAVYN_SDKROOT}
-    -nostdlib -nodefaultlibs -undefined warning
-    -Wl,-no_inits -Wl,-no_warn_unused_dylibs "-Wl,-unexported_symbol,__ZNSt3*"
+    -nostdlib -nodefaultlibs -flat_namespace -undefined warning
+    -Wl,-no_inits -Wl,-no_warn_unused_dylibs
+    "-Wl,-unexported_symbol,__ZNSt3*"
     -mmacosx-version-min=10.15 -Wl,-install_name,/usr/lib/system/libdyld.dylib
-	-L${CMAKE_CURRENT_BINARY_DIR}/../Libsystem/libsystem_malloc -lmalloc
-	-L${CMAKE_CURRENT_BINARY_DIR}/../Libsystem/libsystem_pthread -lpthread_dyld
-	-L${CMAKE_CURRENT_BINARY_DIR}/../Libsystem/libsystem_platform -lplatform_dyld
-	-L${CMAKE_CURRENT_BINARY_DIR}/../Libsystem/libsystem_kernel -lkernel_static
-	-L${CMAKE_CURRENT_BINARY_DIR}/../Libsystem/libsystem_c -lc_static
-	-L${RAVYN_SDKROOT}/usr/lib/system
+	-L${RAVYN_SDKROOT}/usr/lib/system -umbrella System
+	-lsystem_malloc -lsystem_pthread -lsystem_platform -lsystem_kernel
+	-lsystem_c
     # -lCrashReporterClient
-    -umbrella System
-    # -Wl,-upward-lsystem_platform -Wl,-upward-lsystem_malloc
-    # -Wl,-upward-lsystem_c -Wl,-upward-lsystem_pthread
+    -Wl,-upward-lsystem_platform -Wl,-upward-lsystem_malloc
+    -Wl,-upward-lsystem_c -Wl,-upward-lsystem_pthread
     # -Wl,-upward-lxpc
-    # -Wl,-upward-lsystem_blocks
-    -Wl,-upward-lsystem_kernel
+    -Wl,-upward-lsystem_blocks -Wl,-upward-lsystem_kernel
     # -Wl,-upward-ldispatch -Wl,-upward-lcompiler_rt
     -lunwind -lc++ -lc++abi
 )
+
+add_custom_command(TARGET libdyld POST_BUILD
+	COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:libdyld>
+		${RAVYN_SDKROOT}/usr/lib/system)
 
 # add_executable(dyld
 # 	./src/dyldStartup.s

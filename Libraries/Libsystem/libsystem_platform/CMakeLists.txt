@@ -1,11 +1,7 @@
 add_library(libsystem_platform SHARED)
 set_target_properties(libsystem_platform PROPERTIES
-    OUTPUT_NAME "system_platform" SUFFIX ".dylib" PREFIX "lib" NO_SONAME true
-    MACHO_CURRENT_VERSION 220)
-
-add_library(libplatform_dyld STATIC)
-set_target_properties(libplatform_dyld PROPERTIES
-    OUTPUT_NAME "platform_dyld" PREFIX "lib")
+    OUTPUT_NAME "system_platform" SUFFIX ".dylib" PREFIX "lib"
+    NO_SONAME true MACHO_CURRENT_VERSION 220)
 
 set(libplatform_sources
     simple/asl.c
@@ -55,6 +51,7 @@ set(libplatform_sources
     atomics/x86_64/pfz.s
     atomics/init.c
     introspection/introspection.c
+    ../../dyld/src/dyld_stub_binder.s
 )
 set(libplatform_incs
     ${ROOT_SOURCE_DIR}/Kernel/xnu/bsd
@@ -85,27 +82,18 @@ target_include_directories(libsystem_platform PRIVATE ${libplatform_incs})
 target_compile_definitions(libsystem_platform PRIVATE ${libplatform_defs})
 target_compile_options(libsystem_platform PRIVATE ${libplatform_opts})
 
-target_sources(libplatform_dyld PRIVATE ${libplatform_sources})
-target_include_directories(libplatform_dyld PRIVATE ${libplatform_incs})
-target_compile_definitions(libplatform_dyld PRIVATE ${libplatform_defs}
-    BUILDING_VARIANT VARIANT_DYLD VARIANT_STATIC)
-target_compile_options(libplatform_dyld PRIVATE ${libplatform_opts})
-
 target_link_options(libsystem_platform PRIVATE
-    -mmacos-version-min=10.15
+    -mmacos-version-min=10.15 -flat_namespace -undefined warning
     -Wl,-install_name,/usr/lib/system/libsystem_platform.dylib
     -nodefaultlibs -Wl,-search_paths_first -umbrella System
     -L${RAVYN_SDKROOT}/usr/lib/system
-    -L${CMAKE_CURRENT_BINARY_DIR}/../../dyld -ldyld
-    -L${CMAKE_CURRENT_BINARY_DIR}/../libsystem_c -lsystem_c
-    -L${CMAKE_CURRENT_BINARY_DIR}/../libsystem_pthread -lpthread_dyld
-    -L${CMAKE_CURRENT_BINARY_DIR}/../libsystem_malloc -lmalloc
-    -L${CMAKE_CURRENT_BINARY_DIR}/../libsystem_kernel -lkernel_static -lmach -lsyscalls
-    #-lcompiler-rt
+    -L${ROOT_BINARY_DIR}/Libraries/llvm_target/compiler-rt/lib/ravynos
+    -lsystem_c -lsystem_pthread -lsystem_malloc -ldyld
+    -lsystem_kernel -lcompiler_rt
     -Wl,-alias_list,${CMAKE_CURRENT_SOURCE_DIR}/xcodeconfig/libplatform.aliases
 )
 
-target_link_options(libplatform_dyld PRIVATE
-    -mmacos-version-min=10.15 -nodefaultlibs -Wl,-search_paths_first
-    -all_load -undefined warning
+add_custom_command(TARGET libsystem_platform POST_BUILD
+	COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:libsystem_platform>
+		${RAVYN_SDKROOT}/usr/lib/system/
 )

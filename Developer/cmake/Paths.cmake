@@ -31,7 +31,7 @@ set(SYSROOT_DIR ${ROOT_BINARY_DIR}/sysroot)
 
 include(${ROOT_SOURCE_DIR}/Developer/cmake/Version.cmake)
 
-set(TARGET_TRIPLE ${CpuArch}-corvux-darwin${DARWIN_MAJOR}-macho)
+set(TARGET_TRIPLE ${CpuArch}-apple-darwin${DARWIN_MAJOR})
 
 include(ExternalProject)
 include(${ROOT_SOURCE_DIR}/Developer/cmake/Tools.cmake)

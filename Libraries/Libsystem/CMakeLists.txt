@@ -51,8 +51,12 @@ target_include_directories(libSystem PRIVATE
     libsystem_c/darwin ../../Kernel/xnu/EXTERNAL_HEADERS
     ${RAVYN_SDKROOT}/usr/include/pthread private
     ../../Kernel/xnu/bsd ../../Kernel/xnu/libsyscall/mach
-    ../../Kernel/xnu/libsyscall/wrappers
+    ../../Kernel/xnu/libsyscall/wrappers libsystem_c/include
+    ${ROOT_BINARY_DIR}/Kernel/xnu/bsd
     ${ROOT_BINARY_DIR}/Kernel/xnu/EXPORT_HDRS/osfmk
+    ${ROOT_BINARY_DIR}/${CpuArch}
+    ${RAVYN_SDKROOT}/usr/include
+    ${RAVYN_SDKROOT}/usr/local/include
 )
 
 target_compile_definitions(libSystem PRIVATE
@@ -61,26 +65,33 @@ target_compile_definitions(libSystem PRIVATE
 
 target_compile_options(libSystem PRIVATE
     --sysroot=${RAVYN_SDKROOT} -isysroot=${RAVYN_SDKROOT} -w
-    --target=${TARGET_TRIPLE} -isystem ${RAVYN_SDKROOT}/usr/include
-    -iframework ${RAVYN_SDKROOT}/System/Library/Frameworks
+    -F${RAVYN_SDKROOT}/System/Library/Frameworks
     -Wno-implicit-function-declaration
     -Wno-int-conversion -Wno-implicit-int
     $<$<COMPILE_LANGUAGE:ASM>:-x assembler-with-cpp>
 )
 
+add_dependencies(libdyld libsystem_pthread libsystem_c)
 add_dependencies(libsystem_c libsystem_malloc libsystem_platform)
-#add_dependencies(libsystem_pthread libsystem_platform)
-#add_dependencies(libsystem_malloc libsystem_platform)
-#add_dependencies(libsystem_platform compiler_rt)
+add_dependencies(libsystem_pthread libsystem_platform)
+add_dependencies(libsystem_malloc libsystem_platform)
+add_dependencies(libsystem_platform compiler_rt libkernel)
+add_dependencies(libsystem_darwin libdyld libsystem_c)
 #add_dependencies(libsystem_notify xnu_headers)
 #add_dependencies(libcommonCrypto xnu_headers)
 add_dependencies(libSystem 
-    libsystem_c libsystem_malloc libsystem_pthread libsystem_platform
+    libsystem_c libsystem_malloc libsystem_pthread libsystem_platform libdyld
     #libsystem_notify libcommonCrypto
 )
+add_dependencies(xnu libSystem)
 
 target_link_options(libSystem PRIVATE
-    -mmacos-version-min=10.15 -undefined warning
+    -mmacos-version-min=10.15 -Wl,-syslibroot,${RAVYN_SDKROOT}/usr/lib
+    -Wl,-flat_namespace -Wl,-undefined,warning -Wl,-no_warn_inits
+    -L${RAVYN_SDKROOT}/usr/lib/system
+    -Wl,-install_name,/usr/lib/libSystem.dylib
     -rdynamic -nodefaultlibs -Wl,-search_paths_first -Wl,-reexport-lsystem_c
-    -Wl,-reexport-lsystem_malloc -Wl,-reexport-lsystem_platform -Wl,-reexport-lsystem_pthread
+    -Wl,-reexport-lsystem_malloc -Wl,-reexport-lsystem_platform
+    -Wl,-reexport-lsystem_pthread -Wl,-reexport-lcompiler_rt
+    -ldyld
 )

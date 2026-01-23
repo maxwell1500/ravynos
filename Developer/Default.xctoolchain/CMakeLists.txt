@@ -19,7 +19,7 @@ ExternalProject_Add(host_xcbuild
     CMAKE_ARGS -Wno-dev
         -DROOT_SOURCE_DIR=${ROOT_SOURCE_DIR}
         -DROOT_BINARY_DIR=${ROOT_BINARY_DIR}
-        -DCMAKE_BUILD_RPATH=${RPATH}/../lib 
+        -DCMAKE_BUILD_RPATH=${RPATH}/../lib
         -DCMAKE_INSTALL_RPATH=${RPATH}/../lib
         -DCMAKE_INSTALL_PREFIX=${TOOLCHAIN}
 )
@@ -30,12 +30,13 @@ ExternalProject_Add(host_clang DEPENDS host_migcom
     USES_TERMINAL_BUILD
     CMAKE_ARGS
         ${EXTRA_ARGS} -Wno-dev
+        -C${CMAKE_CURRENT_SOURCE_DIR}/llvm/clang/cmake/caches/Apple-stage1.cmake
         -DCMAKE_INSTALL_PREFIX=${TOOLCHAIN}/usr -DCMAKE_BUILD_TYPE=Release
-        -DLLVM_ENABLE_LIBCXX=ON -DLLVM_APPEND_VC_REV=OFF
+        -DLLVM_BOOTSTRAP_ENABLE_LIBCXX=ON -DLLVM_APPEND_VC_REV=OFF
         -DLLVM_TARGETS_TO_BUILD=${BuildArch} -DLLVM_ENABLE_LTO=OFF
         -DLLVM_BUILD_DOCS=OFF -DLLVM_INCLUDE_TESTS=OFF
         -DLLVM_INSTALL_BINUTILS_SYMLINKS=ON -DLLVM_NATIVE_TOOL_DIR=${TOOLS}
-        -DLLVM_DEFAULT_TARGET_TRIPLE=${TARGET_TRIPLE}
+        -DLLVM_BOOTSTRAP_DEFAULT_TARGET_TRIPLE=${CpuArch}-apple-darwin${DARWIN_MAJOR}
         -DLLVM_INCLUDE_BENCHMARKS=OFF -DLLVM_ENABLE_WARNINGS=OFF
         -DLLVM_ENABLE_PROJECTS=clang$<SEMICOLON>tapi$<SEMICOLON>lld
         -DLLVM_BUILD_RUNTIMES=OFF -DLLVM_BUILD_BUILTINS=OFF
@@ -45,7 +46,7 @@ set(GNU_CONFIGURE_ARGS
     --prefix=/usr --sysconfdir=/etc --bindir=/bin --sbindir=/sbin --localstatedir=/var
 )
 add_custom_target(host_gmake
-    COMMAND 
+    COMMAND
         if [ ! -f ${CMAKE_CURRENT_BINARY_DIR}/gmake/make ] $<SEMICOLON> then
           ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/gmake
           && cd ${CMAKE_CURRENT_BINARY_DIR}/gmake
