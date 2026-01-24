@@ -1,7 +1,6 @@
 add_library(libsystem_platform SHARED)
 set_target_properties(libsystem_platform PROPERTIES
-    OUTPUT_NAME "system_platform" SUFFIX ".dylib" PREFIX "lib"
-    NO_SONAME true MACHO_CURRENT_VERSION 220)
+    OUTPUT_NAME "system_platform" SUFFIX ".dylib" PREFIX "lib" NO_SONAME true)
 
 set(libplatform_sources
     simple/asl.c
@@ -83,6 +82,7 @@ target_link_options(libsystem_platform PRIVATE
     --sysroot=${RAVYN_SDKROOT}
     -mmacos-version-min=10.15 -flat_namespace -undefined warning
     -Wl,-install_name,/usr/lib/system/libsystem_platform.dylib
+    -Wl,-current_version,220 -Wl,-compatibility_version,1.0.0
     -Wl,-search_paths_first -umbrella System
     -L${RAVYN_SDKROOT}/usr/lib/system
     -L${ROOT_BINARY_DIR}/Libraries/llvm_target/compiler-rt/lib/ravynos

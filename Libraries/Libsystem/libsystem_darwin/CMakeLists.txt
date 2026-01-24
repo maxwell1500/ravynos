@@ -52,6 +52,7 @@ target_link_options(libsystem_darwin PRIVATE
     --target=${CpuArch}-apple-darwin
     -mmacos-version-min=10.15 -flat_namespace -undefined warning
     -rdynamic -nostdlib -nodefaultlibs
+    -Wl,-current_version,10.15.0 -Wl,-compatibility_version,1.0.0
     -Wl,-syslibroot,${RAVYN_SDKROOT} -Wl,-search_paths_first
     -Wl,-install_name,/usr/lib/system/libsystem_darwin.dylib
     -L${RAVYN_SDKROOT}/usr/lib/system -umbrella System

@@ -1,7 +1,6 @@
 add_library(libsystem_pthread SHARED)
 set_target_properties(libsystem_pthread PROPERTIES
-    OUTPUT_NAME "system_pthread" SUFFIX ".dylib" PREFIX "lib"
-    NO_SONAME true MACHO_CURRENT_VERSION 416.0.6)
+    OUTPUT_NAME "system_pthread" SUFFIX ".dylib" PREFIX "lib" NO_SONAME true)
 
 set(libpthread_sources
     pthread.c pthread_asm.s pthread_atfork.c pthread_cancelable.c
@@ -46,6 +45,7 @@ target_link_options(libsystem_pthread PRIVATE
     --sysroot=${RAVYN_SDKROOT} -isysroot=${RAVYN_SDKROOT}
     -mmacos-version-min=10.15 -flat_namespace -undefined warning
     -Wl,-install_name,/usr/lib/system/libsystem_pthread.dylib
+    -Wl,-current_version,416.0.6 -Wl,-compatibility_version,1.0.0
     -rdynamic -nodefaultlibs -Wl,-search_paths_first
     -all_load -L${RAVYN_SDKROOT}/usr/lib/system -umbrella System
     -ldyld -lsystem_platform -lsystem_c -lsystem_kernel -lcompiler_rt

@@ -1,11 +1,9 @@
 add_library(libSystem SHARED)
 target_sources(libSystem PRIVATE init.c CompatibilityHacks.c)
 set_target_properties(libSystem PROPERTIES
-    OUTPUT_NAME "System.B" SUFFIX ".dylib" PREFIX "lib" NO_SONAME true
-    MACHO_COMPATIBILITY_VERSION 1.0.0
-    MACHO_CURRENT_VERSION 1281)
+    OUTPUT_NAME "System.B" SUFFIX ".dylib" PREFIX "lib" NO_SONAME true)
 
-# Library versions within libsystem were taken from Mavericks System.tbd
+# Library versions within libsystem were taken from Monterey System.tbd
 # libcache.dylib 83
 # libcommonCrypto.dylib 60165
 # libcompiler_rt.dylib 101.2
@@ -66,6 +64,7 @@ target_compile_definitions(libSystem PRIVATE
 target_compile_options(libSystem PRIVATE
     --sysroot=${RAVYN_SDKROOT} -isysroot=${RAVYN_SDKROOT} -w
     -F${RAVYN_SDKROOT}/System/Library/Frameworks
+    -include${CMAKE_CURRENT_BINARY_DIR}/config.${CpuArch}.normal.h
     -Wno-implicit-function-declaration
     -Wno-int-conversion -Wno-implicit-int -fno-common
     $<$<COMPILE_LANGUAGE:ASM>:-x assembler-with-cpp>
@@ -95,7 +94,7 @@ add_custom_command(OUTPUT config
 )
 
 add_custom_command(OUTPUT libunwind.dylib
-    DEPENDS ${RAVYN_SDKROOT}/usr/lib/libunwind.a libunwind
+    DEPENDS libunwind
     COMMAND ${CC} -shared -o ${RAVYN_SDKROOT}/usr/lib/system/libunwind.dylib 
         -Wl,-install_name,/usr/lib/system/libunwind.dylib 
         -Wl,-compatibility_version,1.0.0 -Wl,-current_version,35.4
@@ -112,12 +111,15 @@ target_link_options(libSystem PRIVATE
     -mmacos-version-min=10.15 -Wl,-syslibroot,${RAVYN_SDKROOT}/usr/lib
     -Wl,-flat_namespace -Wl,-undefined,warning -Wl,-no_warn_inits
     -L${RAVYN_SDKROOT}/usr/lib/system -L${RAVYN_SDKROOT}/usr/local/lib/system
-    -Wl,-install_name,/usr/lib/libSystem.dylib
-    -rdynamic -nodefaultlibs -Wl,-search_paths_first -Wl,-reexport-lsystem_c
+    -Wl,-install_name,/usr/lib/libSystem.dylib -Wl,-current_version,1254
+    -Wl,-compatibility_version,1.0.0
+    -rdynamic -nodefaultlibs -Wl,-search_paths_first
+    -Wl,-reexport-lsystem_c
     -Wl,-reexport-lsystem_malloc -Wl,-reexport-lsystem_platform
     -Wl,-reexport-lsystem_darwin -Wl,-reexport-lsystem_pthread
     -Wl,-reexport-lsystem_kernel -Wl,-reexport-lcompiler_rt
-    -ldyld -lc++
+    -lsystem_c -lsystem_malloc -lsystem_platform -lsystem_pthread -lsystem_darwin
+    -lsystem_kernel -lcompiler_rt -ldyld -lc++
 )
 
 add_custom_command(TARGET libSystem POST_BUILD
@@ -127,6 +129,7 @@ add_custom_command(TARGET libSystem POST_BUILD
         ${SYSROOT_DIR} install normal 
     COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/xcodescripts/create_system_framework.sh
         ${SYSROOT_DIR} - - - normal && ${CMAKE_COMMAND} -E copy $<TARGET_FILE:libSystem>
+        ${RAVYN_SDKROOT}/usr/lib/ && ${CMAKE_COMMAND} -E copy $<TARGET_FILE:libSystem>
         ${SYSROOT_DIR}/usr/lib/ && ${CMAKE_COMMAND} -E copy_directory 
         ${RAVYN_SDKROOT}/usr/lib/system ${SYSROOT_DIR}/usr/lib/
     COMMAND ${CMAKE_COMMAND} -E make_directory

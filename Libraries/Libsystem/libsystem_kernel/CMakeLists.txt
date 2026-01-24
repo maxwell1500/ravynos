@@ -288,13 +288,13 @@ target_compile_options(libkernel PRIVATE ${common_opts}
     $<$<COMPILE_LANGUAGE:ASM>:-x assembler-with-cpp>)
 
 set_target_properties(libkernel PROPERTIES
-    OUTPUT_NAME "system_kernel" SUFFIX ".dylib" PREFIX "lib" NO_SONAME true
-    MACHO_CURRENT_VERSION 6153.0.168)
+    OUTPUT_NAME "system_kernel" SUFFIX ".dylib" PREFIX "lib" NO_SONAME true)
 
 target_link_options(libkernel PRIVATE
     -Wl,-umbrella,System -Wl,-all_load -nodefaultlibs
     -mmacosx-version-min=10.15 -L${RAVYN_SDKROOT}/usr/lib/system
     -Wl,-install_name,/usr/lib/system/libsystem_kernel.dylib
+    -Wl,-current_version,6153.0.168 -Wl,-compatibility_version,1.0.0
     $<TARGET_FILE:libkernel_legacy> ${CMAKE_CURRENT_BINARY_DIR}/libsyscalls.a
     ${CMAKE_CURRENT_BINARY_DIR}/libmach.a
 )

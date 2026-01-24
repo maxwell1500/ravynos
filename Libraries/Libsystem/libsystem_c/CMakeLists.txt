@@ -1358,8 +1358,7 @@ add_library(libsystem_c SHARED
     darwin/compatibility_hacks.c
 )
 set_target_properties(libsystem_c PROPERTIES
-	OUTPUT_NAME "system_c" SUFFIX ".dylib" PREFIX "lib" NO_SONAME true
-	MACHO_CURRENT_VERSION 1353.0.10)
+	OUTPUT_NAME "system_c" SUFFIX ".dylib" PREFIX "lib" NO_SONAME true)
 
 add_custom_target(generateLinklists
 	COMMAND env 
@@ -1377,7 +1376,8 @@ add_dependencies(libsystem_c Platform
 )
 
 target_link_options(libsystem_c PRIVATE
-    --sysroot=${RAVYN_SDKROOT}
+    --sysroot=${RAVYN_SDKROOT} -Wl,-current_version,1353.0.10
+    -Wl,-compatibility_version,1.0.0
     -mmacos-version-min=10.15 -flat_namespace -undefined warning
     -Wl,-install_name,/usr/lib/system/libsystem_c.dylib
     -rdynamic -nostdlib -nodefaultlibs -Wl,-search_paths_first
