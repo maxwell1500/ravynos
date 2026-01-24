@@ -54,10 +54,15 @@ target_link_options(libsystem_darwin PRIVATE
     -rdynamic -nostdlib -nodefaultlibs
     -Wl,-syslibroot,${RAVYN_SDKROOT} -Wl,-search_paths_first
     -Wl,-install_name,/usr/lib/system/libsystem_darwin.dylib
-    -Wl,-all_load -L${RAVYN_SDKROOT}/usr/lib/system -umbrella System
+    -L${RAVYN_SDKROOT}/usr/lib/system -umbrella System
     -lsystem_kernel -L${CMAKE_CURRENT_BINARY_DIR}/../../dyld -ldyld
     -lsystem_malloc -lsystem_platform -lsystem_pthread -lsystem_c
     -lunwind -ldyld # -lm -ldispatch -lxpc
+)
+
+add_custom_command(TARGET libsystem_darwin POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:libsystem_darwin>
+        ${RAVYN_SDKROOT}/usr/lib/system/
 )
 
 file(GLOB darwinpvthdrs h/*.h)

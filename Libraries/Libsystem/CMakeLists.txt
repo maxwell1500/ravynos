@@ -67,7 +67,7 @@ target_compile_options(libSystem PRIVATE
     --sysroot=${RAVYN_SDKROOT} -isysroot=${RAVYN_SDKROOT} -w
     -F${RAVYN_SDKROOT}/System/Library/Frameworks
     -Wno-implicit-function-declaration
-    -Wno-int-conversion -Wno-implicit-int
+    -Wno-int-conversion -Wno-implicit-int -fno-common
     $<$<COMPILE_LANGUAGE:ASM>:-x assembler-with-cpp>
 )
 
@@ -85,13 +85,55 @@ add_dependencies(libSystem
 )
 add_dependencies(xnu libSystem)
 
+add_custom_command(OUTPUT config
+   COMMAND ${CMAKE_COMMAND} -E env
+        DEVELOPER_DIR=${ROOT_BINARY_DIR}/Developer
+        RUNTIME_SPEC_PATH=${TOOLCHAIN}/Library/Xcode/Specifications
+        "PATH=${TOOLS}:$ENV{PATH}"
+        ${CMAKE_CURRENT_SOURCE_DIR}/xcodescripts/linker_arguments.sh
+        ${CpuArch} normal ${CMAKE_CURRENT_BINARY_DIR} ${RAVYN_SDKROOT} ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+add_custom_command(OUTPUT libunwind.dylib
+    DEPENDS ${RAVYN_SDKROOT}/usr/lib/libunwind.a libunwind
+    COMMAND ${CC} -shared -o ${RAVYN_SDKROOT}/usr/lib/system/libunwind.dylib 
+        -Wl,-install_name,/usr/lib/system/libunwind.dylib 
+        -Wl,-compatibility_version,1.0.0 -Wl,-current_version,35.4
+        -L${RAVYN_SDKROOT}/usr/lib -L${RAVYN_SDKROOT}/usr/lib/system
+        -mmacosx-version-min=10.15 -umbrella System
+        -Wl,-all_load ${RAVYN_SDKROOT}/usr/lib/libunwind.a
+        -lsystem_c -lsystem_pthread -lsystem_platform -lcompiler_rt
+        -lsystem_malloc -ldyld
+)
+
+target_sources(libSystem PRIVATE config libunwind.dylib)
+
 target_link_options(libSystem PRIVATE
     -mmacos-version-min=10.15 -Wl,-syslibroot,${RAVYN_SDKROOT}/usr/lib
     -Wl,-flat_namespace -Wl,-undefined,warning -Wl,-no_warn_inits
-    -L${RAVYN_SDKROOT}/usr/lib/system
+    -L${RAVYN_SDKROOT}/usr/lib/system -L${RAVYN_SDKROOT}/usr/local/lib/system
     -Wl,-install_name,/usr/lib/libSystem.dylib
     -rdynamic -nodefaultlibs -Wl,-search_paths_first -Wl,-reexport-lsystem_c
     -Wl,-reexport-lsystem_malloc -Wl,-reexport-lsystem_platform
-    -Wl,-reexport-lsystem_pthread -Wl,-reexport-lcompiler_rt
-    -ldyld
+    -Wl,-reexport-lsystem_darwin -Wl,-reexport-lsystem_pthread
+    -Wl,-reexport-lsystem_kernel -Wl,-reexport-lcompiler_rt
+    -ldyld -lc++
+)
+
+add_custom_command(TARGET libSystem POST_BUILD
+    COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/xcodescripts/create_dylib_symlinks.sh
+        ${RAVYN_SDKROOT} install normal 
+    COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/xcodescripts/create_dylib_symlinks.sh
+        ${SYSROOT_DIR} install normal 
+    COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/xcodescripts/create_system_framework.sh
+        ${SYSROOT_DIR} - - - normal && ${CMAKE_COMMAND} -E copy $<TARGET_FILE:libSystem>
+        ${SYSROOT_DIR}/usr/lib/ && ${CMAKE_COMMAND} -E copy_directory 
+        ${RAVYN_SDKROOT}/usr/lib/system ${SYSROOT_DIR}/usr/lib/
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+        ${RAVYN_SDKROOT}/System/Library/Frameworks/System.framework/Versions/B/Resources
+        ${SYSROOT_DIR}/System/Library/Frameworks/System.framework/Versions/B/Resources
+    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/Info.plist
+        ${RAVYN_SDKROOT}/System/Library/Frameworks/System.framework/Versions/B/Resources/
+    COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/Info.plist
+        ${SYSROOT_DIR}/System/Library/Frameworks/System.framework/Versions/B/Resources/
 )
