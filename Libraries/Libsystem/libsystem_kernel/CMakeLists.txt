@@ -57,6 +57,10 @@ set(common_opts
 )
 set(libmach_opts
     --sysroot=${RAVYN_SDKROOT} -isysroot${RAVYN_SDKROOT} -w
+    -I${ROOT_SOURCE_DIR}/Kernel/xnu/bsd
+    -I${ROOT_SOURCE_DIR}/Kernel/xnu/osfmk
+    -I${ROOT_BINARY_DIR}/Kernel/xnu/bsd
+    -I${RAVYN_SDKROOT}/System/Library/Frameworks/System.framework/Versions/B/PrivateHeaders
     -Wno-implicit-function-declaration
     -fdollars-in-identifiers -no-cpp-precomp -fno-common
     -fno-stack-protector -fno-stack-check -momit-leaf-frame-pointer

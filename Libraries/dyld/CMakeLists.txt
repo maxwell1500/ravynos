@@ -36,11 +36,11 @@ set_target_properties(libdyld PROPERTIES
 target_compile_definitions(libdyld PRIVATE
 	BUILDING_LIBDYLD FP_NAN=0 FP_INFINITE=1 FP_ZERO=2 FP_SUBNORMAL=3
 	FP_NORMAL=4 FP_SUPERNORMAL=5 WITHOUT_SANDBOX BROKEN_VECTOR_BASE
-	_USE_EXTENDED_LOCALES_ __DARWIN_C_LEVEL=__DARWIN_C_FULL
+	_USE_EXTENDED_LOCALES_ __DARWIN_C_LEVEL=__DARWIN_C_FULL TARGET_OS_BRIDGE=0
 )
 
 target_compile_options(libdyld PRIVATE
-    --target=${TARGET_TRIPLE} -w
+    --target=${CpuArch}-apple-darwin 
     --sysroot=${RAVYN_SDKROOT} -isysroot${RAVYN_SDKROOT}
     $<$<COMPILE_LANGUAGE:C,CXX>:-include${SDK_SOURCE_DIR}/usr/include/AvailabilityInternal.h>
     $<$<COMPILE_LANGUAGE:C,CXX>:-include${SDK_SOURCE_DIR}/usr/include/AvailabilityVersions.h>
@@ -48,49 +48,43 @@ target_compile_options(libdyld PRIVATE
     $<$<COMPILE_LANGUAGE:C,CXX>:-include${SDK_SOURCE_DIR}/usr/include/Availability.h>
     $<$<COMPILE_LANGUAGE:C,CXX>:-include${SDK_SOURCE_DIR}/usr/include/mach.h>
     $<$<COMPILE_LANGUAGE:C,CXX>:-include${ROOT_SOURCE_DIR}/Libraries/Libsystem/libsystem_c/include/xlocale/_stdlib.h>
-    -Wno-nullability-completeness -Wno-incompatible-sysroot
+    -Wno-nullability-completeness -Wno-incompatible-sysroot -Wno-availability
     $<$<COMPILE_LANGUAGE:ASM>:-x assembler-with-cpp>
 )
 
 target_include_directories(libdyld PRIVATE
-	${SDK_SOURCE_DIR}/usr/include/c++/v1
-	${ROOT_SOURCE_DIR}/Kernel/xnu/bsd
-    ../Libsystem/libsystem_c/include
-    ../Libsystem/libsystem_c/include/xlocale
-    ../Libsystem/libsystem_c/locale
-    ../Libsystem/libsystem_c/locale/FreeBSD
-    ../Libsystem/libsystem_c/stdtime
-    ../Libsystem/libsystem_c/stdtime/FreeBSD
-	../Libsystem/libsystem_c/gen
+    ${SDK_SOURCE_DIR}/usr/include/c++/v1
+    ${ROOT_SOURCE_DIR}/Kernel/xnu/bsd
+    ../Libsystem/libsystem_c/include ../Libsystem/libsystem_c/locale
+    ../Libsystem/libsystem_c/locale/FreeBSD ../Libsystem/libsystem_c/stdtime
+    ../Libsystem/libsystem_c/stdtime/FreeBSD ../Libsystem/private
     ../Libsystem/liblaunch
     ../Libsystem/private include dyld3 dyld3/shared-cache launch-cache src
     ${ROOT_SOURCE_DIR}/Kernel/xnu/libsyscall/wrappers/libproc
-    ${ROOT_SOURCE_DIR}/Kernel/xnu/osfmk
-    ${ROOT_BINARY_DIR}/Libraries/Libsystem/libsystem_kernel/mig_hdr/include
     ${ROOT_BINARY_DIR}/${CpuArch}
-	${ROOT_BINARY_DIR}/Kernel/xnu/EXPORT_HDRS/osfmk
-	${RAVYN_SDKROOT}/usr/local/include/kernel
-	${RAVYN_SDKROOT}/usr/local/include
-    ${ROOT_SOURCE_DIR}/Kernel/xnu/libsyscall/mach
-	${ROOT_SOURCE_DIR}/Kernel/xnu/EXTERNAL_HEADERS
+    ${ROOT_BINARY_DIR}/Libraries/Libsystem/libsystem_kernel/mig_hdr/include
+    ${ROOT_SOURCE_DIR}/Kernel/xnu/libkern
+    ${RAVYN_SDKROOT}/System/Library/Frameworks/System.framework/Versions/B/PrivateHeaders
+    ${ROOT_SOURCE_DIR}/Kernel/xnu/EXTERNAL_HEADERS
 )
 
 target_link_options(libdyld PRIVATE
+    --target=${CpuArch}-apple-darwin
     --sysroot=${RAVYN_SDKROOT} -isysroot${RAVYN_SDKROOT}
-    -nostdlib -nodefaultlibs -flat_namespace -undefined warning
+    -flat_namespace -undefined warning
     -Wl,-no_inits -Wl,-no_warn_unused_dylibs
     "-Wl,-unexported_symbol,__ZNSt3*"
     -mmacosx-version-min=10.15 -Wl,-install_name,/usr/lib/system/libdyld.dylib
-	-L${RAVYN_SDKROOT}/usr/lib/system -umbrella System
-	-lsystem_malloc -lsystem_pthread -lsystem_platform -lsystem_kernel
-	-lsystem_c
+    -L${RAVYN_SDKROOT}/usr/lib/system -umbrella System
+    -lsystem_malloc -lsystem_pthread -lsystem_platform -lsystem_kernel
+    -lsystem_c
     # -lCrashReporterClient
     -Wl,-upward-lsystem_platform -Wl,-upward-lsystem_malloc
     -Wl,-upward-lsystem_c -Wl,-upward-lsystem_pthread
     # -Wl,-upward-lxpc
     -Wl,-upward-lsystem_blocks -Wl,-upward-lsystem_kernel
-    # -Wl,-upward-ldispatch -Wl,-upward-lcompiler_rt
-    -lunwind -lc++ -lc++abi
+    # -Wl,-upward-ldispatch
+    -Wl,-upward-lcompiler_rt -lunwind -lc++ -lc++abi
 )
 
 add_custom_command(TARGET libdyld POST_BUILD

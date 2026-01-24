@@ -1377,9 +1377,10 @@ add_dependencies(libsystem_c Platform
 )
 
 target_link_options(libsystem_c PRIVATE
+    --sysroot=${RAVYN_SDKROOT}
     -mmacos-version-min=10.15 -flat_namespace -undefined warning
     -Wl,-install_name,/usr/lib/system/libsystem_c.dylib
-    -rdynamic -nodefaultlibs -Wl,-search_paths_first
+    -rdynamic -nostdlib -nodefaultlibs -Wl,-search_paths_first
     -all_load -L${RAVYN_SDKROOT}/usr/lib/system -umbrella System
     -ldyld -lsystem_malloc -lsystem_platform -lsystem_pthread -lsystem_kernel
     -Wl,-upward-lsystem_blocks

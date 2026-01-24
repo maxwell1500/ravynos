@@ -37,7 +37,9 @@ file(COPY ${ROOT_SOURCE_DIR}/Libraries/Libsystem/private/pthread/tsd_private.h
     DESTINATION ${RAVYN_SDKROOT}/usr/local/include/pthread/)
 
 add_library(ravynOS_sdk OBJECT stub.c)
-execute_process(COMMAND ${ROOT_SOURCE_DIR}/Kernel/xnu/bsd/sys/make_symbol_aliasing.sh
+execute_process(COMMAND ${CMAKE_COMMAND} -E rm -f
+    ${RAVYN_SDKROOT}/usr/include/sys/_symbol_aliasing.h $<SEMICOLON>
+    ${ROOT_SOURCE_DIR}/Kernel/xnu/bsd/sys/make_symbol_aliasing.sh
     ${RAVYN_SDKROOT} ${RAVYN_SDKROOT}/usr/include/sys/_symbol_aliasing.h)
 
 set(libc_path ${ROOT_SOURCE_DIR}/Libraries/Libsystem/libsystem_c)

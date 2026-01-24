@@ -26,16 +26,10 @@ add_subdirectory(Libsystem)
 # ------------------------------------------------------------------------
 
 set(RUNTIME_FLAGS
-    "-target ${CpuArch}-apple-darwin -isysroot${RAVYN_SDKROOT_MACOSX} \
-    -nostdinc -nobuiltininc --sysroot=${RAVYN_SDKROOT_MACOSX} \
-    -I${RAVYN_SDKROOT_MACOSX}/usr/include/c++/v1 \
-    -I${RAVYN_SDKROOT_MACOSX}/usr/include \
-    -I${RAVYN_SDKROOT_MACOSX}/usr/local/include \
-    -I${RAVYN_SDKROOT_MACOSX}/usr/local/include/kernel \
-    -I../../Libsystem/private \
-    -I${ROOT_SOURCE_DIR}/Kernel/xnu/libsyscall/mach \
-    -I${ROOT_BINARY_DIR}/Kernel/xnu/EXPORT_HDRS/osfmk \
-    -I${ROOT_SOURCE_DIR}/Kernel/xnu/EXTERNAL_HEADERS \
+    "--sysroot=${RAVYN_SDKROOT_MACOSX} \
+    -I${ROOT_SOURCE_DIR}/Kernel/xnu/bsd \
+    -I${RAVYN_SDKROOT}/usr/local/include/kernel \
+    -I${RAVYN_SDKROOT}/System/Library/Frameworks/System.framework/Versions/B/PrivateHeaders \
     -Wno-incompatible-sysroot -Wno-user-defined-literals \
     -Wno-nullability-completeness -Wno-expansion-to-defined \
     -Wno-unused-command-line-argument \
@@ -59,40 +53,26 @@ ExternalProject_Add(runtime DEPENDS xnu_headers
         -DCMAKE_ASM_COMPILER_TARGET=${CpuArch}-apple-darwin
         -DCMAKE_C_COMPILER_TARGET=${CpuArch}-apple-darwin
         -DCMAKE_CXX_COMPILER_TARGET=${CpuArch}-apple-darwin
+        "-DCMAKE_SHARED_LINKER_FLAGS=-L${RAVYN_SDKROOT}/usr/lib/system"
         -DCMAKE_INSTALL_PREFIX=${RAVYN_SDKROOT}/usr
-        -DCMAKE_SYSROOT=${RAVYN_SDKROOT_MACOSX}
-        -DCMAKE_BUILD_TYPE=Release
-        -DLLVM_TARGETS_TO_BUILD=${BuildArch}
-        -DLLVM_ENABLE_RUNTIMES=compiler-rt
-        -DLLVM_RUNTIME_TARGETS=${CpuArch}-apple-darwin
-        -DCOMPILER_RT_DEFAULT_TARGET_ONLY=ON -DCOMPILER_RT_BUILD_CRT=OFF
-        -DLLVM_USE_LINKER=lld -DCOMPILER_RT_OS_DIR=ravynos
+        -DCMAKE_OSX_SYSROOT=${RAVYN_SDKROOT_MACOSX}
+        -DCMAKE_BUILD_TYPE=Release -DLLVM_TARGETS_TO_BUILD=${BuildArch}
+        -DCOMPILER_RT_DEFAULT_TARGET_ONLY=ON -DCOMPILER_RT_OS_DIR=ravynos
         -DCOMPILER_RT_BUILD_BUILTINS=ON -DCOMPILER_RT_BUILD_SANITIZERS=OFF
         -DCOMPILER_RT_BUILD_PROFILE=ON -DCOMPILER_RT_BUILD_XRAY=OFF
         -DCOMPILER_RT_BUILD_LIBFUZZER=OFF -DCOMPILER_RT_BUILD_MEMPROF=OFF
-        -DCOMPILER_RT_BUILD_ORC=OFF
-        -DCOMPILER_RT_EXTERNALIZE_DEBUGINFO=OFF
+        -DCOMPILER_RT_BUILD_ORC=OFF -DCOMPILER_RT_EXTERNALIZE_DEBUGINFO=OFF
+        -DCOMPILER_RT_HAS_ATOMIC_KEYWORD=ON -DCOMPILER_RT_EXCLUDE_ATOMIC_BUILTIN=OFF
 )
 
 # ------------------------------------------------------------------------
 #                           LIBUNWIND
 # ------------------------------------------------------------------------
-
 set(LIBUNWIND_FLAGS
     "-target ${CpuArch}-apple-darwin -isysroot${RAVYN_SDKROOT} \
-    -isystem${SDK_SOURCE_DIR}/usr/include/c++/v1 \
-    -isystem${RAVYN_SDKROOT}/usr/include \
-    -I${SDK_SOURCE_DIR}/usr/include/c++/v1 -I${SDK_SOURCE_DIR}/usr/include \
-    -I${CMAKE_CURRENT_SOURCE_DIR}/Libsystem/libsystem_c/darwin \
-    -I${CMAKE_CURRENT_SOURCE_DIR}/Libsystem/libsystem_c/locale \
-    -I${CMAKE_CURRENT_SOURCE_DIR}/Libsystem/libsystem_c/locale/FreeBSD \
-    -I${CMAKE_CURRENT_SOURCE_DIR}/Libsystem/libsystem_c/stdtime/FreeBSD \
-    -I${CMAKE_CURRENT_SOURCE_DIR}/Libsystem/private \
-    -I${RAVYN_SDKROOT}/usr/include/pthread \
-    -I${ROOT_SOURCE_DIR}/Kernel/xnu/libsyscall/mach \
     -I${ROOT_SOURCE_DIR}/Kernel/xnu/bsd \
-    -I${ROOT_BINARY_DIR}/Kernel/xnu/EXPORT_HDRS/osfmk \
-    -I${ROOT_SOURCE_DIR}/Kernel/xnu/EXTERNAL_HEADERS \
+    -I${RAVYN_SDKROOT}/usr/include/c++/v1 \
+    -I${RAVYN_SDKROOT}/System/Library/Frameworks/System.framework/Versions/B/PrivateHeaders \
     -Wno-incompatible-sysroot -Wno-user-defined-literals \
     -Wno-nullability-completeness -Wno-expansion-to-defined \
     -mmacosx-version-min=10.15"
@@ -105,12 +85,12 @@ ExternalProject_Add(libunwind DEPENDS xnu_headers runtime
     CMAKE_ARGS -Wno-dev
         "-DCMAKE_C_FLAGS=${LIBUNWIND_FLAGS}"
         "-DCMAKE_CXX_FLAGS=${LIBUNWIND_FLAGS}"
-        -DCMAKE_SYSROOT=${RAVYN_SDKROOT} -DCMAKE_SYSTEM_NAME=Darwin
+        -DCMAKE_OSX_SYSROOT=${RAVYN_SDKROOT} -DCMAKE_SYSTEM_NAME=Darwin
         -DCMAKE_C_COMPILER=${CC} -DCMAKE_CXX_COMPILER=${CXX}
         -DCMAKE_C_COMPILER_WORKS=ON -DCMAKE_CXX_COMPILER_WORKS=ON
         -DCMAKE_LINKER=${LD} -DCMAKE_ASM_COMPILER=${CC}
-        -DCMAKE_LINK_DEPENDS_USE_LINKER=OFF
         -DCMAKE_INSTALL_PREFIX=${RAVYN_SDKROOT}/usr -DCMAKE_BUILD_TYPE=Release
+        "-DCMAKE_SHARED_LINKER_FLAGS=-L${RAVYN_SDKROOT}/usr/lib/system"
 
         -DLLVM_ENABLE_LTO=OFF -DLLVM_INCLUDE_TESTS=OFF
         -DLLVM_ENABLE_WARNINGS=OFF
@@ -129,27 +109,10 @@ ExternalProject_Add(libunwind DEPENDS xnu_headers runtime
 
 set(LIBCXX_FLAGS
     "-target ${CpuArch}-apple-darwin -isysroot${RAVYN_SDKROOT} \
-    -isystem ${SDK_SOURCE_DIR}/usr/include/c++/v1 \
-    -stdlib++-isystem ${SDK_SOURCE_DIR}/usr/include/c++/v1 \
-    --include=${RAVYN_SDKROOT}/usr/include/xlocale/_stdlib.h \
-    --include=${RAVYN_SDKROOT}/usr/include/xlocale/_stdio.h \
-    --include=${RAVYN_SDKROOT}/usr/include/xlocale/_string.h \
-    --include=${RAVYN_SDKROOT}/usr/include/c++/v1/limits \
-    -I${SDK_SOURCE_DIR}/usr/include \
-    -I${DEVEL}/Default.xctoolchain/llvm/libcxxabi/include \
-    -I${DEVEL}/Default.xctoolchain/llvm/libcxx/include \
-    -I${CMAKE_CURRENT_SOURCE_DIR}/Libsystem/libsystem_c/darwin \
-    -I${CMAKE_CURRENT_SOURCE_DIR}/Libsystem/libsystem_c/locale \
-    -I${CMAKE_CURRENT_SOURCE_DIR}/Libsystem/libsystem_c/locale/FreeBSD \
-    -I${CMAKE_CURRENT_SOURCE_DIR}/Libsystem/libsystem_c/stdtime/FreeBSD \
-    -I${CMAKE_CURRENT_SOURCE_DIR}/Libsystem/private \
-    -I${RAVYN_SDKROOT}/usr/include/pthread \
-    -I${ROOT_SOURCE_DIR}/Kernel/xnu/libsyscall/mach \
     -I${ROOT_SOURCE_DIR}/Kernel/xnu/bsd \
-    -I${ROOT_BINARY_DIR}/Kernel/xnu/EXPORT_HDRS/osfmk \
-    -I${ROOT_SOURCE_DIR}/Kernel/xnu/EXTERNAL_HEADERS \
-    -DFP_NAN=0 -DFP_INFINITE=1 -DFP_ZERO=2 -DFP_SUBNORMAL=3 -DFP_NORMAL=4 \
-    -DINFINITY='__builtin_huge_val()' \
+    -I${RAVYN_SDKROOT}/System/Library/Frameworks/System.framework/Versions/B/PrivateHeaders \
+    -DFP_NAN=0 -DFP_INFINITE=1 -DFP_ZERO=2 -DFP_SUBNORMAL=3 -DFP_NORMAL=4 -DFP_SUPERNORMAL=5 \
+    -DINFINITY=RLIM_INFINITY -DCRT_HAS_128BIT \
     -Wno-incompatible-sysroot -Wno-user-defined-literals \
     -Wno-nullability-completeness -Wno-expansion-to-defined"
 )
@@ -170,9 +133,9 @@ ExternalProject_Add(libcxx DEPENDS xnu_headers libunwind
         "-DCMAKE_SHARED_LINKER_FLAGS=-Wl,-flat_namespace \
         -Wl,-undefined,warning -Wl,-umbrella,System \
         -Wl,-install_name,/usr/lib/system/libc++.dylib \
+        -L${RAVYN_SDKROOT}/usr/lib/system \
         -L${ROOT_BINARY_DIR}/Libraries/llvm_target/libunwind/lib \
-        -L${ROOT_BINARY_DIR}/Libraries/llvm_target/compiler-rt/lib/ravynos \
-        -lunwind -lclang_rt.builtins-${CpuArch} -nostdlib"
+        -lunwind -lcompiler_rt"
         -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON
         -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=OFF
 
@@ -184,7 +147,7 @@ ExternalProject_Add(libcxx DEPENDS xnu_headers libunwind
 
         -DLIBCXX_ENABLE_EXCEPTIONS=ON -DLIBCXX_INCLUDE_TESTS=OFF
         -DLIBCXX_ENABLE_TIME_ZONE_DATABASE=OFF -DLIBCXX_INCLUDE_BENCHMARKS=OFF
-        -DLIBCXX_USE_COMPILER_RT=ON -DLIBCXX_ENABLE_SHARED=ON
+        -DLIBCXX_USE_COMPILER_RT=OFF -DLIBCXX_ENABLE_SHARED=ON
         -DLIBCXX_INCLUDE_DOCS=OFF -DLIBCXX_HAS_PTHREAD_API=ON
         -DLIBCXX_HAS_ATOMIC_LIB=OFF
 
@@ -194,18 +157,16 @@ ExternalProject_Add(libcxx DEPENDS xnu_headers libunwind
         -DLIBCXXABI_SILENT_TERMINATE=ON
 )
 
-
 add_custom_target(compiler_rt DEPENDS libcxx
     COMMAND
         ${CMAKE_COMMAND} -E make_directory ${RAVYN_SDKROOT}/usr/lib/system &&
-        ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_BINARY_DIR}/llvm_target/compiler-rt/lib/ravynos/libclang_rt.builtins-${CpuArch}.a ${CMAKE_CURRENT_BINARY_DIR}/llvm_target/compiler-rt/lib/ravynos/libclang_rt.profile-${CpuArch}.a ${RAVYN_SDKROOT}/usr/lib/system/
-        && ${CC} -o ${RAVYN_SDKROOT}/usr/lib/system/libcompiler_rt.dylib
+        ${CC} -o ${RAVYN_SDKROOT}/usr/lib/system/libcompiler_rt.dylib
         -mmacosx-version-min=10.15 -shared -nostdlib -Wl,-all_load
         -Wl,-install_name,/usr/lib/system/libcompiler_rt.dylib
         -Wl,-flat_namespace -Wl,-undefined,warning
         -Wl,-current_version,${LLVM_VERSION} -nostdlib -umbrella System
-        ${RAVYN_SDKROOT}/usr/lib/system/libclang_rt.builtins-${CpuArch}.a
-        ${RAVYN_SDKROOT}/usr/lib/system/libclang_rt.profile-${CpuArch}.a
+        ${CMAKE_CURRENT_BINARY_DIR}/llvm_target/compiler-rt/lib/ravynos/libclang_rt.builtins-${CpuArch}.a
+        ${CMAKE_CURRENT_BINARY_DIR}/llvm_target/compiler-rt/lib/ravynos/libclang_rt.profile-${CpuArch}.a
     COMMAND
         test -f ${RAVYN_SDKROOT}/usr/lib/libc++.dylib &&
           mv -f ${RAVYN_SDKROOT}/usr/lib/libc++*.dylib ${RAVYN_SDKROOT}/usr/lib/system/

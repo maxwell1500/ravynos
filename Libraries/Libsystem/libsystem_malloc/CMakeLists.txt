@@ -12,14 +12,11 @@ set(libmalloc_sources
     purgeable_malloc.c vm.c resolver/resolver.c
 )
 set(libmalloc_incs
-    ../../../Kernel/xnu/bsd
-    ../../../Kernel/xnu/osfmk
-    ../libsystem_c/include
+    ${ROOT_SOURCE_DIR}/Kernel/xnu/bsd
+    ${CMAKE_CURRENT_BINARY_DIR}/../libsystem_kernel/mig_hdr/include
     ../private internal resolver
-    ../libsystem_c/darwin
-    ../../../Kernel/xnu/libsyscall/mach
-    ../libsystem_c/gen
-    ${RAVYN_SDKROOT}/System/Library/Frameworks/Kernel.framework/Versions/A/Headers
+    ${RAVYN_SDKROOT}/System/Library/Frameworks/System.framework/Versions/B/PrivateHeaders
+    ${ROOT_BINARY_DIR}/${CpuArch}
 )
 set(libmalloc_defs
     DISPATCH_USE_DTRACE=0 OSATOMIC_DEPRECATED=0 OSATOMIC_USE_INLINED=0
@@ -29,7 +26,6 @@ set(libmalloc_opts
     --sysroot=${RAVYN_SDKROOT} -isysroot${RAVYN_SDKROOT} -w
     -Wno-implicit-function-declaration -momit-leaf-frame-pointer
     -Wno-int-conversion -Wno-implicit-int -DPRIVATE
-    -include${ROOT_SOURCE_DIR}/Kernel/xnu/osfmk/i386/cpu_capabilities.h
     $<$<COMPILE_LANGUAGE:ASM>:-x assembler-with-cpp>
 )
 
@@ -39,9 +35,10 @@ target_compile_definitions(libsystem_malloc PRIVATE ${libmalloc_defs})
 target_compile_options(libsystem_malloc PRIVATE ${libmalloc_opts})
 
 target_link_options(libsystem_malloc PRIVATE
+    --sysroot=${RAVYN_SDKROOT}
     -mmacos-version-min=10.15 -flat_namespace -undefined warning
     -Wl,-install_name,/usr/lib/system/libsystem_malloc.dylib
-    -rdynamic -nodefaultlibs -Wl,-search_paths_first -all_load
+    -rdynamic -Wl,-search_paths_first -all_load
     -L${RAVYN_SDKROOT}/usr/lib/system -umbrella System
     # -lCrashReporterClient
     -lsystem_platform -Wl,-upward-lsystem_c

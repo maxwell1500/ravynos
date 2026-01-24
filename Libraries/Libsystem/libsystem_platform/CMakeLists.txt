@@ -55,17 +55,14 @@ set(libplatform_sources
 )
 set(libplatform_incs
     ${ROOT_SOURCE_DIR}/Kernel/xnu/bsd
-    ../libsystem_c/include
     ../private internal
-    ${ROOT_SOURCE_DIR}/Kernel/xnu/osfmk
     os/resolver
     ${CMAKE_CURRENT_BINARY_DIR}/../libsystem_kernel/mig_hdr/include
-    ${ROOT_BINARY_DIR}/Kernel/xnu/EXPORT_HDRS/osfmk
     ${ROOT_SOURCE_DIR}/Kernel/xnu/libsyscall/wrappers
-    ${ROOT_SOURCE_DIR}/Kernel/xnu/libsyscall/mach
+    ${RAVYN_SDKROOT}/System/Library/Frameworks/System.framework/Versions/B/PrivateHeaders
 )
 set(libplatform_defs
-    DISPATCH_USE_DTRACE=0 voucher_mach_msg_state_t=mach_port_t;
+    DISPATCH_USE_DTRACE=0 
     OS_ATOMIC_CONFIG_MEMORY_ORDER_DEPENDENCY=1
     OS_ATOMIC_CONFIG_STARVATION_FREE_ONLY=0 OS_UNFAIR_LOCK_INLINE=0
     OSATOMIC_USE_INLINED=0 OSATOMIC_DEPRECATED=0 OSSPINLOCK_USE_INLINED=0
@@ -83,9 +80,10 @@ target_compile_definitions(libsystem_platform PRIVATE ${libplatform_defs})
 target_compile_options(libsystem_platform PRIVATE ${libplatform_opts})
 
 target_link_options(libsystem_platform PRIVATE
+    --sysroot=${RAVYN_SDKROOT}
     -mmacos-version-min=10.15 -flat_namespace -undefined warning
     -Wl,-install_name,/usr/lib/system/libsystem_platform.dylib
-    -nodefaultlibs -Wl,-search_paths_first -umbrella System
+    -Wl,-search_paths_first -umbrella System
     -L${RAVYN_SDKROOT}/usr/lib/system
     -L${ROOT_BINARY_DIR}/Libraries/llvm_target/compiler-rt/lib/ravynos
     -lsystem_c -lsystem_pthread -lsystem_malloc -ldyld
