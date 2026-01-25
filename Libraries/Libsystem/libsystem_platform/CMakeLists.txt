@@ -2,6 +2,10 @@ add_library(libsystem_platform SHARED)
 set_target_properties(libsystem_platform PROPERTIES
     OUTPUT_NAME "system_platform" SUFFIX ".dylib" PREFIX "lib" NO_SONAME true)
 
+add_library(libplatform STATIC)
+set_target_properties(libplatform PROPERTIES
+    OUTPUT_NAME "platform" PREFIX "lib" SUFFIX ".a")
+
 set(libplatform_sources
     simple/asl.c
     simple/getenv.c
@@ -25,9 +29,8 @@ set(libplatform_sources
     string/generic/strstr.c
     string/generic/strncmp.c
     force_libplatform_to_build.c
-    os/lock.c
     os/alloc_once.c
-    os/atomic.c
+    #os/atomic.c  # only for iphone
     os/semaphore.c
     ucontext/x86_64/_ctx_start.s
     ucontext/x86_64/_setcontext.s
@@ -52,6 +55,7 @@ set(libplatform_sources
     introspection/introspection.c
     ../../dyld/src/dyld_stub_binder.s
 )
+
 set(libplatform_incs
     ${ROOT_SOURCE_DIR}/Kernel/xnu/bsd
     ../private internal
@@ -61,10 +65,9 @@ set(libplatform_incs
     ${RAVYN_SDKROOT}/System/Library/Frameworks/System.framework/Versions/B/PrivateHeaders
 )
 set(libplatform_defs
-    DISPATCH_USE_DTRACE=0 
-    OS_ATOMIC_CONFIG_MEMORY_ORDER_DEPENDENCY=1
-    OS_ATOMIC_CONFIG_STARVATION_FREE_ONLY=0 OS_UNFAIR_LOCK_INLINE=0
+    DISPATCH_USE_DTRACE=0 _FORTIFY_SOURCE=0 OS_UNFAIR_LOCK_INLINE=0
     OSATOMIC_USE_INLINED=0 OSATOMIC_DEPRECATED=0 OSSPINLOCK_USE_INLINED=0
+
 )
 set(libplatform_opts
     --sysroot=${RAVYN_SDKROOT} -isysroot${RAVYN_SDKROOT} -w
@@ -73,22 +76,36 @@ set(libplatform_opts
     -momit-leaf-frame-pointer -DPRIVATE
     $<$<COMPILE_LANGUAGE:ASM>:-x assembler-with-cpp>
 )
-target_sources(libsystem_platform PRIVATE ${libplatform_sources})
+
+target_sources(libsystem_platform PRIVATE ${libplatform_sources} os/lock.c)
 target_include_directories(libsystem_platform PRIVATE ${libplatform_incs})
 target_compile_definitions(libsystem_platform PRIVATE ${libplatform_defs})
 target_compile_options(libsystem_platform PRIVATE ${libplatform_opts})
+
+target_sources(libplatform PRIVATE ${libplatform_sources})
+target_include_directories(libplatform PRIVATE ${libplatform_incs})
+target_compile_definitions(libplatform PRIVATE ${libplatform_defs}
+    VARIANT_STATIC VARIANT_NO_RESOLVERS)
+target_compile_options(libplatform PRIVATE ${libplatform_opts})
 
 target_link_options(libsystem_platform PRIVATE
     --sysroot=${RAVYN_SDKROOT}
     -mmacos-version-min=10.15 -flat_namespace -undefined warning
     -Wl,-install_name,/usr/lib/system/libsystem_platform.dylib
     -Wl,-current_version,220 -Wl,-compatibility_version,1.0.0
-    -Wl,-search_paths_first -umbrella System
+    -Wl,-search_paths_first -umbrella System -Wl,-all_load
     -L${RAVYN_SDKROOT}/usr/lib/system
     -L${ROOT_BINARY_DIR}/Libraries/llvm_target/compiler-rt/lib/ravynos
     -lsystem_c -lsystem_pthread -lsystem_malloc -ldyld
     -lsystem_kernel -lcompiler_rt
     -Wl,-alias_list,${CMAKE_CURRENT_SOURCE_DIR}/xcodeconfig/libplatform.aliases
+)
+
+add_custom_command(TARGET libplatform POST_BUILD
+	COMMAND ${CMAKE_COMMAND} -E make_directory
+                ${RAVYN_SDKROOT}/usr/local/lib/system &&
+                ${CMAKE_COMMAND} -E copy $<TARGET_FILE:libplatform>
+		${RAVYN_SDKROOT}/usr/local/lib/system/
 )
 
 add_custom_command(TARGET libsystem_platform POST_BUILD

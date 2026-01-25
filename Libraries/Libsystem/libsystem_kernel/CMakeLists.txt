@@ -151,6 +151,8 @@ add_library(libkernel_legacy STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/wrappers/legacy/munmap.c
     ${CMAKE_CURRENT_SOURCE_DIR}/wrappers/legacy/getaudit.c
 )
+set_target_properties(libkernel_legacy PROPERTIES
+    OUTPUT_NAME "kernel_legacy" PREFIX "lib")
 target_compile_definitions(libkernel_legacy PRIVATE
     VARIANT_LEGACY __DARWIN_UNIX03=0 NO_SYSCALL_LEGACY
 )
@@ -158,7 +160,7 @@ target_compile_options(libkernel_legacy PRIVATE ${common_opts})
 target_include_directories(libkernel_legacy PRIVATE ${common_headers})
 add_dependencies(libkernel_legacy xnu_headers)
 
-add_library(libkernel SHARED
+add_library(libkernel STATIC
     libmach.a
     libsyscalls.a
     ${CMAKE_CURRENT_SOURCE_DIR}/custom/errno.c
@@ -276,7 +278,8 @@ add_library(libkernel SHARED
     ${CMAKE_CURRENT_SOURCE_DIR}/wrappers/string/strcpy.c
     ${CMAKE_CURRENT_SOURCE_DIR}/wrappers/string/strlcpy.c
 )
-
+set_target_properties(libkernel PROPERTIES
+    OUTPUT_NAME "kernel" PREFIX "lib")
 add_dependencies(libkernel features libkernel_legacy xnu_headers compiler_rt)
 
 target_include_directories(libkernel PRIVATE ${common_headers})
@@ -287,19 +290,27 @@ target_compile_options(libkernel_legacy PRIVATE ${common_opts}
 target_compile_options(libkernel PRIVATE ${common_opts}
     $<$<COMPILE_LANGUAGE:ASM>:-x assembler-with-cpp>)
 
-set_target_properties(libkernel PROPERTIES
-    OUTPUT_NAME "system_kernel" SUFFIX ".dylib" PREFIX "lib" NO_SONAME true)
+add_custom_command(TARGET libkernel POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:libkernel>
+        ${RAVYN_SDKROOT}/usr/local/lib/kernel/
+)
 
-target_link_options(libkernel PRIVATE
+add_library(libsystem_kernel SHARED stub.c)
+set_target_properties(libsystem_kernel PROPERTIES
+    OUTPUT_NAME "system_kernel" SUFFIX ".dylib" PREFIX "lib" NO_SONAME true)
+add_dependencies(libsystem_kernel libkernel)
+
+target_link_options(libsystem_kernel PRIVATE
     -Wl,-umbrella,System -Wl,-all_load -nodefaultlibs
     -mmacosx-version-min=10.15 -L${RAVYN_SDKROOT}/usr/lib/system
     -Wl,-install_name,/usr/lib/system/libsystem_kernel.dylib
     -Wl,-current_version,6153.0.168 -Wl,-compatibility_version,1.0.0
-    $<TARGET_FILE:libkernel_legacy> ${CMAKE_CURRENT_BINARY_DIR}/libsyscalls.a
+    $<TARGET_FILE:libkernel> $<TARGET_FILE:libkernel_legacy>
+    ${CMAKE_CURRENT_BINARY_DIR}/libsyscalls.a
     ${CMAKE_CURRENT_BINARY_DIR}/libmach.a
 )
 
-add_custom_command(TARGET libkernel POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:libkernel>
+add_custom_command(TARGET libsystem_kernel POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:libsystem_kernel>
         ${RAVYN_SDKROOT}/usr/lib/system/libsystem_kernel.dylib
 )

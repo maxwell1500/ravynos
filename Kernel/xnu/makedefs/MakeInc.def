@@ -204,13 +204,8 @@ endef
 #
 # Default ARCH_FLAGS, for use with compiler/linker/assembler/mig drivers
 
-ifeq ($(OPSYS),Linux)
-ARCH_FLAGS_X86_64     = -march=x86-64
-ARCH_FLAGS_X86_64H    = -march=x86-64h
-else
 ARCH_FLAGS_X86_64	  = -arch x86_64
 ARCH_FLAGS_X86_64H	  = -arch x86_64h
-endif
 
 ifneq ($(filter ARM ARM64,$(CURRENT_ARCH_CONFIG)),)
 
