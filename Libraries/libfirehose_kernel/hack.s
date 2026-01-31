@@ -20,7 +20,8 @@ ___ulock_wait = _ulock_wait
 .globl ___ulock_wake
 ___ulock_wake = _ulock_wake
 
-LEAF(___cxa_atexit, 64)
+LEAF(___cxa_atexit, 0)
+        xorq %rax, %rax
         ret
 
 X_LEAF(_OSSpinLockLock, _OSSpinLockTry)

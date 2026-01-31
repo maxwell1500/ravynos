@@ -281,8 +281,7 @@ CFLAGS_GEN = $(DEBUG_CFLAGS) -nostdinc -w \
 	-fno-common \
 	-fsigned-bitfields \
 	-fmerge-all-constants \
-	-fno-c++-static-destructors \
-    -fno-stack-clash-protection \
+	-fno-stack-clash-protection \
 	-fno-stack-check \
 	-mno-stack-arg-probe \
 	$(OTHER_CFLAGS)
@@ -305,7 +304,7 @@ CFLAGS_ARM	= -Darm -DARM -D__ARM__ -DPAGE_SIZE_FIXED \
 CFLAGS_ARM64	= -Darm64 -DARM64 -D__ARM64__ -DLP64 -DPAGE_SIZE_FIXED \
 			-momit-leaf-frame-pointer -fno-strict-aliasing -D__API__=v4 -mkernel
 
-CFLAGS_RELEASEX86_64 = -O2
+CFLAGS_RELEASEX86_64 = -O0
 CFLAGS_DEVELOPMENTX86_64 = -O2
 CFLAGS_KASANX86_64 = $(CFLAGS_DEVELOPMENTX86_64)
 # No space optimization for the DEBUG kernel for the benefit of gdb:
@@ -475,6 +474,7 @@ LDFLAGS_KERNEL_GEN = \
 	-Wl,-sectalign,__DATA,__percpu,0x80 \
 	-Wl,-sectcreate,__PRELINK_TEXT,__text,/dev/null \
 	-Wl,-segprot,__PRELINK_TEXT,r-x,r-x \
+	-Wl,-segprot,__DATA,rw-,r-- \
 	-Wl,-sectcreate,__PRELINK_INFO,__info,/dev/null \
 	-Wl,-pagezero_size,0x0 \
 	-Wl,-version_load_command \
