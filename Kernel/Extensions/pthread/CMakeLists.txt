@@ -10,20 +10,26 @@ target_sources(pthread.kext PRIVATE
     kern_synch.c
 )
 
-target_compile_definitions(pthread.kext PRIVATE XNU_KERNEL_PRIVATE
-    MACH_KERNEL_PRIVATE ABSOLUTETIME_SCALAR_TYPE NEEDS_SCHED_CALL_T
-    __PTHREAD_EXPOSE_INTERNALS__ __STDC_HOSTED__=0)
-target_compile_options(pthread.kext PRIVATE -Wno-sign-conversion
+target_include_directories(pthread.kext PRIVATE
+    kern .
+    ${ROOT_SOURCE_DIR}/Libraries/Libsystem
+    ${ROOT_SOURCE_DIR}/Libraries/Libsystem/private
+    ${RAVYN_SDKROOT}/usr/local/include
+    ${RAVYN_SDKROOT}/usr/local/include/kernel
+    ${RAVYN_SDKROOT}/System/Library/Frameworks/Kernel.framework/Versions/A/PrivateHeaders
+    ${RAVYN_SDKROOT}/System/Library/Frameworks/System.framework/Versions/B/PrivateHeaders
+#    ${ROOT_BINARY_DIR}/${CpuArch}
+)
+
+target_compile_options(pthread.kext PRIVATE
+    -Wno-sign-conversion
     -Wno-int-conversion -Wno-implicit-function-declaration
     -Wno-incompatible-library-redeclaration -Wno-undef-prefix
-    -I${RAVYN_SDKROOT}/usr/include
-    -I${RAVYN_SDKROOT}/usr/local/include/kernel
-    -I${ROOT_BINARY_DIR}/Kernel/xnu/EXTERNAL_HEADERS
-    -I${ROOT_BINARY_DIR}/Libraries/libpthread
-    -I${ROOT_BINARY_DIR}/Libraries/libpthread/private
-    -I${RAVYN_SDKROOT}/System/Library/Frameworks/Kernel.framework/Versions/A/Headers
-    -I${ROOT_BINARY_DIR}/Kernel/xnu/bsd
 )
+target_compile_definitions(pthread.kext PRIVATE XNU_KERNEL_PRIVATE
+    MACH_KERNEL_PRIVATE ABSOLUTETIME_SCALAR_TYPE NEEDS_SCHED_CALL_T
+    __PTHREAD_EXPOSE_INTERNALS__ __STDC_HOSTED__=0 __DARWIN_ONLY_UNIX_CONFORMANCE)
+
 add_dependencies(pthread.kext xnu libkmod)
 
-install(TARGETS pthread.kext DESTINATION System/Library/Extensions COMPONENT BaseSystem)
+install(TARGETS pthread.kext DESTINATION ${SYSROOT_DIR}/System/Library/Extensions COMPONENT BaseSystem)

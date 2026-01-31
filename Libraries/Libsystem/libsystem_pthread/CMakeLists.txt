@@ -14,7 +14,7 @@ set(libpthread_incs
     ../../../Kernel/xnu/bsd
     ${CMAKE_CURRENT_BINARY_DIR}/../libsystem_kernel/mig_hdr/include
 	${CMAKE_CURRENT_BINARY_DIR}/../libsystem_kernel/mig_hdr/local/include
-    ../private/pthread ../private .. resolver ../libsystem_c/darwin
+    . ./private ../private resolver ../libsystem_c/darwin
     ${RAVYN_SDKROOT}/usr/local/include/pthread
     ${ROOT_BINARY_DIR}/${CpuArch}
     ${RAVYN_SDKROOT}/System/Library/Frameworks/System.framework/Versions/B/PrivateHeaders

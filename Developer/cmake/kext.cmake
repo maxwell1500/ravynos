@@ -1,37 +1,46 @@
 function(add_kext_bundle name)
     cmake_parse_arguments(SL "KERNEL_PRIVATE" "MACOSX_VERSION_MIN;INFO_PLIST;BUNDLE_IDENTIFIER;BUNDLE_VERSION;MAIN_FUNCTION;ANTIMAIN_FUNCTION" "" ${ARGN})
 
-    if(SL_MACOSX_VERSION_MIN)
-        add_darwin_shared_library(${name} MODULE MACOSX_VERSION_MIN ${SL_MACOSX_VERSION_MIN})
-    else()
-        add_darwin_shared_library(${name} MODULE)
+    add_library(${name} SHARED)
+
+    string(SUBSTRING ${name} 0 3 name_prefix)
+    if(name_prefix STREQUAL "lib")
+        string(SUBSTRING ${name} 3 -1 base_name)
+        set_property(TARGET ${name} PROPERTY OUTPUT_NAME ${base_name})
     endif()
 
-    set_property(TARGET ${name} PROPERTY PREFIX "")
-    set_property(TARGET ${name} PROPERTY SUFFIX "")
+    set_target_properties(${name} PROPERTIES
+        SUFFIX "" PREFIX ""
+        OSX_ARCHITECTURES ${CpuArch}
+        CMAKE_OSX_DEPLOYMENT_TARGET ${CMAKE_MACOSX_MIN_VERSION}
+        NO_SONAME true BUNDLE true BUNDLE_EXTENSION kext
+        BUILD_WITH_INSTALL_NAME_DIR false)
 
-    target_compile_definitions(${name} PRIVATE TARGET_OS_OSX KERNEL)
-    target_compile_options(${name} PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-fapple-kext>
+    target_compile_definitions(${name} PRIVATE KERNEL)
+    target_compile_options(${name} PRIVATE
+        $<$<COMPILE_LANGUAGE:CXX>:-fapple-kext>
         --sysroot=${RAVYN_SDKROOT}
-        -I${RAVYN_SDKROOT}/System/Library/Frameworks/Kernel.framework/Versions/A/PrivateHeaders
-        -I${RAVYN_SDKROOT}/System/Library/Frameworks/Kernel.framework/Versions/A/Headers
-        -I${ROOT_BINARY_DIR}/Kernel/xnu/bsd
         -I${RAVYN_SDKROOT}/usr/include
-)
+        -I${RAVYN_SDKROOT}/usr/local/include
+        -I${RAVYN_SDKROOT}/usr/local/include/kernel)
+    if(SL_INSTALL_NAME_DIR)
+        target_link_options(${name} PRIVATE -install_name "${SL_INSTALL_NAME_DIR}/$<TARGET_FILE_NAME:${name}>")
+    elseif(SL_INSTALL_NAME)
+        target_link_options(${name} PRIVATE -install_name ${SL_INSTALL_NAME})
+    endif()
 
-    target_link_options(${name} PRIVATE "LINKER:-bundle")
-    target_link_options(${name} PRIVATE "SHELL:-undefined dynamic_lookup")
-    target_link_options(${name} PRIVATE -Wl,-kext -Wl,-segalign,0x1000)
+    foreach(rpath IN LISTS SL_RPATHS)
+        target_link_options(${name} PRIVATE "SHELL:-rpath ${rpath}")
+    endforeach()
+
+    target_link_options(${name} PRIVATE
+        "LINKER:-bundle" "SHELL:-undefined dynamic_lookup"
+        -Wl,-kext -Wl,-segalign,0x1000)
 
     if(SL_KERNEL_PRIVATE)
         target_compile_definitions(${name} PRIVATE KERNEL_PRIVATE)
-        target_link_libraries(${name} PRIVATE ${CMAKE_BINARY_DIR}/Kernel/libkmod/libkmod.a)
+        target_link_libraries(${name} PRIVATE ${ROOT_BINARY_DIR}/Kernel/libkmod/libkmod.a)
     endif()
-
-#    target_link_libraries(${name} PRIVATE xnu_kernel_headers)
-
-    set_property(TARGET ${name} PROPERTY BUNDLE TRUE)
-    set_property(TARGET ${name} PROPERTY BUNDLE_EXTENSION kext)
 
     if(SL_INFO_PLIST)
         get_filename_component(SL_INFO_PLIST ${SL_INFO_PLIST} ABSOLUTE)

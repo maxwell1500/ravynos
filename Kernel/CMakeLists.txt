@@ -107,5 +107,5 @@ ExternalProject_Add(xnu
 	DEPENDS xnu_headers
 )
 
-#add_subdirectory(xnu/libkern/kmod libkmod)
-#add_subdirectory(Extensions)
+add_subdirectory(xnu/libkern/kmod libkmod)
+add_subdirectory(Extensions)
