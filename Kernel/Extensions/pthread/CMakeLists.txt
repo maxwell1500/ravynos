@@ -18,7 +18,7 @@ target_include_directories(pthread.kext PRIVATE
     ${RAVYN_SDKROOT}/usr/local/include/kernel
     ${RAVYN_SDKROOT}/System/Library/Frameworks/Kernel.framework/Versions/A/PrivateHeaders
     ${RAVYN_SDKROOT}/System/Library/Frameworks/System.framework/Versions/B/PrivateHeaders
-#    ${ROOT_BINARY_DIR}/${CpuArch}
+    ${ROOT_BINARY_DIR}/${CpuArch}
 )
 
 target_compile_options(pthread.kext PRIVATE
@@ -28,7 +28,13 @@ target_compile_options(pthread.kext PRIVATE
 )
 target_compile_definitions(pthread.kext PRIVATE XNU_KERNEL_PRIVATE
     MACH_KERNEL_PRIVATE ABSOLUTETIME_SCALAR_TYPE NEEDS_SCHED_CALL_T
-    __PTHREAD_EXPOSE_INTERNALS__ __STDC_HOSTED__=0 __DARWIN_ONLY_UNIX_CONFORMANCE)
+    __PTHREAD_EXPOSE_INTERNALS__ __STDC_HOSTED__=0
+    _LIBC_NO_FEATURE_VERIFICATION)
+
+target_link_options(pthread.kext PRIVATE
+    -mmacos-version-min=10.15
+    -Wl,-syslibroot,${RAVYN_SDKROOT}/usr/lib
+    -L${RAVYN_SDKROOT}/usr/local/lib)
 
 add_dependencies(pthread.kext xnu libkmod)
 

@@ -20,7 +20,7 @@ add_compile_definitions(
 )
 add_compile_options(
     --target=${TARGET_TRIPLE} -std=gnu11
-    --sysroot=${RAVYN_SDKROOT} -isysroot=${RAVYN_SDKROOT} -w
+    --sysroot=${RAVYN_SDKROOT} -isysroot${RAVYN_SDKROOT} -w
     -iframework${RAVYN_SDKROOT}/System/Library/Frameworks
     -isystem${RAVYN_SDKROOT}/usr/include/c++/v1
     -isystem${ROOT_BINARY_DIR}/${CpuArch}/System.framework/PrivateHeaders
@@ -35,7 +35,8 @@ add_compile_options(
     -Wno-nullability-completeness
     -fdollars-in-identifiers -fno-common -fverbose-asm
 )
-include_directories(gen locale locale/FreeBSD stdtime/FreeBSD darwin)
+include_directories(gen locale locale/FreeBSD stdtime/FreeBSD darwin
+    ${ROOT_SOURCE_DIR}/Kernel/xnu/libsyscall/wrappers/spawn)
 
 
 add_custom_target(features DEPENDS xnu_headers

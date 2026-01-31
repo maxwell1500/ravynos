@@ -33,7 +33,7 @@ function(add_kext_bundle name)
         target_link_options(${name} PRIVATE "SHELL:-rpath ${rpath}")
     endforeach()
 
-    target_link_options(${name} PRIVATE
+    target_link_options(${name} PRIVATE -nostdlib
         "LINKER:-bundle" "SHELL:-undefined dynamic_lookup"
         -Wl,-kext -Wl,-segalign,0x1000)
 
