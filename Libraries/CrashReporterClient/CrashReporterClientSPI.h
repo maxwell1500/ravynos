@@ -22,18 +22,23 @@
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
  * THE POSSIBILITY OF SUCH DAMAGE.
  */
-#ifndef _CRASHREPORTERCLIENT_H
-#define _CRASHREPORTERCLIENT_H
 
-#include <mach/mach_types.h>
+#pragma once
 
-extern const char *CRGetCrashLogMessage();
-extern void CRSetCrashLogMessage(const char *crashString);
-extern void CRSetCrashLogMessage2(const char *crashString);
+#if USE(APPLE_INTERNAL_SDK)
+
+#import <CrashReporterClient.h>
+
+#else
 
 #define CRASHREPORTER_ANNOTATIONS_SECTION "__crash_info"
 #define CRASHREPORTER_ANNOTATIONS_VERSION 5
 #define CRASH_REPORTER_CLIENT_HIDDEN __attribute__((visibility("hidden")))
+
+#define _crc_make_getter(attr) ((const char *)(unsigned long)gCRAnnotations.attr)
+#define _crc_make_setter(attr, arg) (gCRAnnotations.attr = (uint64_t)(unsigned long)(arg))
+#define CRGetCrashLogMessage() _crc_make_getter(message)
+#define CRSetCrashLogMessage(m) _crc_make_setter(message, m)
 
 struct crashreporter_annotations_t {
     uint64_t version;
@@ -49,4 +54,4 @@ struct crashreporter_annotations_t {
 CRASH_REPORTER_CLIENT_HIDDEN
 extern struct crashreporter_annotations_t gCRAnnotations;
 
-#endif /* _CRASHREPORTERCLIENT_H */
+#endif
