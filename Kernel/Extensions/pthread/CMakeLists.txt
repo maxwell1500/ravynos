@@ -2,7 +2,6 @@ add_kext_bundle(pthread.kext INFO_PLIST pthread-Info.plist KERNEL_PRIVATE
     BUNDLE_IDENTIFIER com.ravynos.kext.pthread
     BUNDLE_VERSION ${PROD_VERSION}
     MAIN_FUNCTION pthread_start ANTIMAIN_FUNCTION pthread_stop)
-set_property(TARGET pthread.kext PROPERTY OUTPUT_NAME pthread)
 
 target_sources(pthread.kext PRIVATE
     kern_init.c
@@ -22,6 +21,7 @@ target_include_directories(pthread.kext PRIVATE
 )
 
 target_compile_options(pthread.kext PRIVATE
+    --sysroot=${RAVYN_SDKROOT}
     -Wno-sign-conversion
     -Wno-int-conversion -Wno-implicit-function-declaration
     -Wno-incompatible-library-redeclaration -Wno-undef-prefix

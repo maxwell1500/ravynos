@@ -13,8 +13,7 @@ function(add_kext_bundle name)
         SUFFIX "" PREFIX ""
         OSX_ARCHITECTURES ${CpuArch}
         CMAKE_OSX_DEPLOYMENT_TARGET ${CMAKE_MACOSX_MIN_VERSION}
-        NO_SONAME true BUNDLE true BUNDLE_EXTENSION kext
-        BUILD_WITH_INSTALL_NAME_DIR false)
+        NO_SONAME true BUILD_WITH_INSTALL_NAME_DIR false)
 
     target_compile_definitions(${name} PRIVATE KERNEL)
     target_compile_options(${name} PRIVATE
@@ -34,7 +33,7 @@ function(add_kext_bundle name)
     endforeach()
 
     target_link_options(${name} PRIVATE -nostdlib
-        "LINKER:-bundle" "SHELL:-undefined dynamic_lookup"
+        -Wl,-bundle -Wl,-undefined,dynamic_lookup
         -Wl,-kext -Wl,-segalign,0x1000)
 
     if(SL_KERNEL_PRIVATE)
@@ -57,6 +56,17 @@ function(add_kext_bundle name)
     endif()
 
     add_kmod_info(${name} MAIN_FUNCTION ${SL_MAIN_FUNCTION} ANTIMAIN_FUNCTION ${SL_ANTIMAIN_FUNCTION})
+
+    set(bname ${name})
+    string(REGEX MATCH "\.kext\$" has_suffix ${bname})
+    if(NOT ("${has_suffix}" STREQUAL ".kext"))
+        string(APPEND bname ".kext")
+    endif()
+    add_custom_command(TARGET ${name} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/${bname}/Contents/MacOS
+        COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:${name}> ${CMAKE_CURRENT_BINARY_DIR}/${bname}/Contents/MacOS/
+        COMMAND ${CMAKE_COMMAND} -E copy ${SL_INFO_PLIST} ${CMAKE_CURRENT_BINARY_DIR}/${bname}/Contents/Info.plist
+    )
 endfunction()
 
 function(add_kmod_info target)

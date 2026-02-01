@@ -16,7 +16,7 @@ set(CMAKE_LINK_DEPENDS_USE_LINKER OFF)
 set(CMAKE_INSTALL_PREFIX "")
 
 #add_subdirectory(AppleAPIC)
-#add_subdirectory(AppleI386GenericPlatform)
+add_subdirectory(AppleI386GenericPlatform)
 #add_subdirectory(AppleIntelPIIXATA)
 #add_subdirectory(ApplePS2Controller)
 #add_subdirectory(IOACPIFamily)

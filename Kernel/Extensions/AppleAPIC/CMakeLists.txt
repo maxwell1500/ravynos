@@ -4,5 +4,6 @@ target_sources(AppleAPIC PRIVATE
     AppleAPIC.cpp
 )
 target_compile_options(AppleAPIC PRIVATE -Wno-implicit-int-conversion -Wno-sign-conversion)
-
-install(TARGETS AppleAPIC DESTINATION System/Library/Extensions COMPONENT BaseSystem)
+target_include_directories(AppleAPIC PRIVATE
+    ${RAVYN_SDKROOT}/System/Library/Frameworks/Kernel.framework/Versions/A/PrivateHeaders)
+install(TARGETS AppleAPIC DESTINATION ${SYSROOT_DIR}/System/Library/Extensions COMPONENT BaseSystem)
