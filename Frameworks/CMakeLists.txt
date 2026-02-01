@@ -17,4 +17,7 @@ set(CMAKE_ASM_COMPILER ${CC})
 set(CMAKE_CXX_COMPILER ${CXX})
 set(CMAKE_LINK_DEPENDS_USE_LINKER OFF)
 
+add_custom_target(BUILD_PHASE_FRAMEWORKS)
+add_dependencies(BUILD_PHASE_FRAMEWORKS libSystem)
+
 add_subdirectory(Foundation)

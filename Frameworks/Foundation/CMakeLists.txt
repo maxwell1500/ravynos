@@ -1,5 +1,6 @@
 #add_framework(Foundation)
 add_library(Foundation STATIC)
+add_dependencies(Foundation BUILD_PHASE_FRAMEWORKS)
 target_sources(Foundation PRIVATE
 	NSFormatter.m
 	NSDictionary/NSEnumerator_dictionaryObjects.m

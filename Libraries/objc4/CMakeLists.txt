@@ -84,3 +84,6 @@ add_library(objc-trampolines SHARED
 )
 set_target_properties(objc-trampolines PROPERTIES
     OUTPUT_NAME "objc-trampolines" SUFFIX ".dylib" PREFIX "lib" NO_SONAME true)
+
+add_dependencies(objc-trampolines libSystem)
+add_dependencies(objc libSystem)
