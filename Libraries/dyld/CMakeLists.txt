@@ -30,12 +30,10 @@ add_library(libdyld SHARED
 set_source_files_properties(./dyld3/Loading.cpp TARGET_DIRECTORY libdyld PROPERTIES COMPILE_OPTIONS "-fvisibility=hidden")
 
 set_target_properties(libdyld PROPERTIES
-	PREFIX "lib" OUTPUT_NAME "dyld" SUFFIX ".dylib" NO_SONAME true
-	CXX_STANDARD 20 MACHO_CURRENT_VERSION 732.2)
+	PREFIX "lib" OUTPUT_NAME "dyld" SUFFIX ".dylib" NO_SONAME true CXX_STANDARD 20)
 
 target_compile_definitions(libdyld PRIVATE
-	BUILDING_LIBDYLD FP_NAN=0 FP_INFINITE=1 FP_ZERO=2 FP_SUBNORMAL=3
-	FP_NORMAL=4 FP_SUPERNORMAL=5 WITHOUT_SANDBOX BROKEN_VECTOR_BASE
+	BUILDING_LIBDYLD WITHOUT_SANDBOX BROKEN_VECTOR_BASE
 	_USE_EXTENDED_LOCALES_ __DARWIN_C_LEVEL=__DARWIN_C_FULL TARGET_OS_BRIDGE=0
 )
 
@@ -75,10 +73,10 @@ target_link_options(libdyld PRIVATE
     -Wl,-no_inits -Wl,-no_warn_unused_dylibs
     "-Wl,-unexported_symbol,__ZNSt3*"
     -mmacosx-version-min=10.15 -Wl,-install_name,/usr/lib/system/libdyld.dylib
+    -Wl,-current_version,732.2
     -L${RAVYN_SDKROOT}/usr/lib/system -umbrella System
     -lsystem_malloc -lsystem_pthread -lsystem_platform -lsystem_kernel
-    -lsystem_c
-    # -lCrashReporterClient
+    -lsystem_c -lCrashReporterClient
     -Wl,-upward-lsystem_platform -Wl,-upward-lsystem_malloc
     -Wl,-upward-lsystem_c -Wl,-upward-lsystem_pthread
     # -Wl,-upward-lxpc

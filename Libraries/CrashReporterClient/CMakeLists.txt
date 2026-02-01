@@ -5,3 +5,4 @@ target_compile_options(CrashReporterClient PRIVATE --sysroot=${RAVYN_SDKROOT})
 add_custom_command(TARGET CrashReporterClient POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:CrashReporterClient>
         ${RAVYN_SDKROOT}/usr/lib/system/)
+add_dependencies(CrashReporterClient libkernel) # just for build ordering

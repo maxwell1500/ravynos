@@ -115,8 +115,7 @@ set(LIBCXX_FLAGS
     "-target ${CpuArch}-apple-darwin -isysroot${RAVYN_SDKROOT} \
     -I${ROOT_SOURCE_DIR}/Kernel/xnu/bsd \
     -I${RAVYN_SDKROOT}/System/Library/Frameworks/System.framework/Versions/B/PrivateHeaders \
-    -DFP_NAN=0 -DFP_INFINITE=1 -DFP_ZERO=2 -DFP_SUBNORMAL=3 -DFP_NORMAL=4 -DFP_SUPERNORMAL=5 \
-    -DINFINITY=RLIM_INFINITY -DCRT_HAS_128BIT \
+    -DCRT_HAS_128BIT \
     -Wno-incompatible-sysroot -Wno-user-defined-literals \
     -Wno-nullability-completeness -Wno-expansion-to-defined"
 )

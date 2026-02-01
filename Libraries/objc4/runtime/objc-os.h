@@ -139,6 +139,10 @@ struct explicit_atomic : public std::atomic<T> {
 #   include <System/pthread_machdep.h>
 #ifdef PROBE_ME
 #   include "objc-probes.h"  // generated dtrace probe definitions.
+#else
+    /* stub out dtrace probes */
+#   define OBJC_RUNTIME_OBJC_EXCEPTION_RETHROW() do {} while(0)
+#   define OBJC_RUNTIME_OBJC_EXCEPTION_THROW(arg0) do {} while(0)
 #endif
 
 // Some libc functions call objc_msgSend() 
