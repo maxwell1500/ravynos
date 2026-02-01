@@ -64,5 +64,5 @@ file(COPY ${OBJC}/runtime/maptable.h ${OBJC}/runtime/NSObject-internal.h
     ${OBJC}/runtime/objc-abi.h ${OBJC}/runtime/objc-block-trampolines.h
     ${OBJC}/runtime/objc-gdb.h ${OBJC}/runtime/objc-internal.h
     ${OBJC}/runtime/objc-ptrauth.h ${OBJC}/runtime/hashtable.h
-    ${OBJC}/runtime/hashtable2.h
+    ${OBJC}/runtime/hashtable2.h ${OBJC}/runtime/objc-class.h
     DESTINATION ${RAVYN_SDKROOT}/usr/local/include/objc/)
