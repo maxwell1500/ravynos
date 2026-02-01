@@ -40,8 +40,7 @@ target_link_options(libsystem_malloc PRIVATE
     -Wl,-current_version,283 -Wl,-compatibility_version,1.0.0
     -rdynamic -Wl,-search_paths_first -all_load
     -L${RAVYN_SDKROOT}/usr/lib/system -umbrella System
-    # -lCrashReporterClient
-    -lsystem_platform -Wl,-upward-lsystem_c
+    -lCrashReporterClient -lsystem_platform -Wl,-upward-lsystem_c
     -Wl,-interposable_list,${CMAKE_CURRENT_SOURCE_DIR}/xcodeconfig/interposable.list
 )
 

@@ -1,4 +1,4 @@
-#!/bin/bash -x
+#!/bin/bash 
 
 if [ $# -ne 5 ]; then
     echo "Usage: $0 <archs> <variants> <outputdir> <sdkroot> <srcroot>" 1>&2

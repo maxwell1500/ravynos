@@ -73,7 +73,7 @@ target_compile_options(libSystem PRIVATE
 add_dependencies(libdyld libsystem_pthread libsystem_c)
 add_dependencies(libsystem_c libsystem_malloc libsystem_platform)
 add_dependencies(libsystem_pthread libsystem_platform)
-add_dependencies(libsystem_malloc libsystem_platform)
+add_dependencies(libsystem_malloc libsystem_platform CrashReporterClient)
 add_dependencies(libsystem_platform compiler_rt libkernel)
 add_dependencies(libsystem_darwin libdyld libsystem_c)
 #add_dependencies(libsystem_notify xnu_headers)

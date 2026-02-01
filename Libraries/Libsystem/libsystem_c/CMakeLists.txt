@@ -1385,7 +1385,7 @@ target_link_options(libsystem_c PRIVATE
     -all_load -L${RAVYN_SDKROOT}/usr/lib/system -umbrella System
     -ldyld -lsystem_malloc -lsystem_platform -lsystem_pthread -lsystem_kernel
     -Wl,-upward-lsystem_blocks
-    #-lCrashReporterClient -lm
+    -lCrashReporterClient #-lm
     #-Wl,-upward-ldispatch -Wl,-upward-lmacho -Wl,-upward-lsystem_asl
     #-Wl,-upward-lsystem_info -Wl,-upward-lsystem_notify -Wl,-upward-lxpc -Wl,-upward-lcorecrypto
     #-Wl,-upward-lsystem_trace

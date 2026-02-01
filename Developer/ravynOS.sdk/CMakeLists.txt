@@ -52,3 +52,17 @@ execute_process(
         env DSTROOT=${RAVYN_SDKROOT} SDK_INSTALL_HEADERS_ROOT=.
             sh xcodescripts/install-sys-headers.sh
 )
+
+set(OBJC ${ROOT_SOURCE_DIR}/Libraries/objc4)
+file(COPY ${OBJC}/runtime/runtime.h ${OBJC}/runtime/objc.h
+    ${OBJC}/runtime/objc-sync.h ${OBJC}/runtime/objc-exception.h
+    ${OBJC}/runtime/objc-auto.h ${OBJC}/runtime/objc-api.h
+    ${OBJC}/runtime/message.h ${OBJC}/runtime/NSObject.h
+    ${OBJC}/runtime/NSObjCRuntime.h ${OBJC}/runtime/Module
+    DESTINATION ${RAVYN_SDKROOT}/usr/include/objc/)
+file(COPY ${OBJC}/runtime/maptable.h ${OBJC}/runtime/NSObject-internal.h
+    ${OBJC}/runtime/objc-abi.h ${OBJC}/runtime/objc-block-trampolines.h
+    ${OBJC}/runtime/objc-gdb.h ${OBJC}/runtime/objc-internal.h
+    ${OBJC}/runtime/objc-ptrauth.h ${OBJC}/runtime/hashtable.h
+    ${OBJC}/runtime/hashtable2.h
+    DESTINATION ${RAVYN_SDKROOT}/usr/local/include/objc/)

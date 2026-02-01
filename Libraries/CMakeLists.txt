@@ -15,11 +15,15 @@ set(CMAKE_SYSTEM_NAME Darwin)
 set(CMAKE_C_COMPILER ${CC})
 set(CMAKE_ASM_COMPILER ${CC})
 set(CMAKE_CXX_COMPILER ${CXX})
+set(CMAKE_OBJC_COMPILER ${CC})
+set(CMAKE_OBJCXX_COMPILER ${CXX})
 set(CMAKE_LINK_DEPENDS_USE_LINKER OFF)
 
 add_subdirectory(libfirehose_kernel)
+add_subdirectory(CrashReporterClient)
 add_subdirectory(dyld)
 add_subdirectory(Libsystem)
+add_subdirectory(objc4)
 
 # ------------------------------------------------------------------------
 #                  LLVM BUILTINS AND RUNTIME
