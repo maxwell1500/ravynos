@@ -56,26 +56,31 @@ target_compile_options(objc PRIVATE --sysroot=${RAVYN_SDKROOT}
     $<$<COMPILE_LANGUAGE:OBJC>:-std=gnu11>
     $<$<COMPILE_LANGUAGE:OBJCXX>:-std=gnu++14>
     -mmacos-version-min=10.15 -fdollars-in-identifiers
-    -fno-objc-convert-messages-to-runtime-calls
+    -fno-objc-convert-messages-to-runtime-calls -fblocks
     -Wno-deprecated-declarations)
 
-target_link_options(objc PRIVATE -Wl,-syslibroot,${RAVYN_SDKROOT}/usr/lib
-    -L${RAVYN_SDKROOT}/usr/lib -L${RAVYN_SDKROOT}/usr/local/lib
+target_link_options(objc PRIVATE
+    -L${RAVYN_SDKROOT}/usr/lib -L${RAVYN_SDKROOT}/usr/lib/system
+    -L${RAVYN_SDKROOT}/usr/local/lib
     -Wl,-install_name,/usr/lib/libobjc.dylib -Wl,-current_version,228
     -Wl,-compatibility_version,1 -Wl,-order_file,${CMAKE_CURRENT_SOURCE_DIR}/libobjc.order
     -Wl,-interposable_list,${CMAKE_CURRENT_SOURCE_DIR}/interposable.txt
-    -Wl,-sectalign,__DATA,0x1000 -lc++abi -lCrashReporterClient
-    -Wl,-unexported_symbols,${CMAKE_CURRENT_SOURCE_DIR}/unexported_symbols
+    -Wl,-sectalign,__DATA,__data,0x1000 -lc++abi -lCrashReporterClient
+    -Wl,-unexported_symbols_list,${CMAKE_CURRENT_SOURCE_DIR}/unexported_symbols
+    -mmacos-version-min=10.15
 )
 target_include_directories(objc PRIVATE runtime
-    ${RAVYN_SDKROOT}/System/Library/Frameworks/System.framework/Versions/B/PrivateHeaders
+    ${ROOT_SOURCE_DIR}/Kernel/xnu/bsd
     ${CMAKE_CURRENT_BINARY_DIR}/../Libsystem/libsystem_kernel/mig_hdr/include
-    ../Libsystem/private ${RAVYN_SDKROOT}/usr/local/include
+    ../Libsystem/private ../Libsystem/libsystem_blocks
+    ${RAVYN_SDKROOT}/usr/local/include
     ${RAVYN_SDKROOT}/usr/local/include/kernel
+    ${RAVYN_SDKROOT}/System/Library/Frameworks/System.framework/Versions/B/PrivateHeaders
+    ${ROOT_BINARY_DIR}/${CpuArch}
 )
 
 # SUPPORT_PREOPT and __OBJC2__ add support for the dyld objc shared cache
-target_compile_definitions(objc PRIVATE
+target_compile_definitions(objc PRIVATE _LIBC_NO_FEATURE_VERIFICATION
     TARGET_OS_IOSMAC=0 TARGET_OS_OSX=1 NDEBUG __OBJC2__ SUPPORT_PREOPT)
 
 add_library(objc-trampolines SHARED
@@ -84,6 +89,7 @@ add_library(objc-trampolines SHARED
 )
 set_target_properties(objc-trampolines PROPERTIES
     OUTPUT_NAME "objc-trampolines" SUFFIX ".dylib" PREFIX "lib" NO_SONAME true)
+target_compile_options(objc-trampolines PRIVATE --sysroot=${RAVYN_SDKROOT})
 
 add_dependencies(objc-trampolines libSystem)
 add_dependencies(objc libSystem)

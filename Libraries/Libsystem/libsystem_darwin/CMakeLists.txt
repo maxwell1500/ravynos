@@ -24,7 +24,6 @@ target_include_directories(libsystem_darwin PRIVATE
     ../libsystem_c/locale/FreeBSD ../libsystem_c/stdtime/FreeBSD
     ../libsystem_c ../liblaunch ../libdispatch/private ../private h ../../openbsm
 
-    ${CMAKE_CURRENT_BINARY_DIR}/../libsystem_kernel/mig_hdr/include
     ${ROOT_SOURCE_DIR}/Kernel/xnu/libsyscall/wrappers/spawn
     ${ROOT_SOURCE_DIR}/Kernel/xnu/libsyscall/wrappers/libproc
     ${ROOT_BINARY_DIR}/Kernel/xnu/EXPORT_HDRS/libkern
@@ -33,8 +32,6 @@ target_include_directories(libsystem_darwin PRIVATE
 
 target_compile_definitions(libsystem_darwin PRIVATE
     TARGET_OS_BRIDGE=0 __DARWIN_UNIX03 guardid_t=uint64_t
-    mach_right_recv_t=mach_port_t mach_right_send_t=mach_port_t
-    _COMM_PAGE_ATM_DIAGNOSTIC_CONFIG=0x00007fffffe00048ULL
     _LIBC_NO_FEATURE_VERIFICATION DARWIN_BUILDING_LIBSYSTEM_DARWIN
     OS_CRASH_ENABLE_EXPERIMENTAL_LIBTRACE MAC_OS_X_VERSION_MIN_REQUIRED=1150
 )

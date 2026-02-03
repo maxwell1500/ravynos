@@ -66,6 +66,7 @@ add_library(Base STATIC
 	emulated/lutimes.c
 	emulated/statvfs.c
 	gen/backtrace.c
+	gen/clock_gettime.c
 	gen/confstr.c
 	gen/crypt.c
 	gen/devname.c
@@ -180,6 +181,7 @@ target_include_directories(Base PRIVATE
     ${SDK_SOURCE_DIR}/usr/include
     ${ROOT_SOURCE_DIR}/Kernel/xnu/EXTERNAL_HEADERS
 )
+set_source_files_properties(./gen/clock_gettime.c TARGET_DIRECTORY Base PROPERTIES COMPILE_DEFINITIONS "memory_order_seq_cst=__ATOMIC_SEQ_CST")
 set_source_files_properties(./string/bcopy.c TARGET_DIRECTORY Base PROPERTIES COMPILE_OPTIONS "-momit-leaf-frame-pointer")
 set_source_files_properties(./stdio/xprintf_all_in_one.c TARGET_DIRECTORY Base PROPERTIES COMPILE_OPTIONS "-I${CMAKE_CURRENT_SOURCE_DIR}/stdio/FreeBSD")
 set_source_files_properties(./stdio/xprintf_comp.c TARGET_DIRECTORY Base PROPERTIES COMPILE_OPTIONS "-I${CMAKE_CURRENT_SOURCE_DIR}/stdio/FreeBSD")
@@ -779,7 +781,6 @@ target_compile_definitions(FreeBSD PRIVATE
     VARIANT_STATIC VARIANT_CANCELABLE VARIANT_DARWINEXTSN HAVE_STDINT_H
     __DARWIN_NON_CANCELABLE=0 __DARWIN_VERS_1050 __DARWIN_64_BIT_INO_T
     __DARWIN_UNIX03 __isthreaded
-    FP_NAN=0 FP_INFINITE=1 FP_ZERO=2 FP_SUBNORMAL=3 FP_NORMAL=4 FP_SUPERNORMAL=5
 )
 target_compile_options(FreeBSD PRIVATE
     "-include${CMAKE_CURRENT_SOURCE_DIR}/fbsdcompat/sys/cdefs.h"

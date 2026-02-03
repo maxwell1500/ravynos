@@ -104,8 +104,6 @@ set(libmach_inc
 )
 set(defs
     -DLIBSYSCALL_INTERFACE -DPRIVATE -DVARIANT_CANCELABLE -D__DARWIN_UNIX03
-    -Dsemaphore_consume_ref_t=mach_port_t
-    -Dthread_act_consume_ref_t=mach_port_t
 )
 add_custom_command(
     OUTPUT libmach.a

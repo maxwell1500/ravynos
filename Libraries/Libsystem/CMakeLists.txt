@@ -35,6 +35,25 @@ set_target_properties(libSystem PROPERTIES
 # libxpc.dylib 1738.0.17
 # libSystem.B.dylib 1281
 
+ExternalProject_Add(libdispatch
+    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/libdispatch
+    BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR}/libdispatch
+    USES_TERMINAL_BUILD
+    CONFIGURE_ENVIRONMENT_MODIFIFCATION
+        PATH=path_list_prepend:${TOOLS}
+        DEVELOPER_DIR=set:${ROOT_BINARY_DIR}/Developer
+        SDKROOT=set:${RAVYN_SDKROOT_MACOSX}
+    CMAKE_ARGS -Wno-dev
+        -DCMAKE_SYSTEM_PLATFORM=Darwin -DENABLE_TESTING=OFF
+        "-DCMAKE_C_FLAGS=--sysroot=${RAVYN_SDKROOT}"
+        -DWITH_APPLE_PTHREAD_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/../libsystem_pthread
+        -DWITH_APPLE_LIBPLATFORM_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/../libsystem_platform
+        -DWITH_APPLE_LIBCLOSURE_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/../libsystem_closure
+        -DWITH_APPLE_XNU_SOURCE=${ROOT_SOURCE_DIR}/Kernel/xnu
+        -DWITH_APPLE_OBJC4_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/../../objc
+        -DENABLE_APPLE_TSD_OPTIMIZATIONS=ON
+)
+
 add_subdirectory(libsystem_blocks)
 add_subdirectory(libsystem_kernel)
 add_subdirectory(libsystem_platform)
@@ -44,6 +63,8 @@ add_subdirectory(libsystem_pthread)
 add_subdirectory(libsystem_c)
 add_subdirectory(libsystem_darwin)
 #add_subdirectory(CommonCrypto)
+add_subdirectory(libxpc)
+add_subdirectory(liblaunch)
 
 target_include_directories(libSystem PRIVATE
     libsystem_c/darwin ../../Kernel/xnu/EXTERNAL_HEADERS
@@ -57,13 +78,10 @@ target_include_directories(libSystem PRIVATE
     ${RAVYN_SDKROOT}/usr/local/include
 )
 
-target_compile_definitions(libSystem PRIVATE
-    __DARWIN_UNIX03 DYLD_MACOSX_VERSION_10_11=0x000A0B00
-)
+target_compile_definitions(libSystem PRIVATE __DARWIN_UNIX03)
 
 target_compile_options(libSystem PRIVATE
-    --sysroot=${RAVYN_SDKROOT} -isysroot=${RAVYN_SDKROOT} -w
-    -F${RAVYN_SDKROOT}/System/Library/Frameworks
+    --sysroot=${RAVYN_SDKROOT} -isysroot${RAVYN_SDKROOT} -w
     -include${CMAKE_CURRENT_BINARY_DIR}/config.${CpuArch}.normal.h
     -Wno-implicit-function-declaration
     -Wno-int-conversion -Wno-implicit-int -fno-common
@@ -75,12 +93,16 @@ add_dependencies(libsystem_c libsystem_malloc libsystem_platform)
 add_dependencies(libsystem_pthread libsystem_platform)
 add_dependencies(libsystem_malloc libsystem_platform CrashReporterClient)
 add_dependencies(libsystem_platform compiler_rt libkernel)
-add_dependencies(libplatform xnu_headers)
+add_dependencies(libplatform libkernel)
 add_dependencies(libsystem_darwin libdyld libsystem_c)
+add_dependencies(libxpc libsystem_darwin)
+add_dependencies(libdispatch libsystem_darwin)
+add_dependencies(liblaunch libxpc)
 #add_dependencies(libsystem_notify xnu_headers)
 #add_dependencies(libcommonCrypto xnu_headers)
 add_dependencies(libSystem 
     libsystem_c libsystem_malloc libsystem_pthread libsystem_platform libdyld
+    libxpc libdispatch libsystem_blocks liblaunch
     #libsystem_notify libcommonCrypto
 )
 add_dependencies(xnu libSystem)
@@ -115,10 +137,12 @@ target_link_options(libSystem PRIVATE
     -Wl,-install_name,/usr/lib/libSystem.dylib -Wl,-current_version,1254
     -Wl,-compatibility_version,1.0.0
     -rdynamic -nodefaultlibs -Wl,-search_paths_first
-    -Wl,-reexport-lsystem_c
+    -Wl,-reexport-lsystem_c -Wl,-reexport-lsystem_blocks
     -Wl,-reexport-lsystem_malloc -Wl,-reexport-lsystem_platform
     -Wl,-reexport-lsystem_darwin -Wl,-reexport-lsystem_pthread
     -Wl,-reexport-lsystem_kernel -Wl,-reexport-lcompiler_rt
+    -Wl,-reexport-lunwind -Wl,-reexport-ldyld -Wl,-reexport-lxpc
+    -Wl,-reexport-llaunch -Wl,-reexport-ldispatch
     -lsystem_c -lsystem_malloc -lsystem_platform -lsystem_pthread -lsystem_darwin
     -lsystem_kernel -lcompiler_rt -ldyld -lc++
 )

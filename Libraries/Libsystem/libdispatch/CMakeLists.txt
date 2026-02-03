@@ -1,5 +1,5 @@
 
-cmake_minimum_required(VERSION 3.4.3)
+cmake_minimum_required(VERSION 3.5.0)
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules")
 
@@ -339,9 +339,9 @@ if(CMAKE_SYSTEM_NAME STREQUAL Windows)
   link_directories(${DISPATCH_LIBDIR})
 endif()
 
-add_subdirectory(dispatch)
-add_subdirectory(man)
-add_subdirectory(os)
+#add_subdirectory(dispatch)
+#add_subdirectory(man)
+#add_subdirectory(os)
 add_subdirectory(private)
 add_subdirectory(src)
 if(ENABLE_TESTING)
