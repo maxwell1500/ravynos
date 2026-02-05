@@ -144,7 +144,7 @@ target_link_options(libSystem PRIVATE
     -Wl,-reexport-lunwind -Wl,-reexport-ldyld -Wl,-reexport-lxpc
     -Wl,-reexport-llaunch -Wl,-reexport-ldispatch
     -lsystem_c -lsystem_malloc -lsystem_platform -lsystem_pthread -lsystem_darwin
-    -lsystem_kernel -lcompiler_rt -ldyld -lc++
+    -lsystem_kernel -lcompiler_rt -ldyld -lc++ -lxpc
 )
 
 add_custom_command(TARGET libSystem POST_BUILD

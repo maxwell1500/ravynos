@@ -60,7 +60,6 @@ set(libplatform_incs
     ${ROOT_SOURCE_DIR}/Kernel/xnu/bsd
     ../private internal
     os/resolver
-    ${CMAKE_CURRENT_BINARY_DIR}/../libsystem_kernel/mig_hdr/include
     ${ROOT_SOURCE_DIR}/Kernel/xnu/libsyscall/wrappers
     ${RAVYN_SDKROOT}/System/Library/Frameworks/System.framework/Versions/B/PrivateHeaders
 )
@@ -79,8 +78,13 @@ set(libplatform_opts
 
 target_sources(libsystem_platform PRIVATE ${libplatform_sources} os/lock.c)
 target_include_directories(libsystem_platform PRIVATE ${libplatform_incs})
-target_compile_definitions(libsystem_platform PRIVATE ${libplatform_defs})
-target_compile_options(libsystem_platform PRIVATE ${libplatform_opts})
+target_compile_definitions(libsystem_platform PRIVATE ${libplatform_defs} LONG_BIT=64)
+target_compile_options(libsystem_platform PRIVATE ${libplatform_opts}
+    -isystem${RAVYN_SDKROOT}/usr/include/c++/v1)
+
+set_source_files_properties(_setcontext.s os/lock.c
+    TARGET_DIRECTORY libsystem_platform PROPERTIES
+    COMPILE_OPTIONS "-include${RAVYN_SDKROOT}/usr/include/stdatomic.h")
 
 target_sources(libplatform PRIVATE ${libplatform_sources})
 target_include_directories(libplatform PRIVATE ${libplatform_incs})

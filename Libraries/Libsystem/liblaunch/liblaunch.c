@@ -22,7 +22,8 @@
 #include "launch.h"
 #include "launch_priv.h"
 #include "launch_internal.h"
-#include "ktrace.h"
+
+#include <sys/ktrace.h>
 
 #include <mach/mach.h>
 #include <mach/mach_port.h>

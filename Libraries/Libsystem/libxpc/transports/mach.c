@@ -35,6 +35,7 @@
 #include <sys/un.h>
 #include <stdbool.h>
 #include <xpc/xpc.h>
+#include <servers/bootstrap.h>
 
 #include "../xpc_internal.h"
 
@@ -90,7 +91,7 @@ mach_listen(const char *name, xpc_port_t *port)
 		return (-1);
 	}
 
-	*port = mp;
+	*(mach_port_t *)port = mp;
 	return (0);
 }
 
@@ -144,6 +145,12 @@ mach_create_server_source(xpc_port_t port, void *context, dispatch_queue_t tq)
 	
 	return (ret);
 }
+
+#ifdef __x86_64__
+#define _ALIGN(x) (((uint64_t)x + 63) & ~63) /* align to register size */
+#else
+#error Unsupported platform!
+#endif
 
 static int
 mach_send(xpc_port_t local, xpc_port_t remote, void *buf, size_t len,

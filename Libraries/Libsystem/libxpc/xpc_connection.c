@@ -1,5 +1,6 @@
 /*
- * Copyright 2014-2015 iXsystems, Inc.
+ * Original code Copyright 2014-2015 iXsystems, Inc.
+ * Changes for ravynOS Copyright (C) 2026 Zoe Knox
  * All rights reserved
  *
  * Redistribution and use in source and binary forms, with or without
@@ -25,15 +26,19 @@
  *
  */
 
+#include <string.h>
+#include <sys/bsm/audit.h>
+#include <bsm/libbsm.h>
 #include <errno.h>
 #include <xpc/xpc.h>
-#include <machine/atomic.h>
+#include <stdatomic.h>
 #include <Block.h>
 #include "xpc_internal.h"
 
-#define XPC_CONNECTION_NEXT_ID(conn) (atomic_fetchadd_long(&conn->xc_last_id, 1))
+#define XPC_CONNECTION_NEXT_ID(conn) (atomic_fetch_add(&conn->xc_last_id, 1))
 
 static void xpc_send(xpc_connection_t xconn, xpc_object_t message, uint64_t id);
+char *strerror(int);
 
 xpc_connection_t
 xpc_connection_create(const char *name, dispatch_queue_t targetq)
@@ -53,11 +58,11 @@ xpc_connection_create(const char *name, dispatch_queue_t targetq)
 	TAILQ_INIT(&conn->xc_pending);
 
 	/* Create send queue */
-	asprintf(&qname, "com.ixsystems.xpc.connection.sendq.%p", conn);
+	asprintf(&qname, "com.ravynos.xpc.connection.sendq.%p", conn);
 	conn->xc_send_queue = dispatch_queue_create(qname, NULL);
 
 	/* Create recv queue */
-	asprintf(&qname, "com.ixsystems.xpc.connection.recvq.%p", conn);
+	asprintf(&qname, "com.ravynos.xpc.connection.recvq.%p", conn);
 	conn->xc_recv_queue = dispatch_queue_create(qname, NULL);
 
 	/* Create target queue */
@@ -271,7 +276,6 @@ xpc_connection_get_pid(xpc_connection_t xconn)
 	return (conn->xc_creds.xc_remote_pid);
 }
 
-#ifdef MACH
 au_asid_t
 xpc_connection_get_asid(xpc_connection_t xconn)
 {
@@ -280,7 +284,6 @@ xpc_connection_get_asid(xpc_connection_t xconn)
 	conn = xconn;
 	return (conn->xc_creds.xc_remote_asid);
 }
-#endif
 
 void
 xpc_connection_set_context(xpc_connection_t xconn, void *ctx)

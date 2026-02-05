@@ -46,7 +46,7 @@
 #include <pjdlog.h>
 #endif
 
-#include "common_impl.h"
+#define fd_is_valid(fd) (fcntl((fd), F_GETFL) != -1 || errno != EBADF)
 #include "msgio.h"
 
 #ifndef	HAVE_PJDLOG
@@ -56,10 +56,6 @@
 #define	PJDLOG_ABORT(...)		abort()
 #endif
 
-#ifdef __linux__
-/* Linux: arbitrary size, but must be lower than SCM_MAX_FD. */
-#define	PKG_MAX_SIZE	((64U - 1) * CMSG_SPACE(sizeof(int)))
-#else
 /*
  * To work around limitations in 32-bit emulation on 64-bit kernels, use a
  * machine-independent limit on the number of FDs per message.  Each control
@@ -67,7 +63,6 @@
  * 4 bytes for the descriptor, and another 4 pad bytes.
  */
 #define	PKG_MAX_SIZE	(MCLBYTES / 24)
-#endif
 
 static int
 msghdr_add_fd(struct cmsghdr *cmsg, int fd)

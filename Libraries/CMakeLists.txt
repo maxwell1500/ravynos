@@ -24,6 +24,7 @@ add_subdirectory(CrashReporterClient)
 add_subdirectory(dyld)
 add_subdirectory(Libsystem)
 add_subdirectory(objc4)
+add_subdirectory(MiscLibs)
 
 # ------------------------------------------------------------------------
 #                  LLVM BUILTINS AND RUNTIME

@@ -1,5 +1,6 @@
 /*
- * Copyright 2014-2015 iXsystems, Inc.
+ * Original code Copyright 2014-2015 iXsystems, Inc.
+ * Port to ravynOS Copyright 2026 Zoe Knox
  * All rights reserved
  *
  * Redistribution and use in source and binary forms, with or without
@@ -25,10 +26,11 @@
  *
  */
 
+#include <string.h>
 #include <sys/types.h>
-#include <sys/errno.h>
-#include <sys/sbuf.h>
-#include <machine/atomic.h>
+#include <errno.h>
+#include <sbuf.h>
+#include <stdatomic.h>
 #include <assert.h>
 #include <syslog.h>
 #include <pthread.h>
@@ -44,27 +46,13 @@ extern struct xpc_transport unix_transport __attribute__((weak));
 extern struct xpc_transport mach_transport __attribute__((weak));
 static struct xpc_transport *selected_transport = NULL;
 
+char *strerror(int);
+char *strdup(const char *);
+
 struct xpc_transport *
 xpc_get_transport()
 {
-	if (!selected_transport) {
-		char *env = getenv("XPC_TRANSPORT");
-		if (env) {
-			if (!strcmp(env, "unix"))
-				selected_transport = &unix_transport;
-
-			if (!strcmp(env, "mach"))
-				selected_transport = &mach_transport;
-		} else {
-#ifdef MACH
-			selected_transport = &mach_transport;
-#else
-			selected_transport = &unix_transport;
-#endif
-		}
-	}
-
-	return (selected_transport);
+	return &mach_transport;
 }
 
 static void
@@ -160,7 +148,7 @@ xpc_retain(xpc_object_t obj)
 	struct xpc_object *xo;
 
 	xo = obj;
-	atomic_add_int(&xo->xo_refcnt, 1);
+	atomic_fetch_add(&xo->xo_refcnt, 1);
 	return (obj);
 }
 
@@ -170,7 +158,7 @@ xpc_release(xpc_object_t obj)
 	struct xpc_object *xo;
 
 	xo = obj;
-	if (atomic_fetchadd_int(&xo->xo_refcnt, -1) > 1)
+	if (atomic_fetch_add(&xo->xo_refcnt, -1) > 1)
 		return;
 
 	xpc_object_destroy(xo);
@@ -270,7 +258,7 @@ xpc_copy_description_level(xpc_object_t obj, struct sbuf *sbuf, int level)
 
 	case _XPC_TYPE_UUID:
 		id = (struct uuid *)xpc_uuid_get_bytes(obj);
-		uuid_to_string(id, &uuid_str, &uuid_status);
+		uuid_unparse(id, &uuid_str);
 		sbuf_printf(sbuf, "%s\n", uuid_str);
 		free(uuid_str);
 		break;
@@ -285,7 +273,6 @@ xpc_copy_description_level(xpc_object_t obj, struct sbuf *sbuf, int level)
 	}
 }
 
-#ifdef MACH
 struct _launch_data {
 	uint64_t type;
 	union {
@@ -351,7 +338,6 @@ ld2xpc(launch_data_t ld)
 	}
 	return (xo);
 }
-#endif
 
 #if 0
 xpc_object_t

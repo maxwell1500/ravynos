@@ -33,8 +33,11 @@
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
+#include <sys/types.h>
 #include <sys/param.h>
-#include <sys/endian.h>
+#include <machine/endian.h>
+#include <libkern/OSByteOrder.h>
+#include <endian_enc.h>
 #include <sys/queue.h>
 
 #ifdef _KERNEL
@@ -55,11 +58,6 @@ __FBSDID("$FreeBSD$");
 #include <string.h>
 #include <unistd.h>
 
-#include "common_impl.h"
-#endif
-
-#ifdef HAVE_PJDLOG
-#include <pjdlog.h>
 #endif
 
 #include <sys/nv.h>
@@ -80,6 +78,8 @@ __FBSDID("$FreeBSD$");
 #define	PJDLOG_ABORT(...)		abort()
 #endif
 #endif
+
+#define fd_is_valid(fd) (fcntl((fd), F_GETFL) != -1 || errno != EBADF)
 
 #define	NVPAIR_MAGIC	0x6e7670	/* "nvp" */
 struct nvpair {
@@ -658,15 +658,15 @@ nvpair_unpack_header(bool isbe, nvpair_t *nvp, const unsigned char *ptr,
 
 #if BYTE_ORDER == BIG_ENDIAN
 	if (!isbe) {
-		nvphdr.nvph_namesize = le16toh(nvphdr.nvph_namesize);
-		nvphdr.nvph_datasize = le64toh(nvphdr.nvph_datasize);
-		nvphdr.nvph_nitems = le64toh(nvphdr.nvph_nitems);
+		nvphdr.nvph_namesize = OSSwapLittleToHostInt16(nvphdr.nvph_namesize);
+		nvphdr.nvph_datasize = OSSwapLittleToHostInt64(nvphdr.nvph_datasize);
+		nvphdr.nvph_nitems = OSSwapLittleToHostInt64(nvphdr.nvph_nitems);
 	}
 #else
 	if (isbe) {
-		nvphdr.nvph_namesize = be16toh(nvphdr.nvph_namesize);
-		nvphdr.nvph_datasize = be64toh(nvphdr.nvph_datasize);
-		nvphdr.nvph_nitems = be64toh(nvphdr.nvph_nitems);
+		nvphdr.nvph_namesize = OSSwapBigToHostInt16(nvphdr.nvph_namesize);
+		nvphdr.nvph_datasize = OSSwapBigToHostInt64(nvphdr.nvph_datasize);
+		nvphdr.nvph_nitems = OSSwapBigToHostInt64(nvphdr.nvph_nitems);
 	}
 #endif
 

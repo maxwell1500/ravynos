@@ -3,10 +3,18 @@ add_library(liblaunch SHARED libbootstrap.c liblaunch.c libvproc.c)
 set_target_properties(liblaunch PROPERTIES PREFIX "lib" OUTPUT_NAME "launch"
     SUFFIX ".dylib" NO_SONAME true)
 
-set(CFLAGS --sysroot=${RAVYN_SDKROOT} -g -DPRIVATE
-    -I${CMAKE_CURRENT_BINARY_DIR}/../libsystem_kernel/mig_hdr/include)
+set(CFLAGS --sysroot=${RAVYN_SDKROOT} -g -DPRIVATE -mmacos-version-min=10.15)
 set(MIG_FLAGS ${CFLAGS} -D__MigTypeCheck)
 target_compile_options(liblaunch PRIVATE ${CFLAGS})
+target_compile_definitions(liblaunch PRIVATE _MACH_PORT_T)
+target_include_directories(liblaunch PRIVATE
+    .
+    ../libdispatch/config
+    ../libsystem_pthread
+    ../private
+    ${RAVYN_SDKROOT}/usr/local/include
+    ${RAVYN_SDKROOT}/usr/local/include/kernel
+    ${RAVYN_SDKROOT}/System/Library/Frameworks/Kernel.framework/Versions/A/PrivateHeaders)
 
 add_custom_target(helperMIG
     DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/helper.defs

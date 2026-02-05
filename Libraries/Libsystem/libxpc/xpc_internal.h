@@ -30,6 +30,7 @@
 
 #include <sys/queue.h>
 #include <sys/uio.h>
+#include <stdatomic.h>
 #include <dispatch/dispatch.h>
 #include "mpack.h"
 
@@ -115,7 +116,7 @@ struct xpc_frame_header {
 struct xpc_object {
 	uint8_t			xo_xpc_type;
 	uint16_t		xo_flags;
-	volatile uint32_t	xo_refcnt;
+	volatile _Atomic(uint32_t)	xo_refcnt;
 	size_t			xo_size;
 	xpc_u			xo_u;
 #ifdef MACH
@@ -151,7 +152,7 @@ struct xpc_credentials {
 struct xpc_connection {
 	const char *		xc_name;
 	xpc_port_t		xc_local_port;
-    	xpc_port_t		xc_remote_port;
+    xpc_port_t		xc_remote_port;
 	xpc_handler_t		xc_handler;
 	dispatch_source_t	xc_recv_source;
 	dispatch_queue_t	xc_send_queue;
@@ -160,7 +161,7 @@ struct xpc_connection {
 	int			xc_suspend_count;
 	int			xc_transaction_count;
 	uint64_t		xc_flags;
-	volatile uint64_t	xc_last_id;
+	volatile _Atomic(uint64_t)	xc_last_id;
 	void *			xc_context;
 	struct xpc_connection * xc_parent;
     	struct xpc_credentials	xc_creds;

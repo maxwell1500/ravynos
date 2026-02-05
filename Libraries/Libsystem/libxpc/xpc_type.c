@@ -27,8 +27,13 @@
 
 #include <sys/types.h>
 #include <time.h>
+#include <string.h>
+#include <sys/bsm/audit.h>
+#include <bsm/libbsm.h>
 #include "xpc/xpc.h"
 #include "xpc_internal.h"
+
+char *strdup(const char *);
 
 struct _xpc_type_s {
 };

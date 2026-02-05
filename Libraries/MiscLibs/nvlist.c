@@ -33,8 +33,10 @@
 #include <sys/cdefs.h>
 __FBSDID("$FreeBSD$");
 
+#include <sys/types.h>
 #include <sys/param.h>
-#include <sys/endian.h>
+#include <machine/endian.h>
+#include <libkern/OSByteOrder.h>
 #include <sys/queue.h>
 
 #ifdef _KERNEL
@@ -58,15 +60,11 @@ __FBSDID("$FreeBSD$");
 #include <string.h>
 #include <unistd.h>
 
-#include "msgio.h"
-#endif
-
-#ifdef HAVE_PJDLOG
-#include <pjdlog.h>
 #endif
 
 #include <sys/nv.h>
 
+#include "msgio.h"
 #include "nv_impl.h"
 #include "nvlist_impl.h"
 #include "nvpair_impl.h"
@@ -92,6 +90,8 @@ __FBSDID("$FreeBSD$");
 #define	NV_FLAG_PRIVATE_MASK	(NV_FLAG_BIG_ENDIAN | NV_FLAG_IN_ARRAY)
 #define	NV_FLAG_PUBLIC_MASK	(NV_FLAG_IGNORE_CASE | NV_FLAG_NO_UNIQUE)
 #define	NV_FLAG_ALL_MASK	(NV_FLAG_PRIVATE_MASK | NV_FLAG_PUBLIC_MASK)
+
+#define fd_is_valid(fd) (fcntl((fd), F_GETFL) != -1 || errno != EBADF)
 
 #define	NVLIST_MAGIC	0x6e766c	/* "nvl" */
 struct nvlist {
@@ -1046,8 +1046,8 @@ nvlist_check_header(struct nvlist_header *nvlhdrp)
 	}
 #else
 	if ((nvlhdrp->nvlh_flags & NV_FLAG_BIG_ENDIAN) != 0) {
-		nvlhdrp->nvlh_size = be64toh(nvlhdrp->nvlh_size);
-		nvlhdrp->nvlh_descriptors = be64toh(nvlhdrp->nvlh_descriptors);
+		nvlhdrp->nvlh_size = OSSwapBigToHostInt64(nvlhdrp->nvlh_size);
+		nvlhdrp->nvlh_descriptors = OSSwapBigToHostInt64(nvlhdrp->nvlh_descriptors);
 	}
 #endif
 	return (true);
