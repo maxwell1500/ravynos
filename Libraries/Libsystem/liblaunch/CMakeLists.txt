@@ -5,36 +5,57 @@ set_target_properties(liblaunch PROPERTIES PREFIX "lib" OUTPUT_NAME "launch"
 
 set(CFLAGS --sysroot=${RAVYN_SDKROOT} -g -DPRIVATE -mmacos-version-min=10.15)
 set(MIG_FLAGS ${CFLAGS} -D__MigTypeCheck)
-target_compile_options(liblaunch PRIVATE ${CFLAGS})
-target_compile_definitions(liblaunch PRIVATE _MACH_PORT_T)
+target_compile_options(liblaunch PRIVATE ${CFLAGS}
+    -include${RAVYN_SDKROOT}/usr/include/sys/_types/_mach_port_t.h
+    -include${RAVYN_SDKROOT}/usr/include/stdatomic.h
+)
 target_include_directories(liblaunch PRIVATE
+    ${ROOT_SOURCE_DIR}/Kernel/xnu/bsd
     .
+    ../../openbsm
     ../libdispatch/config
     ../libsystem_pthread
-    ../private
+    ../libsystem_c/fbsdcompat
+    ${ROOT_SOURCE_DIR}/BSD/launchd
     ${RAVYN_SDKROOT}/usr/local/include
     ${RAVYN_SDKROOT}/usr/local/include/kernel
-    ${RAVYN_SDKROOT}/System/Library/Frameworks/Kernel.framework/Versions/A/PrivateHeaders)
-
+    ${ROOT_SOURCE_DIR}/Kernel/xnu/libsyscall/wrappers/libproc
+    ../
+    ${CMAKE_CURRENT_BINARY_DIR}
+    ../private ${ROOT_BINARY_DIR}/Kernel/xnu/EXPORT_HDRS/osfmk
+    ${ROOT_BINARY_DIR}/Kernel/xnu/EXPORT_HDRS/san
+)
 add_custom_target(helperMIG
     DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/helper.defs
     COMMAND ${MIG} ${MIG_FLAGS} -header helper.h -sheader helperServer.h
         ${CMAKE_CURRENT_SOURCE_DIR}/helper.defs
-    BYPRODUCTS helper.h helperServer.h launchd_helperUser.c launchd_helperServer.c
+    BYPRODUCTS ${CMAKE_CURRENT_BINARY_DIR}/helper.h
+        ${CMAKE_CURRENT_BINARY_DIR}/helperServer.h
+        ${CMAKE_CURRENT_BINARY_DIR}/launchd_helperUser.c
+        ${CMAKE_CURRENT_BINARY_DIR}/launchd_helperServer.c
 )
 add_custom_target(jobMIG
     DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/job.defs
     COMMAND ${MIG} ${MIG_FLAGS} -sheader jobServer.h
         ${CMAKE_CURRENT_SOURCE_DIR}/job.defs
-    BYPRODUCTS jobServer.h jobUser.c job.h
+    BYPRODUCTS ${CMAKE_CURRENT_BINARY_DIR}/jobServer.h
+        ${CMAKE_CURRENT_BINARY_DIR}/jobUser.c
+        ${CMAKE_CURRENT_BINARY_DIR}/job.h
 )
-target_sources(liblaunch PRIVATE job.h jobServer.h jobUser.c helper.h
-    helperServer.h launchd_helperUser.c launchd_helperServer.c)
+target_sources(liblaunch PRIVATE
+    ${CMAKE_CURRENT_BINARY_DIR}/job.h
+    ${CMAKE_CURRENT_BINARY_DIR}/jobServer.h
+    ${CMAKE_CURRENT_BINARY_DIR}/jobUser.c
+    ${CMAKE_CURRENT_BINARY_DIR}/helper.h
+    ${CMAKE_CURRENT_BINARY_DIR}/helperServer.h
+    ${CMAKE_CURRENT_BINARY_DIR}/launchd_helperUser.c
+    ${CMAKE_CURRENT_BINARY_DIR}/launchd_helperServer.c)
 add_dependencies(liblaunch jobMIG helperMIG)
 
 target_link_options(liblaunch PRIVATE
     -Wl,-current_version,1738.0.17 -Wl,-compatibility_version,1.0.0
     -Wl,-install_name,/usr/lib/system/liblaunch.dylib -umbrella System
-    -L${RAVYN_SDKROOT}/usr/lib -mmacos-version-min=10.15)
+    -L${RAVYN_SDKROOT}/usr/lib -lcompiler_rt
+    -mmacos-version-min=10.15)
 
 add_dependencies(liblaunch libsystem_darwin)

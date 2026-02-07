@@ -58,7 +58,7 @@ typedef NSUInteger NSStringEncodingConversionOptions;
 
 FOUNDATION_EXPORT const NSUInteger NSMaximumStringLength;
 
-@interface NSString : NSObject <NSCopying, NSMutableCopying, NSCoding>
+@interface NSString : NSObject
 
 + (const NSStringEncoding *)availableStringEncodings;
 + (NSString *)localizedNameOfStringEncoding:(NSStringEncoding)encoding;

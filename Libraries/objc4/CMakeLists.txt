@@ -55,11 +55,13 @@ set_source_files_properties(./runtime/objc-lockdebug.mm TARGET_DIRECTORY objc PR
 target_compile_options(objc PRIVATE --sysroot=${RAVYN_SDKROOT}
     $<$<COMPILE_LANGUAGE:OBJC>:-std=gnu11>
     $<$<COMPILE_LANGUAGE:OBJCXX>:-std=gnu++14>
-    -mmacos-version-min=10.15 -fdollars-in-identifiers
-    -fno-objc-convert-messages-to-runtime-calls -fblocks
+    $<$<COMPILE_LANGUAGE:CXX>:-D_LIBCPP_VISIBLE="">
+    -mmacos-version-min=10.15 -momit-leaf-frame-pointer -fdollars-in-identifiers
+    -fobjc-legacy-dispatch -fno-objc-convert-messages-to-runtime-calls -fblocks
     -Wno-deprecated-declarations)
 
 target_link_options(objc PRIVATE
+    -Wl,-syslibroot,${RAVYN_SDKROOT}/usr/lib
     -L${RAVYN_SDKROOT}/usr/lib -L${RAVYN_SDKROOT}/usr/lib/system
     -L${RAVYN_SDKROOT}/usr/local/lib
     -Wl,-install_name,/usr/lib/libobjc.dylib -Wl,-current_version,228
@@ -67,7 +69,8 @@ target_link_options(objc PRIVATE
     -Wl,-interposable_list,${CMAKE_CURRENT_SOURCE_DIR}/interposable.txt
     -Wl,-sectalign,__DATA,__data,0x1000 -lc++abi -lCrashReporterClient
     -Wl,-unexported_symbols_list,${CMAKE_CURRENT_SOURCE_DIR}/unexported_symbols
-    -mmacos-version-min=10.15
+    -mmacos-version-min=10.15 -Wl,-flat_namespace -Wl,-undefined,warning
+    -lobjc-trampolines
 )
 target_include_directories(objc PRIVATE runtime
     ${ROOT_SOURCE_DIR}/Kernel/xnu/bsd
@@ -83,13 +86,28 @@ target_include_directories(objc PRIVATE runtime
 target_compile_definitions(objc PRIVATE _LIBC_NO_FEATURE_VERIFICATION
     TARGET_OS_IOSMAC=0 TARGET_OS_OSX=1 NDEBUG __OBJC2__ SUPPORT_PREOPT)
 
-add_library(objc-trampolines SHARED
-	./runtime/objc-blocktramps-i386.s
-	./runtime/objc-blocktramps-x86_64.s
+add_custom_command(
+    DEPENDS libsystem_darwin
+    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/libobjc-trampolines.dylib
+	COMMAND ${CC} --target=${CpuArch}-apple-darwin -x assembler-with-cpp
+	    --sysroot=${RAVYN_SDKROOT} -fpic -shared -Wl,-dylib
+	    -o ${CMAKE_CURRENT_BINARY_DIR}/libobjc-trampolines.dylib
+        -Wl,-install_name,/usr/lib/libobjc-trampolines.dylib
+        -Wl,-current_version,228
+        -mmacos-version-min=10.15
+	    ${CMAKE_CURRENT_SOURCE_DIR}/runtime/objc-blocktramps-x86_64.s
+	    && ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_BINARY_DIR}/libobjc-trampolines.dylib
+	        ${RAVYN_SDKROOT}/usr/lib/
+        && ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_BINARY_DIR}/libobjc-trampolines.dylib
+            ${SYSROOT_DIR}/usr/lib/
 )
-set_target_properties(objc-trampolines PROPERTIES
-    OUTPUT_NAME "objc-trampolines" SUFFIX ".dylib" PREFIX "lib" NO_SONAME true)
-target_compile_options(objc-trampolines PRIVATE --sysroot=${RAVYN_SDKROOT})
+target_sources(objc PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/libobjc-trampolines.dylib)
+add_dependencies(objc libsystem_darwin)
 
-add_dependencies(objc-trampolines libSystem)
-add_dependencies(objc libSystem)
+add_custom_command(TARGET objc POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${RAVYN_SDKROOT}/usr/lib ${SYSROOT_DIR}/usr/lib
+    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:objc> ${RAVYN_SDKROOT}/usr/lib/
+    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:objc> ${SYSROOT_DIR}/usr/lib/
+    COMMAND ${CMAKE_COMMAND} -E create_symlink libobjc.A.dylib ${RAVYN_SDKROOT}/usr/lib/libobjc.dylib
+    COMMAND ${CMAKE_COMMAND} -E create_symlink libobjc.A.dylib ${SYSROOT_DIR}/usr/lib/libobjc.dylib
+)

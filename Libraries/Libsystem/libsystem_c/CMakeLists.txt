@@ -181,7 +181,6 @@ target_include_directories(Base PRIVATE
     ${SDK_SOURCE_DIR}/usr/include
     ${ROOT_SOURCE_DIR}/Kernel/xnu/EXTERNAL_HEADERS
 )
-set_source_files_properties(./gen/clock_gettime.c TARGET_DIRECTORY Base PROPERTIES COMPILE_DEFINITIONS "memory_order_seq_cst=__ATOMIC_SEQ_CST")
 set_source_files_properties(./string/bcopy.c TARGET_DIRECTORY Base PROPERTIES COMPILE_OPTIONS "-momit-leaf-frame-pointer")
 set_source_files_properties(./stdio/xprintf_all_in_one.c TARGET_DIRECTORY Base PROPERTIES COMPILE_OPTIONS "-I${CMAKE_CURRENT_SOURCE_DIR}/stdio/FreeBSD")
 set_source_files_properties(./stdio/xprintf_comp.c TARGET_DIRECTORY Base PROPERTIES COMPILE_OPTIONS "-I${CMAKE_CURRENT_SOURCE_DIR}/stdio/FreeBSD")

@@ -17,6 +17,9 @@
  * 
  * @APPLE_APACHE_LICENSE_HEADER_END@
  */
+#include <string.h>
+char *strdup(const char *);
+char *strerror(int);
 
 #include "config.h"
 #include "launch.h"

@@ -35,25 +35,6 @@ set_target_properties(libSystem PROPERTIES
 # libxpc.dylib 1738.0.17
 # libSystem.B.dylib 1281
 
-ExternalProject_Add(libdispatch
-    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/libdispatch
-    BINARY_DIR ${CMAKE_CURRENT_BINARY_DIR}/libdispatch
-    USES_TERMINAL_BUILD
-    CONFIGURE_ENVIRONMENT_MODIFIFCATION
-        PATH=path_list_prepend:${TOOLS}
-        DEVELOPER_DIR=set:${ROOT_BINARY_DIR}/Developer
-        SDKROOT=set:${RAVYN_SDKROOT_MACOSX}
-    CMAKE_ARGS -Wno-dev
-        -DCMAKE_SYSTEM_PLATFORM=Darwin -DENABLE_TESTING=OFF
-        "-DCMAKE_C_FLAGS=--sysroot=${RAVYN_SDKROOT}"
-        -DWITH_APPLE_PTHREAD_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/../libsystem_pthread
-        -DWITH_APPLE_LIBPLATFORM_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/../libsystem_platform
-        -DWITH_APPLE_LIBCLOSURE_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/../libsystem_closure
-        -DWITH_APPLE_XNU_SOURCE=${ROOT_SOURCE_DIR}/Kernel/xnu
-        -DWITH_APPLE_OBJC4_SOURCE=${CMAKE_CURRENT_SOURCE_DIR}/../../objc
-        -DENABLE_APPLE_TSD_OPTIMIZATIONS=ON
-)
-
 add_subdirectory(libsystem_blocks)
 add_subdirectory(libsystem_kernel)
 add_subdirectory(libsystem_platform)
@@ -64,6 +45,7 @@ add_subdirectory(libsystem_c)
 add_subdirectory(libsystem_darwin)
 #add_subdirectory(CommonCrypto)
 add_subdirectory(libxpc)
+add_subdirectory(libdispatch)
 add_subdirectory(liblaunch)
 
 target_include_directories(libSystem PRIVATE
@@ -96,13 +78,13 @@ add_dependencies(libsystem_platform compiler_rt libkernel)
 add_dependencies(libplatform libkernel)
 add_dependencies(libsystem_darwin libdyld libsystem_c)
 add_dependencies(libxpc libsystem_darwin)
-add_dependencies(libdispatch libsystem_darwin)
+add_dependencies(dispatch libsystem_darwin)
 add_dependencies(liblaunch libxpc)
 #add_dependencies(libsystem_notify xnu_headers)
 #add_dependencies(libcommonCrypto xnu_headers)
 add_dependencies(libSystem 
     libsystem_c libsystem_malloc libsystem_pthread libsystem_platform libdyld
-    libxpc libdispatch libsystem_blocks liblaunch
+    libxpc dispatch libsystem_blocks liblaunch
     #libsystem_notify libcommonCrypto
 )
 add_dependencies(xnu libSystem)
@@ -144,7 +126,7 @@ target_link_options(libSystem PRIVATE
     -Wl,-reexport-lunwind -Wl,-reexport-ldyld -Wl,-reexport-lxpc
     -Wl,-reexport-llaunch -Wl,-reexport-ldispatch
     -lsystem_c -lsystem_malloc -lsystem_platform -lsystem_pthread -lsystem_darwin
-    -lsystem_kernel -lcompiler_rt -ldyld -lc++ -lxpc
+    -lsystem_kernel -lcompiler_rt -ldyld -lc++
 )
 
 add_custom_command(TARGET libSystem POST_BUILD
@@ -156,7 +138,7 @@ add_custom_command(TARGET libSystem POST_BUILD
         ${SYSROOT_DIR} - - - normal && ${CMAKE_COMMAND} -E copy $<TARGET_FILE:libSystem>
         ${RAVYN_SDKROOT}/usr/lib/ && ${CMAKE_COMMAND} -E copy $<TARGET_FILE:libSystem>
         ${SYSROOT_DIR}/usr/lib/ && ${CMAKE_COMMAND} -E copy_directory 
-        ${RAVYN_SDKROOT}/usr/lib/system ${SYSROOT_DIR}/usr/lib/
+        ${RAVYN_SDKROOT}/usr/lib/system ${SYSROOT_DIR}/usr/lib/system
     COMMAND ${CMAKE_COMMAND} -E make_directory
         ${RAVYN_SDKROOT}/System/Library/Frameworks/System.framework/Versions/B/Resources
         ${SYSROOT_DIR}/System/Library/Frameworks/System.framework/Versions/B/Resources

@@ -53,6 +53,13 @@ execute_process(
             sh xcodescripts/install-sys-headers.sh
 )
 
+execute_process(
+    COMMAND
+        cd ${ROOT_SOURCE_DIR}/Libraries/Libsystem/libdispatch &&
+        env DSTROOT=${RAVYN_SDKROOT} INSTALL_OWNER=0 INSTALL_GROUP=0 INSTALL_MODE_FLAG=0644
+        xcodescripts/install-manpages.sh
+)
+
 set(OBJC ${ROOT_SOURCE_DIR}/Libraries/objc4)
 file(COPY ${OBJC}/runtime/runtime.h ${OBJC}/runtime/objc.h
     ${OBJC}/runtime/objc-sync.h ${OBJC}/runtime/objc-exception.h

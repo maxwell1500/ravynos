@@ -38,7 +38,7 @@ target_compile_definitions(libdyld PRIVATE
 )
 
 target_compile_options(libdyld PRIVATE
-    --target=${CpuArch}-apple-darwin 
+    --target=${CpuArch}-apple-darwin -DPRIVATE
     --sysroot=${RAVYN_SDKROOT} -isysroot${RAVYN_SDKROOT}
     $<$<COMPILE_LANGUAGE:C,CXX>:-include${SDK_SOURCE_DIR}/usr/include/AvailabilityInternal.h>
     $<$<COMPILE_LANGUAGE:C,CXX>:-include${SDK_SOURCE_DIR}/usr/include/AvailabilityVersions.h>
@@ -56,11 +56,10 @@ target_include_directories(libdyld PRIVATE
     ../Libsystem/libsystem_c/include ../Libsystem/libsystem_c/locale
     ../Libsystem/libsystem_c/locale/FreeBSD ../Libsystem/libsystem_c/stdtime
     ../Libsystem/libsystem_c/stdtime/FreeBSD ../Libsystem/private
-    ../Libsystem/liblaunch
+    ../Libsystem/liblaunch ../openbsm
     ../Libsystem/private include dyld3 dyld3/shared-cache launch-cache src
     ${ROOT_SOURCE_DIR}/Kernel/xnu/libsyscall/wrappers/libproc
     ${ROOT_BINARY_DIR}/${CpuArch}
-    ${ROOT_BINARY_DIR}/Libraries/Libsystem/libsystem_kernel/mig_hdr/include
     ${ROOT_SOURCE_DIR}/Kernel/xnu/libkern
     ${RAVYN_SDKROOT}/System/Library/Frameworks/System.framework/Versions/B/PrivateHeaders
     ${ROOT_SOURCE_DIR}/Kernel/xnu/EXTERNAL_HEADERS

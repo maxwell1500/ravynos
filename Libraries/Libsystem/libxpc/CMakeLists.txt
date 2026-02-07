@@ -37,8 +37,16 @@ target_include_directories(libxpc PRIVATE
     ${RAVYN_SDKROOT}/System/Library/Frameworks/Kernel.framework/Versions/A/PrivateHeaders
 )
 target_link_options(libxpc PRIVATE
+    -Wl,-syslibroot,${RAVYN_SDKROOT}/usr/lib
     -L${CMAKE_CURRENT_BINARY_DIR}/../../MiscLibs -lsbuf -lnv
+    -L${RAVYN_SDKROOT}/usr/lib/system -ldispatch -lobjc
+    -L${RAVYN_SDKROOT}/usr/lib -Wl,-undefined,warning -Wl,-flat_namespace
     -Wl,-install_name,/usr/lib/system/libxpc.dylib -Wl,-current_version,1738.0.17
     -Wl,-compatibility_version,1.0.0 -umbrella System -mmacos-version-min=10.15
 )
-add_dependencies(libxpc libsystem_darwin)
+add_dependencies(libxpc libsystem_darwin dispatch)
+add_custom_command(TARGET libxpc POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory ${RAVYN_SDKROOT}/usr/lib/system ${SYSROOT_DIR}/usr/lib/system
+    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:libxpc> ${RAVYN_SDKROOT}/usr/lib/system/
+    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:libxpc> ${SYSROOT_DIR}/usr/lib/system/
+)
