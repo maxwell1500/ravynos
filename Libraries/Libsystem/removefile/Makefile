@@ -4,6 +4,7 @@ SRCS = 	./removefile_random.c \
 	./removefile_sunlink.c \
 	./removefile_tree_walker.c \
 	./removefile.c
+MK_WERROR = no
 
 CFLAGS = --sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSION_MIN} \
         -D"VERSION_INFO_PREFIX=__attribute__((visibility(\"hidden\")))" \

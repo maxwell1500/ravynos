@@ -10,8 +10,9 @@ HEADERS = CFArray.h CFBag.h CFBase.h CFBinaryHeap.h CFBitVector.h CFBundle.h \
 	CFNumber.h CFNumberFormatter.h CFPlugIn.h CFPlugInCOM.h \
 	CFPreferences.h CFPropertyList.h CFRunLoop.h CFSet.h CFSocket.h \
 	CFStream.h CFString.h CFStringEncodingExt.h CFTimeZone.h CFTree.h \
-	CFURL.h CFURLAccess.h CFUUID.h CFUserNotification.h CFXMLNode.h \
-	CFXMLParser.h CFAvailability.h CFUtilities.h CoreFoundation.h
+	CFURL.h CFURLAccess.h CFURLEnumerator.h CFUUID.h CFUserNotification.h \
+	CFXMLNode.h CFXMLParser.h CFAvailability.h CFUtilities.h \
+	CoreFoundation.h
 
 PRIVATE_HEADERS = CFBundlePriv.h CFCharacterSetPriv.h CFError_Private.h \
 	CFLogUtilities.h CFPriv.h CFRuntime.h CFStorage.h CFStreamAbstract.h \
@@ -88,6 +89,7 @@ SRCS = CFApplicationPreferences.c \
 	CFTree.c \
 	CFURL.c \
 	CFURLAccess.c \
+	CFURLEnumerator.c \
 	CFUUID.c \
 	CFUniChar.c \
 	CFUnicodeDecomposition.c \

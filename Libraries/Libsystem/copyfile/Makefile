@@ -1,6 +1,6 @@
 LIB = copyfile
 SRCS = copyfile.c xattr_flags.c
-
+MK_WERROR = no
 
 CFLAGS = --sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSION_MIN} \
         -D"VERSION_INFO_PREFIX=__attribute__((visibility(\"hidden\")))" \

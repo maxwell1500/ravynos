@@ -1,3 +1,4 @@
+CC := ${HOST_CC}
 SRCS = decomp.c lzvn_decode.c
 OBJS = ${SRCS:%.c=%.o}
 
