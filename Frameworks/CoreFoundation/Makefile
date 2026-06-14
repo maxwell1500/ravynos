@@ -120,7 +120,6 @@ CFLAGS = -DCF_BUILDING_CF -DU_SHOW_CPLUSPLUS_API -DU_SHOW_DRAFT_API \
 	-fexceptions -Wno-implicit-function-declaration \
 	-I${ROOT_SOURCE_DIR}/Kernel/xnu/bsd \
 	-I${ROOT_SOURCE_DIR}/Kernel/xnu/osfmk \
-	-I${ROOT_BINARY_DIR}${ROOT_SOURCE_DIR}/Kernel/xnu/EXPORT_HDRS/osfmk \
 	-I${.OBJDIR} -I${ROOT_SOURCE_DIR}/Frameworks \
 	-I${ROOT_SOURCE_DIR}/Libraries/Libsystem/liblaunch \
 	-I${ROOT_SOURCE_DIR}/Libraries/Libsystem/libdispatch/private \
@@ -131,6 +130,7 @@ CFLAGS = -DCF_BUILDING_CF -DU_SHOW_CPLUSPLUS_API -DU_SHOW_DRAFT_API \
 	-I${ROOT_SOURCE_DIR}/Libraries/Libsystem/private \
 	-I${ROOT_SOURCE_DIR}/Libraries/Libsystem/libsystem_blocks \
 	-I${RAVYN_SDKROOT}/usr/local/include/kernel ${CFLAGS.${.TARGET:T}} \
+	-I${ROOT_BINARY_DIR}${ROOT_SOURCE_DIR}/Kernel/xnu/EXPORT_HDRS/osfmk \
 	-include${ROOT_SOURCE_DIR}/Kernel/xnu/osfmk/mach/error.h \
 	-include${ROOT_SOURCE_DIR}/Kernel/xnu/libsyscall/mach/mach/mach.h \
 	-include${.CURDIR}/CoreFoundation_Prefix.h
