@@ -1,13 +1,14 @@
 CC := ${HOST_CC}
 CXX := ${HOST_CXX}
 
+.PATH: ${ROOT_SOURCE_DIR}/Kernel/IOKitUser
 SRCS =	plktool.c \
-    	macho.c \
-    	kext.c \
-    	${ROOT_SOURCE_DIR}/Kernel/IOKitUser/IOCFSerialize.c
+	macho.c \
+	kext.c \
+	IOCFSerialize.c
 OBJS = ${SRCS:%.c=%.o}
 
-CFLAGS += -I${ROOT_SOURCE_DIR}/Kernel/kext_tools/FILES/3rd \
+CFLAGS = -I${ROOT_SOURCE_DIR}/Kernel/kext_tools/FILES/3rd \
 	-I${ROOT_SOURCE_DIR}/Developer/Default.xctoolchain/include \
 	-I${ROOT_SOURCE_DIR}/Kernel/xnu/libkern \
 	-I${ROOT_SOURCE_DIR}/Kernel/IOKitUser/kext.subproj \
@@ -30,7 +31,7 @@ all: ${TOOLS}/plktool
 ${TOOLCHAIN}/usr/lib/libkxld.a: .PHONY
 	${MAKE} -C ${ROOT_SOURCE_DIR}/Kernel/xnu/libkern/kxld all
 
-${TOOLS}/plktool: ${TOOLCHAIN}/usr/lib/libkxld.a ${OBJS}
+${TOOLS}/plktool: ${TOOLCHAIN}/usr/lib/libkxld.a ${OBJS} ${.CURDIR}/Makefile
 	${HOST_CXX} -o ${.TARGET} ${OBJS} ${LDFLAGS}
 .else
 all: .PHONY

@@ -53,7 +53,7 @@ ${TOOLS}/clang ${TOOLS}/clang++: ${TOOLCHAIN}/usr/libexec/migcom ${.CURDIR}/Make
 	cp -Rf ${.OBJDIR}/../llvm_host/bin ${TOOLCHAIN}/usr/
 	cp -Rf ${.OBJDIR}/../llvm_host/lib/clang ${TOOLCHAIN}/usr/lib/
 	cp -Rf ${.OBJDIR}/../llvm_host/lib/lib* ${TOOLCHAIN}/usr/lib/
-.for tool in ar nm ranlib lipo objdump libtool-darwin otool
+.for tool in ar nm ranlib objdump libtool-darwin otool
 	ln -sf llvm-${tool} ${TOOLCHAIN}/usr/bin/${tool}
 .endfor
 	ln -sf clang ${TOOLCHAIN}/usr/bin/cc

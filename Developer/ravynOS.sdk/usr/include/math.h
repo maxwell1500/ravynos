@@ -62,7 +62,6 @@ typedef _Bool bool;
 #endif
 #endif
 
-#ifndef __cplusplus
 extern bool signbit(double __x);
 extern int fpclassify(double __x);
 extern bool isfinite(double __x);
@@ -304,5 +303,4 @@ extern float truncf(float __x);
 extern double trunc(double __x);
 extern long double truncl(long double __x);
 
-#endif /* __cplusplus */
 #endif /* _MATH_H_ */

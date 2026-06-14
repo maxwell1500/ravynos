@@ -532,10 +532,12 @@ main(int argc, char **argv)
     };
 
     size_t bytes = write(fd_out, &pkh, sizeof(pkh));
-    bytes += write(fd_out, CFDataGetBytePtr(prelinkImage), CFDataGetLength(prelinkImage));
+
+    bytes = write(fd_out, CFDataGetBytePtr(prelinkImage), CFDataGetLength(prelinkImage));
     close(fd_out);
 
     fprintf(stdout, "Wrote %d bytes to %s\nFinished!\n", bytes, argv[1]);
+    result = 0;
 
 finish:
     if (kernelbuf)

@@ -40,7 +40,7 @@ MAKEOBJDIRPREFIX = ${ROOT_BINARY_DIR}
 #  Top level targets
 # ------------------------------------------------------------------------
 
-world: Developer Kernel Libraries/libfirehose_kernel Libraries BSD
+world: version Developer Kernel Libraries/libfirehose_kernel Libraries BSD
 
 # ------------------------------------------------------------------------
 
@@ -107,7 +107,7 @@ SYSROOT_DIR = ${ROOT_BINARY_DIR}/sysroot
 
 TARGET_TRIPLE = ${CpuArch}-apple-darwin${DARWIN_MAJOR}
 
-SUBDIR ?= Kernel Developer .WAIT Libraries Frameworks BSD
+SUBDIR ?= Developer .WAIT Kernel Libraries Frameworks BSD
 
 .export ROOT_SOURCE_DIR ROOT_BINARY_DIR ARCH_CONFIGS KERNEL_CONFIGS \
 	PROD_VERSION PROD_FAMILY CFLAGS DEVEL DARWIN_VERSION \
@@ -118,6 +118,9 @@ SUBDIR ?= Kernel Developer .WAIT Libraries Frameworks BSD
 	KEXT_SOURCE_DIR SDK_SOURCE_DIR PLATFORM_SOURCE_DIR RAVYN_SDKROOT \
 	RAVYN_SDKROOT_MACOSX SYSROOT_DIR TARGET_TRIPLE MAKEOBJDIRPREFIX \
 	TOOLCHAIN TOOLS SRCTOP OBJTOP SRCROOT OBJROOT MK_AUTO_OBJ MK_UNIFIED_OBJDIR
+
+version:
+	${MAKE} -C ${.CURDIR}/SystemLibrary SystemVersion.plist
 
 .include "./BSD/share/mk/bsd.subdir.mk"
 

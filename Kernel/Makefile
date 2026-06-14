@@ -63,7 +63,7 @@ xnu_all: installhdrs libfirehose_kernel compiler_rt
 		PLATFORM=MacOSX BUILD_LTO=0 BUILD_WERROR=0 DO_CTFMERGE=0 \
 		SDKVERSION=${MACOS_VERSION_MIN} SRCROOT=${.CURDIR}/xnu \
 		OBJROOT=${.OBJDIR}/xnu DSTROOT=${RAVYN_SDKROOT} \
-		SYMROOT=${ROOT_BINARY_DIR} BUILD_STATIC_LINK=1 \
+		SYMROOT=${.OBJDIR}/xnu/sym BUILD_STATIC_LINK=1 \
 		MIGCOM=${MIGCOM} MIG=${MIG} IIG=${IIG} CC=${CC} CXX=${CXX} \
 		UNIFDEF=${UNIFDEF} CTFCONVERT=${CTFCONVERT} LD="${CC} --ld-path=${LD}" \
 		CTFMERGE=${CTFMERGE} CTFINSERT=${CTFINSERT} AR=${AR} \
@@ -75,28 +75,14 @@ xnu_all: installhdrs libfirehose_kernel compiler_rt
 		DEVELOPER_DIR=${ROOT_BINARY_DIR}/Developer \
 		LIBTOOL=${TOOLCHAIN}/usr/bin/libtool VERBOSE=yes \
 		KERNEL_CONFIGS=${KERNEL_CONFIGS} ARCH_CONFIGS=${ARCH_CONFIGS} \
-		HOST_CC=${HOST_CC} HOST_CXX=${HOST_CXX} HOST_LD=${HOST_LD} all
-
-install: xnu_all
-	PATH="${PATH}" ${GMAKE} -C ${.CURDIR}/xnu LOGCOLORS=y \
-		PLATFORM=MacOSX BUILD_LTO=0 BUILD_WERROR=0 DO_CTFMERGE=0 \
-		SDKVERSION=${MACOS_VERSION_MIN} SRCROOT=${.CURDIR}/xnu \
-		OBJROOT=${.OBJDIR}/xnu DSTROOT=${ROOT_BINARY_DIR}/sysroot \
-		MIGCOM=${MIGCOM} MIG=${MIG} IIG=${IIG} CC=${CC} CXX=${CXX} \
-		HOST_OS_VERSION=${MACOS_VERSION_MIN} SDKROOT=macosx \
-		HOST_SDKROOT=${RAVYN_SDKROOT} \
-		UNIFDEF=${UNIFDEF} CTFCONVERT=${CTFCONVERT} \
-		CTFMERGE=${CTFMERGE} CTFINSERT=${CTFINSERT} AR=${AR} \
-		NM=${NM} NMEDIT=${NMEDIT} DSYMUTIL=${DSYMUTIL} LIPO=${LIPO} \
-		STRIP=${STRIPBIN} AS=${AS} XCRUN=${XCRUN} \
-		DEVELOPER_DIR=${PLATFORM_DIR}/Developer \
-		AVAILABILITY_PL=${AVAILABILITY_PL} MACHINE=${MACHINE} \
-		AVAILABILITY_PL_PATH=${AVAILABILITY_PL_PATH} \
-		KERNEL_CONFIGS=${KERNEL_CONFIGS} ARCH_CONFIGS=${ARCH_CONFIGS} \
-		HOST_CC=${HOST_CC} HOST_CXX=${HOST_CXX} HOST_LD=${HOST_LD} install
-	mkdir -p ${RAVYN_SDKROOT}/System/Library/Kernels
-	cp -Rf ${.OBJDIR}/xnu/${KERNEL_CONFIGS}_${ARCH_CONFIGS}/kernel${DEBUG}.dSYM \
-		${RAVYN_SDKROOT}/System/Library/Kernels/
+		HOST_CC=${HOST_CC} HOST_CXX=${HOST_CXX} HOST_LD=${HOST_LD} all install
+.for target_dir in ${RAVYN_SDKROOT}/System/Library/Kernels \
+  ${SYSROOT_DIR}/System/Library/Kernels
+	mkdir -p ${target_dir} ${target_dir:H}/Extensions
+	cp -Rf ${.OBJDIR}/xnu/sym/kernel${DEBUG}.dSYM ${target_dir}/
+	cp -f ${.OBJDIR}/xnu/sym/kernel${DEBUG} ${target_dir}/
+	cp -Rf ${.OBJDIR}/xnu/sym/System.kext ${target_dir:H}/Extensions/
+.endfor
 
 SUBDIR = xnu/libkern/kmod xnu/libkern/kxld Extensions
 
