@@ -1,8 +1,10 @@
 MK_WERROR = no
 LIB = system_m
-SRCS = math.c
+SRCS = math.c wrappers.cpp
 
-CFLAGS = -mmacos-version-min=${MACOS_VERSION_MIN} --sysroot=${RAVYN_SDKROOT}
+CFLAGS = -mmacos-version-min=${MACOS_VERSION_MIN} --sysroot=${RAVYN_SDKROOT} \
+	-Wno-nullability-completeness
+CXXFLAGS = ${CFLAGS}
 LDFLAGS = -mmacos-version-min=${MACOS_VERSION_MIN} --sysroot=${RAVYN_SDKROOT} \
 	-Wl,-install_name,/usr/lib/system/libsystem_m.dylib \
 	-Wl,-current_version,3178 -Wl,-compatibility_version,1 \
