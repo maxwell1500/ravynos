@@ -26,6 +26,24 @@
 #include "unicode/dtptngen.h"
 #include "ustrenum.h"
 
+#define LOW_H             ((UChar)0x0068)
+#define LOW_K             ((UChar)0x006B)
+#define LOW_A             ((UChar)0x0061)
+#define LOW_B             ((UChar)0x0062)
+#define LOW_M             ((UChar)0x006D)
+#define LOW_S             ((UChar)0x0073)
+#define CAP_H             ((UChar)0x0048)
+#define CAP_K             ((UChar)0x004B)
+#define CAP_A             ((UChar)0x0041)
+#define CAP_B             ((UChar)0x0042)
+#define CAP_M             ((UChar)0x004D)
+#define FALSE             0
+#define TRUE              1
+#define u_isWhitespace U_ICU_ENTRY_POINT_RENAME(u_isWhitespace)
+
+U_STABLE UBool U_EXPORT2
+u_isWhitespace(UChar32 c);
+
 U_NAMESPACE_USE
 
 U_CAPI UDateTimePatternGenerator * U_EXPORT2
@@ -329,6 +347,189 @@ udatpg_getPatternForSkeleton(const UDateTimePatternGenerator *dtpg,
 U_CAPI UDateFormatHourCycle U_EXPORT2
 udatpg_getDefaultHourCycle(const UDateTimePatternGenerator *dtpg, UErrorCode* pErrorCode) {
     return ((const DateTimePatternGenerator *)dtpg)->getDefaultHourCycle(*pErrorCode);
+}
+
+
+// Helper function for uadatpg_remapPatternWithOptionsLoc
+static int32_t
+_doReplaceAndReturnAdj( UDateTimePatternGenerator *dtpg, uint32_t options, UBool matchHourLen,
+                        UnicodeString &patternString, const UnicodeString &skeleton, const UnicodeString &otherCycSkeleton,
+                        int32_t timePatStart, int32_t timePatLimit, int32_t timeNonHourStart, int32_t timeNonHourLimit,
+                        UErrorCode *pErrorCode) {
+    if (matchHourLen) {
+        options |= UDATPG_MATCH_HOUR_FIELD_LENGTH;
+    }
+    UnicodeString replacement=((DateTimePatternGenerator *)dtpg)->getBestPattern(otherCycSkeleton, (UDateTimePatternMatchOptions)options, *pErrorCode);
+    if (U_FAILURE(*pErrorCode)) {
+        return 0;
+    }
+    UnicodeString stringForOrigSkeleton=((DateTimePatternGenerator *)dtpg)->getBestPattern(skeleton, UDATPG_MATCH_ALL_FIELDS_LENGTH, *pErrorCode); // match orig field lengths
+    if (U_SUCCESS(*pErrorCode)) {
+        int32_t index = patternString.indexOf(stringForOrigSkeleton);
+        if (index >= 0) {
+            int32_t stringForOrigSkelLen = stringForOrigSkeleton.length();
+            patternString.replace(index, stringForOrigSkelLen, replacement);
+            return replacement.length() - stringForOrigSkelLen;
+        }
+    } else {
+        *pErrorCode = U_ZERO_ERROR;
+    }
+    if (timeNonHourStart >= 0 && timeNonHourLimit > timeNonHourStart) {
+        // find any minutes/seconds/milliseconds part of replacement, set that back to the
+        // minutes/seconds/milliseconds part of the original pattern.
+        // First get the minutes/seconds/milliseconds part of the original pattern.
+        UnicodeString nonHour;
+        patternString.extractBetween(timeNonHourStart, timeNonHourLimit, nonHour);
+        // Now scan to find position from just after hours to end of minutes/seconds/milliseconds.
+        timeNonHourStart = -1;
+        timeNonHourLimit = 0;
+        UBool inQuoted = FALSE;
+        int32_t repPos, repLen = replacement.length();
+        for (repPos = 0; repPos < repLen; repPos++) {
+            UChar repChr = replacement.charAt(repPos);
+            if (repChr == 0x27 /* ASCII-range single quote */) {
+                inQuoted = !inQuoted;
+            } else if (!inQuoted) {
+                if (repChr==LOW_H || repChr==CAP_H || repChr==CAP_K || repChr==LOW_K) { // hHKk, hour
+                    timeNonHourStart = repPos + 1;
+                } else if (timeNonHourStart < 0 && (repChr==LOW_M || repChr==LOW_S)) { // 'm' or 's' and we did not have hour
+                    timeNonHourStart = repPos;
+                }
+                if (!u_isWhitespace(repChr) && timeNonHourStart >= 0 && repChr!=LOW_A) { // NonHour portion should not include 'a'
+                    timeNonHourLimit = repPos + 1;
+                }
+            }
+        }
+        // If we found minutes/seconds/milliseconds in replacement, restore that part to original.
+        if (timeNonHourStart >= 0 && timeNonHourLimit > timeNonHourStart) {
+            replacement.replaceBetween(timeNonHourStart, timeNonHourLimit, nonHour);
+        }
+    }
+    patternString.replaceBetween(timePatStart, timePatLimit, replacement);
+    return replacement.length() - (timePatLimit - timePatStart); // positive if replacement is longer
+}
+
+/*
+ *  uadatpg_remapPatternWithOptionsLoc
+ *
+ *  Thee general idea is:
+ *  1. Scan the pattern for one or more time subpatterns
+ *  2. For each time subpattern, if the hour pattern characters don't match the
+ *     time cycle that we want to force to, then:
+ *     a) Save the nonHour portion of the subpattern (from just after hours to end
+ *        of minutes/seconds/ milliseconds)
+ *     b) Turn the pattern characters in that subpattern into a skeleton, but with
+ *        the hour pattern characters switched to the desired time cycle
+ *     c) Use that skeleton to get the locale's corresponding replacement pattern
+ *        for the desired time cycle (with all desired elements - min, sec, etc.)
+ *     d) In that replacement pattern, find the new nonHour portion, and restore
+ *        that to the original nonHour portion
+ *     e) Finally, replace the original time subpattern with the adjusted
+ *        replacement.
+ */
+U_CAPI int32_t U_EXPORT2
+uadatpg_remapPatternWithOptions(UDateTimePatternGenerator *dtpg,
+                                const UChar *pattern, int32_t patternLength,
+                                UDateTimePatternMatchOptions options,
+                                UChar *newPattern, int32_t newPatternCapacity,
+                                UErrorCode *pErrorCode) {
+    if (U_FAILURE(*pErrorCode)) {
+        return 0;
+    }
+    if ( pattern==NULL || ((newPattern==NULL)? newPatternCapacity!=0: newPatternCapacity<0) ) {
+        *pErrorCode = U_ILLEGAL_ARGUMENT_ERROR;
+        return 0;
+    }
+    UnicodeString patternString((patternLength < 0), pattern, patternLength);
+    UBool force12 = ((options & UADATPG_FORCE_HOUR_CYCLE_MASK) == UADATPG_FORCE_12_HOUR_CYCLE);
+    UBool force24 = ((options & UADATPG_FORCE_HOUR_CYCLE_MASK) == UADATPG_FORCE_24_HOUR_CYCLE);
+    if (force12 || force24) {
+        UBool inQuoted = FALSE;
+        UBool inTimePat = FALSE;
+        UBool needReplacement = FALSE;
+        int32_t timePatStart = 0;
+        int32_t timePatLimit = 0;
+        int32_t timeNonHourStart = -1;
+        int32_t timeNonHourLimit = 0;
+        UnicodeString skeleton, otherCycSkeleton;
+        UnicodeString timePatChars("abBhHKkmsSzZOvVXx", -1, US_INV); // all pattern chars for times
+        int32_t numForcedH = 0;
+        int32_t patPos, patLen = patternString.length();
+
+        for (patPos = 0; patPos < patLen; patPos++) {
+            UChar patChr = patternString.charAt(patPos);
+            UChar otherCycPatChr = patChr;
+            if (patChr == 0x27 /* ASCII-range single quote */) {
+                inQuoted = !inQuoted;
+            } else if (!inQuoted) {
+                if (timePatChars.indexOf(patChr) >= 0) {
+                    // in a time pattern
+                    if (!inTimePat) {
+                        inTimePat = TRUE;
+                        timePatStart = patPos;
+                        timeNonHourStart = -1;
+                        skeleton.remove();
+                        otherCycSkeleton.remove();
+                        numForcedH = 0;
+                    }
+                    if (patChr==LOW_H || patChr==CAP_K) { // hK, hour, 12-hour cycle
+                        if (force24) {
+                            otherCycPatChr = CAP_H; // force to H
+                            needReplacement = TRUE;
+                            timeNonHourStart = patPos + 1;
+                            // If we are switching from a 12-hour cycle to a 24-hour cycle
+                            // and the pattern for 12-hour cycle was zero-padded to 2 digits,
+                            // make sure the new pattern for 24-hour cycle is also padded to
+                            // 2 digits regardless of locale default, to match the
+                            // expectations of the pattern provider. However we don't need
+                            // to do this going the other direction (from 24- to 12-hour
+                            // cycles, don't require that the 12-hour cycle has zero padding
+                            // just because the 24-hour cycle did; the 12-hour cycle will
+                            // add other elements such as a, so there wil be a length change
+                            // anyway).
+                            numForcedH++;
+                        }
+                    } else if (patChr==CAP_H || patChr==LOW_K) { // Hk, hour, 24-hour cycle
+                        if (force12) {
+                            otherCycPatChr = LOW_H; // force to h
+                            needReplacement = TRUE;
+                            timeNonHourStart = patPos + 1;
+                        }
+                    } else if (timeNonHourStart < 0 && (patChr==LOW_M || patChr==LOW_S)) { // 'm' or 's' and we did not have hour
+                        timeNonHourStart = patPos;
+                    }
+                    skeleton.append(patChr);
+                    otherCycSkeleton.append(otherCycPatChr);
+                } else if ((patChr >= 0x41 && patChr <= 0x5A) || (patChr >= 0x61 && patChr <= 0x7A)) {
+                    // a non-time pattern character, forces end of any time pattern
+                    if (inTimePat) {
+                        inTimePat = FALSE;
+                        if (needReplacement) {
+                            needReplacement = FALSE;
+                            // do replacement
+                            int32_t posAdjust = _doReplaceAndReturnAdj(dtpg, options, numForcedH >= 2, patternString, skeleton, otherCycSkeleton,
+                                                                       timePatStart, timePatLimit, timeNonHourStart, timeNonHourLimit, pErrorCode);
+                            patLen += posAdjust;
+                            patPos += posAdjust;
+                        }
+                    }
+                }
+                if (inTimePat && !u_isWhitespace(patChr)) {
+                    timePatLimit = patPos + 1;
+                    if (timeNonHourStart >= 0 && patChr!=LOW_A && patChr!=LOW_B && patChr!=CAP_B) { // NonHour portion should not include 'a','b','B'
+                        timeNonHourLimit = timePatLimit;
+                    }
+                }
+            }
+        }
+        // end of string
+        if (needReplacement) {
+            // do replacement
+            _doReplaceAndReturnAdj(dtpg, options, numForcedH >= 2, patternString, skeleton, otherCycSkeleton,
+                                   timePatStart, timePatLimit, timeNonHourStart, timeNonHourLimit, pErrorCode);
+        }
+    }
+    return patternString.extract(newPattern, newPatternCapacity, *pErrorCode);
 }
 
 #endif

@@ -82,6 +82,7 @@ simpleformatter.cpp
 static_unicode_sets.cpp
 stringpiece.cpp
 stringtriebuilder.cpp
+ualoc.cpp
 uarrsort.cpp
 ubidi.cpp
 ubidi_props.cpp

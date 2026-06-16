@@ -133,7 +133,13 @@ typedef enum UDateTimePatternMatchOptions {
     UDATPG_MATCH_SECOND_FIELD_LENGTH = 1 << UDATPG_SECOND_FIELD,
 #endif  /* U_HIDE_INTERNAL_API */
     /** @stable ICU 4.4 */
-    UDATPG_MATCH_ALL_FIELDS_LENGTH = (1 << UDATPG_FIELD_COUNT) - 1
+    UDATPG_MATCH_ALL_FIELDS_LENGTH = (1 << UDATPG_FIELD_COUNT) - 1,
+    /** @internal, Apple-specific for now */
+    UADATPG_FORCE_12_HOUR_CYCLE = 1 << 29,
+    /** @internal, Apple-specific for now */
+    UADATPG_FORCE_24_HOUR_CYCLE = 1 << 30,
+    /** @internal, Apple-specific for now */
+    UADATPG_FORCE_HOUR_CYCLE_MASK = 3 << 29,
 } UDateTimePatternMatchOptions;
 
 /**

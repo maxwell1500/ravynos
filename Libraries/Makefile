@@ -7,7 +7,8 @@ MK_WERROR = no
 CXXLIB = ${RAVYN_SDKROOT}/usr/lib/libc++.dylib
 RTLIB = ${RAVYN_SDKROOT}/usr/lib/system/libcompiler_rt.dylib
 
-SUBDIR = libfirehose_kernel CrashReporterClient MiscLibs objc4 dyld Libsystem
+SUBDIR = libfirehose_kernel CrashReporterClient MiscLibs objc4 dyld Libsystem \
+	ICU
 
 # Don't try to link Foundation or System
 MK_OBJC_RUNTIME = no
@@ -26,7 +27,6 @@ RUNTIME_FLAGS = "--sysroot=${RAVYN_SDKROOT} -B${TOOLCHAIN}/usr/bin \
 	-Wno-nullability-completeness -Wno-expansion-to-defined \
 	-Wno-unused-command-line-argument \
 	-mmacosx-version-min=10.13 -fuse-ld=${LD}"
-	
 
 runtime:
 	DEVELOPER_DIR=${ROOT_BINARY_DIR}/Developer \
