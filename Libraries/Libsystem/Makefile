@@ -39,9 +39,9 @@ LDFLAGS = -mmacos-version-min=${MACOS_VERSION_MIN} \
 	-Wl,-reexport-lsystem_kernel -Wl,-reexport-lcompiler_rt \
 	-Wl,-reexport-lunwind -Wl,-reexport-lxpc -Wl,-reexport-ldyld \
 	-Wl,-reexport-llaunch -Wl,-reexport-ldispatch \
-	-Wl,-reexport-lsystem_m \
+	-Wl,-reexport-lsystem_m -Wl,-reexport-lsystem_coreservices \
 	-Wl,-reexport-lsystem_notify -Wl,-reexport-lsystem_info \
-	-Wl,-reexport-lcopyfile \
+	-Wl,-reexport-lcopyfile -Wl,-reexport-lmacho \
 	-Wl,-reexport-lremovefile -Wl,-reexport-lsystem_trace \
 	-Wl,-reexport-lsystem_dnssd \
 	-Wl,-force_load,${RAVYN_SDKROOT}/usr/lib/system/libCrashReporterClient.a \
@@ -99,7 +99,8 @@ SUBDIR = copyfile removefile libdispatch libsystem_blocks libsystem_kernel \
 	libsystem_platform libsystem_malloc libsystem_pthread libsystem_notify \
 	libsystem_info libsystem_c libsystem_asl libsystem_trace \
 	libsystem_dnssd libxpc liblaunch libsystem_m libsystem_darwin \
-	libsystem_coreservices
+	libsystem_coreservices libmacho
+
 #CommonCrypto
 
 
