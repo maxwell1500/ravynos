@@ -828,7 +828,7 @@ static CFStringRef CreateStringFromFileSystemRepresentationByAddingPercentEscape
     if ( bufStartPtr != NULL ) {
         if ( isAbsolute ) {
             // start with the fileURLPrefix
-            strcpy((char *)bufStartPtr, (char *)fileURLPrefixPtr);
+            strncpy((char *)bufStartPtr, (char *)fileURLPrefixPtr, fileURLPrefixLength);
             bufBytePtr = bufStartPtr + fileURLPrefixLength - 1;
         }
         else {

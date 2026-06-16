@@ -383,7 +383,7 @@ extern CFTypeRef CFMakeUncollectable(CFTypeRef cf);
 
 CF_PRIVATE void _CFRaiseMemoryException(CFStringRef reason);
 
-CF_PRIVATE Boolean __CFProphylacticAutofsAccess;
+CF_PRIVATE extern Boolean __CFProphylacticAutofsAccess;
 
 
 #if DEPLOYMENT_TARGET_MACOSX

@@ -24,10 +24,14 @@
  * THE SOFTWARE.
  */
 
-#include <CoreFoundation/CFBase.h>
-
 #ifndef __COREFOUNDATION_CFURLENUMERATOR__
 #define __COREFOUNDATION_CFURLENUMERATOR__
+
+#include <CoreFoundation/CFBase.h>
+#include <CoreFoundation/CFURL.h>
+#include <CoreFoundation/CFArray.h>
+#include <CoreFoundation/CFError.h>
+#include <Availability.h>
 
 // CF_IMPLICIT_BRIDGING_ENABLED -- FIXME: this is supposed to be bridged
 CF_EXTERN_C_BEGIN
@@ -79,7 +83,7 @@ CFURLEnumeratorGetNextURL(CFURLEnumeratorRef enumerator,
 
 extern Boolean
 CFURLEnumeratorGetSourceDidChange(CFURLEnumeratorRef enumerator)
-    API_DEPRECATED("Use File System Events instead", macos(10.6,10.7));
+    __API_DEPRECATED("Use File System Events instead", macos(10.6,10.7));
 
 CF_EXTERN_C_END
 

@@ -23,6 +23,7 @@
  */
 
 #include "CFURLEnumerator.h"
+#include "CFInternal.h"
 #include <dirent.h>
 
 #define COND_RETAIN(o) (o ? CFRetain(o) : o)
@@ -32,8 +33,9 @@ struct __CFURLEnumerator {
     CFAllocatorRef _alloc;
     CFURLRef _rootURL;
     CFArrayRef _propertyKeys;
-    CFURLEnumeratorOptions options;
-    CFBoolean _mountedVolume;
+    CFURLEnumeratorOptions _options;
+    Boolean _mountedVolume;
+    Boolean _skipDir;
     CFIndex _level;
     DIR* _dirp;
     struct dirent _entry;
@@ -54,9 +56,10 @@ CFURLEnumeratorCreateForDirectoryURL(CFAllocatorRef alloc,
                                      CFURLEnumeratorOptions option,
                                      CFArrayRef propertyKeys)
 {
-    CFURLEnumeratorRef ref = CFAllocatorAllocate(alloc,
-                                                 sizeof(struct __CFURLEnumerator),
-                                                 0);
+    struct __CFURLEnumerator* ref
+        = CFAllocatorAllocate(alloc,
+                              sizeof(struct __CFURLEnumerator),
+                              0);
     if (!ref)
         return NULL;
 
@@ -74,12 +77,12 @@ CFURLEnumeratorCreateForDirectoryURL(CFAllocatorRef alloc,
     ref->_dirp = NULL;
     if (path) {
         char pathbuf[PATH_MAX];
-        CFStringGetCString(path, pathbuf, PATH_MAX - 1, kCFStringUTF8Encoding);
+        CFStringGetCString(path, pathbuf, PATH_MAX - 1, kCFStringEncodingUTF8);
         ref->_path = path;
         ref->_dirp = opendir(pathbuf);
     }
     
-    return ref;
+    return (CFURLEnumeratorRef)ref;
 }
 
 extern CFURLEnumeratorRef
@@ -91,7 +94,7 @@ CFURLEnumeratorCreateForMountedVolumes(CFAllocatorRef alloc,
      * seems reasonable for now.
      */
     CFURLRef dirURL;
-    CFURLEnumeratorRef ref;
+    struct __CFURLEnumerator* ref;
 
     const char* path = "/Volumes";
     const int pathlen = strlen(path);
@@ -109,7 +112,7 @@ CFURLEnumeratorCreateForMountedVolumes(CFAllocatorRef alloc,
                                                propertyKeys);
     ref->_mountedVolume = true;
     
-    return ref;
+    return (CFURLEnumeratorRef)ref;
 }
 
 extern CFIndex
@@ -124,7 +127,8 @@ CFURLEnumeratorSkipDescendents(CFURLEnumeratorRef enumerator)
     if ((enumerator->_entry.d_type != DT_DIR) ||
         !(enumerator->_options & kCFURLEnumeratorDescendRecursively))
         return;
-    enumerator->_skipDir = true;
+    struct __CFURLEnumerator* ref = (struct __CFURLEnumerator*)enumerator;
+    ref->_skipDir = true;
 }
 
 extern CFURLEnumeratorResult
@@ -133,50 +137,64 @@ CFURLEnumeratorGetNextURL(CFURLEnumeratorRef enumerator,
                           CFErrorRef* error)
 {
     CFMutableStringRef path;
+    struct __CFURLEnumerator* ref = (struct __CFURLEnumerator*)enumerator;
 
     /* We descend if we last returned a directory and have not been 
      * told to skip it since the last call to this function
      */
     if (enumerator->_entry.d_name[0] != 0
         && enumerator->_entry.d_type == DT_DIR
-        && enumerator->_skipDir) {
-        enumerator->_skipDir = false;
+        && !enumerator->_skipDir) {
+        ref->_skipDir = false;
 
-        path = CFStringCreateMutableCopy(enumerator->_path);
+        path = CFStringCreateMutableCopy(enumerator->_alloc,
+                                         PATH_MAX,
+                                         enumerator->_path);
         CFStringAppendCString(path, "/", kCFStringEncodingUTF8);
         CFStringAppendCString(path,
                               enumerator->_entry.d_name,
                               kCFStringEncodingUTF8);
         CFURLRef subdirURL
-            = CFURLCreateWithFileSystemRepresentation(enumerator->_alloc,
+            = CFURLCreateFromFileSystemRepresentation(enumerator->_alloc,
                                                       path,
                                                       strlen(path),
                                                       true /* isDir */);
         if (url)
             *url = subdirURL;
 
-        CFURLEnumeratorRef subdir
-            = CFURLEnumeratorCreateForDirectoryURL(subdirURL);
+        struct __CFURLEnumerator* subdir
+            = CFURLEnumeratorCreateForDirectoryURL(enumerator->_alloc,
+                                                   subdirURL,
+                                                   enumerator->_options,
+                                                   enumerator->_propertyKeys);
         subdir->_level++;
-        return CFURLEnumeratorGetNextURL(subdir, url, error);
+        return CFURLEnumeratorGetNextURL((CFURLEnumeratorRef)subdir,
+                                         url,
+                                         error);
     }
     
     struct dirent *d = readdir(enumerator->_dirp);
     
     if (!d)
-        return CFURLEnumeratorError;
+        return kCFURLEnumeratorError;
 
     memcpy(&enumerator->_entry, d, sizeof(struct dirent));
 
-    path = CFStringCreateMutableCopy(enumerator->_path);
+    path = CFStringCreateMutableCopy(enumerator->_alloc,
+                                     PATH_MAX,
+                                     enumerator->_path);
     CFStringAppendCString(path, "/", kCFStringEncodingUTF8);
     CFStringAppendCString(path,
                           enumerator->_entry.d_name,
                           kCFStringEncodingUTF8);    
     
     if (url) {
-        *url = CFURLCreateFromFileSystemRepresentation(path,
-                                                       kCFURLPOSIXPathStyle);
+        char pathbuf[PATH_MAX];
+        CFStringGetCString(path, pathbuf, PATH_MAX - 1, kCFStringEncodingUTF8);
+        *url = CFURLCreateFromFileSystemRepresentation(enumerator->_alloc,
+                                                       pathbuf,
+                                                       strlen(pathbuf),
+                                                       d->d_type == DT_DIR);
     }
 }
 

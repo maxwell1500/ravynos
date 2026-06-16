@@ -64,7 +64,7 @@
 #define INSTRUMENT_SHARED_STRINGS 0
 #endif
 
-CF_PRIVATE const CFStringRef __kCFLocaleCollatorID;
+CF_PRIVATE extern const CFStringRef __kCFLocaleCollatorID;
 
 #if INSTRUMENT_SHARED_STRINGS
 #include <sys/stat.h> /* for umask() */

@@ -135,15 +135,16 @@ CFLAGS = -DCF_BUILDING_CF -DU_SHOW_CPLUSPLUS_API -DU_SHOW_DRAFT_API \
 	-include${ROOT_SOURCE_DIR}/Kernel/xnu/libsyscall/mach/mach/mach.h \
 	-include${.CURDIR}/CoreFoundation_Prefix.h
 
-#-include${ROOT_SOURCE_DIR}/Libraries/Libsystem/liblaunch/bootstrap.h
-
-LDFLAGS = -Wl,-dynamiclib -fexceptions -Wl,-init,___CFInitialize \
+LDFLAGS = -Wl,-dylib -fexceptions -Wl,-init,___CFInitialize \
 	-Wl,-compatibility_version,150 -Wl,-current_version,${VERSION} \
 	-Wl,-alias_list,${.CURDIR}/SymbolAliases \
-	-Wl,-sectcreate,__UNICODE,__csbitmaps,CFCharacterSetBitmaps.bitmap \
-	-Wl,-sectcreate,__UNICODE,__properties,CFUniCharPropertyDatabase.data \
-	-Wl,-sectcreate,__UNICODE,__data,${unicode_data_file_name} \
-	-Wl,-segprot,__UNICODE,r,r
+	-Wl,-sectcreate,__UNICODE,__csbitmaps,${.CURDIR}/CFCharacterSetBitmaps.bitmap \
+	-Wl,-sectcreate,__UNICODE,__properties,${.CURDIR}/CFUniCharPropertyDatabase.data \
+	-Wl,-sectcreate,__UNICODE,__data,${.CURDIR}/${unicode_data_file_name} \
+	-Wl,-segprot,__UNICODE,r,r \
+	-L${RAVYN_SDKROOT}/usr/lib -licudata -licui18n -licuio -licuuc -licutu \
+	${ROOT_BINARY_DIR}${ROOT_SOURCE_DIR}/Libraries/llvm_target/compiler-rt/lib/ravynos/libclang_rt.osx.a \
+	-lSystem
 
 ${.OBJDIR}/mach-o/arch.h:
 	mkdir -p ${.OBJDIR}/mach-o
