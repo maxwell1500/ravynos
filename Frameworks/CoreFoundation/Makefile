@@ -142,7 +142,7 @@ LDFLAGS = -Wl,-dylib -fexceptions -Wl,-init,___CFInitialize \
 	-Wl,-sectcreate,__UNICODE,__properties,${.CURDIR}/CFUniCharPropertyDatabase.data \
 	-Wl,-sectcreate,__UNICODE,__data,${.CURDIR}/${unicode_data_file_name} \
 	-Wl,-segprot,__UNICODE,r,r \
-	-L${RAVYN_SDKROOT}/usr/lib -licudata -licui18n -licuio -licuuc -licutu \
+	-L${RAVYN_SDKROOT}/usr/lib -licucore \
 	${ROOT_BINARY_DIR}${ROOT_SOURCE_DIR}/Libraries/llvm_target/compiler-rt/lib/ravynos/libclang_rt.osx.a \
 	-lSystem
 
@@ -155,5 +155,12 @@ ${FRAMEWORK}: ${.OBJDIR}/mach-o/arch.h
 FRAMEWORK_LIB = ${.OBJDIR}/${FRAMEWORK}.framework/Versions/${FMWK_VERSION}/${FRAMEWORK}
 ${FRAMEWORK}.framework.dSYM: ${FRAMEWORK}
 	${DSYMUTIL} ${FRAMEWORK_LIB} -o ${.TARGET}
+	cp -Rf ${.OBJDIR}/${.TARGET} ${RAVYN_SDKROOT}/System/Library/Frameworks/
+
+fmwk-install-hook:
+	mkdir -p ${RAVYN_SDKROOT}/System/Library/Frameworks \
+	  ${SYSROOT_DIR}/System/Library/Frameworks
+	cp -Rf ${.OBJDIR}/${FRAMEWORK}.framework ${RAVYN_SDKROOT}/System/Library/Frameworks
+	cp -Rf ${.OBJDIR}/${FRAMEWORK}.framework ${SYSROOT_DIR}/System/Library/Frameworks
 
 .include <rvn.framework.mk>
