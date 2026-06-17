@@ -5,7 +5,9 @@ CFLAGS =--sysroot=${RAVYN_SDKROOT} -fuse-ld=${LD} \
 	-mmacos-version-min=${MACOS_VERSION_MIN}
 CXXFLAGS =-std=gnu++17 --sysroot=${RAVYN_SDKROOT} -fuse-ld=${LD} \
 	-mmacos-version-min=${MACOS_VERSION_MIN}
-LDFLAGS =--sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSION_MIN}
+LDFLAGS =--sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSION_MIN} \
+	-fuse-ld=${LD} -licudata -lc++ \
+	${ROOT_BINARY_DIR}${ROOT_SOURCE_DIR}/Libraries/llvm_target/compiler-rt/lib/ravynos/libclang_rt.osx.a
 
 EXTRA_FLAGS = --prefix=/usr --localstatedir=/var --sysconfdir=/etc
 
@@ -16,7 +18,7 @@ EXTRA_FLAGS += --with-cross-build=${.OBJDIR}/native \
 	--disable-samples --disable-tests --disable-extras
 .endif
 
-all: lib${LIB}.a
+all: libicucore.A.dylib
 
 lib${LIB}.a: ${.CURDIR}/Makefile
 .if "${.MAKE.OS}" != "Darwin"
@@ -30,9 +32,20 @@ lib${LIB}.a: ${.CURDIR}/Makefile
 	  CC=${CC} CXX=${CXX} LD=${LD} AR=${AR} STRIP=${STRIP} MAKEFLAGS="" \
 	  ${.CURDIR}/source/runConfigureICU MacOSX ${EXTRA_FLAGS}
 	MAKEFLAGS="" ${GMAKE} -C ${.OBJDIR}/target
+
+libicucore.A.dylib: lib${LIB}.a
+	${TOOLS}/install_name_tool -id /usr/lib/libicudata.dylib \
+	  ${.OBJDIR}/target/lib/libicudata.dylib
+	${CC} -v -o ${.TARGET} -shared -dylib -Wl,-all_load \
+	  -Wl,-install_name,/usr/lib/${.TARGET} \
+	  -Wl,-current_version,78.3 -Wl,-compatibility_version,1 \
+	  $$(find ${.OBJDIR}/target/common ${.OBJDIR}/target/i18n \
+	  ${.OBJDIR}/target/io -name '*.o') ${LDFLAGS}
 .for dir in ${RAVYN_SDKROOT} ${SYSROOT_DIR}
 	mkdir -p ${dir}/usr/lib ${dir}/usr/include
-	cp -fvp ${.OBJDIR}/target/lib/libicu* ${dir}/usr/lib/
-	cp -Rfpv ${.CURDIR}/source/i18n/unicode ${.CURDIR}/source/i18n/*.h \
+	cp -fp ${.OBJDIR}/${.TARGET} ${dir}/usr/lib/
+	ln -sf ${.TARGET} ${dir}/usr/lib/libicucore.dylib
+	cp -fdp ${.OBJDIR}/target/lib/libicudata* ${dir}/usr/lib/
+	cp -Rfp ${.CURDIR}/source/i18n/unicode ${.CURDIR}/source/i18n/*.h \
 	  ${dir}/usr/include
 .endfor

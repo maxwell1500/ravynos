@@ -4,7 +4,7 @@
 
 DERIVED_DATA_DIR = ${.OBJDIR}
 MK_WERROR = no
-CXXLIB = ${RAVYN_SDKROOT}/usr/lib/libc++.dylib
+CXXLIB = ${RAVYN_SDKROOT}/usr/lib/libc++.1.dylib
 RTLIB = ${RAVYN_SDKROOT}/usr/lib/system/libcompiler_rt.dylib
 
 SUBDIR = libfirehose_kernel CrashReporterClient MiscLibs objc4 dyld Libsystem \
@@ -133,7 +133,7 @@ libcxx: libunwind
         -DCMAKE_LINKER=${LD} -DCMAKE_ASM_COMPILER=${CC} \
         -DCMAKE_LINK_DEPENDS_USE_LINKER=OFF \
         -DCMAKE_INSTALL_PREFIX=${RAVYN_SDKROOT}/usr -DCMAKE_BUILD_TYPE=Release \
-        "-DCMAKE_SHARED_LINKER_FLAGS=-nodefaultlibs -Wl,-install_name,/usr/lib/libc++.dylib -L${RAVYN_SDKROOT}/usr/lib -L${ROOT_BINARY_DIR}/Libraries/llvm_target/libunwind/lib -lunwind -lSystem" \
+        "-DCMAKE_SHARED_LINKER_FLAGS=-nodefaultlibs -Wl,-install_name,/usr/lib/libc++.1.dylib -L${RAVYN_SDKROOT}/usr/lib -L${ROOT_BINARY_DIR}/Libraries/llvm_target/libunwind/lib -lunwind -lSystem" \
         -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
         -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=OFF \
         -DLLVM_ENABLE_LIBCXX=ON \
@@ -177,16 +177,17 @@ compiler_rt: runtime libunwind libcxx
 CXXOBJ = ${.OBJDIR}/llvm_target/libcxx/lib/libc++.a
 libcxx_dylib: libcxx
 	mkdir -p ${CXXLIB:H} ${CXXOBJ:H}
-	${CC} -o ${.OBJDIR}/libc++.dylib -dylib -shared \
+	${CC} -o ${.OBJDIR}/libc++.1.dylib -dylib -shared \
 	  -mmacos-version-min=${MACOS_VERSION_MIN} \
 	  -fuse-ld=${LD} --sysroot=${RAVYN_SDKROOT} \
-	  -Wl,-install_name,/usr/lib/libc++.dylib \
+	  -Wl,-install_name,/usr/lib/libc++.1.dylib \
 	  -Wl,-current_version,${LLVM_VERSION} \
 	  -Wl,-force_load,${.OBJDIR}/llvm_target/libcxx/lib/libc++.a \
 	  -Wl,-force_load,${.OBJDIR}/llvm_target/libcxx/lib/libc++abi.a \
 	  -Wl,-force_load,${.OBJDIR}/llvm_target/libcxx/lib/libc++experimental.a \
 	  ${RTOBJ} -L${RAVYN_SDKROOT}/usr/lib -lSystem 2>&1 | grep -v "addend too large"
-	cp -f ${.OBJDIR}/libc++.dylib ${CXXLIB}
+	cp -f ${.OBJDIR}/libc++.1.dylib ${CXXLIB}
+	ln -sf libc++.1.dylib ${RAVYN_SDKROOT}/usr/lib/libc++.dylib
 
 #add_dependencies(libdyld libsystem_malloc libsystem_c libsystem_pthread)
 #add_dependencies(libSystem
