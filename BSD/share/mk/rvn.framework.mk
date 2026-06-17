@@ -1,9 +1,6 @@
+
 FRAMEWORK_DIR = ${.OBJDIR}/${FRAMEWORK}.framework
-.if defined(VERSION)
-FMWK_VERSION = ${VERSION}
-.else
 FMWK_VERSION ?= A
-.endif
 NO_ROOT=yes
 
 UID != id -u
@@ -85,7 +82,11 @@ ${FRAMEWORK}: ${FRAMEWORK_DIR} ${RESOURCES_DIR} lib${LIB}.a
 	  -o ${FRAMEWORK_DIR}/Versions/${FMWK_VERSION}/${FRAMEWORK} \
 	  -Wl,-force_load,${.OBJDIR}/lib${LIB}.a ${LDFLAGS}
 
-all: ${FRAMEWORK}
+all: ${FRAMEWORK} fmwk-install-hook
+
+.if !target(fmwk-install-hook)
+fmwk-install-hook: .PHONY
+.endif
 
 ${FRAMEWORK_DIR}:
 	@${ECHO} building ${FRAMEWORK_DIR:T} bundle

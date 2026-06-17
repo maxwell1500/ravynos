@@ -240,7 +240,8 @@ LDFLAGS		?=
 _LDFLAGS	=	${LDFLAGS:S/-Wl,//g:N-mabi=*:N-fuse-ld=*:N--ld-path=*:N-fsanitize=*:N-fno-sanitize=*}
 
 LIPO		?=	${TOOLS}/lipo
-LIBTOOL		?=	${TOOLS}/llvm-libtool-darwin
+LIBTOOL		?=	${TOOLS}/libtool
+LIBTOOL_LLVM		?=	${TOOLS}/llvm-libtool-darwin
 
 MAKE		?=	${TOOLS}/make
 
