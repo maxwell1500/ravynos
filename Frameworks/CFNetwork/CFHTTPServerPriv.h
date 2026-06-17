@@ -70,8 +70,6 @@
 extern "C" {
 #endif
 
-#pragma options align=mac68k
-
 #if PRAGMA_ENUM_ALWAYSINT
     #pragma enumsalwaysint on
 #endif

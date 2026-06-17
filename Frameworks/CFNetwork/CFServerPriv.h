@@ -67,8 +67,6 @@
 extern "C" {
 #endif
 
-#pragma options align=mac68k
-
 
 /*
  *  _CFServerRef
