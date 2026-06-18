@@ -16,6 +16,8 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 #import <Foundation/NSObjCRuntime.h>
 #import <Foundation/NSDebug.h>
 #import <Foundation/NSRaiseException.h>
+#include <objc/objc.h>
+#include <objc/runtime.h>
 #include <objc/objc-exception.h>
 #include <stdio.h>
 
@@ -28,6 +30,71 @@ NSString * const NSMallocException=@"NSMallocException";
 
 NSString * const NSParseErrorException=@"NSParseErrorException";
 NSString * const NSInconsistentArchiveException=@"NSInconsistentArchiveException";
+
+
+static NSUncaughtExceptionHandler *uncaughtExceptionHandler = NULL;
+
+NSUncaughtExceptionHandler *NSGetUncaughtExceptionHandler(void) {
+    return uncaughtExceptionHandler;
+}
+
+void NSSetUncaughtExceptionHandler(NSUncaughtExceptionHandler *proc) {
+    uncaughtExceptionHandler = proc;
+}
+
+/*
+ * With objc4 + libunwind, Foundation does NOT maintain its own
+ * exception frame stack. The unwinder and the ObjC personality
+ * function discover handlers automatically.
+ */
+
+NSExceptionFrame *NSThreadCurrentHandler(void) {
+    return NULL;
+}
+
+void NSThreadSetCurrentHandler(NSExceptionFrame *handler) {
+    (void)handler;
+}
+
+NSUncaughtExceptionHandler *NSThreadUncaughtExceptionHandler(void) {
+    return NSGetUncaughtExceptionHandler();
+}
+
+void NSThreadSetUncaughtExceptionHandler(NSUncaughtExceptionHandler *function) {
+    NSSetUncaughtExceptionHandler(function);
+}
+
+void __NSPushExceptionFrame(NSExceptionFrame *frame) {
+    (void)frame;
+}
+
+void __NSPopExceptionFrame(NSExceptionFrame *frame) {
+    (void)frame;
+}
+
+static void defaultHandler(id exception) {
+    fprintf(stderr, "*** Uncaught exception of type %s\n",
+            object_getClassName(exception));
+    __builtin_trap();
+}
+
+id _NSRaiseException(id exception) {
+    NSUncaughtExceptionHandler *proc = NSGetUncaughtExceptionHandler();
+
+    // doesn't return if a handler exists
+    objc_exception_throw(exception);
+
+    // no handler was found
+    if (proc) {
+        proc(exception);
+    } else {
+        defaultHandler(exception);
+    }
+
+    __builtin_trap();
+    return nil;
+}
+
 
 @implementation NSException
 
