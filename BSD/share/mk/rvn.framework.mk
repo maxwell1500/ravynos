@@ -44,48 +44,76 @@ RESOURCES_DIR = ${FRAMEWORK_DIR}/Versions/${FMWK_VERSION}/Resources
 HEADER_DIR = ${FRAMEWORK_DIR}/Versions/${FMWK_VERSION}/Headers
 PRIVHDR_DIR = ${FRAMEWORK_DIR}/Versions/${FMWK_VERSION}/PrivateHeaders
 
+${FRAMEWORK}: ${FRAMEWORK_DIR} lib${LIB}.a
+	${CC} -shared -dylib \
+	  -o ${FRAMEWORK_DIR}/Versions/${FMWK_VERSION}/${FRAMEWORK} \
+	  -Wl,-force_load,${.OBJDIR}/lib${LIB}.a ${LDFLAGS}
+
 .if defined(HEADERS) && !empty(HEADERS)
-${HEADER_DIR}: ${HEADERS}
+${HEADER_DIR}:
+	mkdir -p ${HEADER_DIR}
+
+_copy_headers: ${HEADER_DIR}
 .for hdr in ${HEADERS}
-	mkdir -p ${HEADER_DIR}/${hdr:R}
-	cp -f ${.CURDIR}/${hdr} ${HEADER_DIR}/${hdr}
+	cp -f ${.CURDIR}/${hdr} ${HEADER_DIR}/${hdr:T}
 .endfor
 
-${FRAMEWORK}: ${HEADER_DIR}
+${FRAMEWORK}: _copy_headers
 .endif
 
 .if defined(PRIVATE_HEADERS) && !empty(PRIVATE_HEADERS)
 ${PRIVHEADER_DIR}: ${PRIVATE_HEADERS}
 .for hdr in ${PRIVATE_HEADERS}
 	mkdir -p ${PRIVHEADER_DIR}/${hdr:R}
-	cp -f ${.CURDIR}/${hdr} ${PRIVHEADER_DIR}/${hdr}
+	cp -f ${.CURDIR}/${hdr} ${PRIVHEADER_DIR}/${hdr:T}
 .endfor
 
 ${FRAMEWORK}: ${PRIVHEADER_DIR}
 .endif
 
-${RESOURCES_DIR}: ${RESOURCES_DIRS}
+${RESOURCES_DIR}:
 	mkdir -p ${RESOURCES_DIR}
+
 .if defined(RESOURCES_DIRS) && !empty(RESOURCES_DIRS)
+${FRAMEWORK}: _resource_dirs
+
+_resource_dirs: ${RESOURCES_DIR}
 .for rsc in ${RESOURCES_DIRS}
-	cp -fR ${.CURDIR}/${rsc} ${RESOURCES_DIR}
-.endfor
-.endif
-.if defined(RESOURCES_FILES) && !empty(RESOURCES_FILES)
-.for rsc in ${RESOURCES_FILES}
-	cp -fR ${.CURDIR}/${rsc} ${RESOURCES_DIR}
+	mkdir -p ${RESOURCES_DIR}/${rsc:H}
+	cp -fR ${.CURDIR}/${rsc} ${RESOURCES_DIR}/${rsc:H}
 .endfor
 .endif
 
-${FRAMEWORK}: ${FRAMEWORK_DIR} ${RESOURCES_DIR} lib${LIB}.a
-	${CC} -shared -dylib \
-	  -o ${FRAMEWORK_DIR}/Versions/${FMWK_VERSION}/${FRAMEWORK} \
-	  -Wl,-force_load,${.OBJDIR}/lib${LIB}.a ${LDFLAGS}
+.if defined(RESOURCES_FILES) && !empty(RESOURCES_FILES)
+${FRAMEWORK}: _resource_files
+
+_resource_files: ${RESOURCES_DIR}
+.for rsc in ${RESOURCES_FILES}
+	cp -fv ${.CURDIR}/${rsc} ${RESOURCES_DIR}
+.endfor
+.endif
 
 all: ${FRAMEWORK} fmwk-install-hook
 
 .if !target(fmwk-install-hook)
 fmwk-install-hook: .PHONY
+.endif
+
+.if defined(MODULEMAP) && !empty(MODULEMAP)
+all: copy_modulemap
+
+copy_modulemap: ${.CURDIR}/${MODULEMAP}
+	cp -f ${.CURDIR}/${MODULEMAP} \
+	  ${FRAMEWORK_DIR}/Versions/${FMWK_VERSION}/Modules/module.modulemap
+.else
+all: create_modulemap
+
+create_modulemap:
+	(echo 'framework module ${FRAMEWORK} {'; \
+	 echo '    umbrella header "${FRAMEWORK}.h"'; \
+	 echo '    export *'; \
+	 echo '    module * { export * }'; \
+	 echo '}') > ${FRAMEWORK_DIR}/Modules/module.modulemap
 .endif
 
 ${FRAMEWORK_DIR}:

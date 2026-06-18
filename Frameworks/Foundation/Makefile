@@ -5,9 +5,9 @@ CXXSTD = gnu++14
 FRAMEWORK = Foundation
 FMWK_VERSION = C
 INFO_PLIST = Info.plist
-RESOURCES_DIRS = English.lproj/*
-RESOURCES_FILES = NSCharacterSet/*.bitmap
-HEADERS = Headers/Foundation/*
+RESOURCES_DIRS = English.lproj
+RESOURCES_FILES != cd ${.CURDIR}; echo NSCharacterSet/*.bitmap
+HEADERS != cd ${.CURDIR}; echo Headers/Foundation/*
 SLF = /System/Library/Frameworks
 INSTALL_NAME_DIR = ${SLF}/${FRAMEWORK}.framework/Versions/${FMWK_VERSION}
 
@@ -327,7 +327,6 @@ SRCS = 	NSFormatter.m \
         platform_posix/NSTask_posix.m \
         platform_posix/NSTimeZone_posix.m
 
-
 # FIXME: we should build with HAVE_FFI=1
 CFLAGS = -DAPPLE_RUNTIME_4 -DDARWIN -DNULL=0 -DTARGET_OS_IOSMAC=0 \
 	-DPLATFORM_IS_POSIX -DPLATFORM_USES_BSD_SOCKETS \
@@ -342,7 +341,9 @@ CXXFLAGS = -DTARGET_OS_BRIDGE=0 ${CFLAGS:N*-std=*}
 # We need to link this manually to avoid chicken & egg issue with ld wanting
 # to link against Foundation and libobjc :)
 LDFLAGS = --sysroot=${RAVYN_SDKROOT} -Wl,-current_version,1677.104.0 \
-	-Wl,-compatibility_version,300.0.0 -Xlinker -lobjc -Xlinker -lSystem
+	-Wl,-compatibility_version,300.0.0 -Xlinker -lobjc \
+	-F${RAVYN_SDKROOT}/System/Library/Frameworks -framework CoreFoundation \
+	-lSystem
 
 .for file in NSProcessInfo NSStringsFileParser NSData NSNumberFormatter
 CFLAGS.${file}.o = -I${.CURDIR}/NSString
@@ -351,5 +352,11 @@ CFLAGS.NSAutoreleasePool.o = -I${ROOT_SOURCE_DIR}/Libraries/objc4
 CFLAGS.forwarding.o = -I${ROOT_SOURCE_DIR}/Libraries/objc4 \
 	-I${RAVYN_SDKROOT}${SLF}/System.framework/Versions/B/PrivateHeaders \
 	-I/nest/ravynos/Libraries/Libsystem/private
+
+fmwk-install-hook:
+.for dir in ${RAVYN_SDKROOT}/System/Library/Frameworks/ ${SYSROOT_DIR}/System/Library/Frameworks/
+	mkdir -p ${dir}
+	cp -Rfp ${.OBJDIR}/${FRAMEWORK}.framework ${dir}
+.endfor
 
 .include <rvn.framework.mk>
