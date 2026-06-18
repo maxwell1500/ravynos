@@ -2,23 +2,12 @@
 #  RAVYNOS BUILD SYSTEM - Developer Platform
 # ------------------------------------------------------------------------
 
-.include <bsd.own.mk>
-
-.if "${.MAKE.OS}" == "Linux"
-BINGRP = root
-DIRGRP = root
-.endif
-
 PLATFORM_DIR = ${ROOT_BINARY_DIR}/Developer/Platforms/ravynOS.platform
 
-all: ${PLATFORM_DIR}
+all: ${PLATFORM_DIR} Info.plist
 
 ${PLATFORM_DIR}:
 	mkdir -p ${PLATFORM_DIR}
-	cp -f ${.CURDIR}/Info.plist ${.TARGET}/
-.if !NO_ROOT
-	chown ${DIROWN}:${DIRGRP} ${.TARGET}
-	chmod ${DIRMODE} ${.TARGET}
-	chown ${BINOWN}:${BINGRP} ${.TARGET}/Info.plist
-	chmod 0644 ${.TARGET}/Info.plist
-.endif
+
+Info.plist: ${PLATFORM_DIR} ${.CURDIR}/Info.plist
+	cp -f ${.CURDIR}/Info.plist ${PLATFORM_DIR}/
