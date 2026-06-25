@@ -1,6 +1,6 @@
 SUBDIR = AppleAPIC IOACPIFamily IOPCIFamily IOStorageFamily IOATAFamily \
 	 AppleIntelPIIXATA msdosfs hfs AppleFileSystemDriver RavynAHCIPort \
-	 IOGraphics corecrypto pthread #IOHIDFamily
+	 IOGraphics corecrypto pthread IOHIDFamily
 
 all: kernelcache
 .for target_dir in ${RAVYN_SDKROOT}/System/Library/Extensions \
