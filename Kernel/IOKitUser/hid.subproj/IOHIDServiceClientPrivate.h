@@ -24,6 +24,11 @@ void _IOHIDServiceClientReleasePrivate(IOHIDServiceClientRef service);
 CF_EXPORT
 CFStringRef IOHIDServiceClientCopyDescription(IOHIDServiceClientRef service);
 
+CF_EXPORT
+CFNumberRef _Nullable IOHIDServiceClientGetRegistryID(
+    IOHIDServiceClientRef _Nonnull client
+);
+
 CF_IMPLICIT_BRIDGING_DISABLED
 CF_ASSUME_NONNULL_END
 
