@@ -10,9 +10,9 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 #import <Foundation/NSRange.h>
 #import <Foundation/NSEnumerator.h>
 
-@class NSString, NSDictionary, NSPredicate, NSIndexSet, NSURL;
+@class NSString, NSDictionary, NSPredicate, NSIndexSet, NSURL, HIDEvent;
 
-@interface NSArray : NSObject <NSCopying, NSMutableCopying, NSCoding, NSFastEnumeration>
+@interface NSArray <HIDEvent> : NSObject <NSCopying, NSMutableCopying, NSCoding, NSFastEnumeration>
 
 - initWithArray:(NSArray *)array;
 - initWithArray:(NSArray *)array copyItems:(BOOL)copyItems;

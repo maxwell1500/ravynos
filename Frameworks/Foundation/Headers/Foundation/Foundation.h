@@ -1,10 +1,23 @@
 /* Copyright (c) 2006-2007 Christopher J. W. Lloyd
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. */
+ * Copyright (c) 2021-2026 Zoe Knox
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a
+ * copy of this software and associated documentation files (the "Software"),
+ * to deal in the Software without restriction, including without limitation
+ * the rights to use, copy, modify, merge, publish, distribute, sublicense,
+ * and/or sell copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included
+ * in all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+ * OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+ * DEALINGS IN THE SOFTWARE. */
 
 #if !defined(__STDC_VERSION__)
 #define __STDC_VERSION__ 198900L
@@ -34,6 +47,22 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 #include <stdbool.h>
 #include <stdint.h>
 #include <inttypes.h>
+#endif
+
+#if !defined(NS_ASSUME_NONNULL_BEGIN)
+#define NS_ASSUME_NONNULL_BEGIN _Pragma("clang assume_nonnull begin")
+#endif
+
+#if !defined(NS_ASSUME_NONNULL_END)
+#define NS_ASSUME_NONNULL_END _Pragma("clang assume_nonnull end")
+#endif
+
+#if !defined(CF_ASSUME_NONNULL_BEGIN)
+#define CF_ASSUME_NONNULL_BEGIN _Pragma("clang assume_nonnull begin")
+#endif
+
+#if !defined(CF_ASSUME_NONNULL_END)
+#define CF_ASSUME_NONNULL_END _Pragma("clang assume_nonnull end")
 #endif
 
 #import <CoreFoundation/CoreFoundation.h>
@@ -150,3 +179,28 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 #import <Foundation/NSZone.h>
 
 #import <Foundation/NSScriptWhoseTests.h>
+
+static inline id CFBridgingRelease(CFTypeRef cf)
+{
+#if __has_feature(objc_arc)
+    return (__bridge_transfer id)cf;
+#else
+    if (cf == NULL)
+        return nil;
+    id obj = (id)cf; // CFTypeRef and id are toll‑free bridged
+    CFRelease(cf); // transfer ownership to objc
+    return obj;
+#endif
+}
+
+static inline CFTypeRef CFBridgingRetain(id obj)
+{
+#if __has_feature(objc_arc)
+    return (__bridge_retained CFTypeRef)obj;
+#else
+    if (obj == nil)
+        return NULL;
+    CFRetain((CFTypeRef)obj);
+    return (CFTypeRef)obj;
+#endif
+}
