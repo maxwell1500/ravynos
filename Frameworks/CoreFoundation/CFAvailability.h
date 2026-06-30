@@ -83,6 +83,23 @@
 #define __NSi_10_10 introduced=10.10
 #define __NSi_10_10_2 introduced=10.10.2
 #define __NSi_10_10_3 introduced=10.10.3
+#define __NSi_10_15 introduced=10.15
+#define __NSi_11_0 introduced=11.0
+#define __NSi_12_0 introduced=12.0
+#define __NSi_13_0 introduced=13.0
+#define __NSi_14_0 introduced=14.0
+#define __NSi_15_0 introduced=15.0
+#define __NSi_16_0 introduced=16.0
+#define __NSi_17_0 introduced=17.0
+#define __NSi_18_0 introduced=18.0
+#define __NSi_19_0 introduced=19.0
+#define __NSi_20_0 introduced=20.0
+#define __NSi_21_0 introduced=21.0
+#define __NSi_22_0 introduced=22.0
+#define __NSi_23_0 introduced=23.0
+#define __NSi_24_0 introduced=24.0
+#define __NSi_25_0 introduced=25.0
+#define __NSi_26_0 introduced=26.0
 
 #define __NSd_2_0 ,deprecated=2.0
 #define __NSd_2_1 ,deprecated=2.1
@@ -117,6 +134,23 @@
 #define __NSd_10_10 ,deprecated=10.10
 #define __NSd_10_10_2 ,deprecated=10.10.2
 #define __NSd_10_10_3 ,deprecated=10.10.3
+#define __NSd_10_15 ,deprecated=10.15
+#define __NSd_11_0 ,deprecated=11.0
+#define __NSd_12_0 ,deprecated=12.0
+#define __NSd_13_0 ,deprecated=13.0
+#define __NSd_14_0 ,deprecated=14.0
+#define __NSd_15_0 ,deprecated=15.0
+#define __NSd_16_0 ,deprecated=16.0
+#define __NSd_17_0 ,deprecated=17.0
+#define __NSd_18_0 ,deprecated=18.0
+#define __NSd_19_0 ,deprecated=19.0
+#define __NSd_20_0 ,deprecated=20.0
+#define __NSd_21_0 ,deprecated=21.0
+#define __NSd_22_0 ,deprecated=22.0
+#define __NSd_23_0 ,deprecated=23.0
+#define __NSd_24_0 ,deprecated=24.0
+#define __NSd_25_0 ,deprecated=25.0
+#define __NSd_26_0 ,deprecated=26.0
 
 #define __NSi_NA unavailable
 #define __NSd_NA
