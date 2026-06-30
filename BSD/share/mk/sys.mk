@@ -130,7 +130,7 @@ TOOLS		?=	${TOOLCHAIN}/usr/bin
 .if defined(%POSIX)
 .SUFFIXES:	.o .c .y .l .a .sh .f
 .else
-.SUFFIXES:	.out .a .o .bco .llo .c .cc .cpp .cxx .C .m .mm .F .f .e .r .y .l .S .asm .s .cl .p .h .sh
+.SUFFIXES:	.out .a .o .bco .llo .c .cc .cpp .cxx .C .m .mm .F .f .e .r .y .l .S .asm .s .cl .p .h .sh .iig
 .endif
 
 AR		?=	${TOOLS}/ar

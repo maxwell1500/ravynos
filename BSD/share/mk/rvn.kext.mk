@@ -1,5 +1,8 @@
 .include <bsd.suffixes.mk>
 
+.iig.cpp .iig.h .iig.o:
+	@echo '[WARNING] NOT processing IIG file ${.IMPSRC} -> ${.TARGET}'
+
 _KEXT_FOLDER = ${.OBJDIR}/${KEXT}.kext
 _KEXT_LIB = ${_KEXT_FOLDER}/Contents/MacOS/${KEXT}
 
@@ -11,7 +14,7 @@ SDKROOT = ${RAVYN_SDKROOT}
 SRCS += kmod_info.c
 OBJS = ${SRCS:C/\..*$/.o/}
 
-CFLAGS += --sysroot=${SDKROOT} -DKERNEL -I${SDKROOT}/usr/include \
+CFLAGS += --sysroot=${SDKROOT} -I${SDKROOT}/usr/include \
 	-I${SDKROOT}/usr/local/include -I${SDKROOT}/usr/local/include/kernel
 CXXFLAGS += -fapple-kext ${CFLAGS}
 LDFLAGS += -nostdlib -Wl,-bundle -Wl,-undefined,dynamic_lookup \
