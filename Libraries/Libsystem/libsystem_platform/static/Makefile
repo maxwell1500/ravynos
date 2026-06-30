@@ -12,5 +12,6 @@ libplatform.a: lib${LIB}.a
 
 # Fix the include paths to be relative to our parent dir
 CFLAGS := ${CFLAGS:S/${.CURDIR}/${.CURDIR:H}/}
+ACFLAGS = ${CFLAGS}
 
 .include <bsd.lib.mk>

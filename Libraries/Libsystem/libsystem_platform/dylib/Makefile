@@ -25,5 +25,6 @@ lib${LIB}.dylib: lib${LIB}.a
 .include "common.mk"
 
 CFLAGS := ${CFLAGS:S/${.CURDIR}/${.CURDIR:H}/}
+ACFLAGS = ${CFLAGS}
 
 .include <bsd.lib.mk>

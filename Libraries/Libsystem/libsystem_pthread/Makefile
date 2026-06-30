@@ -10,6 +10,7 @@ LDFLAGS = --sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSION_MIN} \
 	-ldyld -lsystem_platform -lsystem_c -lsystem_kernel -lcompiler_rt \
 	-Wl,-dirty_data_list,${.CURDIR}/xcodescripts/pthread.dirty \
 	-Wl,-alias_list,${.CURDIR}/xcodescripts/pthread.aliases
+ACFLAGS = ${CFLAGS}
 
 SUBDIR = dyld
 
