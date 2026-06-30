@@ -299,6 +299,7 @@ public:
     IPhoneOS,
     TvOS,
     WatchOS,
+    BridgeOS,
     DriverKit,
     XROS,
     LastDarwinPlatform = DriverKit

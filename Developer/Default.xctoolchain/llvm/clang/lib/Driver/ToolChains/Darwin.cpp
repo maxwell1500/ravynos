@@ -1516,6 +1516,8 @@ StringRef Darwin::getPlatformFamily() const {
       return "AppleTV";
     case DarwinPlatformKind::WatchOS:
       return "Watch";
+    case DarwinPlatformKind::BridgeOS:
+      return "Bridge";
     case DarwinPlatformKind::DriverKit:
       return "DriverKit";
     case DarwinPlatformKind::XROS:
@@ -2008,6 +2010,8 @@ private:
       return DarwinPlatformKind::TvOS;
     case llvm::Triple::WatchOS:
       return DarwinPlatformKind::WatchOS;
+    case llvm::Triple::BridgeOS:
+      return DarwinPlatformKind::BridgeOS;
     case llvm::Triple::XROS:
       return DarwinPlatformKind::XROS;
     case llvm::Triple::DriverKit:
@@ -3398,6 +3402,8 @@ static const char *getPlatformName(Darwin::DarwinPlatformKind Platform,
     return "tvos";
   case Darwin::WatchOS:
     return "watchos";
+  case Darwin::BridgeOS;
+    return "bridgeos";
   case Darwin::XROS:
     return "xros";
   case Darwin::DriverKit:
