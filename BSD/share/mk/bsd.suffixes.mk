@@ -48,7 +48,7 @@
 	${FC} ${RFLAGS} ${EFLAGS} ${FFLAGS} -c ${.IMPSRC} -o ${.TARGET}
 
 .S.o .s.o .asm.o:
-	${CC:N${CCACHE_BIN}} -x assembler-with-cpp ${CFLAGS} ${ACFLAGS} \
+	${CC:N${CCACHE_BIN}} -x assembler-with-cpp ${ACFLAGS} \
 		-c ${.IMPSRC} -o ${.TARGET}
 	${CTFCONVERT_CMD}
 
