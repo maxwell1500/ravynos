@@ -240,8 +240,15 @@
    #define __API_DEPRECATED_PLATFORM_visionOSApplicationExtension(x,y) visionOSApplicationExtension,introduced=x,deprecated=y
    #define __API_OBSOLETED_PLATFORM_visionOSApplicationExtension(x,y,z) visionOSApplicationExtension,introduced=x,deprecated=y,obsoleted=z
    #define __API_UNAVAILABLE_PLATFORM_visionOSApplicationExtension visionOSApplicationExtension,unavailable
-   
    #define __API_UNAVAILABLE_PLATFORM_kernelkit kernelkit,unavailable
+   #define __API_AVAILABLE_PLATFORM_iosmac(x) macCatalyst,introduced=x
+   #define __API_DEPRECATED_PLATFORM_iosmac(x,y) macCatalyst,introduced=x,deprecated=y
+   #define __API_OBSOLETED_PLATFORM_iosmac(x,y,z) macCatalyst,introduced=x,deprecated=y,obsoleted=z
+   #define __API_UNAVAILABLE_PLATFORM_iosmac macCatalyst,unavailable
+   #define __API_AVAILABLE_PLATFORM_macCatalyst(x) macCatalyst,introduced=x
+   #define __API_DEPRECATED_PLATFORM_macCatalyst(x,y) macCatalyst,introduced=x,deprecated=y
+   #define __API_OBSOLETED_PLATFORM_macCatalyst(x,y,z) macCatalyst,introduced=x,deprecated=y,obsoleted=z
+   #define __API_UNAVAILABLE_PLATFORM_macCatalyst macCatalyst,unavailable
  #endif /* __has_attribute(availability) */
 #endif /* defined(__has_feature) && defined(__has_attribute) */
 
