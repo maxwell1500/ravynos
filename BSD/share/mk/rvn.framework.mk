@@ -102,13 +102,15 @@ fmwk-install-hook: .PHONY
 .if defined(MODULEMAP) && !empty(MODULEMAP)
 all: copy_modulemap
 
-copy_modulemap: ${.CURDIR}/${MODULEMAP}
+copy_modulemap: ${.CURDIR}/${MODULEMAP} ${FRAMEWORK_DIR}
+	rm -f ${FRAMEWORK_DIR}/Modules
+	ln -sf Versions/${FMWK_VERSION}/Modules ${FRAMEWORK_DIR}/Modules
 	cp -f ${.CURDIR}/${MODULEMAP} \
 	  ${FRAMEWORK_DIR}/Versions/${FMWK_VERSION}/Modules/module.modulemap
 .else
 all: create_modulemap
 
-create_modulemap:
+create_modulemap: ${FRAMEWORK_DIR}
 	(echo 'framework module ${FRAMEWORK} {'; \
 	 echo '    umbrella header "${FRAMEWORK}.h"'; \
 	 echo '    export *'; \
@@ -119,9 +121,11 @@ create_modulemap:
 ${FRAMEWORK_DIR}:
 	@${ECHO} building ${FRAMEWORK_DIR:T} bundle
 	mkdir -p "${FRAMEWORK_DIR}/Versions/${FMWK_VERSION}/Headers" \
+		"${FRAMEWORK_DIR}/Versions/${FMWK_VERSION}/PrivateHeaders" \
 		"${FRAMEWORK_DIR}/Versions/${FMWK_VERSION}/Modules" \
 		"${FRAMEWORK_DIR}/Versions/${FMWK_VERSION}/Resources"
 	(cd "${FRAMEWORK_DIR}"; \
+		rm -f Headers PrivateHeaders Resources; \
 		ln -sf Versions/${FMWK_VERSION}/Headers Headers; \
 		ln -sf Versions/${FMWK_VERSION}/PrivateHeaders PrivateHeaders; \
 		ln -sf Versions/${FMWK_VERSION}/Modules Modules; \
