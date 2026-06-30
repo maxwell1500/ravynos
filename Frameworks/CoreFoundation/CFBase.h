@@ -188,6 +188,26 @@ CF_EXTERN_C_BEGIN
     #endif
 #endif
 
+#if !defined(CF_ASSUME_NONNULL_BEGIN)
+#define CF_ASSUME_NONNULL_BEGIN _Pragma("clang assume_nonnull begin")
+#endif
+
+#if !defined(CF_ASSUME_NONNULL_END)
+#define CF_ASSUME_NONNULL_END _Pragma("clang assume_nonnull end")
+#endif
+
+#ifndef CF_SWIFT_NAME
+#define CF_SWIFT_NAME(_name)
+#endif
+
+#define CF_OPEN_ENUM(_type, _name) \
+    enum __attribute__((enum_extensibility(open))) _name : _type _name; \
+    enum _name : _type
+
+#define CF_CLOSED_ENUM(_type, _name) \
+    enum __attribute__((enum_extensibility(closed))) _name : _type _name; \
+    enum _name : _type
+
 // Marks functions which return a CF type that needs to be released by the caller but whose names are not consistent with CoreFoundation naming rules. The recommended fix to this is to rename the functions, but this macro can be used to let the clang static analyzer know of any exceptions that cannot be fixed.
 // This macro is ONLY to be used in exceptional circumstances, not to annotate functions which conform to the CoreFoundation naming rules.
 #ifndef CF_RETURNS_RETAINED

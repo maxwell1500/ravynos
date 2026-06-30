@@ -106,6 +106,12 @@
 #include <CoreFoundation/CFXMLParser.h>
 #endif
 
+#ifndef CF_TYPED_ENUM
+#define CF_TYPED_ENUM __attribute__((swift_wrapper(enum)))
+#endif
+#ifndef CF_STRING_ENUM
+#define CF_STRING_ENUM CF_TYPED_ENUM
+#endif
 
 #endif /* ! __COREFOUNDATION_COREFOUNDATION__ */
 

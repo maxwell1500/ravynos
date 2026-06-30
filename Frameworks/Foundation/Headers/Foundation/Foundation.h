@@ -57,19 +57,15 @@
 #define NS_ASSUME_NONNULL_END _Pragma("clang assume_nonnull end")
 #endif
 
-#if !defined(CF_ASSUME_NONNULL_BEGIN)
-#define CF_ASSUME_NONNULL_BEGIN _Pragma("clang assume_nonnull begin")
-#endif
-
-#if !defined(CF_ASSUME_NONNULL_END)
-#define CF_ASSUME_NONNULL_END _Pragma("clang assume_nonnull end")
-#endif
-
 #import <CoreFoundation/CoreFoundation.h>
 #import <CoreServices/CoreServices.h> // This is actually imported by NSURLError.h
 
 #define NS_ENUM(_type, _name) enum _name:_type _name; enum _name : _type
 #define NS_UNAVAILABLE __attribute__((unavailable))
+
+#ifndef NS_SWIFT_NAME
+#define NS_SWIFT_NAME(_name)
+#endif
 
 #import <Foundation/FoundationErrors.h>
 #import <Foundation/NSAffineTransform.h>

@@ -7,4 +7,6 @@ SUBDIR += CoreFoundation
 SUBDIR += Foundation
 SUBDIR += CoreServices
 
+Foundation: CoreFoundation
+
 .include <bsd.subdir.mk>

@@ -7,7 +7,7 @@ INFO_PLIST = Info.plist
 HEADERS = CFArray.h CFBag.h CFBase.h CFBinaryHeap.h CFBitVector.h CFBundle.h \
 	CFByteOrder.h CFCalendar.h CFCharacterSet.h CFData.h CFDate.h \
 	CFDateFormatter.h CFDictionary.h CFError.h CFLocale.h CFMessagePort.h \
-	CFNumber.h CFNumberFormatter.h CFPlugIn.h CFPlugInCOM.h \
+	CFMachPort.h CFNumber.h CFNumberFormatter.h CFPlugIn.h CFPlugInCOM.h \
 	CFPreferences.h CFPropertyList.h CFRunLoop.h CFSet.h CFSocket.h \
 	CFStream.h CFString.h CFStringEncodingExt.h CFTimeZone.h CFTree.h \
 	CFURL.h CFURLAccess.h CFURLEnumerator.h CFUUID.h CFUserNotification.h \
