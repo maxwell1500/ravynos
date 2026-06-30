@@ -672,8 +672,10 @@ typedef VersRecPtr *                    VersRecHndl;
 *********************************************************************************/
 typedef UInt8                           Byte;
 typedef SInt8                           SignedByte;
+#ifndef _OS_OSTYPES_H
 #ifndef __OS_OBJECT__
 typedef wide *                          WidePtr;
+#endif
 #endif
 typedef UnsignedWide *                  UnsignedWidePtr;
 typedef Float80                         extended80;
