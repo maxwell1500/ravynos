@@ -3342,12 +3342,12 @@ writePlist( const char * path, CFMutableDictionaryRef dict, UInt32 key __unused 
 
 #include <IOKit/IOSharedLock.h>
 
-boolean_t ev_try_lock(OSSpinLock * l)
+Boolean ev_try_lock(volatile OSSpinLock * l)
 {
     return OSSpinLockTry(l);
 }
 
-void ev_unlock(OSSpinLock * l)
+void ev_unlock(volatile OSSpinLock * l)
 {
     OSSpinLockUnlock(l);
 }

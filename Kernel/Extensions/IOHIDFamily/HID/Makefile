@@ -200,9 +200,6 @@ copy_headers: .PHONY
 	cp -f ${ROOT_SOURCE_DIR}/Kernel/IOKitUser/hid.subproj/${file} \
 	  ${HID_OBJC_DST}
 .endfor
-	ln -sf Versions/A/Headers ${RAVYN_SDKROOT}${SLF}/IOKit.framework/Headers
-	ln -sf Versions/A/PrivateHeaders \
-	  ${RAVYN_SDKROOT}${SLF}/IOKit.framework/PrivateHeaders
 
 .include <rvn.framework.mk>
 

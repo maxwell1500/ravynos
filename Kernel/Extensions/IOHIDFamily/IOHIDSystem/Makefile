@@ -1,11 +1,11 @@
 MK_WERROR = no
 KEXT = IOHIDSystem
-INFO_PLIST = Info.plist
+INFO_PLIST = Info-IOHIDSystem.plist
 BUNDLE_IDENTIFIER = com.apple.iokit.IOHIDFamily
 BUNDLE_VERSION = 1.5.2
 KERNEL_PRIVATE = yes
 
-
+.PATH: ${.CURDIR:H}
 SRCS = \
 	HIDDriverKit/IOHIDDevice.iig \
 	HIDDriverKit/IOHIDEventService.iig \
@@ -94,7 +94,6 @@ SRCS = \
 	IOHIDSystem/IOHIDSystemCursorHelper.cpp \
 	IOHIDFamily/IOHIDResourceUserClient.cpp \
 	IOHIDFamily/IOHIDResource.cpp
-)
 
 CFLAGS = -Wno-implicit-int-conversion -Wno-sign-conversion \
 	-I${.CURDIR}/include \
