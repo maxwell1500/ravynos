@@ -95,7 +95,10 @@ typedef struct oslog_stream_buf_entry_s {
  * AppleInternal. This type was guessed from clues in public documents
  */
 typedef struct os_log_pack_s {
-    uint64_t olp_pc;
+    uint64_t olp_continuous_time;
+    struct timespec olp_wall_time;
+    const void* olp_mh; // mach header of caller
+    const void* olp_pc; // return addr of caller
     const char *olp_format;
     uint8_t olp_data[0];
 } os_log_pack_s;
