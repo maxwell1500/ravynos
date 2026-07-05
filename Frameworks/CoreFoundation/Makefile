@@ -11,7 +11,7 @@ HEADERS = CFArray.h CFBag.h CFBase.h CFBinaryHeap.h CFBitVector.h CFBundle.h \
 	CFPreferences.h CFPropertyList.h CFRunLoop.h CFSet.h CFSocket.h \
 	CFStream.h CFString.h CFStringEncodingExt.h CFTimeZone.h CFTree.h \
 	CFURL.h CFURLAccess.h CFURLEnumerator.h CFUUID.h CFUserNotification.h \
-	CFXMLNode.h CFXMLParser.h CFAvailability.h CFUtilities.h \
+	CFXMLNode.h CFXMLParser.h CFXPCBridge.h CFAvailability.h CFUtilities.h \
 	CoreFoundation.h
 
 PRIVATE_HEADERS = CFBundlePriv.h CFCharacterSetPriv.h CFError_Private.h \
