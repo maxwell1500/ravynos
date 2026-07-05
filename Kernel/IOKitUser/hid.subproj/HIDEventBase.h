@@ -8,6 +8,8 @@
 #ifndef HIDEventBase_h
 #define HIDEventBase_h
 
+extern CFTypeID IOHIDEventGetTypeID(void);
+
 #if __OBJC__
 
 #import "HIDEventIvar.h"

@@ -161,7 +161,7 @@ RTOBJ = ${.OBJDIR}/llvm_target/compiler-rt/lib/ravynos/libclang_rt.osx.a
 compiler_rt: runtime libunwind libcxx
 	mkdir -p ${RTLIB:H} ${RTOBJ:H}
 	${CC} -o ${.OBJDIR}/libcompiler_rt.dylib -fuse-ld=${LD} \
-	  -shared -umbrella System \
+	  --sysroot=${RAVYN_SDKROOT} -shared -umbrella System \
 	  -mmacosx-version-min=${MACOS_VERSION_MIN} \
 	  -Wl,-install_name,/usr/lib/system/libcompiler_rt.dylib \
 	  -Wl,-current_version,${LLVM_VERSION}  \

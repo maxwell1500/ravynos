@@ -95,4 +95,13 @@
  */
 #define kIOHIDServiceCapsLockStateKey                "HIDCapsLockState"
 
+/*!
+ * @define      kIOHIDServiceNumLockStateKey
+ *
+ * @abstract    CFBoolean for setting/getting the caps lock state of the
+ *              service. The caps lock LED will be updated to reflect the state.
+ */
+#define kIOHIDServiceNumLockStateKey                "HIDNumLockState"
+
+
 #endif /* IOHIDProperties_h */

@@ -32,6 +32,13 @@
 #include "IOHIDManagerPersistentProperties.h"
 #include "HIDElementIvar.h"
 
+typedef struct {
+    CFStringRef applicationID;
+    CFStringRef userName;
+    CFStringRef hostName;
+    IOOptionBits options;
+} __IOHIDPropertyContext;
+
 typedef struct  __IOHIDElement {
     struct objc_object base;
     struct {
@@ -62,6 +69,19 @@ static CFStringRef      __KIOHIDElementSpecialKeys[]    = {
     CFSTR(kIOHIDElementCalibrationMaxKey),
     NULL
 };
+
+
+extern "C" {
+    CFStringRef __IOHIDDeviceGetUUIDKey(IOHIDDeviceRef device);
+    void __IOHIDPropertySaveToKeyWithSpecialKeys(
+        CFDictionaryRef dictionary,
+        CFStringRef key,
+        CFStringRef *specialKeys,
+        __IOHIDPropertyContext *context);
+    CFMutableDictionaryRef __IOHIDPropertyLoadFromKeyWithSpecialKeys(
+        CFStringRef key,
+        CFStringRef *specialKeys);
+}
 
 //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 // _IOHIDElementReleasePrivate
@@ -203,7 +223,7 @@ IOHIDElementCookie IOHIDElementGetCookie(IOHIDElementRef element)
 //------------------------------------------------------------------------------
 IOHIDElementType IOHIDElementGetType(IOHIDElementRef element)
 {
-    return element->elementStructPtr->type;
+    return (IOHIDElementType)element->elementStructPtr->type;
 }
 
 //------------------------------------------------------------------------------
@@ -248,7 +268,7 @@ IOHIDElementRef IOHIDElementCreateWithDictionary(
 //------------------------------------------------------------------------------
 IOHIDElementCollectionType IOHIDElementGetCollectionType(IOHIDElementRef element)
 {
-    return element->elementStructPtr->collectionType;
+    return (IOHIDElementCollectionType)element->elementStructPtr->collectionType;
 }
 
 //------------------------------------------------------------------------------
@@ -624,10 +644,10 @@ void _IOHIDElementSetValue(IOHIDElementRef element, IOHIDValueRef value)
     }
     
     if (value) {
-        IOHIDValueRef new = _IOHIDValueCreateWithValue(kCFAllocatorDefault,
+        IOHIDValueRef _new = _IOHIDValueCreateWithValue(kCFAllocatorDefault,
                                                        value,
                                                        element);
-        element->value = new;
+        element->value = _new;
     }
 }
 
@@ -697,7 +717,7 @@ Boolean IOHIDElementSetProperty(            IOHIDElementRef         element,
         if ( element->calibrationPtr ) {
             
             CFIndex value = 0;
-            CFNumberGetValue(property, kCFNumberCFIndexType, &value);
+            CFNumberGetValue((CFNumberRef)property, kCFNumberCFIndexType, &value);
             
             if ( isCalMin )
                 element->calibrationPtr->min = value;
@@ -712,7 +732,7 @@ Boolean IOHIDElementSetProperty(            IOHIDElementRef         element,
             else if ( isDZMax )
                 element->calibrationPtr->dzMax  = value;
             else if ( isGran )
-                CFNumberGetValue(property, kCFNumberFloat64Type, &element->calibrationPtr->gran);
+                CFNumberGetValue((CFNumberRef)property, kCFNumberFloat64Type, &element->calibrationPtr->gran);
         }
             
     }
@@ -774,37 +794,37 @@ void __IOHIDElementApplyCalibration(IOHIDElementRef element)
     if (element->properties) {
         CFNumberRef property;
         
-        property = CFDictionaryGetValue(element->properties, CFSTR(kIOHIDElementCalibrationMinKey));
+        property = (CFNumberRef)CFDictionaryGetValue(element->properties, CFSTR(kIOHIDElementCalibrationMinKey));
         if (property && (CFGetTypeID(property) == CFNumberGetTypeID())) {
             CFNumberGetValue(property, kCFNumberCFIndexType, &element->calibrationPtr->min);
         }
         
-        property = CFDictionaryGetValue(element->properties, CFSTR(kIOHIDElementCalibrationMaxKey));
+        property = (CFNumberRef)CFDictionaryGetValue(element->properties, CFSTR(kIOHIDElementCalibrationMaxKey));
         if (property && (CFGetTypeID(property) == CFNumberGetTypeID())) {
             CFNumberGetValue(property, kCFNumberCFIndexType, &element->calibrationPtr->max);
         }
         
-        property = CFDictionaryGetValue(element->properties, CFSTR(kIOHIDElementCalibrationSaturationMinKey));
+        property = (CFNumberRef)CFDictionaryGetValue(element->properties, CFSTR(kIOHIDElementCalibrationSaturationMinKey));
         if (property && (CFGetTypeID(property) == CFNumberGetTypeID())) {
             CFNumberGetValue(property, kCFNumberCFIndexType, &element->calibrationPtr->satMin);
         }
         
-        property = CFDictionaryGetValue(element->properties, CFSTR(kIOHIDElementCalibrationSaturationMaxKey));
+        property = (CFNumberRef)CFDictionaryGetValue(element->properties, CFSTR(kIOHIDElementCalibrationSaturationMaxKey));
         if (property && (CFGetTypeID(property) == CFNumberGetTypeID())) {
             CFNumberGetValue(property, kCFNumberCFIndexType, &element->calibrationPtr->satMax);
         }
         
-        property = CFDictionaryGetValue(element->properties, CFSTR(kIOHIDElementCalibrationDeadZoneMinKey));
+        property = (CFNumberRef)CFDictionaryGetValue(element->properties, CFSTR(kIOHIDElementCalibrationDeadZoneMinKey));
         if (property && (CFGetTypeID(property) == CFNumberGetTypeID())) {
             CFNumberGetValue(property, kCFNumberCFIndexType, &element->calibrationPtr->dzMin);
         }
         
-        property = CFDictionaryGetValue(element->properties, CFSTR(kIOHIDElementCalibrationDeadZoneMaxKey));
+        property = (CFNumberRef)CFDictionaryGetValue(element->properties, CFSTR(kIOHIDElementCalibrationDeadZoneMaxKey));
         if (property && (CFGetTypeID(property) == CFNumberGetTypeID())) {
             CFNumberGetValue(property, kCFNumberCFIndexType, &element->calibrationPtr->dzMax);
         }
         
-        property = CFDictionaryGetValue(element->properties, CFSTR(kIOHIDElementCalibrationGranularityKey));
+        property = (CFNumberRef)CFDictionaryGetValue(element->properties, CFSTR(kIOHIDElementCalibrationGranularityKey));
         if (property && (CFGetTypeID(property) == CFNumberGetTypeID())) {
             CFNumberGetValue(property, kCFNumberFloat64Type, &element->calibrationPtr->gran);
         }

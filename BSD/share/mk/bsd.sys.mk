@@ -17,13 +17,15 @@ CFLAGS+=	-std=iso9899:1990
 CFLAGS+=	-std=iso9899:199409
 .elif ${CSTD} == "c99"
 CFLAGS+=	-std=iso9899:1999
+.elif ${CSTD} == "none"
+# do nothing
 .else # CSTD
 CFLAGS+=	-std=${CSTD}
 .endif # CSTD
 
 CXXSTD?=	gnu++17
 
-.if !empty(CXXSTD)
+.if !empty(CXXSTD) && ${CXXSTD} != "none"
 CXXFLAGS+=	-std=${CXXSTD}
 .endif
 

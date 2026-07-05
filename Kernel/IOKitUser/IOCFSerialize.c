@@ -59,6 +59,9 @@ typedef struct {
 static Boolean
 DoCFSerialize(CFTypeRef object, IOCFSerializeState * state);
 
+static Boolean
+DoCFSerializeKey(CFStringRef object, IOCFSerializeState * state);
+
 static CFDataRef
 IOCFSerializeBinary(CFTypeRef object, CFOptionFlags options);
 

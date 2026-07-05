@@ -97,7 +97,7 @@ IOHIDValueRef __IOHIDValueCreatePrivate(CFAllocatorRef allocator, CFAllocatorCon
         return NULL;
 
     offset = event;
-    bzero(offset + sizeof(CFRuntimeBase), size);
+    bzero((uint8_t*)offset + sizeof(CFRuntimeBase), size);
     
     return event;
 }
@@ -154,7 +154,7 @@ IOHIDValueRef _IOHIDValueCreateWithStruct(CFAllocatorRef allocator, IOHIDElement
 
     if ( isLongValue )
     {
-        event->bytePtr  = pEventStruct->longValue;
+        event->bytePtr  = (uint8_t*)(pEventStruct->longValue);
     }
     else
         __IOHIDValueConvertWordToByte((const uint32_t *)&(pEventStruct->value), event->bytes, min(sizeof(uint32_t), event->length));

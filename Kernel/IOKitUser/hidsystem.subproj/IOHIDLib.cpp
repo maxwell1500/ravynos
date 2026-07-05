@@ -91,13 +91,13 @@ static void *__loadTCCFramework()
             return;
         }
         
-        _preflightFunc = dlsym(tccFramework, "TCCAccessPreflight");
+        _preflightFunc = (typeof TCCAccessPreflight *)dlsym(tccFramework, "TCCAccessPreflight");
         if (_preflightFunc == NULL) {
             IOHIDLogError("Could not find TCC symbol \"TCCAccessPreflight\"");
             return;
         }
         
-        _requestFunc = dlsym(tccFramework, "TCCAccessRequest");
+        _requestFunc = (typeof TCCAccessRequest *)dlsym(tccFramework, "TCCAccessRequest");
         if (_requestFunc == NULL) {
             IOHIDLogError("Could not find TCC symbol \"TCCAccessRequest\"");
             return;
@@ -245,7 +245,7 @@ static void _LOGIOHIDPostEventCaller(void)
     CFStringRef appBundleName = NULL;
     
     if (appBundleRef) {
-        appBundleName = CFBundleGetValueForInfoDictionaryKey(appBundleRef, CFSTR("CFBundleIdentifier"));
+        appBundleName = (CFStringRef)CFBundleGetValueForInfoDictionaryKey(appBundleRef, CFSTR("CFBundleIdentifier"));
     }
     
     //Log call to message tracer

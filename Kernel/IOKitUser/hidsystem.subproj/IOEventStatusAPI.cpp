@@ -127,7 +127,8 @@ NXEventSystemInfoType NXEventSystemInfo(NXEventHandle handle,
 	if( KERN_SUCCESS != kr )
 	    break;
 
-    array = IORegistryEntryCreateCFProperty(hidsystem, CFSTR("NXSystemInfo"),
+    array = (CFArrayRef)IORegistryEntryCreateCFProperty(hidsystem,
+                                CFSTR("NXSystemInfo"),
                                 kCFAllocatorDefault, kNilOptions);
                                 
     IOObjectRelease( hidsystem );
@@ -141,23 +142,23 @@ NXEventSystemInfoType NXEventSystemInfo(NXEventHandle handle,
         deviceCount = maxDeviceCount;
 
     for ( i=0; i<deviceCount; i++) {
-        dict = CFArrayGetValueAtIndex(array, i);
+        dict = (CFDictionaryRef)CFArrayGetValueAtIndex(array, i);
         
         if( !dict )
             continue;
 
-	    if( (num = CFDictionaryGetValue( dict, CFSTR(kIOHIDKindKey )))) {
+	    if( (num = (CFNumberRef)((CFTypeRef)CFDictionaryGetValue( dict, CFSTR(kIOHIDKindKey ))))) {
 
 		CFNumberGetValue( num, kCFNumberSInt32Type, &val );
                 info[ i ].dev_type = val;
 
-                if( (num = CFDictionaryGetValue( dict, CFSTR(kIOHIDInterfaceIDKey ))))
+                if( (num = (CFNumberRef)CFDictionaryGetValue( dict, CFSTR(kIOHIDInterfaceIDKey ))))
                     CFNumberGetValue( num, kCFNumberSInt32Type, &val );
 		else
 		    val = 0;
                 info[ i ].interface = val;
 
-                if( (num = CFDictionaryGetValue( dict, CFSTR(kIOHIDSubinterfaceIDKey ))))
+                if( (num = (CFNumberRef)CFDictionaryGetValue( dict, CFSTR(kIOHIDSubinterfaceIDKey ))))
                     CFNumberGetValue( num, kCFNumberSInt32Type, &val );
 		else
 		    val = 0;
@@ -183,17 +184,17 @@ kern_return_t IOHIDCopyHIDParameterFromEventSystem(io_connect_t handle, CFString
     CFTypeRef param = NULL;
     IOHIDEventSystemClientRef client = IOHIDEventSystemClientCreateWithType (kCFAllocatorDefault, kIOHIDEventSystemClientTypePassive, NULL);
     kern_return_t  kr = kIOReturnNotReady;
+    io_service_t  service = 0;
     if (!client) {
         goto exit;
     }
-    io_service_t  service = 0;
     if (IOConnectGetService (handle, &service) == kIOReturnSuccess) {
         if (IOObjectConformsTo (service, "IOHIDSystem")) {
             param = IOHIDEventSystemClientCopyProperty(client, key);
         } else {
             uint64_t entryID = 0;
             if (IORegistryEntryGetRegistryEntryID (service, &entryID) == kIOReturnSuccess) {
-                IOHIDServiceClientRef serviceClient = IOHIDEventSystemClientCopyServiceForRegistryID(client, entryID);
+                IOHIDServiceClientRef serviceClient = IOHIDEventSystemClientCopyServiceForRegistryID(client, (CFStringRef)entryID);
                 if (serviceClient) {
                     param = IOHIDServiceClientCopyProperty(serviceClient, key);
                     CFRelease(serviceClient);
@@ -222,12 +223,12 @@ kern_return_t IOHIDCopyHIDParameterFromEventSystem(io_connect_t handle, CFString
 kern_return_t IOHIDSetHIDParameterToEventSystem(io_connect_t handle, CFStringRef key, CFTypeRef parameter) {
     IOHIDEventSystemClientRef client = IOHIDEventSystemClientCreateWithType (kCFAllocatorDefault, kIOHIDEventSystemClientTypePassive, NULL);
     kern_return_t  kr = kIOReturnNotReady;
+    io_service_t  service = 0;
     if (!client) {
         goto exit;
     }
  
     kr = kIOReturnUnsupported;
-    io_service_t  service = 0;
     if (IOConnectGetService (handle, &service) == kIOReturnSuccess) {
         if (IOObjectConformsTo (service, "IOHIDSystem")) {
             IOHIDEventSystemClientSetProperty(client, key, parameter);
@@ -235,7 +236,7 @@ kern_return_t IOHIDSetHIDParameterToEventSystem(io_connect_t handle, CFStringRef
         } else {
             uint64_t entryID = 0;
             if (IORegistryEntryGetRegistryEntryID (service, &entryID) == kIOReturnSuccess) {
-                IOHIDServiceClientRef serviceClient = IOHIDEventSystemClientCopyServiceForRegistryID(client, entryID);
+                IOHIDServiceClientRef serviceClient = IOHIDEventSystemClientCopyServiceForRegistryID(client, (CFStringRef)entryID);
                 if (serviceClient) {
                     if (IOHIDServiceClientSetProperty(serviceClient, key, parameter)) {
                       kr = kIOReturnSuccess;
@@ -406,7 +407,7 @@ kern_return_t IOHIDCopyCFTypeParameter( io_connect_t handle, CFStringRef key, CF
   
     kr = IOConnectGetService( handle, &hidsystem );
     if (KERN_SUCCESS == kr) {
-        if( (paramDict = IORegistryEntryCreateCFProperty( hidsystem, CFSTR(kIOHIDParametersKey), kCFAllocatorDefault, kNilOptions)))
+        if( (paramDict = (CFDictionaryRef)IORegistryEntryCreateCFProperty( hidsystem, CFSTR(kIOHIDParametersKey), kCFAllocatorDefault, kNilOptions)))
         {
             if ( (tempParameter = CFDictionaryGetValue( paramDict, key)) )
                 CFRetain(tempParameter);
@@ -443,7 +444,7 @@ static inline int NXEvSetParameterChar( io_connect_t 	handle,
     CFDataRef			data;
 
     do {
-        data = CFDataCreate( kCFAllocatorDefault, bytes, size );
+        data = CFDataCreate( kCFAllocatorDefault, (const UInt8*)bytes, size );
         if( !data)
             continue;
         kr = IOHIDSetCFTypeParameter( handle, key, data );
@@ -535,7 +536,7 @@ static inline int NXEvGetParameterInt(	NXEventHandle handle,
 
     for (i=0; i<*returnedCount; i++)
     {
-        numberRef = CFArrayGetValueAtIndex(arrayRef, i);
+        numberRef = (CFNumberRef)CFArrayGetValueAtIndex(arrayRef, i);
 
         if (numberRef)
             CFNumberGetValue(numberRef, kCFNumberIntType, &(parameterArray[i]));

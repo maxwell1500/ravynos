@@ -1382,7 +1382,7 @@ void IOPMRemoveIrrelevantProperties(CFMutableDictionaryRef energyPrefs)
 
                     // For legacy machines, we look for either the kIOPMDarkWakeBackgroundTaskKey or the
                     // kIOPMSleepServicesKey
-                    if ( ((!IOPMFeatureIsAvailableWithSupportedTable( CFSTR(kIOPMDarkWakeBackgroundTaskKey),
+                    if ( (!IOPMFeatureIsAvailableWithSupportedTable( CFSTR(kIOPMDarkWakeBackgroundTaskKey),
                             (CFStringRef)profile_keys[profile_count], _supportedCached)  &&
                         !IOPMFeatureIsAvailableWithSupportedTable( CFSTR(kIOPMSleepServicesKey),
                             (CFStringRef)profile_keys[profile_count], _supportedCached))

@@ -69,7 +69,8 @@ MIG_FLAGS = --sysroot=${RAVYN_SDKROOT} -g -DPRIVATE \
 MIGCC = ${CC}
 .export MIGCC
 
-LDFLAGS = -L${RAVYN_SDKROOT}/usr/lib/system -L${RAVYN_SDKROOT}/usr/lib \
+LDFLAGS = --sysroot=${RAVYN_SDKROOT} \
+	-L${RAVYN_SDKROOT}/usr/lib/system -L${RAVYN_SDKROOT}/usr/lib \
 	-Wl,-compatibility_version,1 -Wl,-flat_namespace \
 	-Wl,-undefined,warning -Wl,-current_version,1173.0.3 \
 	-Wl,-install_name,/usr/lib/system/libdispatch.dylib \
