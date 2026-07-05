@@ -90,6 +90,13 @@ typedef struct oslog_stream_buf_entry_s {
 } *oslog_stream_buf_entry_t;
 
 
+#ifndef _STRUCT_TIMESPEC
+struct timespec {
+    time_t   tv_sec;        /* seconds */
+    long     tv_nsec;       /* nanoseconds */
+};
+#endif
+
 /*!
  * @typedef os_log_pack_t
  * AppleInternal. This type was guessed from clues in public documents

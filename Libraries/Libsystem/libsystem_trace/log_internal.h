@@ -37,18 +37,29 @@
 #include <os/base.h>
 #include <os/object.h>
 #include <os/log.h>
+#include <CoreFoundation/CFRuntime.h>
+#include <os/log_private.h>
 
-/* This is an overlay on the NSObject. Leave room for refcount and class info */
+typedef enum : uint32_t {
+    OS_LOG_SINK_TYPE_FD, // dest is a file descriptor number
+    OS_LOG_SINK_TYPE_SOCKET, // dest is a struct sockaddr*
+    OS_LOG_SINK_TYPE_MACH // dest is a mach_port_t
+} _os_log_sink_type_t;
+
 struct os_log_s {
-    uintptr_t _opaque[2];
+    CFRuntimeBase _base;
+    uint32_t flags;
+    CFStringRef subsystem;
+    CFStringRef category;
+    uintptr_t sink_dest; // either int val or pointer
+    _os_log_sink_type_t sink_type;
+    uint64_t generate_symptoms;
 };
 
-/* typedef void (^)(void) os_block_t; */
-/* typedef void (*)(void *) os_function_t; */
+typedef void (^os_block_t)(void);
+typedef void (*os_function_t)(void*);
 
-extern size_t os_proc_available_memory();
-extern void * os_retain(void * object);
-extern void os_release(void * object);
+extern size_t os_proc_available_memory(void);
 
 /*
 oslog

@@ -69,12 +69,15 @@ __BEGIN_DECLS
 #if defined(OS_CRASH_ENABLE_EXPERIMENTAL_LIBTRACE)
 #include <os/log_private.h>
 
-#define __os_crash_fmt(...) \
+#define __os_crash_fmt(fmt, ...) \
 	({ \
-		const size_t size = os_log_pack_size(__VA_ARGS__); \
+	 	uint8_t buffer[1024]; \
+		size_t enclen = __os_log_encode(buffer, 1024, fmt, __VA_ARGS__, 0); \
+		const size_t size = os_log_pack_size(fmt, buffer, 0); \
 		uint8_t buf[size] __attribute__((aligned(alignof(os_log_pack_s)))); \
 		os_log_pack_t pack = (os_log_pack_t)&buf; \
-		os_log_pack_fill(pack, size, errno, __VA_ARGS__); \
+		uint8_t *payload = os_log_pack_fill(pack, size, errno, __builtin_return_address(0), fmt); \
+		memcpy(payload, buffer, enclen); \
 		_os_crash_fmt(pack, size); \
 		os_hardware_trap(); \
 	})

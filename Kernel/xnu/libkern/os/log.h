@@ -70,7 +70,7 @@ _os_log_verify_format_str(__unused const char *msg, ...)                        
 }
 
 #if OS_OBJECT_USE_OBJC
-OS_OBJECT_DECL(os_log);
+OS_OBJECT_DECL(os_log, uint64_t generate_symptoms;);
 #else
 typedef struct os_log_s *os_log_t;
 #endif /* OS_OBJECT_USE_OBJC */

@@ -105,6 +105,19 @@ extern uint32_t _asl_evaluate_send(asl_object_t client, asl_object_t m, int slev
 extern uint32_t _asl_lib_vlog(asl_object_t obj, uint32_t eval, asl_object_t msg, const char *format, va_list ap);
 extern uint32_t _asl_lib_vlog_text(asl_object_t obj, uint32_t eval, asl_object_t msg, const char *format, va_list ap);
 
+/**
+ * Shim to os_log_shim_enabled. This shim should use addr (a code address
+ * in a Mach-O executable) to find the image, look up its logging and
+ * tracing preferences, and then call the real function with appropriate
+ * log and type arguments. However, we don't do that - it just means
+ * "caller wants tracing", so let them have it.
+ */
+static bool os_log_shim_enabled(void *addr)
+{
+    (void)addr;
+    return true;
+}
+
 static void
 _syslog_asl_client()
 {
