@@ -31,11 +31,12 @@
 #include <IOKit/hid/IOHIDEventTypes.h>
 #include "IOHIDElement.h"
 
-struct __IOHIDEvent { // FIXME: is this the right order??
+struct IOHIDEvent { // FIXME: is this the right order??
     CFRuntimeBase base;
+    uint32_t type;
     IOHIDEventData *data;
     CFMutableArrayRef children;
-    struct __IOHIDEvent *parent;
+    struct IOHIDEvent *parent;
     size_t capacity;
     AbsoluteTime timeStamp;
     uint64_t senderID;

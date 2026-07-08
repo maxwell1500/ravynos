@@ -60,8 +60,8 @@ SRCS = \
 	hid.subproj/IOHIDServiceKeys.c \
 	hid.subproj/IOHIDLibPrivate.cpp \
 	hid.subproj/IOHIDManager.cpp \
-	hid.subproj/IOHIDQueue.c \
-	hid.subproj/IOHIDTransaction.c \
+	hid.subproj/IOHIDQueue.cpp \
+	hid.subproj/IOHIDTransaction.cpp \
 	hid.subproj/IOHIDEvent.cpp \
 	hid.subproj/IOHIDEventSystem.c \
 	hid.subproj/IOHIDConnectionFilter.c \
@@ -211,6 +211,11 @@ CFLAGS.IOHIDElement.o = -Wno-elaborated-enum-base -I${.CURDIR:H}/xnu/libkern \
 	-include${RAVYN_SDKROOT}/usr/local/include/kernel/os/object.h \
 	-include${RAVYN_SDKROOT}${SLF}/IOKit.framework/PrivateHeaders/hidobjc/hidobjcbase.h \
 	-include${.CURDIR}/CFIOKitShim.h
+CFLAGS.IOHIDEvent.o = -ObjC++ -Wno-elaborated-enum-base -I${.CURDIR:H}/xnu/libkern \
+	-include${RAVYN_SDKROOT}/usr/include/i386/endian.h \
+	-include${RAVYN_SDKROOT}/usr/include/math.h \
+	-include${RAVYN_SDKROOT}/usr/local/include/kernel/os/object.h \
+	-include${RAVYN_SDKROOT}${SLF}/IOKit.framework/PrivateHeaders/hidobjc/hidobjcbase.h
 CFLAGS.IOHIDDevice.o = -Wno-elaborated-enum-base -I${.CURDIR:H}/xnu/libkern \
 	-I${ROOT_SOURCE_DIR}/Libraries/Libsystem/private \
 	-I${ROOT_SOURCE_DIR}/Libraries/Libsystem/libdispatch/private \
@@ -234,6 +239,21 @@ CFLAGS.IOHIDManager.o = -ObjC++ -Wno-elaborated-enum-base -I${.CURDIR:H}/xnu/lib
 	-include${RAVYN_SDKROOT}/usr/local/include/kernel/os/object.h \
 	-include${RAVYN_SDKROOT}${SLF}/IOKit.framework/PrivateHeaders/hidobjc/hidobjcbase.h \
 	-include${.CURDIR}/CFIOKitShim.h
+CFLAGS.IOHIDQueue.o = -ObjC++ -Wno-elaborated-enum-base -I${.CURDIR:H}/xnu/libkern \
+	-I${ROOT_SOURCE_DIR}/Libraries/Libsystem/libdispatch/private \
+	-include${RAVYN_SDKROOT}/usr/include/math.h \
+	-include${RAVYN_SDKROOT}/usr/local/include/kernel/os/object.h \
+	-include${RAVYN_SDKROOT}${SLF}/IOKit.framework/PrivateHeaders/hidobjc/hidobjcbase.h
+CFLAGS.IOHIDTransaction.o = -ObjC++ -Wno-elaborated-enum-base -I${.CURDIR:H}/xnu/libkern \
+	-I${ROOT_SOURCE_DIR}/Libraries/Libsystem/libdispatch/private \
+	-include${RAVYN_SDKROOT}/usr/include/math.h \
+	-include${RAVYN_SDKROOT}/usr/local/include/kernel/os/object.h \
+	-include${RAVYN_SDKROOT}${SLF}/IOKit.framework/PrivateHeaders/hidobjc/hidobjcbase.h
+CFLAGS.IOPMPowerNotifications.o = -I${ROOT_SOURCE_DIR}/Libraries/Libsystem/libsystem_c \
+        -I${.CURDIR}
+CFLAGS.OSKext.o = -I${.CURDIR}/kext.subproj -I${.CURDIR}/stubs \
+        -I${.CURDIR:H}/xnu/libkern/libkern
+CFLAGS.IOPMAssertions.o = -I${.CURDIR} -I${.CURDIR}/stubs
 
 MIG_DEFS = -DIOKIT -DPRIVATE -DNO_SECURITY_FRAMEWORK
 MIGFLAGS = -cc ${CC} -novouchers -server /dev/null ${MIG_DEFS} \

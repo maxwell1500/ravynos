@@ -178,7 +178,7 @@ IOHIDTransactionRef IOHIDTransactionCreate(
     ret = (*deviceInterface)->QueryInterface(
                         deviceInterface, 
                         CFUUIDGetUUIDBytes(kIOHIDDeviceTransactionInterfaceID), 
-                        (LPVOID)&transactionInterface);
+                        (LPVOID *)&transactionInterface);
     
     if ( ret != kIOReturnSuccess || !transactionInterface )
         return NULL;
@@ -223,7 +223,7 @@ IOHIDDeviceRef IOHIDTransactionGetDevice(
 IOHIDTransactionDirectionType IOHIDTransactionGetDirection(     
                                 IOHIDTransactionRef             transaction)
 {
-    IOHIDTransactionDirectionType direction = 0;
+    IOHIDTransactionDirectionType direction = (IOHIDTransactionDirectionType)0;
     (*transaction->transactionInterface)->getDirection(
                                         transaction->transactionInterface, 
                                         &direction);

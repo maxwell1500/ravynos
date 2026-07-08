@@ -21,6 +21,7 @@
  * @APPLE_LICENSE_HEADER_END@
  */
 
+#include <stdatomic.h>
 #include <pthread.h>
 #include <CoreFoundation/CFRuntime.h>
 #include <IOKit/hid/IOHIDDevicePlugIn.h>
@@ -218,7 +219,7 @@ IOHIDQueueRef IOHIDQueueCreate(
     ret = (*deviceInterface)->QueryInterface(
                             deviceInterface, 
                             CFUUIDGetUUIDBytes(kIOHIDDeviceQueueInterfaceID), 
-                            (LPVOID)&queueInterface);
+                            (LPVOID *)&queueInterface);
     
     if ( ret != kIOReturnSuccess || !queueInterface )
         return NULL;
@@ -564,7 +565,7 @@ CFArrayRef _IOHIDQueueCopyElements(IOHIDQueueRef queue)
     if ( !count )
         return NULL;
         
-    IOHIDElementRef * elements  = malloc(sizeof(IOHIDElementRef) * count);
+    IOHIDElementRef * elements  = (IOHIDElementRef *)malloc(sizeof(IOHIDElementRef) * count);
     CFArrayRef        ret       = NULL;
     
     bzero(elements, sizeof(IOHIDElementRef) * count);
