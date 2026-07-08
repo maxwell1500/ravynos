@@ -58,11 +58,11 @@ SRCS = \
 	kext.subproj/macho_util.c \
 	hid.subproj/IOHIDDevice.cpp \
 	hid.subproj/IOHIDServiceKeys.c \
-	hid.subproj/IOHIDLibPrivate.c \
-	hid.subproj/IOHIDManager.c \
+	hid.subproj/IOHIDLibPrivate.cpp \
+	hid.subproj/IOHIDManager.cpp \
 	hid.subproj/IOHIDQueue.c \
 	hid.subproj/IOHIDTransaction.c \
-	hid.subproj/IOHIDEvent.c \
+	hid.subproj/IOHIDEvent.cpp \
 	hid.subproj/IOHIDEventSystem.c \
 	hid.subproj/IOHIDConnectionFilter.c \
 	hid.subproj/IOHIDEventSystemClient.c \
@@ -216,9 +216,24 @@ CFLAGS.IOHIDDevice.o = -Wno-elaborated-enum-base -I${.CURDIR:H}/xnu/libkern \
 	-I${ROOT_SOURCE_DIR}/Libraries/Libsystem/libdispatch/private \
 	-include${RAVYN_SDKROOT}/usr/include/i386/endian.h \
 	-include${RAVYN_SDKROOT}/usr/include/math.h \
+	-include${.CURDIR}/CFIOKitShim.h
+CFLAGS.IOHIDLibPrivate.o = -ObjC++ -Wno-elaborated-enum-base -I${.CURDIR:H}/xnu/libkern \
+	-I${.CURDIR:H}/xnu/libkern/libkern \
+	-I${.CURDIR}/hid.subproj \
+	-I${.CURDIR:H}/Extensions/IOHIDFamily/IOHIDFamily \
+	-include${RAVYN_SDKROOT}/usr/include/math.h \
 	-include${RAVYN_SDKROOT}/usr/local/include/kernel/os/object.h \
 	-include${RAVYN_SDKROOT}${SLF}/IOKit.framework/PrivateHeaders/hidobjc/hidobjcbase.h \
-	-include${.CURDIR}/CFIOKitShim.h -include${RAVYN_SDKROOT}/usr/include/os/log.h
+	-include${.CURDIR:H}/Extensions/IOHIDFamily/IOHIDFamily/IOHIDEventTypes.h \
+	-include${.CURDIR:H}/Extensions/IOHIDFamily/IOHIDFamily/AppleHIDUsageTables.h
+CFLAGS.IOHIDManager.o = -ObjC++ -Wno-elaborated-enum-base -I${.CURDIR:H}/xnu/libkern \
+	-I${.CURDIR:H}/xnu/libkern/libkern \
+	-I${.CURDIR}/hid.subproj \
+	-I${.CURDIR:H}/Extensions/IOHIDFamily/IOHIDFamily \
+	-include${RAVYN_SDKROOT}/usr/include/math.h \
+	-include${RAVYN_SDKROOT}/usr/local/include/kernel/os/object.h \
+	-include${RAVYN_SDKROOT}${SLF}/IOKit.framework/PrivateHeaders/hidobjc/hidobjcbase.h \
+	-include${.CURDIR}/CFIOKitShim.h
 
 MIG_DEFS = -DIOKIT -DPRIVATE -DNO_SECURITY_FRAMEWORK
 MIGFLAGS = -cc ${CC} -novouchers -server /dev/null ${MIG_DEFS} \

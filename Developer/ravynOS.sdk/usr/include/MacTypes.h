@@ -41,6 +41,10 @@
 #include <ConditionalMacros.h>
 #endif
 
+#ifndef TYPE_LONGLONG
+#define TYPE_LONGLONG 1
+#endif
+
 #include <stdbool.h>
 
 #include <sys/types.h>

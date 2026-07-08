@@ -129,13 +129,15 @@ CFLAGS = --sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSION_MIN} \
 	-I${.CURDIR}/../libresolv \
 	-I${.CURDIR}/../../openbsm \
 	-I${.CURDIR}/../libsystem_c/locale \
+	-I${.CURDIR}/../libsystem_trace \
 	-I${ROOT_SOURCE_DIR}/BSD/usr.sbin/mDNSResponder/mDNSShared \
 	-I${ROOT_SOURCE_DIR}/BSD/usr.sbin/configd/dnsinfo \
 	-I${ROOT_SOURCE_DIR}/BSD/sbin/launchd \
 	-I${RAVYN_SDKROOT}/usr/include/arpa \
 	-I${RAVYN_SDKROOT}/usr/local/include/kernel \
 	-I${ROOT_SOURCE_DIR}/Kernel/xnu/libkern \
-	-I${RAVYN_SDKROOT}/System/Library/Frameworks/System.framework/Versions/B/PrivateHeaders
+	-I${RAVYN_SDKROOT}/System/Library/Frameworks/System.framework/Versions/B/PrivateHeaders \
+	-include${.CURDIR}/../libsystem_trace/log.h \
 
 MIG_FLAGS = ${CFLAGS} -D__MigTypeCheck
 

@@ -20,10 +20,14 @@
  * 
  * @APPLE_LICENSE_HEADER_END@
  */
+#include <stdatomic.h>
 #include <pthread.h>
 #include <CoreFoundation/CFRuntime.h>
+#include <CoreFoundation/CFString.h>
 #include "IOHIDManager.h"
 #include <IOKit/IOKitLib.h>
+#include "IOHIDPrivateKeys.h"
+#include "IOHIDBase.h"
 #include "IOHIDLibPrivate.h"
 #include "IOHIDDevicePrivate.h"
 #include "IOHIDLib.h"
@@ -32,6 +36,9 @@
 #include <AssertMacros.h>
 #include <os/lock.h>
 #include <os/state_private.h>
+
+extern void __IOHIDApplyPropertyToDeviceSet(const void *value, void *context);
+extern void __IOHIDSaveDeviceSet(const void *value, void *context);
 
 static IOHIDManagerRef  __IOHIDManagerCreate(
                                     CFAllocatorRef          allocator, 
@@ -705,7 +712,7 @@ void __IOHIDManagerDeviceApplier(
 
         dataRef = (CFMutableDataRef)CFDictionaryGetValue(args->manager->deviceInputBuffers, device);
         if ( !dataRef ) {
-            CFNumberRef number = IOHIDDeviceGetProperty(device, CFSTR(kIOHIDMaxInputReportSizeKey));
+            CFNumberRef number = (CFNumberRef)IOHIDDeviceGetProperty(device, CFSTR(kIOHIDMaxInputReportSizeKey));
             CFIndex     length = 64;
             
             if ( number ) {
@@ -1495,53 +1502,61 @@ void __IOHIDPropertySaveToKeyWithSpecialKeys(CFDictionaryRef dictionary, CFStrin
 CFMutableDictionaryRef __IOHIDPropertyLoadDictionaryFromKey(CFStringRef key)
 {
     CFMutableDictionaryRef result = NULL;
-    CFDictionaryRef baseProperties = CFPreferencesCopyAppValue(key, kCFPreferencesCurrentApplication);
+    CFDictionaryRef baseProperties = (CFDictionaryRef)CFPreferencesCopyAppValue(key, kCFPreferencesCurrentApplication);
     if (baseProperties && (CFGetTypeID(baseProperties) == CFDictionaryGetTypeID())) {
         result = CFDictionaryCreateMutable(NULL, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
         
-        CFDictionaryRef properties = CFPreferencesCopyValue(key, kCFPreferencesAnyApplication, kCFPreferencesAnyUser, kCFPreferencesAnyHost);
+        CFDictionaryRef properties = (CFDictionaryRef)CFPreferencesCopyValue(key,
+			kCFPreferencesAnyApplication, kCFPreferencesAnyUser, kCFPreferencesAnyHost);
         if (properties && (CFGetTypeID(properties) == CFDictionaryGetTypeID()))
             __IOHIDManagerMergeDictionaries(properties, result);
         if (properties)
             CFRelease(properties);
         
-        properties = CFPreferencesCopyValue(key, kCFPreferencesAnyApplication, kCFPreferencesAnyUser, kCFPreferencesCurrentHost);
+        properties = (CFDictionaryRef)CFPreferencesCopyValue(key,
+			kCFPreferencesAnyApplication, kCFPreferencesAnyUser, kCFPreferencesCurrentHost);
         if (properties && (CFGetTypeID(properties) == CFDictionaryGetTypeID()))
             __IOHIDManagerMergeDictionaries(properties, result);
         if (properties)
             CFRelease(properties);
         
-        properties = CFPreferencesCopyValue(key, kCFPreferencesAnyApplication, kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
+        properties = (CFDictionaryRef)CFPreferencesCopyValue(key,
+			kCFPreferencesAnyApplication, kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
         if (properties && (CFGetTypeID(properties) == CFDictionaryGetTypeID()))
             __IOHIDManagerMergeDictionaries(properties, result);
         if (properties)
             CFRelease(properties);
         
-        properties = CFPreferencesCopyValue(key, kCFPreferencesAnyApplication, kCFPreferencesCurrentUser, kCFPreferencesCurrentHost);
+        properties = (CFDictionaryRef)CFPreferencesCopyValue(key,
+			kCFPreferencesAnyApplication, kCFPreferencesCurrentUser, kCFPreferencesCurrentHost);
         if (properties && (CFGetTypeID(properties) == CFDictionaryGetTypeID()))
             __IOHIDManagerMergeDictionaries(properties, result);
         if (properties)
             CFRelease(properties);
         
-        properties = CFPreferencesCopyValue(key, kCFPreferencesCurrentApplication, kCFPreferencesAnyUser, kCFPreferencesAnyHost);
+        properties = (CFDictionaryRef)CFPreferencesCopyValue(key,
+			kCFPreferencesCurrentApplication, kCFPreferencesAnyUser, kCFPreferencesAnyHost);
         if (properties && (CFGetTypeID(properties) == CFDictionaryGetTypeID()))
             __IOHIDManagerMergeDictionaries(properties, result);
         if (properties)
             CFRelease(properties);
         
-        properties = CFPreferencesCopyValue(key, kCFPreferencesCurrentApplication, kCFPreferencesAnyUser, kCFPreferencesCurrentHost);
+        properties = (CFDictionaryRef)CFPreferencesCopyValue(key,
+			kCFPreferencesCurrentApplication, kCFPreferencesAnyUser, kCFPreferencesCurrentHost);
         if (properties && (CFGetTypeID(properties) == CFDictionaryGetTypeID()))
             __IOHIDManagerMergeDictionaries(properties, result);
         if (properties)
             CFRelease(properties);
         
-        properties = CFPreferencesCopyValue(key, kCFPreferencesCurrentApplication, kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
+        properties = (CFDictionaryRef)CFPreferencesCopyValue(key,
+			kCFPreferencesCurrentApplication, kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
         if (properties && (CFGetTypeID(properties) == CFDictionaryGetTypeID()))
             __IOHIDManagerMergeDictionaries(properties, result);
         if (properties)
             CFRelease(properties);
         
-        properties = CFPreferencesCopyValue(key, kCFPreferencesCurrentApplication, kCFPreferencesCurrentUser, kCFPreferencesCurrentHost);
+        properties = (CFDictionaryRef)CFPreferencesCopyValue(key, 
+			kCFPreferencesCurrentApplication, kCFPreferencesCurrentUser, kCFPreferencesCurrentHost);
         if (properties && (CFGetTypeID(properties) == CFDictionaryGetTypeID()))
             __IOHIDManagerMergeDictionaries(properties, result);
         if (properties)
@@ -1630,22 +1645,25 @@ os_state_data_t __IOHIDManagerStateHandler (IOHIDManagerRef device, os_state_hin
     os_state_data_t stateData = NULL;
     CFMutableDictionaryRef deviceState = NULL;
     CFDataRef serializedDeviceState = NULL;
-    
+    uint32_t serializedDeviceStateSize = 0;
+
     if (hints->osh_api != OS_STATE_API_FAULT &&
         hints->osh_api != OS_STATE_API_REQUEST) {
         return NULL;
     }
     
-    deviceState = __IOHIDManagerSerializeState(device);
-    require(deviceState, exit);
+    {
+        deviceState = __IOHIDManagerSerializeState(device);
+        require(deviceState, exit);
     
-    serializedDeviceState = CFPropertyListCreateData(kCFAllocatorDefault, deviceState, kCFPropertyListBinaryFormat_v1_0, 0, NULL);
-    require(serializedDeviceState, exit);
+        serializedDeviceState = CFPropertyListCreateData(kCFAllocatorDefault, deviceState, kCFPropertyListBinaryFormat_v1_0, 0, NULL);
+        require(serializedDeviceState, exit);
     
-    uint32_t serializedDeviceStateSize = (uint32_t)CFDataGetLength(serializedDeviceState);
-    stateData = calloc(1, OS_STATE_DATA_SIZE_NEEDED(serializedDeviceStateSize));
-    require(stateData, exit);
-    
+        serializedDeviceStateSize = (uint32_t)CFDataGetLength(serializedDeviceState);
+        stateData = (os_state_data_t)calloc(1, OS_STATE_DATA_SIZE_NEEDED(serializedDeviceStateSize));
+        require(stateData, exit);
+    }
+
     strlcpy(stateData->osd_title, "IOHIDManager State", sizeof(stateData->osd_title));
     stateData->osd_type = OS_STATE_DATA_SERIALIZED_NSCF_OBJECT;
     stateData->osd_data_size = serializedDeviceStateSize;

@@ -35,6 +35,8 @@
 
 __BEGIN_DECLS
 
+#define kIOHIDManagerKey "IOHIDManager"
+
 /*!
     @defined HID Device Property Keys
     @abstract Keys that represent properties of a paticular device.

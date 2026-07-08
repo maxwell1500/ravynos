@@ -24,13 +24,14 @@
 #ifndef _IOKIT_HID_IOHIDLIBPRIVATE_H
 #define _IOKIT_HID_IOHIDLIBPRIVATE_H
 
+#include "IOHIDEvent.h"
+#include "IOHIDElement.h"
 #include <IOKit/hid/IOHIDLib.h>
 #include <IOKit/hid/IOHIDDevicePlugIn.h>
 #include <IOKit/hid/IOHIDLibUserClient.h>
 #include <IOKit/hid/IOHIDPrivateKeys.h>
 #include <Availability.h>
 #include <os/log.h>
-#include "IOHIDEvent.h"
 #include <CoreFoundation/CFRuntime.h>
 
 __BEGIN_DECLS
@@ -47,6 +48,11 @@ typedef struct _IOHIDCalibrationStruct {
     CFIndex     max;
     double_t    gran;
 } IOHIDCalibrationInfo;
+
+typedef struct _IOHIDApplyPropertyToSetContext {
+    CFStringRef key;
+    CFTypeRef   property;
+} __IOHIDApplyPropertyToSetContext;
 
 typedef struct _IOHIDCallbackApplierContext {
     IOReturn                result;

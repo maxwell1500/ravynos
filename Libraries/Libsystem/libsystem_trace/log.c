@@ -46,7 +46,7 @@
 #include <objc/runtime.h>
 #include <CoreFoundation/CFString.h>
 #include "log_internal.h"
-#include "log.h"
+#include <os/log_private.h>
 #include <os/log_encode_types.h>
 #include <os/log_encode.h>
 

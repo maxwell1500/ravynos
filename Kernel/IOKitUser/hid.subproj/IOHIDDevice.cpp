@@ -27,6 +27,7 @@
 #define DEBUG_ASSERT_PRODUCTION_CODE 0
 #endif
 
+#include <stdatomic.h>
 #include <pthread.h>
 #include <CoreFoundation/CFRuntime.h>
 #include <CoreFoundation/CFBase.h>
@@ -35,17 +36,30 @@
 #include <IOKit/IOMessage.h>
 #include <IOKit/hid/IOHIDKeys.h>
 #include <asl.h>
+#include <dispatch/private.h>
 #include <AssertMacros.h>
 #include "IOHIDDevicePlugIn.h"
+#include "HIDDeviceIvar.h"
 #include "IOHIDDevicePrivate.h"
 #include "IOHIDQueue.h"
 #include "IOHIDElement.h"
+#include "IOHIDEvent.h"
 #include "IOHIDTransaction.h"
 #include "IOHIDLibPrivate.h"
 #include "IOHIDManagerPersistentProperties.h"
+#include <os/log_private.h>
 #include <os/assumes.h>
-#include <dispatch/private.h>
-#include "HIDDeviceIvar.h"
+
+#define kIOHIDManagerUUIDKey "IOHIDManagerUUIDKey"
+
+typedef struct __IOHIDPropertyContext __IOHIDPropertyContext;
+
+extern "C" {
+    void __IOHIDElementLoadProperties(IOHIDElementRef element);
+    void __IOHIDSaveElementSet(const void *value, void *context);
+    void __IOHIDLoadElementSet(const void *value, void *context __unused);
+    CFStringRef __IOHIDManagerGetRootKey(void);
+}
 
 typedef struct  __IOHIDDevice {
     struct objc_object base;
@@ -398,8 +412,8 @@ IOHIDDeviceRef IOHIDDeviceCreate(
 
     require_noerr(IOObjectRetain(service), retain_fail);
     require_noerr(IOCreatePlugInInterfaceForService(service, kIOHIDDeviceTypeID, kIOCFPlugInInterfaceID, &plugInInterface, &score), plugin_fail);
-    require_noerr((*plugInInterface)->QueryInterface(plugInInterface, CFUUIDGetUUIDBytes(kIOHIDDeviceDeviceInterfaceID), (LPVOID)&deviceInterface), query_fail);
-    result = (*plugInInterface)->QueryInterface(plugInInterface, CFUUIDGetUUIDBytes(kIOHIDDeviceDeviceInterfaceID2), (LPVOID)&deviceTimeStampedInterface);
+    require_noerr((*plugInInterface)->QueryInterface(plugInInterface, CFUUIDGetUUIDBytes(kIOHIDDeviceDeviceInterfaceID), (LPVOID *)&deviceInterface), query_fail);
+    result = (*plugInInterface)->QueryInterface(plugInInterface, CFUUIDGetUUIDBytes(kIOHIDDeviceDeviceInterfaceID2), (LPVOID *)&deviceTimeStampedInterface);
     if (result != S_OK) {
         deviceTimeStampedInterface = NULL;
     }
@@ -959,7 +973,7 @@ CFArrayRef __IOHIDDeviceCopyMatchingInputElements(IOHIDDeviceRef device, CFArray
    
     for ( index=0; index<count; index++) {
         elements = IOHIDDeviceCopyMatchingElements( device,
-                                                    CFArrayGetValueAtIndex(multiple, index),
+                                                    (CFDictionaryRef)CFArrayGetValueAtIndex(multiple, index),
                                                     0);
         if ( !elements ) 
             continue;
@@ -1197,7 +1211,7 @@ IOReturn IOHIDDeviceSetValueWithCallback(
         return kIOReturnNoMemory;
 
     elementInfo->device     = device;
-    elementInfo->callback   = callback;
+    elementInfo->callback   = (void *)callback;
     elementInfo->context    = context;
 
     uint32_t timeoutMS = timeout * 1000;
@@ -1276,7 +1290,7 @@ IOReturn IOHIDDeviceSetValueMultipleWithCallback(
             }
 
             elementInfo->device     = device;
-            elementInfo->callback   = callback;
+            elementInfo->callback   = (void *)callback;
             elementInfo->context    = context;
             elementInfo->elements   = CFArrayCreate(CFGetAllocator(device), (const void **)elements, count, &kCFTypeArrayCallBacks);
         
@@ -1374,7 +1388,7 @@ IOReturn IOHIDDeviceGetValueWithCallback(
         return kIOReturnNoMemory;
 
     elementInfo->device     = device;
-    elementInfo->callback   = callback;
+    elementInfo->callback   = (void *)callback;
     elementInfo->context    = context;
 
     uint32_t timeoutMS = timeout * 1000;
@@ -1438,7 +1452,7 @@ IOReturn IOHIDDeviceCopyValueMultipleWithCallback(
             }
 
             elementInfo->device     = device;
-            elementInfo->callback   = callback;
+            elementInfo->callback   = (void *)callback;
             elementInfo->context    = context;
             elementInfo->elements   = CFArrayCreateCopy(CFGetAllocator(device), elements);
         
@@ -1503,7 +1517,7 @@ void __IOHIDDeviceValueCallback(
     IOHIDDeviceRef              device      = elementInfo->device;
     
     if ( elementInfo->callback ) {
-        IOHIDValueCallback callback = elementInfo->callback;
+        IOHIDValueCallback callback = (IOHIDValueCallback)elementInfo->callback;
         
         (*callback)(elementInfo->context,
                     result, 
@@ -1571,7 +1585,7 @@ void __IOHIDDeviceTransactionCallback(
     IOHIDTransactionRef                 transaction     = (IOHIDTransactionRef)sender;
     IOHIDDeviceTransactionCallbackInfo  *elementInfo    = (IOHIDDeviceTransactionCallbackInfo *)context;
     IOHIDDeviceRef                      device          = elementInfo->device;
-    IOHIDValueMultipleCallback          callback        = elementInfo->callback;
+    IOHIDValueMultipleCallback          callback        = (IOHIDValueMultipleCallback)elementInfo->callback;
     CFMutableDictionaryRef              values          = NULL;
     
     do {
@@ -2046,7 +2060,7 @@ CFStringRef __IOHIDDeviceGetRootKey(IOHIDDeviceRef device)
 //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 CFStringRef __IOHIDDeviceGetUUIDString(IOHIDDeviceRef device)
 {
-    CFStringRef uuidStr = IOHIDDeviceGetProperty(device, CFSTR(kIOHIDManagerUUIDKey));
+    CFStringRef uuidStr = (CFStringRef)IOHIDDeviceGetProperty(device, CFSTR(kIOHIDManagerUUIDKey));
     if (!uuidStr || (CFGetTypeID(uuidStr) != CFStringGetTypeID())) {
         CFUUIDRef uuid = CFUUIDCreate(NULL);
         uuidStr = CFUUIDCreateString(NULL, uuid);
@@ -2117,7 +2131,7 @@ void __IOHIDDeviceSaveProperties(IOHIDDeviceRef device, __IOHIDPropertyContext *
 //++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 void __IOHIDDeviceLoadProperties(IOHIDDeviceRef device)
 {
-    CFStringRef uuidStr = IOHIDDeviceGetProperty(device, CFSTR(kIOHIDManagerUUIDKey));
+    CFStringRef uuidStr = (CFStringRef)IOHIDDeviceGetProperty(device, CFSTR(kIOHIDManagerUUIDKey));
     device->loadProperties = TRUE;
     
     // Have we already generated a key?

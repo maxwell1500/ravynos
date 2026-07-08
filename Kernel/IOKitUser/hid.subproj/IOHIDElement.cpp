@@ -32,13 +32,6 @@
 #include "IOHIDManagerPersistentProperties.h"
 #include "HIDElementIvar.h"
 
-typedef struct {
-    CFStringRef applicationID;
-    CFStringRef userName;
-    CFStringRef hostName;
-    IOOptionBits options;
-} __IOHIDPropertyContext;
-
 typedef struct  __IOHIDElement {
     struct objc_object base;
     struct {

@@ -21,6 +21,7 @@
  * @APPLE_LICENSE_HEADER_END@
  */
 
+#include <stdatomic.h>
 #include <IOKit/IOKitLib.h>
 #include <IOKit/IOReturn.h>
 #include <stdarg.h>
@@ -36,6 +37,17 @@
 #include "IOHIDEvent.h"
 #include <IOKit/hid/AppleHIDUsageTables.h>
 #include <os/assumes.h>
+
+#if TYPE_LONGLONG
+CF_INLINE AbsoluteTime __CFUInt64ToAbsoluteTime(uint64_t x) {
+    AbsoluteTime a;
+    a.hi = x >> 32;
+    a.lo = x & (uint64_t)0xFFFFFFFF;
+    return a;
+}
+#endif
+
+extern "C" CFArrayRef IOHIDElementGetChildren(IOHIDElementRef element);
 
 void _IOObjectCFRelease(        CFAllocatorRef          allocator  __unused, 
                                 const void *            value)
@@ -187,7 +199,7 @@ void _IOHIDDebugEventAddPerfData(IOHIDEventRef event, int timepoint, uint64_t ti
         IOHIDEventPerfData data = {0, 0, 0, 0, 0};
         perfEvent = IOHIDEventCreateVendorDefinedEvent(
                                                        CFGetAllocator(event),
-                                                       mach_absolute_time(),
+                                                       __CFUInt64ToAbsoluteTime(mach_absolute_time()),
                                                        kHIDPage_AppleVendor,
                                                        kHIDUsage_AppleVendor_Perf,
                                                        0,
@@ -207,7 +219,7 @@ void _IOHIDDebugEventAddPerfData(IOHIDEventRef event, int timepoint, uint64_t ti
     
     IOHIDEventPerfData *data = NULL;
     CFIndex     eventLength = 0;
-    IOHIDEventGetVendorDefinedData(perfEvent, (uint8_t**)&data, &eventLength);
+    IOHIDEventGetVendorDefinedData(perfEvent, (uint8_t**)&data, (uint32_t*)&eventLength);
     if (data) {
         switch (timepoint) {
             case kIOHIDEventPerfDataPointEventSystemReceive:
@@ -381,18 +393,18 @@ void _IOHIDObjectInternalReleaseCallback (CFAllocatorRef allocator __unused, con
 
 CFTypeRef _IOHIDObjectInternalRetain (CFTypeRef cf)
 {
-    const IOHIDObjectClass * class = (const IOHIDObjectClass *)_CFRuntimeGetClassWithTypeID(CFGetTypeID(cf));
-    if (class) {
-        class->intRetainCount (+1, cf);
+    const IOHIDObjectClass * Class = (const IOHIDObjectClass *)_CFRuntimeGetClassWithTypeID(CFGetTypeID(cf));
+    if (Class) {
+        Class->intRetainCount (+1, cf);
     }
     return cf;
 }
 
 void _IOHIDObjectInternalRelease (CFTypeRef cf)
 {
-    const IOHIDObjectClass * class = (const IOHIDObjectClass *)_CFRuntimeGetClassWithTypeID(CFGetTypeID(cf));
-    if (class) {
-       class->intRetainCount (-1, cf);
+    const IOHIDObjectClass * Class = (const IOHIDObjectClass *)_CFRuntimeGetClassWithTypeID(CFGetTypeID(cf));
+    if (Class) {
+       Class->intRetainCount (-1, cf);
     }
 }
 
@@ -414,8 +426,8 @@ uint32_t _IOHIDObjectRetainCount (intptr_t op, CFTypeRef cf,  boolean_t isIntern
             retainCount = atomic_fetch_sub((_Atomic uint32_t volatile *)cnt, 1);
             os_assert(retainCount);
             if (retainCount == 1) {
-                const IOHIDObjectClass * class = (const IOHIDObjectClass *)_CFRuntimeGetClassWithTypeID(CFGetTypeID(cf));
-                void (*finalizer)(CFTypeRef cf) = isInternal ? class->intFinalize : class->cfClass.finalize;
+                const IOHIDObjectClass * Class = (const IOHIDObjectClass *)_CFRuntimeGetClassWithTypeID(CFGetTypeID(cf));
+                void (*finalizer)(CFTypeRef cf) = isInternal ? Class->intFinalize : Class->cfClass.finalize;
                 if (finalizer) {
                     finalizer (cf);
                 }
