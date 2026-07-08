@@ -36,9 +36,9 @@ SRCS = src/dyldStartup.s \
 	src/missing_symbol_stubs.c \
 	src/cc_stubs.c
 OBJS = ${SRCS:S/.c$/.o/:S/.cpp$/.o/:S/.s$/.o/:S/.S$/.o/}
-MAN = ../doc/man/man1/dyld.1 \
-	../doc/man/man1/dyld_usage.1 \
-	../doc/man/man1/update_dyld_shared_cache.1
+MAN = ../doc/man/man1/dyld.1.gz \
+	../doc/man/man1/dyld_usage.1.gz \
+	../doc/man/man1/update_dyld_shared_cache.1.gz
 
 
 COMMONFLAGS = --target=${CpuArch}-apple-darwin \
@@ -131,9 +131,9 @@ ${.OBJDIR}/${LIB}: ${OBJS}
 	cp -f ${.TARGET} ${RAVYN_SDKROOT}/usr/lib/
 	cp -f ${.TARGET} ${SYSROOT_DIR}/usr/lib/
 	mkdir -p ${RAVYN_SDKROOT}${MANDIR}/man1 ${SYSROOT_DIR}${MANDIR}/man1
-.for man in ${MAN:T}
-	cp -f ${.OBJDIR}/${man}.gz ${RAVYN_SDKROOT}${MANDIR}/man1/
-	cp -f ${.OBJDIR}/${man}.gz ${SYSROOT_DIR}${MANDIR}/man1/
+.for man in ${MAN}
+	cp -f ${.CURDIR}/${man} ${RAVYN_SDKROOT}${MANDIR}/man1/
+	cp -f ${.CURDIR}/${man} ${SYSROOT_DIR}${MANDIR}/man1/
 .endfor
 
 .include <bsd.lib.mk>
