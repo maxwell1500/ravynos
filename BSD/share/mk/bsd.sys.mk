@@ -532,7 +532,8 @@ CFLAGS += -fcolor-diagnostics
 MK_OBJC_RUNTIME ?= yes
 _OBJC_SRCS = ${SRCS:M*.m} ${SRCS:M*.mm}
 .if "${MK_OBJC_RUNTIME}" != "no" && !empty(_OBJC_SRCS)
-LDFLAGS += -fobjc-link-runtime
+LDFLAGS += -framework Foundation 
+#-fobjc-link-runtime
 .endif
 
 # we are generally the last makefile read

@@ -26,6 +26,8 @@
 
 /* NOTE! Many of these are probably in the wrong place */
 
+__BEGIN_DECLS
+
 typedef struct __IOHIDPropertyContext {
     CFStringRef applicationID;
     CFStringRef userName;
@@ -82,5 +84,8 @@ extern void __IOHIDManagerLoadProperties(IOHIDManagerRef manager);
  */
 extern void __IOHIDManagerSaveProperties(IOHIDManagerRef manager,
     __IOHIDPropertyContext *context);
+
+__END_DECLS
+
 
 #endif /* __IOKIT_HID_IOHIDMANAGERPERSISTENT_PROPERTIES_H__ */

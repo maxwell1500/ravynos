@@ -8,7 +8,7 @@ CXXLIB = ${RAVYN_SDKROOT}/usr/lib/libc++.1.dylib
 RTLIB = ${RAVYN_SDKROOT}/usr/lib/system/libcompiler_rt.dylib
 
 SUBDIR = libfirehose_kernel CrashReporterClient MiscLibs objc4 dyld Libsystem \
-	ICU
+	ICU zlib
 
 # Don't try to link Foundation or System
 MK_OBJC_RUNTIME = no

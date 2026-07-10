@@ -75,7 +75,7 @@ enum {
 #define IOHID_DEBUG_END(code)           IOHID_DEBUG_CODE(code) | DBG_FUNC_END
 
 
-#define HIDDEBUGTRACE(code, a, b, c, d)  _IOHIDDebugTrace (code, DBG_FUNC_NONE, a, b, c, d)
+#define HIDDEBUGTRACE(code, a, b, c, d)  _IOHIDDebugTrace (code, DBG_FUNC_NONE, (uint64_t)a, (uint64_t)b, (uint64_t)c, (uint64_t)d)
 #define HIDPROFTRACE(code, a, b, c, d)   _IOHIDDebugTrace (code, DBG_FUNC_NONE, a, b, c, d)
 #define HIDFUNCSTART(code, a, b, c, d)   _IOHIDDebugTrace (code, DBG_FUNC_START, a, b, c, d)
 #define HIDFUNCEND(code, a, b, c, d)     _IOHIDDebugTrace (code, DBG_FUNC_END, a, b, c, d)

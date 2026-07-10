@@ -22,6 +22,7 @@
  * @APPLE_LICENSE_HEADER_END@
  */
 
+#include <stdatomic.h>
 #include <AssertMacros.h>
 #include <pthread.h>
 #include <dispatch/dispatch.h>
@@ -450,21 +451,24 @@ os_state_data_t __IOHIDUserDeviceStateHandler(IOHIDUserDeviceRef device,
     os_state_data_t stateData = NULL;
     CFMutableDictionaryRef deviceState = NULL;
     CFDataRef serializedDeviceState = NULL;
-    
+    uint32_t serializedDeviceStateSize = 0;
+
     if (hints->osh_api != OS_STATE_API_FAULT &&
         hints->osh_api != OS_STATE_API_REQUEST) {
         return NULL;
     }
     
-    deviceState = __IOHIDUserDeviceSerializeState(device);
-    require(deviceState, exit);
+    {
+        deviceState = __IOHIDUserDeviceSerializeState(device);
+        require(deviceState, exit);
     
-    serializedDeviceState = CFPropertyListCreateData(kCFAllocatorDefault, deviceState, kCFPropertyListBinaryFormat_v1_0, 0, NULL);
-    require(serializedDeviceState, exit);
+        serializedDeviceState = CFPropertyListCreateData(kCFAllocatorDefault, deviceState, kCFPropertyListBinaryFormat_v1_0, 0, NULL);
+        require(serializedDeviceState, exit);
     
-    uint32_t serializedDeviceStateSize = (uint32_t)CFDataGetLength(serializedDeviceState);
-    stateData = calloc(1, OS_STATE_DATA_SIZE_NEEDED(serializedDeviceStateSize));
-    require(stateData, exit);
+        serializedDeviceStateSize = (uint32_t)CFDataGetLength(serializedDeviceState);
+        stateData = (os_state_data_t)calloc(1, OS_STATE_DATA_SIZE_NEEDED(serializedDeviceStateSize));
+        require(stateData, exit);
+    }
     
     strlcpy(stateData->osd_title, "IOHIDUserDevice State", sizeof(stateData->osd_title));
     stateData->osd_type = OS_STATE_DATA_SERIALIZED_NSCF_OBJECT;
@@ -1004,7 +1008,7 @@ void __IOHIDUserDeviceHandleReportAsyncCallback(void *refcon, IOReturn result)
 //------------------------------------------------------------------------------
 IOReturn IOHIDUserDeviceHandleReportAsyncWithTimeStamp(IOHIDUserDeviceRef device, uint64_t timestamp, const uint8_t *report, CFIndex reportLength, IOHIDUserDeviceHandleReportAsyncCallback callback, void * refcon)
 {
-    IOHIDDeviceHandleReportAsyncContext *pContext = malloc(sizeof(IOHIDDeviceHandleReportAsyncContext));
+    IOHIDDeviceHandleReportAsyncContext *pContext = (IOHIDDeviceHandleReportAsyncContext *)malloc(sizeof(IOHIDDeviceHandleReportAsyncContext));
     
     if (!pContext)
         return kIOReturnNoMemory;

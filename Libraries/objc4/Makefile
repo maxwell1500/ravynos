@@ -79,30 +79,25 @@ OBJCXXFLAGS = ${COMMONFLAGS} -std=gnu++14 \
 CXXFLAGS = ${COMMONFLAGS} -std=gnu++14 -D_LIBCPP_VISIBLE=""
 ACFLAGS = ${COMMONFLAGS}
 
-LDFLAGS = -Wl,-syslibroot,${RAVYN_SDKROOT}/usr/lib \
-	-L${RAVYN_SDKROOT}/usr/lib -L${RAVYN_SDKROOT}/usr/lib/system \
-	-umbrella System -mmacos-version-min=${MACOS_VERSION_MIN} \
+LDFLAGS = --sysroot=${RAVYN_SDKROOT} -L${RAVYN_SDKROOT}/usr/lib \
+	-mmacos-version-min=${MACOS_VERSION_MIN} \
 	-Wl,-install_name,/usr/lib/libobjc.dylib -Wl,-current_version,228 \
-	-Wl,-compatibility_version,1 -Wl,-allowable_client,libSystem \
-	-Wl,-allowable_client,System -Wl,-allowable_client,Foundation \
+	-Wl,-compatibility_version,1  \
 	-Wl,-order_file,${.CURDIR}/libobjc.order \
 	-Wl,-interposable_list,${.CURDIR}/interposable.txt \
-	-Wl,-sectalign,__DATA,__data,0x1000 -lc++ -lCrashReporterClient \
+	-Wl,-sectalign,__DATA,__data,0x1000 -lc++ \
 	-Wl,-unexported_symbols_list,${.CURDIR}/unexported_symbols \
-	-lobjc-trampolines -lsystem_c -lsystem_platform -lsystem_pthread \
-	-lsystem_malloc -lunwind -lsystem_blocks -lsystem_kernel \
-	-ldispatch -ldyld
+	-lobjc-trampolines -lSystem 
 
 all: ${.OBJDIR}/libobjc-trampolines.dylib ${.OBJDIR}/libobjc.A.dylib
 
 ${.OBJDIR}/libobjc-trampolines.dylib: ${.CURDIR}/runtime/objc-blocktramps-x86_64.s
 	${CC} --target=${CpuArch}-apple-darwin -x assembler-with-cpp \
-	  -mmacos-version-min=${MACOS_VERSION_MIN} -umbrella System \
+	  -mmacos-version-min=${MACOS_VERSION_MIN} \
 	  --sysroot=${RAVYN_SDKROOT} -fpic -shared -Wl,-dylib \
 	  -fuse-ld=${LD} -o ${.OBJDIR}/libobjc-trampolines.dylib \
 	  -Wl,-install_name,/usr/lib/libobjc-trampolines.dylib \
-	  -Wl,-current_version,228 \
-	  -L${RAVYN_SDKROOT}/usr/lib/system -ldyld \
+	  -Wl,-current_version,228 -lSystem \
 	  ${.ALLSRC}
 	mkdir -p ${SYSROOT_DIR}/usr/lib ${RAVYN_SDKROOT}/usr/lib
 	cp -f ${.OBJDIR}/libobjc-trampolines.dylib ${RAVYN_SDKROOT}/usr/lib/

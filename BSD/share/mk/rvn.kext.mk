@@ -14,7 +14,7 @@ SDKROOT = ${RAVYN_SDKROOT}
 SRCS += kmod_info.c
 OBJS = ${SRCS:C/\..*$/.o/}
 
-CFLAGS += --sysroot=${SDKROOT} -I${SDKROOT}/usr/include \
+CFLAGS += -DKERNEL --sysroot=${SDKROOT} -I${SDKROOT}/usr/include \
 	-I${SDKROOT}/usr/local/include -I${SDKROOT}/usr/local/include/kernel
 CXXFLAGS += -fapple-kext ${CFLAGS}
 LDFLAGS += -nostdlib -Wl,-bundle -Wl,-undefined,dynamic_lookup \

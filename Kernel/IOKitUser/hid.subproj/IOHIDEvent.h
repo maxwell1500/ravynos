@@ -31,6 +31,8 @@
 #include <IOKit/hid/IOHIDEventTypes.h>
 #include "IOHIDElement.h"
 
+__BEGIN_DECLS
+
 struct IOHIDEvent { // FIXME: is this the right order??
     CFRuntimeBase base;
     uint32_t type;
@@ -72,5 +74,7 @@ IOHIDEventRef IOHIDEventCreateVendorDefinedEvent(CFAllocatorRef allocator,
     CFIndex length,
     IOHIDEventOptionBits options);
 
+
+__END_DECLS
 
 #endif /* _IOHIDEvent_H_ */

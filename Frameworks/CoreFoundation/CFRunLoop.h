@@ -23,6 +23,8 @@
 
 /*	CFRunLoop.h
 	Copyright (c) 1998-2014, Apple Inc. All rights reserved.
+        Modified for ravynOS 2026. This note is in support of clause
+        2.2 of the License.
 */
 
 #if !defined(__COREFOUNDATION_CFRUNLOOP__)
@@ -64,6 +66,12 @@ typedef CF_OPTIONS(CFOptionFlags, CFRunLoopActivity) {
     kCFRunLoopAfterWaiting = (1UL << 6),
     kCFRunLoopExit = (1UL << 7),
     kCFRunLoopAllActivities = 0x0FFFFFFFU
+};
+
+/* PM assertions */
+enum {
+    __CFRunLoopOptionsTakeAssertion = (1ULL << 0),
+    __CFRunLoopOptionsDropAssertion = (1ULL << 1)
 };
 
 CF_EXPORT const CFStringRef kCFRunLoopDefaultMode;

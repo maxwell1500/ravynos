@@ -84,7 +84,7 @@ SRCS = \
 	hid.subproj/IOHIDEventServer.c \
 	pwr_mgt.subproj/IOPMAssertions.c \
 	network.subproj/IOUserEthernetController.c \
-	hid.subproj/IOHIDUserDevice.c \
+	hid.subproj/IOHIDUserDevice.cpp \
 	hid.subproj/IOHIDPlugins.c \
 	platform.subproj/IOPlatformSupport.c
 
@@ -254,6 +254,13 @@ CFLAGS.IOPMPowerNotifications.o = -I${ROOT_SOURCE_DIR}/Libraries/Libsystem/libsy
 CFLAGS.OSKext.o = -I${.CURDIR}/kext.subproj -I${.CURDIR}/stubs \
         -I${.CURDIR:H}/xnu/libkern/libkern
 CFLAGS.IOPMAssertions.o = -I${.CURDIR} -I${.CURDIR}/stubs
+CFLAGS.IOHIDUserDevice.o = -ObjC++ -Wno-elaborated-enum-base \
+        -Wno-c++11-narrowing -I${.CURDIR:H}/xnu/libkern \
+	-I${ROOT_SOURCE_DIR}/Libraries/Libsystem/libdispatch/private \
+        -I${.CURDIR}/hid.subproj \
+	-include${RAVYN_SDKROOT}/usr/include/math.h \
+	-include${RAVYN_SDKROOT}/usr/local/include/kernel/os/object.h \
+	-include${RAVYN_SDKROOT}${SLF}/IOKit.framework/PrivateHeaders/hidobjc/hidobjcbase.h
 
 MIG_DEFS = -DIOKIT -DPRIVATE -DNO_SECURITY_FRAMEWORK
 MIGFLAGS = -cc ${CC} -novouchers -server /dev/null ${MIG_DEFS} \
@@ -264,9 +271,11 @@ iokitPrivateHdrs = ${RAVYN_SDKROOT}/System/Library/Frameworks/IOKit.framework/Ve
 iokitHdrs = ${RAVYN_SDKROOT}/System/Library/Frameworks/IOKit.framework/Versions/A/Headers
 
 LDFLAGS = --sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSION_MIN} \
-	-Wl,-compatibility_version,1.0.0 -Wl,-current_version,275.0.0
+	-Wl,-compatibility_version,1.0.0 -Wl,-current_version,275.0.0 \
+        -L${RAVYN_SDKROOT}/usr/local/lib/kernel -lcc_kext -lkxld -lkernel \
+        -framework CoreFoundation -lobjc -lc++ -lz -lSystem
 
-all: copy_headers
+all: copy_headers libkxld.a
 
 copy_headers: .PHONY
 	mkdir -p ${RAVYN_SDKROOT}/usr/local/include
@@ -412,6 +421,10 @@ powermanagement.c powermanagement.h: ${.CURDIR}/pwr_mgt.subproj/powermanagement.
 iokitmig64.h iokitmig64.c: ${.CURDIR}/iokitmig.defs
 	${MIG} ${MIGFLAGS} -header iokitmig64.h -user iokitmig64.c \
 		${.CURDIR}/iokitmig.defs
+
+libkxld.a:
+	${MAKE} -C${.CURDIR} -f Makefile.kxld all
+	cp -f ${.OBJDIR}/${.TARGET} ${RAVYN_SDKROOT}/usr/local/lib/kernel
 
 # SUBDIR = kext.subproj
 

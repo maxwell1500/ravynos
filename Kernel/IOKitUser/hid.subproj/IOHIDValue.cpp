@@ -22,6 +22,7 @@
  */
 
 #include <pthread.h>
+#include <math.h>
 #include <System/libkern/OSCrossEndian.h>
 #include <CoreFoundation/CFRuntime.h>
 #include <CoreFoundation/CFData.h>
