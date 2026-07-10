@@ -10,6 +10,8 @@
 
 #include <IOKit/hid/IOHIDEvent.h>
 
+__BEGIN_DECLS
+
 CF_EXPORT
 IOHIDEventRef _IOHIDEventCreate(CFAllocatorRef allocator,
                                 CFIndex dataSize,
@@ -22,5 +24,7 @@ Boolean _IOHIDEventEqual(CFTypeRef cf1, CFTypeRef cf2);
 
 CF_EXPORT
 CFStringRef IOHIDEventCopyDescription(IOHIDEventRef event);
+
+__END_DECLS
 
 #endif /* IOHIDEventPrivate_h */

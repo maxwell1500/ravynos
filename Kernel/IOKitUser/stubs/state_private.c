@@ -20,44 +20,18 @@
  * THE SOFTWARE.
  */
 
-#ifndef __IOKIT_PM_ENERGYTRACE_H__
-#define __IOKIT_PM_ENERGYTRACE_H__
 
-__BEGIN_DECLS
+#include <os/state_private.h>
 
-typedef unsigned int uint32_t;
+os_state_handle_t
+os_state_add_handler(dispatch_queue_t queue, os_state_block_t block)
+{
+    return (os_state_handle_t)NULL;
+}
 
-/* These values are almost certainly wrong. Does it matter? */
-enum {
-    kEnTrQualNone = 0,
-    kEnTrQualSPKeepSystemAwake,
-    kEnTrCompSysPower,
-    kEnTrActSPPMAssertion,
-    kEnTrValNone,
-    kEnTrModSPRetain,
-    kEnTrModSPRelease
-};
+void
+os_state_remove_handler(os_state_handle_t handle)
+{
+}
 
-/* Inferred from call sites */
-void entr_act_begin(uint32_t component,
-    uint32_t action,
-    uint32_t assertion_id,
-    uint32_t intensity,   // or similar enum
-    uint32_t value);
-
-void entr_act_modify(uint32_t component,
-    uint32_t action,
-    uint32_t assertion_id,
-    uint32_t modifier,
-    uint32_t value);
-
-void entr_act_end(uint32_t component,
-    uint32_t action,
-    uint32_t assertion_id,
-    uint32_t qualifier,
-    uint32_t value);
-
-__END_DECLS
-
-#endif /* __IOKIT_PM_ENERGYTRACE_H__ */
 

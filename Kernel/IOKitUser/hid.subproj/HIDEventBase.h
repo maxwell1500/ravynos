@@ -8,6 +8,8 @@
 #ifndef HIDEventBase_h
 #define HIDEventBase_h
 
+__BEGIN_DECLS
+
 extern CFTypeID IOHIDEventGetTypeID(void);
 
 #if __OBJC__
@@ -24,5 +26,7 @@ extern CFTypeID IOHIDEventGetTypeID(void);
 @end
 
 #endif /* __OBJC__ */
+
+__END_DECLS
 
 #endif /* HIDEventBase_h */

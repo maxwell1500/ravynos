@@ -20,44 +20,41 @@
  * THE SOFTWARE.
  */
 
-#ifndef __IOKIT_PM_ENERGYTRACE_H__
-#define __IOKIT_PM_ENERGYTRACE_H__
+#include "energytrace.h"
 
-__BEGIN_DECLS
-
-typedef unsigned int uint32_t;
-
-/* These values are almost certainly wrong. Does it matter? */
-enum {
-    kEnTrQualNone = 0,
-    kEnTrQualSPKeepSystemAwake,
-    kEnTrCompSysPower,
-    kEnTrActSPPMAssertion,
-    kEnTrValNone,
-    kEnTrModSPRetain,
-    kEnTrModSPRelease
-};
-
-/* Inferred from call sites */
 void entr_act_begin(uint32_t component,
     uint32_t action,
     uint32_t assertion_id,
     uint32_t intensity,   // or similar enum
-    uint32_t value);
+    uint32_t value)
+{
+    (void)action;
+    (void)assertion_id;
+    (void)intensity;
+    (void)value;
+}
 
 void entr_act_modify(uint32_t component,
     uint32_t action,
     uint32_t assertion_id,
     uint32_t modifier,
-    uint32_t value);
+    uint32_t value)
+{
+    (void)action;
+    (void)assertion_id;
+    (void)modifier;
+    (void)value;
+}
 
 void entr_act_end(uint32_t component,
     uint32_t action,
     uint32_t assertion_id,
     uint32_t qualifier,
-    uint32_t value);
-
-__END_DECLS
-
-#endif /* __IOKIT_PM_ENERGYTRACE_H__ */
+    uint32_t value)
+{
+    (void)action;
+    (void)assertion_id;
+    (void)qualifier;
+    (void)value;
+}
 

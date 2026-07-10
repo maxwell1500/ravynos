@@ -6,6 +6,9 @@ INSTALL_NAME_DIR = /System/Library/Frameworks/IOKit.framework/Versions/A
 
 .PATH: ${.OBJDIR}
 SRCS = \
+        stubs/energytrace.c \
+        stubs/state_private.c \
+        stubs/msgtracer_client.c \
 	iokitmig64.c \
 	powermanagement.c \
 	kextmanager_mig.c \
@@ -141,6 +144,7 @@ CXXFLAGS = --sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSION_MIN} \
 	-I${RAVYN_SDKROOT}${SLF}/System.framework/PrivateHeaders \
 	-I${ROOT_SOURCE_DIR}/Libraries/Libsystem/private
 
+CFLAGS.msgtracer_client.o = -I${.CURDIR}
 CFLAGS.IOMIGMachPort.o = -include${RAVYN_SDKROOT}/usr/include/mach/error.h
 CFLAGS.IOHIDElementObjc.o = -ObjC++ -Wno-missing-method-return-type
 CFLAGS.IOHIDDeviceObjc.o = -ObjC++ -Wno-missing-method-return-type

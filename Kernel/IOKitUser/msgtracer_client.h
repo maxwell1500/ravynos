@@ -29,6 +29,8 @@
 #include <stdarg.h>
 #include <msgtracer_keys.h>
 
+__BEGIN_DECLS
+
 /**
  * @function msgtracer_log_with_keys
  * @abstract Logs a trace message to the system log
@@ -54,5 +56,7 @@ extern int32_t msgtracer_log_with_keys(const char* domain, ...);
  * @result Returns zero on success, non-zero on error
  */
 extern int32_t msgtracer_vlog_with_keys(const char* domain, va_list args);
+
+__END_DECLS
 
 #endif // _MSGTRACER_CLIENT_H

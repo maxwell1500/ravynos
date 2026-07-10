@@ -1,4 +1,6 @@
 /*
+ * Apple-compatible message tracing
+ *
  * Copyright (C) 2026 Zoe Knox. All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -20,44 +22,21 @@
  * THE SOFTWARE.
  */
 
-#ifndef __IOKIT_PM_ENERGYTRACE_H__
-#define __IOKIT_PM_ENERGYTRACE_H__
+#include <stdio.h>
+#include <stdlib.h>
+#include "msgtracer_client.h"
 
-__BEGIN_DECLS
+int32_t msgtracer_log_with_keys(const char* domain, ...)
+{
+    va_list args;
+    va_start(domain, args);
+    int32_t result = msgtracer_vlog_with_keys(domain, args);
+    va_end(args);
+    return result;
+}
 
-typedef unsigned int uint32_t;
-
-/* These values are almost certainly wrong. Does it matter? */
-enum {
-    kEnTrQualNone = 0,
-    kEnTrQualSPKeepSystemAwake,
-    kEnTrCompSysPower,
-    kEnTrActSPPMAssertion,
-    kEnTrValNone,
-    kEnTrModSPRetain,
-    kEnTrModSPRelease
-};
-
-/* Inferred from call sites */
-void entr_act_begin(uint32_t component,
-    uint32_t action,
-    uint32_t assertion_id,
-    uint32_t intensity,   // or similar enum
-    uint32_t value);
-
-void entr_act_modify(uint32_t component,
-    uint32_t action,
-    uint32_t assertion_id,
-    uint32_t modifier,
-    uint32_t value);
-
-void entr_act_end(uint32_t component,
-    uint32_t action,
-    uint32_t assertion_id,
-    uint32_t qualifier,
-    uint32_t value);
-
-__END_DECLS
-
-#endif /* __IOKIT_PM_ENERGYTRACE_H__ */
+int32_t msgtracer_vlog_with_keys(const char* domain, va_list args)
+{
+    return 0; // FIXME: implement
+}
 

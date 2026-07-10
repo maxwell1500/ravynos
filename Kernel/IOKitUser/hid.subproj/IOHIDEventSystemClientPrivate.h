@@ -26,6 +26,8 @@
 #include <CoreFoundation/CoreFoundation.h>
 #include <IOKit/hidsystem/IOHIDServiceClient.h>
 
+__BEGIN_DECLS
+
 typedef uint32_t IOHIDEventSystemClientType;
 typedef struct __IOHIDEventSystemClient * IOHIDEventSystemClientRef;
 
@@ -53,5 +55,7 @@ CF_EXPORT _Nullable
 IOHIDServiceClientRef IOHIDEventSystemClientCopyServiceForRegistryID(
     IOHIDEventSystemClientRef _Nonnull client,
     CFStringRef _Nonnull entryID);
+
+__END_DECLS
 
 #endif // _IOHIDEventSystemClientPrivate_h
