@@ -1,6 +1,6 @@
 MK_WERROR = no
 LIB = system_trace
-SRCS = log.c signpost.c
+SRCS = log.c signpost.c init.c
 
 SLF = /System/Library/Frameworks
 CFLAGS = -mmacos-version-min=${MACOS_VERSION_MIN} --sysroot=${RAVYN_SDKROOT} \

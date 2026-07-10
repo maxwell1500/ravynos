@@ -84,6 +84,10 @@ xnu_all: installhdrs libfirehose_kernel compiler_rt
 	cp -Rf ${.OBJDIR}/xnu/sym/System.kext ${target_dir:H}/Extensions/
 .endfor
 
-SUBDIR = xnu/libkern/kmod xnu/libkern/kxld IOKitUser Extensions
+# NOTE! This kxld build is for the host toolchain. The target kxld is built
+# later in IOKitUser
+SUBDIR = xnu/libkern/kmod xnu/libkern/kxld
+#SUBDIR += IOKitUser 
+#SUBDIR += Extensions
 
 .include <bsd.subdir.mk>

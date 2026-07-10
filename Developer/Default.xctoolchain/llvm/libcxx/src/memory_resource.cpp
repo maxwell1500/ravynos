@@ -78,49 +78,73 @@ union ResourceInitHelper {
   ~ResourceInitHelper() {}
 };
 
-// Pretend we're inside a system header so the compiler doesn't flag the use of the init_priority
-// attribute with a value that's reserved for the implementation (we're the implementation).
-#include "memory_resource_init_helper.h"
+// Lazy initialization for resource singletons
+static ResourceInitHelper* __get_res_init() noexcept {
+  static ResourceInitHelper __res_init;
+  return &__res_init;
+}
 
 } // end namespace
 
-memory_resource* new_delete_resource() noexcept { return &res_init.resources.new_delete_res; }
+memory_resource* new_delete_resource() noexcept { 
+  return &__get_res_init()->resources.new_delete_res; 
+}
 
-memory_resource* null_memory_resource() noexcept { return &res_init.resources.null_res; }
+memory_resource* null_memory_resource() noexcept { 
+  return &__get_res_init()->resources.null_res; 
+}
 
 // default_memory_resource()
 
 static memory_resource* __default_memory_resource(bool set = false, memory_resource* new_res = nullptr) noexcept {
 #ifndef _LIBCPP_HAS_NO_ATOMIC_HEADER
-  static constinit atomic<memory_resource*> __res{&res_init.resources.new_delete_res};
+  static constinit atomic<memory_resource*> __res{nullptr};
   if (set) {
     new_res = new_res ? new_res : new_delete_resource();
     // TODO: Can a weaker ordering be used?
     return std::atomic_exchange_explicit(&__res, new_res, memory_order_acq_rel);
   } else {
-    return std::atomic_load_explicit(&__res, memory_order_acquire);
+    memory_resource* res = std::atomic_load_explicit(&__res, memory_order_acquire);
+    if (res == nullptr) {
+      res = new_delete_resource();
+      // Try to set it, but don't care if we lose the race
+      std::atomic_compare_exchange_strong_explicit(&__res, &res, res, memory_order_release, memory_order_acquire);
+    }
+    return res;
   }
 #elif !defined(_LIBCPP_HAS_NO_THREADS)
-  static constinit memory_resource* res = &res_init.resources.new_delete_res;
+  static constinit memory_resource* res = nullptr;
   static mutex res_lock;
   if (set) {
     new_res = new_res ? new_res : new_delete_resource();
     lock_guard<mutex> guard(res_lock);
+    if (res == nullptr) {
+      res = new_delete_resource();
+    }
     memory_resource* old_res = res;
     res                      = new_res;
     return old_res;
   } else {
     lock_guard<mutex> guard(res_lock);
+    if (res == nullptr) {
+      res = new_delete_resource();
+    }
     return res;
   }
 #else
-  static constinit memory_resource* res = &res_init.resources.new_delete_res;
+  static constinit memory_resource* res = nullptr;
   if (set) {
+    if (res == nullptr) {
+      res = new_delete_resource();
+    }
     new_res                  = new_res ? new_res : new_delete_resource();
     memory_resource* old_res = res;
     res                      = new_res;
     return old_res;
   } else {
+    if (res == nullptr) {
+      res = new_delete_resource();
+    }
     return res;
   }
 #endif
@@ -130,6 +154,10 @@ memory_resource* get_default_resource() noexcept { return __default_memory_resou
 
 memory_resource* set_default_resource(memory_resource* __new_res) noexcept {
   return __default_memory_resource(true, __new_res);
+}
+
+extern "C" void __libcxx_memrsc_init() noexcept {
+  get_default_resource();
 }
 
 // 23.12.5, mem.res.pool

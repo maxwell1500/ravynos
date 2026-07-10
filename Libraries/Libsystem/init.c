@@ -59,6 +59,7 @@ extern void _libsecinit_initializer(void);        // from libsecinit.dylib
 extern void _libtrace_init(void);		// from libsystem_trace.dylib
 extern void _container_init(const char *apple[]); // from libsystem_containermanager.dylib
 extern void __libdarwin_init(void);		// from libsystem_darwin.dylib
+extern void __libcxx_init(void);                // from libc++.1.dylib
 
 
 // clear qos tsd (from pthread)
@@ -272,6 +273,8 @@ libSystem_initializer(int argc,
 #endif // !TARGET_OS_DRIVERKIT
 
 	__stack_logging_early_finished(&malloc_funcs);
+
+        __libcxx_init();
 
 #if !TARGET_OS_IPHONE
 	/* <rdar://problem/22139800> - Preserve the old behavior of apple[] for

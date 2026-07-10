@@ -89,10 +89,6 @@ __asm__("?wclog@" _LIBCPP_ABI_NAMESPACE_STR "@std@@3V?$basic_ostream@_WU?$char_t
 ;
 #endif // _LIBCPP_HAS_NO_WIDE_CHARACTERS
 
-// Pretend we're inside a system header so the compiler doesn't flag the use of the init_priority
-// attribute with a value that's reserved for the implementation (we're the implementation).
-#include "iostream_init.h"
-
 // On Windows the TLS storage for locales needs to be initialized before we create
 // the standard streams, otherwise it may not be alive during program termination
 // when we flush the streams.
@@ -112,13 +108,22 @@ static void force_locale_initialization() {
 }
 
 class DoIOSInit {
+private:
+  static bool __is_initialized;
+  
 public:
     DoIOSInit();
     ~DoIOSInit();
+    static void __do_init();
 };
 
-DoIOSInit::DoIOSInit()
+bool DoIOSInit::__is_initialized = false;
+
+void DoIOSInit::__do_init()
 {
+    if (__is_initialized)
+        return;
+    
     force_locale_initialization();
 
     istream* cin_ptr  = ::new(cin)  istream(::new(__cin)  __stdinbuf <char>(stdin, &mb_cin));
@@ -139,10 +144,20 @@ DoIOSInit::DoIOSInit()
     _VSTD::unitbuf(*wcerr_ptr);
     wcerr_ptr->tie(wcout_ptr);
 #endif
+
+    __is_initialized = true;
+}
+
+DoIOSInit::DoIOSInit()
+{
+    __do_init();
 }
 
 DoIOSInit::~DoIOSInit()
 {
+    if (!__is_initialized)
+        return;
+        
     ostream* cout_ptr = reinterpret_cast<ostream*>(cout);
     cout_ptr->flush();
     ostream* clog_ptr = reinterpret_cast<ostream*>(clog);
@@ -163,6 +178,10 @@ ios_base::Init::Init()
 
 ios_base::Init::~Init()
 {
+}
+
+extern "C" void __libcxx_ios_init() noexcept {
+    static DoIOSInit __ios_init_instance;
 }
 
 _LIBCPP_END_NAMESPACE_STD

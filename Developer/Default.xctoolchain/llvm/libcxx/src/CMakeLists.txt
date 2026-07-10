@@ -2,6 +2,7 @@ set(LIBCXX_LIB_CMAKEFILES_DIR "${CMAKE_CURRENT_BINARY_DIR}${CMAKE_FILES_DIRECTOR
 
 # Get sources
 set(LIBCXX_SOURCES
+  init.cpp
   algorithm.cpp
   any.cpp
   atomic.cpp

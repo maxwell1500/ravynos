@@ -159,7 +159,9 @@ libcxx: libunwind
 
 RTOBJ = ${.OBJDIR}/llvm_target/compiler-rt/lib/ravynos/libclang_rt.osx.a
 compiler_rt: runtime libunwind libcxx
+	@echo compiler_rt dependencies built
 	mkdir -p ${RTLIB:H} ${RTOBJ:H}
+	@echo after mkdir, making compiler_rt dylib
 	${CC} -o ${.OBJDIR}/libcompiler_rt.dylib -fuse-ld=${LD} \
 	  --sysroot=${RAVYN_SDKROOT} -shared -umbrella System \
 	  -mmacosx-version-min=${MACOS_VERSION_MIN} \
@@ -169,6 +171,7 @@ compiler_rt: runtime libunwind libcxx
 	  -L${RAVYN_SDKROOT}/usr/lib/system -L${RAVYN_SDKROOT}/usr/lib -lsystem_platform \
 	  -lsystem_c -lsystem_malloc -lsystem_m -ldispatch -ldyld -lsystem_kernel \
 	  -lsystem_pthread -lunwind
+	@echo after making dylib, copying to SDK
 	cp -f ${.OBJDIR}/libcompiler_rt.dylib ${RTLIB}
 
 # We want a combined libc++ and libc++abi as our dylib. It needs libSystem
@@ -177,6 +180,7 @@ compiler_rt: runtime libunwind libcxx
 CXXOBJ = ${.OBJDIR}/llvm_target/libcxx/lib/libc++.a
 libcxx_dylib: libcxx
 	mkdir -p ${CXXLIB:H} ${CXXOBJ:H}
+	rm -f ${.OBJDIR}/libc++.1.dylib
 	${CC} -o ${.OBJDIR}/libc++.1.dylib -dylib -shared \
 	  -mmacos-version-min=${MACOS_VERSION_MIN} \
 	  -fuse-ld=${LD} --sysroot=${RAVYN_SDKROOT} \
@@ -185,7 +189,7 @@ libcxx_dylib: libcxx
 	  -Wl,-force_load,${.OBJDIR}/llvm_target/libcxx/lib/libc++.a \
 	  -Wl,-force_load,${.OBJDIR}/llvm_target/libcxx/lib/libc++abi.a \
 	  -Wl,-force_load,${.OBJDIR}/llvm_target/libcxx/lib/libc++experimental.a \
-	  ${RTOBJ} -L${RAVYN_SDKROOT}/usr/lib -lSystem 2>&1 | grep -v "addend too large"
+	  ${RTOBJ} -L${RAVYN_SDKROOT}/usr/lib -lSystem #2>&1 | grep -v "addend too large"
 	cp -f ${.OBJDIR}/libc++.1.dylib ${CXXLIB}
 	ln -sf libc++.1.dylib ${RAVYN_SDKROOT}/usr/lib/libc++.dylib
 
