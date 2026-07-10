@@ -264,3 +264,29 @@ long double tgammal(long double __x)  { return __builtin_tgammal(__x); }
 float truncf(float __x) { return __builtin_truncf(__x); }
 double trunc(double __x) { return __builtin_trunc(__x); }
 long double truncl(long double __x) { return __builtin_truncl(__x); }
+
+double __exp10(double x) { return 0.0; } // FIXME: implement this
+
+__sincos_stret_f64_t __sincos_stret(double x)
+{
+    __sincos_stret_f64_t r;
+
+    r.sin = sin(x);
+    r.cos = cos(x);
+    return r;
+}
+
+__v4sf __sincosf_stret(float x)
+{
+    __v4sf r;
+
+    float s = sinf(x);
+    float c = cosf(x);
+
+    r[0] = s;
+    r[1] = c;
+    r[2] = 0.0f;
+    r[3] = 0.0f;
+
+    return r;
+}

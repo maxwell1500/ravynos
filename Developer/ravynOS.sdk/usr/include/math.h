@@ -62,6 +62,8 @@ typedef _Bool bool;
 #endif
 #endif
 
+__BEGIN_DECLS
+
 extern bool signbit(double __x);
 extern int fpclassify(double __x);
 extern bool isfinite(double __x);
@@ -302,5 +304,24 @@ extern long double tgammal(long double __x);
 extern float truncf(float __x);
 extern double trunc(double __x);
 extern long double truncl(long double __x);
+
+typedef struct {
+    double sin;
+    double cos;
+} __sincos_stret_f64_t;
+
+typedef struct {
+    float sin;
+    float cos;
+} __sincos_stret_f32_t;
+
+__sincos_stret_f64_t __sincos_stret(double x);
+
+__attribute__((vector_size(16)))
+typedef float __v4sf;
+
+__v4sf __sincosf_stret(float x);
+
+__END_DECLS
 
 #endif /* _MATH_H_ */

@@ -1,6 +1,6 @@
 MK_WERROR = no
 LIB = system_m
-SRCS = math.c wrappers.cpp
+SRCS = math.c
 
 CFLAGS = -mmacos-version-min=${MACOS_VERSION_MIN} --sysroot=${RAVYN_SDKROOT} \
 	-Wno-nullability-completeness
