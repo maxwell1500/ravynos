@@ -29,18 +29,31 @@
  * THE SOFTWARE.
  */
 
+#include <stdio.h>
+#include <dlfcn.h>
+#include "init.h"
 
 /* Libsystem init glue */
 
-__BEGIN_DECLS
-
-void _libtrace_init(void);
-
-__END_DECLS
+static void *cf_handle = NULL;
+CFStringRef (*_CFStringCreateWithCString)(CFAllocatorRef, const char*, CFStringEncoding) = NULL;
+CFTypeID (*_CFGetTypeID)(CFTypeRef) = NULL;
+CFTypeID (*_CFDataGetTypeID)(void) = NULL;
+CFIndex (*_CFDataGetLength)(CFDataRef) = NULL;
+const uint8_t* (*_CFDataGetBytePtr)(CFDataRef) = NULL;
 
 void _libtrace_init(void)
 {
-    printf("initialized libsystem_trace\n");
+    if (!cf_handle)
+        cf_handle = dlopen("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation",
+                           RTLD_LAZY);
+    if (cf_handle) { // did we open it?
+        _CFStringCreateWithCString = dlsym(cf_handle, "CFStringCreateWithCString");
+        _CFGetTypeID = dlsym(cf_handle, "CFGetTypeID");
+        _CFDataGetTypeID = dlsym(cf_handle, "CFDataGetTypeID");
+        _CFDataGetBytePtr = dlsym(cf_handle, "CFDataGetBytePtr");
+    }
+    printf("initialized libsystem_trace: cf_handle=%p, pfunc=%p\n", cf_handle, _CFStringCreateWithCString);
 }
 
 

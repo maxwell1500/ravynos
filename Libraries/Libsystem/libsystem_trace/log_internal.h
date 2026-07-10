@@ -47,10 +47,10 @@ typedef enum : uint32_t {
 } _os_log_sink_type_t;
 
 struct os_log_s {
-    CFRuntimeBase _base;
+    uint8_t pad[sizeof(CFRuntimeBase)];
     uint32_t flags;
-    CFStringRef subsystem;
-    CFStringRef category;
+    void* subsystem;
+    void* category;
     uintptr_t sink_dest; // either int val or pointer
     _os_log_sink_type_t sink_type;
     uint64_t generate_symptoms;

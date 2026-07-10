@@ -49,6 +49,8 @@
 #include <os/log_private.h>
 #include <os/log_encode_types.h>
 #include <os/log_encode.h>
+#include "init.h"
+
 
 struct os_log_s _os_log_default;
 struct os_log_s _os_log_disabled;
@@ -64,12 +66,12 @@ os_log_create(const char* subsystem, const char* category)
         return (os_log_t)NULL;
 
     // FIXME: these probably leak
-    log->subsystem = CFStringCreateWithCString(NULL,
-                                               subsystem,
-                                               kCFStringEncodingUTF8);
-    log->category = CFStringCreateWithCString(NULL,
-                                              category,
-                                              kCFStringEncodingUTF8);
+    if (_CFStringCreateWithCString) {
+        log->subsystem = (void*)_CFStringCreateWithCString(NULL,
+            subsystem, kCFStringEncodingUTF8);
+        log->category = (void*)_CFStringCreateWithCString(NULL,
+            category, kCFStringEncodingUTF8);
+    }
 
     log->sink_type = OS_LOG_SINK_TYPE_FD;
     log->sink_dest = STDOUT_FILENO;
