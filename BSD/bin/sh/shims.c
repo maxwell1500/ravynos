@@ -1,6 +1,18 @@
 #include "shims.h"
 #include <errno.h>
 
+void killcmd(void)
+{
+}
+
+void printfcmd(void)
+{
+}
+
+void testcmd(void)
+{
+}
+
 char *
 strchrnul(char * s, char ch)
 {
@@ -29,7 +41,6 @@ qsort_s(void * base, size_t nmemb, size_t size, fn_t * compar, void * thunk)
 		return EINVAL;
 	if (nmemb > 0 && compar == NULL)
 		return EINVAL;
-	qsort_r(base, nmemb, size, compar, thunk);
+	//qsort_r(base, nmemb, size, compar, thunk);
 	return 0;
 }
-
