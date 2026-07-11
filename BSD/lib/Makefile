@@ -1,5 +1,4 @@
-#SUBDIR = ncurses
-SUBDIR = libedit
+SUBDIR =
 
 .include <bsd.subdir.mk>
 
