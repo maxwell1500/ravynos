@@ -2096,6 +2096,7 @@ getDeploymentTargetFromEnvironmentVariables(const Driver &TheDriver,
       "IPHONEOS_DEPLOYMENT_TARGET",
       "TVOS_DEPLOYMENT_TARGET",
       "WATCHOS_DEPLOYMENT_TARGET",
+      "BRIDGEOS_DEPLOYMENT_TARGET",
       "DRIVERKIT_DEPLOYMENT_TARGET",
   };
   static_assert(std::size(EnvVars) == Darwin::LastDarwinPlatform + 1,
