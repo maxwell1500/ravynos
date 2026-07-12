@@ -19,7 +19,7 @@ SRCS = secure/strlcat_chk.c \
 	secure/stpncpy_chk.c \
 	secure/vsnprintf_chk.c
 
-CFLAGS += -DHAVE_STDINT_H -DHAVE_CONFIG_H -D_FORTIFY_SOURCE=1 \
+CFLAGS += -DHAVE_STDINT_H -DHAVE_CONFIG_H -fno-builtin \
 	-I${ROOT_SOURCE_DIR}/Kernel/xnu/bsd -I${.CURDIR:H}/../private
 
 .include <bsd.lib.mk>

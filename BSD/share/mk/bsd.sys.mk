@@ -295,22 +295,16 @@ CLANG_OPT_SMALL+= -mllvm -simplifycfg-dup-ret
 CLANG_OPT_SMALL+= -mllvm -enable-load-pre=false
 CFLAGS.clang+=	 -Qunused-arguments
 
-# XXX This should be defaulted to 2 when WITH_SSP is in use after further
-# testing and soak time.
-FORTIFY_SOURCE?=	0
-.if ${MK_SSP} != "no"
-# Don't use -Wstack-protector as it breaks world with -Werror.
-.if ${COMPILER_FEATURES:Mstackclash}
-SSP_CFLAGS?=	-fstack-protector-strong -fstack-clash-protection
-.else
-SSP_CFLAGS?=	-fstack-protector-strong
-.endif
-CFLAGS+=	${SSP_CFLAGS}
-.endif # SSP
+#FORTIFY_SOURCE?=	0
+FORTIFY_SOURCE=	0 # enforce no hardening for now
 .if ${FORTIFY_SOURCE} > 0
 CFLAGS+=	-D_FORTIFY_SOURCE=${FORTIFY_SOURCE}
 CXXFLAGS+=	-D_FORTIFY_SOURCE=${FORTIFY_SOURCE}
 .endif
+
+# no SSP since Darwin has its own
+CFLAGS+=	-fno-stack-protector -fno-stack-check -mno-red-zone
+CXXFLAGS+=      -fno-stack-protector -fno-stack-check -mno-red-zone
 
 # Additional flags passed in CFLAGS and CXXFLAGS when MK_DEBUG_FILES is
 # enabled.

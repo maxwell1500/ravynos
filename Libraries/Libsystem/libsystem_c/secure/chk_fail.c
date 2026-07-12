@@ -57,7 +57,7 @@
  * and always do overlap checks.
  */
 __attribute__ ((visibility ("hidden")))
-uint32_t __chk_assert_no_overlap = 1;
+uint32_t __chk_assert_no_overlap = 0;
 
 #if PR_13085474_CHECK
 static bool

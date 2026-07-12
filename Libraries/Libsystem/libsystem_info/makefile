@@ -112,12 +112,7 @@ SLF = /System/Library/Frameworks
 
 # FIXME: zoe 2/10/26 - Should generate notify_probes.h from .d with dtrace
 
-# -DDS_AVAILABLE -- zoe 2/11/26 Put this back once we have DirectoryService
-CFLAGS = --sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSION_MIN} \
-	-DPRIVATE -D__APPLE__ -fblocks -fno-common -DDISPATCH_USE_DTRACE=0 \
-	-DINET6 -D__DARWIN_NON_CANCELABLE -DCONFIG_MAC -DSYNTH_ROOTFS \
-	-DTARGET_OS_BRIDGE=0 -Wno-int-conversion -Wno-implicit-int \
-	-I${.CURDIR} \
+HDRS = -I${.CURDIR} \
 	-I${.CURDIR}/Libinfo \
 	-I${.CURDIR}/gen.subproj \
 	-I${.CURDIR}/nis.subproj \
@@ -136,10 +131,17 @@ CFLAGS = --sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSION_MIN} \
 	-I${RAVYN_SDKROOT}/usr/include/arpa \
 	-I${RAVYN_SDKROOT}/usr/local/include/kernel \
 	-I${ROOT_SOURCE_DIR}/Kernel/xnu/libkern \
-	-I${RAVYN_SDKROOT}/System/Library/Frameworks/System.framework/Versions/B/PrivateHeaders \
-	-include${.CURDIR}/../libsystem_trace/log.h \
+	-I${RAVYN_SDKROOT}/System/Library/Frameworks/System.framework/Versions/B/PrivateHeaders 
 
-MIG_FLAGS = ${CFLAGS} -D__MigTypeCheck
+# -DDS_AVAILABLE -- zoe 2/11/26 Put this back once we have DirectoryService
+CFLAGS = --sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSION_MIN} \
+	-DPRIVATE -D__APPLE__ -fblocks -fno-common -DDISPATCH_USE_DTRACE=0 \
+	-DINET6 -D__DARWIN_NON_CANCELABLE -DCONFIG_MAC -DSYNTH_ROOTFS \
+	-DTARGET_OS_BRIDGE=0 -Wno-int-conversion -Wno-implicit-int \
+        ${HDRS} \
+	-include${.CURDIR}/../libsystem_trace/log.h 
+
+MIG_FLAGS = -mmacos-version-min=${MACOS_VERSION_MIN} ${HDRS} -D__MigTypeCheck
 
 LDFLAGS = -Wl,-syslibroot,${RAVYN_SDKROOT}/usr/lib -umbrella System \
     -L${RAVYN_SDKROOT}/usr/lib -L${RAVYN_SDKROOT}/usr/lib/system \

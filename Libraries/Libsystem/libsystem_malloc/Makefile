@@ -23,6 +23,8 @@ CFLAGS = --sysroot=${RAVYN_SDKROOT} -w -momit-leaf-frame-pointer \
 	-I${.CURDIR}/resolver -I${RAVYN_SDKROOT}${SLF}/${SYSPRIVHDR} \
 	-I${ROOT_BINARY_DIR}/${CpuArch}
 
+ACFLAGS = --sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSION_MIN}
+
 LDFLAGS = --sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSION_MIN} \
 	-shared -dylib -umbrella System \
 	-Wl,-install_name,/usr/lib/system/libsystem_malloc.dylib \

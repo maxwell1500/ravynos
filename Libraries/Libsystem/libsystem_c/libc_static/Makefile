@@ -35,6 +35,7 @@ CFLAGS += -UBUILDING_VARIANT -U__DARWIN_NON_CANCELABLE \
 	-I${.CURDIR:H}/../libsystem_info/lookup.subproj \
 	-I${ROOT_SOURCE_DIR}/Kernel/xnu/bsd \
 	-I${ROOT_SOURCE_DIR}/Kernel/xnu/libkern
+ACFLAGS = --sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSION_MIN}
 
 all: libc.a
 
