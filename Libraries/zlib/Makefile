@@ -27,7 +27,7 @@ all: lib${LIB}.a
 	$(AR) $(ARFLAGS) $@ $(OBJS)
 	-@ ($(RANLIB) $@ || true) >/dev/null 2>&1
 	mkdir -p ${RAVYN_SDKROOT}/usr/lib ${RAVYN_SDKROOT}/usr/share/man/man3
-	cp -f ${.OBJDIR}/${.TARGET} ${RAVYN_SDKROOT}/usr/lib/
+	cp -f ${.OBJDIR}/lib${LIB}.a ${RAVYN_SDKROOT}/usr/lib/
 	cp -f ${MAN} ${RAVYN_SDKROOT}/usr/share/man/man3/
 
 match.o: match.S
