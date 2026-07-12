@@ -11,15 +11,17 @@ LDFLAGS = -framework CoreFoundation -Wl,-platform_version -Wl,macos \
 	  -Wl,${MACOS_VERSION_MIN} -Wl,${MACOS_VERSION_MIN} \
 	  -Wl,-syslibroot,${RAVYN_SDKROOT}/usr/lib
 
-all: ${PROG}
+all: ${PROG} copyprog
 
 ${.OBJDIR}/${PROG}:
 	mkdir -p ${.TARGET:H}
 
 ${PROG}: ${.OBJDIR}/${PROG}
-	mkdir -p ${SYSROOT_DIR}/usr/bin
-	cp -f ${.OBJDIR}/${PROG} ${SYSROOT_DIR}/usr/bin/
 
 install: ${PROG}
+
+copyprog: ${PROG}
+	mkdir -p ${SYSROOT_DIR}/usr/bin
+	cp -f ${.OBJDIR}/${PROG} ${SYSROOT_DIR}/usr/bin/
 
 .include <bsd.prog.mk>
