@@ -43,9 +43,6 @@ extern "C" {
 }
 
 #include "ACPIPlatformExpert.h"
-#include "AppleAPIC.h"
-#include "ACPIRTC.h"
-#include "EFINVRAM.h"
 
 const IORegistryPlane * gIOACPIPlane           = 0;
 const OSSymbol *        gIOACPIHardwareIDKey   = 0;
@@ -93,9 +90,9 @@ bool IOACPIPlatformExpertGlobals::isValid() const
 
 #pragma mark -
 
-#define super IODTPlatformExpert
+#define super IOPlatformExpert
 
-OSDefineMetaClassAndStructors(ACPIPlatformExpert, IODTPlatformExpert);
+OSDefineMetaClassAndStructors(ACPIPlatformExpert, IOPlatformExpert);
 
 IOService *ACPIPlatformExpert::probe(IOService *provider, SInt32 *score) {
     if (gIOACPIPlatformExpertGlobals.isInitialized) {
@@ -114,11 +111,25 @@ bool ACPIPlatformExpert::init(OSDictionary *properties) {
     if (name == 0) name = OSString::withCStringNoCopy("ACPICPUInterruptController");
     _interruptControllerName = OSSymbol::withString(name);
 
-    topLevel = OSDynamicCast(OSSet, getProperty("top-level"));
-    if (!topLevel)
-        topLevel = OSSet::withCapacity(32);
-
     return true;
+}
+
+IOService *
+ACPIPlatformExpert::createNub(OSDictionary *dict) {
+    IOService *nub = 0;
+    OSString *type = OSDynamicCast(OSString, dict->getObject("device_type"));
+    OSString *osName = OSDynamicCast(OSString, dict->getObject("name"));
+
+    if (type && type->isEqualTo("processor")) {
+        nub = new ACPICPU;
+        if (nub)
+            nub->init(dict);
+    } else {
+        nub = super::createNub(dict);
+    }
+    if (osName)
+        nub->setName(osName->getCStringNoCopy());
+    return nub;
 }
 
 bool ACPIPlatformExpert::start(IOService *provider) {
@@ -132,88 +143,56 @@ bool ACPIPlatformExpert::start(IOService *provider) {
     }
 
     PE_halt_restart = handlePEHaltRestart;
-
-    parseACPI(provider);
     registerService();
 
-    /* Start PCI discovery now that we've identified the host bridges. */
-    IORegistryIterator *iter = IORegistryIterator::iterateOver(
-            gIOServicePlane, kIORegistryIterateRecursively);
+    /* Start all the cpus */
+    OSIterator * iter = OSCollectionIterator::withCollection(cpuArray);
     if (iter) {
-        IORegistryEntry *entry = NULL;
-        while ((entry = iter->getNextObject())) {
-            IOService *nub = OSDynamicCast(IOService, entry);
-            if (!nub) continue;
-            if (nub->getProperty("acpi-pci-host-bootstrapped")) continue;
+        OSObject * obj = NULL;
+        while ((obj = iter->getNextObject())) {
 
-            OSString *devType = OSDynamicCast(OSString, entry->getProperty("device_type"));
-            OSData *classCodeData = OSDynamicCast(OSData, entry->getProperty("class-code"));
-            uint32_t classCode = 0;
-            if (!devType || !devType->isEqualTo("pci")) continue;
-            if (!classCodeData || classCodeData->getLength() < sizeof(classCode)) continue;
-            bcopy(classCodeData->getBytesNoCopy(), &classCode, sizeof(classCode));
-            if (classCode != 0x060000) continue;
-
-            const char *name = entry->getName(gIODTPlane);
-            ACPIPCIBridge *bridge = new ACPIPCIBridge;
-            if (!bridge) continue;
-            OSDictionary * dict = entry->dictionaryWithProperties();
-            bool result = bridge->init(dict);
-            dict->release();
-            if (!result) {
-                PE_Log("Host bridge init failed for %s", name ? name : "unknown");
-                bridge->release();
-                continue;
-            }
-
-            if (!bridge->attach(nub)) {
-                PE_Log("Host bridge attach failed for %s", name ? name : "unknown");
-                bridge->release();
-                continue;
-            }
-
-            if (!bridge->start(nub)) {
-              PE_Log("Host bridge start failed for %s", name ? name : "unknown");
-              bridge->detach(nub);
-              bridge->release();
-              continue;
-            }
-
-            bridge->setProperty("acpi-pci-host-bootstrapped", kOSBooleanTrue);
-            PE_Log("Host bridge started for %s", name ? name : "unknown");
-            bridge->registerService();
-            bridge->release();
+            ACPICPU *cpu = OSDynamicCast(ACPICPU, obj);
+            if (!cpu)
+                return false;
+            cpu->start(this);
         }
         iter->release();
     }
 
-    OSDictionary * dict = OSDictionary::withCapacity(4);
-    dict->setObject("compatible", OSString::withCString("IORTC"));
-    dict->setObject("name", OSString::withCString("rtc"));
-    dict->setObject("device_type", OSString::withCString("rtc"));
-    IOService * nub = createNub(dict, NULL);
-    if (nub) {
-        nub->setName("rtc");
-        nub->attach(provider);
-        nub->start(provider);
-        nub->release();
-    } else {
-        PE_Log("Failed to create RTC nub");
-    }
+    // PS2 controller will register for interrupts so we setupPIC on its nub
+    struct nubEntry_t {
+        const char *name;
+        const char *type;
+        const char *compat;
+        int pic;
+    } nubEntries[5] = {
+        { "rtc", "platform_device", "IORTC", 0 },
+        { "nvram", "platform_device", "IONVRAM", 0 },
+        { "8259-pic", "platform_device", "8259-pic", 0 },
+        { "ps2controller", "platform_device", "ps2controller", 0 },
+        { "pci", "pci", "IOPlatformDevice" } // pseudo host bridge to kick off matching
+    };
 
-    dict->release();
-    dict = OSDictionary::withCapacity(4);
-    dict->setObject("compatible", OSString::withCString("IONVRAM"));
-    dict->setObject("name", OSString::withCString("nvram"));
-    dict->setObject("device_type", OSString::withCString("nvram"));
-    nub = createNub(dict, NULL);
-    if (nub) {
-        nub->setName("nvram");
-        nub->attach(provider);
-        nub->start(provider);
-        nub->release();
-    } else {
-        PE_Log("Failed to create NVRAM nub");
+    for (int i = 0; i < 5; ++i) {
+        OSDictionary * dict = OSDictionary::withCapacity(8);
+
+        dict->setObject("compatible", OSString::withCString(nubEntries[i].compat));
+        dict->setObject("name", OSString::withCString(nubEntries[i].name));
+        dict->setObject("device_type", OSString::withCString(nubEntries[i].type));
+
+        IOService *nub = createNub(dict);
+
+        if (nub) {
+            if (nubEntries[i].pic)
+                setupPIC(nub); 
+            nub->setName(nubEntries[i].name);
+            nub->attach(this);
+            nub->registerService();
+            nub->release();
+        } else {
+            PE_Log("Failed to create nub `%s`", nubEntries[i].name);
+        }
+        dict->release();
     }
 
     /* Publish the bootloader's boot-uuid DT property to IOResources
@@ -241,11 +220,51 @@ bool ACPIPlatformExpert::start(IOService *provider) {
     return true;
 }
 
+void ACPIPlatformExpert::setupPIC(IOService *nub) {
+        int i;
+        OSDictionary *propTable;
+        OSArray *controller;
+        OSArray *specifier;
+        OSData *tmpData;
+
+        propTable = nub->getPropertyTable();
+
+        // For the moment... assume a classic 8259 interrupt controller
+        // with 16 interrupts. Later, this will be changed to detect
+        // an APIC and/or MP-Table and then will set the nubs appropriately.
+
+        specifier = OSArray::withCapacity(kSystemIRQCount);
+        assert(specifier);
+
+        for (i = 0; i < kSystemIRQCount; i++) {
+                UInt32 spec[2];
+                spec[0] = i;
+                spec[1] = kInterruptTriggerModeEdge |
+                    kInterruptPolarityHigh |
+                    kInterruptNotShareable;
+                tmpData = OSData::withBytes(spec, sizeof(spec));
+                specifier->setObject(tmpData);
+                tmpData->release();
+        }
+
+        controller = OSArray::withCapacity(kSystemIRQCount);
+        assert(controller);
+
+        for (i = 0; i < kSystemIRQCount; i++) controller->setObject(_interruptControllerName);
+
+        propTable->setObject(gIOInterruptControllersKey, controller);
+        propTable->setObject(gIOInterruptSpecifiersKey, specifier);
+
+        specifier->release();
+        controller->release();
+}
+
+
 bool
 ACPIPlatformExpert::parseACPI(IOService *provider) {
-    IORegistryEntry *entry = IORegistryEntry::fromPath("/ACPI", gIODTPlane);
+    IORegistryEntry *entry = IORegistryEntry::fromPath("/", gIODTPlane);
     if (!entry) {
-        PE_Log("ACPI node not found in DT!");
+        PE_Log("ACPI-compatible node not found in DT!");
         return false;
     }
 
@@ -321,11 +340,11 @@ ACPIPlatformExpert::parseACPI(IOService *provider) {
         memcpy(name, p->signature, 4);
 
         if (!strcmp(name, "APIC"))
-            parseAPIC(p, provider);
+            parseAPIC(p, this);
         else if (!strcmp(name, "FACP"))
-            parseFADT(p, provider);
+            parseFADT(p, this);
         else if (!strcmp(name, "MCFG"))
-            parseMCFG(p, provider);
+            parseMCFG(p, this);
 
         tmap->release();
         tdesc->release();
@@ -341,46 +360,22 @@ bool ACPIPlatformExpert::configure(IOService *provider) {
     IOService * nub;
 
     if (!super::configure(provider)) return false;
+
+    parseACPI(this);
+
     return true;
 }
 
-IOService *
-ACPIPlatformExpert::createNub(OSDictionary *dict, IORegistryEntry *from) {
-    (void)from;
-    if (!dict) {
-        PE_Log("createNub called with null dictionary");
-        return NULL;
-    }
 
-    IOService * nub = 0;
-    OSString * type = (OSString *)dict->getObject("device_type");
-    OSString * osName = (OSString *)dict->getObject("name");
-    if (!osName)
-        osName = (OSString *)dict->getObject("IOName");
-    const char * name = osName ? osName->getCStringNoCopy() : "unknown";
-
-    if (type && type->isEqualTo("processor")) {
-        nub = new ACPICPU;
-    } else if (type && type->isEqualTo("io-apic")) {
-        nub = new AppleAPIC;
-    } else if (type && type->isEqualTo("rtc")) {
-        nub = new ACPIRTC;
-    } else if (type && type->isEqualTo("nvram")) {
-        nub = new EFINVRAM;
-    } else {
-        nub = new IOService();
-    }
-    if (!nub || !nub->init(dict)) {
-        PE_Log("Failed to create nub!");
-        if (nub) nub->release();
-        return NULL;
-    }
-    nub->setName(name);
-    return nub;
+bool ACPIPlatformExpert::compareNubName( const IOService * nub,
+    OSString * name, OSString ** matched ) const
+{
+        return IODTCompareNubName(nub, name, matched);
 }
 
+
 bool ACPIPlatformExpert::matchNubWithPropertyTable(IOService *nub, OSDictionary *table) {
-  if (!nub || !table) return false;
+    if (!nub || !table) return false;
 
     OSString *nameProp;
     OSString *match;

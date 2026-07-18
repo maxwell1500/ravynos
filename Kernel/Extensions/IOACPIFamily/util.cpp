@@ -95,6 +95,28 @@ typedef struct {
     uint16_t bridge_control;
 } __attribute__((packed)) PCIHeaderType1;
 
+typedef struct {
+    uint8_t  maxBusNum;
+    uint8_t  majorVersion;
+    uint8_t  minorVersion;
+    uint8_t  BIOSPresent;
+
+    union {
+        struct {
+            uint8_t configMethod1;
+            uint8_t configMethod2;
+            uint8_t specialCycle1;
+            uint8_t specialCycle2;
+        } s;
+    } u_bus;
+
+} PCI_bus_info_t;
+
+static void
+setCompatibleList(OSDictionary * dict,
+                    const char * compat0,
+                    const char * compat1,
+                    const char * compat2);
 
 void
 ACPIPlatformExpert::PE_Log(const char * fmt, ...)
@@ -143,7 +165,6 @@ ACPIPlatformExpert::parseAPIC(void * table, IOService * nub)
     int           index = 0;
     OSArray     * intrOverrides = NULL;
     OSArray     * intrSources = NULL;
-    OSArray     * cpuArray = NULL;
     
     PE_Log("parseAPIC(%p, %p) flags %p",
            table, madt->lapicAddress, madt->flags);
@@ -187,7 +208,6 @@ ACPIPlatformExpert::parseAPIC(void * table, IOService * nub)
                 if (aNub) {
                     cpuArray->setObject(aNub);
                     aNub->attach(nub);
-//                    aNub->start(nub);
                     aNub->registerService();
                     aNub->release();
                 }
@@ -210,14 +230,13 @@ ACPIPlatformExpert::parseAPIC(void * table, IOService * nub)
 
                 sprintf(buf, "io-apic@%d", apic->io_apic_id);
                 dict->setObject("InterruptControllerName",
-                                OSString::withCString(buf));
+                                OSString::withCString("ACPICPUInterruptController"));
                 dict->setObject("name", OSString::withCString(buf));
                 dict->setObject("compatible", OSString::withCString("io-apic"));
 
                 IOService * aNub = createNub(dict);
                 if (aNub) {
                     aNub->attach(nub);
-                    aNub->start(nub);
                     aNub->registerService();
                     aNub->release();
                 }
@@ -255,19 +274,6 @@ ACPIPlatformExpert::parseAPIC(void * table, IOService * nub)
 
     this->setProperty("interrupt-overrides", intrOverrides);
     this->setProperty("interrupt-sources", intrSources);
-
-    /* Start all the cpus */
-    OSIterator * iter = OSCollectionIterator::withCollection(cpuArray);
-    if (iter) {
-        OSObject * obj = NULL;
-        while ((obj = iter->getNextObject())) {
-            IOService * child = OSDynamicCast(ACPICPU, obj);
-            if (child)
-                child->start(nub);
-        }
-        iter->release();
-    }
-    cpuArray->release();
 }
 
 void
@@ -548,11 +554,6 @@ ACPIPlatformExpert::parseMCFG(void * table, IOService * nub)
     for (int i = 0; i < count; i++) {
         int bus = entry[i].startBus;
 
-        // Build one DT host node and one IOService host nub per MCFG segment.
-        IORegistryEntry * dtRoot = IORegistryEntry::fromPath("/", gIODTPlane);
-        IORegistryEntry * dtHost = NULL;
-        IOService * hostService = NULL;
-
         for (; bus <= entry[i].endBus; bus++) {
             for (int device = 0; device < 32; device++) {
                 bool multiFunction = false;
@@ -606,7 +607,7 @@ ACPIPlatformExpert::parseMCFG(void * table, IOService * nub)
 
                     char buf[32];
                     sprintf(buf, "pci@%d,%d", device, function);
-                    dict->setObject("IOName", OSString::withCString(buf));
+                    dict->setObject("name", OSString::withCString(buf));
 
                     IOPCIAddressSpace reg = {};
                     reg.s.busNum = (uint8_t) bus;
@@ -654,13 +655,6 @@ ACPIPlatformExpert::parseMCFG(void * table, IOService * nub)
                             dict->setObject("interrupts",
                                     OSData::withBytes(&intrLine, sizeof(intrLine)));
                         }
-
-                        // Endpoint compatible string list: "pciVVVV,DDDD" then "pciclass,CCCCCC"
-                        char compat0[32];
-                        char compat1[32];
-                        snprintf(compat0, sizeof(compat0), "pci%04x,%04x", vendorID, deviceID);
-                        snprintf(compat1, sizeof(compat1), "pciclass,%06x", classCode);
-                        setCompatibleList(dict, compat0, compat1);
                     }
                     else if (hdrType == 1) {
                         PCIHeaderType1 * b = (PCIHeaderType1 *)header;
@@ -708,67 +702,49 @@ ACPIPlatformExpert::parseMCFG(void * table, IOService * nub)
                             dict->setObject("ranges", OSData::withBytes(ranges, index));
                         }
 
-                        // Bridge compatible string list: "pci-bridge", "pciVVVV,DDDD", "pciclass,060400"
-                        char compat1[32], compat2[32];
-                        snprintf(compat1, sizeof(compat1), "pci%04x,%04x", vendorID, deviceID);
-                        snprintf(compat2, sizeof(compat2), "pciclass,%06x", classCode);
-                        setCompatibleList(dict, "pci-bridge", compat1, compat2);
                     }
+
+                    // Endpoint compatible string list: "pciVVVV,DDDD" then "pciclass,CCCCCC"
+                    // Bridges also get "pci-bridge"
+
+                    char compat0[32];
+                    char compat1[32];
+
+                    snprintf(compat0, sizeof(compat0), "pci%04x,%04x", vendorID, deviceID);
+                    snprintf(compat1, sizeof(compat1), "pciclass,%06x", classCode);
+
+                    if (isBridge)
+                        setCompatibleList(dict, "pci-bridge", compat0, compat1);
+                    else
+                        setCompatibleList(dict, compat0, compat1);
 
                     uint32_t ac = 3, sc = 2;
                     dict->setObject("#address-cells", OSData::withBytes(&ac, sizeof(ac)));
                     dict->setObject("#size-cells", OSData::withBytes(&sc, sizeof(sc)));
 
-                    IORegistryEntry * parentNode = isBridge ? dtRoot : dtHost;
-                    IORegistryEntry * child = new IORegistryEntry();
-                    if (parentNode && child) {
-                        if (child->init(dict)) {
-                            child->setName(buf);
-                            child->attachToParent(parentNode, gIODTPlane);
-                        }
-
-                        OSData *d = OSDynamicCast(OSData, dict->getObject("assigned-addresses"));
-
-                        if (isBridge) {
-                            dtHost = child;
-                            IOService * aNub = createNub(dict, child);
-                            if (aNub) {
-                                if (d)
-                                    aNub->setProperty("assigned-addresses", d);
-                                aNub->attach(nub);
-                                aNub->start(nub);
-                                aNub->registerService();
-                                hostService = aNub;
-                            }
-                        } else {
-                            IOService * aNub = createNub(dict, child);
-                            if (aNub) {
-                                if (d)
-                                    aNub->setProperty("assigned-addresses", d);
-                                aNub->attach(hostService ? hostService : nub);
-                                aNub->start(hostService ? hostService : nub);
-                                aNub->registerService();
-                            }
-                        }
+                    OSData *d = OSDynamicCast(OSData, dict->getObject("assigned-addresses"));
+                    IOService * aNub = createNub(dict);
+                    if (aNub) {
+                        if (d)
+                            aNub->setProperty("assigned-addresses", d);
+                        aNub->attach(nub);
+                        aNub->registerService();
                     }
 
+                    PCI_bus_info_t businfo = {0};
+                    businfo.maxBusNum = entry[i].endBus;
+                    businfo.majorVersion = revisionID;
+                    businfo.u_bus.s.configMethod1 = true;
+                    businfo.u_bus.s.configMethod2 = true;
+
+                    aNub->setProperty("pci-bus-info", 
+                            OSData::withBytes(&businfo, sizeof(businfo)));
                     dict->release();
                     map->release();
                     desc->release();
                 }
             }
         }
-
-        if (hostService) hostService->release();
-        if (dtHost) dtHost->release();
-        if (dtRoot) dtRoot->release();
-    }
-
-    /* Dump generated PCI device trees after enumeration completes.
-     * Enable with boot arg acpi_pci_dt_dump=1
-     */
-    if (shouldDumpPCIDeviceTree(this)) {
-        logGeneratedPCIDeviceTree();
     }
 }
 

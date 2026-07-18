@@ -32,6 +32,7 @@
 
 #include "ACPICPU.h"
 #include "ACPIPCIBridge.h"
+#include "PICShared.h"
 
 #define PE_VERBOSE 1
 
@@ -101,7 +102,7 @@ public:
     inline bool isValid() const;
 };
 
-class ACPIPlatformExpert : public IODTPlatformExpert {
+class ACPIPlatformExpert : public IOPlatformExpert {
     OSDeclareDefaultStructors(ACPIPlatformExpert)
     friend class IOACPIPlatformDevice;
 
@@ -109,7 +110,7 @@ class ACPIPlatformExpert : public IODTPlatformExpert {
     const char *RSDP_SIGNATURE = "RSD PTR";
     
     const OSSymbol *_interruptControllerName;
-    OSSet * topLevel;
+    OSArray * cpuArray = NULL;
 
     void PE_Log(const char *fmt, ...);
     bool parseACPI(IOService *provider);
@@ -117,7 +118,9 @@ class ACPIPlatformExpert : public IODTPlatformExpert {
     void parseFADT(void * table, IOService * nub);
     void parseMCFG(void * table, IOService * nub);
     static int handlePEHaltRestart(unsigned int type);
-    IOService * createNub(OSDictionary *dict, IORegistryEntry *from = NULL);
+    IOService * createNub(OSDictionary *dict);
+    void setupPIC(IOService * nub);
+    bool compareNubName( const IOService * nub, OSString * name, OSString ** matched ) const;
 
 
 protected:
