@@ -33,7 +33,9 @@
 #include <IOKit/hidsystem/IOHIDParameter.h>
 #include "IOKit/hidsystem/IOHIDSystem.h"
 #include "IOKit/hidsystem/IOHIKeyboard.h"
+#ifdef NEW_HID
 #include "IOHIDKeyboardDevice.h"
+#endif
 #include "IOHIDFamilyTrace.h"
 #include "ev_private.h"
 #include "IOHIDDebug.h"
@@ -974,7 +976,11 @@ IOReturn IOHIKeyboard::message( UInt32 type, IOService * provider,
             break;
             
         case kIOHIDSystemDeviceSeizeRequestMessage:
+#ifdef NEW_HID
             if (OSDynamicCast(IOHIDDevice, provider))
+#else
+            if (0)
+#endif
             {
                 KeyboardReserved *tempReservedStruct = GetKeyboardReservedStructEventForService(this);        
                 

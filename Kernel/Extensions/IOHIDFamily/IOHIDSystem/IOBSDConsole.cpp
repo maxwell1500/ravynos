@@ -37,6 +37,7 @@ bool (*playBeep)(IOService *outputStream) = 0;
 
 bool IOBSDConsole::start(IOService * provider)
 {
+kprintf("IOBSDConsole::start\n");
     OSObject *	notify;
 
     if (!super::start(provider))  return false;
@@ -68,13 +69,14 @@ bool IOBSDConsole::publishNotificationHandler(
                             IOService * newService )
 
 {
+kprintf("IOBSDConsole::publishNotificationHandler\n");
     IOHIKeyboard *	keyboard = 0;
     IOService *		audio = 0;
 
     if( ref) {
         audio = OSDynamicCast(IOService, newService->metaCast("IOAudioStream"));
         if (audio != 0) {
-            OSNumber *out = newService->copyProperty("Out");
+            OSNumber *out = OSDynamicCast(OSNumber, newService->copyProperty("Out"));
             if (OSDynamicCast(OSNumber, out)) {
                 if (out->unsigned8BitValue() == 1) {
                     self->fAudioOut = newService;
@@ -86,6 +88,7 @@ bool IOBSDConsole::publishNotificationHandler(
 	audio = 0;
         keyboard = OSDynamicCast( IOHIKeyboard, newService );
 
+kprintf("keyboard = %p\n", keyboard);
         if( keyboard && self->attach( keyboard )) {
             self->arbitrateForKeyboard( keyboard );
         }
@@ -103,10 +106,11 @@ bool IOBSDConsole::publishNotificationHandler(
 
 void IOBSDConsole::arbitrateForKeyboard( IOHIKeyboard * nub )
 {
+kprintf("arbitrating for keyboard: %p\n",
   nub->open(this, 0, 0,
 	(KeyboardEventCallback)keyboardEvent, 
         (KeyboardSpecialEventCallback) 0, 
-        (UpdateEventFlagsCallback)updateEventFlags);
+        (UpdateEventFlagsCallback)updateEventFlags));
   // failure can be expected if the HID system already has it
 }
 
@@ -130,6 +134,7 @@ IOReturn IOBSDConsole::message(UInt32 type, IOService * provider,
       status = super::message(type, provider, argument);
       break;
   }
+kprintf("IOBSDConsole::message() returns %d\n", status);
 
   return status;
 }
@@ -153,6 +158,8 @@ void IOBSDConsole::keyboardEvent(OSObject * target,
                                  OSObject * sender,
                                  void *     refcon)
 {
+kprintf("IOBSDConsole::keyboardEvent\n");
+
     static const char cursorCodes[] = { 'D', 'A', 'C', 'B' };
 
     if ( ((IOBSDConsole *)target)->displayManager != NULL ) {

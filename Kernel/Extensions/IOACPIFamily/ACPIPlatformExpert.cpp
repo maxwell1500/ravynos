@@ -262,7 +262,7 @@ void ACPIPlatformExpert::setupPIC(IOService *nub) {
 
 bool
 ACPIPlatformExpert::parseACPI(IOService *provider) {
-    IORegistryEntry *entry = IORegistryEntry::fromPath("/", gIODTPlane);
+    IORegistryEntry *entry = IORegistryEntry::fromPath("/ACPI", gIODTPlane);
     if (!entry) {
         PE_Log("ACPI-compatible node not found in DT!");
         return false;

@@ -49,16 +49,17 @@
 #include <kern/clock.h>
 #include "IOHIDShared.h"
 #include "IOHIDSystem.h"
-#include "IOHIDEventService.h"
-#include "IOHIDPointing.h"
-#include "IOHIDKeyboard.h"
-#include "IOHIDConsumer.h"
+//#include "IOHIDEventService.h"
+//#include "IOHIDPointing.h"
+//#include "IOHIDKeyboard.h"
+//#include "IOHIDConsumer.h"
+#include "IOHIDevicePrivateKeys.h"
 #include "IOHITablet.h"
 #include "IOHIDPointingDevice.h"
 #include "IOHIDKeyboardDevice.h"
 #include "IOHIDPrivate.h"
 #include "IOHIDPrivateKeys.h"
-#include "IOHIDEventServiceQueue.h"
+//#include "IOHIDEventServiceQueue.h"
 #include "IOLLEvent.h"
 #include "IOHIDPointingEventDevice.h"
 #include "IOHIDKeyboardEventDevice.h"
@@ -189,6 +190,7 @@ typedef struct _IOHIDCmdGateActionArgs {
 
 #define DISPLAY_IS_ENABLED (displayState & IOPMDeviceUsable)
 
+#ifdef NEW_HID
 #define TICKLE_DISPLAY(event) \
 { \
     if (!evStateChanging && displayManager) { \
@@ -201,6 +203,9 @@ typedef struct _IOHIDCmdGateActionArgs {
     } \
     updateHidActivity(); \
 }
+#else
+#define TICKLE_DISPLAY(x) /**/
+#endif
 
 enum {
     // Options for IOHIDPostEvent()
@@ -435,6 +440,7 @@ bool IOHIDSystem::init(OSDictionary * properties)
     nanoseconds_to_absolutetime(kIOHIDPowerOnThresholdNS, &gIOHIDPowerOnThresoldAbsoluteTime);
     nanoseconds_to_absolutetime(kIOHIDDispaySleepAbortThresholdNS, &gIOHIDDisplaySleepAbortThresholdAbsoluteTime);
 
+kprintf("IOHIDSystem::init queue_init keyboard\n");
     queue_init(&gKeyboardEQ);
     gKeyboardEQLock = IOLockAlloc();
     
@@ -508,9 +514,9 @@ bool IOHIDSystem::start(IOService * provider)
     // Let's go ahead and cache our registry name.
     // This was added to remove a call to getName while
     // we are disabling preemption
-    
     obj = copyProperty(kIOHIDPowerOnDelayNSKey, gIOServicePlane);
     if (obj != NULL) {
+        kprintf("  -> %p\n", obj);
         number = OSDynamicCast(OSNumber, obj);
         if (number != NULL) {
             UInt64 value = number->unsigned64BitValue();
@@ -527,7 +533,7 @@ bool IOHIDSystem::start(IOService * provider)
         }
         obj->release();
     }
-        
+
     /*
      * Start up the work loop
      */
@@ -600,10 +606,11 @@ bool IOHIDSystem::start(IOService * provider)
                                                                    kIOReportUnit_us,
                                                                    sizeof(configs)/sizeof(configs[0]),
                                                                    configs);
-        require(_diags.cursorTotalHistReporter, exit_early);
 
-        ret = IOReportLegend::addReporterLegend(this, _diags.cursorTotalHistReporter, "Cursor", "Total");
-        require(ret == kIOReturnSuccess, exit_early);
+        if (_diags.cursorTotalHistReporter) {
+            ret = IOReportLegend::addReporterLegend(this, _diags.cursorTotalHistReporter, "Cursor", "Total");
+            require(ret == kIOReturnSuccess, exit_early);
+        }
 
         _diags.cursorGraphicsHistReporter = IOHistogramReporter::with(this,
                                                               kIOReportCategoryPeripheral | kIOReportCategoryPerformance,
@@ -612,10 +619,11 @@ bool IOHIDSystem::start(IOService * provider)
                                                               kIOReportUnit_us,
                                                               sizeof(configs)/sizeof(configs[0]),
                                                               configs);
-        require(_diags.cursorGraphicsHistReporter, exit_early);
 
-        ret = IOReportLegend::addReporterLegend(this, _diags.cursorGraphicsHistReporter, "Cursor", "Graphics");
-        require(ret == kIOReturnSuccess, exit_early);
+        if (_diags.cursorGraphicsHistReporter) {
+            ret = IOReportLegend::addReporterLegend(this, _diags.cursorGraphicsHistReporter, "Cursor", "Graphics");
+            require(ret == kIOReturnSuccess, exit_early);
+        }
     }
     
     /*
@@ -631,6 +639,7 @@ bool IOHIDSystem::start(IOService * provider)
 
     registerService();
     iWasStarted = true;
+    kprintf("IOHIDSystem started\n");
 
 exit_early:
     OSSafeReleaseNULL(matchingDevice);
@@ -708,6 +717,7 @@ bool IOHIDSystem::genericNotificationHandler(void * handler,
                                              IOService * newService,
                                              IONotifier * /* notifier */)
 {
+kprintf("IOHIDSystem::genericNotificationHandler\n");
     bool result = false;
 
     if (handler && newService) {
@@ -731,6 +741,7 @@ bool IOHIDSystem::genericNotificationHandler(void * handler,
 }
 
 void IOHIDSystem::doProcessNotifications() {
+kprintf("IOHIDSystem::doProcessNotifications\n");
     while (_delayedNotificationArray->getCount() > 0) {
         // retrieve the first item from the queue
         IOLockLock(_delayedNotificationLock);
@@ -757,21 +768,25 @@ bool IOHIDSystem::handlePublishNotification(
             void * target,
             IOService * newService )
 {
+kprintf("IOHIDSystem::handlePublishNotification\n");
     IOHIDSystem * self = (IOHIDSystem *) target;
 
-    if (newService->isInactive()) {
+    if (!self || !newService || newService->isInactive()) {
+kprintf("went away\n");
         // device went away before we could add it. ignore.
         return true;
     }
     
     // avoiding OSDynamicCast & dependency on graphics family
     if( newService->metaCast("IODisplayWrangler")) {
+kprintf("display wrangler\n");
         if( !self->displayManager) {
             self->displayState = newService->registerInterestedDriver(self);
             self->displayManager = newService;
         }
         return true;
     }
+#ifdef NEW_HID
     if(OSDynamicCast(IOHIPointing, newService) && !OSDynamicCast(IOHIDPointing, newService)) {
       IOHIDPointingEventDevice * shim = IOHIDPointingEventDevice::newPointingDeviceAndStart(newService);
       if (shim) {
@@ -784,12 +799,15 @@ bool IOHIDSystem::handlePublishNotification(
         shim->release();
       }
     }
+#endif
   
     if (self->attach( newService ) == false) {
+kprintf("attach failed - return true\n");
         return true;
     }
   
     self->registerEventSource( newService );
+kprintf("registered source\n");
     return true;
 }
 
@@ -920,11 +938,15 @@ IOReturn IOHIDSystem::configureReport(IOReportChannelList *channels,
 {
     IOReturn ret;
 
-    ret = _diags.cursorTotalHistReporter->configureReport(channels, action, result, destination);
-    require(ret == kIOReturnSuccess, exit);
+    if (_diags.cursorTotalHistReporter) {
+        ret = _diags.cursorTotalHistReporter->configureReport(channels, action, result, destination);
+        require(ret == kIOReturnSuccess, exit);
+    }
 
-    ret = _diags.cursorGraphicsHistReporter->configureReport(channels, action, result, destination);
-    require(ret == kIOReturnSuccess, exit);
+    if (_diags.cursorGraphicsHistReporter) {
+        ret = _diags.cursorGraphicsHistReporter->configureReport(channels, action, result, destination);
+        require(ret == kIOReturnSuccess, exit);
+    }
 
     ret = super::configureReport(channels, action, result, destination);
     require(ret == kIOReturnSuccess, exit);
@@ -940,11 +962,15 @@ IOReturn IOHIDSystem::updateReport(IOReportChannelList *channels,
 {
     IOReturn ret;
 
-    ret = _diags.cursorTotalHistReporter->updateReport(channels, action, result, destination);
-    require(ret == kIOReturnSuccess, exit);
+    if (_diags.cursorTotalHistReporter) {
+        ret = _diags.cursorTotalHistReporter->updateReport(channels, action, result, destination);
+        require(ret == kIOReturnSuccess, exit);
+    }
 
-    ret = _diags.cursorGraphicsHistReporter->updateReport(channels, action, result, destination);
-    require(ret == kIOReturnSuccess, exit);
+    if (_diags.cursorGraphicsHistReporter) {
+        ret = _diags.cursorGraphicsHistReporter->updateReport(channels, action, result, destination);
+        require(ret == kIOReturnSuccess, exit);
+    }
 
     ret = super::updateReport(channels, action, result, destination);
     require(ret == kIOReturnSuccess, exit);
@@ -962,6 +988,7 @@ exit:
  */
 IOReturn IOHIDSystem::evOpen(void)
 {
+kprintf("IOHIDSystem::evOpen\n");
     IOReturn r = kIOReturnSuccess;
 
     if ( evOpenCalled == true )
@@ -1083,6 +1110,7 @@ IOHIDSystem::registerScreen(IOGraphicsDevice * io_gd,
                             IOGBounds * boundsPtr,
                             IOGBounds * virtualBoundsPtr)
 {
+kprintf("IOHIDSystem::registerScreen\n");
     int result = -1;
 
     // If we are not open for business, fail silently
@@ -1574,10 +1602,12 @@ void IOHIDSystem::sleepDisplayTickle()
 
 void IOHIDSystem::dispatchEvent(IOHIDEvent *event, IOOptionBits options __unused)
 {
+kprintf("IOHIDSystem::dispatchEvent\n");
     if ( !event || !dataQueueSet)
         return;
 
     OSCollectionIterator *      iterator    = OSCollectionIterator::withCollection(dataQueueSet);
+#ifdef NEW_HID
     IOHIDEventServiceQueue *    dataQueue   = NULL;
 
     if ( !iterator )
@@ -1586,6 +1616,7 @@ void IOHIDSystem::dispatchEvent(IOHIDEvent *event, IOOptionBits options __unused
     while ((dataQueue = OSDynamicCast(IOHIDEventServiceQueue, iterator->getNextObject()))) {
         dataQueue->enqueueEvent(event);
     }
+#endif
 
     iterator->release();
 
@@ -1681,6 +1712,7 @@ void IOHIDSystem::postEvent(int           what,
              /* options*/   UInt32        options
                             )
 {
+kprintf("IOHIDSystem::postEvent\n");
     // Clear out the keyboard queue up until this TS.  This should keep
     // the events in order.
     IOHIDEvent * event = NULL;
@@ -1767,6 +1799,7 @@ exit:
 
 void IOHIDSystem::scheduleNextPeriodicEvent()
 {
+kprintf("IOHIDSystem::scheduleNextPeriodicEvent\n");
     if ( !eventsOpen ) {
         // If eventsOpen is false, then the driver shmem is
         // no longer valid, and it is in the process of shutting down.
@@ -2137,8 +2170,10 @@ IOReturn IOHIDSystem::updateParamPropertiesGated(IOService * source) {
       // update with user settings
       if ( OSDynamicCast(IOHIDevice, source) )
           ((IOHIDevice *)source)->setParamProperties( newParams );
+#ifdef NEW_HID
       else if ( OSDynamicCast(IOHIDEventService, source) )
           ((IOHIDEventService *)source)->setSystemProperties( newParams );
+#endif
 
       setProperty( kIOHIDParametersKey, newParams );
       newParams->release();
@@ -2159,13 +2194,18 @@ IOReturn IOHIDSystem::updateParamPropertiesGated(IOService * source) {
 //
 bool IOHIDSystem::registerEventSource(IOService * source)
 {
+kprintf("IOHIDSystem::registerEventSource\n");
     bool success = true;
-    if ( OSDynamicCast(IOHIDKeyboard, source)) {
+    if (!source)
+        return true;
+
+    if ( OSDynamicCast(IOHIKeyboard, source)) {
       success = ((IOHIKeyboard*)source)->open(this, kIOServiceSeize,0,
                     (KeyboardEventCallback)        _keyboardEvent,
                     (KeyboardSpecialEventCallback) _keyboardSpecialEvent,
                     (UpdateEventFlagsCallback)     _updateEventFlags);
     }
+
     if ( success )
     {
         //Yet another gate call to protect savedParameters on registerEventSource call from handlePublishNotification
@@ -2246,6 +2286,7 @@ void IOHIDSystem::doProcessKeyboardEQ(IOHIDSystem * self)
 
 void IOHIDSystem::processKeyboardEQ(IOHIDSystem * self, AbsoluteTime * deadline)
 {
+kprintf("IOHIDSystem::processKeyboardEQ\n");
     KeyboardEQElement * keyboardEQElement;
 
     KEYBOARD_EQ_LOCK;
@@ -2316,6 +2357,7 @@ void IOHIDSystem::keyboardEvent(unsigned   eventType,
          /* atTime */           AbsoluteTime ts,
          /* sender */       OSObject * sender)
 {
+kprintf("IOHIDSystem::keyboardEvent\n");
     KeyboardEQElement * keyboardEQElement = (KeyboardEQElement *)IOMalloc(sizeof(KeyboardEQElement));
 
     if ( !keyboardEQElement )
@@ -2349,6 +2391,7 @@ void IOHIDSystem::keyboardEvent(unsigned   eventType,
 IOReturn IOHIDSystem::doKeyboardEvent(IOHIDSystem *self, void * args)
                         /* IOCommandGate::Action */
 {
+kprintf("IOHIDSystem::doKeyboardEvent\n");
     KeyboardEQElement * keyboardEQElement = (KeyboardEQElement *)args;
 
     AbsoluteTime ts         = keyboardEQElement->ts;
@@ -2383,6 +2426,7 @@ void IOHIDSystem::keyboardEventGated(unsigned   eventType,
                                 /* sender */           OSObject * sender)
 {
 
+kprintf("IOHIDSystem::keyboardEventGated\n");
     if (eventType == NX_KEYDOWN) {
         TICKLE_DISPLAY(NX_KEYDOWN);
     }
@@ -2528,6 +2572,7 @@ void IOHIDSystem::keyboardSpecialEventGated(
 {
     NXEventData outData;
  
+kprintf("IOHIDSystem::keyboardSpecialEventGated\n");
     // Since the HIDSystem will now take on BSD Console duty,
     // we need to make sure to process the programmer key info
     // prior to doing the eventsOpen check
@@ -2614,6 +2659,7 @@ void IOHIDSystem::updateEventFlags(unsigned flags, OSObject * sender)
 IOReturn IOHIDSystem::doUpdateEventFlags(IOHIDSystem *self, void * args)
                         /* IOCommandGate::Action */
 {
+kprintf("IOHIDSystem::doUpdateEventFlags\n");
     KeyboardEQElement * keyboardEQElement = (KeyboardEQElement *)args;
 
     OSObject * sender   = keyboardEQElement->sender;
@@ -2642,6 +2688,7 @@ void IOHIDSystem::updateEventFlagsGated(unsigned flags, OSObject * sender __unus
 //
 void IOHIDSystem::setCursorPosition(IOGPoint * newLoc, bool external, OSObject * sender)
 {
+kprintf("IOHIDSystem::setCursorPosition\n");
     if ( eventsOpen == true )
     {
         clock_get_uptime(&_cursorEventLast);
@@ -3068,53 +3115,56 @@ IOReturn IOHIDSystem::setEventsEnable(void*p1 __unused,void*,void*,void*,void*,v
     if (mac_iokit_check_hid_control(kauth_cred_get()))
         return kIOReturnNotPermitted;
 
-//    ret = cmdGate->runAction((IOCommandGate::Action)doSetEventsEnablePre, p1);
-//    if ( ret == kIOReturnSuccess ) {
-//        // reset outside gated context
-//        _resetMouseParameters();
-//    }
-//    ret = cmdGate->runAction((IOCommandGate::Action)doSetEventsEnablePost, p1);
+#if 0
+    ret = cmdGate->runAction((IOCommandGate::Action)doSetEventsEnablePre, p1);
+    if ( ret == kIOReturnSuccess ) {
+        // reset outside gated context
+        _resetMouseParameters();
+    }
+    ret = cmdGate->runAction((IOCommandGate::Action)doSetEventsEnablePost, p1);
+#endif
 
     return ret;
 }
 
-//IOReturn IOHIDSystem::doSetEventsEnablePre(IOHIDSystem *self, void *p1)
-//                        /* IOCommandGate::Action */
-//{
-//    return self->setEventsEnablePreGated(p1);
-//}
-//
-//IOReturn IOHIDSystem::setEventsEnablePreGated(void*p1)
-//{
-//    bool enable = (bool)p1;
-//
-//    if( enable) {
-//        while ( evStateChanging )
-//            cmdGate->commandSleep(&evStateChanging);
-//
-//        evStateChanging = true;
-//        //attachDefaultEventSources();
-//    }
-//    return( kIOReturnSuccess);
-//}
-//
-//IOReturn IOHIDSystem::doSetEventsEnablePost(IOHIDSystem *self, void *p1)
-//                        /* IOCommandGate::Action */
-//{
-//    return self->setEventsEnablePostGated(p1);
-//}
-//
-//IOReturn IOHIDSystem::setEventsEnablePostGated(void*p1)
-//{
-//    bool enable = (bool)p1;
-//
-//    if( enable) {
-//        evStateChanging = false;
-//        cmdGate->commandWakeup(&evStateChanging);
-//    }
-//    return( kIOReturnSuccess);
-//}
+#if 0
+IOReturn IOHIDSystem::doSetEventsEnablePre(IOHIDSystem *self, void *p1)
+                        /* IOCommandGate::Action */
+{
+    return self->setEventsEnablePreGated(p1);
+}
 
+IOReturn IOHIDSystem::setEventsEnablePreGated(void*p1)
+{
+    bool enable = (bool)p1;
+
+    if( enable) {
+        while ( evStateChanging )
+            cmdGate->commandSleep(&evStateChanging);
+
+        evStateChanging = true;
+        //attachDefaultEventSources();
+    }
+    return( kIOReturnSuccess);
+}
+
+IOReturn IOHIDSystem::doSetEventsEnablePost(IOHIDSystem *self, void *p1)
+                        /* IOCommandGate::Action */
+{
+    return self->setEventsEnablePostGated(p1);
+}
+
+IOReturn IOHIDSystem::setEventsEnablePostGated(void*p1)
+{
+    bool enable = (bool)p1;
+
+    if( enable) {
+        evStateChanging = false;
+        cmdGate->commandWakeup(&evStateChanging);
+    }
+    return( kIOReturnSuccess);
+}
+#endif
 
 IOReturn IOHIDSystem::setCursorEnable(void*p1,void*,void*,void*,void*,void*)
 {                                                                    // IOMethod
@@ -3311,12 +3361,14 @@ IOReturn IOHIDSystem::extPostEventGated(void *p1,void *p2 __unused, void *p3)
     if ( eventsOpen == false )
         return kIOReturnNotOpen;
 
-//    if (ShouldConsumeHIDEvent(ts, rootDomainStateChangeDeadline, false)) {
-//        if (typeMask & NX_WAKEMASK) {
-//            TICKLE_DISPLAY(event->type);
-//        }
-//        return kIOReturnSuccess;
-//    }
+#if 0
+    if (ShouldConsumeHIDEvent(ts, rootDomainStateChangeDeadline, false)) {
+        if (typeMask & NX_WAKEMASK) {
+            TICKLE_DISPLAY(event->type);
+        }
+        return kIOReturnSuccess;
+    }
+#endif
 
     if (!DISPLAY_IS_ENABLED) {
 #if !WAKE_DISPLAY_ON_MOVEMENT
@@ -3363,6 +3415,7 @@ IOReturn IOHIDSystem::extPostEventGated(void *p1,void *p2 __unused, void *p3)
 
     if ( event->setFlags & kIOHIDPostHIDManagerEvent )
     {
+#ifdef NEW_HID
         if ((typeMask & (MOUSEEVENTMASK | MOVEDEVENTMASK | NX_SCROLLWHEELMOVEDMASK)) &&
             (_hidPointingDevice || (_hidPointingDevice = IOHIDPointingDevice::newPointingDeviceAndStart(this, 8, 400, true, 2))))
         {
@@ -3397,6 +3450,7 @@ IOReturn IOHIDSystem::extPostEventGated(void *p1,void *p2 __unused, void *p3)
 
             isSeized |= _hidKeyboardDevice->isSeized();
         }
+#endif // NEW_HID
     }
 
     if ( !isSeized )
@@ -3413,7 +3467,7 @@ IOReturn IOHIDSystem::extPostEventGated(void *p1,void *p2 __unused, void *p3)
                 /* options*/   options);
     }
 
-    //scheduleNextPeriodicEvent();
+    // scheduleNextPeriodicEvent();
 
     return kIOReturnSuccess;
 }
@@ -3869,7 +3923,8 @@ IOReturn IOHIDSystem::_recordCursorAction(uint64_t origTs, uint64_t callTs)
     workloopDelta = (workloopNs - origTs) / NSEC_PER_USEC;
     totalDelta = (nowNs - origTs) / NSEC_PER_USEC;
 
-    require(_diags.cursorTotalHistReporter->tallyValue((int64_t)totalDelta) != -1, exit);
+    if (_diags.cursorTotalHistReporter)
+        require(_diags.cursorTotalHistReporter->tallyValue((int64_t)totalDelta) != -1, exit);
 
     for (size_t i = 0; i < Diags::kCursorActionCount; i++) {
         if (_diags.lastCursorActionsMask & (1 << i)) {
@@ -3880,7 +3935,8 @@ IOReturn IOHIDSystem::_recordCursorAction(uint64_t origTs, uint64_t callTs)
 
             actionDeltas[i] = (actionNs - origTs) / NSEC_PER_USEC;
 
-            require(_diags.cursorGraphicsHistReporter->tallyValue((int64_t)actionDeltas[i]) != -1, exit);
+            if (_diags.cursorGraphicsHistReporter)
+                require(_diags.cursorGraphicsHistReporter->tallyValue((int64_t)actionDeltas[i]) != -1, exit);
 
             n = snprintf(actionBuf+strlen(actionBuf), sizeof(actionBuf)-strlen(actionBuf), "%s(us) %llu ", Diags::cursorStrings[i], actionDeltas[i]);
             require_action(n > 0 && n < sizeof(actionBuf)-strlen(actionBuf), exit, ret = kIOReturnOverrun);
@@ -3973,10 +4029,13 @@ IOReturn IOHIDSystem::setParamProperties( OSDictionary * dict )
             OSDictionary *  validParameters;
             while( (eventSrc = (IOService *) iter->getNextObject())) {
 
+#if NEW_HID
                 if ( OSDynamicCast(IOHIDKeyboard, eventSrc) || OSDynamicCast(IOHIDPointing, eventSrc) || OSDynamicCast(IOHIDConsumer, eventSrc)) {
                   ((IOHIDevice *)eventSrc)->setParamProperties( dict);
                     continue;
                 }
+#endif
+
                 // Use valid parameters per device.  Basically if the IOHIDevice has a given property
                 // in its registery we should NOT push it down via setParamProperties as properties
                 // generated via the global IOHIDSystem::setParamProperties are defaults.
@@ -3985,9 +4044,10 @@ IOReturn IOHIDSystem::setParamProperties( OSDictionary * dict )
 
                     if ( OSDynamicCast(IOHIDevice, eventSrc) )
                         ret = ((IOHIDevice *)eventSrc)->setParamProperties( validParameters );
+#ifdef NEW_HID
                     else if ( OSDynamicCast( IOHIDEventService, eventSrc ) )
                         ret = ((IOHIDEventService *)eventSrc)->setSystemProperties( validParameters );
-
+#endif
                     if( (ret != kIOReturnSuccess) && (ret != kIOReturnBadArgument))
                         err = ret;
 
@@ -4131,7 +4191,8 @@ void IOHIDSystem::_setScrollCountParameters(OSDictionary *newSettings)
     if (!newSettings) {
         newSettings = (OSDictionary*)copyProperty(kIOHIDScrollCountBootDefaultKey);
         if (!OSDynamicCast(OSDictionary, newSettings)) {
-            newSettings->release();
+            if (newSettings)
+                newSettings->release();
             newSettings = NULL;
         }
     }
