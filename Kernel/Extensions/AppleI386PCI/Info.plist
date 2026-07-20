@@ -51,7 +51,7 @@
 			<key>IOClass</key>
 			<string>AppleI386PCI</string>
 			<key>IONameMatch</key>
-			<string>pci-bridge</string>
+			<string>pci</string>
 			<key>IOProviderClass</key>
 			<string>IOPlatformDevice</string>
 		</dict>
