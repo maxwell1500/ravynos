@@ -122,7 +122,6 @@ class ACPIPlatformExpert : public IOPlatformExpert {
     void setupPIC(IOService * nub);
     bool compareNubName( const IOService * nub, OSString * name, OSString ** matched ) const;
 
-
 protected:
     virtual SInt32 installDeviceInterruptForFixedEvent(IOService *device,
                                                        UInt32 fixedEvent);

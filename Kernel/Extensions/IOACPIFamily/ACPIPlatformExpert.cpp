@@ -110,7 +110,7 @@ bool ACPIPlatformExpert::init(OSDictionary *properties) {
     OSString *name = (OSString *)getProperty("InterruptControllerName");
     if (name == 0) name = OSString::withCStringNoCopy("ACPICPUInterruptController");
     _interruptControllerName = OSSymbol::withString(name);
-
+    
     return true;
 }
 
@@ -165,15 +165,15 @@ bool ACPIPlatformExpert::start(IOService *provider) {
         const char *type;
         const char *compat;
         int pic;
-    } nubEntries[5] = {
+    } nubEntries[] = {
         { "rtc", "platform_device", "IORTC", 0 },
         { "nvram", "platform_device", "IONVRAM", 0 },
-        { "8259-pic", "platform_device", "8259-pic", 0 },
+        { "8259-pic", "platform_device", "8259-pic", 1 },
         { "ps2controller", "platform_device", "ps2controller", 0 },
-        { "pci", "pci", "IOPlatformDevice" } // pseudo host bridge to kick off matching
     };
 
-    for (int i = 0; i < 5; ++i) {
+    int nEntries = sizeof(nubEntries) / sizeof(struct nubEntry_t);
+    for (int i = 0; i < nEntries; ++i) {
         OSDictionary * dict = OSDictionary::withCapacity(8);
 
         dict->setObject("compatible", OSString::withCString(nubEntries[i].compat));
@@ -341,8 +341,6 @@ ACPIPlatformExpert::parseACPI(IOService *provider) {
 
         if (!strcmp(name, "APIC"))
             parseAPIC(p, this);
-        else if (!strcmp(name, "FACP"))
-            parseFADT(p, this);
         else if (!strcmp(name, "MCFG"))
             parseMCFG(p, this);
 
@@ -362,7 +360,6 @@ bool ACPIPlatformExpert::configure(IOService *provider) {
     if (!super::configure(provider)) return false;
 
     parseACPI(this);
-
     return true;
 }
 
@@ -604,9 +601,9 @@ void ACPIPlatformExpert::releaseGlobalLock(IOService *client,
 IOReturn ACPIPlatformExpert::validateObject(IOACPIPlatformDevice *device,
                                             const OSSymbol *objectName)
 {
-    (void)device;
-    (void)objectName;
-    return kIOReturnNotFound;
+    if (!objectName)
+        return kIOReturnBadArgument;
+    return validateObject(device, objectName->getCStringNoCopy());
 }
 
 IOReturn ACPIPlatformExpert::validateObject(IOACPIPlatformDevice *device,
@@ -628,13 +625,14 @@ IOReturn ACPIPlatformExpert::evaluateObject(IOACPIPlatformDevice *device,
                                             IOItemCount paramCount,
                                             IOOptionBits options)
 {
-    (void)device;
-    (void)objectName;
-    (void)params;
-    (void)paramCount;
-    (void)options;
-    if (result) *result = NULL;
-    return kIOReturnUnsupported;
+    if (!objectName)
+        return kIOReturnBadArgument;
+    return evaluateObject(device,
+                          objectName->getCStringNoCopy(),
+                          result,
+                          params,
+                          paramCount,
+                          options);      
 }
 
 IOReturn ACPIPlatformExpert::evaluateObject(IOACPIPlatformDevice *device,
@@ -742,3 +740,4 @@ IOReturn ACPIPlatformExpert::setDeviceWakeEnable(IOACPIPlatformDevice *device,
     (void)enable;
     return kIOReturnUnsupported;
 }
+
