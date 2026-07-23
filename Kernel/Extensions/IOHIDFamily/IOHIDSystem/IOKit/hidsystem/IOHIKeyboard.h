@@ -105,7 +105,7 @@ typedef void (*UpdateEventFlagsCallback)(
 /* End Action Definitions */
 
 /* Default key repeat parameters */
-#define EV_DEFAULTINITIALREPEAT 500000000ULL    // 1/2 sec in nanoseconds
+#define EV_DEFAULTINITIALREPEAT 950000000ULL    // 0.95 sec in nanoseconds
 #define EV_DEFAULTKEYREPEAT     83333333ULL     // 1/12 sec in nanoseconds
 #define EV_MINKEYREPEAT         16700000ULL     // 1/60 sec
 
