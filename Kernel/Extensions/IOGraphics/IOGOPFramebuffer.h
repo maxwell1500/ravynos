@@ -1,10 +1,12 @@
 #include <IOKit/IOInterrupts.h>
 #include <IOKit/IOService.h>
 #include <IOKit/IOPlatformExpert.h>
+#include <IOKit/graphics/IOFramebuffer.h>
 
-class IOFramebuffer : public IOService
+class IOGOPFramebuffer : public IOFramebuffer
 {
-    OSDeclareDefaultStructors(IOFramebuffer);
+    OSDeclareDefaultStructors(IOGOPFramebuffer);
+    friend class IODisplay;
 
 private:
     void   *fbBase;
@@ -14,41 +16,39 @@ private:
     UInt32  bpp;
 
 public:
-    IOService * probe(IOService * provider, SInt32 * score) override;
-    virtual bool start(IOService * provider) override;
-    virtual void stop(IOService * provider) override;
+    IOService * probe(IOService * provider, SInt32 * score) APPLE_KEXT_OVERRIDE;
+    virtual bool start(IOService * provider) APPLE_KEXT_OVERRIDE;
+    virtual void stop(IOService * provider) APPLE_KEXT_OVERRIDE;
     virtual void * getBaseAddress() ;
     virtual uint32_t getWidth() ;
     virtual uint32_t getHeight() ;
     virtual uint32_t getPitch() ;
     virtual uint32_t getDepth() ;
 
-#if 0
-    virtual IOReturn enableController() override;
+    virtual IOReturn enableController() APPLE_KEXT_OVERRIDE;
 
-    virtual const char * getPixelFormats() override;
+    virtual const char * getPixelFormats() APPLE_KEXT_OVERRIDE;
     virtual IOReturn getCurrentDisplayMode(IODisplayModeID * displayMode,
-                                           IOIndex * depth) override;
+                                           IOIndex * depth) APPLE_KEXT_OVERRIDE;
 
     virtual IOReturn setDisplayMode(IODisplayModeID displayMode,
-                                    IOIndex depth) override;
+                                    IOIndex depth) APPLE_KEXT_OVERRIDE;
 
-    virtual IODeviceMemory * getApertureRange(IOPixelAperture aperture) override;
+    virtual IODeviceMemory * getApertureRange(IOPixelAperture aperture) APPLE_KEXT_OVERRIDE;
 
     virtual IOReturn getInformationForDisplayMode(
         IODisplayModeID displayMode,
-        IODisplayModeInformation * info) override;
+        IODisplayModeInformation * info) APPLE_KEXT_OVERRIDE;
 
     virtual UInt64 getPixelFormatsForDisplayMode(
         IODisplayModeID displayMode,
-        IOIndex depth) override;
+        IOIndex depth) APPLE_KEXT_OVERRIDE;
 
     virtual IOReturn getPixelInformation(
         IODisplayModeID displayMode, IOIndex depth,
-        IOPixelAperture aperture, IOPixelInformation * info ) override;
+        IOPixelAperture aperture, IOPixelInformation * info ) APPLE_KEXT_OVERRIDE;
 
-    virtual IOReturn getDisplayModes(IODisplayModeID * allDisplayModes) override;
+    virtual IOReturn getDisplayModes(IODisplayModeID * allDisplayModes) APPLE_KEXT_OVERRIDE;
 
-    virtual IOItemCount getDisplayModeCount( void ) override;
-#endif
+    virtual IOItemCount getDisplayModeCount( void ) APPLE_KEXT_OVERRIDE;
 };

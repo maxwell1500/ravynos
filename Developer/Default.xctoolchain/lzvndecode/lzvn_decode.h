@@ -32,7 +32,9 @@
 #ifndef _LZVN_DECODE_H
 #define _LZVN_DECODE_H
 
+#ifndef KERNEL
 #include <assert.h>
+#endif
 #include <stddef.h> /* size_t */
 #include <stdint.h>
 #include <string.h>

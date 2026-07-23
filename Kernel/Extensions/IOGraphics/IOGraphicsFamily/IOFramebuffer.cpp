@@ -1983,6 +1983,7 @@ static void setupGTraceBuffers()
     if (static_cast<bool>(sAGDCGTrace))
         return;
 
+#if GTRACE_ENABLED
     if (gIOGATLines)
     {
         gGTrace = GTraceBuffer::make(
@@ -1996,6 +1997,7 @@ static void setupGTraceBuffers()
     // TODO(gvdl): Implement a ModuleStop routine to clear up on unload
     // GTraceBuffer::destroy(iog::move(sAGDCGTrace));
     // GTraceBuffer::destroy(iog::move(gGTrace));
+#endif // GTRACE_ENABLED
 }
 
 __private_extern__ "C" kern_return_t IOGraphicsFamilyModuleStart(kmod_info_t *ki, void *data);
@@ -4470,7 +4472,9 @@ do {                                                                           \
         if ((unsigned) -1 != i) gStartedFramebuffers->removeObject(i);
     }
 
+#if 0
     RELEASE_EVENT_SOURCE(gIOFBSystemWorkLoop, __private->fCloseWorkES);
+#endif
 
     if (this == gIOFBConsoleFramebuffer) {
         gIOFBConsoleFramebuffer = NULL;
@@ -4788,11 +4792,13 @@ bool IOFramebuffer::start( IOService * provider )
         }
         bzero(serverMsg, sizeof(mach_msg_header_t));
 
+#if 0
         __private->fCloseWorkES = IOInterruptEventSource::interruptEventSource(this,
             OSMemberFunctionCast(IOInterruptEventSource::Action, this,
                 &IOFramebuffer::closeWork));
         if (!static_cast<bool>(__private->fCloseWorkES)) return false;
         gIOFBSystemWorkLoop->addEventSource(__private->fCloseWorkES);
+#endif
 
         // Grab the gate before we try to find a controller
         SYSGATEGUARD(sysgated);
@@ -8576,9 +8582,9 @@ IOFramebuffer::serverAcknowledgeNotification(integer_t msgh_id)
 
     // Convenience aliases and instrumentation support
     auto& aliasAckedPower      = __private->fServerMsgIDAckedPower;
-    const auto& aliasSentPower = __private->fServerMsgIDSentDim;
-    sentAckedPower = GPACKUINT32T(1, aliasSentPower)
-                   | GPACKUINT32T(0, aliasAckedPower);
+    //const auto& aliasSentPower = __private->fServerMsgIDSentDim;
+    sentAckedPower = /* GPACKUINT32T(1, aliasSentPower)
+                   | */ GPACKUINT32T(0, aliasAckedPower);
 
 
     const auto messageType = msgh_id & kIOFBNS_MessageMask;
@@ -8705,8 +8711,8 @@ IOReturn IOFramebuffer::extRegisterNotificationPort(
         return (err);
     }
 
-    __private->fServerUsesModernAcks =
-        (type >= kServerAckProtocolGraphicsTypesRev);
+    __private->fServerUsesModernAcks = 0;
+        //(type >= kServerAckProtocolGraphicsTypesRev);
 
 
     mach_msg_header_t *msgh = static_cast<mach_msg_header_t*>(serverMsg);
@@ -10159,11 +10165,13 @@ void IOFramebuffer::extClose(void)
     FBASSERTGATED(this);
 
     // Start closeWork() on sys WL and sleep (with gate open) until it finishes.
+#if 0
     __private->fClosePending = true;
     do {
         __private->fCloseWorkES->interruptOccurred(0, 0, 0);
         FBWL(this)->sleepGate(&__private->fClosePending, THREAD_UNINT);
     } while (__private->fClosePending);
+#endif
 
     IOG_KTRACE(DBG_IOG_FB_EXT_CLOSE, DBG_FUNC_END,
                0, __private->regID, 0, 0, 0, 0, 0, 0);
@@ -10174,8 +10182,8 @@ void IOFramebuffer::closeWork(IOInterruptEventSource *, int)
     SYSASSERTGATED(); // Scheduled on sys WL by extClose.
     FBGATEGUARD(ctrlgated, this);
     close();
-    __private->fClosePending = false;
-    FBWL(this)->wakeupGate(&__private->fClosePending, kManyThreadWakeup);
+    //__private->fClosePending = false;
+    //FBWL(this)->wakeupGate(&__private->fClosePending, kManyThreadWakeup);
 }
 
 /*!
@@ -14684,6 +14692,11 @@ void IOFramebuffer::dpUpdateConnect(void)
     DEBG(thisName, "dp dongle %d, sinks %d\n", __private->dpDongle, __private->dpDongleSinkCount);
 }
 
+IOReturn IOFramebuffer::diagnoseReport(void *param1,
+        void *param2, void *param3, void *param4)
+{
+        return kIOReturnSuccess;
+}
 
 #pragma mark -
 

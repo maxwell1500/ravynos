@@ -132,6 +132,7 @@ public:
     virtual IOReturn getAttributeForConnection( IOSelect selector, uintptr_t * value );
     virtual IOReturn setAttributeForConnection( IOSelect selector, uintptr_t value );
     virtual void joinPMtree ( IOService * driver ) APPLE_KEXT_OVERRIDE;
+    virtual uint64_t getFBRegistryID(void);
 
 };
 

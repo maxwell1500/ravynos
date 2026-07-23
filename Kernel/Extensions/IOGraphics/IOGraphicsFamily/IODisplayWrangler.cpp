@@ -91,6 +91,11 @@ bool IODisplayConnect::initWithConnection(
     return (true);
 }
 
+uint64_t IODisplayConnect::getFBRegistryID(void) {
+        return fFBRegID;
+}
+
+#if 0
 void IODisplayConnect::recordGTraceToken(
         const uint16_t line,
         const uint16_t tag0, const uint64_t fbRegID,
@@ -112,6 +117,7 @@ void IODisplayConnect::recordGTraceToken(
     recordGTraceToken(line, GTFuncTag(fnID, fnType, 0), getFBRegistryID(),
                       tag1, arg1, tag2, arg2, tag3, arg3);
 }
+#endif
 
 IOFramebuffer * IODisplayConnect::getFramebuffer( void )
 {
@@ -213,10 +219,12 @@ bool IODisplayWrangler::start( IOService * provider )
     }
 
     // Mostly used by the AppleBacklight and IODisplay instrumentation
+#if 0
     if (!static_cast<bool>(sIODWGTrace))
         sIODWGTrace = GTraceBuffer::make(
                 "abldecoder", "IOGraphicsFamily", kGTraceMinimumLineCount,
                 /* breadcrumb func */ NULL, /* breadcrumb ctxt */ NULL);
+#endif
 
     clock_interval_to_absolutetime_interval(kDimInterval, kSecondScale, &fDimInterval);
 
@@ -873,6 +881,7 @@ sIODWBuiltinPanelPowerKey = OSSymbol::withCString("AAPL,builtin-panel-power");
 /* static */ void
 IODisplayWrangler::builtinPanelPowerNotify(bool state)
 {
+#if 0
     IODisplayWrangler *w = sIODisplayWrangler;
     if (!sIODWBuiltinPanelPowerKey || !w) return;
     OSBoolean *b = OSDynamicCast(OSBoolean,
@@ -886,4 +895,5 @@ IODisplayWrangler::builtinPanelPowerNotify(bool state)
         w->messageClients(kIOMessageServicePropertyChange,
             &details, sizeof(details));
     }
+#endif
 }

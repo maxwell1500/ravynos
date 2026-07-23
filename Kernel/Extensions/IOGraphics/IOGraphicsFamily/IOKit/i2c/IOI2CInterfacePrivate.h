@@ -27,7 +27,7 @@
 #include <IOKit/IOLib.h>
 #include <IOKit/IOUserClient.h>
 
-#include <IOKit/ndrvsupport/IONDRVFramebuffer.h>
+//#include <IOKit/ndrvsupport/IONDRVFramebuffer.h>
 #endif /* KERNEL */
 
 #include <IOKit/i2c/IOI2CInterface.h>

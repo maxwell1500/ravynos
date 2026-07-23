@@ -27,7 +27,7 @@
 #include <IOKit/assert.h>
 #include <libkern/c++/OSContainers.h>
 
-#include <IOKit/ndrvsupport/IONDRVFramebuffer.h>
+//#include <IOKit/ndrvsupport/IONDRVFramebuffer.h>
 #include <IOKit/i2c/IOI2CInterfacePrivate.h>
 #include <IOKit/graphics/IOGraphicsPrivate.h>
 

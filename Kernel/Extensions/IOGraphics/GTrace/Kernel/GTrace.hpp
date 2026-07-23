@@ -30,6 +30,8 @@
 // Function has been moved and renamed, define old macro in terms of new
 #define GTFuncTag(i, t, tag) GPACKFUNCTAG(i, t, tag)
 
+#define GTRACERAW(tracer, t0, a0, t1, a1, t2, a2, t3, a3)
+#if 0
 #define GTRACERAW(tracer, t0, a0, t1, a1, t2, a2, t3, a3) do{                  \
     if (static_cast<bool>(tracer)){                                            \
         (tracer)->recordToken(__LINE__,                                        \
@@ -39,7 +41,7 @@
                 MAKEGTRACETAG(t3), MAKEGTRACEARG(a3));                         \
     }                                                                          \
 }while(0)
-
+#endif
 // Convenience macro, used when all args are ordinary hex data fields.
 #define GTRACERAWNT(tracer, a0, a1, a2, a3)                                    \
     GTRACERAW(tracer, 0, a0, 0, a1, 0, a2, 0, a3)
@@ -54,11 +56,16 @@
 // GTrace for calls that are slow. The GTRACE_IFSLOW_START records the current
 // time, then GTRACE_IFSLOW_END will record an entry if the duration between
 // start and end is > the threshold.  Note `delayat` is in absolute time units.
+#if 0
 #define GTRACE_IFSLOW_START(tracer, fid) do {                                  \
     const uint64_t _gtrace_ ## fid ## _start_                                  \
         = ((static_cast<bool>(tracer)) ? mach_continuous_time() : 0)
+#endif
+#define GTRACE_IFSLOW_START(tracer, fid)
 
 // Matches the do{ from GTRACE_IFSLOW_START, must be in same scope
+#define GTRACE_IFSLOW_END(tracer, fid, ft, t0, a0, t1, a1, t2, a2, delayat)
+#if 0
 #define GTRACE_IFSLOW_END(tracer, fid, ft, t0, a0, t1, a1, t2, a2, delayat)    \
     if(static_cast<bool>(tracer)) {                                            \
         const uint64_t _gtrace_ifslow_now_ = mach_continuous_time();           \
@@ -70,9 +77,14 @@
                                 _gtrace_ifslow_now_);                          \
     }                                                                          \
 }while(0)
+#endif // 0
 
 // Create a pair of GTrace records but only record them if the time duration
 // was > than the absolute time threshold given in GTRACE_DEFER_END
+#define GTRACE_DEFER_START(tracer, t0, a0, t1, a1, t2, a2, t3, a3) 
+#define GTRACE_DEFER_END(tracer, t0, a0, t1, a1, t2, a2, t3, a3, delayat) 
+
+#if 0
 #define GTRACE_DEFER_START(tracer, t0, a0, t1, a1, t2, a2, t3, a3)             \
 do{                                                                            \
     const GTraceEntry _gtrace_start_ = (static_cast<bool>(tracer))             \
@@ -92,6 +104,7 @@ do{                                                                            \
         }                                                                      \
     }                                                                          \
 }while(0)
+#endif // 0
 
 #if GTRACE_IMPL
 // Macro used by IOGraphicsFamily internally, not required for third party use.
@@ -124,7 +137,7 @@ public:
 
 #if !GTRACE_ARCHAIC_CPP
     using shared_type = iog::OSSharedObject<GTraceBuffer>;
-
+#if 0
     /*!
      @function make
      @abstract Make a shared object of a new GTrace buffer.
@@ -159,7 +172,7 @@ public:
     static shared_type make(
             const char* decoderName, const char* bufferName,
             const uint32_t lineCount, breadcrumb_func bcf, void* context);
-
+#endif // 0
     /*! @function destroy
      @abstract Destroy a buffer shared object created with make.
      @discussion When a client is done with the gtrace buffer use
@@ -202,6 +215,7 @@ public:
         __attribute__((deprecated ("Use C++11 and GTraceBuffer::destroy.")));
 #endif
 
+#if 0
     /*! @function formatToken
      @abstract Format a token suitable for recording.
      @discussion GTrace supports tokenized tracing.  formatToken is used to
@@ -260,6 +274,7 @@ public:
         recordToken(formatToken(
             line, tag1, arg1, tag2, arg2, tag3, arg3, tag4, arg4, timestamp));
     }
+#endif // 0
 
 #if GTRACE_IMPL
     /*! @function synchIndex

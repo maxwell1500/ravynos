@@ -31,13 +31,13 @@
 			<key>CFBundleIdentifier</key>
 			<string>com.ravynos.iokit.IOGOPFramebuffer</string>
 			<key>IOClass</key>
-			<string>IOFramebuffer</string>
+			<string>IOGOPFramebuffer</string>
 			<key>IOProbeScore</key>
 			<integer>2000</integer>
 			<key>IONameMatch</key>
-            <string>display</string>
-            <key>IOProviderClass</key>
-            <string>IOPCIDevice</string>
+                        <string>display</string>
+                        <key>IOProviderClass</key>
+                        <string>IOPCIDevice</string>
 		</dict>
 	</dict>
 	<key>OSBundleCompatibleVersion</key>
@@ -49,6 +49,12 @@
 		<key>com.apple.kpi.libkern</key>
 		<string>8.0.0</string>
 		<key>com.apple.kpi.private</key>
+		<string>8.0.0</string>
+		<key>com.apple.kpi.mach</key>
+		<string>8.0.0</string>
+		<key>com.apple.kpi.bsd</key>
+		<string>8.0.0</string>
+		<key>com.apple.kpi.unsupported</key>
 		<string>8.0.0</string>
 		<key>com.apple.iokit.IOPCIFamily</key>
         <string>2.9</string>
