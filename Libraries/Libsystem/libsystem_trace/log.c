@@ -71,8 +71,8 @@ os_log_create(const char* subsystem, const char* category)
         log->category = (void*)_CFStringCreateWithCString(NULL,
             category, kCFStringEncodingUTF8);
     } else {
-        log->subsystem = subsystem ? strdup(subsystem) : NULL;
-        log->category = category ? strdup(category) : NULL;
+        fprintf(stderr,
+            "Missing CFStringCreateWithCString!\n");
     }
 
     log->sink_type = OS_LOG_SINK_TYPE_FD;
