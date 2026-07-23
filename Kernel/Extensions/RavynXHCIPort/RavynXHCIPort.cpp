@@ -401,6 +401,7 @@ bool RavynXHCIPort::start(IOService *provider)
 
     scanPorts();
 
+    XHCI_Log("start complete");
     registerService();
 
     fHotplugRunning = true;
