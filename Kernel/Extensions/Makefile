@@ -1,7 +1,7 @@
-SUBDIR = corecrypto pthread AppleAPIC ApplePS2Controller IOACPIFamily \
-         IOPCIFamily IOStorageFamily IOATAFamily \
-         AppleIntelPIIXATA AppleFileSystemDriver AppleI386PCI \
-         RavynAHCIPort RavynXHCIPort msdosfs hfs IOGraphics IOHIDFamily 
+SUBDIR = AppleAPIC IOACPIFamily IOPCIFamily IOStorageFamily IOATAFamily \
+	 AppleIntelPIIXATA msdosfs hfs AppleFileSystemDriver RavynAHCIPort \
+	 IOGraphics corecrypto pthread IOHIDFamily ApplePS2Controller \
+         #RavynXHCIPort IOUSBFamily
 
 all: kernelcache
 .for target_dir in ${RAVYN_SDKROOT}/System/Library/Extensions \
@@ -28,11 +28,9 @@ kernelcache: ${SUBDIR}
 	${EXTENSIONS}/AppleI386PCI/AppleI386PCI.kext \
 	${EXTENSIONS}/corecrypto/corecrypto.kext \
 	${EXTENSIONS}/pthread/pthread.kext \
+	${EXTENSIONS}/RavynAHCIPort/RavynAHCIPort.kext \
 	${EXTENSIONS}/IOATAFamily/IOATAFamily.kext \
 	${EXTENSIONS}/IOStorageFamily/IOStorageFamily.kext \
-	${EXTENSIONS}/RavynAHCIPort/RavynAHCIPort.kext \
-	${EXTENSIONS}/IOUSBFamily/IOUSBFamily.kext \
-	${EXTENSIONS}/RavynXHCIPort/RavynXHCIPort.kext \
 	${EXTENSIONS}/AppleFileSystemDriver/AppleFileSystemDriver.kext \
 	${EXTENSIONS}/hfs/hfs_encodings/hfs_encodings.kext \
 	${EXTENSIONS}/hfs/hfs.kext \
@@ -42,5 +40,8 @@ kernelcache: ${SUBDIR}
 	${LIPO} -create -output ${.OBJDIR}/${.TARGET} \
 	  -arch x86_64 ${.OBJDIR}/${.TARGET}.tmp
 	cp -f ${.OBJDIR}/${.TARGET} ${ROOT_BINARY_DIR}
+
+#	${EXTENSIONS}/IOUSBFamily/IOUSBFamily.kext \
+	${EXTENSIONS}/RavynXHCIPort/RavynXHCIPort.kext \
 
 .include <bsd.subdir.mk>

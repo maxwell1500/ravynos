@@ -152,21 +152,21 @@ ACPIPlatformExpert::parseAPIC(void * table, IOService * nub)
 
                 dict->setObject("device_type", OSString::withCString("io-apic"));
 
-                /* These should get AppleAPIC to match */
                 dict->setObject("Destination APIC ID",
                                 OSNumber::withNumber(0ULL, 32)); // LAPIC 0
                 dict->setObject("Base Vector Number",
-                                OSNumber::withNumber(apic->gsi_base, 32));
+                                OSNumber::withNumber(apic->gsi_base + 0x40, 32));
                 dict->setObject("Physical Address",
                                 OSNumber::withNumber(apic->address, 32));
 
                 sprintf(buf, "io-apic@%d", apic->io_apic_id);
-                dict->setObject("InterruptControllerName", _interruptControllerName);
+                dict->setObject("InterruptControllerName", OSSymbol::withCString(buf));
                 dict->setObject("name", OSString::withCString(buf));
                 dict->setObject("compatible", OSString::withCString("io-apic"));
 
                 IOService * aNub = createNub(dict);
                 if (aNub) {
+                    setupAPIC(aNub);
                     aNub->attach(nub);
                     aNub->registerService();
                     aNub->release();

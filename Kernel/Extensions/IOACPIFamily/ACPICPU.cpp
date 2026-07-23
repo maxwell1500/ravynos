@@ -97,19 +97,7 @@ const OSSymbol *ACPICPU::getCPUName() {
 
 OSDefineMetaClassAndStructors(ACPICPUInterruptController, IOCPUInterruptController);
 
-IOReturn ACPICPUInterruptController::handleInterrupt(void *refCon, IOService *nub, int source) {
-        //return super::handleInterrupt(refCon, nub, source);
-#if 1
-	// Override the implementation in IOCPUInterruptController to
-	// dispatch interrupts the old way. The source argument is ignored;
-	// the first IOCPUInterruptController in the vector array is always used.
-
-	IOInterruptVector *vector = &vectors[0];
-        kprintf("ACPICPUIC::handleInterrupt source=%d handler %p nub %p\n",
-                source, vector->handler, nub);
-	if (!vector->interruptRegistered) return kIOReturnInvalid;
-
-	vector->handler(vector->target, refCon, vector->nub, source);
-	return kIOReturnSuccess;
-#endif
+IOReturn ACPICPUInterruptController::handleInterrupt(void *refCon,
+        IOService *nub, int source) {
+    return ((ACPIPlatformExpert *)getPlatform())->handleInterrupt(refCon, nub, source);
 }

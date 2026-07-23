@@ -107,7 +107,8 @@ CSTD = none
 CXXSTD = none
 
 SLF = /System/Library/Frameworks
-CFLAGS = -Wno-implicit-int-conversion -Wno-sign-conversion \
+CFLAGS = -DOMITPENDINGKEYCAPS \
+        -Wno-implicit-int-conversion -Wno-sign-conversion \
         -Wno-elaborated-enum-base -Wno-nullability-completeness \
 	-DAVAILABLE_MAC_OS_X_VERSION_10_13_AND_LATER="" \
 	-I${.CURDIR} -I${.CURDIR:H} -I${.CURDIR:H}/IOHIDFamily \

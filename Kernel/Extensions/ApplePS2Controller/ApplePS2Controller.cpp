@@ -616,7 +616,6 @@ void ApplePS2Controller::interruptOccurred(OSObject *, IOInterruptEventSource *,
   //
   // This method should only be called from our single-threaded work loop.
   //
-
   if (_hardwareOffline)
   {
     // Toss any asynchronous data received. The interrupt event source may
@@ -808,7 +807,6 @@ void ApplePS2Controller::processRequestQueue(IOInterruptEventSource *, int)
   queue_head_t localQueue;
 
   // Transfer queued (async) requests to a local queue.
-
   IOSimpleLockLock(_requestQueueLock);
 
   if (!queue_empty(&_requestQueue))
@@ -1520,3 +1518,4 @@ void ApplePS2Controller::uninstallPowerControlAction( PS2DeviceType deviceType )
     _powerControlTargetMouse = 0;
   }
 }
+

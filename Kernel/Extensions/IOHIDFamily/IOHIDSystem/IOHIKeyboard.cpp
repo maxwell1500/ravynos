@@ -786,22 +786,23 @@ void IOHIKeyboard::dispatchKeyboardEvent(unsigned int keyCode,
 
     _lastEventTime = time;
     
-//    if (tempReservedStruct)
-//    {
-//        if (tempReservedStruct->keyboardNub)
-//        {
-//            // Post the event to the HID Manager
-//            tempReservedStruct->keyboardNub->postKeyboardEvent(keyCode, goingDown);
-//        }
-//        
-//        if (tempReservedStruct->isSeized)
-//        {
-//            IOLockUnlock( _deviceLock);
-//            return;
-//        }
-//        
-//        tempReservedStruct->dispatchEventCalled = true;
-//    }
+    if (tempReservedStruct)
+    {
+#if 0
+        if (tempReservedStruct->keyboardNub)
+        {
+            // Post the event to the HID Manager
+            tempReservedStruct->keyboardNub->postKeyboardEvent(keyCode, goingDown);
+        }
+        if (tempReservedStruct->isSeized)
+        {
+            IOLockUnlock( _deviceLock);
+            return;
+        }
+#endif
+        
+        tempReservedStruct->dispatchEventCalled = true;
+    }
 
     if (_keyMap)  _keyMap->translateKeyCode(keyCode,
 			  /* direction */ goingDown,

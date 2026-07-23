@@ -50,11 +50,9 @@ const OSSymbol *        gIOACPIUniqueIDKey     = 0;
 const OSSymbol *        gIOACPIAddressKey      = 0;
 const OSSymbol *        gIOACPIDeviceStatusKey = 0;
 
+extern "C" void lapic_end_of_interrupt( void );
+
 static IOLock *ResourceLock;
-static struct {
-    UInt16 consumers;
-    UInt16 status;
-} IRQ[kSystemIRQCount];
 
 static IOACPIPlatformExpertGlobals gIOACPIPlatformExpertGlobals;
 
@@ -66,7 +64,6 @@ IOACPIPlatformExpertGlobals::IOACPIPlatformExpertGlobals()
     gIOACPIAddressKey      = OSSymbol::withCString("_ADR");
     gIOACPIDeviceStatusKey = OSSymbol::withCString("_STA");
     ResourceLock = IOLockAlloc();
-    bzero(IRQ, sizeof(IRQ));
     isInitialized = false;
 }
 
@@ -108,7 +105,7 @@ bool ACPIPlatformExpert::init(OSDictionary *properties) {
     if (!super::init()) return false;
 
     OSString *name = (OSString *)getProperty("InterruptControllerName");
-    if (name == 0) name = OSString::withCStringNoCopy("ACPICPUInterruptController");
+    if (name == 0) name = OSString::withCStringNoCopy("io-apic@0");
     _interruptControllerName = OSSymbol::withString(name);
     
     return true;
@@ -159,7 +156,6 @@ bool ACPIPlatformExpert::start(IOService *provider) {
         iter->release();
     }
 
-    // PS2 controller will register for interrupts so we setupPIC on its nub
     struct nubEntry_t {
         const char *name;
         const char *type;
@@ -168,8 +164,7 @@ bool ACPIPlatformExpert::start(IOService *provider) {
     } nubEntries[] = {
         { "rtc", "platform_device", "IORTC", 0 },
         { "nvram", "platform_device", "IONVRAM", 0 },
-        { "8259-pic", "platform_device", "8259-pic", 1 },
-        { "ps2controller", "platform_device", "ps2controller", 0 },
+        { "ps2controller", "platform_device", "ps2controller", 1 },
     };
 
     int nEntries = sizeof(nubEntries) / sizeof(struct nubEntry_t);
@@ -183,9 +178,9 @@ bool ACPIPlatformExpert::start(IOService *provider) {
         IOService *nub = createNub(dict);
 
         if (nub) {
-            if (nubEntries[i].pic)
-                setupPIC(nub); 
             nub->setName(nubEntries[i].name);
+            if (nubEntries[i].pic)
+                setupAPIC(nub);
             nub->attach(this);
             nub->registerService();
             nub->release();
@@ -219,46 +214,6 @@ bool ACPIPlatformExpert::start(IOService *provider) {
 
     return true;
 }
-
-void ACPIPlatformExpert::setupPIC(IOService *nub) {
-        int i;
-        OSDictionary *propTable;
-        OSArray *controller;
-        OSArray *specifier;
-        OSData *tmpData;
-
-        propTable = nub->getPropertyTable();
-
-        // For the moment... assume a classic 8259 interrupt controller
-        // with 16 interrupts. Later, this will be changed to detect
-        // an APIC and/or MP-Table and then will set the nubs appropriately.
-
-        specifier = OSArray::withCapacity(kSystemIRQCount);
-        assert(specifier);
-
-        for (i = 0; i < kSystemIRQCount; i++) {
-                UInt32 spec[2];
-                spec[0] = i;
-                spec[1] = kInterruptTriggerModeEdge |
-                    kInterruptPolarityHigh |
-                    kInterruptNotShareable;
-                tmpData = OSData::withBytes(spec, sizeof(spec));
-                specifier->setObject(tmpData);
-                tmpData->release();
-        }
-
-        controller = OSArray::withCapacity(kSystemIRQCount);
-        assert(controller);
-
-        for (i = 0; i < kSystemIRQCount; i++) controller->setObject(_interruptControllerName);
-
-        propTable->setObject(gIOInterruptControllersKey, controller);
-        propTable->setObject(gIOInterruptSpecifiersKey, specifier);
-
-        specifier->release();
-        controller->release();
-}
-
 
 bool
 ACPIPlatformExpert::parseACPI(IOService *provider) {
@@ -496,14 +451,9 @@ IOReturn ACPIPlatformExpert::callPlatformFunction(const OSSymbol *functionName, 
         UInt32 vectorCount = (UInt32)((UInt64)param3);
         bool exclusive = (bool)param4;
 
-        if (vectorCount != 1) return kIOReturnBadArgument;
-
-        ok = reserveSystemInterrupt(nub, vectors[0], exclusive);
-        if (ok == false) return kIOReturnNoResources;
-
+        if (vectorCount != 1)
+            return kIOReturnBadArgument;
         ok = setNubInterruptVector(nub, vectors[0]);
-        if (ok == false) releaseSystemInterrupt(nub, vectors[0], exclusive);
-
         return ok ? kIOReturnSuccess : kIOReturnNoMemory;
     } else if (functionName->isEqualTo("SetBusClockRateMHz")) {
         UInt32 rateMHz = (UInt32)((UInt64)param1);
@@ -518,51 +468,10 @@ IOReturn ACPIPlatformExpert::callPlatformFunction(const OSSymbol *functionName, 
     return super::callPlatformFunction(functionName, waitForFunction, param1, param2, param3, param4);
 }
 
-bool ACPIPlatformExpert::reserveSystemInterrupt(IOService *client, UInt32 vectorNumber, bool exclusive) {
-    bool ok = false;
-    if (vectorNumber >= kSystemIRQCount) return ok;
-
-    IOLockLock(ResourceLock);
-
-    if (exclusive) {
-        if (IRQ[vectorNumber].status == kIRQAvailable) {
-            IRQ[vectorNumber].status = kIRQExclusive;
-            IRQ[vectorNumber].consumers = 1;
-            ok = true;
-        }
-    } else {
-        if (IRQ[vectorNumber].status == kIRQAvailable || IRQ[vectorNumber].status == kIRQSharable) {
-            IRQ[vectorNumber].status = kIRQSharable;
-            IRQ[vectorNumber].consumers++;
-            ok = true;
-        }
-    }
-
-    IOLockUnlock(ResourceLock);
-    return ok;
-}
-
-void ACPIPlatformExpert::releaseSystemInterrupt(IOService *client, UInt32 vectorNumber, bool exclusive) {
-    if (vectorNumber >= kSystemIRQCount) return;
-    IOLockLock(ResourceLock);
-
-    if (exclusive) {
-        if (IRQ[vectorNumber].status == kIRQExclusive) {
-            IRQ[vectorNumber].status = kIRQAvailable;
-            IRQ[vectorNumber].consumers = 0;
-        }
-    } else {
-        if (IRQ[vectorNumber].status == kIRQSharable && --IRQ[vectorNumber].consumers == 0) {
-            IRQ[vectorNumber].status = kIRQAvailable;
-        }
-    }
-
-    IOLockUnlock(ResourceLock);
-}
-
 SInt32 ACPIPlatformExpert::installDeviceInterruptForFixedEvent(IOService *device,
                                                                UInt32 fixedEvent)
 {
+    kprintf("STUB 1\n");
     (void)device;
     (void)fixedEvent;
     return -1;
@@ -573,6 +482,7 @@ SInt32 ACPIPlatformExpert::installDeviceInterruptForGPE(IOService *device,
                                                         void *gpeBlockDevice,
                                                         IOOptionBits options)
 {
+    kprintf("STUB 2\n");
     (void)device;
     (void)gpeNumber;
     (void)gpeBlockDevice;
@@ -654,6 +564,7 @@ IOReturn ACPIPlatformExpert::evaluateObject(IOACPIPlatformDevice *device,
 const OSData *ACPIPlatformExpert::getACPITableData(const char *tableName,
                                                    UInt32 tableInstance)
 {
+    kprintf("STUB 3\n");
     (void)tableName;
     (void)tableInstance;
     return NULL;
@@ -665,6 +576,7 @@ IOReturn ACPIPlatformExpert::registerAddressSpaceHandler(IOACPIPlatformDevice *d
                                                          void *context,
                                                          IOOptionBits options)
 {
+    kprintf("STUB 4\n");
     (void)device;
     (void)spaceID;
     (void)handler;
@@ -691,6 +603,7 @@ IOReturn ACPIPlatformExpert::readAddressSpace(UInt64 *value,
                                               UInt32 bitOffset,
                                               IOOptionBits options)
 {
+    kprintf("STUB 5\n");
     (void)value;
     (void)spaceID;
     (void)address;
@@ -707,6 +620,7 @@ IOReturn ACPIPlatformExpert::writeAddressSpace(UInt64 value,
                                                UInt32 bitOffset,
                                                IOOptionBits options)
 {
+    kprintf("STUB 6\n");
     (void)value;
     (void)spaceID;
     (void)address;
@@ -739,5 +653,39 @@ IOReturn ACPIPlatformExpert::setDeviceWakeEnable(IOACPIPlatformDevice *device,
     (void)device;
     (void)enable;
     return kIOReturnUnsupported;
+}
+
+void ACPIPlatformExpert::setupAPIC(IOService *nub) {
+    int i;
+    UInt32 vectors[kSystemIRQCount];
+
+    for (i = 0; i < kSystemIRQCount; i++) {
+        vectors[i] = i;
+    }
+    setNubInterruptVectors(nub, vectors, kSystemIRQCount);
+}
+
+IOReturn ACPIPlatformExpert::handleInterrupt(void *refCon, IOService *nub, int source) {
+    if (!_apic) {
+        //PE_Log("No interrupt controller registered! (%p %d)", nub, source);
+        OSIterator *iter = getChildIterator(gIOServicePlane);
+        OSObject *obj;
+        while ((obj = iter->getNextObject()) != NULL) {
+            IOService *io = OSDynamicCast(IOService, obj);
+            if (io && !strcmp("io-apic@0", io->getName())) {
+                OSIterator *subiter = io->getChildIterator(gIOServicePlane);
+                _apic = OSDynamicCast(AppleAPICInterruptController, subiter->getNextObject());
+                subiter->release();
+                break;
+            }
+        }
+        if (!_apic) {
+            lapic_end_of_interrupt();
+            return kIOReturnNotFound;
+        }
+    }
+    IOReturn ret = _apic->handleInterrupt(refCon, nub, source);
+    lapic_end_of_interrupt();
+    return ret;
 }
 

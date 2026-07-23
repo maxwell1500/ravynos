@@ -440,7 +440,6 @@ bool IOHIDSystem::init(OSDictionary * properties)
     nanoseconds_to_absolutetime(kIOHIDPowerOnThresholdNS, &gIOHIDPowerOnThresoldAbsoluteTime);
     nanoseconds_to_absolutetime(kIOHIDDispaySleepAbortThresholdNS, &gIOHIDDisplaySleepAbortThresholdAbsoluteTime);
 
-kprintf("IOHIDSystem::init queue_init keyboard\n");
     queue_init(&gKeyboardEQ);
     gKeyboardEQLock = IOLockAlloc();
     
@@ -516,7 +515,6 @@ bool IOHIDSystem::start(IOService * provider)
     // we are disabling preemption
     obj = copyProperty(kIOHIDPowerOnDelayNSKey, gIOServicePlane);
     if (obj != NULL) {
-        kprintf("  -> %p\n", obj);
         number = OSDynamicCast(OSNumber, obj);
         if (number != NULL) {
             UInt64 value = number->unsigned64BitValue();
@@ -639,7 +637,7 @@ bool IOHIDSystem::start(IOService * provider)
 
     registerService();
     iWasStarted = true;
-    kprintf("IOHIDSystem started\n");
+    IOLog("IOHIDSystem started\n");
 
 exit_early:
     OSSafeReleaseNULL(matchingDevice);
@@ -717,7 +715,6 @@ bool IOHIDSystem::genericNotificationHandler(void * handler,
                                              IOService * newService,
                                              IONotifier * /* notifier */)
 {
-kprintf("IOHIDSystem::genericNotificationHandler\n");
     bool result = false;
 
     if (handler && newService) {
@@ -741,7 +738,6 @@ kprintf("IOHIDSystem::genericNotificationHandler\n");
 }
 
 void IOHIDSystem::doProcessNotifications() {
-kprintf("IOHIDSystem::doProcessNotifications\n");
     while (_delayedNotificationArray->getCount() > 0) {
         // retrieve the first item from the queue
         IOLockLock(_delayedNotificationLock);
@@ -768,18 +764,15 @@ bool IOHIDSystem::handlePublishNotification(
             void * target,
             IOService * newService )
 {
-kprintf("IOHIDSystem::handlePublishNotification\n");
     IOHIDSystem * self = (IOHIDSystem *) target;
 
     if (!self || !newService || newService->isInactive()) {
-kprintf("went away\n");
         // device went away before we could add it. ignore.
         return true;
     }
     
     // avoiding OSDynamicCast & dependency on graphics family
     if( newService->metaCast("IODisplayWrangler")) {
-kprintf("display wrangler\n");
         if( !self->displayManager) {
             self->displayState = newService->registerInterestedDriver(self);
             self->displayManager = newService;
@@ -801,13 +794,12 @@ kprintf("display wrangler\n");
     }
 #endif
   
+    
     if (self->attach( newService ) == false) {
-kprintf("attach failed - return true\n");
         return true;
     }
   
     self->registerEventSource( newService );
-kprintf("registered source\n");
     return true;
 }
 
@@ -988,7 +980,6 @@ exit:
  */
 IOReturn IOHIDSystem::evOpen(void)
 {
-kprintf("IOHIDSystem::evOpen\n");
     IOReturn r = kIOReturnSuccess;
 
     if ( evOpenCalled == true )
@@ -1110,7 +1101,6 @@ IOHIDSystem::registerScreen(IOGraphicsDevice * io_gd,
                             IOGBounds * boundsPtr,
                             IOGBounds * virtualBoundsPtr)
 {
-kprintf("IOHIDSystem::registerScreen\n");
     int result = -1;
 
     // If we are not open for business, fail silently
@@ -1602,7 +1592,6 @@ void IOHIDSystem::sleepDisplayTickle()
 
 void IOHIDSystem::dispatchEvent(IOHIDEvent *event, IOOptionBits options __unused)
 {
-kprintf("IOHIDSystem::dispatchEvent\n");
     if ( !event || !dataQueueSet)
         return;
 
@@ -1712,7 +1701,6 @@ void IOHIDSystem::postEvent(int           what,
              /* options*/   UInt32        options
                             )
 {
-kprintf("IOHIDSystem::postEvent\n");
     // Clear out the keyboard queue up until this TS.  This should keep
     // the events in order.
     IOHIDEvent * event = NULL;
@@ -1799,7 +1787,6 @@ exit:
 
 void IOHIDSystem::scheduleNextPeriodicEvent()
 {
-kprintf("IOHIDSystem::scheduleNextPeriodicEvent\n");
     if ( !eventsOpen ) {
         // If eventsOpen is false, then the driver shmem is
         // no longer valid, and it is in the process of shutting down.
@@ -2194,7 +2181,6 @@ IOReturn IOHIDSystem::updateParamPropertiesGated(IOService * source) {
 //
 bool IOHIDSystem::registerEventSource(IOService * source)
 {
-kprintf("IOHIDSystem::registerEventSource\n");
     bool success = true;
     if (!source)
         return true;
@@ -2286,7 +2272,6 @@ void IOHIDSystem::doProcessKeyboardEQ(IOHIDSystem * self)
 
 void IOHIDSystem::processKeyboardEQ(IOHIDSystem * self, AbsoluteTime * deadline)
 {
-kprintf("IOHIDSystem::processKeyboardEQ\n");
     KeyboardEQElement * keyboardEQElement;
 
     KEYBOARD_EQ_LOCK;
@@ -2357,7 +2342,6 @@ void IOHIDSystem::keyboardEvent(unsigned   eventType,
          /* atTime */           AbsoluteTime ts,
          /* sender */       OSObject * sender)
 {
-kprintf("IOHIDSystem::keyboardEvent\n");
     KeyboardEQElement * keyboardEQElement = (KeyboardEQElement *)IOMalloc(sizeof(KeyboardEQElement));
 
     if ( !keyboardEQElement )
@@ -2391,7 +2375,6 @@ kprintf("IOHIDSystem::keyboardEvent\n");
 IOReturn IOHIDSystem::doKeyboardEvent(IOHIDSystem *self, void * args)
                         /* IOCommandGate::Action */
 {
-kprintf("IOHIDSystem::doKeyboardEvent\n");
     KeyboardEQElement * keyboardEQElement = (KeyboardEQElement *)args;
 
     AbsoluteTime ts         = keyboardEQElement->ts;
@@ -2426,7 +2409,6 @@ void IOHIDSystem::keyboardEventGated(unsigned   eventType,
                                 /* sender */           OSObject * sender)
 {
 
-kprintf("IOHIDSystem::keyboardEventGated\n");
     if (eventType == NX_KEYDOWN) {
         TICKLE_DISPLAY(NX_KEYDOWN);
     }
@@ -2572,7 +2554,6 @@ void IOHIDSystem::keyboardSpecialEventGated(
 {
     NXEventData outData;
  
-kprintf("IOHIDSystem::keyboardSpecialEventGated\n");
     // Since the HIDSystem will now take on BSD Console duty,
     // we need to make sure to process the programmer key info
     // prior to doing the eventsOpen check
@@ -2659,7 +2640,6 @@ void IOHIDSystem::updateEventFlags(unsigned flags, OSObject * sender)
 IOReturn IOHIDSystem::doUpdateEventFlags(IOHIDSystem *self, void * args)
                         /* IOCommandGate::Action */
 {
-kprintf("IOHIDSystem::doUpdateEventFlags\n");
     KeyboardEQElement * keyboardEQElement = (KeyboardEQElement *)args;
 
     OSObject * sender   = keyboardEQElement->sender;
@@ -2688,7 +2668,6 @@ void IOHIDSystem::updateEventFlagsGated(unsigned flags, OSObject * sender __unus
 //
 void IOHIDSystem::setCursorPosition(IOGPoint * newLoc, bool external, OSObject * sender)
 {
-kprintf("IOHIDSystem::setCursorPosition\n");
     if ( eventsOpen == true )
     {
         clock_get_uptime(&_cursorEventLast);
@@ -3467,7 +3446,7 @@ IOReturn IOHIDSystem::extPostEventGated(void *p1,void *p2 __unused, void *p3)
                 /* options*/   options);
     }
 
-    // scheduleNextPeriodicEvent();
+    scheduleNextPeriodicEvent();
 
     return kIOReturnSuccess;
 }
