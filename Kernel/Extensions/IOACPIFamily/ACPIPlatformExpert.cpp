@@ -139,6 +139,13 @@ bool ACPIPlatformExpert::start(IOService *provider) {
         PE_Log("ACPIPlatformExpert::start <<<< gIOACPIPlane == 0 >>>>");
     }
 
+    // Disable the legacy PIC to avoid spurious interrupts
+    asm volatile (
+        "movb $0xff, %al;\n"
+        "outb %al, $0x21;\n"
+        "movb $0xff, %al;\n"
+        "outb %al, $0xa1;\n");
+
     PE_halt_restart = handlePEHaltRestart;
     registerService();
 
