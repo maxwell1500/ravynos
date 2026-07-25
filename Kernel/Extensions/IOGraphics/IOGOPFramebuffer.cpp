@@ -67,7 +67,7 @@ IOGOPFramebuffer::start(IOService *provider)
     pitch  = bootDisplay.v_rowBytes;
     bpp    = 32;
 
-    IOLog("framebuffer: %dx%d @ %p\n", width, height, fbBase);
+    IOLog("IOFB: GOP framebuffer %dx%d @ %p\n", width, height, fbBase);
 
     // Register the framebuffer with the kernel console system
     PE_Video consoleInfo;
@@ -84,8 +84,9 @@ IOGOPFramebuffer::start(IOService *provider)
 
     // Initialize graphics console with this framebuffer
     // Use the public IOPlatformExpert::setConsoleInfo() method
-    IOReturn ret = pe->setConsoleInfo(&consoleInfo, kPEGraphicsMode);
-    ret = pe->setConsoleInfo(&consoleInfo, kPEBaseAddressChange);
+    IOReturn ret = pe->setConsoleInfo(&consoleInfo, kPEAcquireScreen)
+                | pe->setConsoleInfo(&consoleInfo, kPEGraphicsMode)
+                | pe->setConsoleInfo(&consoleInfo, kPEEnableScreen);
     if (ret != kIOReturnSuccess) {
         DEBUG("setConsoleInfo failed: %d\n", ret);
         // Don't fail - we can still register the service even if console init fails
@@ -264,3 +265,9 @@ IOGOPFramebuffer::getPixelInformation(IODisplayModeID      displayMode,
 
     return (kIOReturnSuccess);
 }
+
+bool IOGOPFramebuffer::isConsoleDevice( void )
+{
+    return true;
+}
+

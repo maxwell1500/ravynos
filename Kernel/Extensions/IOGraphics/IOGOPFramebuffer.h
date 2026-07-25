@@ -51,4 +51,5 @@ public:
     virtual IOReturn getDisplayModes(IODisplayModeID * allDisplayModes) APPLE_KEXT_OVERRIDE;
 
     virtual IOItemCount getDisplayModeCount( void ) APPLE_KEXT_OVERRIDE;
+    virtual bool isConsoleDevice( void ) APPLE_KEXT_OVERRIDE;
 };

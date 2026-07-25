@@ -13,6 +13,7 @@ CXXSTD = gnu++11
 .PATH: ${ROOT_SOURCE_DIR}/Developer/Default.xctoolchain/lzvndecode
 SRCS = IOGOPFramebuffer.cpp \
         IOGraphicsDevice.cpp \
+        IOBootFramebuffer.cpp \
         IOFramebuffer.cpp \
         IOI2CInterface.cpp \
         IODisplay.cpp \
