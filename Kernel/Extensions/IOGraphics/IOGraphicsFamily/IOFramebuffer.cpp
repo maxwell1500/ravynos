@@ -10348,7 +10348,6 @@ IODeviceMemory * IOFramebuffer::getApertureRangeWithLength( IOPixelAperture aper
             fbRange = NULL;
         }
     }
-
     IOFB_END(getApertureRangeWithLength,0,0,0);
     return (fbRange);
 }

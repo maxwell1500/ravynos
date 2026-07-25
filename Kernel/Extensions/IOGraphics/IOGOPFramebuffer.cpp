@@ -42,7 +42,7 @@ bool
 IOGOPFramebuffer::start(IOService *provider)
 {
     if (!super::start(provider)) {
-        kprintf("IOGOPFramebuffer::start - super::start failed\n");
+        DEBUG("super::start failed\n");
         return false;
     }
 
@@ -85,6 +85,7 @@ IOGOPFramebuffer::start(IOService *provider)
     // Initialize graphics console with this framebuffer
     // Use the public IOPlatformExpert::setConsoleInfo() method
     IOReturn ret = pe->setConsoleInfo(&consoleInfo, kPEGraphicsMode);
+    ret = pe->setConsoleInfo(&consoleInfo, kPEBaseAddressChange);
     if (ret != kIOReturnSuccess) {
         DEBUG("setConsoleInfo failed: %d\n", ret);
         // Don't fail - we can still register the service even if console init fails
@@ -92,6 +93,7 @@ IOGOPFramebuffer::start(IOService *provider)
         DEBUG("Kernel graphics console initialized\n");
     }
 
+    setupForCurrentConfig(); // full setup
     registerService();
     return true;
 }

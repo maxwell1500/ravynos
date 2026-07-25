@@ -111,7 +111,6 @@ IOFramebufferUserClient * IOFramebufferUserClient::withTask( task_t owningTask )
     DEBG("IOGfbUC", "\n");
 
     IOFramebufferUserClient * inst = NULL;
-
     inst = new IOFramebufferUserClient;
 
     if (inst && !inst->init())
