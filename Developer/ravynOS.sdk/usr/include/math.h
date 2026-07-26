@@ -181,7 +181,7 @@ extern float cbrtf(float __x);
 extern double cbrt(double __x);
 extern long double cbrtl(long double __x);
 
-extern double copysignf(float __x, float __y);
+//extern double copysignf(float __x, float __y);
 extern double copysign(double __x, double __y);
 extern long double copysignl(long double __x, long double __y);
 
@@ -222,7 +222,7 @@ extern double hypot(double __x, double __y);
 extern long double hypotl(long double __x, long double __y);
 
 extern int ilogbf(float __x);
-extern double ilogb(double __x);
+//extern double ilogb(double __x);
 extern int ilogbl(long double __x);
 
 extern float lgammaf(float __x);

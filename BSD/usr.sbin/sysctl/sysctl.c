@@ -559,7 +559,7 @@ S_quads(int len, void *p)
 		printf("%llu", i);
 		if (len > size) {
 			len -= size;
-			p = (uintptr_t)p + size;
+			p = (void *)((uintptr_t)p + size);
 			printf(" ");
 		} else {
 			break;

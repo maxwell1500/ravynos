@@ -1,13 +1,15 @@
 .include <src.opts.mk>
 
 CFLAGS = -Wno-int-conversion
-.export CFLAGS
 
 PROG=	sysctl
 
 MK_WERROR = no
-LINKS=	${BINDIR}/sysctl
-MLINKS=	sysctl.8
+MAN=	sysctl.8
+CFLAGS = --sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSION_MIN} \
+        -Wno-nullability-completeness
+LDFLAGS = --sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSION_MIN} \
+        -fuse-ld=${LD}
 
 HAS_TESTS=
 

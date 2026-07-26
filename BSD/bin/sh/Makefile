@@ -34,8 +34,7 @@ CFLAGS = --sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSION_MIN} \
         -Wno-nullability-completeness
 
 LDFLAGS = --sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSION_MIN} \
-	-L${RAVYN_SDKROOT}/usr/lib -lncursesw \
-	-L${ROOT_BINARY_DIR}${.CURDIR:H}/../lib/libedit -ledit
+        -ledit
 
 builtins.c builtins.h: ${.CURDIR}/mkbuiltins ${SRCS:N*builtins.*}
 	${.CURDIR}/mkbuiltins ${.CURDIR}
@@ -46,10 +45,10 @@ syntax.c syntax.h: mksyntax
 nodes.c nodes.h: mknodes
 	${.OBJDIR}/mknodes ${.CURDIR}/nodetypes ${.CURDIR}/nodes.c.pat
 
-token.h:
+token.h: ${.CURDIR}/mktokens
 	${.CURDIR}/mktokens
 
-parser.o: token.h
+parser.c: token.h
 
 mksyntax: ${.CURDIR}/mksyntax.c
 	${HOST_CC} \

@@ -32,6 +32,7 @@
  * SUCH DAMAGE.
  */
 
+#include <crt_externs.h>
 #include <unistd.h>
 #include <stdlib.h>
 #include <paths.h>
@@ -140,7 +141,7 @@ static struct var *find_var(const char *, struct var ***, int *);
 static int localevar(const char *);
 static void setvareq_const(const char *s, int flags);
 
-extern char **environ;
+//extern char **environ;
 
 /*
  * This routine initializes the builtin variables and imports the environment.
@@ -176,7 +177,7 @@ initvar(void)
 	}
 	fmtstr(ppid, sizeof(ppid), "%d", (int)getppid());
 	setvarsafe("PPID", ppid, 0);
-	for (envp = environ ; *envp ; envp++) {
+	for (envp = *_NSGetEnviron(); *envp ; envp++) {
 		if (strchr(*envp, '=')) {
 			setvareq(*envp, VEXPORT|VTEXTFIXED);
 		}
