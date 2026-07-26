@@ -51,9 +51,7 @@ __RCSID("$NetBSD: yes.c,v 1.5 1997/10/19 14:28:27 mrg Exp $");
 int main __P((int, char **));
 
 int
-main(argc, argv)
-	int argc;
-	char **argv;
+main(int argc, char **argv)
 {
 	if (argc > 1)
 		for(;;)
