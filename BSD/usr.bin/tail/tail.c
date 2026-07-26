@@ -1,6 +1,4 @@
 /*-
- * SPDX-License-Identifier: BSD-3-Clause
- *
  * Copyright (c) 1991, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -15,7 +13,11 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 3. Neither the name of the University nor the names of its contributors
+ * 3. All advertising materials mentioning features or use of this software
+ *    must display the following acknowledgement:
+ *	This product includes software developed by the University of
+ *	California, Berkeley and its contributors.
+ * 4. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -32,55 +34,50 @@
  * SUCH DAMAGE.
  */
 
+#include <sys/cdefs.h>
 
-#include <sys/capsicum.h>
+__FBSDID("$FreeBSD$");
+
+#ifndef lint
+static const char copyright[] =
+"@(#) Copyright (c) 1991, 1993\n\
+	The Regents of the University of California.  All rights reserved.\n";
+#endif
+
+#ifndef lint
+static const char sccsid[] = "@(#)tail.c	8.1 (Berkeley) 6/6/93";
+#endif
+
 #include <sys/types.h>
 #include <sys/stat.h>
 
-#include <capsicum_helpers.h>
 #include <err.h>
 #include <errno.h>
-#include <getopt.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
-#include <libutil.h>
-
-#include <libcasper.h>
-#include <casper/cap_fileargs.h>
-
 #include "extern.h"
 
-int Fflag, fflag, qflag, rflag, rval, no_files, vflag;
-fileargs_t *fa;
+int Fflag, fflag, qflag, rflag, rval, no_files;
+const char *fname;
+
+static file_info_t *files;
 
 static void obsolete(char **);
-static void usage(void) __dead2;
-
-static const struct option long_opts[] =
-{
-	{"blocks",	required_argument,	NULL, 'b'},
-	{"bytes",	required_argument,	NULL, 'c'},
-	{"lines",	required_argument,	NULL, 'n'},
-	{"quiet",	no_argument,		NULL, 'q'},
-	{"silent",	no_argument,		NULL, 'q'},
-	{"verbose",	no_argument,		NULL, 'v'},
-	{NULL,		no_argument,		NULL, 0}
-};
+static void usage(void);
 
 int
 main(int argc, char *argv[])
 {
 	struct stat sb;
-	const char *fn;
 	FILE *fp;
 	off_t off;
 	enum STYLE style;
-	int ch, first;
-	file_info_t file, *filep, *files;
-	cap_rights_t rights;
+	int i, ch, first;
+	file_info_t *file;
+	char *p;
 
 	/*
 	 * Tail's options are weird.  First, -n10 is the same as -n-10, not
@@ -95,19 +92,16 @@ main(int argc, char *argv[])
 	 * -r is the entire file, not 10 lines.
 	 */
 #define	ARG(units, forward, backward) {					\
-	int64_t num;							\
 	if (style)							\
 		usage();						\
-	if (expand_number(optarg, &num))				\
-		err(1, "illegal offset -- %s", optarg);			\
-	if (num > INT64_MAX / units || num < INT64_MIN / units)		\
+	off = strtoll(optarg, &p, 10) * (units);                        \
+	if (*p)								\
 		errx(1, "illegal offset -- %s", optarg);		\
-	off = num * units;						\
-	switch (optarg[0]) {						\
+	switch(optarg[0]) {						\
 	case '+':							\
-		if (off != 0)						\
+		if (off)						\
 			off -= (units);					\
-		style = (forward);					\
+			style = (forward);				\
 		break;							\
 	case '-':							\
 		off = -off;						\
@@ -120,10 +114,8 @@ main(int argc, char *argv[])
 
 	obsolete(argv);
 	style = NOTSET;
-	off = 0;
-	while ((ch = getopt_long(argc, argv, "+Fb:c:fn:qrv", long_opts, NULL)) !=
-	    -1)
-		switch (ch) {
+	while ((ch = getopt(argc, argv, "Fb:c:fn:qr")) != -1)
+		switch(ch) {
 		case 'F':	/* -F is superset of (and implies) -f */
 			Fflag = fflag = 1;
 			break;
@@ -141,14 +133,9 @@ main(int argc, char *argv[])
 			break;
 		case 'q':
 			qflag = 1;
-			vflag = 0;
 			break;
 		case 'r':
 			rflag = 1;
-			break;
-		case 'v':
-			vflag = 1;
-			qflag = 0;
 			break;
 		case '?':
 		default:
@@ -158,22 +145,6 @@ main(int argc, char *argv[])
 	argv += optind;
 
 	no_files = argc ? argc : 1;
-
-	cap_rights_init(&rights, CAP_FSTAT, CAP_FSTATFS, CAP_FCNTL,
-	    CAP_MMAP_R);
-	if (fflag)
-		cap_rights_set(&rights, CAP_EVENT);
-	if (caph_rights_limit(STDIN_FILENO, &rights) < 0 ||
-	    caph_limit_stderr() < 0 || caph_limit_stdout() < 0)
-		err(1, "unable to limit stdio rights");
-
-	fa = fileargs_init(argc, argv, O_RDONLY, 0, &rights, FA_OPEN);
-	if (fa == NULL)
-		err(1, "unable to init casper");
-
-	caph_cache_catpages();
-	if (caph_enter_casper() < 0)
-		err(1, "unable to enter capability mode");
 
 	/*
 	 * If displaying in reverse, don't permit follow option, and convert
@@ -202,51 +173,7 @@ main(int argc, char *argv[])
 		}
 	}
 
-	if (*argv && fflag) {
-		files = malloc(no_files * sizeof(struct file_info));
-		if (files == NULL)
-			err(1, "failed to allocate memory for file descriptors");
-
-		for (filep = files; (fn = *argv++); filep++) {
-			filep->file_name = fn;
-			filep->fp = fileargs_fopen(fa, filep->file_name, "r");
-			if (filep->fp == NULL ||
-			    fstat(fileno(filep->fp), &filep->st)) {
-				if (filep->fp != NULL) {
-					fclose(filep->fp);
-					filep->fp = NULL;
-				}
-				if (!Fflag || errno != ENOENT)
-					ierr(filep->file_name);
-			}
-		}
-		follow(files, style, off);
-		free(files);
-	} else if (*argv) {
-		for (first = 1; (fn = *argv++);) {
-			if ((fp = fileargs_fopen(fa, fn, "r")) == NULL ||
-			    fstat(fileno(fp), &sb)) {
-				ierr(fn);
-				continue;
-			}
-			if (vflag || (qflag == 0 && argc > 1)) {
-				printfn(fn, !first);
-				first = 0;
-			}
-
-			if (rflag)
-				reverse(fp, fn, style, off, &sb);
-			else
-				forward(fp, fn, style, off, &sb);
-		}
-	} else {
-		fn = "stdin";
-
-		if (fstat(fileno(stdin), &sb)) {
-			ierr(fn);
-			exit(1);
-		}
-
+	if (fflag && !argc) {
 		/*
 		 * Determine if input is a pipe.  4.4BSD will set the SOCKET
 		 * bit in the st_mode field for pipes.  Fix this then.
@@ -256,19 +183,71 @@ main(int argc, char *argv[])
 			errno = 0;
 			fflag = 0;		/* POSIX.2 requires this. */
 		}
-
-		if (rflag) {
-			reverse(stdin, fn, style, off, &sb);
-		} else if (fflag) {
-			file.file_name = fn;
-			file.fp = stdin;
-			file.st = sb;
-			follow(&file, style, off);
-		} else {
-			forward(stdin, fn, style, off, &sb);
-		}
 	}
-	fileargs_free(fa);
+
+	if (fflag) {
+		files = (struct file_info *) malloc(no_files * sizeof(struct file_info));
+		if (! files)
+			err(1, "Couldn't malloc space for file descriptors.");
+
+		for (file = files; (fname = argc ? *argv++ : "stdin"); file++) {
+			file->file_name = malloc(strlen(fname)+1);
+			if (! file->file_name)
+				errx(1, "Couldn't malloc space for file name.");
+			strncpy(file->file_name, fname, strlen(fname)+1);
+			file->fp = argc ? fopen(file->file_name, "r") : stdin;
+			if (file->fp == NULL ||
+			    fstat(fileno(file->fp), &file->st)) {
+				file->fp = NULL;
+				ierr();
+				continue;
+			}
+			if (!argc)
+				break;
+		}
+		follow(files, style, off);
+		for (i = 0, file = files; i < no_files; i++, file++) {
+		    free(file->file_name);
+		}
+		free(files);
+	} else if (*argv) {
+		for (first = 1; (fname = *argv++);) {
+			if ((fp = fopen(fname, "r")) == NULL ||
+			    fstat(fileno(fp), &sb)) {
+				ierr();
+				continue;
+			}
+			if (argc > 1 && !qflag) {
+				(void)printf("%s==> %s <==\n",
+				    first ? "" : "\n", fname);
+				first = 0;
+				(void)fflush(stdout);
+			}
+
+#ifdef __APPLE__
+			/* 3849683: don't read a directory */
+			if (S_IFDIR == (sb.st_mode & S_IFMT))
+				continue;
+#endif
+
+			if (rflag)
+				reverse(fp, style, off, &sb);
+			else
+				forward(fp, style, off, &sb);
+		}
+	} else {
+		fname = "stdin";
+
+		if (fstat(fileno(stdin), &sb)) {
+			ierr();
+			exit(1);
+		}
+
+		if (rflag)
+			reverse(stdin, style, off, &sb);
+		else
+			forward(stdin, style, off, &sb);
+	}
 	exit(rval);
 }
 
@@ -300,7 +279,7 @@ obsolete(char *argv[])
 			/* Malloc space for dash, new option and argument. */
 			len = strlen(*argv);
 			if ((start = p = malloc(len + 3)) == NULL)
-				err(1, "failed to allocate memory");
+				err(1, "malloc");
 			*p++ = '-';
 
 			/*

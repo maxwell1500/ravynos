@@ -6,7 +6,7 @@ LDFLAGS = --sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSION_MIN} \
 .export CFLAGS LDFLAGS MK_TESTS
 
 SUBDIR = basename dirname env false sw_vers 
-SUBDIR += tee time touch true uname users whereis which xargs yes
+SUBDIR += tail tee time touch true uname users whereis which xargs yes
 #SUBDIR += who
 
 .include <bsd.subdir.mk>
