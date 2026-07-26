@@ -1,6 +1,4 @@
-/*-
- * SPDX-License-Identifier: BSD-3-Clause
- *
+/*
  * Copyright (c) 1989, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -12,7 +10,11 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 3. Neither the name of the University nor the names of its contributors
+ * 3. All advertising materials mentioning features or use of this software
+ *    must display the following acknowledgement:
+ *	This product includes software developed by the University of
+ *	California, Berkeley and its contributors.
+ * 4. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -29,6 +31,14 @@
  * SUCH DAMAGE.
  */
 
+#ifndef lint
+#if 0
+static char sccsid[] = "@(#)parse.c	8.1 (Berkeley) 6/6/93";
+#endif
+#endif /* not lint */
+#include <sys/cdefs.h>
+__FBSDID("$FreeBSD: src/usr.bin/hexdump/parse.c,v 1.12 2002/09/04 23:29:01 dwmalone Exp $");
+
 #include <sys/types.h>
 
 #include <err.h>
@@ -42,7 +52,7 @@
 FU *endfu;					/* format at end-of-data */
 
 void
-addfile(const char *name)
+addfile(char *name)
 {
 	unsigned char *p;
 	FILE *fp;
@@ -52,16 +62,16 @@ addfile(const char *name)
 	if ((fp = fopen(name, "r")) == NULL)
 		err(1, "%s", name);
 	while (fgets(buf, sizeof(buf), fp)) {
-		if (!(p = strchr(buf, '\n'))) {
+		if (!(p = (unsigned char *)index(buf, '\n'))) {
 			warnx("line too long");
 			while ((ch = getchar()) != '\n' && ch != EOF);
 			continue;
 		}
 		*p = '\0';
-		for (p = buf; *p && isspace(*p); ++p);
+		for (p = (unsigned char *)buf; *p && isspace(*p); ++p);
 		if (!*p || *p == '#')
 			continue;
-		add(p);
+		add((const char *)p);
 	}
 	(void)fclose(fp);
 }
@@ -85,7 +95,7 @@ add(const char *fmt)
 	nextfu = &tfs->nextfu;
 
 	/* take the format string and break it up into format units */
-	for (p = fmt;;) {
+	for (p = (unsigned const char *)fmt;;) {
 		/* skip leading white space */
 		for (; isspace(*p); ++p);
 		if (!*p)
@@ -104,7 +114,7 @@ add(const char *fmt)
 			if (!isspace(*p) && *p != '/')
 				badfmt(fmt);
 			/* may overwrite either white space or slash */
-			tfu->reps = atoi(savep);
+			tfu->reps = atoi((const char *)savep);
 			tfu->flags = F_SETREP;
 			/* skip trailing white space */
 			for (++p; isspace(*p); ++p);
@@ -119,7 +129,7 @@ add(const char *fmt)
 			for (savep = p; isdigit(*p); ++p);
 			if (!isspace(*p))
 				badfmt(fmt);
-			tfu->bcnt = atoi(savep);
+			tfu->bcnt = atoi((const char *)savep);
 			/* skip trailing white space */
 			for (++p; isspace(*p); ++p);
 		}
@@ -132,7 +142,8 @@ add(const char *fmt)
 				badfmt(fmt);
 		if (!(tfu->fmt = malloc(p - savep + 1)))
 			err(1, NULL);
-		(void) strlcpy(tfu->fmt, savep, p - savep + 1);
+		(void) strncpy(tfu->fmt, (const char *)savep, p - savep);
+		tfu->fmt[p - savep] = '\0';
 		escape(tfu->fmt);
 		p++;
 	}
@@ -154,19 +165,16 @@ size(FS *fs)
 			cursize += fu->bcnt * fu->reps;
 			continue;
 		}
-		for (bcnt = prec = 0, fmt = fu->fmt; *fmt; ++fmt) {
+		for (bcnt = prec = 0, fmt = (unsigned char *)fu->fmt; *fmt; ++fmt) {
 			if (*fmt != '%')
 				continue;
 			/*
 			 * skip any special chars -- save precision in
 			 * case it's a %s format.
 			 */
-			while (*++fmt != 0 && strchr(spec + 1, *fmt) != NULL)
-				;
-			if (*fmt == 0)
-				badnoconv();
+			while (index(spec + 1, *++fmt));
 			if (*fmt == '.' && isdigit(*++fmt)) {
-				prec = atoi(fmt);
+				prec = atoi((const char *)fmt);
 				while (isdigit(*++fmt));
 			}
 			switch(*fmt) {
@@ -200,31 +208,31 @@ void
 rewrite(FS *fs)
 {
 	enum { NOTOKAY, USEBCNT, USEPREC } sokay;
-	PR *pr, **nextpr;
+	PR *pr, **nextpr = NULL;
 	FU *fu;
 	unsigned char *p1, *p2, *fmtp;
 	char savech, cs[3];
-	int nconv, prec;
-
-	prec = 0;
+	int nconv, prec = 0;
 
 	for (fu = fs->nextfu; fu; fu = fu->nextfu) {
 		/*
 		 * Break each format unit into print units; each conversion
 		 * character gets its own.
 		 */
-		nextpr = &fu->nextpr;
-		for (nconv = 0, fmtp = fu->fmt; *fmtp; nextpr = &pr->nextpr) {
+		for (nconv = 0, fmtp = (unsigned char *)fu->fmt; *fmtp; nextpr = &pr->nextpr) {
 			if ((pr = calloc(1, sizeof(PR))) == NULL)
 				err(1, NULL);
-			*nextpr = pr;
+			if (!fu->nextpr)
+				fu->nextpr = pr;
+			else
+				*nextpr = pr;
 
 			/* Skip preceding text and up to the next % sign. */
 			for (p1 = fmtp; *p1 && *p1 != '%'; ++p1);
 
 			/* Only text in the string. */
 			if (!*p1) {
-				pr->fmt = fmtp;
+				pr->fmt = (char *)fmtp;
 				pr->flags = F_TEXT;
 				break;
 			}
@@ -236,27 +244,19 @@ rewrite(FS *fs)
 			if (fu->bcnt) {
 				sokay = USEBCNT;
 				/* Skip to conversion character. */
-				while (*++p1 != 0 && strchr(spec, *p1) != NULL)
-					;
-				if (*p1 == 0)
-					badnoconv();
+				for (++p1; index(spec, *p1); ++p1);
 			} else {
 				/* Skip any special chars, field width. */
-				while (*++p1 != 0 && strchr(spec + 1, *p1) != NULL)
-					;
-				if (*p1 == 0)
-					badnoconv();
+				while (index(spec + 1, *++p1));
 				if (*p1 == '.' && isdigit(*++p1)) {
 					sokay = USEPREC;
-					prec = atoi(p1);
+					prec = atoi((const char *)p1);
 					while (isdigit(*++p1));
 				} else
 					sokay = NOTOKAY;
 			}
 
-			p2 = *p1 ? p1 + 1 : p1;	/* Set end pointer -- make sure
-						 * that it's non-NUL/-NULL first
-						 * though. */
+			p2 = p1 + 1;		/* Set end pointer. */
 			cs[0] = *p1;		/* Set conversion string. */
 			cs[1] = '\0';
 
@@ -274,7 +274,7 @@ rewrite(FS *fs)
 					break;
 				default:
 					p1[1] = '\0';
-					badcnt(p1);
+					badcnt((char *)p1);
 				}
 				break;
 			case 'd': case 'i':
@@ -295,12 +295,14 @@ isint:				cs[2] = '\0';
 				case 2:
 					pr->bcnt = 2;
 					break;
+#ifdef __APPLE__
 				case 8:
 					pr->bcnt = 8;
 					break;
+#endif /* __APPLE__ */
 				default:
 					p1[1] = '\0';
-					badcnt(p1);
+					badcnt((char *)p1);
 				}
 				break;
 			case 'e': case 'E': case 'f': case 'g': case 'G':
@@ -320,7 +322,7 @@ isint:				cs[2] = '\0';
 						pr->bcnt = sizeof(long double);
 					} else {
 						p1[1] = '\0';
-						badcnt(p1);
+						badcnt((char *)p1);
 					}
 				}
 				break;
@@ -355,7 +357,7 @@ isint:				cs[2] = '\0';
 						break;
 					default:
 						p1[3] = '\0';
-						badconv(p1);
+						badconv((char *)p1);
 					}
 					break;
 				case 'c':
@@ -375,17 +377,24 @@ isint2:					switch(fu->bcnt) {
 						break;
 					default:
 						p1[2] = '\0';
-						badcnt(p1);
+						badcnt((char *)p1);
 					}
+					break;
+				case 'n': /* Force -A n to dump extra blank line like default od behavior */
+					endfu = fu;
+					fu->flags = F_IGNORE;
+					pr->flags = F_TEXT;
+					fmtp = (unsigned char *)"\n";
+					cs[0] = '\0';
 					break;
 				default:
 					p1[2] = '\0';
-					badconv(p1);
+					badconv((char *)p1);
 				}
 				break;
 			default:
 				p1[1] = '\0';
-				badconv(p1);
+				badconv((char *)p1);
 			}
 
 			/*
@@ -394,15 +403,17 @@ isint2:					switch(fu->bcnt) {
 			 */
 			savech = *p2;
 			p1[0] = '\0';
-			if (asprintf(&pr->fmt, "%s%s", fmtp, cs) == -1)
+			if ((pr->fmt = calloc(1, strlen((const char *)fmtp) + 2)) == NULL)
 				err(1, NULL);
+			(void)strcpy(pr->fmt, (const char *)fmtp);
+			(void)strcat(pr->fmt, cs);
 			*p2 = savech;
 			pr->cchar = pr->fmt + (p1 - fmtp);
 			fmtp = p2;
 
 			/* Only one conversion character if byte count. */
 			if (!(pr->flags&F_ADDRESS) && fu->bcnt && nconv++)
-	    errx(1, "byte count with multiple conversion characters");
+				errx(1, "byte count with multiple conversion characters");
 		}
 		/*
 		 * If format unit byte count not specified, figure it out
@@ -429,10 +440,10 @@ isint2:					switch(fu->bcnt) {
 			for (pr = fu->nextpr;; pr = pr->nextpr)
 				if (!pr->nextpr)
 					break;
-			for (p1 = pr->fmt, p2 = NULL; *p1; ++p1)
+			for (p1 = (unsigned char *)pr->fmt, p2 = NULL; *p1; ++p1)
 				p2 = isspace(*p1) ? p1 : NULL;
 			if (p2)
-				pr->nospace = p2;
+				pr->nospace = (char *)p2;
 		}
 	}
 #ifdef DEBUG
@@ -451,14 +462,13 @@ escape(char *p1)
 	char *p2;
 
 	/* alphabetic escape sequences have to be done in place */
-	for (p2 = p1;; p1++, p2++) {
-		if (*p1 == '\\') {
-			p1++;
-			switch(*p1) {
-			case '\0':
-				*p2 = '\\';
-				*++p2 = '\0';
-				return;
+	for (p2 = p1;; ++p1, ++p2) {
+		if (!*p1) {
+			*p2 = *p1;
+			break;
+		}
+		if (*p1 == '\\')
+			switch(*++p1) {
 			case 'a':
 			     /* *p2 = '\a'; */
 				*p2 = '\007';
@@ -485,16 +495,11 @@ escape(char *p1)
 				*p2 = *p1;
 				break;
 			}
-		} else {
-			*p2 = *p1;
-			if (*p1 == '\0')
-				return;
-		}
 	}
 }
 
 void
-badcnt(const char *s)
+badcnt(char *s)
 {
 	errx(1, "%s: bad byte count", s);
 }
@@ -512,13 +517,7 @@ badfmt(const char *fmt)
 }
 
 void
-badconv(const char *ch)
+badconv(char *ch)
 {
 	errx(1, "%%%s: bad conversion character", ch);
-}
-
-void
-badnoconv(void)
-{
-	errx(1, "missing conversion character");
 }

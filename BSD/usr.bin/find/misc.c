@@ -1,6 +1,4 @@
 /*-
- * SPDX-License-Identifier: BSD-3-Clause
- *
  * Copyright (c) 1990, 1993, 1994
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -15,7 +13,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 3. Neither the name of the University nor the names of its contributors
+ * 4. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -31,6 +29,16 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
+
+#ifndef lint
+#if 0
+static char sccsid[] = "@(#)misc.c	8.2 (Berkeley) 4/1/94";
+#else
+#endif
+#endif /* not lint */
+
+#include <sys/cdefs.h>
+__FBSDID("$FreeBSD: src/usr.bin/find/misc.c,v 1.13 2010/12/11 08:32:16 joel Exp $");
 
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -49,33 +57,23 @@
  *	Replace occurrences of {} in s1 with s2 and return the result string.
  */
 void
-brace_subst(char *orig, char **store, char *path, size_t len)
+brace_subst(char *orig, char **store, char *path, int len)
 {
-	const char *pastorigend, *p, *q;
-	char *dst;
-	size_t newlen, plen;
+	int plen;
+	char ch, *p;
 
 	plen = strlen(path);
-	newlen = strlen(orig) + 1;
-	pastorigend = orig + newlen;
-	for (p = orig; (q = strstr(p, "{}")) != NULL; p = q + 2) {
-		if (plen > 2 && newlen + plen - 2 < newlen)
-			errx(2, "brace_subst overflow");
-		newlen += plen - 2;
-	}
-	if (newlen > len) {
-		*store = reallocf(*store, newlen);
-		if (*store == NULL)
-			err(2, NULL);
-	}
-	dst = *store;
-	for (p = orig; (q = strstr(p, "{}")) != NULL; p = q + 2) {
-		memcpy(dst, p, q - p);
-		dst += q - p;
-		memcpy(dst, path, plen);
-		dst += plen;
-	}
-	memcpy(dst, p, pastorigend - p);
+	for (p = *store; (ch = *orig) != '\0'; ++orig)
+		if (ch == '{' && orig[1] == '}') {
+			while ((p - *store) + plen > len)
+				if (!(*store = realloc(*store, len *= 2)))
+					err(1, NULL);
+			memmove(p, path, plen);
+			p += plen;
+			++orig;
+		} else
+			*p++ = ch;
+	*p = '\0';
 }
 
 /*
@@ -103,5 +101,6 @@ queryuser(char *argv[])
 		(void)fprintf(stderr, "\n");
 		(void)fflush(stderr);
 	}
-        return (rpmatch(resp) == 1);
+
+	return (rpmatch(resp) == 1);
 }

@@ -23,12 +23,15 @@ MAN = getmntopts.3 \
 
 CFLAGS = -ObjC --sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSION_MIN} \
         -I${.CURDIR} -I${ROOT_SOURCE_DIR}/Kernel/xnu/libsyscall/wrappers/spawn \
-        -I${ROOT_SOURCE_DIR}/Kernel/xnu/libkern
+        -I${ROOT_SOURCE_DIR}/Kernel/xnu/libkern ${CFLAGS.${.TARGET}}
 CXXFLAGS = -ObjC++ --sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSION_MIN} \
         -I${.CURDIR} -I${ROOT_SOURCE_DIR}/Kernel/xnu/libsyscall/wrappers/spawn \
         -I${ROOT_SOURCE_DIR}/Kernel/xnu/libkern
 LDFLAGS = --sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSION_MIN} \
         -fuse-ld=${LD}
+
+CFLAGS.tzlink.o = -I${ROOT_SOURCE_DIR}/Libraries/Libsystem/liblaunch \
+        -include${RAVYN_SDKROOT}/usr/include/os/object.h
 
 #SUBDIR = tzlinkd
 

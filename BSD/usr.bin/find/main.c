@@ -1,6 +1,4 @@
 /*-
- * SPDX-License-Identifier: BSD-3-Clause
- *
  * Copyright (c) 1990, 1993, 1994
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -15,7 +13,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 3. Neither the name of the University nor the names of its contributors
+ * 4. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -31,6 +29,21 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
+
+#ifndef lint
+static const char copyright[] =
+"@(#) Copyright (c) 1990, 1993, 1994\n\
+	The Regents of the University of California.  All rights reserved.\n";
+#endif /* not lint */
+
+#ifndef lint
+#if 0
+static char sccsid[] = "@(#)main.c	8.4 (Berkeley) 5/4/95";
+#endif
+#endif /* not lint */
+
+#include <sys/cdefs.h>
+__FBSDID("$FreeBSD: src/usr.bin/find/main.c,v 1.23 2011/12/10 18:11:06 ed Exp $");
 
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -51,18 +64,15 @@
 time_t now;			/* time find was run */
 int dotfd;			/* starting directory */
 int ftsoptions;			/* options for the ftsopen(3) call */
-int ignore_readdir_race;	/* ignore readdir race */
+int isdeprecated;		/* using deprecated syntax */
 int isdepth;			/* do directories on post-order visit */
 int isoutput;			/* user specified output operator */
 int issort;         		/* do hierarchies in lexicographical order */
 int isxargs;			/* don't permit xargs delimiting chars */
 int mindepth = -1, maxdepth = -1; /* minimum and maximum depth */
 int regexp_flags = REG_BASIC;	/* use the "basic" regexp by default*/
-int exitstatus;
-volatile sig_atomic_t showinfo = 0;
 
-static void usage(void) __dead2;
-static void siginfo_handler(int sig __unused);
+static void usage(void);
 
 int
 main(int argc, char *argv[])
@@ -73,8 +83,6 @@ main(int argc, char *argv[])
 	(void)setlocale(LC_ALL, "");
 
 	(void)time(&now);	/* initialize the time-of-day */
-
-	(void)signal(SIGINFO, siginfo_handler);
 
 	p = start = argv;
 	Hflag = Lflag = 0;
@@ -142,8 +150,8 @@ main(int argc, char *argv[])
 		usage();
 	*p = NULL;
 
-	if ((dotfd = open(".", O_RDONLY | O_CLOEXEC, 0)) < 0)
-		ftsoptions |= FTS_NOCHDIR;
+	if ((dotfd = open(".", O_RDONLY, 0)) < 0)
+		err(1, ".");
 
 	exit(find_execute(find_formplan(argv), start));
 }
@@ -155,10 +163,4 @@ usage(void)
 "usage: find [-H | -L | -P] [-EXdsx] [-f path] path ... [expression]",
 "       find [-H | -L | -P] [-EXdsx] -f path [path ...] [expression]");
 	exit(1);
-}
-
-static void
-siginfo_handler(int sig __unused)
-{
-	showinfo = 1;
 }

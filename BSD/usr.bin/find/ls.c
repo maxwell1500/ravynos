@@ -1,6 +1,4 @@
-/*-
- * SPDX-License-Identifier: BSD-3-Clause
- *
+/*
  * Copyright (c) 1989, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -12,7 +10,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 3. Neither the name of the University nor the names of its contributors
+ * 4. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -29,6 +27,15 @@
  * SUCH DAMAGE.
  */
 
+#ifndef lint
+#if 0
+static char sccsid[] = "@(#)ls.c	8.1 (Berkeley) 6/6/93";
+#endif
+#endif /* not lint */
+
+#include <sys/cdefs.h>
+__FBSDID("$FreeBSD: src/usr.bin/find/ls.c,v 1.23 2011/09/28 18:53:36 ed Exp $");
+
 #include <sys/param.h>
 #include <sys/stat.h>
 
@@ -44,6 +51,11 @@
 #include <time.h>
 #include <unistd.h>
 
+#ifdef __APPLE__
+#undef MAXLOGNAME
+#define MAXLOGNAME 17
+#endif /* __APPLE__ */
+
 #include "find.h"
 
 /* Derived from the print routines in the ls(1) source code. */
@@ -56,10 +68,9 @@ printlong(char *name, char *accpath, struct stat *sb)
 {
 	char modep[15];
 
-	(void)printf("%6ju %8"PRId64" ", (uintmax_t)sb->st_ino, sb->st_blocks);
+	(void)printf("%6lu %8"PRId64" ", (u_long) sb->st_ino, sb->st_blocks);
 	(void)strmode(sb->st_mode, modep);
-	(void)printf("%s %3ju %-*s %-*s ", modep, (uintmax_t)sb->st_nlink,
-	    MAXLOGNAME - 1,
+	(void)printf("%s %3u %-*s %-*s ", modep, sb->st_nlink, MAXLOGNAME - 1,
 	    user_from_uid(sb->st_uid, 0), MAXLOGNAME - 1,
 	    group_from_gid(sb->st_gid, 0));
 
@@ -81,12 +92,9 @@ printtime(time_t ftime)
 	static time_t lnow;
 	const char *format;
 	static int d_first = -1;
-	struct tm *tm;
 
-#ifdef D_MD_ORDER
 	if (d_first < 0)
 		d_first = (*nl_langinfo(D_MD_ORDER) == 'd');
-#endif
 	if (lnow == 0)
 		lnow = time(NULL);
 
@@ -97,17 +105,14 @@ printtime(time_t ftime)
 	else
 		/* mmm dd  yyyy || dd mmm  yyyy */
 		format = d_first ? "%e %b  %Y " : "%b %e  %Y ";
-	if ((tm = localtime(&ftime)) != NULL)
-		strftime(longstring, sizeof(longstring), format, tm);
-	else
-		strlcpy(longstring, "bad date val ", sizeof(longstring));
+	strftime(longstring, sizeof(longstring), format, localtime(&ftime));
 	fputs(longstring, stdout);
 }
 
 static void
 printlink(char *name)
 {
-	ssize_t lnklen;
+	int lnklen;
 	char path[MAXPATHLEN];
 
 	if ((lnklen = readlink(name, path, MAXPATHLEN - 1)) == -1) {

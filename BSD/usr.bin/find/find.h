@@ -1,6 +1,4 @@
 /*-
- * SPDX-License-Identifier: BSD-3-Clause
- *
  * Copyright (c) 1990, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -15,7 +13,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 3. Neither the name of the University nor the names of its contributors
+ * 4. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -30,34 +28,12 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
+ *
+ *	@(#)find.h	8.1 (Berkeley) 6/6/93
+ *	$FreeBSD: src/usr.bin/find/find.h,v 1.21 2010/12/11 08:32:16 joel Exp $
  */
 
 #include <regex.h>
-#include <sys/mount.h>
-#include <sys/stat.h>
-
-/*
- * We need to build find during the bootstrap stage when building on a
- * non-FreeBSD system. Linux does not have the st_flags and st_birthtime
- * members in struct stat so we need to omit support for tests that depend
- * on these members. This works fine since none of these flags are used
- * during the build of world and kernel.
- */
-#ifdef UF_SETTABLE
-#define HAVE_STRUCT_STAT_ST_FLAGS 1
-#else
-#define HAVE_STRUCT_STAT_ST_FLAGS 0
-#endif
-#if defined(st_birthtime) || defined(st_birthtimespec)
-#define HAVE_STRUCT_STAT_ST_BIRTHTIME 1
-#else
-#define HAVE_STRUCT_STAT_ST_BIRTHTIME 0
-#endif
-#if defined(MFSNAMELEN) || defined(MFSTYPENAMELEN)
-#define HAVE_STRUCT_STATFS_F_FSTYPENAME 1
-#else
-#define HAVE_STRUCT_STATFS_F_FSTYPENAME 0
-#endif
 
 /* forward declarations */
 struct _plandata;
@@ -92,13 +68,9 @@ typedef	struct _plandata *creat_f(struct _option *, char ***);
 #define	F_IGNCASE	0x00010000	/* iname ipath iregex */
 #define	F_EXACTTIME	F_IGNCASE	/* -[acm]time units syntax */
 #define F_EXECPLUS	0x00020000	/* -exec ... {} + */
-#if HAVE_STRUCT_STAT_ST_BIRTHTIME
 #define	F_TIME_B	0x00040000	/* one of -Btime, -Bnewer, -newerB* */
 #define	F_TIME2_B	0x00080000	/* one of -newer?B */
-#endif
 #define F_LINK		0x00100000	/* lname or ilname */
-/* Notes about execution */
-#define F_HAS_WARNED	0x10000000	/* Has issued a warning for maybe bad input */
 
 /* node definition */
 typedef struct _plandata {
@@ -116,7 +88,7 @@ typedef struct _plandata {
 		nlink_t _l_data;		/* link count */
 		short _d_data;			/* level depth (-1 to N) */
 		off_t _o_data;			/* file size */
-		struct timespec _t_data;	/* time value */
+		time_t _t_data;			/* time value */
 		uid_t _u_data;			/* uid */
 		short _mt_data;			/* mount flags */
 		struct _plandata *_p_data[2];	/* PLAN trees */
@@ -135,7 +107,6 @@ typedef struct _plandata {
 		char *_a_data[2];		/* array of char pointers */
 		char *_c_data;			/* char pointer */
 		regex_t *_re_data;		/* regex */
-		FILE *_fprint_file;		/* file stream for -fprint */
 	} p_un;
 } PLAN;
 #define	a_data	p_un._a_data
@@ -163,7 +134,6 @@ typedef struct _plandata {
 #define e_pbsize p_un.ex._e_pbsize
 #define e_psizemax p_un.ex._e_psizemax
 #define e_next p_un.ex._e_next
-#define	fprint_file	p_un._fprint_file
 
 typedef struct _option {
 	const char *name;		/* option name */

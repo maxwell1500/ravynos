@@ -1,6 +1,4 @@
 /*-
- * SPDX-License-Identifier: BSD-3-Clause
- *
  * Copyright (c) 1990, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -12,7 +10,11 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 3. Neither the name of the University nor the names of its contributors
+ * 3. All advertising materials mentioning features or use of this software
+ *    must display the following acknowledgement:
+ *	This product includes software developed by the University of
+ *	California, Berkeley and its contributors.
+ * 4. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -28,6 +30,14 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
+
+#ifndef lint
+#if 0
+static char sccsid[] = "@(#)odsyntax.c	8.2 (Berkeley) 5/4/95";
+#endif
+#endif /* not lint */
+#include <sys/cdefs.h>
+__FBSDID("$FreeBSD: src/usr.bin/hexdump/odsyntax.c,v 1.16 2002/09/04 23:29:01 dwmalone Exp $");
 
 #include <sys/types.h>
 
@@ -56,7 +66,7 @@ static void odusage(void);
 void
 oldsyntax(int argc, char ***argvp)
 {
-	static char empty[] = "", padding[] = PADDING;
+	static char _n[] = "%_n", padding[] = PADDING;
 	int ch;
 	char **argv, *end;
 
@@ -77,7 +87,7 @@ oldsyntax(int argc, char ***argvp)
 				    *optarg;
 				break;
 			case 'n':
-				fshead->nextfu->fmt = empty;
+				fshead->nextfu->fmt = _n; /* mimic regular output */
 				fshead->nextfs->nextfu->fmt = padding;
 				break;
 			default:
@@ -135,6 +145,10 @@ oldsyntax(int argc, char ***argvp)
 				skip *= 1024;
 			else if (*end == 'm')
 				skip *= 1048576L;
+			else if (*end == 'g')
+				skip *= 1073741824;
+			else if (*end != '\0')
+				skip = -1;
 			if (errno != 0 || skip < 0 || strlen(end) > 1)
 				errx(1, "%s: invalid skip amount", optarg);
 			break;
@@ -183,7 +197,7 @@ odusage(void)
 static void
 odoffset(int argc, char ***argvp)
 {
-	char *p, *num, *end;
+	unsigned char *p, *q, *num, *end;
 	int base;
 
 	/*
@@ -198,7 +212,7 @@ odoffset(int argc, char ***argvp)
 	 *
 	 * We assume it's a file if the offset is bad.
 	 */
-	p = argc == 1 ? (*argvp)[0] : (*argvp)[1];
+	p = (unsigned char *)(argc == 1 ? (*argvp)[0] : (*argvp)[1]);
 
 	if (*p != '+' && (argc < 2 ||
 	    (!isdigit(p[0]) && (p[0] != 'x' || !isxdigit(p[1])))))
@@ -228,15 +242,16 @@ odoffset(int argc, char ***argvp)
 	/* check for no number */
 	if (num == p)
 		return;
-
+	q = p;
 	/* if terminates with a '.', base is decimal */
-	if (*p == '.') {
+	if (*q == '.') {
 		if (base)
 			return;
 		base = 10;
+		q++;
 	}
 
-	skip = strtoll(num, &end, base ? base : 8);
+	skip = strtoll((const char *)num, (char **)&end, base ? base : 8);
 
 	/* if end isn't the same as p, we got a non-octal digit */
 	if (end != p) {
@@ -244,17 +259,17 @@ odoffset(int argc, char ***argvp)
 		return;
 	}
 
-	if (*p) {
-		if (*p == 'B') {
+	if (*q) {
+		if (*q == 'B') {
 			skip *= 1024;
 			++p;
-		} else if (*p == 'b') {
+		} else if (*q == 'b') {
 			skip *= 512;
-			++p;
+			++q;
 		}
 	}
 
-	if (*p) {
+	if (*q) {
 		skip = 0;
 		return;
 	}

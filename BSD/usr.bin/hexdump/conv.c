@@ -1,6 +1,4 @@
-/*-
- * SPDX-License-Identifier: BSD-3-Clause
- *
+/*
  * Copyright (c) 1989, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -12,7 +10,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 3. Neither the name of the University nor the names of its contributors
+ * 4. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -28,6 +26,12 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
+
+#ifndef lint
+static const char sccsid[] = "@(#)conv.c	8.1 (Berkeley) 6/6/93";
+#endif /* not lint */
+#include <sys/cdefs.h>
+__FBSDID("$FreeBSD$");
 
 #include <sys/types.h>
 
@@ -50,9 +54,6 @@ conv_c(PR *pr, u_char *p, size_t bufsize)
 	size_t clen, oclen;
 	int converr, pad, width;
 	u_char peekbuf[MB_LEN_MAX];
-	u_char *op;
-
-	op = NULL;
 
 	if (pr->mbleft > 0) {
 		str = "**";
@@ -98,21 +99,12 @@ conv_c(PR *pr, u_char *p, size_t bufsize)
 	if (odmode && MB_CUR_MAX > 1) {
 		oclen = 0;
 retry:
-		clen = mbrtowc(&wc, p, bufsize, &pr->mbstate);
+		clen = mbrtowc(&wc, (const char *)p, bufsize, &pr->mbstate);
 		if (clen == 0)
 			clen = 1;
 		else if (clen == (size_t)-1 || (clen == (size_t)-2 &&
 		    p == peekbuf)) {
 			memset(&pr->mbstate, 0, sizeof(pr->mbstate));
-			if (p == peekbuf) {
-				/*
-				 * We peeked ahead, but that didn't help --
-				 * we either got an illegal sequence or still
-				 * can't complete; restore original character.
-				 */
-				oclen = 0;
-				p = op;
-			}
 			wc = *p;
 			clen = 1;
 			converr = 1;
@@ -122,7 +114,6 @@ retry:
 			 * can complete it.
 			 */
 			oclen = bufsize;
-			op = p;
 			bufsize = peek(p = peekbuf, MB_CUR_MAX);
 			goto retry;
 		}
@@ -135,7 +126,7 @@ retry:
 		if (!odmode) {
 			*pr->cchar = 'c';
 			(void)printf(pr->fmt, (int)wc);
-		} else {
+		} else {	
 			*pr->cchar = 'C';
 			assert(strcmp(pr->fmt, "%3C") == 0);
 			width = wcwidth(wc);

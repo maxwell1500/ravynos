@@ -1,6 +1,4 @@
-/*-
- * SPDX-License-Identifier: BSD-3-Clause
- *
+/*
  * Copyright (c) 1989, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -12,7 +10,11 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 3. Neither the name of the University nor the names of its contributors
+ * 3. All advertising materials mentioning features or use of this software
+ *    must display the following acknowledgement:
+ *	This product includes software developed by the University of
+ *	California, Berkeley and its contributors.
+ * 4. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -29,13 +31,17 @@
  * SUCH DAMAGE.
  */
 
+#ifndef lint
+#if 0
+static char sccsid[] = "@(#)display.c	8.1 (Berkeley) 6/6/93";
+#endif
+#endif /* not lint */
+#include <sys/cdefs.h>
+__FBSDID("$FreeBSD: src/usr.bin/hexdump/display.c,v 1.19 2004/07/11 01:11:12 tjr Exp $");
+
 #include <sys/param.h>
-#include <sys/capsicum.h>
-#include <sys/conf.h>
-#include <sys/ioctl.h>
 #include <sys/stat.h>
 
-#include <capsicum_helpers.h>
 #include <ctype.h>
 #include <err.h>
 #include <errno.h>
@@ -50,8 +56,7 @@ enum _vflag vflag = FIRST;
 static off_t address;			/* address/offset in stream */
 static off_t eaddress;			/* end address */
 
-static void print(PR *, u_char *);
-static void noseek(void);
+static __inline void print(PR *, u_char *);
 
 void
 display(void)
@@ -62,9 +67,8 @@ display(void)
 	int cnt;
 	u_char *bp;
 	off_t saveaddress;
-	u_char savech, *savebp;
+	u_char savech=0, *savebp;
 
-	savech = 0;
 	while ((bp = get()))
 	    for (fs = fshead, savebp = bp, saveaddress = address; fs;
 		fs = fs->nextfs, bp = savebp, address = saveaddress)
@@ -92,8 +96,9 @@ display(void)
 		 * blocksize, and no partial block ever found.
 		 */
 		if (!eaddress) {
-			if (!address)
+			if (!address) {
 				return;
+			}
 			eaddress = address;
 		}
 		for (pr = endfu->nextpr; pr; pr = pr->nextpr)
@@ -104,19 +109,21 @@ display(void)
 			case F_TEXT:
 				(void)printf("%s", pr->fmt);
 				break;
+			default:
+				break;
 			}
 	}
 }
 
-static void
+static __inline void
 print(PR *pr, u_char *bp)
 {
 	long double ldbl;
 	   double f8;
 	    float f4;
 	  int16_t s2;
+	   int8_t s8;
 	  int32_t s4;
-	  int64_t s8;
 	u_int16_t u2;
 	u_int32_t u4;
 	u_int64_t u8;
@@ -173,7 +180,7 @@ print(PR *pr, u_char *bp)
 		}
 		break;
 	case F_P:
-		(void)printf(pr->fmt, isprint(*bp) ? *bp : '.');
+		(void)printf(pr->fmt, isprint(*bp) && isascii(*bp) ? *bp : '.');
 		break;
 	case F_STR:
 		(void)printf(pr->fmt, (char *)bp);
@@ -220,7 +227,7 @@ bpad(PR *pr)
 	pr->cchar[0] = 's';
 	pr->cchar[1] = '\0';
 	for (p1 = pr->fmt; *p1 != '%'; ++p1);
-	for (p2 = ++p1; *p1 && strchr(spec, *p1); ++p1);
+	for (p2 = ++p1; *p1 && index(spec, *p1); ++p1);
 	while ((*p2++ = *p1++));
 }
 
@@ -255,7 +262,7 @@ get(void)
 		 * block and set the end flag.
 		 */
 		if (!length || (ateof && !next((char **)NULL))) {
-			if (odmode && skip > 0)
+			if (odmode && address < skip)
 				errx(1, "cannot skip past end of input");
 			if (need == blocksize)
 				return((u_char *)NULL);
@@ -263,17 +270,22 @@ get(void)
 			 * XXX bcmp() is not quite right in the presence
 			 * of multibyte characters.
 			 */
-			if (need == 0 && vflag != ALL &&
+#ifdef __APPLE__
+			/* 5650060 */
+			if (!need && vflag != ALL && 
+#else
+			if (vflag != ALL && 
+#endif
 			    valid_save && 
 			    bcmp(curp, savp, nread) == 0) {
-				if (vflag != DUP) {
+				if (vflag != DUP)
 					(void)printf("*\n");
-					(void)fflush(stdout);
-				}
 				return((u_char *)NULL);
 			}
 			bzero((char *)curp + nread, need);
 			eaddress = address + nread;
+			if (length == 0)
+				lseek(STDIN_FILENO, ftell(stdin), SEEK_SET); /* rewind stdin for next process */
 			return(curp);
 		}
 		n = fread((char *)curp + nread, sizeof(u_char),
@@ -299,10 +311,8 @@ get(void)
 					vflag = WAIT;
 				return(curp);
 			}
-			if (vflag == WAIT) {
+			if (vflag == WAIT)
 				(void)printf("*\n");
-				(void)fflush(stdout);
-			}
 			vflag = DUP;
 			address += blocksize;
 			need = blocksize;
@@ -319,7 +329,7 @@ peek(u_char *buf, size_t nbytes)
 	size_t n, nread;
 	int c;
 
-	if (length != -1 && nbytes > (unsigned int)length)
+	if (length != -1 && nbytes > length)
 		nbytes = length;
 	nread = 0;
 	while (nread < nbytes && (c = getchar()) != EOF) {
@@ -346,32 +356,18 @@ next(char **argv)
 	}
 	for (;;) {
 		if (*_argv) {
-			done = 1;
 			if (!(freopen(*_argv, "r", stdin))) {
 				warn("%s", *_argv);
 				exitval = 1;
 				++_argv;
 				continue;
 			}
-			statok = 1;
+			statok = done = 1;
 		} else {
 			if (done++)
 				return(0);
 			statok = 0;
 		}
-
-		if (caph_limit_stream(fileno(stdin), CAPH_READ) < 0)
-			err(1, "unable to restrict %s",
-			    statok ? *_argv : "stdin");
-
-		/*
-		 * We've opened our last input file; enter capsicum sandbox.
-		 */
-		if (statok == 0 || *(_argv + 1) == NULL) {
-			if (caph_enter() < 0)
-				err(1, "unable to enter capability mode");
-		}
-
 		if (skip)
 			doskip(statok ? *_argv : "stdin", statok);
 		if (*_argv)
@@ -385,50 +381,37 @@ next(char **argv)
 void
 doskip(const char *fname, int statok)
 {
-	int type;
+	int cnt;
 	struct stat sb;
 
 	if (statok) {
 		if (fstat(fileno(stdin), &sb))
 			err(1, "%s", fname);
-		if (S_ISREG(sb.st_mode) && skip > sb.st_size && sb.st_size > 0) {
+		if (S_ISREG(sb.st_mode) && skip >= sb.st_size) {
 			address += sb.st_size;
 			skip -= sb.st_size;
 			return;
 		}
 	}
-	if (!statok || S_ISFIFO(sb.st_mode) || S_ISSOCK(sb.st_mode) || \
-	    (S_ISREG(sb.st_mode) && sb.st_size == 0)) {
-		noseek();
-		return;
-	}
-	if (S_ISCHR(sb.st_mode) || S_ISBLK(sb.st_mode)) {
-		if (ioctl(fileno(stdin), FIODTYPE, &type))
+#ifdef __APPLE__
+	/* try to seek first; fall back on ESPIPE */
+	if (fseeko(stdin, skip, SEEK_SET) == 0) {
+#else /* !__APPLE__ */
+	if (S_ISREG(sb.st_mode)) {
+		if (fseeko(stdin, skip, SEEK_SET))
 			err(1, "%s", fname);
-		/*
-		 * Most tape drives don't support seeking,
-		 * yet fseek() would succeed.
-		 */
-		if (type & D_TAPE) {
-			noseek();
-			return;
-		}
+#endif /* __APPLE__ */
+		address += skip;
+		skip = 0;
+	} else {
+#ifdef __APPLE__
+		if (errno != ESPIPE)
+			err(1, "%s", fname);
+#endif /* __APPLE__ */
+		for (cnt = 0; cnt < skip; ++cnt)
+			if (getchar() == EOF)
+				break;
+		address += cnt;
+		skip -= cnt;
 	}
-	if (fseeko(stdin, skip, SEEK_SET)) {
-		noseek();
-		return;
-	}
-	address += skip;
-	skip = 0;
-}
-
-static void
-noseek(void)
-{
-	int count;
-	for (count = 0; count < skip; ++count)
-		if (getchar() == EOF)
-			break;
-	address += count;
-	skip -= count;
 }

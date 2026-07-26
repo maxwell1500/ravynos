@@ -1,6 +1,4 @@
 /*-
- * SPDX-License-Identifier: BSD-3-Clause
- *
  * Copyright (c) 1991, 1993, 1994
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -12,7 +10,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 3. Neither the name of the University nor the names of its contributors
+ * 4. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -27,11 +25,14 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
+ *
+ *	@(#)extern.h	8.3 (Berkeley) 4/16/94
+ *	$FreeBSD: src/usr.bin/find/extern.h,v 1.26 2010/12/11 08:32:16 joel Exp $
  */
 
 #include <sys/cdefs.h>
 
-void	 brace_subst(char *, char **, char *, size_t);
+void	 brace_subst(char *, char **, char *, int);
 PLAN	*find_create(char ***);
 int	 find_execute(PLAN *, char **);
 PLAN	*find_formplan(char **);
@@ -44,8 +45,6 @@ void	 printlong(char *, char *, struct stat *);
 int	 queryuser(char **);
 OPTION	*lookup_option(const char *);
 void	 finish_execplus(void);
-void	 do_printf(PLAN *plan, FTSENT *entry, FILE *fout);
-
 
 creat_f	c_Xmin;
 creat_f	c_Xtime;
@@ -57,10 +56,8 @@ creat_f	c_empty;
 creat_f	c_exec;
 creat_f	c_flags;
 creat_f	c_follow;
-creat_f	c_fprint;
 creat_f	c_fstype;
 creat_f	c_group;
-creat_f	c_ignore_readdir_race;
 creat_f	c_inum;
 creat_f	c_links;
 creat_f	c_ls;
@@ -71,12 +68,10 @@ creat_f	c_nogroup;
 creat_f	c_nouser;
 creat_f	c_perm;
 creat_f	c_print;
-creat_f	c_printf;
 creat_f	c_regex;
 creat_f	c_samefile;
 creat_f	c_simple;
 creat_f	c_size;
-creat_f	c_sparse;
 creat_f	c_type;
 creat_f	c_user;
 creat_f	c_xdev;
@@ -90,12 +85,9 @@ exec_f	f_delete;
 exec_f	f_depth;
 exec_f	f_empty;
 exec_f	f_exec;
-exec_f	f_executable;
 exec_f	f_expr;
 exec_f	f_false;
 exec_f	f_flags;
-exec_f	f_fprint;
-exec_f	f_fprint0;
 exec_f	f_fstype;
 exec_f	f_group;
 exec_f	f_inum;
@@ -112,23 +104,21 @@ exec_f	f_path;
 exec_f	f_perm;
 exec_f	f_print;
 exec_f	f_print0;
-exec_f	f_printf;
 exec_f	f_prune;
 exec_f	f_quit;
-exec_f	f_readable;
 exec_f	f_regex;
 exec_f	f_size;
-exec_f	f_sparse;
 exec_f	f_type;
 exec_f	f_user;
-exec_f	f_writable;
+#ifdef __APPLE__
+exec_f	f_xattr;
+exec_f	f_xattrname;
+#endif /* __APPLE__ */
 
-extern int ftsoptions, ignore_readdir_race, isdepth, isoutput;
-extern int issort, isxargs;
+extern int ftsoptions, isdeprecated, isdepth, isoutput, issort, isxargs;
 extern int mindepth, maxdepth;
 extern int regexp_flags;
-extern int exitstatus;
 extern time_t now;
 extern int dotfd;
 extern FTS *tree;
-extern volatile sig_atomic_t showinfo;
+extern int execplus_error;
