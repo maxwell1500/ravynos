@@ -62,9 +62,7 @@ int	main __P((int, char **));
 int scmp __P((const void *, const void *));
 
 int
-main(argc, argv)
-	int argc;
-	char **argv;
+main(int argc, char **argv)
 {
 	namebuf *names = NULL;
 	int ncnt = 0;
@@ -116,8 +114,7 @@ main(argc, argv)
 }
 
 int
-scmp(p, q)
-	const void *p, *q;
+scmp(const void *p, const void *q)
 {
 	return(strncmp((char *) p, (char *) q, _UTX_USERSIZE));
 }
