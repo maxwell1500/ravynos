@@ -1,6 +1,4 @@
 /*-
- * SPDX-License-Identifier: BSD-3-Clause
- *
  * Copyright (c) 1991, 1993, 1994
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -12,7 +10,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 3. Neither the name of the University nor the names of its contributors
+ * 4. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -27,6 +25,9 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
+ *
+ *	@(#)extern.h	8.3 (Berkeley) 4/2/94
+ *	$FreeBSD: extern.h,v 1.8 1998/05/25 05:07:17 steve Exp $
  */
 
 struct kinfo;
@@ -36,60 +37,62 @@ struct varent;
 
 extern fixpt_t ccpu;
 extern int cflag, eval, fscale, nlistread, rawcpu;
+#ifdef __APPLE__
+extern uint64_t mempages;
+#else
 extern unsigned long mempages;
+#endif
 extern time_t now;
-extern int showthreads, sumrusage, termwidth;
-extern struct velisthead varlist;
-extern const size_t known_keywords_nb;
+extern int showthreads, sumrusage, termwidth, totwidth;
+extern STAILQ_HEAD(velisthead, varent) varlist;
 
 __BEGIN_DECLS
-char	 *arguments(KINFO *, VARENT *);
-void	 check_keywords(void);
-char	 *command(KINFO *, VARENT *);
-char	 *cputime(KINFO *, VARENT *);
-char	 *cpunum(KINFO *, VARENT *);
+int	 get_task_info(KINFO *);
+void	 command(KINFO *, VARENT *);
+void	 just_command(KINFO *, VARENT *);
+void	 args(KINFO *, VARENT *);
+int	 s_command(KINFO *);
+int	 s_just_command(KINFO *);
+int	 s_args(KINFO *);
+void	 cputime(KINFO *, VARENT *);
+void	 pstime(KINFO *, VARENT *);
+void	 p_etime(KINFO *, VARENT *);
+int	 s_etime(KINFO *);
+void	 putime(KINFO *, VARENT *);
 int	 donlist(void);
-char	 *elapsed(KINFO *, VARENT *);
-char	 *elapseds(KINFO *, VARENT *);
-char	 *emulname(KINFO *, VARENT *);
-VARENT	*find_varentry(const char *);
-const	 char *fmt_argv(char **, char *, char *, size_t);
-double	 getpcpu(const KINFO *);
-char	 *jailname(KINFO *, VARENT *);
-size_t	 aliased_keyword_index(const VAR *);
-char	 *kvar(KINFO *, VARENT *);
-char	 *label(KINFO *, VARENT *);
-char	 *loginclass(KINFO *, VARENT *);
-char	 *logname(KINFO *, VARENT *);
-char	 *longtname(KINFO *, VARENT *);
-char	 *lstarted(KINFO *, VARENT *);
-char	 *maxrss(KINFO *, VARENT *);
-char	 *lockname(KINFO *, VARENT *);
-char	 *mwchan(KINFO *, VARENT *);
-char	 *nwchan(KINFO *, VARENT *);
-char	 *pagein(KINFO *, VARENT *);
-void	 parsefmt(const char *, struct velisthead *, int);
-char	 *pcpu(KINFO *, VARENT *);
-char	 *pmem(KINFO *, VARENT *);
-char	 *pri(KINFO *, VARENT *);
+void	 evar(KINFO *, VARENT *);
+VARENT	*find_varentry(VAR *);
+const	 char *fmt_argv(char **, char *, size_t);
+int	 getpcpu(KINFO *);
+double	 getpmem(KINFO *);
+void	 logname(KINFO *, VARENT *);
+void	 longtname(KINFO *, VARENT *);
+void	 lstarted(KINFO *, VARENT *);
+void	 maxrss(KINFO *, VARENT *);
+void	 nlisterr(struct nlist *);
+void	 p_rssize(KINFO *, VARENT *);
+void	 pagein(KINFO *, VARENT *);
+void	 parsefmt(const char *, int);
+void	 pcpu(KINFO *, VARENT *);
+void	 pmem(KINFO *, VARENT *);
+void	 pri(KINFO *, VARENT *);
+void	 rtprior(KINFO *, VARENT *);
 void	 printheader(void);
-char	 *priorityr(KINFO *, VARENT *);
-char	 *egroupname(KINFO *, VARENT *);
-char	 *rgroupname(KINFO *, VARENT *);
-void	 resolve_aliases(void);
-char	 *runame(KINFO *, VARENT *);
-char	 *rvar(KINFO *, VARENT *);
+void	 pvar(KINFO *, VARENT *);
+void	 runame(KINFO *, VARENT *);
+void	 rvar(KINFO *, VARENT *);
+int	 s_runame(KINFO *);
+int	 s_uname(KINFO *);
 void	 showkey(void);
-char	 *started(KINFO *, VARENT *);
-char	 *state(KINFO *, VARENT *);
-char	 *systime(KINFO *, VARENT *);
-char	 *tdev(KINFO *, VARENT *);
-char	 *tdnam(KINFO *, VARENT *);
-char	 *tname(KINFO *, VARENT *);
-char	 *ucomm(KINFO *, VARENT *);
-char	 *username(KINFO *, VARENT *);
-char	 *upr(KINFO *, VARENT *);
-char	 *usertime(KINFO *, VARENT *);
-char	 *vsize(KINFO *, VARENT *);
-char	 *wchan(KINFO *, VARENT *);
+void	 started(KINFO *, VARENT *);
+void	 state(KINFO *, VARENT *);
+void	 tdev(KINFO *, VARENT *);
+void	 tname(KINFO *, VARENT *);
+void	 tsize(KINFO *, VARENT *);
+void	 ucomm(KINFO *, VARENT *);
+void	 uname(KINFO *, VARENT *);
+void	 uvar(KINFO *, VARENT *);
+void	 vsize(KINFO *, VARENT *);
+void	 wchan(KINFO *, VARENT *);
+void	 wq(KINFO *, VARENT *);
 __END_DECLS

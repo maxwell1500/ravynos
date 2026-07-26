@@ -1,6 +1,4 @@
 /*-
- * SPDX-License-Identifier: BSD-3-Clause
- *
  * Copyright (c) 1990, 1993
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -12,7 +10,11 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 3. Neither the name of the University nor the names of its contributors
+ * 3. All advertising materials mentioning features or use of this software
+ *    must display the following acknowledgement:
+ *	This product includes software developed by the University of
+ *	California, Berkeley and its contributors.
+ * 4. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -27,66 +29,91 @@
  * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
+ *
+ *	@(#)ps.h	8.1 (Berkeley) 5/31/93
+ *	$FreeBSD: ps.h,v 1.6 1998/09/14 08:32:20 dfr Exp $
  */
 
 #include <sys/queue.h>
 
-#define	UNLIMITED	0	/* unlimited terminal width */
-enum type { UNSPEC, /* For output routines that don't care and aliases. */
-	    CHAR, UCHAR, SHORT, USHORT, INT, UINT, LONG, ULONG, KPTR, PGTOK };
+#include <mach/mach.h>
+#include <mach/mach_error.h>
+#include <mach/policy.h>
+#include <mach/task_info.h>
+#include <mach/thread_info.h>
 
-typedef struct kinfo_str {
-	STAILQ_ENTRY(kinfo_str) ks_next;
-	char *ks_str;	/* formatted string */
-} KINFO_STR;
+#define	UNLIMITED	0	/* unlimited terminal width */
+enum type { CHAR, UCHAR, SHORT, USHORT, INT, UINT, LONG, ULONG, KPTR, PGTOK };
+
+struct usave {
+	struct	timeval u_start;
+	struct	rusage u_ru;
+	struct	rusage u_cru;
+	char	u_acflag;
+	char	u_valid;
+};
+
+#define KI_PROC(ki) (&(ki)->ki_p->kp_proc)
+#define KI_EPROC(ki) (&(ki)->ki_p->kp_eproc)
+
+typedef struct thread_values {
+	struct thread_basic_info tb;
+	/* struct policy_infos	schedinfo; */
+	union {
+		struct policy_timeshare_info tshare;
+		struct policy_rr_info rr;
+		struct policy_fifo_info fifo;
+	} schedinfo;
+} thread_values_t;
 
 typedef struct kinfo {
 	struct kinfo_proc *ki_p;	/* kinfo_proc structure */
-	const char *ki_args;	/* exec args */
-	const char *ki_env;	/* environment */
-	int ki_valid;		/* 1 => uarea stuff valid */
-	double	 ki_pcpu;	/* calculated in main() */
-	segsz_t	 ki_memsize;	/* calculated in main() */
+	struct usave ki_u;	/* interesting parts of user */
+	char *ki_args;		/* exec args */
+	char *ki_env;		/* environment */
+        task_port_t task;
+	int state;
+	int cpu_usage;
+	int curpri;
+	int basepri;
+	int swapped;
+	struct task_basic_info tasks_info;
+	struct task_thread_times_info times;
+	/* struct policy_infos	schedinfo; */
 	union {
-		int level;	/* used in decendant_sort() */
-		char *prefix;	/* calculated in decendant_sort() */
-	} ki_d;
-	STAILQ_HEAD(, kinfo_str) ki_ks;
+		struct policy_timeshare_info tshare;
+		struct policy_rr_info rr;
+		struct policy_fifo_info fifo;
+	} schedinfo;
+	int	invalid_tinfo;
+        unsigned int	thread_count;
+        thread_port_array_t thread_list;
+        thread_values_t *thval;
+	int	invalid_thinfo;
 } KINFO;
 
-/* Keywords/variables to be printed. */
+/* Variables. */
 typedef struct varent {
-	STAILQ_ENTRY(varent)	 next_ve;
-	const char		*header;
-	const struct var	*var;
-	u_int			 width;
-#define VE_KEEP		(1 << 0)
-	uint16_t		flags;
+	STAILQ_ENTRY(varent) next_ve;
+	const char *header;
+	struct var *var;
 } VARENT;
-STAILQ_HEAD(velisthead, varent);
 
-struct var;
-typedef struct var VAR;
-/* Structure representing one available keyword. */
-struct var {
+typedef struct var {
 	const char *name;	/* name(s) of variable */
-	union {
-		/* Valid field depends on RESOLVED_ALIAS' presence. */
-		const char	*aliased; /* keyword this one is an alias to */
-		const VAR	*final_kw; /* final aliased keyword */
-	};
 	const char *header;	/* default header */
-	const char *field;	/* xo field name */
-#define COMM		0x01	/* needs exec arguments and environment (XXX) */
-#define LJUST		0x02	/* left adjust on output (trailing blanks) */
-#define USER		0x04	/* needs user structure */
-#define INF127		0x10	/* values >127 displayed as 127 */
-#define NOINHERIT	0x1000	/* Don't inherit flags from aliased keyword. */
-#define RESOLVING_ALIAS	0x10000	/* Used transiently to resolve aliases. */
-#define RESOLVED_ALIAS	0x20000	/* Mark that an alias has been resolved. */
+	const char *alias;	/* aliases */
+#define	COMM	0x01		/* needs exec arguments and environment (XXX) */
+#define	LJUST	0x02		/* left adjust on output (trailing blanks) */
+#define	USER	0x04		/* needs user structure */
+#define	DSIZ	0x08		/* field size is dynamic*/
+#define	INF127	0x10		/* values >127 displayed as 127 */
 	u_int	flag;
-	/* output routine */
-	char	*(*oproc)(struct kinfo *, struct varent *);
+				/* output routine */
+	void	(*oproc)(struct kinfo *, struct varent *);
+				/* sizing routine*/
+	int	(*sproc)(struct kinfo *);
+	short	width;		/* printing width */
 	/*
 	 * The following (optional) elements are hooks for passing information
 	 * to the generic output routine pvar (which prints simple elements
@@ -94,7 +121,11 @@ struct var {
 	 */
 	size_t	off;		/* offset in structure */
 	enum	type type;	/* type of element */
-	const char *fmt;	/* printf format (depends on output routine) */
-};
+	const char *fmt;	/* printf format */
+	short	dwidth;		/* dynamic printing width */
+	/*
+	 * glue to link selected fields together
+	 */
+} VAR;
 
 #include "extern.h"

@@ -1,6 +1,4 @@
 /*-
- * SPDX-License-Identifier: BSD-3-Clause
- *
  * Copyright (c) 1992, 1993, 1994
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -12,7 +10,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 3. Neither the name of the University nor the names of its contributors
+ * 4. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -28,6 +26,15 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  */
+
+#if 0
+#ifndef lint
+static char sccsid[] = "@(#)fmt.c	8.4 (Berkeley) 4/15/94";
+#endif
+#endif
+
+#include <sys/cdefs.h>
+__FBSDID("$FreeBSD: src/bin/ps/fmt.c,v 1.34 2004/06/22 02:18:29 gad Exp $");
 
 #include <sys/types.h>
 #include <sys/time.h>
@@ -98,7 +105,7 @@ cmdpart(char *arg0)
 }
 
 const char *
-fmt_argv(char **argv, char *cmd, char *thread, size_t maxlen)
+fmt_argv(char **argv, char *cmd, size_t maxlen)
 {
 	size_t len;
 	char *ap, *cp;
@@ -115,14 +122,9 @@ fmt_argv(char **argv, char *cmd, char *thread, size_t maxlen)
 	cp = malloc(len);
 	if (cp == NULL)
 		errx(1, "malloc failed");
-	if (ap == NULL) {
-		if (thread != NULL) {
-			asprintf(&ap, "%s/%s", cmd, thread);
-			sprintf(cp, "[%.*s]", (int)maxlen, ap);
-			free(ap);
-		} else
-			sprintf(cp, "[%.*s]", (int)maxlen, cmd);
-	} else if (strncmp(cmdpart(argv[0]), cmd, maxlen) != 0)
+	if (ap == NULL)
+		sprintf(cp, "[%.*s]", (int)maxlen, cmd);
+	else if (strncmp(cmdpart(argv[0]), cmd, maxlen) != 0)
 		sprintf(cp, "%s (%.*s)", ap, (int)maxlen, cmd);
 	else
 		strcpy(cp, ap);

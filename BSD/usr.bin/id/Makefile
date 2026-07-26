@@ -1,14 +1,10 @@
-.include <src.opts.mk>
+PROG = id
+SRCS = id.c open_directory.c
 
-PACKAGE=	runtime
+LINKS = ${BINDIR}/id ${BINDIR}/groups
+LINKS += ${BINDIR}/id ${BINDIR}/whoami
 
-PROG=	id
-LINKS=	${BINDIR}/id ${BINDIR}/groups
-LINKS+=	${BINDIR}/id ${BINDIR}/whoami
-MAN=	id.1 groups.1 whoami.1
-
-.if ${MK_AUDIT} != "no"
-CFLAGS+=	-DUSE_BSM_AUDIT
-.endif
+MAN=   id.1 groups.1 whoami.1
 
 .include <bsd.prog.mk>
+

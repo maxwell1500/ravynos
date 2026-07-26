@@ -1,13 +1,6 @@
 /*-
- * SPDX-License-Identifier: BSD-3-Clause
- *
  * Copyright (c) 1990, 1993, 1994
  *	The Regents of the University of California.  All rights reserved.
- * Copyright (c) 2025 The FreeBSD Foundation
- *
- * Portions of this software were developed by Olivier Certner
- * <olce@FreeBSD.org> at Kumacom SARL under sponsorship from the FreeBSD
- * Foundation.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -17,7 +10,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 3. Neither the name of the University nor the names of its contributors
+ * 4. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -41,21 +34,41 @@
  * ------+---------+---------+-------- + --------+---------+---------+---------*
  */
 
+#ifndef lint
+static const char copyright[] =
+"@(#) Copyright (c) 1990, 1993, 1994\n\
+	The Regents of the University of California.  All rights reserved.\n";
+#endif /* not lint */
+
+#if 0
+#ifndef lint
+static char sccsid[] = "@(#)ps.c	8.4 (Berkeley) 4/2/94";
+#endif /* not lint */
+#endif
+
+#include <sys/cdefs.h>
+__FBSDID("$FreeBSD: src/bin/ps/ps.c,v 1.110 2005/02/09 17:37:38 ru Exp $");
+
 #include <sys/param.h>
-#include <sys/jail.h>
+#ifdef __APPLE__
+#include <sys/time.h>
+#endif /* __APPLE__ */
 #include <sys/proc.h>
 #include <sys/user.h>
 #include <sys/stat.h>
 #include <sys/ioctl.h>
 #include <sys/sysctl.h>
 #include <sys/mount.h>
+#include <sys/resourcevar.h>
 
 #include <ctype.h>
+#include <err.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <grp.h>
-#include <jail.h>
+#ifndef __APPLE__
 #include <kvm.h>
+#endif /* !__APPLE__ */
 #include <limits.h>
 #include <locale.h>
 #include <paths.h>
@@ -64,14 +77,25 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <libxo/xo.h>
 
 #include "ps.h"
 
-#define	_PATH_PTS	"/dev/pts/"
+#ifdef __APPLE__
+#include <get_compat.h>
+#else /* !__APPLE__ */
+#define COMPAT_MODE(func, mode) (1)
+#endif /* __APPLE__ */
 
 #define	W_SEP	" \t"		/* "Whitespace" list separators */
 #define	T_SEP	","		/* "Terminate-element" list separators */
+
+#ifdef LAZY_PS
+#define	DEF_UREAD	0
+#define	OPT_LAZY_f	"f"
+#else
+#define	DEF_UREAD	1	/* Always do the more-expensive read. */
+#define	OPT_LAZY_f		/* I.e., the `-f' option is not added. */
+#endif
 
 /*
  * isdigit takes an `int', but expects values in the range of unsigned char.
@@ -85,30 +109,19 @@ time_t	 now;			/* Current time(3) value */
 int	 rawcpu;		/* -C */
 int	 sumrusage;		/* -S */
 int	 termwidth;		/* Width of the screen (0 == infinity). */
-int	 showthreads;		/* will threads be shown? */
-
-struct keyword_info {
-	/*
-	 * Whether there is (at least) one column referencing this keyword that
-	 * must be kept.
-	 */
-#define	KWI_HAS_MUST_KEEP_COLUMN	(1 << 0)
-	/*
-	 * Whether a column with such a keyword has been seen.
-	 */
-#define	KWI_SEEN			(1 << 1)
-	u_int flags;
-};
+int	 totwidth;		/* Calculated-width of requested variables. */
 
 struct velisthead varlist = STAILQ_HEAD_INITIALIZER(varlist);
-static struct velisthead Ovarlist = STAILQ_HEAD_INITIALIZER(Ovarlist);
 
+#ifndef __APPLE__
+static int	 forceuread = DEF_UREAD; /* Do extra work to get u-area. */
 static kvm_t	*kd;
+#endif /* !__APPLE__ */
+static KINFO	*kinfo;
 static int	 needcomm;	/* -o "command" */
 static int	 needenv;	/* -e */
 static int	 needuser;	/* -o "user" */
 static int	 optfatal;	/* Fatal error parsing some list-option. */
-static int	 pid_max;	/* kern.pid_max */
 
 static enum sort { DEFAULT, SORTMEM, SORTCPU } sortby = DEFAULT;
 
@@ -123,7 +136,6 @@ struct listinfo {
 	const char	*lname;
 	union {
 		gid_t	*gids;
-		int	*jids;
 		pid_t	*pids;
 		dev_t	*ttys;
 		uid_t	*uids;
@@ -131,85 +143,101 @@ struct listinfo {
 	} l;
 };
 
+#ifndef __APPLE__
+static int	 check_procfs(void);
+#endif /* !__APPLE__ */
 static int	 addelem_gid(struct listinfo *, const char *);
-static int	 addelem_jid(struct listinfo *, const char *);
 static int	 addelem_pid(struct listinfo *, const char *);
 static int	 addelem_tty(struct listinfo *, const char *);
 static int	 addelem_uid(struct listinfo *, const char *);
 static void	 add_list(struct listinfo *, const char *);
-static void	 descendant_sort(KINFO *, int);
-static void	 format_output(KINFO *);
+static void	 dynsizevars(KINFO *);
 static void	*expand_list(struct listinfo *);
+#ifndef __APPLE__
 static const char *
 		 fmt(char **(*)(kvm_t *, const struct kinfo_proc *, int),
-		    KINFO *, char *, char *, int);
+		    KINFO *, char *, int);
+#endif /* !__APPLE__ */
 static void	 free_list(struct listinfo *);
 static void	 init_list(struct listinfo *, addelem_rtn, int, const char *);
-static char	*kludge_oldps_options(const char *, char *, const char *);
+static char	*kludge_oldps_options(const char *, char *, const char *, int *);
 static int	 pscomp(const void *, const void *);
 static void	 saveuser(KINFO *);
-static void	 scan_vars(struct keyword_info *);
-static void	 remove_redundant_columns(struct keyword_info *);
-static void	 pidmax_init(void);
-static void	 usage(void);
+static void	 scanvars(void);
+static void	 sizevars(void);
+static void	 usage(int);
 
-static const char dfmt[] = "pid,tt,state,time,command";
-static const char jfmt[] = "user,pid,ppid,pgid,sid,jobc,state,tt,time,command";
-static const char lfmt[] = "uid,pid,ppid,cpu,pri,nice,vsz,rss,mwchan,state,"
-			   "tt,time,command";
-static const char ufmt[] = "user,pid,%cpu,%mem,vsz,rss,tt,state,start,time,command";
-static const char vfmt[] = "pid,state,time,sl,re,pagein,vsz,rss,lim,tsiz,"
-			   "%cpu,%mem,command";
-static const char Zfmt[] = "label";
+/* 5842004: Fix -f option. */
+VAR *findvar(char *, int, char **);
 
-#define	PS_ARGS	"AaCcD:defG:gHhjJ:LlM:mN:O:o:p:rSTt:U:uvwXxZ"
+/* p_ == POSIX/SUSv3/UNIX2003 format */
+static char dfmt[] = "pid,tt,state,time,command";
+static char jfmt[] = "user,pid,ppid,pgid,sess,jobc,state,tt,time,command";
+static char lfmt[] = "uid,pid,ppid,cpu,pri,nice,vsz,rss,wchan,state,"
+			"tt,time,command";
+static char   o1[] = "pid";
+static char   o2[] = "tt,state,time,command";
+static char ufmt[] = "user,pid,%cpu,%mem,vsz,rss,tt,state,start,time,command";
+static char vfmt[] = "pid,state,time,sl,re,pagein,vsz,rss,lim,tsiz,"
+			"%cpu,%mem,command";
+#ifndef __APPLE__
+static char Zfmt[] = "label";
+#endif /* !__APPLE__ */
+char  p_dfmt[] = "pid tty time command=CMD";
+char  p_ffmt[] = "uid pid ppid cpu=C start=STIME tty time command=CMD";
+char p_uffmt[] = "user pid ppid cpu=C start=STIME tty time command=CMD";
+char  p_lfmt[] = "uid pid ppid flags cpu pri nice vsz=SZ rss wchan state=S paddr=ADDR tty time command=CMD";
+char    mfmt[] = "user pid tt %cpu state  pri stime utime command";
+
+int eflg = 0;
+int mflg = 0; /* if -M option to display all mach threads */
+int print_thread_num = 0;
+int print_all_thread = 0;
+
+#define	PS_ARGS	(u03 ? "aACcdeEfg:G:hjLlMmO:o:p:rSTt:U:u:vwx" : \
+	"aACcdeEgG:hjLlMmO:o:p:rSTt:U:uvwx")
 
 int
 main(int argc, char *argv[])
 {
-	struct listinfo gidlist, jidlist, pgrplist, pidlist;
+	struct listinfo gidlist, pgrplist, pidlist;
 	struct listinfo ruidlist, sesslist, ttylist, uidlist;
 	struct kinfo_proc *kp;
-	KINFO *kinfo = NULL, *next_KINFO;
-	KINFO_STR *ks;
+	KINFO *next_KINFO;
 	struct varent *vent;
-	struct winsize ws = { .ws_row = 0 };
-	const char *nlistf, *memf, *str;
+	struct winsize ws;
+#ifndef __APPLE__
+	const char *nlistf, *memf;
+#endif /* !__APPLE__ */
 	char *cols;
-	int all, ch, elem, flag, _fmt, i, lineno, linelen, left;
-	int descendancy, nentries, nkept, nselectors;
-	int prtheader, wflag, what, xkeep, xkeep_implied;
-	int fwidthmin, fwidthmax;
+	int all, ch, elem, flag, _fmt, i, lineno;
+	int nentries, nkept, nselectors;
+	int prtheader, showthreads, wflag, what, xkeep, xkeep_implied;
+#ifndef __APPLE__
 	char errbuf[_POSIX2_LINE_MAX];
-	char fmtbuf[_POSIX2_LINE_MAX];
-	enum { NONE = 0, UP = 1, DOWN = 2, BOTH = 1 | 2 } directions = NONE;
-	struct { int traversed; int initial; } pid_count;
-	struct keyword_info *keywords_info;
+#endif /* !__APPLE__ */
+	struct kinfo_proc *kprocbuf;
+	int j;
+	int mib[4] = { CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0 };
+	size_t bufSize = 0;
+	size_t orig_bufSize = 0;
+	int local_error=0;
+	int retry_count = 0;
+	int u03 = COMPAT_MODE("bin/ps", "unix2003");
+#ifdef __APPLE__
+	int dflag = 0;
+#endif /* __APPLE__ */
 
 	(void) setlocale(LC_ALL, "");
 	time(&now);			/* Used by routines in print.c. */
 
-	/*
-	 * Compute default output line length before processing options.
-	 * If COLUMNS is set, use it.  Otherwise, if this is part of an
-	 * interactive job (i.e. one associated with a terminal), use
-	 * the terminal width.  "Interactive" is determined by whether
-	 * any of stdout, stderr, or stdin is a terminal.  The intent
-	 * is that "ps", "ps | more", and "ps | grep" all use the same
-	 * default line length unless -w is specified.
-	 *
-	 * If not interactive, the default length was traditionally 79.
-	 * It has been changed to unlimited.  This is mostly for the
-	 * benefit of non-interactive scripts, which arguably should
-	 * use -ww, but is compatible with Linux.
-	 */
 	if ((cols = getenv("COLUMNS")) != NULL && *cols != '\0')
 		termwidth = atoi(cols);
 	else if ((ioctl(STDOUT_FILENO, TIOCGWINSZ, (char *)&ws) == -1 &&
 	     ioctl(STDERR_FILENO, TIOCGWINSZ, (char *)&ws) == -1 &&
 	     ioctl(STDIN_FILENO,  TIOCGWINSZ, (char *)&ws) == -1) ||
 	     ws.ws_col == 0)
-		termwidth = UNLIMITED;
+		termwidth = 79;
 	else
 		termwidth = ws.ws_col - 1;
 
@@ -218,41 +246,38 @@ main(int argc, char *argv[])
 	 * to support some historical BSD behaviors, such as `ps axu'.
 	 */
 	if (argc > 1)
-		argv[1] = kludge_oldps_options(PS_ARGS, argv[1], argv[2]);
+		argv[1] = kludge_oldps_options(PS_ARGS, argv[1], argv[2], &u03);
 
-	pidmax_init();
-
-#ifdef PS_CHECK_KEYWORDS
-	/* Check for obvious problems in the keywords array. */
-	check_keywords();
-	/* Resolve all aliases at start to spot errors. */
-	resolve_aliases();
-#endif
-
-	all = descendancy = _fmt = nselectors = optfatal = 0;
+	all = _fmt = nselectors = optfatal = 0;
 	prtheader = showthreads = wflag = xkeep_implied = 0;
 	xkeep = -1;			/* Neither -x nor -X. */
 	init_list(&gidlist, addelem_gid, sizeof(gid_t), "group");
-	init_list(&jidlist, addelem_jid, sizeof(int), "jail id");
 	init_list(&pgrplist, addelem_pid, sizeof(pid_t), "process group");
 	init_list(&pidlist, addelem_pid, sizeof(pid_t), "process id");
 	init_list(&ruidlist, addelem_uid, sizeof(uid_t), "ruser");
 	init_list(&sesslist, addelem_pid, sizeof(pid_t), "session id");
 	init_list(&ttylist, addelem_tty, sizeof(dev_t), "tty");
 	init_list(&uidlist, addelem_uid, sizeof(uid_t), "user");
-	memf = _PATH_DEVNULL;
-	nlistf = NULL;
-
-	argc = xo_parse_args(argc, argv);
-	if (argc < 0)
-		exit(1);
-
+#ifndef __APPLE__
+	memf = nlistf = _PATH_DEVNULL;
+#endif /* !__APPLE__ */
 	while ((ch = getopt(argc, argv, PS_ARGS)) != -1)
-		switch (ch) {
+		switch ((char)ch) {
+#ifdef __APPLE__
+		case 'd':
+			dflag = 1;
+#endif /* __APPLE__ */
 		case 'A':
+			/*
+			 * Exactly the same as `-ax'.   This has been
+			 * added for compatability with SUSv3, but for
+			 * now it will not be described in the man page.
+			 */
+			nselectors++;
 			all = xkeep = 1;
 			break;
 		case 'a':
+			nselectors++;
 			all = 1;
 			break;
 		case 'C':
@@ -261,30 +286,39 @@ main(int argc, char *argv[])
 		case 'c':
 			cflag = 1;
 			break;
-		case 'D': {
-				size_t len = strlen(optarg);
-
-				if (len <= 2 &&
-					strncasecmp(optarg, "up", len) == 0)
-					directions |= UP;
-				else if (len <= 4 &&
-					strncasecmp(optarg, "down", len) == 0)
-					directions |= DOWN;
-				else if (len <= 4 &&
-					strncasecmp(optarg, "both", len) == 0)
-					directions |= BOTH;
-				else
-					usage();
+		case 'e':			/* XXX set ufmt */
+			if (u03) {
+				nselectors++;
+				all = xkeep = 1;
 				break;
 			}
-		case 'd':
-			descendancy = 1;
-			break;
-		case 'e':			/* XXX set ufmt */
+		case 'E':	
 			needenv = 1;
+			eflg = 1;
 			break;
+#ifdef LAZY_PS
 		case 'f':
-			/* compat */
+			if (getuid() == 0 || getgid() == 0)
+				forceuread = 1;
+			break;
+#endif
+		case 'f':
+			termwidth = UNLIMITED; /* 4990408 */
+			if (u03 && uidlist.count == 0) {
+			    parsefmt(p_ffmt, 0);
+			    /* This is a unplesent little trick that makes
+			      ./ps -f -p PID -o pid,comm,args
+			      print out the whole command even if they slap
+			      more fields on after it and gobble up too much
+			      space */
+			    VAR *v = findvar("command", 0, NULL);
+			    if (v) {
+				v->width = 64;
+			    }
+			} else {
+			    parsefmt(p_uffmt, 0);
+			}
+			_fmt = 1;
 			break;
 		case 'G':
 			add_list(&gidlist, optarg);
@@ -292,63 +326,61 @@ main(int argc, char *argv[])
 			nselectors++;
 			break;
 		case 'g':
-#if 0
-			/*
-			 * XXX - This behavior is still under debate since it
-			 *	conflicts with the (undocumented) `-g' option
-			 *	and is non-standard.  However, it is the
-			 *	behavior of most UNIX systems except
-			 *	SunOS/Solaris/illumos (see next comment; see
-			 *	also comment for '-s' below).
-			 */
+			/* The historical BSD-ish (from SunOS) behavior. */
+			if (!u03) break;
+
 			add_list(&pgrplist, optarg);
 			xkeep_implied = 1;
 			nselectors++;
 			break;
-#else
-			/*
-			 * The historical BSD-ish (from SunOS) behavior: Also
-			 * display process group leaders (but we do not filter
-			 * them out).
-			 */
-			break;			/* no-op */
-#endif
+#ifndef __APPLE__
 		case 'H':
 			showthreads = KERN_PROC_INC_THREAD;
 			break;
+#endif /* !__APPLE__ */
 		case 'h':
 			prtheader = ws.ws_row > 5 ? ws.ws_row : 22;
 			break;
-		case 'J':
-			add_list(&jidlist, optarg);
-			xkeep_implied = 1;
-			nselectors++;
-			break;
 		case 'j':
-			parsefmt(jfmt, &varlist, 0);
+			parsefmt(jfmt, 0);
 			_fmt = 1;
+			jfmt[0] = '\0';
 			break;
 		case 'L':
 			showkey();
 			exit(0);
 		case 'l':
-			parsefmt(lfmt, &varlist, 0);
+			parsefmt(u03 ? p_lfmt : lfmt, 0);
 			_fmt = 1;
+			lfmt[0] = '\0';
 			break;
 		case 'M':
+#ifndef __APPLE__
 			memf = optarg;
+#else
+			parsefmt(mfmt, 0);
+			_fmt = 1;
+			mfmt[0] = '\0';
+			mflg  = 1;
+#endif /* 0 */
 			break;
 		case 'm':
 			sortby = SORTMEM;
 			break;
+#ifndef __APPLE__
 		case 'N':
 			nlistf = optarg;
 			break;
+#endif /* !__APPLE__ */
 		case 'O':
-			parsefmt(optarg, &Ovarlist, 1);
+			parsefmt(o1, 1);
+			parsefmt(optarg, 1);
+			parsefmt(o2, 1);
+			o1[0] = o2[0] = '\0';
+			_fmt = 1;
 			break;
 		case 'o':
-			parsefmt(optarg, &varlist, 1);
+			parsefmt(optarg, 1);
 			_fmt = 1;
 			break;
 		case 'p':
@@ -367,24 +399,9 @@ main(int argc, char *argv[])
 		case 'S':
 			sumrusage = 1;
 			break;
-#if 0
-		case 's':
-			/*
-			 * XXX - This non-standard option is still under debate.
-			 *	It is supported on Solaris, Linux, IRIX, and
-			 *	OpenBSD but conflicts with '-s' on NetBSD.  This
-			 *	is the same functionality as POSIX option '-g',
-			 *	but the cited systems do not provide it under
-			 *	'-g', only under '-s'.
-			 */
-			add_list(&sesslist, optarg);
-			xkeep_implied = 1;
-			nselectors++;
-			break;
-#endif
 		case 'T':
 			if ((optarg = ttyname(STDIN_FILENO)) == NULL)
-				xo_errx(1, "stdin: not a terminal");
+				errx(1, "stdin: not a terminal");
 			/* FALLTHROUGH */
 		case 't':
 			add_list(&ttylist, optarg);
@@ -397,38 +414,28 @@ main(int argc, char *argv[])
 			nselectors++;
 			break;
 		case 'u':
-#if 0
-			/*
-			 * POSIX's '-u' behavior.
-			 *
-			 * This has not been activated because:
-			 * 1. Option '-U' is a substitute for most users, and
-			 *    those that care seem more likely to want to match
-			 *    on the real user ID to display all processes
-			 *    launched by some users.
-			 * 2. '-u' has been a canned display on the BSDs for
-			 *    a very long time (POLA).
-			 */
-			add_list(&uidlist, optarg);
-			xkeep_implied = 1;
-			nselectors++;
-			break;
-#else
-			/* Historical BSD's '-u'. */
-			parsefmt(ufmt, &varlist, 0);
+			if (u03) {
+				/* This is what SUSv3 defines as the `-u' option. */
+				add_list(&uidlist, optarg);
+				xkeep_implied = 1;
+				nselectors++;
+				break;
+			}
+			parsefmt(ufmt, 0);
 			sortby = SORTCPU;
 			_fmt = 1;
+			ufmt[0] = '\0';
 			break;
-#endif
 		case 'v':
-			parsefmt(vfmt, &varlist, 0);
+			parsefmt(vfmt, 0);
 			sortby = SORTMEM;
 			_fmt = 1;
+			vfmt[0] = '\0';
 			break;
 		case 'w':
 			if (wflag)
 				termwidth = UNLIMITED;
-			else if (termwidth < 131 && termwidth != UNLIMITED)
+			else if (termwidth < 131)
 				termwidth = 131;
 			wflag++;
 			break;
@@ -449,16 +456,29 @@ main(int argc, char *argv[])
 		case 'x':
 			xkeep = 1;
 			break;
-		case 'Z':
-			parsefmt(Zfmt, &varlist, 0);
-			break;
 		case '?':
 		default:
-			usage();
+			usage(u03);
 		}
 	argc -= optind;
 	argv += optind;
 
+#ifdef __APPLE__
+	/* 3862041 */
+	if (!isatty(STDOUT_FILENO))
+		termwidth = UNLIMITED;
+#endif /* __APPLE__ */
+
+	/*
+	 * If the user specified ps -e then they want a copy of the process
+	 * environment kvm_getenvv(3) attempts to open /proc/<pid>/mem.
+	 * Check to make sure that procfs is mounted on /proc, otherwise
+	 * print a warning informing the user that output will be incomplete.
+	 */
+#ifndef __APPLE__
+	if (needenv == 1 && check_procfs() == 0)
+		warnx("Process environment requires procfs(5)");
+#endif /* !__APPLE__ */
 	/*
 	 * If there arguments after processing all the options, attempt
 	 * to treat them as a list of process ids.
@@ -470,73 +490,42 @@ main(int argc, char *argv[])
 		argv++;
 	}
 	if (*argv) {
-		xo_warnx("illegal argument: %s\n", *argv);
-		usage();
+		fprintf(stderr, "%s: illegal argument: %s\n",
+		    getprogname(), *argv);
+		usage(u03);
 	}
 	if (optfatal)
 		exit(1);		/* Error messages already printed. */
 	if (xkeep < 0)			/* Neither -X nor -x was specified. */
 		xkeep = xkeep_implied;
 
+#if FIXME 
 	kd = kvm_openfiles(nlistf, memf, NULL, O_RDONLY, errbuf);
-	if (kd == NULL)
-		xo_errx(1, "%s", errbuf);
+	if (kd == 0)
+		errx(1, "%s", errbuf);
+#endif /* FIXME */
 
-	if (!_fmt)
-		parsefmt(dfmt, &varlist, 0);
-
-	if (!STAILQ_EMPTY(&Ovarlist)) {
-		VARENT *const pid_entry = find_varentry("pid");
-
-		/*
-		 * We insert the keywords passed by '-O' after the process ID if
-		 * specified, else at start.
-		 */
-		if (pid_entry != NULL) {
-			struct velisthead rest;
-
-			STAILQ_SPLIT_AFTER(&varlist, pid_entry, &rest, next_ve);
-			STAILQ_CONCAT(&varlist, &Ovarlist);
-			STAILQ_CONCAT(&varlist, &rest);
+	if (!_fmt) {
+		if (u03 && uidlist.count != 0) {
+			parsefmt("uid", 0);
 		}
-		else {
-			STAILQ_SWAP(&varlist, &Ovarlist, varent);
-			STAILQ_CONCAT(&varlist, &Ovarlist);
-		}
+		parsefmt(u03 ? p_dfmt : dfmt, 0);
 	}
 
-	keywords_info = calloc(known_keywords_nb, sizeof(struct keyword_info));
-	if (keywords_info == NULL)
-		xo_errx(1, "malloc failed");
-	/*
-	 * Scan requested variables, noting which structures are needed and
-	 * which keywords are specified.
-	 */
-	scan_vars(keywords_info);
-	/*
-	 * Remove redundant columns from "canned" displays (see the callee's
-	 * herald comment for more details).
-	 */
-	remove_redundant_columns(keywords_info);
-	free(keywords_info);
-	keywords_info = NULL;
-
-	if (all)
-		/*
-		 * We have to display all processes, regardless of other
-		 * options.
-		 */
-		nselectors = 0;
-	else if (nselectors == 0) {
-		/*
-		 * Default is to request our processes only.  As per POSIX, we
-		 * match processes by their effective user IDs and we use our
-		 * effective user ID as our own identity.
-		 */
-		expand_list(&uidlist);
-		uidlist.l.uids[uidlist.count++] = geteuid();
+	if (nselectors == 0) {
+		uidlist.l.ptr = malloc(sizeof(uid_t));
+		if (uidlist.l.ptr == NULL)
+			errx(1, "malloc failed");
 		nselectors = 1;
+		uidlist.count = uidlist.maxcount = 1;
+		*uidlist.l.uids = getuid();
 	}
+
+	/*
+	 * scan requested variables, noting what structures are needed,
+	 * and adjusting header widths as appropriate.
+	 */
+	scanvars();
 
 	/*
 	 * Get process list.  If the user requested just one selector-
@@ -545,18 +534,20 @@ main(int argc, char *argv[])
 	 * then this routine will search that full list and select the
 	 * processes which match any of the user's selector-options.
 	 */
-	what = showthreads != 0 ? KERN_PROC_ALL : KERN_PROC_PROC;
+	what = KERN_PROC_ALL;
 	flag = 0;
 	if (nselectors == 1) {
 		if (gidlist.count == 1) {
+#if 0
 			what = KERN_PROC_RGID | showthreads;
 			flag = *gidlist.l.gids;
 			nselectors = 0;
+#endif /* 0 */
 		} else if (pgrplist.count == 1) {
 			what = KERN_PROC_PGRP | showthreads;
 			flag = *pgrplist.l.pids;
 			nselectors = 0;
-		} else if (pidlist.count == 1 && directions == NONE) {
+		} else if (pidlist.count == 1) {
 			what = KERN_PROC_PID | showthreads;
 			flag = *pidlist.l.pids;
 			nselectors = 0;
@@ -573,7 +564,7 @@ main(int argc, char *argv[])
 			flag = *ttylist.l.ttys;
 			nselectors = 0;
 		} else if (uidlist.count == 1) {
-			what = KERN_PROC_UID | showthreads;
+			what = (xkeep ? KERN_PROC_RUID : KERN_PROC_UID) | showthreads;
 			flag = *uidlist.l.uids;
 			nselectors = 0;
 		}
@@ -583,45 +574,64 @@ main(int argc, char *argv[])
 	 * select procs
 	 */
 	nentries = -1;
+#if FIXME
 	kp = kvm_getprocs(kd, what, flag, &nentries);
-	/*
-	 * Ignore ESRCH to preserve behaviour of "ps -p nonexistent-pid"
-	 * not reporting an error.
-	 */
-	if ((kp == NULL && errno != ESRCH) || (kp != NULL && nentries < 0))
-		xo_errx(1, "%s", kvm_geterr(kd));
+	if ((kp == NULL && nentries > 0) || (kp != NULL && nentries < 0))
+		errx(1, "%s", kvm_geterr(kd));
+#else /* FIXME */
+    mib[0] = CTL_KERN;
+    mib[1] = KERN_PROC;
+    mib[2] = what;
+    mib[3] = flag;
+
+    if (sysctl(mib, 4, NULL, &bufSize, NULL, 0) < 0) {
+        perror("Failure calling sysctl");
+        return 0;
+    }
+
+    kprocbuf= kp = (struct kinfo_proc *)malloc(bufSize);
+
+    retry_count = 0;
+    orig_bufSize = bufSize;
+   for(retry_count=0; ; retry_count++) {
+    /* retry for transient errors due to load in the system */
+    local_error = 0;
+    bufSize = orig_bufSize;
+    if ((local_error = sysctl(mib, 4, kp, &bufSize, NULL, 0)) < 0) {
+	if (retry_count < 1000) {
+		/* 1 sec back off */
+		sleep(1);
+		continue;
+	}
+        perror("Failure calling sysctl");
+        return 0;
+    } else if (local_error == 0) {
+	break;
+    }
+    /* 1 sec back off */
+    sleep(1);
+   }
+
+    /* This has to be after the second sysctl since the bufSize
+       may have changed.  */
+    nentries = bufSize / sizeof(struct kinfo_proc);
+#endif /* FIXME */
 	nkept = 0;
-	pid_count.initial = pidlist.count;
-	if (directions & DOWN)
-		for (elem = 0; elem < pidlist.count; elem++)
-			for (i = 0; i < nentries; i++) {
-				if (kp[i].ki_ppid == kp[i].ki_pid)
-					continue;
-				if (kp[i].ki_ppid == pidlist.l.pids[elem]) {
-					if (pidlist.count >= pidlist.maxcount)
-						expand_list(&pidlist);
-					pidlist.l.pids[pidlist.count++] = kp[i].ki_pid;
-				}
-			}
-	pid_count.traversed = pidlist.count;
-	if (directions & UP)
-		for (elem = 0; elem < pidlist.count; elem++) {
-			if (elem >= pid_count.initial && elem < pid_count.traversed)
-				continue;
-			for (i = 0; i < nentries; i++) {
-				if (kp[i].ki_ppid == kp[i].ki_pid)
-					continue;
-				if (kp[i].ki_pid == pidlist.l.pids[elem]) {
-					if (pidlist.count >= pidlist.maxcount)
-						expand_list(&pidlist);
-					pidlist.l.pids[pidlist.count++] = kp[i].ki_ppid;
-				}
-			}
-		}
 	if (nentries > 0) {
-		if ((kinfo = malloc(nentries * sizeof(*kinfo))) == NULL)
-			xo_errx(1, "malloc failed");
+		if ((kinfo = calloc(nentries, sizeof(*kinfo))) == NULL)
+			errx(1, "malloc failed");
 		for (i = nentries; --i >= 0; ++kp) {
+#ifdef __APPLE__
+			if (kp->kp_proc.p_pid == 0) {
+				continue;
+			}
+#endif /* __APPLE__ */
+
+#ifdef __APPLE__
+			if (dflag && (kp->kp_proc.p_pid == kp->kp_eproc.e_pgid))
+				continue;
+#endif /* __APPLE__ */
+
 			/*
 			 * If the user specified multiple selection-criteria,
 			 * then keep any process matched by the inclusive OR
@@ -629,7 +639,7 @@ main(int argc, char *argv[])
 			 */
 			if (pidlist.count > 0) {
 				for (elem = 0; elem < pidlist.count; elem++)
-					if (kp->ki_pid == pidlist.l.pids[elem])
+					if (kp->kp_proc.p_pid == pidlist.l.pids[elem])
 						goto keepit;
 			}
 			/*
@@ -638,47 +648,44 @@ main(int argc, char *argv[])
 			 * a controlling terminal.
 			 */
 			if (xkeep == 0) {
-				if ((kp->ki_tdev == NODEV ||
-				    (kp->ki_flag & P_CONTROLT) == 0))
+				if ((kp->kp_eproc.e_tdev == NODEV ||
+				    (kp->kp_proc.p_flag & P_CONTROLT) == 0))
 					continue;
 			}
-			if (nselectors == 0)
+			if (all || nselectors == 0)
 				goto keepit;
 			if (gidlist.count > 0) {
 				for (elem = 0; elem < gidlist.count; elem++)
-					if (kp->ki_rgid == gidlist.l.gids[elem])
-						goto keepit;
-			}
-			if (jidlist.count > 0) {
-				for (elem = 0; elem < jidlist.count; elem++)
-					if (kp->ki_jid == jidlist.l.jids[elem])
+					if (kp->kp_eproc.e_pcred.p_rgid == gidlist.l.gids[elem])
 						goto keepit;
 			}
 			if (pgrplist.count > 0) {
 				for (elem = 0; elem < pgrplist.count; elem++)
-					if (kp->ki_pgid ==
+					if (kp->kp_eproc.e_pgid ==
 					    pgrplist.l.pids[elem])
 						goto keepit;
 			}
 			if (ruidlist.count > 0) {
 				for (elem = 0; elem < ruidlist.count; elem++)
-					if (kp->ki_ruid ==
+					if (kp->kp_eproc.e_pcred.p_ruid ==
 					    ruidlist.l.uids[elem])
 						goto keepit;
 			}
+#if 0
 			if (sesslist.count > 0) {
 				for (elem = 0; elem < sesslist.count; elem++)
 					if (kp->ki_sid == sesslist.l.pids[elem])
 						goto keepit;
 			}
+#endif
 			if (ttylist.count > 0) {
 				for (elem = 0; elem < ttylist.count; elem++)
-					if (kp->ki_tdev == ttylist.l.ttys[elem])
+					if (kp->kp_eproc.e_tdev == ttylist.l.ttys[elem])
 						goto keepit;
 			}
 			if (uidlist.count > 0) {
 				for (elem = 0; elem < uidlist.count; elem++)
-					if (kp->ki_uid == uidlist.l.uids[elem])
+					if (kp->kp_eproc.e_ucred.cr_uid == uidlist.l.uids[elem])
 						goto keepit;
 			}
 			/*
@@ -690,120 +697,83 @@ main(int argc, char *argv[])
 		keepit:
 			next_KINFO = &kinfo[nkept];
 			next_KINFO->ki_p = kp;
-			next_KINFO->ki_d.level = 0;
-			next_KINFO->ki_d.prefix = NULL;
+			get_task_info(next_KINFO);
+#ifndef __APPLE__
 			next_KINFO->ki_pcpu = getpcpu(next_KINFO);
 			if (sortby == SORTMEM)
 				next_KINFO->ki_memsize = kp->ki_tsize +
 				    kp->ki_dsize + kp->ki_ssize;
+#endif /* !__APPLE__ */
 			if (needuser)
 				saveuser(next_KINFO);
+			dynsizevars(next_KINFO);
 			nkept++;
 		}
 	}
 
-	if (nkept == 0) {
-		printheader();
-		if (xo_finish() < 0)
-			xo_err(1, "stdout");
+	sizevars();
+
+	/*
+	 * print header
+	 */
+	printheader();
+	if (nkept == 0)
 		exit(1);
-	}
 
 	/*
 	 * sort proc list
 	 */
 	qsort(kinfo, nkept, sizeof(KINFO), pscomp);
-
 	/*
-	 * We want things in descendant order
+	 * For each process, call each variable output function.
 	 */
-	if (descendancy)
-		descendant_sort(kinfo, nkept);
-
-
-	/*
-	 * Prepare formatted output.
-	 */
-	for (i = 0; i < nkept; i++)
-		format_output(&kinfo[i]);
-
-	/*
-	 * Print header.
-	 */
-	xo_open_container("process-information");
-	printheader();
-	if (xo_get_style(NULL) != XO_STYLE_TEXT)
-		termwidth = UNLIMITED;
-
-	/*
-	 * Output formatted lines.
-	 */
-	xo_open_list("process");
 	for (i = lineno = 0; i < nkept; i++) {
-		linelen = 0;
-		xo_open_instance("process");
-		STAILQ_FOREACH(vent, &varlist, next_ve) {
-			ks = STAILQ_FIRST(&kinfo[i].ki_ks);
-			STAILQ_REMOVE_HEAD(&kinfo[i].ki_ks, ks_next);
-			/* Truncate rightmost column if necessary.  */
-			fwidthmax = _POSIX2_LINE_MAX;
-			if (STAILQ_NEXT(vent, next_ve) == NULL &&
-			   termwidth != UNLIMITED && ks->ks_str != NULL) {
-				left = termwidth - linelen;
-				if (left > 0 && left < (int)strlen(ks->ks_str))
-					fwidthmax = left;
+		if(mflg) {
+			print_all_thread = 1;
+			for(j=0; j < kinfo[i].thread_count; j++) {
+			print_thread_num = j;
+			STAILQ_FOREACH(vent, &varlist, next_ve) {
+				(vent->var->oproc)(&kinfo[i], vent);
+				if (STAILQ_NEXT(vent, next_ve) != NULL)
+					(void)putchar(' ');
 			}
 
-			str = ks->ks_str;
-			if (str == NULL)
-				str = "-";
-			/* No padding for the last column, if it's LJUST. */
-			fwidthmin = (xo_get_style(NULL) != XO_STYLE_TEXT ||
-			    (STAILQ_NEXT(vent, next_ve) == NULL &&
-			    (vent->var->flag & LJUST))) ? 0 : vent->width;
-			snprintf(fmtbuf, sizeof(fmtbuf), "{:%s/%%%s%d..%dhs}",
-			    vent->var->field ? vent->var->field : vent->var->name,
-			    (vent->var->flag & LJUST) ? "-" : "",
-			    fwidthmin, fwidthmax);
-			xo_emit(fmtbuf, str);
-			linelen += fwidthmin;
-
-			if (ks->ks_str != NULL) {
-				free(ks->ks_str);
-				ks->ks_str = NULL;
+			(void)putchar('\n');
+			if (prtheader && lineno++ == prtheader - 4) {
+				(void)putchar('\n');
+				printheader();
+				lineno = 0;
 			}
-			free(ks);
-			ks = NULL;
-
-			if (STAILQ_NEXT(vent, next_ve) != NULL) {
-				xo_emit("{P: }");
-				linelen++;
 			}
-		}
-	        xo_emit("\n");
-		xo_close_instance("process");
-		if (prtheader && lineno++ == prtheader - 4) {
-			xo_emit("\n");
-			printheader();
-			lineno = 0;
+			print_all_thread = 0;
+		} else {
+			STAILQ_FOREACH(vent, &varlist, next_ve) {
+				(vent->var->oproc)(&kinfo[i], vent);
+				if (STAILQ_NEXT(vent, next_ve) != NULL)
+					(void)putchar(' ');
+			}
+
+			(void)putchar('\n');
+			if (prtheader && lineno++ == prtheader - 4) {
+				(void)putchar('\n');
+				printheader();
+				lineno = 0;
+			}
 		}
 	}
-	xo_close_list("process");
-	xo_close_container("process-information");
-	if (xo_finish() < 0)
-		xo_err(1, "stdout");
-
+	for (i = 0; i < nkept; i++) {
+		if (kinfo[i].invalid_tinfo == 0 && kinfo[i].thread_count)
+			free(kinfo[i].thval);	
+	}
+	free(kprocbuf);
+	free(kinfo);
 	free_list(&gidlist);
-	free_list(&jidlist);
 	free_list(&pidlist);
 	free_list(&pgrplist);
 	free_list(&ruidlist);
 	free_list(&sesslist);
 	free_list(&ttylist);
 	free_list(&uidlist);
-	for (i = 0; i < nkept; i++)
-		free(kinfo[i].ki_d.prefix);
-	free(kinfo);
 
 	exit(eval);
 }
@@ -818,9 +788,9 @@ addelem_gid(struct listinfo *inf, const char *elem)
 
 	if (*elem == '\0' || strlen(elem) >= MAXLOGNAME) {
 		if (*elem == '\0')
-			xo_warnx("Invalid (zero-length) %s name", inf->lname);
+			warnx("Invalid (zero-length) %s name", inf->lname);
 		else
-			xo_warnx("%s name too long: %s", inf->lname, elem);
+			warnx("%s name too long: %s", inf->lname, elem);
 		optfatal = 1;
 		return (0);		/* Do not add this value. */
 	}
@@ -845,7 +815,7 @@ addelem_gid(struct listinfo *inf, const char *elem)
 	if (grp == NULL)
 		grp = getgrnam(elem);
 	if (grp == NULL) {
-		xo_warnx("No %s %s '%s'", inf->lname, nameorID, elem);
+		warnx("No %s %s '%s'", inf->lname, nameorID, elem);
 		optfatal = 1;
 		return (0);
 	}
@@ -855,30 +825,7 @@ addelem_gid(struct listinfo *inf, const char *elem)
 	return (1);
 }
 
-static int
-addelem_jid(struct listinfo *inf, const char *elem)
-{
-	int tempid;
-
-	if (*elem == '\0') {
-		xo_warnx("Invalid (zero-length) jail id");
-		optfatal = 1;
-		return (0);		/* Do not add this value. */
-	}
-
-	tempid = jail_getid(elem);
-	if (tempid < 0) {
-		xo_warnx("Invalid %s: %s", inf->lname, elem);
-		optfatal = 1;
-		return (0);
-	}
-
-	if (inf->count >= inf->maxcount)
-		expand_list(inf);
-	inf->l.jids[(inf->count)++] = tempid;
-	return (1);
-}
-
+#define	BSD_PID_MAX	99999		/* Copy of PID_MAX from sys/proc.h. */
 static int
 addelem_pid(struct listinfo *inf, const char *elem)
 {
@@ -886,7 +833,7 @@ addelem_pid(struct listinfo *inf, const char *elem)
 	long tempid;
 
 	if (*elem == '\0') {
-		xo_warnx("Invalid (zero-length) process id");
+		warnx("Invalid (zero-length) process id");
 		optfatal = 1;
 		return (0);		/* Do not add this value. */
 	}
@@ -894,10 +841,10 @@ addelem_pid(struct listinfo *inf, const char *elem)
 	errno = 0;
 	tempid = strtol(elem, &endp, 10);
 	if (*endp != '\0' || tempid < 0 || elem == endp) {
-		xo_warnx("Invalid %s: %s", inf->lname, elem);
+		warnx("Invalid %s: %s", inf->lname, elem);
 		errno = ERANGE;
-	} else if (errno != 0 || tempid > pid_max) {
-		xo_warnx("%s too large: %s", inf->lname, elem);
+	} else if (errno != 0 || tempid > BSD_PID_MAX) {
+		warnx("%s too large: %s", inf->lname, elem);
 		errno = ERANGE;
 	}
 	if (errno == ERANGE) {
@@ -909,12 +856,13 @@ addelem_pid(struct listinfo *inf, const char *elem)
 	inf->l.pids[(inf->count)++] = tempid;
 	return (1);
 }
+#undef	BSD_PID_MAX
 
-/*
+/*-
  * The user can specify a device via one of three formats:
- *     1) fully qualified, e.g.:     /dev/ttyp0 /dev/console	/dev/pts/0
- *     2) missing "/dev", e.g.:      ttyp0      console		pts/0
- *     3) two-letters, e.g.:         p0         co		0
+ *     1) fully qualified, e.g.:     /dev/ttyp0 /dev/console
+ *     2) missing "/dev", e.g.:      ttyp0      console
+ *     3) two-letters, e.g.:         p0         co
  *        (matching letters that would be seen in the "TT" column)
  */
 static int
@@ -922,11 +870,10 @@ addelem_tty(struct listinfo *inf, const char *elem)
 {
 	const char *ttypath;
 	struct stat sb;
-	char pathbuf[PATH_MAX], pathbuf2[PATH_MAX], pathbuf3[PATH_MAX];
+	char pathbuf[PATH_MAX], pathbuf2[PATH_MAX];
 
 	ttypath = NULL;
 	pathbuf2[0] = '\0';
-	pathbuf3[0] = '\0';
 	switch (*elem) {
 	case '/':
 		ttypath = elem;
@@ -943,8 +890,6 @@ addelem_tty(struct listinfo *inf, const char *elem)
 		ttypath = pathbuf;
 		if (strncmp(pathbuf, _PATH_TTY, strlen(_PATH_TTY)) == 0)
 			break;
-		if (strncmp(pathbuf, _PATH_PTS, strlen(_PATH_PTS)) == 0)
-			break;
 		if (strcmp(pathbuf, _PATH_CONSOLE) == 0)
 			break;
 		/* Check to see if /dev/tty${elem} exists */
@@ -952,35 +897,30 @@ addelem_tty(struct listinfo *inf, const char *elem)
 		strlcat(pathbuf2, elem, sizeof(pathbuf2));
 		if (stat(pathbuf2, &sb) == 0 && S_ISCHR(sb.st_mode)) {
 			/* No need to repeat stat() && S_ISCHR() checks */
-			ttypath = NULL;
-			break;
-		}
-		/* Check to see if /dev/pts/${elem} exists */
-		strlcpy(pathbuf3, _PATH_PTS, sizeof(pathbuf3));
-		strlcat(pathbuf3, elem, sizeof(pathbuf3));
-		if (stat(pathbuf3, &sb) == 0 && S_ISCHR(sb.st_mode)) {
-			/* No need to repeat stat() && S_ISCHR() checks */
-			ttypath = NULL;
+			ttypath = NULL;	
 			break;
 		}
 		break;
 	}
 	if (ttypath) {
+#ifdef __APPLE__
+		if (access(ttypath, F_OK) == -1 || stat(ttypath, &sb) == -1) {
+#else
 		if (stat(ttypath, &sb) == -1) {
-			if (pathbuf3[0] != '\0')
-				xo_warn("%s, %s, and %s", pathbuf3, pathbuf2,
-				    ttypath);
+#endif
+			if (pathbuf2[0] != '\0')
+				warn("%s and %s", pathbuf2, ttypath);
 			else
-				xo_warn("%s", ttypath);
+				warn("%s", ttypath);
 			optfatal = 1;
 			return (0);
 		}
 		if (!S_ISCHR(sb.st_mode)) {
-			if (pathbuf3[0] != '\0')
-				xo_warnx("%s, %s, and %s: Not a terminal",
-				    pathbuf3, pathbuf2, ttypath);
+			if (pathbuf2[0] != '\0')
+				warnx("%s and %s: Not a terminal", pathbuf2,
+				    ttypath);
 			else
-				xo_warnx("%s: Not a terminal", ttypath);
+				warnx("%s: Not a terminal", ttypath);
 			optfatal = 1;
 			return (0);
 		}
@@ -1000,9 +940,9 @@ addelem_uid(struct listinfo *inf, const char *elem)
 
 	if (*elem == '\0' || strlen(elem) >= MAXLOGNAME) {
 		if (*elem == '\0')
-			xo_warnx("Invalid (zero-length) %s name", inf->lname);
+			warnx("Invalid (zero-length) %s name", inf->lname);
 		else
-			xo_warnx("%s name too long: %s", inf->lname, elem);
+			warnx("%s name too long: %s", inf->lname, elem);
 		optfatal = 1;
 		return (0);		/* Do not add this value. */
 	}
@@ -1012,12 +952,12 @@ addelem_uid(struct listinfo *inf, const char *elem)
 		errno = 0;
 		bigtemp = strtoul(elem, &endp, 10);
 		if (errno != 0 || *endp != '\0' || bigtemp > UID_MAX)
-			xo_warnx("No %s named '%s'", inf->lname, elem);
+			warnx("No %s named '%s'", inf->lname, elem);
 		else {
 			/* The string is all digits, so it might be a userID. */
 			pwd = getpwuid((uid_t)bigtemp);
 			if (pwd == NULL)
-				xo_warnx("No %s name or ID matches '%s'",
+				warnx("No %s name or ID matches '%s'",
 				    inf->lname, elem);
 		}
 	}
@@ -1044,8 +984,8 @@ add_list(struct listinfo *inf, const char *argp)
 	int toolong;
 	char elemcopy[PATH_MAX];
 
-	if (*argp == '\0')
-		inf->addelem(inf, argp);
+	if (*argp == 0)
+		inf->addelem(inf, elemcopy);
 	while (*argp != '\0') {
 		while (*argp != '\0' && strchr(W_SEP, *argp) != NULL)
 			argp++;
@@ -1074,7 +1014,7 @@ add_list(struct listinfo *inf, const char *argp)
 			while (*argp != '\0' && strchr(W_SEP T_SEP,
 			    *argp) == NULL)
 				argp++;
-			xo_warnx("Value too long: %.*s", (int)(argp - savep),
+			warnx("Value too long: %.*s", (int)(argp - savep),
 			    savep);
 			optfatal = 1;
 		}
@@ -1087,119 +1027,13 @@ add_list(struct listinfo *inf, const char *argp)
 			argp++;
 		if (*argp != '\0' && strchr(T_SEP, *argp) != NULL) {
 			argp++;
+#if 0
 			/* Catch case where string ended with a comma. */
 			if (*argp == '\0')
 				inf->addelem(inf, argp);
+#endif /* 0 */
 		}
 	}
-}
-
-static void
-descendant_sort(KINFO *ki, int items)
-{
-	int dst, lvl, maxlvl, n, ndst, nsrc, siblings, src;
-	unsigned char *path;
-	KINFO kn;
-
-	/*
-	 * First, sort the entries by descendancy, tracking the descendancy
-	 * depth in the ki_d.level field.
-	 */
-	src = 0;
-	maxlvl = 0;
-	while (src < items) {
-		if (ki[src].ki_d.level) {
-			src++;
-			continue;
-		}
-		for (nsrc = 1; src + nsrc < items; nsrc++)
-			if (!ki[src + nsrc].ki_d.level)
-				break;
-
-		for (dst = 0; dst < items; dst++) {
-			if (ki[dst].ki_p->ki_pid == ki[src].ki_p->ki_pid)
-				continue;
-			if (ki[dst].ki_p->ki_pid == ki[src].ki_p->ki_ppid)
-				break;
-		}
-
-		if (dst == items) {
-			src += nsrc;
-			continue;
-		}
-
-		for (ndst = 1; dst + ndst < items; ndst++)
-			if (ki[dst + ndst].ki_d.level <= ki[dst].ki_d.level)
-				break;
-
-		for (n = src; n < src + nsrc; n++) {
-			ki[n].ki_d.level += ki[dst].ki_d.level + 1;
-			if (maxlvl < ki[n].ki_d.level)
-				maxlvl = ki[n].ki_d.level;
-		}
-
-		while (nsrc) {
-			if (src < dst) {
-				kn = ki[src];
-				memmove(ki + src, ki + src + 1,
-				    (dst - src + ndst - 1) * sizeof *ki);
-				ki[dst + ndst - 1] = kn;
-				nsrc--;
-				dst--;
-				ndst++;
-			} else if (src != dst + ndst) {
-				kn = ki[src];
-				memmove(ki + dst + ndst + 1, ki + dst + ndst,
-				    (src - dst - ndst) * sizeof *ki);
-				ki[dst + ndst] = kn;
-				ndst++;
-				nsrc--;
-				src++;
-			} else {
-				ndst += nsrc;
-				src += nsrc;
-				nsrc = 0;
-			}
-		}
-	}
-
-	/*
-	 * Now populate ki_d.prefix (instead of ki_d.level) with the command
-	 * prefix used to show descendancies.
-	 */
-	path = calloc((maxlvl + 7) / 8, sizeof(unsigned char));
-	for (src = 0; src < items; src++) {
-		if ((lvl = ki[src].ki_d.level) == 0) {
-			ki[src].ki_d.prefix = NULL;
-			continue;
-		}
-		if ((ki[src].ki_d.prefix = malloc(lvl * 2 + 1)) == NULL)
-			xo_errx(1, "malloc failed");
-		for (n = 0; n < lvl - 2; n++) {
-			ki[src].ki_d.prefix[n * 2] =
-			    path[n / 8] & 1 << (n % 8) ? '|' : ' ';
-			ki[src].ki_d.prefix[n * 2 + 1] = ' ';
-		}
-		if (n == lvl - 2) {
-			/* Have I any more siblings? */
-			for (siblings = 0, dst = src + 1; dst < items; dst++) {
-				if (ki[dst].ki_d.level > lvl)
-					continue;
-				if (ki[dst].ki_d.level == lvl)
-					siblings = 1;
-				break;
-			}
-			if (siblings)
-				path[n / 8] |= 1 << (n % 8);
-			else
-				path[n / 8] &= ~(1 << (n % 8));
-			ki[src].ki_d.prefix[n * 2] = siblings ? '|' : '`';
-			ki[src].ki_d.prefix[n * 2 + 1] = '-';
-			n++;
-		}
-		strcpy(ki[src].ki_d.prefix + n * 2, "- ");
-	}
-	free(path);
 }
 
 static void *
@@ -1212,7 +1046,7 @@ expand_list(struct listinfo *inf)
 	newlist = realloc(inf->l.ptr, newmax * inf->elemsize);
 	if (newlist == NULL) {
 		free(inf->l.ptr);
-		xo_errx(1, "realloc to %d %ss failed", newmax, inf->lname);
+		errx(1, "realloc to %d %ss failed", newmax, inf->lname);
 	}
 	inf->maxcount = newmax;
 	inf->l.ptr = newlist;
@@ -1245,181 +1079,169 @@ init_list(struct listinfo *inf, addelem_rtn artn, int elemsize,
 }
 
 VARENT *
-find_varentry(const char *name)
+find_varentry(VAR *v)
 {
 	struct varent *vent;
 
 	STAILQ_FOREACH(vent, &varlist, next_ve) {
-		if (strcmp(vent->var->name, name) == 0)
+		if (strcmp(vent->var->name, v->name) == 0)
 			return vent;
 	}
 	return NULL;
 }
 
 static void
-scan_vars(struct keyword_info *const keywords_info)
+scanvars(void)
 {
 	struct varent *vent;
-	const VAR *v;
+	VAR *v;
 
 	STAILQ_FOREACH(vent, &varlist, next_ve) {
 		v = vent->var;
+		if (v->flag & DSIZ) {
+			v->dwidth = v->width;
+			v->width = 0;
+		}
 		if (v->flag & USER)
 			needuser = 1;
 		if (v->flag & COMM)
 			needcomm = 1;
-		if ((vent->flags & VE_KEEP) != 0)
-			keywords_info[aliased_keyword_index(v)].flags |=
-			    KWI_HAS_MUST_KEEP_COLUMN;
-	}
-}
-
-/*
- * For each explicitly requested keyword, remove all the same keywords
- * from "canned" displays.  If the same keyword appears multiple times
- * only in "canned displays", then keep the first (leftmost) occurence
- * only (with the reasoning that columns requested first are the most
- * important as their positions catch the eye more).
- */
-static void
-remove_redundant_columns(struct keyword_info *const keywords_info)
-{
-	struct varent *prev_vent, *vent, *next_vent;
-
-	prev_vent = NULL;
-	STAILQ_FOREACH_SAFE(vent, &varlist, next_ve, next_vent) {
-		const VAR *const v = vent->var;
-		struct keyword_info *const kwi =
-		    &keywords_info[aliased_keyword_index(v)];
-
-		/*
-		 * If the current column is not marked as to absolutely keep,
-		 * and we have either already output one with the same keyword
-		 * or know we will output one later, remove it.
-		 */
-		if ((vent->flags & VE_KEEP) == 0 &&
-		    (kwi->flags & (KWI_HAS_MUST_KEEP_COLUMN | KWI_SEEN)) != 0) {
-			if (prev_vent == NULL)
-				STAILQ_REMOVE_HEAD(&varlist, next_ve);
-			else
-				STAILQ_REMOVE_AFTER(&varlist, prev_vent,
-				    next_ve);
-		} else
-			prev_vent = vent;
-
-
-		kwi->flags |= KWI_SEEN;
 	}
 }
 
 static void
-format_output(KINFO *ki)
+dynsizevars(KINFO *ki)
 {
 	struct varent *vent;
-	const VAR *v;
-	KINFO_STR *ks;
-	char *str;
-	u_int len;
+	VAR *v;
+	int i;
 
-	STAILQ_INIT(&ki->ki_ks);
 	STAILQ_FOREACH(vent, &varlist, next_ve) {
 		v = vent->var;
-		str = (v->oproc)(ki, vent);
-		ks = malloc(sizeof(*ks));
-		if (ks == NULL)
-			xo_errx(1, "malloc failed");
-		ks->ks_str = str;
-		STAILQ_INSERT_TAIL(&ki->ki_ks, ks, ks_next);
-		if (str != NULL) {
-			len = strlen(str);
-		} else
-			len = 1; /* "-" */
-		if (vent->width < len)
-			vent->width = len;
+		if (!(v->flag & DSIZ))
+			continue;
+		i = (v->sproc)( ki);
+		if (v->width < i)
+			v->width = i;
+		if (v->width > v->dwidth)
+			v->width = v->dwidth;
 	}
 }
 
+static void
+sizevars(void)
+{
+	struct varent *vent;
+	VAR *v;
+	int i;
+
+	STAILQ_FOREACH(vent, &varlist, next_ve) {
+		v = vent->var;
+		i = strlen(vent->header);
+		if (v->width < i)
+			v->width = i;
+		totwidth += v->width + 1;	/* +1 for space */
+	}
+	totwidth--;
+}
+
+#ifndef __APPLE__
 static const char *
 fmt(char **(*fn)(kvm_t *, const struct kinfo_proc *, int), KINFO *ki,
-    char *comm, char *thread, int maxlen)
+    char *comm, int maxlen)
 {
 	const char *s;
 
-	s = fmt_argv((*fn)(kd, ki->ki_p, termwidth), comm,
-	    showthreads && ki->ki_p->ki_numthreads > 1 ? thread : NULL, maxlen);
+	s = fmt_argv((*fn)(kd, ki->ki_p, termwidth), comm, maxlen);
 	return (s);
 }
+#endif /* !__APPLE__ */
+
+#define UREADOK(ki)	(forceuread || (KI_PROC(ki)->p_flag & P_INMEM))
 
 static void
 saveuser(KINFO *ki)
 {
-	char tdname[COMMLEN + 1];
+	struct usave *usp;
+#if FIXME
+	struct user *u_addr = (struct user *)USRSTACK;
+#endif /* FIXME */
 
-	ki->ki_valid = 1;
-
+	usp = &ki->ki_u;
+#if FIXME
+	if (UREADOK(ki) && kvm_uread(kd, KI_PROC(ki), (unsigned long)&u_addr->u_stats,
+	    (char *)&pstats, sizeof(pstats)) == sizeof(pstats)) 
+	{
+		/*
+		 * The u-area might be swapped out, and we can't get
+		 * at it because we have a crashdump and no swap.
+		 * If it's here fill in these fields, otherwise, just
+		 * leave them 0.
+		 */
+		usp->u_start = pstats.p_start;
+		usp->u_ru = pstats.p_ru;
+		usp->u_cru = pstats.p_cru;
+		usp->u_valid = 1;
+	} else
+		usp->u_valid = 0;
+#else /* FIXME */
+		usp->u_valid = 0;
+#endif /* FIXME */
 	/*
 	 * save arguments if needed
 	 */
-	if (needcomm) {
-		if (ki->ki_p->ki_stat == SZOMB) {
-			ki->ki_args = strdup("<defunct>");
-		} else {
-			(void)snprintf(tdname, sizeof(tdname), "%s%s",
-			    ki->ki_p->ki_tdname, ki->ki_p->ki_moretdname);
-			ki->ki_args = fmt(kvm_getargv, ki,
-			    ki->ki_p->ki_comm, tdname, COMMLEN * 2 + 1);
-		}
-		if (ki->ki_args == NULL)
-			xo_errx(1, "malloc failed");
-	} else {
-		ki->ki_args = NULL;
-	}
-	if (needenv) {
-		ki->ki_env = fmt(kvm_getenvv, ki, (char *)NULL,
-		    (char *)NULL, 0);
-		if (ki->ki_env == NULL)
-			xo_errx(1, "malloc failed");
-	} else {
-		ki->ki_env = NULL;
-	}
+#if FIXME
+	if (needcomm && UREADOK(ki)) {
+	    ki->ki_args = fmt(kvm_getargv, ki, KI_PROC(ki)->p_comm,
+		MAXCOMLEN);
+	} else if (needcomm) {
+	    ki->ki_args = malloc(strlen(KI_PROC(ki)->p_comm) + 3);
+	    sprintf(ki->ki_args, "(%s)", KI_PROC(ki)->p_comm);
+    } else {
+	    ki->ki_args = NULL;
+    }
+#else /* FIXME */
+	    ki->ki_args = malloc(strlen(KI_PROC(ki)->p_comm) + 3);
+	    sprintf(ki->ki_args, "%s", KI_PROC(ki)->p_comm);
+	    //ki->ki_args = malloc(10);
+	    //strcpy(ki->ki_args, "()");
+#endif /* FIXME */
+#if FIXME
+   if (needenv && UREADOK(ki)) {
+	    ki->ki_env = fmt(kvm_getenvv, ki, (char *)NULL, 0);
+    } else if (needenv) {
+	    ki->ki_env = malloc(3);
+	    strcpy(ki->ki_env, "()");
+    } else {
+	    ki->ki_env = NULL;
+    }
+#else /* FIXME */
+	    ki->ki_env = malloc(10);
+	    strcpy(ki->ki_env, "");
+#endif /* FIXME */
 }
-
-/* A macro used to improve the readability of pscomp(). */
-#define	DIFF_RETURN(a, b, field) do {	\
-	if ((a)->field != (b)->field)	\
-		return (((a)->field < (b)->field) ? -1 : 1);	\
-} while (0)
 
 static int
 pscomp(const void *a, const void *b)
 {
-	const KINFO *ka, *kb;
+	int i;
+#if FIXME
+#define VSIZE(k) (KI_EPROC(k)->e_vm.vm_dsize + KI_EPROC(k)->e_vm.vm_ssize + \
+		  KI_EPROC(k)->e_vm.vm_tsize)
+#else /* FIXME */
+#define VSIZE(k) ((k)->tasks_info.resident_size)
 
-	ka = a;
-	kb = b;
-	/* SORTCPU and SORTMEM are sorted in descending order. */
+#endif /* FIXME */
+
 	if (sortby == SORTCPU)
-		DIFF_RETURN(kb, ka, ki_pcpu);
+		return (getpcpu((KINFO *)b) - getpcpu((KINFO *)a));
 	if (sortby == SORTMEM)
-		DIFF_RETURN(kb, ka, ki_memsize);
-	/*
-	 * TTY's are sorted in ascending order, except that all NODEV
-	 * processes come before all processes with a device.
-	 */
-	if (ka->ki_p->ki_tdev != kb->ki_p->ki_tdev) {
-		if (ka->ki_p->ki_tdev == NODEV)
-			return (-1);
-		if (kb->ki_p->ki_tdev == NODEV)
-			return (1);
-		DIFF_RETURN(ka, kb, ki_p->ki_tdev);
-	}
-
-	/* PID's and TID's (threads) are sorted in ascending order. */
-	DIFF_RETURN(ka, kb, ki_p->ki_pid);
-	DIFF_RETURN(ka, kb, ki_p->ki_tid);
-	return (0);
+		return (VSIZE((KINFO *)b) - VSIZE((KINFO *)a));
+	i =  KI_EPROC((KINFO *)a)->e_tdev - KI_EPROC((KINFO *)b)->e_tdev;
+	if (i == 0)
+		i = KI_PROC((KINFO *)a)->p_pid - KI_PROC((KINFO *)b)->p_pid;
+	return (i);
 }
-#undef DIFF_RETURN
 
 /*
  * ICK (all for getopt), would rather hide the ugliness
@@ -1433,7 +1255,7 @@ pscomp(const void *a, const void *b)
  * feature is available with the option 'T', which takes no argument.
  */
 static char *
-kludge_oldps_options(const char *optlist, char *origval, const char *nextarg)
+kludge_oldps_options(const char *optlist, char *origval, const char *nextarg, int *u03)
 {
 	size_t len;
 	char *argp, *cp, *newopts, *ns, *optp, *pidp;
@@ -1499,10 +1321,12 @@ kludge_oldps_options(const char *optlist, char *origval, const char *nextarg)
 	 * original value.
 	 */
 	if ((newopts = ns = malloc(len + 3)) == NULL)
-		xo_errx(1, "malloc failed");
+		errx(1, "malloc failed");
 
-	if (*origval != '-')
-		*ns++ = '-';	/* add option flag */
+	if (*origval != '-') {
+		*ns++ = '-';    /* add option flag */
+		*u03 = 0;
+	}
 
 	if (pidp == NULL)
 		strcpy(ns, origval);
@@ -1521,28 +1345,29 @@ kludge_oldps_options(const char *optlist, char *origval, const char *nextarg)
 	return (newopts);
 }
 
-static void
-pidmax_init(void)
+#ifndef __APPLE__
+static int
+check_procfs(void)
 {
-	size_t intsize;
+	struct statfs mnt;
 
-	intsize = sizeof(pid_max);
-	if (sysctlbyname("kern.pid_max", &pid_max, &intsize, NULL, 0) < 0) {
-		xo_warn("unable to read kern.pid_max");
-		pid_max = 99999;
-	}
+	if (statfs("/proc", &mnt) < 0)
+		return (0);
+	if (strcmp(mnt.f_fstypename, "procfs") != 0)
+		return (0);
+	return (1);
 }
+#endif /* !__APPLE__ */
 
-static void __dead2
-usage(void)
+static void
+usage(int u03)
 {
-#define	SINGLE_OPTS	"[-aCcdeHhjlmrSTuvwXxZ]"
+#define	SINGLE_OPTS	"[-AaCcEefhjlMmrSTvwXx]"
 
-	xo_error("%s\n%s\n%s\n%s\n%s\n",
-	    "usage: ps [--libxo] " SINGLE_OPTS " [-O fmt | -o fmt]",
-	    "          [-G gid[,gid...]] [-J jid[,jid...]] [-M core] [-N system]",
+	(void)fprintf(stderr, "%s\n%s\n%s\n%s\n",
+	    "usage: ps " SINGLE_OPTS " [-O fmt | -o fmt] [-G gid[,gid...]]",
+	    (u03 ? "          [-g grp[,grp...]] [-u [uid,uid...]]" : "          [-u]"),
 	    "          [-p pid[,pid...]] [-t tty[,tty...]] [-U user[,user...]]",
-	    "          [-D up | down | both]",
-	    "       ps [--libxo] -L");
+	    "       ps [-L]");
 	exit(1);
 }

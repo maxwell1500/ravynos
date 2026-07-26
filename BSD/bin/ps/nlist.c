@@ -1,6 +1,4 @@
 /*-
- * SPDX-License-Identifier: BSD-3-Clause
- *
  * Copyright (c) 1990, 1993, 1994
  *	The Regents of the University of California.  All rights reserved.
  *
@@ -12,7 +10,7 @@
  * 2. Redistributions in binary form must reproduce the above copyright
  *    notice, this list of conditions and the following disclaimer in the
  *    documentation and/or other materials provided with the distribution.
- * 3. Neither the name of the University nor the names of its contributors
+ * 4. Neither the name of the University nor the names of its contributors
  *    may be used to endorse or promote products derived from this software
  *    without specific prior written permission.
  *
@@ -29,8 +27,20 @@
  * SUCH DAMAGE.
  */
 
+#if 0
+#ifndef lint
+static char sccsid[] = "@(#)nlist.c	8.4 (Berkeley) 4/2/94";
+#endif /* not lint */
+#endif
+
+#include <sys/cdefs.h>
+__FBSDID("$FreeBSD: src/bin/ps/nlist.c,v 1.21 2004/04/06 20:06:49 markm Exp $");
+
 #include <sys/types.h>
 #include <sys/sysctl.h>
+#ifdef __APPLE__
+#include <sys/resource.h>
+#endif
 
 #include <stddef.h>
 
@@ -38,14 +48,29 @@
 
 fixpt_t	ccpu;				/* kernel _ccpu variable */
 int	nlistread;			/* if nlist already read. */
+#ifdef __APPLE__
+uint64_t	mempages;		/* number of pages of phys. memory */
+#else
 unsigned long	mempages;		/* number of pages of phys. memory */
+#endif
 int	fscale;				/* kernel _fscale variable */
 
 int
 donlist(void)
 {
+#ifdef __APPLE__
+	int mib[2];
+#endif
 	size_t oldlen;
 
+#ifdef __APPLE__
+	mib[0] = CTL_HW;
+	mib[1] = HW_MEMSIZE;
+	oldlen = sizeof(mempages);
+	if (sysctl(mib, 2, &mempages, &oldlen, NULL, 0) == -1)
+		return (1);
+	fscale = 100;
+#else
 	oldlen = sizeof(ccpu);
 	if (sysctlbyname("kern.ccpu", &ccpu, &oldlen, NULL, 0) == -1)
 		return (1);
@@ -55,6 +80,7 @@ donlist(void)
 	oldlen = sizeof(mempages);
 	if (sysctlbyname("hw.availpages", &mempages, &oldlen, NULL, 0) == -1)
 		return (1);
+#endif
 	nlistread = 1;
 	return (0);
 }

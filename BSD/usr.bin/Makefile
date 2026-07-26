@@ -7,6 +7,6 @@ LDFLAGS = --sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSION_MIN} \
 
 SUBDIR = basename dirname env false printf sed sw_vers 
 SUBDIR += tail tee time touch true uname users whereis which xargs yes
-#SUBDIR += sort who
+#SUBDIR += id sort who
 
 .include <bsd.subdir.mk>

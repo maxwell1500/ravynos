@@ -1,10 +1,8 @@
-PACKAGE=runtime
-PROG=	ps
-SRCS=	fmt.c keyword.c nlist.c print.c ps.c
+MK_WERROR = no
 
-LIBADD=	m kvm jail xo
-.ifdef PS_CHECK_KEYWORDS
-CFLAGS+=-DPS_CHECK_KEYWORDS
-.endif
+PROG = ps
+SRCS = fmt.c keyword.c nlist.c print.c ps.c tasks.c
+
+CFLAGS += -I${ROOT_SOURCE_DIR}/Kernel/xnu/libsyscall/wrappers/libproc
 
 .include <bsd.prog.mk>
