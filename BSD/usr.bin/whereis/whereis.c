@@ -61,14 +61,13 @@ void usage __P((void));
 int main __P((int, char *[]));
 
 int
-main(argc, argv)
-	int argc;
-	char *argv[];
+main(int argc, char **argv)
 {
 	struct stat sb;
 	size_t len;
 	int ch, sverrno, mib[2];
-	char *p, *t, *std, path[MAXPATHLEN];
+	char *p, *std, path[MAXPATHLEN];
+	const char *t;
 
 	while ((ch = getopt(argc, argv, "")) != -1)
 		switch (ch) {
@@ -105,10 +104,10 @@ main(argc, argv)
 			if ((p = strchr(p, ':')) != NULL) {
 				*p = '\0';
 				if (t == p)
-					t = ".";
+					t = (const char *)".";
 			} else
 				if (strlen(t) == 0)
-					t = ".";
+					t = (const char *)".";
 			(void)snprintf(path, sizeof(path), "%s/%s", t, *argv);
 			if (!stat(path, &sb))
 				(void)printf("%s\n", path);
@@ -120,7 +119,7 @@ main(argc, argv)
 }
 
 void
-usage()
+usage(void)
 {
 
 	(void)fprintf(stderr, "usage: whereis program [...]\n");
