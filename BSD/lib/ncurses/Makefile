@@ -1,5 +1,7 @@
 
-all:
+all: ${.OBJDIR}/lib/libncurses.6.dylib
+
+${.OBJDIR}/lib/libncurses.6.dylib: ${.CURDIR}/Makefile
 	CC=${CC} CXX=${CXX} \
 	CFLAGS="--sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSION_MIN}" \
 	CXXFLAGS="--sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSION_MIN}" \
