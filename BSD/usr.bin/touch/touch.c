@@ -190,11 +190,11 @@ main(int argc, char *argv[])
 		 */
 		if (Aflag) {
 			if (aflag) {
-				ts[0] = sb.st_atim;
+				ts[0] = sb.st_atimespec;
 				ts[0].tv_sec += Aflag;
 			}
 			if (mflag) {
-				ts[1] = sb.st_mtim;
+				ts[1] = sb.st_mtimespec;
 				ts[1].tv_sec += Aflag;
 			}
 		}
@@ -392,8 +392,8 @@ stime_file(const char *fname, struct timespec *tsp)
 
 	if (stat(fname, &sb))
 		err(1, "%s", fname);
-	tsp[0] = sb.st_atim;
-	tsp[1] = sb.st_mtim;
+	tsp[0] = sb.st_atimespec;
+	tsp[1] = sb.st_mtimespec;
 }
 
 static void

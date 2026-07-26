@@ -1,7 +1,4 @@
-.include <src.opts.mk>
-
 PROG=	touch
-HAS_TESTS=
-SUBDIR.${MK_TESTS}=	tests
+CFLAGS += -D_DARWIN_C_SOURCE
 
 .include <bsd.prog.mk>
