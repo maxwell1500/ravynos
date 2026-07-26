@@ -70,9 +70,7 @@ static void usage __P((void));
     (PRINT_SYSNAME|PRINT_NODENAME|PRINT_RELEASE|PRINT_VERSION|PRINT_MACHINE)
 
 int
-main(argc, argv) 
-	int argc;
-	char **argv;
+main(int argc, char **argv) 
 {
 	struct utsname u;
 #ifndef __APPLE__
@@ -201,7 +199,7 @@ main(argc, argv)
 }
 
 static void
-usage()
+usage(void)
 {
 	fprintf(stderr, "usage: uname [-amnprsv]\n");
 	exit(EXIT_FAILURE);
