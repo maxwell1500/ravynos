@@ -2468,6 +2468,24 @@ XPC_EXPORT XPC_MALLOC XPC_RETURNS_RETAINED XPC_WARN_RESULT XPC_NONNULL_ALL
 xpc_connection_t
 xpc_dictionary_create_connection(xpc_object_t xdict, const char *key);
 
+/*!
+ * @function xpc_dictionary_dup_fd
+ * Creates a file descriptor from a dictionary directly.
+ *
+ * @param xdict The dictionary object to be examined.
+ * @param key   The key whose value is obtained.
+ *
+ * @return
+ * A new file descriptor created from the value of the specified key. You
+ * are responsible for closing this descriptor. -1 is returned if the
+ * specified key is not a file descriptor value or if there is no value for
+ * the specified key.
+ */
+__OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0)
+XPC_EXPORT XPC_WARN_RESULT XPC_NONNULL_ALL
+int
+xpc_dictionary_dup_fd(xpc_object_t dictionary, const char *key);
+
 #pragma mark Runtime
 /*!
  * @function xpc_main

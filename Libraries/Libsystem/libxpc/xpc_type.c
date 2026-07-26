@@ -339,6 +339,30 @@ xpc_data_get_bytes(xpc_object_t xdata, void *buffer, size_t off, size_t length)
 }
 
 xpc_object_t
+xpc_fd_create(int fd)
+{
+	xpc_u val;
+
+	val.fd = fd;
+	return _xpc_prim_create(_XPC_TYPE_FD, val, 1);
+}
+
+int
+xpc_fd_dup(xpc_object_t xfd)
+{
+	struct xpc_object *xo;
+
+	xo = xfd;
+	if (xo == NULL)
+		return -1;
+
+	if (xo->xo_xpc_type == _XPC_TYPE_FD)
+		return dup(xo->xo_fd);
+
+	return (-1);
+}
+
+xpc_object_t
 xpc_string_create(const char *string)
 {
 	xpc_u val;

@@ -419,3 +419,13 @@ xpc_create_from_plist(uint8_t *buf, size_t length)
 {
     return NULL; /* FIXME: stub */
 }
+
+int
+xpc_dictionary_dup_fd(xpc_object_t dictionary, const char *key)
+{
+    xpc_object_t obj = xpc_dictionary_get_value(dictionary, key);
+    if (obj == NULL) // not found or empty value
+        return -1;
+    return xpc_fd_dup(obj);
+}
+
