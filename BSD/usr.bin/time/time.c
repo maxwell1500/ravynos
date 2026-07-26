@@ -58,15 +58,13 @@ __RCSID("$NetBSD: time.c,v 1.9 1997/10/20 03:28:21 lukem Exp $");
 #include <langinfo.h>
 #include <locale.h>
 
-int lflag;
-int portableflag;
+static int lflag;
+static int portableflag;
 
 int	main __P((int, char **));
 
 int
-main(argc, argv)
-	int argc;
-	char **argv;
+main(int argc, char **argv)
 {
 	int pid;
 	int ch, status;
@@ -123,7 +121,7 @@ main(argc, argv)
 
 		radix = nl_langinfo(RADIXCHAR);
 		if (!radix || radix[0] == '\0') {
-			radix = ".";
+			radix = (char *)((uintptr_t)"."); // de-const-ify
 		}
 
 		fprintf (stderr, "real %9ld%s%02ld\n",
