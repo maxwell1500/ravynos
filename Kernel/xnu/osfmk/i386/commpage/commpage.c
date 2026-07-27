@@ -388,11 +388,16 @@ commpage_init_cpu_capabilities( void )
 		    CPUID_LEAF7_FEATURE_AVX512VPCDQ);
 	}
 
-	uint64_t misc_enable = rdmsr64(MSR_IA32_MISC_ENABLE);
-	setif(bits, kHasENFSTRG, (misc_enable & 1ULL) &&
-	    (cpuid_leaf7_features() &
-	    CPUID_LEAF7_FEATURE_ERMS));
+	/* Adapted patch from Samuel Zormeister (PureDarwin) */
+	i386_cpu_info_t *infop = cpuid_info();
 
+	/* MSR_IA32_MISC_ENABLE != present on AMD */
+	if (!strncmp(infop->cpuid_vendor, CPUID_VID_INTEL, sizeof(infop->cpuid_vendor))) {
+	    uint64_t misc_enable = rdmsr64(MSR_IA32_MISC_ENABLE);
+	    setif(bits, kHasENFSTRG, (misc_enable & 1ULL) &&
+        	(cpuid_leaf7_features() &
+        	CPUID_LEAF7_FEATURE_ERMS));
+	}
 	_cpu_capabilities = bits;               // set kernel version for use by drivers etc
 }
 
