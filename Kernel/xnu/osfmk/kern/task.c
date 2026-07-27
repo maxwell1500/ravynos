@@ -2107,7 +2107,7 @@ task_deliver_crash_notification(
 
                 x86_saved_state64_t *ss = USER_REGS64(th_iter);
 
-                if (ss == NULL)
+                if (ss == NULL || task->mach_header_vm_address == 0)
                         continue;
 
                 printf("thread %lx on cpu%d - err=%016llx. loaded @%016llx\n",
