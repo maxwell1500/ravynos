@@ -169,7 +169,7 @@ public:
     void setName(pint_t newName) { P::setP(name, newName); }
 
     struct SortBySELAddress : 
-        public std::binary_function<const objc_method_t<P>&, 
+        public std::__binary_function<const objc_method_t<P>&, 
                                     const objc_method_t<P>&, bool>
     {
         bool operator() (const objc_method_t<P>& lhs, 
