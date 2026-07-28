@@ -184,7 +184,7 @@ bool FileSystemPhysical::loadFile(const char* path, LoadedFileInfo& info, char r
                     else
                         strcpy(realerPath, realPathWithin);
     #if BUILDING_UPDATE_DYLD_CACHE_BUILDER
-                    sipProtected = (rootless_check_trusted_fd(fd) == 0);
+                    //sipProtected = (rootless_check_trusted_fd(fd) == 0);
     #endif
                     stop = true;
                 }
