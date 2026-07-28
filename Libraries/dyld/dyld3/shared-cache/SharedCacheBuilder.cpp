@@ -33,7 +33,9 @@
 #include <mach/mach_vm.h>
 #include <mach/mach_time.h>
 #include <mach/shared_region.h>
+#if APFS
 #include <apfs/apfs_fsctl.h>
+#endif
 
 #include <CommonCrypto/CommonHMAC.h>
 #include <CommonCrypto/CommonDigest.h>
@@ -2534,8 +2536,10 @@ void SharedCacheBuilder::writeFile(const std::string& path)
             // if making macOS dyld cache for current OS into standard location
             if ( (_options.platform == dyld3::Platform::macOS) && startsWith(path, MACOSX_DYLD_SHARED_CACHE_DIR) ) {
                 // <rdar://48687550> pin cache file to SSD on fusion drives
+#if APFS
                 apfs_data_pin_location_t where = APFS_PIN_DATA_TO_MAIN;
                 ::fsctl(pathTemplateSpace, APFSIOC_PIN_DATA, &where, 0);
+#endif
             }
             // set final cache file size (may help defragment file)
             ::ftruncate(fd, size);
