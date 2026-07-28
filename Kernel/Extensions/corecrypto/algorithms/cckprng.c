@@ -13,6 +13,24 @@ void cckprng_init(struct cckprng_ctx *ctx, unsigned max_ngens, size_t entropybuf
 	ctx->bytes_generated = ctx->bytes_since_entropy = 0;
 
 	cckprng_reseed(ctx, seed_nbytes, seed);
+	cckprng_reseed(ctx, nonce_nbytes, nonce);
+	cckprng_reseed(ctx, entropybuf_nbytes, entropybuf);
+}
+
+void cckprng_init_with_getentropy(struct cckprng_ctx *ctx, unsigned max_ngens, size_t seed_nbytes, const void *seed,
+								  size_t nonce_nbytes, const void *nonce, cckprng_getentropy getentropy,
+								  void *getentropy_arg) {
+	uint8_t entropy[32];
+	size_t entropy_nbytes = sizeof(entropy);
+
+	cckprng_init(ctx, max_ngens, 0, NULL, NULL, seed_nbytes, seed, nonce_nbytes, nonce);
+
+	if (getentropy && getentropy(&entropy_nbytes, entropy, getentropy_arg) == 0) {
+		if (entropy_nbytes > sizeof(entropy)) {
+			entropy_nbytes = sizeof(entropy);
+		}
+		cckprng_reseed(ctx, entropy_nbytes, entropy);
+	}
 }
 
 void cckprng_initgen(struct cckprng_ctx *ctx, unsigned gen_idx) {
@@ -20,6 +38,10 @@ void cckprng_initgen(struct cckprng_ctx *ctx, unsigned gen_idx) {
 }
 
 void cckprng_reseed(struct cckprng_ctx *ctx, size_t nbytes, const void *seed) {
+	if (nbytes == 0 || seed == NULL) {
+		return;
+	}
+
 	prngInput(ctx->prng, (BYTE *)seed, (UINT)nbytes, 0, 0);
 	prngAllowReseed(ctx->prng, 5000);
 	ctx->bytes_since_entropy = 0;

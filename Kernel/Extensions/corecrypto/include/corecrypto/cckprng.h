@@ -27,6 +27,10 @@ struct cckprng_ctx {
     uint64_t bytes_generated;
 };
 
+typedef int32_t (*cckprng_getentropy)(size_t *entropy_nbytes,
+                                      void *entropy,
+                                      void *getentropy_arg);
+
 #define CCKPRNG_ENTROPY_INTERVAL (1 << 14)
 #define CCKPRNG_RESEED_NTICKS 50
 
@@ -276,6 +280,14 @@ struct cckprng_funcs {
     void (*reseed)(struct cckprng_ctx *ctx, size_t nbytes, const void *seed);
     void (*refresh)(struct cckprng_ctx *ctx);
     void (*generate)(struct cckprng_ctx *ctx, unsigned gen_idx, size_t nbytes, void *out);
+    void (*init_with_getentropy)(struct cckprng_ctx *ctx,
+                                 unsigned max_ngens,
+                                 size_t seed_nbytes,
+                                 const void *seed,
+                                 size_t nonce_nbytes,
+                                 const void *nonce,
+                                 cckprng_getentropy getentropy,
+                                 void *getentropy_arg);
 };
 
 /*
@@ -303,6 +315,15 @@ void cckprng_init(struct cckprng_ctx *ctx,
                   const void *seed,
                   size_t nonce_nbytes,
                   const void *nonce);
+
+void cckprng_init_with_getentropy(struct cckprng_ctx *ctx,
+                                  unsigned max_ngens,
+                                  size_t seed_nbytes,
+                                  const void *seed,
+                                  size_t nonce_nbytes,
+                                  const void *nonce,
+                                  cckprng_getentropy getentropy,
+                                  void *getentropy_arg);
 
 /*
   @function cckprng_initgen
