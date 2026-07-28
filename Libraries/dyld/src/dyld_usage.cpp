@@ -42,6 +42,7 @@
 #include <ktrace/session.h>
 #include <dispatch/dispatch.h>
 #include <System/sys/kdebug.h>
+#include <assert.h>
 
 #include "Tracing.h"
 
