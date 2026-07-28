@@ -110,7 +110,11 @@ ${.OBJDIR}/lib${LIB}.a: mkdirs ${OBJS}
 	mkdir -p ${RAVYN_SDKROOT}/usr/lib/system
 	cp -f ${.TARGET} ${RAVYN_SDKROOT}/usr/lib/system/
 
-SUBDIR = dyld
+SUBDIR = dyld libdsc libslc_builder chroot_util #dyld_closure_util dyldinfo \
+        #dsc_extractor dyld_shared_cache_util \
+        #update_dyld_shared_cache_root_mode_tool
+        #update_dyld_shared_cache_tool -- needs private Bom and dscsyms fmwks
+        #dyld_usage -- needs private ktrace.framework
 
 .include <bsd.subdir.mk>
 

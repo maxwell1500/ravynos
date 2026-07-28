@@ -504,6 +504,7 @@ ALWAYS_INLINE
 static bool
 isKnownClass(Class cls)
 {
+fprintf(stderr, "isKnownClass(%p) name = %s\n", cls, class_getName(cls));
     if (fastpath(objc::dataSegmentsRanges.contains(cls->data()->witness, (uintptr_t)cls))) {
         return true;
     }
@@ -521,6 +522,7 @@ isKnownClass(Class cls)
 static void
 addClassTableEntry(Class cls, bool addMeta = true)
 {
+fprintf(stderr, "addClassTableEntry(%p, %d)\n", cls, addMeta);
     runtimeLock.assertLocked();
 
     // This class is allowed to be a known class via the shared cache or via
@@ -642,6 +644,7 @@ static unsigned unreasonableClassCount()
 
     int base = NXCountMapTable(gdb_objc_realized_classes) +
     getPreoptimizedClassUnreasonableCount();
+fprintf(stderr, "unreasonableClassCount() = %d\n", base);
 
     // Provide lots of slack here. Some iterations touch metaclasses too.
     // Some iterations backtrack (like realized class iteration).
@@ -1695,13 +1698,15 @@ uintptr_t objc_debug_realized_class_generation_count;
 
 static Class getClass_impl(const char *name)
 {
-    runtimeLock.assertLocked();
+fprintf(stderr, "getClass_impl(%s) NEW\n");
 
+    runtimeLock.assertLocked();
     // allocated in _read_images
     ASSERT(gdb_objc_realized_classes);
-
+fprintf(stderr, "past second assert\n");
     // Try runtime-allocated table
     Class result = (Class)NXMapGet(gdb_objc_realized_classes, name);
+fprintf(stderr, "NXMapGet(%p, %s) = %p\n", gdb_objc_realized_classes, name, result);
     if (result) return result;
 
     // Try table from dyld shared cache.
@@ -1740,9 +1745,11 @@ static Class getClassExceptSomeSwift(const char *name)
 **********************************************************************/
 static void addNamedClass(Class cls, const char *name, Class replacing = nil)
 {
+fprintf(stderr, "addNamedClass(%p, %s)\n", cls, name);
     runtimeLock.assertLocked();
     Class old;
     if ((old = getClassExceptSomeSwift(name))  &&  old != replacing) {
+fprintf(stderr, "replacing %p\n", replacing);
         inform_duplicate(name, old, cls);
 
         // getMaybeUnrealizedNonMetaClass uses name lookups.
@@ -1750,6 +1757,7 @@ static void addNamedClass(Class cls, const char *name, Class replacing = nil)
         // secondary meta->nonmeta table.
         addNonMetaClass(cls);
     } else {
+fprintf(stderr, "NXMapInsert(%p, %s, %p)\n", gdb_objc_realized_classes, name, cls);
         NXMapInsert(gdb_objc_realized_classes, name, cls);
     }
     ASSERT(!(cls->data()->flags & RO_META));
@@ -1768,6 +1776,7 @@ static void removeNamedClass(Class cls, const char *name)
 {
     runtimeLock.assertLocked();
     ASSERT(!(cls->data()->flags & RO_META));
+fprintf(stderr, "removeNamedClass(%p, %s)\n", cls, name);
     if (cls == NXMapGet(gdb_objc_realized_classes, name)) {
         NXMapRemove(gdb_objc_realized_classes, name);
     } else {
@@ -1997,6 +2006,7 @@ objc_loadClassref(_Nullable Class * _Nonnull clsref)
 **********************************************************************/
 static Class getMaybeUnrealizedNonMetaClass(Class metacls, id inst)
 {
+fprintf(stderr, "getMaybeUnrealizedNonMetaClass(%p, %p)\n", metacls, inst);
     static int total, named, secondary, sharedcache, dyld3;
     runtimeLock.assertLocked();
     ASSERT(metacls->isRealized());
@@ -3516,6 +3526,8 @@ void _read_images(header_info **hList, uint32_t hCount, int totalClasses, int un
             (isPreoptimized() ? unoptimizedTotalClasses : totalClasses) * 4 / 3;
         gdb_objc_realized_classes =
             NXCreateMapTable(NXStrValueMapPrototype, namedClassesSize);
+fprintf(stderr, "namedClassesSize = %d, isPreopt = %d\n", namedClassesSize, isPreoptimized());
+fprintf(stderr, "gdb_objc_realized_classes = %p\n", gdb_objc_realized_classes);
 
         ts.log("IMAGE TIMES: first time tasks");
     }
@@ -7010,21 +7022,25 @@ look_up_class(const char *name,
               bool includeUnconnected __attribute__((unused)), 
               bool includeClassHandler __attribute__((unused)))
 {
+fprintf(stderr, "look_up_class(%s)\n", name);
     if (!name) return nil;
 
     Class result;
     bool unrealized;
     {
         runtimeLock.lock();
+fprintf(stderr, "locked, getClassExcept\n");
         result = getClassExceptSomeSwift(name);
         unrealized = result  &&  !result->isRealized();
         if (unrealized) {
+fprintf(stderr, "realizeClassMaybeSwift\n");
             result = realizeClassMaybeSwiftAndUnlock(result, runtimeLock);
             // runtimeLock is now unlocked
         } else {
             runtimeLock.unlock();
         }
     }
+fprintf(stderr, "unrealized = %x, result = %x\n", unrealized, result);
 
     if (!result) {
         // Ask Swift about its un-instantiated classes.

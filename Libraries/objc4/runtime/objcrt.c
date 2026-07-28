@@ -59,6 +59,7 @@ extern IMAGE_DOS_HEADER __ImageBase;  // this image's header
 
 static int __objc_init(void)
 {
+printf("__objc_init()\n");
     objc_sections sections = {
         5, 
         &__objc_modStart, &__objc_modEnd, 
@@ -67,7 +68,9 @@ static int __objc_init(void)
         &__objc_selrefsStart, &__objc_selrefsEnd, 
         &__objc_clsrefsStart, &__objc_clsrefsEnd, 
     };
+printf("objc_init_image\n");
     __hinfo = _objc_init_image((HMODULE)&__ImageBase, &sections);
+printf("done\n");
     return 0;
 }
 

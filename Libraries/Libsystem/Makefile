@@ -99,9 +99,7 @@ SUBDIR = copyfile removefile libdispatch libsystem_blocks libsystem_kernel \
 	libsystem_platform libsystem_malloc libsystem_pthread libsystem_notify \
 	libsystem_info libsystem_c libsystem_asl libsystem_trace \
 	libsystem_dnssd libxpc liblaunch libsystem_m libsystem_darwin \
-	libsystem_coreservices libmacho 
-
-#CommonCrypto
+	libsystem_coreservices libmacho #CommonCrypto
 
 
 # Library versions within libsystem were taken from Monterey System.tbd

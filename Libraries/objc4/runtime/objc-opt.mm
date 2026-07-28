@@ -75,6 +75,7 @@ unsigned int getPreoptimizedClassUnreasonableCount()
 }
 
 Class getPreoptimizedClass(const char *name)
+fprintf(stderr, "getPreoptimizedClass(%s) STUB\n", name);
 {
     return nil;
 }
@@ -388,9 +389,10 @@ unsigned int getPreoptimizedClassUnreasonableCount()
 
 Class getPreoptimizedClass(const char *name)
 {
+fprintf(stderr, "getPreoptimizedClass(%s)\n", name);
     objc_clsopt_t *classes = opt ? opt->clsopt() : nil;
     if (!classes) return nil;
-
+fprintf(stderr, "there are classes\n");
     // Try table from dyld closure first.  It was built to ignore the dupes it
     // knows will come from the cache, so anything left in here was there when
     // we launched
@@ -401,29 +403,35 @@ Class getPreoptimizedClass(const char *name)
         // Skip images which aren't loaded.  This supports the case where dyld
         // might soft link an image from the main binary so its possibly not
         // loaded yet.
+fprintf(stderr, "dyld_for_each_objc_class isLoaded=%d\n", isLoaded);
         if (!isLoaded)
             return;
 
         // Found a loaded image with this class name, so stop the search
         result = (Class)classPtr;
+fprintf(stderr, "result = %p\n", result);
         *stop = true;
     });
     if (result) return result;
 
     void *cls;
     void *hi;
+fprintf(stderr, "getClassAndHeader\n");
     uint32_t count = classes->getClassAndHeader(name, cls, hi);
     if (count == 1  &&  ((header_info *)hi)->isLoaded()) {
         // exactly one matching class, and its image is loaded
+fprintf(stderr, "found\n");
         return (Class)cls;
     } 
     else if (count > 1) {
         // more than one matching class - find one that is loaded
         void *clslist[count];
         void *hilist[count];
+fprintf(stderr, "getClassesAndHeaders\n");
         classes->getClassesAndHeaders(name, clslist, hilist);
         for (uint32_t i = 0; i < count; i++) {
             if (((header_info *)hilist[i])->isLoaded()) {
+fprintf(stderr, "found\n");
                 return (Class)clslist[i];
             }
         }
