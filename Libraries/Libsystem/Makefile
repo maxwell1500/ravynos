@@ -43,7 +43,7 @@ LDFLAGS = -mmacos-version-min=${MACOS_VERSION_MIN} \
 	-Wl,-reexport-lsystem_notify -Wl,-reexport-lsystem_info \
 	-Wl,-reexport-lcopyfile -Wl,-reexport-lmacho \
 	-Wl,-reexport-lremovefile -Wl,-reexport-lsystem_trace \
-	-Wl,-reexport-lsystem_dnssd \
+	-Wl,-reexport-lsystem_dnssd -Wl,-reexport-lcorecrypto \
 	-Wl,-force_load,${RAVYN_SDKROOT}/usr/lib/system/libCrashReporterClient.a \
 	-lcompiler_rt -ldyld -lsystem_c -lc++ \
 	-lsystem_platform -lsystem_kernel -lsystem_blocks -lsystem_malloc \
@@ -135,31 +135,6 @@ SUBDIR = copyfile removefile libdispatch libsystem_blocks libsystem_kernel \
 # libunwind.dylib 35.4
 # libxpc.dylib 1738.0.17
 # libSystem.B.dylib 1281
-
-# add_dependencies(libdyld libsystem_pthread libsystem_c)
-# add_dependencies(libsystem_c libsystem_malloc libsystem_platform)
-# add_dependencies(libpthread_dyld libsystem_platform)
-# add_dependencies(libsystem_pthread libsystem_platform)
-# add_dependencies(libsystem_malloc libsystem_platform CrashReporterClient)
-# add_dependencies(libsystem_platform compiler_rt libkernel)
-# add_dependencies(libplatform libkernel)
-# add_dependencies(libsystem_darwin libdyld libsystem_c)
-# add_dependencies(removefile libsystem_darwin)
-# add_dependencies(copyfile libsystem_darwin)
-# add_dependencies(libxpc libsystem_darwin)
-# add_dependencies(dispatch libsystem_darwin)
-# add_dependencies(liblaunch libxpc)
-# add_dependencies(libsystem_asl libxpc)
-# add_dependencies(libsystem_m libsystem_platform)
-# add_dependencies(libsystem_dnssd libsystem_darwin)
-# #add_dependencies(libcommonCrypto xnu_headers)
-# add_dependencies(libSystem
-#     libsystem_c libsystem_malloc libsystem_pthread libsystem_platform libdyld
-#     libxpc dispatch libsystem_blocks liblaunch CrashReporterClient libsystem_m
-#     libsystem_notify libsystem_info copyfile removefile libsystem_trace
-#     libsystem_dnssd #libcommonCrypto
-# )
-#
 
 .include <bsd.lib.mk>
 .include <bsd.subdir.mk>
