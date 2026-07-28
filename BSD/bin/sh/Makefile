@@ -36,6 +36,13 @@ CFLAGS = --sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSION_MIN} \
 LDFLAGS = --sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSION_MIN} \
         -ledit
 
+all: to-sysroot
+
+to-sysroot: ${PROG}
+	mkdir -p ${SYSROOT_DIR}/bin
+	cp -f ${PROG} ${SYSROOT_DIR}/bin/
+
+
 builtins.c builtins.h: ${.CURDIR}/mkbuiltins ${SRCS:N*builtins.*}
 	${.CURDIR}/mkbuiltins ${.CURDIR}
 

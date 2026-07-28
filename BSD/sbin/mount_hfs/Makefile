@@ -10,4 +10,11 @@ CFLAGS = --sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSION_MIN} \
 LDFLAGS = --sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSION_MIN} \
         -fuse-ld=${LD} -L${ROOT_BINARY_DIR}${LIBUTIL} -lutil
 
+all: to-sysroot
+
+to-sysroot: ${PROG}
+	mkdir -p ${SYSROOT_DIR}/sbin
+	cp -f ${PROG} ${SYSROOT_DIR}/sbin/
+
+
 .include <bsd.prog.mk>
