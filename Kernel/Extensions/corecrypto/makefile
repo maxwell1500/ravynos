@@ -51,4 +51,7 @@ copyheaders:
 	mkdir -p ${.OBJDIR}/include/corecrypto
 	cp -f ${.CURDIR}/src/cc_abort.h ${.OBJDIR}/include/corecrypto
 
+SUBDIR = src/user
+
 .include <rvn.kext.mk>
+.include <bsd.subdir.mk>
