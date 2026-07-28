@@ -483,7 +483,16 @@
  #define CC_NORETURN __attribute__((__noreturn__))
  #define CC_NOTHROW __attribute__((__nothrow__))
  #define CC_NONNULL(N) __attribute__((__nonnull__ N))
+ #define CC_NONNULL_TU CC_NONNULL
+ #define CC_NONNULL1 CC_NONNULL((1))
+ #define CC_NONNULL2 CC_NONNULL((2))
+ #define CC_NONNULL3 CC_NONNULL((3))
  #define CC_NONNULL4 CC_NONNULL((4))
+ #define CC_NONNULL5 CC_NONNULL((5))
+ #define CC_NONNULL6 CC_NONNULL((6))
+ #define CC_NONNULL7 CC_NONNULL((7))
+ #define CC_NONNULL8 CC_NONNULL((8))
+ #define CC_NONNULL9 CC_NONNULL((9))
  #define CC_NONNULL_ALL __attribute__((__nonnull__))
  #define CC_SENTINEL __attribute__((__sentinel__))
  // Only apply the `CC_CONST` attribute to functions with no side-effects where the output is a strict function of pass by value input vars with no exterior side-effects.
@@ -498,6 +507,26 @@
  #define CC_UNUSED
 /*! @parseOnly */
  #define CC_NONNULL(N)
+/*! @parseOnly */
+ #define CC_NONNULL_TU CC_NONNULL
+/*! @parseOnly */
+ #define CC_NONNULL1
+/*! @parseOnly */
+ #define CC_NONNULL2
+/*! @parseOnly */
+ #define CC_NONNULL3
+/*! @parseOnly */
+ #define CC_NONNULL4
+/*! @parseOnly */
+ #define CC_NONNULL5
+/*! @parseOnly */
+ #define CC_NONNULL6
+/*! @parseOnly */
+ #define CC_NONNULL7
+/*! @parseOnly */
+ #define CC_NONNULL8
+/*! @parseOnly */
+ #define CC_NONNULL9
 /*! @parseOnly */
  #define CC_NONNULL4
 /*! @parseOnly */

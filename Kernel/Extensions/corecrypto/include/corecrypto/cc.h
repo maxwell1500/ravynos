@@ -71,6 +71,11 @@ typedef struct { \
 uint8_t b[_alignment_]; \
 } CC_ALIGNED(_alignment_)
 
+#define cc_aligned_struct_name(_struct_name_,_alignment_)  \
+typedef struct _struct_name_ { \
+uint8_t b[_alignment_]; \
+} CC_ALIGNED(_alignment_) _struct_name_
+
 #if defined(__BIGGEST_ALIGNMENT__)
 #define CC_MAX_ALIGNMENT __BIGGEST_ALIGNMENT__
 #else
