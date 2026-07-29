@@ -13,6 +13,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/fcntl.h>
+#include <_simple.h>
 
 int __snprintf_chk(char * str, size_t maxlen, int flag, size_t strlen, const char * format, ...)
 {
@@ -31,70 +32,10 @@ int inDenyList(const char * path)
     return 0;
 }
 
-#undef strstr
-char* strstr(const char* haystack, const char* needle)
+int fflush(FILE *stream)
 {
-    while (*haystack) {
-        const char* h = haystack;
-        const char* n = needle;
-        while (*h && *n && *h == *n) {
-            ++h;
-            ++n;
-        }
-        if (*n == '\0') {
-            return (char*)haystack;
-        }
-        ++haystack;
-    }
-    return NULL;
-}
-
-#undef strncmp
-int strncmp(const char* s1, const char* s2, size_t len)
-{
-    size_t n = 0;
-    while (n < len && *s1 && *s2) {
-        if (*s1 != *s2) break;
-        ++n;
-        ++s1;
-        ++s2;
-    }
-    return (int)(unsigned char)*s1 - (int)(unsigned char)*s2;
-}
-
-#undef strlcat
-size_t strlcat(char* dst, const char* src, size_t len)
-{
-    size_t n = 0;
-    while (n < len && *dst) {
-        ++n;
-        ++dst;
-    }
-    while (n < len && *src) {
-        *dst = *src;
-        ++n;
-        ++dst;
-        ++src;
-    }
-    if (n < len) {
-        *dst = '\0';
-    } else if (len > 0) {
-        dst[-1] = '\0';
-    }
-    return n;
-}
-
-#undef strncpy
-char* strncpy(char* dst, const char* src, size_t len)
-{
-    size_t n = 0;
-    while (n < len && *src) {
-        *dst = *src;
-        ++n;
-        ++dst;
-        ++src;
-    }
-    return dst;
+_simple_dprintf(1, "fflush dyld stub!\n");
+        return 0;
 }
 
 #undef snprintf
@@ -109,6 +50,7 @@ int snprintf(char* str, size_t size, const char* format, ...)
 
 void* dlopen(const char* path, int mode)
 {
+_simple_dprintf(1, "dlopen dyld stub! %s %x\n", path, mode);
     return NULL;
 }
 
@@ -120,9 +62,9 @@ void* aligned_alloc(size_t alignment, size_t size)
 
 char* getenv(const char* name)
 {
+_simple_dprintf(1, "getenv() dyld stub! %s\n", name);
         return NULL;
 }
-
 
 
 /* c++ glue */
@@ -165,30 +107,6 @@ _cleanup(void)
 void
 __sinit(void)
 {
-}
-
-int fflush(FILE *stream)
-{
-        return 0;
-}
-
-/* called by libcpp_verbose_abort */
-int
-vfprintf(FILE* fp, const char* format, va_list ap) __printflike(2, 0)
-{
-	(void)fp;
-        (void)format;
-        (void)ap;
-	return 0;
-}
-
-int
-vasprintf(char** strp, const char* format, va_list ap) __printflike(2, 0)
-{
-        (void)strp;
-        (void)format;
-        (void)ap;
-        return 0;
 }
 
 /* For objc-class.mm.o - mangled name for C++ linkage */
@@ -312,31 +230,6 @@ int dyld_shared_cache_extract_dylibs_progress(const char* shared_cache_file_path
     (void)extraction_root_path;
     (void)progress;
     return KERN_NOT_SUPPORTED;
-}
-
-/* FIXME: need libmacho */
-uint8_t* getsectiondata(const struct mach_header_64* mhp,
-                        const char* segname,
-                        const char* sectname,
-                        unsigned long* size)
-{
-    (void)mhp;
-    (void)segname;
-    (void)sectname;
-    if ( size != NULL )
-        *size = 0;
-    return NULL;
-}
-
-uint8_t * getsegmentdata(const struct mach_header_64* mhp,
-                         const char* segname,
-                         unsigned long* size)
-{
-    (void)mhp;
-    (void)segname;
-    if ( size != NULL )
-        *size = 0;
-    return NULL;
 }
 
 /* DNSService stubs to be removed when mDNSResponder is built */

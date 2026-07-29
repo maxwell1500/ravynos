@@ -36,6 +36,8 @@ COMMONFLAGS = -w --target=${CpuArch}-apple-darwin -dylib \
 	-DBUILDING_LIBDYLD -DWITHOUT_SANDBOX -DBROKEN_VECTOR_BASE \
 	-D__USING_SJLJ_EXCEPTIONS__=0 -D_USE_EXTENDED_LOCALES_ \
 	-D__DARWIN_C_LEVEL=__DARWIN_C_FULL -DTARGET_OS_BRIDGE=0 \
+	-DSUPPORT_ZERO_COST_EXCEPTIONS -DSUPPORT_ACCELERATE_TABLES \
+	-D__MAC_OS_X_VERSION_MIN_REQUIRED=101300 \
 	-Wno-nullability-completeness -Wno-incompatible-sysroot \
 	-Wno-availability -I${SDK_SOURCE_DIR}/usr/include/c++/v1 \
 	-I${.CURDIR}/src -I${.CURDIR}/dyld3/shared-cache \
