@@ -21,3 +21,6 @@ ${.OBJDIR}/lib/libncurses.6.dylib: ${.CURDIR}/Makefile
 	MAKEFLAGS="" ${TOOLS}/gmake
 	MAKEFLAGS="" ${TOOLS}/gmake install DESTDIR=${RAVYN_SDKROOT}
 	MAKEFLAGS="" ${TOOLS}/gmake install DESTDIR=${SYSROOT_DIR}
+.for prog in clear infocmp tabs tic toe tput tset
+	ln -sf ${CpuArch}-apple-darwin19-${prog} ${SYSROOT_DIR}/usr/bin/${prog}
+.endfor
