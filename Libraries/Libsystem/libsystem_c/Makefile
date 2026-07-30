@@ -130,13 +130,13 @@ LDFLAGS = -mmacos-version-min=${MACOS_VERSION_MIN} \
 	-Wl,-upward-lsystem_blocks -Wl,-upward-lxpc -Wl,-upward-ldispatch \
 	-Wl,-upward-lsystem_asl -Wl,-upward-lsystem_info \
 	-Wl,-upward-lsystem_notify -Wl,-upward-lsystem_trace \
+	-Wl,-upward-lcorecrypto -Wl,-upward-lmacho \
 	-Wl,-interposable_list,${.OBJDIR}/interposable.list \
 	-Wl,-unexported_symbols_list,${.OBJDIR}/unexport.list \
 	-Wl,-alias_list,${.CURDIR}/xcodescripts/alias.list \
 	-Wl,-order_file,${.CURDIR}/xcodescripts/Libc.order \
 	-lsystem_malloc -lsystem_platform -lsystem_pthread -lsystem_kernel \
-	-ldyld -llaunch -lsystem_m -lCrashReporterClient
-	#-Wl,-upward-lcorecrypto -Wl,-upward-lmacho
+	-lcorecrypto -lmacho -ldyld -llaunch -lsystem_m -lCrashReporterClient
 
 # FIXME: should also build `debug` variant
 
