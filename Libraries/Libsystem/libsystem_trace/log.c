@@ -170,14 +170,27 @@ size_t os_log_encode(void* buffer,
     va_list args,
     uint32_t flags)
 {
-    struct os_log_arginfo_s header;
-    os_log_buffer_context_t ctx;
+    char compspace[1024];
 
-    if (buffer == NULL || format == NULL || buffer_size <= 0)
+    if (buffer == NULL || format == NULL || 
+            buffer_size <= sizeof(struct os_log_buffer_s))
         return 0;
 
-    if (_os_log_encode(format, args, errno, ctx))
-        return ctx->arg_content_sz;
+    memset(buffer, 0, buffer_size);
+    os_log_buffer_context_t ctx = calloc(1, sizeof(struct
+            os_log_buffer_context_s));
+
+    ctx->log = OS_LOG_DEFAULT;
+    ctx->buffer = (os_log_buffer_t)buffer;
+    ctx->content_sz = buffer_size - sizeof(struct os_log_buffer_s);
+    ctx->comp = compspace;
+    ctx->comp_sz = sizeof(compspace);
+
+    bool ret = _os_log_encode(format, args, errno, ctx);
+    free(ctx);
+
+    if(ret)
+        return sizeof(struct os_log_buffer_s) + ctx->content_off;
 
     return 0;
 }
