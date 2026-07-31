@@ -188,7 +188,7 @@
 #define PACKAGE "libdispatch"
 
 /* Define to the address where bug reports for this package should be sent. */
-#define PACKAGE_BUGREPORT "libdispatch@macosforge.org"
+#define PACKAGE_BUGREPORT "bugreport@ravynos.com"
 
 /* Define to the full name of this package. */
 #define PACKAGE_NAME "libdispatch"
@@ -200,7 +200,7 @@
 #define PACKAGE_TARNAME "libdispatch"
 
 /* Define to the home page for this package. */
-#define PACKAGE_URL "http://libdispatch.macosforge.org"
+#define PACKAGE_URL "https://github.com/ravynsoft/ravynos.git"
 
 /* Define to the version of this package. */
 #define PACKAGE_VERSION "1.3"
