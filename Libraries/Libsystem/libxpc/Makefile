@@ -24,7 +24,7 @@ CFLAGS = -DXPC_DEBUG -DMACH -D__APPLE__ -g -O0 -fblocks \
 LDFLAGS = -Wl,-syslibroot,${RAVYN_SDKROOT}/usr/lib \
 	-mmacos-version-min=${MACOS_VERSION_MIN}  -umbrella System \
 	-L${CMAKE_CURRENT_BINARY_DIR}/../../MiscLibs -lsbuf -lnv \
-	-L${RAVYN_SDKROOT}/usr/lib -lobjc \
+	-L${RAVYN_SDKROOT}/usr/lib -Wl,-upward-lobjc \
 	-L${RAVYN_SDKROOT}/usr/lib/system -ldispatch -lsystem_c \
 	-lsystem_platform -lsystem_kernel -lsystem_blocks -lsystem_malloc \
 	-llaunch -ldyld -lsystem_pthread \

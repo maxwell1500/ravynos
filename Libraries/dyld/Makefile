@@ -28,7 +28,6 @@ SRCS = ./src/start_glue.s \
 	./dyld3/ClosureBuilder.cpp \
 	./dyld3/ClosureWriter.cpp \
 	./dyld3/libdyldEntryVector.cpp
-OBJS = ${SRCS:S/.c$/.o/:S/.cpp$/.o/:S/.s$/.o/}
 
 COMMONFLAGS = -w --target=${CpuArch}-apple-darwin -dylib \
 	-mmacos-version-min=${MACOS_VERSION_MIN} \
@@ -80,37 +79,31 @@ ACFLAGS = ${COMMONFLAGS}
 CFLAGS = ${COMMONFLAGS} ${CFLAGS.${.TARGET:T}}
 CXXFLAGS = ${COMMONFLAGS} -std=c++20 ${C_INCS} ${CFLAGS.${.TARGET:T}}
 LDFLAGS = --target=${CpuArch}-apple-darwin --sysroot=${RAVYN_SDKROOT} \
+	-L${RAVYN_SDKROOT}/usr/lib/system -L${RAVYN_SDKROOT}/usr/lib \
 	-Wl,-no_inits -Wl,-no_warn_unused_dylibs -fuse-ld=${LD} -shared \
 	-umbrella System "-Wl,-unexported_symbol,__ZNSt3*" \
 	-mmacos-version-min=${MACOS_VERSION_MIN} \
 	-Wl,-install_name,/usr/lib/system/libdyld.dylib \
-	-Wl,-flat_namespace -Wl,-undefined,suppress \
 	-Wl,-current_version,732.2 \
-	-L${RAVYN_SDKROOT}/usr/lib/system -L${RAVYN_SDKROOT}/usr/lib \
 	-lsystem_malloc -lsystem_pthread -lsystem_platform -lsystem_kernel \
 	-Wl,-upward-lsystem_platform -Wl,-upward-lsystem_malloc \
 	-Wl,-upward-lsystem_c -Wl,-upward-lsystem_pthread \
-	-Wl,-upward-lxpc \
+	-Wl,-upward-lxpc -Wl,-upward-lc++ \
 	-Wl,-upward-lsystem_blocks -Wl,-upward-lsystem_kernel \
-	-Wl,-upward-ldispatch \
-	-Wl,-upward-lcompiler_rt 
+	-Wl,-upward-ldispatch -Wl,-upward-lcompiler_rt 
 
-all: ${.OBJDIR}/lib${LIB}.dylib
+all: lib${LIB}.dylib
 
 mkdirs: .PHONY
 	mkdir -p ${.OBJDIR}/src ${.OBJDIR}/dyld3/shared-cache
 
-${.OBJDIR}/lib${LIB}.dylib: mkdirs ${OBJS}
-	${CC} -o ${.TARGET} ${OBJS} ${LDFLAGS}
+lib${LIB}.dylib: mkdirs lib${LIB}.a
+	${CC} -o ${.TARGET} -Wl,-force_load,lib${LIB}.a ${LDFLAGS}
 	mkdir -p ${RAVYN_SDKROOT}/usr/lib/system
 	cp -f ${.TARGET} ${RAVYN_SDKROOT}/usr/lib/system/
+	cp -f ${.OBJDIR}/lib${LIB}.a ${RAVYN_SDKROOT}/usr/lib/system/
 
 libdyld: ${.OBJDIR}/lib${LIB}.dylib
-
-${.OBJDIR}/lib${LIB}.a: mkdirs ${OBJS}
-	${AR} rcs ${.TARGET} ${OBJS}
-	mkdir -p ${RAVYN_SDKROOT}/usr/lib/system
-	cp -f ${.TARGET} ${RAVYN_SDKROOT}/usr/lib/system/
 
 SUBDIR = dyld libdsc libslc_builder chroot_util #dyld_closure_util dyldinfo \
         #dsc_extractor dyld_shared_cache_util \
@@ -119,4 +112,5 @@ SUBDIR = dyld libdsc libslc_builder chroot_util #dyld_closure_util dyldinfo \
         #dyld_usage -- needs private ktrace.framework
 
 .include <bsd.subdir.mk>
+.include <bsd.lib.mk>
 

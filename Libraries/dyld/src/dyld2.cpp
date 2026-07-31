@@ -6183,7 +6183,7 @@ static ClosureMode getPlatformDefaultClosureMode() {
 	return ClosureMode::Off;
 #else
 	// x86_64 defaults to using the shared cache closures
-	return ClosureMode::Off; //ClosureMode::PreBuiltOnly;
+	return ClosureMode::PreBuiltOnly;
 #endif // __i386__
 	
 #else

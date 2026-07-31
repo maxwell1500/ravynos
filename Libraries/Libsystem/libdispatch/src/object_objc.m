@@ -261,6 +261,12 @@ _dispatch_objc_activate(dispatch_object_t dou)
 	return [dou _activate];
 }
 
+NSRange NSMakeRange(unsigned long location, unsigned long length)
+{
+    NSRange result = { location, length };
+    return result;
+}
+
 size_t
 _dispatch_objc_debug(dispatch_object_t dou, char* buf, size_t bufsiz)
 {

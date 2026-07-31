@@ -17,8 +17,8 @@ LDFLAGS = --sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSION_MIN} \
 	-Wl,-install_name,/usr/lib/system/libsystem_trace.dylib \
 	-Wl,-current_version,1147.0.3 -Wl,-compatibility_version,1 \
 	-L${RAVYN_SDKROOT}/usr/lib/system -L${RAVYN_SDKROOT}/usr/lib \
-	-umbrella System -lobjc -lsystem_c -lsystem_platform -ldispatch \
-	-ldyld
+	-umbrella System -Wl,-upward-lobjc -lsystem_c -lsystem_platform \
+        -ldispatch -ldyld
 
 all: ${.OBJDIR}/lib${LIB}.dylib
 

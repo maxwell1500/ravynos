@@ -132,7 +132,6 @@ void _dyld_setup_minimal_tsd(void)
 
 // dyld::halt(const char* msg);
 extern void _ZN4dyld4haltEPKc(const char* msg) __attribute__((noreturn));
-
 extern void dyld_fatal_error(const char* errString) __attribute__((noreturn));
 
 
@@ -241,6 +240,18 @@ void abort_report_np(const char* format, ...)
 	// _ZN4dyld4haltEPKc doesn't return, so we can't call _simple_sfree
 }
 
+#if BUILDING_LIBDYLD
+/* These functions are undefined since they're static in dyld3/Logging.cpp.
+ * For now we just hack around it rather than changing the visibility.
+ */
+#define _ZN4dyld3logEPKcz(fmt, ...) _simple_dprintf(2, fmt, __VA_ARGS__)
+void _ZN4dyld4haltEPKc(const char *msg)
+{
+    _simple_dprintf(2, msg);
+    abort();
+}
+#endif
+
 // libc uses assert()
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Winvalid-noreturn"
@@ -335,7 +346,6 @@ void __guard_setup(const char* apple[])
 #endif
 }
 
-extern void _ZN4dyld4haltEPKc(const char*);
 void __stack_chk_fail()
 {
 	_ZN4dyld4haltEPKc("stack buffer overrun");

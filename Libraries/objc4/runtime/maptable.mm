@@ -122,7 +122,6 @@ NXMapTable *NXCreateMapTableFromZone(NXMapTablePrototype prototype, unsigned cap
 }
 
 NXMapTable *NXCreateMapTable(NXMapTablePrototype prototype, unsigned capacity) {
-fprintf(stderr, "NXCreateMapTable\n");
     return NXCreateMapTableFromZone(prototype, capacity, malloc_default_zone());
 }
 
@@ -257,7 +256,6 @@ static void validateKey(NXMapTable *table, MapPair *pair,
 }
 
 static INLINE void *_NXMapMember(NXMapTable *table, const void *key, void **value) {
-fprintf(stderr, "NXMapMember(%p, %p, %p)\n", table, key, value);
     MapPair	*pairs = (MapPair *)table->buckets;
     unsigned	index = bucketOf(table, key);
     MapPair	*pair = pairs + index;
@@ -288,7 +286,6 @@ void *NXMapMember(NXMapTable *table, const void *key, void **value) {
 
 void *NXMapGet(NXMapTable *table, const void *key) {
     void	*value;
-fprintf(stderr, "NXMapGet\n");
     return (_NXMapMember(table, key, &value) != NX_MAPNOTAKEY) ? value : NULL;
 }
 

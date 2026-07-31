@@ -154,8 +154,7 @@ LDFLAGS = -Wl,-syslibroot,${RAVYN_SDKROOT}/usr/lib -umbrella System \
 
 all: ${.OBJDIR}/lib${LIB}.dylib
 
-${.OBJDIR}/notify_ipc.h ${.OBJDIR}/notify_ipcUser.c \
-${.OBJDIR}/notify_ipcServer.c: ${.CURDIR}/../libsystem_notify/notify_ipc.defs
+notify_ipc.h notify_ipcUser.c notify_ipcServer.c: ${.CURDIR}/../libsystem_notify/notify_ipc.defs
 	${MIG} ${MIG_FLAGS} -novouchers -header notify_ipc.h \
 		${.CURDIR}/../libsystem_notify/notify_ipc.defs
 
@@ -165,7 +164,7 @@ copyheaders:
 
 lib${LIB}.a: copyheaders
 
-${.OBJDIR}/lib${LIB}.dylib: ${.OBJDIR}/notify_ipcUser.c lib${LIB}.a
+${.OBJDIR}/lib${LIB}.dylib: notify_ipcUser.c lib${LIB}.a
 	${CC} -fuse-ld=${LD} -shared -dylib -o ${.TARGET} \
 		-Wl,-force_load,${.OBJDIR}/lib${LIB}.a ${LDFLAGS}
 	mkdir -p ${RAVYN_SDKROOT}/usr/lib/system ${SYSROOT_DIR}/usr/lib/system

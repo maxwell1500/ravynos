@@ -23,8 +23,6 @@ CFLAGS = --sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSION_MIN} \
 	-I${ROOT_BINARY_DIR}/${CpuArch} \
 	-I${RAVYN_SDKROOT}/usr/local/include/kernel \
 	-I${RAVYN_SDKROOT}${SLF}/System.framework/Versions/B/PrivateHeaders
-#    "-include${RAVYN_SDKROOT}/usr/include/xpc/xpc.h"
-#    "-include${RAVYN_SDKROOT}/usr/include/xpc/launchd.h"
 
 MIG_FLAGS = ${CFLAGS} -D__MigTypeCheck
 
@@ -38,12 +36,11 @@ LDFLAGS = -Wl,-syslibroot,${RAVYN_SDKROOT}/usr/lib -umbrella System \
 
 all: ${.OBJDIR}/lib${LIB}.dylib
 
-${.OBJDIR}/notify_ipc.h ${.OBJDIR}/notify_ipcUser.c \
-	${.OBJDIR}/notify_ipcServer.c: ${.CURDIR}/notify_ipc.defs
+notify_ipc.h notify_ipcUser.c notify_ipcServer.c: ${.CURDIR}/notify_ipc.defs
 	${MIG} ${MIG_FLAGS} -novouchers -header notify_ipc.h \
 		${.CURDIR}/notify_ipc.defs
 
-lib${LIB}.a: ${.OBJDIR}/notify_ipcUser.c
+lib${LIB}.a: notify_ipcUser.c
 
 ${.OBJDIR}/lib${LIB}.dylib: lib${LIB}.a
 	${CC} -fuse-ld=${LD} -shared -dylib -o ${.TARGET} \

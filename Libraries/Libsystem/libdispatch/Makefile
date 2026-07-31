@@ -69,35 +69,30 @@ MIG_FLAGS = --sysroot=${RAVYN_SDKROOT} -g -DPRIVATE \
 MIGCC = ${CC}
 .export MIGCC
 
-LDFLAGS = --sysroot=${RAVYN_SDKROOT} \
+LDFLAGS = --sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSION_MIN} \
 	-L${RAVYN_SDKROOT}/usr/lib/system -L${RAVYN_SDKROOT}/usr/lib \
-	-Wl,-compatibility_version,1 -Wl,-flat_namespace \
-	-Wl,-undefined,warning -Wl,-current_version,1173.0.3 \
+	-Wl,-compatibility_version,1 \
+	-Wl,-current_version,1173.0.3 \
 	-Wl,-install_name,/usr/lib/system/libdispatch.dylib \
 	-Wl,-dead_strip -umbrella System \
 	-Wl,-alias_list,${.CURDIR}/xcodeconfig/libdispatch.aliases \
 	-Wl,-interposable_list,${.CURDIR}/xcodeconfig/libdispatch.interposable \
 	-Wl,-order_file,${.CURDIR}/xcodeconfig/libdispatch.order \
-	-mmacos-version-min=${MACOS_VERSION_MIN}
+	-Wl,-upward-lobjc -lclang_rt.osx 
 
 all: lib${LIB}.dylib
 
-${.OBJDIR}/protocolServer.h ${.OBJDIR}/protocol.h \
-	${.OBJDIR}/libdispatch_internal_protocolServer.c \
-	${.OBJDIR}/libdispatch_internal_protocolUser.c: ${.CURDIR}/src/protocol.defs
+protocolServer.h protocol.h libdispatch_internal_protocolServer.c \
+	libdispatch_internal_protocolUser.c: ${.CURDIR}/src/protocol.defs
 	${MIG} ${MIG_FLAGS} -header protocol.h \
 	  -sheader protocolServer.h ${.ALLSRC}
 
-${.CURDIR}/firehoseServer.h \
-	${.CURDIR}/firehose.h \
-	${.CURDIR}/firehoseServer.c \
-	${.CURDIR}/firehoseUser.c: ${.CURDIR}/src/firehose/firehose.defs
+firehoseServer.h firehose.h firehoseServer.c firehoseUser.c: ${.CURDIR}/src/firehose/firehose.defs
 	${MIG} ${MIG_FLAGS} -header firehose.h \
 	  -sheader firehoseServer.h ${.ALLSRC}
 
-${.OBJDIR}/firehose_replyServer.h ${.OBJDIR}/firehose_reply.h \
-	${.OBJDIR}/firehoseReplyServer.c \
-	${.OBJDIR}/firehoseReplyUser.c: ${.CURDIR}/src/firehose/firehose_reply.defs
+firehose_replyServer.h firehose_reply.h firehoseReplyServer.c firehoseReplyUser.c: \
+	${.CURDIR}/src/firehose/firehose_reply.defs
 	${MIG} ${MIG_FLAGS} -header firehose_reply.h \
 		-sheader firehose_replyServer.h ${.ALLSRC}
 
@@ -107,10 +102,9 @@ ${.OBJDIR}/BlocksRuntime:
 	mkdir -p ${.TARGET}
 	cp -f ${.CURDIR}/../libsystem_blocks/Block_private.h ${.TARGET}/
 
-migs: ${.OBJDIR}/protocolServer.h ${.CURDIR}/firehoseServer.h \
-	${.OBJDIR}/firehose_replyServer.h
+migs: protocolServer.h firehoseServer.h firehose_replyServer.h
 
-${.OBJDIR}/lib${LIB}.dylib: ${.OBJDIR}/BlocksRuntime migs ${LOBJS}
+${.OBJDIR}/lib${LIB}.dylib: migs ${LOBJS} ${.OBJDIR}/BlocksRuntime
 	${CC} -fuse-ld=${LD} -shared -dylib -o ${.TARGET} ${LOBJS} ${LDFLAGS}
 	cp -f ${.TARGET} ${RAVYN_SDKROOT}/usr/lib/system/
 	cp -f ${.TARGET} ${SYSROOT_DIR}/usr/lib/system/

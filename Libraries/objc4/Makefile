@@ -41,8 +41,7 @@ SRCS =	runtime/hashtable2.mm \
 	runtime/objc-opt.mm \
 	runtime/objc-zalloc.mm \
 	runtime/objc-cache-old.mm \
-	runtime/objc-sel-old.mm \
-	macho.c
+	runtime/objc-sel-old.mm
 	# ./runtime/objc-probes.d # FIXME: need to generate .h from this
 
 CFLAGS.objc-auto.o = -fexceptions
@@ -69,7 +68,9 @@ COMMONFLAGS = --sysroot=${RAVYN_SDKROOT} \
 
 # SUPPORT_PREOPT and __OBJC2__ add support for the dyld objc shared cache
 COMMONFLAGS += -D_LIBC_NO_FEATURE_VERIFICATION -DTARGET_OS_IOSMAC=0 \
-	      -DTARGET_OS_OSX=1 -DNDEBUG -D__OBJC2__ -DSUPPORT_PREOPT
+	      -DTARGET_OS_OSX=1 -DDEBUG -D__OBJC2__ -DSUPPORT_PREOPT \
+              -DSUPPORT_DIRECT_THREAD_KEYS -DSUPPORT_RETURN_AUTORELEASE \
+              -DOBJC_IS_DEBUG_BUILD
 
 CFLAGS = ${COMMONFLAGS} -std=gnu11
 OBJCFLAGS = ${COMMONFLAGS} -std=gnu11 \
