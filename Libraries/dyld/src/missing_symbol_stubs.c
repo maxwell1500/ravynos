@@ -15,6 +15,8 @@
 #include <sys/fcntl.h>
 #include <_simple.h>
 
+char **environ;
+
 int __snprintf_chk(char * str, size_t maxlen, int flag, size_t strlen, const char * format, ...)
 {
     va_list args;
@@ -34,7 +36,6 @@ int inDenyList(const char * path)
 
 int fflush(FILE *stream)
 {
-_simple_dprintf(1, "fflush dyld stub!\n");
         return 0;
 }
 
@@ -54,18 +55,10 @@ _simple_dprintf(1, "dlopen dyld stub! %s %x\n", path, mode);
     return NULL;
 }
 
-/* absolutely in no way at all an aligned_alloc */
-void* aligned_alloc(size_t alignment, size_t size)
-{
-        return malloc(size);
-}
-
 char* getenv(const char* name)
 {
-_simple_dprintf(1, "getenv() dyld stub! %s\n", name);
-        return NULL;
+	return _simple_getenv(environ, name);
 }
-
 
 /* c++ glue */
 void __cxa_finalize(void *d)

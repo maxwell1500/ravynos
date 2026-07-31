@@ -93,7 +93,7 @@ LDFLAGS = --target=${CpuArch}-apple-darwin --sysroot=${RAVYN_SDKROOT} \
 	-Wl,-upward-lxpc \
 	-Wl,-upward-lsystem_blocks -Wl,-upward-lsystem_kernel \
 	-Wl,-upward-ldispatch \
-	-Wl,-upward-lcompiler_rt -lunwind -lc++
+	-Wl,-upward-lcompiler_rt 
 
 all: ${.OBJDIR}/lib${LIB}.dylib
 
