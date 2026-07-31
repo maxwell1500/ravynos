@@ -60,6 +60,42 @@ static dyld_static_pool initialPool = { NULL, initialPoolContent, &initialPoolCo
 static dyld_static_pool* currentPool = &initialPool;
 
 
+void* aligned_alloc(size_t align, size_t size)
+{
+	if ( size > DYLD_POOL_CHUNK_SIZE ) {
+		dyld::log("dyld aligned_alloc overflow: size=%lu\n", size);
+		dyld::halt("dyld aligned_alloc overflow\n");
+	}
+	size = (size+align-1) & (-align);
+	uint8_t* result = (uint8_t *)((uintptr_t)currentPool->current & (-align));
+	if (result != currentPool->current) {
+		result = (uint8_t *)(((uintptr_t)currentPool->current + align - 1) & (-align));
+		currentPool->current = result;
+	}
+	currentPool->current += size;
+	if ( currentPool->current > currentPool->end ) {
+		vm_address_t addr = 0;
+		kern_return_t r = vm_allocate(mach_task_self(), &addr, DYLD_POOL_CHUNK_SIZE, VM_FLAGS_ANYWHERE);
+		if ( r != KERN_SUCCESS ) {
+			dyld::halt("out of address space for dyld memory pool\n");
+		}
+		dyld_static_pool* newPool = (dyld_static_pool*)addr;
+		newPool->previousPool = NULL;
+		newPool->current = newPool->pool;
+		newPool->end = (uint8_t*)(addr + DYLD_POOL_CHUNK_SIZE);
+		newPool->previousPool = currentPool;
+		currentPool = newPool;
+		if ( (currentPool->current + size) > currentPool->end ) {
+			dyld::log("dyld memory pool exhausted: size=%lu\n", size);
+			dyld::halt("dyld memory pool exhausted\n");
+		}
+		result = currentPool->current;
+		currentPool->current += size;
+	}
+	//dyld::log("%p = malloc(%3lu) from pool %p, free space = %lu\n", result, size, currentPool, (long)(currentPool->end - currentPool->current));
+	return result;
+}
+
 void* malloc(size_t size)
 {
 	if ( (dyld::gLibSystemHelpers != NULL) && dyld::gProcessInfo->libSystemInitialized ) {
