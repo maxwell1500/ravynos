@@ -40,10 +40,9 @@ typedef enum NSComparisonResult {
 #include <Foundation/NSObjCRuntime.h>
 #include <objc/NSObject.h>
 
-@interface NSObject(ravyn)
+@interface NSObject (Foundation)
 +(NSInteger)version;
 +(void)setVersion:(NSInteger)version;
-+(void)load;
 +(void)initialize;
 @end
 

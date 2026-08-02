@@ -1,10 +1,24 @@
 /* Copyright (c) 2006-2007 Christopher J. W. Lloyd
+   Copyright (c) 2024-2026 Zoe Knox
 
-Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+of the Software, and to permit persons to whom the Software is furnished to do
+so, subject to the following conditions:
 
-The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. */
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.*/
+
 #import <Foundation/NSObject.h>
 #import <Foundation/NSAutoreleasePool.h>
 #import <Foundation/NSException.h>
@@ -20,8 +34,12 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 #import <objc/message.h>
 #import "forwarding.h"
 
+#include <CoreFoundation/CFRuntime.h>
+
 /* zoe 2/10/26 - we now use NSObject from Apple's runtime. The remaining functions
  * here are additions or changes to the base class */
+
+typedef void *malloc_zone_t;
 
 // From Apple docs:
 // Returns a Boolean value that indicates whether the receiver is an instance of given class
@@ -48,7 +66,10 @@ BOOL NSObjectIsKindOfClass(id object,Class kindOf) {
 @end
 
 
-@implementation NSObject
+@implementation NSObject (Foundation)
++(NSObject *)allocWithZone: (NSZone *)zone {
+   return NSAllocateObject(self, 0, zone);
+}
 
 +(NSInteger)version {
    return class_getVersion(self);
@@ -59,85 +80,10 @@ BOOL NSObjectIsKindOfClass(id object,Class kindOf) {
    class_setVersion(self,version);
 }
 
-#ifndef APPLE_RUNTIME_4
-+(void)load {
-}
-
 +(void)initialize {
     objc_setForwardHandler(_objc_msgForward,_objc_msgForward_stret);
 }
 
-+(Class)superclass {
-   return class_getSuperclass(self);
-}
-
-
-+(Class)class {
-   return self;
-}
-
-// From Apple docs:
-// Returns a Boolean value that indicates whether the receiving class is a subclass of, or identical to, a given class.
-
-+(BOOL)isSubclassOfClass:(Class)cls {
-   Class check=self;
-   
-   do {
-	   
-    if(check==cls)
-     return YES;
-
-	check=[check superclass];
-
-   }while(check && check != [NSObject class] &&
-		  check != [NSProxy class]);
-   
-   return NO;
-}
-
-+(BOOL)instancesRespondToSelector:(SEL)selector {
-   return class_respondsToSelector(self,selector);
-}
-
-+(BOOL)conformsToProtocol:(Protocol *)protocol {
-   return class_conformsToProtocol(self,protocol);
-}
-
-
-+(IMP)methodForSelector:(SEL)selector {
-   return class_getMethodImplementation(object_getClass(self),selector);
-}
-
-+(IMP)instanceMethodForSelector:(SEL)selector {
-   return class_getMethodImplementation(self,selector);
-}
-
-+(NSMethodSignature *)instanceMethodSignatureForSelector:(SEL)selector {
-   Method      method=class_getInstanceMethod(self,selector);
-   const char *types=method_getTypeEncoding(method);
-
-   return (types==NULL)?(NSMethodSignature *)nil:[NSMethodSignature signatureWithObjCTypes:types];
-}
-
-+(BOOL)resolveClassMethod:(SEL)selector {
-   // do nothing
-   return NO;
-}
-
-+(BOOL)resolveInstanceMethod:(SEL)selector {
-   // do nothing
-   return NO;
-}
-
-+copyWithZone:(NSZone *)zone {
-   return self;
-}
-
-
-+mutableCopyWithZone:(NSZone *)zone {
-   NSInvalidAbstractInvocation();
-   return nil;
-}
 
 + (void)poseAsClass:(Class)aClass
 {
@@ -146,54 +92,8 @@ BOOL NSObjectIsKindOfClass(id object,Class kindOf) {
     [pool release];
 }
 
-
-+(NSString *)description {
-   return NSStringFromClass(self);
-}
-
-+(NSString *)debugDescription {
-    return [self description];
-}
-
-+alloc {
-   return [self allocWithZone:NULL];
-}
-
-
-+allocWithZone:(NSZone *)zone {
-   return NSAllocateObject([self class],0,zone);
-}
-
-
--(void)dealloc {
-   NSDeallocateObject(self);
-}
-
--(void)finalize {
-   // do nothing
-}
-
--init {
-   return self;
-}
-
-
-+new {
-   return [[self allocWithZone:NULL] init];
-}
-
-
-+(void)dealloc {
-}
-
-
--copy {
-   return [(id <NSCopying>)self copyWithZone:NULL];
-}
-
-
--mutableCopy {
-   return [(id <NSMutableCopying>)self mutableCopyWithZone:NULL];
+-(uint32_t *)cfinfo {
+   return (uint32_t *)(self->cfinfo);
 }
 
 -(Class)classForCoder {
@@ -215,27 +115,6 @@ BOOL NSObjectIsKindOfClass(id object,Class kindOf) {
 
 -awakeAfterUsingCoder:(NSCoder *)coder {
    return self;
-}
-
--(IMP)methodForSelector:(SEL)selector {
-   return class_getMethodImplementation(object_getClass(self),selector);
-}
-
--(void)doesNotRecognizeSelector:(SEL)selector {
-   [NSException raise:NSInvalidArgumentException
-     format:@"%c[%@ %@]: selector not recognized", class_isMetaClass(object_getClass(self))?'+':'-',
-      NSStringFromClass(object_getClass(self)),NSStringFromSelector(selector)];
-}
-
--(NSMethodSignature *)methodSignatureForSelector:(SEL)selector {
-   Method      method=class_getInstanceMethod(object_getClass(self),selector);
-   const char *types=method_getTypeEncoding(method);
-
-   return (types==NULL)?(NSMethodSignature *)nil:[NSMethodSignature signatureWithObjCTypes:types];
-}
-
--(void)forwardInvocation:(NSInvocation *)invocation {
-   [self doesNotRecognizeSelector:[invocation selector]];
 }
 
 -(NSUInteger)_frameLengthForSelector:(SEL)selector {
@@ -263,132 +142,6 @@ BOOL NSObjectIsKindOfClass(id object,Class kindOf) {
     return result;
    }
 }
-
-
-
--(NSUInteger)hash {
-   return (NSUInteger)self>>4;
-}
-
-
--(BOOL)isEqual:object {
-   return (self==object)?YES:NO;
-}
-
-
--self {
-   return self;
-}
-
-
--(Class)class {
-   return object_getClass(self);
-}
-
-/* FIXME: is there a object_getSuperClass? */
--(Class)superclass {
-   return class_getSuperclass(object_getClass(self));
-}
-
-
--(NSZone *)zone {
-   return NSZoneFromPointer(self);
-}
-
-
-- performSelector:(SEL)selector
-{
-#if defined(GCC_RUNTIME_3) || defined(APPLE_RUNTIME_4)
-    IMP imp = class_getMethodImplementation(object_getClass(self), selector);
-#else
-    IMP imp = objc_msg_lookup_sender(self, selector, self);
-#endif
-    return ((id (*)(id,SEL))imp)(self, selector);
-}
-
-
-- performSelector:(SEL)selector withObject:object0
-{
-#if defined(GCC_RUNTIME_3) || defined(APPLE_RUNTIME_4)
-    IMP imp = class_getMethodImplementation(object_getClass(self), selector);
-#else
-    IMP imp = objc_msg_lookup_sender(self, selector, self);
-#endif
-    return ((id (*)(id,SEL,id))imp)(self, selector, object0);
-}
-
-- performSelector:(SEL)selector withObject:object0 withObject:object1
-{
-#if defined(GCC_RUNTIME_3) || defined(APPLE_RUNTIME_4)
-    IMP imp = class_getMethodImplementation(object_getClass(self), selector);
-#else
-    IMP imp = objc_msg_lookup_sender(self, selector, self);
-#endif
-    return ((id (*)(id,SEL,id,id))imp)(self, selector, object0, object1);
-}
-
-
--(BOOL)isProxy {
-   return NO;
-}
-
-
--(BOOL)isKindOfClass:(Class)class {
-   return NSObjectIsKindOfClass(self,class);
-}
-
-
--(BOOL)isMemberOfClass:(Class)class {
-   return (object_getClass(self)==class);
-}
-
-
--(BOOL)conformsToProtocol:(Protocol *)protocol {
-   return [object_getClass(self) conformsToProtocol:protocol];
-}
-
-
--(BOOL)respondsToSelector:(SEL)selector {
-   return class_respondsToSelector(object_getClass(self),selector);
-}
-
--autorelease {
-   return NSAutorelease(self);
-}
-
-+autorelease {
-   return self;
-}
-
--(oneway void)release {
-   if(NSDecrementExtraRefCountWasZero(self))
-    [self dealloc];
-}
-
-+(oneway void)release {
-}
-
--retain {
-   NSIncrementExtraRefCount(self);
-   return self;
-}
-
-+retain {
-   return self;
-}
-
--(NSUInteger)retainCount {
-   return object_getRetainCount_np(self);
-}
-
--(NSString *)description {
-   return [NSString stringWithFormat:@"<%@ 0x%08x>",[self class],self];
-}
-
--(NSString *)debugDescription {
-    return [self description];
-}
-#endif /* APPLE_RUNTIME_4 */
 
 +(NSString *)className {
    return NSStringFromClass(self);
