@@ -93,7 +93,7 @@ _resource_files: ${RESOURCES_DIR}
 .endfor
 .endif
 
-all: ${FRAMEWORK} fmwk-install-hook
+all: ${FRAMEWORK} .WAIT fmwk-install-hook
 
 .if !target(fmwk-install-hook)
 fmwk-install-hook: .PHONY
