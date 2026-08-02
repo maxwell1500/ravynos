@@ -34,6 +34,8 @@
 #include <unistd.h>
 #endif
 
+#include <CoreFoundation/CFRuntime.h>
+
 // NSZone functions implemented in platform subproject
 
 void NSIncrementExtraRefCount(id object) {
@@ -73,6 +75,12 @@ id NSAllocateObject(Class class, NSUInteger extraBytes, NSZone *zone)
             __NSAllocateObjectHook(result);
         }
     }
+
+    /* Make sure our type is aligned with CoreFoundation */
+    CFRuntimeBase *base = (CFRuntimeBase *)result;
+    uint32_t *cfinfo = (uint32_t *)(base->_cfinfo);
+    uint32_t typeid = (uint32_t)[result _cfTypeID];
+    *cfinfo = (uint32_t)result | (typeid << 8);
 
     return result;
 }

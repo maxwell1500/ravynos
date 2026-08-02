@@ -53,7 +53,11 @@ OBJC_EXPORT
 @interface NSObject <NSObject> {
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wobjc-interface-ivars"
+    /* Keep aligned with CFRuntimeBase */
     Class isa  OBJC_ISA_AVAILABILITY;
+    uintptr_t bits;
+    unsigned char cfinfo[4];
+    unsigned int rc;
 #pragma clang diagnostic pop
 }
 
