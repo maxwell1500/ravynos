@@ -2,7 +2,7 @@
 #  RAVYNOS BUILD SYSTEM - TOP LEVEL
 # ------------------------------------------------------------------------
 
-PROD_VERSION = 0.7.0
+PROD_VERSION = 0.7.1
 PROD_FAMILY = Pre Alpha
 
 # Set ONE arch and ONE config
