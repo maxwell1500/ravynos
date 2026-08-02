@@ -23,6 +23,7 @@ LDFLAGS = --sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSION_MIN} \
 SUBDIR = dfalib
 
 all: all_subdir_BSD/sbin/fsck_hfs/dfalib to-sysroot
+${PROG}: all_subdir_BSD/sbin/fsck_hfs/dfalib
 
 to-sysroot: ${PROG}
 	mkdir -p ${SYSROOT_DIR}/sbin
