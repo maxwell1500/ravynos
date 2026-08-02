@@ -17,7 +17,10 @@
 NSStringEncoding defaultEncoding()
 {
 #if 1
-    static int defaultEncoding = NSUnicodeStringEncoding;
+    /* We do not have getpwuid() yet (libsystem_info) so the code in this
+     * #else clause will crash. Remove this once libinfo is available.
+     */
+    return NSISOLatin1StringEncoding;
 #else
     //don't use objc calls because they call often defaultCStringEncoding 
 
@@ -64,12 +67,12 @@ defaultEncoding = NSISOLatin1StringEncoding;
 				case 0x0100:
 					defaultEncoding = NSUnicodeStringEncoding;
 // FIXME: use until the right encoding is implemented
-//defaultEncoding = NSISOLatin1StringEncoding;
+defaultEncoding = NSISOLatin1StringEncoding;
 					break;
 				case 0x08000100:
 					defaultEncoding = NSUTF8StringEncoding;
 // FIXME: use until the right encoding is implemented
-//defaultEncoding = NSISOLatin1StringEncoding;
+defaultEncoding = NSISOLatin1StringEncoding;
 					break;	
 				case 0x0BFF:
 					defaultEncoding = NSNonLossyASCIIStringEncoding;
@@ -96,7 +99,7 @@ defaultEncoding = NSISOLatin1StringEncoding;
 			defaultEncoding = NSMacOSRomanStringEncoding;
 		}
 	}
-#endif
 	
 	return defaultEncoding;		    
+#endif
 }
