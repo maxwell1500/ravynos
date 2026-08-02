@@ -230,9 +230,11 @@ NSUInteger NSPlatformThreadID() {
     return [NSString stringWithCString:remoteHost->h_name];
 }
 
+#ifndef __RAVYNOS__
 void NSPlatformLogString(NSString *string) {
     fprintf(stderr, "%s\n", [string UTF8String]);
 }
+#endif
 
 void *NSPlatformContentsOfFile(NSString *path,NSUInteger *lengthp) {
     int fd = open([path fileSystemRepresentation], O_RDONLY);

@@ -125,5 +125,10 @@ NSString * const NSPlatformLoadableObjectFilePrefix=@"";
 char **NSPlatform_environ() {   
    return *_NSGetEnviron();
 }
+
+void NSPlatformLogString(NSString *string) {
+    // FIXME: zoe 31/7/26 This should use os_log().
+    fprintf(stderr, "%s\n", [string UTF8String]);
+}
 #endif
 

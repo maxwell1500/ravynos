@@ -16,6 +16,9 @@
 
 NSStringEncoding defaultEncoding()
 {
+#if 1
+    static int defaultEncoding = NSUnicodeStringEncoding;
+#else
     //don't use objc calls because they call often defaultCStringEncoding 
 
     static int defaultEncoding = -1;
@@ -61,12 +64,12 @@ defaultEncoding = NSISOLatin1StringEncoding;
 				case 0x0100:
 					defaultEncoding = NSUnicodeStringEncoding;
 // FIXME: use until the right encoding is implemented
-defaultEncoding = NSISOLatin1StringEncoding;
+//defaultEncoding = NSISOLatin1StringEncoding;
 					break;
 				case 0x08000100:
 					defaultEncoding = NSUTF8StringEncoding;
 // FIXME: use until the right encoding is implemented
-defaultEncoding = NSISOLatin1StringEncoding;
+//defaultEncoding = NSISOLatin1StringEncoding;
 					break;	
 				case 0x0BFF:
 					defaultEncoding = NSNonLossyASCIIStringEncoding;
@@ -93,6 +96,7 @@ defaultEncoding = NSISOLatin1StringEncoding;
 			defaultEncoding = NSMacOSRomanStringEncoding;
 		}
 	}
+#endif
 	
 	return defaultEncoding;		    
 }
