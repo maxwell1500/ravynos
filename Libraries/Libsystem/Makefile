@@ -33,7 +33,7 @@ LDFLAGS = -mmacos-version-min=${MACOS_VERSION_MIN} \
 	-Wl,-compatibility_version,1.0.0 \
 	-nodefaultlibs -dylib -Wl,-search_paths_first \
 	-Wl,-reexport-lsystem_c -Wl,-reexport-lsystem_blocks \
-	-Wl,-reexport-lsystem_asl \
+	-Wl,-reexport-lsystem_asl -Wl,-reexport-lCrashReporterClient \
 	-Wl,-reexport-lsystem_malloc -Wl,-reexport-lsystem_platform \
 	-Wl,-reexport-lsystem_darwin -Wl,-reexport-lsystem_pthread \
 	-Wl,-reexport-lsystem_kernel -Wl,-reexport-lcompiler_rt \
@@ -44,8 +44,7 @@ LDFLAGS = -mmacos-version-min=${MACOS_VERSION_MIN} \
 	-Wl,-reexport-lcopyfile -Wl,-reexport-lmacho \
 	-Wl,-reexport-lremovefile -Wl,-reexport-lsystem_trace \
 	-Wl,-reexport-lsystem_dnssd -Wl,-reexport-lcorecrypto \
-	-Wl,-force_load,${RAVYN_SDKROOT}/usr/lib/system/libCrashReporterClient.a \
-	-lcompiler_rt -ldyld -lsystem_c -lc++ \
+	-lcompiler_rt -ldyld -lsystem_c -lc++ -lCrashReporterClient\
 	-lsystem_platform -lsystem_kernel -lsystem_blocks -lsystem_malloc \
 	-lsystem_info -lsystem_notify -lsystem_trace -lsystem_asl \
 	-lsystem_blocks -lsystem_pthread -ldispatch -lxpc -llaunch -lsystem_m

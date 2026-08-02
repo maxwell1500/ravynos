@@ -80,7 +80,7 @@ LDFLAGS = --sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSION_MIN} \
 	-Wl,-order_file,${.CURDIR}/xcodeconfig/libdispatch.order \
 	-Wl,-upward-lobjc -lclang_rt.osx 
 
-all: lib${LIB}.dylib
+all: BlocksRuntime lib${LIB}.dylib
 
 protocolServer.h protocol.h libdispatch_internal_protocolServer.c \
 	libdispatch_internal_protocolUser.c: ${.CURDIR}/src/protocol.defs
@@ -98,13 +98,13 @@ firehose_replyServer.h firehose_reply.h firehoseReplyServer.c firehoseReplyUser.
 
 lib${LIB}.dylib: ${.OBJDIR}/lib${LIB}.dylib
 
-${.OBJDIR}/BlocksRuntime:
+BlocksRuntime:
 	mkdir -p ${.TARGET}
 	cp -f ${.CURDIR}/../libsystem_blocks/Block_private.h ${.TARGET}/
 
 migs: protocolServer.h firehoseServer.h firehose_replyServer.h
 
-${.OBJDIR}/lib${LIB}.dylib: migs ${LOBJS} ${.OBJDIR}/BlocksRuntime
+${.OBJDIR}/lib${LIB}.dylib: migs ${LOBJS} 
 	${CC} -fuse-ld=${LD} -shared -dylib -o ${.TARGET} ${LOBJS} ${LDFLAGS}
 	cp -f ${.TARGET} ${RAVYN_SDKROOT}/usr/lib/system/
 	cp -f ${.TARGET} ${SYSROOT_DIR}/usr/lib/system/
