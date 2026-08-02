@@ -5,7 +5,7 @@ FPATH = /System/Library/Frameworks/System.framework
 libc_path = ${ROOT_SOURCE_DIR}/Libraries/Libsystem/libsystem_c
 objc_path = ${ROOT_SOURCE_DIR}/Libraries/objc4
 
-all: ${PLATFORM_DIR} ${TOOLS}/unifdef
+all: ${PLATFORM_DIR} ${TOOLS}/unifdef .EXEC
 	mkdir -p ${RAVYN_SDKROOT}${FPATH}/Versions/B
 	mkdir -p ${RAVYN_SDKROOT}/usr/local/include
 	mkdir -p ${RAVYN_SDKROOT}/usr/local/lib
