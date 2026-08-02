@@ -260,11 +260,9 @@ SRCS = 	NSFormatter.m \
 	NSAttributedString/NSAttributedString_oneAttribute.m \
 	NSAttributedString/NSMutableString_proxyToMutableAttributedString.m \
 	NSAttributedString/NSMutableAttributedString.m \
-	NSObject/NSObject.m \
-	NSObject/objc_forward_ffi.m \
+        NSObject/NSObject.m \
 	NSObject/objc_size_alignment.m \
 	NSObject/NSZombieObject.m \
-	NSObject/forwarding.mm \
 	NSDistributedLock.m \
 	NSMetadata/NSMetadataQuery.m \
 	NSMetadata/NSMetadataQueryResultGroup.m \
@@ -329,19 +327,20 @@ SRCS = 	NSFormatter.m \
 
 # FIXME: we should build with HAVE_FFI=1
 CFLAGS = -DAPPLE_RUNTIME_4 -DDARWIN -DNULL=0 -DTARGET_OS_IOSMAC=0 \
-	-DPLATFORM_IS_POSIX -DPLATFORM_USES_BSD_SOCKETS \
+	-DPLATFORM_IS_POSIX -DPLATFORM_USES_BSD_SOCKETS -DNSBUILDINGFOUNDATION \
 	--sysroot=${RAVYN_SDKROOT} -Wno-implicit-function-declaration \
 	-Wno-nullability-completeness \
 	-I${RAVYN_SDKROOT}/usr/local/include/kernel -I${.CURDIR}/Headers \
 	-I${.CURDIR:H} -I${ROOT_SOURCE_DIR}/Libraries/objc4 \
-	-I${ROOT_SOURCE_DIR}/Libraries/Libsystem/libsystem_info/lookup.subproj
+	-I${ROOT_SOURCE_DIR}/Libraries/Libsystem/libsystem_info/lookup.subproj \
+        -I${ROOT_SOURCE_DIR}/Libraries/Libsystem/liblaunch
 
 CXXFLAGS = -DTARGET_OS_BRIDGE=0 ${CFLAGS:N*-std=*}
 
 # We need to link this manually to avoid chicken & egg issue with ld wanting
 # to link against Foundation and libobjc :)
 LDFLAGS = --sysroot=${RAVYN_SDKROOT} -Wl,-current_version,1677.104.0 \
-	-Wl,-compatibility_version,300.0.0 -Xlinker -lobjc \
+	-Wl,-compatibility_version,300.0.0 -Xlinker -reexport-lobjc \
 	-F${RAVYN_SDKROOT}/System/Library/Frameworks -framework CoreFoundation \
 	-lSystem
 
@@ -351,7 +350,8 @@ CFLAGS.${file}.o = -I${.CURDIR}/NSString
 CFLAGS.NSAutoreleasePool.o = -I${ROOT_SOURCE_DIR}/Libraries/objc4
 CFLAGS.forwarding.o = -I${ROOT_SOURCE_DIR}/Libraries/objc4 \
 	-I${RAVYN_SDKROOT}${SLF}/System.framework/Versions/B/PrivateHeaders \
-	-I/nest/ravynos/Libraries/Libsystem/private
+	-I/nest/ravynos/Libraries/Libsystem/private \
+        -include${.CURDIR:H}/CoreFoundation/ForFoundationOnly.h
 
 fmwk-install-hook:
 .for dir in ${RAVYN_SDKROOT}/System/Library/Frameworks/ ${SYSROOT_DIR}/System/Library/Frameworks/
