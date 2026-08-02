@@ -1,5 +1,5 @@
 /* Copyright (c) 2009 Jens Ayton
-   Copyright (C) 2024 Zoe Knox <zoe@ravynsoft.com>
+   Copyright (C) 2024-2026 Zoe Knox <zoe@ravynsoft.com>
  
  Permission is hereby granted, free of charge, to any person obtaining a copy
  of this software and associated documentation files (the "Software"), to deal
@@ -21,32 +21,52 @@
 
 /* IMPORTANT: these are for internal use only. They are subject to chage
    without notice. Use the appropriate functions (e.g. CFStringGetTypeID())
-   rather than assuming specific values.
+   rather than assuming specific values. Aligned to CF on 1/8/26.
 */
 
 enum {
-    kNSCFTypeObject = 1,
-
+    kNSCFTypeNotAType = 0,
+    kNSCFTypeTypeID,
     kNSCFTypeAllocator,
-    kNSCFTypeArray,
-    kNSCFTypeAttributedString,
+    kNSCFTypeBasicHash,
     kNSCFTypeBag,
+    kNSCFTypeObject,
+    /* empty slot 6 */
+    kNSCFTypeString = 7, // "must be 0x7, now and forever"
+    /* empty slots 8-15 */
+    kNSCFTypeNull = 16,
+    kNSCFTypeSet,
+    kNSCFTypeDictionary,
+    kNSCFTypeArray,
+    kNSCFTypeData,
+    kNSCFTypeBoolean,
+    kNSCFTypeNumber,
     kNSCFTypeBinaryHeap,
     kNSCFTypeBitVector,
-    kNSCFTypeBoolean,
     kNSCFTypeCharacterSet,
-    kNSCFTypeData,
-    kNSCFTypeDate,
+    kNSCFTypeStorage,
     kNSCFTypeError,
-    kNSCFTypeDictionary,
-    kNSCFTypeMachPort,
+    kNSCFTypeTree,
+    kNSCFTypeURL,
+    kNSCFTypeBundle,
+    kNSCFTypePFactory,
+    kNSCFTypePlugIn,
+    kNSCFTypePlugInInstance,
+    kNSCFTypeUUID,
     kNSCFTypeMessagePort,
+    kNSCFTypeMachPort,
+    kNSCFTypeStream,
+    kNSCFTypeDate,
+    kNSCFTypeRunLoop,
+    kNSCFTypeRunLoopObserver,
+    kNSCFTypeRunLoopSource,
+    kNSCFTypeRunLoopTimer,
+    kNSCFTypeTimeZone,
+    kNSCFTypeCalendar,
+
+    kNSCFTypeAttributedString,
     kNSCFTypeNotificationCenter,
-    kNSCFTypeNumber,
-    kNSCFTypeSet,
-    kNSCFTypeSocket,
-    kNSCFTypeString,
-    kNSCFTypeUUID
+    kNSCFTypeSocket
 };
 
 #if __OBJC__
