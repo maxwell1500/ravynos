@@ -2128,7 +2128,7 @@ task_deliver_crash_notification(
 
                 printf("Stack:\n");
                 uint64_t* frame = (uint64_t *)(ss->rbp);
-                for (int i = 0; i < 8; ++i) {
+                for (int i = 0; frame && i < 8; ++i) {
                         printf("%016llx\n", *(frame + 1)); // ret addr
                         frame = (uint64_t *)(*frame);
                 }
