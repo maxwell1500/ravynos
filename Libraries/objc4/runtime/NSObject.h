@@ -56,8 +56,6 @@ OBJC_EXPORT
     /* Keep aligned with CFRuntimeBase */
     Class isa  OBJC_ISA_AVAILABILITY;
     uintptr_t bits;
-    unsigned char cfinfo[4];
-    unsigned int rc;
 #pragma clang diagnostic pop
 }
 

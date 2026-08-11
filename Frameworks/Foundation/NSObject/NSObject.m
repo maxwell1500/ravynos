@@ -92,9 +92,11 @@ BOOL NSObjectIsKindOfClass(id object,Class kindOf) {
     [pool release];
 }
 
+#if TOLL_FREE_BRIDGING
 -(uint32_t *)cfinfo {
    return (uint32_t *)(self->cfinfo);
 }
+#endif
 
 -(Class)classForCoder {
    return object_getClass(self);

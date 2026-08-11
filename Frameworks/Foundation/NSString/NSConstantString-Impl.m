@@ -33,15 +33,15 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 @implementation NSConstantString(Impl)
 
 static BOOL storageIsASCII(NSConstantString *self){
-   return ((self->flags & 3) == 0 )?YES:NO;
+    return (self->_length & 0x40000000) ? YES : NO;
 }
 
 static inline NSUInteger lengthOfBytes(NSConstantString *self){
-   return self->size;
+    return self->_length & 0x0fffffff;
 }
 
 static inline NSUInteger lengthInUnicode(NSConstantString *self){
-   return self->_length;
+    return self->_length & 0x0fffffff;
 }
 
 
@@ -80,7 +80,7 @@ static inline NSUInteger lengthInUnicode(NSConstantString *self){
 -(NSUInteger)lengthOfBytesUsingEncoding:(NSStringEncoding)encoding {
     switch (encoding) {
         case NSUTF8StringEncoding:
-	    if(self->flags == 0) // ASCII string
+            if(self->_length & 0x40000000 != 0) // ASCII string
 	        return self->_length;
 	    return NSConvertUTF16toUTF8(self->_bytes,self->_length,NULL);
         case NSASCIIStringEncoding:
