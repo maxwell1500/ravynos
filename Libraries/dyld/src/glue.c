@@ -46,6 +46,7 @@
 #include <corecrypto/ccdigest.h>
 #include <corecrypto/ccsha1.h>
 #include <corecrypto/ccsha2.h>
+#include <execinfo.h>
 
 #if TARGET_OS_SIMULATOR
 	#include "dyldSyscallInterface.h"
@@ -247,8 +248,14 @@ void abort_report_np(const char* format, ...)
 #define _ZN4dyld3logEPKcz(fmt, ...) _simple_dprintf(2, fmt, __VA_ARGS__)
 void _ZN4dyld4haltEPKc(const char *msg)
 {
+    _simple_dprintf(2, "libdyld: ");
     _simple_dprintf(2, msg);
-    _exit(-1);
+    _simple_dprintf(2, "\n");
+    void *callstack[500];
+    int frameCount = backtrace(callstack, 500);
+    backtrace_symbols_fd(callstack, frameCount, 2);
+    asm("int3");
+    asm("ud2");
 }
 #endif
 
@@ -295,12 +302,6 @@ void cthread_set_errno_self(int err)
 struct tm* localtime(const time_t* t)
 {
 	return (struct tm*)NULL;
-}
-
-// malloc calls exit(-1) in case of errors...
-void exit(int x)
-{
-    _ZN4dyld4haltEPKc("exit()");
 }
 
 // static initializers make calls to __cxa_atexit
@@ -938,8 +939,8 @@ kern_return_t mach_port_destruct(ipc_space_t task, mach_port_name_t name, mach_p
 
 void abort_with_payload(uint32_t reason_namespace, uint64_t reason_code, void* payload, uint32_t payload_size, const char* reason_string, uint64_t reason_flags)
 {
-//	if ( gSyscallHelpers->version >= 6 )
-//		gSyscallHelpers->abort_with_payload(reason_namespace, reason_code, payload, payload_size, reason_string, reason_flags);
+	if ( gSyscallHelpers->version >= 6 )
+		gSyscallHelpers->abort_with_payload(reason_namespace, reason_code, payload, payload_size, reason_string, reason_flags);
 	dyld_fatal_error(reason_string);
 }
 
