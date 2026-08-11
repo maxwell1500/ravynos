@@ -19,7 +19,7 @@ PRIVATE_HEADERS = CFBundlePriv.h CFCharacterSetPriv.h CFError_Private.h \
 	CFStreamPriv.h CFStreamInternal.h CFStringDefaultEncoding.h \
 	CFStringEncodingConverter.h CFStringEncodingConverterExt.h \
 	CFUniChar.h CFUnicodeDecomposition.h CFUnicodePrecomposition.h \
-	ForFoundationOnly.h CFBurstTrie.h CFICULogging.h
+	ForFoundationOnly.h CFBurstTrie.h CFICULogging.h CFBridging.h
 
 SLF = /System/Library/Frameworks
 INSTALL_NAME_DIR = ${SLF}/${FRAMEWORK}.framework/Versions/${FMWK_VERSION}
@@ -35,6 +35,7 @@ SRCS = CFApplicationPreferences.c \
 	CFBinaryHeap.c \
 	CFBinaryPList.c \
 	CFBitVector.c \
+	CFBridging.c \
 	CFBuiltinConverters.c \
 	CFBundle.c \
 	CFBundle_Binary.c \
@@ -114,10 +115,12 @@ unicode_data_file_name = CFUnicodeData-L.mapping
 unicode_data_file_name = CFUnicodeData-B.mapping
 .endif
 
-CFLAGS = -DCF_BUILDING_CF -DU_SHOW_CPLUSPLUS_API -DU_SHOW_DRAFT_API \
+CFLAGS = -ObjC -DCF_BUILDING_CF -DU_SHOW_CPLUSPLUS_API -DU_SHOW_DRAFT_API \
 	-DDEPLOYMENT_TARGET_MACOSX -D"MAC_OS_X_VERSION_MAX_ALLOWED=0x0D0100" \
 	-DVERSION=${VERSION} -DTARGET_OS_BRIDGE=0 -fconstant-cfstrings \
-	-fexceptions -Wno-implicit-function-declaration \
+        -DINCLUDE_OBJC -DUSE_STRING_ROM -DTARGET_OS_IOSMAC=0 \
+        -fexceptions -fconstant-cfstrings \
+        -Wno-implicit-function-declaration -Wno-return-type \
 	-I${ROOT_SOURCE_DIR}/Kernel/xnu/bsd \
 	-I${ROOT_SOURCE_DIR}/Kernel/xnu/osfmk \
 	-I${.OBJDIR} -I${ROOT_SOURCE_DIR}/Frameworks \
@@ -131,6 +134,7 @@ CFLAGS = -DCF_BUILDING_CF -DU_SHOW_CPLUSPLUS_API -DU_SHOW_DRAFT_API \
 	-I${ROOT_SOURCE_DIR}/Libraries/Libsystem/libsystem_blocks \
 	-I${RAVYN_SDKROOT}/usr/local/include/kernel ${CFLAGS.${.TARGET:T}} \
 	-I${ROOT_BINARY_DIR}${ROOT_SOURCE_DIR}/Kernel/xnu/EXPORT_HDRS/osfmk \
+        -I${.CURDIR:H}/Foundation/Headers \
 	-include${ROOT_SOURCE_DIR}/Kernel/xnu/osfmk/mach/error.h \
 	-include${ROOT_SOURCE_DIR}/Kernel/xnu/libsyscall/mach/mach/mach.h \
 	-include${.CURDIR}/CoreFoundation_Prefix.h
@@ -142,8 +146,9 @@ LDFLAGS = -Wl,-dylib -fexceptions -Wl,-init,___CFInitialize \
 	-Wl,-sectcreate,__UNICODE,__properties,${.CURDIR}/CFUniCharPropertyDatabase.data \
 	-Wl,-sectcreate,__UNICODE,__data,${.CURDIR}/${unicode_data_file_name} \
 	-Wl,-segprot,__UNICODE,r,r \
-	-lSystem -L${RAVYN_SDKROOT}/usr/lib -licucore \
+	-lSystem -L${RAVYN_SDKROOT}/usr/lib -licucore -lobjc \
 	${ROOT_BINARY_DIR}${ROOT_SOURCE_DIR}/Libraries/llvm_target/compiler-rt/lib/ravynos/libclang_rt.osx.a
+SUBDIR =
 
 ${.OBJDIR}/mach-o/arch.h:
 	mkdir -p ${.OBJDIR}/mach-o

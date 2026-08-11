@@ -23,6 +23,8 @@
 
 /*	CFInternal.h
 	Copyright (c) 1998-2014, Apple Inc. All rights reserved.
+
+    Modified for ravynOS by Zoe Knox, 2026
 */
 
 /*
@@ -567,11 +569,29 @@ CF_PRIVATE void _CFIterateDirectory(CFStringRef directoryPath, Boolean (^fileHan
 #define __CFRuntimeClassTableSize 1024
 
 extern void _CFRuntimeSetInstanceTypeIDAndIsa(CFTypeRef cf, CFTypeID newTypeID);
+extern uintptr_t __CFRuntimeObjCClassTable[__CFRuntimeClassTableSize];
 
-#define CF_OBJC_FUNCDISPATCHV(typeID, obj, ...) do { } while (0)
+#if INCLUDE_OBJC
+#include <Foundation/NSRange.h>
+
+#define CF_OBJC_FUNCDISPATCHV(typeID, rettype, obj, ...) \
+    do { \
+        if (CF_IS_OBJC(typeID, obj)) { \
+            [((id)obj) __VA_ARGS__]; \
+        } \
+    } while(0)
+#else
+#define CF_OBJC_FUNCDISPATCHV(typeID, rettype, obj, ...) do { } while(0)
+#endif
 #define CF_OBJC_CALLV(obj, ...) (0)
-#define CF_IS_OBJC(typeID, obj) (0)
-#define __CFISAForTypeID(t) (0)
+#define CF_IS_OBJC(typeID, obj) (obj && (*(uintptr_t *)obj) \
+    && (typeID < __CFRuntimeClassTableSize) \
+    && (*(uintptr_t *)obj == __CFRuntimeObjCClassTable[typeID]))
+#define __CFISAForTypeID(t) (t < __CFRuntimeClassTableSize \
+    ? __CFRuntimeObjCClassTable[t] \
+        ? (uintptr_t)__CFRuntimeObjCClassTable[t] \
+        : (uintptr_t)_CFRuntimeGetClassWithTypeID(t) \
+    : 0)
 
 /* See comments in CFBase.c
 */

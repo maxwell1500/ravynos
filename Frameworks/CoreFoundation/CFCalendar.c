@@ -198,7 +198,7 @@ void CFCalendarSetLocale(CFCalendarRef calendar, CFLocaleRef locale) {
 }
 
 CFTimeZoneRef CFCalendarCopyTimeZone(CFCalendarRef calendar) {
-    CF_OBJC_FUNCDISPATCHV(CFCalendarGetTypeID(), CFTimeZoneRef, calendar_copyTimeZone);
+    CF_OBJC_FUNCDISPATCHV(CFCalendarGetTypeID(), CFTimeZoneRef, calendar, calendar_copyTimeZone);
     __CFGenericValidateType(calendar, CFCalendarGetTypeID());
     return (CFTimeZoneRef)CFRetain(calendar->_tz);
 }

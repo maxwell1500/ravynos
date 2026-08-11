@@ -73,7 +73,11 @@ DEFINE_WEAK_CFNETWORK_FUNC_FAIL(Boolean, _CFURLDestroyResource, (CFURLRef A, SIn
 
 #endif
 
+#if INCLUDE_OBJC
+#include <Foundation/NSTimer.h>
+#else
 typedef struct __NSString__ *NSString;
+#endif
 
 /*
     Pre-10.6 property keys

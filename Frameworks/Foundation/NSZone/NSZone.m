@@ -77,11 +77,7 @@ id NSAllocateObject(Class class, NSUInteger extraBytes, NSZone *zone)
     }
 
     /* Make sure our type is aligned with CoreFoundation */
-    CFRuntimeBase *base = (CFRuntimeBase *)result;
-    uint32_t *cfinfo = (uint32_t *)(base->_cfinfo);
-    uint32_t typeid = (uint32_t)[result _cfTypeID];
-    *cfinfo = (uint32_t)result | (typeid << 8);
-
+    [result _setCFInfo];
     return result;
 }
 
@@ -107,6 +103,6 @@ id NSCopyObject(id object, NSUInteger extraBytes, NSZone *zone)
     if (result) {
         memcpy(result, object, class_getInstanceSize(object_getClass(object)) + extraBytes);
     }
-    
+
     return result;
 }

@@ -45,6 +45,9 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
+#if INCLUDE_OBJC
+#include <Foundation/NSMutableString.h>
+#endif
 #if DEPLOYMENT_TARGET_MACOSX || DEPLOYMENT_TARGET_EMBEDDED || DEPLOYMENT_TARGET_LINUX || DEPLOYMENT_TARGET_FREEBSD
 #include <unistd.h>
 #endif
@@ -2086,7 +2089,6 @@ const char * CFStringGetCStringPtr(CFStringRef str, CFStringEncoding encoding) {
     if (str == NULL) return NULL;   // Should really just crash, but for compatibility... see <rdar://problem/12340248>
     
     CF_OBJC_FUNCDISPATCHV(__kCFStringTypeID, const char *, (NSString *)str, _fastCStringContents:true);
-
     __CFAssertIsString(str);
 
     if (__CFStrHasNullByte(str)) {

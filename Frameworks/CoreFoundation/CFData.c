@@ -31,6 +31,9 @@
 #include "CFInternal.h"
 #include <string.h>
 
+#if INCLUDE_OBJC
+#include <Foundation/NSData.h>
+#endif
 
 
 #if __LP64__

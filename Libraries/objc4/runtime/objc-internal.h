@@ -329,7 +329,7 @@ _objc_makeTaggedPointer(objc_tag_index_t tag, uintptr_t payload);
 
 // Return true if ptr is a tagged pointer object.
 // Does not check the validity of ptr's class.
-static inline bool 
+extern inline bool
 _objc_isTaggedPointer(const void * _Nullable ptr);
 
 // Extract the tag value from the given tagged pointer object.
@@ -441,7 +441,7 @@ _objc_makeTaggedPointer(objc_tag_index_t tag, uintptr_t value)
     }
 }
 
-static inline bool 
+extern inline bool
 _objc_isTaggedPointer(const void * _Nullable ptr)
 {
     return ((uintptr_t)ptr & _OBJC_TAG_MASK) == _OBJC_TAG_MASK;

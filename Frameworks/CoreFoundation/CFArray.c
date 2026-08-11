@@ -31,6 +31,10 @@
 #include "CFInternal.h"
 #include <string.h>
 
+#if INCLUDE_OBJC
+#include <Foundation/NSArray.h>
+#endif
+
 
 const CFArrayCallBacks kCFTypeArrayCallBacks = {0, __CFTypeCollectionRetain, __CFTypeCollectionRelease, CFCopyDescription, CFEqual};
 static const CFArrayCallBacks __kCFNullArrayCallBacks = {0, NULL, NULL, NULL, NULL};

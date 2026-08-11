@@ -36,6 +36,9 @@
 #include "CFBasicHash.h"
 #include <CoreFoundation/CFString.h>
 
+#if INCLUDE_OBJC
+#include <Foundation/NSSet.h>
+#endif
 
 #define CFDictionary 0
 #define CFSet 0

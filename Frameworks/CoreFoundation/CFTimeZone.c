@@ -44,6 +44,9 @@
 #include <dirent.h>
 #include <unistd.h>
 #include <sys/fcntl.h>
+#if INCLUDE_OBJC
+#include <Foundation/NSTimeZone.h>
+#endif
 #endif
 #if DEPLOYMENT_TARGET_MACOSX || DEPLOYMENT_TARGET_EMBEDDED
 #include <tzfile.h>

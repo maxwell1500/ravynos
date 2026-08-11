@@ -36,6 +36,10 @@
 #include <stdio.h>
 #include "CFInternal.h"
 
+#if INCLUDE_OBJC
+#include <Foundation/NSPort.h>
+typedef NSPort NSMachPort;
+#endif
 
 #define AVOID_WEAK_COLLECTIONS 1
 

@@ -33,6 +33,10 @@
 #include "CFInternal.h"
 #include <stdio.h>
 
+#if INCLUDE_OBJC
+#include <Foundation/NSStream.h>
+#endif
+
 #if defined(DEBUG)
 #include <assert.h>
 #endif

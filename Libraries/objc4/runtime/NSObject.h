@@ -55,7 +55,8 @@ OBJC_EXPORT
 #pragma clang diagnostic ignored "-Wobjc-interface-ivars"
     /* Keep aligned with CFRuntimeBase */
     Class isa  OBJC_ISA_AVAILABILITY;
-    uintptr_t bits;
+    unsigned char __cfinfo[4];
+    unsigned int __rc;
 #pragma clang diagnostic pop
 }
 

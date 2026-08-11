@@ -24,6 +24,8 @@
 /*	CFRuntime.c
 	Copyright (c) 1999-2014, Apple Inc. All rights reserved.
 	Responsibility: Christopher Kane
+
+    Modified for ravynOS by Zoe Knox, 2026.
 */
 
 #define ENABLE_ZOMBIES 1
@@ -44,6 +46,7 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <CoreFoundation/CFStringDefaultEncoding.h>
+#include "CFBridging.h"
 #endif
 #if DEPLOYMENT_TARGET_EMBEDDED
 // This isn't in the embedded runtime.h header
@@ -72,6 +75,22 @@ __kCFReleaseEvent = 29
 
 #if DEPLOYMENT_TARGET_MACOSX || DEPLOYMENT_TARGET_EMBEDDED
 CF_PRIVATE void __CFOAInitializeNSObject(void);  // from NSObject.m
+
+#if !INCLUDE_OBJC
+typedef char * SEL;
+#endif
+extern id objc_msgSend(id, SEL, ...);
+
+#define CFTYPE_IS_OBJC(obj) (obj && *(uintptr_t *)obj == \
+    __CFRuntimeObjCClassTable[(*((uintptr_t *)obj+1) & 0xff00) >> 8])
+#define CFTYPE_OBJC_FUNCDISPATCH0(rettype, obj, sel) \
+    if (CFTYPE_IS_OBJC(obj)) \
+        return (rettype)objc_msgSend(obj, #sel)
+
+#define CFTYPE_OBJC_FUNCDISPATCH1(rettype, obj, sel, a1) \
+    if (CFTYPE_IS_OBJC(obj)) \
+        return (rettype)objc_msgSend(obj, #sel, a1)
+
 
 bool __CFOASafe = false;
 
@@ -355,7 +374,7 @@ CFTypeRef _CFRuntimeCreateInstance(CFAllocatorRef allocator, CFTypeID typeID, CF
 #endif
     uint32_t *cfinfop = (uint32_t *)&(memory->_cfinfo);
     *cfinfop = (uint32_t)((rc << 24) | (customRC ? 0x800000 : 0x0) | ((uint32_t)typeID << 8) | (usesSystemDefaultAllocator ? 0x80 : 0x00));
-    memory->_cfisa = 0;
+    memory->_cfisa = __CFISAForTypeID(typeID);
     if (NULL != cls->init) {
 	(cls->init)(memory);
     }
@@ -377,7 +396,7 @@ void _CFRuntimeInitStaticInstance(void *ptr, CFTypeID typeID) {
 #if __LP64__
     memory->_rc = customRC ? 0xFFFFFFFFU : 0x0;
 #endif
-    memory->_cfisa = 0;
+    memory->_cfisa = __CFISAForTypeID(typeID);
     if (NULL != cfClass->init) {
        (cfClass->init)(memory);
     }
@@ -488,12 +507,6 @@ CF_PRIVATE void __CFGenericValidateType_(CFTypeRef cf, CFTypeID type, const char
 
 #define __CFGenericAssertIsCF(cf) \
     CFAssert2(cf != NULL && (NULL != __CFRuntimeClassTable[__CFGenericTypeID_inline(cf)]) && (__kCFNotATypeTypeID != __CFGenericTypeID_inline(cf)) && (__kCFTypeTypeID != __CFGenericTypeID_inline(cf)), __kCFLogAssertion, "%s(): pointer %p is not a CF object", __PRETTY_FUNCTION__, cf);
-
-
-#define CFTYPE_IS_OBJC(obj) (false)
-#define CFTYPE_OBJC_FUNCDISPATCH0(rettype, obj, sel) do {} while (0)
-#define CFTYPE_OBJC_FUNCDISPATCH1(rettype, obj, sel, a1) do {} while (0)
-
 
 CFTypeID CFGetTypeID(CFTypeRef cf) {
 #if defined(DEBUG)
@@ -1082,7 +1095,6 @@ void __CFInitialize(void) {
         
 
         if (__CFRuntimeClassTableCount < 256) __CFRuntimeClassTableCount = 256;
-
 
 #if defined(DEBUG) || defined(ENABLE_ZOMBIES)
         const char *value = __CFgetenv("NSZombieEnabled");

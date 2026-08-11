@@ -939,8 +939,8 @@ kern_return_t mach_port_destruct(ipc_space_t task, mach_port_name_t name, mach_p
 
 void abort_with_payload(uint32_t reason_namespace, uint64_t reason_code, void* payload, uint32_t payload_size, const char* reason_string, uint64_t reason_flags)
 {
-	if ( gSyscallHelpers->version >= 6 )
-		gSyscallHelpers->abort_with_payload(reason_namespace, reason_code, payload, payload_size, reason_string, reason_flags);
+//	if ( gSyscallHelpers->version >= 6 )
+//		gSyscallHelpers->abort_with_payload(reason_namespace, reason_code, payload, payload_size, reason_string, reason_flags);
 	dyld_fatal_error(reason_string);
 }
 

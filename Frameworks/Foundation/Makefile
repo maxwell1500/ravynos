@@ -328,6 +328,7 @@ SRCS = 	NSFormatter.m \
 # FIXME: we should build with HAVE_FFI=1
 CFLAGS = -DAPPLE_RUNTIME_4 -DDARWIN -DNULL=0 -DTARGET_OS_IOSMAC=0 \
 	-DPLATFORM_IS_POSIX -DPLATFORM_USES_BSD_SOCKETS -DNSBUILDINGFOUNDATION \
+        -DTOLL_FREE_BRIDGING \
 	--sysroot=${RAVYN_SDKROOT} -Wno-implicit-function-declaration \
 	-Wno-nullability-completeness \
 	-I${RAVYN_SDKROOT}/usr/local/include/kernel -I${.CURDIR}/Headers \

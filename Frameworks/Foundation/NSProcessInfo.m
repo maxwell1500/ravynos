@@ -221,6 +221,9 @@ FOUNDATION_EXPORT void __NSInitializeProcess(int argc,const char *argv[]) {
     
     // Override the compiler version of the class
     //objc_addClass(&_NSConstantStringClassReference);
+#if TOLL_FREE_BRIDGING
+    CFSetupFoundationBridging();
+#endif
 #endif
 
 }

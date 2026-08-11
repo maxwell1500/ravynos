@@ -37,6 +37,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if INCLUDE_OBJC
+#include <Foundation/NSMutableCharacterSet.h>
+#endif
+
 
 #define BITSPERBYTE	8	/* (CHAR_BIT * sizeof(unsigned char)) */
 #define LOG_BPB		3
