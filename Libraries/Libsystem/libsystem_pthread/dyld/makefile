@@ -1,6 +1,7 @@
 .PATH: ${.CURDIR:H}
 
 LIB = pthread
+SUBDIR =
 
 .include "common.mk"
 

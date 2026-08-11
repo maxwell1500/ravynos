@@ -1,4 +1,5 @@
 .PATH: ${.CURDIR:H}
+SUBDIR = 
 MK_WERROR = no
 LIB = vLegacy
 SRCS = compat-43/FreeBSD/creat.c \

@@ -1,4 +1,5 @@
 .PATH: ${.CURDIR:H}
+SUBDIR = 
 LIB = FreeBSD
 SRCS =  compat-43/FreeBSD/gethostid.c \
 	compat-43/FreeBSD/getwd.c \

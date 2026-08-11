@@ -1,3 +1,4 @@
+SUBDIR =
 MK_WERROR = no
 LIB = system_notify
 SRCS = libnotify.c notify_client.c table.c

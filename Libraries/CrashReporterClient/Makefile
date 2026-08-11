@@ -5,6 +5,7 @@ OBJS = ${SRCS:S/.c$/.o/:S/.cpp$/.o/}
 CFLAGS = --sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSION_MIN} \
         -Wno-nullability-completeness
 LDFLAGS =
+SUBDIR =
 
 all: ${.OBJDIR}/lib${LIB}.dylib
 

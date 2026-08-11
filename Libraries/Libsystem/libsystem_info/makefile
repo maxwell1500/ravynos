@@ -1,3 +1,4 @@
+SUBDIR =
 MK_WERROR = no
 LIB = system_info
 SRCS = 	./dns.subproj/herror.c \

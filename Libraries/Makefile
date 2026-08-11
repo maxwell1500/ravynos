@@ -6,6 +6,7 @@ DERIVED_DATA_DIR = ${.OBJDIR}
 MK_WERROR = no
 CXXLIB = ${RAVYN_SDKROOT}/usr/lib/libc++.1.dylib
 RTLIB = ${RAVYN_SDKROOT}/usr/lib/system/libcompiler_rt.dylib
+RTLIB2 = ${SYSROOT_DIR}/usr/lib/system/libcompiler_rt.dylib
 
 SUBDIR = libfirehose_kernel CrashReporterClient MiscLibs objc4 dyld Libsystem \
 	ICU zlib
@@ -160,7 +161,7 @@ libcxx: libunwind
 RTOBJ = ${.OBJDIR}/llvm_target/compiler-rt/lib/ravynos/libclang_rt.osx.a
 compiler_rt: runtime libunwind libcxx
 	@echo compiler_rt dependencies built
-	mkdir -p ${RTLIB:H} ${RTOBJ:H}
+	mkdir -p ${RTLIB:H} ${RTOBJ:H} ${RTLIB2:H}
 	@echo after mkdir, making compiler_rt dylib
 	${CC} -o ${.OBJDIR}/libcompiler_rt.dylib -fuse-ld=${LD} \
 	  --sysroot=${RAVYN_SDKROOT} -shared -umbrella System \
@@ -173,6 +174,7 @@ compiler_rt: runtime libunwind libcxx
 	  -lsystem_pthread -lunwind
 	@echo after making dylib, copying to SDK
 	cp -f ${.OBJDIR}/libcompiler_rt.dylib ${RTLIB}
+	cp -f ${.OBJDIR}/libcompiler_rt.dylib ${RTLIB2}
 
 # We want a combined libc++ and libc++abi as our dylib. It needs libSystem
 # for _dlopen and _dlsym. We do not link directly to libdyld.

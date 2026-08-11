@@ -1,4 +1,5 @@
 MK_WERROR = no
+SUBDIR =
 
 LIB = dyld
 SRCS = ./src/start_glue.s \
@@ -101,7 +102,9 @@ lib${LIB}.dylib: mkdirs lib${LIB}.a
 	${CC} -o ${.TARGET} -Wl,-force_load,lib${LIB}.a ${LDFLAGS}
 	mkdir -p ${RAVYN_SDKROOT}/usr/lib/system
 	cp -f ${.TARGET} ${RAVYN_SDKROOT}/usr/lib/system/
+	cp -f ${.TARGET} ${SYSROOT_DIR}/usr/lib/system/
 	cp -f ${.OBJDIR}/lib${LIB}.a ${RAVYN_SDKROOT}/usr/lib/system/
+	cp -f ${.OBJDIR}/lib${LIB}.a ${SYSROOT_DIR}/usr/lib/system/
 
 libdyld: ${.OBJDIR}/lib${LIB}.dylib
 

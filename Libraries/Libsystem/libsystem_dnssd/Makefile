@@ -1,3 +1,4 @@
+SUBDIR =
 MK_WERROR = no
 LIB = system_dnssd
 .PATH: ${ROOT_SOURCE_DIR}/BSD/usr.sbin/mDNSResponder

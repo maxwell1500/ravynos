@@ -1,4 +1,5 @@
 MK_WERROR = no
+SUBDIR =
 
 NV_SRCS = bsd_nvpair.c nvlist.c msgio.c
 NV_OBJS = ${NV_SRCS:%.c=%.o}

@@ -7,6 +7,7 @@ HEADERS = CoreServices.h
 RESOURCES=Info.plist English.lproj
 
 CFLAGS = -I${.CURDIR:H}
+SUBDIR =
 
 fmwk-install-hook:
 	mkdir -p ${RAVYN_SDKROOT}/System/Library/Frameworks \

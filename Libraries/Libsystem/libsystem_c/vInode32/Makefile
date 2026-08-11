@@ -1,4 +1,5 @@
 .PATH: ${.CURDIR:H}
+SUBDIR = 
 MK_WERROR = no
 LIB = vInode32
 SRCS = gen/fts.c \

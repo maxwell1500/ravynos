@@ -1,4 +1,5 @@
 .PATH: ${.CURDIR:H}
+SUBDIR = 
 MK_WERROR = no
 LIB = TRE
 SRCS = regex/TRE/lib/regcomp.c \

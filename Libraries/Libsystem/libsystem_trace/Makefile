@@ -1,3 +1,4 @@
+SUBDIR =
 MK_WERROR = no
 LIB = system_trace
 SRCS = log.c signpost.c init.c

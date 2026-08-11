@@ -248,7 +248,7 @@ void abort_report_np(const char* format, ...)
 void _ZN4dyld4haltEPKc(const char *msg)
 {
     _simple_dprintf(2, msg);
-    abort();
+    _exit(-1);
 }
 #endif
 
@@ -300,7 +300,7 @@ struct tm* localtime(const time_t* t)
 // malloc calls exit(-1) in case of errors...
 void exit(int x)
 {
-	_ZN4dyld4haltEPKc("exit()");
+    _ZN4dyld4haltEPKc("exit()");
 }
 
 // static initializers make calls to __cxa_atexit
@@ -938,8 +938,8 @@ kern_return_t mach_port_destruct(ipc_space_t task, mach_port_name_t name, mach_p
 
 void abort_with_payload(uint32_t reason_namespace, uint64_t reason_code, void* payload, uint32_t payload_size, const char* reason_string, uint64_t reason_flags)
 {
-	if ( gSyscallHelpers->version >= 6 )
-		gSyscallHelpers->abort_with_payload(reason_namespace, reason_code, payload, payload_size, reason_string, reason_flags);
+//	if ( gSyscallHelpers->version >= 6 )
+//		gSyscallHelpers->abort_with_payload(reason_namespace, reason_code, payload, payload_size, reason_string, reason_flags);
 	dyld_fatal_error(reason_string);
 }
 

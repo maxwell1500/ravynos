@@ -1,4 +1,5 @@
 .PATH: ${.CURDIR:H}
+SUBDIR = 
 LIB = Platform
 SRCS = darwin/forceLibcToBuild.c darwin/kvm.c
 ACFLAGS = -mmacos-version-min=${MACOS_VERSION_MIN} --sysroot=${RAVYN_SDKROOT}

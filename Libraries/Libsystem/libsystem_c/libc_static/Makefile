@@ -1,4 +1,5 @@
 .PATH: ${.CURDIR:H}
+SUBDIR = 
 MK_WERROR = no
 LIB = c_static
 SRCS = secure/chk_fail.c \

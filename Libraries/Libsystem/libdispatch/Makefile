@@ -3,6 +3,7 @@
 
 MK_WERROR = no
 MK_OBJC_RUNTIME = no
+SUBDIR =
 
 LIB = dispatch
 SRCS =	allocator.c \

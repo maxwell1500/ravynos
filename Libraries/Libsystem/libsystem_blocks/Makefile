@@ -1,3 +1,4 @@
+SUBDIR =
 LIB = system_blocks
 SRCS = data.c runtime.c
 

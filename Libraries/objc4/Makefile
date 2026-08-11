@@ -1,4 +1,5 @@
 MK_WERROR = no
+SUBDIR =
 
 # Don't try to link System or Foundation to this
 MK_OBJC_RUNTIME = no
@@ -70,13 +71,13 @@ COMMONFLAGS = --sysroot=${RAVYN_SDKROOT} \
 COMMONFLAGS += -D_LIBC_NO_FEATURE_VERIFICATION -DTARGET_OS_IOSMAC=0 \
 	      -DTARGET_OS_OSX=1 -DDEBUG -D__OBJC2__ -DSUPPORT_PREOPT \
               -DSUPPORT_DIRECT_THREAD_KEYS -DSUPPORT_RETURN_AUTORELEASE \
-              -DOBJC_IS_DEBUG_BUILD
+              -DOBJC_IS_DEBUG_BUILD -DSUPPORT_NONPOINTER_ISA 
 
 CFLAGS = ${COMMONFLAGS} -std=gnu11
 OBJCFLAGS = ${COMMONFLAGS} -std=gnu11 \
-	    -fno-objc-convert-messages-to-runtime-calls 
+	    -fno-objc-convert-messages-to-runtime-calls
 OBJCXXFLAGS = ${COMMONFLAGS} -std=gnu++14 \
-	      -fno-objc-convert-messages-to-runtime-calls 
+	      -fno-objc-convert-messages-to-runtime-calls
 CXXFLAGS = ${COMMONFLAGS} -std=gnu++14 -D_LIBCPP_VISIBLE=""
 ACFLAGS = ${COMMONFLAGS}
 
@@ -88,7 +89,7 @@ LDFLAGS = --sysroot=${RAVYN_SDKROOT} -L${RAVYN_SDKROOT}/usr/lib \
 	-Wl,-interposable_list,${.CURDIR}/interposable.txt \
 	-Wl,-sectalign,__DATA,__data,0x1000 -lc++ \
 	-Wl,-unexported_symbols_list,${.CURDIR}/unexported_symbols \
-	-lobjc-trampolines -lSystem 
+	-lobjc-trampolines -lSystem
 
 all: ${.OBJDIR}/libobjc-trampolines.dylib ${.OBJDIR}/libobjc.A.dylib
 

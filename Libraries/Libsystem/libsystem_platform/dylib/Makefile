@@ -1,3 +1,4 @@
+SUBDIR = 
 LIB = system_platform
 SEED_DEFS = -DLONG_BIT=64
 

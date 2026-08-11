@@ -1,4 +1,5 @@
 .PATH: ${.CURDIR:H}
+SUBDIR = 
 MK_WERROR = no
 LIB = c_dyld
 SRCS = gen/FreeBSD/arc4random.c \

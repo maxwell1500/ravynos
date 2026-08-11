@@ -1,4 +1,5 @@
 LIB = copyfile
+SUBDIR =
 SRCS = copyfile.c xattr_flags.c
 MK_WERROR = no
 

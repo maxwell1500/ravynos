@@ -1,4 +1,5 @@
 .PATH: ${.CURDIR:H}
+SUBDIR = 
 MK_WERROR = no
 LIB = vPre1050
 SRCS = gen/FreeBSD/daemon.c

@@ -1,4 +1,5 @@
 MK_WERROR = no
+SUBDIR =
 
 .PATH: ${.CURDIR}/..
 

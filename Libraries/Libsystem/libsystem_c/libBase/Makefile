@@ -1,4 +1,5 @@
 .PATH: ${.CURDIR:H}
+SUBDIR =
 LIB = Base
 SRCS = \
 	emulated/lchflags.c \

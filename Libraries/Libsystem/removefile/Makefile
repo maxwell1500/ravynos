@@ -1,4 +1,5 @@
 LIB = removefile
+SUBDIR =
 SRCS = 	./removefile_random.c \
 	./removefile_rename_unlink.c \
 	./removefile_sunlink.c \

@@ -5,6 +5,7 @@ SRCS = firehose_buffer.c hack.s
 OBJS = firehose_buffer.o hack.o
 
 MK_WERROR = no
+SUBDIR =
 
 DEFINES = -DKERNEL=1 -DDISPATCH_USE_DTRACE=0 \
 	  -DOS_ATOMIC_CONFIG_MEMORY_ORDER_DEPENDENCY=1 \

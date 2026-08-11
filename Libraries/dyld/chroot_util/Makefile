@@ -1,4 +1,5 @@
 MK_WERROR = no
+SUBDIR =
 PROG = chroot_util
 .PATH: ${.CURDIR:H}
 SRCS =  dyld3/Diagnostics.cpp \

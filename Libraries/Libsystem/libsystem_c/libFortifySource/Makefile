@@ -1,4 +1,5 @@
 .PATH: ${.CURDIR:H}
+SUBDIR =
 MK_WERROR = no
 LIB = FortifySource
 SRCS = secure/strlcat_chk.c \

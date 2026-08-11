@@ -1,4 +1,5 @@
 MK_WERROR = no
+SUBDIR =
 LIB = system_asl
 SRCS =  asl.c \
 	asl_client.c \
@@ -56,6 +57,6 @@ ${.OBJDIR}/lib${LIB}.dylib: asl_ipcUser.c lib${LIB}.a
 	  -Wl,-force_load,${.OBJDIR}/lib${LIB}.a ${LDFLAGS}
 	mkdir -p ${RAVYN_SDKROOT}/usr/lib/system ${SYSROOT_DIR}/usr/lib/system
 	cp -f ${.TARGET} ${RAVYN_SDKROOT}/usr/lib/system/
-	cp -f ${.TARGET} ${RAVYN_SDKROOT}/usr/lib/system/
+	cp -f ${.TARGET} ${SYSROOT_DIR}/usr/lib/system/
 
 .include <bsd.lib.mk>

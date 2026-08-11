@@ -1,3 +1,4 @@
+SUBDIR =
 SLF = /System/Library/Frameworks
 SYSPRIVHDR = System.framework/Versions/B/PrivateHeaders
 XNU = ${ROOT_SOURCE_DIR}/Kernel/xnu

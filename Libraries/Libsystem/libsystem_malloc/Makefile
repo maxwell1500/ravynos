@@ -1,3 +1,4 @@
+SUBDIR =
 LIB = system_malloc
 SRCS = \
 	bitarray.c empty.s frozen_malloc.c legacy_malloc.c \

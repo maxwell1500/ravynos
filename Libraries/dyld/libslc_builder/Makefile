@@ -1,4 +1,5 @@
 MK_WERROR = no
+SUBDIR =
 .PATH: ${.CURDIR:H}
 LIB = slc_builder
 SRCS =  dyld3/shared-cache/DyldSharedCache.cpp \

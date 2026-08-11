@@ -1,4 +1,5 @@
 .PATH: ${.CURDIR:H}
+SUBDIR = 
 MK_WERROR = no
 LIB = vDarwinExtsnCancelable
 SRCS = gen/FreeBSD/popen.c \

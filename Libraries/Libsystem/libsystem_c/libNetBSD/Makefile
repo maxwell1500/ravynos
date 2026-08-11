@@ -1,4 +1,5 @@
 .PATH: ${.CURDIR:H}
+SUBDIR = 
 MK_WERROR = no
 LIB = NetBSD
 SRCS = gen/NetBSD/utmpx.c \

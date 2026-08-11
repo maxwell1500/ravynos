@@ -1,5 +1,6 @@
 .PATH: ${DEVEL}/Default.xctoolchain/cctools/libmacho
 
+SUBDIR =
 MK_WERROR = no
 LIB = macho
 SRCS = arch.c getsecbyname.c getsegbyname.c swap.c
