@@ -1,4 +1,84 @@
 {
+    "file": "boxwork.jpg",
+    "title": "Boxwork",
+    "license": "CC BY 4.0",
+    "licenseURL": "http://creativecommons.org/licenses/by/4.0/",
+    "credit": "Kaleb A. Ascevich",
+    "creditURL": ""
+},
+{
+    "file": "needles.jpg",
+    "title": "Needles",
+    "license": "CC BY 4.0",
+    "licenseURL": "http://creativecommons.org/licenses/by/4.0/",
+    "credit": "Kaleb A. Ascevich",
+    "creditURL": ""
+},
+{
+    "file": "rainbow.jpg",
+    "title": "Rainbow",
+    "license": "CC BY 4.0",
+    "licenseURL": "http://creativecommons.org/licenses/by/4.0/",
+    "credit": "Kaleb A. Ascevich",
+    "creditURL": ""
+},
+{
+    "file": "stream.jpg",
+    "title": "Stream",
+    "license": "CC BY 4.0",
+    "licenseURL": "http://creativecommons.org/licenses/by/4.0/",
+    "credit": "Kaleb A. Ascevich",
+    "creditURL": ""
+},
+{
+    "file":"CurvedPath.jpg",
+    "title":"Curved Path",
+    "license":"CC0",
+    "licenseURL":"",
+    "credit":"Clocktower System",
+    "creditURL":""
+},
+{
+    "file":"TheHills1.jpg",
+    "title":"Hills 1",
+    "license":"CC0",
+    "licenseURL":"",
+    "credit":"Clocktower System",
+    "creditURL":""
+},
+{
+    "file":"TheHills2.jpg",
+    "title":"Hills 2",
+    "license":"CC0",
+    "licenseURL":"",
+    "credit":"Clocktower System",
+    "creditURL":""
+},
+{
+    "file":"SunnyHills.jpg",
+    "title":"Sunny Hills",
+    "license":"CC0",
+    "licenseURL":"",
+    "credit":"Clocktower System",
+    "creditURL":""
+},
+{
+    "file":"Fountain.jpg",
+    "title":"Fountain",
+    "license":"CC0",
+    "licenseURL":"",
+    "credit":"Clocktower System",
+    "creditURL":""
+},
+{
+    "file":"Archway.jpg",
+    "title":"Archway",
+    "license":"CC0",
+    "licenseURL":"",
+    "credit":"Clocktower System",
+    "creditURL":""
+},
+{
     "file":"toinfinity.jpg",
     "title":"To Infinity!",
     "license":"All rights reserved",
