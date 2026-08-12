@@ -1,3 +1,4 @@
+SUBDIR =
 PROG = yes
 CSTD = c99
 

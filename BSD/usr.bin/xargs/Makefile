@@ -1,3 +1,4 @@
+SUBDIR =
 PROG = xargs
 SRCS = strnsubst.c xargs.c
 

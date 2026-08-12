@@ -1,3 +1,4 @@
+SUBDIR =
 PROG = sw_vers
 SRCS = sw_vers.c
 MAN =

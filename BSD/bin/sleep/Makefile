@@ -1,3 +1,4 @@
+SUBDIR =
 PROG=	sleep
 
 HAS_TESTS=

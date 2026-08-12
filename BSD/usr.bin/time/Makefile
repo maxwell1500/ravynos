@@ -1,3 +1,4 @@
+SUBDIR =
 PROG = time
 CSTD = c99
 

@@ -1,5 +1,4 @@
-PACKAGE=	fetch
+SUBDIR =
 PROG=		fetch
-LIBADD=		fetch
 
 .include <bsd.prog.mk>

@@ -1,5 +1,6 @@
 .include <src.opts.mk>
 
+SUBDIR =
 PROG=	cat
 
 HAS_TESTS=

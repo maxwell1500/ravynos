@@ -1,3 +1,4 @@
+SUBDIR =
 PROG=	env
 SRCS=	env.c envopts.c
 

@@ -1,16 +1,16 @@
 .include <src.opts.mk>
 
-PACKAGE=	runtime
-
+MK_WERROR = no
+SUBDIR =
 PROG=	find
 SRCS=	find.c function.c ls.c main.c misc.c operator.c option.c printf.c \
 	getdate.y
 YFLAGS=
-CFLAGS.clang+=	-Werror=undef
+CFLAGS += -D__DARWIN_64_BIT_INO_T -D_DARWIN_C_SOURCE -Wno-nullability-completeness
+LDFLAGS += -mmacos-version-min=${MACOS_VERSION_MIN} -L${SYSROOT_DIR}${LIBDIR}
+LIBS += -lbz2
+#CFLAGS.clang+=	-Werror=undef
 
 NO_WMISSING_VARIABLE_DECLARATIONS=
-
-HAS_TESTS=
-SUBDIR.${MK_TESTS}+= tests
 
 .include <bsd.prog.mk>

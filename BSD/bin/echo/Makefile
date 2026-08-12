@@ -1,5 +1,6 @@
 .include <src.opts.mk>
 
+SUBDIR =
 PROG=	echo
 
 HAS_TESTS=

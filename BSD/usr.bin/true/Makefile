@@ -1,3 +1,4 @@
+SUBDIR =
 PROG=	true
 
 all: to-sysroot

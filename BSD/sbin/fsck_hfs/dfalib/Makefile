@@ -1,3 +1,4 @@
+SUBDIR = 
 MK_WERROR = no
 
 LIB = dfa

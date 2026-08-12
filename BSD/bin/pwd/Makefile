@@ -1,3 +1,4 @@
+SUBDIR =
 PROG=	pwd
 
 all: to-sysroot

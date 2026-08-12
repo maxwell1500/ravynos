@@ -1,3 +1,4 @@
+SUBDIR =
 PROG = uname
 CSTD = c99
 

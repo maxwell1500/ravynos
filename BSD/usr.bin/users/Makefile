@@ -1,3 +1,4 @@
+SUBDIR =
 MK_WERROR = no
 PROG = users
 CSTD = c99

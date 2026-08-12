@@ -1,5 +1,6 @@
 .include <src.opts.mk>
 
+SUBDIR =
 CFLAGS = -Wno-int-conversion
 
 PROG=	sysctl

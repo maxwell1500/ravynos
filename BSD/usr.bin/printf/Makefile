@@ -1,5 +1,9 @@
+MK_WERROR = no
+SUBDIR =
 PROG = printf
 
+CFLAGS += -D__DARWIN_64_BIT_INO_T -D_DARWIN_C_SOURCE \
+        -mmacos-version-min=${MACOS_VERSION_MIN}
 
 all: to-sysroot
 

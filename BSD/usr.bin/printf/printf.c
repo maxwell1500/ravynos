@@ -62,6 +62,7 @@ static const char rcsid[] =
 #include <string.h>
 #include <unistd.h>
 #include <wchar.h>
+#include <sys/stat.h>
 
 #ifdef SHELL
 #define	main printfcmd

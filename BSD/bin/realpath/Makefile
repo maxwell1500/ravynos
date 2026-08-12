@@ -1,3 +1,4 @@
+SUBDIR =
 PROG=	realpath
 
 all: to-sysroot

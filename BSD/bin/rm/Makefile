@@ -1,3 +1,4 @@
+SUBDIR =
 PROG=	rm
 
 MK_WERROR = no

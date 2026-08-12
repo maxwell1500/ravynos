@@ -1,5 +1,6 @@
 .include <src.opts.mk>
 
+SUBDIR =
 MK_WERROR = no
 PROG=	ls
 SRCS=	cmp.c ls.c print.c util.c

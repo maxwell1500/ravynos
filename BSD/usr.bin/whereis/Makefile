@@ -1,3 +1,4 @@
+SUBDIR =
 PROG = whereis
 CSTD = c99
 

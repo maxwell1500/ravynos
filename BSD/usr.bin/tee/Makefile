@@ -1,3 +1,4 @@
+SUBDIR =
 PROG=	tee
 
 all: to-sysroot
