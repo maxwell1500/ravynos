@@ -705,11 +705,16 @@ i386_init(void)
 	postcode(I386_INIT_ENTRY);
 
 	pal_i386_init();
+	/* Before anything can consult the CPU topology: the lock guarding it was
+	 * otherwise not initialised until cpu_thread_init(), and using it before
+	 * then panics from inside the panic path, hiding the real fault. */
+	x86_topo_lock_init();
 	tsc_init();
 	rtclock_early_init();   /* mach_absolute_time() now functionsl */
 
 	kernel_debug_string_early("i386_init");
-	pstate_trace();
+	/* pstate_trace() reads MSRs that are not present on AMD; leave it off
+	 * until it is proven safe there. */
 
 #if CONFIG_MCA
 	/* Initialize machine-check handling */

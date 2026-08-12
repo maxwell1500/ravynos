@@ -190,8 +190,11 @@ ml_static_mfree(
 				kernel_pmap->stats.resident_max = kernel_pmap->stats.resident_count;
 			}
 
-			assert(pmap_valid_page(ppn));
-			if (IS_MANAGED_PAGE(ppn)) {
+			/* Skip such frames rather than asserting: handing them to
+			 * vm_page_create() would be the actual bug, and IS_MANAGED_PAGE()
+			 * already declines to. The assert only made a release-safe
+			 * situation fatal on DEBUG. */
+			if (pmap_valid_page(ppn) && IS_MANAGED_PAGE(ppn)) {
 				vm_page_create(ppn, (ppn + 1));
 				freed_pages++;
 			}

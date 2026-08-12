@@ -437,6 +437,9 @@ init_fpu(void)
 
 	static boolean_t is_avx512_enabled = TRUE;
 	if (cpu_number() == master_cpu) {
+		if (cpuid_info()->cpuid_ven == CPUID_VEN_AMD || cpuid_vmm_present()) {
+			is_avx512_enabled = FALSE;
+		}
 		if (cpuid_leaf7_features() & CPUID_LEAF7_FEATURE_AVX512F) {
 			PE_parse_boot_argn("avx512", &is_avx512_enabled, sizeof(boolean_t));
 			kprintf("AVX512 supported %s\n",

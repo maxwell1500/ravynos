@@ -522,6 +522,11 @@ commpage_populate_one(
 
 	next = 0;
 	commPagePtr = (char *)commpage_allocate( submap, (vm_size_t) area_used, uperm );
+
+	/* The page is only lazily faulted in as the writes below touch it, so keep
+	 * interrupts off until the whole area has been populated. */
+	boolean_t istate = ml_set_interrupts_enabled(FALSE);
+
 	*kernAddressPtr = commPagePtr;                          // save address either in commPagePtr32 or 64
 	commPageBaseOffset = base_offset;
 
@@ -564,6 +569,8 @@ commpage_populate_one(
 	if (next > _COMM_PAGE_END) {
 		panic("commpage overflow: next = 0x%08x, commPagePtr = 0x%p", next, commPagePtr);
 	}
+
+	ml_set_interrupts_enabled(istate);
 }
 
 
