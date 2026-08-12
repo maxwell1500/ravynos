@@ -94,6 +94,7 @@
 #include <i386/trap.h>
 #include <i386/machine_routines.h>
 #include <i386/mp.h>            /* mp_rendezvous_break_lock */
+#include <i386/tsc.h>           /* tsc_sync_init_deferred */
 #include <i386/cpuid.h>
 #include <i386/fpu.h>
 #include <i386/machine_cpu.h>
@@ -706,6 +707,9 @@ machine_init(void)
 	 * Free lowmem pages and complete other setup
 	 */
 	pmap_lowmem_finalize();
+
+	/* Arm the periodic AMD TSC resync that tsc_init() deliberately deferred. */
+	tsc_sync_init_deferred();
 }
 
 /*

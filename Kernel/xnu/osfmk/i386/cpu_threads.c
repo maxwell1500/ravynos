@@ -66,6 +66,18 @@ x86_topology_parameters_t       topoParms;
 
 decl_simple_lock_data(, x86_topo_lock);
 
+/* Idempotent so i386_init() can bring the lock up before cpu_thread_init(). */
+void
+x86_topo_lock_init(void)
+{
+	static boolean_t x86_topo_lock_inited = FALSE;
+
+	if (!x86_topo_lock_inited) {
+		simple_lock_init(&x86_topo_lock, 0);
+		x86_topo_lock_inited = TRUE;
+	}
+}
+
 static struct cpu_cache {
 	int     level; int     type;
 } cpu_caches[LCACHE_MAX] = {
@@ -82,6 +94,12 @@ cpu_is_hyperthreaded(void)
 
 	cpuinfo = cpuid_info();
 	return cpuinfo->thread_count > cpuinfo->core_count;
+}
+
+static uint32_t
+nonzero_u32(uint32_t value, uint32_t fallback)
+{
+	return value ? value : fallback;
 }
 
 static x86_cpu_cache_t *
@@ -152,10 +170,18 @@ x86_LLC_info(void)
 	 * nCPUsSharing represents the *maximum* number of cores or
 	 * logical CPUs sharing the cache.
 	 */
-	topoParms.maxSharingLLC = nCPUsSharing;
+	topoParms.maxSharingLLC = nonzero_u32(nCPUsSharing, 1);
+	if (topoParms.maxSharingLLC > nonzero_u32(cpuinfo->thread_count, 1)) {
+		topoParms.maxSharingLLC = nonzero_u32(cpuinfo->thread_count, 1);
+	}
 
-	topoParms.nCoresSharingLLC = nCPUsSharing / (cpuinfo->thread_count /
-	    cpuinfo->core_count);
+	uint32_t threads_per_core = nonzero_u32(cpuinfo->thread_count /
+	    nonzero_u32(cpuinfo->core_count, 1), 1);
+
+	topoParms.nCoresSharingLLC = topoParms.maxSharingLLC / threads_per_core;
+	if (topoParms.nCoresSharingLLC == 0) {
+		topoParms.nCoresSharingLLC = 1;
+	}
 	topoParms.nLCPUsSharingLLC = nCPUsSharing;
 
 	/*
@@ -191,24 +217,33 @@ initTopoParms(void)
 	 */
 	DIVISOR_GUARD(cpuinfo->core_count);
 	topoParms.nLThreadsPerCore = cpuinfo->thread_count / cpuinfo->core_count;
+	topoParms.nLThreadsPerCore = nonzero_u32(topoParms.nLThreadsPerCore, 1);
 	DIVISOR_GUARD(cpuinfo->cpuid_cores_per_package);
 	topoParms.nPThreadsPerCore = cpuinfo->cpuid_logical_per_package / cpuinfo->cpuid_cores_per_package;
+	topoParms.nPThreadsPerCore = nonzero_u32(topoParms.nPThreadsPerCore, 1);
 
 	/*
 	 * Compute the number of dies per package.
 	 */
 	DIVISOR_GUARD(topoParms.nCoresSharingLLC);
 	topoParms.nLDiesPerPackage = cpuinfo->core_count / topoParms.nCoresSharingLLC;
+	topoParms.nLDiesPerPackage = nonzero_u32(topoParms.nLDiesPerPackage, 1);
 	DIVISOR_GUARD(topoParms.nPThreadsPerCore);
 	DIVISOR_GUARD(topoParms.maxSharingLLC / topoParms.nPThreadsPerCore);
-	topoParms.nPDiesPerPackage = cpuinfo->cpuid_cores_per_package / (topoParms.maxSharingLLC / topoParms.nPThreadsPerCore);
+	uint32_t pcores_sharing_llc = topoParms.maxSharingLLC / topoParms.nPThreadsPerCore;
+	pcores_sharing_llc = nonzero_u32(pcores_sharing_llc, 1);
+	if (pcores_sharing_llc > nonzero_u32(cpuinfo->cpuid_cores_per_package, 1)) {
+		pcores_sharing_llc = nonzero_u32(cpuinfo->cpuid_cores_per_package, 1);
+	}
+	topoParms.nPDiesPerPackage = cpuinfo->cpuid_cores_per_package / pcores_sharing_llc;
+	topoParms.nPDiesPerPackage = nonzero_u32(topoParms.nPDiesPerPackage, 1);
 
 
 	/*
 	 * Compute the number of cores per die.
 	 */
 	topoParms.nLCoresPerDie = topoParms.nCoresSharingLLC;
-	topoParms.nPCoresPerDie = (topoParms.maxSharingLLC / topoParms.nPThreadsPerCore);
+	topoParms.nPCoresPerDie = pcores_sharing_llc;
 
 	/*
 	 * Compute the number of threads per die.
@@ -227,6 +262,10 @@ initTopoParms(void)
 	 */
 	topoParms.nLThreadsPerPackage = topoParms.nLThreadsPerCore * topoParms.nLCoresPerPackage;
 	topoParms.nPThreadsPerPackage = topoParms.nPThreadsPerCore * topoParms.nPCoresPerPackage;
+	topoParms.nLThreadsPerPackage = nonzero_u32(topoParms.nLThreadsPerPackage,
+	    nonzero_u32(cpuinfo->thread_count, 1));
+	topoParms.nPThreadsPerPackage = nonzero_u32(topoParms.nPThreadsPerPackage,
+	    nonzero_u32(cpuinfo->cpuid_logical_per_package, 1));
 
 	TOPO_DBG("\nCache Topology Parameters:\n");
 	TOPO_DBG("\tLLC Depth:           %d\n", topoParms.LLCDepth);
@@ -961,7 +1000,7 @@ cpu_thread_init(void)
 	 * the CPU topology infrastructure.
 	 */
 	if (my_cpu == master_cpu && !initialized) {
-		simple_lock_init(&x86_topo_lock, 0);
+		x86_topo_lock_init();
 
 		/*
 		 * Put this logical CPU into the physical CPU topology.

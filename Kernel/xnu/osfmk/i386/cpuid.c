@@ -302,7 +302,20 @@ cpuid_do_was(void)
 	do_cwas(cpuid_info(), TRUE);
 }
 
-/* this function is Intel-specific */
+static void
+cpuid_determine_vendor( i386_cpu_info_t * info_p )
+{
+	DBG("cpuid_determine_ven(%p)\n", info_p);
+
+	if (!strncmp(CPUID_VID_INTEL, info_p->cpuid_vendor, strlen(CPUID_VID_INTEL))) {
+		info_p->cpuid_ven = CPUID_VEN_INTEL;
+	} else if (!strncmp(CPUID_VID_AMD, info_p->cpuid_vendor, strlen(CPUID_VID_AMD))) {
+		info_p->cpuid_ven = CPUID_VEN_AMD;
+	} else {
+		info_p->cpuid_ven = CPUID_VEN_UNKNOWN;
+	}
+}
+
 static void
 cpuid_set_cache_info( i386_cpu_info_t * info_p )
 {
@@ -328,6 +341,10 @@ cpuid_set_cache_info( i386_cpu_info_t * info_p )
 		}
 		((uint32_t *) info_p->cache_info)[j] = cpuid_result[j];
 	}
+	/* cache_info[0] drives the loop below; on parts where leaf 2 is
+	 * deprecated it is not necessarily the small count older CPUs return. */
+	DBG("cpuid_set_cache_info: leaf2 done, cache_info[0]=0x%x\n",
+	    info_p->cache_info[0]);
 	/* first byte gives number of cpuid calls to get all descriptors */
 	for (i = 1; i < info_p->cache_info[0]; i++) {
 		if (i * 16 > sizeof(info_p->cache_info)) {
@@ -353,7 +370,9 @@ cpuid_set_cache_info( i386_cpu_info_t * info_p )
 		cpuid_deterministic_supported = TRUE;
 	}
 
-	for (index = 0; cpuid_deterministic_supported; index++) {
+	/* Bounded: a part that does not terminate the enumeration with cache type 0
+	 * would otherwise hang the machine here, before any console exists. */
+	for (index = 0; cpuid_deterministic_supported && index < 16; index++) {
 		cache_type_t    type = Lnone;
 		uint32_t        cache_type;
 		uint32_t        cache_level;
@@ -365,7 +384,7 @@ cpuid_set_cache_info( i386_cpu_info_t * info_p )
 		uint32_t        cache_partitions;
 		uint32_t        colors;
 
-		reg[eax] = 4;           /* cpuid request 4 */
+		reg[eax] = info_p->cpuid_ven == CPUID_VEN_INTEL ? 4 : 0x8000001D;           /* cpuid request 4 or 8000001Dh */
 		reg[ecx] = index;       /* index starting at 0 */
 		cpuid(reg);
 		DBG("cpuid(4) index=%d eax=0x%x\n", index, reg[eax]);
@@ -564,6 +583,7 @@ cpuid_set_generic_info(i386_cpu_info_t *info_p)
 	bcopy((char *)&reg[ecx], &info_p->cpuid_vendor[8], 4);
 	bcopy((char *)&reg[edx], &info_p->cpuid_vendor[4], 4);
 	info_p->cpuid_vendor[12] = 0;
+	cpuid_determine_vendor(info_p);
 
 	/* get extended cpuid results */
 	cpuid_fn(0x80000000, reg);
@@ -634,7 +654,12 @@ cpuid_set_generic_info(i386_cpu_info_t *info_p)
 	 * and bracket this with the approved procedure for reading the
 	 * the microcode version number a.k.a. signature a.k.a. BIOS ID
 	 */
-	wrmsr64(MSR_IA32_BIOS_SIGN_ID, 0);
+
+	/* On AMD this MSR is the read-only PATCH_LEVEL, so the zeroing write raises
+	 * an unhandled #GP this early. It still reads back, so only gate the write. */
+	if (info_p->cpuid_ven == CPUID_VEN_INTEL) {
+		wrmsr64(MSR_IA32_BIOS_SIGN_ID, 0);
+	}
 	cpuid_fn(1, reg);
 	info_p->cpuid_microcode_version =
 	    (uint32_t) (rdmsr64(MSR_IA32_BIOS_SIGN_ID) >> 32);
@@ -649,21 +674,56 @@ cpuid_set_generic_info(i386_cpu_info_t *info_p)
 	info_p->cpuid_features  = quad(reg[ecx], reg[edx]);
 
 	/* Get "processor flag"; necessary for microcode update matching */
-	info_p->cpuid_processor_flag = (rdmsr64(MSR_IA32_PLATFORM_ID) >> 50) & 0x7;
+	info_p->cpuid_processor_flag = info_p->cpuid_ven == CPUID_VEN_INTEL ? (rdmsr64(MSR_IA32_PLATFORM_ID) >> 50) & 0x7 : 1;
 
 	/* Fold extensions into family/model */
 	if (info_p->cpuid_family == 0x0f) {
 		info_p->cpuid_family += info_p->cpuid_extfamily;
 	}
-	if (info_p->cpuid_family == 0x0f || info_p->cpuid_family == 0x06) {
+	if (info_p->cpuid_family == 0x0f || info_p->cpuid_family == 0x06 || info_p->cpuid_ven == CPUID_VEN_AMD) {
 		info_p->cpuid_model += (info_p->cpuid_extmodel << 4);
 	}
 
 	if (info_p->cpuid_features & CPUID_FEATURE_HTT) {
 		info_p->cpuid_logical_per_package =
 		    bitfield32(reg[ebx], 23, 16);
+	} else if (info_p->cpuid_ven == CPUID_VEN_AMD) {
+		cpuid_fn(0x80000008, reg);
+		info_p->cpuid_logical_per_package = bitfield32(reg[ecx], 7, 0) + 1; /* ThreadCount and CoreCount on some AMD CPUs */
+		if (info_p->cpuid_family == 0x15 || info_p->cpuid_family == 0x16) {
+			info_p->cpuid_cores_per_package = info_p->cpuid_logical_per_package; /* WORKAROUND */
+		}
 	} else {
+		/* Does this mean that it assumes that the logical core per physical core is one? */
+		/* XNU defines a package as the whole CPU in cpu_topology */
 		info_p->cpuid_logical_per_package = 1;
+	}
+
+	/* Leaf 1 EBX[23:16] is only a power-of-two bound and lies on hybrid parts (a
+	 * Core Ultra 9 185H reports 128); leaf 0x1F/0xB gives the real width. */
+	if (info_p->cpuid_ven == CPUID_VEN_INTEL && info_p->cpuid_max_basic >= 0x0b) {
+		uint32_t topo[4];
+		uint32_t leaf = (info_p->cpuid_max_basic >= 0x1f) ? 0x1f : 0x0b;
+		uint32_t widest = 0;
+		uint32_t sub;
+
+		for (sub = 0; sub < 8; sub++) {
+			topo[eax] = leaf;
+			topo[ecx] = sub;
+			cpuid(topo);
+			if (bitfield32(topo[ecx], 15, 8) == 0) {
+				break;          /* invalid level: end of enumeration */
+			}
+			if (bitfield32(topo[ebx], 15, 0) > widest) {
+				widest = bitfield32(topo[ebx], 15, 0);
+			}
+		}
+		DBG("cpuid: topology leaf 0x%x levels=%u logical_per_package=%u"
+		    " (leaf1 said %u)\n", leaf, sub, widest,
+		    info_p->cpuid_logical_per_package);
+		if (widest != 0) {
+			info_p->cpuid_logical_per_package = widest;
+		}
 	}
 
 	if (info_p->cpuid_max_ext >= 0x80000001) {
@@ -803,7 +863,9 @@ cpuid_set_generic_info(i386_cpu_info_t *info_p)
 		DBG("  EDX           : 0x%x\n", xsp->extended_state[edx]);
 	}
 
-	if (info_p->cpuid_model >= CPUID_MODEL_IVYBRIDGE) {
+	/* Gate on the leaf actually being reported, not on an Intel model number:
+	 * AMD and the Atom line support leaf 7 without matching that comparison. */
+	if (info_p->cpuid_max_basic >= 0x7) {
 		/*
 		 * Leaf7 Features:
 		 */
@@ -833,10 +895,95 @@ cpuid_set_generic_info(i386_cpu_info_t *info_p)
 	return;
 }
 
+/* Split out from cpuid_set_cpufamily() purely to keep the two vendors' model
+ * tables readable; the Intel path below is unchanged. */
+static uint32_t
+cpuid_amd_cpufamily(i386_cpu_info_t *info_p)
+{
+	switch (info_p->cpuid_family) {
+	case 0x15:
+		switch (info_p->cpuid_model) {
+		case CPUID_MODEL_AMD_ZAMBEZI: /* ZURICH, VALENCIA, INTERLAGOS */
+			return CPUFAMILY_AMD_BULLDOZER;
+		case CPUID_MODEL_AMD_VISHERA: /* DELHI, SEOUL, WARSAW, ABU DHABI */
+		case CPUID_MODEL_AMD_TRINITY:
+		case CPUID_MODEL_AMD_RICHLAND:
+			return CPUFAMILY_AMD_PILEDRIVER;
+		case CPUID_MODEL_AMD_KAVERI: /* BALD EAGLE (?) */
+		case CPUID_MODEL_AMD_GODAVARI:
+			return CPUFAMILY_AMD_STEAMROLLER;
+		case CPUID_MODEL_AMD_CARRIZO:
+		case CPUID_MODEL_AMD_BRISTOL_RIDGE:
+		case CPUID_MODEL_AMD_STONEY_RIDGE:
+			return CPUFAMILY_AMD_EXCAVATOR;
+		default:
+			panic("Unsupported AMD Family 15h Model! 0x%x", info_p->cpuid_model);
+		}
+	case 0x16:
+		switch (info_p->cpuid_model) {
+		case CPUID_MODEL_AMD_KABINI: /* TEMASH, KYOTO */
+			return CPUFAMILY_AMD_JAGUAR;
+		case CPUID_MODEL_AMD_MULLINS: /* BEEMA, STEPPE EAGLE, CROWNED EAGLE */
+			return CPUFAMILY_AMD_PUMA;
+		default:
+			panic("Unsupported AMD Family 16h Model! 0x%x", info_p->cpuid_model);
+		}
+	case 0x17:
+		switch (info_p->cpuid_model) {
+		case CPUID_MODEL_AMD_NAPLES: /* WHITEHAVEN, SUMMIT RIDGE, SNOWY OWL */
+		case CPUID_MODEL_AMD_RAVEN_RIDGE: /* GREAT HORNED OWL */
+		case CPUID_MODEL_AMD_DALI:
+			return CPUFAMILY_AMD_ZEN;
+		case CPUID_MODEL_AMD_COLFAX: /* PINNACLE RIDGE */
+		case CPUID_MODEL_AMD_PICASSO: /* BANDED KESTREL */
+			return CPUFAMILY_AMD_ZENX; /* Zen+ */
+		case CPUID_MODEL_AMD_ROME: /* CASTLE PEAK */
+		case CPUID_MODEL_AMD_RENOIR: /* GREY HAWK */
+		case CPUID_MODEL_AMD_LUCIENNE:
+		case CPUID_MODEL_AMD_MATISSE:
+		case CPUID_MODEL_AMD_VAN_GOGH:
+		case CPUID_MODEL_AMD_MENDOCINO:
+			return CPUFAMILY_AMD_ZEN2;
+		default:
+			panic("Unsupported AMD Family 17h Model! 0x%x", info_p->cpuid_model);
+		}
+	case 0x19:
+		switch (info_p->cpuid_model) {
+		case CPUID_MODEL_AMD_CHAGALL:
+		case CPUID_MODEL_AMD_MILAN:
+		case CPUID_MODEL_AMD_VERMEER:
+		case CPUID_MODEL_AMD_REMBRANDT:
+		case CPUID_MODEL_AMD_CEZANNE:
+			return CPUFAMILY_AMD_ZEN3;
+		case CPUID_MODEL_AMD_RAPHAEL:
+		case CPUID_MODEL_AMD_PHOENIX:
+		case CPUID_MODEL_AMD_HAWKPOINT:
+		case CPUID_MODEL_AMD_PHOENIX2:
+			return CPUFAMILY_AMD_ZEN4;
+		default:
+			panic("Unsupported AMD Family 19h Model! 0x%x", info_p->cpuid_model);
+		}
+	case 0x1A:
+		switch (info_p->cpuid_model) {
+		case CPUID_MODEL_AMD_GRANITE_RIDGE:
+			return CPUFAMILY_AMD_ZEN5;
+		default:
+			panic("Unsupported AMD Family 1Ah Model! 0x%x", info_p->cpuid_model);
+		}
+	default:
+		panic("Unsupported AMD Family! 0x%x", info_p->cpuid_family);
+	}
+}
+
 static uint32_t
 cpuid_set_cpufamily(i386_cpu_info_t *info_p)
 {
 	uint32_t cpufamily = CPUFAMILY_UNKNOWN;
+
+	if (info_p->cpuid_ven == CPUID_VEN_AMD) {
+		cpufamily = cpuid_amd_cpufamily(info_p);
+		goto out;
+	}
 
 	switch (info_p->cpuid_family) {
 	case 6:
@@ -869,23 +1016,78 @@ cpuid_set_cpufamily(i386_cpu_info_t *info_p)
 		case CPUID_MODEL_CRYSTALWELL:
 			cpufamily = CPUFAMILY_INTEL_HASWELL;
 			break;
+		case CPUID_MODEL_BAYTRAIL:
+		case CPUID_MODEL_TANGIER:
+		case CPUID_MODEL_AVOTON:
+		case CPUID_MODEL_ANNIEDALE:
+		case CPUID_MODEL_SOFIA:
+			cpufamily = CPUFAMILY_INTEL_SILVERMONT;
+			break;
 		case CPUID_MODEL_BROADWELL:
 		case CPUID_MODEL_BRYSTALWELL:
 			cpufamily = CPUFAMILY_INTEL_BROADWELL;
+			break;
+		case CPUID_MODEL_BRASWELL: /* merge with Silvermont? */
+			cpufamily = CPUFAMILY_INTEL_AIRMONT;
 			break;
 		case CPUID_MODEL_SKYLAKE:
 		case CPUID_MODEL_SKYLAKE_DT:
 		case CPUID_MODEL_SKYLAKE_W:
 			cpufamily = CPUFAMILY_INTEL_SKYLAKE;
 			break;
+		case CPUID_MODEL_APOLLOLAKE:
+		case CPUID_MODEL_DENVERTON:
+			cpufamily = CPUFAMILY_INTEL_GOLDMONT;
+			break;
 		case CPUID_MODEL_KABYLAKE:
 		case CPUID_MODEL_KABYLAKE_DT:
 			cpufamily = CPUFAMILY_INTEL_KABYLAKE;
+			break;
+		case CPUID_MODEL_GEMINILAKE:
+			cpufamily = CPUFAMILY_INTEL_GOLDMONTPLUS;
+			break;
+		case CPUID_MODEL_ICELAKE:
+		case CPUID_MODEL_ICELAKE_H:
+		case CPUID_MODEL_ICELAKE_DT:
+		case CPUID_MODEL_ICELAKE_SP:
+		case CPUID_MODEL_ICELAKE_DE:
+			cpufamily = CPUFAMILY_INTEL_ICELAKE;
+			break;
+		case CPUID_MODEL_METEORLAKE:
+		case CPUID_MODEL_METEORLAKE_L:
+			cpufamily = CPUFAMILY_INTEL_METEORLAKE;
+			break;
+		case CPUID_MODEL_COMETLAKE_DT:
+			cpufamily = CPUFAMILY_INTEL_COMETLAKE;
+			break;
+		case CPUID_MODEL_TIGERLAKE_U:
+		case CPUID_MODEL_TIGERLAKE_H:
+			cpufamily = CPUFAMILY_INTEL_TIGERLAKE;
+			break;
+		case CPUID_MODEL_ROCKETLAKE:
+			cpufamily = CPUFAMILY_INTEL_ROCKETLAKE;
+			break;
+		/* For ADL+ the scheduler could stand to know these are big.LITTLE
+		 * rather than treating every core as equal. */
+		case CPUID_MODEL_ALDERLAKE:
+		case CPUID_MODEL_ALDERLAKE_P:
+			cpufamily = CPUFAMILY_INTEL_ALDERLAKE;
+			break;
+		case CPUID_MODEL_RAPTORLAKE:
+		case CPUID_MODEL_RAPTORLAKE_P:
+			cpufamily = CPUFAMILY_INTEL_RAPTORLAKE;
+			break;
+		case CPUID_MODEL_SAPPHIRERAPIDS:
+			cpufamily = CPUFAMILY_INTEL_SAPPHIRERAPIDS;
+			break;
+		case CPUID_MODEL_EMERALDRAPIDS:
+			cpufamily = CPUFAMILY_INTEL_EMERALDRAPIDS;
 			break;
 		}
 		break;
 	}
 
+out:
 	info_p->cpuid_cpufamily = cpufamily;
 	DBG("cpuid_set_cpufamily(%p) returning 0x%x\n", info_p, cpufamily);
 	return cpufamily;
@@ -905,11 +1107,11 @@ cpuid_set_info(void)
 
 	cpuid_set_generic_info(info_p);
 
-	/* verify we are running on a supported CPU */
-	if ((strncmp(CPUID_VID_INTEL, info_p->cpuid_vendor,
-	    min(strlen(CPUID_STRING_UNKNOWN) + 1,
-	    sizeof(info_p->cpuid_vendor)))) ||
-	    (cpuid_set_cpufamily(info_p) == CPUFAMILY_UNKNOWN)) {
+	cpuid_determine_vendor(info_p);
+
+	/* Verify we are running on a supported CPU - now with less GenuineIntel:
+	 * the cpufamily lookup is the real check and it knows both vendors. */
+	if (cpuid_set_cpufamily(info_p) == CPUFAMILY_UNKNOWN) {
 		panic("Unsupported CPU");
 	}
 
@@ -946,10 +1148,33 @@ cpuid_set_info(void)
 	} else {
 		switch (info_p->cpuid_cpufamily) {
 		case CPUFAMILY_INTEL_PENRYN:
+		case CPUFAMILY_AMD_BULLDOZER:
+		case CPUFAMILY_AMD_PILEDRIVER:
+		case CPUFAMILY_AMD_STEAMROLLER:
+		case CPUFAMILY_AMD_EXCAVATOR:
+		case CPUFAMILY_AMD_JAGUAR:
+		case CPUFAMILY_AMD_PUMA:
 			cpuid_set_cache_info(info_p);
 			info_p->core_count   = info_p->cpuid_cores_per_package;
 			info_p->thread_count = info_p->cpuid_logical_per_package;
 			break;
+		case CPUFAMILY_AMD_ZEN:
+		case CPUFAMILY_AMD_ZENX:
+		case CPUFAMILY_AMD_ZEN2:
+		case CPUFAMILY_AMD_ZEN3:
+		case CPUFAMILY_AMD_ZEN4:
+		case CPUFAMILY_AMD_ZEN5: {
+			uint32_t reg[4];
+			uint32_t threads_per_core;
+
+			cpuid_set_cache_info(info_p);
+			info_p->thread_count = info_p->cpuid_logical_per_package;
+			cpuid_fn(0x8000001E, reg);
+			threads_per_core = bitfield32(reg[ebx], 15, 8) + 1;
+			info_p->core_count = info_p->thread_count / threads_per_core;
+			info_p->cpuid_cores_per_package = info_p->core_count;
+			break;
+		}
 		case CPUFAMILY_INTEL_WESTMERE: {
 			uint64_t msr = rdmsr64(MSR_CORE_THREAD_COUNT);
 			if (0 == msr) {
@@ -1333,6 +1558,9 @@ cpuid_init_vmm_info(i386_vmm_info_t *info_p)
 	} else if (0 == strcmp(info_p->cpuid_vmm_vendor, CPUID_VMM_ID_PARALLELS)) {
 		/* Parallels identification string */
 		info_p->cpuid_vmm_family = CPUID_VMM_FAMILY_PARALLELS;
+	} else if (0 == strcmp(info_p->cpuid_vmm_vendor, CPUID_VMM_ID_QEMU_TCG)) {
+		/* QEMU TCG identification string */
+		info_p->cpuid_vmm_family = CPUID_VMM_FAMILY_QEMU_TCG;
 	} else {
 		info_p->cpuid_vmm_family = CPUID_VMM_FAMILY_UNKNOWN;
 	}
