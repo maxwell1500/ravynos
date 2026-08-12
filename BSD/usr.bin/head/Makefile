@@ -1,15 +1,8 @@
 .include <src.opts.mk>
 
+SUBDIR =
 PROG=	head
-LIBADD=	util
-
-HAS_TESTS=
-SUBDIR.${MK_TESTS}+= tests
-
-.if ${MK_CASPER} != "no" && !defined(RESCUE)
-LIBADD+=        casper
-LIBADD+=        cap_fileargs
-CFLAGS+=-DWITH_CASPER
-.endif
+CFLAGS += -I${ROOT_SOURCE_DIR}/BSD/lib/libutil
+LDFLAGS += -L${ROOT_BINARY_DIR}${ROOT_SOURCE_DIR}/BSD/lib/libutil -lutil
 
 .include <bsd.prog.mk>

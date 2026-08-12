@@ -56,6 +56,8 @@ __FBSDID("$FreeBSD: src/usr.bin/killall/killall.c,v 1.31 2004/07/29 18:36:35 max
 #include <TargetConditionals.h>
 #endif
 
+void kludge_signal_args(int *argc, char **argv, int *sig);
+
 static void __dead2
 usage(void)
 {
@@ -368,27 +370,27 @@ main(int ac, char **av)
 			continue;
 		thispid = procs[i].kp_proc.p_pid;
 
-		int mib[3], argmax;
+		int _mib[3], argmax;
 		size_t syssize;
 		char *procargs, *cp;
 
-		mib[0] = CTL_KERN;
-		mib[1] = KERN_ARGMAX;
+		_mib[0] = CTL_KERN;
+		_mib[1] = KERN_ARGMAX;
 
 		syssize = sizeof(argmax);
-		if (sysctl(mib, 2, &argmax, &syssize, NULL, 0) == -1)
+		if (sysctl(_mib, 2, &argmax, &syssize, NULL, 0) == -1)
 			continue;
 
 		procargs = malloc(argmax);
 		if (procargs == NULL)
 			continue;
 
-		mib[0] = CTL_KERN;
-		mib[1] = KERN_PROCARGS2;
-		mib[2] = thispid;
+		_mib[0] = CTL_KERN;
+		_mib[1] = KERN_PROCARGS2;
+		_mib[2] = thispid;
 
 		syssize = (size_t)argmax;
-		if (sysctl(mib, 3, procargs, &syssize, NULL, 0) == -1) {
+		if (sysctl(_mib, 3, procargs, &syssize, NULL, 0) == -1) {
 			free(procargs);
 			continue;
 		}

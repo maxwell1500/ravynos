@@ -5,8 +5,8 @@ LDFLAGS = --sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSION_MIN} \
         -fuse-ld=${LD}
 .export CFLAGS LDFLAGS MK_TESTS
 
-SUBDIR = basename chroot cut date dirname env false find getopt grep 
-SUBDIR += printf sed sw_vers 
+SUBDIR = apply basename chroot cut date dirname env false find getopt grep 
+SUBDIR += head kill killall patch printf sed sw_vers 
 SUBDIR += tail tee time touch true uname users whereis which xargs yes
 #SUBDIR += fetch id sort who
 
