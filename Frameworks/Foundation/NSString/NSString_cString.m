@@ -50,6 +50,9 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
     }\
 }
 
+extern NSString *NSCFStringNewWithBytes(NSZone *, const char *, NSUInteger);
+extern NSString *NSCFStringNewWithCharacters(NSZone *, const unichar *, NSUInteger, BOOL);
+
 unichar *NSCharactersFromCString(const char *cString,NSUInteger length,
   NSUInteger *resultLength,NSZone *zone) {
    return NSString_anyCStringToUnicode(defaultEncoding(),cString,length,resultLength,zone);
@@ -151,8 +154,9 @@ char *NSString_unicodeToAnyCString(NSStringEncoding encoding, const unichar *cha
 }
 
 NSString *NSString_anyCStringNewWithBytes(NSStringEncoding encoding, NSZone *zone, const char *bytes,NSUInteger length)
-{
+{ 
     switch(encoding) {
+#if 0
         case NSNEXTSTEPStringEncoding:
             return NSNEXTSTEPCStringNewWithBytes(zone,bytes,length);
         case NSMacOSRomanStringEncoding:
@@ -164,18 +168,20 @@ NSString *NSString_anyCStringNewWithBytes(NSStringEncoding encoding, NSZone *zon
             return NSString_isoLatin2NewWithBytes(zone,bytes,length);
         case NSWindowsCP1252StringEncoding:
             return NSString_win1252NewWithBytes(zone,bytes,length);
+#endif
         default: {
             NSUInteger decodedLength = 0;
             unichar *chars = NSBytesToUnicode(bytes, length, encoding, &decodedLength, zone);
             if (chars) {
-                NSString *result = [[NSString allocWithZone:zone] initWithCharacters:chars length:decodedLength];
+                NSString *result = NSCFStringNewWithCharacters(zone, chars, decodedLength, NO);
                 NSZoneFree(zone, chars);
                 return result;
             }
 
             logEncodingError(encoding);
             // we're using an unsupported default encoding - assuming NextSTEP
-            return NSNEXTSTEPCStringNewWithBytes(zone,bytes,length);
+            //return NSNEXTSTEPCStringNewWithBytes(zone,bytes,length);
+            return NSCFStringNewWithBytes(zone, bytes, length);
         }
     }
 }
@@ -185,6 +191,7 @@ NSString *NSString_anyCStringNewWithBytes(NSStringEncoding encoding, NSZone *zon
 NSString *NSString_anyCStringNewWithCharacters(NSStringEncoding encoding, NSZone *zone, const unichar *characters,NSUInteger length,BOOL lossy)
 {
     switch(encoding) {
+#if 0
         case NSNEXTSTEPStringEncoding:
             return NSNEXTSTEPCStringNewWithCharacters(zone,characters,length, lossy);
         case NSWindowsCP1252StringEncoding:
@@ -196,11 +203,14 @@ NSString *NSString_anyCStringNewWithCharacters(NSStringEncoding encoding, NSZone
             return NSISOLatin1CStringNewWithCharacters(zone,characters,length, lossy);
         case NSISOLatin2StringEncoding:
             return NSISOLatin2CStringNewWithCharacters(zone,characters,length, lossy);
+#endif
         default:
-            return [[NSString allocWithZone:zone] initWithCharacters:characters length:length];
+            return NSCFStringNewWithCharacters(zone, characters, length, NO);
     }
     return nil;
 }
+
+extern NSUInteger NSGetDarwinCStringWithMaxLength(const unichar *characters, NSUInteger length, NSUInteger *location, char *cString, NSUInteger maxLength, BOOL lossy);
 
 NSUInteger NSGetAnyCStringWithMaxLength(NSStringEncoding encoding, const unichar *characters,NSUInteger length,NSUInteger *location,char *cString,NSUInteger maxLength,BOOL lossy)
 {
@@ -209,6 +219,7 @@ NSUInteger NSGetAnyCStringWithMaxLength(NSStringEncoding encoding, const unichar
     }
     
     switch(encoding) {
+#if 0
         case NSNEXTSTEPStringEncoding:
             return NSGetNEXTSTEPCStringWithMaxLength(characters,length, location, cString, maxLength, lossy);
         case NSUnicodeStringEncoding:
@@ -224,13 +235,14 @@ NSUInteger NSGetAnyCStringWithMaxLength(NSStringEncoding encoding, const unichar
             return NSGetWin1252CStringWithMaxLength(characters,length, location, cString, maxLength, lossy);
         case NSUTF8StringEncoding:
             return NSGetUTF8CStringWithMaxLength(characters,length, location, cString, maxLength);
+#endif
         default: {
             NSUInteger decodedLength = 0;
             unsigned char *bytes = NSBytesFromUnicode(characters, length, encoding, lossy, &decodedLength, nil);
             if (bytes == NULL) {
                 logEncodingError(encoding);
                 // we're using an unsupported default encoding - assuming NextSTEP
-                return NSGetNEXTSTEPCStringWithMaxLength(characters,length, location, cString, maxLength, lossy);
+                return NSGetDarwinCStringWithMaxLength(characters,length, location, cString, maxLength, lossy);
             } else {
                 NSUInteger len = MIN(decodedLength,maxLength);
                 memcpy(cString, bytes, len);

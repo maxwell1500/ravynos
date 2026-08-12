@@ -53,12 +53,13 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
     NSDeallocateObject(self);
 
     if (encoding == defaultEncoding()) {
-        return (NSString_placeholder *)NSString_cStringNewWithBytes(NULL, bytes, length);
+        return (NSString_placeholder *)NSCFStringNewWithBytes(NULL, bytes, length);
     }
 
     switch(encoding) {
         NSUInteger resultLength;
         unichar *characters;
+#if 0
 
         case NSUnicodeStringEncoding:
             characters = NSUnicodeFromBytes(bytes, length, &resultLength);
@@ -97,11 +98,12 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
             characters = NSUnicodeFromBytesUTF16BigEndian(bytes, length, &resultLength);
             return (NSString_placeholder *)NSString_unicodePtrNewNoCopy(NULL, characters, resultLength, YES);
 
+#endif
         default: {
             // Let's convert the encoding to unicode and use that
             unichar *unicodePtr = NSBytesToUnicode(bytes, length, encoding, &resultLength, NULL);
             if (unicodePtr) {
-                return (NSString_placeholder *)NSString_unicodePtrNewNoCopy(NULL, unicodePtr, resultLength, YES);
+                return (NSString_placeholder *)NSCFStringNewWithCharacters(NULL, unicodePtr, resultLength, YES);
             }
         }
             break;

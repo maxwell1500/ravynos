@@ -1,5 +1,4 @@
 /*
- * Copyright (c) 2008 Johannes Fortmann
  * Copyright (c) 2026 Zoe Knox.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy of
@@ -21,73 +20,50 @@
  * SOFTWARE.
  */
 
-/* Basically rewritten for modern CFString interop */
-
-#import "NSDarwinString.h"
 #include "NSCFString.h"
 #include <stdio.h>
 #include <sys/param.h>
 
-#define TRACE(...) do { printf("%s: ", object_getClassName(self)); printf(__VA_ARGS__); } while(0);
-
-#if defined(__APPLE__)
 #import <Foundation/NSException.h>
 #import <Foundation/NSStringHashing.h>
 #import <Foundation/NSRaiseException.h>
 
-#if __LP64__
-int __CFConstantStringClassReference[24] = {0};
-#else
-int __CFConstantStringClassReference[12] = {0};
-#endif
+#define TRACE(...) do { printf("%s: ", object_getClassName(self)); printf(__VA_ARGS__); } while(0);
 
-@implementation __builtin_NSString
--init {
-    fprintf(stderr, "[__builtin_NSString init]\n");
-    return self;
-}
+@implementation NSCFString
 
--alloc {
-    fprintf(stderr, "[__builtin_NSString alloc]\n");
-    return self;
-}
-@end
-
-
-@implementation NSDarwinString
-
-NSString *NSDarwinStringNewWithCharacters(NSZone *zone, const unichar *characters, NSUInteger length, BOOL lossy)
+NSString *NSCFStringNewWithCharacters(NSZone *zone, const unichar *characters,
+        NSUInteger length, BOOL lossy)
 {
     NSUInteger bytesLength = sizeof(unichar) * length;
-printf("bytesLength %d\n", bytesLength);
-    NSString *string = NSDarwinStringNewWithBytes(zone, (const char *)characters, bytesLength);
-printf("string = %p\n", string);
+    NSString *string = NSCFStringNewWithBytes(zone, (const char *)characters, 
+            bytesLength);
     if (string) {
         string->cfinfo[CF_INFO_BITS] |= 0x10; // is unicode string
     }
     return string;
 }
 
-NSString *NSDarwinStringNewWithBytes(NSZone *zone, const char *bytes, NSUInteger length)
+NSString *NSCFStringNewWithBytes(NSZone *zone, const char *bytes,
+         NSUInteger length)
 {
-    NSDarwinString *self = NSAllocateObject([NSDarwinString class], length * sizeof(char), zone);
-printf("NSDarwinStringNewWithBytes(%p %s %d) = %p\n", bytes, bytes, length, self);
+    NSCFString *self = NSAllocateObject([NSCFString class], 
+            length * sizeof(char), zone);
     if (self) {
         self->variants.notInlineImmutable1.length = length;
         self->variants.notInlineImmutable1.bytes = self->bytes;
-printf("assigned bytes and length\n");
         for (int i = 0; i < length; i++)
             self->bytes[i] = ((unsigned char *)bytes)[i];
-printf("copied bytes\n");
         // cfinfo immutable, not inline, don't free, 8bit, has length, no NULL byte
         self->cfinfo[CF_INFO_BITS] = 0x44;
+        self->cfinfo[CF_RC_BITS] = 1;
     }
-printf("return %p\n", self);
     return self;
 }
 
-NSUInteger NSGetDarwinCStringWithMaxLength(const unichar *characters, NSUInteger length,
-        NSUInteger *location, char *cString, NSUInteger maxLength, BOOL lossy)
+NSUInteger NSGetCFStringWithMaxLength(const unichar *characters, 
+        NSUInteger length, NSUInteger *location, char *cString, 
+        NSUInteger maxLength, BOOL lossy)
 {
     NSUInteger i, result = 0;
 
@@ -117,17 +93,16 @@ NSUInteger NSGetDarwinCStringWithMaxLength(const unichar *characters, NSUInteger
 }
 
 -copy {
-   return self;
+    return self;
 }
 
 -copyWithZone:(NSZone *)zone {
-   return self;
+    return self;
 }
 
 -retain {
-   return self;
+    return self;
 }
-
 
 - (oneway void)release
 {
@@ -135,21 +110,21 @@ NSUInteger NSGetDarwinCStringWithMaxLength(const unichar *characters, NSUInteger
 
 
 -autorelease {
-   return self;
+    return self;
 }
 
 -(void)dealloc {
-   return;
-   [super dealloc];
+    return;
+    [super dealloc];
 }
 
 -(NSUInteger)length {
     uint8_t infobits = self->cfinfo[CF_INFO_BITS];
 
-    if (infobits & 0x4) { // has length byte?
+    if (infobits & kNSCFHasLength) {
         return (self->variants.inline1.length & 0xff);
-    } else if (infobits & 0x8) { // has null byte?
-        if (infobits & 0x10) { // is unicode (16 bit char)?
+    } else if (infobits & kNSCFHasNull) {
+        if (infobits & kNSCFUnichar) {
             uint16_t *ch = self->variants.notInlineImmutable1.bytes;
             NSUInteger len = 0;
             while (*ch++)
@@ -168,21 +143,21 @@ NSUInteger NSGetDarwinCStringWithMaxLength(const unichar *characters, NSUInteger
 
 -(unichar)characterAtIndex:(NSUInteger)location {
     if (location >= [self length]) {
-        NSRaiseException(NSRangeException,self,_cmd,@"index %d beyond length %d",
-            location,[self length]);
+        NSRaiseException(NSRangeException, self, _cmd, 
+            @"index %d beyond length %d", location,[self length]);
     }
 
     uint8_t infobits = self->cfinfo[CF_INFO_BITS];
 
-    if (infobits & 0x60 == 0) // inline
+    if (infobits & ED_MASK == 0) // inline
         return self->variants.notInlineImmutable1.bytes[location];
-    else if (infobits & 0x10) { // unicode 16-bit chars
-        if (infobits & 0x4) // has length byte
+    else if (infobits & kNSCFUnichar) {
+        if (infobits & kNSCFHasLength)
             return ((uint16_t *)(self->variants.notInlineImmutable1.bytes))[location];
         else
             return ((uint16_t *)(self->variants.notInlineImmutable2.bytes))[location];
     } else {
-        if (infobits & 0x4) // has length byte
+        if (infobits & kNSCFHasLength) // has length byte
             return ((uint16_t *)(self->variants.notInlineImmutable1.bytes))[location];
         else
             return ((uint16_t *)(self->variants.notInlineImmutable2.bytes))[location];
@@ -190,14 +165,13 @@ NSUInteger NSGetDarwinCStringWithMaxLength(const unichar *characters, NSUInteger
     return 0; // should not be reached
 }
 
-#define kCFStringEncodingUTF8  0x08000100
 -(NSStringEncoding)fastestEncoding {
     return NSUTF8StringEncoding;
 }
 
 -(const char *)_fastCStringContents:(BOOL)getContents {
     uint8_t infobits = self->cfinfo[CF_INFO_BITS];
-    if ((infobits & 0x60 == 0) && (infobits & 0x4)) // inline + length byte
+    if ((infobits & ED_MASK == 0) && (infobits & kNSCFHasLength))
         return (const char *)(&self->variants.notInlineImmutable1.bytes[1]);
     else
         return (const char *)(self->variants.notInlineImmutable1.bytes);
@@ -209,7 +183,8 @@ NSUInteger NSGetDarwinCStringWithMaxLength(const unichar *characters, NSUInteger
 }
 
 -(BOOL)_encodingCantBeStoredInEightBitCFString {
-    if (self->cfinfo[CF_INFO_BITS] & 0x10) // is unicode
+    uint8_t infobits = self->cfinfo[CF_INFO_BITS];
+    if (infobits & kNSCFUnichar)
         return YES;
     return NO;
 }
@@ -225,20 +200,21 @@ NSUInteger NSGetDarwinCStringWithMaxLength(const unichar *characters, NSUInteger
         return;
 
     if (NSMaxRange(range) > [self length]) {
-        NSRaiseException(NSRangeException, self, _cmd, @"range %@ beyond length %d",
+        NSRaiseException(NSRangeException, self, _cmd,
+            @"range %@ beyond length %d",
             NSStringFromRange(range), [self length]);
     }
 
     uint8_t infobits = self->cfinfo[CF_INFO_BITS];
 
-    if (infobits & 0x4) // length byte
+    if (infobits & kNSCFHasLength)
         loc++, len++;
 
     memset(buffer, 0, len * sizeof(unichar));
-    if (infobits & 0x60 == 0) { // inline
+    if (infobits & ED_MASK == 0) { // inline
         for (i = 0 ; i < len; i++)
             buffer[i] = self->variants.notInlineImmutable1.bytes[i + loc];
-    } else if (infobits & 0x10) { // unicode 16-bit chars
+    } else if (infobits & kNSCFUnichar) { // unicode 16-bit chars
         for (i = 0; i < len; i++)
             buffer[i] = ((unichar *)(self->variants.notInlineImmutable1.bytes))[i + loc];
     } else { // 8-bit UTF8 or ASCII
@@ -252,9 +228,8 @@ TRACE("ascii buffer p=%p %02x %c i=%d loc=%d len=%d\n", p, *p, *p, i, loc, len);
 }
 
 -(NSUInteger)hash {
-    return NSStringHashASCII([self _fastCStringContents:NO], MIN([self length], NSHashStringLength));
+    return NSStringHashASCII([self _fastCStringContents:NO],
+        MIN([self length], NSHashStringLength));
 }
 
 @end
-
-#endif

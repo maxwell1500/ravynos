@@ -100,24 +100,9 @@ BOOL NSObjectIsKindOfClass(id object,Class kindOf) {
     [pool release];
 }
 
-#if TOLL_FREE_BRIDGING
--(uint32_t)_cftype {
-    uint16_t v = (uint16_t)(&self->__cfinfo[1]);
-    return v >> 8;
+-(uint32_t *)cfinfo {
+   return (uint32_t *)(self->cfinfo);
 }
-
--(uint32_t)_cfinfo {
-    return self->__cfinfo[CF_INFO_BITS];
-}
-
--(uint32_t)_cfrc {
-    return self->__cfinfo[CF_RC_BITS];
-}
-
--(void)_setCFInfo {
-    *(uint32_t *)&(self->__cfinfo) = (uint32_t)[self _cfTypeID] << 8;
-}
-#endif
 
 -(Class)classForCoder {
    return object_getClass(self);
