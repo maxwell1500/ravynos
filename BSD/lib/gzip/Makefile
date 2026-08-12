@@ -60,7 +60,7 @@ all: lib${LIB}.dylib zcat
 
 zcat: gzip
 	sed -e 's/BINDIR/\/usr\/bin/' <${.CURDIR}/src/zcat.in >${.TARGET}
-	cp -f ${.CURDIR}/zcat.1 ${SYSROOT_DIR}/usr/share/man/man1/
+	cp -f ${.CURDIR}/src/zcat.1 ${SYSROOT_DIR}/usr/share/man/man1/
 	rm -f ${SYSROOT_DIR}/usr/bin/uncompress
 	ln -f ${SYSROOT_DIR}/bin/gzip ${SYSROOT_DIR}/bin/zcat
 	ln -f ${SYSROOT_DIR}/bin/gzip ${SYSROOT_DIR}/bin/gzcat

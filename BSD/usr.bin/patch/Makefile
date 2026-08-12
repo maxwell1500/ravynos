@@ -5,5 +5,11 @@ SUBDIR =
 PROG=	patch
 SRCS=	patch.c pch.c inp.c util.c backupfile.c mkpath.c
 
+all: to-sysroot
+
+to-sysroot: ${PROG}
+	mkdir -p ${SYSROOT_DIR}/bin
+	cp -f ${PROG} ${SYSROOT_DIR}/bin/
+
 .include <bsd.prog.mk>
 
