@@ -67,8 +67,13 @@ static const struct option long_opts[] =
 int expand_number(const char *str, int64_t *num);
 int expand_number(const char *str, int64_t *num)
 {
-    int64_t val = strtol(str, 0, 0);
+    int64_t val = strtol(str, NULL, 10);
     char suffix = str[strlen(str) - 1];
+    if (suffix >= '0' && suffix <= '9') {
+        if (num)
+            *num = val;
+        return 0;
+    }
     switch (suffix) {
         case 'K': val *= 1024UL; break;
         case 'M': val *= 1024UL * 1024UL; break;
