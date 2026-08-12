@@ -83,13 +83,12 @@ int main(void) {
         
         printf("\n--- Native objects ---\n");
         s = [NSString stringWithCString:"hello this is a long text"];
-    printf("*** s = %p\n\n", s);
         p = (uint64_t *)s;
         printf(" + %s(%p): 0x%llx 0x%llx 0x%llx 0x%llx 0x%llx\n", object_getClassName(s), s, p[0], p[1], p[2], p[3], p[4]);
 
         c = CFStringCreateWithCString(NULL, "floofcat nyancat fuff fuff fuff", kCFStringEncodingUTF8);
         p = (uint64_t *)c;
-        printf(" + CFStringRef(%p): 0x%llx 0x%llx 0x%llx 0x%llx\n", c, p[0], p[1], p[2], p[3]);
+        printf(" + %s(%p): 0x%llx 0x%llx 0x%llx 0x%llx\n", object_getClassName(c), p[0], p[1], p[2], p[3]);
         uint32_t *u = &p[1];
         printf("bits: flags %x, rc %d\n", u[0], u[1]);
 

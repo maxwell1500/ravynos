@@ -453,7 +453,7 @@ extern int *__NSConstantStringClassReference;
 }
 
 -(NSUInteger)length {
-   NSInvalidAbstractInvocation();
+printf("NSString length stub\n");
    return 0;
 }
 

@@ -54,8 +54,8 @@ NSString *NSCFStringNewWithBytes(NSZone *zone, const char *bytes,
         self->variants.notInlineImmutable1.bytes = self->bytes;
         for (int i = 0; i < length; i++)
             self->bytes[i] = ((unsigned char *)bytes)[i];
-        // cfinfo immutable, not inline, don't free, 8bit, has length, no NULL byte
-        self->cfinfo[CF_INFO_BITS] = 0x44;
+        // cfinfo immutable, not inline, don't free, 8bit, no length byte, no NULL byte
+        self->cfinfo[CF_INFO_BITS] = 0x40;
         self->cfinfo[CF_RC_BITS] = 1;
     }
     return self;
@@ -146,32 +146,18 @@ NSUInteger NSGetCFStringWithMaxLength(const unichar *characters,
         NSRaiseException(NSRangeException, self, _cmd, 
             @"index %d beyond length %d", location,[self length]);
     }
-
-    uint8_t infobits = self->cfinfo[CF_INFO_BITS];
-
-    if (infobits & ED_MASK == 0) // inline
-        return self->variants.notInlineImmutable1.bytes[location];
-    else if (infobits & kNSCFUnichar) {
-        if (infobits & kNSCFHasLength)
-            return ((uint16_t *)(self->variants.notInlineImmutable1.bytes))[location];
-        else
-            return ((uint16_t *)(self->variants.notInlineImmutable2.bytes))[location];
-    } else {
-        if (infobits & kNSCFHasLength) // has length byte
-            return ((uint16_t *)(self->variants.notInlineImmutable1.bytes))[location];
-        else
-            return ((uint16_t *)(self->variants.notInlineImmutable2.bytes))[location];
-    }
-    return 0; // should not be reached
+    unichar buffer[1];
+    [self getCharacters:buffer range:NSMakeRange(location, 1)];
+    return buffer[0];
 }
 
 -(NSStringEncoding)fastestEncoding {
-    return NSUTF8StringEncoding;
+    return NSUnicodeStringEncoding;
 }
 
 -(const char *)_fastCStringContents:(BOOL)getContents {
     uint8_t infobits = self->cfinfo[CF_INFO_BITS];
-    if ((infobits & ED_MASK == 0) && (infobits & kNSCFHasLength))
+    if (infobits & kNSCFHasLength)
         return (const char *)(&self->variants.notInlineImmutable1.bytes[1]);
     else
         return (const char *)(self->variants.notInlineImmutable1.bytes);
@@ -196,6 +182,9 @@ NSUInteger NSGetCFStringWithMaxLength(const unichar *characters,
 
 -(void)getCharacters:(unichar *)buffer range:(NSRange)range {
     NSInteger i = 0, loc = range.location, len = range.length;
+    unichar *uch = 0;
+    unsigned char *ch = 0;
+
     if (!buffer)
         return;
 
@@ -206,25 +195,33 @@ NSUInteger NSGetCFStringWithMaxLength(const unichar *characters,
     }
 
     uint8_t infobits = self->cfinfo[CF_INFO_BITS];
-
     if (infobits & kNSCFHasLength)
-        loc++, len++;
+        loc++;
 
     memset(buffer, 0, len * sizeof(unichar));
-    if (infobits & ED_MASK == 0) { // inline
-        for (i = 0 ; i < len; i++)
-            buffer[i] = self->variants.notInlineImmutable1.bytes[i + loc];
-    } else if (infobits & kNSCFUnichar) { // unicode 16-bit chars
-        for (i = 0; i < len; i++)
-            buffer[i] = ((unichar *)(self->variants.notInlineImmutable1.bytes))[i + loc];
-    } else { // 8-bit UTF8 or ASCII
-        char *p = &(self->variants.notInlineImmutable1.bytes[i + loc]);
-TRACE("ascii buffer p=%p %02x %c i=%d loc=%d len=%d\n", p, *p, *p, i, loc, len);
-        for (i = 0; i < len; i++) {
-            unsigned char ch = *p++;
-            buffer[i] = ch;
+
+    switch (infobits & ED_MASK) {
+        case 0x00: {
+            printf("inline buffer\n");
+            uch = (unichar *)&(self->variants.notInlineImmutable1.bytes);
+            ch = (unsigned char *)&(self->variants.notInlineImmutable1.bytes);
+            break;
+        }
+        default: {
+            printf("not inline\n");
+            uch = (unichar *)self->variants.notInlineImmutable1.bytes;
+            ch = (unsigned char *)self->variants.notInlineImmutable1.bytes;
         }
     }
+
+    if (infobits & kNSCFUnichar) { // unicode 16-bit chars
+        for (i = 0; i < len; i++)
+            buffer[i] = uch[i + loc];
+    } else { // 8-bit UTF8 or ASCII
+        for (i = 0; i < len; i++) 
+            buffer[i] = ch[i + loc];
+    }
+    TRACE("finished buffer = %p\n", buffer);
 }
 
 -(NSUInteger)hash {

@@ -216,7 +216,7 @@ FOUNDATION_EXPORT void __NSInitializeProcess(int argc,const char *argv[]) {
     extern int __CFConstantStringClassReference[12];
 #endif
 
-    cls = objc_getClass("NSDarwinString");
+    cls = objc_getClass("NSCFString");
     memcpy(&__CFConstantStringClassReference, cls, sizeof(__CFConstantStringClassReference));
     
     // Override the compiler version of the class
