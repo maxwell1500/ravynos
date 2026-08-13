@@ -63,7 +63,10 @@ decl_simple_lock_data(static, mtrr_lock);
 #define MTRR_LOCK()     simple_lock(&mtrr_lock, LCK_GRP_NULL);
 #define MTRR_UNLOCK()   simple_unlock(&mtrr_lock);
 
-//#define MTRR_DEBUG 1
+#if DEBUG || DEVELOPMENT
+#define MTRR_DEBUG 1
+#endif
+
 #if     MTRR_DEBUG
 #define DBG(x...)       kprintf(x)
 #else

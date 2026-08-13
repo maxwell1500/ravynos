@@ -91,6 +91,17 @@ ACPIPlatformExpert::parseAPIC(void * table, IOService * nub)
         uint16_t flags;
     } __attribute__((packed));
 
+    /* Processor Local x2APIC (ACPI 4.0+, MADT type 9). Firmware on hybrid parts
+     * (Meteor Lake and later) describes processors this way rather than type 0. */
+    struct X2APIC_RECORD {
+        uint8_t  type;
+        uint8_t  length;
+        uint16_t reserved;
+        uint32_t x2apic_id;
+        uint32_t flags;
+        uint32_t acpi_uid;
+    } __attribute__((packed));
+
     char          buf[64];
     struct MADT * madt = (struct MADT *) table;
     MADT_Record * rec = madt->records;
@@ -116,23 +127,61 @@ ACPIPlatformExpert::parseAPIC(void * table, IOService * nub)
         return; /* and panic */
     }
 
+    /* Firmware may list the same processor as both a type 0 and a type 9 record.
+     * The convention (matching Linux) is that type 9 wins only above ID 254, so
+     * we need to know whether any type 0 record exists before walking. */
+    bool haveLegacyLapics = false;
+    for (MADT_Record * scan = madt->records;
+         (uint64_t)scan < ((uint64_t)madt + madt->length) && scan->length != 0;
+         scan = (MADT_Record *) ((uint64_t)scan + scan->length)) {
+        if (scan->type == 0) {
+            haveLegacyLapics = true;
+            break;
+        }
+    }
+
     while ((uint64_t)rec < ((uint64_t)madt + madt->length)) {
         if (rec->length == 0) {
             rec = (MADT_Record *) ((uint64_t)rec + sizeof(MADT_Record));
         }
-        
+
         switch (rec->type) {
-            case 0: { /* Local APIC */
+            case 0:   /* Local APIC */
+            case 9: { /* Local x2APIC */
+                uint32_t apic_id, proc_id;
+
+                if (rec->type == 0) {
+                    struct LAPIC_RECORD * lr = (struct LAPIC_RECORD *) rec;
+                    apic_id = lr->lapic_id;
+                    proc_id = lr->proc_id;
+                } else {
+                    struct X2APIC_RECORD * xr = (struct X2APIC_RECORD *) rec;
+
+                    if (rec->length < sizeof(*xr)) {
+                        PE_Log("Malformed MADT x2APIC record, length %d", rec->length);
+                        break;
+                    }
+                    /* Unlike type 0 above, x2APIC tables are routinely padded with
+                     * disabled entries, so the enabled flag has to be honoured. */
+                    if (!(xr->flags & 1u) || xr->x2apic_id == 0xFFFFFFFFu) {
+                        break;
+                    }
+                    if (xr->x2apic_id < 0xFFu && haveLegacyLapics) {
+                        break; /* already described by a type 0 record */
+                    }
+                    apic_id = xr->x2apic_id;
+                    proc_id = xr->acpi_uid;
+                }
+
                 ncpus++;
-                struct LAPIC_RECORD * lr = (struct LAPIC_RECORD *) rec;
                 OSDictionary * dict = OSDictionary::withCapacity(7);
 
                 dict->setObject("device_type", OSString::withCString("processor"));
                 dict->setObject("compatible", OSString::withCString("processor"));
-                dict->setObject("apic-id", OSNumber::withNumber(lr->lapic_id, 32));
-                dict->setObject("processor-id", OSNumber::withNumber(lr->proc_id, 32));
+                dict->setObject("apic-id", OSNumber::withNumber(apic_id, 32));
+                dict->setObject("processor-id", OSNumber::withNumber(proc_id, 32));
                 dict->setObject("cpu-number", OSNumber::withNumber(index, 32));
-                
+
                 sprintf(buf, "cpu@%d", index++);
                 dict->setObject("name", OSString::withCString(buf));
                 dict->setObject("location", OSNumber::withNumber(madt->lapicAddress, 32));
