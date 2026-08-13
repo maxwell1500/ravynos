@@ -32,7 +32,7 @@ extern "C" {
 
 CF_ASSUME_NONNULL_BEGIN
 
-CF_ENUM(uint32_t, SecCSHostFlags) {
+extern CF_ENUM(uint32_t, SecCSHostFlags) {
 	kSecCSDedicatedHost = 1 << 0,
 	kSecCSGenerateGuestHash = 1 << 1,
 };

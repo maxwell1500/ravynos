@@ -1,4 +1,5 @@
 MK_WERROR = no
+SUBDIR =
 KEXT = IOPCIFamily
 INFO_PLIST = Info.plist
 BUNDLE_IDENTIFIER = com.apple.iokit.IOPCIFamily

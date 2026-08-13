@@ -1,4 +1,5 @@
 MK_WERROR = no
+SUBDIR =
 KEXT = IOHIDFamily
 BUNDLE_IDENTIFIER = com.apple.iokit.IOHIDFamily
 BUNDLE_VERSION = 1.5.2

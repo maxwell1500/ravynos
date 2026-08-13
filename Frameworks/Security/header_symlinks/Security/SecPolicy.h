@@ -203,7 +203,7 @@ SecPolicyRef SecPolicyCreateSSL(Boolean server, CFStringRef __nullable hostname)
      OCSP or CRL may be used, depending on the method(s) specified in the
      certificate and the value of kSecRevocationPreferCRL.
  */
-CF_ENUM(CFOptionFlags, SecRevocationOptions) {
+extern CF_ENUM(CFOptionFlags, SecRevocationOptions) {
     kSecRevocationOCSPMethod = (1 << 0),
     kSecRevocationCRLMethod = (1 << 1),
     kSecRevocationPreferCRL = (1 << 2),

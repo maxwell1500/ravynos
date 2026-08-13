@@ -166,7 +166,7 @@ OSStatus SecStaticCodeCreateWithPathAndAttributes(CFURLRef path, SecCSFlags flag
 	@result If validation succeeds, errSecSuccess. If validation fails, an OSStatus value
 	documented in CSCommon.h or certain other Security framework headers.
 */
-CF_ENUM(uint32_t, SecCSValidationFlags) {
+extern CF_ENUM(uint32_t, SecCSValidationFlags) {
 	kSecCSCheckAllArchitectures = 1 << 0,
 	kSecCSDoNotValidateExecutable = 1 << 1,
 	kSecCSDoNotValidateResources = 1 << 2,

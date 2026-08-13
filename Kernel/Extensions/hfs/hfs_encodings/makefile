@@ -1,4 +1,5 @@
 MK_WERROR = no
+SUBDIR =
 KEXT = hfs_encodings
 KERNEL_PRIVATE = yes
 INFO_PLIST = HFSEncodings-Info.plist

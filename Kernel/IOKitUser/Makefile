@@ -276,10 +276,15 @@ iokitHdrs = ${RAVYN_SDKROOT}/System/Library/Frameworks/IOKit.framework/Versions/
 
 LDFLAGS = --sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSION_MIN} \
 	-Wl,-compatibility_version,1.0.0 -Wl,-current_version,275.0.0 \
+	-Wl,-flat_namespace -Wl,-undefined,warning \
         -L${RAVYN_SDKROOT}/usr/local/lib/kernel -lcc_kext -lkxld -lkernel \
         -framework CoreFoundation -lobjc -lc++ -lz -lSystem
 
-all: copy_headers libkxld.a
+all: copy_headers libkxld.a kext.subproj ${FRAMEWORK} to-sysroot
+
+to-sysroot:
+	cp -Rf ${.OBJDIR}/IOKit.framework ${RAVYN_SDKROOT}/System/Library/Frameworks/
+	cp -Rf ${.OBJDIR}/IOKit.framework ${SYSROOT_DIR}/System/Library/Frameworks/
 
 copy_headers: .PHONY
 	mkdir -p ${RAVYN_SDKROOT}/usr/local/include
@@ -430,7 +435,7 @@ libkxld.a:
 	${MAKE} -C${.CURDIR} -f Makefile.kxld all
 	cp -f ${.OBJDIR}/${.TARGET} ${RAVYN_SDKROOT}/usr/local/lib/kernel
 
-# SUBDIR = kext.subproj
+SUBDIR = kext.subproj
 
 .include <rvn.framework.mk>
 .include <bsd.subdir.mk>

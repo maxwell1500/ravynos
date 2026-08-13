@@ -318,7 +318,7 @@ CFStringRef SecCopyErrorMessageString(OSStatus status, void * __nullable reserve
     line that does not start with errZZZ.
 */
 
-CF_ENUM(OSStatus, SecErrorCode)
+extern CF_ENUM(OSStatus, SecErrorCode)
 {
     errSecSuccess                            = 0,       /* No error. */
     errSecUnimplemented                      = -4,      /* Function or operation not implemented. */
@@ -793,7 +793,7 @@ CF_ENUM(OSStatus, SecErrorCode)
  a different or additional comment is needed, it can be put in the header doc format, or on a
  line that does not start with errZZZ.
  */
-CF_ENUM(OSStatus, SecTransportErrorCode) {
+extern CF_ENUM(OSStatus, SecTransportErrorCode) {
     errSSLProtocol                                  = -9800,    /* SSL protocol error */
     errSSLNegotiation                               = -9801,    /* Cipher Suite negotiation failure */
     errSSLFatalAlert                                = -9802,    /* Fatal alert */

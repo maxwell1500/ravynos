@@ -1,3 +1,4 @@
+SUBDIR =
 MK_WERROR = no
 INFO_PLIST = Info.plist
 BUNDLE_IDENTIFIER = com.apple.driver.ApplePS2Controller

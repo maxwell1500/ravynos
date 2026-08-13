@@ -1,4 +1,5 @@
 MK_WERROR = no
+SUBDIR =
 KEXT = IOATAFamily
 KERNEL_PRIVATE = yes
 INFO_PLIST = Info.plist

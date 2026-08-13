@@ -1,4 +1,5 @@
 MK_WERROR = no
+SUBDIR =
 KEXT = corecrypto
 KERNEL_PRIVATE = yes
 INFO_PLIST = kext/Info.plist

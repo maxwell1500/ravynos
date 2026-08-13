@@ -1,4 +1,5 @@
 MK_WERROR = no
+SUBDIR =
 KERNEL_PRIVATE = yes
 KEXT = AppleAPIC
 INFO_PLIST = Info.plist

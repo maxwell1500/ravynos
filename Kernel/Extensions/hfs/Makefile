@@ -1,4 +1,5 @@
 MK_WERROR = no
+SUBDIR =
 KEXT = hfs
 KERNEL_PRIVATE = yes
 INFO_PLIST = core/macosx-Info.plist

@@ -48,7 +48,7 @@ CF_ASSUME_NONNULL_BEGIN
 	@constant kSecReadPermStatus Indicates the keychain is readable.
 	@constant kSecWritePermStatus Indicates the keychain is writable.
 */
-CF_ENUM(UInt32, KeychainStatus_t)
+extern CF_ENUM(UInt32, KeychainStatus_t)
 {
     kSecUnlockStateStatus        = 1,
     kSecReadPermStatus           = 2,

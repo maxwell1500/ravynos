@@ -121,7 +121,7 @@ CF_IMPLICIT_BRIDGING_ENABLED
 	use the equivalent items defined in SecItem.h
 	@@@.
 */
-CF_ENUM(int, SecKeyItem)
+extern CF_ENUM(int, SecKeyItem)
 {
     kSecKeyKeyClass =          0,
     kSecKeyPrintName =         1,

@@ -32,7 +32,7 @@ typedef uint32_t IOHIDEventSystemClientType;
 typedef struct __IOHIDEventSystemClient * IOHIDEventSystemClientRef;
 
 
-CF_ENUM(IOHIDEventSystemClientType, _IOHIDEventSystemClientType) {
+extern CF_ENUM(IOHIDEventSystemClientType, _IOHIDEventSystemClientType) {
     kIOHIDEventSystemClientTypeAdmin = 0,
     kIOHIDEventSystemClientTypeMonitor = 1,
     kIOHIDEventSystemClientTypeFilter = 2,

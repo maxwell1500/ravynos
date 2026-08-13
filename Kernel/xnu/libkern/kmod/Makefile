@@ -1,4 +1,5 @@
 MK_WERROR = no
+SUBDIR =
 LIB = kmod
 SRCS = c_start.c c_stop.c pure.c
 

@@ -1,4 +1,5 @@
 MK_WERROR = no
+SUBDIR =
 KEXT = IOHIDSystem
 INFO_PLIST = Info-IOHIDSystem.plist
 BUNDLE_IDENTIFIER = com.apple.iokit.IOHIDSystem

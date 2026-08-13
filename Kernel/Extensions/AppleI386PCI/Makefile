@@ -1,4 +1,5 @@
 MK_WERROR = no
+SUBDIR =
 KEXT = AppleI386PCI
 INFO_PLIST = Info.plist
 BUNDLE_IDENTIFIER = com.apple.driver.AppleI386PCI

@@ -1,4 +1,5 @@
 MK_WERROR = no
+SUBDIR =
 KEXT = pthread
 INFO_PLIST = Info.plist
 KERNEL_PRIVATE = yes

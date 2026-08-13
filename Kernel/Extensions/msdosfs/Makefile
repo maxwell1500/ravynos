@@ -1,4 +1,5 @@
 MK_WERROR = no
+SUBDIR =
 KEXT = msdosfs
 KERNEL_PRIVATE = yes
 INFO_PLIST = Info-msdosfs_kext.plist
