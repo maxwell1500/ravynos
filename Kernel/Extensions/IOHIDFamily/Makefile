@@ -21,6 +21,7 @@ SRCS = \
         \
         IOHIDFamily/IOHIDEvent.cpp \
         IOHIDFamily/IOHIDFamilyPrivate.cpp \
+        IOHIDFamily/IOHIDLibUserClient.cpp \
         IOHIDFamily/IOHIDResource.cpp
 
 CSTD = none
@@ -40,6 +41,7 @@ CFLAGS = -Wno-implicit-int-conversion -Wno-sign-conversion \
 	-I${ROOT_BINARY_DIR}${ROOT_SOURCE_DIR}/Kernel/xnu/EXPORT_HDRS/osfmk \
 	-I${ROOT_BINARY_DIR}${ROOT_SOURCE_DIR}/Kernel/xnu/EXPORT_HDRS/san \
 	-I${ROOT_BINARY_DIR}${ROOT_SOURCE_DIR}/Kernel/xnu/EXPORT_HDRS/security \
+	-I${ROOT_SOURCE_DIR}/Kernel/xnu/osfmk \
 	-include${RAVYN_SDKROOT}/usr/include/i386/endian.h \
 	-include${RAVYN_SDKROOT}/usr/local/include/kernel/os/object.h \
 	${CFLAGS.${.TARGET}}
@@ -48,6 +50,7 @@ LDFLAGS = -mmacos-version-min=${MACOS_VERSION_MIN} --sysroot=${RAVYN_SDKROOT} \
 	-fuse-ld=${LD}
 
 CFLAGS.IOHIDSystem.o = -include${.CURDIR}/IOHIDFamily/IOHIDElement.h
+CFLAGS.IOHIDDevice.o = -include${.CURDIR}/IOHIDFamily/IOHIDDevice.h
 
 all: copyheaders
 
@@ -56,6 +59,9 @@ copyheaders:
 	    ${RAVYN_SDKROOT}${SLF}/IOKit.framework/Headers/hid/
 	mkdir -p ${RAVYN_SDKROOT}${SLF}/IOKit.framework/Headers/usb
 	touch ${RAVYN_SDKROOT}${SLF}/IOKit.framework/Headers/usb/IOUSBHostFamily.h
+	mkdir -p ${RAVYN_SDKROOT}${SLF}/IOKit.framework/Headers/hidsystem
+	cp -fv ${.CURDIR}/IOHIDFamily/IOHIDUsageTables.h \
+	    ${RAVYN_SDKROOT}${SLF}/IOKit.framework/Headers/hidsystem
 
 SUBDIR = IOHIDSystem
 #SUBDIR += HID

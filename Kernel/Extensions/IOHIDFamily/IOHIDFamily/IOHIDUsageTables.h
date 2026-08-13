@@ -74,7 +74,8 @@ enum
     kHIDPage_Arcade                 = 0x91,    /* OAAF Definitions for arcade and coinop related Devices */
     /* Reserved 0x92 - 0xFEFF */
     /* VendorDefined 0xFF00 - 0xFFFF */
-    kHIDPage_VendorDefinedStart     = 0xFF00
+    kHIDPage_VendorDefinedStart     = 0xFF00,
+    kHIDPage_AppleVendor            = 0xFF00
 };
 
 /* Undefined Usage for all usage pages */
@@ -2586,6 +2587,12 @@ enum
     /* Reserved 0x01 - 0x1F */
     kHIDUsage_CC_Autofocus = 0x20,      /* One-Shot Control */
     kHIDUsage_CC_Shutter = 0x21,        /* One-Shot Control */
+};
+
+/* Apple Vendor Page (0xFF00) */
+enum
+{
+    kHIDUsage_AppleVendor_MultipleInterfaces = 0x1,
 };
 
 #endif /* _IOHIDUSAGETABLES_H */

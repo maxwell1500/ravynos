@@ -81,7 +81,7 @@ typedef enum {
 } IOHIDLogCategory;
 
 
-extern uint32_t gIOHIDDebugConfig;
+extern "C" uint32_t gIOHIDDebugConfig;
 
 #define kIOHIDLogSubsytem   "com.apple.iohid"
 

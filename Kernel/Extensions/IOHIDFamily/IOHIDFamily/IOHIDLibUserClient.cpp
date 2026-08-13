@@ -88,6 +88,7 @@ struct AsyncGateParam {
     UInt32                    completionTimeOutMS;
 };
 
+uint32_t _gIOHIDDebugConfig;
 
 OSDefineMetaClassAndStructors(IOHIDLibUserClient, IOUserClient);
 

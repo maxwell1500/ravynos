@@ -825,6 +825,7 @@ void __IOHIDElementApplyCalibration(IOHIDElementRef element)
 }
 
 //------------------------------------------------------------------------------
+extern "C" void __IOHIDSaveElementSet(const void *value, void *context);
 void __IOHIDSaveElementSet(const void *value, void *context) {
     IOHIDElementRef element = (IOHIDElementRef)value;
     if (element)
@@ -832,6 +833,7 @@ void __IOHIDSaveElementSet(const void *value, void *context) {
 }
 
 //------------------------------------------------------------------------------
+extern "C" void __IOHIDLoadElementSet(const void *value, void *context __unused);
 void __IOHIDLoadElementSet(const void *value, void *context __unused) {
     IOHIDElementRef element = (IOHIDElementRef)value;
     if (element)

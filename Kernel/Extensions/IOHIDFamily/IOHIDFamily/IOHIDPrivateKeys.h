@@ -249,6 +249,15 @@ enum {
     kIOHIDVirtualServiceEnableLogging = 4
 };
 
+#define kIOHIDExtendedDataKey "IOHIDExtendedData"
+#define kIOHIDProtectedAccessKey "IOHIDProtectedAccess"
+#define kIOHIDMultipleInterfaceEnabledKey "IOHIDMultipleInterfaceEnabled"
+#define kIOHIDRequiresTCCAuthorizationKey "IOHIDRequiresTCCAuthorization"
+#define kIOHIDRegisterServiceKey "IOHIDRegisterServiceKey"
+#define kIOHIDRelaySupportKey "IOHIDRelaySupportKey"
+#define kIOHIDRelayServiceInterfaceActiveKey "IOHIDRelayServiceInterfaceActiveKey"
+#define kIOHIDDeviceMessagePropertyUpdateKey "IOHIDDeviceMessagePropertyUpdate"
+
 __END_DECLS
 
 #endif /* !_IOKIT_HID_IOHIDPRIVATEKEYS_H_ */
