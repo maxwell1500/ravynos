@@ -61,9 +61,13 @@ IOGOPFramebuffer::start(IOService *provider)
         DEBUG("no framebuffer base address\n");
         return false;
     }
+    fbBase = (void *)bootDisplay.v_baseAddr;
+    width  = bootDisplay.v_width;
+    height = bootDisplay.v_height;
+    pitch  = bootDisplay.v_rowBytes;
+    bpp    = 32;
 
-    IOLog("IOFB: GOP framebuffer %dx%d @ %p\n", bootDisplay.v_width,
-        bootDisplay.v_height, bootDisplay.v_baseAddr);
+    IOLog("IOFB: GOP framebuffer %dx%d @ %p\n", width, height, fbBase);
 
     // Register the framebuffer with the kernel console system
     PE_Video consoleInfo;
