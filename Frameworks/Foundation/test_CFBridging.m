@@ -16,10 +16,10 @@ void test_CFBridgingRetain(void) {
 
         if ((void *)cf == (void *)obj) {
             printf("Pointers match - toll-free bridging OK\n");
-            printf("contents of cf: %s\n", CFStringGetCStringPtr(cf, kCFStringEncodingUTF8));
-            uintptr_t *p = (uintptr_t *)cf;
-            printf("dump: isa %lx bits %lx ptr %lx %s length %lx\n",
-                p[0], p[1], p[2], (char *)&p[2], p[3]);
+//            printf("contents of cf: %s\n", CFStringGetCStringPtr(cf, kCFStringEncodingUTF8));
+//            uintptr_t *p = (uintptr_t *)cf;
+//            printf("dump: isa %lx bits %lx ptr %lx %s length %lx\n",
+//                p[0], p[1], p[2], (char *)&p[2], p[3]);
         } else {
             printf("ERROR: pointers differ!\n");
         }
@@ -84,9 +84,9 @@ int main(void) {
         printf("\n--- Native objects ---\n");
         s = [NSString stringWithCString:"hello this is a long text"];
         p = (uint64_t *)s;
-        printf(" + %s(%p): 0x%llx 0x%llx 0x%llx 0x%llx 0x%llx\n", object_getClassName(s), s, p[0], p[1], p[2], p[3], p[4]);
+//        printf(" + %s(%p): 0x%llx 0x%llx 0x%llx 0x%llx 0x%llx\n", object_getClassName(s), s, p[0], p[1], p[2], p[3], p[4]);
 
-        c = CFStringCreateWithCString(NULL, "floofcat nyancat fuff fuff fuff", kCFStringEncodingUTF8);
+        c = CFStringCreateWithCString(NULL, "floofcat nyancat fuff", kCFStringEncodingUTF8);
         p = (uint64_t *)c;
         printf(" + %s(%p): 0x%llx 0x%llx 0x%llx 0x%llx\n", object_getClassName(c), p[0], p[1], p[2], p[3]);
         uint32_t *u = &p[1];

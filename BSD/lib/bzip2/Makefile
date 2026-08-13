@@ -24,7 +24,6 @@ SRCS +=	./src/x86_64/crc32vec.s
 MAJMIN = ${MAJOR}.${MINOR}
 VERSION = ${MAJOR}.${MINOR}.${PATCH}
 
-BINDIR ?= /usr/bin
 CFLAGS += --sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSION_MIN} \
         -I${.CURDIR}/src -Wno-nullability-completeness
 ACFLAGS += --sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSION_MIN}
@@ -42,24 +41,25 @@ MLINKS += src/bzmore.1 bzless.1
 all: lib${LIB}.dylib bzip2 bzip2recover bzdiff bzmore
 
 bzip2: ${.CURDIR}/src/bzip2.c
-	${CC} ${CFLAGS} -o ${.ALLSRC:%.c=%.o} -c ${.ALLSRC}
-	${CC} ${PROG_LDFLAGS} -o ${SYSROOT_DIR}${BINDIR}/${.TARGET} ${.ALLSRC:%.c=%.o}
-	ln -f ${SYSROOT_DIR}${BINDIR}/bzip2 ${SYSROOT_DIR}${BINDIR}/bunzip2
-	ln -f ${SYSROOT_DIR}${BINDIR}/bzip2 ${SYSROOT_DIR}${BINDIR}/bzcat
+	${CC} ${CFLAGS} -o ${.TARGET}.o -c ${.CURDIR}/src/bzip2.c
+	${CC} ${PROG_LDFLAGS} -o ${SYSROOT_DIR}/usr/bin/${.TARGET} bzip2.o
+	ln -f ${SYSROOT_DIR}/usr/bin/bzip2 ${SYSROOT_DIR}/usr/bin/bunzip2
+	ln -f ${SYSROOT_DIR}/usr/bin/bzip2 ${SYSROOT_DIR}/usr/bin/bzcat
 
 bzdiff: ${.CURDIR}/src/bzdiff
-	cp -f ${.ALLSRC} ${SYSROOT_DIR}${BINDIR}/${.TARGET}
-	chmod +x ${SYSROOT_DIR}${BINDIR}/bzdiff
-	ln -sf bzdiff ${SYSROOT_DIR}${BINDIR}/bzcmp
+	cp -f ${.ALLSRC} ${SYSROOT_DIR}/usr/bin/${.TARGET}
+	chmod +x ${SYSROOT_DIR}/usr/bin/bzdiff
+	ln -sf bzdiff ${SYSROOT_DIR}/usr/bin/bzcmp
 
 bzmore: ${.CURDIR}/src/bzmore
-	cp -f ${.ALLSRC} ${SYSROOT_DIR}${BINDIR}/${.TARGET}
-	chmod +x ${SYSROOT_DIR}${BINDIR}/bzmore
-	ln -sf bzmore ${SYSROOT_DIR}${BINDIR}/bzless
+	cp -f ${.ALLSRC} ${SYSROOT_DIR}/usr/bin/${.TARGET}
+	chmod +x ${SYSROOT_DIR}/usr/bin/bzmore
+	ln -sf bzmore ${SYSROOT_DIR}/usr/bin/bzless
 
 bzip2recover: ${.CURDIR}/src/bzip2recover.c
-	${CC} ${CFLAGS} -o ${.ALLSRC:%.c=%.o} -c ${.ALLSRC}
-	${CC} ${PROG_LDFLAGS} -o ${SYSROOT_DIR}${BINDIR}/${.TARGET} ${.ALLSRC:%.c=%.o}
+	${CC} ${CFLAGS} -o ${.TARGET}.o -c ${.CURDIR}/src/bzip2recover.c
+	${CC} ${PROG_LDFLAGS} -o ${SYSROOT_DIR}/usr/bin/${.TARGET} \
+	    ${.CURDIR}/src/bzip2recover.c
 
 lib${LIB}.dylib: lib${LIB}.a
 	${CC} ${LDFLAGS} -o ${.TARGET} -shared -Wl,-force_load,lib${LIB}.a \
