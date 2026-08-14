@@ -1,3 +1,4 @@
+#import <CoreFoundation/CFArray.h>
 #import <CoreGraphics/CGGradient.h>
 #import <CoreGraphics/CGColor.h>
 #import <Foundation/NSString.h>

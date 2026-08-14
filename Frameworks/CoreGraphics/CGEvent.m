@@ -1,6 +1,6 @@
 /*
  * Quartz Event Services
- * Copyright (C) 2024 Zoe Knox <zoe@ravynsoft.com>
+ * Copyright (C) 2024-2026 Zoe Knox <zoe@ravynsoft.com>
  * 
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -21,10 +21,12 @@
  * THE SOFTWARE.
  */
 
+#import <CoreFoundation/CFRuntime.h>
+#import <CoreGraphics/CGGeometry.h>
 #import <CoreGraphics/CGEvent.h>
 
 struct __CGEvent {
-    uintptr_t cfisa;
+    CFRuntimeBase _base;
     CGEventSourceRef source;
     CGEventType mouseType;
     CGPoint mouseLocation;

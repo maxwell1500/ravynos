@@ -7,6 +7,7 @@ SUBDIR = CoreFoundation
 SUBDIR += Foundation
 SUBDIR += CoreServices
 SUBDIR += Onyx2D
+SUBDIR += CoreGraphics
 
 all: ${SUBDIR}
 

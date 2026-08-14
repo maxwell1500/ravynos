@@ -1,5 +1,4 @@
 FRAMEWORK=CoreVideo
-.include "../framework.common.mk"
 
 SRCS= CVDisplayLink.m
 INCS= CVBase.h CVDisplayLink.h CVReturn.h CoreVideo.h
@@ -9,4 +8,3 @@ CFLAGS+= ${FMWK_CFLAGS} -F../OpenGL -framework OpenGL -I${.CURDIR}/.. \
 
 .include <rvn.framework.mk>
 
-installresources: std_install_hook

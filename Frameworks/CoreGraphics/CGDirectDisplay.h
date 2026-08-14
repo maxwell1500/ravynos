@@ -21,8 +21,6 @@
  * THE SOFTWARE.
  */
 
-#include <vm/vm.h> // boolean_t
-
 #import <CoreFoundation/CFRunLoop.h>
 #import <CoreFoundation/CFMachPort.h>
 #import <CoreGraphics/CoreGraphicsExport.h>

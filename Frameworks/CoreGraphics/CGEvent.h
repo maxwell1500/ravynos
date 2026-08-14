@@ -29,7 +29,6 @@
 #define kCGAnyInputEventType (~(CGEventType)0)
 #define kCGEventMaskForAllEvents (~(CGEventMask)0)
 
-typedef uint32_t UniCharCount;
 typedef struct __CGEvent *CGEventRef;
 typedef uint32_t CGButtonCount;
 typedef uint16_t CGCharCode;

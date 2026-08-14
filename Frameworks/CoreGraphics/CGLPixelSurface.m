@@ -1,13 +1,10 @@
+#include <math.h>
 #import <CoreGraphics/CGLPixelSurface.h>
 #import <CoreGraphics/CGWindow.h>
 #import <Onyx2D/O2Image.h>
 //#import <GLES2/gl2.h>
 //#import <GLES2/gl2ext.h>
-#if defined(__RAVYNOS__)
 #import <Onyx2D/O2Surface.h>
-#else
-#import <AppKit/O2Surface_DIBSection.h>
-#endif
 
 @implementation CGLPixelSurface
 
@@ -257,7 +254,7 @@ static inline uint32_t premultiplyPixel(uint32_t value){
 }
 
 -(NSString *)description {
-   return [NSString stringWithFormat:@"<%@ %p:size={  %d %d } surface=%@",isa,self,_width,_height,_surface];
+   return [NSString stringWithFormat:@"<%@ %p:size={  %d %d } surface=%@",object_getClass(self),self,_width,_height,_surface];
 }
 
 @end

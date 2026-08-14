@@ -10,6 +10,7 @@ THE SOFTWARE IS PROVIDED "AS IS",WITHOUT WARRANTY OF ANY KIND,EXPRESS OR IMPLIED
 
 typedef void *CGContextRef;
 
+#import <CoreFoundation/CFDictionary.h>
 #import <CoreGraphics/CGGeometry.h>
 #import <CoreGraphics/CGAffineTransform.h>
 #import <CoreGraphics/CGFont.h>

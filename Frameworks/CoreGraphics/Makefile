@@ -1,5 +1,6 @@
+SUBDIR =
+MK_WERROR = no
 FRAMEWORK=CoreGraphics
-.include "../framework.common.mk"
 
 SRCS= \
 	CGAffineTransform.m \
@@ -28,7 +29,7 @@ SRCS= \
 	CGPattern.m \
 	CGShading.m 
 
-INCS= \
+HEADERS= \
 	CGAffineTransform.h \
 	CGBitmapContext.h \
 	CGColor.h \
@@ -63,15 +64,24 @@ INCS= \
 	CoreText.h 
 
 RESOURCES=Info.plist 
-CFLAGS+= ${FMWK_CFLAGS} -F${OBJTOP}/Frameworks/OpenGL -framework OpenGL \
-	-I.. -I${.CURDIR}/.. -fblocks -I../Foundation/Headers \
-	-I${.CURDIR}/../OpenGL/mesa/include -I${SRCTOP}/CoreServices
-LDFLAGS+= ${FMWK_LDFLAGS} -L${BUILDROOT}/System/Library/Frameworks/Onyx2D.framework \
-	-L${BUILDROOT}/System/Library/Frameworks/OpenGL.framework -lOnyx2D -lOpenGL -lm \
-	-Wl,-R/System/Library/Frameworks/Onyx2D.framework/Versions/A \
-	-Wl,-R/System/Library/Frameworks/OpenGL.framework/Versions/A \
-	-lSystem
+CFLAGS+= -I${.CURDIR:H}/OpenGL -I${.CURDIR:H} -I${.OBJDIR:H} -fblocks \
+	-I${.CURDIR}/Foundation/Headers -I${.OBJDIR} \
+	-I${ROOT_SOURCE_DIR}/CoreServices -Wno-implicit-function-declaration
+LDFLAGS+= -framework Onyx2D -framework CoreFoundation \
+	-Wl,-undefined,dynamic_lookup
+
+#-framework OpenGL
+
+all: copy-headers libCoreGraphics.a
+
+copy-headers:
+	ln -sf ${.CURDIR:H}/OpenGL/include ${.OBJDIR}/OpenGL
+
+fmwk-install-hook:
+.for dir in ${RAVYN_SDKROOT}/System/Library/Frameworks/ ${SYSROOT_DIR}/System/Library/Frameworks/
+	mkdir -p ${dir}
+	cp -Rfp ${.OBJDIR}/${FRAMEWORK}.framework ${dir}
+.endfor
 
 .include <rvn.framework.mk>
 
-installresources: std_install_hook
