@@ -11,6 +11,10 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 #import <Onyx2D/O2Exceptions.h>
 #import <math.h>
 
+#ifndef ABS
+#define ABS __builtin_abs
+#endif
+
 // ellipse to 4 spline bezier, http://www.tinaja.com/glib/ellipse4.pdf
 void O2MutablePathEllipseToBezier(O2Point *cp,float x,float y,float xrad,float yrad){
    float magic=0.551784;

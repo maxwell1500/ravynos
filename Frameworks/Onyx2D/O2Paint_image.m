@@ -27,6 +27,11 @@
  *-------------------------------------------------------------------*/
 #import <Onyx2D/O2Paint_image.h>
 
+#ifndef ABS
+#define ABS __builtin_abs
+#endif
+
+
 @implementation O2Paint_image
 
 #if 0

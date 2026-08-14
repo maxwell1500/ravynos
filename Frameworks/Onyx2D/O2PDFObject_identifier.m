@@ -84,6 +84,6 @@ O2PDFIdentifier O2PDFClassifyIdentifier(const char *bytes,unsigned length) {
 }
 
 -(NSString *)description {
-   return [NSString stringWithFormat:@"<%@ %d %s",isa,_identifier,_bytes];
+   return [NSString stringWithFormat:@"<%@ %d %s",object_getClass(self),_identifier,_bytes];
 }
 @end

@@ -10,9 +10,11 @@
 # For conditions of distribution and use, see the disclaimer
 # and license in png.h
 
+.PATH: ${SRCROOT}
+
 # Where the zlib library and include files are located
-ZLIBLIB=/usr/lib
-ZLIBINC=/usr/include
+ZLIBLIB=${RAVYN_SDKROOT}/usr/lib
+ZLIBINC=${ROOT_SOURCE_DIR}/Libraries/zlib
 
 # Library name:
 LIBNAME=libpng16
@@ -23,9 +25,9 @@ LIBSO=$(LIBNAME).dylib
 LIBSOMAJ=$(LIBNAME).$(PNGMAJ).dylib
 
 # Utilities:
-CC=cc
-AR=ar
-RANLIB=ranlib
+#CC=cc
+#AR=ar
+#RANLIB=ranlib
 LN_SF=ln -sf
 CP=cp
 RM_F=rm -f
@@ -34,9 +36,9 @@ NOHWOPT=-DPNG_ARM_NEON_OPT=0 -DPNG_MIPS_MSA_OPT=0 \
         -DPNG_POWERPC_VSX_OPT=0 -DPNG_INTEL_SSE_OPT=0
 DEFS=$(NOHWOPT)
 CPPFLAGS=-I$(ZLIBINC) $(DEFS)
-CFLAGS=-O3 -funroll-loops -Wall -Wextra -Wundef
-ARFLAGS=rc
-LDFLAGS=-L. -L$(ZLIBLIB) -lpng16 -lz
+CFLAGS+=-O3 -funroll-loops -Wall -Wextra -Wundef
+ARFLAGS=rcs
+LDFLAGS+=-L. -L$(ZLIBLIB) -lpng16 -lz
 
 # Pre-built configuration
 # See scripts/pnglibconf.mak for more options
@@ -57,7 +59,7 @@ OBJSDLL = $(OBJS:.o=.pic.o)
 .c.pic.o:
 	$(CC) -c $(CPPFLAGS) $(CFLAGS) -fno-common -o $@ $*.c
 
-all: libpng.a $(LIBSO) pngtest
+all: libpng.a $(LIBSO) #pngtest
 
 pnglibconf.h: $(PNGLIBCONF_H_PREBUILT)
 	$(CP) $(PNGLIBCONF_H_PREBUILT) $@
@@ -70,7 +72,7 @@ $(LIBSO): $(LIBSOMAJ)
 	$(LN_SF) $(LIBSOMAJ) $(LIBSO)
 
 $(LIBSOMAJ): $(OBJSDLL)
-	$(CC) -dynamiclib \
+	$(CC) ${LIB_LDFLAGS} -dynamiclib \
 	 -current_version 16 -compatibility_version 16 \
 	 -o $(LIBSOMAJ) \
 	 $(OBJSDLL) -L$(ZLIBLIB) -lz

@@ -30,6 +30,11 @@ THE SOFTWARE.
 #define READ(_gif,_buf,_len)  [(_gif)->inputStream read:_buf maxLength:_len]
 #define WRITE(_gif,_buf,_len) [(_gif)->outputStream write:_buf maxLength:_len]
 
+#ifndef ABS
+#define ABS __builtin_abs
+#endif
+
+
 static int EGifPutWord(int Word, GifFileType * GifFile);
 static int EGifSetupCompress(GifFileType * GifFile);
 static int EGifCompressLine(GifFileType * GifFile, GifPixelType * Line,int LineLen);

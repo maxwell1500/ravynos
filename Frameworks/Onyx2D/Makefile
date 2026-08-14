@@ -1,13 +1,11 @@
 FRAMEWORK=Onyx2D
-.include "../framework.common.mk"
 
-SUBDIR+=	freetype
-LINK_SUBDIR+=	freetype/CMakeFiles/freetype.dir/src
-LINK_SUBDIR+=	freetype/CMakeFiles/freetype.dir/builds/unix
-MK_WERROR=no
-WARNS=1
+SUBDIR = freetype
+LINK_SUBDIR += freetype/CMakeFiles/freetype.dir/src
+LINK_SUBDIR += freetype/CMakeFiles/freetype.dir/builds/unix
+MK_WERROR = no
 
-SRCS= \
+SRCS = \
 	O2AffineTransform.m \
 	O2BitmapContext.m \
 	O2ClipMask.m \
@@ -28,6 +26,7 @@ SRCS= \
 	O2Encoder_TIFF.m \
 	O2Encoding.m \
 	O2Font+PDF.m \
+	O2Font_ttf.m \
 	O2Font.m \
 	O2Font_freetype.m \
 	O2Function+PDF.m \
@@ -100,7 +99,7 @@ SRCS= \
 	VGPath.m \
 	gif_lib.m 
 
-INCS= \
+HEADERS = \
 	O2AffineTransform.h \
 	O2BitmapContext.h \
 	O2Blending.h \
@@ -197,12 +196,62 @@ INCS= \
 	VGmath.h \
 	gif_lib.h
 
-RESOURCES=Info.plist English.lproj
-CFLAGS+= ${FMWK_CFLAGS} -I${.CURDIR} -I.. -I../Foundation/Headers
-CFLAGS+= -I${.CURDIR}/freetype/include
-LDFLAGS+= ${FMWK_LDFLAGS} -L${OBJTOP}/tmp/usr/lib -ljpeg -lpng -ltiff
-LDFLAGS+= -Wl,-R\$$ORIGIN/Resources
+RESOURCES = Info.plist English.lproj
+CFLAGS += -I${.CURDIR} -I${.CURDIR:H} -I${.CURDIR:H}/Foundation/Headers \
+        -I${ROOT_SOURCE_DIR}/BSD/lib/libjpeg \
+        -I${ROOT_SOURCE_DIR}/BSD/lib/libpng \
+        -I${ROOT_SOURCE_DIR}/BSD/lib/libtiff/libtiff \
+        -I${ROOT_SOURCE_DIR}/Libraries/zlib \
+	-I${.OBJDIR}/jpeg -I${.OBJDIR}/tiff/libtiff \
+        -Wno-missing-method-return-type -Wno-missing-prototypes \
+	-Wno-implicit-function-declaration
+CFLAGS += -I${.CURDIR}/freetype/include \
+	-include${RAVYN_SDKROOT}/usr/include/sys/param.h
+LDFLAGS += ${.OBJDIR}/jpeg/libjpeg.a ${.OBJDIR}/png/libpng.a \
+	${.OBJDIR}/tiff/libtiff/libtiff.a ${.OBJDIR}/freetype/libfreetype.a \
+	-framework CoreFoundation -lz
+
+lib${FRAMEWORK}.a: libjpeg.a libpng.a libtiff.a freetype
+
+libjpeg.a:
+	CFLAGS="-mmacos-version-min=${MACOS_VERSION_MIN} --sysroot=${RAVYN_SDKROOT}" \
+	    LDFLAGS="-mmacos-version-min=${MACOS_VERSION_MIN} -fuse-ld=${LD}" \
+	    cmake -DCMAKE_C_COMPILER=${CC} \
+	    -DCMAKE_SYSTEM_NAME=Darwin \
+	    -DCMAKE_SYSROOT=${RAVYN_SDKROOT} \
+	    -DCMAKE_SYSTEM_VERSION=${MACOS_VERSION_MIN} \
+	    -DCMAKE_SYSTEM_PROCESSOR=${CpuArch} \
+	    -S${ROOT_SOURCE_DIR}/BSD/lib/libjpeg -B${.OBJDIR}/jpeg
+	cmake --build ${.OBJDIR}/jpeg
+
+libpng.a:
+	SDKROOT=${RAVYN_SDKROOT} cmake -DCMAKE_C_COMPILER=${CC} \
+	    -DCMAKE_C_FLAGS="-mmacos-version-min=${MACOS_VERSION_MIN} --sysroot=${RAVYN_SDKROOT} \
+		-I${ROOT_SOURCE_DIR}/Libraries/zlib -fuse-ld=${LD}" \
+	    -DCMAKE_EXE_LINKER_FLAGS="-mmacos-version-min=${MACOS_VERSION_MIN} -fuse-ld=${LD}" \
+	    -DCMAKE_SYSTEM_NAME=Darwin \
+	    -DCMAKE_SYSROOT=${RAVYN_SDKROOT} \
+	    -DCMAKE_SYSTEM_VERSION=${MACOS_VERSION_MIN} \
+	    -DCMAKE_SYSTEM_PROCESSOR=${CpuArch} \
+	    -DPNG_TOOLS=OFF -DPNG_SHARED=OFF -DPNG_TESTS=OFF \
+	    -DZLIB_ROOT=${ROOT_SOURCE_DIR}/Libraries/zlib \
+	    -S${ROOT_SOURCE_DIR}/BSD/lib/libpng -B${.OBJDIR}/png
+	cmake --build ${.OBJDIR}/png
+
+libtiff.a:
+	cmake -DCMAKE_C_COMPILER=${CC} -DCMAKE_CXX_COMPILER=${CXX} \
+	    -DCMAKE_C_COMPILER_LINKER=${LD} \
+	    -DCMAKE_C_FLAGS="-mmacos-version-min=${MACOS_VERSION_MIN} --sysroot=${RAVYN_SDKROOT} \
+		-I${ROOT_SOURCE_DIR}/Libraries/zlib -I${ROOT_SOURCE_DIR}/BSD/lib/libtiff" \
+	    -DCMAKE_CXX_FLAGS="-mmacos-version-min=${MACOS_VERSION_MIN} --sysroot=${RAVYN_SDKROOT}" \
+	    -DCMAKE_EXE_LINKER_FLAGS="-mmacos-version-min=${MACOS_VERSION_MIN} -fuse-ld=${LD}" \
+	    -DCMAKE_SYSTEM_NAME=Darwin \
+	    -DCMAKE_SYSROOT=${RAVYN_SDKROOT} \
+	    -DCMAKE_SYSTEM_VERSION=${MACOS_VERSION_MIN} \
+	    -DCMAKE_SYSTEM_PROCESSOR=${CpuArch} \
+	    -DBUILD_SHARED_LIBS=OFF \
+	    -S${ROOT_SOURCE_DIR}/BSD/lib/libtiff -B${.OBJDIR}/tiff
+	cmake --build ${.OBJDIR}/tiff
 
 .include <rvn.framework.mk>
 
-installresources: std_install_hook

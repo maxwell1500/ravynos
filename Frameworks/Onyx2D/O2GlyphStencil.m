@@ -1,3 +1,4 @@
+#include <Foundation/NSZone.h>
 #import <Onyx2D/O2GlyphStencil.h>
 
 O2GlyphStencilRef O2GlyphStencilCreate(size_t width,size_t height,uint8_t *coverage,size_t bytesPerRow,size_t left,size_t top) {

@@ -34,7 +34,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 }
 
 -(NSString *)description {
-   return [NSString stringWithFormat:@"<%@ %f>",isa,_value];
+   return [NSString stringWithFormat:@"<%@ %f>",object_getClass(self),_value];
 }
 
 -(void)encodeWithPDFContext:(O2PDFContext *)encoder {

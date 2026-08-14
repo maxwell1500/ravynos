@@ -124,7 +124,7 @@ O2ColorSpaceModel O2ColorSpaceGetModel(O2ColorSpaceRef self) {
 }
 
 -(NSString *)description {
-   return [NSString stringWithFormat:@"<%@: %p, type=%d>",isa,self,_type];
+   return [NSString stringWithFormat:@"<%@: %p, type=%d>",object_getClass(self),self,_type];
 }
 
 @end

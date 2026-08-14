@@ -21,7 +21,6 @@ SRCS = \
         \
         IOHIDFamily/IOHIDEvent.cpp \
         IOHIDFamily/IOHIDFamilyPrivate.cpp \
-        IOHIDFamily/IOHIDLibUserClient.cpp \
         IOHIDFamily/IOHIDResource.cpp
 
 CSTD = none

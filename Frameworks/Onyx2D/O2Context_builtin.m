@@ -20,6 +20,7 @@
  * OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE MATERIALS OR
  * THE USE OR OTHER DEALINGS IN THE MATERIALS.
  */
+#include <sys/param.h>
 #import <Onyx2D/O2Context_builtin.h>
 #import <Onyx2D/O2MutablePath.h>
 #import <Onyx2D/O2Image.h>
@@ -259,7 +260,7 @@ ONYX2D_STATIC O2Paint *paintFromColor(O2Context_builtin *self,O2ColorRef color,O
     O2GState        *gState=O2ContextCurrentGState(self);
     O2Size           size=[pattern bounds].size;
     O2Surface       *surface=[self createSurfaceWithWidth:size.width height:size.height];
-    O2BitmapContext *context=[[self->isa alloc] initWithSurface:surface flipped:NO];
+    O2BitmapContext *context=[[object_getClass(self) alloc] initWithSurface:surface flipped:NO];
 
     O2ContextClearRect(context,O2RectMake(0,0,size.width,size.height));
 // do save/restore? probably pointless

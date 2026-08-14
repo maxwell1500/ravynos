@@ -1,3 +1,4 @@
+#include <sys/param.h>
 #import <Onyx2D/O2Encoder_TIFF.h>
 #import <Onyx2D/O2Decoder_TIFF.h>
 
