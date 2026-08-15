@@ -78,7 +78,7 @@ id NSAllocateObject(Class class, NSUInteger extraBytes, NSZone *zone)
 
     /* Make sure our type is aligned with CoreFoundation */
     struct objc_object *base = (struct objc_object *)result;
-    base->bits = (uintptr_t)[result cfinfo];
+    base->bits = (uintptr_t)([result _cfTypeID]) << 8;
     return result;
 }
 
