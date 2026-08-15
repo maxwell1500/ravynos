@@ -25,7 +25,7 @@
 #include "CFInternal.h"
 #include <Foundation/NSCFTypeID.h>
 
-#define DEBUG 1
+#define DEBUG 0
 #if DEBUG
 #define TRACE(...) printf(__VA_ARGS__)
 #else
