@@ -158,14 +158,17 @@ NSUInteger NSGetCFStringWithMaxLength(const unichar *characters,
 -(const char *)_fastCStringContents:(BOOL)getContents {
     uint8_t infobits = self->cfinfo[CF_INFO_BITS];
     if (infobits & kNSCFHasLength)
-        return (const char *)(&self->variants.notInlineImmutable1.bytes[1]);
+        return (const char *)(&self->variants.notInlineImmutable1.bytes);
     else
         return (const char *)(self->variants.notInlineImmutable1.bytes);
 }
 
 -(unichar *)_fastCharacterContents {
-    // FIXME
-    return (unichar *)self->variants.notInlineImmutable1.bytes;
+    uint8_t infobits = self->cfinfo[CF_INFO_BITS];
+    if (infobits & kNSCFHasLength)
+        return (unichar *)(&self->variants.notInlineImmutable1.bytes);
+    else
+        return (unichar *)(self->variants.notInlineImmutable1.bytes);
 }
 
 -(BOOL)_encodingCantBeStoredInEightBitCFString {
@@ -202,13 +205,11 @@ NSUInteger NSGetCFStringWithMaxLength(const unichar *characters,
 
     switch (infobits & ED_MASK) {
         case 0x00: {
-            printf("inline buffer\n");
             uch = (unichar *)&(self->variants.notInlineImmutable1.bytes);
             ch = (unsigned char *)&(self->variants.notInlineImmutable1.bytes);
             break;
         }
         default: {
-            printf("not inline\n");
             uch = (unichar *)self->variants.notInlineImmutable1.bytes;
             ch = (unsigned char *)self->variants.notInlineImmutable1.bytes;
         }
@@ -221,12 +222,10 @@ NSUInteger NSGetCFStringWithMaxLength(const unichar *characters,
         for (i = 0; i < len; i++) 
             buffer[i] = ch[i + loc];
     }
-    TRACE("finished buffer = %p\n", buffer);
 }
 
 -(NSUInteger)hash {
-    return NSStringHashASCII([self _fastCStringContents:NO],
-        MIN([self length], NSHashStringLength));
+    return CFStringHashNSString(self);
 }
 
 @end
