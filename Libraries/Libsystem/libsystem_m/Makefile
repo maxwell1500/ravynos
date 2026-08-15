@@ -9,7 +9,7 @@ CXXFLAGS = ${CFLAGS}
 LDFLAGS = -mmacos-version-min=${MACOS_VERSION_MIN} --sysroot=${RAVYN_SDKROOT} \
 	-Wl,-install_name,/usr/lib/system/libsystem_m.dylib \
 	-Wl,-current_version,3178 -Wl,-compatibility_version,1 \
-	-Wl,-all_load -umbrella System -nostdlib
+	-Wl,-all_load -umbrella System 
 
 all: ${.OBJDIR}/lib${LIB}.dylib
 

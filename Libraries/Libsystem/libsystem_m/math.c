@@ -21,6 +21,7 @@
  * THE SOFTWARE.
  */
 #include <math.h>
+#include <errno.h>
 
 bool signbit(double __x) { return __builtin_signbit(__x); }
 int fpclassify(double __x) {
@@ -77,9 +78,33 @@ float floorf(float __x) { return __builtin_floorf(__x); }
 double floor(double __x) { return __builtin_floor(__x); }
 long double floorl(long double __x) { return __builtin_floorl(__x); }
 
-float fmodf(float __x, float __y) { return __builtin_fmodf(__x, __y); }
-double fmod(double __x, double __y) { return __builtin_fmod(__x, __y); }
-long double fmodl(long double __x, long double __y) { return __builtin_fmodl(__x, __y); }
+float fmodf(float __x, float __y) { return (float)fmodl(__x, __y); }
+double fmod(double __x, double __y) { return (double)fmodl(__x, __y); }
+long double fmodl(long double __x, long double __y) {
+    if (isnan(__x) || isnan(__y))
+        return FP_NAN;
+    if (isinf(__x)) {
+        errno = EDOM;
+        return FP_NAN; // FIXME: should raise exception
+    }
+    if (__y == 0) {
+        errno = EDOM;
+        return FP_NAN; // FIXME: should raise exception
+    }
+    long long n = (long long)__x / (long long)__y;
+    long double z = __x - (long double)n * __y;
+    if (z < 0)
+        z *= -1.0;
+    return z;
+}
+
+int _fmodtest(void) {
+    if (fmod(372, 360) != 12) return 1;
+    if (fmod(-372, 360) != -12) return 2;
+    if (fmod(-372, -360) != -12) return 3;
+    return 0;
+}
+
 
 float frexpf(float __x, int* __e) { return __builtin_frexpf(__x, __e); }
 double frexp(double __x, int* __e) { return __builtin_frexp(__x, __e); }
