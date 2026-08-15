@@ -89,7 +89,7 @@ BOOL NSObjectIsKindOfClass(id object,Class kindOf) {
 }
 
 +(void)initialize {
-    objc_setForwardHandler(_objc_msgForward,_objc_msgForward_stret);
+    //objc_setForwardHandler(_defaultForwardHandler,NULL);
 }
 
 

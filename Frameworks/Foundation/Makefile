@@ -324,7 +324,8 @@ SRCS = 	NSFormatter.m \
         platform_posix/NSSocket_bsd.m \
         platform_posix/NSSocketPort_posix.m \
         platform_posix/NSTask_posix.m \
-        platform_posix/NSTimeZone_posix.m
+        platform_posix/NSTimeZone_posix.m \
+	NSObject/forwarding.m
 
 # FIXME: we should build with HAVE_FFI=1
 CFLAGS = -DAPPLE_RUNTIME_4 -DDARWIN -DNULL=0 -DTARGET_OS_IOSMAC=0 \

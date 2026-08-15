@@ -36,9 +36,9 @@
 #import <Foundation/NSRaiseException.h>
 
 #if __LP64__
-int __CFConstantStringClassReference[24] = {0};
+extern int __CFConstantStringClassReference[24];
 #else
-int __CFConstantStringClassReference[12] = {0};
+extern int __CFConstantStringClassReference[12];
 #endif
 
 @implementation __builtin_NSString

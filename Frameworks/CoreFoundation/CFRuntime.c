@@ -85,11 +85,11 @@ extern id objc_msgSend(id, SEL, ...);
     __CFRuntimeObjCClassTable[(*((uintptr_t *)obj+1) & 0xff00) >> 8])
 #define CFTYPE_OBJC_FUNCDISPATCH0(rettype, obj, sel) \
     if (CFTYPE_IS_OBJC(obj)) \
-        return (rettype)objc_msgSend(obj, #sel)
+        return (rettype)objc_msgSend(obj, @selector(sel))
 
 #define CFTYPE_OBJC_FUNCDISPATCH1(rettype, obj, sel, a1) \
     if (CFTYPE_IS_OBJC(obj)) \
-        return (rettype)objc_msgSend(obj, #sel, a1)
+        return (rettype)objc_msgSend(obj, @selector(sel), a1)
 
 
 bool __CFOASafe = false;
