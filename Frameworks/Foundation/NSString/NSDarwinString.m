@@ -59,9 +59,7 @@ extern int __CFConstantStringClassReference[12];
 NSString *NSDarwinStringNewWithCharacters(NSZone *zone, const unichar *characters, NSUInteger length, BOOL lossy)
 {
     NSUInteger bytesLength = sizeof(unichar) * length;
-printf("bytesLength %d\n", bytesLength);
     NSString *string = NSDarwinStringNewWithBytes(zone, (const char *)characters, bytesLength);
-printf("string = %p\n", string);
     if (string) {
         string->cfinfo[CF_INFO_BITS] |= 0x10; // is unicode string
     }
@@ -71,18 +69,14 @@ printf("string = %p\n", string);
 NSString *NSDarwinStringNewWithBytes(NSZone *zone, const char *bytes, NSUInteger length)
 {
     NSDarwinString *self = NSAllocateObject([NSDarwinString class], length * sizeof(char), zone);
-printf("NSDarwinStringNewWithBytes(%p %s %d) = %p\n", bytes, bytes, length, self);
     if (self) {
         self->variants.notInlineImmutable1.length = length;
         self->variants.notInlineImmutable1.bytes = self->bytes;
-printf("assigned bytes and length\n");
         for (int i = 0; i < length; i++)
             self->bytes[i] = ((unsigned char *)bytes)[i];
-printf("copied bytes\n");
         // cfinfo immutable, not inline, don't free, 8bit, has length, no NULL byte
         self->cfinfo[CF_INFO_BITS] = 0x44;
     }
-printf("return %p\n", self);
     return self;
 }
 
@@ -243,7 +237,6 @@ NSUInteger NSGetDarwinCStringWithMaxLength(const unichar *characters, NSUInteger
             buffer[i] = ((unichar *)(self->variants.notInlineImmutable1.bytes))[i + loc];
     } else { // 8-bit UTF8 or ASCII
         char *p = &(self->variants.notInlineImmutable1.bytes[i + loc]);
-TRACE("ascii buffer p=%p %02x %c i=%d loc=%d len=%d\n", p, *p, *p, i, loc, len);
         for (i = 0; i < len; i++) {
             unsigned char ch = *p++;
             buffer[i] = ch;

@@ -79,6 +79,14 @@ BOOL NSObjectIsKindOfClass(id object,Class kindOf) {
    return NSAllocateObject(self, 0, zone);
 }
 
++(id)alloc {
+    return NSAllocateObject(self, 0, NULL);
+}
+
+-(id)alloc {
+    return NSAllocateObject(self, 0, NULL);
+}
+
 +(NSInteger)version {
    return class_getVersion(self);
 }

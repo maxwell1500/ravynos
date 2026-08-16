@@ -273,17 +273,17 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 }
 
 -objectForKey:key {
-   NSInvalidAbstractInvocation();
+   //NSInvalidAbstractInvocation();
    return nil;
 }
 
 -(NSUInteger)count {
-   NSInvalidAbstractInvocation();
+   //NSInvalidAbstractInvocation();
    return 0;
 }
 
 -(NSEnumerator *)keyEnumerator {
-   NSInvalidAbstractInvocation();
+   //NSInvalidAbstractInvocation();
    return nil;
 }
 

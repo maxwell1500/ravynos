@@ -19,7 +19,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 }
 
 -initWithCapacity:(NSUInteger)capacity {
-   NSInvalidAbstractInvocation();
+   //NSInvalidAbstractInvocation();
    return nil;
 }
 
@@ -52,7 +52,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 
 -(void)setObject:object forKey:aKey {
-   NSInvalidAbstractInvocation();
+   //NSInvalidAbstractInvocation();
 }
 
 -(void)addEntriesFromDictionary:(NSDictionary *)dictionary {
@@ -69,7 +69,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 }
 
 -(void)removeObjectForKey:aKey {
-   NSInvalidAbstractInvocation();
+   //NSInvalidAbstractInvocation();
 }
 
 -(void)removeAllObjects {

@@ -51,43 +51,43 @@ NSString * const NSFileSystemFreeSize=@"NSFileSystemFreeSize";
 }
 
 -delegate {
-   NSUnimplementedMethod();
+   //NSUnimplementedMethod();
    return 0;
 }
 -(void)setDelegate:delegate {
-   NSUnimplementedMethod();
+   //NSUnimplementedMethod();
 }
 
 -(NSDictionary *)attributesOfFileSystemForPath:(NSString *)path error:(NSError **)errorp {
-   NSUnimplementedMethod();
+   //NSUnimplementedMethod();
    return 0;
 }
 -(NSDictionary *)attributesOfItemAtPath:(NSString *)path error:(NSError **)error {
-   NSUnimplementedMethod();
+   //NSUnimplementedMethod();
    return 0;
 }
 -(BOOL)changeCurrentDirectoryPath:(NSString *)path {
-   NSUnimplementedMethod();
+   //NSUnimplementedMethod();
    return 0;
 }
 -(NSArray *)componentsToDisplayForPath:(NSString *)path {
-   NSUnimplementedMethod();
+   //NSUnimplementedMethod();
    return 0;
 }
 -(BOOL)contentsEqualAtPath:(NSString *)path1 andPath:(NSString *)path2 {
-   NSUnimplementedMethod();
+   //NSUnimplementedMethod();
    return 0;
 }
 -(NSArray *)contentsOfDirectoryAtPath:(NSString *)path error:(NSError **)error {
-   NSUnimplementedMethod();
+   //NSUnimplementedMethod();
    return 0;
 }
 -(BOOL)copyItemAtPath:(NSString *)fromPath toPath:(NSString *)toPath error:(NSError **)error {
-   NSUnimplementedMethod();
+   //NSUnimplementedMethod();
    return 0;
 }
 -(NSString *)destinationOfSymbolicLinkAtPath:(NSString *)path error:(NSError **)error {
-   NSInvalidAbstractInvocation();
+   //NSInvalidAbstractInvocation();
    return 0;
 }
 
@@ -111,24 +111,24 @@ NSString * const NSFileSystemFreeSize=@"NSFileSystemFreeSize";
 }
 
 -(BOOL)isDeletableFileAtPath:(NSString *)path {
-   NSUnimplementedMethod();
+   //NSUnimplementedMethod();
    return 0;
 }
 
 -(BOOL)linkItemAtPath:(NSString *)fromPath toPath:(NSString *)toPath error:(NSError **)error {
-   NSUnimplementedMethod();
+   //NSUnimplementedMethod();
    return 0;
 }
 -(BOOL)linkPath:(NSString *)source toPath:(NSString *)destination handler:handler {
-   NSUnimplementedMethod();
+   //NSUnimplementedMethod();
    return 0;
 }
 -(BOOL)moveItemAtPath:(NSString *)fromPath toPath:(NSString *)toPath error:(NSError **)error {
-   NSUnimplementedMethod();
+   //NSUnimplementedMethod();
    return 0;
 }
 -(BOOL)removeItemAtPath:(NSString *)path error:(NSError **)error {
-   NSUnimplementedMethod();
+   //NSUnimplementedMethod();
    return 0;
 }
 
@@ -153,12 +153,12 @@ NSString * const NSFileSystemFreeSize=@"NSFileSystemFreeSize";
 }
 
 -(BOOL)setAttributes:(NSDictionary *)attributes ofItemAtPath:(NSString *)path error:(NSError **)error {
-   NSUnimplementedMethod();
+   //NSUnimplementedMethod();
    return 0;
 }
 
 -(NSString *)stringWithFileSystemRepresentation:(const char *)string length:(NSUInteger)length {
-   NSUnimplementedMethod();
+   //NSUnimplementedMethod();
    return 0;
 }
 
@@ -191,7 +191,7 @@ stringByAppendingPathComponent:[files objectAtIndex:x]] paths:paths];
 }
 
 -(NSArray *)subpathsOfDirectoryAtPath:(NSString *)path error:(NSError **)error {
-   NSUnimplementedMethod();
+   //NSUnimplementedMethod();
    return 0;
 }
 
@@ -201,12 +201,12 @@ stringByAppendingPathComponent:[files objectAtIndex:x]] paths:paths];
 
 -(BOOL)createFileAtPath:(NSString *)path contents:(NSData *)data
              attributes:(NSDictionary *)attributes {
-   NSInvalidAbstractInvocation();
+   //NSInvalidAbstractInvocation();
    return NO;
 }
 
 -(NSArray *)directoryContentsAtPath:(NSString *)path {
-   NSInvalidAbstractInvocation();
+   //NSInvalidAbstractInvocation();
    return nil;
 }
 
@@ -215,7 +215,7 @@ stringByAppendingPathComponent:[files objectAtIndex:x]] paths:paths];
 }
 
 -(BOOL)createDirectoryAtPath:(NSString *)path attributes:(NSDictionary *)attributes {
-   NSInvalidAbstractInvocation();
+   //NSInvalidAbstractInvocation();
    return NO;
 }
 
@@ -245,67 +245,74 @@ stringByAppendingPathComponent:[files objectAtIndex:x]] paths:paths];
 }
 
 -(BOOL)createSymbolicLinkAtPath:(NSString *)path pathContent:(NSString *)destination {
-   NSInvalidAbstractInvocation();
+   //NSInvalidAbstractInvocation();
    return NO;
 }
 
 -(BOOL)createSymbolicLinkAtPath:(NSString *)path withDestinationPath:(NSString *)destPath error:(NSError **)error {
-   NSUnimplementedMethod();
+   //NSUnimplementedMethod();
    return 0;
 }
 
 -(NSString *)pathContentOfSymbolicLinkAtPath:(NSString *)path {
-   NSInvalidAbstractInvocation();
+   //NSInvalidAbstractInvocation();
    return NO;
 }
 
 -(BOOL)fileExistsAtPath:(NSString *)path {
+   /* *** HACK ALERT ***
+    * For some reason (likely the way this object is created), it has a nil
+    * isa which causes all sorts of fun problems. This function is called
+    * early in an app's initialization of NSBundle so we patch it here
+    * until the root cause can be fixed.
+    */
+   *(uintptr_t *)self = (uintptr_t)objc_lookUpClass("NSFileManager_posix");
    BOOL foo;
    return [self fileExistsAtPath:path isDirectory:&foo];
 }
 
 -(BOOL)fileExistsAtPath:(NSString *)path isDirectory:(BOOL *)isDirectory {
-   NSInvalidAbstractInvocation();
+   //NSInvalidAbstractInvocation();
    return NO;
 }
 
 -(BOOL)removeFileAtPath:(NSString *)path handler:handler {
-   NSInvalidAbstractInvocation();
+   //NSInvalidAbstractInvocation();
    return NO;
 }
 
 -(BOOL)movePath:(NSString *)src toPath:(NSString *)dest handler:handler {
-   NSInvalidAbstractInvocation();
+   //NSInvalidAbstractInvocation();
    return NO;
 }
 
 -(BOOL)copyPath:(NSString *)src toPath:(NSString *)dest handler:handler {
-   NSInvalidAbstractInvocation();
+   //NSInvalidAbstractInvocation();
    return NO;
 }
 
 -(NSString *)currentDirectoryPath {
-   NSInvalidAbstractInvocation();
+   //NSInvalidAbstractInvocation();
    return nil;
 }
 
 -(NSDictionary *)fileAttributesAtPath:(NSString *)path traverseLink:(BOOL)traverse {
-   NSInvalidAbstractInvocation();
+   //NSInvalidAbstractInvocation();
    return nil;
 }
 
 -(BOOL)isReadableFileAtPath:(NSString *)path {
-   NSInvalidAbstractInvocation();
+   //NSInvalidAbstractInvocation();
    return NO;
 }
 
 -(BOOL)isWritableFileAtPath:(NSString *)path {
-   NSInvalidAbstractInvocation();
+   //NSInvalidAbstractInvocation();
    return NO;
 }
 
 -(BOOL)isExecutableFileAtPath:(NSString *)path {
-   NSInvalidAbstractInvocation();
+   //NSInvalidAbstractInvocation();
    return NO;
 }
 
@@ -314,12 +321,12 @@ stringByAppendingPathComponent:[files objectAtIndex:x]] paths:paths];
 }
 
 -(const char *)fileSystemRepresentationWithPath:(NSString *)path {
-   NSInvalidAbstractInvocation();
+   //NSInvalidAbstractInvocation();
    return NULL;
 }
 
 -(const uint16_t *)fileSystemRepresentationWithPathW:(NSString *)path {
-   NSInvalidAbstractInvocation();
+   //NSInvalidAbstractInvocation();
    return NULL;
 }
 

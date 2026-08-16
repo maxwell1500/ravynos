@@ -247,6 +247,10 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
    return [@"~" stringByAppendingString:rest];
 }
 
+extern char *NSString_unicodeToAnyCString(NSStringEncoding encoding,
+                const unichar *characters, NSUInteger length, BOOL lossy, 
+                NSUInteger *resultLength, NSZone *zone, BOOL zeroTerminate);
+
 -(NSString *)stringByStandardizingPath {
     NSUInteger length = [self length];
     if (length < 1)
@@ -265,7 +269,6 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
     int i;
 
     [standardPath getCharacters:buffer];
-
     for (i = 0; i < length; i++) {
         cleanedBuffer[cleanedN++] = buffer[i];
 
@@ -279,8 +282,8 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
     }
 
     // this implementation doesn't do all transformations described in Cocoa documentation
-
-    return [NSString stringWithCharacters:cleanedBuffer length:cleanedN];
+    NSString *s = [NSString stringWithCharacters:cleanedBuffer length:cleanedN];
+    return s;
 }
 
 -(BOOL)isAbsolutePath {

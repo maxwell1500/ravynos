@@ -67,7 +67,9 @@ enum {
     kNSCFMutable = 0x1,
     kNSCFHasLength = 0x4,
     kNSCFHasNull = 0x8,
-    kNSCFUnichar = 0x10
+    kNSCFUnichar = 0x10,
+    kNSCFDefaultFree = 0x20,
+    kNSCFDoNotFree = 0x40
 };
 #define ED_MASK 0x60
 

@@ -7591,18 +7591,10 @@ _class_createInstanceFromZone(Class cls, size_t extraBytes, void *zone,
     if (outAllocatedSize) *outAllocatedSize = size;
 
     id obj;
-    // Zones are deprecated so ignore it. Use a 16-byte aligned alloc
-    // consistent with CoreFoundation object alignment.
     if (zone) {
-        void *addr;
-        posix_memalign(&addr, 16, size);
-        bzero(addr, size);
-        obj = (id)addr;
+        obj = (id)malloc_zone_calloc((malloc_zone_t *)zone, 1, size);
     } else {
-        void *addr;
-        posix_memalign(&addr, 16, size);
-        bzero(addr, size);
-        obj = (id)addr;
+        obj = (id)calloc(1, size);
     }
     if (slowpath(!obj)) {
         if (construct_flags & OBJECT_CONSTRUCT_CALL_BADALLOC) {

@@ -192,6 +192,16 @@ unichar *NSBytesToUnicode(const unsigned char *bytes,NSUInteger length,NSStringE
             unknownEncodingLogged++;
             NSCLog("NSBytesToUnicode : encoding %d (%x) to unicode not (yet) implemented", encoding, encoding);
         }
+        NSCLog("NSBytesToUnicode: trying CoreFoundation fallback");
+        data = malloc(sizeof(unichar) * length);
+        if (!data)
+            return NULL;
+        int maxCharLen = length, usedCharLen = 0;
+        int res = CFStringEncodingBytesToUnicode(encoding, 0, bytes, length, resultLength, data, maxCharLen, &usedCharLen);
+        if (res != 0) {
+            free(data);
+            data = NULL;
+        }
     }
     return data;
 }

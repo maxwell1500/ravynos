@@ -43,7 +43,8 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 - initWithCharactersNoCopy:(unichar *)characters length:(NSUInteger)length freeWhenDone:(BOOL)freeWhenDone
 {
     NSDeallocateObject(self);
-    return (NSString_placeholder *)NSString_unicodePtrNewNoCopy(NULL, characters, length, freeWhenDone);
+    NSString *s = NSCFStringNewWithCharacters(NULL, characters, length, freeWhenDone);
+    return (NSString_placeholder *)s;
 }
 
 
@@ -59,49 +60,50 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
     switch(encoding) {
         NSUInteger resultLength;
         unichar *characters;
-#if 0
 
         case NSUnicodeStringEncoding:
             characters = NSUnicodeFromBytes(bytes, length, &resultLength);
-            return (NSString_placeholder *)NSString_unicodePtrNewNoCopy(NULL, characters, resultLength, YES);
+            return (NSString_placeholder *)NSCFStringNewWithCharacters(NULL, characters, resultLength, YES);
 
         case NSNEXTSTEPStringEncoding:
-            return (NSString_placeholder *)NSNEXTSTEPStringNewWithBytes(NULL, bytes, length);
+            return (NSString_placeholder *)NSCFStringNewWithBytes(NULL, bytes, length);
 
 // FIX, not nextstep
         case NSASCIIStringEncoding:
         case NSNonLossyASCIIStringEncoding:
-            return (NSString_placeholder *)NSNEXTSTEPStringNewWithBytes(NULL, bytes, length);
+            return (NSString_placeholder *)NSCFStringNewWithBytes(NULL, bytes, length);
 
         case NSISOLatin1StringEncoding:
-            return (NSString_placeholder *)NSString_isoLatin1NewWithBytes(NULL, bytes, length);
+            return (NSString_placeholder *)NSCFStringNewWithBytes(NULL, bytes, length);
 
         case NSSymbolStringEncoding:
             characters = NSSymbolToUnicode(bytes, length, &resultLength, NULL);
-            return (NSString_placeholder *)NSString_unicodePtrNewNoCopy(NULL, characters, resultLength, YES);
+            return (NSString_placeholder *)NSCFStringNewWithCharacters(NULL, characters, resultLength, YES);
 
         case NSUTF8StringEncoding:
             characters = NSUTF8ToUnicode(bytes, length, &resultLength, NULL);
-            return (NSString_placeholder *)NSString_unicodePtrNewNoCopy(NULL, characters, resultLength, YES);
+            return (NSString_placeholder *)NSCFStringNewWithCharacters(NULL, characters, resultLength, YES);
 
         case NSWindowsCP1252StringEncoding:
-            return (NSString_placeholder *)NSString_win1252NewWithBytes(NULL, bytes, length);
+            return (NSString_placeholder *)NSCFStringNewWithBytes(NULL, bytes, length);
 
         case NSMacOSRomanStringEncoding:
-            return (NSString_placeholder *)NSString_macOSRomanNewWithBytes(NULL, bytes, length);
+            return (NSString_placeholder *)NSCFStringNewWithBytes(NULL, bytes, length);
 
         case NSUTF16LittleEndianStringEncoding:
             characters = NSUnicodeFromBytesUTF16LittleEndian(bytes, length, &resultLength);
-            return (NSString_placeholder *)NSString_unicodePtrNewNoCopy(NULL, characters, resultLength, YES);
+            return (NSString_placeholder *)NSCFStringNewWithCharacters(NULL, characters, resultLength, YES);
 
         case NSUTF16BigEndianStringEncoding:
             characters = NSUnicodeFromBytesUTF16BigEndian(bytes, length, &resultLength);
-            return (NSString_placeholder *)NSString_unicodePtrNewNoCopy(NULL, characters, resultLength, YES);
+            return (NSString_placeholder *)NSCFStringNewWithCharacters(NULL, characters, resultLength, YES);
 
-#endif
         default: {
             // Let's convert the encoding to unicode and use that
             unichar *unicodePtr = NSBytesToUnicode(bytes, length, encoding, &resultLength, NULL);
+            NSCLog("-[NSString_placeholder initWithBytes:] trying CoreFoundation fallback");
+            int maxCharLen = length, usedCharLen = 0;
+            CFStringEncodingBytesToUnicode(encoding, 0, bytes, length, &resultLength, unicodePtr, maxCharLen, &usedCharLen);
             if (unicodePtr) {
                 return (NSString_placeholder *)NSCFStringNewWithCharacters(NULL, unicodePtr, resultLength, YES);
             }

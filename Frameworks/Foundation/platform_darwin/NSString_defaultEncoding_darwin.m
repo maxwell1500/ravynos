@@ -20,7 +20,7 @@ NSStringEncoding defaultEncoding()
     /* We do not have getpwuid() yet (libsystem_info) so the code in this
      * #else clause will crash. Remove this once libinfo is available.
      */
-    return NSISOLatin1StringEncoding;
+    return NSUTF8StringEncoding;
 #else
     //don't use objc calls because they call often defaultCStringEncoding 
 

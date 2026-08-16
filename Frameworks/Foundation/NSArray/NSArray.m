@@ -95,7 +95,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 }
 
 -initWithObjects:(id *)objects count:(NSUInteger)count {
-   NSInvalidAbstractInvocation();
+   //NSInvalidAbstractInvocation();
    return nil;
 }
 
@@ -230,13 +230,13 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 
 -(NSUInteger)count {
-   NSInvalidAbstractInvocation();
+   //NSInvalidAbstractInvocation();
    return 0;
 }
 
 
 -objectAtIndex:(NSUInteger)index {
-   NSInvalidAbstractInvocation();
+   //NSInvalidAbstractInvocation();
    return nil;
 }
 
@@ -468,12 +468,12 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 }
 
 -(NSString *)descriptionWithLocale:(NSDictionary *)locale {
-   NSUnimplementedMethod();
+   //NSUnimplementedMethod();
    return nil;
 }
 
 -(NSString *)descriptionWithLocale:(NSDictionary *)locale indent:(NSUInteger)indent {
-   NSUnimplementedMethod();
+   //NSUnimplementedMethod();
    return nil;
 }
 

@@ -30,17 +30,17 @@
 
 #define TRACE(...) do { printf("%s: ", object_getClassName(self)); printf(__VA_ARGS__); } while(0);
 
+extern unichar *NSUTF8ToUnicode(const char *,NSUInteger,NSUInteger *,NSZone *);
+extern char *NSUnicodeToUTF8(const unichar *,NSUInteger,BOOL,NSUInteger *,NSZone *,BOOL);
+
 @implementation NSCFString
 
 NSString *NSCFStringNewWithCharacters(NSZone *zone, const unichar *characters,
         NSUInteger length, BOOL lossy)
 {
-    NSUInteger bytesLength = sizeof(unichar) * length;
-    NSString *string = NSCFStringNewWithBytes(zone, (const char *)characters, 
-            bytesLength);
-    if (string) {
-        string->cfinfo[CF_INFO_BITS] |= 0x10; // is unicode string
-    }
+    NSUInteger reslen;
+    char *bytes = NSUnicodeToUTF8(characters, length, YES, &reslen, NULL, YES);
+    NSString *string = NSCFStringNewWithBytes(zone, (const char *)bytes, reslen);
     return string;
 }
 
@@ -55,7 +55,7 @@ NSString *NSCFStringNewWithBytes(NSZone *zone, const char *bytes,
         for (int i = 0; i < length; i++)
             self->bytes[i] = ((unsigned char *)bytes)[i];
         // cfinfo immutable, not inline, don't free, 8bit, no length byte, no NULL byte
-        self->cfinfo[CF_INFO_BITS] = 0x40;
+        self->cfinfo[CF_INFO_BITS] = kNSCFDoNotFree;
         self->cfinfo[CF_RC_BITS] = 1;
     }
     return self;
@@ -152,23 +152,39 @@ NSUInteger NSGetCFStringWithMaxLength(const unichar *characters,
 }
 
 -(NSStringEncoding)fastestEncoding {
-    return NSUnicodeStringEncoding;
+    return NSUTF8StringEncoding;
 }
 
 -(const char *)_fastCStringContents:(BOOL)getContents {
     uint8_t infobits = self->cfinfo[CF_INFO_BITS];
+    const char *p;
+    NSUInteger reslen;
+
     if (infobits & kNSCFHasLength)
-        return (const char *)(&self->variants.notInlineImmutable1.bytes);
+        p = (const char *)(&self->variants.notInlineImmutable1.bytes);
     else
-        return (const char *)(self->variants.notInlineImmutable1.bytes);
+        p = (const char *)(self->variants.notInlineImmutable1.bytes);
+
+    if (infobits & kNSCFUnichar)
+        return NSUnicodeToUTF8(p, [self length], YES, &reslen, NULL, YES);
+    else
+        return p;
 }
 
 -(unichar *)_fastCharacterContents {
     uint8_t infobits = self->cfinfo[CF_INFO_BITS];
+    const char *p;
+    NSUInteger reslen;
+
     if (infobits & kNSCFHasLength)
-        return (unichar *)(&self->variants.notInlineImmutable1.bytes);
+        p = (const char *)(&self->variants.notInlineImmutable1.bytes);
     else
-        return (unichar *)(self->variants.notInlineImmutable1.bytes);
+        p = (const char *)(self->variants.notInlineImmutable1.bytes);
+
+    if (infobits & kNSCFUnichar)
+        return (unichar *)p;
+    else
+        return NSUTF8ToUnicode(p, [self length], &reslen, NULL);
 }
 
 -(BOOL)_encodingCantBeStoredInEightBitCFString {
@@ -205,19 +221,17 @@ NSUInteger NSGetCFStringWithMaxLength(const unichar *characters,
 
     switch (infobits & ED_MASK) {
         case 0x00: {
-            uch = (unichar *)&(self->variants.notInlineImmutable1.bytes);
             ch = (unsigned char *)&(self->variants.notInlineImmutable1.bytes);
             break;
         }
         default: {
-            uch = (unichar *)self->variants.notInlineImmutable1.bytes;
             ch = (unsigned char *)self->variants.notInlineImmutable1.bytes;
         }
     }
 
     if (infobits & kNSCFUnichar) { // unicode 16-bit chars
         for (i = 0; i < len; i++)
-            buffer[i] = uch[i + loc];
+            buffer[i] = ((unichar *)ch)[i + loc];
     } else { // 8-bit UTF8 or ASCII
         for (i = 0; i < len; i++) 
             buffer[i] = ch[i + loc];
