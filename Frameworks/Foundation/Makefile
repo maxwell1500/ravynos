@@ -12,6 +12,7 @@ SLF = /System/Library/Frameworks
 INSTALL_NAME_DIR = ${SLF}/${FRAMEWORK}.framework/Versions/${FMWK_VERSION}
 
 SRCS = 	NSFormatter.m \
+        NSObject/msgSendv-Darwin_x86_64.s \
 	NSDictionary/NSEnumerator_dictionaryObjects.m \
 	NSDictionary/NSMutableDictionary.m \
 	NSDictionary/NSEnumerator_dictionaryKeys.m \
@@ -339,6 +340,7 @@ CFLAGS = -DAPPLE_RUNTIME_4 -DDARWIN -DNULL=0 -DTARGET_OS_IOSMAC=0 \
         -I${ROOT_SOURCE_DIR}/Libraries/Libsystem/liblaunch
 
 CXXFLAGS = -DTARGET_OS_BRIDGE=0 ${CFLAGS:N*-std=*}
+ACFLAGS = -mmacos-version-min=${MACOS_VERSION_MIN}
 
 # We need to link this manually to avoid chicken & egg issue with ld wanting
 # to link against Foundation and libobjc :)
