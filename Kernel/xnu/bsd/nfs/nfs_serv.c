@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2019 Apple Inc.  All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -86,6 +86,7 @@
 #include <sys/vnode_internal.h>
 #include <sys/uio_internal.h>
 #include <libkern/OSAtomic.h>
+#include <IOKit/IOLib.h>
 #include <sys/fsevents.h>
 #include <kern/thread_call.h>
 #include <sys/time.h>
@@ -116,12 +117,12 @@
 
 int nfsd_thread_count = 0;
 int nfsd_thread_max = 0;
-lck_grp_t *nfsd_lck_grp;
-lck_mtx_t *nfsd_mutex;
+static LCK_GRP_DECLARE(nfsd_lck_grp, "nfsd");
+LCK_MTX_DECLARE(nfsd_mutex, &nfsd_lck_grp);
 struct nfsd_head nfsd_head, nfsd_queue;
 
-lck_grp_t *nfsrv_slp_rwlock_group;
-lck_grp_t *nfsrv_slp_mutex_group;
+LCK_GRP_DECLARE(nfsrv_slp_rwlock_group, "nfsrv-slp-rwlock");
+LCK_GRP_DECLARE(nfsrv_slp_mutex_group, "nfsrv-slp-mutex");
 struct nfsrv_sockhead nfsrv_socklist, nfsrv_sockwg,
     nfsrv_sockwait, nfsrv_sockwork;
 struct nfsrv_sock *nfsrv_udpsock = NULL;
@@ -132,15 +133,15 @@ struct nfsrv_expfs_list nfsrv_exports;
 struct nfsrv_export_hashhead *nfsrv_export_hashtbl = NULL;
 int nfsrv_export_hash_size = NFSRVEXPHASHSZ;
 u_long nfsrv_export_hash;
-lck_grp_t *nfsrv_export_rwlock_group;
-lck_rw_t nfsrv_export_rwlock;
+static LCK_GRP_DECLARE(nfsrv_export_rwlock_group, "nfsrv-export-rwlock");
+LCK_RW_DECLARE(nfsrv_export_rwlock, &nfsrv_export_rwlock_group);
 
 #if CONFIG_FSE
 /* NFS server file modification event generator */
 struct nfsrv_fmod_hashhead *nfsrv_fmod_hashtbl;
 u_long nfsrv_fmod_hash;
-lck_grp_t *nfsrv_fmod_grp;
-lck_mtx_t *nfsrv_fmod_mutex;
+static LCK_GRP_DECLARE(nfsrv_fmod_grp, "nfsrv_fmod");
+LCK_MTX_DECLARE(nfsrv_fmod_mutex, &nfsrv_fmod_grp);
 static int nfsrv_fmod_timer_on = 0;
 int nfsrv_fsevents_enabled = 1;
 #endif
@@ -158,7 +159,7 @@ uint32_t nfsrv_user_stat_enabled = 1;
 uint32_t nfsrv_user_stat_node_count = 0;
 uint32_t nfsrv_user_stat_max_idle_sec = NFSRV_USER_STAT_DEF_IDLE_SEC;
 uint32_t nfsrv_user_stat_max_nodes = NFSRV_USER_STAT_DEF_MAX_NODES;
-lck_grp_t *nfsrv_active_user_mutex_group;
+LCK_GRP_DECLARE(nfsrv_active_user_mutex_group, "nfs-active-user-mutex");
 
 int nfsrv_wg_delay = NFSRV_WGATHERDELAY * 1000;
 int nfsrv_wg_delay_v3 = 0;
@@ -169,7 +170,6 @@ int nfsrv_authorize(vnode_t, vnode_t, kauth_action_t, vfs_context_t, struct nfs_
 int nfsrv_wg_coalesce(struct nfsrv_descript *, struct nfsrv_descript *);
 void nfsrv_modified(vnode_t, vfs_context_t);
 
-extern void IOSleep(int);
 extern int safe_getpath(struct vnode *dvp, char *leafname, char *path, int _len, int *truncated_path);
 
 /*
@@ -203,32 +203,15 @@ nfsrv_init(void)
 		printf("struct nfsrv_sock bloated (> %dbytes)\n", NFS_SVCALLOC);
 	}
 
-	/* init nfsd mutex */
-	nfsd_lck_grp = lck_grp_alloc_init("nfsd", LCK_GRP_ATTR_NULL);
-	nfsd_mutex = lck_mtx_alloc_init(nfsd_lck_grp, LCK_ATTR_NULL);
-
-	/* init slp rwlock */
-	nfsrv_slp_rwlock_group = lck_grp_alloc_init("nfsrv-slp-rwlock", LCK_GRP_ATTR_NULL);
-	nfsrv_slp_mutex_group  = lck_grp_alloc_init("nfsrv-slp-mutex", LCK_GRP_ATTR_NULL);
-
 	/* init export data structures */
 	LIST_INIT(&nfsrv_exports);
-	nfsrv_export_rwlock_group = lck_grp_alloc_init("nfsrv-export-rwlock", LCK_GRP_ATTR_NULL);
-	lck_rw_init(&nfsrv_export_rwlock, nfsrv_export_rwlock_group, LCK_ATTR_NULL);
-
-	/* init active user list mutex structures */
-	nfsrv_active_user_mutex_group = lck_grp_alloc_init("nfs-active-user-mutex", LCK_GRP_ATTR_NULL);
-
-	/* init nfs server request cache mutex */
-	nfsrv_reqcache_lck_grp = lck_grp_alloc_init("nfsrv_reqcache", LCK_GRP_ATTR_NULL);
-	nfsrv_reqcache_mutex = lck_mtx_alloc_init(nfsrv_reqcache_lck_grp, LCK_ATTR_NULL);
 
 #if CONFIG_FSE
 	/* init NFS server file modified event generation */
 	nfsrv_fmod_hashtbl = hashinit(NFSRVFMODHASHSZ, M_TEMP, &nfsrv_fmod_hash);
-	nfsrv_fmod_grp = lck_grp_alloc_init("nfsrv_fmod", LCK_GRP_ATTR_NULL);
-	nfsrv_fmod_mutex = lck_mtx_alloc_init(nfsrv_fmod_grp, LCK_ATTR_NULL);
 #endif
+
+	nfs_gss_svc_init();                 /* Init RPCSEC_GSS security */
 
 	/* initialize NFS server timer callouts */
 #if CONFIG_FSE
@@ -586,6 +569,16 @@ nfsrv_setattr(
 
 	/* Authorize the attribute changes.  */
 	error = vnode_authattr(vp, vap, &action, ctx);
+	if ((error == EACCES) && (nxo->nxo_flags & NX_READONLY)) {
+		switch (vnode_vtype(vp)) {
+		case VREG: case VDIR: case VLNK: case VCPLX:
+			error = EROFS;
+			break;
+		default:
+			break;
+		}
+	}
+
 	if (!error) {
 		error = nfsrv_authorize(vp, NULL, action, ctx, nxo, 0);
 	}
@@ -673,7 +666,7 @@ nfsrv_lookup(
 {
 	struct nameidata ni;
 	vnode_t vp, dirp = NULL;
-	struct nfs_filehandle dnfh, nfh;
+	struct nfs_filehandle dnfh, nfh = {};
 	struct nfs_export *nx = NULL;
 	struct nfs_export_options *nxo;
 	int error, attrerr, dirattrerr, isdotdot;
@@ -693,11 +686,7 @@ nfsrv_lookup(
 	nfsm_name_len_check(error, nd, len);
 	nfsmerr_if(error);
 
-	ni.ni_cnd.cn_nameiop = LOOKUP;
-#if CONFIG_TRIGGERS
-	ni.ni_op = OP_LOOKUP;
-#endif
-	ni.ni_cnd.cn_flags = LOCKLEAF;
+	NDINIT(&ni, LOOKUP, OP_LOOKUP, LOCKLEAF | CN_FIRMLINK_NOFOLLOW, UIO_SYSSPACE, 0, ctx);
 	error = nfsm_chain_get_path_namei(nmreq, len, &ni);
 	isdotdot = ((len == 2) && (ni.ni_cnd.cn_pnbuf[0] == '.') && (ni.ni_cnd.cn_pnbuf[1] == '.'));
 	if (!error) {
@@ -790,9 +779,9 @@ nfsrv_readlink(
 	struct nfsm_chain *nmreq, nmrep;
 	mbuf_t mpath, mp;
 	uio_t auio = NULL;
-	char uio_buf[UIO_SIZEOF(4)];
-	char *uio_bufp = &uio_buf[0];
-	int uio_buflen = UIO_SIZEOF(4);
+	UIO_STACKBUF(uio_buf, 4);
+	void *uio_bufp = &uio_buf[0];
+	int uio_buflen = sizeof(uio_buf);
 
 	error = 0;
 	attrerr = ENOENT;
@@ -810,7 +799,7 @@ nfsrv_readlink(
 	nfsmerr_if(error);
 	if (mpcnt > 4) {
 		uio_buflen = UIO_SIZEOF(mpcnt);
-		MALLOC(uio_bufp, char*, uio_buflen, M_TEMP, M_WAITOK);
+		uio_bufp = kalloc_data(uio_buflen, Z_WAITOK);
 		if (!uio_bufp) {
 			error = ENOMEM;
 		}
@@ -908,7 +897,7 @@ nfsmout:
 		mbuf_freem(mpath);
 	}
 	if (uio_bufp != &uio_buf[0]) {
-		FREE(uio_bufp, M_TEMP);
+		kfree_data(uio_bufp, uio_buflen);
 	}
 	if (error) {
 		nfsm_chain_cleanup(&nmrep);
@@ -928,21 +917,21 @@ nfsrv_read(
 	mbuf_t *mrepp)
 {
 	int error, attrerr, mreadcnt;
-	uint32_t reqlen, maxlen, count, len, tlen, left;
+	uint32_t reqlen, maxlen, count, len, tlen;
 	mbuf_t mread, m;
 	vnode_t vp;
 	struct nfs_filehandle nfh;
-	struct nfs_export *nx;
+	struct nfs_export *nx = NULL;
 	struct nfs_export_options *nxo;
 	uio_t auio = NULL;
-	char *uio_bufp = NULL;
 	struct vnode_attr vattr, *vap = &vattr;
 	off_t off;
 	uid_t saved_uid;
-	char uio_buf[UIO_SIZEOF(0)];
+	UIO_STACKBUF(uio_buf, 0);
 	struct nfsm_chain *nmreq, nmrep;
 
 	error = 0;
+	count = 0;
 	attrerr = ENOENT;
 	nmreq = &nd->nd_nmreq;
 	nfsm_chain_null(&nmrep);
@@ -1012,22 +1001,19 @@ nfsrv_read(
 	if ((u_quad_t)off >= vap->va_data_size) {
 		count = 0;
 	} else if (((u_quad_t)off + reqlen) > vap->va_data_size) {
-		count = nfsm_rndup(vap->va_data_size - off);
+		count = (int)nfsm_rndup(vap->va_data_size - off);
 	} else {
 		count = reqlen;
 	}
 
-	len = left = count;
+	len = count;
 	if (count > 0) {
 		/* get mbuf list to hold read data */
 		error = nfsm_mbuf_get_list(count, &mread, &mreadcnt);
 		nfsmerr_if(error);
-		MALLOC(uio_bufp, char *, UIO_SIZEOF(mreadcnt), M_TEMP, M_WAITOK);
-		if (uio_bufp) {
-			auio = uio_createwithbuffer(mreadcnt, off, UIO_SYSSPACE,
-			    UIO_READ, uio_bufp, UIO_SIZEOF(mreadcnt));
-		}
-		if (!uio_bufp || !auio) {
+
+		auio = uio_create(mreadcnt, off, UIO_SYSSPACE, UIO_READ);
+		if (!auio) {
 			error = ENOMEM;
 			goto errorexit;
 		}
@@ -1079,7 +1065,7 @@ nfsmerr:
 	}
 	if (nd->nd_vers == NFS_VER3) {
 		nfsm_chain_add_32(error, &nmrep, len);
-		nfsm_chain_add_32(error, &nmrep, (len < reqlen) ? TRUE : FALSE);
+		nfsm_chain_add_32(error, &nmrep, (off + len >= vap->va_data_size) ? TRUE : FALSE);
 	} else {
 		error = nfsm_chain_add_fattr(nd, &nmrep, vap);
 	}
@@ -1103,8 +1089,8 @@ nfsmout:
 	if (mread) {
 		mbuf_freem(mread);
 	}
-	if (uio_bufp != NULL) {
-		FREE(uio_bufp, M_TEMP);
+	if (count > 0 && auio != NULL) {
+		uio_free(auio);
 	}
 	if (error) {
 		nfsm_chain_cleanup(&nmrep);
@@ -1142,10 +1128,11 @@ nfsrv_fmod_timer(__unused void *param0, __unused void *param1)
 	struct nfsrv_fmod_hashhead *headp, firehead;
 	struct nfsrv_fmod *fp, *nfp, *pfp;
 	uint64_t timenow, next_deadline;
-	int interval = 0, i, fmod_fire;
+	time_t interval = 0;
+	int i, fmod_fire;
 
 	LIST_INIT(&firehead);
-	lck_mtx_lock(nfsrv_fmod_mutex);
+	lck_mtx_lock(&nfsrv_fmod_mutex);
 again:
 	clock_get_uptime(&timenow);
 	clock_interval_to_deadline(nfsrv_fmod_pendtime, 1000 * 1000,
@@ -1193,7 +1180,7 @@ again:
 	}
 
 	if (fmod_fire) {
-		lck_mtx_unlock(nfsrv_fmod_mutex);
+		lck_mtx_unlock(&nfsrv_fmod_mutex);
 		/*
 		 * Fire off the content modified fsevent for each
 		 * entry and free it.
@@ -1208,9 +1195,9 @@ again:
 			vnode_put(fp->fm_vp);
 			kauth_cred_unref(&fp->fm_context.vc_ucred);
 			LIST_REMOVE(fp, fm_link);
-			FREE(fp, M_TEMP);
+			kfree_type(struct nfsrv_fmod, fp);
 		}
-		lck_mtx_lock(nfsrv_fmod_mutex);
+		lck_mtx_lock(&nfsrv_fmod_mutex);
 		nfsrv_fmod_pending -= fmod_fire;
 		goto again;
 	}
@@ -1222,7 +1209,7 @@ again:
 	 * entry is ready to send its fsevent.
 	 */
 	if (nfsrv_fmod_pending > 0) {
-		interval = (next_deadline - timenow) / (1000 * 1000);
+		interval = ((time_t)(next_deadline - timenow)) / (1000 * 1000);
 		if (interval < nfsrv_fmod_min_interval) {
 			interval = nfsrv_fmod_min_interval;
 		}
@@ -1233,7 +1220,7 @@ again:
 		nfs_interval_timer_start(nfsrv_fmod_timer_call, interval);
 	}
 
-	lck_mtx_unlock(nfsrv_fmod_mutex);
+	lck_mtx_unlock(&nfsrv_fmod_mutex);
 }
 
 /*
@@ -1249,7 +1236,7 @@ nfsrv_modified(vnode_t vp, vfs_context_t ctx)
 	struct nfsrv_fmod *fp;
 	struct nfsrv_fmod_hashhead *head;
 
-	lck_mtx_lock(nfsrv_fmod_mutex);
+	lck_mtx_lock(&nfsrv_fmod_mutex);
 
 	/*
 	 * Compute the time in the future when the
@@ -1270,7 +1257,7 @@ nfsrv_modified(vnode_t vp, vfs_context_t ctx)
 				LIST_REMOVE(fp, fm_link);
 				LIST_INSERT_HEAD(head, fp, fm_link);
 			}
-			lck_mtx_unlock(nfsrv_fmod_mutex);
+			lck_mtx_unlock(&nfsrv_fmod_mutex);
 			return;
 		}
 	}
@@ -1283,11 +1270,7 @@ nfsrv_modified(vnode_t vp, vfs_context_t ctx)
 	if (vnode_get(vp) != 0) {
 		goto done;
 	}
-	MALLOC(fp, struct nfsrv_fmod *, sizeof(*fp), M_TEMP, M_WAITOK);
-	if (fp == NULL) {
-		vnode_put(vp);
-		goto done;
-	}
+	fp = kalloc_type(struct nfsrv_fmod, Z_WAITOK | Z_NOFAIL);
 	fp->fm_vp = vp;
 	kauth_cred_ref(vfs_context_ucred(ctx));
 	fp->fm_context = *ctx;
@@ -1305,7 +1288,7 @@ nfsrv_modified(vnode_t vp, vfs_context_t ctx)
 		    nfsrv_fmod_pendtime);
 	}
 done:
-	lck_mtx_unlock(nfsrv_fmod_mutex);
+	lck_mtx_unlock(&nfsrv_fmod_mutex);
 	return;
 }
 #endif /* CONFIG_FSE */
@@ -1328,10 +1311,9 @@ nfsrv_write(
 	mbuf_t m;
 	vnode_t vp;
 	struct nfs_filehandle nfh;
-	struct nfs_export *nx;
+	struct nfs_export *nx = NULL;
 	struct nfs_export_options *nxo;
 	uio_t auio = NULL;
-	char *uio_bufp = NULL;
 	off_t off;
 	uid_t saved_uid;
 	struct nfsm_chain *nmreq, nmrep;
@@ -1430,16 +1412,13 @@ nfsrv_write(
 				mcount++;
 			}
 		}
-		MALLOC(uio_bufp, char *, UIO_SIZEOF(mcount), M_TEMP, M_WAITOK);
-		if (uio_bufp) {
-			auio = uio_createwithbuffer(mcount, off, UIO_SYSSPACE, UIO_WRITE, uio_bufp, UIO_SIZEOF(mcount));
-		}
-		if (!uio_bufp || !auio) {
+		auio = uio_create(mcount, off, UIO_SYSSPACE, UIO_WRITE);
+		if (!auio) {
 			error = ENOMEM;
 		}
 		nfsmerr_if(error);
 		for (m = nmreq->nmc_mcur; m; m = mbuf_next(m)) {
-			if ((mlen = mbuf_len(m)) > 0) {
+			if ((mlen = (int)mbuf_len(m)) > 0) {
 				uio_addiov(auio, CAST_USER_ADDR_T((caddr_t)mbuf_data(m)), mlen);
 			}
 		}
@@ -1457,7 +1436,7 @@ nfsrv_write(
 		}
 
 		error = VNOP_WRITE(vp, auio, ioflags, ctx);
-		OSAddAtomic64(1, &nfsstats.srvvop_writes);
+		OSAddAtomic64(1, &nfsrvstats.srvvop_writes);
 
 		/* update export stats */
 		NFSStatAdd64(&nx->nx_stats.bytes_written, len);
@@ -1510,8 +1489,8 @@ nfsmout:
 	if (vp) {
 		vnode_put(vp);
 	}
-	if (uio_bufp != NULL) {
-		FREE(uio_bufp, M_TEMP);
+	if (auio) {
+		uio_free(auio);
 	}
 	if (error) {
 		nfsm_chain_cleanup(&nmrep);
@@ -1555,13 +1534,13 @@ nfsrv_writegather(
 	struct nfsrv_wg_delayhash *wpp;
 	uid_t saved_uid;
 	struct vnode_attr preattr, postattr;
-	int error, mlen, i, ioflags, tlen;
+	int error, mlen, i, ioflags;
+	size_t tlen;
 	int preattrerr, postattrerr;
 	vnode_t vp;
 	mbuf_t m;
 	uio_t auio = NULL;
-	char *uio_bufp = NULL;
-	u_quad_t cur_usec;
+	time_t cur_usec;
 	struct timeval now;
 	struct nfsm_chain *nmreq, nmrep;
 
@@ -1579,7 +1558,7 @@ nfsrv_writegather(
 		nd->nd_mrep = NULL;
 		nd->nd_stable = NFS_WRITE_FILESYNC;
 		microuptime(&now);
-		cur_usec = (u_quad_t)now.tv_sec * 1000000 + (u_quad_t)now.tv_usec;
+		cur_usec = now.tv_sec * 1000000 + now.tv_usec;
 		nd->nd_time = cur_usec +
 		    ((nd->nd_vers == NFS_VER3) ? nfsrv_wg_delay_v3 : nfsrv_wg_delay);
 
@@ -1680,7 +1659,7 @@ nfsmerr:
 	 */
 loop1:
 	microuptime(&now);
-	cur_usec = (u_quad_t)now.tv_sec * 1000000 + (u_quad_t)now.tv_usec;
+	cur_usec = now.tv_sec * 1000000 + now.tv_usec;
 	for (nd = slp->ns_tq.lh_first; nd; nd = owp) {
 		owp = nd->nd_tq.le_next;
 		if (nd->nd_time > cur_usec) {
@@ -1742,12 +1721,8 @@ loop1:
 				}
 			}
 
-			MALLOC(uio_bufp, char *, UIO_SIZEOF(i), M_TEMP, M_WAITOK);
-			if (uio_bufp) {
-				auio = uio_createwithbuffer(i, nd->nd_off, UIO_SYSSPACE,
-				    UIO_WRITE, uio_bufp, UIO_SIZEOF(i));
-			}
-			if (!uio_bufp || !auio) {
+			auio = uio_create(i, nd->nd_off, UIO_SYSSPACE, UIO_WRITE);
+			if (!auio) {
 				error = ENOMEM;
 			}
 			if (!error) {
@@ -1757,7 +1732,7 @@ loop1:
 					}
 				}
 				error = VNOP_WRITE(vp, auio, ioflags, ctx);
-				OSAddAtomic64(1, &nfsstats.srvvop_writes);
+				OSAddAtomic64(1, &nfsrvstats.srvvop_writes);
 
 				/* update export stats */
 				NFSStatAdd64(&nx->nx_stats.bytes_written, nd->nd_len);
@@ -1770,9 +1745,9 @@ loop1:
 				}
 #endif
 			}
-			if (uio_bufp) {
-				FREE(uio_bufp, M_TEMP);
-				uio_bufp = NULL;
+			if (auio) {
+				uio_free(auio);
+				auio = NULL;
 			}
 		}
 		if (vp) {
@@ -1854,7 +1829,7 @@ loop1:
 	 *
 	 * Add/Remove the socket in the nfsrv_sockwg queue as needed.
 	 */
-	lck_mtx_lock(nfsd_mutex);
+	lck_mtx_lock(&nfsd_mutex);
 	if (slp->ns_wgtime) {
 		if (slp->ns_wgq.tqe_next == SLPNOLIST) {
 			TAILQ_INSERT_HEAD(&nfsrv_sockwg, slp, ns_wgq);
@@ -1868,7 +1843,7 @@ loop1:
 		TAILQ_REMOVE(&nfsrv_sockwg, slp, ns_wgq);
 		slp->ns_wgq.tqe_next = SLPNOLIST;
 	}
-	lck_mtx_unlock(nfsd_mutex);
+	lck_mtx_unlock(&nfsd_mutex);
 
 	return 0;
 }
@@ -1883,7 +1858,8 @@ loop1:
 int
 nfsrv_wg_coalesce(struct nfsrv_descript *owp, struct nfsrv_descript *nd)
 {
-	int overlap, error;
+	int error;
+	off_t overlap;
 	mbuf_t mp, mpnext;
 	struct nfsrv_descript *p;
 
@@ -1895,7 +1871,7 @@ nfsrv_wg_coalesce(struct nfsrv_descript *owp, struct nfsrv_descript *nd)
 			return EIO;
 		}
 		if (overlap > 0) {
-			mbuf_adj(nd->nd_nmreq.nmc_mhead, overlap);
+			mbuf_adj(nd->nd_nmreq.nmc_mhead, (int)overlap);
 		}
 		mp = owp->nd_nmreq.nmc_mhead;
 		while ((mpnext = mbuf_next(mp))) {
@@ -1938,16 +1914,16 @@ void
 nfsrv_wg_timer(__unused void *param0, __unused void *param1)
 {
 	struct timeval now;
-	uint64_t cur_usec, next_usec;
-	int interval;
+	time_t cur_usec, next_usec;
+	time_t interval;
 	struct nfsrv_sock *slp;
 	int writes_pending = 0;
 
 	microuptime(&now);
-	cur_usec = (uint64_t)now.tv_sec * 1000000 + (uint64_t)now.tv_usec;
+	cur_usec = now.tv_sec * 1000000 + now.tv_usec;
 	next_usec = cur_usec + (NFSRV_WGATHERDELAY * 1000);
 
-	lck_mtx_lock(nfsd_mutex);
+	lck_mtx_lock(&nfsd_mutex);
 	TAILQ_FOREACH(slp, &nfsrv_sockwg, ns_wgq) {
 		if (slp->ns_wgtime) {
 			writes_pending++;
@@ -1966,10 +1942,10 @@ nfsrv_wg_timer(__unused void *param0, __unused void *param1)
 
 	if (writes_pending == 0) {
 		nfsrv_wg_timer_on = 0;
-		lck_mtx_unlock(nfsd_mutex);
+		lck_mtx_unlock(&nfsd_mutex);
 		return;
 	}
-	lck_mtx_unlock(nfsd_mutex);
+	lck_mtx_unlock(&nfsd_mutex);
 
 	/*
 	 * Return the number of msec to wait again
@@ -2017,17 +1993,20 @@ nfsrv_create(
 	struct vnode_attr dpreattr, dpostattr, postattr;
 	struct vnode_attr va, *vap = &va;
 	struct nameidata ni;
-	int error, rdev, dpreattrerr, dpostattrerr, postattrerr;
+	int error, dpreattrerr, dpostattrerr, postattrerr;
 	int how, exclusive_flag;
 	uint32_t len = 0, cnflags;
+	uint64_t rdev;
 	vnode_t vp, dvp, dirp;
-	struct nfs_filehandle nfh;
+	struct nfs_filehandle nfh = {};
 	struct nfs_export *nx = NULL;
-	struct nfs_export_options *nxo;
+	struct nfs_export_options *nxo = NULL;
 	u_quad_t tempsize;
 	u_char cverf[NFSX_V3CREATEVERF];
 	uid_t saved_uid;
 	struct nfsm_chain *nmreq, nmrep;
+	__unused const int nfs_vers = nd->nd_vers;
+	assert(nd->nd_vers == NFS_VER2 || nd->nd_vers == NFS_VER3);
 
 	error = 0;
 	dpreattrerr = dpostattrerr = postattrerr = ENOENT;
@@ -2045,13 +2024,7 @@ nfsrv_create(
 	nfsm_name_len_check(error, nd, len);
 	nfsmerr_if(error);
 
-	ni.ni_cnd.cn_nameiop = CREATE;
-#if CONFIG_TRIGGERS
-	ni.ni_op = OP_LINK;
-#endif
-	ni.ni_cnd.cn_flags = LOCKPARENT | LOCKLEAF;
-	ni.ni_cnd.cn_ndp = &ni;
-
+	NDINIT(&ni, CREATE, OP_LINK, LOCKPARENT | LOCKLEAF, UIO_SYSSPACE, 0, ctx);
 	error = nfsm_chain_get_path_namei(nmreq, len, &ni);
 	if (!error) {
 		error = nfsrv_namei(nd, ctx, &ni, &nfh, &dirp, &nx, &nxo);
@@ -2091,6 +2064,7 @@ nfsrv_create(
 				error = EEXIST;
 				break;
 			}
+			OS_FALLTHROUGH;
 		case NFS_CREATE_UNCHECKED:
 			error = nfsm_chain_get_sattr(nd, nmreq, vap);
 			break;
@@ -2213,7 +2187,7 @@ nfsrv_create(
 			}
 		} else if (vap->va_type == VCHR || vap->va_type == VBLK ||
 		    vap->va_type == VFIFO) {
-			if (vap->va_type == VCHR && rdev == (int)0xffffffff) {
+			if (vap->va_type == VCHR && rdev == 0xffffffff) {
 				VATTR_SET(vap, va_type, VFIFO);
 			}
 			if (vap->va_type != VFIFO) {
@@ -2328,11 +2302,16 @@ nfsmerr:
 	nd->nd_repstat = error;
 	error = nfsrv_rephead(nd, slp, &nmrep, NFSX_SRVFH(nd->nd_vers, &nfh) +
 	    NFSX_FATTR(nd->nd_vers) + NFSX_WCCDATA(nd->nd_vers));
+	assert(nfs_vers == nd->nd_vers);
 	nfsmout_if(error);
 	*mrepp = nmrep.nmc_mhead;
 	nfsmout_on_status(nd, error);
 	if (nd->nd_vers == NFS_VER3) {
 		if (!nd->nd_repstat) {
+			if (!nfh.nfh_fhp) {
+				error = NFSERR_SERVERFAULT;
+				goto nfsmerr;
+			}
 			nfsm_chain_add_postop_fh(error, &nmrep, nfh.nfh_fhp, nfh.nfh_len);
 			nfsm_chain_add_postop_attr(error, nd, &nmrep, postattrerr, &postattr);
 		}
@@ -2387,9 +2366,9 @@ nfsrv_mknod(
 	enum vtype vtyp;
 	nfstype nvtype;
 	vnode_t vp, dvp, dirp;
-	struct nfs_filehandle nfh;
+	struct nfs_filehandle nfh = {};
 	struct nfs_export *nx = NULL;
-	struct nfs_export_options *nxo;
+	struct nfs_export_options *nxo = NULL;
 	uid_t saved_uid;
 	kauth_acl_t xacl = NULL;
 	struct nfsm_chain *nmreq, nmrep;
@@ -2408,12 +2387,7 @@ nfsrv_mknod(
 	nfsm_name_len_check(error, nd, len);
 	nfsmerr_if(error);
 
-	ni.ni_cnd.cn_nameiop = CREATE;
-#if CONFIG_TRIGGERS
-	ni.ni_op = OP_LINK;
-#endif
-	ni.ni_cnd.cn_flags = LOCKPARENT | LOCKLEAF;
-	ni.ni_cnd.cn_ndp = &ni;
+	NDINIT(&ni, CREATE, OP_LINK, LOCKPARENT | LOCKLEAF, UIO_SYSSPACE, 0, ctx);
 	error = nfsm_chain_get_path_namei(nmreq, len, &ni);
 	if (!error) {
 		error = nfsrv_namei(nd, ctx, &ni, &nfh, &dirp, &nx, &nxo);
@@ -2588,6 +2562,10 @@ nfsmerr:
 	*mrepp = nmrep.nmc_mhead;
 	nfsmout_on_status(nd, error);
 	if (!nd->nd_repstat) {
+		if (!nfh.nfh_fhp) {
+			error = NFSERR_SERVERFAULT;
+			goto nfsmerr;
+		}
 		nfsm_chain_add_postop_fh(error, &nmrep, nfh.nfh_fhp, nfh.nfh_len);
 		nfsm_chain_add_postop_attr(error, nd, &nmrep, postattrerr, &postattr);
 	}
@@ -2641,7 +2619,7 @@ nfsrv_remove(
 	struct vnode_attr dpreattr, dpostattr;
 	struct nfs_filehandle nfh;
 	struct nfs_export *nx = NULL;
-	struct nfs_export_options *nxo;
+	struct nfs_export_options *nxo = NULL;
 	struct nfsm_chain *nmreq, nmrep;
 
 	error = 0;
@@ -2656,12 +2634,7 @@ nfsrv_remove(
 	nfsm_name_len_check(error, nd, len);
 	nfsmerr_if(error);
 
-	ni.ni_cnd.cn_nameiop = DELETE;
-#if CONFIG_TRIGGERS
-	ni.ni_op = OP_UNLINK;
-#endif
-	ni.ni_cnd.cn_flags = LOCKPARENT | LOCKLEAF;
-	ni.ni_cnd.cn_ndp = &ni;
+	NDINIT(&ni, DELETE, OP_UNLINK, LOCKPARENT | LOCKLEAF, UIO_SYSSPACE, 0, ctx);
 	error = nfsm_chain_get_path_namei(nmreq, len, &ni);
 	if (!error) {
 		error = nfsrv_namei(nd, ctx, &ni, &nfh, &dirp, &nx, &nxo);
@@ -2688,7 +2661,7 @@ nfsrv_remove(
 		vp = ni.ni_vp;
 
 		if (vnode_vtype(vp) == VDIR) {
-			error = EPERM;          /* POSIX */
+			error = NFSERR_ISDIR;
 		} else if (vnode_isvroot(vp)) {
 			/*
 			 * The root of a mounted filesystem cannot be deleted.
@@ -2708,7 +2681,7 @@ nfsrv_remove(
 		if (!error) {
 #if CONFIG_FSE
 			char     *path = NULL;
-			int       plen;
+			int       plen = 0;
 			fse_info  finfo;
 
 			if (nfsrv_fsevents_enabled && need_fsevent(FSE_DELETE, dvp)) {
@@ -2798,6 +2771,7 @@ nfsrv_rename(
 	struct nfs_export_options *fnxo, *tnxo;
 	enum vtype fvtype, tvtype;
 	int holding_mntlock;
+	int is_subdir = 0;
 	mount_t locked_mp;
 	struct nfsm_chain *nmreq, nmrep;
 	char *from_name, *to_name;
@@ -2850,17 +2824,11 @@ nfsrv_rename(
 	saved_cred = nd->nd_cr;
 	kauth_cred_ref(saved_cred);
 retry:
-	fromni.ni_cnd.cn_nameiop = DELETE;
-#if CONFIG_TRIGGERS
-	fromni.ni_op = OP_UNLINK;
-#endif
-	fromni.ni_cnd.cn_flags = WANTPARENT;
-
+	NDINIT(&fromni, DELETE, OP_UNLINK, WANTPARENT, UIO_SYSSPACE, CAST_USER_ADDR_T(frompath), ctx);
 	fromni.ni_cnd.cn_pnbuf = frompath;
 	frompath = NULL;
 	fromni.ni_cnd.cn_pnlen = MAXPATHLEN;
 	fromni.ni_cnd.cn_flags |= HASBUF;
-	fromni.ni_cnd.cn_ndp = &fromni;
 
 	error = nfsrv_namei(nd, ctx, &fromni, &fnfh, &fdirp, &fnx, &fnxo);
 	if (error) {
@@ -2887,17 +2855,11 @@ retry:
 		ctx->vc_ucred = nd->nd_cr = saved_cred;
 	}
 
-	toni.ni_cnd.cn_nameiop = RENAME;
-#if CONFIG_TRIGGERS
-	toni.ni_op = OP_RENAME;
-#endif
-	toni.ni_cnd.cn_flags = WANTPARENT;
-
+	NDINIT(&toni, RENAME, OP_RENAME, WANTPARENT, UIO_SYSSPACE, CAST_USER_ADDR_T(topath), ctx);
 	toni.ni_cnd.cn_pnbuf = topath;
 	topath = NULL;
 	toni.ni_cnd.cn_pnlen = MAXPATHLEN;
 	toni.ni_cnd.cn_flags |= HASBUF;
-	toni.ni_cnd.cn_ndp = &toni;
 
 	if (fvtype == VDIR) {
 		toni.ni_cnd.cn_flags |= WILLBEDIR;
@@ -2977,6 +2939,16 @@ retry:
 			error = ENOTEMPTY;
 		}
 		goto out;
+	}
+	if (fvtype == VDIR) {
+		error = vnode_issubdir(tdvp, fvp, &is_subdir, ctx);
+		if (error) {
+			goto out;
+		}
+		if (is_subdir) {
+			error = EINVAL;
+			goto out;
+		}
 	}
 
 	/*
@@ -3143,10 +3115,8 @@ auth_exit:
 			mount_ref(locked_mp, 0);
 
 			/* make a copy of to path to pass to nfsrv_namei() again */
-			MALLOC_ZONE(topath, caddr_t, MAXPATHLEN, M_NAMEI, M_WAITOK);
-			if (topath) {
-				bcopy(toni.ni_cnd.cn_pnbuf, topath, tolen + 1);
-			}
+			topath = zalloc(ZV_NAMEI);
+			bcopy(toni.ni_cnd.cn_pnbuf, topath, tolen + 1);
 
 			/*
 			 * nameidone has to happen before we vnode_put(tdvp)
@@ -3160,10 +3130,8 @@ auth_exit:
 			vnode_put(tdvp);
 
 			/* make a copy of from path to pass to nfsrv_namei() again */
-			MALLOC_ZONE(frompath, caddr_t, MAXPATHLEN, M_NAMEI, M_WAITOK);
-			if (frompath) {
-				bcopy(fromni.ni_cnd.cn_pnbuf, frompath, fromlen + 1);
-			}
+			frompath = zalloc(ZV_NAMEI);
+			bcopy(fromni.ni_cnd.cn_pnbuf, frompath, fromlen + 1);
 
 			/*
 			 * nameidone has to happen before we vnode_put(fdvp)
@@ -3407,10 +3375,10 @@ nfsmout:
 		vnode_put(tdirp);
 	}
 	if (frompath) {
-		FREE_ZONE(frompath, MAXPATHLEN, M_NAMEI);
+		NFS_ZFREE(ZV_NAMEI, frompath);
 	}
 	if (topath) {
-		FREE_ZONE(topath, MAXPATHLEN, M_NAMEI);
+		NFS_ZFREE(ZV_NAMEI, topath);
 	}
 	if (saved_cred) {
 		kauth_cred_unref(&saved_cred);
@@ -3467,7 +3435,7 @@ nfsrv_link(
 
 	/* we're not allowed to link to directories... */
 	if (vnode_vtype(vp) == VDIR) {
-		error = EPERM;          /* POSIX */
+		error = NFSERR_ISDIR;
 		goto out;
 	}
 
@@ -3476,11 +3444,7 @@ nfsrv_link(
 		goto out;
 	}
 
-	ni.ni_cnd.cn_nameiop = CREATE;
-#if CONFIG_TRIGGERS
-	ni.ni_op = OP_LINK;
-#endif
-	ni.ni_cnd.cn_flags = LOCKPARENT;
+	NDINIT(&ni, CREATE, OP_LINK, LOCKPARENT, UIO_SYSSPACE, CAST_USER_ADDR_T(vnode_getname(vp)), ctx);
 	error = nfsm_chain_get_path_namei(nmreq, len, &ni);
 	if (!error) {
 		error = nfsrv_namei(nd, ctx, &ni, &dnfh, &dirp, &nx, &nxo);
@@ -3608,16 +3572,18 @@ nfsrv_symlink(
 	struct vnode_attr va, *vap = &va;
 	struct nameidata ni;
 	int error, dpreattrerr, dpostattrerr, postattrerr;
-	uint32_t len = 0, linkdatalen, cnflags;
+	uint32_t len = 0, linkdatalen = 0, cnflags;
 	uid_t saved_uid;
 	char *linkdata;
 	vnode_t vp, dvp, dirp;
-	struct nfs_filehandle nfh;
+	struct nfs_filehandle nfh = {};
 	struct nfs_export *nx = NULL;
-	struct nfs_export_options *nxo;
+	struct nfs_export_options *nxo = NULL;
 	uio_t auio = NULL;
-	char uio_buf[UIO_SIZEOF(1)];
+	UIO_STACKBUF(uio_buf, 1);
 	struct nfsm_chain *nmreq, nmrep;
+	__unused const int nfs_vers = nd->nd_vers;
+	assert(nd->nd_vers == NFS_VER2 || nd->nd_vers == NFS_VER3);
 
 	error = 0;
 	dpreattrerr = dpostattrerr = postattrerr = ENOENT;
@@ -3636,13 +3602,7 @@ nfsrv_symlink(
 	nfsm_name_len_check(error, nd, len);
 	nfsmerr_if(error);
 
-	ni.ni_cnd.cn_nameiop = CREATE;
-#if CONFIG_TRIGGERS
-	ni.ni_op = OP_LINK;
-#endif
-	ni.ni_cnd.cn_flags = LOCKPARENT;
-	ni.ni_flag = 0;
-	ni.ni_cnd.cn_ndp = &ni;
+	NDINIT(&ni, CREATE, OP_LINK, LOCKPARENT, UIO_SYSSPACE, 0, ctx);
 	error = nfsm_chain_get_path_namei(nmreq, len, &ni);
 	if (!error) {
 		error = nfsrv_namei(nd, ctx, &ni, &nfh, &dirp, &nx, &nxo);
@@ -3680,7 +3640,7 @@ nfsrv_symlink(
 		error = NFSERR_NAMETOL;
 	}
 	nfsmerr_if(error);
-	MALLOC(linkdata, caddr_t, linkdatalen + 1, M_TEMP, M_WAITOK);
+	linkdata = kalloc_data(linkdatalen + 1, Z_WAITOK);
 	if (linkdata) {
 		auio = uio_createwithbuffer(1, 0, UIO_SYSSPACE, UIO_READ,
 		    &uio_buf[0], sizeof(uio_buf));
@@ -3781,8 +3741,7 @@ out:
 	vnode_put(dvp);
 out1:
 	if (linkdata) {
-		FREE(linkdata, M_TEMP);
-		linkdata = NULL;
+		kfree_data(linkdata, linkdatalen + 1);
 	}
 	if (dirp) {
 		nfsm_srv_vattr_init(&dpostattr, nd->nd_vers);
@@ -3796,11 +3755,16 @@ nfsmerr:
 	nd->nd_repstat = error;
 	error = nfsrv_rephead(nd, slp, &nmrep, NFSX_SRVFH(nd->nd_vers, &nfh) +
 	    NFSX_POSTOPATTR(nd->nd_vers) + NFSX_WCCDATA(nd->nd_vers));
+	assert(nfs_vers == nd->nd_vers);
 	nfsmout_if(error);
 	*mrepp = nmrep.nmc_mhead;
 	nfsmout_on_status(nd, error);
 	if (nd->nd_vers == NFS_VER3) {
 		if (!nd->nd_repstat) {
+			if (!nfh.nfh_fhp) {
+				error = NFSERR_SERVERFAULT;
+				goto nfsmerr;
+			}
 			nfsm_chain_add_postop_fh(error, &nmrep, nfh.nfh_fhp, nfh.nfh_len);
 			nfsm_chain_add_postop_attr(error, nd, &nmrep, postattrerr, &postattr);
 		}
@@ -3825,7 +3789,7 @@ nfsmout:
 		vnode_put(dirp);
 	}
 	if (linkdata) {
-		FREE(linkdata, M_TEMP);
+		kfree_data(linkdata, linkdatalen + 1);
 	}
 	if (error) {
 		nfsm_chain_cleanup(&nmrep);
@@ -3851,12 +3815,14 @@ nfsrv_mkdir(
 	int error, dpreattrerr, dpostattrerr, postattrerr;
 	uint32_t len = 0;
 	vnode_t vp, dvp, dirp;
-	struct nfs_filehandle nfh;
+	struct nfs_filehandle nfh = {};
 	struct nfs_export *nx = NULL;
-	struct nfs_export_options *nxo;
+	struct nfs_export_options *nxo = NULL;
 	uid_t saved_uid;
 	kauth_acl_t xacl = NULL;
 	struct nfsm_chain *nmreq, nmrep;
+	__unused const int nfs_vers = nd->nd_vers;
+	assert(nd->nd_vers == NFS_VER2 || nd->nd_vers == NFS_VER3);
 
 	error = 0;
 	dpreattrerr = dpostattrerr = postattrerr = ENOENT;
@@ -3873,12 +3839,7 @@ nfsrv_mkdir(
 	nfsm_name_len_check(error, nd, len);
 	nfsmerr_if(error);
 
-	ni.ni_cnd.cn_nameiop = CREATE;
-#if CONFIG_TRIGGERS
-	ni.ni_op = OP_LINK;
-#endif
-	ni.ni_cnd.cn_flags = LOCKPARENT | WILLBEDIR;
-	ni.ni_cnd.cn_ndp = &ni;
+	NDINIT(&ni, CREATE, OP_LINK, LOCKPARENT | WILLBEDIR, UIO_SYSSPACE, 0, ctx);
 	error = nfsm_chain_get_path_namei(nmreq, len, &ni);
 	if (!error) {
 		error = nfsrv_namei(nd, ctx, &ni, &nfh, &dirp, &nx, &nxo);
@@ -4030,11 +3991,16 @@ nfsmerr:
 	nd->nd_repstat = error;
 	error = nfsrv_rephead(nd, slp, &nmrep, NFSX_SRVFH(nd->nd_vers, &nfh) +
 	    NFSX_POSTOPATTR(nd->nd_vers) + NFSX_WCCDATA(nd->nd_vers));
+	assert(nfs_vers == nd->nd_vers);
 	nfsmout_if(error);
 	*mrepp = nmrep.nmc_mhead;
 	nfsmout_on_status(nd, error);
 	if (nd->nd_vers == NFS_VER3) {
 		if (!nd->nd_repstat) {
+			if (!nfh.nfh_fhp) {
+				error = NFSERR_SERVERFAULT;
+				goto nfsmerr;
+			}
 			nfsm_chain_add_postop_fh(error, &nmrep, nfh.nfh_fhp, nfh.nfh_len);
 			nfsm_chain_add_postop_attr(error, nd, &nmrep, postattrerr, &postattr);
 		}
@@ -4086,7 +4052,7 @@ nfsrv_rmdir(
 	struct vnode_attr dpreattr, dpostattr;
 	struct nfs_filehandle nfh;
 	struct nfs_export *nx = NULL;
-	struct nfs_export_options *nxo;
+	struct nfs_export_options *nxo = NULL;
 	struct nameidata ni;
 	struct nfsm_chain *nmreq, nmrep;
 
@@ -4103,12 +4069,7 @@ nfsrv_rmdir(
 	nfsm_name_len_check(error, nd, len);
 	nfsmerr_if(error);
 
-	ni.ni_cnd.cn_nameiop = DELETE;
-#if CONFIG_TRIGGERS
-	ni.ni_op = OP_UNLINK;
-#endif
-	ni.ni_cnd.cn_flags = LOCKPARENT | LOCKLEAF;
-	ni.ni_cnd.cn_ndp = &ni;
+	NDINIT(&ni, DELETE, OP_UNLINK, LOCKPARENT | LOCKLEAF, UIO_SYSSPACE, 0, ctx);
 	error = nfsm_chain_get_path_namei(nmreq, len, &ni);
 	if (!error) {
 		error = nfsrv_namei(nd, ctx, &ni, &nfh, &dirp, &nx, &nxo);
@@ -4146,6 +4107,13 @@ nfsrv_rmdir(
 		goto out;
 	}
 	/*
+	 * No rmdir ".." please.
+	 */
+	if (vnode_parent(dvp) == vp) {
+		error = EINVAL;
+		goto out;
+	}
+	/*
 	 * The root of a mounted filesystem cannot be deleted.
 	 */
 	if (vnode_isvroot(vp)) {
@@ -4164,7 +4132,7 @@ nfsrv_rmdir(
 	if (!error) {
 #if CONFIG_FSE
 		char     *path = NULL;
-		int       plen;
+		int       plen = 0;
 		fse_info  finfo;
 
 		if (nfsrv_fsevents_enabled && need_fsevent(FSE_DELETE, dvp)) {
@@ -4268,16 +4236,17 @@ nfsrv_readdir(
 {
 	struct direntry *dp;
 	char *cpos, *cend, *rbuf;
+	size_t rbuf_siz;
 	vnode_t vp;
-	struct vnode_attr attr;
+	struct vnode_attr attr = {};
 	struct nfs_filehandle nfh;
 	struct nfs_export *nx;
 	struct nfs_export_options *nxo;
 	uio_t auio = NULL;
-	char uio_buf[UIO_SIZEOF(1)];
+	UIO_STACKBUF(uio_buf, 1);
 	int len, nlen, rem, xfer, error, attrerr;
 	int siz, count, fullsiz, eofflag, nentries;
-	u_quad_t off, toff, verf;
+	u_quad_t off, toff, verf = 0;
 	int vnopflag;
 	struct nfsm_chain *nmreq, nmrep;
 
@@ -4287,6 +4256,7 @@ nfsrv_readdir(
 	nmreq = &nd->nd_nmreq;
 	nfsm_chain_null(&nmrep);
 	rbuf = NULL;
+	rbuf_siz = 0;
 	vp = NULL;
 
 	vnopflag = VNODE_READDIR_EXTENDED | VNODE_READDIR_REQSEEKOFF;
@@ -4308,6 +4278,11 @@ nfsrv_readdir(
 		siz = xfer;
 	}
 	fullsiz = siz;
+
+	if (fullsiz == 0) {
+		error = NFSERR_TOOSMALL;
+		goto nfsmerr;
+	}
 
 	error = nfsrv_fhtovp(&nfh, nd, &vp, &nx, &nxo);
 	nfsmerr_if(error);
@@ -4332,7 +4307,7 @@ nfsrv_readdir(
 	if (nd->nd_vers == NFS_VER3) {
 		nfsm_srv_vattr_init(&attr, NFS_VER3);
 		error = attrerr = vnode_getattr(vp, &attr, ctx);
-		if (!error && toff && verf && (verf != attr.va_filerev)) {
+		if (!error && verf && (verf != attr.va_filerev)) {
 			error = NFSERR_BAD_COOKIE;
 		}
 	}
@@ -4352,7 +4327,8 @@ nfsrv_readdir(
 #endif
 	nfsmerr_if(error);
 
-	MALLOC(rbuf, caddr_t, siz, M_TEMP, M_WAITOK);
+	rbuf_siz = siz;
+	rbuf = kalloc_data(rbuf_siz, Z_WAITOK);
 	if (rbuf) {
 		auio = uio_createwithbuffer(1, 0, UIO_SYSSPACE, UIO_READ,
 		    &uio_buf[0], sizeof(uio_buf));
@@ -4381,7 +4357,7 @@ again:
 		if (siz == 0) {
 			vnode_put(vp);
 			vp = NULL;
-			FREE(rbuf, M_TEMP);
+			kfree_data(rbuf, rbuf_siz);
 			/* assemble reply */
 			nd->nd_repstat = error;
 			error = nfsrv_rephead(nd, slp, &nmrep, NFSX_POSTOPATTR(nd->nd_vers) +
@@ -4478,11 +4454,11 @@ again:
 	}
 	nfsm_chain_add_32(error, &nmrep, FALSE);
 	nfsm_chain_add_32(error, &nmrep, eofflag ? TRUE : FALSE);
-	FREE(rbuf, M_TEMP);
+	kfree_data(rbuf, rbuf_siz);
 	goto nfsmout;
 nfsmerr:
 	if (rbuf) {
-		FREE(rbuf, M_TEMP);
+		kfree_data(rbuf, rbuf_siz);
 	}
 	if (vp) {
 		vnode_put(vp);
@@ -4513,12 +4489,13 @@ nfsrv_readdirplus(
 {
 	struct direntry *dp;
 	char *cpos, *cend, *rbuf;
+	size_t rbuf_siz;
 	vnode_t vp, nvp;
 	struct nfs_filehandle dnfh, nfh;
 	struct nfs_export *nx;
 	struct nfs_export_options *nxo;
 	uio_t auio = NULL;
-	char uio_buf[UIO_SIZEOF(1)];
+	UIO_STACKBUF(uio_buf, 1);
 	struct vnode_attr attr, va, *vap = &va;
 	int len, nlen, rem, xfer, error, attrerr, gotfh, gotattr;
 	int siz, dircount, maxcount, fullsiz, eofflag, dirlen, nentries, isdotdot;
@@ -4532,6 +4509,7 @@ nfsrv_readdirplus(
 	nmreq = &nd->nd_nmreq;
 	nfsm_chain_null(&nmrep);
 	rbuf = NULL;
+	rbuf_siz = 0;
 	vp = NULL;
 	dircount = maxcount = 0;
 
@@ -4556,6 +4534,11 @@ nfsrv_readdirplus(
 		maxcount = xfer;
 	}
 
+	if (maxcount == 0) {
+		error = NFSERR_TOOSMALL;
+		goto nfsmerr;
+	}
+
 	error = nfsrv_fhtovp(&dnfh, nd, &vp, &nx, &nxo);
 	nfsmerr_if(error);
 
@@ -4578,7 +4561,7 @@ nfsrv_readdirplus(
 
 	nfsm_srv_vattr_init(&attr, NFS_VER3);
 	error = attrerr = vnode_getattr(vp, &attr, ctx);
-	if (!error && toff && verf && (verf != attr.va_filerev)) {
+	if (!error && verf && (verf != attr.va_filerev)) {
 		error = NFSERR_BAD_COOKIE;
 	}
 	if (!error) {
@@ -4597,7 +4580,8 @@ nfsrv_readdirplus(
 #endif
 	nfsmerr_if(error);
 
-	MALLOC(rbuf, caddr_t, siz, M_TEMP, M_WAITOK);
+	rbuf_siz = siz;
+	rbuf = kalloc_data(siz, Z_WAITOK);
 	if (rbuf) {
 		auio = uio_createwithbuffer(1, 0, UIO_SYSSPACE, UIO_READ,
 		    &uio_buf[0], sizeof(uio_buf));
@@ -4624,7 +4608,7 @@ again:
 		if (siz == 0) {
 			vnode_put(vp);
 			vp = NULL;
-			FREE(rbuf, M_TEMP);
+			kfree_data(rbuf, rbuf_siz);
 			/* assemble reply */
 			nd->nd_repstat = error;
 			error = nfsrv_rephead(nd, slp, &nmrep, NFSX_V3POSTOPATTR +
@@ -4660,10 +4644,9 @@ again:
 	}
 
 	/*
-	 * Probe one of the directory entries to see if the filesystem
-	 * supports VGET.
+	 * Probe the directory to see if the filesystem supports VGET.
 	 */
-	if ((error = VFS_VGET(vnode_mount(vp), (ino64_t)dp->d_fileno, &nvp, ctx))) {
+	if ((error = VFS_VGET(vnode_mount(vp), (ino64_t)attr.va_fileid, &nvp, ctx))) {
 		if (error == ENOTSUP) { /* let others get passed back */
 			error = NFSERR_NOTSUPP;
 		}
@@ -4751,11 +4734,11 @@ again:
 	vp = NULL;
 	nfsm_chain_add_32(error, &nmrep, FALSE);
 	nfsm_chain_add_32(error, &nmrep, eofflag ? TRUE : FALSE);
-	FREE(rbuf, M_TEMP);
+	kfree_data(rbuf, rbuf_siz);
 	goto nfsmout;
 nfsmerr:
 	if (rbuf) {
-		FREE(rbuf, M_TEMP);
+		kfree_data(rbuf, rbuf_siz);
 	}
 	nd->nd_repstat = error;
 	error = nfsrv_rephead(nd, slp, &nmrep, NFSX_V3POSTOPATTR);
@@ -4787,7 +4770,7 @@ nfsrv_commit(
 {
 	vnode_t vp;
 	struct nfs_filehandle nfh;
-	struct nfs_export *nx;
+	struct nfs_export *nx = NULL;
 	struct nfs_export_options *nxo;
 	int error, preattrerr, postattrerr, count;
 	struct vnode_attr preattr, postattr;
@@ -4821,6 +4804,12 @@ nfsrv_commit(
 
 	error = nfsrv_credcheck(nd, ctx, nx, nxo);
 	nfsmerr_if(error);
+
+	/* This must identify a file system object of type, NF3REG */
+	if (vnode_vtype(vp) != VREG) {
+		error = NFSERR_BADTYPE;
+		goto nfsmerr;
+	}
 
 	nfsm_srv_pre_vattr_init(&preattr);
 	preattrerr = vnode_getattr(vp, &preattr, ctx);
@@ -4866,7 +4855,7 @@ nfsrv_statfs(
 	vfs_context_t ctx,
 	mbuf_t *mrepp)
 {
-	struct vfs_attr va;
+	struct vfs_attr va = {};
 	int error, attrerr;
 	vnode_t vp;
 	struct vnode_attr attr;
@@ -4904,7 +4893,7 @@ nfsrv_statfs(
 	VFSATTR_WANTED(&va, f_files);
 	VFSATTR_WANTED(&va, f_ffree);
 	error = vfs_getattr(vnode_mount(vp), &va, ctx);
-	blksize = vnode_mount(vp)->mnt_vfsstat.f_bsize;
+	blksize = vfs_statfs(vnode_mount(vp))->f_bsize;
 
 	if (nd->nd_vers == NFS_VER3) {
 		nfsm_srv_vattr_init(&attr, nd->nd_vers);
@@ -5051,8 +5040,8 @@ nfsrv_pathconf(
 	vfs_context_t ctx,
 	mbuf_t *mrepp)
 {
-	int error, attrerr, linkmax, namemax;
-	int chownres, notrunc, case_sensitive, case_preserving;
+	int error, attrerr, linkmax = 0, namemax = 0;
+	int chownres = 0, notrunc = 0, case_sensitive = 0, case_preserving = 0;
 	vnode_t vp;
 	struct vnode_attr attr;
 	struct nfs_filehandle nfh;

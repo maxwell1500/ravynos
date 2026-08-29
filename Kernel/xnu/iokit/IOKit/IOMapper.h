@@ -30,10 +30,10 @@
 #define __IOKIT_IOMAPPER_H
 
 #include <sys/cdefs.h>
-
-__BEGIN_DECLS
 #include <IOKit/IOTypes.h>
 #include <mach/vm_types.h>
+
+__BEGIN_DECLS
 
 // These are C accessors to the system mapper for non-IOKit clients
 ppnum_t IOMapperIOVMAlloc(unsigned pages);
@@ -47,6 +47,7 @@ __END_DECLS
 #include <IOKit/IOService.h>
 #include <IOKit/IOMemoryDescriptor.h>
 #include <IOKit/IODMACommand.h>
+#include <libkern/c++/OSPtr.h>
 
 class OSData;
 
@@ -99,8 +100,8 @@ public:
 		}
 	}
 
-	static IOMapper * copyMapperForDevice(IOService * device);
-	static IOMapper * copyMapperForDeviceWithIndex(IOService * device, unsigned int index);
+	static OSPtr<IOMapper>  copyMapperForDevice(IOService * device);
+	static OSPtr<IOMapper>  copyMapperForDeviceWithIndex(IOService * device, unsigned int index);
 
 // { subclasses
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -65,42 +65,27 @@
 
 #include <mach/machine/vm_types.h>
 #include <mach/vm_map.h>
-#include <kern/zalloc.h>
-#include <kern/kalloc.h>
+#include <kern/startup.h>
+#include <kern/zalloc_internal.h>
 #include <kern/kext_alloc.h>
 #include <sys/kdebug.h>
-#include <vm/vm_object.h>
-#include <vm/vm_map.h>
-#include <vm/vm_page.h>
+#include <vm/vm_object_internal.h>
+#include <vm/vm_map_internal.h>
+#include <vm/vm_page_internal.h>
 #include <vm/vm_kern.h>
 #include <vm/memory_object.h>
-#include <vm/vm_fault.h>
-#include <vm/vm_init.h>
+#include <vm/vm_fault_xnu.h>
+#include <vm/vm_init_xnu.h>
 
 #include <pexpert/pexpert.h>
 
 #include <vm/vm_protos.h>
 
-#define ZONE_MAP_MIN CONFIG_ZONE_MAP_MIN
-
-/* Maximum zone size is 1.5G */
-#define ZONE_MAP_MAX (1024 * 1024 * 1536)
-
 const vm_offset_t vm_min_kernel_address = VM_MIN_KERNEL_AND_KEXT_ADDRESS;
 const vm_offset_t vm_max_kernel_address = VM_MAX_KERNEL_ADDRESS;
 
-boolean_t vm_kernel_ready = FALSE;
-boolean_t kmem_ready = FALSE;
-boolean_t kmem_alloc_ready = FALSE;
-boolean_t zlog_ready = FALSE;
-boolean_t iokit_iomd_setownership_enabled = TRUE;
-
-vm_offset_t kmapoff_kaddr;
-unsigned int kmapoff_pgcnt;
-
-#if CONFIG_EMBEDDED
-extern int log_executable_mem_entry;
-#endif /* CONFIG_EMBEDDED */
+TUNABLE(bool, iokit_iomd_setownership_enabled,
+    "iokit_iomd_setownership_enabled", true);
 
 static inline void
 vm_mem_bootstrap_log(const char *message)
@@ -113,154 +98,63 @@ vm_mem_bootstrap_log(const char *message)
  *	vm_mem_bootstrap initializes the virtual memory system.
  *	This is done only by the first cpu up.
  */
-
+__startup_func
 void
 vm_mem_bootstrap(void)
 {
-	vm_offset_t     start, end;
-	vm_size_t zsizearg;
-	mach_vm_size_t zsize;
+	vm_offset_t start, end;
 
 	/*
 	 *	Initializes resident memory structures.
 	 *	From here on, all physical memory is accounted for,
 	 *	and we use only virtual addresses.
 	 */
-	vm_mem_bootstrap_log("vm_page_bootstrap");
+	extern void pal_serial_putc(char);
+	const char *vmb1 = "  vm_mem_bootstrap: calling vm_page_bootstrap...\r\n";
+	while (*vmb1) { pal_serial_putc(*vmb1++); }
+
 	vm_page_bootstrap(&start, &end);
 
-	/*
-	 *	Initialize other VM packages
-	 */
+	const char *vmb2 = "  vm_mem_bootstrap: calling zone_bootstrap...\r\n";
+	while (*vmb2) { pal_serial_putc(*vmb2++); }
 
-	vm_mem_bootstrap_log("zone_bootstrap");
 	zone_bootstrap();
 
-	vm_mem_bootstrap_log("vm_object_bootstrap");
+	const char *vmb3 = "  vm_mem_bootstrap: calling vm_object_bootstrap...\r\n";
+	while (*vmb3) { pal_serial_putc(*vmb3++); }
+
 	vm_object_bootstrap();
 
-	vm_kernel_ready = TRUE;
+	const char *vmb4 = "  vm_mem_bootstrap: calling vm_retire_boot_pages...\r\n";
+	while (*vmb4) { pal_serial_putc(*vmb4++); }
 
-	vm_mem_bootstrap_log("vm_map_init");
+	vm_retire_boot_pages();
+
+	const char *vmb5 = "  vm_mem_bootstrap: calling vm_map_init...\r\n";
+	while (*vmb5) { pal_serial_putc(*vmb5++); }
+
 	vm_map_init();
 
-	vm_mem_bootstrap_log("kmem_init");
+	const char *vmb6 = "  vm_mem_bootstrap: calling kmem_init...\r\n";
+	while (*vmb6) { pal_serial_putc(*vmb6++); }
+
 	kmem_init(start, end);
-	kmem_ready = TRUE;
-	/*
-	 * Eat a random amount of kernel_map to fuzz subsequent heap, zone and
-	 * stack addresses. (With a 4K page and 9 bits of randomness, this
-	 * eats at most 2M of VA from the map.)
-	 */
-	if (!PE_parse_boot_argn("kmapoff", &kmapoff_pgcnt,
-	    sizeof(kmapoff_pgcnt))) {
-		kmapoff_pgcnt = early_random() & 0x1ff; /* 9 bits */
-	}
-	if (kmapoff_pgcnt > 0 &&
-	    vm_allocate_kernel(kernel_map, &kmapoff_kaddr,
-	    kmapoff_pgcnt * PAGE_SIZE_64, VM_FLAGS_ANYWHERE, VM_KERN_MEMORY_OSFMK) != KERN_SUCCESS) {
-		panic("cannot vm_allocate %u kernel_map pages", kmapoff_pgcnt);
-	}
 
-#if CONFIG_EMBEDDED
-	PE_parse_boot_argn("log_executable_mem_entry",
-	    &log_executable_mem_entry,
-	    sizeof(log_executable_mem_entry));
-#endif /* CONFIG_EMBEDDED */
+	const char *vmb7 = "  vm_mem_bootstrap: initializing STARTUP_SUB_KMEM...\r\n";
+	while (*vmb7) { pal_serial_putc(*vmb7++); }
 
-	vm_mem_bootstrap_log("pmap_init");
-	pmap_init();
+	kernel_startup_initialize_upto(STARTUP_SUB_KMEM);
 
-	kmem_alloc_ready = TRUE;
+	const char *vmb8 = "  vm_mem_bootstrap: calling vm_fault_init...\r\n";
+	while (*vmb8) { pal_serial_putc(*vmb8++); }
 
-	if (PE_parse_boot_argn("zsize", &zsizearg, sizeof(zsizearg))) {
-		zsize = zsizearg * (1024ULL * 1024);
-	} else {
-		zsize = sane_size >> 2;         /* Set target zone size as 1/4 of physical memory */
-#if defined(__LP64__)
-		zsize += zsize >> 1;
-#endif /* __LP64__ */
-
-#if !CONFIG_EMBEDDED
-		/*
-		 * The max_zonemap_size was based on physical memory and might make the
-		 * end of the zone go beyond what vm_page_[un]pack_ptr() can handle.
-		 * To fix that we'll limit the size of the zone map to be what a 256Gig
-		 * machine would have, but we'll retain the boot-args-specified size if
-		 * it was provided.
-		 */
-		vm_size_t       orig_zsize = zsize;
-
-		if (zsize > 256 * (1024ULL * 1024 * 1024) / 4) {
-			zsize = 256 * (1024ULL * 1024 * 1024) / 4;
-			printf("NOTE: zonemap size reduced from 0x%lx to 0x%lx\n",
-			    (uintptr_t)orig_zsize, (uintptr_t)zsize);
-		}
-#endif
-	}
-
-	if (zsize < ZONE_MAP_MIN) {
-		zsize = ZONE_MAP_MIN;   /* Clamp to min */
-	}
-	if (zsize > sane_size >> 1) {
-		zsize = sane_size >> 1; /* Clamp to half of RAM max */
-	}
-#if !__LP64__
-	if (zsize > ZONE_MAP_MAX) {
-		zsize = ZONE_MAP_MAX;   /* Clamp to 1.5GB max for K32 */
-	}
-#endif /* !__LP64__ */
-
-	vm_mem_bootstrap_log("kext_alloc_init");
-	kext_alloc_init();
-
-	vm_mem_bootstrap_log("zone_init");
-	assert((vm_size_t) zsize == zsize);
-	zone_init((vm_size_t) zsize);   /* Allocate address space for zones */
-
-	/* The vm_page_zone must be created prior to kalloc_init; that
-	 * routine can trigger zalloc()s (for e.g. mutex statistic structure
-	 * initialization). The vm_page_zone must exist to saisfy fictitious
-	 * page allocations (which are used for guard pages by the guard
-	 * mode zone allocator).
-	 */
-	vm_mem_bootstrap_log("vm_page_module_init");
-	vm_page_module_init();
-
-	vm_mem_bootstrap_log("kalloc_init");
-	kalloc_init();
-
-	vm_mem_bootstrap_log("vm_fault_init");
 	vm_fault_init();
 
-	vm_mem_bootstrap_log("memory_manager_default_init");
-	memory_manager_default_init();
+	const char *vmb9 = "  vm_mem_bootstrap: initializing STARTUP_SUB_ZALLOC...\r\n";
+	while (*vmb9) { pal_serial_putc(*vmb9++); }
 
-	vm_mem_bootstrap_log("memory_object_control_bootstrap");
-	memory_object_control_bootstrap();
+	kernel_startup_initialize_upto(STARTUP_SUB_ZALLOC);
 
-	vm_mem_bootstrap_log("device_pager_bootstrap");
-	device_pager_bootstrap();
-
-	vm_paging_map_init();
-
-	vm_mem_bootstrap_log("vm_mem_bootstrap done");
-
-#ifdef  CONFIG_ZCACHE
-	zcache_bootstrap();
-#endif
-	vm_rtfault_record_init();
-
-	PE_parse_boot_argn("iokit_iomd_setownership_enabled", &iokit_iomd_setownership_enabled, sizeof(iokit_iomd_setownership_enabled));
-	if (!iokit_iomd_setownership_enabled) {
-		kprintf("IOKit IOMD setownership DISABLED\n");
-	} else {
-		kprintf("IOKit IOMD setownership ENABLED\n");
-	}
-}
-
-void
-vm_mem_init(void)
-{
-	vm_object_init();
+	const char *vmb10 = "  vm_mem_bootstrap: vm_init completed!\r\n";
+	while (*vmb10) { pal_serial_putc(*vmb10++); }
 }

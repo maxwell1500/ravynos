@@ -73,12 +73,8 @@ typedef struct vc_progress_user_options vc_progress_user_options;
 
 #if XNU_KERNEL_PRIVATE
 
-void vcputc(int, int, int);
-
-int vcgetc(     int             l,
-    int             u,
-    boolean_t       wait,
-    boolean_t       raw );
+void vcputc(char);
+void vcputc_options(char, bool);
 
 void video_scroll_up(   void    *start,
     void    *end,
@@ -138,7 +134,7 @@ int vc_display_lzss_icon(uint32_t dst_x, uint32_t dst_y,
     uint32_t       compressed_size,
     const uint8_t *clut);
 
-#if !CONFIG_EMBEDDED
+#if defined(XNU_TARGET_OS_OSX)
 
 extern void vc_enable_progressmeter(int new_value);
 extern void vc_set_progressmeter(int new_value);
@@ -146,7 +142,7 @@ extern int vc_progressmeter_enable;
 extern int vc_progressmeter_value;
 extern void vc_progress_setdiskspeed(uint32_t speed);
 
-#endif /* !CONFIG_EMBEDDED */
+#endif /* defined(XNU_TARGET_OS_OSX) */
 
 #endif /* XNU_KERNEL_PRIVATE */
 

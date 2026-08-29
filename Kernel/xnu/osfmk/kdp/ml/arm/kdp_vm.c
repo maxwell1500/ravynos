@@ -37,7 +37,7 @@
 #include <mach/vm_statistics.h>
 
 #include <vm/vm_kern.h>
-#include <vm/vm_object.h>
+#include <vm/vm_object_xnu.h>
 #include <vm/vm_protos.h>
 #include <kdp/kdp_core.h>
 #include <kdp/kdp_udp.h>
@@ -45,6 +45,7 @@
 #include <arm/misc_protos.h>
 #include <arm/caches_internal.h>
 #include <arm/cpu_data_internal.h>
+#include <arm/misc_protos.h>
 
 pmap_t          kdp_pmap = 0;
 boolean_t       kdp_trans_off;
@@ -61,7 +62,6 @@ kdp_vtophys(
 	vm_offset_t va)
 {
 	pmap_paddr_t    pa;
-	ppnum_t         pp;
 
 	/* Ensure that the provided va resides within the provided pmap range. */
 	if (!pmap || ((pmap != kernel_pmap) && ((va < pmap->min) || (va >= pmap->max)))) {
@@ -74,14 +74,9 @@ kdp_vtophys(
 		return 0;   /* Just return if no translation */
 	}
 
-	pp = pmap_find_phys(pmap, va);  /* Get the page number */
-	if (!pp) {
-		return 0;       /* Just return if no translation */
-	}
-	pa = ((pmap_paddr_t) pp << PAGE_SHIFT) | (va & PAGE_MASK);      /* Insert page offset */
+	pa = pmap_find_pa(pmap, va);  /* Get the physical address */
 	return pa;
 }
-
 
 /*
  * kdp_machine_vm_read
@@ -334,24 +329,37 @@ kern_collectth_state(thread_t thread __unused, void *buffer, uint64_t size, void
 		return;
 	}
 
-	if ((cpudatap == NULL) || (cpudatap->cpu_processor == NULL) || (cpudatap->cpu_processor->active_thread == NULL)) {
+	processor_t processor = PERCPU_GET_RELATIVE(processor, cpu_data, cpudatap);
+	if ((cpudatap == NULL) || (processor->active_thread == NULL)) {
 		bzero(state, hdr->count * sizeof(uint32_t));
 		return;
 	}
 
-	vm_offset_t kstackptr = (vm_offset_t) cpudatap->cpu_processor->active_thread->machine.kstackptr;
-	arm_saved_state_t *saved_state = (arm_saved_state_t *) kstackptr;
-
 #if defined(__arm64__)
+	void *kpcb = processor->active_thread->machine.kpcb;
+	if (kpcb != NULL) {
+		arm_saved_state_t *saved_state = (arm_saved_state_t *)kpcb;
 
-	state->fp   = saved_state->ss_64.fp;
-	state->lr   = saved_state->ss_64.lr;
-	state->sp   = saved_state->ss_64.sp;
-	state->pc   = saved_state->ss_64.pc;
-	state->cpsr = saved_state->ss_64.cpsr;
-	bcopy(&saved_state->ss_64.x[0], &state->x[0], sizeof(state->x));
+		state->fp   = saved_state->ss_64.fp;
+		state->lr   = saved_state->ss_64.lr;
+		state->sp   = saved_state->ss_64.sp;
+		state->pc   = saved_state->ss_64.pc;
+		state->cpsr = saved_state->ss_64.cpsr;
+		bcopy(&saved_state->ss_64.x[0], &state->x[0], sizeof(state->x));
+	} else {
+		vm_offset_t kstackptr = (vm_offset_t) processor->active_thread->machine.kstackptr;
+		arm_kernel_saved_state_t *saved_state = (arm_kernel_saved_state_t *) kstackptr;
+
+		state->fp   = saved_state->fp;
+		state->lr   = saved_state->lr;
+		state->sp   = saved_state->sp;
+		state->pc   = saved_state->pc_was_in_userspace ? (register_t)ptrauth_strip((void *)&_was_in_userspace, ptrauth_key_function_pointer) : 0;
+		state->cpsr = PSR64_KERNEL_DEFAULT;
+	}
 
 #else /* __arm64__ */
+	vm_offset_t kstackptr = (vm_offset_t) processor->active_thread->machine.kstackptr;
+	arm_saved_state_t *saved_state = (arm_saved_state_t *) kstackptr;
 
 	state->lr   = saved_state->lr;
 	state->sp   = saved_state->sp;
@@ -360,4 +368,107 @@ kern_collectth_state(thread_t thread __unused, void *buffer, uint64_t size, void
 	bcopy(&saved_state->r[0], &state->r[0], sizeof(state->r));
 
 #endif /* !__arm64__ */
+}
+
+static const arm_state_hdr_t user32_thread_flavor_array[] = {
+	{ ARM_THREAD_STATE, ARM_UNIFIED_THREAD_STATE_COUNT },
+};
+
+#if defined(__arm64__)
+static const arm_state_hdr_t user64_thread_flavor_array[] = {
+	{ ARM_THREAD_STATE64, ARM_THREAD_STATE64_COUNT },
+	{ ARM_VFP_STATE, ARM_VFP_STATE_COUNT },
+	{ ARM_EXCEPTION_STATE64, ARM_EXCEPTION_STATE64_COUNT },
+};
+#endif
+
+void
+kern_collect_userth_state_size(task_t task, uint64_t * tstate_count, uint64_t * tstate_size)
+{
+	uint64_t per_thread_size = 0;
+	uint64_t num_flavors = 0;
+	const arm_state_hdr_t * flavors;
+#if defined(__arm64__)
+	bool is64bit = task_has_64Bit_addr(task);
+
+	if (is64bit) {
+		flavors = user64_thread_flavor_array;
+		num_flavors = sizeof(user64_thread_flavor_array) / sizeof(user64_thread_flavor_array[0]);
+	} else {
+		flavors = user32_thread_flavor_array;
+		num_flavors = sizeof(user32_thread_flavor_array) / sizeof(user32_thread_flavor_array[0]);
+	}
+#else
+	flavors = user32_thread_flavor_array;
+	num_flavors = sizeof(user32_thread_flavor_array) / sizeof(user32_thread_flavor_array[0]);
+#endif
+
+	for (size_t i = 0; i < num_flavors; i++) {
+		per_thread_size += sizeof(arm_state_hdr_t) + (flavors[i].count * sizeof(natural_t));
+	}
+
+	*tstate_count = task->thread_count;
+	*tstate_size  = sizeof(struct thread_command) + per_thread_size;
+}
+
+void
+kern_collect_userth_state(task_t task, thread_t thread, void *buffer, uint64_t size)
+{
+	kern_return_t ret;
+	uint64_t num_flavors = 0;
+	const arm_state_hdr_t * flavors;
+#if defined(__arm64__)
+	bool is64bit = task_has_64Bit_addr(task);
+
+	if (is64bit) {
+		flavors = user64_thread_flavor_array;
+		num_flavors = sizeof(user64_thread_flavor_array) / sizeof(user64_thread_flavor_array[0]);
+	} else {
+		flavors = user32_thread_flavor_array;
+		num_flavors = sizeof(user32_thread_flavor_array) / sizeof(user32_thread_flavor_array[0]);
+	}
+#else
+	(void)task;
+	flavors = user32_thread_flavor_array;
+	num_flavors = sizeof(user32_thread_flavor_array) / sizeof(user32_thread_flavor_array[0]);
+#endif
+
+	struct thread_command *tc = buffer;
+	tc->cmd = LC_THREAD;
+	tc->cmdsize = (uint32_t)size;
+
+	arm_state_hdr_t *hdr = (arm_state_hdr_t *)(tc + 1);
+
+	for (size_t i = 0; i < num_flavors; i++) {
+		hdr->flavor = flavors[i].flavor;
+		hdr->count = flavors[i].count;
+		/* Ensure we can't write past the end of the buffer */
+		assert(hdr->count + sizeof(arm_state_hdr_t) + ((uintptr_t)hdr - (uintptr_t)buffer) <= size);
+		ret = machine_thread_get_state(thread, hdr->flavor, (thread_state_t)(hdr + 1), &hdr->count);
+		assert(ret == KERN_SUCCESS);
+
+		hdr = (arm_state_hdr_t *)((uintptr_t)(hdr + 1) + hdr->count * sizeof(natural_t));
+	}
+}
+
+/*
+ * kdp_core_start_addr
+ *
+ * return the address where the kernel core file starts
+ *
+ * The kernel start address is VM_MIN_KERNEL_AND_KEXT_ADDRESS
+ * unless the physical aperture has been relocated below
+ * VM_MIN_KERNEL_AND_KEXT_ADDRESS as in the case of
+ * ARM_LARGE_MEMORY systems
+ *
+ */
+vm_map_offset_t
+kdp_core_start_addr()
+{
+#if defined(__arm64__)
+	extern const vm_map_address_t physmap_base;
+	return MIN(physmap_base, VM_MIN_KERNEL_AND_KEXT_ADDRESS);
+#else /* !defined(__arm64__) */
+	return VM_MIN_KERNEL_AND_KEXT_ADDRESS;
+#endif /* !defined(__arm64__) */
 }

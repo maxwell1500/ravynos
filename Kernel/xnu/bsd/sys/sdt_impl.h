@@ -35,7 +35,9 @@ extern const char *sdt_prefix;
 
 typedef struct sdt_probedesc {
 	char                    *sdpd_name;     /* name of this probe */
+	int                     sdpd_namelen;
 	char                    *sdpd_func;     /* APPLE NOTE: function name */
+	const char              *sdpd_prov;     /* APPLE NOTE: provider name */
 	unsigned long           sdpd_offset;    /* offset of call in text */
 	struct sdt_probedesc    *sdpd_next;     /* next static probe */
 } sdt_probedesc_t;
@@ -60,6 +62,7 @@ extern uint64_t sdt_getarg(void *, dtrace_id_t, void *, int, int);
 
 void sdt_provide_module(void *, struct modctl *);
 void sdt_early_init(void);
+void sdt_load_machsect(struct modctl *ctl);
 void sdt_init(void);
 
 extern int          sdt_probetab_size;
@@ -69,8 +72,6 @@ extern int          sdt_probetab_mask;
 
 #if defined(__x86_64__)
 typedef uint8_t sdt_instr_t;
-#elif defined(__arm__)
-typedef uint16_t sdt_instr_t;
 #elif defined(__arm64__)
 typedef uint32_t sdt_instr_t;
 #else

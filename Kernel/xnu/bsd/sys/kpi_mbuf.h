@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2023 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -478,6 +478,7 @@ extern errno_t mbuf_ring_cluster_activate(mbuf_t mbuf);
 extern errno_t mbuf_cluster_set_prop(mbuf_t mbuf, u_int32_t oldprop,
     u_int32_t newprop);
 extern errno_t mbuf_cluster_get_prop(mbuf_t mbuf, u_int32_t *prop);
+
 #endif /* BSD_KERNEL_PRIVATE */
 
 /*!
@@ -508,7 +509,7 @@ extern errno_t mbuf_cluster_get_prop(mbuf_t mbuf, u_int32_t *prop);
  *                   smaller during subsequent requests.
  */
 extern errno_t mbuf_getcluster(mbuf_how_t how, mbuf_type_t type, size_t size,
-    mbuf_t *mbuf);
+    mbuf_t *mbuf)
 __NKE_API_DEPRECATED;
 
 /*!
@@ -1300,6 +1301,15 @@ __NKE_API_DEPRECATED;
 extern u_int32_t mbuf_get_minclsize(void)
 __NKE_API_DEPRECATED;
 
+#ifdef XNU_KERNEL_PRIVATE
+/*
+ *      @function   mbuf_get_minclsize
+ *      @discussion Kernel internal function that returns the size of an mbuf
+ *      @result     The size of an mbuf
+ */
+extern u_int32_t mbuf_get_msize(void);
+#endif /* XNU_KERNEL_PRIVATE */
+
 /*!
  *       @function mbuf_clear_csum_performed
  *       @discussion Clears the hardware checksum flags and values.
@@ -2015,6 +2025,28 @@ extern errno_t mbuf_get_keepalive_flag(mbuf_t mbuf, boolean_t *is_keepalive);
  */
 extern errno_t mbuf_set_keepalive_flag(mbuf_t mbuf, boolean_t is_keepalive);
 
+/*!
+ *       @function mbuf_get_wake_packet_flag
+ *       @discussion Tell if the wake packet flag is set.
+ *       @param mbuf The mbuf representing the packet.
+ *       @param is_wake_packet A pointer that returns the truth value.
+ *       @result 0 upon success otherwise the errno error. If the mbuf
+ *               packet header does not have valid data bytes, the error
+ *               code will be EINVAL.
+ */
+extern errno_t mbuf_get_wake_packet_flag(mbuf_t mbuf, boolean_t *is_wake_packet);
+
+/*!
+ *       @function mbuf_set_wake_packet_flag
+ *       @discussion Set or clear the wake packet flag.
+ *       @param mbuf The mbuf representing the packet.
+ *       @param is_wake_packet The boolean value.
+ *       @result 0 upon success otherwise the errno error. If the mbuf
+ *               packet header does not have valid data bytes, the error
+ *               code will be EINVAL.
+ */
+extern errno_t mbuf_set_wake_packet_flag(mbuf_t mbuf, boolean_t is_wake_packet);
+
 #endif /* KERNEL_PRIVATE */
 
 /* IF_QUEUE interaction */
@@ -2048,4 +2080,5 @@ extern errno_t mbuf_set_keepalive_flag(mbuf_t mbuf, boolean_t is_keepalive);
 }
 
 __END_DECLS
+#undef __NKE_API_DEPRECATED
 #endif /* __KPI_MBUF__ */

@@ -3,12 +3,15 @@
 
 #include <mach/mach_error.h>
 #include <mach/mach_init.h>
+#include <mach/memory_entry.h>
 #include <mach/mach_port.h>
 #include <mach/mach_vm.h>
+#include <mach/memory_entry.h>
 #include <mach/task.h>
 #include <mach/task_info.h>
 #include <mach/vm_map.h>
 
+#include <sys/kern_memorystatus.h>
 #include <sys/mman.h>
 #include <sys/types.h>
 #include <sys/sysctl.h>
@@ -19,13 +22,19 @@
 extern int ledger(int cmd, caddr_t arg1, caddr_t arg2, caddr_t arg3);
 
 T_GLOBAL_META(T_META_RUN_CONCURRENTLY(true));
-boolean_t legacy_footprint;
+static boolean_t legacy_footprint = FALSE;
 
 #if LEGACY_FOOTPRINT_ENTITLED && defined(__arm64__)
 #define TEST_VM_NAMESPACE "xnu.vm_legacy"
 #else /* ENTITLED && __arm64__ */
 #define TEST_VM_NAMESPACE "xnu.vm"
 #endif /* ENTITLED && __arm64__ */
+
+T_GLOBAL_META(
+	T_META_NAMESPACE(TEST_VM_NAMESPACE),
+	T_META_RADAR_COMPONENT_NAME("xnu"),
+	T_META_RADAR_COMPONENT_VERSION("VM"),
+	T_META_RUN_CONCURRENTLY(true));
 
 #define MEM_SIZE (100 * 1024 * 1024) /* 100 MB */
 
@@ -42,8 +51,6 @@ ledger_init(void)
 	struct ledger_template_info     *templateInfo;
 	int64_t                         templateCnt;
 	int                             i;
-	int                             legacy_footprint_entitlement_mode;
-	size_t                          oldlen;
 
 	if (ledger_inited) {
 		return;
@@ -54,7 +61,9 @@ ledger_init(void)
 
 	legacy_footprint = FALSE;
 #if LEGACY_FOOTPRINT_ENTITLED
-	int ret;
+	int     legacy_footprint_entitlement_mode;
+	size_t  oldlen;
+	int     ret;
 
 	T_QUIET;
 	T_WITH_ERRNO;
@@ -151,8 +160,9 @@ get_ledger_info(
 }
 
 static mach_vm_address_t
-pre_warm(
-	mach_vm_size_t  vm_size)
+pre_warm_with_tag(
+	mach_vm_size_t  vm_size,
+	int             tag)
 {
 	kern_return_t           kr;
 	mach_vm_address_t       vm_addr;
@@ -184,13 +194,14 @@ pre_warm(
 	 * Pre-allocate, touch and then release the same amount
 	 * of memory we'll be allocating later during the test,
 	 * to account for any memory overhead (page tables, global
-	 * variables, ...).
+	 * variables, ...). Supplied VM tag should ensure memory
+	 * is allocated in the appropriate VM range.
 	 */
 	vm_addr = 0;
 	kr = mach_vm_allocate(mach_task_self(),
 	    &vm_addr,
 	    vm_size,
-	    VM_FLAGS_ANYWHERE);
+	    VM_FLAGS_ANYWHERE | VM_MAKE_TAG(tag));
 	T_QUIET;
 	T_EXPECT_EQ(kr, KERN_SUCCESS, "vm_allocate(%lld) error 0x%x (%s)",
 	    vm_size, kr, mach_error_string(kr));
@@ -217,10 +228,19 @@ pre_warm(
 	return vm_addr;
 }
 
+static mach_vm_address_t
+pre_warm(
+	mach_vm_size_t  vm_size)
+{
+	/*
+	 * Default to not tagging pre_warm memory.
+	 */
+	return pre_warm_with_tag(vm_size, 0);
+}
+
 T_DECL(phys_footprint_anonymous,
     "phys_footprint for anonymous memory",
-    T_META_NAMESPACE(TEST_VM_NAMESPACE),
-    T_META_LTEPHASE(LTE_POSTINIT))
+    T_META_LTEPHASE(LTE_POSTINIT), T_META_TAG_VM_PREFERRED)
 {
 	uint64_t                footprint_before, pagetable_before;
 	uint64_t                footprint_after, pagetable_after;
@@ -292,8 +312,7 @@ T_DECL(phys_footprint_anonymous,
 
 T_DECL(phys_footprint_file,
     "phys_footprint for mapped file",
-    T_META_NAMESPACE(TEST_VM_NAMESPACE),
-    T_META_LTEPHASE(LTE_POSTINIT))
+    T_META_LTEPHASE(LTE_POSTINIT), T_META_TAG_VM_PREFERRED)
 {
 	uint64_t                footprint_before, pagetable_before;
 	uint64_t                footprint_after, pagetable_after;
@@ -331,7 +350,11 @@ T_DECL(phys_footprint_file,
 	T_SETUPEND;
 
 	/* pre-warm to account for page table expansion */
-	pre_vm_addr = pre_warm(TEMP_FILE_SIZE);
+#if TARGET_OS_OSX
+	pre_vm_addr = pre_warm_with_tag(TEMP_FILE_SIZE, VM_MEMORY_MALLOC);
+#else
+	pre_vm_addr = pre_warm_with_tag(TEMP_FILE_SIZE, VM_MEMORY_MALLOC_TINY);
+#endif
 
 	/* mapping a file does not impact footprint... */
 	get_ledger_info(&footprint_before, &pagetable_before);
@@ -392,8 +415,7 @@ T_DECL(phys_footprint_file,
 
 T_DECL(phys_footprint_purgeable,
     "phys_footprint for purgeable memory",
-    T_META_NAMESPACE(TEST_VM_NAMESPACE),
-    T_META_LTEPHASE(LTE_POSTINIT))
+    T_META_LTEPHASE(LTE_POSTINIT), T_META_TAG_VM_PREFERRED)
 {
 	uint64_t                footprint_before, pagetable_before;
 	uint64_t                footprint_after, pagetable_after;
@@ -511,8 +533,7 @@ T_DECL(phys_footprint_purgeable,
 
 T_DECL(phys_footprint_purgeable_ownership,
     "phys_footprint for owned purgeable memory",
-    T_META_NAMESPACE(TEST_VM_NAMESPACE),
-    T_META_LTEPHASE(LTE_POSTINIT))
+    T_META_LTEPHASE(LTE_POSTINIT), T_META_TAG_VM_PREFERRED)
 {
 	uint64_t                footprint_before, pagetable_before;
 	uint64_t                footprint_after, pagetable_after;
@@ -655,6 +676,44 @@ T_DECL(phys_footprint_purgeable_ownership,
 	    dirty_size, footprint_before, footprint_after,
 	    footprint_expected, footprint_after - footprint_expected);
 
+	get_ledger_info(&footprint_after, &pagetable_after);
+	footprint_expected = footprint_before;
+	footprint_expected += (pagetable_after - pagetable_before);
+	T_LOG("deallocating owned memory while holding memory entry "
+	    "does not change phys_footprint");
+	T_EXPECT_EQ(footprint_after, footprint_expected,
+	    "deallocated %lld dirty bytes: "
+	    "footprint %lld -> %lld expected %lld delta %lld",
+	    dirty_size, footprint_before, footprint_after,
+	    footprint_expected, footprint_after - footprint_expected);
+
+	/* changing ownership of memory entry (from self to self)... */
+	get_ledger_info(&footprint_before, &pagetable_before);
+	kr = mach_memory_entry_ownership(me_port,
+#if VM_LEDGER_TAG_UNCHANGED
+	    MACH_PORT_NULL,          /* owner remains unchanged */
+	    VM_LEDGER_TAG_UNCHANGED, /* ledger-tag remains unchanged */
+#else /* VM_LEDGER_TAG_UNCHANGED */
+	    mach_task_self(),
+	    VM_LEDGER_TAG_DEFAULT,
+#endif /* VM_LEDGER_TAG_UNCHANGED */
+	    0);
+	T_QUIET;
+	T_EXPECT_EQ(kr, KERN_SUCCESS,
+	    "mach_memory_entry_ownership() error 0x%x (%s)",
+	    kr, mach_error_string(kr));
+	/* ... should not change footprint */
+	get_ledger_info(&footprint_after, &pagetable_after);
+	footprint_expected = footprint_before;
+	footprint_expected += (pagetable_after - pagetable_before);
+	T_LOG("changing ownership from self to self "
+	    "does not change phys_footprint");
+	T_EXPECT_EQ(footprint_after, footprint_expected,
+	    "changed ownership of %lld dirty bytes: "
+	    "footprint %lld -> %lld expected %lld delta %lld",
+	    dirty_size, footprint_before, footprint_after,
+	    footprint_expected, footprint_after - footprint_expected);
+
 	/* releasing the memory entry... */
 	kr = mach_port_deallocate(mach_task_self(), me_port);
 	T_QUIET;
@@ -672,11 +731,197 @@ T_DECL(phys_footprint_purgeable_ownership,
 	    footprint_expected, footprint_after - footprint_expected);
 }
 
+#if VM_LEDGER_TAG_UNCHANGED
+T_DECL(phys_footprint_multiple_purgeable_ownership,
+    "phys_footprint for owned purgeable memory (MAP_MEM_VM_SHARE)",
+    T_META_NAMESPACE(TEST_VM_NAMESPACE),
+    T_META_LTEPHASE(LTE_POSTINIT), T_META_TAG_VM_PREFERRED)
+{
+	uint64_t                footprint_before, pagetable_before;
+	uint64_t                footprint_after, pagetable_after;
+	uint64_t                footprint_expected;
+	kern_return_t           kr;
+	mach_vm_address_t       pre_vm_addr, vm_addr;
+	mach_vm_size_t          vm_size, dirty_size, me_size;
+	int                     state;
+	mach_port_t             me_port;
+
+	/* pre-warm to account for page table expansion */
+	pre_vm_addr = pre_warm(MEM_SIZE);
+
+	/* allocating purgeable virtual memory... */
+	get_ledger_info(&footprint_before, &pagetable_before);
+	vm_addr = 0;
+	vm_size = MEM_SIZE;
+	kr = mach_vm_allocate(mach_task_self(), &vm_addr, vm_size,
+	    VM_FLAGS_ANYWHERE | VM_FLAGS_PURGABLE);
+	T_QUIET;
+	T_EXPECT_EQ(kr, KERN_SUCCESS, "vm_allocate() error 0x%x (%s)",
+	    kr, mach_error_string(kr));
+	T_QUIET;
+	T_EXPECT_EQ(vm_addr, pre_vm_addr, "pre-warm mishap");
+	/* ... should not change footprint */
+	get_ledger_info(&footprint_after, &pagetable_after);
+	footprint_expected = footprint_before;
+	footprint_expected += (pagetable_after - pagetable_before);
+	T_LOG("purgeable virtual allocation does not change phys_footprint");
+	T_EXPECT_EQ(footprint_after, footprint_expected,
+	    "purgeable virtual allocation of %lld bytes: "
+	    "footprint %lld -> %lld expected %lld delta %lld",
+	    vm_size, footprint_before, footprint_after,
+	    footprint_expected, footprint_after - footprint_expected);
+
+	/* touching memory... */
+	get_ledger_info(&footprint_before, &pagetable_before);
+	dirty_size = vm_size / 2;
+	memset((char *)(uintptr_t)vm_addr, 'x', (size_t)dirty_size);
+	/* ... should increase footprint */
+	get_ledger_info(&footprint_after, &pagetable_after);
+	footprint_expected = footprint_before + dirty_size;
+	footprint_expected += (pagetable_after - pagetable_before);
+	T_LOG("modifying anonymous memory increases phys_footprint");
+	T_EXPECT_EQ(footprint_after, footprint_expected,
+	    "touched %lld bytes: "
+	    "footprint %lld -> %lld expected %lld delta %lld",
+	    dirty_size, footprint_before, footprint_after,
+	    footprint_expected, footprint_after - footprint_expected);
+
+	/* making it volatile... */
+	get_ledger_info(&footprint_before, &pagetable_before);
+	state = VM_PURGABLE_VOLATILE;
+	T_QUIET;
+	T_ASSERT_EQ(mach_vm_purgable_control(mach_task_self(),
+	    vm_addr,
+	    VM_PURGABLE_SET_STATE,
+	    &state),
+	    KERN_SUCCESS,
+	    "vm_purgable_control(VOLATILE)");
+	T_QUIET;
+	T_ASSERT_EQ(state, VM_PURGABLE_NONVOLATILE,
+	    "memory was non-volatile");
+	/* ... should decrease footprint */
+	get_ledger_info(&footprint_after, &pagetable_after);
+	footprint_expected = footprint_before - dirty_size;
+	footprint_expected += (pagetable_after - pagetable_before);
+	T_LOG("making volatile decreases phys_footprint");
+	T_EXPECT_EQ(footprint_after, footprint_expected,
+	    "made volatile %lld dirty bytes: "
+	    "footprint %lld -> %lld expected %lld delta %lld",
+	    dirty_size, footprint_before, footprint_after,
+	    footprint_expected, footprint_after - footprint_expected);
+
+	/* making it non-volatile... */
+	get_ledger_info(&footprint_before, &pagetable_before);
+	state = VM_PURGABLE_NONVOLATILE;
+	T_QUIET;
+	T_ASSERT_EQ(mach_vm_purgable_control(mach_task_self(),
+	    vm_addr,
+	    VM_PURGABLE_SET_STATE,
+	    &state),
+	    KERN_SUCCESS,
+	    "vm_purgable_control(NONVOLATILE)");
+	T_QUIET;
+	T_ASSERT_EQ(state, VM_PURGABLE_VOLATILE,
+	    "memory was volatile");
+	/* ... should increase footprint */
+	get_ledger_info(&footprint_after, &pagetable_after);
+	footprint_expected = footprint_before + dirty_size;
+	footprint_expected += (pagetable_after - pagetable_before);
+	T_LOG("making non-volatile increases phys_footprint");
+	T_EXPECT_EQ(footprint_after, footprint_expected,
+	    "made non-volatile %lld dirty bytes: "
+	    "footprint %lld -> %lld expected %lld delta %lld",
+	    dirty_size, footprint_before, footprint_after,
+	    footprint_expected, footprint_after - footprint_expected);
+
+	/* making a memory entry... */
+	get_ledger_info(&footprint_before, &pagetable_before);
+	me_size = vm_size;
+	me_port = MACH_PORT_NULL;
+	kr = mach_make_memory_entry_64(mach_task_self(),
+	    &me_size,
+	    vm_addr,
+	    MAP_MEM_VM_SHARE | VM_PROT_READ | VM_PROT_WRITE,
+	    &me_port,
+	    MACH_PORT_NULL);
+	T_QUIET;
+	T_EXPECT_EQ(kr, KERN_SUCCESS, "make_memory_entry() error 0x%x (%s)",
+	    kr, mach_error_string(kr));
+	T_QUIET;
+	T_EXPECT_EQ(me_size, vm_size, "memory entry size mismatch");
+	/* ... should not change footprint */
+	get_ledger_info(&footprint_after, &pagetable_after);
+	footprint_expected = footprint_before;
+	footprint_expected += (pagetable_after - pagetable_before);
+	T_LOG("making a memory entry does not change phys_footprint");
+	T_EXPECT_EQ(footprint_after, footprint_expected,
+	    "making a memory entry of %lld bytes: "
+	    "footprint %lld -> %lld expected %lld delta %lld",
+	    vm_size, footprint_before, footprint_after,
+	    footprint_expected, footprint_after - footprint_expected);
+
+	/* deallocating memory while holding memory entry... */
+	get_ledger_info(&footprint_before, &pagetable_before);
+	kr = mach_vm_deallocate(mach_task_self(), vm_addr, vm_size);
+	T_QUIET;
+	T_EXPECT_EQ(kr, KERN_SUCCESS, "vm_deallocate() error 0x%x (%s)",
+	    kr, mach_error_string(kr));
+	/* ... should not change footprint */
+	get_ledger_info(&footprint_after, &pagetable_after);
+	footprint_expected = footprint_before;
+	footprint_expected += (pagetable_after - pagetable_before);
+	T_LOG("deallocating owned memory while holding memory entry "
+	    "does not change phys_footprint");
+	T_EXPECT_EQ(footprint_after, footprint_expected,
+	    "deallocated %lld dirty bytes: "
+	    "footprint %lld -> %lld expected %lld delta %lld",
+	    dirty_size, footprint_before, footprint_after,
+	    footprint_expected, footprint_after - footprint_expected);
+
+	/* changing ownership of memory entry (from self to self)... */
+	get_ledger_info(&footprint_before, &pagetable_before);
+	kr = mach_memory_entry_ownership(me_port,
+	    MACH_PORT_NULL,          /* owner remains unchanged */
+	    VM_LEDGER_TAG_UNCHANGED, /* ledger-tag remains unchanged */
+	    0);
+	T_QUIET;
+	T_EXPECT_EQ(kr, KERN_SUCCESS,
+	    "mach_memory_entry_ownership() error 0x%x (%s)",
+	    kr, mach_error_string(kr));
+	/* ... should not change footprint */
+	get_ledger_info(&footprint_after, &pagetable_after);
+	footprint_expected = footprint_before;
+	footprint_expected += (pagetable_after - pagetable_before);
+	T_LOG("changing ownership from self to self "
+	    "does not change phys_footprint");
+	T_EXPECT_EQ(footprint_after, footprint_expected,
+	    "changed ownership of %lld dirty bytes: "
+	    "footprint %lld -> %lld expected %lld delta %lld",
+	    dirty_size, footprint_before, footprint_after,
+	    footprint_expected, footprint_after - footprint_expected);
+
+	/* releasing the memory entry... */
+	kr = mach_port_deallocate(mach_task_self(), me_port);
+	T_QUIET;
+	T_EXPECT_EQ(kr, KERN_SUCCESS, "mach_port_deallocate() error 0x%x (%s)",
+	    kr, mach_error_string(kr));
+	/* ... should decrease footprint */
+	get_ledger_info(&footprint_after, &pagetable_after);
+	footprint_expected = footprint_before - dirty_size;
+	footprint_expected += (pagetable_after - pagetable_before);
+	T_LOG("releasing memory entry decreases phys_footprint");
+	T_EXPECT_EQ(footprint_after, footprint_expected,
+	    "made volatile %lld dirty bytes: "
+	    "footprint %lld -> %lld expected %lld delta %lld",
+	    dirty_size, footprint_before, footprint_after,
+	    footprint_expected, footprint_after - footprint_expected);
+}
+#endif /* VM_LEDGER_TAG_UNCHANGED */
+
 #ifdef MAP_MEM_LEDGER_TAGGED
 T_DECL(phys_footprint_ledger_purgeable_owned,
     "phys_footprint for ledger-tagged purgeable memory ownership",
-    T_META_NAMESPACE(TEST_VM_NAMESPACE),
-    T_META_LTEPHASE(LTE_POSTINIT))
+    T_META_LTEPHASE(LTE_POSTINIT), T_META_TAG_VM_PREFERRED)
 {
 	uint64_t                footprint_before, pagetable_before;
 	uint64_t                footprint_after, pagetable_after;
@@ -848,8 +1093,7 @@ T_DECL(phys_footprint_ledger_purgeable_owned,
 
 T_DECL(phys_footprint_ledger_owned,
     "phys_footprint for ledger-tagged memory ownership",
-    T_META_NAMESPACE(TEST_VM_NAMESPACE),
-    T_META_LTEPHASE(LTE_POSTINIT))
+    T_META_LTEPHASE(LTE_POSTINIT), T_META_TAG_VM_PREFERRED)
 {
 	uint64_t                footprint_before, pagetable_before;
 	uint64_t                footprint_after, pagetable_after;
@@ -962,6 +1206,172 @@ T_DECL(phys_footprint_ledger_owned,
 	footprint_expected = footprint_before - dirty_size;
 	footprint_expected += (pagetable_after - pagetable_before);
 	T_LOG("releasing memory entry decreases phys_footprint");
+	T_EXPECT_EQ(footprint_after, footprint_expected,
+	    "made volatile %lld dirty bytes: "
+	    "footprint %lld -> %lld expected %lld delta %lld",
+	    dirty_size, footprint_before, footprint_after,
+	    footprint_expected, footprint_after - footprint_expected);
+}
+
+T_DECL(phys_footprint_no_footprint_for_debug,
+    "phys_footprint for no_footprint_for_debug",
+    T_META_LTEPHASE(LTE_POSTINIT), T_META_TAG_VM_PREFERRED)
+{
+	uint64_t                footprint_before, pagetable_before;
+	uint64_t                footprint_after, pagetable_after;
+	uint64_t                footprint_expected;
+	kern_return_t           kr;
+	mach_vm_address_t       pre_vm_addr, vm_addr;
+	mach_vm_size_t          vm_size, dirty_size, me_size;
+	mach_port_t             me_port;
+	int                     new_value, ret;
+
+	/* pre-warm to account for page table expansion */
+	pre_vm_addr = pre_warm(MEM_SIZE);
+
+	/* making a memory entry... */
+	get_ledger_info(&footprint_before, &pagetable_before);
+	vm_size = MEM_SIZE;
+	me_size = vm_size;
+	me_port = MACH_PORT_NULL;
+	kr = mach_make_memory_entry_64(mach_task_self(),
+	    &me_size,
+	    0,
+	    (MAP_MEM_NAMED_CREATE |
+	    MAP_MEM_LEDGER_TAGGED |
+	    VM_PROT_READ | VM_PROT_WRITE),
+	    &me_port,
+	    MACH_PORT_NULL);
+	T_QUIET;
+	T_EXPECT_EQ(kr, KERN_SUCCESS, "make_memory_entry() error 0x%x (%s)",
+	    kr, mach_error_string(kr));
+	T_QUIET;
+	T_EXPECT_EQ(me_size, vm_size, "memory entry size mismatch");
+	/* ... should not change footprint */
+	get_ledger_info(&footprint_after, &pagetable_after);
+	footprint_expected = footprint_before;
+	footprint_expected += (pagetable_after - pagetable_before);
+	T_LOG("making a memory entry does not change phys_footprint");
+	T_EXPECT_EQ(footprint_after, footprint_expected,
+	    "making a memory entry of %lld bytes: "
+	    "footprint %lld -> %lld expected %lld delta %lld",
+	    vm_size, footprint_before, footprint_after,
+	    footprint_expected, footprint_after - footprint_expected);
+
+	/* pretending to call from the kernel should fail */
+	kr = mach_memory_entry_ownership(me_port,
+	    mach_task_self(),
+	    VM_LEDGER_TAG_DEFAULT,
+	    VM_LEDGER_FLAG_FROM_KERNEL);
+	T_QUIET;
+	T_EXPECT_EQ(kr, KERN_INVALID_ARGUMENT,
+	    "mach_memory_entry_ownership(FROM_KERNEL) fails");
+
+	/* trying to hide debug memory from footprint while not allowed */
+	kr = mach_memory_entry_ownership(me_port,
+	    mach_task_self(),
+	    VM_LEDGER_TAG_DEFAULT,
+	    VM_LEDGER_FLAG_NO_FOOTPRINT_FOR_DEBUG);
+	T_QUIET;
+	T_EXPECT_EQ(kr, KERN_NO_ACCESS,
+	    "mach_memory_entry_ownership(NO_FOOTPRINT_FOR_DEBUG) fails without sysctl");
+
+	/* let's get permission to hide debug memory */
+	new_value = 1;
+	ret = sysctlbyname("vm.task_no_footprint_for_debug", NULL, NULL, &new_value, sizeof(new_value));
+	if (ret == -1 && errno == ENOENT) {
+		T_SKIP("sysctlbyname(vm.task_no_footprint_for_debug) ENOENT");
+	}
+	T_QUIET;
+	T_ASSERT_POSIX_SUCCESS(ret, "sysctlbyname(vm.task_no_footprint_for_debug)");
+
+	/* trying to hide debug memory from footprint while allowed */
+	task_id_token_t token;
+	kr = task_create_identity_token(mach_task_self(), &token);
+	T_QUIET;
+	T_ASSERT_EQ(kr, KERN_SUCCESS,
+	    "task_create_identity_token");
+
+	kr = mach_memory_entry_ownership(me_port,
+	    token, /* this time also try calling it with id token */
+	    VM_LEDGER_TAG_DEFAULT,
+	    VM_LEDGER_FLAG_NO_FOOTPRINT_FOR_DEBUG);
+	T_QUIET;
+	T_EXPECT_EQ(kr, KERN_SUCCESS,
+	    "mach_memory_entry_ownership(NO_FOOTPRINT_FOR_DEBUG) succeeds after sysctl");
+	mach_port_deallocate(mach_task_self(), token);
+
+	/* mapping ledger-tagged virtual memory... */
+	get_ledger_info(&footprint_before, &pagetable_before);
+	vm_addr = 0;
+	kr = mach_vm_map(mach_task_self(), &vm_addr, vm_size,
+	    0, /* mask */
+	    VM_FLAGS_ANYWHERE,
+	    me_port,
+	    0, /* offset */
+	    FALSE, /* copy */
+	    VM_PROT_READ | VM_PROT_WRITE,
+	    VM_PROT_READ | VM_PROT_WRITE,
+	    VM_INHERIT_DEFAULT);
+	T_QUIET;
+	T_EXPECT_EQ(kr, KERN_SUCCESS, "vm_map() error 0x%x (%s)",
+	    kr, mach_error_string(kr));
+	T_QUIET;
+	T_EXPECT_EQ(vm_addr, pre_vm_addr, "pre-warm mishap");
+	/* ... should not change footprint */
+	get_ledger_info(&footprint_after, &pagetable_after);
+	footprint_expected = footprint_before;
+	footprint_expected += (pagetable_after - pagetable_before);
+	T_LOG("mapping ledger-tagged memory does not change phys_footprint");
+	T_EXPECT_EQ(footprint_after, footprint_expected,
+	    "ledger-tagged mapping of %lld bytes: "
+	    "footprint %lld -> %lld expected %lld delta %lld",
+	    vm_size, footprint_before, footprint_after,
+	    footprint_expected, footprint_after - footprint_expected);
+
+	/* touching memory... */
+	get_ledger_info(&footprint_before, &pagetable_before);
+	dirty_size = vm_size / 2;
+	memset((char *)(uintptr_t)vm_addr, 'x', (size_t)dirty_size);
+	/* ... should not increase footprint */
+	get_ledger_info(&footprint_after, &pagetable_after);
+	footprint_expected = footprint_before;
+	footprint_expected += (pagetable_after - pagetable_before);
+	T_LOG("modifying no_footprint_for_debug memory does not increase phys_footprint");
+	T_EXPECT_EQ(footprint_after, footprint_expected,
+	    "touched %lld bytes: "
+	    "footprint %lld -> %lld expected %lld delta %lld",
+	    dirty_size, footprint_before, footprint_after,
+	    footprint_expected, footprint_after - footprint_expected);
+
+	/* deallocating memory while holding memory entry... */
+	get_ledger_info(&footprint_before, &pagetable_before);
+	kr = mach_vm_deallocate(mach_task_self(), vm_addr, vm_size);
+	T_QUIET;
+	T_EXPECT_EQ(kr, KERN_SUCCESS, "vm_deallocate() error 0x%x (%s)",
+	    kr, mach_error_string(kr));
+	/* ... should not change footprint */
+	get_ledger_info(&footprint_after, &pagetable_after);
+	footprint_expected = footprint_before;
+	footprint_expected += (pagetable_after - pagetable_before);
+	T_LOG("deallocating owned memory while holding memory entry "
+	    "does not change phys_footprint");
+	T_EXPECT_EQ(footprint_after, footprint_expected,
+	    "deallocated %lld dirty bytes: "
+	    "footprint %lld -> %lld expected %lld delta %lld",
+	    dirty_size, footprint_before, footprint_after,
+	    footprint_expected, footprint_after - footprint_expected);
+
+	/* releasing the memory entry... */
+	kr = mach_port_deallocate(mach_task_self(), me_port);
+	T_QUIET;
+	T_EXPECT_EQ(kr, KERN_SUCCESS, "mach_port_deallocate() error 0x%x (%s)",
+	    kr, mach_error_string(kr));
+	/* ... should not change footprint */
+	get_ledger_info(&footprint_after, &pagetable_after);
+	footprint_expected = footprint_before;
+	footprint_expected += (pagetable_after - pagetable_before);
+	T_LOG("releasing memory entry does not change phys_footprint");
 	T_EXPECT_EQ(footprint_after, footprint_expected,
 	    "made volatile %lld dirty bytes: "
 	    "footprint %lld -> %lld expected %lld delta %lld",
@@ -1148,8 +1558,7 @@ CreateSurface(uint32_t pixelsWide, uint32_t pixelsHigh, uint32_t rowBytesAlignme
 }
 T_DECL(phys_footprint_purgeable_iokit,
     "phys_footprint for purgeable IOKit memory",
-    T_META_NAMESPACE(TEST_VM_NAMESPACE),
-    T_META_LTEPHASE(LTE_POSTINIT))
+    T_META_LTEPHASE(LTE_POSTINIT), T_META_TAG_VM_PREFERRED)
 {
 	uint64_t        footprint_before, pagetable_before;
 	uint64_t        footprint_after, pagetable_after;
@@ -1276,8 +1685,7 @@ T_DECL(phys_footprint_purgeable_iokit,
 #if (TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR)
 T_DECL(phys_footprint_nonpurgeable_iokit,
     "phys_footprint for non-purgeable IOKit memory",
-    T_META_NAMESPACE(TEST_VM_NAMESPACE),
-    T_META_LTEPHASE(LTE_POSTINIT))
+    T_META_LTEPHASE(LTE_POSTINIT), T_META_TAG_VM_PREFERRED)
 {
 	uint64_t        footprint_before, pagetable_before;
 	uint64_t        footprint_after, pagetable_after;
@@ -1405,3 +1813,43 @@ T_DECL(phys_footprint_nonpurgeable_iokit,
 	    footprint_expected, footprint_after - footprint_expected);
 }
 #endif /* (TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR) */
+
+#if 0
+#if LEGACY_FOOTPRINT_ENTITLED && defined(__arm64__)
+T_DECL(legacy_footprint_entitled_set_and_query,
+    "legacy footprint entitled is sticky with memlimit set properties and can be queried",
+    T_META_BOOTARGS_SET("legacy_footprint_entitlement_mode=3"), T_META_TAG_VM_PREFERRED)
+{
+	int ret;
+	int32_t max_task_pmem = 0, legacy_footprint_bonus_mb = 0;
+	size_t size_max_task_pmem = sizeof(max_task_pmem);
+	size_t size_legacy_footprint_bonus_mb = sizeof(legacy_footprint_bonus_mb);
+	memorystatus_memlimit_properties2_t mmprops;
+
+	/* Get the default limit */
+	ret = sysctlbyname("kern.max_task_pmem", &max_task_pmem, &size_max_task_pmem, NULL, 0);
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(ret, "call sysctlbyname to get max task physical memory.");
+
+	ret = sysctlbyname("kern.legacy_footprint_bonus_mb", &legacy_footprint_bonus_mb,
+	    &size_legacy_footprint_bonus_mb, NULL, 0);
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(ret, "call sysctlbyname to get the bonus value.");
+
+	mmprops.v1.memlimit_active = -1;
+	mmprops.v1.memlimit_inactive = -1;
+	ret = memorystatus_control(MEMORYSTATUS_CMD_SET_MEMLIMIT_PROPERTIES, getpid(), 0, &mmprops.v1, sizeof(mmprops.v1));
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(ret, "memorystatus_control");
+
+	/* Check our memlimt */
+	ret = memorystatus_control(MEMORYSTATUS_CMD_GET_MEMLIMIT_PROPERTIES, getpid(), 0, &mmprops, sizeof(mmprops));
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(ret, "memorystatus_control");
+
+	T_QUIET; T_ASSERT_EQ(mmprops.v1.memlimit_active, max_task_pmem + legacy_footprint_bonus_mb, "active limit");
+	T_QUIET; T_ASSERT_EQ(mmprops.v1.memlimit_inactive, max_task_pmem + legacy_footprint_bonus_mb, "inactive limit");
+
+	/* Verify MEMORYSTATUS_CMD_CONVERT_MEMLIMIT_MB */
+	ret = memorystatus_control(MEMORYSTATUS_CMD_CONVERT_MEMLIMIT_MB, getpid(), (uint32_t) -1, NULL, 0);
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(ret, "memorystatus_control");
+	T_QUIET; T_ASSERT_EQ(ret, max_task_pmem + legacy_footprint_bonus_mb, "got bonus adjustment");
+}
+#endif /* LEGACY_FOOTPRINT_ENTITLED && defined(__arm64__) */
+#endif

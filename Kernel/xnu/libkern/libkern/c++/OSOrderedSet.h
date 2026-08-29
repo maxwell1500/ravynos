@@ -36,7 +36,7 @@
 class OSOffset;
 class OSOrderedSet;
 
-typedef OSPtr<OSOrderedSet> OSOrderedSetPtr;
+typedef OSOrderedSet* OSOrderedSetPtr;
 
 /*!
  * @header
@@ -124,6 +124,9 @@ public:
 	    const OSMetaClassBase * obj2,
 	    void * context);
 
+	typedef int32_t (^OSOrderBlock)(const OSMetaClassBase * obj1,
+	    const OSMetaClassBase * obj2);
+
 protected:
 	struct _Element * array;
 	OSOrderFunction   ordering;
@@ -184,10 +187,14 @@ public:
  * See
  * <code>@link getOrderingRef getOrderingRef@/link</code>.
  */
-	static OSOrderedSetPtr withCapacity(
+	static OSPtr<OSOrderedSet> withCapacity(
 		unsigned int      capacity,
 		OSOrderFunction   orderFunc = NULL,
 		void            * orderingContext = NULL);
+
+	static OSPtr<OSOrderedSet> withCapacity(
+		unsigned int      capacity,
+		OSOrderBlock      orderBlock);
 
 
 /*!
@@ -409,6 +416,8 @@ public:
  */
 	virtual bool setObject(const OSMetaClassBase * anObject);
 
+	bool setObject(OSSharedPtr<const OSMetaClassBase> const& anObject);
+
 
 /*!
  * @function setFirstObject
@@ -442,6 +451,8 @@ public:
  * containsObject(const OSMetaClassBase *)@/link</code>.
  */
 	virtual bool setFirstObject(const OSMetaClassBase * anObject);
+
+	bool setFirstObject(OSSharedPtr<const OSMetaClassBase> const& anObject);
 
 
 /*!
@@ -477,6 +488,8 @@ public:
  */
 	virtual bool setLastObject(const OSMetaClassBase * anObject);
 
+	bool setLastObject(OSSharedPtr<const OSMetaClassBase> const& anObject);
+
 
 /*!
  * @function removeObject
@@ -491,6 +504,8 @@ public:
  * The object removed from the ordered set is released.
  */
 	virtual void removeObject(const OSMetaClassBase * anObject);
+
+	void removeObject(OSSharedPtr<const OSMetaClassBase> const& anObject);
 
 
 /*!
@@ -632,6 +647,10 @@ public:
 		unsigned int            index,
 		const OSMetaClassBase * anObject);
 
+	bool setObject(
+		unsigned int            index,
+		OSSharedPtr<const OSMetaClassBase> const& anObject);
+
 
 /*!
  * @function getObject
@@ -757,7 +776,7 @@ public:
  * Objects that are not derived from OSCollection are retained
  * rather than copied.
  */
-	OSCollectionPtr copyCollection(OSDictionary * cycleDict = NULL) APPLE_KEXT_OVERRIDE;
+	OSPtr<OSCollection> copyCollection(OSDictionary * cycleDict = NULL) APPLE_KEXT_OVERRIDE;
 
 	OSMetaClassDeclareReservedUnused(OSOrderedSet, 0);
 	OSMetaClassDeclareReservedUnused(OSOrderedSet, 1);

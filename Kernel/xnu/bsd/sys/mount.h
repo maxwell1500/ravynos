@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2021 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -87,6 +87,9 @@
 #endif
 
 #include <sys/_types/_fsid_t.h> /* file system id type */
+#include <sys/_types/_graftdmg_un.h>
+#include <sys/_types/_mount_t.h>
+#include <sys/_types/_vnode_t.h>
 
 /*
  * file system statistics
@@ -102,6 +105,7 @@
 #endif /* __DARWIN_64_BIT_INO_T */
 
 #define MNT_EXT_ROOT_DATA_VOL      0x00000001      /* Data volume of root volume group */
+#define MNT_EXT_FSKIT              0x00000002      /* this is an FSKit mount */
 
 #define __DARWIN_STRUCT_STATFS64 { \
 	uint32_t	f_bsize;        /* fundamental file system block size */ \
@@ -330,6 +334,7 @@ struct vfs_attr {
 #define MNT_NOUSERXATTR 0x01000000      /* Don't allow user extended attributes */
 #define MNT_DEFWRITE    0x02000000      /* filesystem should defer writes */
 #define MNT_MULTILABEL  0x04000000      /* MAC support for individual labels */
+#define MNT_NOFOLLOW    0x08000000      /* don't follow symlink when resolving mount point */
 #define MNT_NOATIME             0x10000000      /* disable update of file access time */
 #define MNT_SNAPSHOT    0x40000000 /* The mount is a snapshot */
 #define MNT_STRICTATIME 0x80000000      /* enable strict update of file access time */
@@ -352,7 +357,8 @@ struct vfs_attr {
 	                MNT_ROOTFS	| MNT_DOVOLFS	| MNT_DONTBROWSE | \
 	                MNT_IGNORE_OWNERSHIP | MNT_AUTOMOUNTED | MNT_JOURNALED | \
 	                MNT_NOUSERXATTR | MNT_DEFWRITE	| MNT_MULTILABEL | \
-	                MNT_NOATIME | MNT_STRICTATIME | MNT_SNAPSHOT | MNT_CPROTECT)
+	                MNT_NOFOLLOW | MNT_NOATIME | MNT_STRICTATIME | \
+	                MNT_SNAPSHOT | MNT_CPROTECT)
 /*
  * External filesystem command modifier flags.
  * Unmount can use the MNT_FORCE flag.
@@ -397,13 +403,6 @@ struct vfs_attr {
 #define MNT_VOLUME      8       /* sync on a single mounted filesystem  */
 #endif
 
-
-#if !defined(KERNEL) && !defined(_KERN_SYS_KERNELTYPES_H_) /* also defined in kernel_types.h */
-struct mount;
-typedef struct mount * mount_t;
-struct vnode;
-typedef struct vnode * vnode_t;
-#endif
 
 /* Reserved fields preserve binary compatibility */
 struct vfsconf {
@@ -456,7 +455,7 @@ union union_vfsidctl { /* the fields vc_vers and vc_fsid are compatible */
  * New style VFS sysctls, do not reuse/conflict with the namespace for
  * private sysctls.
  */
-#define VFS_CTL_STATFS  0x00010001      /* statfs */
+#define VFS_CTL_OSTATFS 0x00010001      /* old legacy statfs */
 #define VFS_CTL_UMOUNT  0x00010002      /* unmount */
 #define VFS_CTL_QUERY   0x00010003      /* anything wrong? (vfsquery) */
 #define VFS_CTL_NEWADDR 0x00010004      /* reconnect to new address */
@@ -466,6 +465,19 @@ union union_vfsidctl { /* the fields vc_vers and vc_fsid are compatible */
 #define VFS_CTL_DISC    0x00010008      /* server disconnected */
 #define VFS_CTL_SERVERINFO  0x00010009  /* information about fs server */
 #define VFS_CTL_NSTATUS 0x0001000A      /* netfs mount status */
+#define VFS_CTL_STATFS64 0x0001000B     /* statfs64 */
+
+#ifndef KERNEL
+/*
+ * Automatically select the correct VFS_CTL_*STATFS* flavor based
+ * on what "struct statfs" layout the client will use.
+ */
+#if __DARWIN_64_BIT_INO_T
+#define VFS_CTL_STATFS  VFS_CTL_STATFS64
+#else
+#define VFS_CTL_STATFS  VFS_CTL_OSTATFS
+#endif
+#endif /* ! KERNEL */
 
 struct vfsquery {
 	u_int32_t       vq_flags;
@@ -505,7 +517,8 @@ struct netfs_status {
 #define VQ_NEARLOWDISK          0x2000  /* Above lowdisk and below desired disk space */
 #define VQ_DESIRED_DISK         0x4000  /* the desired disk space */
 #define VQ_FREE_SPACE_CHANGE    0x8000  /* free disk space has significantly changed */
-#define VQ_FLAG10000    0x10000  /* placeholder */
+#define VQ_PURGEABLE_SPACE_CHANGE  0x10000  /* purgeable disk space has significantly changed */
+#define VQ_FLAG20000    0x20000  /* placeholder */
 
 
 #ifdef KERNEL
@@ -566,7 +579,7 @@ struct vfs_fsentry {
 
 struct vfsops {
 	/*!
-	 *  @function vfs_mount
+	 *  @field vfs_mount
 	 *  @abstract Perform filesystem-specific operations required for mounting.
 	 *  @discussion Typical operations include setting the mount-specific data with vfs_setfsprivate().
 	 *  Note that if a mount call fails, the filesystem must clean up any state it has constructed, because
@@ -581,7 +594,7 @@ struct vfsops {
 	int  (*vfs_mount)(struct mount *mp, vnode_t devvp, user_addr_t data, vfs_context_t context);
 
 	/*!
-	 *  @function vfs_start
+	 *  @field vfs_start
 	 *  @abstract Mark a mount as ready to be used.
 	 *  @discussion After receiving this calldown, a filesystem will be hooked into the mount list and should expect
 	 *  calls down from the VFS layer.
@@ -593,7 +606,7 @@ struct vfsops {
 	int  (*vfs_start)(struct mount *mp, int flags, vfs_context_t context);
 
 	/*!
-	 *  @function vfs_unmount
+	 *  @field vfs_unmount
 	 *  @abstract Perform filesystem-specific cleanup as part of unmount.
 	 *  @discussion If the unmount downcall succeeds, VFS considers itself authorized to destroy all
 	 *  state related to the mount.
@@ -605,7 +618,7 @@ struct vfsops {
 	int  (*vfs_unmount)(struct mount *mp, int mntflags, vfs_context_t context);
 
 	/*!
-	 *  @function vfs_root
+	 *  @field vfs_root
 	 *  @abstract Get the root vnode of a filesystem.
 	 *  @discussion Upon success, should return with an iocount held on the root vnode which the caller will
 	 *  drop with vnode_put().
@@ -617,7 +630,7 @@ struct vfsops {
 	int  (*vfs_root)(struct mount *mp, struct vnode **vpp, vfs_context_t context);
 
 	/*!
-	 *  @function vfs_quotactl
+	 *  @field vfs_quotactl
 	 *  @abstract Manipulate quotas for a volume.
 	 *  @param mp Mount for which to manipulate quotas.
 	 *  @param cmds Detailed in "quotactl" manual page.
@@ -629,31 +642,31 @@ struct vfsops {
 	int  (*vfs_quotactl)(struct mount *mp, int cmds, uid_t uid, caddr_t arg, vfs_context_t context);
 
 	/*!
-	 *  @function vfs_getattr
+	 *  @field vfs_getattr
 	 *  @abstract Get filesystem attributes.
 	 *  @discussion See VFSATTR_RETURN, VFSATTR_ACTIVE, VFSATTR_SET_SUPPORTED, VFSATTR_WANTED macros.
 	 *  @param mp Mount for which to get parameters.
 	 *  @param vfa Container for specifying which attributes are desired and which attributes the filesystem
 	 *  supports, as well as for returning results.
-	 *  @param ctx Context to authenticate for getting filesystem attributes.
+	 *  @param context Context to authenticate for getting filesystem attributes.
 	 *  @return 0 for success, else an error code.
 	 */
-	int  (*vfs_getattr)(struct mount *mp, struct vfs_attr *, vfs_context_t context);
+	int  (*vfs_getattr)(struct mount *mp, struct vfs_attr *vfa, vfs_context_t context);
 /*	int  (*vfs_statfs)(struct mount *mp, struct vfsstatfs *sbp, vfs_context_t context);*/
 
 	/*!
-	 *  @function vfs_sync
+	 *  @field vfs_sync
 	 *  @abstract Flush all filesystem data to backing store.
 	 *  @discussion vfs_sync will be called as part of the sync() system call and during unmount.
 	 *  @param mp Mountpoint to sync.
 	 *  @param waitfor MNT_WAIT: flush synchronously, waiting for all data to be written before returning. MNT_NOWAIT: start I/O but do not wait for it.
-	 *  @param ctx Context to authenticate for the sync.
+	 *  @param context Context to authenticate for the sync.
 	 *  @return 0 for success, else an error code.
 	 */
 	int  (*vfs_sync)(struct mount *mp, int waitfor, vfs_context_t context);
 
 	/*!
-	 *  @function vfs_vget
+	 *  @field vfs_vget
 	 *  @abstract Get a vnode by file id (inode number).
 	 *  @discussion This routine is chiefly used to build paths to vnodes.  Result should be turned with an iocount that the
 	 *  caller will drop with vnode_put().
@@ -665,7 +678,7 @@ struct vfsops {
 	int  (*vfs_vget)(struct mount *mp, ino64_t ino, struct vnode **vpp, vfs_context_t context);
 
 	/*!
-	 *  @function vfs_fhtovp
+	 *  @field vfs_fhtovp
 	 *  @abstract Get the vnode corresponding to a file handle.
 	 *  @discussion Filesystems can return handles to files which are independent of their (transient) vnode identities.
 	 *  vfs_thtovp converts that persistent handle back to a vnode.  The vnode should be returned with an iocount which
@@ -674,39 +687,39 @@ struct vfsops {
 	 *  @param fhlen Size of file handle structure, as returned by vfs_vptofh.
 	 *  @param fhp Pointer to handle.
 	 *  @param vpp Destination for vnode.
-	 *  @param ctx Context against which to authenticate the file-handle conversion.
+	 *  @param context Context against which to authenticate the file-handle conversion.
 	 *  @return 0 for success, else an error code.
 	 */
 	int  (*vfs_fhtovp)(struct mount *mp, int fhlen, unsigned char *fhp, struct vnode **vpp,
 	    vfs_context_t context);
 
 	/*!
-	 *  @function vfs_vptofh
+	 *  @field vfs_vptofh
 	 *  @abstract Get a persistent handle corresponding to a vnode.
-	 *  @param mp Mount against which to convert the vnode to a handle.
+	 *  @param vp Vnode against which to obtain the file-handle
 	 *  @param fhlen Size of buffer provided for handle; set to size of actual handle returned.
 	 *  @param fhp Pointer to buffer in which to place handle data.
-	 *  @param ctx Context against which to authenticate the file-handle request.
+	 *  @param context Context against which to authenticate the file-handle request.
 	 *  @return 0 for success, else an error code.
 	 */
 	int  (*vfs_vptofh)(struct vnode *vp, int *fhlen, unsigned char *fhp, vfs_context_t context);
 
 	/*!
-	 *  @function vfs_init
+	 *  @field vfs_init
 	 *  @abstract Prepare a filesystem for having instances mounted.
 	 *  @discussion This routine is called once, before any particular instance of a filesystem
 	 *  is mounted; it allows the filesystem to initialize whatever global data structures
 	 *  are shared across all mounts.  If this returns successfully, a filesystem should be ready to have
 	 *  instances mounted.
-	 *  @param vfsconf Configuration information.  Currently, the only useful data are the filesystem name,
+	 *  @param vfsc Configuration information.  Currently, the only useful data are the filesystem name,
 	 *  typenum, and flags.  The flags field will be either 0 or MNT_LOCAL.  Many filesystems ignore this
 	 *  parameter.
 	 *  @return 0 for success, else an error code.
 	 */
-	int  (*vfs_init)(struct vfsconf *);
+	int  (*vfs_init)(struct vfsconf *vfsc);
 
 	/*!
-	 *  @function vfs_sysctl
+	 *  @field vfs_sysctl
 	 *  @abstract Broad interface for querying and controlling filesystem.
 	 *  @discussion VFS defines VFS_CTL_QUERY as a generic status request which is answered
 	 *  with the VQ_* macros in a "struct vfsquery."
@@ -718,7 +731,7 @@ struct vfsops {
 	int  (*vfs_sysctl)(int *, u_int, user_addr_t, size_t *, user_addr_t, size_t, vfs_context_t context);
 
 	/*!
-	 *  @function vfs_setattr
+	 *  @field vfs_setattr
 	 *  @abstract Set filesystem attributes.
 	 *  @discussion The other side of the vfs_getattr coin.  Currently only called to set volume name.
 	 *  @param mp Mount on which to set attributes.
@@ -727,10 +740,10 @@ struct vfsops {
 	 *  @param context Context against which to authenticate attribute change.
 	 *  @return 0 for success, else an error code.
 	 */
-	int  (*vfs_setattr)(struct mount *mp, struct vfs_attr *, vfs_context_t context);
+	int  (*vfs_setattr)(struct mount *mp, struct vfs_attr *vfa, vfs_context_t context);
 
 	/*!
-	 *  @function vfs_ioctl
+	 *  @field vfs_ioctl
 	 *  @abstract File system control operations.
 	 *  @discussion  Unlike vfs_sysctl, this is specific to a particular volume.
 	 *  @param mp The mount to execute the command on.
@@ -741,14 +754,14 @@ struct vfsops {
 	 *  If it is an address, it is valid and resides in the kernel; callers of
 	 *  VFS_IOCTL() are responsible for copying to and from userland.
 	 *  @param flags Reserved for future use, set to zero
-	 *  @param ctx Context against which to authenticate ioctl request.
+	 *  @param context Context against which to authenticate ioctl request.
 	 *  @return 0 for success, else an error code.
 	 */
 	int  (*vfs_ioctl)(struct mount *mp, u_long command, caddr_t data,
 	    int flags, vfs_context_t context);
 
 	/*!
-	 *  @function vfs_vget_snapdir
+	 *  @field vfs_vget_snapdir
 	 *  @abstract Get the vnode for the snapshot directory of a filesystem.
 	 *  @discussion Upon success, should return with an iocount held on the root vnode which the caller will
 	 *  drop with vnode_put().
@@ -795,10 +808,16 @@ typedef struct fs_role_mount_args {
 
 OS_ENUM(vfs_roles, uint32_t,
     VFS_SYSTEM_ROLE = 1,
+    VFS_RECOVERY_ROLE = 4,
     VFS_VM_ROLE = 8,
+    VFS_PREBOOT_ROLE = 16,
     VFS_DATA_ROLE = 64);
 
 #define VFSIOC_MOUNT_BYROLE  _IOW('V', 4, fs_role_mount_args_t)
+
+// When this is defined, it is safe to use VFS_RECOVERY_ROLE and
+// VFS_PREBOOT_ROLE.
+#define VFSIOC_MOUNT_BYROLE_has_recovery 1
 
 #endif /* KERNEL */
 
@@ -1045,14 +1064,18 @@ void    vfs_clearextendedsecurity(mount_t mp);
  *  @abstract Mark a filesystem as unable to use swap files.
  *  @param mp Mount to mark.
  */
+#ifdef KERNEL_PRIVATE
 void    vfs_setnoswap(mount_t mp);
+#endif
 
 /*!
  *  @function vfs_clearnoswap
  *  @abstract Mark a filesystem as capable of using swap files.
  *  @param mp Mount to mark.
  */
+#ifdef KERNEL_PRIVATE
 void    vfs_clearnoswap(mount_t mp);
+#endif
 
 /*!
  *  @function vfs_setlocklocal
@@ -1255,6 +1278,14 @@ void    vfs_getnewfsid(struct mount *mp);
 mount_t vfs_getvfs(fsid_t *fsid);
 
 /*!
+ *  @function vfs_getvfs_with_vfsops
+ *  @abstract Given a filesystem ID, look up a mount structure, verify the vfsops
+ *  @param fsid Filesystem ID to look up.
+ *  @return Mountpoint if found and the vfsops matches the expected value, else NULL.  Note unmounting mountpoints can be returned.
+ */
+mount_t vfs_getvfs_with_vfsops(fsid_t *fsid, const struct vfsops *ops);
+
+/*!
  *  @function vfs_mountedon
  *  @abstract Check whether a given block device has a filesystem mounted on it.
  *  @discussion Note that this is NOT a check for a covered vnode (the directory upon which
@@ -1305,13 +1336,40 @@ int     vfs_setattr(mount_t mp, struct vfs_attr *vfa, vfs_context_t ctx);
 int     vfs_extendedsecurity(mount_t);
 mount_t vfs_getvfs_by_mntonname(char *);
 vnode_t vfs_vnodecovered(mount_t mp); /* Returns vnode with an iocount that must be released with vnode_put() */
+int vfs_setdevvp(mount_t mp, vnode_t vp);
 vnode_t vfs_devvp(mount_t mp); /* Please see block comment with implementation */
 int vfs_nativexattrs(mount_t mp);  /* whether or not the FS supports EAs natively */
 void *  vfs_mntlabel(mount_t mp); /* Safe to cast to "struct label*"; returns "void*" to limit dependence of mount.h on security headers.  */
 void    vfs_setcompoundopen(mount_t mp);
+void    vfs_setfskit(mount_t mp);
+uint32_t vfs_getextflags(mount_t mp);
+char *  vfs_getfstypenameref_locked(mount_t mp, size_t *lenp);
+void    vfs_getfstypename(mount_t mp, char *buf, size_t buflen);
+void    vfs_setfstypename_locked(mount_t mp, const char *name);
+void    vfs_setfstypename(mount_t mp, const char *name);
 uint64_t vfs_throttle_mask(mount_t mp);
 int vfs_isswapmount(mount_t mp);
+int     vfs_context_dataless_materialization_is_prevented(vfs_context_t);
 boolean_t vfs_context_is_dataless_manipulator(vfs_context_t);
+boolean_t vfs_context_can_resolve_triggers(vfs_context_t);
+boolean_t vfs_context_can_break_leases(vfs_context_t);
+boolean_t vfs_context_skip_mtime_update(vfs_context_t ctx);
+void    vfs_setmntsystem(mount_t mp);
+void    vfs_setmntsystemdata(mount_t mp);
+void    vfs_setmntswap(mount_t mp);
+boolean_t vfs_is_basesystem(mount_t mp);
+boolean_t vfs_iskernelmount(mount_t mp);
+
+boolean_t vfs_shutdown_in_progress(void);
+boolean_t vfs_shutdown_finished(void);
+void    vfs_update_last_completion_time(void);
+uint64_t vfs_last_completion_time(void);
+
+OS_ENUM(bsd_bootfail_mode, uint32_t,
+    BSD_BOOTFAIL_SEAL_BROKEN = 1,
+    BSD_BOOTFAIL_MEDIA_MISSING = 2);
+
+boolean_t bsd_boot_to_recovery(bsd_bootfail_mode_t mode, uuid_t volume_uuid, boolean_t reboot);
 
 struct vnode_trigger_info;
 
@@ -1392,12 +1450,31 @@ void mount_set_noreaddirext(mount_t);
  */
 void vfs_get_statfs64(struct mount *mp, struct statfs64 *sfs);
 
+/*!
+ * @function vfs_mount_id
+ * @abstract Retrieve the system-wide unique mount ID for a mount point.
+ * The ID is generated at mount and does not change on remount.
+ * @param mp Mountpoint for which to get the mount ID.
+ */
+uint64_t vfs_mount_id(mount_t mp);
+
+/*!
+ * @function vfs_mount_at_path
+ * @abstract A wrapper around kernel_mount() to be used only in special
+ * circumstances.
+ */
+int vfs_mount_at_path(const char *fstype, const char *path,
+    vnode_t pvp, vnode_t vp, void *data, size_t datalen, int mnt_flags,
+    int flags);
+
+#define VFS_MOUNT_FLAG_NOAUTH           0x01 /* Don't check the UID of the directory we are mounting on */
+#define VFS_MOUNT_FLAG_PERMIT_UNMOUNT   0x02 /* Allow (non-forced) unmounts by users other the one who mounted the volume */
+#define VFS_MOUNT_FLAG_CURRENT_CONTEXT  0x04 /* Mount using the current VFS context */
+
 #endif  /* KERNEL_PRIVATE */
 __END_DECLS
 
 #endif /* KERNEL */
-
-#ifndef KERNEL
 
 /*
  * Generic file handle
@@ -1412,6 +1489,39 @@ struct fhandle {
 };
 typedef struct fhandle  fhandle_t;
 
+/*
+ * Cryptex authentication
+ * Note: these 2 enums are used in conjunction, graftdmg_type is used for authentication while grafting
+ * cryptexes and cryptex_auth_type is currently used for authentication while mounting generic
+ * cryptexes. We need to make sure we do not use the reserved values in each for a new authentication type.
+ */
+// bump up the version for any change that has kext dependency
+#define CRYPTEX_AUTH_STRUCT_VERSION 2
+OS_ENUM(graftdmg_type, uint32_t,
+    GRAFTDMG_CRYPTEX_BOOT = 1,
+    GRAFTDMG_CRYPTEX_PREBOOT = 2,
+    GRAFTDMG_CRYPTEX_DOWNLEVEL = 3,
+    // Reserved: CRYPTEX1_AUTH_ENV_GENERIC = 4,
+    // Reserved: CRYPTEX1_AUTH_ENV_GENERIC_SUPPLEMENTAL = 5,
+    GRAFTDMG_CRYPTEX_PDI_NONCE = 6,
+    GRAFTDMG_CRYPTEX_EFFECTIVE_AP = 7,
+    GRAFTDMG_CRYPTEX_MOBILE_ASSET = 8,
+    // Update this when a new type is added
+    GRAFTDMG_CRYPTEX_MAX = 8);
+
+OS_ENUM(cryptex_auth_type, uint32_t,
+    // Reserved: GRAFTDMG_CRYPTEX_BOOT = 1,
+    // Reserved: GRAFTDMG_CRYPTEX_PREBOOT = 2,
+    // Reserved: GRAFTDMG_CRYPTEX_DOWNLEVEL = 3,
+    CRYPTEX1_AUTH_ENV_GENERIC = 4,
+    CRYPTEX1_AUTH_ENV_GENERIC_SUPPLEMENTAL = 5,
+    CRYPTEX_AUTH_PDI_NONCE = 6,
+    // Reserved: GRAFTDMG_CRYPTEX_EFFECTIVE_AP = 7,
+    CRYPTEX_AUTH_MOBILE_ASSET = 8,
+    // Update this when a new type is added
+    CRYPTEX_AUTH_MAX = 8);
+
+#ifndef KERNEL
 
 __BEGIN_DECLS
 int     fhopen(const struct fhandle *, int);
@@ -1439,6 +1549,11 @@ int     statfs64(const char *, struct statfs64 *) __OSX_AVAILABLE_BUT_DEPRECATED
 #endif /* !__DARWIN_ONLY_64_BIT_INO_T */
 int     unmount(const char *, int);
 int     getvfsbyname(const char *, struct vfsconf *);
+#if PRIVATE
+int     pivot_root(const char *, const char *) __OSX_AVAILABLE(10.16);
+int     graftdmg(int, const char *, uint32_t, graftdmg_args_un *) __OSX_AVAILABLE(13.0) __IOS_AVAILABLE(16.0);
+int     ungraftdmg(const char *, uint64_t) __OSX_AVAILABLE(13.0) __IOS_AVAILABLE(16.0);
+#endif
 __END_DECLS
 
 #endif /* KERNEL */

@@ -1,9 +1,10 @@
 import logging
-import target
+from . import target
 import struct
 
 from xnu import *
 from core.operating_system import Armv8_RegisterSet, Armv7_RegisterSet, I386_RegisterSet, X86_64RegisterSet
+from core import caching
 
 """ these defines should come from an authoritative header file """
 CPU_TYPE_I386 = 0x00000007
@@ -23,7 +24,7 @@ def GetRegisterSetForCPU(cputype, subtype):
         retval = I386_RegisterSet
     elif cputype == CPU_TYPE_X86_64:
         retval = X86_64RegisterSet
-    
+
     """ crash if unknown cputype """
 
     return retval.register_info['registers']
@@ -31,8 +32,8 @@ def GetRegisterSetForCPU(cputype, subtype):
 
 class UserThreadObject(object):
     """representation of userspace thread"""
-    def __init__(self, thr_obj, cputype, cpusubtype, is_kern_64bit):
-        super(UserThreadObject, self).__init__()
+    def __init__(self, thr_obj, cputype, cpusubtype):
+        super().__init__()
         self.thread = thr_obj
         self.registerset = GetRegisterSetForCPU(cputype, cpusubtype)
         self.thread_id = unsigned(self.thread.thread_id)
@@ -51,16 +52,13 @@ class UserThreadObject(object):
                 self.saved_state = Cast(self.thread.machine.iss, 'x86_saved_state_t *').uss.ss_32
             if cputype == CPU_TYPE_ARM:
                 self.reg_type = "arm"
-                if not is_kern_64bit:
-                    self.saved_state = self.thread.machine.PcbData
-                else:
-                    self.saved_state = self.thread.machine.contextData.ss.uss.ss_32
+                self.saved_state = self.thread.machine.contextData.ss.uss.ss_32
             if cputype == CPU_TYPE_ARM64_32:
                 self.reg_type = "arm64"
                 self.saved_state = self.thread.machine.upcb.uss.ss_64
 
-        logging.debug("created thread id 0x%x of type %s, is_kern_64bit 0x%x cputype 0x%x"
-                      % (self.thread_id, self.reg_type, is_kern_64bit, cputype))
+        logging.debug("created thread id 0x%x of type %s, cputype 0x%x"
+                      % (self.thread_id, self.reg_type, cputype))
 
     def getRegisterValueByName(self, name):
         if self.reg_type == 'arm64':
@@ -98,7 +96,10 @@ class UserProcess(target.Process):
     """ Represent a user process and thread states """
     def __init__(self, task):
         self.task = task
-        self.proc = Cast(task.bsd_info, 'proc_t')
+        self.proc = GetProcFromTask(task)
+        self.cache = {}
+        if self.proc is None:
+            raise ValueError("Task has no associated BSD process.")
         dataregisters64bit = False
         ptrsize = 4
 
@@ -107,27 +108,34 @@ class UserProcess(target.Process):
         if task.t_flags & 0x2:
             dataregisters64bit = True
 
-        is_kern_64bit = kern.arch in ['x86_64', 'x86_64h', 'arm64', 'arm64e']
-
         self.cputype = unsigned(self.proc.p_cputype)
         self.cpusubtype = unsigned(self.proc.p_cpusubtype)
 
-        super(UserProcess, self).__init__(self.cputype, self.cpusubtype, ptrsize)
-
-        self.hinfo['ostype'] = 'macosx'
-        if self.cputype != CPU_TYPE_X86_64 and self.cputype != CPU_TYPE_I386:
+        super().__init__(self.cputype, self.cpusubtype, ptrsize)
+        dbg_message = "process:%s is64bit:%d ptrsize:%d cputype:0x%x cpusubtype:0x%x" % (hex(self.proc), int(dataregisters64bit), ptrsize, self.cputype, self.cpusubtype)
+        self.proc_platform = int(GetProcPlatform(self.proc))
+        if self.proc_platform == xnudefines.P_PLATFORM_MACOS:
+            self.hinfo['ostype'] = 'macosx'
+        elif self.proc_platform == xnudefines.P_PLATFORM_WATCHOS:
+            self.hinfo['ostype'] = 'watchos'
+        elif self.proc_platform == xnudefines.P_PLATFORM_TVOS:
+            self.hinfo['ostype'] = 'tvos'
+        else:
             self.hinfo['ostype'] = 'ios'
+        dbg_message += " ostype:%s" % self.hinfo['ostype']
+
+        if str(kern.arch).lower().startswith('arm'):
+            addressing_bits = 64 - int(kern.globals.gT1Sz)
+            self.hinfo['addressing_bits'] = addressing_bits
+            dbg_message += " addressing_bits:%d" % addressing_bits
 
         self.registerset = GetRegisterSetForCPU(self.cputype, self.cpusubtype)
-        logging.debug("process %s is64bit: %d ptrsize: %d cputype: %d  cpusubtype:%d",
-                      hex(self.proc), int(dataregisters64bit), ptrsize,
-                      self.cputype, self.cpusubtype
-                      )
+        logging.info(dbg_message)
         self.threads = {}
         self.threads_ids_list = []
         logging.debug("iterating over threads in process")
         for thval in IterateQueue(task.threads, 'thread *', 'task_threads'):
-            self.threads[unsigned(thval.thread_id)] = UserThreadObject(thval, self.cputype, self.cpusubtype, is_kern_64bit)
+            self.threads[unsigned(thval.thread_id)] = UserThreadObject(thval, self.cputype, self.cpusubtype)
             self.threads_ids_list.append(unsigned(thval.thread_id))
 
     def getRegisterDataForThread(self, th_id, reg_num):
@@ -138,7 +146,7 @@ class UserProcess(target.Process):
             logging.warning("regnum %d is not defined for thread_id 0x%x" % (reg_num, th_id))
             return ''
         value = self.threads[th_id].getRegisterData(reg_num)
-        return self.encodeRegisterData(value, bytesize=self.registerset[reg_num]['bitsize']/8)
+        return self.encodeRegisterData(value, bytesize=(self.registerset[reg_num]['bitsize'] // 8))
 
     def getRegisterCombinedDataForThread(self, th_id):
         if th_id not in self.threads:
@@ -151,7 +159,7 @@ class UserProcess(target.Process):
             name = rinfo['name']
             format = "%02x:%s;"
             value = cur_thread.getRegisterValueByName(name)
-            value_endian_correct_str = self.encodeRegisterData(value, bytesize=(rinfo['bitsize']/8))
+            value_endian_correct_str = self.encodeRegisterData(value, bytesize=(rinfo['bitsize'] // 8))
             retval += format % (pos, value_endian_correct_str)
             pos += 1
         return retval
@@ -165,13 +173,13 @@ class UserProcess(target.Process):
     def getRegisterInfo(self, regnum):
         #something similar to
         #"name:x1;bitsize:64;offset:8;encoding:uint;format:hex;gcc:1;dwarf:1;set:General Purpose Registers;"
-        if regnum > len(self.registerset):
+        if regnum >= len(self.registerset):
             logging.debug("No register_info for number %d." % regnum)
             return 'E45'
 
         rinfo = self.registerset[regnum]
         retval = ''
-        for i in rinfo.keys():
+        for i in list(rinfo.keys()):
             i_val = str(rinfo[i])
             if i == 'set':
                 i_val = 'General Purpose Registers'
@@ -194,15 +202,21 @@ class UserProcess(target.Process):
         pinfo['real-gid'] = "%x" % (unsigned(self.proc.p_rgid))
         if str(kern.arch).find('arm') >= 0:
             pinfo['ostype'] = 'ios'
-        for i in pinfo.keys():
+        for i in list(pinfo.keys()):
             i_val = str(pinfo[i])
             retval += '%s:%s;' % (str(i), i_val)
         return retval
 
     def readMemory(self, address, size):
+        cache_key = "{}-{}-{}".format(hex(self.task), hex(address), size)
+        cache_data = self.cache.get(cache_key, None)
+        if cache_data:
+            return self.encodeByteString(cache_data)
         data = GetUserDataAsString(self.task, address, size)
         if not data:
             logging.error("Failed to read memory task:{: <#018x} {: <#018x} {:d}".format(self.task, address, size))
+        else:
+            self.cache[cache_key] = data
         return self.encodeByteString(data)
 
     def getSharedLibInfoAddress(self):

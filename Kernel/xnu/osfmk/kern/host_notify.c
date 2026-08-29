@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -37,54 +37,36 @@
 
 #include "mach/host_notify_reply.h"
 
-decl_lck_mtx_data(, host_notify_lock);
-
-lck_mtx_ext_t                   host_notify_lock_ext;
-lck_grp_t                               host_notify_lock_grp;
-lck_attr_t                              host_notify_lock_attr;
-static lck_grp_attr_t   host_notify_lock_grp_attr;
-static zone_t                   host_notify_zone;
-
-static queue_head_t             host_notify_queue[HOST_NOTIFY_TYPE_MAX + 1];
-
-static mach_msg_id_t    host_notify_replyid[HOST_NOTIFY_TYPE_MAX + 1] =
-{ HOST_CALENDAR_CHANGED_REPLYID,
-  HOST_CALENDAR_SET_REPLYID };
-
 struct host_notify_entry {
-	queue_chain_t           entries;
+	queue_chain_t                   entries;
 	ipc_port_t                      port;
+	ipc_port_request_index_t        index;
 };
 
-typedef struct host_notify_entry        *host_notify_t;
+LCK_GRP_DECLARE(host_notify_lock_grp, "host_notify");
+LCK_MTX_DECLARE(host_notify_lock, &host_notify_lock_grp);
 
-void
-host_notify_init(void)
-{
-	int             i;
+static KALLOC_TYPE_DEFINE(host_notify_zone,
+    struct host_notify_entry, KT_DEFAULT);
 
-	for (i = 0; i <= HOST_NOTIFY_TYPE_MAX; i++) {
-		queue_init(&host_notify_queue[i]);
-	}
+static queue_head_t     host_notify_queue[HOST_NOTIFY_TYPE_MAX + 1] = {
+	QUEUE_HEAD_INITIALIZER(host_notify_queue[HOST_NOTIFY_CALENDAR_CHANGE]),
+	QUEUE_HEAD_INITIALIZER(host_notify_queue[HOST_NOTIFY_CALENDAR_SET]),
+};
 
-	lck_grp_attr_setdefault(&host_notify_lock_grp_attr);
-	lck_grp_init(&host_notify_lock_grp, "host_notify", &host_notify_lock_grp_attr);
-	lck_attr_setdefault(&host_notify_lock_attr);
-
-	lck_mtx_init_ext(&host_notify_lock, &host_notify_lock_ext, &host_notify_lock_grp, &host_notify_lock_attr);
-
-	i = sizeof(struct host_notify_entry);
-	host_notify_zone =
-	    zinit(i, (4096 * i), (16 * i), "host_notify");
-}
+static mach_msg_id_t    host_notify_replyid[HOST_NOTIFY_TYPE_MAX + 1] = {
+	HOST_CALENDAR_CHANGED_REPLYID,
+	HOST_CALENDAR_SET_REPLYID,
+};
 
 kern_return_t
 host_request_notification(
-	host_t                                  host,
-	host_flavor_t                   notify_type,
-	ipc_port_t                              port)
+	host_t          host,
+	host_flavor_t   notify_type,
+	ipc_port_t      port)
 {
-	host_notify_t           entry;
+	host_notify_t entry;
+	kern_return_t kr;
 
 	if (host == HOST_NULL) {
 		return KERN_INVALID_ARGUMENT;
@@ -98,59 +80,62 @@ host_request_notification(
 		return KERN_INVALID_ARGUMENT;
 	}
 
-	entry = (host_notify_t)zalloc(host_notify_zone);
-	if (entry == NULL) {
-		return KERN_RESOURCE_SHORTAGE;
-	}
+	entry = zalloc_flags(host_notify_zone, Z_WAITOK | Z_ZERO | Z_NOFAIL);
+	entry->port = port;
 
+again:
 	lck_mtx_lock(&host_notify_lock);
 
-	ip_lock(port);
-	if (!ip_active(port) || port->ip_tempowner || ip_kotype(port) != IKOT_NONE) {
-		ip_unlock(port);
-
-		lck_mtx_unlock(&host_notify_lock);
-		zfree(host_notify_zone, entry);
-
-		return KERN_FAILURE;
+	ip_mq_lock(port);
+	if (ip_active(port)) {
+		kr = ipc_port_request_hnotify_alloc(port, entry, &entry->index);
+	} else {
+		kr = KERN_INVALID_CAPABILITY;
 	}
 
-	entry->port = port;
-	ipc_kobject_set_atomically(port, (ipc_kobject_t)entry, IKOT_HOST_NOTIFY);
-	ip_unlock(port);
+	if (kr == KERN_SUCCESS) {
+		/*
+		 * Preserve original ABI of host-notify ports being immovable
+		 * as a side effect of being a kobject.
+		 *
+		 * Unlike the original ABI, multiple registrations
+		 * for the same port are now allowed.
+		 */
+		port->ip_immovable_receive = true;
+		enqueue_tail(&host_notify_queue[notify_type], &entry->entries);
+	}
 
-	enqueue_tail(&host_notify_queue[notify_type], (queue_entry_t)entry);
 	lck_mtx_unlock(&host_notify_lock);
 
-	return KERN_SUCCESS;
+	if (kr == KERN_NO_SPACE) {
+		kr = ipc_port_request_grow(port);
+		/* port unlocked */
+		if (kr == KERN_SUCCESS) {
+			goto again;
+		}
+	} else {
+		ip_mq_unlock(port);
+	}
+
+	if (kr != KERN_SUCCESS) {
+		zfree(host_notify_zone, entry);
+	}
+
+	return kr;
 }
 
 void
-host_notify_port_destroy(
-	ipc_port_t                      port)
+host_notify_cancel(host_notify_t entry)
 {
-	host_notify_t           entry;
+	ipc_port_t port;
 
 	lck_mtx_lock(&host_notify_lock);
-
-	ip_lock(port);
-	if (ip_kotype(port) == IKOT_HOST_NOTIFY) {
-		entry = (host_notify_t)ip_get_kobject(port);
-		assert(entry != NULL);
-		ipc_kobject_set_atomically(port, IKO_NULL, IKOT_NONE);
-		ip_unlock(port);
-
-		assert(entry->port == port);
-		remqueue((queue_entry_t)entry);
-		lck_mtx_unlock(&host_notify_lock);
-		zfree(host_notify_zone, entry);
-
-		ipc_port_release_sonce(port);
-		return;
-	}
-	ip_unlock(port);
-
+	remqueue((queue_entry_t)entry);
+	port = entry->port;
 	lck_mtx_unlock(&host_notify_lock);
+
+	zfree(host_notify_zone, entry);
+	ipc_port_release_sonce(port);
 }
 
 static void
@@ -159,50 +144,54 @@ host_notify_all(
 	mach_msg_header_t       *msg,
 	mach_msg_size_t         msg_size)
 {
-	queue_t         notify_queue = &host_notify_queue[notify_type];
+	queue_head_t  send_queue = QUEUE_HEAD_INITIALIZER(send_queue);
+	queue_entry_t e;
+	host_notify_t entry;
+	ipc_port_t    port;
 
 	lck_mtx_lock(&host_notify_lock);
 
-	if (!queue_empty(notify_queue)) {
-		queue_head_t            send_queue;
-		host_notify_t           entry;
+	qe_foreach_safe(e, &host_notify_queue[notify_type]) {
+		entry = (host_notify_t)e;
+		port  = entry->port;
 
-		send_queue = *notify_queue;
-		queue_init(notify_queue);
-
-		send_queue.next->prev = &send_queue;
-		send_queue.prev->next = &send_queue;
-
-		msg->msgh_bits =
-		    MACH_MSGH_BITS_SET(MACH_MSG_TYPE_MOVE_SEND_ONCE, 0, 0, 0);
-		msg->msgh_local_port = MACH_PORT_NULL;
-		msg->msgh_voucher_port = MACH_PORT_NULL;
-		msg->msgh_id = host_notify_replyid[notify_type];
-
-		while ((entry = (host_notify_t)dequeue(&send_queue)) != NULL) {
-			ipc_port_t              port;
-
-			port = entry->port;
-			assert(port != IP_NULL);
-
-			ip_lock(port);
-			assert(ip_kotype(port) == IKOT_HOST_NOTIFY);
-			assert(ip_get_kobject(port) == (ipc_kobject_t)entry);
-			ipc_kobject_set_atomically(port, IKO_NULL, IKOT_NONE);
-			ip_unlock(port);
-
-			lck_mtx_unlock(&host_notify_lock);
-			zfree(host_notify_zone, entry);
-
-			msg->msgh_remote_port = port;
-
-			(void) mach_msg_send_from_kernel_proper(msg, msg_size);
-
-			lck_mtx_lock(&host_notify_lock);
+		ip_mq_lock(port);
+		if (ip_active(port)) {
+			ipc_port_request_cancel(port, IPR_HOST_NOTIFY,
+			    entry->index);
+			remqueue(e);
+			enqueue_tail(&send_queue, e);
+		} else {
+			/*
+			 * leave the entry in place,
+			 * we're racing with ipc_port_dnnotify()
+			 * which will call host_notify_cancel().
+			 */
 		}
+		ip_mq_unlock(port);
 	}
 
 	lck_mtx_unlock(&host_notify_lock);
+
+	if (queue_empty(&send_queue)) {
+		return;
+	}
+
+	msg->msgh_bits =
+	    MACH_MSGH_BITS_SET(MACH_MSG_TYPE_MOVE_SEND_ONCE, 0, 0, 0);
+	msg->msgh_local_port = MACH_PORT_NULL;
+	msg->msgh_voucher_port = MACH_PORT_NULL;
+	msg->msgh_id = host_notify_replyid[notify_type];
+
+	qe_foreach_safe(e, &send_queue) {
+		entry = (host_notify_t)e;
+		port  = entry->port;
+
+		zfree(host_notify_zone, entry);
+
+		msg->msgh_remote_port = port;
+		(void)mach_msg_send_from_kernel(msg, msg_size);
+	}
 }
 
 void

@@ -55,7 +55,7 @@
 
 #ifndef __ARM_COHERENT_IO__
 
-extern boolean_t up_style_idle_exit;
+TUNABLE(bool, up_style_idle_exit, "up_style_idle_exit", false);
 
 void
 flush_dcache(
@@ -83,8 +83,7 @@ flush_dcache(
 		}
 		FlushPoC_DcacheRegion(vaddr, (unsigned)count);
 		if (paddr && (cpu_data_ptr->cpu_cache_dispatch != NULL)) {
-			((cache_dispatch_t) cpu_data_ptr->cpu_cache_dispatch)(
-				cpu_data_ptr->cpu_id, CacheCleanFlushRegion, (unsigned int) paddr, (unsigned)count);
+			cpu_data_ptr->cpu_cache_dispatch(cpu_data_ptr->cpu_id, CacheCleanFlushRegion, (unsigned int) paddr, (unsigned)count);
 		}
 		addr += count;
 		length -= count;
@@ -118,8 +117,7 @@ clean_dcache(
 		}
 		CleanPoC_DcacheRegion(vaddr, (unsigned)count);
 		if (paddr && (cpu_data_ptr->cpu_cache_dispatch != NULL)) {
-			((cache_dispatch_t) cpu_data_ptr->cpu_cache_dispatch)(
-				cpu_data_ptr->cpu_id, CacheCleanRegion, (unsigned int) paddr, (unsigned)count);
+			cpu_data_ptr->cpu_cache_dispatch(cpu_data_ptr->cpu_id, CacheCleanRegion, (unsigned int) paddr, (unsigned)count);
 		}
 		addr += count;
 		length -= count;
@@ -133,14 +131,10 @@ flush_dcache_syscall(
 	unsigned length)
 {
 	if ((cache_info()->c_bulksize_op != 0) && (length >= (cache_info()->c_bulksize_op))) {
-#if     __ARM_SMP__ && defined(ARMA7)
-		cache_xcall(LWFlush);
-#else
 		FlushPoC_Dcache();
-		if (getCpuDatap()->cpu_cache_dispatch != (cache_dispatch_t) NULL) {
-			((cache_dispatch_t) getCpuDatap()->cpu_cache_dispatch)( getCpuDatap()->cpu_id, CacheCleanFlush, 0x0UL, 0x0UL);
+		if (getCpuDatap()->cpu_cache_dispatch != NULL) {
+			getCpuDatap()->cpu_cache_dispatch(getCpuDatap()->cpu_id, CacheCleanFlush, 0x0UL, 0x0UL);
 		}
-#endif
 	} else {
 		FlushPoC_DcacheRegion((vm_offset_t) va, length);
 	}
@@ -157,14 +151,10 @@ dcache_incoherent_io_flush64(
 	cpu_data_t *cpu_data_ptr = getCpuDatap();
 
 	if ((cache_info()->c_bulksize_op != 0) && (remaining >= (cache_info()->c_bulksize_op))) {
-#if     __ARM_SMP__ && defined (ARMA7)
-		cache_xcall(LWFlush);
-#else
 		FlushPoC_Dcache();
-		if (cpu_data_ptr->cpu_cache_dispatch != (cache_dispatch_t) NULL) {
-			((cache_dispatch_t) cpu_data_ptr->cpu_cache_dispatch)( cpu_data_ptr->cpu_id, CacheCleanFlush, 0x0UL, 0x0UL);
+		if (cpu_data_ptr->cpu_cache_dispatch != NULL) {
+			cpu_data_ptr->cpu_cache_dispatch(cpu_data_ptr->cpu_id, CacheCleanFlush, 0x0UL, 0x0UL);
 		}
-#endif
 		*res = BWOpDone;
 	} else {
 		vm_offset_t     vaddr;
@@ -190,8 +180,7 @@ dcache_incoherent_io_flush64(
 			FlushPoC_DcacheRegion(vaddr, (unsigned)count);
 			if (isphysmem(paddr)) {
 				if (cpu_data_ptr->cpu_cache_dispatch != NULL) {
-					((cache_dispatch_t) cpu_data_ptr->cpu_cache_dispatch)(
-						cpu_data_ptr->cpu_id, CacheCleanFlushRegion, (unsigned int) paddr, (unsigned)count);
+					cpu_data_ptr->cpu_cache_dispatch(cpu_data_ptr->cpu_id, CacheCleanFlushRegion, (unsigned int) paddr, (unsigned)count);
 				}
 			} else {
 				pmap_unmap_cpu_windows_copy(index);
@@ -223,17 +212,10 @@ dcache_incoherent_io_store64(
 	}
 
 	if ((cache_info()->c_bulksize_op != 0) && (remaining >= (cache_info()->c_bulksize_op))) {
-#if     __ARM_SMP__ && defined (ARMA7)
-		cache_xcall(LWClean);
-		if (cpu_data_ptr->cpu_cache_dispatch != (cache_dispatch_t) NULL) {
-			((cache_dispatch_t) cpu_data_ptr->cpu_cache_dispatch)( cpu_data_ptr->cpu_id, CacheClean, 0x0UL, 0x0UL);
-		}
-#else
 		CleanPoC_Dcache();
-		if (cpu_data_ptr->cpu_cache_dispatch != (cache_dispatch_t) NULL) {
-			((cache_dispatch_t) cpu_data_ptr->cpu_cache_dispatch)( cpu_data_ptr->cpu_id, CacheClean, 0x0UL, 0x0UL);
+		if (cpu_data_ptr->cpu_cache_dispatch != NULL) {
+			cpu_data_ptr->cpu_cache_dispatch(cpu_data_ptr->cpu_id, CacheClean, 0x0UL, 0x0UL);
 		}
-#endif
 		*res = BWOpDone;
 	} else {
 		vm_offset_t     vaddr;
@@ -257,8 +239,7 @@ dcache_incoherent_io_store64(
 			CleanPoC_DcacheRegion(vaddr, (unsigned)count);
 			if (isphysmem(paddr)) {
 				if (cpu_data_ptr->cpu_cache_dispatch != NULL) {
-					((cache_dispatch_t) cpu_data_ptr->cpu_cache_dispatch)(
-						cpu_data_ptr->cpu_id, CacheCleanRegion, (unsigned int) paddr, (unsigned)count);
+					cpu_data_ptr->cpu_cache_dispatch(cpu_data_ptr->cpu_id, CacheCleanRegion, (unsigned int) paddr, (unsigned)count);
 				}
 			} else {
 				pmap_unmap_cpu_windows_copy(index);
@@ -298,13 +279,11 @@ platform_cache_init(
 
 	cpuid_cache_info = cache_info();
 
-	if (cpu_data_ptr->cpu_cache_dispatch != (cache_dispatch_t) NULL) {
-		((cache_dispatch_t) cpu_data_ptr->cpu_cache_dispatch)(
-			cpu_data_ptr->cpu_id, CacheControl, CacheControlEnable, 0x0UL);
+	if (cpu_data_ptr->cpu_cache_dispatch != NULL) {
+		cpu_data_ptr->cpu_cache_dispatch(cpu_data_ptr->cpu_id, CacheControl, CacheControlEnable, 0x0UL);
 
 		if (cpuid_cache_info->c_l2size == 0x0) {
-			((cache_dispatch_t) cpu_data_ptr->cpu_cache_dispatch)(
-				cpu_data_ptr->cpu_id, CacheConfig, CacheConfigSize, (unsigned int)&cache_size);
+			cpu_data_ptr->cpu_cache_dispatch(cpu_data_ptr->cpu_id, CacheConfig, CacheConfigSize, (unsigned int)&cache_size);
 			cpuid_cache_info->c_l2size = cache_size;
 		}
 	}
@@ -318,9 +297,8 @@ platform_cache_flush(
 
 	FlushPoC_Dcache();
 
-	if (cpu_data_ptr->cpu_cache_dispatch != (cache_dispatch_t) NULL) {
-		((cache_dispatch_t) cpu_data_ptr->cpu_cache_dispatch)(
-			cpu_data_ptr->cpu_id, CacheCleanFlush, 0x0UL, 0x0UL);
+	if (cpu_data_ptr->cpu_cache_dispatch != NULL) {
+		cpu_data_ptr->cpu_cache_dispatch(cpu_data_ptr->cpu_id, CacheCleanFlush, 0x0UL, 0x0UL);
 	}
 }
 
@@ -332,9 +310,8 @@ platform_cache_clean(
 
 	CleanPoC_Dcache();
 
-	if (cpu_data_ptr->cpu_cache_dispatch != (cache_dispatch_t) NULL) {
-		((cache_dispatch_t) cpu_data_ptr->cpu_cache_dispatch)(
-			cpu_data_ptr->cpu_id, CacheClean, 0x0UL, 0x0UL);
+	if (cpu_data_ptr->cpu_cache_dispatch != NULL) {
+		cpu_data_ptr->cpu_cache_dispatch(cpu_data_ptr->cpu_id, CacheClean, 0x0UL, 0x0UL);
 	}
 }
 
@@ -346,31 +323,20 @@ platform_cache_shutdown(
 
 	CleanPoC_Dcache();
 
-	if (cpu_data_ptr->cpu_cache_dispatch != (cache_dispatch_t) NULL) {
-		((cache_dispatch_t) cpu_data_ptr->cpu_cache_dispatch)(
-			cpu_data_ptr->cpu_id, CacheShutdown, 0x0UL, 0x0UL);
+	if (cpu_data_ptr->cpu_cache_dispatch != NULL) {
+		cpu_data_ptr->cpu_cache_dispatch(cpu_data_ptr->cpu_id, CacheShutdown, 0x0UL, 0x0UL);
 	}
 }
 
 void
 platform_cache_disable(void)
 {
-#if (__ARM_ARCH__ < 8)
-	uint32_t sctlr_value = 0;
-
-	/* Disable dcache allocation. */
-	sctlr_value = __builtin_arm_mrc(MRC_SCTLR);
-	sctlr_value &= ~SCTLR_DCACHE;
-	__builtin_arm_mcr(MCR_SCTLR(sctlr_value));
-	__builtin_arm_isb(ISB_SY);
-#endif /* (__ARM_ARCH__ < 8) */
 }
 
 void
 platform_cache_idle_enter(
 	void)
 {
-#if __ARM_SMP__
 	platform_cache_disable();
 
 	/*
@@ -383,76 +349,7 @@ platform_cache_idle_enter(
 		CleanPoU_Dcache();
 	} else {
 		FlushPoU_Dcache();
-
-#if (__ARM_ARCH__ < 8)
-		cpu_data_t      *cpu_data_ptr = getCpuDatap();
-		cpu_data_ptr->cpu_CLW_active = 0;
-		__builtin_arm_dmb(DMB_ISH);
-		cpu_data_ptr->cpu_CLWFlush_req = 0;
-		cpu_data_ptr->cpu_CLWClean_req = 0;
-		CleanPoC_DcacheRegion((vm_offset_t) cpu_data_ptr, sizeof(cpu_data_t));
-#endif /* (__ARM_ARCH__ < 8) */
 	}
-#else /* !__ARM_SMP__ */
-	CleanPoU_Dcache();
-#endif /* !__ARM_SMP__ */
-
-#if defined(__ARM_SMP__) && defined(ARMA7)
-	uint32_t actlr_value = 0;
-
-	/* Leave the coherency domain */
-	__builtin_arm_clrex();
-	actlr_value = __builtin_arm_mrc(MRC_ACTLR);
-	actlr_value &= ~0x40;
-
-	__builtin_arm_mcr(MCR_ACTLR(actlr_value));
-	/* Ensures any pending fwd request gets serviced and ends up */
-	__builtin_arm_dsb(DSB_SY);
-	/* Forces the processor to re-fetch, so any pending fwd request gets into the core */
-	__builtin_arm_isb(ISB_SY);
-	/* Ensures the second possible pending fwd request ends up. */
-	__builtin_arm_dsb(DSB_SY);
-#endif /* defined(__ARM_SMP__) && defined(ARMA7) */
-}
-
-void
-platform_cache_idle_exit(
-	void)
-{
-#if defined(ARMA7)
-	uint32_t actlr_value = 0;
-
-	/* Flush L1 caches and TLB before rejoining the coherency domain */
-	FlushPoU_Dcache();
-	/*
-	 * If we're only using a single CPU, we can avoid flushing the
-	 * I-cache or the TLB, as neither program text nor pagetables
-	 * should have been changed during the idle period.  We still
-	 * want to flush the D-cache to PoU (above), as memory contents
-	 * may have been changed by DMA.
-	 */
-	if (!up_style_idle_exit || (real_ncpus > 1)) {
-		InvalidatePoU_Icache();
-		flush_core_tlb();
-	}
-
-	/* Rejoin the coherency domain */
-	actlr_value = __builtin_arm_mrc(MRC_ACTLR);
-	actlr_value |= 0x40;
-	__builtin_arm_mcr(MCR_ACTLR(actlr_value));
-	__builtin_arm_isb(ISB_SY);
-
-#if __ARM_SMP__
-	uint32_t sctlr_value = 0;
-
-	/* Enable dcache allocation. */
-	sctlr_value = __builtin_arm_mrc(MRC_SCTLR);
-	sctlr_value |= SCTLR_DCACHE;
-	__builtin_arm_mcr(MCR_SCTLR(sctlr_value));
-	__builtin_arm_isb(ISB_SY);
-	getCpuDatap()->cpu_CLW_active = 1;
-#endif /* __ARM_SMP__ */
-#endif /* defined(ARMA7) */
 }
 
 boolean_t
@@ -475,134 +372,12 @@ platform_cache_flush_wimg(
 	__unused unsigned int new_wimg
 	)
 {
-#if     __ARM_SMP__ && defined (ARMA7)
-	cache_xcall(LWFlush);
-#else
 	FlushPoC_Dcache();
-	if (getCpuDatap()->cpu_cache_dispatch != (cache_dispatch_t) NULL) {
-		((cache_dispatch_t) getCpuDatap()->cpu_cache_dispatch)( getCpuDatap()->cpu_id, CacheCleanFlush, 0x0UL, 0x0UL);
-	}
-#endif
-}
-
-#if     __ARM_SMP__ && defined(ARMA7)
-void
-cache_xcall_handler(unsigned int op)
-{
-	cpu_data_t      *cdp;
-	uint64_t        abstime;
-
-	cdp = getCpuDatap();
-
-	if ((op == LWFlush) && (cdp->cpu_CLWFlush_req > cdp->cpu_CLWFlush_last)) {
-		FlushPoU_Dcache();
-		abstime = ml_get_timebase();
-		cdp->cpu_CLWFlush_last = abstime;
-		cdp->cpu_CLWClean_last = abstime;
-	} else if ((op == LWClean) && (cdp->cpu_CLWClean_req > cdp->cpu_CLWClean_last)) {
-		CleanPoU_Dcache();
-		abstime = ml_get_timebase();
-		cdp->cpu_CLWClean_last = abstime;
+	if (getCpuDatap()->cpu_cache_dispatch != NULL) {
+		getCpuDatap()->cpu_cache_dispatch(getCpuDatap()->cpu_id, CacheCleanFlush, 0x0UL, 0x0UL);
 	}
 }
 
-
-void
-cache_xcall(unsigned int op)
-{
-	boolean_t       intr;
-	cpu_data_t      *cdp;
-	cpu_data_t      *target_cdp;
-	unsigned int    cpu;
-	unsigned int    signal;
-	uint64_t        abstime;
-
-	intr = ml_set_interrupts_enabled(FALSE);
-	cdp = getCpuDatap();
-	abstime = ml_get_timebase();
-	if (op == LWClean) {
-		signal = SIGPLWClean;
-	} else {
-		signal = SIGPLWFlush;
-	}
-
-	for (cpu = 0; cpu < MAX_CPUS; cpu++) {
-		target_cdp = (cpu_data_t *)CpuDataEntries[cpu].cpu_data_vaddr;
-		if (target_cdp == (cpu_data_t *)NULL) {
-			break;
-		}
-
-		if (target_cdp->cpu_CLW_active == 0) {
-			continue;
-		}
-
-		if (op == LWFlush) {
-			target_cdp->cpu_CLWFlush_req = abstime;
-		} else if (op == LWClean) {
-			target_cdp->cpu_CLWClean_req = abstime;
-		}
-		__builtin_arm_dmb(DMB_ISH);
-		if (target_cdp->cpu_CLW_active == 0) {
-			if (op == LWFlush) {
-				target_cdp->cpu_CLWFlush_req = 0x0ULL;
-			} else if (op == LWClean) {
-				target_cdp->cpu_CLWClean_req = 0x0ULL;
-			}
-			continue;
-		}
-
-		if (target_cdp == cdp) {
-			continue;
-		}
-
-		if (KERN_SUCCESS != cpu_signal(target_cdp, signal, (void *)NULL, NULL)) {
-			if (op == LWFlush) {
-				target_cdp->cpu_CLWFlush_req = 0x0ULL;
-			} else if (op == LWClean) {
-				target_cdp->cpu_CLWClean_req = 0x0ULL;
-			}
-		}
-		if (cpu == real_ncpus) {
-			break;
-		}
-	}
-
-	cache_xcall_handler(op);
-
-	(void) ml_set_interrupts_enabled(intr);
-
-	for (cpu = 0; cpu < MAX_CPUS; cpu++) {
-		target_cdp = (cpu_data_t *)CpuDataEntries[cpu].cpu_data_vaddr;
-		if (target_cdp == (cpu_data_t *)NULL) {
-			break;
-		}
-
-		if (target_cdp == cdp) {
-			continue;
-		}
-
-		if (op == LWFlush) {
-			while ((target_cdp->cpu_CLWFlush_req != 0x0ULL) && (target_cdp->cpu_CLWFlush_last < abstime)) {
-				;
-			}
-		} else if (op == LWClean) {
-			while ((target_cdp->cpu_CLWClean_req != 0x0ULL) && (target_cdp->cpu_CLWClean_last < abstime)) {
-				;
-			}
-		}
-
-		if (cpu == real_ncpus) {
-			break;
-		}
-	}
-
-	if (op == LWFlush) {
-		FlushPoC_Dcache();
-	} else if (op == LWClean) {
-		CleanPoC_Dcache();
-	}
-}
-#endif
 
 
 #else   /* __ARM_COHERENT_IO__ */
@@ -696,12 +471,6 @@ platform_cache_shutdown(
 
 void
 platform_cache_idle_enter(
-	void)
-{
-}
-
-void
-platform_cache_idle_exit(
 	void)
 {
 }

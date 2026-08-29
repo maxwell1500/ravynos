@@ -31,9 +31,18 @@
 #if defined (__i386__) || defined(__x86_64__)
 #include "pexpert/i386/boot.h"
 #elif defined (__arm64__)
+#ifdef PRIVATE
+/* pexpert/arm64/boot.h isn't installed into the public SDK. */
 #include "pexpert/arm64/boot.h"
+#endif /* PRIVATE */
 #elif defined (__arm__)
+/*
+ * This file is DEPRECATED for arm architectures preceeding version 8.
+ */
+#ifdef PRIVATE
+/* pexpert/arm/boot.h isn't installed into the public SDK. */
 #include "pexpert/arm/boot.h"
+#endif /* PRIVATE */
 #else
 #error architecture not supported
 #endif

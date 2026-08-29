@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2015-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -46,7 +46,7 @@
 #include <kern/mach_param.h>
 #include <kern/kern_types.h>
 #include <kern/assert.h>
-#include <kern/kalloc.h>
+#include <kern/zalloc.h>
 #include <kern/thread.h>
 #include <kern/clock.h>
 #include <kern/ledger.h>
@@ -58,6 +58,8 @@
 #include <kern/turnstile.h>
 #include <kern/zalloc.h>
 #include <kern/debug.h>
+
+#include <vm/vm_map_xnu.h>
 
 #include <pexpert/pexpert.h>
 
@@ -90,15 +92,29 @@
  * relies on that thread to carry the torch for the other waiting threads.
  */
 
-static lck_grp_t *ull_lck_grp;
+static LCK_GRP_DECLARE(ull_lck_grp, "ulocks");
 
+#if XNU_TARGET_OS_XR
+#define ULL_TICKET_LOCK 1
+#endif /* XNU_TARGET_OS_XR */
+
+#if ULL_TICKET_LOCK
+typedef lck_ticket_t ull_lock_t;
+#define ull_lock_init(ull)      lck_ticket_init(&ull->ull_lock, &ull_lck_grp)
+#define ull_lock_destroy(ull)   lck_ticket_destroy(&ull->ull_lock, &ull_lck_grp)
+#define ull_lock(ull)           lck_ticket_lock(&ull->ull_lock, &ull_lck_grp)
+#define ull_unlock(ull)         lck_ticket_unlock(&ull->ull_lock)
+#define ull_assert_owned(ull)   lck_ticket_assert_owned(&ull->ull_lock)
+#define ull_assert_notwned(ull) lck_ticket_assert_not_owned(&ull->ull_lock)
+#else
 typedef lck_spin_t ull_lock_t;
-#define ull_lock_init(ull)      lck_spin_init(&ull->ull_lock, ull_lck_grp, NULL)
-#define ull_lock_destroy(ull)   lck_spin_destroy(&ull->ull_lock, ull_lck_grp)
-#define ull_lock(ull)           lck_spin_lock_grp(&ull->ull_lock, ull_lck_grp)
+#define ull_lock_init(ull)      lck_spin_init(&ull->ull_lock, &ull_lck_grp, NULL)
+#define ull_lock_destroy(ull)   lck_spin_destroy(&ull->ull_lock, &ull_lck_grp)
+#define ull_lock(ull)           lck_spin_lock_grp(&ull->ull_lock, &ull_lck_grp)
 #define ull_unlock(ull)         lck_spin_unlock(&ull->ull_lock)
 #define ull_assert_owned(ull)   LCK_SPIN_ASSERT(&ull->ull_lock, LCK_ASSERT_OWNED)
 #define ull_assert_notwned(ull) LCK_SPIN_ASSERT(&ull->ull_lock, LCK_ASSERT_NOTOWNED)
+#endif /* ULL_TICKET_LOCK */
 
 #define ULOCK_TO_EVENT(ull)   ((event_t)ull)
 #define EVENT_TO_ULOCK(event) ((ull_t *)event)
@@ -113,7 +129,12 @@ typedef struct {
 	union {
 		struct __attribute__((packed)) {
 			user_addr_t     ulk_addr;
-			pid_t           ulk_pid;
+			/*
+			 * We use the task address as a hashing key,
+			 * so that ulock wakes across exec can't
+			 * be confused.
+			 */
+			task_t          ulk_task __kernel_data_semantics;
 		};
 		struct __attribute__((packed)) {
 			uint64_t        ulk_object;
@@ -123,7 +144,7 @@ typedef struct {
 	ulk_type        ulk_key_type;
 } ulk_t;
 
-#define ULK_UADDR_LEN   (sizeof(user_addr_t) + sizeof(pid_t))
+#define ULK_UADDR_LEN   (sizeof(user_addr_t) + sizeof(task_t))
 #define ULK_XPROC_LEN   (sizeof(uint64_t) + sizeof(uint64_t))
 
 inline static bool
@@ -134,7 +155,7 @@ ull_key_match(ulk_t *a, ulk_t *b)
 	}
 
 	if (a->ulk_key_type == ULK_UADDR) {
-		return (a->ulk_pid == b->ulk_pid) &&
+		return (a->ulk_task == b->ulk_task) &&
 		       (a->ulk_addr == b->ulk_addr);
 	}
 
@@ -159,8 +180,6 @@ typedef struct ull {
 	queue_chain_t   ull_hash_link;
 } ull_t;
 
-extern void ulock_initialize(void);
-
 #define ULL_MUST_EXIST  0x0001
 static void ull_put(ull_t *);
 
@@ -179,7 +198,7 @@ ull_dump(ull_t *ull)
 	switch (ull->ull_key.ulk_key_type) {
 	case ULK_UADDR:
 		kprintf("ull_key.ulk_key_type\tULK_UADDR\n");
-		kprintf("ull_key.ulk_pid\t%d\n", ull->ull_key.ulk_pid);
+		kprintf("ull_key.ulk_task\t%p\n", ull->ull_key.ulk_task);
 		kprintf("ull_key.ulk_addr\t%p\n", (void *)(ull->ull_key.ulk_addr));
 		break;
 	case ULK_XPROC:
@@ -201,17 +220,25 @@ ull_dump(ull_t *ull)
 
 typedef struct ull_bucket {
 	queue_head_t ulb_head;
+#if ULL_TICKET_LOCK
+	lck_ticket_t ulb_lock;
+#else
 	lck_spin_t   ulb_lock;
+#endif /* ULL_TICKET_LOCK */
 } ull_bucket_t;
 
-static int ull_hash_buckets;
-static ull_bucket_t *ull_bucket;
+static SECURITY_READ_ONLY_LATE(int) ull_hash_buckets;
+static SECURITY_READ_ONLY_LATE(ull_bucket_t *) ull_bucket;
 static uint32_t ull_nzalloc = 0;
-static zone_t ull_zone;
+static KALLOC_TYPE_DEFINE(ull_zone, ull_t, KT_DEFAULT);
 
-#define ull_bucket_lock(i)       lck_spin_lock_grp(&ull_bucket[i].ulb_lock, ull_lck_grp)
+#if ULL_TICKET_LOCK
+#define ull_bucket_lock(i)       lck_ticket_lock(&ull_bucket[i].ulb_lock, &ull_lck_grp)
+#define ull_bucket_unlock(i)     lck_ticket_unlock(&ull_bucket[i].ulb_lock)
+#else
+#define ull_bucket_lock(i)       lck_spin_lock_grp(&ull_bucket[i].ulb_lock, &ull_lck_grp)
 #define ull_bucket_unlock(i)     lck_spin_unlock(&ull_bucket[i].ulb_lock)
-
+#endif /* ULL_TICKET_LOCK */
 static __inline__ uint32_t
 ull_hash_index(const void *key, size_t length)
 {
@@ -224,11 +251,9 @@ ull_hash_index(const void *key, size_t length)
 
 #define ULL_INDEX(keyp) ull_hash_index(keyp, keyp->ulk_key_type == ULK_UADDR ? ULK_UADDR_LEN : ULK_XPROC_LEN)
 
-void
+static void
 ulock_initialize(void)
 {
-	ull_lck_grp = lck_grp_alloc_init("ulocks", NULL);
-
 	assert(thread_max > 16);
 	/* Size ull_hash_buckets based on thread_max.
 	 * Round up to nearest power of 2, then divide by 4
@@ -238,31 +263,30 @@ ulock_initialize(void)
 	kprintf("%s>thread_max=%d, ull_hash_buckets=%d\n", __FUNCTION__, thread_max, ull_hash_buckets);
 	assert(ull_hash_buckets >= thread_max / 4);
 
-	ull_bucket = (ull_bucket_t *)kalloc(sizeof(ull_bucket_t) * ull_hash_buckets);
+	ull_bucket = zalloc_permanent(sizeof(ull_bucket_t) * ull_hash_buckets,
+	    ZALIGN_PTR);
 	assert(ull_bucket != NULL);
 
 	for (int i = 0; i < ull_hash_buckets; i++) {
 		queue_init(&ull_bucket[i].ulb_head);
-		lck_spin_init(&ull_bucket[i].ulb_lock, ull_lck_grp, NULL);
+#if ULL_TICKET_LOCK
+		lck_ticket_init(&ull_bucket[i].ulb_lock, &ull_lck_grp);
+#else
+		lck_spin_init(&ull_bucket[i].ulb_lock, &ull_lck_grp, NULL);
+#endif /* ULL_TICKET_LOCK */
 	}
-
-	ull_zone = zinit(sizeof(ull_t),
-	    thread_max * sizeof(ull_t),
-	    0, "ulocks");
-
-	zone_change(ull_zone, Z_NOENCRYPT, TRUE);
-	zone_change(ull_zone, Z_CACHING_ENABLED, TRUE);
 }
+STARTUP(EARLY_BOOT, STARTUP_RANK_FIRST, ulock_initialize);
 
 #if DEVELOPMENT || DEBUG
-/* Count the number of hash entries for a given pid.
- * if pid==0, dump the whole table.
+/* Count the number of hash entries for a given task address.
+ * if task==0, dump the whole table.
  */
 static int
-ull_hash_dump(pid_t pid)
+ull_hash_dump(task_t task)
 {
 	int count = 0;
-	if (pid == 0) {
+	if (task == TASK_NULL) {
 		kprintf("%s>total number of ull_t allocated %d\n", __FUNCTION__, ull_nzalloc);
 		kprintf("%s>BEGIN\n", __FUNCTION__);
 	}
@@ -270,11 +294,12 @@ ull_hash_dump(pid_t pid)
 		ull_bucket_lock(i);
 		if (!queue_empty(&ull_bucket[i].ulb_head)) {
 			ull_t *elem;
-			if (pid == 0) {
+			if (task == TASK_NULL) {
 				kprintf("%s>index %d:\n", __FUNCTION__, i);
 			}
 			qe_foreach_element(elem, &ull_bucket[i].ulb_head, ull_hash_link) {
-				if ((pid == 0) || ((elem->ull_key.ulk_key_type == ULK_UADDR) && (pid == elem->ull_key.ulk_pid))) {
+				if ((task == TASK_NULL) || ((elem->ull_key.ulk_key_type == ULK_UADDR)
+				    && (task == elem->ull_key.ulk_task))) {
 					ull_dump(elem);
 					count++;
 				}
@@ -282,7 +307,7 @@ ull_hash_dump(pid_t pid)
 		}
 		ull_bucket_unlock(i);
 	}
-	if (pid == 0) {
+	if (task == TASK_NULL) {
 		kprintf("%s>END\n", __FUNCTION__);
 		ull_nzalloc = 0;
 	}
@@ -293,7 +318,7 @@ ull_hash_dump(pid_t pid)
 static ull_t *
 ull_alloc(ulk_t *key)
 {
-	ull_t *ull = (ull_t *)zalloc(ull_zone);
+	ull_t *ull = (ull_t *)zalloc_flags(ull_zone, Z_SET_NOTSHARED);
 	assert(ull != NULL);
 
 	ull->ull_refcount = 1;
@@ -400,8 +425,7 @@ ull_put(ull_t *ull)
 	ull_free(ull);
 }
 
-extern kern_return_t vm_map_page_info(vm_map_t map, vm_map_offset_t offset, vm_page_info_flavor_t flavor, vm_page_info_t info, mach_msg_type_number_t *count);
-extern vm_map_t current_map(void);
+
 extern boolean_t machine_thread_on_core(thread_t thread);
 
 static int
@@ -455,8 +479,8 @@ ulock_resolve_owner(uint32_t value, thread_t *owner)
 	mach_port_name_t owner_name = ulock_owner_value_to_port_name(value);
 
 	*owner = port_name_to_thread(owner_name,
-	    PORT_TO_THREAD_IN_CURRENT_TASK |
-	    PORT_TO_THREAD_NOT_CURRENT_THREAD);
+	    PORT_INTRANS_THREAD_IN_CURRENT_TASK |
+	    PORT_INTRANS_THREAD_NOT_CURRENT_THREAD);
 	if (*owner == THREAD_NULL) {
 		/*
 		 * Translation failed - even though the lock value is up to date,
@@ -468,9 +492,23 @@ ulock_resolve_owner(uint32_t value, thread_t *owner)
 }
 
 int
-ulock_wait(struct proc *p, struct ulock_wait_args *args, int32_t *retval)
+sys_ulock_wait(struct proc *p, struct ulock_wait_args *args, int32_t *retval)
 {
-	uint opcode = args->operation & UL_OPCODE_MASK;
+	struct ulock_wait2_args args2;
+
+	args2.operation = args->operation;
+	args2.addr      = args->addr;
+	args2.value     = args->value;
+	args2.timeout   = (uint64_t)(args->timeout) * NSEC_PER_USEC;
+	args2.value2    = 0;
+
+	return sys_ulock_wait2(p, &args2, retval);
+}
+
+int
+sys_ulock_wait2(struct proc *p, struct ulock_wait2_args *args, int32_t *retval)
+{
+	uint8_t opcode = (uint8_t)(args->operation & UL_OPCODE_MASK);
 	uint flags = args->operation & UL_FLAGS_MASK;
 
 	if (flags & ULF_WAIT_CANCEL_POINT) {
@@ -539,7 +577,7 @@ ulock_wait(struct proc *p, struct ulock_wait_args *args, int32_t *retval)
 		key.ulk_offset = offset;
 	} else {
 		key.ulk_key_type = ULK_UADDR;
-		key.ulk_pid = p->p_pid;
+		key.ulk_task = proc_task(p);
 		key.ulk_addr = args->addr;
 	}
 
@@ -620,7 +658,7 @@ ulock_wait(struct proc *p, struct ulock_wait_args *args, int32_t *retval)
 
 #if DEVELOPMENT || DEBUG
 	/* Occasionally simulate copyin finding the user address paged out */
-	if (((ull_simulate_copyin_fault == p->p_pid) || (ull_simulate_copyin_fault == 1)) && (copy_ret == 0)) {
+	if (((ull_simulate_copyin_fault == proc_getpid(p)) || (ull_simulate_copyin_fault == 1)) && (copy_ret == 0)) {
 		static _Atomic int fault_inject = 0;
 		if (os_atomic_inc_orig(&fault_inject, relaxed) % 73 == 0) {
 			copy_ret = EFAULT;
@@ -642,7 +680,7 @@ ulock_wait(struct proc *p, struct ulock_wait_args *args, int32_t *retval)
 
 	if (set_owner) {
 		if (owner_thread == THREAD_NULL) {
-			ret = ulock_resolve_owner(args->value, &owner_thread);
+			ret = ulock_resolve_owner((uint32_t)args->value, &owner_thread);
 			if (ret == EOWNERDEAD) {
 				/*
 				 * Translation failed - even though the lock value is up to date,
@@ -680,7 +718,7 @@ ulock_wait(struct proc *p, struct ulock_wait_args *args, int32_t *retval)
 	}
 
 	wait_result_t wr;
-	uint32_t timeout = args->timeout;
+	uint64_t timeout = args->timeout; /* nanoseconds */
 	uint64_t deadline = TIMEOUT_WAIT_FOREVER;
 	wait_interrupt_t interruptible = THREAD_ABORTSAFE;
 	struct turnstile *ts;
@@ -693,15 +731,28 @@ ulock_wait(struct proc *p, struct ulock_wait_args *args, int32_t *retval)
 		interruptible |= THREAD_WAIT_NOREPORT;
 	}
 
-	if (timeout) {
-		clock_interval_to_deadline(timeout, NSEC_PER_USEC, &deadline);
-	}
-
 	turnstile_update_inheritor(ts, owner_thread,
 	    (TURNSTILE_DELAYED_UPDATE | TURNSTILE_INHERITOR_THREAD));
 
+	if (timeout) {
+		if (flags & ULF_DEADLINE) {
+			deadline = timeout;
+		} else {
+			nanoseconds_to_deadline(timeout, &deadline);
+		}
+	}
+
 	wr = waitq_assert_wait64(&ts->ts_waitq, CAST_EVENT64_T(ULOCK_TO_EVENT(ull)),
 	    interruptible, deadline);
+
+	if (wr == THREAD_WAITING) {
+		uthread_t uthread = (uthread_t)get_bsdthread_info(self);
+		uthread->uu_save.uus_ulock_wait_data.ull = ull;
+		uthread->uu_save.uus_ulock_wait_data.retval = retval;
+		uthread->uu_save.uus_ulock_wait_data.flags = flags;
+		uthread->uu_save.uus_ulock_wait_data.owner_thread = owner_thread;
+		uthread->uu_save.uus_ulock_wait_data.old_owner = old_owner;
+	}
 
 	ull_unlock(ull);
 
@@ -713,13 +764,8 @@ ulock_wait(struct proc *p, struct ulock_wait_args *args, int32_t *retval)
 	turnstile_update_inheritor_complete(ts, TURNSTILE_INTERLOCK_NOT_HELD);
 
 	if (wr == THREAD_WAITING) {
-		uthread_t uthread = (uthread_t)get_bsdthread_info(self);
-		uthread->uu_save.uus_ulock_wait_data.retval = retval;
-		uthread->uu_save.uus_ulock_wait_data.flags = flags;
-		uthread->uu_save.uus_ulock_wait_data.owner_thread = owner_thread;
-		uthread->uu_save.uus_ulock_wait_data.old_owner = old_owner;
 		if (set_owner && owner_thread != THREAD_NULL) {
-			thread_handoff_parameter(owner_thread, ulock_wait_continue, ull);
+			thread_handoff_parameter(owner_thread, ulock_wait_continue, ull, THREAD_HANDOFF_NONE);
 		} else {
 			assert(owner_thread == THREAD_NULL);
 			thread_block_parameter(ulock_wait_continue, ull);
@@ -803,13 +849,12 @@ ulock_wait_cleanup(ull_t *ull, thread_t owner_thread, thread_t old_owner, int32_
 
 __attribute__((noreturn))
 static void
-ulock_wait_continue(void * parameter, wait_result_t wr)
+ulock_wait_continue(__unused void * parameter, wait_result_t wr)
 {
-	thread_t self = current_thread();
-	uthread_t uthread = (uthread_t)get_bsdthread_info(self);
+	uthread_t uthread = current_uthread();
 	int ret = 0;
 
-	ull_t *ull = (ull_t *)parameter;
+	ull_t *ull = uthread->uu_save.uus_ulock_wait_data.ull;
 	int32_t *retval = uthread->uu_save.uus_ulock_wait_data.retval;
 	uint flags = uthread->uu_save.uus_ulock_wait_data.flags;
 	thread_t owner_thread = uthread->uu_save.uus_ulock_wait_data.owner_thread;
@@ -831,30 +876,46 @@ ulock_wait_continue(void * parameter, wait_result_t wr)
 }
 
 int
-ulock_wake(struct proc *p, struct ulock_wake_args *args, __unused int32_t *retval)
+sys_ulock_wake(struct proc *p, struct ulock_wake_args *args, int32_t *retval)
 {
-	uint opcode = args->operation & UL_OPCODE_MASK;
-	uint flags = args->operation & UL_FLAGS_MASK;
 	int ret = 0;
-	ulk_t key;
-
-	/* involved threads - each variable holds +1 ref if not null */
-	thread_t wake_thread    = THREAD_NULL;
-
 #if DEVELOPMENT || DEBUG
+	uint8_t opcode = (uint8_t)(args->operation & UL_OPCODE_MASK);
+
 	if (opcode == UL_DEBUG_HASH_DUMP_PID) {
-		*retval = ull_hash_dump(p->p_pid);
+		*retval = ull_hash_dump(proc_task(p));
 		return ret;
 	} else if (opcode == UL_DEBUG_HASH_DUMP_ALL) {
-		*retval = ull_hash_dump(0);
+		*retval = ull_hash_dump(TASK_NULL);
 		return ret;
 	} else if (opcode == UL_DEBUG_SIMULATE_COPYIN_FAULT) {
 		ull_simulate_copyin_fault = (int)(args->wake_value);
 		return ret;
 	}
 #endif
+	ret = ulock_wake(proc_task(p), args->operation, args->addr, args->wake_value);
+
+	if ((args->operation & ULF_NO_ERRNO) && (ret != 0)) {
+		*retval = -ret;
+		ret = 0;
+	}
+
+	return ret;
+}
+
+int
+ulock_wake(task_t task, uint32_t operation, user_addr_t addr, uint64_t wake_value)
+{
+	uint8_t opcode = (uint8_t)(operation & UL_OPCODE_MASK);
+	uint flags = operation & UL_FLAGS_MASK;
+	int ret = 0;
+	ulk_t key;
+
+	/* involved threads - each variable holds +1 ref if not null */
+	thread_t wake_thread    = THREAD_NULL;
 
 	bool set_owner = false;
+	bool allow_non_owner = false;
 	bool xproc = false;
 
 	switch (opcode) {
@@ -883,7 +944,16 @@ ulock_wake(struct proc *p, struct ulock_wake_args *args, __unused int32_t *retva
 		goto munge_retval;
 	}
 
-	if (args->addr == 0) {
+	if (flags & ULF_WAKE_ALLOW_NON_OWNER) {
+		if (!set_owner) {
+			ret = EINVAL;
+			goto munge_retval;
+		}
+
+		allow_non_owner = true;
+	}
+
+	if (addr == 0) {
 		ret = EINVAL;
 		goto munge_retval;
 	}
@@ -892,7 +962,7 @@ ulock_wake(struct proc *p, struct ulock_wake_args *args, __unused int32_t *retva
 		uint64_t object = 0;
 		uint64_t offset = 0;
 
-		ret = uaddr_findobj(args->addr, &object, &offset);
+		ret = uaddr_findobj(addr, &object, &offset);
 		if (ret) {
 			ret = EINVAL;
 			goto munge_retval;
@@ -902,15 +972,15 @@ ulock_wake(struct proc *p, struct ulock_wake_args *args, __unused int32_t *retva
 		key.ulk_offset = offset;
 	} else {
 		key.ulk_key_type = ULK_UADDR;
-		key.ulk_pid = p->p_pid;
-		key.ulk_addr = args->addr;
+		key.ulk_task = task;
+		key.ulk_addr = addr;
 	}
 
 	if (flags & ULF_WAKE_THREAD) {
-		mach_port_name_t wake_thread_name = (mach_port_name_t)(args->wake_value);
+		mach_port_name_t wake_thread_name = (mach_port_name_t)(wake_value);
 		wake_thread = port_name_to_thread(wake_thread_name,
-		    PORT_TO_THREAD_IN_CURRENT_TASK |
-		    PORT_TO_THREAD_NOT_CURRENT_THREAD);
+		    PORT_INTRANS_THREAD_IN_CURRENT_TASK |
+		    PORT_INTRANS_THREAD_NOT_CURRENT_THREAD);
 		if (wake_thread == THREAD_NULL) {
 			ret = ESRCH;
 			goto munge_retval;
@@ -934,7 +1004,7 @@ ulock_wake(struct proc *p, struct ulock_wake_args *args, __unused int32_t *retva
 	}
 
 	if (set_owner) {
-		if (ull->ull_owner != current_thread()) {
+		if ((ull->ull_owner != current_thread()) && !allow_non_owner) {
 			/*
 			 * If the current thread isn't the known owner,
 			 * then this wake call was late to the party,
@@ -962,12 +1032,9 @@ ulock_wake(struct proc *p, struct ulock_wake_args *args, __unused int32_t *retva
 			ret = EALREADY;
 		}
 	} else if (flags & ULF_WAKE_ALL) {
-		if (set_owner) {
-			turnstile_update_inheritor(ts, THREAD_NULL,
-			    TURNSTILE_IMMEDIATE_UPDATE | TURNSTILE_INHERITOR_THREAD);
-		}
 		waitq_wakeup64_all(&ts->ts_waitq, CAST_EVENT64_T(ULOCK_TO_EVENT(ull)),
-		    THREAD_AWAKENED, 0);
+		    THREAD_AWAKENED,
+		    set_owner ? WAITQ_UPDATE_INHERITOR : WAITQ_WAKEUP_DEFAULT);
 	} else if (set_owner) {
 		/*
 		 * The turnstile waitq is priority ordered,
@@ -976,10 +1043,10 @@ ulock_wake(struct proc *p, struct ulock_wake_args *args, __unused int32_t *retva
 		 */
 		new_owner = waitq_wakeup64_identify(&ts->ts_waitq,
 		    CAST_EVENT64_T(ULOCK_TO_EVENT(ull)),
-		    THREAD_AWAKENED, WAITQ_PROMOTE_ON_WAKE);
+		    THREAD_AWAKENED, WAITQ_UPDATE_INHERITOR);
 	} else {
 		waitq_wakeup64_one(&ts->ts_waitq, CAST_EVENT64_T(ULOCK_TO_EVENT(ull)),
-		    THREAD_AWAKENED, WAITQ_ALL_PRIORITIES);
+		    THREAD_AWAKENED, WAITQ_WAKEUP_DEFAULT);
 	}
 
 	if (set_owner) {
@@ -1007,10 +1074,6 @@ munge_retval:
 		thread_deallocate(wake_thread);
 	}
 
-	if ((flags & ULF_NO_ERRNO) && (ret != 0)) {
-		*retval = -ret;
-		ret = 0;
-	}
 	return ret;
 }
 
@@ -1018,7 +1081,8 @@ void
 kdp_ulock_find_owner(__unused struct waitq * waitq, event64_t event, thread_waitinfo_t * waitinfo)
 {
 	ull_t *ull = EVENT_TO_ULOCK(event);
-	assert(kdp_is_in_zone(ull, "ulocks"));
+
+	zone_require(ull_zone->kt_zv.zv_zone, ull);
 
 	switch (ull->ull_opcode) {
 	case UL_UNFAIR_LOCK:

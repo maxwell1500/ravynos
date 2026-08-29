@@ -30,8 +30,8 @@
 #include <kern/clock.h>
 #include <kern/coalition.h>
 #include <kern/debug.h>
+#include <kern/startup.h>
 #include <kern/host.h>
-#include <kern/kalloc.h>
 #include <kern/kern_types.h>
 #include <kern/machine.h>
 #include <kern/simple_lock.h>
@@ -131,23 +131,28 @@ typedef struct {
 
 static inline void _sfi_wait_cleanup(void);
 
-#define SFI_CLASS_REGISTER(clsid, ledger_name)                                                          \
-static void __attribute__((noinline, noreturn))                                                         \
+static void sfi_class_register(sfi_class_registration_t *);
+
+#define SFI_CLASS_REGISTER(clsid, ledger_name)                                  \
+                                                                                \
+static void __attribute__((noinline, noreturn))                                 \
 SFI_ ## clsid ## _THREAD_IS_WAITING(void *arg __unused, wait_result_t wret __unused) \
-{                                                                                                                                                       \
-	_sfi_wait_cleanup();                                                                                                    \
-	thread_exception_return();                                                                                              \
-}                                                                                                                                                       \
-                                                                                                                                                        \
-_Static_assert(SFI_CLASS_ ## clsid < MAX_SFI_CLASS_ID, "Invalid ID");           \
-                                                                                                                                                        \
-__attribute__((section("__DATA,__sfi_class_reg"), used))                                        \
-static sfi_class_registration_t SFI_ ## clsid ## _registration = {                      \
-	.class_id = SFI_CLASS_ ## clsid,                                                                                \
-	.class_continuation = SFI_ ## clsid ## _THREAD_IS_WAITING,                              \
-	.class_name = "SFI_CLASS_" # clsid,                                                                             \
-	.class_ledger_name = "SFI_CLASS_" # ledger_name,                                                \
-}
+{                                                                               \
+	_sfi_wait_cleanup();                                                    \
+	thread_exception_return();                                              \
+}                                                                               \
+                                                                                \
+static_assert(SFI_CLASS_ ## clsid < MAX_SFI_CLASS_ID, "Invalid ID");            \
+                                                                                \
+static __startup_data sfi_class_registration_t                                  \
+SFI_ ## clsid ## _registration = {                                              \
+	.class_id = SFI_CLASS_ ## clsid,                                        \
+	.class_continuation = SFI_ ## clsid ## _THREAD_IS_WAITING,              \
+	.class_name = "SFI_CLASS_" # clsid,                                     \
+	.class_ledger_name = "SFI_CLASS_" # ledger_name,                        \
+};                                                                              \
+STARTUP_ARG(TUNABLES, STARTUP_RANK_MIDDLE,                                      \
+    sfi_class_register, &SFI_ ## clsid ## _registration)
 
 /* SFI_CLASS_UNSPECIFIED not included here */
 SFI_CLASS_REGISTER(MAINTENANCE, MAINTENANCE);
@@ -171,7 +176,7 @@ struct sfi_class_state {
 	uint64_t        off_time_usecs;
 	uint64_t        off_time_interval;
 
-	timer_call_data_t       on_timer;
+	thread_call_t       on_timer;
 	uint64_t        on_timer_deadline;
 	boolean_t                       on_timer_programmed;
 
@@ -188,7 +193,7 @@ struct sfi_class_state {
 /* Static configuration performed in sfi_early_init() */
 struct sfi_class_state sfi_classes[MAX_SFI_CLASS_ID];
 
-int sfi_enabled_class_count;
+int sfi_enabled_class_count; // protected by sfi_lock and used atomically
 
 static void sfi_timer_global_off(
 	timer_call_param_t      param0,
@@ -198,73 +203,46 @@ static void sfi_timer_per_class_on(
 	timer_call_param_t      param0,
 	timer_call_param_t      param1);
 
-static sfi_class_registration_t *
-sfi_get_registration_data(unsigned long *count)
-{
-	unsigned long sectlen = 0;
-	void *sectdata;
-
-	sectdata = getsectdatafromheader(&_mh_execute_header, "__DATA", "__sfi_class_reg", &sectlen);
-	if (sectdata) {
-		if (sectlen % sizeof(sfi_class_registration_t) != 0) {
-			/* corrupt data? */
-			panic("__sfi_class_reg section has invalid size %lu", sectlen);
-			__builtin_unreachable();
-		}
-
-		*count = sectlen / sizeof(sfi_class_registration_t);
-		return (sfi_class_registration_t *)sectdata;
-	} else {
-		panic("__sfi_class_reg section not found");
-		__builtin_unreachable();
-	}
-}
-
 /* Called early in boot, when kernel is single-threaded */
-void
-sfi_early_init(void)
+__startup_func
+static void
+sfi_class_register(sfi_class_registration_t *reg)
 {
-	unsigned long i, count;
-	sfi_class_registration_t *registrations;
+	sfi_class_id_t class_id = reg->class_id;
 
-	registrations = sfi_get_registration_data(&count);
-	for (i = 0; i < count; i++) {
-		sfi_class_id_t class_id = registrations[i].class_id;
-
-		assert(class_id < MAX_SFI_CLASS_ID); /* should be caught at compile-time */
-		if (class_id < MAX_SFI_CLASS_ID) {
-			if (sfi_classes[class_id].continuation != NULL) {
-				panic("Duplicate SFI registration for class 0x%x", class_id);
-			}
-			sfi_classes[class_id].class_sfi_is_enabled = FALSE;
-			sfi_classes[class_id].class_in_on_phase = TRUE;
-			sfi_classes[class_id].continuation = registrations[i].class_continuation;
-			sfi_classes[class_id].class_name = registrations[i].class_name;
-			sfi_classes[class_id].class_ledger_name = registrations[i].class_ledger_name;
-		}
+	if (class_id >= MAX_SFI_CLASS_ID) {
+		panic("Invalid SFI class 0x%x", class_id);
 	}
+	if (sfi_classes[class_id].continuation != NULL) {
+		panic("Duplicate SFI registration for class 0x%x", class_id);
+	}
+	sfi_classes[class_id].class_sfi_is_enabled = FALSE;
+	sfi_classes[class_id].class_in_on_phase = TRUE;
+	sfi_classes[class_id].continuation = reg->class_continuation;
+	sfi_classes[class_id].class_name = reg->class_name;
+	sfi_classes[class_id].class_ledger_name = reg->class_ledger_name;
 }
 
 void
 sfi_init(void)
 {
 	sfi_class_id_t i;
-	kern_return_t kret;
 
 	simple_lock_init(&sfi_lock, 0);
 	timer_call_setup(&sfi_timer_call_entry, sfi_timer_global_off, NULL);
 	sfi_window_is_set = FALSE;
-	sfi_enabled_class_count = 0;
+	os_atomic_init(&sfi_enabled_class_count, 0);
 	sfi_is_enabled = FALSE;
 
 	for (i = 0; i < MAX_SFI_CLASS_ID; i++) {
 		/* If the class was set up in sfi_early_init(), initialize remaining fields */
 		if (sfi_classes[i].continuation) {
-			timer_call_setup(&sfi_classes[i].on_timer, sfi_timer_per_class_on, (void *)(uintptr_t)i);
+			sfi_classes[i].on_timer = thread_call_allocate_with_options(
+				sfi_timer_per_class_on, (void *)(uintptr_t)i, THREAD_CALL_PRIORITY_HIGH,
+				THREAD_CALL_OPTIONS_ONCE);
 			sfi_classes[i].on_timer_programmed = FALSE;
 
-			kret = waitq_init(&sfi_classes[i].waitq, SYNC_POLICY_FIFO | SYNC_POLICY_DISABLE_IRQ);
-			assert(kret == KERN_SUCCESS);
+			waitq_init(&sfi_classes[i].waitq, WQT_QUEUE, SYNC_POLICY_FIFO);
 		} else {
 			/* The only allowed gap is for SFI_CLASS_UNSPECIFIED */
 			if (i != SFI_CLASS_UNSPECIFIED) {
@@ -350,14 +328,14 @@ sfi_timer_global_off(
 			on_timer_deadline = now + sfi_classes[i].off_time_interval;
 			sfi_classes[i].on_timer_deadline = on_timer_deadline;
 
-			timer_call_enter1(&sfi_classes[i].on_timer, NULL, on_timer_deadline, TIMER_CALL_SYS_CRITICAL);
+			thread_call_enter_delayed_with_leeway(sfi_classes[i].on_timer, NULL, on_timer_deadline, 0, THREAD_CALL_DELAY_SYS_CRITICAL);
 		} else {
 			/* If this class no longer needs SFI, make sure the timer is cancelled */
 			sfi_classes[i].class_in_on_phase = TRUE;
 			if (sfi_classes[i].on_timer_programmed) {
 				sfi_classes[i].on_timer_programmed = FALSE;
 				sfi_classes[i].on_timer_deadline = ~0ULL;
-				timer_call_cancel(&sfi_classes[i].on_timer);
+				thread_call_cancel(sfi_classes[i].on_timer);
 			}
 		}
 	}
@@ -422,10 +400,8 @@ sfi_timer_per_class_on(
 {
 	sfi_class_id_t sfi_class_id = (sfi_class_id_t)(uintptr_t)param0;
 	struct sfi_class_state  *sfi_class = &sfi_classes[sfi_class_id];
-	kern_return_t   kret;
-	spl_t           s;
 
-	s = splsched();
+	spl_t s = splsched();
 
 	simple_lock(&sfi_lock, LCK_GRP_NULL);
 
@@ -440,16 +416,20 @@ sfi_timer_per_class_on(
 	sfi_class->class_in_on_phase = TRUE;
 	sfi_class->on_timer_programmed = FALSE;
 
+	simple_unlock(&sfi_lock);
+
+	/*
+	 * Issue the wakeup outside the lock to reduce lock hold time
+	 * rdar://problem/96463639
+	 */
+	__assert_only kern_return_t kret;
+
 	kret = waitq_wakeup64_all(&sfi_class->waitq,
 	    CAST_EVENT64_T(sfi_class_id),
-	    THREAD_AWAKENED, WAITQ_ALL_PRIORITIES);
+	    THREAD_AWAKENED, waitq_flags_splx(s));
 	assert(kret == KERN_SUCCESS || kret == KERN_NOT_WAITING);
 
 	KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SFI, SFI_ON_TIMER) | DBG_FUNC_END, 0, 0, 0, 0, 0);
-
-	simple_unlock(&sfi_lock);
-
-	splx(s);
 }
 
 
@@ -507,7 +487,7 @@ sfi_set_window(uint64_t window_usecs)
 	sfi_window_interval = interval;
 	sfi_window_is_set = TRUE;
 
-	if (sfi_enabled_class_count == 0) {
+	if (os_atomic_load(&sfi_enabled_class_count, relaxed) == 0) {
 		/* Can't program timer yet */
 	} else if (!sfi_is_enabled) {
 		sfi_is_enabled = TRUE;
@@ -566,9 +546,8 @@ sfi_window_cancel(void)
 kern_return_t
 sfi_defer(uint64_t sfi_defer_matus)
 {
-	spl_t           s;
 	kern_return_t kr = KERN_FAILURE;
-	s = splsched();
+	spl_t s = splsched();
 
 	KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SFI, SFI_GLOBAL_DEFER), sfi_defer_matus, 0, 0, 0, 0);
 
@@ -582,13 +561,12 @@ sfi_defer(uint64_t sfi_defer_matus)
 	sfi_next_off_deadline += sfi_defer_matus;
 	timer_call_enter1(&sfi_timer_call_entry, NULL, sfi_next_off_deadline, TIMER_CALL_SYS_CRITICAL);
 
-	int i;
-	for (i = 0; i < MAX_SFI_CLASS_ID; i++) {
+	for (int i = 0; i < MAX_SFI_CLASS_ID; i++) {
 		if (sfi_classes[i].class_sfi_is_enabled) {
 			if (sfi_classes[i].on_timer_programmed) {
 				uint64_t new_on_deadline = sfi_classes[i].on_timer_deadline + sfi_defer_matus;
 				sfi_classes[i].on_timer_deadline = new_on_deadline;
-				timer_call_enter1(&sfi_classes[i].on_timer, NULL, new_on_deadline, TIMER_CALL_SYS_CRITICAL);
+				thread_call_enter_delayed_with_leeway(sfi_classes[i].on_timer, NULL, new_on_deadline, 0, THREAD_CALL_DELAY_SYS_CRITICAL);
 			}
 		}
 	}
@@ -660,7 +638,7 @@ sfi_set_class_offtime(sfi_class_id_t class_id, uint64_t offtime_usecs)
 
 	/* We never re-program the per-class on-timer, but rather just let it expire naturally */
 	if (!sfi_classes[class_id].class_sfi_is_enabled) {
-		sfi_enabled_class_count++;
+		os_atomic_inc(&sfi_enabled_class_count, relaxed);
 	}
 	sfi_classes[class_id].off_time_usecs = offtime_usecs;
 	sfi_classes[class_id].off_time_interval = interval;
@@ -700,13 +678,13 @@ sfi_class_offtime_cancel(sfi_class_id_t class_id)
 
 	/* We never re-program the per-class on-timer, but rather just let it expire naturally */
 	if (sfi_classes[class_id].class_sfi_is_enabled) {
-		sfi_enabled_class_count--;
+		os_atomic_dec(&sfi_enabled_class_count, relaxed);
 	}
 	sfi_classes[class_id].off_time_usecs = 0;
 	sfi_classes[class_id].off_time_interval = 0;
 	sfi_classes[class_id].class_sfi_is_enabled = FALSE;
 
-	if (sfi_enabled_class_count == 0) {
+	if (os_atomic_load(&sfi_enabled_class_count, relaxed) == 0) {
 		sfi_is_enabled = FALSE;
 	}
 
@@ -761,10 +739,20 @@ sfi_get_class_offtime(sfi_class_id_t class_id, uint64_t *offtime_usecs)
 sfi_class_id_t
 sfi_thread_classify(thread_t thread)
 {
-	task_t task = thread->task;
+	task_t task = get_threadtask(thread);
 	boolean_t is_kernel_thread = (task == kernel_task);
 	sched_mode_t thmode = thread->sched_mode;
 	boolean_t focal = FALSE;
+
+	/* kernel threads never reach the user AST boundary, and are in a separate world for SFI */
+	if (is_kernel_thread) {
+		return SFI_CLASS_KERNEL;
+	}
+
+	/* no need to re-classify threads unless there is at least one enabled SFI class */
+	if (os_atomic_load(&sfi_enabled_class_count, relaxed) == 0) {
+		return SFI_CLASS_OPTED_OUT;
+	}
 
 	int task_role       = proc_get_effective_task_policy(task, TASK_POLICY_ROLE);
 	int latency_qos     = proc_get_effective_task_policy(task, TASK_POLICY_LATENCY_QOS);
@@ -772,11 +760,6 @@ sfi_thread_classify(thread_t thread)
 
 	int thread_qos      = proc_get_effective_thread_policy(thread, TASK_POLICY_QOS);
 	int thread_bg       = proc_get_effective_thread_policy(thread, TASK_POLICY_DARWIN_BG);
-
-	/* kernel threads never reach the user AST boundary, and are in a separate world for SFI */
-	if (is_kernel_thread) {
-		return SFI_CLASS_KERNEL;
-	}
 
 	if (thread_qos == THREAD_QOS_MAINTENANCE) {
 		return SFI_CLASS_MAINTENANCE;
@@ -814,7 +797,7 @@ sfi_thread_classify(thread_t thread)
 	case TASK_DEFAULT_APPLICATION:
 	case TASK_UNSPECIFIED:
 		/* Focal if the task is in a coalition with a FG/focal app */
-		if (task_coalition_focal_count(thread->task) > 0) {
+		if (task_coalition_focal_count(task) > 0) {
 			focal = TRUE;
 		}
 		break;
@@ -963,14 +946,13 @@ _sfi_wait_cleanup(void)
 	 */
 
 	if (self->wait_sfi_begin_time != 0) {
-#if !CONFIG_EMBEDDED
 		uint64_t made_runnable = os_atomic_load(&self->last_made_runnable_time, relaxed);
 		int64_t sfi_wait_time = made_runnable - self->wait_sfi_begin_time;
 		assert(sfi_wait_time >= 0);
 
-		ledger_credit(self->task->ledger, task_ledgers.sfi_wait_times[current_sfi_wait_class],
+		ledger_credit(get_threadtask(self)->ledger,
+		    task_ledgers.sfi_wait_times[current_sfi_wait_class],
 		    sfi_wait_time);
-#endif /* !CONFIG_EMBEDDED */
 
 		self->wait_sfi_begin_time = 0;
 	}
@@ -1186,7 +1168,7 @@ sfi_reevaluate(thread_t thread __unused)
 sfi_class_id_t
 sfi_thread_classify(thread_t thread)
 {
-	task_t task = thread->task;
+	task_t task = get_threadtask(thread);
 	boolean_t is_kernel_thread = (task == kernel_task);
 
 	if (is_kernel_thread) {

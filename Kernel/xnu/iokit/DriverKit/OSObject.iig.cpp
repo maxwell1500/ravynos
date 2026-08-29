@@ -8,9 +8,9 @@
 #else
 #include <DriverKit/DriverKit.h>
 #endif /* KERNEL */
+#include <IOKit/IORPC.h>
 #include <DriverKit/IOReturn.h>
 #include <DriverKit/OSObject.h>
-
 /* @iig implementation */
 #include <DriverKit/IODispatchQueue.h>
 /* @iig end */

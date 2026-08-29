@@ -6,37 +6,22 @@ export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 include $(MakeInc_cmd)
 include $(MakeInc_def)
 
-OPSYS := $(shell uname -s)
-
 OBJS = kextsymboltool.o
 
-CFLAGS = -g -O0 -Wno-implicit-function-declaration \
-	-I$(SRCROOT)/../../Developer/Default.xctoolchain/include \
-	-I$(SOURCE) -I. 
-LDFLAGS = -lstdc++
+CFLAGS = -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION) -g -O0 -I$(SOURCE) -I.
 
-ifeq ($(OPSYS),Darwin)
-CFLAGS += -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION)
-LDFLAGS += -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION)
-endif
+WARNFLAGS = -Wall
 
-ifeq ($(OPSYS),Linux)
-# The linux linker needs these to come after object files :(
-export LIBS = -L../../../../Developer/Default.xctoolchain/cctools/libmacho \
-	-L../../../../Developer/Default.xctoolchain/cctools/libstuff \
-	-luuid -L${TOOLCHAIN}/usr/lib -lmacho -lstuff
-endif
-
-WARNFLAGS = -Wall -Wno-int-conversion
+LDFLAGS = -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION) -lstdc++
 
 kextsymboltool: $(OBJS)
-	$(call makelog,$(ColorH)HOST_LD$(Color0)       $(ColorF)$@$(Color0))
-	$(_v)$(HOST_CC) $(LDFLAGS) -o $@ $^ $(LIBS)
-	$(call makelog,$(ColorH)HOST_CODESIGN$(Color0) $(ColorF)$@$(Color0))
+	@$(LOG_HOST_LD) "$@"
+	$(_v)$(HOST_CC) $(LDFLAGS) -o $@ $^
+	@$(LOG_HOST_CODESIGN) "$@"
 	$(_v)env CODESIGN_ALLOCATE=$(HOST_CODESIGN_ALLOCATE) $(HOST_CODESIGN) -s - $@
 
 %.o: %.c
-	$(call makelog,$(ColorH)HOST_CC$(Color0)       $(ColorF)$@$(Color0))
+	@$(LOG_HOST_CC) "$@"
 	$(_v)$(HOST_CC) $(WARNFLAGS) $(CFLAGS) -c -o $@ $<
 
 do_build_setup:: kextsymboltool

@@ -28,7 +28,6 @@ PRIVATE_DATAFILES = ${DATAFILES}
 PRIVATE_KERNELFILES = \
 	_label.h \
 	mac.h \
-	mac_alloc.h \
 	mac_data.h \
 	mac_framework.h \
 	mac_internal.h \
@@ -38,7 +37,7 @@ PRIVATE_KERNELFILES = \
 INSTALL_MI_LIST = ${DATAFILES}
 
 # /System/Library/Frameworks/System.framework/PrivateHeaders
-INSTALL_MI_LCL_LIST = ${PRIVATE_DATAFILES}
+INSTALL_SF_MI_LCL_LIST = $(sort ${DATAFILES} ${PRIVATE_DATAFILES})
 
 INSTALL_MI_DIR = security
 

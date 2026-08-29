@@ -10,12 +10,10 @@ PRIVATE_DATAFILES = \
 	cpu_capabilities.h
 
 KERNELFILES = \
-	atomic_impl.h	\
 	atomic.h	\
 	config.h		\
 	cpu_capabilities.h	\
 	cpu_number.h	\
-	io_map_entries.h \
 	lock.h	\
 	locks.h	\
 	machine_cpuid.h		\
@@ -26,13 +24,18 @@ KERNELFILES = \
 	monotonic.h \
 	pal_routines.h		\
 	pal_hibernate.h		\
+	setjmp.h		\
 	simple_lock.h		\
-	smp.h
+	smp.h                   \
+	trap.h
 
 EXPORT_FILES = \
 	machine_remote_time.h
 
+# These are covered by ../../bsd/machine/machine_private.modulemap.
 INSTALL_MI_LCL_LIST = ${PRIVATE_DATAFILES}
+
+INSTALL_SF_MI_LCL_LIST = ${PRIVATE_DATAFILES}
 
 INSTALL_KF_MD_LCL_LIST = ${EXPORT_FILES}
 

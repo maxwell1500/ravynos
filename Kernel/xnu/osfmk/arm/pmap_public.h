@@ -28,6 +28,7 @@
 #ifndef _ARM_PMAP_PUBLIC_H_
 #define _ARM_PMAP_PUBLIC_H_
 
+
 #include <stddef.h>
 #include <mach/kern_return.h>
 #include <mach/vm_types.h>
@@ -36,9 +37,9 @@
 __BEGIN_DECLS
 
 #if defined(__arm64__)
-typedef uint64_t pmap_paddr_t;                  /* physical address (not ppnum_t) */
+typedef uint64_t pmap_paddr_t __kernel_ptr_semantics; /* physical address (not ppnum_t) */
 #else
-typedef uint32_t pmap_paddr_t;                  /* physical address (not ppnum_t) */
+typedef uint32_t pmap_paddr_t __kernel_ptr_semantics; /* physical address (not ppnum_t) */
 #endif
 
 

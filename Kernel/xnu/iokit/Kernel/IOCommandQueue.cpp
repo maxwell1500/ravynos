@@ -26,12 +26,15 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
+#define IOKIT_ENABLE_SHARED_PTR
+
 #if !defined(__LP64__)
 
 #include <IOKit/IOCommandQueue.h>
 #include <IOKit/IOWorkLoop.h>
 #include <IOKit/IOTimeStamp.h>
 #include <IOKit/IOKitDebug.h>
+#include <libkern/c++/OSSharedPtr.h>
 
 #include <mach/sync_policy.h>
 
@@ -94,7 +97,7 @@ IOCommandQueue::init(OSObject *inOwner,
 
 	size = inSize + 1; /* Allocate one more entry than needed */
 
-	queue = (void *)kalloc(size * sizeof(commandEntryT));
+	queue = (void *)kalloc_type(commandEntryT, size, Z_WAITOK_ZERO);
 	if (!queue) {
 		return false;
 	}
@@ -111,16 +114,16 @@ IOCommandQueue::init(OSObject *inOwner,
 	return true;
 }
 
-IOCommandQueue *
+OSSharedPtr<IOCommandQueue>
 IOCommandQueue::commandQueue(OSObject *inOwner,
     IOCommandQueueAction inAction,
     int inSize)
 {
-	IOCommandQueue *me = new IOCommandQueue;
+	OSSharedPtr<IOCommandQueue> me = OSMakeShared<IOCommandQueue>();
 
 	if (me && !me->init(inOwner, inAction, inSize)) {
-		me->free();
-		return NULL;
+		me.reset();
+		return nullptr;
 	}
 
 	return me;
@@ -137,7 +140,7 @@ void
 IOCommandQueue::free()
 {
 	if (queue) {
-		kfree(queue, size * sizeof(commandEntryT));
+		kfree_type(commandEntryT, size, queue);
 	}
 	if (producerSema) {
 		semaphore_destroy(kernel_task, producerSema);

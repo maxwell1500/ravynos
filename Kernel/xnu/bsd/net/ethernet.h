@@ -32,8 +32,14 @@
 
 #ifndef _NET_ETHERNET_H_
 #define _NET_ETHERNET_H_
+#ifndef DRIVERKIT
 #include <sys/appleapiopts.h>
 #include <sys/types.h>          /* u_ types */
+#else
+#include <sys/_types.h>
+#include <sys/_types/_u_char.h>
+#include <sys/_types/_u_short.h>
+#endif /* DRIVERKIT */
 
 /*
  * The number of bytes in an ethernet (MAC) address.
@@ -108,7 +114,6 @@ typedef struct  ether_addr {
 #define ETHERTYPE_PTP           0x88f7  /* IEEE 1588 Precision Time Protocol */
 #define ETHERTYPE_LOOPBACK      0x9000  /* used to test interfaces */
 /* XXX - add more useful types here */
-#define ETHERTYPE_IEEE802154    0x0809  /* 802.15.4 */
 
 /*
  * The ETHERTYPE_NTRAILER packet types starting at ETHERTYPE_TRAIL have
@@ -121,6 +126,7 @@ typedef struct  ether_addr {
 #define ETHERMTU        (ETHER_MAX_LEN-ETHER_HDR_LEN-ETHER_CRC_LEN)
 #define ETHERMIN        (ETHER_MIN_LEN-ETHER_HDR_LEN-ETHER_CRC_LEN)
 
+#ifndef DRIVERKIT
 #ifdef KERNEL_PRIVATE
 /*
  * The following are used by ethernet interfaces.
@@ -131,23 +137,20 @@ struct  ether_addr *ether_aton(const char *);
 #ifdef BSD_KERNEL_PRIVATE
 extern u_char   etherbroadcastaddr[ETHER_ADDR_LEN];
 
-#if defined (__arm__)
 
-#include <string.h>
-
+// TODO: This should really be `__sized_by(ETHER_ADDR_LEN)` rather than
+// `__unsafe_indexable` on the parameters but it is being omitted until the perf
+// impact of adding bounds checks is analyzed (rdar://117166943)
 static __inline__ int
-_ether_cmp(const void * a, const void * b)
+_ether_cmp(const void *__unsafe_indexable a, const void *__unsafe_indexable b)
 {
-	return memcmp(a, b, ETHER_ADDR_LEN);
-}
-
-#else /* __arm__ */
-
-static __inline__ int
-_ether_cmp(const void * a, const void * b)
-{
-	const u_int16_t * a_s = (const u_int16_t *)a;
-	const u_int16_t * b_s = (const u_int16_t *)b;
+	// Given that `ETHER_ADDR_LEN` is a constant one might expect all
+	// bounds checks to be removed in optimized code. Unfortunately a bug
+	// means not all bounds checks are removed (rdar://117279245).
+	const u_int16_t * __unsafe_indexable a_s = __unsafe_forge_bidi_indexable(
+		const u_int16_t *, a, ETHER_ADDR_LEN);
+	const u_int16_t * __unsafe_indexable b_s = __unsafe_forge_bidi_indexable(
+		const u_int16_t *, b, ETHER_ADDR_LEN);
 
 	if (a_s[0] != b_s[0]
 	    || a_s[1] != b_s[1]
@@ -157,7 +160,6 @@ _ether_cmp(const void * a, const void * b)
 	return 0;
 }
 
-#endif /* __arm__ */
 #endif /* BSD_KERNEL_PRIVATE */
 
 #define ETHER_IS_MULTICAST(addr) (*(addr) & 0x01) /* is address mcast/bcast? */
@@ -179,5 +181,6 @@ struct  ether_addr *ether_aton(const char *);
 int     ether_ntohost(char *, const struct ether_addr *);
 __END_DECLS
 #endif /* !KERNEL */
+#endif /* DRIVERKIT */
 
 #endif /* !_NET_ETHERNET_H_ */

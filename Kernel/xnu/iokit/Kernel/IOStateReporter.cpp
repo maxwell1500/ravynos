@@ -26,6 +26,9 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
+#define IOKIT_ENABLE_SHARED_PTR
+
+#include <libkern/c++/OSSharedPtr.h>
 #include <IOKit/IOKernelReportStructs.h>
 #include <IOKit/IOKernelReporters.h>
 #include "IOReporterDefs.h"
@@ -36,34 +39,28 @@ OSDefineMetaClassAndStructors(IOStateReporter, IOReporter);
 
 
 /* static */
-IOStateReporter*
+OSSharedPtr<IOStateReporter>
 IOStateReporter::with(IOService *reportingService,
     IOReportCategories categories,
     int nstates,
     IOReportUnit unit /* = kIOReportUnitHWTicks*/)
 {
-	IOStateReporter *reporter, *rval = NULL;
+	OSSharedPtr<IOStateReporter> reporter;
 
-	// kprintf("%s\n", __func__);      // can't IORLOG() from static
+	if (nstates > INT16_MAX) {
+		return nullptr;
+	}
 
-	reporter = new IOStateReporter;
+	reporter = OSMakeShared<IOStateReporter>();
 	if (!reporter) {
-		goto finish;
+		return nullptr;
 	}
 
-	if (!reporter->initWith(reportingService, categories, nstates, unit)) {
-		goto finish;
+	if (!reporter->initWith(reportingService, categories, (int16_t) nstates, unit)) {
+		return nullptr;
 	}
 
-	// success
-	rval = reporter;
-
-finish:
-	if (!rval) {
-		OSSafeReleaseNULL(reporter);
-	}
-
-	return rval;
+	return reporter;
 }
 
 bool
@@ -102,11 +99,11 @@ IOStateReporter::free(void)
 {
 	if (_currentStates) {
 		PREFL_MEMOP_PANIC(_nChannels, int);
-		IOFree(_currentStates, (size_t)_nChannels * sizeof(int));
+		IOFreeData(_currentStates, (size_t)_nChannels * sizeof(int));
 	}
 	if (_lastUpdateTimes) {
 		PREFL_MEMOP_PANIC(_nChannels, uint64_t);
-		IOFree(_lastUpdateTimes, (size_t)_nChannels * sizeof(uint64_t));
+		IOFreeData(_lastUpdateTimes, (size_t)_nChannels * sizeof(uint64_t));
 	}
 
 	super::free();
@@ -130,7 +127,7 @@ IOStateReporter::handleSwapPrepare(int newNChannels)
 	// new currentStates buffer
 	PREFL_MEMOP_FAIL(newNChannels, int);
 	newCurStatesSize = (size_t)newNChannels * sizeof(int);
-	_swapCurrentStates = (int*)IOMalloc(newCurStatesSize);
+	_swapCurrentStates = (int*)IOMallocData(newCurStatesSize);
 	if (_swapCurrentStates == NULL) {
 		res = kIOReturnNoMemory; goto finish;
 	}
@@ -139,22 +136,21 @@ IOStateReporter::handleSwapPrepare(int newNChannels)
 	// new timestamps buffer
 	PREFL_MEMOP_FAIL(newNChannels, uint64_t);
 	newTSSize = (size_t)newNChannels * sizeof(uint64_t);
-	_swapLastUpdateTimes = (uint64_t *)IOMalloc(newTSSize);
+	_swapLastUpdateTimes = (uint64_t *)IOMallocZeroData(newTSSize);
 	if (_swapLastUpdateTimes == NULL) {
 		res = kIOReturnNoMemory; goto finish;
 	}
-	memset(_swapLastUpdateTimes, 0, newTSSize);
 
 	res = super::handleSwapPrepare(newNChannels);
 
 finish:
 	if (res) {
 		if (_swapCurrentStates) {
-			IOFree(_swapCurrentStates, newCurStatesSize);
+			IOFreeData(_swapCurrentStates, newCurStatesSize);
 			_swapCurrentStates = NULL;
 		}
 		if (_swapLastUpdateTimes) {
-			IOFree(_swapLastUpdateTimes, newTSSize);
+			IOFreeData(_swapLastUpdateTimes, newTSSize);
 			_swapLastUpdateTimes = NULL;
 		}
 	}
@@ -246,12 +242,12 @@ IOStateReporter::handleSwapCleanup(int swapNChannels)
 
 	if (_swapCurrentStates) {
 		PREFL_MEMOP_PANIC(swapNChannels, int);
-		IOFree(_swapCurrentStates, (size_t)swapNChannels * sizeof(int));
+		IOFreeData(_swapCurrentStates, (size_t)swapNChannels * sizeof(int));
 		_swapCurrentStates = NULL;
 	}
 	if (_swapLastUpdateTimes) {
 		PREFL_MEMOP_PANIC(swapNChannels, uint64_t);
-		IOFree(_swapLastUpdateTimes, (size_t)swapNChannels * sizeof(uint64_t));
+		IOFreeData(_swapLastUpdateTimes, (size_t)swapNChannels * sizeof(uint64_t));
 		_swapLastUpdateTimes = NULL;
 	}
 }
@@ -348,7 +344,7 @@ IOStateReporter::overrideChannelState(uint64_t channel_id,
 
 	if (_getStateIndices(channel_id, state_id, &channel_index, &state_index) == kIOReturnSuccess) {
 		if (_lastUpdateTimes[channel_index]) {
-			panic("overrideChannelState() cannot be used after setChannelState()!\n");
+			panic("overrideChannelState() cannot be used after setChannelState()!");
 		}
 
 		res = handleOverrideChannelStateByIndices(channel_index, state_index,
@@ -424,7 +420,7 @@ IOStateReporter::incrementChannelState(uint64_t channel_id,
 
 	if (_getStateIndices(channel_id, state_id, &channel_index, &state_index) == kIOReturnSuccess) {
 		if (_lastUpdateTimes[channel_index]) {
-			panic("incrementChannelState() cannot be used after setChannelState()!\n");
+			panic("incrementChannelState() cannot be used after setChannelState()!");
 		}
 
 		res = handleIncrementChannelStateByIndices(channel_index, state_index,
@@ -874,4 +870,22 @@ IOStateReporter::updateChannelValues(int channel_index)
 
 finish:
 	return result;
+}
+
+/* static */ OSPtr<IOReportLegendEntry>
+IOStateReporter::createLegend(const uint64_t *channelIDs,
+    const char **channelNames,
+    int channelCount,
+    int nstates,
+    IOReportCategories categories,
+    IOReportUnit unit)
+{
+	IOReportChannelType channelType = {
+		.categories = categories,
+		.report_format = kIOReportFormatState,
+		.nelements = static_cast<uint16_t>(nstates),
+		.element_idx = 0
+	};
+
+	return IOReporter::legendWith(channelIDs, channelNames, channelCount, channelType, unit);
 }

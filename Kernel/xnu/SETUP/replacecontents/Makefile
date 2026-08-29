@@ -8,25 +8,20 @@ include $(MakeInc_def)
 
 OBJS = replacecontents.o
 
-CFLAGS = -g -O0 -I$(SOURCE) -I.
-LDFLAGS =
-ifeq ($(shell uname -s),"Darwin")
-	CFLAGS += -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION)
-	LDFLAGS += -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION)
-else
-LDFLAGS += -lbsd -L${TOOLCHAIN}/usr/lib
-endif
+CFLAGS = -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION) -g -O0 -I$(SOURCE) -I.
 
 WARNFLAGS = -Wall
 
+LDFLAGS = -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION)
+
 replacecontents: $(OBJS)
-	$(call makelog,$(ColorH)HOST_LD$(Color0)       $(ColorF)$@$(Color0))
+	@$(LOG_HOST_LD) "$@"
 	$(_v)$(HOST_CC) $(LDFLAGS) -o $@ $^
-	$(call makelog,$(ColorH)HOST_CODESIGN$(Color0) $(ColorF)$@$(Color0))
+	@$(LOG_HOST_CODESIGN) "$@"
 	$(_v)env CODESIGN_ALLOCATE=$(HOST_CODESIGN_ALLOCATE) $(HOST_CODESIGN) -s - $@
 
 %.o: %.c
-	$(call makelog,$(ColorH)HOST_CC$(Color0)       $(ColorF)$@$(Color0))
+	@$(LOG_HOST_CC) "$@"
 	$(_v)$(HOST_CC) $(WARNFLAGS) $(CFLAGS) -c -o $@ $<
 
 do_build_setup:: replacecontents

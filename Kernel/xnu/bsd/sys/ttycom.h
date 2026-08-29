@@ -149,7 +149,7 @@ struct winsize {
 #define TIOCMBIS        _IOW('t', 108, int)     /* bis modem bits */
 #define TIOCMBIC        _IOW('t', 107, int)     /* bic modem bits */
 #define TIOCMGET        _IOR('t', 106, int)     /* get all modem bits */
-#define TIOCREMOTE      _IOW('t', 105, int)     /* remote input editing */
+                                                /* 105 unused */
 #define TIOCGWINSZ      _IOR('t', 104, struct winsize)  /* get window size */
 #define TIOCSWINSZ      _IOW('t', 103, struct winsize)  /* set window size */
 #define TIOCUCNTL       _IOW('t', 102, int)     /* pty: set/clr usr cntl mode */
@@ -182,6 +182,7 @@ struct winsize {
 #define TIOCPTYUNLK     _IO('t', 82)            /* unlockpt(3) */
 #ifdef KERNEL
 #define TIOCREVOKE       _IO('t', 81)
+#define TIOCREVOKECLEAR  _IO('t', 80)
 #endif
 
 #define TTYDISC         0               /* termios tty line discipline */

@@ -81,73 +81,74 @@
  *	New version based on 4.4 and NS3.3
  */
 
-#include <sys/param.h>
-#include <sys/systm.h>
-#include <sys/conf.h>
-#include <sys/reboot.h>
-#include <sys/msgbuf.h>
-#include <sys/proc_internal.h>
-#include <sys/ioctl.h>
-#include <sys/tty.h>
-#include <sys/file_internal.h>
-#include <sys/tprintf.h>
-#include <sys/syslog.h>
 #include <stdarg.h>
-#include <sys/malloc.h>
+#include <sys/conf.h>
+#include <sys/file_internal.h>
+#include <sys/ioctl.h>
 #include <sys/lock.h>
+#include <sys/malloc.h>
+#include <sys/msgbuf.h>
+#include <sys/param.h>
+#include <sys/proc_internal.h>
+#include <sys/reboot.h>
 #include <sys/subr_prf.h>
+#include <sys/syslog.h>
+#include <sys/systm.h>
+#include <sys/tprintf.h>
+#include <sys/tty.h>
 
-#include <kern/cpu_number.h>    /* for cpu_number() */
+#include <console/serial_protos.h>
+#include <kern/task.h> /* for get_bsdthreadtask_info() */
+#include <kern/sched_prim.h>  /* for preemption_enabled() */
 #include <libkern/libkern.h>
 #include <os/log_private.h>
-
-/* for vaddlog(): the following are implemented in osfmk/kern/printf.c  */
-extern void bsd_log_lock(void);
-extern void bsd_log_unlock(void);
-
-/* Keep this around only because it's exported */
-void _printf(int, struct tty *, const char *, ...);
 
 struct snprintf_arg {
 	char *str;
 	size_t remain;
 };
 
-
-/*
- * In case console is off,
- * debugger_panic_str contains argument to last
- * call to panic.
- */
-extern const char       *debugger_panic_str;
-
-extern  void cnputc(char);              /* standard console putc */
-
-extern  struct tty cons;                /* standard console tty */
-extern struct   tty *constty;           /* pointer to console "window" tty */
-extern int  __doprnt(const char *fmt,
-    va_list    argp,
-    void       (*)(int, void *),
-    void       *arg,
-    int        radix,
-    int        is_log);
-
-/*
- *	Record cpu that panic'd and lock around panic data
- */
-
-extern  void logwakeup(struct msgbuf *);
-extern  void halt_cpu(void);
-
-static void
-snprintf_func(int ch, void *arg);
-
 struct putchar_args {
 	int flags;
 	struct tty *tty;
+	bool last_char_was_cr;
 };
+
+static void snprintf_func(int, void *);
 static void putchar(int c, void *arg);
 
+/*
+ * In case console is off, debugger_panic_str contains argument to last call to
+ * panic.
+ */
+extern const char *debugger_panic_str;
+
+extern struct tty cons;     /* standard console tty */
+extern struct tty       *copy_constty(void);               /* current console device */
+extern struct tty       *set_constty(struct tty *);
+
+extern int __doprnt(const char *, va_list, void (*)(int, void *), void *, int, int);
+extern void console_write_char(char);  /* standard console putc */
+
+static void
+putchar_args_init(struct putchar_args *pca, struct session *sessp)
+{
+	session_lock(sessp);
+	pca->flags = TOTTY;
+	pca->tty   = sessp->s_ttyp;
+	if (pca->tty != TTY_NULL) {
+		ttyhold(pca->tty);
+	}
+	session_unlock(sessp);
+}
+
+static void
+putchar_args_destroy(struct putchar_args *pca)
+{
+	if (pca->tty != TTY_NULL) {
+		ttyfree(pca->tty);
+	}
+}
 
 /*
  * Uprintf prints to the controlling terminal for the current process.
@@ -159,14 +160,14 @@ uprintf(const char *fmt, ...)
 {
 	struct proc *p = current_proc();
 	struct putchar_args pca;
+	struct pgrp *pg;
 	va_list ap;
-	struct session *sessp;
 
-	sessp = proc_session(p);
+	pg = proc_pgrp(p, NULL);
 
-	if (p->p_flag & P_CONTROLT && sessp != SESSION_NULL && sessp->s_ttyvp) {
-		pca.flags = TOTTY;
-		pca.tty   = SESSION_TP(sessp);
+	if ((p->p_flag & P_CONTROLT) && pg) {
+		putchar_args_init(&pca, pg->pg_session);
+
 		if (pca.tty != NULL) {
 			tty_lock(pca.tty);
 		}
@@ -176,35 +177,63 @@ uprintf(const char *fmt, ...)
 		if (pca.tty != NULL) {
 			tty_unlock(pca.tty);
 		}
+
+		putchar_args_destroy(&pca);
 	}
-	if (sessp != SESSION_NULL) {
-		session_rele(sessp);
-	}
+
+	pgrp_rele(pg);
 }
 
 tpr_t
 tprintf_open(struct proc *p)
 {
-	struct session * sessp;
+	struct session *sessp;
+	struct pgrp *pg;
 
-	sessp = proc_session(p);
+	pg = proc_pgrp(p, &sessp);
 
-	if (p->p_flag & P_CONTROLT && sessp->s_ttyvp) {
-		return (tpr_t)sessp;
-	}
-	if (sessp != SESSION_NULL) {
-		session_rele(sessp);
+	if ((p->p_flag & P_CONTROLT) && sessp->s_ttyvp) {
+		return pg;
 	}
 
-	return (tpr_t) NULL;
+	pgrp_rele(pg);
+	return PGRP_NULL;
 }
 
 void
-tprintf_close(tpr_t sessp)
+tprintf_close(tpr_t pg)
 {
-	if (sessp) {
-		session_rele((struct session *) sessp);
+	pgrp_rele(pg);
+}
+
+static void
+tprintf_impl(tpr_t tpr, const char *fmt, va_list ap)
+{
+	va_list ap2;
+	struct putchar_args pca;
+
+	if (tpr) {
+		putchar_args_init(&pca, tpr->pg_session);
+
+		if (pca.tty) {
+			/* ttycheckoutq(), tputchar() require a locked tp */
+			tty_lock(pca.tty);
+			if (ttycheckoutq(pca.tty, 0)) {
+				/* going to the tty; leave locked */
+				va_copy(ap2, ap);
+				__doprnt(fmt, ap2, putchar, &pca, 10, FALSE);
+				va_end(ap2);
+			}
+			tty_unlock(pca.tty);
+		}
+
+		putchar_args_destroy(&pca);
 	}
+
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wformat-nonliteral"
+	os_log_with_args(OS_LOG_DEFAULT, OS_LOG_TYPE_DEFAULT, fmt, ap, __builtin_return_address(0));
+#pragma clang diagnostic pop
 }
 
 /*
@@ -216,36 +245,29 @@ tprintf_close(tpr_t sessp)
 void
 tprintf(tpr_t tpr, const char *fmt, ...)
 {
-	struct session *sess = (struct session *)tpr;
-	struct tty *tp;
 	va_list ap;
-	struct putchar_args pca;
-
-	if (sess && (tp = SESSION_TP(sess)) != TTY_NULL) {
-		/* ttycheckoutq(), tputchar() require a locked tp */
-		tty_lock(tp);
-		if (ttycheckoutq(tp, 0)) {
-			pca.flags = TOTTY;
-			/* going to the tty; leave locked */
-			pca.tty = tp;
-			va_start(ap, fmt);
-			__doprnt(fmt, ap, putchar, &pca, 10, FALSE);
-			va_end(ap);
-		}
-		tty_unlock(tp);
-	}
-
-	pca.flags = TOLOG;
-	pca.tty   = TTY_NULL;
-	va_start(ap, fmt);
-	__doprnt(fmt, ap, putchar, &pca, 10, TRUE);
-	va_end(ap);
-
-	logwakeup(msgbufp);
 
 	va_start(ap, fmt);
-	os_log_with_args(OS_LOG_DEFAULT, OS_LOG_TYPE_DEFAULT, fmt, ap, __builtin_return_address(0));
+	tprintf_impl(tpr, fmt, ap);
 	va_end(ap);
+}
+
+/*
+ * tprintf_thd takes the session reference, calls tprintf
+ * with user inputs, and then drops the reference.
+ */
+void
+tprintf_thd(thread_t thd, const char *fmt, ...)
+{
+	struct proc * p = thd ? get_bsdthreadtask_info(thd) : NULL;
+	tpr_t tpr = p ? tprintf_open(p) : NULL;
+	va_list ap;
+
+	va_start(ap, fmt);
+	tprintf_impl(tpr, fmt, ap);
+	va_end(ap);
+
+	tprintf_close(tpr);
 }
 
 /*
@@ -276,57 +298,7 @@ ttyprintf(struct tty *tp, const char *fmt, ...)
 void
 logtime(time_t secs)
 {
-	printf("Time %ld Message ", secs);
-}
-
-static void
-putchar_asl(int c, void *arg)
-{
-	struct putchar_args *pca = arg;
-
-	if ((pca->flags & TOLOGLOCKED) && c != '\0' && c != '\r' && c != 0177) {
-		log_putc_locked(aslbufp, c);
-	}
-	putchar(c, arg);
-}
-
-/*
- * Vestigial support for kern_asl_msg() via /dev/klog
- */
-int
-vaddlog(const char *fmt, va_list ap)
-{
-	struct putchar_args pca = {
-		.flags = TOLOGLOCKED,
-		.tty = NULL,
-	};
-
-	bsd_log_lock();
-	__doprnt(fmt, ap, putchar_asl, &pca, 10, TRUE);
-	bsd_log_unlock();
-	logwakeup(NULL);
-
-	return 0;
-}
-
-void
-_printf(int flags, struct tty *ttyp, const char *format, ...)
-{
-	va_list ap;
-	struct putchar_args pca;
-
-	pca.flags = flags;
-	pca.tty   = ttyp;
-
-	if (ttyp != NULL) {
-		tty_lock(ttyp);
-
-		va_start(ap, format);
-		__doprnt(format, ap, putchar, &pca, 10, TRUE);
-		va_end(ap);
-
-		tty_unlock(ttyp);
-	}
+	printf("Time 0x%lx Message ", secs);
 }
 
 int
@@ -365,49 +337,109 @@ putchar(int c, void *arg)
 {
 	struct putchar_args *pca = arg;
 	char **sp = (char**) pca->tty;
+	struct tty *constty = NULL;
+	struct tty *freetp = NULL;
+	const bool allow_constty = preemption_enabled();
 
-	if (debugger_panic_str) {
-		constty = 0;
+	if (allow_constty) {
+		constty = copy_constty();
+	}
+
+	if (debugger_panic_str && allow_constty && constty != NULL) {
+		if (tty_islocked(constty)) {
+			ttyfree_locked(constty);
+		} else {
+			ttyfree(constty);
+		}
+		constty = NULL;
+		freetp = set_constty(NULL);
+		if (freetp != NULL) {
+			if (tty_islocked(freetp)) {
+				ttyfree_locked(freetp);
+			} else {
+				ttyfree(freetp);
+			}
+			freetp = NULL;
+		}
 	}
 	if ((pca->flags & TOCONS) && pca->tty == NULL && constty) {
 		pca->tty = constty;
 		pca->flags |= TOTTY;
 	}
 	if ((pca->flags & TOTTY) && pca->tty && tputchar(c, pca->tty) < 0 &&
-	    (pca->flags & TOCONS) && pca->tty == constty) {
-		constty = 0;
+	    (pca->flags & TOCONS) && pca->tty == constty && allow_constty) {
+		if (tty_islocked(constty)) {
+			ttyfree_locked(constty);
+		} else {
+			ttyfree(constty);
+		}
+		constty = NULL;
+		freetp = set_constty(NULL);
+		if (freetp) {
+			if (tty_islocked(freetp)) {
+				ttyfree_locked(freetp);
+			} else {
+				ttyfree(freetp);
+			}
+			freetp = NULL;
+		}
 	}
 	if ((pca->flags & TOLOG) && c != '\0' && c != '\r' && c != 0177) {
-		log_putc(c);
+		log_putc((char)c);
 	}
 	if ((pca->flags & TOLOGLOCKED) && c != '\0' && c != '\r' && c != 0177) {
-		log_putc_locked(msgbufp, c);
+		log_putc_locked(msgbufp, (char)c);
 	}
-	if ((pca->flags & TOCONS) && constty == 0 && c != '\0') {
-		cnputc(c);
+	if ((pca->flags & TOCONS) && constty == NULL && c != '\0') {
+		console_write_char((char)c);
 	}
 	if (pca->flags & TOSTR) {
-		**sp = c;
+		**sp = (char)c;
 		(*sp)++;
+	}
+
+	pca->last_char_was_cr = ('\n' == c);
+	if (constty) {
+		if (tty_islocked(constty)) {
+			ttyfree_locked(constty);
+		} else {
+			ttyfree(constty);
+		}
 	}
 }
 
-int
-vprintf_log_locked(const char *fmt, va_list ap, bool addcr)
+bool
+printf_log_locked(bool addcr, const char *fmt, ...)
+{
+	bool retval;
+	va_list args;
+
+	va_start(args, fmt);
+	retval = vprintf_log_locked(fmt, args, addcr);
+	va_end(args);
+
+	return retval;
+}
+
+bool
+vprintf_log_locked(const char *fmt, va_list ap, bool driverkit)
 {
 	struct putchar_args pca;
 
 	pca.flags = TOLOGLOCKED;
+	if (driverkit && enable_dklog_serial_output) {
+		pca.flags |= TOCONS;
+	}
 	pca.tty   = NULL;
+	pca.last_char_was_cr = false;
 	__doprnt(fmt, ap, putchar, &pca, 10, TRUE);
-	if (addcr) {
+	if (driverkit) {
 		putchar('\n', &pca);
 	}
-	return 0;
+	return pca.last_char_was_cr;
 }
 
-#if !CONFIG_EMBEDDED
-
+#if CONFIG_VSPRINTF
 /*
  * Scaled down version of vsprintf(3).
  *
@@ -429,7 +461,7 @@ vsprintf(char *buf, const char *cfmt, va_list ap)
 	}
 	return 0;
 }
-#endif  /* !CONFIG_EMBEDDED */
+#endif  /* CONFIG_VSPRINTF */
 
 /*
  * Scaled down version of snprintf(3).
@@ -444,6 +476,18 @@ snprintf(char *str, size_t size, const char *format, ...)
 	retval = vsnprintf(str, size, format, ap);
 	va_end(ap);
 	return retval;
+}
+
+const char *
+tsnprintf(char *__counted_by(count)dst, size_t count, const char *fmt, ...)
+{
+	const char *result;
+	va_list ap;
+
+	va_start(ap, fmt);
+	result = vtsnprintf(dst, count, fmt, ap);
+	va_end(ap);
+	return result;
 }
 
 /*
@@ -464,15 +508,33 @@ vsnprintf(char *str, size_t size, const char *format, va_list ap)
 	return retval;
 }
 
+const char *
+vtsnprintf(char *__counted_by(count)dst, size_t count, const char *fmt, va_list ap)
+{
+	if (count == 0) {
+		return NULL;
+	}
+	(void) vsnprintf(dst, count, fmt, ap);
+	return __unsafe_forge_null_terminated(const char *, dst);
+}
+
 int
 vscnprintf(char *buf, size_t size, const char *fmt, va_list args)
 {
-	ssize_t ssize = size;
 	int i;
 
 	i = vsnprintf(buf, size, fmt, args);
-
-	return (i >= ssize) ? (ssize - 1) : i;
+	/* Note: XNU's printf never returns negative values */
+	if ((uint32_t)i < size) {
+		return i;
+	}
+	if (size == 0) {
+		return 0;
+	}
+	if (size > INT_MAX) {
+		return INT_MAX;
+	}
+	return (int)(size - 1);
 }
 
 int
@@ -494,14 +556,7 @@ snprintf_func(int ch, void *arg)
 	struct snprintf_arg *const info = arg;
 
 	if (info->remain >= 2) {
-		*info->str++ = ch;
+		*info->str++ = (char)ch;
 		info->remain--;
 	}
-}
-
-int
-kvprintf(char const *fmt, void (*func)(int, void*), void *arg, int radix, va_list ap)
-{
-	__doprnt(fmt, ap, func, arg, radix, TRUE);
-	return 0;
 }

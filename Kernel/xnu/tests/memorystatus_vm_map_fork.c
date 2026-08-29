@@ -16,8 +16,12 @@
 #include <darwintest.h>
 #include <darwintest_utils.h>
 
+#include "test_utils.h"
+
 T_GLOBAL_META(
 	T_META_NAMESPACE("xnu.vm"),
+	T_META_RADAR_COMPONENT_NAME("xnu"),
+	T_META_RADAR_COMPONENT_VERSION("VM"),
 	T_META_CHECK_LEAKS(false)
 	);
 
@@ -76,25 +80,6 @@ static char *child_exit_why[] = {
 	"invalid memsize argument to child",
 	"malloc() failed",
 };
-
-/*
- * Corpse collection only happens in development kernels.
- * So we need this to detect if the test is relevant.
- */
-static boolean_t
-is_development_kernel(void)
-{
-	int ret;
-	int dev = 0;
-	size_t dev_size = sizeof(dev);
-
-	ret = sysctlbyname("kern.development", &dev, &dev_size, NULL, 0);
-	if (ret != 0) {
-		return FALSE;
-	}
-
-	return dev != 0;
-}
 
 /*
  * Set/Get the sysctl used to determine if corpse collection occurs.
@@ -333,21 +318,44 @@ memorystatus_vm_map_fork_parent(int test_variant)
 		max_task_pmem = 0;
 	}
 
+	/* default limit is 1/4 of max task phys memory value */
+	active_limit_mb = max_task_pmem / 4;
+
+#if TARGET_OS_WATCH
+
+	/*
+	 * Larger memory watches have a raised corpse size limit.
+	 * One coprse of 300Meg is allowed, others are 200M.
+	 * We pick 300 or 200 based on which test is being done.
+	 */
+	uint64_t hw_memsize = 0;
+	size = sizeof(hw_memsize);
+	T_ASSERT_POSIX_SUCCESS(sysctlbyname("hw.memsize", &hw_memsize, &size, NULL, 0), "read hw.memsize");
+	if (hw_memsize > 1024 * 1024 * 1024) {
+		if (test_variant == TEST_ALLOWED) {
+			active_limit_mb = MAX(active_limit_mb, 200);
+		} else {
+			active_limit_mb = MAX(active_limit_mb, 300);
+		}
+	}
+
+#endif /* TARGET_OS_WATCH */
+
 	if (test_variant == TEST_ALLOWED) {
 		/*
 		 * Tell the child to allocate less than 1/4 the system wide limit.
 		 */
-		if (max_task_pmem / 4 - LIMIT_DELTA_MB <= 0) {
+		if (active_limit_mb <= LIMIT_DELTA_MB) {
 			active_limit_mb = LIMIT_DELTA_MB;
 		} else {
-			active_limit_mb = max_task_pmem / 4 - LIMIT_DELTA_MB;
+			active_limit_mb -= LIMIT_DELTA_MB;
 		}
 		expected_pidwatch_val = MEMORYSTATUS_VM_MAP_FORK_ALLOWED;
 	} else { /* TEST_NOT_ALLOWED */
 		/*
 		 * Tell the child to allocate more than 1/4 the system wide limit.
 		 */
-		active_limit_mb = (max_task_pmem / 4) + LIMIT_DELTA_MB;
+		active_limit_mb += LIMIT_DELTA_MB;
 		if (max_task_pmem == 0) {
 			expected_pidwatch_val = MEMORYSTATUS_VM_MAP_FORK_ALLOWED;
 		} else {
@@ -366,7 +374,7 @@ memorystatus_vm_map_fork_parent(int test_variant)
 	 */
 	wait_for_free_mem(active_limit_mb);
 
-#if defined(__x86_64__)
+#if TARGET_OS_OSX
 	/*
 	 * vm_map_fork() is always allowed on desktop.
 	 */
@@ -458,12 +466,20 @@ memorystatus_vm_map_fork_parent(int test_variant)
  * We test "not allowed first", then "allowed". If it were the other way around, the corpse from the "allowed"
  * test would likely cause memory pressure and jetsam would likely kill the "not allowed" test.
  */
-T_DECL(memorystatus_vm_map_fork_test_not_allowed, "test that corpse generation was not allowed")
+T_DECL(memorystatus_vm_map_fork_test_not_allowed,
+    "test that corpse generation was not allowed",
+    T_META_ASROOT(true),
+    T_META_TAG_VM_PREFERRED,
+    T_META_ENABLED(false /* rdar://133953771 */))
 {
 	memorystatus_vm_map_fork_parent(TEST_NOT_ALLOWED);
 }
 
-T_DECL(memorystatus_vm_map_fork_test_allowed, "test corpse generation allowed")
+T_DECL(memorystatus_vm_map_fork_test_allowed,
+    "test corpse generation allowed",
+    T_META_ASROOT(true),
+    T_META_TAG_VM_PREFERRED,
+    T_META_ENABLED(false /* rdar://133953771 */))
 {
 	memorystatus_vm_map_fork_parent(TEST_ALLOWED);
 }

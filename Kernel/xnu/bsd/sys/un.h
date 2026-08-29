@@ -90,6 +90,7 @@ struct  sockaddr_un {
 #define LOCAL_PEEREPID          0x003           /* retrieve eff. peer pid */
 #define LOCAL_PEERUUID          0x004           /* retrieve peer UUID */
 #define LOCAL_PEEREUUID         0x005           /* retrieve eff. peer UUID */
+#define LOCAL_PEERTOKEN         0x006           /* retrieve peer audit token */
 
 #endif  /* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 
@@ -113,6 +114,11 @@ extern  struct pr_usrreqs uipc_usrreqs;
 int     unp_lock(struct socket *, int, void *);
 int     unp_unlock(struct socket *, int, void *);
 lck_mtx_t* unp_getlock(struct socket *, int);
+
+#define UNP_FORGE_PATH(sun, len) ({                                     \
+	__unsafe_forge_bidi_indexable(char *, &sun->sun_path, len);     \
+})
+
 __END_DECLS
 #endif /* PRIVATE */
 #else /* !KERNEL */
@@ -122,7 +128,6 @@ __END_DECLS
 #define SUN_LEN(su) \
 	(sizeof(*(su)) - sizeof((su)->sun_path) + strlen((su)->sun_path))
 #endif  /* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
-
 #endif /* KERNEL */
 
 #endif /* !_SYS_UN_H_ */

@@ -33,7 +33,7 @@
 #include <mach/mach_vm.h>
 #include <mach/semaphore.h>
 #include <mach/task.h>
-#include <vm/vm_kern.h>
+#include <vm/vm_kern_xnu.h>
 #include <vm/vm_map.h>
 #include <vm/vm_protos.h>
 #include <sys/errno.h>
@@ -51,11 +51,11 @@ struct copyio_test_data {
 	/* VM map of the current userspace process. */
 	vm_map_t user_map;
 	/* The start of a `copyio_test_buf_size'-sized region mapped into userspace. */
-	mach_vm_offset_t user_addr;
+	user_addr_t user_addr;
 	/* The start of a page-sized region that guaranteed to be unmapped in userspace. */
-	mach_vm_offset_t unmapped_addr;
+	user_addr_t unmapped_addr;
 	/* The start of a page-sized region mapped at the largest possible userspace address. */
-	mach_vm_offset_t user_lastpage_addr;
+	user_addr_t user_lastpage_addr;
 	/* Kernel mapping of the physical pages mapped at `user_addr'. */
 	void *kern_addr;
 
@@ -108,7 +108,7 @@ copyio_test_run_in_thread(copyio_thread_fn_t fn, struct copyio_test_data *data)
 static void
 copyio_test_protect(struct copyio_test_data *data, vm_prot_t prot)
 {
-	kern_return_t ret = mach_vm_protect(data->user_map, data->user_addr, copyio_test_buf_size, false, prot);
+	__assert_only kern_return_t ret = mach_vm_protect(data->user_map, data->user_addr, copyio_test_buf_size, false, prot);
 	assert(ret == KERN_SUCCESS);
 }
 
@@ -252,7 +252,7 @@ copyinstr_test(struct copyio_test_data *data)
 	data->thread_ptr = &lencopied;
 
 	err = copyio_test_run_in_thread(copyinstr_from_kernel, data);
-#if defined(CONFIG_EMBEDDED)
+#if defined (__arm64__)
 	T_EXPECT_EQ_INT(err, EFAULT, "copyinstr() from kernel address in kernel_task thread should return EFAULT");
 #else
 	T_EXPECT_EQ_INT(err, 0, "copyinstr() from kernel address in kernel_task thread should succeed");
@@ -275,7 +275,7 @@ copyinstr_test(struct copyio_test_data *data)
 	char *kern_unterminated_addr = (char *)data->kern_addr + copyio_test_buf_size - unterminated_size;
 	memset(kern_unterminated_addr, 'A', unterminated_size);
 
-	mach_vm_offset_t user_unterminated_addr = data->user_addr + copyio_test_buf_size - unterminated_size;
+	user_addr_t user_unterminated_addr = data->user_addr + copyio_test_buf_size - unterminated_size;
 	err = copyinstr(user_unterminated_addr, in_buf, copyio_test_buf_size, &lencopied);
 	T_EXPECT_EQ_INT(err, EFAULT, "copyinstr() from userspace region without NULL terminator should return EFAULT");
 }
@@ -324,7 +324,7 @@ copyoutstr_test(struct copyio_test_data *data)
 	data->thread_ptr = &lencopied;
 
 	err = copyio_test_run_in_thread(copyoutstr_to_kernel, data);
-#if defined(CONFIG_EMBEDDED)
+#if defined (__arm64__)
 	T_EXPECT_EQ_INT(err, EFAULT, "copyoutstr() to kernel address in kernel_task thread should return EFAULT");
 #else
 	T_EXPECT_EQ_INT(err, 0, "copyoutstr() to kernel address in kernel_task thread should succeed");
@@ -356,7 +356,7 @@ copyin_atomic64_from_kernel(struct copyio_test_data *data)
 static int
 copyout_atomic32_to_kernel(struct copyio_test_data *data)
 {
-	return copyout_atomic32(data->thread_data, (user_addr_t)data->kern_addr);
+	return copyout_atomic32((uint32_t)data->thread_data, (user_addr_t)data->kern_addr);
 }
 
 static int
@@ -454,7 +454,7 @@ copyout_atomic64_to_kernel(struct copyio_test_data *data)
 static int
 copyin_atomic32_wait_if_equals_from_kernel(struct copyio_test_data *data)
 {
-	return copyin_atomic32_wait_if_equals((uintptr_t)data->kern_addr, data->thread_data);
+	return copyin_atomic32_wait_if_equals((uintptr_t)data->kern_addr, (uint32_t)data->thread_data);
 }
 
 static void
@@ -492,10 +492,11 @@ kern_return_t
 copyio_test(void)
 {
 	struct copyio_test_data data = {};
+	mach_vm_offset_t user_addr = 0;
 	kern_return_t ret = KERN_SUCCESS;
 
-	data.buf1 = kalloc(copyio_test_buf_size);
-	data.buf2 = kalloc(copyio_test_buf_size);
+	data.buf1 = kalloc_data(copyio_test_buf_size, Z_WAITOK);
+	data.buf2 = kalloc_data(copyio_test_buf_size, Z_WAITOK);
 	if (!data.buf1 || !data.buf2) {
 		T_FAIL("failed to allocate scratch buffers");
 		ret = KERN_NO_SPACE;
@@ -510,31 +511,38 @@ copyio_test(void)
 	 * not to the point of actually execing yet.
 	 */
 	proc_t proc = current_proc();
-	assert(proc->p_pid == 1);
-	data.user_map = get_task_map_reference(proc->task);
+	assert(proc_getpid(proc) == 1);
+	data.user_map = get_task_map_reference(proc_task(proc));
 
-	ret = mach_vm_allocate_kernel(data.user_map, &data.user_addr, copyio_test_buf_size + PAGE_SIZE, VM_FLAGS_ANYWHERE, VM_KERN_MEMORY_NONE);
+	user_addr = data.user_addr;
+	ret = mach_vm_allocate_kernel(data.user_map, &user_addr,
+	    copyio_test_buf_size + PAGE_SIZE, VM_MAP_KERNEL_FLAGS_ANYWHERE());
 	if (ret) {
 		T_FAIL("mach_vm_allocate_kernel(user_addr) failed: %d", ret);
 		goto err_user_alloc;
 	}
+	data.user_addr = (user_addr_t)user_addr;
 
-	data.user_lastpage_addr = get_map_max(data.user_map) - PAGE_SIZE;
-	ret = mach_vm_allocate_kernel(data.user_map, &data.user_lastpage_addr, PAGE_SIZE, VM_FLAGS_FIXED, VM_KERN_MEMORY_NONE);
+	user_addr = get_map_max(data.user_map) - PAGE_SIZE;
+	ret = mach_vm_allocate_kernel(data.user_map, &user_addr, PAGE_SIZE,
+	    VM_MAP_KERNEL_FLAGS_FIXED());
 	if (ret) {
 		T_FAIL("mach_vm_allocate_kernel(user_lastpage_addr) failed: %d", ret);
 		goto err_user_lastpage_alloc;
 	}
+	data.user_lastpage_addr = (user_addr_t)user_addr;
 
 	data.unmapped_addr = data.user_addr + copyio_test_buf_size;
 	mach_vm_deallocate(data.user_map, data.unmapped_addr, PAGE_SIZE);
 
 	vm_prot_t cur_protection, max_protection;
 	mach_vm_offset_t kern_addr = 0;
-	ret = mach_vm_remap_kernel(kernel_map, &kern_addr, copyio_test_buf_size, VM_PROT_READ | VM_PROT_WRITE, VM_FLAGS_ANYWHERE, VM_KERN_MEMORY_NONE,
-	    data.user_map, data.user_addr, false, &cur_protection, &max_protection, VM_INHERIT_NONE);
+	ret = mach_vm_remap(kernel_map, &kern_addr, copyio_test_buf_size,
+	    VM_PROT_READ | VM_PROT_WRITE, VM_FLAGS_ANYWHERE,
+	    data.user_map, data.user_addr, false,
+	    &cur_protection, &max_protection, VM_INHERIT_NONE);
 	if (ret) {
-		T_FAIL("mach_vm_remap_kernel() failed: %d", ret);
+		T_FAIL("mach_vm_remap() failed: %d", ret);
 		goto err_kern_remap;
 	}
 	data.kern_addr = (void *)kern_addr;
@@ -555,7 +563,7 @@ err_user_lastpage_alloc:
 err_user_alloc:
 	vm_map_deallocate(data.user_map);
 err_kalloc:
-	kfree(data.buf2, copyio_test_buf_size);
-	kfree(data.buf1, copyio_test_buf_size);
+	kfree_data(data.buf2, copyio_test_buf_size);
+	kfree_data(data.buf1, copyio_test_buf_size);
 	return ret;
 }

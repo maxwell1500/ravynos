@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2010-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -28,6 +28,7 @@
 #include <i386/asm.h>
 #include <assym.s>
 #include <debug.h>
+#include "dwarf_unwind.h"
 #include <i386/eflags.h>
 #include <i386/rtclock_asm.h>
 #include <i386/trap.h>
@@ -79,6 +80,7 @@
 #define	HNDL_DOUBLE_FAULT	7
 #define	HNDL_MACHINE_CHECK	8
 
+	
 /* Begin double-mapped descriptor section */
 	
 .section	__HIB, __desc
@@ -159,8 +161,70 @@ EXT(idt64_hndl_table1):
 
 Entry(idt64_page_fault)
 	pushq	$(HNDL_ALLTRAPS)
-	push	$(T_PAGE_FAULT)
+#if !(DEVELOPMENT || DEBUG)
+	pushq	$(T_PAGE_FAULT)
 	jmp	L_dispatch
+#else
+	pushq	$(T_PAGE_FAULT)
+
+	pushq	%rax
+	pushq	%rbx
+	pushq	%rcx
+	testb	$3, 8+8+8+ISF64_CS(%rsp)	/* Coming from userspace? */
+	jz	L_pfkern		/* No? (relatively uncommon), goto L_pfkern */
+
+	/*
+	 * We faulted from the user; if the fault address is at the user's %rip,
+	 * abort trying to save the cacheline since that adds another page fault's
+	 * overhead when we recover, below.
+	 */
+	movq	8+8+8+ISF64_RIP(%rsp), %rbx
+	movq	%cr2, %rcx
+	cmpq	%rbx, %rcx
+
+	/* note that the next 3 instructions do not affect RFLAGS */
+	swapgs
+	leaq	EXT(idt64_hndl_table0)(%rip), %rax
+	mov	16(%rax), %rax	/* Offset of per-CPU shadow */
+
+	jne	L_dispatch_from_user_with_rbx_rcx_pushes
+	jmp	abort_rip_cacheline_read
+
+L_pfkern:
+	/*
+	 * Kernel page fault
+	 * If the fault occurred on while reading from the user's code cache line, abort the cache line read;
+	 * otherwise, treat this as a regular kernel fault
+	 */
+	movq	8+8+8+ISF64_RIP(%rsp), %rbx
+	leaq	rip_cacheline_read(%rip), %rcx
+	cmpq	%rcx, %rbx
+	jb	regular_kernel_page_fault
+	leaq	rip_cacheline_read_end(%rip), %rcx
+	cmpq	%rcx, %rbx
+	jbe	L_pf_on_clread	/* Did we hit a #PF within the cacheline read? */
+
+regular_kernel_page_fault:
+	/* No, regular kernel #PF */
+	popq	%rcx
+	popq	%rbx
+	jmp	L_dispatch_from_kernel_no_push_rax
+
+L_pf_on_clread:
+	/*
+	 * We faulted while trying to read user instruction memory at the parent fault's %rip; abort that action by
+	 * changing the return address on the stack, restoring cr2 to its previous value, peeling off the pushes we
+	 * added on entry to the page fault handler, then performing an iretq
+	 */
+	popq	%rcx
+	movq	%rcx, %cr2
+	popq	%rbx
+	leaq	abort_rip_cacheline_read(%rip), %rax
+	movq	%rax, 8+ISF64_RIP(%rsp)
+	popq	%rax
+	addq	$24, %rsp	/* pop the 2 pushes + the error code */
+	iretq			/* Resume previous trap/fault processing */
+#endif /* !(DEVELOPMENT || DEBUG) */
 
 /*
  * #DB handler, which runs on IST1, will treat as spurious any #DB received while executing in the
@@ -531,6 +595,85 @@ L_sysenter_continue:
 	orl	$(EFL_IF), ISF64_RFLAGS(%rsp)
 	jmp	L_u64bit_entry_check
 
+#if DEVELOPMENT || DEBUG
+do_cacheline_stash:
+	/*
+	 * Copy the cache line that includes the user's EIP/RIP into the shadow cpu structure
+	 * for later extraction/sanity-checking in user_trap().
+	 */
+
+	pushq	%rbx
+	pushq	%rcx
+L_dispatch_from_user_with_rbx_rcx_pushes:
+	movq	8+8+8+ISF64_RIP(%rsp), %rbx
+	andq	$-64, %rbx	/* Round address to cacheline boundary */
+	pushf
+	/*
+	 * disable SMAP, if it's enabled (note that CLAC is present in BDW and later only, so we're
+	 * using generic instructions here without checking whether the CPU supports SMAP first)
+	 */
+	orq	$(1 << 18), (%rsp)
+	popf
+	/*
+	 * Note that we only check for a faulting read on the first read, since if the first read
+	 * succeeds, the rest of the cache line should also be readible since we are running with
+	 * interrupts disabled here and a TLB invalidation cannot sneak in and pull the rug out.
+	 */
+	movq	%cr2, %rcx	/* stash the original %cr2 in case the first cacheline read triggers a #PF */
+				/* This value of %cr2 is restored in the page fault handler if it detects */
+				/* that the fault occurrent on the next instruction, so the original #PF can */
+				/* continue to be handled without issue. */
+rip_cacheline_read:
+	mov	(%rbx), %rcx
+	/* Note that CPU_RTIMES in the shadow cpu struct was just a convenient place to stash the cacheline */
+	mov	%rcx, %gs:CPU_RTIMES(%rax)
+	movq    %cr2, %rcx
+	mov	8(%rbx), %rcx
+	mov	%rcx, %gs:8+CPU_RTIMES(%rax)
+	movq    %cr2, %rcx
+	mov	16(%rbx), %rcx
+	mov	%rcx, %gs:16+CPU_RTIMES(%rax)
+	movq    %cr2, %rcx
+	mov	24(%rbx), %rcx
+	mov	%rcx, %gs:24+CPU_RTIMES(%rax)
+	movq    %cr2, %rcx
+	mov	32(%rbx), %rcx
+	mov	%rcx, %gs:32+CPU_RTIMES(%rax)
+	movq    %cr2, %rcx
+	mov	40(%rbx), %rcx
+	mov	%rcx, %gs:40+CPU_RTIMES(%rax)
+	movq    %cr2, %rcx
+	mov	48(%rbx), %rcx
+	mov	%rcx, %gs:48+CPU_RTIMES(%rax)
+	movq    %cr2, %rcx
+rip_cacheline_read_end:
+	mov	56(%rbx), %rcx
+	mov	%rcx, %gs:56+CPU_RTIMES(%rax)
+
+	pushf
+	andq	$~(1 << 18), (%rsp) 	/* reenable SMAP */
+	popf
+
+	jmp	cacheline_read_cleanup_stack
+
+abort_rip_cacheline_read:
+	pushf
+	andq	$~(1 << 18), (%rsp) 	/* reenable SMAP */
+	popf
+abort_rip_cacheline_read_no_smap_reenable:
+	movl	$0xdeadc0de, %ecx			/* Write a sentinel so higher-level code knows this was aborted */
+	shlq	$32, %rcx
+	movl	$0xbeefcafe, %ebx
+	orq	%rbx, %rcx
+	movq	%rcx, %gs:CPU_RTIMES(%rax)
+	movq	%rcx, %gs:8+CPU_RTIMES(%rax)
+
+cacheline_read_cleanup_stack:
+	popq	%rcx
+	popq	%rbx
+	jmp	L_dispatch_kgsb
+#endif /* if DEVELOPMENT || DEBUG */
+
 /*
  * Common dispatch point.
  * Determine what mode has been interrupted and save state accordingly.
@@ -546,9 +689,20 @@ L_dispatch:
 	testb	$3, 8+ISF64_CS(%rsp)
 	jz	1f
 L_dispatch_from_user_no_push_rax:
-     	swapgs
+	swapgs
 	leaq	EXT(idt64_hndl_table0)(%rip), %rax
-     	mov	16(%rax), %rax
+	mov	16(%rax), %rax	/* Offset of per-CPU shadow */
+
+#if DEVELOPMENT || DEBUG
+	/* Stash the cacheline for #UD, #PF, and #GP */
+	cmpl	$(T_INVALID_OPCODE), 8+ISF64_TRAPNO(%rsp)
+	je	do_cacheline_stash
+	cmpl	$(T_PAGE_FAULT), 8+ISF64_TRAPNO(%rsp)
+	je	do_cacheline_stash
+	cmpl	$(T_GENERAL_PROTECTION), 8+ISF64_TRAPNO(%rsp)
+	je	do_cacheline_stash
+#endif
+
 L_dispatch_kgsb:
 	mov	%gs:CPU_SHADOWTASK_CR3(%rax), %rax
 	mov	%rax, %cr3
@@ -588,7 +742,7 @@ Entry(ks_64bit_return)
 	push	R64_CS(%r15)
 	push	R64_RIP(%r15)
 
-	cmpq	$(KERNEL64_CS), 8(%rsp)
+	cmpw	$(KERNEL64_CS), 8(%rsp)
 	jne	1f			/* Returning to user (%r15 will be restored after the segment checks) */
 	mov	R64_R15(%r15), %r15
 	jmp	L_64b_kernel_return	/* Returning to kernel */
@@ -640,11 +794,12 @@ L_chk_sysret:
 	 * |  Saved RAX   |  <-- rsp
 	 * +--------------+
 	 */
-	cmpl	$(SYSCALL_CS), 16(%rsp) /* test for exit via SYSRET */
+
+	cmpw	$(SYSCALL_CS), 16(%rsp) /* test for exit via SYSRET */
 	je      L_sysret
 
-	cmpl	$1, %eax
-	je	L_verw_island_2
+	testl	$(MTHR_SEGCHK), %eax
+	jnz	L_verw_island_2
 
 	pop	%rax		/* Matched to [A], above */
 
@@ -655,8 +810,8 @@ EXT(ret64_iret):
 
 
 L_sysret:
-	cmpl	$1, %eax
-	je	L_verw_island_3
+	testl	$(MTHR_SEGCHK), %eax
+	jnz	L_verw_island_3
 
 	pop	%rax		/* Matched to [A], above */
 	/*
@@ -675,7 +830,7 @@ L_sysret:
 L_verw_island_2:
 
 	pop	%rax		/* Matched to [A], above */
-	verw	40(%rsp)	/* verw operates on the %ss value already on the stack */
+	verw	32(%rsp)	/* verw operates on the %ss value already on the stack */
 	jmp	EXT(ret64_iret)
 
 
@@ -701,7 +856,7 @@ L_64b_segops_island:
 
 	/* Validate CS/DS/ES/FS/GS segment selectors with the Load Access Rights instruction prior to restoration */
 	/* Exempt "known good" statically configured selectors, e.g. USER64_CS and 0 */
-	cmpl	$(USER64_CS), R64_CS(%r15)
+	cmpw	$(USER64_CS), R64_CS(%r15)
 	jz 	11f
 	larw	R64_CS(%r15), %ax
 	jnz	L_64_reset_cs
@@ -712,25 +867,25 @@ L_64b_segops_island:
 L_64_reset_cs:
 	movl	$(USER64_CS), R64_CS(%r15)
 11:
-	cmpl	$0, R64_DS(%r15)
+	cmpw	$0, R64_DS(%r15)
 	jz 	22f
 	larw	R64_DS(%r15), %ax
 	jz	22f
 	movl	$0, R64_DS(%r15)
 22:
-	cmpl	$0, R64_ES(%r15)
+	cmpw	$0, R64_ES(%r15)
 	jz 	33f
 	larw	R64_ES(%r15), %ax
 	jz	33f
 	movl	$0, R64_ES(%r15)
 33:
-	cmpl	$0, R64_FS(%r15)
+	cmpw	$0, R64_FS(%r15)
 	jz 	44f
 	larw	R64_FS(%r15), %ax
 	jz	44f
 	movl	$0, R64_FS(%r15)
 44:
-	cmpl	$0, R64_GS(%r15)
+	cmpw	$0, R64_GS(%r15)
 	jz	55f
 	larw	R64_GS(%r15), %ax
 	jz	55f
@@ -827,7 +982,7 @@ Entry(ks_32bit_return)
 
 	/* Validate CS/DS/ES/FS/GS segment selectors with the Load Access Rights instruction prior to restoration */
 	/* Exempt "known good" statically configured selectors, e.g. USER_CS, USER_DS and 0 */
-	cmpl	$(USER_CS), R32_CS(%r15)
+	cmpw	$(USER_CS), R32_CS(%r15)
 	jz 	11f
 	larw	R32_CS(%r15), %ax
 	jnz	L_32_reset_cs
@@ -838,33 +993,33 @@ Entry(ks_32bit_return)
 L_32_reset_cs:
 	movl	$(USER_CS), R32_CS(%r15)
 11:
-	cmpl	$(USER_DS), R32_DS(%r15)
+	cmpw	$(USER_DS), R32_DS(%r15)
 	jz	22f
-	cmpl	$0, R32_DS(%r15)
+	cmpw	$0, R32_DS(%r15)
 	jz 	22f
 	larw	R32_DS(%r15), %ax
 	jz	22f
 	movl	$(USER_DS), R32_DS(%r15)
 22:
-	cmpl	$(USER_DS), R32_ES(%r15)
+	cmpw	$(USER_DS), R32_ES(%r15)
 	jz	33f
-	cmpl	$0, R32_ES(%r15)
+	cmpw	$0, R32_ES(%r15)
 	jz 	33f
 	larw	R32_ES(%r15), %ax
 	jz	33f
 	movl	$(USER_DS), R32_ES(%r15)
 33:
-	cmpl	$(USER_DS), R32_FS(%r15)
+	cmpw	$(USER_DS), R32_FS(%r15)
 	jz	44f
-	cmpl	$0, R32_FS(%r15)
+	cmpw	$0, R32_FS(%r15)
 	jz 	44f
 	larw	R32_FS(%r15), %ax
 	jz	44f
 	movl	$(USER_DS), R32_FS(%r15)
 44:
-	cmpl	$(USER_CTHREAD), R32_GS(%r15)
+	cmpw	$(USER_CTHREAD), R32_GS(%r15)
 	jz	55f
-	cmpl	$0, R32_GS(%r15)
+	cmpw	$0, R32_GS(%r15)
 	jz 	55f
 	larw	R32_GS(%r15), %ax
 	jz	55f
@@ -951,12 +1106,11 @@ L_32bit_seg_restore_done:
 	 * +--------------+
 	 */
 
-	cmpl	$(SYSENTER_CS), 8(%rsp)
-					/* test for sysexit */
+	cmpw	$(SYSENTER_CS), 8(%rsp)		/* test for sysexit */
 	je      L_rtu_via_sysexit
 
-	cmpl	$1, %r14d
-	je	L_verw_island
+	testl	$(MTHR_SEGCHK), %r14d
+	jnz	L_verw_island
 
 L_after_verw:
 	xor	%r14, %r14
@@ -981,7 +1135,7 @@ L_rtu_via_sysexit:
 	/*
 	 * %ss is now at 16(%rsp)
 	 */
-	cmpl	$1, %r14d
+	testl	$(MTHR_SEGCHK), %r14d
 	je	L_verw_island_1
 L_after_verw_1:
 	xor	%r14, %r14
@@ -998,7 +1152,7 @@ L_after_verw_1:
 
 Entry(ks_dispatch)
 	popq	%rax
-	cmpl	$(KERNEL64_CS), ISF64_CS(%rsp)
+	cmpw	$(KERNEL64_CS), ISF64_CS(%rsp)
 	je	EXT(ks_dispatch_kernel)
 
 	mov 	%rax, %gs:CPU_UBER_TMP
@@ -1094,7 +1248,11 @@ L_skip_save_extra_segregs:
 	xor	%r14, %r14
 
 	/* cr2 is significant only for page-faults */
+	xor	%rax, %rax
+	cmpl	$T_PAGE_FAULT, R64_TRAPNO(%r15)
+	jne	1f
 	mov	%cr2, %rax
+1:
 	mov	%rax, R64_CR2(%r15)
 
 L_dispatch_U64_after_fault:
@@ -1130,7 +1288,11 @@ L_dispatch_U32: /* 32-bit user task */
 	mov	%edi, R32_EDI(%r15)
 
 	/* Unconditionally save cr2; only meaningful on page faults */
+	xor	%eax, %eax
+	cmpl	$T_PAGE_FAULT, R64_TRAPNO(%r15)
+	jne	1f
 	mov	%cr2, %rax
+1:
 	mov	%eax, R32_CR2(%r15)
 	/* Zero unused GPRs. BX/DX/SI/R15 are clobbered elsewhere across the exception handler, and are skipped. */
 	xor	%ecx, %ecx
@@ -1334,7 +1496,7 @@ ret_to_kernel:
 	CCALL1(panic_idt64, %r15)
 	hlt
 1:
-	cmpl	$(KERNEL64_CS), R64_CS(%r15)
+	cmpw	$(KERNEL64_CS), R64_CS(%r15)
 	je	2f
 	CCALL1(panic_idt64, %r15)
 	hlt
@@ -1379,13 +1541,7 @@ Entry(hndl_alltraps)
 Entry(return_from_trap)
 	movq	%gs:CPU_ACTIVE_THREAD,%r15	/* Get current thread */
 	movl	$-1, TH_IOTIER_OVERRIDE(%r15)	/* Reset IO tier override to -1 before returning to userspace */
-	cmpl	$0, TH_RWLOCK_COUNT(%r15)	/* Check if current thread has pending RW locks held */
-	jz	1f
-	xorq	%rbp, %rbp		/* clear framepointer */
-	mov	%r15, %rdi		/* Set RDI to current thread */
-	CCALL(lck_rw_clear_promotions_x86)	/* Clear promotions if needed */
-1:	
-	movq	TH_PCB_ISS(%r15), %r15 		/* PCB stack */
+	movq	TH_PCB_ISS(%r15), %r15		/* PCB stack */
 	movl	%gs:CPU_PENDING_AST,%eax
 	testl	%eax,%eax
 	je	EXT(return_to_user)		/* branch if no AST */
@@ -1428,7 +1584,13 @@ L_return_from_trap_with_ast:
  * 
  */
 trap_from_kernel:
+
+UNWIND_PROLOGUE	
+	
 	movq	%r15, %rdi		/* saved state addr */
+
+UNWIND_DIRECTIVES	
+
 	pushq   R64_RIP(%r15)           /* Simulate a CALL from fault point */
 	pushq   %rbp                    /* Extend framepointer chain */
 	movq    %rsp, %rbp
@@ -1459,7 +1621,8 @@ trap_from_kernel:
 	mov	%rsp, %r15		/* AST changes stack, saved state */
 	jmp	ret_to_kernel
 
-
+UNWIND_EPILOGUE
+	
 /*
  * All interrupts on all tasks enter here with:
  *	r15	 x86_saved_state_t
@@ -1471,6 +1634,9 @@ trap_from_kernel:
  *	direction flag cleared
  */
 Entry(hndl_allintrs)
+
+UNWIND_PROLOGUE	
+	
 	/*
 	 * test whether already on interrupt stack
 	 */
@@ -1490,8 +1656,10 @@ Entry(hndl_allintrs)
 	pushq	%rcx			/* save pointer to old stack */
 	pushq	%gs:CPU_INT_STATE	/* save previous intr state */
 	movq	%r15,%gs:CPU_INT_STATE	/* set intr state */
+
+UNWIND_DIRECTIVES	
 	
-	TIME_INT_ENTRY			/* do timing */
+	CCALL1(recount_enter_intel_interrupt, %r15) /* update time and PMCs */
 
 	/* Check for active vtimers in the current task */
 	mov	%gs:CPU_ACTIVE_THREAD, %rcx
@@ -1502,6 +1670,8 @@ Entry(hndl_allintrs)
 	incl	%gs:CPU_INTERRUPT_LEVEL
 
 	CCALL1(interrupt, %r15)		/* call generic interrupt routine */
+	
+UNWIND_EPILOGUE
 
 .globl	EXT(return_to_iret)
 LEXT(return_to_iret)			/* (label for kdb_kintr and hardclock) */
@@ -1509,7 +1679,7 @@ LEXT(return_to_iret)			/* (label for kdb_kintr and hardclock) */
 	decl	%gs:CPU_INTERRUPT_LEVEL
 	decl	%gs:CPU_PREEMPTION_LEVEL
 
-	TIME_INT_EXIT			/* do timing */
+	CCALL(recount_leave_intel_interrupt) /* update time and PMCs */
 
 	popq	%gs:CPU_INT_STATE 	/* reset/clear intr state pointer */
 	popq	%rsp			/* switch back to old stack */
@@ -1529,21 +1699,20 @@ LEXT(return_to_iret)			/* (label for kdb_kintr and hardclock) */
 	mov	%rax,%cr0		/* set cr0 */
 2:
 	/* Load interrupted code segment into %eax */
-	movl	R32_CS(%r15),%eax	/* assume 32-bit state */
-	cmpl	$(SS_64),SS_FLAVOR(%r15)/* 64-bit? */	
+	movl	R64_CS(%r15), %eax	/* assume 64-bit state */
+	cmpl	$(SS_32), SS_FLAVOR(%r15) /* 32-bit? */
 #if DEBUG_IDT64
-	jne	4f
-	movl	R64_CS(%r15),%eax	/* 64-bit user mode */
+	jne	5f
+	movl	R32_CS(%r15),%eax	/* 32-bit user mode */
 	jmp	3f
-4:
-	cmpl    $(SS_32),SS_FLAVOR(%r15)
+5:
+	cmpl    $(SS_64),SS_FLAVOR(%r15)
 	je	3f
 	POSTCODE2(0x6431)
 	CCALL1(panic_idt64, %r15)
 	hlt
 #else
-	jne	3f
-	movl	R64_CS(%r15),%eax	/* 64-bit user mode */
+	je	4f
 #endif
 3:
 	testb	$3,%al			/* user mode, */
@@ -1569,6 +1738,9 @@ LEXT(return_to_iret)			/* (label for kdb_kintr and hardclock) */
 
 	mov	%rsp, %r15		/* AST changes stack, saved state */
 	jmp	ret_to_kernel
+4:
+	movl	R32_CS(%r15),%eax	/* 32-bit user mode */
+	jmp	3b
 
 
 /*

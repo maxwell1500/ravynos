@@ -45,54 +45,55 @@
 #include <mach/clock_types.h>
 
 extern uint64_t LockTimeOut;
-extern processor_t      current_processor(void);
 
 /* Globals */
-void (*PE_kputc)(char c);
+typedef void (*PE_kputc_t)(char);
+
+#if XNU_TARGET_OS_OSX
+PE_kputc_t PE_kputc;
+#else
+SECURITY_READ_ONLY_LATE(PE_kputc_t) PE_kputc;
+#endif
 
 #if DEVELOPMENT || DEBUG
 /* DEBUG kernel starts with true serial, but
  * may later disable or switch to video
  * console */
-SECURITY_READ_ONLY_LATE(unsigned int) disable_serial_output = FALSE;
+SECURITY_READ_ONLY_LATE(bool) disable_serial_output = false;
 #else
-SECURITY_READ_ONLY_LATE(unsigned int) disable_serial_output = TRUE;
+SECURITY_READ_ONLY_LATE(bool) disable_serial_output = true;
 #endif
+SECURITY_READ_ONLY_LATE(bool) disable_iolog_serial_output = false;
+SECURITY_READ_ONLY_LATE(bool) enable_dklog_serial_output = false;
 
-decl_simple_lock_data(static, kprintf_lock);
+static SIMPLE_LOCK_DECLARE(kprintf_lock, 0);
 
-void
-PE_init_kprintf(boolean_t vm_initialized)
+__startup_func
+static void
+PE_init_kprintf(void)
 {
-	unsigned int    boot_arg;
-
 	if (PE_state.initialized == FALSE) {
 		panic("Platform Expert not initialized");
 	}
 
-	if (!vm_initialized) {
-		unsigned int new_disable_serial_output = TRUE;
+	bool new_disable_serial_output = true;
 
-		simple_lock_init(&kprintf_lock, 0);
-
-		if (PE_parse_boot_argn("debug", &boot_arg, sizeof(boot_arg))) {
-			if (boot_arg & DB_KPRT) {
-				new_disable_serial_output = FALSE;
-			}
-		}
-
-		/* If we are newly enabling serial, make sure we only
-		 * call pal_serial_init() if our previous state was
-		 * not enabled */
-		if (!new_disable_serial_output && (!disable_serial_output || pal_serial_init())) {
-			PE_kputc = pal_serial_putc;
-		} else {
-			PE_kputc = cnputc;
-		}
-
-		disable_serial_output = new_disable_serial_output;
+	if (debug_boot_arg & DB_KPRT) {
+		new_disable_serial_output = false;
 	}
+
+	/* If we are newly enabling serial, make sure we only
+	 * call pal_serial_init() if our previous state was
+	 * not enabled */
+	if (!new_disable_serial_output && (!disable_serial_output || pal_serial_init())) {
+		PE_kputc = pal_serial_putc;
+	} else {
+		PE_kputc = console_write_unbuffered;
+	}
+
+	disable_serial_output = new_disable_serial_output;
 }
+STARTUP(KPRINTF, STARTUP_RANK_FIRST, PE_init_kprintf);
 
 #if CONFIG_NO_KPRINTF_STRINGS
 /* Prevent CPP from breaking the definition below */
@@ -147,17 +148,23 @@ kprintf(const char *fmt, ...)
 
 			// If interrupts are enabled
 			if (ml_get_interrupts_enabled()) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wformat-nonliteral"
 				os_log_with_args(OS_LOG_DEFAULT, OS_LOG_TYPE_DEFAULT, fmt, listp2, caller);
+#pragma clang diagnostic pop
 			}
 			va_end(listp2);
 			return;
 		}
 
+		va_start(listp, fmt);
+		va_copy(listp2, listp);
+
 		state = ml_set_interrupts_enabled(FALSE);
 
 		pal_preemption_assert();
 
-		in_panic_context = processor_in_panic_context(current_processor());
+		in_panic_context = debug_is_current_cpu_in_panic_state();
 
 		// If current CPU is in panic context, be a little more impatient.
 		kprintf_lock_grabbed = simple_lock_try_lock_mp_signal_safe_loop_duration(&kprintf_lock,
@@ -169,10 +176,7 @@ kprintf(const char *fmt, ...)
 			cpu_last_locked = cpu_number();
 		}
 
-		va_start(listp, fmt);
-		va_copy(listp2, listp);
 		_doprnt(fmt, &listp, PE_kputc, 16);
-		va_end(listp);
 
 		if (kprintf_lock_grabbed) {
 			simple_unlock(&kprintf_lock);
@@ -180,21 +184,27 @@ kprintf(const char *fmt, ...)
 
 		ml_set_interrupts_enabled(state);
 
+		va_end(listp);
+
 		// If interrupts are enabled
 		if (ml_get_interrupts_enabled()) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wformat-nonliteral"
 			os_log_with_args(OS_LOG_DEFAULT, OS_LOG_TYPE_DEFAULT, fmt, listp2, caller);
+#pragma clang diagnostic pop
 		}
 		va_end(listp2);
 	} else {
 		if (ml_get_interrupts_enabled()) {
 			va_start(listp, fmt);
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wformat-nonliteral"
 			os_log_with_args(OS_LOG_DEFAULT, OS_LOG_TYPE_DEFAULT, fmt, listp, caller);
+#pragma clang diagnostic pop
 			va_end(listp);
 		}
 	}
 }
-
-
 
 extern void kprintf_break_lock(void);
 void

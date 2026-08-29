@@ -1,4 +1,4 @@
-#! /bin/bash -
+#! /bin/sh -
 #
 # Copyright (c) 2010 Apple Inc. All rights reserved.
 #
@@ -22,7 +22,7 @@
 # @APPLE_OSREFERENCE_LICENSE_HEADER_END@
 #
 
-function usage() {
+usage() {
     echo "Usage: $0 <output>" 1>&2
     exit 1
 }

@@ -111,32 +111,19 @@ const struct fileops socketops = {
 /* ARGSUSED */
 static int
 soo_read(struct fileproc *fp, struct uio *uio, __unused int flags,
-#if !CONFIG_MACF_SOCKET
-    __unused
-#endif
-    vfs_context_t ctx)
+    __unused vfs_context_t ctx)
 {
-	struct socket *so;
+	struct socket *__single so;
 	int stat;
-#if CONFIG_MACF_SOCKET
-	int error;
-#endif
 
 	int (*fsoreceive)(struct socket *so2, struct sockaddr **paddr,
 	    struct uio *uio2, struct mbuf **mp0, struct mbuf **controlp,
 	    int *flagsp);
 
-	if ((so = (struct socket *)fp->f_fglob->fg_data) == NULL) {
+	if ((so = (struct socket *)fp_get_data(fp)) == NULL) {
 		/* This is not a valid open file descriptor */
 		return EBADF;
 	}
-
-#if CONFIG_MACF_SOCKET
-	error = mac_socket_check_receive(vfs_context_ucred(ctx), so);
-	if (error) {
-		return error;
-	}
-#endif /* CONFIG_MACF_SOCKET */
 
 	fsoreceive = so->so_proto->pr_usrreqs->pru_soreceive;
 
@@ -149,29 +136,17 @@ static int
 soo_write(struct fileproc *fp, struct uio *uio, __unused int flags,
     vfs_context_t ctx)
 {
-	struct socket *so;
+	struct socket *__single so;
 	int stat;
 	int (*fsosend)(struct socket *so2, struct sockaddr *addr,
 	    struct uio *uio2, struct mbuf *top, struct mbuf *control,
 	    int flags2);
 	proc_t procp;
 
-#if CONFIG_MACF_SOCKET
-	int error;
-#endif
-
-	if ((so = (struct socket *)fp->f_fglob->fg_data) == NULL) {
+	if ((so = (struct socket *)fp_get_data(fp)) == NULL) {
 		/* This is not a valid open file descriptor */
 		return EBADF;
 	}
-
-#if CONFIG_MACF_SOCKET
-	/* JMM - have to fetch the socket's remote addr */
-	error = mac_socket_check_send(vfs_context_ucred(ctx), so, NULL);
-	if (error) {
-		return error;
-	}
-#endif /* CONFIG_MACF_SOCKET */
 
 	fsosend = so->so_proto->pr_usrreqs->pru_sosend;
 
@@ -187,7 +162,7 @@ soo_write(struct fileproc *fp, struct uio *uio, __unused int flags,
 }
 
 __private_extern__ int
-soioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
+soioctl(struct socket *so, u_long cmd, caddr_t __sized_by(IOCPARM_LEN(cmd)) data, struct proc *p)
 {
 	int error = 0;
 	int int_arg;
@@ -309,12 +284,12 @@ out:
 }
 
 int
-soo_ioctl(struct fileproc *fp, u_long cmd, caddr_t data, vfs_context_t ctx)
+soo_ioctl(struct fileproc *fp, u_long cmd, caddr_t __sized_by(IOCPARM_LEN(cmd)) data, vfs_context_t ctx)
 {
-	struct socket *so;
+	struct socket *__single so;
 	proc_t procp = vfs_context_proc(ctx);
 
-	if ((so = (struct socket *)fp->f_fglob->fg_data) == NULL) {
+	if ((so = (struct socket *)fp_get_data(fp)) == NULL) {
 		/* This is not a valid open file descriptor */
 		return EBADF;
 	}
@@ -325,7 +300,7 @@ soo_ioctl(struct fileproc *fp, u_long cmd, caddr_t data, vfs_context_t ctx)
 int
 soo_select(struct fileproc *fp, int which, void *wql, vfs_context_t ctx)
 {
-	struct socket *so = (struct socket *)fp->f_fglob->fg_data;
+	struct socket *__single so = (struct socket *)fp_get_data(fp);
 	int retnum = 0;
 	proc_t procp;
 
@@ -334,13 +309,6 @@ soo_select(struct fileproc *fp, int which, void *wql, vfs_context_t ctx)
 	}
 
 	procp = vfs_context_proc(ctx);
-
-#if CONFIG_MACF_SOCKET
-	if (mac_socket_check_select(vfs_context_ucred(ctx), so, which) != 0) {
-		return 0;
-	}
-#endif /* CONFIG_MACF_SOCKET */
-
 
 	socket_lock(so, 1);
 	switch (which) {
@@ -441,10 +409,10 @@ static int
 soo_close(struct fileglob *fg, __unused vfs_context_t ctx)
 {
 	int error = 0;
-	struct socket *sp;
+	struct socket *__single sp;
 
-	sp = (struct socket *)fg->fg_data;
-	fg->fg_data = NULL;
+	sp = (struct socket *)fg_get_data(fg);
+	fg_set_data(fg, NULL);
 
 	if (sp) {
 		error = soclose(sp);
@@ -457,7 +425,7 @@ static int
 soo_drain(struct fileproc *fp, __unused vfs_context_t ctx)
 {
 	int error = 0;
-	struct socket *so = (struct socket *)fp->f_fglob->fg_data;
+	struct socket *__single so = (struct socket *)fp_get_data(fp);
 
 	if (so) {
 		socket_lock(so, 1);

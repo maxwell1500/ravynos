@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2024 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -33,6 +33,7 @@
 
 #include <i386/cpu_threads.h>
 #include <i386/cpuid.h>
+#include <i386/machine_routines.h>
 
 int force_tecs_at_idle;
 int tecs_mode_supported;
@@ -101,7 +102,7 @@ typedef struct cpuid_cache_descriptor {
 /*
  * Intel cache descriptor table:
  */
-static cpuid_cache_descriptor_t intel_cpuid_leaf2_descriptor_table[] = {
+static const cpuid_cache_descriptor_t intel_cpuid_leaf2_descriptor_table[] = {
 //	-------------------------------------------------------
 //	value	type	level		ways	size	entries
 //	-------------------------------------------------------
@@ -212,11 +213,17 @@ static cpuid_cache_descriptor_t intel_cpuid_leaf2_descriptor_table[] = {
 #define INTEL_LEAF2_DESC_NUM (sizeof(intel_cpuid_leaf2_descriptor_table) / \
 	                        sizeof(cpuid_cache_descriptor_t))
 
+boolean_t cpuid_tsx_disabled = false;   /* true if XNU disabled TSX */
+boolean_t cpuid_tsx_supported = false;
 
 static void do_cwas(i386_cpu_info_t *cpuinfo, boolean_t on_slave);
 static void cpuid_do_precpuid_was(void);
 
-static inline cpuid_cache_descriptor_t *
+static void cpuid_vmm_detect_pv_interface(i386_vmm_info_t *info_p, const char *signature,
+    bool (*)(i386_vmm_info_t*, const uint32_t, const uint32_t));
+static bool cpuid_vmm_detect_applepv_features(i386_vmm_info_t *info_p, const uint32_t base, const uint32_t max_leaf);
+
+static inline const cpuid_cache_descriptor_t *
 cpuid_leaf2_find(uint8_t value)
 {
 	unsigned int    i;
@@ -258,13 +265,27 @@ do_cwas(i386_cpu_info_t *cpuinfo, boolean_t on_slave)
 	 * Workaround for reclaiming perf counter 3 due to TSX memory ordering erratum.
 	 * This workaround does not support being forcibly set (since an MSR must be
 	 * enumerated, lest we #GP when forced to access it.)
+	 *
+	 * Note that if disabling TSX is supported, disablement is prefered over forcing
+	 * TSX transactions to abort.
 	 */
-	if (cpuid_wa_required(CPU_INTEL_TSXFA) == CWA_ON) {
+	if (cpuid_wa_required(CPU_INTEL_TSXDA) == CWA_ON) {
+		/* This must be executed on all logical processors */
+		wrmsr64(MSR_IA32_TSX_CTRL, MSR_IA32_TSXCTRL_TSX_CPU_CLEAR | MSR_IA32_TSXCTRL_RTM_DISABLE);
+	} else if (cpuid_wa_required(CPU_INTEL_TSXFA) == CWA_ON) {
 		/* This must be executed on all logical processors */
 		wrmsr64(MSR_IA32_TSX_FORCE_ABORT,
 		    rdmsr64(MSR_IA32_TSX_FORCE_ABORT) | MSR_IA32_TSXFA_RTM_FORCE_ABORT);
 	}
 
+	if (((wa_reqd = cpuid_wa_required(CPU_INTEL_SRBDS)) & CWA_ON) != 0 &&
+	    ((wa_reqd & CWA_FORCE_ON) == CWA_ON ||
+	    (cpuinfo->cpuid_leaf7_extfeatures & CPUID_LEAF7_EXTFEATURE_SRBDS_CTRL) != 0)) {
+		/* This must be executed on all logical processors */
+		uint64_t mcuoptctrl = rdmsr64(MSR_IA32_MCU_OPT_CTRL);
+		mcuoptctrl |= MSR_IA32_MCUOPTCTRL_RNGDS_MITG_DIS;
+		wrmsr64(MSR_IA32_MCU_OPT_CTRL, mcuoptctrl);
+	}
 
 	if (on_slave) {
 		return;
@@ -279,7 +300,7 @@ do_cwas(i386_cpu_info_t *cpuinfo, boolean_t on_slave)
 			force_tecs_at_idle = 1;
 		}
 
-	/*FALLTHROUGH*/
+		OS_FALLTHROUGH;
 	case CWA_ON:
 		tecs_mode_supported = 1;
 		break;
@@ -302,6 +323,8 @@ cpuid_do_was(void)
 	do_cwas(cpuid_info(), TRUE);
 }
 
+
+
 static void
 cpuid_determine_vendor( i386_cpu_info_t * info_p )
 {
@@ -316,6 +339,7 @@ cpuid_determine_vendor( i386_cpu_info_t * info_p )
 	}
 }
 
+/* this function is Intel-specific */
 static void
 cpuid_set_cache_info( i386_cpu_info_t * info_p )
 {
@@ -326,6 +350,7 @@ cpuid_set_cache_info( i386_cpu_info_t * info_p )
 	unsigned int    i;
 	unsigned int    j;
 	boolean_t       cpuid_deterministic_supported = FALSE;
+	unsigned int    dcnt = 0;
 
 	DBG("cpuid_set_cache_info(%p)\n", info_p);
 
@@ -334,29 +359,19 @@ cpuid_set_cache_info( i386_cpu_info_t * info_p )
 	/* Get processor cache descriptor info using leaf 2.  We don't use
 	 * this internally, but must publish it for KEXTs.
 	 */
-	cpuid_fn(2, cpuid_result);
-	for (j = 0; j < 4; j++) {
-		if ((cpuid_result[j] >> 31) == 1) {     /* bit31 is validity */
-			continue;
-		}
-		((uint32_t *) info_p->cache_info)[j] = cpuid_result[j];
-	}
-	/* cache_info[0] drives the loop below; on parts where leaf 2 is
-	 * deprecated it is not necessarily the small count older CPUs return. */
-	DBG("cpuid_set_cache_info: leaf2 done, cache_info[0]=0x%x\n",
-	    info_p->cache_info[0]);
-	/* first byte gives number of cpuid calls to get all descriptors */
-	for (i = 1; i < info_p->cache_info[0]; i++) {
-		if (i * 16 > sizeof(info_p->cache_info)) {
+	for (i = 0; i < sizeof(info_p->cache_info) / 16; i++) {
+		/* byte 0 gives number of cpuid calls to get all descriptors */
+		if (i > 0 && i >= info_p->cache_info[0]) {
 			break;
 		}
+
 		cpuid_fn(2, cpuid_result);
 		for (j = 0; j < 4; j++) {
 			if ((cpuid_result[j] >> 31) == 1) {
 				continue;
 			}
-			((uint32_t *) info_p->cache_info)[4 * i + j] =
-			    cpuid_result[j];
+			memcpy(&info_p->cache_info[dcnt], &cpuid_result[j], 4);
+			dcnt += 4;
 		}
 	}
 
@@ -370,8 +385,6 @@ cpuid_set_cache_info( i386_cpu_info_t * info_p )
 		cpuid_deterministic_supported = TRUE;
 	}
 
-	/* Bounded: a part that does not terminate the enumeration with cache type 0
-	 * would otherwise hang the machine here, before any console exists. */
 	for (index = 0; cpuid_deterministic_supported && index < 16; index++) {
 		cache_type_t    type = Lnone;
 		uint32_t        cache_type;
@@ -524,7 +537,7 @@ cpuid_set_cache_info( i386_cpu_info_t * info_p )
 	 */
 	DBG(" %ld leaf2 descriptors:\n", sizeof(info_p->cache_info));
 	for (i = 1; i < sizeof(info_p->cache_info); i++) {
-		cpuid_cache_descriptor_t        *descp;
+		const cpuid_cache_descriptor_t  *descp;
 		int                             id;
 		int                             level;
 		int                             page;
@@ -622,10 +635,12 @@ cpuid_set_generic_info(i386_cpu_info_t *info_p)
 
 	/* Get cache and addressing info. */
 	if (info_p->cpuid_max_ext >= 0x80000006) {
-		uint32_t assoc;
 		cpuid_fn(0x80000006, reg);
-		info_p->cpuid_cache_linesize   = bitfield32(reg[ecx], 7, 0);
-		assoc = bitfield32(reg[ecx], 15, 12);
+		info_p->cpuid_cache_linesize = bitfield32(reg[ecx], 7, 0);
+		DBG(" cpuid_cache_linesize: %d\n",
+		    info_p->cpuid_cache_linesize);
+
+		uint32_t assoc = bitfield32(reg[ecx], 15, 12);
 		/*
 		 * L2 associativity is encoded, though in an insufficiently
 		 * descriptive fashion, e.g. 24-way is mapped to 16-way.
@@ -641,7 +656,10 @@ cpuid_set_generic_info(i386_cpu_info_t *info_p)
 			assoc = 0xFFFF;
 		}
 		info_p->cpuid_cache_L2_associativity = assoc;
-		info_p->cpuid_cache_size       = bitfield32(reg[ecx], 31, 16);
+		info_p->cpuid_cache_size = bitfield32(reg[ecx], 31, 16);
+		DBG(" cpuid_cache_size    : %dKiB\n",
+		    info_p->cpuid_cache_size);
+
 		cpuid_fn(0x80000008, reg);
 		info_p->cpuid_address_bits_physical =
 		    bitfield32(reg[eax], 7, 0);
@@ -654,12 +672,7 @@ cpuid_set_generic_info(i386_cpu_info_t *info_p)
 	 * and bracket this with the approved procedure for reading the
 	 * the microcode version number a.k.a. signature a.k.a. BIOS ID
 	 */
-
-	/* On AMD this MSR is the read-only PATCH_LEVEL, so the zeroing write raises
-	 * an unhandled #GP this early. It still reads back, so only gate the write. */
-	if (info_p->cpuid_ven == CPUID_VEN_INTEL) {
-		wrmsr64(MSR_IA32_BIOS_SIGN_ID, 0);
-	}
+	if (info_p->cpuid_ven == CPUID_VEN_INTEL) { wrmsr64(MSR_IA32_BIOS_SIGN_ID, 0); }
 	cpuid_fn(1, reg);
 	info_p->cpuid_microcode_version =
 	    (uint32_t) (rdmsr64(MSR_IA32_BIOS_SIGN_ID) >> 32);
@@ -677,11 +690,11 @@ cpuid_set_generic_info(i386_cpu_info_t *info_p)
 	info_p->cpuid_processor_flag = info_p->cpuid_ven == CPUID_VEN_INTEL ? (rdmsr64(MSR_IA32_PLATFORM_ID) >> 50) & 0x7 : 1;
 
 	/* Fold extensions into family/model */
-	if (info_p->cpuid_family == 0x0f) {
-		info_p->cpuid_family += info_p->cpuid_extfamily;
-	}
-	if (info_p->cpuid_family == 0x0f || info_p->cpuid_family == 0x06 || info_p->cpuid_ven == CPUID_VEN_AMD) {
+	if (info_p->cpuid_family == 0x0f || info_p->cpuid_family == 0x06) {
 		info_p->cpuid_model += (info_p->cpuid_extmodel << 4);
+		if (info_p->cpuid_family == 0x0f) {
+			info_p->cpuid_family += info_p->cpuid_extfamily;
+		}
 	}
 
 	if (info_p->cpuid_features & CPUID_FEATURE_HTT) {
@@ -689,38 +702,28 @@ cpuid_set_generic_info(i386_cpu_info_t *info_p)
 		    bitfield32(reg[ebx], 23, 16);
 	} else if (info_p->cpuid_ven == CPUID_VEN_AMD) {
 		cpuid_fn(0x80000008, reg);
-		info_p->cpuid_logical_per_package = bitfield32(reg[ecx], 7, 0) + 1; /* ThreadCount and CoreCount on some AMD CPUs */
+		info_p->cpuid_logical_per_package = bitfield32(reg[ecx], 7, 0) + 1;
 		if (info_p->cpuid_family == 0x15 || info_p->cpuid_family == 0x16) {
-			info_p->cpuid_cores_per_package = info_p->cpuid_logical_per_package; /* WORKAROUND */
+			info_p->cpuid_cores_per_package = info_p->cpuid_logical_per_package;
 		}
 	} else {
-		/* Does this mean that it assumes that the logical core per physical core is one? */
-		/* XNU defines a package as the whole CPU in cpu_topology */
 		info_p->cpuid_logical_per_package = 1;
 	}
 
-	/* Leaf 1 EBX[23:16] is only a power-of-two bound and lies on hybrid parts (a
-	 * Core Ultra 9 185H reports 128); leaf 0x1F/0xB gives the real width. */
+	/* Hybrid CPU (e.g. Meteor Lake / Alder Lake) topology extraction */
 	if (info_p->cpuid_ven == CPUID_VEN_INTEL && info_p->cpuid_max_basic >= 0x0b) {
 		uint32_t topo[4];
 		uint32_t leaf = (info_p->cpuid_max_basic >= 0x1f) ? 0x1f : 0x0b;
 		uint32_t widest = 0;
 		uint32_t sub;
-
 		for (sub = 0; sub < 8; sub++) {
-			topo[eax] = leaf;
-			topo[ecx] = sub;
+			topo[eax] = leaf; topo[ecx] = sub;
 			cpuid(topo);
-			if (bitfield32(topo[ecx], 15, 8) == 0) {
-				break;          /* invalid level: end of enumeration */
-			}
+			if (bitfield32(topo[ecx], 15, 8) == 0) break;
 			if (bitfield32(topo[ebx], 15, 0) > widest) {
 				widest = bitfield32(topo[ebx], 15, 0);
 			}
 		}
-		DBG("cpuid: topology leaf 0x%x levels=%u logical_per_package=%u"
-		    " (leaf1 said %u)\n", leaf, sub, widest,
-		    info_p->cpuid_logical_per_package);
 		if (widest != 0) {
 			info_p->cpuid_logical_per_package = widest;
 		}
@@ -861,17 +864,38 @@ cpuid_set_generic_info(i386_cpu_info_t *info_p)
 		DBG("  EBX           : 0x%x\n", xsp->extended_state[ebx]);
 		DBG("  ECX           : 0x%x\n", xsp->extended_state[ecx]);
 		DBG("  EDX           : 0x%x\n", xsp->extended_state[edx]);
+
+		const uint32_t valid =
+		    info_p->cpuid_xsave_leafp->extended_state[eax];
+		for (unsigned n = 2; n < 8; n++) {
+			if ((valid & (1u << n)) == 0) {
+				continue;
+			}
+			xsp = &info_p->cpuid_xsave_leaf[n];
+			xsp->extended_state[eax] = 0xd;
+			xsp->extended_state[ecx] = n;
+			cpuid(xsp->extended_state);
+			DBG(" XSAVE Sub-leaf%d:\n", n);
+			DBG("  EAX           : 0x%x\n",
+			    xsp->extended_state[eax]);
+			DBG("  EBX           : 0x%x\n",
+			    xsp->extended_state[ebx]);
+			DBG("  ECX           : 0x%x\n",
+			    xsp->extended_state[ecx]);
+			DBG("  EDX           : 0x%x\n",
+			    xsp->extended_state[edx]);
+		}
 	}
 
-	/* Gate on the leaf actually being reported, not on an Intel model number:
-	 * AMD and the Atom line support leaf 7 without matching that comparison. */
-	if (info_p->cpuid_max_basic >= 0x7) {
+	if (info_p->cpuid_max_basic >= 7) {
 		/*
 		 * Leaf7 Features:
 		 */
 		cpuid_fn(0x7, reg);
 		info_p->cpuid_leaf7_features = quad(reg[ecx], reg[ebx]);
 		info_p->cpuid_leaf7_extfeatures = reg[edx];
+
+		cpuid_tsx_supported = (reg[ebx] & (CPUID_LEAF7_FEATURE_HLE | CPUID_LEAF7_FEATURE_RTM)) != 0;
 
 		DBG(" Feature Leaf7:\n");
 		DBG("  EBX           : 0x%x\n", reg[ebx]);
@@ -891,61 +915,46 @@ cpuid_set_generic_info(i386_cpu_info_t *info_p)
 		DBG("  numerator     : 0x%x\n", reg[ebx]);
 		DBG("  denominator   : 0x%x\n", reg[eax]);
 	}
-
-	return;
 }
 
-/* Split out from cpuid_set_cpufamily() purely to keep the two vendors' model
- * tables readable; the Intel path below is unchanged. */
+
 static uint32_t
 cpuid_amd_cpufamily(i386_cpu_info_t *info_p)
 {
 	switch (info_p->cpuid_family) {
 	case 0x15:
 		switch (info_p->cpuid_model) {
-		case CPUID_MODEL_AMD_ZAMBEZI: /* ZURICH, VALENCIA, INTERLAGOS */
-			return CPUFAMILY_AMD_BULLDOZER;
-		case CPUID_MODEL_AMD_VISHERA: /* DELHI, SEOUL, WARSAW, ABU DHABI */
+		case CPUID_MODEL_AMD_ZAMBEZI: return CPUFAMILY_AMD_BULLDOZER;
+		case CPUID_MODEL_AMD_VISHERA:
 		case CPUID_MODEL_AMD_TRINITY:
-		case CPUID_MODEL_AMD_RICHLAND:
-			return CPUFAMILY_AMD_PILEDRIVER;
-		case CPUID_MODEL_AMD_KAVERI: /* BALD EAGLE (?) */
-		case CPUID_MODEL_AMD_GODAVARI:
-			return CPUFAMILY_AMD_STEAMROLLER;
+		case CPUID_MODEL_AMD_RICHLAND: return CPUFAMILY_AMD_PILEDRIVER;
+		case CPUID_MODEL_AMD_KAVERI:
+		case CPUID_MODEL_AMD_GODAVARI: return CPUFAMILY_AMD_STEAMROLLER;
 		case CPUID_MODEL_AMD_CARRIZO:
 		case CPUID_MODEL_AMD_BRISTOL_RIDGE:
-		case CPUID_MODEL_AMD_STONEY_RIDGE:
-			return CPUFAMILY_AMD_EXCAVATOR;
-		default:
-			panic("Unsupported AMD Family 15h Model! 0x%x", info_p->cpuid_model);
+		case CPUID_MODEL_AMD_STONEY_RIDGE: return CPUFAMILY_AMD_EXCAVATOR;
+		default: return CPUFAMILY_AMD_PILEDRIVER;
 		}
 	case 0x16:
 		switch (info_p->cpuid_model) {
-		case CPUID_MODEL_AMD_KABINI: /* TEMASH, KYOTO */
-			return CPUFAMILY_AMD_JAGUAR;
-		case CPUID_MODEL_AMD_MULLINS: /* BEEMA, STEPPE EAGLE, CROWNED EAGLE */
-			return CPUFAMILY_AMD_PUMA;
-		default:
-			panic("Unsupported AMD Family 16h Model! 0x%x", info_p->cpuid_model);
+		case CPUID_MODEL_AMD_KABINI: return CPUFAMILY_AMD_JAGUAR;
+		case CPUID_MODEL_AMD_MULLINS: return CPUFAMILY_AMD_PUMA;
+		default: return CPUFAMILY_AMD_JAGUAR;
 		}
 	case 0x17:
 		switch (info_p->cpuid_model) {
-		case CPUID_MODEL_AMD_NAPLES: /* WHITEHAVEN, SUMMIT RIDGE, SNOWY OWL */
-		case CPUID_MODEL_AMD_RAVEN_RIDGE: /* GREAT HORNED OWL */
-		case CPUID_MODEL_AMD_DALI:
-			return CPUFAMILY_AMD_ZEN;
-		case CPUID_MODEL_AMD_COLFAX: /* PINNACLE RIDGE */
-		case CPUID_MODEL_AMD_PICASSO: /* BANDED KESTREL */
-			return CPUFAMILY_AMD_ZENX; /* Zen+ */
-		case CPUID_MODEL_AMD_ROME: /* CASTLE PEAK */
-		case CPUID_MODEL_AMD_RENOIR: /* GREY HAWK */
+		case CPUID_MODEL_AMD_NAPLES:
+		case CPUID_MODEL_AMD_RAVEN_RIDGE:
+		case CPUID_MODEL_AMD_DALI: return CPUFAMILY_AMD_ZEN;
+		case CPUID_MODEL_AMD_COLFAX:
+		case CPUID_MODEL_AMD_PICASSO: return CPUFAMILY_AMD_ZENX;
+		case CPUID_MODEL_AMD_ROME:
+		case CPUID_MODEL_AMD_RENOIR:
 		case CPUID_MODEL_AMD_LUCIENNE:
 		case CPUID_MODEL_AMD_MATISSE:
 		case CPUID_MODEL_AMD_VAN_GOGH:
-		case CPUID_MODEL_AMD_MENDOCINO:
-			return CPUFAMILY_AMD_ZEN2;
-		default:
-			panic("Unsupported AMD Family 17h Model! 0x%x", info_p->cpuid_model);
+		case CPUID_MODEL_AMD_MENDOCINO: return CPUFAMILY_AMD_ZEN2;
+		default: return CPUFAMILY_AMD_ZEN2;
 		}
 	case 0x19:
 		switch (info_p->cpuid_model) {
@@ -953,25 +962,17 @@ cpuid_amd_cpufamily(i386_cpu_info_t *info_p)
 		case CPUID_MODEL_AMD_MILAN:
 		case CPUID_MODEL_AMD_VERMEER:
 		case CPUID_MODEL_AMD_REMBRANDT:
-		case CPUID_MODEL_AMD_CEZANNE:
-			return CPUFAMILY_AMD_ZEN3;
+		case CPUID_MODEL_AMD_CEZANNE: return CPUFAMILY_AMD_ZEN3;
 		case CPUID_MODEL_AMD_RAPHAEL:
 		case CPUID_MODEL_AMD_PHOENIX:
 		case CPUID_MODEL_AMD_HAWKPOINT:
-		case CPUID_MODEL_AMD_PHOENIX2:
-			return CPUFAMILY_AMD_ZEN4;
-		default:
-			panic("Unsupported AMD Family 19h Model! 0x%x", info_p->cpuid_model);
+		case CPUID_MODEL_AMD_PHOENIX2: return CPUFAMILY_AMD_ZEN4;
+		default: return CPUFAMILY_AMD_ZEN4;
 		}
 	case 0x1A:
-		switch (info_p->cpuid_model) {
-		case CPUID_MODEL_AMD_GRANITE_RIDGE:
-			return CPUFAMILY_AMD_ZEN5;
-		default:
-			panic("Unsupported AMD Family 1Ah Model! 0x%x", info_p->cpuid_model);
-		}
+		return CPUFAMILY_AMD_ZEN5;
 	default:
-		panic("Unsupported AMD Family! 0x%x", info_p->cpuid_family);
+		return CPUFAMILY_AMD_ZEN3;
 	}
 }
 
@@ -1016,46 +1017,23 @@ cpuid_set_cpufamily(i386_cpu_info_t *info_p)
 		case CPUID_MODEL_CRYSTALWELL:
 			cpufamily = CPUFAMILY_INTEL_HASWELL;
 			break;
-		case CPUID_MODEL_BAYTRAIL:
-		case CPUID_MODEL_TANGIER:
-		case CPUID_MODEL_AVOTON:
-		case CPUID_MODEL_ANNIEDALE:
-		case CPUID_MODEL_SOFIA:
-			cpufamily = CPUFAMILY_INTEL_SILVERMONT;
-			break;
 		case CPUID_MODEL_BROADWELL:
 		case CPUID_MODEL_BRYSTALWELL:
 			cpufamily = CPUFAMILY_INTEL_BROADWELL;
-			break;
-		case CPUID_MODEL_BRASWELL: /* merge with Silvermont? */
-			cpufamily = CPUFAMILY_INTEL_AIRMONT;
 			break;
 		case CPUID_MODEL_SKYLAKE:
 		case CPUID_MODEL_SKYLAKE_DT:
 		case CPUID_MODEL_SKYLAKE_W:
 			cpufamily = CPUFAMILY_INTEL_SKYLAKE;
 			break;
-		case CPUID_MODEL_APOLLOLAKE:
-		case CPUID_MODEL_DENVERTON:
-			cpufamily = CPUFAMILY_INTEL_GOLDMONT;
-			break;
 		case CPUID_MODEL_KABYLAKE:
 		case CPUID_MODEL_KABYLAKE_DT:
 			cpufamily = CPUFAMILY_INTEL_KABYLAKE;
 			break;
-		case CPUID_MODEL_GEMINILAKE:
-			cpufamily = CPUFAMILY_INTEL_GOLDMONTPLUS;
-			break;
 		case CPUID_MODEL_ICELAKE:
 		case CPUID_MODEL_ICELAKE_H:
 		case CPUID_MODEL_ICELAKE_DT:
-		case CPUID_MODEL_ICELAKE_SP:
-		case CPUID_MODEL_ICELAKE_DE:
 			cpufamily = CPUFAMILY_INTEL_ICELAKE;
-			break;
-		case CPUID_MODEL_METEORLAKE:
-		case CPUID_MODEL_METEORLAKE_L:
-			cpufamily = CPUFAMILY_INTEL_METEORLAKE;
 			break;
 		case CPUID_MODEL_COMETLAKE_DT:
 			cpufamily = CPUFAMILY_INTEL_COMETLAKE;
@@ -1067,8 +1045,6 @@ cpuid_set_cpufamily(i386_cpu_info_t *info_p)
 		case CPUID_MODEL_ROCKETLAKE:
 			cpufamily = CPUFAMILY_INTEL_ROCKETLAKE;
 			break;
-		/* For ADL+ the scheduler could stand to know these are big.LITTLE
-		 * rather than treating every core as equal. */
 		case CPUID_MODEL_ALDERLAKE:
 		case CPUID_MODEL_ALDERLAKE_P:
 			cpufamily = CPUFAMILY_INTEL_ALDERLAKE;
@@ -1077,11 +1053,32 @@ cpuid_set_cpufamily(i386_cpu_info_t *info_p)
 		case CPUID_MODEL_RAPTORLAKE_P:
 			cpufamily = CPUFAMILY_INTEL_RAPTORLAKE;
 			break;
+		case CPUID_MODEL_METEORLAKE:
+		case CPUID_MODEL_METEORLAKE_L:
+			cpufamily = CPUFAMILY_INTEL_METEORLAKE;
+			break;
 		case CPUID_MODEL_SAPPHIRERAPIDS:
 			cpufamily = CPUFAMILY_INTEL_SAPPHIRERAPIDS;
 			break;
 		case CPUID_MODEL_EMERALDRAPIDS:
 			cpufamily = CPUFAMILY_INTEL_EMERALDRAPIDS;
+			break;
+		case CPUID_MODEL_BAYTRAIL:
+		case CPUID_MODEL_TANGIER:
+		case CPUID_MODEL_AVOTON:
+		case CPUID_MODEL_ANNIEDALE:
+		case CPUID_MODEL_SOFIA:
+			cpufamily = CPUFAMILY_INTEL_SILVERMONT;
+			break;
+		case CPUID_MODEL_BRASWELL:
+			cpufamily = CPUFAMILY_INTEL_AIRMONT;
+			break;
+		case CPUID_MODEL_APOLLOLAKE:
+		case CPUID_MODEL_DENVERTON:
+			cpufamily = CPUFAMILY_INTEL_GOLDMONT;
+			break;
+		case CPUID_MODEL_GEMINILAKE:
+			cpufamily = CPUFAMILY_INTEL_GOLDMONTPLUS;
 			break;
 		}
 		break;
@@ -1108,11 +1105,13 @@ cpuid_set_info(void)
 	cpuid_set_generic_info(info_p);
 
 	cpuid_determine_vendor(info_p);
-
-	/* Verify we are running on a supported CPU - now with less GenuineIntel:
-	 * the cpufamily lookup is the real check and it knows both vendors. */
 	if (cpuid_set_cpufamily(info_p) == CPUFAMILY_UNKNOWN) {
-		panic("Unsupported CPU");
+		/* Fallback for unrecognized Intel/AMD architectures */
+		if (info_p->cpuid_ven == CPUID_VEN_AMD) {
+			info_p->cpuid_cpufamily = CPUFAMILY_AMD_ZEN3;
+		} else {
+			info_p->cpuid_cpufamily = CPUFAMILY_INTEL_SKYLAKE;
+		}
 	}
 
 	info_p->cpuid_cpu_type = CPU_TYPE_X86;
@@ -1140,6 +1139,9 @@ cpuid_set_info(void)
 	 * (which determines whether SMT/Hyperthreading is active).
 	 */
 
+	/*
+	 * Not all VMMs emulate MSR_CORE_THREAD_COUNT (0x35).
+	 */
 	if (0 != (info_p->cpuid_features & CPUID_FEATURE_VMM) &&
 	    PE_parse_boot_argn("-nomsr35h", NULL, 0)) {
 		info_p->core_count = 1;
@@ -1148,34 +1150,16 @@ cpuid_set_info(void)
 	} else {
 		switch (info_p->cpuid_cpufamily) {
 		case CPUFAMILY_INTEL_PENRYN:
-		case CPUFAMILY_AMD_BULLDOZER:
-		case CPUFAMILY_AMD_PILEDRIVER:
-		case CPUFAMILY_AMD_STEAMROLLER:
-		case CPUFAMILY_AMD_EXCAVATOR:
-		case CPUFAMILY_AMD_JAGUAR:
-		case CPUFAMILY_AMD_PUMA:
 			cpuid_set_cache_info(info_p);
 			info_p->core_count   = info_p->cpuid_cores_per_package;
 			info_p->thread_count = info_p->cpuid_logical_per_package;
 			break;
-		case CPUFAMILY_AMD_ZEN:
-		case CPUFAMILY_AMD_ZENX:
-		case CPUFAMILY_AMD_ZEN2:
-		case CPUFAMILY_AMD_ZEN3:
-		case CPUFAMILY_AMD_ZEN4:
-		case CPUFAMILY_AMD_ZEN5: {
-			uint32_t reg[4];
-			uint32_t threads_per_core;
-
-			cpuid_set_cache_info(info_p);
-			info_p->thread_count = info_p->cpuid_logical_per_package;
-			cpuid_fn(0x8000001E, reg);
-			threads_per_core = bitfield32(reg[ebx], 15, 8) + 1;
-			info_p->core_count = info_p->thread_count / threads_per_core;
-			info_p->cpuid_cores_per_package = info_p->core_count;
-			break;
-		}
 		case CPUFAMILY_INTEL_WESTMERE: {
+			/*
+			 * This should be the same as Nehalem but an A0 silicon bug returns
+			 * invalid data in the top 12 bits. Hence, we use only bits [19..16]
+			 * rather than [31..16] for core count - which actually can't exceed 8.
+			 */
 			uint64_t msr = rdmsr64(MSR_CORE_THREAD_COUNT);
 			if (0 == msr) {
 				/* Provide a non-zero default for some VMMs */
@@ -1207,6 +1191,9 @@ cpuid_set_info(void)
 	DBG("    cpu_subtype: 0x%08x\n", info_p->cpuid_cpu_subtype);
 
 	info_p->cpuid_model_string = ""; /* deprecated */
+
+	/* Init CPU LBRs */
+	i386_lbr_init(info_p, true);
 
 	do_cwas(info_p, FALSE);
 }
@@ -1527,13 +1514,42 @@ cpuid_leaf7_extfeatures(void)
 	return cpuid_info()->cpuid_leaf7_extfeatures;
 }
 
+const char *
+cpuid_vmm_family_string(void)
+{
+	switch (cpuid_vmm_info()->cpuid_vmm_family) {
+	case CPUID_VMM_FAMILY_NONE:
+		return "None";
+
+	case CPUID_VMM_FAMILY_VMWARE:
+		return "VMWare";
+
+	case CPUID_VMM_FAMILY_PARALLELS:
+		return "Parallels";
+
+	case CPUID_VMM_FAMILY_HYVE:
+		return "xHyve";
+
+	case CPUID_VMM_FAMILY_HVF:
+		return "HVF";
+
+	case CPUID_VMM_FAMILY_KVM:
+		return "KVM";
+
+	case CPUID_VMM_FAMILY_UNKNOWN:
+	/*FALLTHROUGH*/
+	default:
+		return "Unknown VMM";
+	}
+}
+
 static i386_vmm_info_t  *_cpuid_vmm_infop = NULL;
 static i386_vmm_info_t  _cpuid_vmm_info;
 
 static void
 cpuid_init_vmm_info(i386_vmm_info_t *info_p)
 {
-	uint32_t        reg[4];
+	uint32_t        reg[4], maxbasic_regs[4];
 	uint32_t        max_vmm_leaf;
 
 	bzero(info_p, sizeof(*info_p));
@@ -1544,8 +1560,27 @@ cpuid_init_vmm_info(i386_vmm_info_t *info_p)
 
 	DBG("cpuid_init_vmm_info(%p)\n", info_p);
 
+	/*
+	 * Get the highest basic leaf value, then save the cpuid details for that leaf
+	 * for comparison with the [ostensible] VMM leaf.
+	 */
+	cpuid_fn(0, reg);
+	cpuid_fn(reg[eax], maxbasic_regs);
+
 	/* do cpuid 0x40000000 to get VMM vendor */
 	cpuid_fn(0x40000000, reg);
+
+	/*
+	 * If leaf 0x40000000 is non-existent, cpuid will return the values as
+	 * if the highest basic leaf was requested, so compare to those values
+	 * we just retrieved to see if no vmm is present.
+	 */
+	if (bcmp(reg, maxbasic_regs, sizeof(reg)) == 0) {
+		info_p->cpuid_vmm_family = CPUID_VMM_FAMILY_NONE;
+		DBG(" vmm_vendor          : NONE\n");
+		return;
+	}
+
 	max_vmm_leaf = reg[eax];
 	bcopy((char *)&reg[ebx], &info_p->cpuid_vmm_vendor[0], 4);
 	bcopy((char *)&reg[ecx], &info_p->cpuid_vmm_vendor[4], 4);
@@ -1555,12 +1590,23 @@ cpuid_init_vmm_info(i386_vmm_info_t *info_p)
 	if (0 == strcmp(info_p->cpuid_vmm_vendor, CPUID_VMM_ID_VMWARE)) {
 		/* VMware identification string: kb.vmware.com/kb/1009458 */
 		info_p->cpuid_vmm_family = CPUID_VMM_FAMILY_VMWARE;
-	} else if (0 == strcmp(info_p->cpuid_vmm_vendor, CPUID_VMM_ID_PARALLELS)) {
+	} else if (0 == bcmp(info_p->cpuid_vmm_vendor, CPUID_VMM_ID_PARALLELS, 12)) {
 		/* Parallels identification string */
 		info_p->cpuid_vmm_family = CPUID_VMM_FAMILY_PARALLELS;
-	} else if (0 == strcmp(info_p->cpuid_vmm_vendor, CPUID_VMM_ID_QEMU_TCG)) {
-		/* QEMU TCG identification string */
-		info_p->cpuid_vmm_family = CPUID_VMM_FAMILY_QEMU_TCG;
+	} else if (0 == bcmp(info_p->cpuid_vmm_vendor, CPUID_VMM_ID_HYVE, 12)) {
+		/* bhyve/xhyve identification string */
+		info_p->cpuid_vmm_family = CPUID_VMM_FAMILY_HYVE;
+	} else if (0 == bcmp(info_p->cpuid_vmm_vendor, CPUID_VMM_ID_HVF, 12)) {
+		/* HVF identification string */
+		info_p->cpuid_vmm_family = CPUID_VMM_FAMILY_HVF;
+	} else if (0 == bcmp(info_p->cpuid_vmm_vendor, CPUID_VMM_ID_KVM, 12)) {
+		/* KVM identification string */
+		info_p->cpuid_vmm_family = CPUID_VMM_FAMILY_KVM;
+		if (max_vmm_leaf >= 0x40000001) {
+			cpuid_fn(0x40000001, reg);
+			info_p->cpuid_vmm_kvm_features =
+			    quad(reg[edx], reg[eax]);
+		}
 	} else {
 		info_p->cpuid_vmm_family = CPUID_VMM_FAMILY_UNKNOWN;
 	}
@@ -1572,6 +1618,8 @@ cpuid_init_vmm_info(i386_vmm_info_t *info_p)
 		info_p->cpuid_vmm_tsc_frequency = reg[eax];
 		info_p->cpuid_vmm_bus_frequency = reg[ebx];
 	}
+
+	cpuid_vmm_detect_pv_interface(info_p, APPLEPV_SIGNATURE, &cpuid_vmm_detect_applepv_features);
 
 	DBG(" vmm_vendor          : %s\n", info_p->cpuid_vmm_vendor);
 	DBG(" vmm_family          : %u\n", info_p->cpuid_vmm_family);
@@ -1601,6 +1649,18 @@ cpuid_vmm_family(void)
 	return cpuid_vmm_info()->cpuid_vmm_family;
 }
 
+uint64_t
+cpuid_vmm_get_kvm_features(void)
+{
+	return cpuid_vmm_info()->cpuid_vmm_kvm_features;
+}
+
+uint64_t
+cpuid_vmm_get_applepv_features(void)
+{
+	return cpuid_vmm_info()->cpuid_vmm_applepv_features;
+}
+
 cwa_classifier_e
 cpuid_wa_required(cpu_wa_e wa)
 {
@@ -1608,6 +1668,7 @@ cpuid_wa_required(cpu_wa_e wa)
 	static uint64_t bootarg_cpu_wa_enables = 0;
 	static uint64_t bootarg_cpu_wa_disables = 0;
 	static int bootargs_overrides_processed = 0;
+	uint32_t        reg[4];
 
 	if (!bootargs_overrides_processed) {
 		if (!PE_parse_boot_argn("cwae", &bootarg_cpu_wa_enables, sizeof(bootarg_cpu_wa_enables))) {
@@ -1654,6 +1715,11 @@ cpuid_wa_required(cpu_wa_e wa)
 
 	case CPU_INTEL_TSXFA:
 		/*
+		 * Note that if TSX was disabled in cpuid_do_precpuid_was(), the cached cpuid
+		 * info will indicate that RTM is *not* supported and this workaround will not
+		 * be enabled.
+		 */
+		/*
 		 * Otherwise, if the CPU supports both TSX(HLE) and FORCE_ABORT, return that
 		 * the workaround should be enabled.
 		 */
@@ -1663,6 +1729,53 @@ cpuid_wa_required(cpu_wa_e wa)
 		}
 		break;
 
+	case CPU_INTEL_TSXDA:
+		/*
+		 * Since this workaround might be requested before cpuid_set_info() is complete,
+		 * we need to invoke cpuid directly when looking for the required bits.
+		 */
+		cpuid_fn(0x7, reg);
+		if (reg[edx] & CPUID_LEAF7_EXTFEATURE_ACAPMSR) {
+			uint64_t archcap_msr = rdmsr64(MSR_IA32_ARCH_CAPABILITIES);
+			/*
+			 * If this CPU supports TSX (HLE being the proxy for TSX detection) AND it does
+			 * not include a hardware fix for TAA and it supports the TSX_CTRL MSR, disable TSX entirely.
+			 * (Note this can be overridden (above) if the cwad boot-arg's value has bit 2 set.)
+			 */
+			if ((reg[ebx] & CPUID_LEAF7_FEATURE_HLE) != 0 &&
+			    (archcap_msr & (MSR_IA32_ARCH_CAPABILITIES_TAA_NO | MSR_IA32_ARCH_CAPABILITIES_TSX_CTRL))
+			    == MSR_IA32_ARCH_CAPABILITIES_TSX_CTRL) {
+				return CWA_ON;
+			}
+		}
+		break;
+
+	case CPU_INTEL_SRBDS:
+		/*
+		 * SRBDS mitigations are enabled by default.  CWA_ON returned here indicates
+		 * the caller should disable the mitigation.  Mitigations should be disabled
+		 * at least for CPUs that advertise MDS_NO *and* (either TAA_NO is set OR TSX
+		 * has been disabled).
+		 */
+		if ((info_p->cpuid_leaf7_extfeatures & CPUID_LEAF7_EXTFEATURE_SRBDS_CTRL) != 0) {
+			if ((info_p->cpuid_leaf7_extfeatures & CPUID_LEAF7_EXTFEATURE_ACAPMSR) != 0) {
+				uint64_t archcap_msr = rdmsr64(MSR_IA32_ARCH_CAPABILITIES);
+				if ((archcap_msr & MSR_IA32_ARCH_CAPABILITIES_MDS_NO) != 0 &&
+				    ((archcap_msr & MSR_IA32_ARCH_CAPABILITIES_TAA_NO) != 0 ||
+				    cpuid_tsx_disabled)) {
+					return CWA_ON;
+				}
+			}
+		}
+		break;
+
+	case CPU_INTEL_RSBST:
+		/*
+		 * RSB-stuffing in the kernel exit trampolines (when returning to user)
+		 * RSB depth is 32.  This workaround must be explicitly enabled via the
+		 * cwae boot-arg.
+		 */
+		break;
 
 	default:
 		break;
@@ -1680,4 +1793,72 @@ cpuid_do_precpuid_was(void)
 	 * that data as well.
 	 */
 
+	/* Note the TSX disablement, we do not support force-on since it depends on MSRs being present */
+	if (cpuid_wa_required(CPU_INTEL_TSXDA) == CWA_ON) {
+		/* This must be executed on all logical processors */
+		wrmsr64(MSR_IA32_TSX_CTRL, MSR_IA32_TSXCTRL_TSX_CPU_CLEAR | MSR_IA32_TSXCTRL_RTM_DISABLE);
+		cpuid_tsx_disabled = true;
+	}
+}
+
+
+/*
+ * Hunt for Apple Paravirtualization support in the hypervisor class leaves [0x4000_0000-0x4001_0000].
+ * Hypervisor interfaces are expected to be found at 0x100 boundaries for compatibility.
+ */
+
+static bool
+cpuid_vmm_detect_applepv_features(i386_vmm_info_t *info_p, const uint32_t base, const uint32_t max_leaf)
+{
+	if ((max_leaf - base) < APPLEPV_LEAF_INDEX_MAX) {
+		return false;
+	}
+
+	/*
+	 * Issue cpuid to make sure the interface supports "AH#1" features.
+	 * This avoids a possible collision with "Hv#1" used by Hyper-V.
+	 */
+	uint32_t reg[4];
+	char interface[5];
+	cpuid_fn(base + APPLEPV_INTERFACE_LEAF_INDEX, reg);
+	memcpy(&interface[0], &reg[eax], 4);
+	interface[4] = '\0';
+	if (0 == strcmp(interface, APPLEPV_INTERFACE)) {
+		cpuid_fn(base + APPLEPV_FEATURES_LEAF_INDEX, reg);
+		info_p->cpuid_vmm_applepv_features = quad(reg[ecx], reg[edx]);
+		return true;
+	}
+	return false;
+}
+
+static void
+cpuid_vmm_detect_pv_interface(i386_vmm_info_t *info_p, const char *signature,
+    bool (*searcher)(i386_vmm_info_t*, const uint32_t, const uint32_t))
+{
+	int hcalls;
+	if (PE_parse_boot_argn("hcalls", &hcalls, sizeof(hcalls)) &&
+	    hcalls == 0) {
+		return;
+	}
+
+	assert(info_p);
+
+	/*
+	 * Look for PV interface matching signature
+	 */
+	for (uint32_t base = 0x40000100; base < 0x40010000; base += 0x100) {
+		uint32_t reg[4];
+		char vendor[13];
+
+		cpuid_fn(base, reg);
+		memcpy(&vendor[0], &reg[ebx], 4);
+		memcpy(&vendor[4], &reg[ecx], 4);
+		memcpy(&vendor[8], &reg[edx], 4);
+		vendor[12] = '\0';
+		if ((0 == strcmp(vendor, signature)) &&
+		    (reg[eax] - base) < 0x100 &&
+		    (*searcher)(info_p, base, reg[eax])) {
+			break;
+		}
+	}
 }

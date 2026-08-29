@@ -35,10 +35,10 @@
 #include <sys/param.h>
 
 #include <sys/fcntl.h>
+#include <sys/file_internal.h>
 #include <sys/fsevents.h>
 #include <sys/kernel.h>
 #include <sys/kauth.h>
-#include <sys/malloc.h>
 #include <sys/mount_internal.h>
 #include <sys/namei.h>
 #include <sys/proc_internal.h>
@@ -49,8 +49,19 @@
 #include <sys/vnode_internal.h>
 #include <sys/xattr.h>
 
+#include <kern/kalloc.h>
+#include <kern/kern_types.h>
+#include <kern/host.h>
+#include <kern/ipc_misc.h>
+
+#include <mach/doubleagent_mig_server.h>
+#include <mach/doubleagent_types.h>
+#include <mach/host_priv.h>
+#include <mach/host_special_ports.h>
+
 #include <libkern/OSByteOrder.h>
 #include <vm/vm_kern.h>
+#include <vm/vm_protos.h>       /* XXX for ipc_port_release_send() */
 
 #if CONFIG_MACF
 #include <security/mac_framework.h>
@@ -147,17 +158,11 @@ vn_getxattr(vnode_t vp, const char *name, uio_t uio, size_t *size,
 		if ((error = vnode_authorize(vp, NULL, KAUTH_VNODE_READ_EXTATTRIBUTES, context))) {
 			goto out;
 		}
-		/* The offset can only be non-zero for resource forks. */
-		if (uio != NULL && uio_offset(uio) != 0 &&
-		    bcmp(name, XATTR_RESOURCEFORK_NAME, sizeof(XATTR_RESOURCEFORK_NAME)) != 0) {
-			error = EINVAL;
-			goto out;
-		}
 	}
 
 	/* The offset can only be non-zero for resource forks. */
-	if (uio != NULL && uio_offset(uio) != 0 &&
-	    bcmp(name, XATTR_RESOURCEFORK_NAME, sizeof(XATTR_RESOURCEFORK_NAME)) != 0) {
+	if (uio_offset(uio) != 0 &&
+	    strncmp(name, XATTR_RESOURCEFORK_NAME, sizeof(XATTR_RESOURCEFORK_NAME)) != 0) {
 		error = EINVAL;
 		goto out;
 	}
@@ -211,7 +216,7 @@ vn_setxattr(vnode_t vp, const char *name, uio_t uio, int options, vfs_context_t 
 	}
 	/* The offset can only be non-zero for resource forks. */
 	if (uio_offset(uio) != 0 &&
-	    bcmp(name, XATTR_RESOURCEFORK_NAME, sizeof(XATTR_RESOURCEFORK_NAME)) != 0) {
+	    strncmp(name, XATTR_RESOURCEFORK_NAME, sizeof(XATTR_RESOURCEFORK_NAME)) != 0) {
 		error = EINVAL;
 		goto out;
 	}
@@ -381,15 +386,12 @@ out:
 int
 xattr_validatename(const char *name)
 {
-	int namelen;
+	size_t namelen;
 
 	if (name == NULL || name[0] == '\0') {
 		return EINVAL;
 	}
 	namelen = strlen(name);
-	if (name[namelen] != '\0') {
-		return ENAMETOOLONG;
-	}
 
 	if (utf8_validatestr((const unsigned char *)name, namelen) != 0) {
 		return EINVAL;
@@ -437,6 +439,12 @@ vnode_setasnamedstream_internal(vnode_t vp, vnode_t svp)
 	 * code.
 	 */
 	vnode_update_identity(svp, vp, NULL, 0, 0, VNODE_UPDATE_NAMEDSTREAM_PARENT);
+
+	if (vnode_isdyldsharedcache(vp)) {
+		vnode_lock_spin(svp);
+		svp->v_flag |= VSHARED_DYLD;
+		vnode_unlock(svp);
+	}
 
 	return;
 }
@@ -560,7 +568,7 @@ vnode_relenamedstream(vnode_t vp, vnode_t svp)
 	cn.cn_pnbuf = tmpname;
 	cn.cn_pnlen = sizeof(tmpname);
 	cn.cn_nameptr = cn.cn_pnbuf;
-	cn.cn_namelen = strlen(tmpname);
+	cn.cn_namelen = (int)strlen(tmpname);
 
 	/*
 	 * Obtain the vnode for the shadow files directory.  Make sure to
@@ -608,14 +616,18 @@ vnode_flushnamedstream(vnode_t vp, vnode_t svp, vfs_context_t context)
 	    !VATTR_IS_SUPPORTED(&va, va_data_size)) {
 		return 0;
 	}
-	datasize = va.va_data_size;
+	if (va.va_data_size > UINT32_MAX) {
+		return EINVAL;
+	}
+	datasize = (size_t)va.va_data_size;
 	if (datasize == 0) {
 		(void) default_removexattr(vp, XATTR_RESOURCEFORK_NAME, 0, context);
 		return 0;
 	}
 
 	iosize = bufsize = MIN(datasize, NS_IOBUFSIZE);
-	if (kmem_alloc(kernel_map, (vm_offset_t *)&bufptr, bufsize, VM_KERN_MEMORY_FILE)) {
+	bufptr = kalloc_data(bufsize, Z_WAITOK);
+	if (bufptr == NULL) {
 		return ENOMEM;
 	}
 	auio = uio_create(1, 0, UIO_SYSSPACE, UIO_READ);
@@ -657,9 +669,7 @@ vnode_flushnamedstream(vnode_t vp, vnode_t svp, vfs_context_t context)
 	/* close shadowfile */
 	(void) VNOP_CLOSE(svp, 0, kernelctx);
 out:
-	if (bufptr) {
-		kmem_free(kernel_map, (vm_offset_t)bufptr, bufsize);
-	}
+	kfree_data(bufptr, bufsize);
 	if (auio) {
 		uio_free(auio);
 	}
@@ -708,7 +718,7 @@ vnode_verifynamedstream(vnode_t vp)
 	cn.cn_pnbuf = tmpname;
 	cn.cn_pnlen = sizeof(tmpname);
 	cn.cn_nameptr = cn.cn_pnbuf;
-	cn.cn_namelen = strlen(tmpname);
+	cn.cn_namelen = (int)strlen(tmpname);
 
 	if (VNOP_LOOKUP(shadow_dvp, &shadowfile, &cn, kernelctx) == 0) {
 		/* is the pointer the same? */
@@ -762,7 +772,7 @@ retry_create:
 	cn.cn_pnbuf = tmpname;
 	cn.cn_pnlen = sizeof(tmpname);
 	cn.cn_nameptr = cn.cn_pnbuf;
-	cn.cn_namelen = strlen(tmpname);
+	cn.cn_namelen = (int)strlen(tmpname);
 
 	/* Pick up uid, gid, mode and date from original file. */
 	VATTR_INIT(&va);
@@ -895,7 +905,7 @@ default_getnamedstream(vnode_t vp, vnode_t *svpp, const char *name, enum nsopera
 	/*
 	 * Only the "com.apple.ResourceFork" stream is supported here.
 	 */
-	if (bcmp(name, XATTR_RESOURCEFORK_NAME, sizeof(XATTR_RESOURCEFORK_NAME)) != 0) {
+	if (strncmp(name, XATTR_RESOURCEFORK_NAME, sizeof(XATTR_RESOURCEFORK_NAME)) != 0) {
 		*svpp = NULLVP;
 		return ENOATTR;
 	}
@@ -956,7 +966,8 @@ retry:
 		size_t  iosize;
 
 		iosize = bufsize = MIN(datasize, NS_IOBUFSIZE);
-		if (kmem_alloc(kernel_map, (vm_offset_t *)&bufptr, bufsize, VM_KERN_MEMORY_FILE)) {
+		bufptr = kalloc_data(bufsize, Z_WAITOK);
+		if (bufptr == NULL) {
 			error = ENOMEM;
 			goto out;
 		}
@@ -1021,9 +1032,7 @@ out:
 		}
 	}
 
-	if (bufptr) {
-		kmem_free(kernel_map, (vm_offset_t)bufptr, bufsize);
-	}
+	kfree_data(bufptr, bufsize);
 	if (auio) {
 		uio_free(auio);
 	}
@@ -1047,7 +1056,7 @@ default_makenamedstream(vnode_t vp, vnode_t *svpp, const char *name, vfs_context
 	/*
 	 * Only the "com.apple.ResourceFork" stream is supported here.
 	 */
-	if (bcmp(name, XATTR_RESOURCEFORK_NAME, sizeof(XATTR_RESOURCEFORK_NAME)) != 0) {
+	if (strncmp(name, XATTR_RESOURCEFORK_NAME, sizeof(XATTR_RESOURCEFORK_NAME)) != 0) {
 		*svpp = NULLVP;
 		return ENOATTR;
 	}
@@ -1078,7 +1087,7 @@ default_removenamedstream(vnode_t vp, const char *name, vfs_context_t context)
 	/*
 	 * Only the "com.apple.ResourceFork" stream is supported here.
 	 */
-	if (bcmp(name, XATTR_RESOURCEFORK_NAME, sizeof(XATTR_RESOURCEFORK_NAME)) != 0) {
+	if (strncmp(name, XATTR_RESOURCEFORK_NAME, sizeof(XATTR_RESOURCEFORK_NAME)) != 0) {
 		return ENOATTR;
 	}
 	/*
@@ -1146,7 +1155,7 @@ get_shadow_dir(vnode_t *sdvpp)
 	cn.cn_pnbuf = tmpname;
 	cn.cn_pnlen = sizeof(tmpname);
 	cn.cn_nameptr = cn.cn_pnbuf;
-	cn.cn_namelen = strlen(tmpname);
+	cn.cn_namelen = (int)strlen(tmpname);
 
 	/*
 	 * owned by root, only readable by root, hidden
@@ -1451,11 +1460,47 @@ typedef struct attr_info {
 	 (attr_entry_t *)((u_int8_t *)(ae) + ATTR_ENTRY_LENGTH((ae)->namelen))
 
 #define ATTR_VALID(ae, ai)  \
-	((u_int8_t *)ATTR_NEXT(ae) <= ((ai).rawdata + (ai).rawsize))
+	((&(ae)->namelen < ((ai).rawdata + (ai).rawsize)) && \
+	 (u_int8_t *)ATTR_NEXT(ae) <= ((ai).rawdata + (ai).rawsize))
 
 #define SWAP16(x)  OSSwapBigToHostInt16((x))
 #define SWAP32(x)  OSSwapBigToHostInt32((x))
 #define SWAP64(x)  OSSwapBigToHostInt64((x))
+
+
+/*
+ * sysctl stuff
+ */
+static int vfs_xattr_doubleagent_enabled = 1;
+SYSCTL_DECL(_vfs_generic);
+SYSCTL_INT(_vfs_generic, OID_AUTO, xattr_doubleagent_enabled, CTLFLAG_RW | CTLFLAG_LOCKED, &vfs_xattr_doubleagent_enabled, 0, "");
+
+static int get_doubleagentd_port(mach_port_t *doubleagentd_port);
+
+/*
+ * VFS default xattr functions
+ */
+static int default_getxattr_vfs(vnode_t vp, const char *name, uio_t uio, size_t *size, int options,
+    vfs_context_t context);
+static int default_setxattr_vfs(vnode_t vp, const char *name, uio_t uio, int options,
+    vfs_context_t context);
+static int default_listxattr_vfs(vnode_t vp, uio_t uio, size_t *size, int options,
+    vfs_context_t context);
+static int default_removexattr_vfs(vnode_t vp, const char *name, int options,
+    vfs_context_t context);
+
+/*
+ * DoubleAgent default xattr functions
+ */
+static int default_getxattr_doubleagent(vnode_t vp, const char *name,
+    uio_t uio, size_t *size, int options, vfs_context_t context,
+    mach_port_t);
+static int default_setxattr_doubleagent(vnode_t vp, const char *name,
+    uio_t uio, int options, vfs_context_t context, mach_port_t);
+static int default_listxattr_doubleagent(vnode_t vp, uio_t uio, size_t *size,
+    int options, vfs_context_t context, mach_port_t);
+static int default_removexattr_doubleagent(vnode_t vp, const char *name,
+    int options, vfs_context_t context, mach_port_t);
 
 
 static u_int32_t emptyfinfo[8] = {0};
@@ -1464,13 +1509,14 @@ static u_int32_t emptyfinfo[8] = {0};
 /*
  * Local support routines
  */
-static void  close_xattrfile(vnode_t xvp, int fileflags, vfs_context_t context);
+static void  close_xattrfile(struct fileglob *xfg, bool have_iocount, bool drop_iocount, vfs_context_t context);
 
-static int  open_xattrfile(vnode_t vp, int fileflags, vnode_t *xvpp, vfs_context_t context);
+static int  open_xattrfile(vnode_t vp, int fileflags, struct fileglob **xfgp,
+    int64_t *file_sizep, vfs_context_t context);
 
 static int  create_xattrfile(vnode_t xvp, u_int32_t fileid, vfs_context_t context);
 
-static int  remove_xattrfile(vnode_t xvp, vfs_context_t context);
+static void  remove_xattrfile(struct fileglob *xfg, vnode_t xvp, vfs_context_t context);
 
 static int  get_xattrinfo(vnode_t xvp, int setting, attr_info_t *ainfop, vfs_context_t context);
 
@@ -1480,10 +1526,7 @@ static int  write_xattrinfo(attr_info_t *ainfop);
 
 static void  init_empty_resource_fork(rsrcfork_header_t * rsrcforkhdr);
 
-static int  lock_xattrfile(vnode_t xvp, short locktype, vfs_context_t context);
-
-static int  unlock_xattrfile(vnode_t xvp, vfs_context_t context);
-
+static int make_xattrfile_port(struct fileglob *xfg, ipc_port_t *portp);
 
 #if BYTE_ORDER == LITTLE_ENDIAN
 static void  swap_adhdr(apple_double_header_t *adh);
@@ -1592,8 +1635,6 @@ check_and_swap_apple_double_header(attr_info_t *ainfop)
 	return 0;
 }
 
-
-
 /*
  * Retrieve the data of an extended attribute.
  */
@@ -1601,41 +1642,121 @@ static int
 default_getxattr(vnode_t vp, const char *name, uio_t uio, size_t *size,
     __unused int options, vfs_context_t context)
 {
+	mach_port_t port;
+	int error;
+
+	if (vfs_xattr_doubleagent_enabled &&
+	    get_doubleagentd_port(&port) == 0) {
+		error = default_getxattr_doubleagent(vp, name, uio, size,
+		    options, context, port);
+		ipc_port_release_send(port);
+	} else {
+		error = default_getxattr_vfs(vp, name, uio, size, options,
+		    context);
+	}
+	return error;
+}
+
+/*
+ * Set the data of an extended attribute.
+ */
+static int __attribute__((noinline))
+default_setxattr(vnode_t vp, const char *name, uio_t uio, int options,
+    vfs_context_t context)
+{
+	mach_port_t port;
+	int error;
+
+	if (vfs_xattr_doubleagent_enabled &&
+	    get_doubleagentd_port(&port) == 0) {
+		error = default_setxattr_doubleagent(vp, name, uio, options,
+		    context, port);
+		ipc_port_release_send(port);
+	} else {
+		error = default_setxattr_vfs(vp, name, uio, options, context);
+	}
+	return error;
+}
+
+/*
+ * Remove an extended attribute.
+ */
+static int
+default_removexattr(vnode_t vp, const char *name, __unused int options,
+    vfs_context_t context)
+{
+	mach_port_t port;
+	int error;
+
+	if (vfs_xattr_doubleagent_enabled &&
+	    get_doubleagentd_port(&port) == 0) {
+		error = default_removexattr_doubleagent(vp, name, options,
+		    context, port);
+		ipc_port_release_send(port);
+	} else {
+		error = default_removexattr_vfs(vp, name, options, context);
+	}
+	return error;
+}
+
+/*
+ * Retrieve the list of extended attribute names.
+ */
+static int
+default_listxattr(vnode_t vp, uio_t uio, size_t *size, __unused int options,
+    vfs_context_t context)
+{
+	mach_port_t port;
+	int error;
+
+	if (vfs_xattr_doubleagent_enabled &&
+	    get_doubleagentd_port(&port) == 0) {
+		error = default_listxattr_doubleagent(vp, uio, size, options,
+		    context, port);
+		ipc_port_release_send(port);
+	} else {
+		error = default_listxattr_vfs(vp, uio, size, options, context);
+	}
+	return error;
+}
+
+/*
+ * Retrieve the data of an extended attribute.
+ * (VFS implementation).
+ */
+static int
+default_getxattr_vfs(vnode_t vp, const char *name, uio_t uio, size_t *size,
+    __unused int options, vfs_context_t context)
+{
 	vnode_t xvp = NULL;
+	struct fileglob *xfg = NULL;
 	attr_info_t ainfo;
 	attr_header_t *header;
 	attr_entry_t *entry;
 	u_int8_t *attrdata;
-	size_t datalen;
-	int namelen;
+	u_int32_t datalen;
+	size_t namelen;
 	int isrsrcfork;
 	int fileflags;
 	int i;
 	int error;
 
-	fileflags = FREAD;
-	if (strcmp(name, XATTR_RESOURCEFORK_NAME) == 0) {
-		isrsrcfork = 1;
-		/*
-		 * Open the file locked (shared) since the Carbon
-		 * File Manager may have the Apple Double file open
-		 * and could be changing the resource fork.
-		 */
-		fileflags |= O_SHLOCK;
-	} else {
-		isrsrcfork = 0;
-	}
+	fileflags = FREAD | O_SHLOCK;
+	isrsrcfork = strncmp(name, XATTR_RESOURCEFORK_NAME,
+	    sizeof(XATTR_RESOURCEFORK_NAME)) == 0;
 
-	if ((error = open_xattrfile(vp, fileflags, &xvp, context))) {
+	if ((error = open_xattrfile(vp, fileflags, &xfg, NULL, context))) {
 		return error;
 	}
+	xvp = fg_get_data(xfg);
+
 	if ((error = get_xattrinfo(xvp, 0, &ainfo, context))) {
-		close_xattrfile(xvp, fileflags, context);
+		close_xattrfile(xfg, true, true, context);
 		return error;
 	}
 
 	/* Get the Finder Info. */
-	if (strcmp(name, XATTR_FINDERINFO_NAME) == 0) {
+	if (strncmp(name, XATTR_FINDERINFO_NAME, sizeof(XATTR_FINDERINFO_NAME)) == 0) {
 		if (ainfo.finderinfo == NULL || ainfo.emptyfinderinfo) {
 			error = ENOATTR;
 		} else if (uio == NULL) {
@@ -1687,7 +1808,7 @@ default_getxattr(vnode_t vp, const char *name, uio_t uio, size_t *size,
 	 */
 	for (i = 0; i < header->num_attrs && ATTR_VALID(entry, ainfo); i++) {
 		if (strncmp((const char *)entry->name, name, namelen) == 0) {
-			datalen = (size_t)entry->length;
+			datalen = entry->length;
 			if (uio == NULL) {
 				*size = datalen;
 				error = 0;
@@ -1711,18 +1832,20 @@ default_getxattr(vnode_t vp, const char *name, uio_t uio, size_t *size,
 	}
 out:
 	rel_xattrinfo(&ainfo);
-	close_xattrfile(xvp, fileflags, context);
+	close_xattrfile(xfg, true, true, context);
 
 	return error;
 }
 
 /*
  * Set the data of an extended attribute.
+ * (VFS implementation).
  */
-static int
-default_setxattr(vnode_t vp, const char *name, uio_t uio, int options, vfs_context_t context)
+static int __attribute__((noinline))
+default_setxattr_vfs(vnode_t vp, const char *name, uio_t uio, int options, vfs_context_t context)
 {
 	vnode_t xvp = NULL;
+	struct fileglob *xfg = NULL;
 	attr_info_t ainfo;
 	attr_header_t *header;
 	attr_entry_t *entry;
@@ -1740,7 +1863,13 @@ default_setxattr(vnode_t vp, const char *name, uio_t uio, int options, vfs_conte
 	char finfo[FINDERINFOSIZE];
 
 	datalen = uio_resid(uio);
-	namelen = strlen(name) + 1;
+	if (datalen > XATTR_MAXSIZE) {
+		return E2BIG;
+	}
+	namelen = (int)strlen(name) + 1;
+	if (namelen > UINT8_MAX) {
+		return EINVAL;
+	}
 	entrylen = ATTR_ENTRY_LENGTH(namelen);
 
 	/*
@@ -1758,15 +1887,20 @@ default_setxattr(vnode_t vp, const char *name, uio_t uio, int options, vfs_conte
 	 *
 	 * NOTE: this copies the Finder Info data into the "finfo" local.
 	 */
-	if (bcmp(name, XATTR_FINDERINFO_NAME, sizeof(XATTR_FINDERINFO_NAME)) == 0) {
+	if (strncmp(name, XATTR_FINDERINFO_NAME, sizeof(XATTR_FINDERINFO_NAME)) == 0) {
 		/*
 		 * TODO: check the XATTR_CREATE and XATTR_REPLACE flags.
 		 * That means we probably have to open_xattrfile and get_xattrinfo.
 		 */
-		if (uio_offset(uio) != 0 || datalen != FINDERINFOSIZE) {
+		if (uio_offset(uio) != 0) {
 			return EINVAL;
 		}
-		error = uiomove(finfo, datalen, uio);
+
+		if (datalen != FINDERINFOSIZE) {
+			return ERANGE;
+		}
+
+		error = uiomove(finfo, (int)datalen, uio);
 		if (error) {
 			return error;
 		}
@@ -1786,16 +1920,18 @@ start:
 	 * can change the layout of the Apple Double file.
 	 */
 	fileflags = FREAD | FWRITE | O_EXLOCK;
-	if ((error = open_xattrfile(vp, O_CREAT | fileflags, &xvp, context))) {
+	if ((error = open_xattrfile(vp, O_CREAT | fileflags, &xfg, NULL, context))) {
 		return error;
 	}
+	xvp = fg_get_data(xfg);
+
 	if ((error = get_xattrinfo(xvp, ATTR_SETTING, &ainfo, context))) {
-		close_xattrfile(xvp, fileflags, context);
+		close_xattrfile(xfg, true, true, context);
 		return error;
 	}
 
 	/* Set the Finder Info. */
-	if (bcmp(name, XATTR_FINDERINFO_NAME, sizeof(XATTR_FINDERINFO_NAME)) == 0) {
+	if (strncmp(name, XATTR_FINDERINFO_NAME, sizeof(XATTR_FINDERINFO_NAME)) == 0) {
 		if (ainfo.finderinfo && !ainfo.emptyfinderinfo) {
 			/* attr exists and "create" was specified? */
 			if (options & XATTR_CREATE) {
@@ -1823,7 +1959,7 @@ start:
 			 * The common case where options == 0 was handled above.
 			 */
 			rel_xattrinfo(&ainfo);
-			close_xattrfile(xvp, fileflags, context);
+			close_xattrfile(xfg, true, true, context);
 			error = default_removexattr(vp, name, 0, context);
 			if (error == ENOATTR) {
 				error = 0;
@@ -1842,8 +1978,8 @@ start:
 	}
 
 	/* Write the Resource Fork. */
-	if (bcmp(name, XATTR_RESOURCEFORK_NAME, sizeof(XATTR_RESOURCEFORK_NAME)) == 0) {
-		u_int32_t endoffset;
+	if (strncmp(name, XATTR_RESOURCEFORK_NAME, sizeof(XATTR_RESOURCEFORK_NAME)) == 0) {
+		off_t endoffset;
 
 		if (!vnode_isreg(vp)) {
 			error = EPERM;
@@ -1876,6 +2012,10 @@ start:
 		}
 
 		endoffset = uio_resid(uio) + uio_offset(uio); /* new size */
+		if (endoffset > UINT32_MAX || endoffset < 0) {
+			error = EINVAL;
+			goto out;
+		}
 		uio_setoffset(uio, uio_offset(uio) + ainfo.rsrcfork->offset);
 		error = VNOP_WRITE(xvp, uio, 0, context);
 		if (error) {
@@ -1883,7 +2023,7 @@ start:
 		}
 		uio_setoffset(uio, uio_offset(uio) - ainfo.rsrcfork->offset);
 		if (endoffset > ainfo.rsrcfork->length) {
-			ainfo.rsrcfork->length = endoffset;
+			ainfo.rsrcfork->length = (u_int32_t)endoffset;
 			ainfo.iosize = sizeof(attr_header_t);
 			error = write_xattrinfo(&ainfo);
 			goto out;
@@ -1935,7 +2075,7 @@ start:
 				}
 			} else {
 				attrdata = (u_int8_t *)header + entry->offset;
-				error = uiomove((caddr_t)attrdata, datalen, uio);
+				error = uiomove((caddr_t)attrdata, (int)datalen, uio);
 				if (error) {
 					goto out;
 				}
@@ -1952,7 +2092,7 @@ start:
 			 */
 			found = 0;
 			rel_xattrinfo(&ainfo);
-			close_xattrfile(xvp, fileflags, context);
+			close_xattrfile(xfg, true, true, context);
 			error = default_removexattr(vp, name, options, context);
 			if (error) {
 				return error;
@@ -1960,6 +2100,11 @@ start:
 			/* Clear XATTR_REPLACE option since we just removed the attribute. */
 			options &= ~XATTR_REPLACE;
 			goto start; /* start over */
+		}
+	} else {
+		if (!ATTR_VALID(entry, ainfo)) {
+			error = ENOSPC;
+			goto out;
 		}
 	}
 
@@ -2050,7 +2195,7 @@ start:
 	} else {
 		attrdata = (u_int8_t *)header + header->data_start + header->data_length;
 
-		error = uiomove((caddr_t)attrdata, datalen, uio);
+		error = uiomove((caddr_t)attrdata, (int)datalen, uio);
 		if (error) {
 			printf("setxattr: uiomove error %d\n", error);
 			goto out;
@@ -2058,9 +2203,9 @@ start:
 	}
 
 	/* Create the attribute entry. */
-	lastentry->length = datalen;
+	lastentry->length = (u_int32_t)datalen;
 	lastentry->offset = header->data_start + header->data_length;
-	lastentry->namelen = namelen;
+	lastentry->namelen = (u_int8_t)namelen;
 	lastentry->flags = 0;
 	bcopy(name, &lastentry->name[0], namelen);
 
@@ -2082,7 +2227,7 @@ start:
 
 out:
 	rel_xattrinfo(&ainfo);
-	close_xattrfile(xvp, fileflags, context);
+	close_xattrfile(xfg, true, true, context);
 
 	/* Touch the change time if we changed an attribute. */
 	if (error == 0) {
@@ -2106,11 +2251,13 @@ out:
 
 /*
  * Remove an extended attribute.
+ * (VFS implementation).
  */
 static int
-default_removexattr(vnode_t vp, const char *name, __unused int options, vfs_context_t context)
+default_removexattr_vfs(vnode_t vp, const char *name, __unused int options, vfs_context_t context)
 {
 	vnode_t xvp = NULL;
+	struct fileglob *xfg = NULL;
 	attr_info_t ainfo;
 	attr_header_t *header;
 	attr_entry_t *entry;
@@ -2128,24 +2275,17 @@ default_removexattr(vnode_t vp, const char *name, __unused int options, vfs_cont
 	int fileflags;
 	int error;
 
-	fileflags = FREAD | FWRITE;
-	if (strncmp(name, XATTR_RESOURCEFORK_NAME, sizeof(XATTR_RESOURCEFORK_NAME)) == 0) {
-		isrsrcfork = 1;
-		/*
-		 * Open the file locked (exclusive) since the Carbon
-		 * File Manager may have the Apple Double file open
-		 * and could be changing the resource fork.
-		 */
-		fileflags |= O_EXLOCK;
-	} else {
-		isrsrcfork = 0;
-	}
+	fileflags = FREAD | FWRITE | O_EXLOCK;
+	isrsrcfork = strncmp(name, XATTR_RESOURCEFORK_NAME,
+	    sizeof(XATTR_RESOURCEFORK_NAME)) == 0;
 
-	if ((error = open_xattrfile(vp, fileflags, &xvp, context))) {
+	if ((error = open_xattrfile(vp, fileflags, &xfg, NULL, context))) {
 		return error;
 	}
+	xvp = fg_get_data(xfg);
+
 	if ((error = get_xattrinfo(xvp, 0, &ainfo, context))) {
-		close_xattrfile(xvp, fileflags, context);
+		close_xattrfile(xfg, true, true, context);
 		return error;
 	}
 	if (ainfo.attrhdr) {
@@ -2170,7 +2310,6 @@ default_removexattr(vnode_t vp, const char *name, __unused int options, vfs_cont
 		}
 		attrdata = (u_int8_t *)ainfo.filehdr + ainfo.finderinfo->offset;
 		bzero((caddr_t)attrdata, FINDERINFOSIZE);
-		ainfo.iosize = sizeof(attr_header_t);
 		error = write_xattrinfo(&ainfo);
 		goto out;
 	}
@@ -2211,7 +2350,7 @@ default_removexattr(vnode_t vp, const char *name, __unused int options, vfs_cont
 		error = ENOATTR;
 		goto out;
 	}
-	namelen = strlen(name) + 1;
+	namelen = (int)strlen(name) + 1;
 	header = ainfo.attrhdr;
 	entry = ainfo.attr_entry;
 
@@ -2304,15 +2443,9 @@ out:
 
 	/* When there are no more attributes remove the ._ file. */
 	if (attrcount == 0) {
-		if (fileflags & O_EXLOCK) {
-			(void) unlock_xattrfile(xvp, context);
-		}
-		VNOP_CLOSE(xvp, fileflags, context);
-		vnode_rele(xvp);
-		error = remove_xattrfile(xvp, context);
-		vnode_put(xvp);
+		remove_xattrfile(xfg, xvp, context);
 	} else {
-		close_xattrfile(xvp, fileflags, context);
+		close_xattrfile(xfg, true, true, context);
 	}
 	/* Touch the change time if we changed an attribute. */
 	if (error == 0) {
@@ -2336,11 +2469,13 @@ out:
 
 /*
  * Retrieve the list of extended attribute names.
+ * (VFS implementation).
  */
 static int
-default_listxattr(vnode_t vp, uio_t uio, size_t *size, __unused int options, vfs_context_t context)
+default_listxattr_vfs(vnode_t vp, uio_t uio, size_t *size, __unused int options, vfs_context_t context)
 {
 	vnode_t xvp = NULL;
+	struct fileglob *xfg = NULL;
 	attr_info_t ainfo;
 	attr_entry_t *entry;
 	int i, count;
@@ -2352,17 +2487,19 @@ default_listxattr(vnode_t vp, uio_t uio, size_t *size, __unused int options, vfs
 	 * system call layer, up in listxattr or flistxattr.
 	 */
 
-	if ((error = open_xattrfile(vp, FREAD, &xvp, context))) {
+	if ((error = open_xattrfile(vp, FREAD | O_SHLOCK, &xfg, NULL, context))) {
 		if (error == ENOATTR) {
 			error = 0;
 		}
 		return error;
 	}
+	xvp = fg_get_data(xfg);
+
 	if ((error = get_xattrinfo(xvp, 0, &ainfo, context))) {
 		if (error == ENOATTR) {
 			error = 0;
 		}
-		close_xattrfile(xvp, FREAD, context);
+		close_xattrfile(xfg, true, true, context);
 		return error;
 	}
 
@@ -2432,25 +2569,477 @@ default_listxattr(vnode_t vp, uio_t uio, size_t *size, __unused int options, vfs
 	}
 out:
 	rel_xattrinfo(&ainfo);
-	close_xattrfile(xvp, FREAD, context);
+	close_xattrfile(xfg, true, true, context);
 
 	return error;
 }
 
 static int
-open_xattrfile(vnode_t vp, int fileflags, vnode_t *xvpp, vfs_context_t context)
+get_doubleagentd_port(mach_port_t *doubleagentd_port)
 {
+	kern_return_t ret;
+
+	*doubleagentd_port = MACH_PORT_NULL;
+	ret = host_get_doubleagentd_port(host_priv_self(), doubleagentd_port);
+	if (ret != KERN_SUCCESS) {
+		printf("vfs_xattr: can't get doubleagentd port, status 0x%08x\n", ret);
+		return EIO;
+	}
+	if (!IPC_PORT_VALID(*doubleagentd_port)) {
+		printf("vfs_xattr: doubleagentd port not valid\n");
+		return EIO;
+	}
+	return 0;
+}
+
+/*
+ * Retrieve the data of an extended attribute.
+ * (Using DoubleAgent to parse the AD file).
+ */
+static int
+default_getxattr_doubleagent(vnode_t vp, const char *name, uio_t uio,
+    size_t *size, __unused int options, vfs_context_t context,
+    mach_port_t doubleagentd_port)
+{
+	vnode_t xvp = NULL;
+	struct fileglob *xfg = NULL;
+	mach_port_t fileport = MACH_PORT_NULL;
+	uint64_t value_offset = 0;
+	uint64_t value_length = 0;
+	int64_t fsize;
+	int isrsrcfork;
+	int fileflags;
+	int error;
+	kern_return_t kr;
+	char cName[XATTR_MAXNAMELEN] = {0};
+	bool have_iocount = true;
+
+	fileflags = FREAD | O_SHLOCK;
+	isrsrcfork = strncmp(name, XATTR_RESOURCEFORK_NAME,
+	    sizeof(XATTR_RESOURCEFORK_NAME)) == 0;
+
+	if ((error = open_xattrfile(vp, fileflags, &xfg, &fsize, context))) {
+		goto out;
+	}
+	xvp = fg_get_data(xfg);
+	if ((error = make_xattrfile_port(xfg, &fileport))) {
+		goto out;
+	}
+
+	/* Drop the iocount before upcalling to doubleagentd. */
+	vnode_put(xvp);
+	have_iocount = false;
+
+	strncpy(cName, name, XATTR_MAXNAMELEN);
+
+	/*
+	 * Call doubleagentd to look up the xattr.  The fileport argument
+	 * is declared move-send, so the Mig stub consumes it.
+	 */
+	kr = doubleagent_lookup_xattr(doubleagentd_port, fileport, fsize, cName,
+	    &error, &value_offset, &value_length);
+	if (kr != KERN_SUCCESS) {
+		error = EIO;
+	}
+	if (error == 0) {
+		error = vnode_getwithref(xvp);
+	}
+	if (error) {
+		goto out;
+	}
+	have_iocount = true;
+	if (uio != NULL) {
+		if (isrsrcfork) {
+			// Resource Fork case is a bit different,
+			// as we can have a non-zero uio offset.
+			uio_setoffset(uio, uio_offset(uio) + value_offset);
+			error = VNOP_READ(xvp, uio, 0, context);
+			if (error == 0) {
+				uio_setoffset(uio, uio_offset(uio) - value_offset);
+			}
+		} else {
+			if (uio_resid(uio) < value_length) {
+				error = ERANGE;
+				goto out;
+			}
+
+			// Read from the relevant offset in the AD file into the uio.
+			user_ssize_t orig_resid = uio_resid(uio);
+			uio_setoffset(uio, value_offset);
+			uio_setresid(uio, value_length);
+
+			error = VNOP_READ(xvp, uio, 0, context);
+
+			uio_setoffset(uio, 0);
+			uio_setresid(uio, orig_resid - value_length + uio_resid(uio));
+		}
+	}
+
+	*size = value_length;
+
+out:
+	if (xfg != NULL) {
+		close_xattrfile(xfg, have_iocount, true, context);
+	}
+	return error;
+}
+
+/*
+ * Retrieve the list of extended attribute names.
+ * (Using DoubleAgent to parse the AD file).
+ */
+static int
+default_listxattr_doubleagent(vnode_t vp, uio_t uio, size_t *size,
+    __unused int options, vfs_context_t context, mach_port_t doubleagentd_port)
+{
+	vnode_t xvp = NULL;
+	struct fileglob *xfg = NULL;
+	int64_t fsize;
+	int error;
+
+	mach_port_t fileport = MACH_PORT_NULL;
+	kern_return_t kr;
+	void *buf = NULL;
+	listxattrs_result_t *result;
+	bool have_iocount = true;
+
+	/*
+	 * We do not zero "*size" here as we don't want to stomp a size set
+	 * when VNOP_LISTXATTR() processed any native EAs.  That size is
+	 * initially zeroed by the system call layer, up in listxattr() or
+	 * flistxattr().
+	 */
+
+	if ((error = open_xattrfile(vp, FREAD | O_SHLOCK, &xfg, &fsize,
+	    context))) {
+		if (error == ENOATTR) {
+			error = 0;
+		}
+		goto out;
+	}
+	xvp = fg_get_data(xfg);
+	if ((error = make_xattrfile_port(xfg, &fileport))) {
+		goto out;
+	}
+
+	/* Drop the iocount before upcalling to doubleagentd. */
+	vnode_put(xvp);
+	have_iocount = false;
+
+	buf = kalloc_data(sizeof(listxattrs_result_t), Z_WAITOK);
+	result = (listxattrs_result_t *)buf;
+
+	/*
+	 * Call doubleagentd to list the xattrs.  The fileport argument
+	 * is declared move-send, so the Mig stub consumes it.
+	 */
+	kr = doubleagent_list_xattrs(doubleagentd_port, fileport, fsize, &error,
+	    result);
+	if (kr != KERN_SUCCESS) {
+		error = EIO;
+	}
+	if (error == 0) {
+		error = vnode_getwithref(xvp);
+	}
+	if (error) {
+		goto out;
+	}
+	have_iocount = true;
+
+	if (uio != NULL) {
+		if (uio_resid(uio) < result->namesLength) {
+			error = ERANGE;
+			goto out;
+		}
+		// copy the relevant part of the result into the uio.
+		error = uiomove((const char *)result->data, (int)result->namesLength, uio);
+		if (error) {
+			if (error != EFAULT) {
+				error = ERANGE;
+			}
+			goto out;
+		}
+	}
+
+	/*
+	 * Set *size, while preserving any previous value from
+	 * VNOP_LISTXATTR().
+	 */
+	*size += result->namesLength;
+
+out:
+	if (xfg != NULL) {
+		close_xattrfile(xfg, have_iocount, true, context);
+	}
+	if (buf != NULL) {
+		kfree_data(buf, sizeof(listxattrs_result_t));
+	}
+	return error;
+}
+
+/*
+ * Set the data of an extended attribute.
+ * (Using DoubleAgent to parse the AD file).
+ */
+static int __attribute__((noinline))
+default_setxattr_doubleagent(vnode_t vp, const char *name, uio_t uio,
+    int options, vfs_context_t context, mach_port_t doubleagentd_port)
+{
+	vnode_t xvp = NULL;
+	struct fileglob *xfg = NULL;
+	size_t datalen;
+	int namelen;
+	int fileflags;
+	int error;
+	char cName[XATTR_MAXNAMELEN] = {0};
+	char finfo[FINDERINFOSIZE];
+	uio_t finfo_uio = NULL;
+	mach_port_t fileport = MACH_PORT_NULL;
+	uint64_t value_offset = 0;
+	int64_t fsize;
+	kern_return_t kr;
+	bool have_iocount = true;
+
+	datalen = uio_resid(uio);
+	if (datalen > XATTR_MAXSIZE) {
+		return E2BIG;
+	}
+	namelen = (int)strlen(name) + 1;
+	if (namelen > UINT8_MAX) {
+		return EINVAL;
+	}
+
+	/*
+	 * By convention, Finder Info that is all zeroes is equivalent to not
+	 * having a Finder Info EA.  So if we're trying to set the Finder Info
+	 * to all zeroes, then delete it instead.  If a file didn't have an
+	 * AppleDouble file before, this prevents creating an AppleDouble file
+	 * with no useful content.
+	 *
+	 * If neither XATTR_CREATE nor XATTR_REPLACE were specified, we check
+	 * for all zeroes Finder Info before opening the AppleDouble file.
+	 * But if either of those options were specified, we need to open the
+	 * AppleDouble file to see whether there was already Finder Info (so we
+	 * can return an error if needed); this case is handled in DoubleAgent.
+	 */
+	if (strncmp(name, XATTR_FINDERINFO_NAME, sizeof(XATTR_FINDERINFO_NAME)) == 0) {
+		if (uio_offset(uio) != 0) {
+			return EINVAL;
+		}
+
+		if (datalen != FINDERINFOSIZE) {
+			return ERANGE;
+		}
+
+		// Duplicate the uio to keep it as-is for later.
+		finfo_uio = uio_duplicate(uio);
+		// Get the finfo data from the duplicated uio.
+		error = uiomove(finfo, (int)datalen, finfo_uio);
+		uio_free(finfo_uio);
+		if (error) {
+			return error;
+		}
+		if ((options & (XATTR_CREATE | XATTR_REPLACE)) == 0 &&
+		    bcmp(finfo, emptyfinfo, FINDERINFOSIZE) == 0) {
+			error = default_removexattr(vp, name, 0, context);
+			if (error == ENOATTR) {
+				error = 0;
+			}
+			return error;
+		}
+	}
+
+	if (strncmp(name, XATTR_RESOURCEFORK_NAME, sizeof(XATTR_RESOURCEFORK_NAME)) == 0) {
+		/*
+		 * For ResourceFork we allow offset to be != 0, so adjust datalen accordingly
+		 * so doubleagent will adjust the file length accordingly
+		 *
+		 */
+		if (__improbable(os_add_overflow(datalen, uio_offset(uio), &datalen))) {
+			return EINVAL;
+		}
+
+		if (datalen > UINT32_MAX) {
+			return EINVAL;
+		}
+	}
+
+	/*
+	 * Open the file locked since setting an attribute
+	 * can change the layout of the Apple Double file.
+	 */
+	fileflags = FREAD | FWRITE | O_EXLOCK;
+	if ((error = open_xattrfile(vp, O_CREAT | fileflags, &xfg,
+	    &fsize, context))) {
+		goto out;
+	}
+	xvp = fg_get_data(xfg);
+	if ((error = make_xattrfile_port(xfg, &fileport))) {
+		goto out;
+	}
+
+	/* Drop the iocount before upcalling to doubleagentd. */
+	vnode_put(xvp);
+	have_iocount = false;
+
+	strncpy(cName, name, XATTR_MAXNAMELEN);
+
+	/*
+	 * Call doubleagentd to allocate space for the xattr.  The
+	 * fileport argument is declared move-send, so the Mig stub
+	 * consumes it.
+	 */
+	kr = doubleagent_allocate_xattr(doubleagentd_port, fileport, fsize,
+	    cName, datalen, options, &error, &value_offset);
+	if (kr != KERN_SUCCESS) {
+		error = EIO;
+	}
+	if (error == 0) {
+		error = vnode_getwithref(xvp);
+	}
+	if (error) {
+		goto out;
+	}
+	have_iocount = true;
+
+	/*
+	 * write the uio data into the offset we got from doubleagent,
+	 * while adding the given uio offset (could be non-zero only for
+	 * resource fork; it is being checked earlier).
+	 */
+	uio_setoffset(uio, uio_offset(uio) + value_offset);
+	error = VNOP_WRITE(xvp, uio, 0, context);
+	uio_setoffset(uio, 0);
+
+out:
+	if (xfg != NULL) {
+		close_xattrfile(xfg, have_iocount, true, context);
+	}
+
+	/* Touch the change time if we changed an attribute. */
+	if (error == 0) {
+		struct vnode_attr va;
+
+		/* Re-write the mtime to cause a ctime change. */
+		VATTR_INIT(&va);
+		VATTR_WANTED(&va, va_modify_time);
+		if (vnode_getattr(vp, &va, context) == 0) {
+			VATTR_INIT(&va);
+			VATTR_SET(&va, va_modify_time, va.va_modify_time);
+			(void) vnode_setattr(vp, &va, context);
+		}
+	}
+
+	post_event_if_success(vp, error, NOTE_ATTRIB);
+
+	return error;
+}
+
+/*
+ * Remove an extended attribute.
+ * (Using DoubleAgent to parse the AD file).
+ */
+static int
+default_removexattr_doubleagent(vnode_t vp, const char *name,
+    __unused int options, vfs_context_t context,
+    mach_port_t doubleagentd_port)
+{
+	vnode_t xvp = NULL;
+	struct fileglob *xfg = NULL;
+	int isrsrcfork;
+	int fileflags;
+	int error;
+	int64_t fsize;
+	boolean_t is_empty = false;
+	char cName[XATTR_MAXNAMELEN] = {0};
+	mach_port_t fileport = MACH_PORT_NULL;
+	kern_return_t kr;
+	bool have_iocount = true;
+
+	fileflags = FREAD | FWRITE | O_EXLOCK;
+	isrsrcfork = strncmp(name, XATTR_RESOURCEFORK_NAME,
+	    sizeof(XATTR_RESOURCEFORK_NAME)) == 0;
+
+	if ((error = open_xattrfile(vp, fileflags, &xfg, &fsize, context))) {
+		goto out;
+	}
+	xvp = fg_get_data(xfg);
+	if ((error = make_xattrfile_port(xfg, &fileport))) {
+		goto out;
+	}
+
+	/* Drop the iocount before upcalling to doubleagentd. */
+	vnode_put(xvp);
+	have_iocount = false;
+
+	strncpy(cName, name, XATTR_MAXNAMELEN);
+
+	/*
+	 * Call doubleagentd to remove the xattr.  The fileport argument
+	 * is declared move-send, so the Mig stub consumes it.
+	 */
+	kr = doubleagent_remove_xattr(doubleagentd_port, fileport, fsize, cName,
+	    &error, &is_empty);
+	if (kr != KERN_SUCCESS) {
+		error = EIO;
+	}
+	if (error == 0) {
+		error = vnode_getwithref(xvp);
+	}
+	if (error) {
+		goto out;
+	}
+	have_iocount = true;
+
+out:
+	if (error == 0) {
+		/* When there are no more attributes remove the ._ file. */
+		if (is_empty) {
+			remove_xattrfile(xfg, xvp, context);
+		} else {
+			close_xattrfile(xfg, have_iocount, true, context);
+		}
+		xfg = NULL;
+
+		/* Touch the change time if we changed an attribute. */
+		struct vnode_attr va;
+		/* Re-write the mtime to cause a ctime change. */
+		VATTR_INIT(&va);
+		VATTR_WANTED(&va, va_modify_time);
+		if (vnode_getattr(vp, &va, context) == 0) {
+			VATTR_INIT(&va);
+			VATTR_SET(&va, va_modify_time, va.va_modify_time);
+			(void) vnode_setattr(vp, &va, context);
+		}
+	}
+
+	post_event_if_success(vp, error, NOTE_ATTRIB);
+
+	if (xfg != NULL) {
+		close_xattrfile(xfg, have_iocount, true, context);
+	}
+	return error;
+}
+
+static int
+open_xattrfile(vnode_t vp, int fileflags, struct fileglob **xfgp,
+    int64_t *file_sizep, vfs_context_t context)
+{
+	extern const struct fileops vnops;      /* XXX */
 	vnode_t xvp = NULLVP;
 	vnode_t dvp = NULLVP;
-	struct vnode_attr va;
-	struct nameidata nd;
+	struct fileglob *fg = NULL;
+	struct vnode_attr *va = NULL;
+	struct nameidata *nd = NULL;
 	char smallname[64];
 	char *filename = NULL;
 	const char *basename = NULL;
-	size_t len;
+	size_t alloc_len = 0;
+	size_t copy_len;
 	errno_t error;
 	int opened = 0;
 	int referenced = 0;
+	bool created_xattr_file = false;
 
 	if (vnode_isvroot(vp) && vnode_isdir(vp)) {
 		/*
@@ -2477,11 +3066,11 @@ open_xattrfile(vnode_t vp, int fileflags, vnode_t *xvpp, vfs_context_t context)
 		goto out;
 	}
 	filename = &smallname[0];
-	len = snprintf(filename, sizeof(smallname), "%s%s", ATTR_FILE_PREFIX, basename);
-	if (len >= sizeof(smallname)) {
-		len++;  /* snprintf result doesn't include '\0' */
-		MALLOC(filename, char *, len, M_TEMP, M_WAITOK);
-		len = snprintf(filename, len, "%s%s", ATTR_FILE_PREFIX, basename);
+	alloc_len = snprintf(filename, sizeof(smallname), "%s%s", ATTR_FILE_PREFIX, basename);
+	if (alloc_len >= sizeof(smallname)) {
+		alloc_len++;  /* snprintf result doesn't include '\0' */
+		filename = kalloc_data(alloc_len, Z_WAITOK);
+		copy_len = snprintf(filename, alloc_len, "%s%s", ATTR_FILE_PREFIX, basename);
 	}
 	/*
 	 * Note that the lookup here does not authorize.  Since we are looking
@@ -2492,24 +3081,27 @@ open_xattrfile(vnode_t vp, int fileflags, vnode_t *xvpp, vfs_context_t context)
 	 * file security from the EA must always get access
 	 */
 lookup:
-	NDINIT(&nd, LOOKUP, OP_OPEN, LOCKLEAF | NOFOLLOW | USEDVP | DONOTAUTH,
+	nd = kalloc_type(struct nameidata, Z_WAITOK);
+	NDINIT(nd, LOOKUP, OP_OPEN, LOCKLEAF | NOFOLLOW | USEDVP | DONOTAUTH,
 	    UIO_SYSSPACE, CAST_USER_ADDR_T(filename), context);
-	nd.ni_dvp = dvp;
+	nd->ni_dvp = dvp;
+
+	va = kalloc_type(struct vnode_attr, Z_WAITOK);
 
 	if (fileflags & O_CREAT) {
-		nd.ni_cnd.cn_nameiop = CREATE;
+		nd->ni_cnd.cn_nameiop = CREATE;
 #if CONFIG_TRIGGERS
-		nd.ni_op = OP_LINK;
+		nd->ni_op = OP_LINK;
 #endif
 		if (dvp != vp) {
-			nd.ni_cnd.cn_flags |= LOCKPARENT;
+			nd->ni_cnd.cn_flags |= LOCKPARENT;
 		}
-		if ((error = namei(&nd))) {
-			nd.ni_dvp = NULLVP;
+		if ((error = namei(nd))) {
+			nd->ni_dvp = NULLVP;
 			error = ENOATTR;
 			goto out;
 		}
-		if ((xvp = nd.ni_vp) == NULLVP) {
+		if ((xvp = nd->ni_vp) == NULLVP) {
 			uid_t uid;
 			gid_t gid;
 			mode_t umode;
@@ -2517,44 +3109,45 @@ lookup:
 			/*
 			 * Pick up uid/gid/mode from target file.
 			 */
-			VATTR_INIT(&va);
-			VATTR_WANTED(&va, va_uid);
-			VATTR_WANTED(&va, va_gid);
-			VATTR_WANTED(&va, va_mode);
-			if (VNOP_GETATTR(vp, &va, context) == 0 &&
-			    VATTR_IS_SUPPORTED(&va, va_uid) &&
-			    VATTR_IS_SUPPORTED(&va, va_gid) &&
-			    VATTR_IS_SUPPORTED(&va, va_mode)) {
-				uid = va.va_uid;
-				gid = va.va_gid;
-				umode = va.va_mode & (S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH);
+			VATTR_INIT(va);
+			VATTR_WANTED(va, va_uid);
+			VATTR_WANTED(va, va_gid);
+			VATTR_WANTED(va, va_mode);
+			if (VNOP_GETATTR(vp, va, context) == 0 &&
+			    VATTR_IS_SUPPORTED(va, va_uid) &&
+			    VATTR_IS_SUPPORTED(va, va_gid) &&
+			    VATTR_IS_SUPPORTED(va, va_mode)) {
+				uid = va->va_uid;
+				gid = va->va_gid;
+				umode = va->va_mode & (S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH);
 			} else { /* fallback values */
 				uid = KAUTH_UID_NONE;
 				gid = KAUTH_GID_NONE;
 				umode = S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH;
 			}
 
-			VATTR_INIT(&va);
-			VATTR_SET(&va, va_type, VREG);
-			VATTR_SET(&va, va_mode, umode);
+			VATTR_INIT(va);
+			VATTR_SET(va, va_type, VREG);
+			VATTR_SET(va, va_mode, umode);
 			if (uid != KAUTH_UID_NONE) {
-				VATTR_SET(&va, va_uid, uid);
+				VATTR_SET(va, va_uid, uid);
 			}
 			if (gid != KAUTH_GID_NONE) {
-				VATTR_SET(&va, va_gid, gid);
+				VATTR_SET(va, va_gid, gid);
 			}
 
-			error = vn_create(dvp, &nd.ni_vp, &nd, &va,
+			error = vn_create(dvp, &nd->ni_vp, nd, va,
 			    VN_CREATE_NOAUTH | VN_CREATE_NOINHERIT | VN_CREATE_NOLABEL,
 			    0, NULL,
 			    context);
 			if (error) {
 				error = ENOATTR;
 			} else {
-				xvp = nd.ni_vp;
+				xvp = nd->ni_vp;
+				created_xattr_file = true;
 			}
 		}
-		nameidone(&nd);
+		nameidone(nd);
 		if (dvp != vp) {
 			vnode_put(dvp);  /* drop iocount from LOCKPARENT request above */
 		}
@@ -2562,15 +3155,15 @@ lookup:
 			goto out;
 		}
 	} else {
-		if ((error = namei(&nd))) {
-			nd.ni_dvp = NULLVP;
+		if ((error = namei(nd))) {
+			nd->ni_dvp = NULLVP;
 			error = ENOATTR;
 			goto out;
 		}
-		xvp = nd.ni_vp;
-		nameidone(&nd);
+		xvp = nd->ni_vp;
+		nameidone(nd);
 	}
-	nd.ni_dvp = NULLVP;
+	nd->ni_dvp = NULLVP;
 
 	if (xvp->v_type != VREG) {
 		error = ENOATTR;
@@ -2579,14 +3172,14 @@ lookup:
 	/*
 	 * Owners must match.
 	 */
-	VATTR_INIT(&va);
-	VATTR_WANTED(&va, va_uid);
-	if (VNOP_GETATTR(vp, &va, context) == 0 && VATTR_IS_SUPPORTED(&va, va_uid)) {
-		uid_t owner = va.va_uid;
+	VATTR_INIT(va);
+	VATTR_WANTED(va, va_uid);
+	if (VNOP_GETATTR(vp, va, context) == 0 && VATTR_IS_SUPPORTED(va, va_uid)) {
+		uid_t owner = va->va_uid;
 
-		VATTR_INIT(&va);
-		VATTR_WANTED(&va, va_uid);
-		if (VNOP_GETATTR(xvp, &va, context) == 0 && (owner != va.va_uid)) {
+		VATTR_INIT(va);
+		VATTR_WANTED(va, va_uid);
+		if (VNOP_GETATTR(xvp, va, context) == 0 && (owner != va->va_uid)) {
 			error = ENOATTR;  /* don't use this "._" file */
 			goto out;
 		}
@@ -2598,67 +3191,119 @@ lookup:
 	}
 	opened = 1;
 
-	if ((error = vnode_ref(xvp))) {
+	if ((error = vnode_ref_ext(xvp, fileflags, 0)) != 0) {
 		goto out;
 	}
 	referenced = 1;
 
-	/* If create was requested, make sure file header exists. */
-	if (fileflags & O_CREAT) {
-		VATTR_INIT(&va);
-		VATTR_WANTED(&va, va_data_size);
-		VATTR_WANTED(&va, va_fileid);
-		VATTR_WANTED(&va, va_nlink);
-		if ((error = vnode_getattr(xvp, &va, context)) != 0) {
+	/*
+	 * If create was requested, make sure file header exists.
+	 * This is only done in the non-DoubleAgent case.
+	 * XXX And will be garbage-collected in due time.
+	 */
+	if (!vfs_xattr_doubleagent_enabled && (fileflags & O_CREAT) != 0) {
+		VATTR_INIT(va);
+		VATTR_WANTED(va, va_data_size);
+		VATTR_WANTED(va, va_fileid);
+		VATTR_WANTED(va, va_nlink);
+		if ((error = vnode_getattr(xvp, va, context)) != 0) {
 			error = EPERM;
 			goto out;
 		}
 
 		/* If the file is empty then add a default header. */
-		if (va.va_data_size == 0) {
+		if (va->va_data_size == 0) {
 			/* Don't adopt hard-linked "._" files. */
-			if (VATTR_IS_SUPPORTED(&va, va_nlink) && va.va_nlink > 1) {
+			if (VATTR_IS_SUPPORTED(va, va_nlink) && va->va_nlink > 1) {
 				error = EPERM;
 				goto out;
 			}
-			if ((error = create_xattrfile(xvp, (u_int32_t)va.va_fileid, context))) {
+			if ((error = create_xattrfile(xvp, (u_int32_t)va->va_fileid, context))) {
 				goto out;
 			}
 		}
 	}
+
+	/*
+	 * Allocate a file object for the referenced vnode.
+	 * This file object now owns the vnode reference,
+	 * and the caller owns the iocount, which will be
+	 * dropped in close_xattrfile().
+	 */
+	fg = fg_alloc_init(context);
+	fg->fg_flag = fileflags & FMASK;
+	fg->fg_ops = &vnops;
+	fg_set_data(fg, xvp);
+
 	/* Apply file locking if requested. */
 	if (fileflags & (O_EXLOCK | O_SHLOCK)) {
-		short locktype;
+		struct flock lf = {
+			.l_whence = SEEK_SET,
+		};
 
-		locktype = (fileflags & O_EXLOCK) ? F_WRLCK : F_RDLCK;
-		error = lock_xattrfile(xvp, locktype, context);
-		if (error) {
-			error = ENOATTR;
+		if (fileflags & O_EXLOCK) {
+			lf.l_type = F_WRLCK;
+		} else {
+			lf.l_type = F_RDLCK;
 		}
+		error = VNOP_ADVLOCK(xvp, (caddr_t)fg, F_SETLK, &lf, F_FLOCK | F_WAIT, context, NULL);
+		if (error == ENOTSUP) {
+			error = 0;
+		} else if (error) {
+			error = ENOATTR;
+			goto out;
+		} else { // error == 0
+			fg->fg_flag |= FWASLOCKED;
+		}
+	}
+
+	if (file_sizep != NULL) {
+		/*
+		 * Now that the file is locked, get the file's size.
+		 */
+		VATTR_INIT(va);
+		VATTR_WANTED(va, va_data_size);
+		if ((error = vnode_getattr(xvp, va, context)) != 0) {
+			error = ENOATTR;
+			goto out;
+		}
+		*file_sizep = va->va_data_size;
 	}
 out:
 	if (error) {
-		if (xvp != NULLVP) {
+		if (fg != NULL) {
+			/* Let the normal close path handle this. */
+			if (created_xattr_file) {
+				remove_xattrfile(fg, xvp, context);
+			} else {
+				close_xattrfile(fg, true, true, context);
+			}
+			fg = NULL;
+			xvp = NULLVP;
+		} else if (xvp != NULLVP) {
 			if (opened) {
 				(void) VNOP_CLOSE(xvp, fileflags, context);
 			}
-
-			if (fileflags & O_CREAT) {
-				/* Delete the xattr file if we encountered any errors */
-				(void) remove_xattrfile(xvp, context);
+			if (created_xattr_file) {
+				remove_xattrfile(NULL, xvp, context);
 			}
-
 			if (referenced) {
 				(void) vnode_rele(xvp);
 			}
-			(void) vnode_put(xvp);
+			/* remove_xattrfile() would have dropped the iocount already */
+			if (!created_xattr_file) {
+				(void) vnode_put(xvp);
+			}
 			xvp = NULLVP;
 		}
 		if ((error == ENOATTR) && (fileflags & O_CREAT)) {
 			error = EPERM;
 		}
 	}
+
 	/* Release resources after error-handling */
+	kfree_type(struct nameidata, nd);
+	kfree_type(struct vnode_attr, va);
 	if (dvp && (dvp != vp)) {
 		vnode_put(dvp);
 	}
@@ -2666,65 +3311,104 @@ out:
 		vnode_putname(basename);
 	}
 	if (filename && filename != &smallname[0]) {
-		FREE(filename, M_TEMP);
+		kfree_data(filename, alloc_len);
 	}
 
-	*xvpp = xvp;  /* return a referenced vnode */
+	*xfgp = fg;
 	return error;
 }
 
 static void
-close_xattrfile(vnode_t xvp, int fileflags, vfs_context_t context)
+close_xattrfile(struct fileglob *xfg, bool have_iocount, bool drop_iocount,
+    vfs_context_t context)
 {
-//	if (fileflags & FWRITE)
-//		(void) VNOP_FSYNC(xvp, MNT_WAIT, context);
+	vnode_t xvp = fg_get_data(xfg);
 
-	if (fileflags & (O_EXLOCK | O_SHLOCK)) {
-		(void) unlock_xattrfile(xvp, context);
+	/*
+	 * N.B. The only time have_iocount would be false would be when
+	 * a vnode_getwithref() calls fails after coming back from a
+	 * doubleagentd upcall.  If that happens, then it would mean
+	 * that the old vnode identity is gone, and our advisory lock
+	 * would have been garbage-collected when the vnode was reclaimed.
+	 */
+	if (have_iocount) {
+		/*
+		 * fg_drop() won't drop our advisory lock because we are not
+		 * following POSIX semantics.  Drop it here.
+		 */
+		struct flock lf = {
+			.l_whence = SEEK_SET,
+			.l_type = F_UNLCK,
+		};
+		(void)VNOP_ADVLOCK(xvp, (caddr_t)xfg, F_UNLCK, &lf, F_FLOCK,
+		    context, NULL);
+
+		/* (Maybe) drop the iocount we took in open_xattrfile(). */
+		if (drop_iocount) {
+			vnode_put(xvp);
+		}
 	}
 
-	(void) VNOP_CLOSE(xvp, fileflags, context);
-	(void) vnode_rele(xvp);
-	(void) vnode_put(xvp);
+	(void) fg_drop(current_proc(), xfg);
 }
 
-static int
-remove_xattrfile(vnode_t xvp, vfs_context_t context)
+static void
+remove_xattrfile(struct fileglob *xfg, vnode_t xvp, vfs_context_t context)
 {
-	vnode_t dvp;
+	vnode_t dvp = NULL, rvp = NULL;
 	struct nameidata nd;
 	char *path = NULL;
 	int pathlen;
-	int error = 0;
+	int error;
 
-	MALLOC_ZONE(path, char *, MAXPATHLEN, M_NAMEI, M_WAITOK);
-	if (path == NULL) {
-		return ENOMEM;
+	if (xfg != NULL) {
+		/*
+		 * Close the xattr file but don't dispose of the
+		 * iocount acquired in open_xattrfile() while doing
+		 * so.  We'll do that below once we have performed
+		 * the unlink operation.
+		 */
+		close_xattrfile(xfg, true, false, context);
 	}
 
+	path = zalloc(ZV_NAMEI);
 	pathlen = MAXPATHLEN;
 	error = vn_getpath(xvp, path, &pathlen);
 	if (error) {
-		FREE_ZONE(path, MAXPATHLEN, M_NAMEI);
-		return error;
+		zfree(ZV_NAMEI, path);
+		goto out;
 	}
 
 	NDINIT(&nd, DELETE, OP_UNLINK, LOCKPARENT | NOFOLLOW | DONOTAUTH,
 	    UIO_SYSSPACE, CAST_USER_ADDR_T(path), context);
 	error = namei(&nd);
-	FREE_ZONE(path, MAXPATHLEN, M_NAMEI);
+	zfree(ZV_NAMEI, path);
 	if (error) {
-		return error;
+		goto out;
 	}
 	dvp = nd.ni_dvp;
-	xvp = nd.ni_vp;
+	rvp = nd.ni_vp;
 
-	error = VNOP_REMOVE(dvp, xvp, &nd.ni_cnd, 0, context);
+	/*
+	 * Only remove if the namei() returned to us the same vnode that
+	 * we think we are supposed to be removing.  If they're not the
+	 * same, we could have raced against something else trying to
+	 * unlink it, and we don't want to remove someone else's (possibly
+	 * very important) file.
+	 */
+	if (rvp == xvp) {
+		(void) VNOP_REMOVE(dvp, rvp, &nd.ni_cnd, 0, context);
+	}
 	nameidone(&nd);
-	vnode_put(dvp);
-	vnode_put(xvp);
 
-	return error;
+out:
+	vnode_put(xvp);
+	if (dvp != NULLVP) {
+		vnode_put(dvp);
+	}
+	if (rvp != NULLVP) {
+		vnode_put(rvp);
+	}
 }
 
 /*
@@ -2753,7 +3437,7 @@ get_xattrinfo(vnode_t xvp, int setting, attr_info_t *ainfop, vfs_context_t conte
 	void * buffer = NULL;
 	apple_double_header_t  *filehdr;
 	struct vnode_attr va;
-	size_t iosize;
+	size_t iosize = 0;
 	int i;
 	int error;
 
@@ -2775,12 +3459,13 @@ get_xattrinfo(vnode_t xvp, int setting, attr_info_t *ainfop, vfs_context_t conte
 		iosize = MIN(ATTR_MAX_HDR_SIZE, ainfop->filesize);
 	}
 
-	if (iosize == 0) {
+	if (iosize == 0 || iosize < sizeof(apple_double_header_t)) {
 		error = ENOATTR;
 		goto bail;
 	}
+
 	ainfop->iosize = iosize;
-	MALLOC(buffer, void *, iosize, M_TEMP, M_WAITOK);
+	buffer = kalloc_data(iosize, Z_WAITOK | Z_ZERO);
 	if (buffer == NULL) {
 		error = ENOMEM;
 		goto bail;
@@ -2916,8 +3601,15 @@ get_xattrinfo(vnode_t xvp, int setting, attr_info_t *ainfop, vfs_context_t conte
 				    delta, context);
 				writesize = sizeof(attr_header_t);
 			} else {
-				/* Create a new, empty resource fork. */
+				/* We are in case where existing resource fork of length 0, try to create a new, empty resource fork. */
 				rsrcfork_header_t *rsrcforkhdr;
+
+				/* Do we have enough space in the header buffer for empty resource fork */
+				if (filehdr->entries[1].offset + delta + sizeof(rsrcfork_header_t) > ainfop->iosize) {
+					/* we do not have space, bail for now */
+					error = ENOATTR;
+					goto bail;
+				}
 
 				vnode_setsize(xvp, filehdr->entries[1].offset + delta, 0, context);
 
@@ -2978,6 +3670,11 @@ get_xattrinfo(vnode_t xvp, int setting, attr_info_t *ainfop, vfs_context_t conte
 	    ainfop->finderinfo->length >= (sizeof(attr_header_t) - sizeof(apple_double_header_t))) {
 		attr_header_t *attrhdr = (attr_header_t*)filehdr;
 
+		if (ainfop->finderinfo->offset != offsetof(apple_double_header_t, finfo)) {
+			error = ENOATTR;
+			goto bail;
+		}
+
 		if ((error = check_and_swap_attrhdr(attrhdr, ainfop)) == 0) {
 			ainfop->attrhdr = attrhdr;  /* valid attribute header */
 			/* First attr_entry starts immediately following attribute header */
@@ -2990,9 +3687,7 @@ bail:
 	if (auio != NULL) {
 		uio_free(auio);
 	}
-	if (buffer != NULL) {
-		FREE(buffer, M_TEMP);
-	}
+	kfree_data(buffer, iosize);
 	return error;
 }
 
@@ -3007,8 +3702,7 @@ create_xattrfile(vnode_t xvp, u_int32_t fileid, vfs_context_t context)
 	int rsrcforksize;
 	int error;
 
-	MALLOC(buffer, void *, ATTR_BUF_SIZE, M_TEMP, M_WAITOK);
-	bzero(buffer, ATTR_BUF_SIZE);
+	buffer = kalloc_data(ATTR_BUF_SIZE, Z_WAITOK | Z_ZERO);
 
 	xah = (attr_header_t *)buffer;
 	auio = uio_create(1, 0, UIO_SYSSPACE, UIO_WRITE);
@@ -3046,7 +3740,7 @@ create_xattrfile(vnode_t xvp, u_int32_t fileid, vfs_context_t context)
 	}
 
 	uio_free(auio);
-	FREE(buffer, M_TEMP);
+	kfree_data(buffer, ATTR_BUF_SIZE);
 
 	return error;
 }
@@ -3070,7 +3764,7 @@ init_empty_resource_fork(rsrcfork_header_t * rsrcforkhdr)
 static void
 rel_xattrinfo(attr_info_t *ainfop)
 {
-	FREE(ainfop->filehdr, M_TEMP);
+	kfree_data_addr(ainfop->filehdr);
 	bzero(ainfop, sizeof(attr_info_t));
 }
 
@@ -3167,6 +3861,8 @@ check_and_swap_attrhdr(attr_header_t *ah, attr_info_t *ainfop)
 	u_int32_t end;
 	int count;
 	int i;
+	uint32_t total_header_size;
+	uint32_t total_data_size;
 
 	if (ah == NULL) {
 		return EINVAL;
@@ -3191,6 +3887,7 @@ check_and_swap_attrhdr(attr_header_t *ah, attr_info_t *ainfop)
 	 */
 	end = ah->data_start + ah->data_length;
 	if (ah->total_size > ainfop->finderinfo->offset + ainfop->finderinfo->length ||
+	    ah->data_start < sizeof(attr_header_t) ||
 	    end < ah->data_start ||
 	    end > ah->total_size) {
 		return EINVAL;
@@ -3199,19 +3896,31 @@ check_and_swap_attrhdr(attr_header_t *ah, attr_info_t *ainfop)
 	/*
 	 * Make sure each of the attr_entry_t's fits within total_size.
 	 */
-	buf_end = ainfop->rawdata + ah->total_size;
+	buf_end = ainfop->rawdata + ah->data_start;
+	if (buf_end > ainfop->rawdata + ainfop->rawsize) {
+		return EINVAL;
+	}
 	count = ah->num_attrs;
+	if (count > 256) {
+		return EINVAL;
+	}
 	ae = (attr_entry_t *)(&ah[1]);
 
+	total_header_size = sizeof(attr_header_t);
+	total_data_size = 0;
 	for (i = 0; i < count; i++) {
 		/* Make sure the fixed-size part of this attr_entry_t fits. */
 		if ((u_int8_t *) &ae[1] > buf_end) {
 			return EINVAL;
 		}
 
-		/* Make sure the variable-length name fits (+1 is for NUL terminator) */
-		/* TODO: Make sure namelen matches strnlen(name,namelen+1)? */
-		if (&ae->name[ae->namelen + 1] > buf_end) {
+		/* Make sure the variable-length name fits */
+		if (&ae->name[ae->namelen] > buf_end) {
+			return EINVAL;
+		}
+
+		/* Make sure that namelen is matching name's real length, namelen included NUL */
+		if (strnlen((const char *)ae->name, ae->namelen) != ae->namelen - 1) {
 			return EINVAL;
 		}
 
@@ -3220,25 +3929,40 @@ check_and_swap_attrhdr(attr_header_t *ah, attr_info_t *ainfop)
 		ae->length      = SWAP32(ae->length);
 		ae->flags       = SWAP16(ae->flags);
 
-		/* Make sure the attribute content fits. */
+		/* Make sure the attribute content fits and points to the data part */
 		end = ae->offset + ae->length;
 		if (end < ae->offset || end > ah->total_size) {
+			return EINVAL;
+		}
+
+		/* Make sure entry points to data section and not header */
+		if (ae->offset < ah->data_start || end > ah->data_start + ah->data_length) {
+			return EINVAL;
+		}
+
+		/* We verified namelen is ok above, so add this entry's size to a total */
+		if (os_add_overflow(total_header_size, ATTR_ENTRY_LENGTH(ae->namelen), &total_header_size)) {
+			return EINVAL;
+		}
+
+		/* We verified that entry's length is within data section, so add it to running size total */
+		if (os_add_overflow(total_data_size, ae->length, &total_data_size)) {
 			return EINVAL;
 		}
 
 		ae = ATTR_NEXT(ae);
 	}
 
-	/*
-	 * TODO: Make sure the contents of attributes don't overlap the header
-	 * and don't overlap each other.  The hard part is that we don't know
-	 * what the actual header size is until we have looped over all of the
-	 * variable-sized attribute entries.
-	 *
-	 * XXX  Is there any guarantee that attribute entries are stored in
-	 * XXX  order sorted by the contents' file offset?  If so, that would
-	 * XXX  make the pairwise overlap check much easier.
-	 */
+
+	/* make sure data_start is actually after all the xattr key entries */
+	if (ah->data_start < total_header_size) {
+		return EINVAL;
+	}
+
+	/* make sure all entries' data  length add to header's idea of data length */
+	if (total_data_size != ah->data_length) {
+		return EINVAL;
+	}
 
 	return 0;
 }
@@ -3271,19 +3995,20 @@ shift_data_down(vnode_t xvp, off_t start, size_t len, off_t delta, vfs_context_t
 	}
 	orig_chunk = chunk;
 
-	if (kmem_alloc(kernel_map, (vm_offset_t *)&buff, chunk, VM_KERN_MEMORY_FILE)) {
+	buff = kalloc_data(chunk, Z_WAITOK);
+	if (buff == NULL) {
 		return ENOMEM;
 	}
 
 	for (pos = start + len - chunk; pos >= start; pos -= chunk) {
-		ret = vn_rdwr(UIO_READ, xvp, buff, chunk, pos, UIO_SYSSPACE, IO_NODELOCKED | IO_NOAUTH, ucred, &iolen, p);
+		ret = vn_rdwr(UIO_READ, xvp, buff, (int)chunk, pos, UIO_SYSSPACE, IO_NODELOCKED | IO_NOAUTH, ucred, &iolen, p);
 		if (iolen != 0) {
 			printf("xattr:shift_data: error reading data @ %lld (read %d of %lu) (%d)\n",
 			    pos, ret, chunk, ret);
 			break;
 		}
 
-		ret = vn_rdwr(UIO_WRITE, xvp, buff, chunk, pos + delta, UIO_SYSSPACE, IO_NODELOCKED | IO_NOAUTH, ucred, &iolen, p);
+		ret = vn_rdwr(UIO_WRITE, xvp, buff, (int)chunk, pos + delta, UIO_SYSSPACE, IO_NODELOCKED | IO_NOAUTH, ucred, &iolen, p);
 		if (iolen != 0) {
 			printf("xattr:shift_data: error writing data @ %lld (wrote %d of %lu) (%d)\n",
 			    pos + delta, ret, chunk, ret);
@@ -3298,8 +4023,8 @@ shift_data_down(vnode_t xvp, off_t start, size_t len, off_t delta, vfs_context_t
 			}
 		}
 	}
-	kmem_free(kernel_map, (vm_offset_t)buff, orig_chunk);
 
+	kfree_data(buff, orig_chunk);
 	return 0;
 }
 
@@ -3326,19 +4051,20 @@ shift_data_up(vnode_t xvp, off_t start, size_t len, off_t delta, vfs_context_t c
 	orig_chunk = chunk;
 	end = start + len;
 
-	if (kmem_alloc(kernel_map, (vm_offset_t *)&buff, chunk, VM_KERN_MEMORY_FILE)) {
+	buff = kalloc_data(chunk, Z_WAITOK);
+	if (buff == NULL) {
 		return ENOMEM;
 	}
 
 	for (pos = start; pos < end; pos += chunk) {
-		ret = vn_rdwr(UIO_READ, xvp, buff, chunk, pos, UIO_SYSSPACE, IO_NODELOCKED | IO_NOAUTH, ucred, &iolen, p);
+		ret = vn_rdwr(UIO_READ, xvp, buff, (int)chunk, pos, UIO_SYSSPACE, IO_NODELOCKED | IO_NOAUTH, ucred, &iolen, p);
 		if (iolen != 0) {
 			printf("xattr:shift_data: error reading data @ %lld (read %d of %lu) (%d)\n",
 			    pos, ret, chunk, ret);
 			break;
 		}
 
-		ret = vn_rdwr(UIO_WRITE, xvp, buff, chunk, pos - delta, UIO_SYSSPACE, IO_NODELOCKED | IO_NOAUTH, ucred, &iolen, p);
+		ret = vn_rdwr(UIO_WRITE, xvp, buff, (int)chunk, pos - delta, UIO_SYSSPACE, IO_NODELOCKED | IO_NOAUTH, ucred, &iolen, p);
 		if (iolen != 0) {
 			printf("xattr:shift_data: error writing data @ %lld (wrote %d of %lu) (%d)\n",
 			    pos + delta, ret, chunk, ret);
@@ -3353,39 +4079,46 @@ shift_data_up(vnode_t xvp, off_t start, size_t len, off_t delta, vfs_context_t c
 			}
 		}
 	}
-	kmem_free(kernel_map, (vm_offset_t)buff, orig_chunk);
 
+	kfree_data(buff, orig_chunk);
 	return 0;
 }
 
 static int
-lock_xattrfile(vnode_t xvp, short locktype, vfs_context_t context)
+make_xattrfile_port(struct fileglob *fg, ipc_port_t *portp)
 {
-	struct flock lf;
-	int error;
+	/*
+	 * This is essentially a stripped-down copy of
+	 * sys_fileport_makeport().
+	 */
+	ipc_port_t fileport;
+	int error = 0;
 
-	lf.l_whence = SEEK_SET;
-	lf.l_start = 0;
-	lf.l_len = 0;
-	lf.l_type = locktype; /* F_WRLCK or F_RDLCK */
-	/* Note: id is just a kernel address that's not a proc */
-	error = VNOP_ADVLOCK(xvp, (caddr_t)xvp, F_SETLK, &lf, F_FLOCK | F_WAIT, context, NULL);
-	return error == ENOTSUP ? 0 : error;
-}
+	/* Dropped when port is deallocated. */
+	fg_ref(FG_NOPROC, fg);
 
-int
-unlock_xattrfile(vnode_t xvp, vfs_context_t context)
-{
-	struct flock lf;
-	int error;
+	fileport = fileport_alloc(fg);
+	if (fileport == IPC_PORT_NULL) {
+		fg_drop_live(fg);
+		error = EIO;
+	} else {
+		/* Tag the fileglob for debugging purposes */
+		lck_mtx_lock_spin(&fg->fg_lock);
+		fg->fg_lflags |= FG_PORTMADE;
+		lck_mtx_unlock(&fg->fg_lock);
+	}
 
-	lf.l_whence = SEEK_SET;
-	lf.l_start = 0;
-	lf.l_len = 0;
-	lf.l_type = F_UNLCK;
-	/* Note: id is just a kernel address that's not a proc */
-	error = VNOP_ADVLOCK(xvp, (caddr_t)xvp, F_UNLCK, &lf, F_FLOCK, context, NULL);
-	return error == ENOTSUP ? 0 : error;
+	/*
+	 * The Mig defs for doubleagentd declare the fileport argument
+	 * as move-send.  If we ever decide we want to cache the fileport
+	 * here in the kernel, we will either need to change the Mig
+	 * defs back to the default mach_port_t (which is a copy-send)
+	 * or explicitly ipc_port_copy_send_any() the right before
+	 * sending it in the Mig stub.
+	 */
+
+	*portp = fileport;
+	return error;
 }
 
 #else /* CONFIG_APPLEDOUBLE */

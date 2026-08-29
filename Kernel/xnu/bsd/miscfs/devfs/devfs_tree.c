@@ -145,11 +145,9 @@ static devdirent_t *devfs_make_node_internal(dev_t, devfstype_t type, uid_t, gid
     int (*clone)(dev_t dev, int action), const char *fmt, va_list ap);
 
 
-lck_grp_t       * devfs_lck_grp;
-lck_grp_attr_t  * devfs_lck_grp_attr;
-lck_attr_t      * devfs_lck_attr;
-lck_mtx_t         devfs_mutex;
-lck_mtx_t         devfs_attr_mutex;
+static LCK_GRP_DECLARE(devfs_lck_grp, "devfs_lock");
+LCK_MTX_DECLARE(devfs_mutex, &devfs_lck_grp);
+LCK_MTX_DECLARE(devfs_attr_mutex, &devfs_lck_grp);
 
 os_refgrp_decl(static, devfs_refgrp, "devfs", NULL);
 
@@ -183,14 +181,6 @@ devfs_sinit(void)
 {
 	int error;
 
-	devfs_lck_grp_attr = lck_grp_attr_alloc_init();
-	devfs_lck_grp = lck_grp_alloc_init("devfs_lock", devfs_lck_grp_attr);
-
-	devfs_lck_attr = lck_attr_alloc_init();
-
-	lck_mtx_init(&devfs_mutex, devfs_lck_grp, devfs_lck_attr);
-	lck_mtx_init(&devfs_attr_mutex, devfs_lck_grp, devfs_lck_attr);
-
 	DEVFS_LOCK();
 	error = dev_add_entry("root", NULL, DEV_DIR, NULL, NULL, NULL, &dev_root);
 	DEVFS_UNLOCK();
@@ -200,9 +190,7 @@ devfs_sinit(void)
 		return ENOTSUP;
 	}
 #ifdef HIDDEN_MOUNTPOINT
-	MALLOC(devfs_hidden_mount, struct mount *, sizeof(struct mount),
-	    M_MOUNT, M_WAITOK);
-	bzero(devfs_hidden_mount, sizeof(struct mount));
+	devfs_hidden_mount = zalloc_flags(mount_zone, Z_WAITOK | Z_ZERO);
 	mount_lock_init(devfs_hidden_mount);
 	TAILQ_INIT(&devfs_hidden_mount->mnt_vnodelist);
 	TAILQ_INIT(&devfs_hidden_mount->mnt_workerqueue);
@@ -224,7 +212,7 @@ devfs_sinit(void)
 	        = (struct devfsmount *)devfs_hidden_mount->mnt_data;
 #endif /* HIDDEN_MOUNTPOINT */
 #if CONFIG_MACF
-	mac_devfs_label_associate_directory("/", strlen("/"),
+	mac_devfs_label_associate_directory("/", (int) strlen("/"),
 	    dev_root->de_dnp, "/");
 #endif
 	devfs_ready = 1;
@@ -360,7 +348,7 @@ dev_finddir(const char * path,
 #if CONFIG_MACF
 			mac_devfs_label_associate_directory(
 				dirnode->dn_typeinfo.Dir.myname->de_name,
-				strlen(dirnode->dn_typeinfo.Dir.myname->de_name),
+				(int) strlen(dirnode->dn_typeinfo.Dir.myname->de_name),
 				dnp, fullpath);
 #endif
 			devfs_propogate(dirnode->dn_typeinfo.Dir.myname, dirent_p, delp);
@@ -406,12 +394,7 @@ dev_add_name(const char * name, devnode_t * dirnode, __unused devdirent_t * back
 	/*
 	 * Allocate and fill out a new directory entry
 	 */
-	MALLOC(dirent_p, devdirent_t *, sizeof(devdirent_t),
-	    M_DEVFSNAME, M_WAITOK);
-	if (!dirent_p) {
-		return ENOMEM;
-	}
-	bzero(dirent_p, sizeof(devdirent_t));
+	dirent_p = kalloc_type(devdirent_t, Z_WAITOK | Z_ZERO | Z_NOFAIL);
 
 	/* inherrit our parent's mount info */ /*XXX*/
 	/* a kludge but.... */
@@ -548,10 +531,7 @@ dev_add_node(int entrytype, devnode_type_t * typeinfo, devnode_t * proto,
 		}
 	}
 #endif  /* SPLIT_DEVS */
-	MALLOC(dnp, devnode_t *, sizeof(devnode_t), M_DEVFSNODE, M_WAITOK);
-	if (!dnp) {
-		return ENOMEM;
-	}
+	dnp = kalloc_type(devnode_t, Z_WAITOK | Z_ZERO | Z_NOFAIL);
 
 	/*
 	 * If we have a proto, that means that we are duplicating some
@@ -570,7 +550,7 @@ dev_add_node(int entrytype, devnode_type_t * typeinfo, devnode_t * proto,
 		proto->dn_prevsiblingp = &(dnp->dn_nextsibling);
 #if CONFIG_MACF
 		mac_devfs_label_init(dnp);
-		mac_devfs_label_copy(proto->dn_label, dnp->dn_label);
+		mac_devfs_label_copy(mac_devfs_label(proto), mac_devfs_label(dnp));
 #endif
 	} else {
 		struct timeval tv;
@@ -579,7 +559,6 @@ dev_add_node(int entrytype, devnode_type_t * typeinfo, devnode_t * proto,
 		 * We have no prototype, so start off with a clean slate
 		 */
 		microtime(&tv);
-		bzero(dnp, sizeof(devnode_t));
 		dnp->dn_type = entrytype;
 		dnp->dn_nextsibling = dnp;
 		dnp->dn_prevsiblingp = &(dnp->dn_nextsibling);
@@ -629,9 +608,7 @@ dev_add_node(int entrytype, devnode_type_t * typeinfo, devnode_t * proto,
 		 * A symlink only exists on one plane and has its own
 		 * node.. therefore we might be on any random plane.
 		 */
-		MALLOC(dnp->dn_typeinfo.Slnk.name, char *,
-		    typeinfo->Slnk.namelen + 1,
-		    M_DEVFSNODE, M_WAITOK);
+		dnp->dn_typeinfo.Slnk.name = kalloc_data(typeinfo->Slnk.namelen + 1, Z_WAITOK);
 		if (!dnp->dn_typeinfo.Slnk.name) {
 			error = ENOMEM;
 			break;
@@ -666,7 +643,7 @@ dev_add_node(int entrytype, devnode_type_t * typeinfo, devnode_t * proto,
 	}
 
 	if (error) {
-		FREE(dnp, M_DEVFSNODE);
+		kfree_type(devnode_t, dnp);
 	} else {
 		*dn_pp = dnp;
 		DEVFS_INCR_NODES();
@@ -687,10 +664,10 @@ devnode_free(devnode_t * dnp)
 #endif
 	if (dnp->dn_type == DEV_SLNK) {
 		DEVFS_DECR_STRINGSPACE(dnp->dn_typeinfo.Slnk.namelen + 1);
-		FREE(dnp->dn_typeinfo.Slnk.name, M_DEVFSNODE);
+		kfree_data(dnp->dn_typeinfo.Slnk.name, dnp->dn_typeinfo.Slnk.namelen + 1);
 	}
 	DEVFS_DECR_NODES();
-	FREE(dnp, M_DEVFSNODE);
+	kfree_type(devnode_t, dnp);
 }
 
 
@@ -966,7 +943,7 @@ devfs_free_plane(struct devfsmount *devfs_mp_p)
 	devfs_nmountplanes--;
 
 	if (devfs_nmountplanes > (devfs_nmountplanes + 1)) {
-		panic("plane count wrapped around.\n");
+		panic("plane count wrapped around.");
 	}
 }
 
@@ -1094,7 +1071,7 @@ dev_free_name(devdirent_t * dirent_p)
 	}
 
 	DEVFS_DECR_ENTRIES();
-	FREE(dirent_p, M_DEVFSNAME);
+	kfree_type(devdirent_t, dirent_p);
 	return 0;
 }
 
@@ -1168,6 +1145,7 @@ retry:
 
 		vid = vnode_vid(vn_p);
 
+		vnode_hold(vn_p);
 		DEVFS_UNLOCK();
 
 		/*
@@ -1181,6 +1159,7 @@ retry:
 		 */
 		error = vnode_getwithvid_drainok(vn_p, vid);
 
+		vnode_drop(vn_p);
 		DEVFS_LOCK();
 
 		if (dnp->dn_lflags & DN_DELETE) {
@@ -1291,7 +1270,7 @@ retry:
 				goto out;
 			}
 
-			vfsp.vnfs_rdev = makedev(n_major, n_minor);;
+			vfsp.vnfs_rdev = makedev(n_major, n_minor);
 		} else {
 			vfsp.vnfs_rdev = dnp->dn_typeinfo.dev;
 		}
@@ -1306,7 +1285,8 @@ retry:
 
 	DEVFS_UNLOCK();
 
-	error = vnode_create(VNCREATE_FLAVOR, VCREATESIZE, &vfsp, &vn_p);
+	error = vnode_create_ext(VNCREATE_FLAVOR, VCREATESIZE, &vfsp, &vn_p,
+	    VNODE_CREATE_DEFAULT);
 
 	/* Do this before grabbing the lock */
 	if (error == 0) {
@@ -1319,7 +1299,7 @@ retry:
 		vnode_settag(vn_p, VT_DEVFS);
 
 		if ((dnp->dn_clone != NULL) && (dnp->dn_vn != NULLVP)) {
-			panic("devfs_dntovn: cloning device with a vnode?\n");
+			panic("devfs_dntovn: cloning device with a vnode?");
 		}
 
 		*vn_pp = vn_p;
@@ -1388,7 +1368,7 @@ devfs_rele_node(devnode_t *dnp)
 {
 	os_ref_count_t rc = os_ref_release_locked_raw(&dnp->dn_refcount, &devfs_refgrp);
 	if (rc < 1) {
-		panic("devfs_rele_node: devnode without a refcount!\n");
+		panic("devfs_rele_node: devnode without a refcount!");
 	} else if ((rc == 1) && (dnp->dn_lflags & DN_DELETE)) {
 		/* release final reference from dev_add_node */
 		(void) os_ref_release_locked_raw(&dnp->dn_refcount, &devfs_refgrp);
@@ -1433,6 +1413,7 @@ devfs_bulk_notify(devfs_event_log_t delp)
 			vnode_notify(dvep->dve_vp, dvep->dve_events, NULL);
 			vnode_put(dvep->dve_vp);
 		}
+		vnode_drop(dvep->dve_vp);
 	}
 }
 
@@ -1440,7 +1421,7 @@ static void
 devfs_record_event(devfs_event_log_t delp, devnode_t *dnp, uint32_t events)
 {
 	if (delp->del_used >= delp->del_max) {
-		panic("devfs event log overflowed.\n");
+		panic("devfs event log overflowed.");
 	}
 
 	/* Can only notify for nodes that have an associated vnode */
@@ -1448,6 +1429,7 @@ devfs_record_event(devfs_event_log_t delp, devnode_t *dnp, uint32_t events)
 		devfs_vnode_event_t dvep = &delp->del_entries[delp->del_used];
 		dvep->dve_vp = dnp->dn_vn;
 		dvep->dve_vid = vnode_vid(dnp->dn_vn);
+		vnode_hold(dvep->dve_vp);
 		dvep->dve_events = events;
 		delp->del_used++;
 	}
@@ -1459,7 +1441,8 @@ devfs_init_event_log(devfs_event_log_t delp, uint32_t count, devfs_vnode_event_t
 	devfs_vnode_event_t dvearr;
 
 	if (buf == NULL) {
-		MALLOC(dvearr, devfs_vnode_event_t, count * sizeof(struct devfs_vnode_event), M_TEMP, M_WAITOK | M_ZERO);
+		dvearr = kalloc_type(struct devfs_vnode_event, count,
+		    Z_WAITOK | Z_ZERO);
 		if (dvearr == NULL) {
 			return ENOMEM;
 		}
@@ -1477,11 +1460,12 @@ static void
 devfs_release_event_log(devfs_event_log_t delp, int need_free)
 {
 	if (delp->del_entries == NULL) {
-		panic("Free of devfs notify info that has not been intialized.\n");
+		panic("Free of devfs notify info that has not been intialized.");
 	}
 
 	if (need_free) {
-		FREE(delp->del_entries, M_TEMP);
+		kfree_type(struct devfs_vnode_event, delp->del_max,
+		    delp->del_entries);
 	}
 
 	delp->del_entries = NULL;
@@ -1568,6 +1552,7 @@ out:
 	return new_dev;
 }
 
+__printflike(7, 0)
 static devdirent_t *
 devfs_make_node_internal(dev_t dev, devfstype_t type, uid_t uid,
     gid_t gid, int perms, int (*clone)(dev_t dev, int action), const char *fmt, va_list ap)
@@ -1581,7 +1566,7 @@ devfs_make_node_internal(dev_t dev, devfstype_t type, uid_t uid,
 #if CONFIG_MACF
 	char buff[sizeof(buf)];
 #endif
-	int             i;
+	size_t          i;
 	uint32_t        log_count;
 	struct devfs_event_log event_log;
 	struct devfs_vnode_event stackbuf[NUM_STACK_ENTRIES];
@@ -1682,7 +1667,7 @@ devfs_make_link(void *original, char *fmt, ...)
 
 	va_list ap;
 	char *p, buf[256]; /* XXX */
-	int i;
+	size_t i;
 
 	DEVFS_LOCK();
 

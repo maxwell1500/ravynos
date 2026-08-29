@@ -85,11 +85,9 @@
 #include <netinet/in_systm.h>
 #include <netinet/ip.h>
 
-#if INET6
 #include <netinet6/nd6.h>
 #include <netinet6/in6_ifattach.h>
 #include <netinet6/ip6_var.h>
-#endif
 
 /* #include "vlan.h" */
 #if NVLAN > 0
@@ -97,6 +95,8 @@
 #endif /* NVLAN > 0 */
 
 #include <net/ether_if_module.h>
+
+#include <net/sockaddr_utils.h>
 
 static const u_char etherip6allnodes[ETHER_ADDR_LEN] =
 { 0x33, 0x33, 0, 0, 0, 1 };
@@ -163,7 +163,7 @@ ether_inet6_pre_output(ifnet_t ifp, protocol_family_t protocol_family,
 {
 #pragma unused(protocol_family)
 	errno_t result;
-	struct sockaddr_dl sdl;
+	struct sockaddr_dl sdl = {};
 	struct mbuf *m = *m0;
 
 	/*
@@ -171,14 +171,16 @@ ether_inet6_pre_output(ifnet_t ifp, protocol_family_t protocol_family,
 	 */
 	m->m_flags |= M_LOOP;
 
-	result = nd6_lookup_ipv6(ifp, (const struct sockaddr_in6 *)
-	    (uintptr_t)(size_t)dst_netaddr, &sdl, sizeof(sdl), route, *m0);
+	result = nd6_lookup_ipv6(ifp, SIN6(dst_netaddr), &sdl, sizeof(sdl), route, *m0);
 
 	if (result == 0) {
 		u_int16_t ethertype_ipv6 = htons(ETHERTYPE_IPV6);
 
-		bcopy(&ethertype_ipv6, type, sizeof(ethertype_ipv6));
-		bcopy(LLADDR(&sdl), edst, sdl.sdl_alen);
+		uint8_t *frametype = dlil_frame_type(type);
+		bcopy(&ethertype_ipv6, frametype, sizeof(ethertype_ipv6));
+
+		uint8_t *laddr = dlil_link_addr(edst);
+		bcopy(LLADDR(&sdl), laddr, sdl.sdl_alen);
 	}
 
 	return result;
@@ -191,7 +193,7 @@ ether_inet6_resolve_multi(ifnet_t ifp, const struct sockaddr *proto_addr,
 	static const size_t minsize =
 	    offsetof(struct sockaddr_dl, sdl_data[0]) + ETHER_ADDR_LEN;
 	const struct sockaddr_in6 *sin6 =
-	    (const struct sockaddr_in6 *)(uintptr_t)(size_t)proto_addr;
+	    SIN6(proto_addr);
 
 	if (proto_addr->sa_family != AF_INET6) {
 		return EAFNOSUPPORT;
@@ -205,7 +207,7 @@ ether_inet6_resolve_multi(ifnet_t ifp, const struct sockaddr *proto_addr,
 		return EMSGSIZE;
 	}
 
-	bzero(out_ll, minsize);
+	SOCKADDR_ZERO(out_ll, minsize);
 	out_ll->sdl_len = minsize;
 	out_ll->sdl_family = AF_LINK;
 	out_ll->sdl_index = ifp->if_index;
@@ -256,15 +258,14 @@ errno_t
 ether_attach_inet6(struct ifnet *ifp, protocol_family_t protocol_family)
 {
 #pragma unused(protocol_family)
-	struct ifnet_attach_proto_param proto;
-	struct ifnet_demux_desc demux[1];
+	struct ifnet_attach_proto_param proto = {};
 	u_short en_6native = htons(ETHERTYPE_IPV6);
+	struct ifnet_demux_desc demux[1] = {
+		{ .type = DLIL_DESC_ETYPE2, .data = &en_6native,
+		  .datalen = sizeof(en_6native) }
+	};
 	errno_t error;
 
-	bzero(&proto, sizeof(proto));
-	demux[0].type = DLIL_DESC_ETYPE2;
-	demux[0].data = &en_6native;
-	demux[0].datalen = sizeof(en_6native);
 	proto.demux_list = demux;
 	proto.demux_count = 1;
 	proto.input = ether_inet6_input;

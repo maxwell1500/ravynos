@@ -3,8 +3,8 @@ from utils import *
 from process import *
 from misc import *
 from memory import *
+from ipc import *
 
-# TODO: write scheduler related macros here
 
 # Macro: showallprocrunqcount
 
@@ -29,8 +29,8 @@ def ShowInterrupts(cmd_args=None):
     """ Prints IRQ, IPI and TMR counts for each CPU
     """
 
-    if not kern.arch.startswith('arm'):
-        print("showinterrupts is only supported on arm/arm64")
+    if not kern.arch.startswith('arm64'):
+        print("showinterrupts is only supported on arm64")
         return
 
     base_address = kern.GetLoadAddressForSymbol('CpuDataEntries')
@@ -43,7 +43,10 @@ def ShowInterrupts(cmd_args=None):
             cpu_data_entry = Cast(element, 'cpu_data_t *')
             print("CPU {} IRQ: {:d}\n".format(y, cpu_data_entry.cpu_stat.irq_ex_cnt))
             print("CPU {} IPI: {:d}\n".format(y, cpu_data_entry.cpu_stat.ipi_cnt))
-            print("CPU {} PMI: {:d}\n".format(y, cpu_data_entry.cpu_monotonic.mtc_npmis))
+            try:
+                print("CPU {} PMI: {:d}\n".format(y, cpu_data_entry.cpu_monotonic.mtc_npmis))
+            except AttributeError:
+                pass
             print("CPU {} TMR: {:d}\n".format(y, cpu_data_entry.cpu_stat.timer_cnt))
             x = x + 1
         y = y + 1
@@ -127,13 +130,13 @@ def showinterruptsourceinfo(cmd_args = None):
     print(object_info)
     print("--- Dumping IOFilterInterruptEventSource object ---\n")
     #Dump the IOFilterInterruptEventSource object.
-    target_info=re.search('target =[\t ]+(.*)',object_info)
+    target_info=re.search('target =\s+(.*)',object_info)
     target= target_info.group()
     target= target.split()
     #Dump the Object pointer of the source who is triggering the Interrupts.
     vector_info=lldb_run_command("dumpobject {:s} ".format(target[2]))
     print(vector_info)
-    owner_info= re.search('owner =[\t ]+(.*)',vector_info)
+    owner_info= re.search('owner =\s+(.*)',vector_info)
     owner= owner_info.group()
     owner= owner.split()
     print("\n\n")
@@ -143,42 +146,40 @@ def showinterruptsourceinfo(cmd_args = None):
 # EndMacro: showinterruptsourceinfo
 
 @lldb_command('showcurrentabstime')
-def ShowCurremtAbsTime(cmd_args=None):
+def ShowCurrentAbsTime(cmd_args=None):
     """  Routine to print latest absolute time known to system before being stopped.
          Usage: showcurrentabstime
     """
-    pset = addressof(kern.globals.pset0)
-    processor_array = kern.globals.processor_array
-    cur_abstime = 0
 
-    while unsigned(pset) != 0:
-        cpu_bitmap = int(pset.cpu_bitmask)
-        for cpuid in IterateBitmap(cpu_bitmap):
-            processor = processor_array[cpuid]
-            if unsigned(processor.last_dispatch) > cur_abstime:
-                cur_abstime = unsigned(processor.last_dispatch)
-
-        pset = pset.pset_list
-
-    print("Last dispatch time known: %d MATUs" % cur_abstime)
+    print("Last dispatch time known: %d MATUs" % GetRecentTimestamp())
 
 bucketStr = ["FIXPRI (>UI)", "TIMESHARE_FG", "TIMESHARE_IN", "TIMESHARE_DF", "TIMESHARE_UT", "TIMESHARE_BG"]
 
-@header("     {:>18s} | {:>20s} | {:>20s} | {:>10s} | {:>10s}".format('Thread Group', 'Interactivity Score', 'Last Timeshare Tick', 'pri_shift', 'highq'))
+@header("{:<18s} | {:>20s} | {:>20s} | {:>10s} | {:>10s}".format('Thread Group', 'Pending (us)', 'Interactivity Score', 'TG Boost', 'Highest Thread Pri'))
 def GetSchedClutchBucketSummary(clutch_bucket):
-    return "     0x{:>16x} | {:>20d} | {:>20d} | {:>10d} | {:>10d}".format(clutch_bucket.scb_clutch.sc_tg, clutch_bucket.scb_interactivity_score, clutch_bucket.scb_timeshare_tick, clutch_bucket.scb_pri_shift, clutch_bucket.scb_runq.highq)
+    tg_boost = 0
+    pending_delta = kern.GetNanotimeFromAbstime(GetRecentTimestamp() - clutch_bucket.scb_group.scbg_pending_data.scct_timestamp) // 1000
+    if (int)(clutch_bucket.scb_group.scbg_pending_data.scct_timestamp) == 18446744073709551615:
+        pending_delta = 0
+    return "0x{:<16x} | {:>20d} | {:>20d} | {:>10d} | {:>10d}".format(
+        clutch_bucket.scb_group.scbg_clutch.sc_tg, pending_delta,
+        clutch_bucket.scb_group.scbg_interactivity_data.scct_count,
+        tg_boost, clutch_bucket.scb_thread_runq.pq_root.key >> 8)
 
 def ShowSchedClutchForPset(pset):
     root_clutch = pset.pset_clutch_root
     print("\n{:s} : {:d}\n\n".format("Current Timestamp", GetRecentTimestamp()))
-    print("{:>10s} | {:>20s} | {:>30s} | {:>18s} | {:>10s} | {:>10s} | {:>30s} | {:>30s} | {:>15s} | ".format("Root", "Root Buckets", "Clutch Buckets", "Address", "Priority", "Count", "CPU Usage (MATUs)", "CPU Blocked (MATUs)", "Deadline (abs)") + GetSchedClutchBucketSummary.header)
+    print("{:>10s} | {:>20s} | {:>30s} | {:>25s} | {:<18s} | {:>10s} | {:>10s} | {:>15s} | ".format("Root", "Root Buckets", "Clutch Buckets", "Threads", "Address", "Pri (Base)", "Count", "Deadline (us)") + GetSchedClutchBucketSummary.header)
     print("=" * 300)
-    print("{:>10s} | {:>20s} | {:>30s} | 0x{:16x} | {:>10d} | {:>10d} | {:>30s} | {:>30s} | {:>15s} | ".format("Root", "*", "*", addressof(root_clutch), root_clutch.scr_priority, root_clutch.scr_thr_count, "*", "*", "*"))
+    print("{:>10s} | {:>20s} | {:>30s} | {:>25s} | 0x{:<16x} | {:>10d} | {:>10d} | {:>15s} | ".format("Root", "*", "*", "*", addressof(root_clutch), (root_clutch.scr_priority if root_clutch.scr_thr_count > 0 else -1), root_clutch.scr_thr_count, "*"))
     print("-" * 300)
 
     for i in range(0, 6):
-        root_bucket = root_clutch.scr_buckets[i]
-        print("{:>10s} | {:>20s} | {:>30s} | 0x{:16x} | {:>10s} | {:>10s} | {:>30s} | {:>30s} | {:>15d} | ".format("*", bucketStr[i], "*", addressof(root_bucket), "*", "*", "*", "*", root_bucket.scrb_deadline))
+        root_bucket = root_clutch.scr_unbound_buckets[i]
+        root_bucket_deadline = 0
+        if root_bucket.scrb_clutch_buckets.scbrq_count != 0 and i != 0:
+            root_bucket_deadline = kern.GetNanotimeFromAbstime(root_bucket.scrb_pqlink.deadline - GetRecentTimestamp()) // 1000
+        print("{:>10s} | {:>20s} | {:>30s} | {:>25s} | 0x{:<16x} | {:>10s} | {:>10s} | {:>15d} | ".format("*", bucketStr[int(root_bucket.scrb_bucket)], "*", "*", addressof(root_bucket), "*", "*", root_bucket_deadline))
         clutch_bucket_runq = root_bucket.scrb_clutch_buckets
         clutch_bucket_list = []
         for pri in range(0,128):
@@ -188,9 +189,31 @@ def ShowSchedClutchForPset(pset):
         if len(clutch_bucket_list) > 0:
             clutch_bucket_list.sort(key=lambda x: x.scb_priority, reverse=True)
             for clutch_bucket in clutch_bucket_list:
-                cpu_used = clutch_bucket.scb_cpu_data.cpu_data.scbcd_cpu_used
-                cpu_blocked = clutch_bucket.scb_cpu_data.cpu_data.scbcd_cpu_blocked
-                print("{:>10s} | {:>20s} | {:>30s} | 0x{:16x} | {:>10d} | {:>10d} | {:>30d} | {:>30d} | {:>15s} | ".format("*", "*", clutch_bucket.scb_clutch.sc_tg.tg_name, clutch_bucket, clutch_bucket.scb_priority, clutch_bucket.scb_thr_count, cpu_used, cpu_blocked, "*") + GetSchedClutchBucketSummary(clutch_bucket))
+                print("{:>10s} | {:>20s} | {:>30s} | {:>25s} | {:<18s} | {:>10s} | {:>10s} | {:>15s} | ".format("", "", "", "", "", "", "", ""))
+                print("{:>10s} | {:>20s} | {:>30s} | {:>25s} | 0x{:<16x} | {:>10d} | {:>10d} | {:>15s} | ".format("*", "*", clutch_bucket.scb_group.scbg_clutch.sc_tg.tg_name, "*", clutch_bucket, clutch_bucket.scb_priority, clutch_bucket.scb_thr_count, "*") + GetSchedClutchBucketSummary(clutch_bucket))
+                runq = clutch_bucket.scb_clutchpri_prioq
+                for thread in IterateSchedPriorityQueue(runq, 'struct thread', 'th_clutch_pri_link'):
+                    thread_name = GetThreadName(thread)[-24:]
+                    if len(thread_name) == 0:
+                        thread_name = "<unnamed thread>"
+                    print("{:>10s} | {:>20s} | {:>30s} | {:<25s} | 0x{:<16x} | {:>10d} | {:>10s} | {:>15s} | ".format("*", "*", "*", thread_name, thread, thread.base_pri, "*", "*")) 
+        print("-" * 300)
+        root_bucket = root_clutch.scr_bound_buckets[i]
+        root_bucket_deadline = 0
+        if root_bucket.scrb_bound_thread_runq.count != 0:
+            root_bucket_deadline = kern.GetNanotimeFromAbstime(root_bucket.scrb_pqlink.deadline - GetRecentTimestamp()) // 1000
+        print("{:>10s} | {:>20s} | {:>30s} | {:>25s} | 0x{:<16x} | {:>10s} | {:>10d} | {:>15d} | ".format("*", bucketStr[int(root_bucket.scrb_bucket)] + " [Bound]", "*", "*", addressof(root_bucket), "*", root_bucket.scrb_bound_thread_runq.count, root_bucket_deadline))
+        if root_bucket.scrb_bound_thread_runq.count == 0:
+            print("-" * 300)
+            continue
+        thread_runq = root_bucket.scrb_bound_thread_runq
+        for pri in range(0, 128):
+            thread_circleq = thread_runq.queues[pri]
+            for thread in IterateCircleQueue(thread_circleq, 'struct thread', 'runq_links'):
+                thread_name = GetThreadName(thread)[-24:]
+                if len(thread_name) == 0:
+                    thread_name = "<unnamed thread>"
+                print("{:>10s} | {:>20s} | {:>30s} | {:<25s} | 0x{:<16x} | {:>10d} | {:>10s} | {:>15s} | ".format("*", "*", "*", thread_name, thread, thread.base_pri, "*", "*"))
         print("-" * 300)
 
 @lldb_command('showschedclutch')
@@ -214,9 +237,9 @@ def ShowSchedClutchRoot(cmd_args=[]):
     if not root:
         print("unknown arguments:", str(cmd_args))
         return False
-    print("{:>30s} : 0x{:16x}".format("Root", root))
-    print("{:>30s} : 0x{:16x}".format("Pset", root.scr_pset))
-    print("{:>30s} : {:d}".format("Priority", root.scr_priority))
+    print("{:>30s} : 0x{:<16x}".format("Root", root))
+    print("{:>30s} : 0x{:<16x}".format("Pset", root.scr_pset))
+    print("{:>30s} : {:d}".format("Priority", (root.scr_priority if root.scr_thr_count > 0 else -1)))
     print("{:>30s} : {:d}".format("Urgency", root.scr_urgency))
     print("{:>30s} : {:d}".format("Threads", root.scr_thr_count))
     print("{:>30s} : {:d}".format("Current Timestamp", GetRecentTimestamp()))
@@ -233,9 +256,9 @@ def ShowSchedClutchRootBucket(cmd_args=[]):
     if not root_bucket:
         print("unknown arguments:", str(cmd_args))
         return False
-    print("{:<30s} : 0x{:16x}".format("Root Bucket", root_bucket))
+    print("{:<30s} : 0x{:<16x}".format("Root Bucket", root_bucket))
     print("{:<30s} : {:s}".format("Bucket Name", bucketStr[int(root_bucket.scrb_bucket)]))
-    print("{:<30s} : {:d}".format("Deadline", root_bucket.scrb_deadline))
+    print("{:<30s} : {:d}".format("Deadline", (root_bucket.scrb_pqlink.deadline if root_bucket.scrb_clutch_buckets.scbrq_count != 0 else 0)))
     print("{:<30s} : {:d}".format("Current Timestamp", GetRecentTimestamp()))
     print("\n")
     clutch_bucket_runq = root_bucket.scrb_clutch_buckets
@@ -250,7 +273,31 @@ def ShowSchedClutchRootBucket(cmd_args=[]):
         print("=" * 240)
         clutch_bucket_list.sort(key=lambda x: x.scb_priority, reverse=True)
         for clutch_bucket in clutch_bucket_list:
-            print("{:>30s} | 0x{:16x} | {:>20d} | {:>20d} | ".format(clutch_bucket.scb_clutch.sc_tg.tg_name, clutch_bucket, clutch_bucket.scb_priority, clutch_bucket.scb_thr_count) + GetSchedClutchBucketSummary(clutch_bucket))
+            print("{:>30s} | 0x{:<16x} | {:>20d} | {:>20d} | ".format(clutch_bucket.scb_group.scbg_clutch.sc_tg.tg_name, clutch_bucket, clutch_bucket.scb_priority, clutch_bucket.scb_thr_count) + GetSchedClutchBucketSummary(clutch_bucket))
+
+def SchedClutchBucketDetails(clutch_bucket):
+    print("{:<30s} : 0x{:<16x}".format("Clutch Bucket", clutch_bucket))
+    print("{:<30s} : {:s}".format("Scheduling Bucket", bucketStr[(int)(clutch_bucket.scb_bucket)]))
+    print("{:<30s} : 0x{:<16x}".format("Clutch Bucket Group", clutch_bucket.scb_group))
+    print("{:<30s} : {:s}".format("TG Name", clutch_bucket.scb_group.scbg_clutch.sc_tg.tg_name))
+    print("{:<30s} : {:d}".format("Priority", clutch_bucket.scb_priority))
+    print("{:<30s} : {:d}".format("Thread Count", clutch_bucket.scb_thr_count))
+    print("{:<30s} : 0x{:<16x}".format("Thread Group", clutch_bucket.scb_group.scbg_clutch.sc_tg))
+    print("{:<30s} : {:6d} (inherited from clutch bucket group)".format("Interactivity Score", clutch_bucket.scb_group.scbg_interactivity_data.scct_count))
+    print("{:<30s} : {:6d} (inherited from clutch bucket group)".format("Last Timeshare Update Tick", clutch_bucket.scb_group.scbg_timeshare_tick))
+    print("{:<30s} : {:6d} (inherited from clutch bucket group)".format("Priority Shift", clutch_bucket.scb_group.scbg_pri_shift)) 
+    print("\n")
+    runq = clutch_bucket.scb_clutchpri_prioq
+    thread_list = []
+    for thread in IterateSchedPriorityQueue(runq, 'struct thread', 'th_clutch_pri_link'):
+        thread_list.append(thread)
+    if len(thread_list) > 0:
+        print("=" * 240)
+        print(GetThreadSummary.header + "{:s}".format("Process Name"))
+        print("=" * 240)
+        for thread in thread_list:
+            proc = thread.t_tro.tro_proc
+            print(GetThreadSummary(thread) + "{:s}".format(GetProcName(proc)))
 
 @lldb_command('showschedclutchbucket')
 def ShowSchedClutchBucket(cmd_args=[]):
@@ -263,30 +310,7 @@ def ShowSchedClutchBucket(cmd_args=[]):
     if not clutch_bucket:
         print("unknown arguments:", str(cmd_args))
         return False
-    print("{:<30s} : 0x{:16x}".format("Clutch Bucket", clutch_bucket))
-    print("{:<30s} : {:s}".format("TG Name", clutch_bucket.scb_clutch.sc_tg.tg_name))
-    print("{:<30s} : {:d}".format("Priority", clutch_bucket.scb_priority))
-    print("{:<30s} : {:d}".format("Thread Count", clutch_bucket.scb_thr_count))
-    print("{:<30s} : 0x{:16x}".format("Thread Group", clutch_bucket.scb_clutch.sc_tg))
-    cpu_used = clutch_bucket.scb_cpu_data.cpu_data.scbcd_cpu_used
-    cpu_blocked = clutch_bucket.scb_cpu_data.cpu_data.scbcd_cpu_blocked
-    print("{:<30s} : {:d}".format("CPU Used (MATUs)", cpu_used))
-    print("{:<30s} : {:d}".format("CPU Blocked (MATUs)", cpu_blocked) )
-    print("{:<30s} : {:d}".format("Interactivity Score", clutch_bucket.scb_interactivity_score))
-    print("{:<30s} : {:d}".format("Last Timeshare Update Tick", clutch_bucket.scb_timeshare_tick))
-    print("{:<30s} : {:d}".format("Priority Shift", clutch_bucket.scb_pri_shift) )
-    print("\n")
-    runq = clutch_bucket.scb_clutchpri_prioq
-    thread_list = []
-    for thread in IteratePriorityQueue(runq, 'struct thread', 'sched_clutchpri_link'):
-        thread_list.append(thread)
-    if len(thread_list) > 0:
-        print("=" * 240)
-        print(GetThreadSummary.header + "{:s}".format("Process Name"))
-        print("=" * 240)
-        for thread in thread_list:
-            proc = Cast(thread.task.bsd_info, 'proc *')
-            print(GetThreadSummary(thread) + "{:s}".format(str(proc.p_comm)))
+    SchedClutchBucketDetails(clutch_bucket)
 
 @lldb_command('abs2nano')
 def ShowAbstimeToNanoTime(cmd_args=[]):
@@ -298,13 +322,13 @@ def ShowAbstimeToNanoTime(cmd_args=[]):
     timedata = ArgumentStringToInt(cmd_args[0])
     ns = kern.GetNanotimeFromAbstime(timedata)
     us = float(ns) / 1000 
-    ms = us / 1000 
-    s = ms / 1000 
+    ms = us / 1000
+    s = ms / 1000
     
     if s > 60 :
-        m = s / 60
-        h = m / 60
-        d = h / 24
+        m = s // 60
+        h = m // 60
+        d = h // 24
         
         print("{:d} ns, {:f} us, {:f} ms, {:f} s, {:f} m, {:f} h, {:f} d".format(ns, us, ms, s, m, h, d))
     else:
@@ -318,7 +342,11 @@ def GetRecentTimestamp():
     TODO: on x86, if not in the debugger, then look at the scheduler
     """
     if kern.arch == 'x86_64':
-        return kern.globals.debugger_entry_time
+        most_recent_dispatch = GetSchedMostRecentDispatch(False)
+        if most_recent_dispatch > kern.globals.debugger_entry_time :
+            return most_recent_dispatch
+        else :
+            return kern.globals.debugger_entry_time
     else :
         return GetSchedMostRecentDispatch(False)
 
@@ -326,17 +354,18 @@ def GetSchedMostRecentDispatch(show_processor_details=False):
     """ Return the most recent dispatch on the system, printing processor
         details if argument is true.
     """
-    processor_list = kern.globals.processor_list
 
     most_recent_dispatch = 0
-    current_processor = processor_list
 
-    while unsigned(current_processor) > 0:
+    for current_processor in IterateLinkedList(kern.globals.processor_list, 'processor_list') :
         active_thread = current_processor.active_thread
+        thread_id = 0
+
         if unsigned(active_thread) != 0 :
-            task_val = active_thread.task
-            proc_val = Cast(task_val.bsd_info, 'proc *')
-            proc_name = "<unknown>" if unsigned(proc_val) == 0 else str(proc_val.p_name)
+            task_val = active_thread.t_tro.tro_task
+            proc_val = active_thread.t_tro.tro_proc
+            proc_name = "<unknown>" if unsigned(proc_val) == 0 else GetProcName(proc_val)
+            thread_id = active_thread.thread_id
 
         last_dispatch = unsigned(current_processor.last_dispatch)
 
@@ -350,38 +379,36 @@ def GetSchedMostRecentDispatch(show_processor_details=False):
             time_since_debugger_us = kern.GetNanotimeFromAbstime(time_since_debugger) / 1000.0
 
             if show_processor_details:
-                print("Processor last dispatch: {:16d} Entered debugger: {:16d} ({:8.3f} us after dispatch, {:8.3f} us after debugger) Active thread: 0x{t:<16x} 0x{t.thread_id:<8x} {proc_name:s}".format(last_dispatch, cpu_debugger_time,
-                        time_since_dispatch_us, time_since_debugger_us, t=active_thread, proc_name=proc_name))
+                print("Processor last dispatch: {:16d} Entered debugger: {:16d} ({:8.3f} us after dispatch, {:8.3f} us after debugger) Active thread: 0x{t:<16x} 0x{thread_id:<8x} {proc_name:s}".format(last_dispatch, cpu_debugger_time,
+                        time_since_dispatch_us, time_since_debugger_us, t=active_thread, thread_id=thread_id, proc_name=proc_name))
         else:
             if show_processor_details:
-                print("Processor last dispatch: {:16d} Active thread: 0x{t:<16x} 0x{t.thread_id:<8x} {proc_name:s}".format(last_dispatch, t=active_thread, proc_name=proc_name))
+                print("Processor last dispatch: {:16d} Active thread: 0x{t:<16x} 0x{thread_id:<8x} {proc_name:s}".format(last_dispatch, t=active_thread, thread_id=thread_id, proc_name=proc_name))
 
         if last_dispatch > most_recent_dispatch:
             most_recent_dispatch = last_dispatch
-
-        current_processor = current_processor.processor_list
 
     return most_recent_dispatch
 
 @header("{:<18s} {:<10s} {:>16s} {:>16s} {:>16s} {:>16s} {:>18s} {:>16s} {:>16s} {:>16s} {:>16s} {:2s} {:2s} {:2s} {:>2s} {:<19s} {:<9s} {:>10s} {:>10s} {:>10s} {:>10s} {:>10s} {:>11s} {:>8s}".format("thread", "id", "on-core", "off-core", "runnable", "prichange", "last-duration (us)", "since-off (us)", "since-on (us)", "pending (us)", "pri-change (us)", "BP", "SP", "TP", "MP", "sched-mode", "state", "cpu-usage", "delta", "sch-usage", "stamp", "shift", "task", "thread-name"))
 def ShowThreadSchedHistory(thread, most_recent_dispatch):
     """ Given a thread and the most recent dispatch time of a thread on the
-        system, print(out details about scheduler history for the thread.)
+        system, print out details about scheduler history for the thread.
     """
 
     thread_name = ""
 
-    if unsigned(thread.uthread) != 0:
-        uthread = Cast(thread.uthread, 'uthread *')
-        # Doing the straightforward thing blows up weirdly, so use some indirections to get back on track
-        if unsigned(uthread.pth_name) != 0 :
-            thread_name = str(kern.GetValueFromAddress(unsigned(uthread.pth_name), 'char*'))
+    uthread = GetBSDThread(thread)
+    # Doing the straightforward thing blows up weirdly, so use some indirections to get back on track
+    if unsigned(uthread.pth_name) != 0 :
+        thread_name = str(kern.GetValueFromAddress(unsigned(uthread.pth_name), 'char*'))
 
-    task = thread.task
+    task = thread.t_tro.tro_task
+
     task_name = "unknown"
-    if task and unsigned(task.bsd_info):
-        p = Cast(task.bsd_info, 'proc *')
-        task_name = str(p.p_name)
+    p = GetProcFromTask(task)
+    if task and p is not None:
+        task_name = GetProcName(p)
 
     sched_mode = ""
 
@@ -544,38 +571,9 @@ def int32(n):
 
 # Macro: showallprocessors
 
-def ShowGroupSetSummary(runq, task_map):
-    """ Internal function to print summary of group run queue
-        params: runq - value representing struct run_queue *
-    """
-
-    print("    runq: count {: <10d} highq: {: <10d} urgency {: <10d}\n".format(runq.count, int32(runq.highq), runq.urgency))
-
-    runq_queue_i = 0
-    runq_queue_count = sizeof(runq.queues)/sizeof(runq.queues[0])
-
-    for runq_queue_i in xrange(runq_queue_count) :
-        runq_queue_head = addressof(runq.queues[runq_queue_i])
-        runq_queue_p = runq_queue_head.next
-
-        if unsigned(runq_queue_p) != unsigned(runq_queue_head):
-            runq_queue_this_count = 0
-
-            for entry in ParanoidIterateLinkageChain(runq_queue_head, "sched_entry_t", "entry_links", circleQueue=True):
-                runq_queue_this_count += 1
-
-            print("      Queue [{: <#012x}] Priority {: <3d} count {:d}\n".format(runq_queue_head, runq_queue_i, runq_queue_this_count))
-            for entry in ParanoidIterateLinkageChain(runq_queue_head, "sched_entry_t", "entry_links", circleQueue=True):
-                group_addr = unsigned(entry) - (sizeof(dereference(entry)) * unsigned(entry.sched_pri))
-                group = kern.GetValueFromAddress(unsigned(group_addr), 'sched_group_t')
-                task = task_map.get(unsigned(group), 0x0)
-                if task == 0x0 :
-                    print("Cannot find task for group: {: <#012x}".format(group))
-                print("\tEntry [{: <#012x}] Priority {: <3d} Group {: <#012x} Task {: <#012x}\n".format(unsigned(entry), entry.sched_pri, unsigned(group), unsigned(task)))
-
 @lldb_command('showrunq')
 def ShowRunq(cmd_args=None):
-    """  Routine to print(information of a runq)
+    """  Routine to print information of a runq
          Usage: showrunq <runq>
     """
 
@@ -595,9 +593,9 @@ def ShowRunQSummary(runq):
     print("    runq: count {: <10d} highq: {: <10d} urgency {: <10d}\n".format(runq.count, int32(runq.highq), runq.urgency))
 
     runq_queue_i = 0
-    runq_queue_count = sizeof(runq.queues)/sizeof(runq.queues[0])
+    runq_queue_count = sizeof(runq.queues) // sizeof(runq.queues[0])
 
-    for runq_queue_i in xrange(runq_queue_count) :
+    for runq_queue_i in range(runq_queue_count) :
         runq_queue_head = addressof(runq.queues[runq_queue_i])
         runq_queue_p = runq_queue_head.head
 
@@ -616,38 +614,22 @@ def ShowRunQSummary(runq):
 
 def ShowRTRunQSummary(rt_runq):
     if (hex(rt_runq.count) == hex(0xfdfdfdfd)) :
-        print("    Realtime Queue ({:<#012x}) uninitialized\n".format(addressof(rt_runq.queue)))
+        print("    Realtime Queue ({:<#012x}) uninitialized\n".format(rt_runq))
         return
-    print("    Realtime Queue ({:<#012x}) Count {:d}\n".format(addressof(rt_runq.queue), rt_runq.count))
+    print("    Realtime Queue ({:<#012x}) Count {:d}\n".format(rt_runq, rt_runq.count))
     if rt_runq.count != 0:
-        print("\t" + GetThreadSummary.header + "\n")
-        for rt_runq_thread in ParanoidIterateLinkageChain(rt_runq.queue, "thread_t", "runq_links", circleQueue=True):
-            print("\t" + GetThreadSummary(rt_runq_thread) + "\n")
-
-def ShowGrrrSummary(grrr_runq):
-    """ Internal function to print summary of grrr_run_queue
-        params: grrr_runq - value representing struct grrr_run_queue *
-    """
-    print("    GRRR Info: Count {: <10d} Weight {: <10d} Current Group {: <#012x}\n".format(grrr_runq.count,
-        grrr_runq.weight, grrr_runq.current_group))
-    grrr_group_i = 0
-    grrr_group_count = sizeof(grrr_runq.groups)/sizeof(grrr_runq.groups[0])
-    for grrr_group_i in xrange(grrr_group_count) :
-        grrr_group = addressof(grrr_runq.groups[grrr_group_i])
-        if grrr_group.count > 0:
-            print("      Group {: <3d} [{: <#012x}] ".format(grrr_group.index, grrr_group))
-            print("Count {:d} Weight {:d}\n".format(grrr_group.count, grrr_group.weight))
-            grrr_group_client_head = addressof(grrr_group.clients)
-            print(GetThreadSummary.header)
-            for thread in ParanoidIterateLinkageChain(grrr_group_client_head, "thread_t", "runq_links", circleQueue=True):
-                print("\t" + GetThreadSummary(thread) + "\n")
-                if config['verbosity'] > vHUMAN :
-                    print("\t" + GetThreadBackTrace(thread, prefix="\t\t") + "\n")
+        rt_pri_bitmap = int(rt_runq.bitmap[0])
+        for rt_index in IterateBitmap(rt_pri_bitmap):
+            rt_pri_rq = addressof(rt_runq.rt_queue_pri[rt_index])
+            print("        Realtime Queue Index {:d} ({:<#012x}) Count {:d}\n".format(rt_index, rt_pri_rq, rt_pri_rq.pri_count))
+            print("\t" + GetThreadSummary.header + "\n")
+            for rt_runq_thread in ParanoidIterateLinkageChain(rt_pri_rq.pri_queue, "thread_t", "runq_links", circleQueue=False):
+                print("\t" + GetThreadSummary(rt_runq_thread) + "\n")
 
 def ShowActiveThread(processor):
     if (processor.active_thread != 0) :
-        print("\t" + GetThreadSummary.header + "\n")
-        print("\t" + GetThreadSummary(processor.active_thread) + "\n")
+        print("\t" + GetThreadSummary.header)
+        print("\t" + GetThreadSummary(processor.active_thread))
 
 @lldb_command('showallprocessors')
 @lldb_command('showscheduler')
@@ -656,23 +638,13 @@ def ShowScheduler(cmd_args=None):
          Usage: showscheduler
     """
     node = addressof(kern.globals.pset_node0)
-    show_grrr = 0
     show_priority_runq = 0
     show_priority_pset_runq = 0
-    show_group_pset_runq = 0
     show_clutch = 0
+    show_edge = 0
     sched_string = str(kern.globals.sched_string)
 
-    if sched_string == "traditional":
-        show_priority_runq = 1
-    elif sched_string == "traditional_with_pset_runqueue":
-        show_priority_pset_runq = 1
-    elif sched_string == "grrr":
-        show_grrr = 1
-    elif sched_string == "multiq":
-        show_priority_runq = 1
-        show_group_pset_runq = 1
-    elif sched_string == "dualq":
+    if sched_string == "dualq":
         show_priority_pset_runq = 1
         show_priority_runq = 1
     elif sched_string == "amp":
@@ -680,12 +652,16 @@ def ShowScheduler(cmd_args=None):
         show_priority_runq = 1
     elif sched_string == "clutch":
         show_clutch = 1
+        show_priority_runq = 1
+    elif sched_string == "edge":
+        show_edge = 1
+        show_priority_runq = 1
     else :
         print("Unknown sched_string {:s}".format(sched_string))
 
     print("Scheduler: {:s}\n".format(sched_string))
 
-    if show_clutch == 0:
+    if show_clutch == 0 and show_edge == 0:
         run_buckets = kern.globals.sched_run_buckets
         run_count      = run_buckets[GetEnumValue('sched_bucket_t::TH_BUCKET_RUN')]
         fixpri_count   = run_buckets[GetEnumValue('sched_bucket_t::TH_BUCKET_FIXPRI')]
@@ -701,20 +677,7 @@ def ShowScheduler(cmd_args=None):
     processor_dispatching = GetEnumValue('processor_state_t::PROCESSOR_DISPATCHING')
     processor_running     = GetEnumValue('processor_state_t::PROCESSOR_RUNNING')
 
-    if show_group_pset_runq:
-        if hasattr(kern.globals, "multiq_sanity_check"):
-            print("multiq scheduler config: deep-drain {g.deep_drain:d}, ceiling {g.drain_ceiling:d}, depth limit {g.drain_depth_limit:d}, band limit {g.drain_band_limit:d}, sanity check {g.multiq_sanity_check:d}\n".format(g=kern.globals))
-        else:
-            print("multiq scheduler config: deep-drain {g.deep_drain:d}, ceiling {g.drain_ceiling:d}, depth limit {g.drain_depth_limit:d}, band limit {g.drain_band_limit:d}\n".format(g=kern.globals))
-
-        # Create a group->task mapping
-        task_map = {}
-        for task in kern.tasks:
-            task_map[unsigned(task.sched_group)] = task
-        for task in kern.terminated_tasks:
-            task_map[unsigned(task.sched_group)] = task
-
-    print(" \n")
+    print()
 
     while node != 0:
         pset = node.psets
@@ -731,19 +694,8 @@ def ShowScheduler(cmd_args=None):
                 runq = kern.GetValueFromAddress(unsigned(addressof(pset.pset_runq)), 'struct run_queue *')
                 ShowRunQSummary(runq)
 
-            if show_group_pset_runq:
-                print("Main Runq:\n")
-                runq = kern.GetValueFromAddress(unsigned(addressof(pset.pset_runq)), 'struct run_queue *')
-                ShowGroupSetSummary(runq, task_map)
-                print("All Groups:\n")
-                # TODO: Possibly output task header for each group
-                for group in IterateQueue(kern.globals.sched_groups, "sched_group_t", "sched_groups"):
-                    if (group.runq.count != 0) :
-                        task = task_map.get(unsigned(group), "Unknown task!")
-                        print("Group {: <#012x} Task {: <#012x}\n".format(unsigned(group), unsigned(task)))
-                        ShowRunQSummary(group.runq)
-            print(" \n")
-            
+            print()
+
             processor_array = kern.globals.processor_array
 
             print("Active Processors:\n")
@@ -751,16 +703,14 @@ def ShowScheduler(cmd_args=None):
             for cpuid in IterateBitmap(active_bitmap):
                 processor = processor_array[cpuid]
                 if processor != 0:
-                    print("    " + GetProcessorSummary(processor))
+                    print("    " + GetProcessorSummary(processor), end='')
                     ShowActiveThread(processor)
 
                     if show_priority_runq:
                         runq = processor.runq
-                        ShowRunQSummary(runq)
-                    if show_grrr:
-                        grrr_runq = processor.grrr_runq
-                        ShowGrrrSummary(grrr_runq)
-            print(" \n")
+                        if runq.count != 0:
+                            ShowRunQSummary(runq)
+            print()
 
 
             print("Idle Processors:\n")
@@ -768,12 +718,14 @@ def ShowScheduler(cmd_args=None):
             for cpuid in IterateBitmap(idle_bitmap):
                 processor = processor_array[cpuid]
                 if processor != 0:
-                    print("    " + GetProcessorSummary(processor))
+                    print("    " + GetProcessorSummary(processor), end='')
                     ShowActiveThread(processor)
 
                     if show_priority_runq:
-                        ShowRunQSummary(processor.runq)
-            print(" \n")
+                        runq = processor.runq
+                        if runq.count != 0:
+                            ShowRunQSummary(runq)
+            print()
 
 
             print("Idle Secondary Processors:\n")
@@ -781,12 +733,14 @@ def ShowScheduler(cmd_args=None):
             for cpuid in IterateBitmap(idle_bitmap):
                 processor = processor_array[cpuid]
                 if processor != 0:
-                    print("    " + GetProcessorSummary(processor))
+                    print("    " + GetProcessorSummary(processor), end='')
                     ShowActiveThread(processor)
 
                     if show_priority_runq:
-                        print(ShowRunQSummary(processor.runq))
-            print(" \n")
+                        runq = processor.runq
+                        if runq.count != 0:
+                            ShowRunQSummary(runq)
+            print()
 
 
             print("Other Processors:\n")
@@ -797,15 +751,20 @@ def ShowScheduler(cmd_args=None):
             for cpuid in IterateBitmap(other_bitmap):
                 processor = processor_array[cpuid]
                 if processor != 0:
-                    print("    " + GetProcessorSummary(processor))
+                    print("    " + GetProcessorSummary(processor), end='')
                     ShowActiveThread(processor)
 
                     if show_priority_runq:
-                        ShowRunQSummary(processor.runq)
-            print(" \n")
+                        runq = processor.runq
+                        if runq.count != 0:
+                            ShowRunQSummary(runq)
+            print()
 
-            if show_clutch:
-                print("=== Clutch Scheduler Hierarchy ===\n\n")
+            if show_clutch or show_edge:
+                cluster_type = 'SMP'
+                if pset.pset_cluster_type != 0:
+                    cluster_type = GetEnumName('pset_cluster_type_t', pset.pset_cluster_type, 'PSET_AMP_')
+                print("=== Clutch Scheduler Hierarchy Pset{:d} (Type: {:s}) ] ===\n\n".format(pset.pset_cluster_id, cluster_type))
                 ShowSchedClutchForPset(pset)
 
             pset = pset.pset_list
@@ -830,14 +789,25 @@ def ShowScheduler(cmd_args=None):
                 first = False
             print("\t" + GetThreadSummary(thread))
 
+    def dump_thread_exception_queue(name, head):
+        head = addressof(head)
+        print("\n{:s}: ({:<#012x})\n".format(name, head))
+        first = True
+        for exception_elt in IterateMPSCQueue(head.mpd_queue, 'struct thread_exception_elt', 'link'):
+            if first:
+                print("\t" + GetThreadSummary.header)
+                first = False
+            thread = exception_elt.exception_thread
+            print("\t" + GetThreadSummary(thread))
+
     dump_mpsc_thread_queue("Terminate Queue", kern.globals.thread_terminate_queue)
     dump_mpsc_thread_queue("Waiting For Kernel Stacks Queue", kern.globals.thread_stack_queue)
-    dump_mpsc_thread_queue("Thread Exception Queue", kern.globals.thread_exception_queue)
+    dump_thread_exception_queue("Thread Exception Queue", kern.globals.thread_exception_queue)
     dump_mpsc_thread_queue("Thread Deallocate Queue", kern.globals.thread_deallocate_queue)
 
-    print("\n")
+    print(kern.globals.pcs)
 
-    print("\n")
+    print()
 
 # EndMacro: showallprocessors
 
@@ -864,7 +834,7 @@ def ParanoidIterateLinkageChain(queue_head, element_type, field_name, field_ofst
                 print thread.thread_id
     """
 
-    if type(element_type) is str:
+    if isinstance(element_type, str):
         element_type = gettype(element_type)
 
     # Some ways of constructing a queue head seem to end up with the
@@ -890,7 +860,7 @@ def ParanoidIterateLinkageChain(queue_head, element_type, field_name, field_ofst
     else:
         struct_type = element_type
 
-    elem_ofst = getfieldoffset(struct_type, field_name) + field_ofst
+    elem_ofst = struct_type.xGetFieldOffset(field_name) + field_ofst
 
     try:
         link = queue_head.next
@@ -927,8 +897,8 @@ def ParanoidIterateLinkageChain(queue_head, element_type, field_name, field_ofst
                     print("Corrupt prev pointer: queue_head {:>#18x} link: {:>#18x} next: {:>#18x} prev: {:>#18x} prev link: {:>#18x} ".format(
                             queue_head, link, link.next, link.prev, last_link))
 
-            addr = unsigned(link) - unsigned(elem_ofst);
-            obj = kern.GetValueFromAddress(addr, element_type)
+            addr = unsigned(link) - unsigned(elem_ofst)
+            obj = kern.GetValueFromAddress(addr, element_type.name)
             if ParanoidIterateLinkageChain.enable_debug :
                 print("yielding link: {:>#18x} next: {:>#18x} prev: {:>#18x} addr: {:>#18x} obj: {:>#18x}".format(link, link.next, link.prev, addr, obj))
             yield obj
@@ -937,16 +907,28 @@ def ParanoidIterateLinkageChain(queue_head, element_type, field_name, field_ofst
             if circleQueue and unsigned(queue_head) == unsigned(link):
                 break;
     except:
-        exc_info = sys.exc_info()
         try:
             print("Exception while iterating queue: {:>#18x} link: {:>#18x} addr: {:>#18x} obj: {:>#18x} last link: {:>#18x}".format(queue_head, link, addr, obj, last_link))
         except:
             import traceback
             traceback.print_exc()
-        raise exc_info[0](exc_info[1]).with_traceback(exc_info[2])
+        raise
 
 ParanoidIterateLinkageChain.enable_paranoia = True
 ParanoidIterateLinkageChain.enable_debug = False
+
+def LinkageChainEmpty(queue_head):
+    if not queue_head.GetSBValue().GetType().IsPointerType() :
+        queue_head = addressof(queue_head)
+
+    # Mosh the value into a brand new value, to really get rid of its old cvalue history
+    # avoid using GetValueFromAddress
+    queue_head = value(queue_head.GetSBValue().CreateValueFromExpression(None,'(void *)'+str(unsigned(queue_head))))
+    queue_head = cast(queue_head, 'struct queue_entry *')
+
+    link = queue_head.next
+
+    return unsigned(queue_head) == unsigned(link)
 
 def bit_first(bitmap):
     return bitmap.bit_length() - 1
@@ -976,76 +958,313 @@ def IterateBitmap(bitmap):
 
 # Macro: showallcallouts
 
-def ShowThreadCall(prefix, call):
+from kevent import GetKnoteKqueue
+
+def ShowThreadCall(prefix, call, recent_timestamp, pqueue, is_pending=False):
     """
     Print a description of a thread_call_t and its relationship to its expected fire time
     """
-    func = call.tc_call.func
-    param0 = call.tc_call.param0
-    param1 = call.tc_call.param1
+    func = call.tc_func
+    param0 = call.tc_param0
+    param1 = call.tc_param1
 
-    iotes_desc = ""
-    iotes_callout = kern.GetLoadAddressForSymbol("_ZN18IOTimerEventSource17timeoutAndReleaseEPvS0_")
-    iotes_callout2 = kern.GetLoadAddressForSymbol("_ZN18IOTimerEventSource15timeoutSignaledEPvS0_")
-
-    if (unsigned(func) == unsigned(iotes_callout) or
-        unsigned(func) == unsigned(iotes_callout2)) :
-        iotes = Cast(call.tc_call.param0, 'IOTimerEventSource*')
-        func = iotes.action
-        param0 = iotes.owner
-        param1 = unsigned(iotes)
+    is_iotes = False
 
     func_name = kern.Symbolicate(func)
+
+    extra_string = ""
+
+    strip_func = kern.StripKernelPAC(unsigned(func))
+
+    func_syms = kern.SymbolicateFromAddress(strip_func)
+    # returns an array of SBSymbol
+
+    if func_syms and func_syms[0] :
+        func_name = func_syms[0].GetName()
+
+        try :
+            if ("IOTimerEventSource::timeoutAndRelease" in func_name or
+                "IOTimerEventSource::timeoutSignaled" in func_name) :
+                iotes = Cast(call.tc_param0, 'IOTimerEventSource*')
+                try:
+                    func = iotes.action
+                    param0 = iotes.owner
+                    param1 = unsigned(iotes)
+                except AttributeError:
+                    # This is horrible, horrible, horrible.  But it works.  Needed because IOEventSource hides the action member in an
+                    # anonymous union when XNU_PRIVATE_SOURCE is set.  To grab it, we work backwards from the enabled member.
+                    func = dereference(kern.GetValueFromAddress(addressof(iotes.enabled) - sizeof('IOEventSource::Action'), 'uint64_t *'))
+                    param0 = iotes.owner
+                    param1 = unsigned(iotes)
+
+                workloop = iotes.workLoop
+                thread = workloop.workThread
+
+                is_iotes = True
+
+                # re-symbolicate the func we found inside the IOTES
+                strip_func = kern.StripKernelPAC(unsigned(func))
+                func_syms = kern.SymbolicateFromAddress(strip_func)
+                if func_syms and func_syms[0] :
+                    func_name = func_syms[0].GetName()
+                else :
+                    func_name = str(FindKmodNameForAddr(func))
+
+                # cast from IOThread to thread_t, because IOThread is sometimes opaque
+                thread = Cast(thread, 'thread_t')
+                thread_id = thread.thread_id
+                thread_name = GetThreadName(thread)
+
+                extra_string += "workloop thread: {:#x} ({:#x}) {:s}".format(thread, thread_id, thread_name)
+
+            if "filt_timerexpire" in func_name :
+                knote = Cast(call.tc_param0, 'struct knote *')
+                kqueue = GetKnoteKqueue(knote)
+                proc = kqueue.kq_p
+                proc_name = GetProcName(proc)
+                proc_pid = GetProcPID(proc)
+
+                extra_string += "kq: {:#018x} {:s}[{:d}]".format(kqueue, proc_name, proc_pid)
+
+            if "mk_timer_expire" in func_name :
+                timer = Cast(call.tc_param0, 'struct mk_timer *')
+                port = timer.port
+
+                extra_string += "port: {:#018x} {:s}".format(port, GetPortDestinationSummary(port))
+
+            if "workq_kill_old_threads_call" in func_name :
+                workq = Cast(call.tc_param0, 'struct workqueue *')
+                proc = workq.wq_proc
+                proc_name = GetProcName(proc)
+                proc_pid = GetProcPID(proc)
+
+                extra_string += "{:s}[{:d}]".format(proc_name, proc_pid)
+
+            if ("workq_add_new_threads_call" in func_name or
+                "realitexpire" in func_name):
+                proc = Cast(call.tc_param0, 'struct proc *')
+                proc_name = GetProcName(proc)
+                proc_pid = GetProcPID(proc)
+
+                extra_string += "{:s}[{:d}]".format(proc_name, proc_pid)
+
+        except:
+            print("exception generating extra_string for call: {:#018x}".format(call))
+            if ShowThreadCall.enable_debug :
+                raise
+
     if (func_name == "") :
         func_name = FindKmodNameForAddr(func)
 
-    call_entry = call.tc_call
+    # e.g. func may be 0 if there is a bug
+    if func_name is None :
+        func_name = "No func_name!"
 
-    recent_timestamp = GetRecentTimestamp()
-
-    # THREAD_CALL_CONTINUOUS  0x100
-    kern.globals.mach_absolutetime_asleep
-    if (call.tc_flags & 0x100) :
-        timer_fire = call_entry.deadline - (recent_timestamp + kern.globals.mach_absolutetime_asleep)
+    if (call.tc_flags & GetEnumValue('thread_call_flags_t::THREAD_CALL_FLAG_CONTINUOUS')) :
+        timer_fire = call.tc_pqlink.deadline - (recent_timestamp + kern.globals.mach_absolutetime_asleep)
+        soft_timer_fire = call.tc_soft_deadline - (recent_timestamp + kern.globals.mach_absolutetime_asleep)
     else :
-        timer_fire = call_entry.deadline - recent_timestamp
+        timer_fire = call.tc_pqlink.deadline - recent_timestamp
+        soft_timer_fire = call.tc_soft_deadline - recent_timestamp
 
     timer_fire_s = kern.GetNanotimeFromAbstime(timer_fire) / 1000000000.0
+    soft_timer_fire_s = kern.GetNanotimeFromAbstime(soft_timer_fire) / 1000000000.0
+
+    hardtogo = ""
+    softtogo = ""
+
+    if call.tc_pqlink.deadline != 0 :
+        hardtogo = "{:18.06f}".format(timer_fire_s);
+
+    if call.tc_soft_deadline != 0 :
+        softtogo = "{:18.06f}".format(soft_timer_fire_s);
+
+    leeway = call.tc_pqlink.deadline - call.tc_soft_deadline
+    leeway_s = kern.GetNanotimeFromAbstime(leeway) / 1000000000.0
 
     ttd_s = kern.GetNanotimeFromAbstime(call.tc_ttd) / 1000000000.0
 
-    print("{:s}{:#018x}: {:18d} {:18d} {:03.06f} {:03.06f} {:#018x}({:#018x},{:#018x}) ({:s})".format(prefix,
-            unsigned(call), call_entry.deadline, call.tc_soft_deadline, ttd_s, timer_fire_s,
-            func, param0, param1, func_name))
+    if (is_pending) :
+        pending_time = call.tc_pending_timestamp - recent_timestamp
+        pending_time = kern.GetNanotimeFromAbstime(pending_time) / 1000000000.0
+
+    flags = int(call.tc_flags)
+    # TODO: extract this out of the thread_call_flags_t enum
+    thread_call_flags = {0x0:'', 0x1:'A', 0x2:'W', 0x4:'D', 0x8:'R', 0x10:'S', 0x20:'O',
+            0x40:'P', 0x80:'L', 0x100:'C', 0x200:'V'}
+
+    flags_str = ''
+    mask = 0x1
+    while mask <= 0x200 :
+        flags_str += thread_call_flags[int(flags & mask)]
+        mask = mask << 1
+
+    if is_iotes :
+        flags_str += 'I'
+
+    colon = ":"
+
+    if pqueue is not None :
+        if addressof(call.tc_pqlink) == pqueue.pq_root :
+            colon = "*"
+
+    if (is_pending) :
+        print(("{:s}{:#018x}{:s} {:18d} {:18d} {:18s} {:18s} {:18.06f} {:18.06f} {:18.06f} {:9s} " +
+                "{:#018x} ({:#018x}, {:#018x}) ({:s}) {:s}").format(prefix,
+                unsigned(call), colon, call.tc_soft_deadline, call.tc_pqlink.deadline,
+                softtogo, hardtogo, pending_time, ttd_s, leeway_s, flags_str,
+                func, param0, param1, func_name, extra_string))
+    else :
+        print(("{:s}{:#018x}{:s} {:18d} {:18d} {:18s} {:18s} {:18.06f} {:18.06f} {:9s} " +
+                "{:#018x} ({:#018x}, {:#018x}) ({:s}) {:s}").format(prefix,
+                unsigned(call), colon, call.tc_soft_deadline, call.tc_pqlink.deadline,
+                softtogo, hardtogo, ttd_s, leeway_s, flags_str,
+                func, param0, param1, func_name, extra_string))
+
+ShowThreadCall.enable_debug = False
+
+@header("{:>18s}  {:>18s} {:>18s} {:>18s} {:>18s} {:>18s} {:>18s} {:9s} {:>18s}".format(
+            "entry", "soft_deadline", "deadline",
+            "soft to go (s)", "hard to go (s)", "duration (s)", "leeway (s)", "flags", "(*func) (param0, param1)"))
+def PrintThreadGroup(group):
+    header = PrintThreadGroup.header
+    pending_header = "{:>18s}  {:>18s} {:>18s} {:>18s} {:>18s} {:>18s} {:>18s} {:9s} {:>18s}".format(
+            "entry", "soft_deadline", "deadline",
+            "soft to go (s)", "hard to go (s)", "pending", "duration (s)", "leeway (s)", "flags", "(*func) (param0, param1)")
+
+    recent_timestamp = GetRecentTimestamp()
+
+    idle_timestamp_distance = group.idle_timestamp - recent_timestamp
+    idle_timestamp_distance_s = kern.GetNanotimeFromAbstime(idle_timestamp_distance) / 1000000000.0
+
+    is_parallel = ""
+
+    if (group.tcg_flags & GetEnumValue('thread_call_group_flags_t::TCG_PARALLEL')) :
+        is_parallel = " (parallel)"
+
+    print("Group: {g.tcg_name:s} ({:#18x}){:s}".format(unsigned(group), is_parallel, g=group))
+    print("\t" +"Thread Priority: {g.tcg_thread_pri:d}\n".format(g=group))
+    print(("\t" +"Active: {g.active_count:<3d} Idle: {g.idle_count:<3d} " +
+        "Blocked: {g.blocked_count:<3d} Pending: {g.pending_count:<3d} " +
+        "Target: {g.target_thread_count:<3d}\n").format(g=group))
+
+    if unsigned(group.idle_timestamp) != 0 :
+        print("\t" +"Idle Timestamp: {g.idle_timestamp:d} ({:03.06f})\n".format(idle_timestamp_distance_s,
+            g=group))
+
+    print("\t" +"Pending Queue: ({:>#18x})\n".format(addressof(group.pending_queue)))
+    if not LinkageChainEmpty(group.pending_queue) :
+        print("\t\t" + pending_header)
+    for call in ParanoidIterateLinkageChain(group.pending_queue, "thread_call_t", "tc_qlink"):
+        ShowThreadCall("\t\t", call, recent_timestamp, None, is_pending=True)
+
+    print("\t" +"Delayed Queue (Absolute Time): ({:>#18x}) timer: ({:>#18x})\n".format(
+            addressof(group.delayed_queues[0]), addressof(group.delayed_timers[0])))
+    if not LinkageChainEmpty(group.delayed_queues[0]) :
+        print("\t\t" + header)
+    for call in ParanoidIterateLinkageChain(group.delayed_queues[0], "thread_call_t", "tc_qlink"):
+        ShowThreadCall("\t\t", call, recent_timestamp, group.delayed_pqueues[0])
+
+    print("\t" +"Delayed Queue (Continuous Time): ({:>#18x}) timer: ({:>#18x})\n".format(
+            addressof(group.delayed_queues[1]), addressof(group.delayed_timers[1])))
+    if not LinkageChainEmpty(group.delayed_queues[1]) :
+        print("\t\t" + header)
+    for call in ParanoidIterateLinkageChain(group.delayed_queues[1], "thread_call_t", "tc_qlink"):
+        ShowThreadCall("\t\t", call, recent_timestamp, group.delayed_pqueues[1])
+
+def PrintThreadCallThreads() :
+    callout_flag = GetEnumValue('thread_tag_t::THREAD_TAG_CALLOUT')
+    recent_timestamp = GetRecentTimestamp()
+
+    for thread in IterateQueue(kern.globals.kernel_task.threads, 'thread *', 'task_threads'):
+        if (thread.thread_tag & callout_flag) :
+            print(" {:#20x} {:#12x} {:s}".format(thread, thread.thread_id, GetThreadName(thread)))
+            state = thread.thc_state
+            if state and state.thc_call :
+                print("\t" + PrintThreadGroup.header)
+                ShowThreadCall("\t", state.thc_call, recent_timestamp, None)
+                soft_deadline = state.thc_call_soft_deadline
+                slop_time = state.thc_call_hard_deadline - soft_deadline
+                slop_time = kern.GetNanotimeFromAbstime(slop_time) / 1000000000.0
+                print("\t original soft deadline {:d}, hard deadline {:d} (leeway {:.06f}s)".format(
+                        soft_deadline, state.thc_call_hard_deadline, slop_time))
+                enqueue_time = state.thc_call_pending_timestamp - soft_deadline
+                enqueue_time = kern.GetNanotimeFromAbstime(enqueue_time) / 1000000000.0
+                print("\t time to enqueue after deadline: {:.06f}s (enqueued at: {:d})".format(
+                        enqueue_time, state.thc_call_pending_timestamp))
+                wait_time = state.thc_call_start - state.thc_call_pending_timestamp
+                wait_time = kern.GetNanotimeFromAbstime(wait_time) / 1000000000.0
+                print("\t time to start executing after enqueue: {:.06f}s (executing at: {:d})".format(
+                        wait_time, state.thc_call_start))
+
+                if (state.thc_IOTES_invocation_timestamp) :
+                    iotes_acquire_time = state.thc_IOTES_invocation_timestamp - state.thc_call_start
+                    iotes_acquire_time = kern.GetNanotimeFromAbstime(iotes_acquire_time) / 1000000000.0
+                    print("\t IOTES acquire time: {:.06f}s (acquired at: {:d})".format(
+                            iotes_acquire_time, state.thc_IOTES_invocation_timestamp))
+
+
+@lldb_command('showcalloutgroup')
+def ShowCalloutGroup(cmd_args=None):
+    """ Prints out the pending and delayed thread calls for a specific group
+
+        Pass 'threads' to show the thread call threads themselves.
+
+        Callout flags:
+
+        A - Allocated memory owned by thread_call.c
+        W - Wait - thread waiting for call to finish running
+        D - Delayed - deadline based
+        R - Running - currently executing on a thread
+        S - Signal - call from timer interrupt instead of thread
+        O - Once - pend the enqueue if re-armed while running
+        P - Reschedule pending - enqueue is pending due to re-arm while running
+        L - Rate-limited - (App Nap)
+        C - Continuous time - Timeout is in mach_continuous_time
+        I - Callout is an IOTimerEventSource
+    """
+    if not cmd_args:
+        print("No arguments passed")
+        print(ShowCalloutGroup.__doc__)
+        return False
+
+    if "threads" in cmd_args[0] :
+        PrintThreadCallThreads()
+        return
+
+    group = kern.GetValueFromAddress(cmd_args[0], 'struct thread_call_group *')
+    if not group:
+        print("unknown arguments:", str(cmd_args))
+        return False
+
+    PrintThreadGroup(group)
 
 @lldb_command('showallcallouts')
 def ShowAllCallouts(cmd_args=None):
     """ Prints out the pending and delayed thread calls for the thread call groups
-    """
 
+        Callout flags:
+
+        A - Allocated memory owned by thread_call.c
+        W - Wait - thread waiting for call to finish running
+        D - Delayed - deadline based
+        R - Running - currently executing on a thread
+        S - Signal - call from timer interrupt instead of thread
+        O - Once - pend the enqueue if re-armed while running
+        P - Reschedule pending - enqueue is pending due to re-arm while running
+        L - Rate-limited - (App Nap)
+        C - Continuous time - Timeout is in mach_continuous_time
+        I - Callout is an IOTimerEventSource
+        V - Callout is validly initialized
+    """
     index_max = GetEnumValue('thread_call_index_t::THREAD_CALL_INDEX_MAX')
 
-    for i in range (0, index_max) :
-        group = kern.globals.thread_call_groups[i]
+    for i in range (1, index_max) :
+        group = addressof(kern.globals.thread_call_groups[i])
+        PrintThreadGroup(group)
 
-        print("Group {i:d}: {g.tcg_name:s} ({:>#18x})".format(addressof(group), i=i, g=group))
-        print("\t" +"Active: {g.active_count:d} Idle: {g.idle_count:d}\n".format(g=group))
-        print("\t" +"Blocked: {g.blocked_count:d} Pending: {g.pending_count:d}\n".format(g=group))
-        print("\t" +"Target: {g.target_thread_count:d}\n".format(g=group))
-
-        print("\t" +"Pending Queue: ({:>#18x})\n".format(addressof(group.pending_queue)))
-        for call in ParanoidIterateLinkageChain(group.pending_queue, "thread_call_t", "tc_call.q_link"):
-            ShowThreadCall("\t\t", call)
-
-        print("\t" +"Delayed Queue (Absolute Time): ({:>#18x}) timer: ({:>#18x})\n".format(
-                addressof(group.delayed_queues[0]), addressof(group.delayed_timers[0])))
-        for call in ParanoidIterateLinkageChain(group.delayed_queues[0], "thread_call_t", "tc_call.q_link"):
-            ShowThreadCall("\t\t", call)
-
-        print("\t" +"Delayed Queue (Continuous Time): ({:>#18x}) timer: ({:>#18x})\n".format(
-                addressof(group.delayed_queues[1]), addressof(group.delayed_timers[1])))
-        for call in ParanoidIterateLinkageChain(group.delayed_queues[1], "thread_call_t", "tc_call.q_link"):
-            ShowThreadCall("\t\t", call)
+    print("Thread Call Threads:")
+    PrintThreadCallThreads()
 
 # EndMacro: showallcallouts
 

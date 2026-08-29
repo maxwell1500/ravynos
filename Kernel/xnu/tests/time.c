@@ -1,4 +1,5 @@
 #include <darwintest.h>
+#include <darwintest_utils.h>
 #include <stdlib.h>
 #include <sys/stat.h>
 #include <sys/syslimits.h>
@@ -9,7 +10,7 @@
 T_GLOBAL_META(T_META_CHECK_LEAKS(false));
 
 T_DECL(settimeofday, "check setting and getting time of day",
-    T_META_ASROOT(true))
+    T_META_ASROOT(true), T_META_TAG_VM_PREFERRED)
 {
 	struct timeval origtime = {};
 	struct timezone origtz = {};
@@ -56,17 +57,18 @@ cleanup_tmpfile(void)
 static int
 create_tmpfile(void)
 {
-	const char *tmpdir = getenv("TMPDIR");
+	const char *tmpdir = dt_tmpdir();
 	strlcat(tmppath, tmpdir ? tmpdir : "/tmp", sizeof(tmppath));
-	strlcat(tmppath, "xnu_quick_test.XXXXX", sizeof(tmppath));
+	strlcat(tmppath, "/xnu.futimes.XXXXX", sizeof(tmppath));
+	T_LOG("creating temporary file at %s", tmppath);
 	int fd = mkstemp(tmppath);
-	T_ASSERT_POSIX_SUCCESS(fd, "created temporary file at %s", tmppath);
+	T_ASSERT_POSIX_SUCCESS(fd, "create temporary file");
 	T_ATEND(cleanup_tmpfile);
 	return fd;
 }
 
 T_DECL(futimes, "check that futimes updates file times",
-    T_META_RUN_CONCURRENTLY(true))
+    T_META_RUN_CONCURRENTLY(true), T_META_TAG_VM_PREFERRED)
 {
 	int tmpfd = create_tmpfile();
 

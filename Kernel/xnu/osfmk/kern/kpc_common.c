@@ -33,10 +33,8 @@
 #include <sys/errno.h>
 #include <sys/vm.h>
 #include <kperf/buffer.h>
+#include <kern/monotonic.h>
 #include <kern/thread.h>
-#if defined(__arm64__) || defined(__arm__)
-#include <arm/cpu_data_internal.h>
-#endif
 
 #include <kern/kpc.h>
 
@@ -45,6 +43,8 @@
 #include <kperf/context.h>
 #include <kperf/action.h>
 
+#if CONFIG_CPU_COUNTERS
+
 uint32_t kpc_actionid[KPC_MAX_COUNTERS];
 
 #define COUNTERBUF_SIZE_PER_CPU (KPC_MAX_COUNTERS * sizeof(uint64_t))
@@ -52,9 +52,8 @@ uint32_t kpc_actionid[KPC_MAX_COUNTERS];
 	                 COUNTERBUF_SIZE_PER_CPU)
 
 /* locks */
-static lck_grp_attr_t *kpc_config_lckgrp_attr = NULL;
-static lck_grp_t      *kpc_config_lckgrp = NULL;
-static lck_mtx_t       kpc_config_lock;
+static LCK_GRP_DECLARE(kpc_config_lckgrp, "kpc");
+static LCK_MTX_DECLARE(kpc_config_lock, &kpc_config_lckgrp);
 
 /* state specifying if all counters have been requested by kperf */
 static boolean_t force_all_ctrs = FALSE;
@@ -63,22 +62,24 @@ static boolean_t force_all_ctrs = FALSE;
 static kpc_pm_handler_t kpc_pm_handler;
 static boolean_t kpc_pm_has_custom_config;
 static uint64_t kpc_pm_pmc_mask;
-#if MACH_ASSERT
-static bool kpc_calling_pm = false;
-#endif /* MACH_ASSERT */
 
 boolean_t kpc_context_switch_active = FALSE;
 bool kpc_supported = true;
 
-void
-kpc_common_init(void)
+static uint64_t *
+kpc_percpu_alloc(void)
 {
-	kpc_config_lckgrp_attr = lck_grp_attr_alloc_init();
-	kpc_config_lckgrp = lck_grp_alloc_init("kpc", kpc_config_lckgrp_attr);
-	lck_mtx_init(&kpc_config_lock, kpc_config_lckgrp, LCK_ATTR_NULL);
+	return kalloc_data_tag(COUNTERBUF_SIZE_PER_CPU, Z_WAITOK | Z_ZERO,
+	           VM_KERN_MEMORY_DIAG);
 }
 
-boolean_t
+static void
+kpc_percpu_free(uint64_t *buf)
+{
+	kfree_data(buf, COUNTERBUF_SIZE_PER_CPU);
+}
+
+void
 kpc_register_cpu(struct cpu_data *cpu_data)
 {
 	assert(cpu_data);
@@ -98,30 +99,24 @@ kpc_register_cpu(struct cpu_data *cpu_data)
 	 * allocate the memory here.
 	 */
 
-	if ((cpu_data->cpu_kpc_buf[0] = kalloc(COUNTERBUF_SIZE_PER_CPU)) == NULL) {
+	if ((cpu_data->cpu_kpc_buf[0] = kpc_percpu_alloc()) == NULL) {
 		goto error;
 	}
-	if ((cpu_data->cpu_kpc_buf[1] = kalloc(COUNTERBUF_SIZE_PER_CPU)) == NULL) {
+	if ((cpu_data->cpu_kpc_buf[1] = kpc_percpu_alloc()) == NULL) {
 		goto error;
 	}
-	if ((cpu_data->cpu_kpc_shadow = kalloc(COUNTERBUF_SIZE_PER_CPU)) == NULL) {
+	if ((cpu_data->cpu_kpc_shadow = kpc_percpu_alloc()) == NULL) {
 		goto error;
 	}
-	if ((cpu_data->cpu_kpc_reload = kalloc(COUNTERBUF_SIZE_PER_CPU)) == NULL) {
+	if ((cpu_data->cpu_kpc_reload = kpc_percpu_alloc()) == NULL) {
 		goto error;
 	}
-
-	memset(cpu_data->cpu_kpc_buf[0], 0, COUNTERBUF_SIZE_PER_CPU);
-	memset(cpu_data->cpu_kpc_buf[1], 0, COUNTERBUF_SIZE_PER_CPU);
-	memset(cpu_data->cpu_kpc_shadow, 0, COUNTERBUF_SIZE_PER_CPU);
-	memset(cpu_data->cpu_kpc_reload, 0, COUNTERBUF_SIZE_PER_CPU);
 
 	/* success */
-	return TRUE;
+	return;
 
 error:
-	kpc_unregister_cpu(cpu_data);
-	return FALSE;
+	panic("kpc_percpu_alloc failed");
 }
 
 void
@@ -129,23 +124,22 @@ kpc_unregister_cpu(struct cpu_data *cpu_data)
 {
 	assert(cpu_data);
 	if (cpu_data->cpu_kpc_buf[0] != NULL) {
-		kfree(cpu_data->cpu_kpc_buf[0], COUNTERBUF_SIZE_PER_CPU);
+		kpc_percpu_free(cpu_data->cpu_kpc_buf[0]);
 		cpu_data->cpu_kpc_buf[0] = NULL;
 	}
 	if (cpu_data->cpu_kpc_buf[1] != NULL) {
-		kfree(cpu_data->cpu_kpc_buf[1], COUNTERBUF_SIZE_PER_CPU);
+		kpc_percpu_free(cpu_data->cpu_kpc_buf[1]);
 		cpu_data->cpu_kpc_buf[1] = NULL;
 	}
 	if (cpu_data->cpu_kpc_shadow != NULL) {
-		kfree(cpu_data->cpu_kpc_shadow, COUNTERBUF_SIZE_PER_CPU);
+		kpc_percpu_free(cpu_data->cpu_kpc_shadow);
 		cpu_data->cpu_kpc_shadow = NULL;
 	}
 	if (cpu_data->cpu_kpc_reload != NULL) {
-		kfree(cpu_data->cpu_kpc_reload, COUNTERBUF_SIZE_PER_CPU);
+		kpc_percpu_free(cpu_data->cpu_kpc_reload);
 		cpu_data->cpu_kpc_reload = NULL;
 	}
 }
-
 
 static void
 kpc_task_set_forced_all_ctrs(task_t task, boolean_t state)
@@ -161,11 +155,12 @@ kpc_task_set_forced_all_ctrs(task_t task, boolean_t state)
 	task_unlock(task);
 }
 
-static boolean_t
+bool kpc_task_get_forced_all_ctrs(task_t task);
+
+bool
 kpc_task_get_forced_all_ctrs(task_t task)
 {
-	assert(task);
-	return task->t_kpc & TASK_KPC_FORCED_ALL_CTRS ? TRUE : FALSE;
+	return task->t_kpc & TASK_KPC_FORCED_ALL_CTRS;
 }
 
 int
@@ -187,15 +182,13 @@ kpc_force_all_ctrs(task_t task, int val)
 		return 0;
 	}
 
+#if CONFIG_CPU_COUNTERS
+	mt_ownership_change(new_state);
+#endif /* CONFIG_CPU_COUNTERS */
+
 	/* notify the power manager */
 	if (kpc_pm_handler) {
-#if MACH_ASSERT
-		kpc_calling_pm = true;
-#endif /* MACH_ASSERT */
-		kpc_pm_handler( new_state ? FALSE : TRUE );
-#if MACH_ASSERT
-		kpc_calling_pm = false;
-#endif /* MACH_ASSERT */
+		kpc_pm_handler(new_state ? FALSE : TRUE);
 	}
 
 	/*
@@ -224,7 +217,6 @@ kpc_pm_acknowledge(boolean_t available_to_pm)
 	/*
 	 * Make sure power management isn't playing games with us.
 	 */
-	assert(kpc_calling_pm == true);
 
 	/*
 	 * Counters being available means no one is forcing all counters.
@@ -311,7 +303,7 @@ kpc_get_curcpu_counters(uint32_t classes, int *curcpu, uint64_t *buf)
 
 	/* grab counters and CPU number as close as possible */
 	if (curcpu) {
-		*curcpu = current_processor()->cpu_id;
+		*curcpu = cpu_number();
 	}
 
 	if (classes & KPC_CLASS_FIXED_MASK) {
@@ -336,7 +328,7 @@ kpc_get_curcpu_counters(uint32_t classes, int *curcpu, uint64_t *buf)
 	return offset;
 }
 
-/* generic counter reading function, public api */
+/* generic counter reading function */
 int
 kpc_get_cpu_counters(boolean_t all_cpus, uint32_t classes,
     int *curcpu, uint64_t *buf)
@@ -359,7 +351,7 @@ int
 kpc_get_shadow_counters(boolean_t all_cpus, uint32_t classes,
     int *curcpu, uint64_t *buf)
 {
-	int curcpu_id = current_processor()->cpu_id;
+	int curcpu_id = cpu_number();
 	uint32_t cfg_count = kpc_configurable_count(), offset = 0;
 	uint64_t pmc_mask = 0ULL;
 	boolean_t enabled;
@@ -368,7 +360,7 @@ kpc_get_shadow_counters(boolean_t all_cpus, uint32_t classes,
 
 	enabled = ml_set_interrupts_enabled(FALSE);
 
-	curcpu_id = current_processor()->cpu_id;
+	curcpu_id = cpu_number();
 	if (curcpu) {
 		*curcpu = curcpu_id;
 	}
@@ -443,7 +435,8 @@ kpc_get_config_count(uint32_t classes)
 		count += kpc_configurable_config_count(pmc_mask);
 	}
 
-	if ((classes & KPC_CLASS_RAWPMU_MASK) && !kpc_multiple_clients()) {
+	if ((classes & KPC_CLASS_RAWPMU_MASK) &&
+	    (!kpc_multiple_clients() || force_all_ctrs)) {
 		count += kpc_rawpmu_config_count();
 	}
 
@@ -478,7 +471,7 @@ kpc_get_config(uint32_t classes, kpc_config_t *current_config)
 		// Client shouldn't ask for config words that aren't available.
 		// Most likely, they'd misinterpret the returned buffer if we
 		// allowed this.
-		if (kpc_multiple_clients()) {
+		if (kpc_multiple_clients() && !force_all_ctrs) {
 			return EPERM;
 		}
 		kpc_get_rawpmu_config(&current_config[count]);
@@ -488,19 +481,21 @@ kpc_get_config(uint32_t classes, kpc_config_t *current_config)
 	return 0;
 }
 
-int
-kpc_set_config(uint32_t classes, kpc_config_t *configv)
+static int
+_kpc_set_config_internal(uint32_t classes, kpc_config_t *configv, bool secure)
 {
 	int ret = 0;
 	struct kpc_config_remote mp_config = {
 		.classes = classes, .configv = configv,
-		.pmc_mask = kpc_get_configurable_pmc_mask(classes)
+		.pmc_mask = kpc_get_configurable_pmc_mask(classes),
+		.secure = secure,
 	};
 
 	assert(configv);
 
 	/* don't allow RAWPMU configuration when sharing counters */
-	if ((classes & KPC_CLASS_RAWPMU_MASK) && kpc_multiple_clients()) {
+	if ((classes & KPC_CLASS_RAWPMU_MASK) && kpc_multiple_clients() &&
+	    !force_all_ctrs) {
 		return EPERM;
 	}
 
@@ -524,6 +519,19 @@ kpc_set_config(uint32_t classes, kpc_config_t *configv)
 	return ret;
 }
 
+int
+kpc_set_config_kernel(uint32_t classes, kpc_config_t * configv)
+{
+	return _kpc_set_config_internal(classes, configv, true);
+}
+
+int kpc_set_config_external(uint32_t classes, kpc_config_t *configv);
+int
+kpc_set_config_external(uint32_t classes, kpc_config_t *configv)
+{
+	return _kpc_set_config_internal(classes, configv, false);
+}
+
 uint32_t
 kpc_get_counterbuf_size(void)
 {
@@ -534,30 +542,25 @@ kpc_get_counterbuf_size(void)
 uint64_t *
 kpc_counterbuf_alloc(void)
 {
-	uint64_t *buf = NULL;
-
-	buf = kalloc_tag(COUNTERBUF_SIZE, VM_KERN_MEMORY_DIAG);
-	if (buf) {
-		bzero(buf, COUNTERBUF_SIZE);
-	}
-
-	return buf;
+	return kalloc_data_tag(COUNTERBUF_SIZE, Z_WAITOK | Z_ZERO,
+	           VM_KERN_MEMORY_DIAG);
 }
 
 void
 kpc_counterbuf_free(uint64_t *buf)
 {
-	if (buf) {
-		kfree(buf, COUNTERBUF_SIZE);
-	}
+	kfree_data(buf, COUNTERBUF_SIZE);
 }
 
 void
-kpc_sample_kperf(uint32_t actionid)
+kpc_sample_kperf(uint32_t actionid, uint32_t counter, uint64_t config,
+    uint64_t count, uintptr_t pc, kperf_kpc_flags_t flags)
 {
 	struct kperf_sample sbuf;
 
-	BUF_DATA(PERF_KPC_HNDLR | DBG_FUNC_START);
+	uint64_t desc = config | (uint64_t)counter << 32 | (uint64_t)flags << 48;
+
+	BUF_DATA(PERF_KPC_HNDLR | DBG_FUNC_START, desc, count, pc);
 
 	thread_t thread = current_thread();
 	task_t task = get_threadtask(thread);
@@ -836,7 +839,7 @@ kpc_release_pm_counters(void)
 uint8_t
 kpc_popcount(uint64_t value)
 {
-	return __builtin_popcountll(value);
+	return (uint8_t)__builtin_popcountll(value);
 }
 
 uint64_t
@@ -882,3 +885,92 @@ exit:
 
 	return cfg_mask | pwr_mask;
 }
+
+#else // CONFIG_CPU_COUNTERS
+
+/*
+ * Ensure there are stubs available for kexts, even if xnu isn't built to
+ * support CPU counters.
+ */
+
+void
+kpc_pm_acknowledge(boolean_t __unused available_to_pm)
+{
+}
+
+boolean_t
+kpc_register_pm_handler(kpc_pm_handler_t __unused handler)
+{
+	return FALSE;
+}
+
+boolean_t
+kpc_reserve_pm_counters(
+	uint64_t __unused pmc_mask,
+	kpc_pm_handler_t __unused handler,
+	boolean_t __unused custom_config)
+{
+	return TRUE;
+}
+
+void
+kpc_release_pm_counters(void)
+{
+}
+
+int
+kpc_get_force_all_ctrs(void)
+{
+	return 0;
+}
+
+int
+kpc_get_cpu_counters(
+	boolean_t __unused all_cpus,
+	uint32_t __unused classes,
+	int * __unused curcpu,
+	uint64_t * __unused buf)
+{
+	return ENOTSUP;
+}
+
+int
+kpc_get_shadow_counters(
+	boolean_t __unused all_cpus,
+	uint32_t __unused classes,
+	int * __unused curcpu,
+	uint64_t * __unused buf)
+{
+	return ENOTSUP;
+}
+
+uint32_t
+kpc_get_running(void)
+{
+	return 0;
+}
+
+int
+kpc_set_running(uint32_t __unused classes)
+{
+	return ENOTSUP;
+}
+
+int
+kpc_get_config(
+	uint32_t __unused classes,
+	kpc_config_t * __unused current_config)
+{
+	return ENOTSUP;
+}
+
+int kpc_set_config_external(uint32_t classes, kpc_config_t *configv);
+int
+kpc_set_config_external(
+	uint32_t __unused classes,
+	kpc_config_t * __unused configv)
+{
+	return ENOTSUP;
+}
+
+#endif // !CONFIG_CPU_COUNTERS

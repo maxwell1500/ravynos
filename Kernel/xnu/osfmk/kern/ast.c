@@ -55,8 +55,7 @@
  */
 
 #include <kern/ast.h>
-#include <kern/counters.h>
-#include <kern/cpu_quiesce.h>
+#include <kern/counter.h>
 #include <kern/misc_protos.h>
 #include <kern/queue.h>
 #include <kern/sched_prim.h>
@@ -71,7 +70,8 @@
 #include <kern/waitq.h>
 #include <kern/ledger.h>
 #include <kern/machine.h>
-#include <kperf/kperf_kpc.h>
+#include <kern/kpc.h>
+#include <kperf/kperf.h>
 #include <mach/policy.h>
 #include <security/mac_mach_internal.h> // for MACF AST hook
 #include <stdatomic.h>
@@ -88,6 +88,18 @@ thread_preempted(__unused void* parameter, __unused wait_result_t result)
 	 * try again to return to userspace.
 	 */
 	thread_exception_return();
+}
+
+/*
+ * Create a dedicated frame to clarify that this thread has been preempted
+ * while running in kernel space.
+ */
+static void __attribute__((noinline, disable_tail_calls))
+thread_preempted_in_kernel(ast_t urgent_reason)
+{
+	thread_block_reason(THREAD_CONTINUE_NULL, NULL, urgent_reason);
+
+	assert(ml_get_interrupts_enabled() == FALSE);
 }
 
 /*
@@ -132,11 +144,8 @@ ast_taken_kernel(void)
 
 	assert(urgent_reason & AST_PREEMPT);
 
-	counter(c_ast_taken_block++);
-
-	thread_block_reason(THREAD_CONTINUE_NULL, NULL, urgent_reason);
-
-	assert(ml_get_interrupts_enabled() == FALSE);
+	/* We've decided to try context switching */
+	thread_preempted_in_kernel(urgent_reason);
 }
 
 /*
@@ -150,6 +159,7 @@ ast_taken_user(void)
 	assert(ml_get_interrupts_enabled() == FALSE);
 
 	thread_t thread = current_thread();
+	task_t   task   = get_threadtask(thread);
 
 	/* We are about to return to userspace, there must not be a pending wait */
 	assert(waitq_wait_possible(thread));
@@ -246,12 +256,16 @@ ast_taken_user(void)
 
 	if (reasons & AST_KPERF) {
 		thread_ast_clear(thread, AST_KPERF);
-		kperf_kpc_thread_ast(thread);
+#if CONFIG_CPU_COUNTERS
+		kpc_thread_ast_handler(thread);
+#endif /* CONFIG_CPU_COUNTERS */
+		kperf_thread_ast_handler(thread);
+		thread->kperf_ast = 0;
 	}
 
 	if (reasons & AST_RESET_PCS) {
 		thread_ast_clear(thread, AST_RESET_PCS);
-		thread_reset_pcs_ast(thread);
+		thread_reset_pcs_ast(task, thread);
 	}
 
 	if (reasons & AST_KEVENT) {
@@ -262,11 +276,26 @@ ast_taken_user(void)
 		}
 	}
 
+	if (reasons & AST_PROC_RESOURCE) {
+		thread_ast_clear(thread, AST_PROC_RESOURCE);
+		task_port_space_ast(task);
+#if MACH_BSD
+		proc_filedesc_ast(task);
+#endif /* MACH_BSD */
+	}
+
 #if CONFIG_TELEMETRY
 	if (reasons & AST_TELEMETRY_ALL) {
 		ast_t telemetry_reasons = reasons & AST_TELEMETRY_ALL;
 		thread_ast_clear(thread, AST_TELEMETRY_ALL);
 		telemetry_ast(thread, telemetry_reasons);
+	}
+#endif
+
+#if MACH_ASSERT
+	if (reasons & AST_DEBUG_ASSERT) {
+		thread_ast_clear(thread, AST_DEBUG_ASSERT);
+		thread_debug_return_to_user_ast(thread);
 	}
 #endif
 
@@ -311,18 +340,26 @@ ast_taken_user(void)
 #endif
 
 		if (preemption_reasons & AST_PREEMPT) {
-			counter(c_ast_taken_block++);
 			/* switching to a continuation implicitly re-enables interrupts */
 			thread_block_reason(thread_preempted, NULL, preemption_reasons);
 			/* NOTREACHED */
 		}
-	}
 
-	if (ast_consume(AST_UNQUIESCE) == AST_UNQUIESCE) {
-		cpu_quiescent_counter_ast();
+		/*
+		 * We previously had a pending AST_PREEMPT, but csw_check
+		 * decided that it should no longer be set, and to keep
+		 * executing the current thread instead.
+		 * Clear the pending preemption timer as we no longer
+		 * have a pending AST_PREEMPT to time out.
+		 *
+		 * TODO: just do the thread block if we see AST_PREEMPT
+		 * to avoid taking the pset lock twice.
+		 * To do that thread block needs to be smarter
+		 * about not context switching when it's not necessary
+		 * e.g. the first-timeslice check for queue has priority
+		 */
+		clear_pending_nonurgent_preemption(current_processor());
 	}
-
-	cpu_quiescent_counter_assert_ast();
 
 	splx(s);
 
@@ -330,15 +367,19 @@ ast_taken_user(void)
 	 * Here's a good place to put assertions of things which must be true
 	 * upon return to userspace.
 	 */
-	assert((thread->sched_flags & TH_SFLAG_WAITQ_PROMOTED) == 0);
-	assert((thread->sched_flags & TH_SFLAG_RW_PROMOTED) == 0);
-	assert((thread->sched_flags & TH_SFLAG_EXEC_PROMOTED) == 0);
-	assert((thread->sched_flags & TH_SFLAG_PROMOTED) == 0);
-	assert((thread->sched_flags & TH_SFLAG_DEPRESS) == 0);
-
 	assert(thread->kern_promotion_schedpri == 0);
-	assert(thread->waiting_for_mutex == NULL);
-	assert(thread->rwlock_count == 0);
+	if (thread->rwlock_count > 0) {
+		panic("rwlock_count is %d for thread %p, possibly it still holds a rwlock", thread->rwlock_count, thread);
+	}
+	assert(thread->priority_floor_count == 0);
+
+	assert3u(0, ==, thread->sched_flags &
+	    (TH_SFLAG_WAITQ_PROMOTED |
+	    TH_SFLAG_RW_PROMOTED |
+	    TH_SFLAG_EXEC_PROMOTED |
+	    TH_SFLAG_FLOOR_PROMOTED |
+	    TH_SFLAG_PROMOTED |
+	    TH_SFLAG_DEPRESS));
 }
 
 /*
@@ -405,7 +446,7 @@ ast_context(thread_t thread)
 {
 	ast_t *pending_ast = ast_pending();
 
-	*pending_ast = ((*pending_ast & ~AST_PER_THREAD) | thread->ast);
+	*pending_ast = (*pending_ast & ~AST_PER_THREAD) | thread_ast_get(thread);
 }
 
 /*
@@ -415,7 +456,7 @@ ast_context(thread_t thread)
 void
 ast_propagate(thread_t thread)
 {
-	ast_on(thread->ast);
+	ast_on(thread_ast_get(thread));
 }
 
 void

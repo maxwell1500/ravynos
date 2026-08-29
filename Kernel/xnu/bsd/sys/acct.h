@@ -70,9 +70,12 @@
 
 #include <sys/appleapiopts.h>
 #include <sys/cdefs.h>
+#include <sys/_types/_u_int8_t.h>  /* u_int8_t */
 #include <sys/_types/_u_int16_t.h> /* u_int16_t */
 #include <sys/_types/_u_int32_t.h> /* u_int32_t */
 #include <sys/_types/_uid_t.h>     /* uid_t */
+#include <sys/_types/_gid_t.h>     /* gid_t */
+#include <sys/_types/_dev_t.h>     /* dev_t */
 
 /*
  * Accounting structures; these use a comp_t type which is a 3 bits base 8
@@ -107,7 +110,7 @@ struct acct {
  */
 #define AHZ     64
 
-#ifdef KERNEL
+#ifdef XNU_KERNEL_PRIVATE
 #ifdef __APPLE_API_PRIVATE
 extern struct vnode     *acctp;
 
@@ -116,6 +119,6 @@ int     acct_process(struct proc *p);
 __END_DECLS
 
 #endif /* __APPLE_API_PRIVATE */
-#endif /* KERNEL */
+#endif /* XNU_KERNEL_PRIVATE */
 
 #endif /* ! _SYS_ACCT_H_ */

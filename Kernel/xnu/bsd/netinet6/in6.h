@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2018 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -90,14 +90,21 @@
  *	@(#)in.h	8.3 (Berkeley) 1/3/94
  */
 
+#ifndef DRIVERKIT
 #ifndef __KAME_NETINET_IN_H_INCLUDED_
 #error "do not include netinet6/in6.h directly, include netinet/in.h. " \
         " see RFC2553"
 #endif
+#endif /* DRIVERKIT */
 
 #ifndef _NETINET6_IN6_H_
 #define _NETINET6_IN6_H_
+#ifndef DRIVERKIT
 #include <sys/appleapiopts.h>
+#else
+#include <sys/_types/_in_port_t.h>
+#endif /* DRIVERKIT */
+
 #include <sys/_types.h>
 #include <sys/_types/_sa_family_t.h>
 
@@ -187,6 +194,8 @@ struct sockaddr_in6 {
 #define IN6MASK0        {{{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }}}
 #define IN6MASK7        {{{ 0xfe, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, \
 	                    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }}}
+#define IN6MASK8        {{{ 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, \
+	                    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }}}
 #define IN6MASK16       {{{ 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, \
 	                    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 }}}
 #define IN6MASK32       {{{ 0xff, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, \
@@ -199,22 +208,7 @@ struct sockaddr_in6 {
 	                    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff }}}
 #endif
 
-#ifdef KERNEL_PRIVATE
-extern const struct sockaddr_in6 sa6_any;
-
-extern const struct in6_addr in6mask0;
-extern const struct in6_addr in6mask7;
-extern const struct in6_addr in6mask16;
-extern const struct in6_addr in6mask32;
-extern const struct in6_addr in6mask64;
-extern const struct in6_addr in6mask96;
-extern const struct in6_addr in6mask128;
-
-#define SIN6(s)         ((struct sockaddr_in6 *)(void *)s)
-#define satosin6(sa)    SIN6(sa)
-#define sin6tosa(sin6)  ((struct sockaddr *)(void *)(sin6))
-#define SIN6IFSCOPE(s)  SIN6(s)
-#endif /* KERNEL_PRIVATE */
+#ifndef XNU_PLATFORM_DriverKit
 
 #ifdef KERNEL   /* XXX nonstandard */
 /*
@@ -269,6 +263,7 @@ extern const struct in6_addr in6mask128;
 #define IN6ADDR_V4MAPPED_INIT \
 	{{{ 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, \
 	    0x00, 0x00, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00 }}}
+#define IN6ADDR_MULTICAST_PREFIX        IN6MASK8
 #endif /* (_POSIX_C_SOURCE && !_DARWIN_C_SOURCE) */
 
 extern const struct in6_addr in6addr_any;
@@ -382,6 +377,16 @@ extern const struct in6_addr in6addr_linklocal_allv2routers;
  */
 #define IN6_IS_ADDR_MULTICAST(a)        ((a)->s6_addr[0] == 0xff)
 
+#define IPV6_ADDR_MC_FLAGS(a)           ((a)->s6_addr[1] & 0xf0)
+
+#define IPV6_ADDR_MC_FLAGS_TRANSIENT            0x10
+#define IPV6_ADDR_MC_FLAGS_PREFIX               0x20
+#define IPV6_ADDR_MC_FLAGS_UNICAST_BASED        (IPV6_ADDR_MC_FLAGS_TRANSIENT | IPV6_ADDR_MC_FLAGS_PREFIX)
+
+#define IN6_IS_ADDR_UNICAST_BASED_MULTICAST(a)  \
+	(IN6_IS_ADDR_MULTICAST(a) &&            \
+	(IPV6_ADDR_MC_FLAGS(a) == IPV6_ADDR_MC_FLAGS_UNICAST_BASED))
+
 /*
  * Unique Local IPv6 Unicast Addresses (per RFC 4193)
  */
@@ -398,14 +403,19 @@ extern const struct in6_addr in6addr_linklocal_allv2routers;
  * Multicast Scope
  */
 #ifdef KERNEL   /* refers nonstandard items */
+#define IN6_IS_ADDR_MC_UNICAST_BASED_LINKLOCAL(a)                               \
+	(IN6_IS_ADDR_MULTICAST(a) &&                                            \
+	(IPV6_ADDR_MC_FLAGS(a) == IPV6_ADDR_MC_FLAGS_UNICAST_BASED) &&          \
+	(IPV6_ADDR_MC_SCOPE(a) == IPV6_ADDR_SCOPE_LINKLOCAL))
 #define IN6_IS_ADDR_MC_NODELOCAL(a)     \
 	(IN6_IS_ADDR_MULTICAST(a) &&    \
 	(IPV6_ADDR_MC_SCOPE(a) == IPV6_ADDR_SCOPE_NODELOCAL))
 #define IN6_IS_ADDR_MC_INTFACELOCAL(a)  \
 	(IN6_IS_ADDR_MULTICAST(a) &&    \
 	(IPV6_ADDR_MC_SCOPE(a) == IPV6_ADDR_SCOPE_INTFACELOCAL))
-#define IN6_IS_ADDR_MC_LINKLOCAL(a)     \
-	(IN6_IS_ADDR_MULTICAST(a) &&    \
+#define IN6_IS_ADDR_MC_LINKLOCAL(a)                                             \
+	(IN6_IS_ADDR_MULTICAST(a) &&                                            \
+	(IPV6_ADDR_MC_FLAGS(a) != IPV6_ADDR_MC_FLAGS_UNICAST_BASED) &&          \
 	(IPV6_ADDR_MC_SCOPE(a) == IPV6_ADDR_SCOPE_LINKLOCAL))
 #define IN6_IS_ADDR_MC_SITELOCAL(a)     \
 	(IN6_IS_ADDR_MULTICAST(a) &&    \
@@ -420,8 +430,9 @@ extern const struct in6_addr in6addr_linklocal_allv2routers;
 #define IN6_IS_ADDR_MC_NODELOCAL(a)     \
 	(IN6_IS_ADDR_MULTICAST(a) &&    \
 	(__IPV6_ADDR_MC_SCOPE(a) == __IPV6_ADDR_SCOPE_NODELOCAL))
-#define IN6_IS_ADDR_MC_LINKLOCAL(a)     \
-	(IN6_IS_ADDR_MULTICAST(a) &&    \
+#define IN6_IS_ADDR_MC_LINKLOCAL(a)                                             \
+	(IN6_IS_ADDR_MULTICAST(a) &&                                            \
+	(IPV6_ADDR_MC_FLAGS(a) != IPV6_ADDR_MC_FLAGS_UNICAST_BASED) &&          \
 	(__IPV6_ADDR_MC_SCOPE(a) == __IPV6_ADDR_SCOPE_LINKLOCAL))
 #define IN6_IS_ADDR_MC_SITELOCAL(a)     \
 	(IN6_IS_ADDR_MULTICAST(a) &&    \
@@ -454,40 +465,6 @@ extern const struct in6_addr in6addr_linklocal_allv2routers;
 	((a)->ia6_lifetime.ia6ti_expire != 0 && \
 	(a)->ia6_lifetime.ia6ti_expire < (t))
 #endif /* KERNEL */
-
-#ifdef PRIVATE
-struct route_in6_old {
-	void            *ro_rt;
-	uint32_t        ro_flags;
-	struct sockaddr_in6 ro_dst;
-};
-#endif /* PRIVATE */
-
-#ifdef BSD_KERNEL_PRIVATE
-#include <net/if_llatbl.h>
-#include <sys/eventhandler.h>
-
-/*
- * IP6 route structure
- *
- * A route consists of a destination address and a reference
- * to a routing entry.  These are often held by protocols
- * in their control blocks, e.g. inpcb.
- */
-struct route_in6 {
-	/*
-	 * N.B: struct route_in6 must begin with ro_{rt,srcia,flags}
-	 * because the code does some casts of a 'struct route_in6 *'
-	 * to a 'struct route *'.
-	 */
-	struct rtentry  *ro_rt;
-	struct  llentry *ro_lle;
-
-	struct ifaddr   *ro_srcia;
-	uint32_t        ro_flags;       /* route flags */
-	struct sockaddr_in6 ro_dst;
-};
-#endif /* BSD_KERNEL_PRIVATE */
 
 /*
  * Options for use with [gs]etsockopt at the IPV6 level.
@@ -534,9 +511,9 @@ struct route_in6 {
 #define IPV6_SOCKOPT_RESERVED1  3  /* reserved for future use */
 #endif /* (_POSIX_C_SOURCE && !_DARWIN_C_SOURCE) */
 #define IPV6_UNICAST_HOPS       4  /* int; IP6 hops */
-#define IPV6_MULTICAST_IF       9  /* __uint8_t; set/get IP6 multicast i/f  */
-#define IPV6_MULTICAST_HOPS     10 /* __uint8_t; set/get IP6 multicast hops */
-#define IPV6_MULTICAST_LOOP     11 /* __uint8_t; set/get IP6 mcast loopback */
+#define IPV6_MULTICAST_IF       9  /* u_int; set/get IP6 multicast i/f  */
+#define IPV6_MULTICAST_HOPS     10 /* int; set/get IP6 multicast hops */
+#define IPV6_MULTICAST_LOOP     11 /* u_int; set/get IP6 mcast loopback */
 #define IPV6_JOIN_GROUP         12 /* ip6_mreq; join a group membership */
 #define IPV6_LEAVE_GROUP        13 /* ip6_mreq; leave a group membership */
 
@@ -663,11 +640,6 @@ struct route_in6 {
 
 #define IPV6_BOUND_IF           125 /* int; set/get bound interface */
 
-#ifdef PRIVATE
-#define IPV6_NO_IFT_CELLULAR    6969 /* for internal use only */
-#define IPV6_OUT_IF             9696 /* for internal use only */
-#endif /* PRIVATE */
-
 /* to define items, should talk with KAME guys first, for *BSD compatibility */
 
 #define IPV6_RTHDR_LOOSE        0 /* this hop need not be a neighbor. */
@@ -787,182 +759,12 @@ struct ip6_mtuinfo {
 #define IPV6CTL_MAXIFDEFROUTERS 48
 #define IPV6CTL_MAXDYNROUTES    49
 #define ICMPV6CTL_ND6_ONLINKNSRFC4861   50
+#define IPV6CTL_ULA_USETEMPADDR 51
+
 
 /* New entries should be added here from current IPV6CTL_MAXID value. */
 /* to define items, should talk with KAME guys first, for *BSD compatibility */
 #define IPV6CTL_MAXID           51
-
-#ifdef BSD_KERNEL_PRIVATE
-#define CTL_IPV6PROTO_NAMES { \
-	{ 0, 0 }, { 0, 0 }, { 0, 0 }, { 0, 0 }, { 0, 0 }, \
-	{ 0, 0 }, \
-	{ "tcp6", CTLTYPE_NODE }, \
-	{ 0, 0 }, \
-	{ 0, 0 }, \
-	{ 0, 0 }, \
-	{ 0, 0 }, { 0, 0 }, { 0, 0 }, { 0, 0 }, { 0, 0 }, \
-	{ 0, 0 }, \
-	{ 0, 0 }, \
-	{ "udp6", CTLTYPE_NODE }, \
-	{ 0, 0 }, \
-	{ 0, 0 }, \
-	{ 0, 0 }, { 0, 0 }, { 0, 0 }, { 0, 0 }, { 0, 0 }, \
-	{ 0, 0 }, { 0, 0 }, { 0, 0 }, { 0, 0 }, { 0, 0 }, \
-	{ 0, 0 }, { 0, 0 }, { 0, 0 }, { 0, 0 }, { 0, 0 }, \
-	{ 0, 0 }, { 0, 0 }, { 0, 0 }, { 0, 0 }, { 0, 0 }, \
-	{ 0, 0 }, \
-	{ "ip6", CTLTYPE_NODE }, \
-	{ 0, 0 }, \
-	{ 0, 0 }, \
-	{ 0, 0 }, \
-	{ 0, 0 }, { 0, 0 }, { 0, 0 }, { 0, 0 }, { 0, 0 }, \
-	{ 0, 0 }, \
-	{ "ipsec6", CTLTYPE_NODE }, \
-	{ 0, 0 }, \
-	{ 0, 0 }, \
-	{ 0, 0 }, \
-	{ 0, 0 }, \
-	{ 0, 0 }, \
-	{ 0, 0 }, \
-	{ "icmp6", CTLTYPE_NODE }, \
-	{ 0, 0 }, \
-	{ 0, 0 }, { 0, 0 }, { 0, 0 }, { 0, 0 }, { 0, 0 }, \
-	{ 0, 0 }, { 0, 0 }, { 0, 0 }, { 0, 0 }, { 0, 0 }, \
-	{ 0, 0 }, { 0, 0 }, { 0, 0 }, { 0, 0 }, { 0, 0 }, \
-	{ 0, 0 }, { 0, 0 }, { 0, 0 }, { 0, 0 }, { 0, 0 }, \
-	{ 0, 0 }, { 0, 0 }, { 0, 0 }, { 0, 0 }, { 0, 0 }, \
-	{ 0, 0 }, { 0, 0 }, { 0, 0 }, { 0, 0 }, { 0, 0 }, \
-	{ 0, 0 }, { 0, 0 }, { 0, 0 }, { 0, 0 }, { 0, 0 }, \
-	{ 0, 0 }, { 0, 0 }, { 0, 0 }, { 0, 0 }, { 0, 0 }, \
-	{ 0, 0 }, \
-	{ 0, 0 }, \
-	{ 0, 0 }, \
-	{ 0, 0 }, \
-}
-/*
- * Redefinition of mbuf flags
- */
-#define M_AUTHIPHDR     M_PROTO2
-#define M_DECRYPTED     M_PROTO3
-#define M_AUTHIPDGM     M_PROTO5
-
-struct cmsghdr;
-struct mbuf;
-struct ifnet;
-struct in6_aliasreq;
-struct lltable;
-
-extern struct lltable * in6_lltattach(struct ifnet *ifp);
-extern uint16_t in6_pseudo(const struct in6_addr *, const struct in6_addr *,
-    uint32_t);
-extern u_int16_t inet6_cksum(struct mbuf *, uint32_t, uint32_t, uint32_t);
-extern u_int16_t inet6_cksum_buffer(const uint8_t *, uint32_t, uint32_t,
-    uint32_t);
-
-#define in6_cksum(_m, _n, _o, _l)                       \
-	inet6_cksum(_m, _n, _o, _l)
-#define in6_cksum_buffer(_b, _n, _o, _l)                \
-	inet6_cksum_buffer(_b, _n, _o, _l)
-
-extern int in6_addrscope(struct in6_addr *);
-extern struct in6_ifaddr *in6_ifawithscope(struct ifnet *, struct in6_addr *);
-extern struct in6_ifaddr *in6_ifawithifp(struct ifnet *, struct in6_addr *);
-
-struct sockaddr;
-
-extern void in6_sin6_2_sin(struct sockaddr_in *sin, struct sockaddr_in6 *sin6);
-extern void in6_sin_2_v4mapsin6(struct sockaddr_in *sin,
-    struct sockaddr_in6 *sin6);
-extern void in6_sin6_2_sin_in_sock(struct sockaddr *nam);
-extern int in6_sin_2_v4mapsin6_in_sock(struct sockaddr **nam);
-
-extern uint32_t in6_finalize_cksum(struct mbuf *, uint32_t, int32_t,
-    int32_t, uint32_t);
-
-#define in6_delayed_cksum(_m)                   \
-	((void) in6_finalize_cksum(_m, 0, 0, -1, CSUM_DELAY_IPV6_DATA))
-#define in6_delayed_cksum_offset(_m, _o, _s, _p)        \
-	((void) in6_finalize_cksum(_m, _o, _s, _p, CSUM_DELAY_IPV6_DATA))
-
-/* IPv6 protocol events */
-extern struct eventhandler_lists_ctxt in6_evhdlr_ctxt;
-/*
- * XXX Avoid reordering the enum values below.
- * If the order is changed, please make sure
- * in6_event2kev_array is also changed to reflect the
- * change in order of the enums
- */
-typedef enum {
-	/* Address events */
-	/*
-	 * XXX To avoid duplicacy and also for correctness
-	 * only report these for link local and stable addresses
-	 * NOTE: Link local address can never be marked detached
-	 * or duplicated.
-	 */
-	IN6_ADDR_MARKED_DUPLICATED,
-	IN6_ADDR_MARKED_DETACHED,
-	IN6_ADDR_MARKED_DEPRECATED,
-
-	/* Expiry events */
-	IN6_NDP_RTR_EXPIRY,
-	IN6_NDP_PFX_EXPIRY,
-	IN6_NDP_ADDR_EXPIRY,
-
-	/* XXX DNS expiry needs to be handled by user-space */
-	/* MAX */
-	IN6_EVENT_MAX,
-} in6_evhdlr_code_t;
-
-struct in6_event2kev {
-	in6_evhdlr_code_t       in6_event_code;
-	uint32_t                in6_event_kev_subclass;
-	uint32_t                in6_event_kev_code;
-	const char              *in6_event_str;
-};
-extern struct in6_event2kev in6_event2kev_array[];
-extern void in6_eventhdlr_callback(struct eventhandler_entry_arg, in6_evhdlr_code_t,
-    struct ifnet *, struct in6_addr *, uint32_t);
-extern void in6_event_enqueue_nwk_wq_entry(in6_evhdlr_code_t,
-    struct ifnet *, struct in6_addr *, uint32_t);
-
-typedef void (*in6_event_fn) (struct eventhandler_entry_arg, in6_evhdlr_code_t,
-    struct ifnet *, struct in6_addr *, uint32_t);
-EVENTHANDLER_DECLARE(in6_event, in6_event_fn);
-#endif /* BSD_KERNEL_PRIVATE */
-
-#ifdef PRIVATE
-/* CLAT46 events */
-typedef enum in6_clat46_evhdlr_code_t {
-	IN6_CLAT46_EVENT_V4_FLOW,
-	IN6_CLAT46_EVENT_V6_ADDR_CONFFAIL,
-} in6_clat46_evhdlr_code_t;
-
-struct kev_netevent_clat46_data {
-	in6_clat46_evhdlr_code_t clat46_event_code;
-	pid_t epid;
-	uuid_t euuid;
-};
-#endif /* PRIVATE */
-
-#ifdef BSD_KERNEL_PRIVATE
-/* CLAT46 events */
-extern struct eventhandler_lists_ctxt in6_clat46_evhdlr_ctxt;
-extern void in6_clat46_eventhdlr_callback(struct eventhandler_entry_arg,
-    in6_clat46_evhdlr_code_t, pid_t, uuid_t);
-extern void in6_clat46_event_enqueue_nwk_wq_entry(in6_clat46_evhdlr_code_t,
-    pid_t, uuid_t);
-
-typedef void (*in6_clat46_event_fn) (struct eventhandler_entry_arg, in6_clat46_evhdlr_code_t,
-    pid_t, uuid_t);
-EVENTHANDLER_DECLARE(in6_clat46_event, in6_clat46_event_fn);
-#endif /* BSD_KERNEL_PRIVATE */
-
-#ifdef KERNEL_PRIVATE
-/* exporte for ApplicationFirewall */
-extern int in6_localaddr(struct in6_addr *);
-extern int in6addr_local(struct in6_addr *);
-#endif /* KERNEL_PRIVATE */
 
 #ifndef KERNEL
 __BEGIN_DECLS
@@ -1008,4 +810,5 @@ extern struct in6_addr *inet6_rth_getaddr(const void *, int);
 __END_DECLS
 #endif /* !KERNEL */
 #endif /* (_POSIX_C_SOURCE && !_DARWIN_C_SOURCE) */
+#endif /* XNU_PLATFORM_DriverKit */
 #endif /* !_NETINET6_IN6_H_ */

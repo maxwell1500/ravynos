@@ -1,285 +1,514 @@
 /*
- * Test to validate that we can schedule threads on all hw.ncpus cores according to _os_cpu_number
+ * Tests to validate that:
+ *  - we can schedule threads on all hw.ncpus cores according to _os_cpu_number
+ *  - we can schedule threads on all hw.cpuclusters clusters according to _os_cpu_cluster_number
+ *  - the cluster id returned by _os_cpu_cluster_number aligns with mappings from IORegistry
  *
  * <rdar://problem/29545645>
+ * <rdar://problem/30445216>
  *
- *  xcrun -sdk macosx.internal clang -o cpucount cpucount.c -ldarwintest -g -Weverything
- *  xcrun -sdk iphoneos.internal clang -arch arm64 -o cpucount-ios cpucount.c -ldarwintest -g -Weverything
+ *  xcrun -sdk macosx.internal clang -o cpucount cpucount.c -ldarwintest -framework IOKit -framework CoreFoundation -g -Weverything
+ *  xcrun -sdk iphoneos.internal clang -arch arm64 -o cpucount-ios cpucount.c -ldarwintest -framework IOKit -framework CoreFoundation -g -Weverything
+ *  xcrun -sdk macosx.internal clang -o cpucount cpucount.c -ldarwintest -framework IOKit -framework CoreFoundation -arch arm64e -Weverything
  */
 
 #include <darwintest.h>
+#include "test_utils.h"
 
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdbool.h>
-#include <stdalign.h>
 #include <unistd.h>
-#include <assert.h>
 #include <pthread.h>
-#include <err.h>
-#include <errno.h>
-#include <sysexits.h>
+#include <sys/commpage.h>
 #include <sys/sysctl.h>
-#include <stdatomic.h>
+#include <sys/proc_info.h>
+#include <libproc.h>
+
+#include <CoreFoundation/CoreFoundation.h>
+#include <IOKit/IOKitLib.h>
 
 #include <mach/mach.h>
 #include <mach/mach_time.h>
+#include <machine/cpu_capabilities.h>
 
-#include <os/tsd.h> /* private header for _os_cpu_number */
+#include <os/tsd.h> /* private header for _os_cpu_number, _os_cpu_cluster_number */
 
-T_GLOBAL_META(T_META_RUN_CONCURRENTLY(true));
+T_GLOBAL_META(
+	T_META_RUN_CONCURRENTLY(false),
+	T_META_BOOTARGS_SET("enable_skstb=1"),
+	T_META_CHECK_LEAKS(false),
+	T_META_ASROOT(true),
+	T_META_ALL_VALID_ARCHS(true),
+	T_META_RADAR_COMPONENT_NAME("xnu"),
+	T_META_RADAR_COMPONENT_VERSION("scheduler"),
+	T_META_OWNER("jarrad"),
+	T_META_TAG_VM_NOT_PREFERRED
+	);
 
-/* const variables aren't constants, but enums are */
-enum { max_threads = 40 };
+#define KERNEL_BOOTARGS_MAX_SIZE 1024
+static char kernel_bootargs[KERNEL_BOOTARGS_MAX_SIZE];
 
-#define CACHE_ALIGNED __attribute__((aligned(128)))
-
-static _Atomic CACHE_ALIGNED uint64_t g_ready_threads = 0;
-
-static _Atomic CACHE_ALIGNED bool g_cpu_seen[max_threads];
-
-static _Atomic CACHE_ALIGNED bool g_bail = false;
-
-static uint32_t g_threads; /* set by sysctl hw.ncpu */
-
-static uint64_t g_spin_ms = 50; /* it takes ~50ms of spinning for CLPC to deign to give us all cores */
-
-/*
- * sometimes pageout scan can eat all of CPU 0 long enough to fail the test,
- * so we run the test at RT priority
- */
-static uint32_t g_thread_pri = 97;
-
-/*
- * add in some extra low-pri threads to convince the amp scheduler to use E-cores consistently
- * works around <rdar://problem/29636191>
- */
-static uint32_t g_spin_threads = 2;
-static uint32_t g_spin_threads_pri = 20;
-
-static semaphore_t g_readysem, g_go_sem;
+#define KERNEL_VERSION_MAX_SIZE 1024
+static char kernel_version[KERNEL_VERSION_MAX_SIZE];
 
 static mach_timebase_info_data_t timebase_info;
 
-static uint64_t
-nanos_to_abs(uint64_t nanos)
+// Source: libktrace:corefoundation_helpers.c
+
+static void
+dict_number_internal(CFDictionaryRef dict, CFStringRef key, void *dst_out, CFNumberType nbr_type)
 {
-	return nanos * timebase_info.denom / timebase_info.numer;
+	bool success;
+	T_QUIET; T_ASSERT_NOTNULL(dict, "dict must not be null");
+	T_QUIET; T_ASSERT_NOTNULL(key, " key must not be null");
+	T_QUIET; T_ASSERT_NOTNULL(dst_out, "dst out must not be null");
+
+	CFTypeRef val = CFDictionaryGetValue(dict, key);
+	T_QUIET; T_ASSERT_NOTNULL(val, "unable to get value for key %s", CFStringGetCStringPtr(key, kCFStringEncodingASCII));
+
+	CFTypeID type = CFGetTypeID(val);
+	if (type == CFNumberGetTypeID()) {
+		CFNumberRef val_nbr = (CFNumberRef)val;
+		success = CFNumberGetValue(val_nbr, nbr_type, dst_out);
+		T_QUIET; T_ASSERT_TRUE(success, "dictionary number at key '%s' is not the right type", CFStringGetCStringPtr(key, kCFStringEncodingASCII));
+	} else if (type == CFDataGetTypeID()) {
+		CFDataRef val_data = (CFDataRef)val;
+		size_t raw_size = (size_t)CFDataGetLength(val_data);
+		T_QUIET; T_ASSERT_EQ(raw_size, (size_t)4, "cannot convert CFData of size %zu to number", raw_size);
+		CFDataGetBytes(val_data, CFRangeMake(0, (CFIndex)raw_size), dst_out);
+	} else {
+		T_ASSERT_FAIL("dictionary value at key '%s' should be a number or data", CFStringGetCStringPtr(key, kCFStringEncodingASCII));
+	}
 }
 
 static void
-set_realtime(pthread_t thread)
+dict_uint32(CFDictionaryRef dict, CFStringRef key, uint32_t *dst_out)
 {
-	kern_return_t kr;
-	thread_time_constraint_policy_data_t pol;
-
-	mach_port_t target_thread = pthread_mach_thread_np(thread);
-	T_QUIET; T_ASSERT_NOTNULL(target_thread, "pthread_mach_thread_np");
-
-	/* 1s 100ms 10ms */
-	pol.period      = (uint32_t)nanos_to_abs(1000000000);
-	pol.constraint  = (uint32_t)nanos_to_abs(100000000);
-	pol.computation = (uint32_t)nanos_to_abs(10000000);
-
-	pol.preemptible = 0; /* Ignored by OS */
-	kr = thread_policy_set(target_thread, THREAD_TIME_CONSTRAINT_POLICY, (thread_policy_t) &pol,
-	    THREAD_TIME_CONSTRAINT_POLICY_COUNT);
-	T_QUIET; T_ASSERT_MACH_SUCCESS(kr, "thread_policy_set(THREAD_TIME_CONSTRAINT_POLICY)");
+	dict_number_internal(dict, key, dst_out, kCFNumberSInt32Type);
 }
 
-static pthread_t
-create_thread(void *(*start_routine)(void *), uint32_t priority)
+static uint64_t
+abs_to_nanos(uint64_t abs)
+{
+	return abs * timebase_info.numer / timebase_info.denom;
+}
+
+static int32_t
+get_csw_count(void)
+{
+	struct proc_taskinfo taskinfo;
+	int rv;
+
+	rv = proc_pidinfo(getpid(), PROC_PIDTASKINFO, 0, &taskinfo, sizeof(taskinfo));
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(rv, "PROC_PIDTASKINFO");
+
+	return taskinfo.pti_csw;
+}
+
+// noinline hopefully keeps the optimizer from hoisting it out of the loop
+// until rdar://68253516 is fixed.
+__attribute__((noinline))
+static uint32_t
+fixed_os_cpu_number(void)
+{
+	uint32_t cpu_number = _os_cpu_number();
+	return cpu_number;
+}
+
+static unsigned int
+commpage_cpu_cluster_number(void)
+{
+	uint8_t cpu_number = (uint8_t)fixed_os_cpu_number();
+	volatile uint8_t *cpu_to_cluster = COMM_PAGE_SLOT(uint8_t, CPU_TO_CLUSTER);
+	return (unsigned int)*(cpu_to_cluster + cpu_number);
+}
+
+static void
+cpucount_setup(void)
 {
 	int rv;
-	pthread_t new_thread;
-	pthread_attr_t attr;
-
-	struct sched_param param = { .sched_priority = (int)priority };
-
-	rv = pthread_attr_init(&attr);
-	T_QUIET; T_ASSERT_POSIX_SUCCESS(rv, "pthread_attr_init");
-
-	rv = pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-	T_QUIET; T_ASSERT_POSIX_SUCCESS(rv, "pthread_attr_setdetachstate");
-
-	rv = pthread_attr_setschedparam(&attr, &param);
-	T_QUIET; T_ASSERT_POSIX_SUCCESS(rv, "pthread_attr_setschedparam");
-
-	rv = pthread_create(&new_thread, &attr, start_routine, NULL);
-	T_QUIET; T_ASSERT_POSIX_SUCCESS(rv, "pthread_create");
-
-	if (priority == 97) {
-		set_realtime(new_thread);
-	}
-
-	rv = pthread_attr_destroy(&attr);
-	T_QUIET; T_ASSERT_POSIX_SUCCESS(rv, "pthread_attr_destroy");
-
-	return new_thread;
-}
-
-static void *
-thread_fn(__unused void *arg)
-{
-	T_QUIET; T_EXPECT_TRUE(true, "initialize darwintest on this thread");
-
 	kern_return_t kr;
 
-	kr = semaphore_wait_signal(g_go_sem, g_readysem);
-	T_QUIET; T_ASSERT_MACH_SUCCESS(kr, "semaphore_wait_signal");
+	T_SETUPBEGIN;
 
-	/* atomic inc to say hello */
-	g_ready_threads++;
-
-	uint64_t timeout = nanos_to_abs(g_spin_ms * NSEC_PER_MSEC) + mach_absolute_time();
-
-	/*
-	 * spin to force the other threads to spread out across the cores
-	 * may take some time if cores are masked and CLPC needs to warm up to unmask them
-	 */
-	while (g_ready_threads < g_threads && mach_absolute_time() < timeout) {
-		;
-	}
-
-	T_QUIET; T_ASSERT_GE(timeout, mach_absolute_time(), "waiting for all threads took too long");
-
-	timeout = nanos_to_abs(g_spin_ms * NSEC_PER_MSEC) + mach_absolute_time();
-
-	int iteration = 0;
-	uint32_t cpunum = 0;
-
-	/* search for new CPUs for the duration */
-	while (mach_absolute_time() < timeout) {
-		cpunum = _os_cpu_number();
-
-		assert(cpunum < max_threads);
-
-		g_cpu_seen[cpunum] = true;
-
-		if (iteration++ % 10000) {
-			uint32_t cpus_seen = 0;
-
-			for (uint32_t i = 0; i < g_threads; i++) {
-				if (g_cpu_seen[i]) {
-					cpus_seen++;
-				}
-			}
-
-			/* bail out early if we saw all CPUs */
-			if (cpus_seen == g_threads) {
-				break;
-			}
-		}
-	}
-
-	g_bail = true;
-
-	printf("thread cpunum: %d\n", cpunum);
-
-	kr = semaphore_wait_signal(g_go_sem, g_readysem);
-	T_QUIET; T_ASSERT_MACH_SUCCESS(kr, "semaphore_wait_signal");
-
-	return NULL;
-}
-
-static void *
-spin_fn(__unused void *arg)
-{
-	T_QUIET; T_EXPECT_TRUE(true, "initialize darwintest on this thread");
-
-	kern_return_t kr;
-
-	kr = semaphore_wait_signal(g_go_sem, g_readysem);
-	T_QUIET; T_ASSERT_MACH_SUCCESS(kr, "semaphore_wait_signal");
-
-	uint64_t timeout = nanos_to_abs(g_spin_ms * NSEC_PER_MSEC * 2) + mach_absolute_time();
-
-	/*
-	 * run and sleep a bit to force some scheduler churn to get all the cores active
-	 * needed to work around bugs in the amp scheduler
-	 */
-	while (mach_absolute_time() < timeout && g_bail == false) {
-		usleep(500);
-
-		uint64_t inner_timeout = nanos_to_abs(1 * NSEC_PER_MSEC) + mach_absolute_time();
-
-		while (mach_absolute_time() < inner_timeout && g_bail == false) {
-			;
-		}
-	}
-
-	kr = semaphore_wait_signal(g_go_sem, g_readysem);
-	T_QUIET; T_ASSERT_MACH_SUCCESS(kr, "semaphore_wait_signal");
-
-	return NULL;
-}
-
-
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wgnu-flexible-array-initializer"
-T_DECL(count_cpus, "Tests we can schedule threads on all hw.ncpus cores according to _os_cpu_number",
-    T_META_CHECK_LEAKS(false), T_META_ENABLED(false))
-#pragma clang diagnostic pop
-{
 	setvbuf(stdout, NULL, _IONBF, 0);
 	setvbuf(stderr, NULL, _IONBF, 0);
 
-	int rv;
-	kern_return_t kr;
+	/* Validate what kind of kernel we're on */
+	size_t kernel_version_size = sizeof(kernel_version);
+	rv = sysctlbyname("kern.version", kernel_version, &kernel_version_size, NULL, 0);
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(rv, "kern.version");
+
+	T_LOG("kern.version: %s\n", kernel_version);
+
+	/* Double check that darwintest set the boot arg we requested */
+	size_t kernel_bootargs_size = sizeof(kernel_bootargs);
+	rv = sysctlbyname("kern.bootargs", kernel_bootargs, &kernel_bootargs_size, NULL, 0);
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(rv, "kern.bootargs");
+
+	T_LOG("kern.bootargs: %s\n", kernel_bootargs);
+
+	if (NULL == strstr(kernel_bootargs, "enable_skstb=1")) {
+		T_ASSERT_FAIL("enable_skstb=1 boot-arg is missing");
+	}
+
 	kr = mach_timebase_info(&timebase_info);
 	T_QUIET; T_ASSERT_MACH_SUCCESS(kr, "mach_timebase_info");
 
-	kr = semaphore_create(mach_task_self(), &g_readysem, SYNC_POLICY_FIFO, 0);
-	T_QUIET; T_ASSERT_MACH_SUCCESS(kr, "semaphore_create");
+	struct sched_param param = {.sched_priority = 63};
 
-	kr = semaphore_create(mach_task_self(), &g_go_sem, SYNC_POLICY_FIFO, 0);
-	T_QUIET; T_ASSERT_MACH_SUCCESS(kr, "semaphore_create");
+	rv = pthread_setschedparam(pthread_self(), SCHED_FIFO, &param);
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(rv, "pthread_setschedparam");
 
-	size_t ncpu_size = sizeof(g_threads);
-	rv = sysctlbyname("hw.ncpu", &g_threads, &ncpu_size, NULL, 0);
+	T_SETUPEND;
+}
+
+
+T_DECL(count_cpus,
+    "Tests we can schedule bound threads on all hw.ncpus cores and that _os_cpu_number matches",
+    XNU_T_META_SOC_SPECIFIC)
+{
+	int rv;
+
+	cpucount_setup();
+
+	int bound_cpu_out = 0;
+	size_t bound_cpu_out_size = sizeof(bound_cpu_out);
+	rv = sysctlbyname("kern.sched_thread_bind_cpu", &bound_cpu_out, &bound_cpu_out_size, NULL, 0);
+
+	if (rv == -1) {
+		if (errno == ENOENT) {
+			T_ASSERT_FAIL("kern.sched_thread_bind_cpu doesn't exist, must set enable_skstb=1 boot-arg on development kernel");
+		}
+		if (errno == EPERM) {
+			T_ASSERT_FAIL("must run as root");
+		}
+	}
+
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(rv, "read kern.sched_thread_bind_cpu");
+	T_QUIET; T_ASSERT_EQ(bound_cpu_out, -1, "kern.sched_thread_bind_cpu should exist, start unbound");
+
+	uint32_t sysctl_ncpu = 0;
+	size_t ncpu_size = sizeof(sysctl_ncpu);
+	rv = sysctlbyname("hw.ncpu", &sysctl_ncpu, &ncpu_size, NULL, 0);
 	T_QUIET; T_ASSERT_POSIX_SUCCESS(rv, "sysctlbyname(hw.ncpu)");
 
-	printf("hw.ncpu: %2d\n", g_threads);
+	T_LOG("hw.ncpu: %2d\n", sysctl_ncpu);
 
-	assert(g_threads < max_threads);
+	T_ASSERT_GT(sysctl_ncpu, 0, "at least one CPU exists");
 
-	for (uint32_t i = 0; i < g_threads; i++) {
-		create_thread(&thread_fn, g_thread_pri);
-	}
+	for (uint32_t cpu_to_bind = 0; cpu_to_bind < sysctl_ncpu; cpu_to_bind++) {
+		int32_t before_csw_count = get_csw_count();
+		T_LOG("(csw %4d) attempting to bind to cpu %2d\n", before_csw_count, cpu_to_bind);
 
-	for (uint32_t i = 0; i < g_spin_threads; i++) {
-		create_thread(&spin_fn, g_spin_threads_pri);
-	}
+		uint64_t start =  mach_absolute_time();
 
-	for (uint32_t i = 0; i < g_threads + g_spin_threads; i++) {
-		kr = semaphore_wait(g_readysem);
-		T_QUIET; T_ASSERT_MACH_SUCCESS(kr, "semaphore_wait");
-	}
+		rv = sysctlbyname("kern.sched_thread_bind_cpu", NULL, 0, &cpu_to_bind, sizeof(cpu_to_bind));
 
-	uint64_t timeout = nanos_to_abs(g_spin_ms * NSEC_PER_MSEC) + mach_absolute_time();
+		uint64_t end =  mach_absolute_time();
 
-	/* spin to warm up CLPC :) */
-	while (mach_absolute_time() < timeout) {
-		;
-	}
-
-	kr = semaphore_signal_all(g_go_sem);
-	T_QUIET; T_ASSERT_MACH_SUCCESS(kr, "semaphore_signal_all");
-
-	for (uint32_t i = 0; i < g_threads + g_spin_threads; i++) {
-		kr = semaphore_wait(g_readysem);
-		T_QUIET; T_ASSERT_MACH_SUCCESS(kr, "semaphore_wait");
-	}
-
-	uint32_t cpus_seen = 0;
-
-	for (uint32_t i = 0; i < g_threads; i++) {
-		if (g_cpu_seen[i]) {
-			cpus_seen++;
+		if (rv == -1 && errno == ENOTSUP) {
+			T_SKIP("Binding is available, but this process doesn't support binding (e.g. Rosetta on Aruba)");
 		}
 
-		printf("cpu %2d: %d\n", i, g_cpu_seen[i]);
+		T_QUIET; T_ASSERT_POSIX_SUCCESS(rv, "kern.sched_thread_bind_cpu(%u)", cpu_to_bind);
+
+		uint32_t os_cpu_number_reported = fixed_os_cpu_number();
+
+		bound_cpu_out = 0;
+		rv = sysctlbyname("kern.sched_thread_bind_cpu", &bound_cpu_out, &bound_cpu_out_size, NULL, 0);
+		T_QUIET; T_ASSERT_POSIX_SUCCESS(rv, "read kern.sched_thread_bind_cpu");
+
+		T_QUIET; T_EXPECT_EQ((int)cpu_to_bind, bound_cpu_out,
+		    "should report bound cpu id matching requested bind target");
+
+		uint64_t delta_abs = end - start;
+		uint64_t delta_ns = abs_to_nanos(delta_abs);
+
+		int32_t after_csw_count = get_csw_count();
+
+		T_LOG("(csw %4d) bound to cpu %2d in %f milliseconds\n",
+		    after_csw_count, cpu_to_bind,
+		    ((double)delta_ns / 1000000.0));
+
+		if (cpu_to_bind > 0) {
+			T_QUIET; T_EXPECT_LT(before_csw_count, after_csw_count,
+			    "should have had to context switch to execute the bind");
+		}
+
+		T_LOG("cpu %2d reported id %2d\n",
+		    cpu_to_bind, os_cpu_number_reported);
+
+		T_QUIET;
+		T_EXPECT_EQ(cpu_to_bind, os_cpu_number_reported,
+		    "should report same CPU number as was bound to");
 	}
 
-	T_ASSERT_EQ(cpus_seen, g_threads, "test should have run threads on all CPUS");
+	int unbind = -1; /* pass -1 in order to unbind the thread */
+
+	rv = sysctlbyname("kern.sched_thread_bind_cpu", NULL, 0, &unbind, sizeof(unbind));
+
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(rv, "kern.sched_thread_bind_cpu(%u)", unbind);
+
+	rv = sysctlbyname("kern.sched_thread_bind_cpu", &bound_cpu_out, &bound_cpu_out_size, NULL, 0);
+
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(rv, "read kern.sched_thread_bind_cpu");
+	T_QUIET; T_ASSERT_EQ(bound_cpu_out, -1, "thread should be unbound at the end");
+
+	T_PASS("test has run threads on all CPUS");
+}
+
+T_DECL(count_clusters,
+    "Tests we can schedule bound threads on all cpu clusters and that _os_cpu_cluster_number matches",
+    XNU_T_META_SOC_SPECIFIC,
+#if __x86_64__
+    T_META_ENABLED(false /* rdar://133956403 */)
+#else
+    T_META_ENABLED(true)
+#endif
+    )
+{
+	int rv;
+
+	cpucount_setup();
+
+	uint8_t cpuclusters = COMM_PAGE_READ(uint8_t, CPU_CLUSTERS);
+	T_LOG("cpuclusters: %2d\n", cpuclusters);
+	T_QUIET; T_ASSERT_GT(cpuclusters, 0, "at least one CPU cluster exists");
+	if (cpuclusters == 1) {
+		T_SKIP("Test is unsupported on non-AMP platforms");
+	}
+
+	uint32_t sysctl_ncpu = 0;
+	size_t ncpu_size = sizeof(sysctl_ncpu);
+	rv = sysctlbyname("hw.ncpu", &sysctl_ncpu, &ncpu_size, NULL, 0);
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(rv, "sysctlbyname(hw.ncpu)");
+	T_LOG("hw.ncpu: %2d\n", sysctl_ncpu);
+
+	uint64_t recommended_cores = 0;
+	size_t recommended_cores_size = sizeof(recommended_cores);
+	rv = sysctlbyname("kern.sched_recommended_cores", &recommended_cores, &recommended_cores_size, NULL, 0);
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(rv, "sysctlbyname(kern.sched_recommended_cores)");
+	T_LOG("kern.sched_recommended_cores: %llu", recommended_cores);
+	if ((uint32_t)__builtin_popcountll(recommended_cores) != sysctl_ncpu) {
+		T_SKIP("Missing recommended cores");
+	}
+
+	int bound_cluster_out = 0;
+	size_t bound_cluster_out_size = sizeof(bound_cluster_out);
+	rv = sysctlbyname("kern.sched_thread_bind_cluster_id", &bound_cluster_out, &bound_cluster_out_size, NULL, 0);
+
+	if (rv == -1) {
+		if (errno == ENOENT) {
+			T_ASSERT_FAIL("kern.sched_thread_bind_cluster_id doesn't exist, must set enable_skstb=1 boot-arg on development kernel");
+		}
+		if (errno == EPERM) {
+			T_ASSERT_FAIL("must run as root");
+		}
+	}
+
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(rv, "read kern.sched_thread_bind_cluster_id");
+	T_QUIET; T_ASSERT_EQ(bound_cluster_out, -1, "kern.sched_thread_bind_cluster_id should exist, start unbound");
+
+	for (uint32_t cluster_to_bind = 0; cluster_to_bind < cpuclusters; cluster_to_bind++) {
+		int32_t before_csw_count = get_csw_count();
+		T_LOG("(csw %4d) attempting to bind to cluster %2d\n", before_csw_count, cluster_to_bind);
+
+		uint64_t start =  mach_absolute_time();
+
+		rv = sysctlbyname("kern.sched_thread_bind_cluster_id", NULL, 0, &cluster_to_bind, sizeof(cluster_to_bind));
+
+		uint64_t end =  mach_absolute_time();
+
+		if (rv == -1 && errno == ENOTSUP) {
+			T_SKIP("Binding is available, but this process doesn't support binding (e.g. Rosetta on Aruba)");
+		}
+
+		T_QUIET; T_ASSERT_POSIX_SUCCESS(rv, "kern.sched_thread_bind_cluster_id(%u)", cluster_to_bind);
+
+		T_LOG("CPU ID: %d", fixed_os_cpu_number());
+
+#if TARGET_CPU_X86_64
+		T_LOG("_os_cpu_cluster_number unsupported under x86.");
+#else
+		unsigned int os_cluster_number_reported = _os_cpu_cluster_number();
+		T_LOG("OS reported cluster number: %2d\n",
+		    os_cluster_number_reported);
+		T_QUIET; T_EXPECT_EQ(cluster_to_bind, os_cluster_number_reported,
+		    "_os_cpu_cluster_number should report same cluster number as was bound to");
+#endif
+
+		unsigned int commpage_cluster_number_reported = commpage_cpu_cluster_number();
+		T_LOG("Comm Page reported cluster number: %u", commpage_cluster_number_reported);
+		T_EXPECT_EQ(commpage_cluster_number_reported, cluster_to_bind, "comm page cluster number matches commpage for this CPU");
+
+		bound_cluster_out = 0;
+		rv = sysctlbyname("kern.sched_thread_bind_cluster_id", &bound_cluster_out, &bound_cluster_out_size, NULL, 0);
+		T_QUIET; T_ASSERT_POSIX_SUCCESS(rv, "read kern.sched_thread_bind_cluster_id");
+
+		T_QUIET; T_EXPECT_EQ((int)cluster_to_bind, bound_cluster_out,
+		    "bound cluster id matches requested bind target");
+
+		uint64_t delta_abs = end - start;
+		uint64_t delta_ns = abs_to_nanos(delta_abs);
+
+		int32_t after_csw_count = get_csw_count();
+
+		T_LOG("(csw %4d) bound to cluster %2d in %f milliseconds\n",
+		    after_csw_count, cluster_to_bind,
+		    ((double)delta_ns / 1000000.0));
+
+		if (cluster_to_bind > 0) {
+			T_QUIET; T_EXPECT_LT(before_csw_count, after_csw_count,
+			    "should have had to context switch to execute the bind");
+		}
+	}
+
+	int unbind = -1; /* pass -1 in order to unbind the thread */
+
+	rv = sysctlbyname("kern.sched_thread_bind_cluster_id", NULL, 0, &unbind, sizeof(unbind));
+
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(rv, "kern.sched_thread_bind_cluster_id(%u)", unbind);
+
+	rv = sysctlbyname("kern.sched_thread_bind_cluster_id", &bound_cluster_out, &bound_cluster_out_size, NULL, 0);
+
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(rv, "read kern.sched_thread_bind_cluster_id");
+	T_QUIET; T_ASSERT_EQ(bound_cluster_out, -1, "thread should be unbound at the end");
+
+	T_PASS("test has run threads on all clusters");
+}
+
+T_DECL(check_cpu_topology,
+    "Verify _os_cpu_cluster_number(), _os_cpu_number() against IORegistry",
+    XNU_T_META_SOC_SPECIFIC,
+    T_META_ENABLED(TARGET_CPU_ARM || TARGET_CPU_ARM64))
+{
+	int rv;
+	uint32_t cpu_id, cluster_id;
+	kern_return_t kr;
+	io_iterator_t cpus_iter = 0;
+	io_service_t cpus_service = 0;
+	io_service_t cpu_service = 0;
+	CFDictionaryRef match = NULL;
+
+	cpucount_setup();
+
+	int bound_cpu_out = 0;
+	size_t bound_cpu_out_size = sizeof(bound_cpu_out);
+	rv = sysctlbyname("kern.sched_thread_bind_cpu", &bound_cpu_out, &bound_cpu_out_size, NULL, 0);
+
+	if (rv == -1) {
+		if (errno == ENOENT) {
+			T_FAIL("kern.sched_thread_bind_cpu doesn't exist, must set enable_skstb=1 boot-arg on development kernel");
+		}
+		if (errno == EPERM) {
+			T_FAIL("must run as root");
+		}
+	}
+
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(rv, "read kern.sched_thread_bind_cpu");
+	T_QUIET; T_ASSERT_EQ(bound_cpu_out, -1, "kern.sched_thread_bind_cpu should exist, start unbound");
+
+	match = IOServiceNameMatching("cpus");
+	cpus_service = IOServiceGetMatchingService(kIOMainPortDefault, match);
+	match = NULL; // consumes reference to match
+	T_QUIET; T_ASSERT_NE(cpus_service, (io_service_t)0, "Failed get cpus IOService");
+
+	kr = IORegistryEntryGetChildIterator(cpus_service, "IODeviceTree", &cpus_iter);
+	T_QUIET; T_ASSERT_MACH_SUCCESS(kr, "IORegistryEntryGetChildIterator");
+
+	while ((cpu_service = IOIteratorNext(cpus_iter)) != 0) {
+		CFMutableDictionaryRef props = NULL;
+		kr = IORegistryEntryCreateCFProperties(cpu_service, &props, kCFAllocatorDefault, 0);
+		T_QUIET; T_ASSERT_MACH_SUCCESS(kr, "IORegistryEntryCreateCFProperties");
+
+		dict_uint32(props, CFSTR("logical-cpu-id"), &cpu_id);
+		T_LOG("IORegistry logical cpu id: %u", cpu_id);
+		dict_uint32(props, CFSTR("logical-cluster-id"), &cluster_id);
+		T_LOG("IORegistry logical cpu cluster id: %u", cluster_id);
+
+		T_LOG("Binding thread to cpu %u", cpu_id);
+		rv = sysctlbyname("kern.sched_thread_bind_cpu", NULL, 0, &cpu_id, sizeof(cpu_id));
+		if (rv == -1 && errno == ENOTSUP) {
+			T_SKIP("Binding is available, but this process doesn't support binding (e.g. Rosetta on Aruba)");
+		}
+		T_QUIET; T_ASSERT_POSIX_SUCCESS(rv, "kern.sched_thread_bind_cpu(%u)", cpu_id);
+
+		unsigned int os_cpu_number_reported = fixed_os_cpu_number();
+		T_EXPECT_EQ(os_cpu_number_reported, cpu_id, "_os_cpu_number matches IORegistry entry for this CPU");
+		unsigned int os_cluster_number_reported = _os_cpu_cluster_number();
+		T_EXPECT_EQ(os_cluster_number_reported, cluster_id, "_os_cpu_cluster_number matches IORegistry entry for this CPU");
+		unsigned int commpage_cluster_number_reported = commpage_cpu_cluster_number();
+		T_EXPECT_EQ(commpage_cluster_number_reported, cluster_id, "comm page cluster number matches IORegistry entry for this CPU");
+
+		CFRelease(props);
+		IOObjectRelease(cpu_service);
+	}
+	T_PASS("All cluster IDs match with IORegistry");
+}
+
+T_DECL(hw_perflevels_order_and_cpu_counts,
+    "check that perflevel sysctls return the correct order and with expected cpu counts",
+    XNU_T_META_SOC_SPECIFIC)
+{
+	int ret;
+	char sysctlname[256];
+
+	/* Check perflevel count */
+	int level_count = 0;
+	ret = sysctlbyname("hw.nperflevels", &level_count, &(size_t){ sizeof(level_count) }, NULL, 0);
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(ret, "hw.nperflevels");
+	T_EXPECT_GE(level_count, 1, "valid hw.nperflevels: %d", level_count);
+
+	/* Check perflevel names */
+	char perflevel_name[level_count][128];
+	int efficient_pos = -1;
+	int performance_pos = -1;
+	int standard_pos = -1;
+	for (int p = 0; p < level_count; p++) {
+		snprintf(sysctlname, sizeof(sysctlname), "hw.perflevel%d.name", p);
+		ret = sysctlbyname(sysctlname, perflevel_name[p], &(size_t){ sizeof(perflevel_name[p]) }, NULL, 0);
+		T_QUIET; T_ASSERT_POSIX_SUCCESS(ret, sysctlname);
+		if (strcmp(perflevel_name[p], "Efficiency") == 0) {
+			efficient_pos = p;
+		} else if (strcmp(perflevel_name[p], "Performance") == 0) {
+			performance_pos = p;
+		} else if (strcmp(perflevel_name[p], "Standard") == 0) {
+			standard_pos = p;
+		}
+	}
+	T_ASSERT_TRUE((efficient_pos >= 0) || (performance_pos >= 0) || (standard_pos >= 0),
+	    "valid perflevels detected (\"Efficient\" %d, \"Performance\" %d, \"Standard\" %d)",
+	    efficient_pos, performance_pos, standard_pos);
+	if (standard_pos >= 0) {
+		T_ASSERT_EQ(level_count, 1, "single \"Standard\" perflevel");
+	}
+	if (efficient_pos >= 0) {
+		T_ASSERT_EQ(efficient_pos, level_count - 1, "\"Efficiency\" is the highest index perflevel");
+	}
+	if (performance_pos >= 0) {
+		T_ASSERT_EQ(performance_pos, 0, "\"Performance\" is the lowest index perflevel");
+	}
+
+	/*
+	 * Check that certain variants of CPU counts sum up to the expected total
+	 * across all perflevels.
+	 */
+	const int num_cpu_count_variants = 2;
+	char *cpu_count_variants[num_cpu_count_variants] = {"physicalcpu_max", "logicalcpu_max"};
+	for (int v = 0; v < num_cpu_count_variants; v++) {
+		unsigned int total_amount = 0;
+		snprintf(sysctlname, sizeof(sysctlname), "hw.%s", cpu_count_variants[v]);
+		ret = sysctlbyname(sysctlname, &total_amount, &(size_t){ sizeof(total_amount) }, NULL, 0);
+		T_QUIET; T_ASSERT_POSIX_SUCCESS(ret, sysctlname);
+		unsigned int amount_from_perflevels = 0;
+		for (int p = 0; p < level_count; p++) {
+			unsigned int perflevel_amount = 0;
+			snprintf(sysctlname, sizeof(sysctlname), "hw.perflevel%d.%s", p, cpu_count_variants[v]);
+			ret = sysctlbyname(sysctlname, &perflevel_amount, &(size_t){ sizeof(perflevel_amount) }, NULL, 0);
+			T_QUIET; T_ASSERT_POSIX_SUCCESS(ret, sysctlname);
+			amount_from_perflevels += perflevel_amount;
+		}
+		T_EXPECT_EQ(total_amount, amount_from_perflevels, "all %u %s accounted for", total_amount, cpu_count_variants[v]);
+	}
 }

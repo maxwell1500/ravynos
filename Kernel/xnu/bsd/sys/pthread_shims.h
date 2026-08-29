@@ -160,9 +160,9 @@ typedef const struct pthread_callbacks_s {
 
 	thread_t (*task_findtid)(task_t t, uint64_t tid);
 	void (*thread_deallocate_safe)(thread_t);
-	void *__unused_was_proc_get_dispatchqueue_offset;
+	bool (*proc_get_jit_entitled)(struct proc *t);
 	void (*proc_set_dispatchqueue_offset)(struct proc *t, uint64_t offset);
-	void *__unused_was_proc_get_wqlockptr;
+	bool (*proc_get_pthread_jit_allowlist2)(struct proc *t, bool *late_out);
 	void *__unused_was_proc_get_wqinitingptr;
 	void *__unused_was_proc_get_wqptr;
 
@@ -198,11 +198,11 @@ typedef const struct pthread_callbacks_s {
 
 	/* vm_protos.h calls */
 	ipc_space_t (*task_get_ipcspace)(task_t t);
-	mach_port_name_t (*ipc_port_copyout_send)(ipc_port_t sright, ipc_space_t space);
+	void *__unused_was_ipc_port_copyout_send;
 
 	/* osfmk/vm/vm_map.h */
 	kern_return_t (*vm_map_page_info)(vm_map_t map, vm_map_offset_t offset, vm_page_info_flavor_t flavor, vm_page_info_t info, mach_msg_type_number_t *count);
-	void *__unused_was_vm_map_switch;
+	mach_port_name_t (*ipc_port_copyout_send_pinned)(ipc_port_t sright, ipc_space_t space);
 
 	/* wq functions */
 	kern_return_t (*thread_set_wq_state32)(thread_t thread, thread_state_t state);
@@ -242,11 +242,8 @@ typedef const struct pthread_callbacks_s {
 	kern_return_t (*semaphore_signal_internal_trap)(mach_port_name_t sema_name);
 	vm_map_t (*current_map)(void);
 
-	/* osfmk/kern/thread.h */
-	ipc_port_t (*convert_thread_to_port)(thread_t th);
-
-	/* mach/task.h */
-	kern_return_t (*thread_create)(task_t parent_task, thread_act_t *child_act);
+	void *__unused_was_convert_thread_to_port;
+	void *__unused_was_thread_create;
 
 	/* mach/thread_act.h */
 	kern_return_t (*thread_resume)(thread_act_t target_act);
@@ -266,7 +263,7 @@ typedef const struct pthread_callbacks_s {
 	void *__unused_was_proc_set_dispatchqueue_serialno_offset;
 
 	void *__unused_was_proc_usynch_thread_qos_add_override_for_resource_check_owner;
-	void *__unused_was_proc_set_stack_addr_hint;
+	void (*proc_set_workqueue_quantum_offset)(struct proc *p, uint64_t offset);
 
 	uint32_t (*proc_get_pthread_tsd_offset)(struct proc *p);
 	void (*proc_set_pthread_tsd_offset)(struct proc *p, uint32_t pthread_tsd_offset);
@@ -291,14 +288,15 @@ typedef const struct pthread_callbacks_s {
 	uint16_t (*thread_set_tag)(thread_t thread, uint16_t tag);
 	uint16_t (*thread_get_tag)(thread_t thread);
 
-	void *__unused_was_proc_usynch_thread_qos_squash_override_for_resource;
-	void *__unused_was_task_get_default_manager_qos;
-	void *__unused_was_thread_create_workq_waiting;
+	void *__unused_was_thread_create_pinned;
+
+	kern_return_t (*thread_terminate_pinned)(thread_t thread);
+	ipc_port_t (*convert_thread_to_port_pinned)(thread_t th);
 
 	user_addr_t (*proc_get_stack_addr_hint)(struct proc *p);
 	void (*proc_set_stack_addr_hint)(struct proc *p, user_addr_t stack_addr_hint);
 
-	void *__unused_was_proc_get_return_to_kernel_offset;
+	kern_return_t (*thread_create_immovable)(task_t parent_task, thread_t *new_thread);
 	void (*proc_set_return_to_kernel_offset)(struct proc *t, uint64_t offset);
 
 	void *__unused_was_workloop_fulfill_threadreq;

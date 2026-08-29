@@ -24,7 +24,7 @@ static_assert(POLL_TIMEOUT_MS > (SLEEP_TIME_SECS * 1000),
  * See <rdar://problem/28372390>.
  */
 T_DECL(sleep_with_no_fds,
-    "poll() called with no fds provided should act like sleep")
+    "poll() called with no fds provided should act like sleep", T_META_TAG_VM_PREFERRED)
 {
 	uint64_t begin_time, sleep_time, poll_time;
 	struct pollfd pfd = { .fd = 0, .events = 0, .revents = 0 };
@@ -50,7 +50,7 @@ T_DECL(sleep_with_no_fds,
  * See <rdar://problem/28539155>.
  */
 T_DECL(directories,
-    "poll() with directories should return an error")
+    "poll() with directories should return an error", T_META_TAG_VM_PREFERRED)
 {
 	int file, dir, pipes[2];
 	struct pollfd pfd[] = {
@@ -127,4 +127,53 @@ T_DECL(directories,
 	T_QUIET; T_EXPECT_TRUE(pfd[0].revents & POLLNVAL,
 	    "directory should be an invalid event");
 	T_QUIET; T_EXPECT_FALSE(pfd[1].revents & POLLIN, "pipe should not be readable");
+}
+
+#define PRIVATE
+#include <libproc.h>
+
+static void *
+leak_thread(void *ptr)
+{
+	T_LOG("Trying to find kevent kernel pointer...\n");
+
+	unsigned char *buffer = (unsigned char*) malloc(16392 * 8);
+
+	while (1) {
+		memset(buffer, 0, 16392 * 8);
+
+		// Dump the kevent udatas for self
+		int ret = proc_list_uptrs(getpid(), buffer, 16392 * 8);
+
+		if (ret > 0) {
+			T_LOG("udata pointers returned: %d\n", ret);
+			uint64_t *ptrs = (uint64_t*) buffer;
+			for (int i = 0; i < ret; i++) {
+				T_EXPECT_EQ(ptrs[i] & 0xffffff0000000000, 0, "kptr? -> 0x%llx\n", ptrs[i]);
+			}
+			break;
+		}
+	}
+
+	free(buffer);
+	return NULL;
+}
+
+T_DECL(poll_dont_leak_kernel_pointers, "poll and proc_pidinfo should not leak kernel pointers", T_META_TAG_VM_PREFERRED)
+{
+	pthread_t thr;
+	pthread_create(&thr, NULL, *leak_thread, (void *) NULL);
+
+	struct pollfd fds[2] = {};
+	fds[0].fd = STDERR_FILENO;
+	fds[0].events = POLLERR | POLLHUP;
+	fds[0].revents = POLLERR;
+	fds[1].fd = STDOUT_FILENO;
+	fds[1].events = POLLERR | POLLHUP;
+	fds[1].revents = POLLERR;
+
+	//int poll_nocancel(struct pollfd *fds, u_int nfds, int timeout)
+	poll(fds, 2, 5000);
+
+	pthread_join(thr, NULL);
 }

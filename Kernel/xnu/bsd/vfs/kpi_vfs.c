@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2022 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -84,13 +84,14 @@
 #include <sys/mount.h>
 #include <sys/mount_internal.h>
 #include <sys/time.h>
+#include <sys/disk.h>
 #include <sys/vnode_internal.h>
 #include <sys/stat.h>
 #include <sys/namei.h>
 #include <sys/ucred.h>
 #include <sys/buf.h>
 #include <sys/errno.h>
-#include <sys/malloc.h>
+#include <kern/kalloc.h>
 #include <sys/domain.h>
 #include <sys/mbuf.h>
 #include <sys/syslog.h>
@@ -106,7 +107,7 @@
 #include <sys/kdebug.h>
 
 #include <kern/assert.h>
-#include <kern/kalloc.h>
+#include <kern/zalloc.h>
 #include <kern/task.h>
 #include <kern/policy_internal.h>
 
@@ -144,8 +145,17 @@ static void xattrfile_setattr(vnode_t dvp, const char * basename,
     struct vnode_attr * vap, vfs_context_t ctx);
 #endif /* CONFIG_APPLEDOUBLE */
 
+extern lck_rw_t rootvnode_rw_lock;
+
 static errno_t post_rename(vnode_t fdvp, vnode_t fvp, vnode_t tdvp, vnode_t tvp);
 
+KALLOC_TYPE_DEFINE(KT_VFS_CONTEXT, struct vfs_context, KT_PRIV_ACCT);
+
+extern int fstypenumstart;
+char vfs_typenum_arr[13];
+
+LCK_GRP_DECLARE(typenum_arr_grp, "typenum array group");
+LCK_MTX_DECLARE(vfs_typenum_mtx, &typenum_arr_grp);
 /*
  * vnode_setneedinactive
  *
@@ -441,7 +451,13 @@ vfs_typenum(mount_t mp)
 void*
 vfs_mntlabel(mount_t mp)
 {
-	return (void*)mp->mnt_mntlabel;
+	return (void*)mac_mount_label(mp);
+}
+
+uint64_t
+vfs_mount_id(mount_t mp)
+{
+	return mp->mnt_mount_id;
 }
 
 /* returns command modifier flags of mount_t ie. MNT_CMDFLAGS */
@@ -643,6 +659,30 @@ vfs_setextendedsecurity(mount_t mp)
 }
 
 void
+vfs_setmntsystem(mount_t mp)
+{
+	mount_lock(mp);
+	mp->mnt_kern_flag |= MNTK_SYSTEM;
+	mount_unlock(mp);
+}
+
+void
+vfs_setmntsystemdata(mount_t mp)
+{
+	mount_lock(mp);
+	mp->mnt_kern_flag |= MNTK_SYSTEMDATA;
+	mount_unlock(mp);
+}
+
+void
+vfs_setmntswap(mount_t mp)
+{
+	mount_lock(mp);
+	mp->mnt_kern_flag |= (MNTK_SYSTEM | MNTK_SWAP_MOUNT);
+	mount_unlock(mp);
+}
+
+void
 vfs_clearextendedsecurity(mount_t mp)
 {
 	mount_lock(mp);
@@ -686,6 +726,12 @@ vfs_setmaxsymlen(mount_t mp, uint32_t symlen)
 	mp->mnt_maxsymlinklen = symlen;
 }
 
+boolean_t
+vfs_is_basesystem(mount_t mp)
+{
+	return ((mp->mnt_supl_kern_flag & MNTK_SUPL_BASESYSTEM) == 0) ? false : true;
+}
+
 /* return a pointer to the RO vfs_statfs associated with mount_t */
 struct vfsstatfs *
 vfs_statfs(mount_t mp)
@@ -725,7 +771,7 @@ vfs_setattr(mount_t mp, struct vfs_attr *vfa, vfs_context_t ctx)
 	 * the volume name
 	 */
 	if (vfs_isrdonly(mp) &&
-	    !((mp->mnt_flag & MNT_ROOTFS) && (vfa->f_active == VFSATTR_f_vol_name))) {
+	    !((strcmp(mp->mnt_vfsstat.f_fstypename, "apfs") == 0) && (vfa->f_active == VFSATTR_f_vol_name))) {
 		return EROFS;
 	}
 
@@ -784,6 +830,28 @@ vfs_vnodecovered(mount_t mp)
 	} else {
 		return vp;
 	}
+}
+
+int
+vfs_setdevvp(mount_t mp, vnode_t devvp)
+{
+	if (mp == NULL) {
+		return 0;
+	}
+
+	if (devvp) {
+		if (devvp->v_type != VBLK) {
+			return EINVAL;
+		}
+
+		if (major(devvp->v_rdev) >= nblkdev) {
+			return ENXIO;
+		}
+	}
+
+	mp->mnt_devvp = devvp;
+
+	return 0;
 }
 
 /*
@@ -899,16 +967,40 @@ vfs_fsadd(struct vfs_fsentry *vfe, vfstable_t *handle)
 		return EINVAL;
 	}
 
-	MALLOC(newvfstbl, void *, sizeof(struct vfstable), M_TEMP,
-	    M_WAITOK);
-	bzero(newvfstbl, sizeof(struct vfstable));
+	newvfstbl = kalloc_type(struct vfstable, Z_WAITOK | Z_ZERO);
 	newvfstbl->vfc_vfsops = vfe->vfe_vfsops;
 	strncpy(&newvfstbl->vfc_name[0], vfe->vfe_fsname, MFSNAMELEN);
 	if ((vfe->vfe_flags & VFS_TBLNOTYPENUM)) {
-		newvfstbl->vfc_typenum = maxvfstypenum++;
+		int tmp;
+		int found = 0;
+		lck_mtx_lock(&vfs_typenum_mtx);
+		for (tmp = fstypenumstart; tmp < OID_AUTO_START; tmp++) {
+			if (isclr(vfs_typenum_arr, tmp)) {
+				newvfstbl->vfc_typenum = tmp;
+				setbit(vfs_typenum_arr, tmp);
+				found = 1;
+				break;
+			}
+		}
+		if (!found) {
+			lck_mtx_unlock(&vfs_typenum_mtx);
+			return EINVAL;
+		}
+		if (maxvfstypenum < OID_AUTO_START) {
+			/* getvfsbyname checks up to but not including maxvfstypenum */
+			maxvfstypenum = newvfstbl->vfc_typenum + 1;
+		}
+		lck_mtx_unlock(&vfs_typenum_mtx);
 	} else {
 		newvfstbl->vfc_typenum = vfe->vfe_fstypenum;
+		lck_mtx_lock(&vfs_typenum_mtx);
+		setbit(vfs_typenum_arr, newvfstbl->vfc_typenum);
+		if (newvfstbl->vfc_typenum >= maxvfstypenum) {
+			maxvfstypenum = newvfstbl->vfc_typenum + 1;
+		}
+		lck_mtx_unlock(&vfs_typenum_mtx);
 	}
+
 
 	newvfstbl->vfc_refcount = 0;
 	newvfstbl->vfc_flags = 0;
@@ -964,10 +1056,8 @@ vfs_fsadd(struct vfs_fsentry *vfe, vfstable_t *handle)
 	 */
 	/* XXX - shouldn't be M_TEMP */
 
-	descsize = desccount * vfs_opv_numops * sizeof(PFI);
-	MALLOC(descptr, PFI *, descsize,
-	    M_TEMP, M_WAITOK);
-	bzero(descptr, descsize);
+	descsize = desccount * vfs_opv_numops;
+	descptr = kalloc_type(PFI, descsize, Z_WAITOK | Z_ZERO);
 
 	newvfstbl->vfc_descptr = descptr;
 	newvfstbl->vfc_descsize = descsize;
@@ -1024,7 +1114,6 @@ vfs_fsadd(struct vfs_fsentry *vfe, vfstable_t *handle)
 			    opve_descp->opve_impl;
 		}
 
-
 		/*
 		 * Finally, go back and replace unfilled routines
 		 * with their default.  (Sigh, an O(n^3) algorithm.  I
@@ -1047,13 +1136,7 @@ vfs_fsadd(struct vfs_fsentry *vfe, vfstable_t *handle)
 		}
 	} /* end of each vnodeopv_desc parsing */
 
-
-
 	*handle = vfstable_add(newvfstbl);
-
-	if (newvfstbl->vfc_typenum <= maxvfstypenum) {
-		maxvfstypenum = newvfstbl->vfc_typenum + 1;
-	}
 
 	if (newvfstbl->vfc_vfsops->vfs_init) {
 		struct vfsconf vfsc;
@@ -1069,7 +1152,7 @@ vfs_fsadd(struct vfs_fsentry *vfe, vfstable_t *handle)
 		(*newvfstbl->vfc_vfsops->vfs_init)(&vfsc);
 	}
 
-	FREE(newvfstbl, M_TEMP);
+	kfree_type(struct vfstable, newvfstbl);
 
 	return 0;
 }
@@ -1084,6 +1167,7 @@ vfs_fsremove(vfstable_t handle)
 {
 	struct vfstable * vfstbl =  (struct vfstable *)handle;
 	void *old_desc = NULL;
+	size_t descsize = 0;
 	errno_t err;
 
 	/* Preflight check for any mounts */
@@ -1093,20 +1177,29 @@ vfs_fsremove(vfstable_t handle)
 		return EBUSY;
 	}
 
+	/* Free the spot in vfs_typenum_arr */
+	lck_mtx_lock(&vfs_typenum_mtx);
+	clrbit(vfs_typenum_arr, handle->vfc_typenum);
+	if (maxvfstypenum == handle->vfc_typenum) {
+		maxvfstypenum--;
+	}
+	lck_mtx_unlock(&vfs_typenum_mtx);
+
 	/*
 	 * save the old descriptor; the free cannot occur unconditionally,
 	 * since vfstable_del() may fail.
 	 */
 	if (vfstbl->vfc_descptr && vfstbl->vfc_descsize) {
 		old_desc = vfstbl->vfc_descptr;
+		descsize = vfstbl->vfc_descsize;
 	}
 	err = vfstable_del(vfstbl);
 
 	mount_list_unlock();
 
 	/* free the descriptor if the delete was successful */
-	if (err == 0 && old_desc) {
-		FREE(old_desc, M_TEMP);
+	if (err == 0) {
+		kfree_type(PFI, descsize, old_desc);
 	}
 
 	return err;
@@ -1141,10 +1234,45 @@ vfs_idle_time(mount_t mp)
 	       + now.tv_usec - mp->mnt_last_write_completed_timestamp.tv_usec;
 }
 
+/*
+ * vfs_context_create_with_proc() takes a reference on an arbitrary
+ * thread in the process.  To distinguish this reference-counted thread
+ * from the usual non-reference-counted thread, we set the least significant
+ * bit of of vc_thread.
+ */
+#define VFS_CONTEXT_THREAD_IS_REFERENCED(ctx) \
+	(!!(((uintptr_t)(ctx)->vc_thread) & 1UL))
+
+#define VFS_CONTEXT_SET_REFERENCED_THREAD(ctx, thr) \
+	(ctx)->vc_thread = (thread_t)(((uintptr_t)(thr)) | 1UL)
+
+#define VFS_CONTEXT_GET_THREAD(ctx) \
+	((thread_t)(((uintptr_t)(ctx)->vc_thread) & ~1UL))
+
 int
 vfs_context_pid(vfs_context_t ctx)
 {
 	return proc_pid(vfs_context_proc(ctx));
+}
+
+int
+vfs_context_copy_audit_token(vfs_context_t ctx, audit_token_t *token)
+{
+	kern_return_t           err;
+	task_t                  task;
+	mach_msg_type_number_t  info_size = TASK_AUDIT_TOKEN_COUNT;
+
+	task = vfs_context_task(ctx);
+
+	if (task == NULL) {
+		// Not sure how this would happen; we are supposed to be
+		// in the middle of using the context. Regardless, don't
+		// wander off a NULL pointer.
+		return ESRCH;
+	}
+
+	err = task_info(task, TASK_AUDIT_TOKEN, (integer_t *)token, &info_size);
+	return (err) ? ESRCH : 0;
 }
 
 int
@@ -1172,14 +1300,96 @@ vfs_context_issignal(vfs_context_t ctx, sigset_t mask)
 int
 vfs_context_is64bit(vfs_context_t ctx)
 {
+	uthread_t uth;
+	thread_t t;
+
+	if (ctx != NULL && (t = VFS_CONTEXT_GET_THREAD(ctx)) != NULL) {
+		uth = get_bsdthread_info(t);
+	} else {
+		uth = current_uthread();
+	}
+	return uthread_is64bit(uth);
+}
+
+boolean_t
+vfs_context_can_resolve_triggers(vfs_context_t ctx)
+{
 	proc_t proc = vfs_context_proc(ctx);
 
 	if (proc) {
-		return proc_is64bit(proc);
+		if (proc->p_vfs_iopolicy &
+		    P_VFS_IOPOLICY_TRIGGER_RESOLVE_DISABLE) {
+			return false;
+		}
+		return true;
 	}
-	return 0;
+	return false;
 }
 
+boolean_t
+vfs_context_can_break_leases(vfs_context_t ctx)
+{
+	proc_t proc = vfs_context_proc(ctx);
+
+	if (proc) {
+		/*
+		 * We do not have a separate I/O policy for this,
+		 * because the scenarios where we would not want
+		 * local file lease breaks are currently exactly
+		 * the same as where we would not want dataless
+		 * file materialization (mainly, system daemons
+		 * passively snooping file activity).
+		 */
+		if (proc->p_vfs_iopolicy &
+		    P_VFS_IOPOLICY_MATERIALIZE_DATALESS_FILES) {
+			return true;
+		}
+		return false;
+	}
+	return true;
+}
+
+bool
+vfs_context_allow_fs_blksize_nocache_write(vfs_context_t ctx)
+{
+	uthread_t uth;
+	thread_t t;
+	proc_t p;
+
+	if ((ctx == NULL) || (t = VFS_CONTEXT_GET_THREAD(ctx)) == NULL) {
+		return false;
+	}
+
+	uth = get_bsdthread_info(t);
+	if (uth && (uth->uu_flag & UT_FS_BLKSIZE_NOCACHE_WRITES)) {
+		return true;
+	}
+
+	p = (proc_t)get_bsdthreadtask_info(t);
+	if (p && (os_atomic_load(&p->p_vfs_iopolicy, relaxed) & P_VFS_IOPOLICY_NOCACHE_WRITE_FS_BLKSIZE)) {
+		return true;
+	}
+
+	return false;
+}
+
+boolean_t
+vfs_context_skip_mtime_update(vfs_context_t ctx)
+{
+	proc_t p = vfs_context_proc(ctx);
+	thread_t t = vfs_context_thread(ctx);
+	uthread_t ut = t ? get_bsdthread_info(t) : NULL;
+
+	if (ut && (os_atomic_load(&ut->uu_flag, relaxed) & UT_SKIP_MTIME_UPDATE)) {
+		return true;
+	}
+
+	if (p && (os_atomic_load(&p->p_vfs_iopolicy, relaxed) & P_VFS_IOPOLICY_SKIP_MTIME_UPDATE)) {
+		return true;
+	}
+
+	return false;
+}
 
 /*
  * vfs_context_proc
@@ -1198,22 +1408,18 @@ vfs_context_is64bit(vfs_context_t ctx)
  *		o	There is no Mach task associated with the Mach thread
  *		o	There is no proc_t associated with the Mach task
  *		o	The proc_t has no per process open file table
- *		o	The proc_t is post-vfork()
  *
  *		This causes this function to return a value matching as
- *		closely as possible the previous behaviour, while at the
- *		same time avoiding the task lending that results from vfork()
+ *		closely as possible the previous behaviour.
  */
 proc_t
 vfs_context_proc(vfs_context_t ctx)
 {
 	proc_t  proc = NULL;
+	thread_t t;
 
-	if (ctx != NULL && ctx->vc_thread != NULL) {
-		proc = (proc_t)get_bsdthreadtask_info(ctx->vc_thread);
-	}
-	if (proc != NULL && (proc->p_fd == NULL || (proc->p_lflag & P_LVFORK))) {
-		proc = NULL;
+	if (ctx != NULL && (t = VFS_CONTEXT_GET_THREAD(ctx)) != NULL) {
+		proc = (proc_t)get_bsdthreadtask_info(t);
 	}
 
 	return proc == NULL ? current_proc() : proc;
@@ -1234,13 +1440,7 @@ vfs_context_proc(vfs_context_t ctx)
 kern_return_t
 vfs_context_get_special_port(vfs_context_t ctx, int which, ipc_port_t *portp)
 {
-	task_t                  task = NULL;
-
-	if (ctx != NULL && ctx->vc_thread != NULL) {
-		task = get_threadtask(ctx->vc_thread);
-	}
-
-	return task_get_special_port(task, which, portp);
+	return task_get_special_port(vfs_context_task(ctx), which, portp);
 }
 
 /*
@@ -1258,13 +1458,8 @@ vfs_context_get_special_port(vfs_context_t ctx, int which, ipc_port_t *portp)
 kern_return_t
 vfs_context_set_special_port(vfs_context_t ctx, int which, ipc_port_t port)
 {
-	task_t                  task = NULL;
-
-	if (ctx != NULL && ctx->vc_thread != NULL) {
-		task = get_threadtask(ctx->vc_thread);
-	}
-
-	return task_set_special_port_internal(task, which, port);
+	return task_set_special_port_internal(vfs_context_task(ctx),
+	           which, port);
 }
 
 /*
@@ -1287,9 +1482,38 @@ vfs_context_set_special_port(vfs_context_t ctx, int which, ipc_port_t port)
 thread_t
 vfs_context_thread(vfs_context_t ctx)
 {
-	return ctx->vc_thread;
+	return VFS_CONTEXT_GET_THREAD(ctx);
 }
 
+/*
+ * vfs_context_task
+ *
+ * Description:	Return the Mach task associated with a vfs_context_t
+ *
+ * Parameters:	vfs_context_t			The context to use
+ *
+ * Returns:	task_t				The task for this context, or
+ *						NULL, if there is not one.
+ *
+ * Notes:	NULL task_t's are legal, but discouraged.  They occur only
+ *		as a result of a static vfs_context_t declaration in a function
+ *		and will result in this function returning NULL.
+ *
+ *		This is intentional; this function should NOT return the
+ *		task associated with current_thread() in this case.
+ */
+task_t
+vfs_context_task(vfs_context_t ctx)
+{
+	task_t                  task = NULL;
+	thread_t                t;
+
+	if (ctx != NULL && (t = VFS_CONTEXT_GET_THREAD(ctx)) != NULL) {
+		task = get_threadtask(t);
+	}
+
+	return task;
+}
 
 /*
  * vfs_context_cwd
@@ -1311,9 +1535,10 @@ vnode_t
 vfs_context_cwd(vfs_context_t ctx)
 {
 	vnode_t cwd = NULLVP;
+	thread_t t;
 
-	if (ctx != NULL && ctx->vc_thread != NULL) {
-		uthread_t uth = get_bsdthread_info(ctx->vc_thread);
+	if (ctx != NULL && (t = VFS_CONTEXT_GET_THREAD(ctx)) != NULL) {
+		uthread_t uth = get_bsdthread_info(t);
 		proc_t proc;
 
 		/*
@@ -1321,9 +1546,8 @@ vfs_context_cwd(vfs_context_t ctx)
 		 * from the process, instead.
 		 */
 		if ((cwd = uth->uu_cdir) == NULLVP &&
-		    (proc = (proc_t)get_bsdthreadtask_info(ctx->vc_thread)) != NULL &&
-		    proc->p_fd != NULL) {
-			cwd = proc->p_fd->fd_cdir;
+		    (proc = (proc_t)get_bsdthreadtask_info(t)) != NULL) {
+			cwd = proc->p_fd.fd_cdir;
 		}
 	}
 
@@ -1348,74 +1572,78 @@ vfs_context_create(vfs_context_t ctx)
 {
 	vfs_context_t newcontext;
 
-	newcontext = (vfs_context_t)kalloc(sizeof(struct vfs_context));
+	newcontext = zalloc_flags(KT_VFS_CONTEXT, Z_WAITOK | Z_ZERO | Z_NOFAIL);
 
-	if (newcontext) {
-		kauth_cred_t safecred;
-		if (ctx) {
-			newcontext->vc_thread = ctx->vc_thread;
-			safecred = ctx->vc_ucred;
-		} else {
-			newcontext->vc_thread = current_thread();
-			safecred = kauth_cred_get();
-		}
-		if (IS_VALID_CRED(safecred)) {
-			kauth_cred_ref(safecred);
-		}
-		newcontext->vc_ucred = safecred;
-		return newcontext;
+	if (ctx == NULL) {
+		ctx = vfs_context_current();
 	}
-	return NULL;
+	*newcontext = *ctx;
+	if (IS_VALID_CRED(ctx->vc_ucred)) {
+		kauth_cred_ref(ctx->vc_ucred);
+	}
+
+	return newcontext;
 }
 
+/*
+ * vfs_context_create_with_proc
+ *
+ * Description: Create a new context with credentials taken from
+ *              the specified proc.
+ *
+ * Parameters:  proc_t: The process whose crendials to use.
+ *
+ * Returns:     Pointer to new context.
+ *
+ * Notes:       The context will also take a reference on an arbitrary
+ *              thread in the process as well as the process's credentials.
+ */
+vfs_context_t
+vfs_context_create_with_proc(proc_t p)
+{
+	vfs_context_t newcontext;
+	thread_t thread;
+	kauth_cred_t cred;
+
+	if (p == current_proc()) {
+		return vfs_context_create(NULL);
+	}
+
+	newcontext = zalloc_flags(KT_VFS_CONTEXT, Z_WAITOK | Z_ZERO | Z_NOFAIL);
+
+	proc_lock(p);
+	thread = proc_thread(p);        /* XXX */
+	if (thread != NULL) {
+		thread_reference(thread);
+	}
+	proc_unlock(p);
+
+	cred = kauth_cred_proc_ref(p);
+
+	if (thread != NULL) {
+		VFS_CONTEXT_SET_REFERENCED_THREAD(newcontext, thread);
+	}
+	newcontext->vc_ucred = cred;
+
+	return newcontext;
+}
 
 vfs_context_t
 vfs_context_current(void)
 {
-	vfs_context_t ctx = NULL;
-	volatile uthread_t ut = (uthread_t)get_bsdthread_info(current_thread());
+	static_assert(offsetof(struct thread_ro, tro_owner) ==
+	    offsetof(struct vfs_context, vc_thread));
+	static_assert(offsetof(struct thread_ro, tro_cred) ==
+	    offsetof(struct vfs_context, vc_ucred));
 
-	if (ut != NULL) {
-		if (ut->uu_context.vc_ucred != NULL) {
-			ctx = &ut->uu_context;
-		}
-	}
-
-	return ctx == NULL ? vfs_context_kernel() : ctx;
+	return (vfs_context_t)current_thread_ro();
 }
 
-
-/*
- * XXX Do not ask
- *
- * Dangerous hack - adopt the first kernel thread as the current thread, to
- * get to the vfs_context_t in the uthread associated with a kernel thread.
- * This is used by UDF to make the call into IOCDMediaBSDClient,
- * IOBDMediaBSDClient, and IODVDMediaBSDClient to determine whether the
- * ioctl() is being called from kernel or user space (and all this because
- * we do not pass threads into our ioctl()'s, instead of processes).
- *
- * This is also used by imageboot_setup(), called early from bsd_init() after
- * kernproc has been given a credential.
- *
- * Note: The use of proc_thread() here is a convenience to avoid inclusion
- * of many Mach headers to do the reference directly rather than indirectly;
- * we will need to forego this convenience when we reture proc_thread().
- */
-static struct vfs_context kerncontext;
 vfs_context_t
 vfs_context_kernel(void)
 {
-	if (kerncontext.vc_ucred == NOCRED) {
-		kerncontext.vc_ucred = kernproc->p_ucred;
-	}
-	if (kerncontext.vc_thread == NULL) {
-		kerncontext.vc_thread = proc_thread(kernproc);
-	}
-
-	return &kerncontext;
+	return &vfs_context0;
 }
-
 
 int
 vfs_context_rele(vfs_context_t ctx)
@@ -1424,7 +1652,11 @@ vfs_context_rele(vfs_context_t ctx)
 		if (IS_VALID_CRED(ctx->vc_ucred)) {
 			kauth_cred_unref(&ctx->vc_ucred);
 		}
-		kfree(ctx, sizeof(struct vfs_context));
+		if (VFS_CONTEXT_THREAD_IS_REFERENCED(ctx)) {
+			assert(VFS_CONTEXT_GET_THREAD(ctx) != NULL);
+			thread_deallocate(VFS_CONTEXT_GET_THREAD(ctx));
+		}
+		zfree(KT_VFS_CONTEXT, ctx);
 	}
 	return 0;
 }
@@ -1448,14 +1680,13 @@ vfs_context_issuser(vfs_context_t ctx)
 int
 vfs_context_iskernel(vfs_context_t ctx)
 {
-	return ctx == &kerncontext;
+	return ctx == &vfs_context0;
 }
 
 /*
  * Given a context, for all fields of vfs_context_t which
  * are not held with a reference, set those fields to the
- * values for the current execution context.  Currently, this
- * just means the vc_thread.
+ * values for the current execution context.
  *
  * Returns: 0 for success, nonzero for failure
  *
@@ -1468,7 +1699,38 @@ vfs_context_iskernel(vfs_context_t ctx)
 int
 vfs_context_bind(vfs_context_t ctx)
 {
+	assert(!VFS_CONTEXT_THREAD_IS_REFERENCED(ctx));
 	ctx->vc_thread = current_thread();
+	return 0;
+}
+
+int
+vfs_set_thread_fs_private(uint8_t tag, uint64_t fs_private)
+{
+	struct uthread *ut;
+
+	if (tag != FS_PRIVATE_TAG_APFS) {
+		return ENOTSUP;
+	}
+
+	ut = current_uthread();
+	ut->t_fs_private = fs_private;
+
+	return 0;
+}
+
+int
+vfs_get_thread_fs_private(uint8_t tag, uint64_t *fs_private)
+{
+	struct uthread *ut;
+
+	if (tag != FS_PRIVATE_TAG_APFS) {
+		return ENOTSUP;
+	}
+
+	ut = current_uthread();
+	*fs_private = ut->t_fs_private;
+
 	return 0;
 }
 
@@ -1512,16 +1774,19 @@ vnode_makeimode(int indx, int mode)
 vnode_t
 vfs_rootvnode(void)
 {
-	int error;
+	vnode_t vp = NULLVP;
 
-	error = vnode_get(rootvnode);
-	if (error) {
-		return (vnode_t)0;
-	} else {
-		return rootvnode;
+	if (rootvnode) {
+		lck_rw_lock_shared(&rootvnode_rw_lock);
+		vp = rootvnode;
+		if (vp && (vnode_get(vp) != 0)) {
+			vp = NULLVP;
+		}
+		lck_rw_unlock_shared(&rootvnode_rw_lock);
 	}
-}
 
+	return vp;
+}
 
 uint32_t
 vnode_vid(vnode_t vp)
@@ -1553,6 +1818,19 @@ vnode_isonexternalstorage(vnode_t vp)
 	if (vp) {
 		if (vp->v_mount) {
 			if (vp->v_mount->mnt_ioflags & MNT_IOFLAGS_PERIPHERAL_DRIVE) {
+				return TRUE;
+			}
+		}
+	}
+	return FALSE;
+}
+
+boolean_t
+vnode_isonssd(vnode_t vp)
+{
+	if (vp) {
+		if (vp->v_mount) {
+			if (vp->v_mount->mnt_kern_flag & MNTK_SSD) {
 				return TRUE;
 			}
 		}
@@ -1648,6 +1926,14 @@ vnode_isrecycled(vnode_t vp)
 	return ret;
 }
 
+/* is this vnode marked for termination */
+int
+vnode_willberecycled(vnode_t vp)
+{
+	return (vp->v_lflag & VL_MARKTERM) ? 1 : 0;
+}
+
+
 /* vnode was created by background task requesting rapid aging
  *  and has not since been referenced by a normal task */
 int
@@ -1657,9 +1943,9 @@ vnode_israge(vnode_t vp)
 }
 
 int
-vnode_needssnapshots(vnode_t vp)
+vnode_needssnapshots(__unused vnode_t vp)
 {
-	return (vp->v_flag & VNEEDSSNAPSHOT)? 1 : 0;
+	return 0;
 }
 
 
@@ -1758,7 +2044,7 @@ vnode_lookup_continue_needed(vnode_t vp, struct componentname *cnp)
 	struct nameidata *ndp = cnp->cn_ndp;
 
 	if (ndp == NULL) {
-		panic("vnode_lookup_continue_needed(): cnp->cn_ndp is NULL\n");
+		panic("vnode_lookup_continue_needed(): cnp->cn_ndp is NULL");
 	}
 
 	if (vnode_isdir(vp)) {
@@ -2028,7 +2314,12 @@ vnode_clearmountedon(vnode_t vp)
 void
 vnode_settag(vnode_t vp, int tag)
 {
-	vp->v_tag = tag;
+	/*
+	 * We only assign enum values to v_tag, but add an assert to make sure we
+	 * catch it in dev/debug builds if this ever change.
+	 */
+	assert(tag >= SHRT_MIN && tag <= SHRT_MAX);
+	vp->v_tag = (uint16_t)tag;
 }
 
 int
@@ -2170,21 +2461,6 @@ current_workingdir(void)
 	return vfs_context_cwd(vfs_context_current());
 }
 
-/* returns vnode ref to current root(chroot) directory */
-vnode_t
-current_rootdir(void)
-{
-	proc_t proc = current_proc();
-	struct vnode * vp;
-
-	if ((vp = proc->p_fd->fd_rdir)) {
-		if ((vnode_getwithref(vp))) {
-			return NULL;
-		}
-	}
-	return vp;
-}
-
 /*
  * Get a filesec and optional acl contents from an extended attribute.
  * Function will attempt to retrive ACL, UUID, and GUID information using a
@@ -2264,7 +2540,7 @@ vnode_get_filesec(vnode_t vp, kauth_filesec_t *fsecp, vfs_context_t ctx)
 	}
 
 	/* get buffer and uio */
-	if (((fsec = kauth_filesec_alloc(fsec_size)) == NULL) ||
+	if (((fsec = kauth_filesec_alloc((int)fsec_size)) == NULL) ||
 	    ((fsec_uio = uio_create(1, 0, UIO_SYSSPACE, UIO_READ)) == NULL) ||
 	    uio_addiov(fsec_uio, CAST_USER_ADDR_T(fsec), xsize)) {
 		KAUTH_DEBUG("    ERROR - could not allocate iov to read ACL");
@@ -2408,6 +2684,55 @@ out:
 	return error;
 }
 
+/*
+ * Handle uid/gid == 99 and MNT_IGNORE_OWNERSHIP here.
+ */
+void
+vnode_attr_handle_uid_and_gid(struct vnode_attr *vap, mount_t mp, vfs_context_t ctx)
+{
+	uid_t   nuid;
+	gid_t   ngid;
+	bool is_suser = vfs_context_issuser(ctx) ? true : false;
+
+	if (VATTR_IS_ACTIVE(vap, va_uid)) {
+		if (is_suser && VATTR_IS_SUPPORTED(vap, va_uid)) {
+			nuid = vap->va_uid;
+		} else if (mp->mnt_flag & MNT_IGNORE_OWNERSHIP) {
+			nuid = mp->mnt_fsowner;
+			if (nuid == KAUTH_UID_NONE) {
+				nuid = 99;
+			}
+		} else if (VATTR_IS_SUPPORTED(vap, va_uid)) {
+			nuid = vap->va_uid;
+		} else {
+			/* this will always be something sensible */
+			nuid = mp->mnt_fsowner;
+		}
+		if ((nuid == 99) && !is_suser) {
+			nuid = kauth_cred_getuid(vfs_context_ucred(ctx));
+		}
+		VATTR_RETURN(vap, va_uid, nuid);
+	}
+	if (VATTR_IS_ACTIVE(vap, va_gid)) {
+		if (is_suser && VATTR_IS_SUPPORTED(vap, va_gid)) {
+			ngid = vap->va_gid;
+		} else if (mp->mnt_flag & MNT_IGNORE_OWNERSHIP) {
+			ngid = mp->mnt_fsgroup;
+			if (ngid == KAUTH_GID_NONE) {
+				ngid = 99;
+			}
+		} else if (VATTR_IS_SUPPORTED(vap, va_gid)) {
+			ngid = vap->va_gid;
+		} else {
+			/* this will always be something sensible */
+			ngid = mp->mnt_fsgroup;
+		}
+		if ((ngid == 99) && !is_suser) {
+			ngid = kauth_cred_getgid(vfs_context_ucred(ctx));
+		}
+		VATTR_RETURN(vap, va_gid, ngid);
+	}
+}
 
 /*
  * Returns:	0			Success
@@ -2425,8 +2750,6 @@ vnode_getattr(vnode_t vp, struct vnode_attr *vap, vfs_context_t ctx)
 	kauth_filesec_t fsec;
 	kauth_acl_t facl;
 	int     error;
-	uid_t   nuid;
-	gid_t   ngid;
 
 	/*
 	 * Reject attempts to fetch unknown attributes.
@@ -2537,53 +2860,14 @@ vnode_getattr(vnode_t vp, struct vnode_attr *vap, vfs_context_t ctx)
 	}
 #endif
 
-	/*
-	 * Handle uid/gid == 99 and MNT_IGNORE_OWNERSHIP here.
-	 */
-	if (VATTR_IS_ACTIVE(vap, va_uid)) {
-		if (vfs_context_issuser(ctx) && VATTR_IS_SUPPORTED(vap, va_uid)) {
-			nuid = vap->va_uid;
-		} else if (vp->v_mount->mnt_flag & MNT_IGNORE_OWNERSHIP) {
-			nuid = vp->v_mount->mnt_fsowner;
-			if (nuid == KAUTH_UID_NONE) {
-				nuid = 99;
-			}
-		} else if (VATTR_IS_SUPPORTED(vap, va_uid)) {
-			nuid = vap->va_uid;
-		} else {
-			/* this will always be something sensible */
-			nuid = vp->v_mount->mnt_fsowner;
-		}
-		if ((nuid == 99) && !vfs_context_issuser(ctx)) {
-			nuid = kauth_cred_getuid(vfs_context_ucred(ctx));
-		}
-		VATTR_RETURN(vap, va_uid, nuid);
-	}
-	if (VATTR_IS_ACTIVE(vap, va_gid)) {
-		if (vfs_context_issuser(ctx) && VATTR_IS_SUPPORTED(vap, va_gid)) {
-			ngid = vap->va_gid;
-		} else if (vp->v_mount->mnt_flag & MNT_IGNORE_OWNERSHIP) {
-			ngid = vp->v_mount->mnt_fsgroup;
-			if (ngid == KAUTH_GID_NONE) {
-				ngid = 99;
-			}
-		} else if (VATTR_IS_SUPPORTED(vap, va_gid)) {
-			ngid = vap->va_gid;
-		} else {
-			/* this will always be something sensible */
-			ngid = vp->v_mount->mnt_fsgroup;
-		}
-		if ((ngid == 99) && !vfs_context_issuser(ctx)) {
-			ngid = kauth_cred_getgid(vfs_context_ucred(ctx));
-		}
-		VATTR_RETURN(vap, va_gid, ngid);
-	}
+	vnode_attr_handle_uid_and_gid(vap, vp->v_mount, ctx);
 
 	/*
 	 * Synthesise some values that can be reasonably guessed.
 	 */
 	if (!VATTR_IS_SUPPORTED(vap, va_iosize)) {
-		VATTR_RETURN(vap, va_iosize, vp->v_mount->mnt_vfsstat.f_iosize);
+		assert(vp->v_mount->mnt_vfsstat.f_iosize <= UINT32_MAX);
+		VATTR_RETURN(vap, va_iosize, (uint32_t)vp->v_mount->mnt_vfsstat.f_iosize);
 	}
 
 	if (!VATTR_IS_SUPPORTED(vap, va_flags)) {
@@ -3717,6 +4001,11 @@ VNOP_IOCTL(vnode_t vp, u_long command, caddr_t data, int fflag, vfs_context_t ct
 		}
 	}
 
+	if ((command == DKIOCISSOLIDSTATE) && (vp == rootvp) && rootvp_is_ssd && data) {
+		*data = 1;
+		return 0;
+	}
+
 	a.a_desc = &vnop_ioctl_desc;
 	a.a_vp = vp;
 	a.a_command = command;
@@ -4156,30 +4445,31 @@ vn_rename(struct vnode *fdvp, struct vnode **fvpp, struct componentname *fcnp, s
 	 * source has a "._" prefix.
 	 */
 
+	size_t xfromname_len = 0;
+	size_t xtoname_len = 0;
 	if (!NATIVE_XATTR(fdvp) &&
 	    !(fcnp->cn_nameptr[0] == '.' && fcnp->cn_nameptr[1] == '_')) {
-		size_t len;
 		int error;
 
 		/* Get source attribute file name. */
-		len = fcnp->cn_namelen + 3;
-		if (len > sizeof(smallname1)) {
-			MALLOC(xfromname, char *, len, M_TEMP, M_WAITOK);
+		xfromname_len = fcnp->cn_namelen + 3;
+		if (xfromname_len > sizeof(smallname1)) {
+			xfromname = kalloc_data(xfromname_len, Z_WAITOK);
 		} else {
 			xfromname = &smallname1[0];
 		}
-		strlcpy(xfromname, "._", len);
-		strlcat(xfromname, fcnp->cn_nameptr, len);
+		strlcpy(xfromname, "._", xfromname_len);
+		strlcat(xfromname, fcnp->cn_nameptr, xfromname_len);
 
 		/* Get destination attribute file name. */
-		len = tcnp->cn_namelen + 3;
-		if (len > sizeof(smallname2)) {
-			MALLOC(xtoname, char *, len, M_TEMP, M_WAITOK);
+		xtoname_len = tcnp->cn_namelen + 3;
+		if (xtoname_len > sizeof(smallname2)) {
+			xtoname = kalloc_data(xtoname_len, Z_WAITOK);
 		} else {
 			xtoname = &smallname2[0];
 		}
-		strlcpy(xtoname, "._", len);
-		strlcat(xtoname, tcnp->cn_nameptr, len);
+		strlcpy(xtoname, "._", xtoname_len);
+		strlcat(xtoname, tcnp->cn_nameptr, xtoname_len);
 
 		/*
 		 * Look up source attribute file, keep reference on it if exists.
@@ -4187,7 +4477,7 @@ vn_rename(struct vnode *fdvp, struct vnode **fvpp, struct componentname *fcnp, s
 		 * in the rename syscall. It's OK if the source file does not exist, since this
 		 * is only for AppleDouble files.
 		 */
-		MALLOC(fromnd, struct nameidata *, sizeof(struct nameidata), M_TEMP, M_WAITOK);
+		fromnd = kalloc_type(struct nameidata, Z_WAITOK);
 		NDINIT(fromnd, RENAME, OP_RENAME, NOFOLLOW | USEDVP | CN_NBMOUNTLOOK,
 		    UIO_SYSSPACE, CAST_USER_ADDR_T(xfromname), ctx);
 		fromnd->ni_dvp = fdvp;
@@ -4263,9 +4553,23 @@ vn_rename(struct vnode *fdvp, struct vnode **fvpp, struct componentname *fcnp, s
 
 #if CONFIG_MACF
 	if (_err == 0) {
-		mac_vnode_notify_rename(ctx, *fvpp, tdvp, tcnp);
 		if (flags & VFS_RENAME_SWAP) {
-			mac_vnode_notify_rename(ctx, *tvpp, fdvp, fcnp);
+			mac_vnode_notify_rename_swap(
+				ctx,                        /* ctx */
+				fdvp,                       /* fdvp */
+				*fvpp,                      /* fvp */
+				fcnp,                       /* fcnp */
+				tdvp,                       /* tdvp */
+				*tvpp,                      /* tvp */
+				tcnp                        /* tcnp */
+				);
+		} else {
+			mac_vnode_notify_rename(
+				ctx,                        /* ctx */
+				*fvpp,                      /* fvp */
+				tdvp,                       /* tdvp */
+				tcnp                        /* tcnp */
+				);
 		}
 	}
 #endif
@@ -4282,7 +4586,7 @@ vn_rename(struct vnode *fdvp, struct vnode **fvpp, struct componentname *fcnp, s
 		 * Note that tdvp already has an iocount reference. Make sure to check that we
 		 * get a valid vnode from namei.
 		 */
-		MALLOC(tond, struct nameidata *, sizeof(struct nameidata), M_TEMP, M_WAITOK);
+		tond = kalloc_type(struct nameidata, Z_WAITOK);
 		NDINIT(tond, RENAME, OP_RENAME,
 		    NOCACHE | NOFOLLOW | USEDVP | CN_NBMOUNTLOOK, UIO_SYSSPACE,
 		    CAST_USER_ADDR_T(xtoname), ctx);
@@ -4376,18 +4680,14 @@ ad_error:
 		nameidone(tond);
 	}
 	if (xfromname && xfromname != &smallname1[0]) {
-		FREE(xfromname, M_TEMP);
+		kfree_data(xfromname, xfromname_len);
 	}
 	if (xtoname && xtoname != &smallname2[0]) {
-		FREE(xtoname, M_TEMP);
+		kfree_data(xtoname, xtoname_len);
 	}
 #endif /* CONFIG_APPLEDOUBLE */
-	if (fromnd) {
-		FREE(fromnd, M_TEMP);
-	}
-	if (tond) {
-		FREE(tond, M_TEMP);
-	}
+	kfree_type(struct nameidata, fromnd);
+	kfree_type(struct nameidata, tond);
 	return _err;
 }
 
@@ -4853,18 +5153,19 @@ xattrfile_remove(vnode_t dvp, const char * basename, vfs_context_t ctx, int forc
 	struct nameidata nd;
 	char smallname[64];
 	char *filename = NULL;
-	size_t len;
+	size_t alloc_len;
+	size_t copy_len;
 
 	if ((basename == NULL) || (basename[0] == '\0') ||
 	    (basename[0] == '.' && basename[1] == '_')) {
 		return;
 	}
 	filename = &smallname[0];
-	len = snprintf(filename, sizeof(smallname), "._%s", basename);
-	if (len >= sizeof(smallname)) {
-		len++;  /* snprintf result doesn't include '\0' */
-		MALLOC(filename, char *, len, M_TEMP, M_WAITOK);
-		len = snprintf(filename, len, "._%s", basename);
+	alloc_len = snprintf(filename, sizeof(smallname), "._%s", basename);
+	if (alloc_len >= sizeof(smallname)) {
+		alloc_len++;  /* snprintf result doesn't include '\0' */
+		filename = kalloc_data(alloc_len, Z_WAITOK);
+		copy_len = snprintf(filename, alloc_len, "._%s", basename);
 	}
 	NDINIT(&nd, DELETE, OP_UNLINK, WANTPARENT | LOCKLEAF | NOFOLLOW | USEDVP, UIO_SYSSPACE,
 	    CAST_USER_ADDR_T(filename), ctx);
@@ -4874,6 +5175,7 @@ xattrfile_remove(vnode_t dvp, const char * basename, vfs_context_t ctx, int forc
 	}
 
 	xvp = nd.ni_vp;
+	dvp = nd.ni_dvp;
 	nameidone(&nd);
 	if (xvp->v_type != VREG) {
 		goto out1;
@@ -4881,8 +5183,10 @@ xattrfile_remove(vnode_t dvp, const char * basename, vfs_context_t ctx, int forc
 
 	/*
 	 * When creating a new object and a "._" file already
-	 * exists, check to see if its a stale "._" file.
-	 *
+	 * exists, check to see if it's a stale "._" file. These are
+	 * typically AppleDouble (AD) files generated via XNU's
+	 * VFS compatibility shims for storing XATTRs and streams
+	 * on filesystems that do not support them natively.
 	 */
 	if (!force) {
 		struct vnode_attr va;
@@ -4890,21 +5194,44 @@ xattrfile_remove(vnode_t dvp, const char * basename, vfs_context_t ctx, int forc
 		VATTR_INIT(&va);
 		VATTR_WANTED(&va, va_data_size);
 		VATTR_WANTED(&va, va_modify_time);
+		VATTR_WANTED(&va, va_change_time);
+
 		if (VNOP_GETATTR(xvp, &va, ctx) == 0 &&
 		    VATTR_IS_SUPPORTED(&va, va_data_size) &&
-		    VATTR_IS_SUPPORTED(&va, va_modify_time) &&
 		    va.va_data_size != 0) {
-			struct timeval tv;
+			struct timeval tv_compare = {};
+			struct timeval tv_now = {};
 
-			microtime(&tv);
-			if ((tv.tv_sec > va.va_modify_time.tv_sec) &&
-			    (tv.tv_sec - va.va_modify_time.tv_sec) > AD_STALE_SECS) {
+			/*
+			 * If the file exists (and has non-zero size), then use the newer of
+			 * chgtime / modtime to compare against present time. Note that setting XATTRs or updating
+			 * streams through the compatibility interfaces may not trigger chgtime to be updated, so
+			 * checking either modtime or chgtime is useful.
+			 */
+			if (VATTR_IS_SUPPORTED(&va, va_modify_time) && (va.va_modify_time.tv_sec)) {
+				if (VATTR_IS_SUPPORTED(&va, va_change_time) && (va.va_change_time.tv_sec)) {
+					tv_compare.tv_sec = va.va_change_time.tv_sec;
+					if (tv_compare.tv_sec < va.va_modify_time.tv_sec) {
+						tv_compare.tv_sec = va.va_modify_time.tv_sec;
+					}
+				} else {
+					/* fall back to mod-time alone if chgtime not supported or set to 0 */
+					tv_compare.tv_sec = va.va_modify_time.tv_sec;
+				}
+			}
+
+			/* Now, we have a time to compare against, compare against AD_STALE_SEC */
+			microtime(&tv_now);
+			if ((tv_compare.tv_sec > 0) &&
+			    (tv_now.tv_sec > tv_compare.tv_sec) &&
+			    ((tv_now.tv_sec - tv_compare.tv_sec) > AD_STALE_SECS)) {
 				force = 1;  /* must be stale */
 			}
 		}
 	}
+
 	if (force) {
-		int  error;
+		int error;
 
 		error = VNOP_REMOVE(dvp, xvp, &nd.ni_cnd, 0, ctx);
 		if (error == 0) {
@@ -4920,7 +5247,7 @@ out1:
 	vnode_put(xvp);
 out2:
 	if (filename && filename != &smallname[0]) {
-		FREE(filename, M_TEMP);
+		kfree_data(filename, alloc_len);
 	}
 }
 
@@ -4935,7 +5262,8 @@ xattrfile_setattr(vnode_t dvp, const char * basename, struct vnode_attr * vap,
 	struct nameidata nd;
 	char smallname[64];
 	char *filename = NULL;
-	size_t len;
+	size_t alloc_len;
+	size_t copy_len;
 
 	if ((dvp == NULLVP) ||
 	    (basename == NULL) || (basename[0] == '\0') ||
@@ -4943,11 +5271,11 @@ xattrfile_setattr(vnode_t dvp, const char * basename, struct vnode_attr * vap,
 		return;
 	}
 	filename = &smallname[0];
-	len = snprintf(filename, sizeof(smallname), "._%s", basename);
-	if (len >= sizeof(smallname)) {
-		len++;  /* snprintf result doesn't include '\0' */
-		MALLOC(filename, char *, len, M_TEMP, M_WAITOK);
-		len = snprintf(filename, len, "._%s", basename);
+	alloc_len = snprintf(filename, sizeof(smallname), "._%s", basename);
+	if (alloc_len >= sizeof(smallname)) {
+		alloc_len++;  /* snprintf result doesn't include '\0' */
+		filename = kalloc_data(alloc_len, Z_WAITOK);
+		copy_len = snprintf(filename, alloc_len, "._%s", basename);
 	}
 	NDINIT(&nd, LOOKUP, OP_SETATTR, NOFOLLOW | USEDVP, UIO_SYSSPACE,
 	    CAST_USER_ADDR_T(filename), ctx);
@@ -4973,7 +5301,7 @@ xattrfile_setattr(vnode_t dvp, const char * basename, struct vnode_attr * vap,
 	vnode_put(xvp);
 out2:
 	if (filename && filename != &smallname[0]) {
-		FREE(filename, M_TEMP);
+		kfree_data(filename, alloc_len);
 	}
 }
 #endif /* CONFIG_APPLEDOUBLE */
@@ -5376,12 +5704,16 @@ VNOP_ADVLOCK(struct vnode *vp, caddr_t id, int op, struct flock *fl, int flags, 
 		} else if (flags & F_OFD_LOCK) {
 			/* Non-local locking doesn't work for OFD locks */
 			_err = err_advlock(&a);
+		} else if (op == F_TRANSFER) {
+			/* Non-local locking doesn't have F_TRANSFER */
+			_err = err_advlock(&a);
 		} else {
 			/* Advisory locking done by underlying filesystem */
 			_err = (*vp->v_op[vnop_advlock_desc.vdesc_offset])(&a);
 		}
 		DTRACE_FSINFO(advlock, vnode_t, vp);
-		if (op == F_UNLCK && flags == F_FLOCK) {
+		if (op == F_UNLCK &&
+		    (flags & (F_FLOCK | F_OFD_LOCK)) != 0) {
 			post_event_if_success(vp, _err, NOTE_FUNLOCK);
 		}
 	}
@@ -5815,6 +6147,61 @@ VNOP_OFFTOBLK(struct vnode *vp, off_t offset, daddr64_t *lblkno)
 
 	_err = (*vp->v_op[vnop_offtoblk_desc.vdesc_offset])(&a);
 	DTRACE_FSINFO(offtoblk, vnode_t, vp);
+
+	return _err;
+}
+
+#if 0
+/*
+*#
+*#% ap vp L L L
+*#
+*/
+struct vnop_verify_args {
+	struct vnodeop_desc *a_desc;
+	vnode_t a_vp;
+	off_t a_foffset;
+	char *a_buf;
+	size_t a_bufsize;
+	size_t *a_verifyblksize;
+	void **a_verify_ctxp;
+	int a_flags;
+	vfs_context_t a_context;
+};
+#endif
+
+errno_t
+VNOP_VERIFY(struct vnode *vp, off_t foffset, uint8_t *buf, size_t bufsize,
+    size_t *verify_block_size, void **verify_ctxp, vnode_verify_flags_t flags,
+    vfs_context_t ctx)
+{
+	int _err;
+	struct vnop_verify_args a;
+
+	if (ctx == NULL) {
+		ctx = vfs_context_kernel();
+	}
+	a.a_desc = &vnop_verify_desc;
+	a.a_vp = vp;
+	a.a_foffset = foffset;
+	a.a_buf = buf;
+	a.a_bufsize = bufsize;
+	a.a_verifyblksize = verify_block_size;
+	a.a_flags = flags;
+	a.a_verify_ctxp = verify_ctxp;
+	a.a_context = ctx;
+
+	_err = (*vp->v_op[vnop_verify_desc.vdesc_offset])(&a);
+	DTRACE_FSINFO(verify, vnode_t, vp);
+
+	/* It is not an error for a filesystem to not support this VNOP */
+	if (_err == ENOTSUP) {
+		if (!buf && verify_block_size) {
+			*verify_block_size = 0;
+		}
+
+		_err = 0;
+	}
 
 	return _err;
 }

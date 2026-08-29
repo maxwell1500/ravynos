@@ -31,13 +31,14 @@
 #ifndef _OS_OSSYMBOL_H
 #define _OS_OSSYMBOL_H
 
+#include <kern/smr_types.h>
 #include <libkern/c++/OSString.h>
 #include <libkern/c++/OSPtr.h>
 
 class OSSymbol;
 
-typedef OSPtr<OSSymbol> OSSymbolPtr;
-typedef OSPtr<const OSSymbol> OSSymbolConstPtr;
+typedef OSSymbol* OSSymbolPtr;
+typedef OSSymbol const* OSSymbolConstPtr;
 
 /*!
  * @header
@@ -84,13 +85,14 @@ typedef OSPtr<const OSSymbol> OSSymbolConstPtr;
  * handle synchronization via defined member functions for setting
  * properties.
  */
-class OSSymbol : public OSString
+class OSSymbol final : public OSString
 {
 	friend class OSSymbolPool;
 
-	OSDeclareAbstractStructors(OSSymbol);
+	OSDeclareDefaultStructors(OSSymbol);
 
 private:
+	struct smrq_slink hashlink;
 
 	static void initialize();
 
@@ -149,7 +151,21 @@ private:
 
 protected:
 
-// xx-review: should we just omit this from headerdoc?
+/*!
+ * @function taggedRetain
+ *
+ * @abstract
+ * Overrides
+ * <code>@link
+ * //apple_ref/cpp/instm/OSObject/taggedRetain/virtualvoid/(constvoid*)
+ * OSObject::taggedRetain(const void *) const@/link</code>
+ * to synchronize with the symbol pool.
+ *
+ * @param tag      Used for tracking collection references.
+ */
+	virtual void taggedRetain(
+		const void * tag) const APPLE_KEXT_OVERRIDE;
+
 /*!
  * @function taggedRelease
  *
@@ -251,7 +267,7 @@ public:
  * new OSSymbol with a retain count of 1,
  * or increments the retain count of the existing instance.
  */
-	static OSSymbolConstPtr withString(const OSString * aString);
+	static OSPtr<const OSSymbol> withString(const OSString * aString);
 
 
 /*!
@@ -278,7 +294,7 @@ public:
  * new OSSymbol with a retain count of 1,
  * or increments the retain count of the existing instance.
  */
-	static OSSymbolConstPtr withCString(const char * cString);
+	static OSPtr<const OSSymbol> withCString(const char * cString);
 
 
 /*!
@@ -308,7 +324,7 @@ public:
  * new OSSymbol with a retain count of 1,
  * or increments the retain count of the existing instance.
  */
-	static OSSymbolConstPtr withCStringNoCopy(const char * cString);
+	static OSPtr<const OSSymbol> withCStringNoCopy(const char * cString);
 
 /*!
  * @function existingSymbolForString
@@ -327,7 +343,7 @@ public:
  * The returned OSSymbol object is returned with an incremented refcount
  * that needs to be released.
  */
-	static OSSymbolConstPtr existingSymbolForString(const OSString *aString);
+	static OSPtr<const OSSymbol> existingSymbolForString(const OSString *aString);
 
 /*!
  * @function existingSymbolForCString
@@ -346,7 +362,7 @@ public:
  * The returned OSSymbol object is returned with an incremented refcount
  * that needs to be released.
  */
-	static OSSymbolConstPtr existingSymbolForCString(const char *aCString);
+	static OSPtr<const OSSymbol> existingSymbolForCString(const char *aCString);
 
 /*!
  * @function isEqualTo
@@ -414,6 +430,11 @@ public:
 		const void *  array,
 		unsigned int  arrayCount,
 		size_t        memberSize);
+
+	inline void smr_free();
+
+	inline uint32_t hash() const;
+
 #endif /* XNU_KERNEL_PRIVATE */
 
 	OSMetaClassDeclareReservedUnused(OSSymbol, 0);

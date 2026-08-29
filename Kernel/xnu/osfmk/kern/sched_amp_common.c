@@ -44,19 +44,25 @@
 #include <machine/atomic.h>
 #include <sys/kdebug.h>
 #include <kern/sched_amp_common.h>
+#include <stdatomic.h>
 
 #if __AMP__
+
+/* Configuration shared with the Edge scheduler */
+
+/*
+ * We see performance gains from doing immediate IPIs to P-cores to run
+ * P-eligible threads and lesser P-E migrations from using deferred IPIs
+ * for spill.
+ */
+int sched_amp_spill_deferred_ipi = 1;
+int sched_amp_pcores_preempt_immediate_ipi = 1;
+
+#if !CONFIG_SCHED_EDGE
 
 /* Exported globals */
 processor_set_t ecore_set = NULL;
 processor_set_t pcore_set = NULL;
-
-static struct processor_set pset1;
-static struct pset_node pset_node1;
-
-#if DEVELOPMENT || DEBUG
-bool system_ecore_only = false;
-#endif /* DEVELOPMENT || DEBUG */
 
 /*
  * sched_amp_init()
@@ -67,36 +73,6 @@ bool system_ecore_only = false;
 void
 sched_amp_init(void)
 {
-	pset_init(&pset1, &pset_node1);
-	pset_node1.psets = &pset1;
-	pset_node0.node_list = &pset_node1;
-
-	if (ml_get_boot_cluster() == CLUSTER_TYPE_P) {
-		pcore_set = &pset0;
-		ecore_set = &pset1;
-	} else {
-		ecore_set = &pset0;
-		pcore_set = &pset1;
-	}
-
-	ecore_set->pset_cluster_type = PSET_AMP_E;
-	ecore_set->pset_cluster_id = 0;
-
-	pcore_set->pset_cluster_type = PSET_AMP_P;
-	pcore_set->pset_cluster_id = 1;
-
-#if !CONFIG_SCHED_CLUTCH
-	/*
-	 * For non-clutch scheduler, allow system to be e-core only.
-	 * Clutch scheduler support for this feature needs to be implemented.
-	 */
-#if DEVELOPMENT || DEBUG
-	if (PE_parse_boot_argn("enable_skstsct", NULL, 0)) {
-		system_ecore_only = true;
-	}
-#endif /* DEVELOPMENT || DEBUG */
-
-#endif /* !CONFIG_SCHED_CLUTCH */
 	sched_timeshare_init();
 }
 
@@ -106,13 +82,16 @@ int sched_amp_idle_steal = 1;
 int sched_amp_spill_steal = 1;
 
 /*
- * We see performance gains from doing immediate IPIs to P-cores to run
- * P-eligible threads and lesser P-E migrations from using deferred IPIs
- * for spill.
+ * sched_perfcontrol_inherit_recommendation_from_tg changes amp
+ * scheduling policy away from default and allows policy to be
+ * modified at run-time.
+ *
+ * once modified from default, the policy toggles between "follow
+ * thread group" and "restrict to e".
  */
-int sched_amp_spill_deferred_ipi = 1;
-int sched_amp_pcores_preempt_immediate_ipi = 1;
 
+_Atomic sched_perfctl_class_policy_t sched_perfctl_policy_util = SCHED_PERFCTL_POLICY_DEFAULT;
+_Atomic sched_perfctl_class_policy_t sched_perfctl_policy_bg = SCHED_PERFCTL_POLICY_DEFAULT;
 
 /*
  * sched_amp_spill_threshold()
@@ -146,12 +125,15 @@ pset_signal_spill(processor_set_t pset, int spilled_thread_priority)
 			KDBG(MACHDBG_CODE(DBG_MACH_SCHED, MACH_AMP_SIGNAL_SPILL) | DBG_FUNC_NONE, processor->cpu_id, 0, 0, 0);
 
 			processor->deadline = UINT64_MAX;
-			pset_update_processor_state(pset, processor, PROCESSOR_DISPATCHING);
 
 			if (processor == current_processor()) {
-				bit_set(pset->pending_AST_URGENT_cpu_mask, processor->cpu_id);
+				pset_update_processor_state(pset, processor, PROCESSOR_DISPATCHING);
+				if (bit_set_if_clear(pset->pending_AST_URGENT_cpu_mask, processor->cpu_id)) {
+					KDBG(MACHDBG_CODE(DBG_MACH_SCHED, MACH_PENDING_AST_URGENT) | DBG_FUNC_START,
+					    processor->cpu_id, pset->pending_AST_URGENT_cpu_mask, 0, 6);
+				}
 			} else {
-				ipi_type = sched_ipi_action(processor, NULL, true, SCHED_IPI_EVENT_SPILL);
+				ipi_type = sched_ipi_action(processor, NULL, SCHED_IPI_EVENT_SPILL);
 			}
 			pset_unlock(pset);
 			sched_ipi_perform(processor, ipi_type);
@@ -160,6 +142,7 @@ pset_signal_spill(processor_set_t pset, int spilled_thread_priority)
 	}
 
 	processor_t ast_processor = NULL;
+	ast_t preempt = AST_NONE;
 	uint64_t running_map = pset->recommended_bitmask & pset->cpu_state_map[PROCESSOR_RUNNING];
 	for (int cpuid = lsb_first(running_map); cpuid >= 0; cpuid = lsb_next(running_map, cpuid)) {
 		processor = processor_array[cpuid];
@@ -180,9 +163,9 @@ pset_signal_spill(processor_set_t pset, int spilled_thread_priority)
 		bit_set(pset->pending_spill_cpu_mask, processor->cpu_id);
 		KDBG(MACHDBG_CODE(DBG_MACH_SCHED, MACH_AMP_SIGNAL_SPILL) | DBG_FUNC_NONE, processor->cpu_id, 1, 0, 0);
 		if (processor == current_processor()) {
-			ast_on(AST_PREEMPT);
+			preempt = AST_PREEMPT;
 		}
-		ipi_type = sched_ipi_action(processor, NULL, false, SCHED_IPI_EVENT_SPILL);
+		ipi_type = sched_ipi_action(processor, NULL, SCHED_IPI_EVENT_SPILL);
 		if (ipi_type != SCHED_IPI_NONE) {
 			ast_processor = processor;
 		}
@@ -191,6 +174,11 @@ pset_signal_spill(processor_set_t pset, int spilled_thread_priority)
 
 	pset_unlock(pset);
 	sched_ipi_perform(ast_processor, ipi_type);
+
+	if (preempt != AST_NONE) {
+		ast_t new_preempt = update_pending_nonurgent_preemption(processor, preempt);
+		ast_on(new_preempt);
+	}
 }
 
 /*
@@ -202,6 +190,10 @@ pset_signal_spill(processor_set_t pset, int spilled_thread_priority)
 bool
 pset_should_accept_spilled_thread(processor_set_t pset, int spilled_thread_priority)
 {
+	if (!pset) {
+		return false;
+	}
+
 	if ((pset->recommended_bitmask & pset->cpu_state_map[PROCESSOR_IDLE]) != 0) {
 		return true;
 	}
@@ -242,12 +234,10 @@ should_spill_to_ecores(processor_set_t nset, thread_t thread)
 		return false;
 	}
 
-#if !CONFIG_SCHED_CLUTCH
-	/* Per-thread P-core scheduling support needs to be implemented for clutch scheduler */
-	if (thread->sched_flags & TH_SFLAG_PCORE_ONLY) {
+	if (thread->th_bound_cluster_id == pcore_set->pset_id) {
+		/* Thread bound to the P-cluster */
 		return false;
 	}
-#endif /* !CONFIG_SCHED_CLUTCH */
 
 	if (thread->sched_pri >= BASEPRI_RTQUEUES) {
 		/* Never spill realtime threads */
@@ -259,7 +249,7 @@ should_spill_to_ecores(processor_set_t nset, thread_t thread)
 		return false;
 	}
 
-	if ((sched_get_pset_load_average(nset) >= sched_amp_spill_threshold(nset)) &&  /* There is already a load on P cores */
+	if ((sched_get_pset_load_average(nset, 0) >= sched_amp_spill_threshold(nset)) &&  /* There is already a load on P cores */
 	    pset_should_accept_spilled_thread(ecore_set, thread->sched_pri)) { /* There are lower priority E cores */
 		return true;
 	}
@@ -308,7 +298,7 @@ sched_amp_steal_threshold(processor_set_t pset, bool spill_pending)
 bool
 sched_amp_steal_thread_enabled(processor_set_t pset)
 {
-	return (pset->pset_cluster_type == PSET_AMP_E) && (pcore_set->online_processor_count > 0);
+	return (pset->pset_cluster_type == PSET_AMP_E) && (pcore_set != NULL) && (pcore_set->online_processor_count > 0);
 }
 
 /*
@@ -316,15 +306,15 @@ sched_amp_steal_thread_enabled(processor_set_t pset)
  *
  * Invoked with pset locked, returns with pset unlocked
  */
-void
+bool
 sched_amp_balance(processor_t cprocessor, processor_set_t cpset)
 {
 	assert(cprocessor == current_processor());
 
 	pset_unlock(cpset);
 
-	if (cpset->pset_cluster_type == PSET_AMP_E || !cprocessor->is_recommended) {
-		return;
+	if (!ecore_set || cpset->pset_cluster_type == PSET_AMP_E || !cprocessor->is_recommended) {
+		return false;
 	}
 
 	/*
@@ -332,7 +322,6 @@ sched_amp_balance(processor_t cprocessor, processor_set_t cpset)
 	 * Look for P-eligible threads that have spilled to an E core
 	 * and coax them to come back.
 	 */
-
 	processor_set_t pset = ecore_set;
 
 	pset_lock(pset);
@@ -346,7 +335,7 @@ sched_amp_balance(processor_t cprocessor, processor_set_t cpset)
 		eprocessor = processor_array[cpuid];
 		if ((eprocessor->current_pri < BASEPRI_RTQUEUES) &&
 		    (eprocessor->current_recommended_pset_type == PSET_AMP_P)) {
-			ipi_type[eprocessor->cpu_id] = sched_ipi_action(eprocessor, NULL, false, SCHED_IPI_EVENT_REBALANCE);
+			ipi_type[eprocessor->cpu_id] = sched_ipi_action(eprocessor, NULL, SCHED_IPI_EVENT_REBALANCE);
 			if (ipi_type[eprocessor->cpu_id] != SCHED_IPI_NONE) {
 				bit_set(ast_processor_map, eprocessor->cpu_id);
 				assert(eprocessor != cprocessor);
@@ -360,6 +349,9 @@ sched_amp_balance(processor_t cprocessor, processor_set_t cpset)
 		processor_t ast_processor = processor_array[cpuid];
 		sched_ipi_perform(ast_processor, ipi_type[cpuid]);
 	}
+
+	/* Core should light-weight idle using WFE if it just sent out rebalance IPIs */
+	return ast_processor_map != 0;
 }
 
 /*
@@ -370,6 +362,10 @@ sched_amp_balance(processor_t cprocessor, processor_set_t cpset)
 void
 sched_amp_bounce_thread_group_from_ecores(processor_set_t pset, struct thread_group *tg)
 {
+	if (!pset) {
+		return;
+	}
+
 	assert(pset->pset_cluster_type == PSET_AMP_E);
 	uint64_t ast_processor_map = 0;
 	sched_ipi_type_t ipi_type[MAX_CPUS] = {SCHED_IPI_NONE};
@@ -381,7 +377,7 @@ sched_amp_bounce_thread_group_from_ecores(processor_set_t pset, struct thread_gr
 	for (int cpuid = lsb_first(running_map); cpuid >= 0; cpuid = lsb_next(running_map, cpuid)) {
 		processor_t eprocessor = processor_array[cpuid];
 		if (eprocessor->current_thread_group == tg) {
-			ipi_type[eprocessor->cpu_id] = sched_ipi_action(eprocessor, NULL, false, SCHED_IPI_EVENT_REBALANCE);
+			ipi_type[eprocessor->cpu_id] = sched_ipi_action(eprocessor, NULL, SCHED_IPI_EVENT_REBALANCE);
 			if (ipi_type[eprocessor->cpu_id] != SCHED_IPI_NONE) {
 				bit_set(ast_processor_map, eprocessor->cpu_id);
 			} else if (eprocessor == current_processor()) {
@@ -410,7 +406,6 @@ sched_ipi_type_t
 sched_amp_ipi_policy(processor_t dst, thread_t thread, boolean_t dst_idle, sched_ipi_event_t event)
 {
 	processor_set_t pset = dst->processor_set;
-	assert(bit_test(pset->pending_AST_URGENT_cpu_mask, dst->cpu_id) == false);
 	assert(dst != current_processor());
 
 	boolean_t deferred_ipi_supported = false;
@@ -422,7 +417,7 @@ sched_amp_ipi_policy(processor_t dst, thread_t thread, boolean_t dst_idle, sched
 	case SCHED_IPI_EVENT_SPILL:
 		/* For Spill event, use deferred IPIs if sched_amp_spill_deferred_ipi set */
 		if (deferred_ipi_supported && sched_amp_spill_deferred_ipi) {
-			return sched_ipi_deferred_policy(pset, dst, event);
+			return sched_ipi_deferred_policy(pset, dst, thread, event);
 		}
 		break;
 	case SCHED_IPI_EVENT_PREEMPT:
@@ -449,144 +444,54 @@ sched_amp_ipi_policy(processor_t dst, thread_t thread, boolean_t dst_idle, sched
 uint32_t
 sched_amp_qos_max_parallelism(int qos, uint64_t options)
 {
-	uint32_t ecount = ecore_set->cpu_set_count;
-	uint32_t pcount = pcore_set->cpu_set_count;
+	uint32_t ecount = ecore_set ? ecore_set->cpu_set_count : 0;
+	uint32_t pcount = pcore_set ? pcore_set->cpu_set_count : 0;
+
+	/*
+	 * The AMP scheduler does not support more than 1 of each type of cluster
+	 * but the P-cluster is optional (e.g. watchOS)
+	 */
+	uint32_t ecluster_count = ecount ? 1 : 0;
+	uint32_t pcluster_count = pcount ? 1 : 0;
 
 	if (options & QOS_PARALLELISM_REALTIME) {
 		/* For realtime threads on AMP, we would want them
 		 * to limit the width to just the P-cores since we
 		 * do not spill/rebalance for RT threads.
 		 */
-		return pcount;
+		return (options & QOS_PARALLELISM_CLUSTER_SHARED_RESOURCE) ? pcluster_count : pcount;
 	}
 
 	/*
-	 * The current AMP scheduler policy is not run
-	 * background and utility threads on the P-Cores.
+	 * The default AMP scheduler policy is to run utility and by
+	 * threads on E-Cores only.  Run-time policy adjustment unlocks
+	 * ability of utility and bg to threads to be scheduled based on
+	 * run-time conditions.
 	 */
 	switch (qos) {
 	case THREAD_QOS_UTILITY:
+		if (os_atomic_load(&sched_perfctl_policy_util, relaxed) == SCHED_PERFCTL_POLICY_DEFAULT) {
+			return (options & QOS_PARALLELISM_CLUSTER_SHARED_RESOURCE) ? ecluster_count : ecount;
+		} else {
+			return (options & QOS_PARALLELISM_CLUSTER_SHARED_RESOURCE) ? (ecluster_count + pcluster_count) : (ecount + pcount);
+		}
 	case THREAD_QOS_BACKGROUND:
 	case THREAD_QOS_MAINTENANCE:
-		return ecount;
+		if (os_atomic_load(&sched_perfctl_policy_bg, relaxed) == SCHED_PERFCTL_POLICY_DEFAULT) {
+			return (options & QOS_PARALLELISM_CLUSTER_SHARED_RESOURCE) ? ecluster_count : ecount;
+		} else {
+			return (options & QOS_PARALLELISM_CLUSTER_SHARED_RESOURCE) ? (ecluster_count + pcluster_count) : (ecount + pcount);
+		}
 	default:
-		return ecount + pcount;
+		return (options & QOS_PARALLELISM_CLUSTER_SHARED_RESOURCE) ? (ecluster_count + pcluster_count) : (ecount + pcount);
 	}
 }
 
-/*
- * sched_amp_rt_runq()
- */
-rt_queue_t
-sched_amp_rt_runq(processor_set_t pset)
+pset_node_t
+sched_amp_choose_node(thread_t thread)
 {
-	return &pset->rt_runq;
+	pset_node_t node = (recommended_pset_type(thread) == PSET_AMP_P) ? pcore_node : ecore_node;
+	return ((node != NULL) && (node->pset_map != 0)) ? node : &pset_node0;
 }
-
-/*
- * sched_amp_rt_init()
- */
-void
-sched_amp_rt_init(processor_set_t pset)
-{
-	pset_rt_init(pset);
-}
-
-/*
- * sched_amp_rt_queue_shutdown()
- */
-void
-sched_amp_rt_queue_shutdown(processor_t processor)
-{
-	processor_set_t pset = processor->processor_set;
-	thread_t        thread;
-	queue_head_t    tqueue;
-
-	pset_lock(pset);
-
-	/* We only need to migrate threads if this is the last active or last recommended processor in the pset */
-	if ((pset->online_processor_count > 0) && pset_is_recommended(pset)) {
-		pset_unlock(pset);
-		return;
-	}
-
-	queue_init(&tqueue);
-
-	rt_lock_lock(pset);
-
-	while (rt_runq_count(pset) > 0) {
-		thread = qe_dequeue_head(&pset->rt_runq.queue, struct thread, runq_links);
-		thread->runq = PROCESSOR_NULL;
-		SCHED_STATS_RUNQ_CHANGE(&pset->rt_runq.runq_stats, pset->rt_runq.count);
-		rt_runq_count_decr(pset);
-		enqueue_tail(&tqueue, &thread->runq_links);
-	}
-	rt_lock_unlock(pset);
-	sched_update_pset_load_average(pset);
-	pset_unlock(pset);
-
-	qe_foreach_element_safe(thread, &tqueue, runq_links) {
-		remqueue(&thread->runq_links);
-
-		thread_lock(thread);
-
-		thread_setrun(thread, SCHED_TAILQ);
-
-		thread_unlock(thread);
-	}
-}
-
-/*
- * sched_amp_rt_runq_scan()
- *
- * Assumes RT lock is not held, and acquires splsched/rt_lock itself
- */
-void
-sched_amp_rt_runq_scan(sched_update_scan_context_t scan_context)
-{
-	thread_t        thread;
-
-	pset_node_t node = &pset_node0;
-	processor_set_t pset = node->psets;
-
-	spl_t s = splsched();
-	do {
-		while (pset != NULL) {
-			rt_lock_lock(pset);
-
-			qe_foreach_element_safe(thread, &pset->rt_runq.queue, runq_links) {
-				if (thread->last_made_runnable_time < scan_context->earliest_rt_make_runnable_time) {
-					scan_context->earliest_rt_make_runnable_time = thread->last_made_runnable_time;
-				}
-			}
-
-			rt_lock_unlock(pset);
-
-			pset = pset->pset_list;
-		}
-	} while (((node = node->node_list) != NULL) && ((pset = node->psets) != NULL));
-	splx(s);
-}
-
-/*
- * sched_amp_rt_runq_count_sum()
- */
-int64_t
-sched_amp_rt_runq_count_sum(void)
-{
-	pset_node_t node = &pset_node0;
-	processor_set_t pset = node->psets;
-	int64_t count = 0;
-
-	do {
-		while (pset != NULL) {
-			count += pset->rt_runq.runq_stats.count_sum;
-
-			pset = pset->pset_list;
-		}
-	} while (((node = node->node_list) != NULL) && ((pset = node->psets) != NULL));
-
-	return count;
-}
-
+#endif /* !CONFIG_SCHED_EDGE */
 #endif /* __AMP__ */

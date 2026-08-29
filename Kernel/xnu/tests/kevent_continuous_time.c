@@ -30,9 +30,12 @@ static uint64_t
 time_delta_ms(void)
 {
 	uint64_t abs_now = mach_absolute_time();
-	uint64_t cnt_now = mach_continuous_time();;
+	uint64_t cnt_now = mach_continuous_time();
 	return tick_to_ms(cnt_now) - tick_to_ms(abs_now);
 }
+
+T_GLOBAL_META(T_META_RADAR_COMPONENT_NAME("xnu"),
+    T_META_RADAR_COMPONENT_VERSION("kevent"));
 
 static int run_sleep_tests = 0;
 
@@ -92,7 +95,7 @@ wait_for_sleep()
 	return -1;
 }
 
-T_DECL(kevent_continuous_time_periodic_tick, "kevent(EVFILT_TIMER with NOTE_MACH_CONTINUOUS_TIME)", T_META_LTEPHASE(LTE_POSTINIT)){
+T_DECL(kevent_continuous_time_periodic_tick, "kevent(EVFILT_TIMER with NOTE_MACH_CONTINUOUS_TIME)", T_META_LTEPHASE(LTE_POSTINIT), T_META_TAG_VM_PREFERRED){
 	mach_timebase_info(&tb_info);
 	int kq;
 	T_ASSERT_POSIX_SUCCESS((kq = kqueue()), NULL);
@@ -110,7 +113,7 @@ T_DECL(kevent_continuous_time_periodic_tick, "kevent(EVFILT_TIMER with NOTE_MACH
 	T_ASSERT_EQ(0ll, kev.data, "No error returned");
 
 	uint64_t abs_then = mach_absolute_time();
-	uint64_t cnt_then = mach_continuous_time();;
+	uint64_t cnt_then = mach_continuous_time();
 
 	trigger_sleep(1);
 	int sleep_secs = wait_for_sleep();
@@ -120,7 +123,7 @@ T_DECL(kevent_continuous_time_periodic_tick, "kevent(EVFILT_TIMER with NOTE_MACH
 	T_ASSERT_EQ(kev.flags & EV_ERROR, 0, "event should not have EV_ERROR set: %s", kev.flags & EV_ERROR ? strerror((int)kev.data) : "no error");
 
 	uint64_t abs_now = mach_absolute_time();
-	uint64_t cnt_now = mach_continuous_time();;
+	uint64_t cnt_now = mach_continuous_time();
 	uint64_t ct_ms_progressed = tick_to_ms(cnt_now - cnt_then);
 	uint64_t ab_ms_progressed = tick_to_ms(abs_now - abs_then);
 
@@ -150,7 +153,7 @@ T_DECL(kevent_continuous_time_periodic_tick, "kevent(EVFILT_TIMER with NOTE_MACH
 	T_ASSERT_POSIX_ZERO(close(kq), NULL);
 }
 
-T_DECL(kevent_continuous_time_absolute, "kevent(EVFILT_TIMER with NOTE_MACH_CONTINUOUS_TIME and NOTE_ABSOLUTE)", T_META_LTEPHASE(LTE_POSTINIT)){
+T_DECL(kevent_continuous_time_absolute, "kevent(EVFILT_TIMER with NOTE_MACH_CONTINUOUS_TIME and NOTE_ABSOLUTE)", T_META_LTEPHASE(LTE_POSTINIT), T_META_TAG_VM_PREFERRED){
 	mach_timebase_info(&tb_info);
 
 	int kq;
@@ -208,7 +211,7 @@ T_DECL(kevent_continuous_time_absolute, "kevent(EVFILT_TIMER with NOTE_MACH_CONT
 	T_ASSERT_POSIX_ZERO(close(kq), NULL);
 }
 
-T_DECL(kevent_continuous_time_pops, "kevent(EVFILT_TIMER with NOTE_MACH_CONTINUOUS_TIME with multiple pops)", T_META_LTEPHASE(LTE_POSTINIT)){
+T_DECL(kevent_continuous_time_pops, "kevent(EVFILT_TIMER with NOTE_MACH_CONTINUOUS_TIME with multiple pops)", T_META_LTEPHASE(LTE_POSTINIT), T_META_TAG_VM_PREFERRED){
 	// have to throttle rate at which pmset is called
 	sleep(2);
 

@@ -27,18 +27,22 @@
  */
 /* IOOffset.m created by rsulack on Wed 17-Sep-1997 */
 
+#define IOKIT_ENABLE_SHARED_PTR
+
 #include <sys/cdefs.h>
 
 #include <libkern/c++/OSNumber.h>
 #include <libkern/c++/OSString.h>
 #include <libkern/c++/OSSerialize.h>
+#include <libkern/c++/OSSharedPtr.h>
 #include <libkern/c++/OSLib.h>
 
 #define sizeMask (~0ULL >> (64 - size))
 
 #define super OSObject
 
-OSDefineMetaClassAndStructors(OSNumber, OSObject)
+OSDefineMetaClassAndStructorsWithZone(OSNumber, OSObject,
+    (zone_create_flags_t) (ZC_CACHING | ZC_ZFREE_CLEARMEM))
 
 OSMetaClassDefineReservedUnused(OSNumber, 0);
 OSMetaClassDefineReservedUnused(OSNumber, 1);
@@ -77,31 +81,77 @@ OSNumber::free()
 	super::free();
 }
 
-OSNumber *
+OSSharedPtr<OSNumber>
 OSNumber::withNumber(unsigned long long value,
     unsigned int newNumberOfBits)
 {
-	OSNumber *me = new OSNumber;
+	OSSharedPtr<OSNumber> me = OSMakeShared<OSNumber>();
 
 	if (me && !me->init(value, newNumberOfBits)) {
-		me->release();
-		return NULL;
+		return nullptr;
 	}
 
 	return me;
 }
 
-OSNumber *
+OSSharedPtr<OSNumber>
 OSNumber::withNumber(const char *value, unsigned int newNumberOfBits)
 {
-	OSNumber *me = new OSNumber;
+	OSSharedPtr<OSNumber> me = OSMakeShared<OSNumber>();
 
 	if (me && !me->init(value, newNumberOfBits)) {
-		me->release();
-		return NULL;
+		return nullptr;
 	}
 
 	return me;
+}
+
+OSSharedPtr<OSNumber>
+OSNumber::withDouble(
+	double             value)
+{
+	OSSharedPtr<OSNumber> me = OSMakeShared<OSNumber>();
+
+	if (me && !me->OSObject::init()) {
+		return nullptr;
+	}
+	me->size = 63;
+	me->fpValue = value;
+
+	return me;
+}
+
+OSSharedPtr<OSNumber>
+OSNumber::withFloat(
+	float             value)
+{
+	OSSharedPtr<OSNumber> me = OSMakeShared<OSNumber>();
+
+	if (me && !me->OSObject::init()) {
+		return nullptr;
+	}
+	me->size = 31;
+	me->fpValue = (double) value;
+
+	return me;
+}
+
+double
+OSNumber::doubleValue() const
+{
+	if ((size != 63) && (size != 31)) {
+		return (double) value;
+	}
+	return fpValue;
+}
+
+float
+OSNumber::floatValue() const
+{
+	if ((size != 63) && (size != 31)) {
+		return (float) value;
+	}
+	return (float) fpValue;
 }
 
 unsigned int
@@ -120,43 +170,63 @@ OSNumber::numberOfBytes() const
 unsigned char
 OSNumber::unsigned8BitValue() const
 {
+	if ((size == 63) || (size == 31)) {
+		return (unsigned char) fpValue;
+	}
 	return (unsigned char) value;
 }
 
 unsigned short
 OSNumber::unsigned16BitValue() const
 {
+	if ((size == 63) || (size == 31)) {
+		return (unsigned short) fpValue;
+	}
 	return (unsigned short) value;
 }
 
 unsigned int
 OSNumber::unsigned32BitValue() const
 {
+	if ((size == 63) || (size == 31)) {
+		return (unsigned int) fpValue;
+	}
 	return (unsigned int) value;
 }
 
 unsigned long long
 OSNumber::unsigned64BitValue() const
 {
+	if ((size == 63) || (size == 31)) {
+		return (unsigned long long) fpValue;
+	}
 	return value;
 }
 
 void
 OSNumber::addValue(signed long long inValue)
 {
-	value = ((value + inValue) & sizeMask);
+	if ((size == 63) || (size == 31)) {
+		fpValue += inValue;
+	} else {
+		value = ((value + inValue) & sizeMask);
+	}
 }
 
 void
 OSNumber::setValue(unsigned long long inValue)
 {
-	value = (inValue & sizeMask);
+	if ((size == 63) || (size == 31)) {
+		fpValue = (double) inValue;
+	} else {
+		value = (inValue & sizeMask);
+	}
 }
 
 bool
 OSNumber::isEqualTo(const OSNumber *integer) const
 {
-	return value == integer->value;
+	return unsigned64BitValue() == integer->unsigned64BitValue();
 }
 
 bool

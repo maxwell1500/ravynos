@@ -29,6 +29,7 @@
 #include <mach/mach_traps.h>
 #include <mach/mach_port.h>
 #include <mach/mach_right.h>
+#include <mach/mach_right_private.h>
 
 
 #pragma mark Utilities
@@ -56,6 +57,12 @@ mach_right_recv_construct(mach_right_flags_t flags,
 	if (flags & MACH_RIGHT_RECV_FLAG_UNGUARDED) {
 		opts.flags &= (~MPO_CONTEXT_AS_GUARD);
 	}
+	if (flags & MACH_RIGHT_RECV_FLAG_STRICT) {
+		opts.flags |= MPO_STRICT;
+	}
+	if (flags & MACH_RIGHT_RECV_FLAG_IMMOVABLE) {
+		opts.flags |= MPO_IMMOVABLE_RECEIVE;
+	}
 	if (sr) {
 		opts.flags |= MPO_INSERT_SEND_RIGHT;
 	}
@@ -79,10 +86,6 @@ mach_right_recv_destruct(mach_right_recv_t r, mach_right_send_t *s,
 
 	if (s) {
 		if (r.mrr_name != s->mrs_name) {
-#if 0 // zoe - removed until we have this
-			_os_set_crash_log_cause_and_message(s->mrs_name,
-			    "api misuse: bad send right");
-#endif
 			__builtin_trap();
 		}
 

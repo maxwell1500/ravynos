@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009-2018 Apple Inc. All rights reserved.
+ * Copyright (c) 2009-2024 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -73,6 +73,7 @@
 
 #include <net/if.h>
 #include <net/route.h>
+#include <net/droptap.h>
 
 #include <netinet/in.h>
 #include <netinet/in_var.h>
@@ -90,9 +91,7 @@
 
 #if IPSEC
 #include <netinet6/ipsec.h>
-#if INET6
 #include <netinet6/ipsec6.h>
-#endif
 #include <netkey/key.h>
 extern int ipsec_bypass;
 #endif /* IPSEC */
@@ -100,13 +99,34 @@ extern int ipsec_bypass;
 #include <net/net_osdep.h>
 
 #if DUMMYNET
-#include <netinet/ip_fw.h>
 #include <netinet/ip_dummynet.h>
 #endif /* DUMMYNET */
 
 #if PF
 #include <net/pfvar.h>
+static void
+adjust_scope_and_pktlen(struct mbuf *m,
+    unsigned int *ifscope_p, uint32_t *mpktlen_p)
+{
+	struct pf_mtag *__single pf_mtag;
+	struct pf_fragment_tag *__single pf_ftagp;
+
+	pf_mtag = pf_find_mtag(m);
+	ASSERT(pf_mtag != NULL);
+	if (pf_mtag->pftag_rtableid != IFSCOPE_NONE) {
+		*ifscope_p = pf_mtag->pftag_rtableid;
+	}
+	pf_ftagp = pf_find_fragment_tag(m);
+	if (pf_ftagp != NULL) {
+		ASSERT(pf_mtag->pftag_flags & PF_TAG_REASSEMBLED);
+		*mpktlen_p = pf_ftagp->ft_maxlen;
+		ASSERT(*mpktlen_p);
+	}
+}
+
 #endif /* PF */
+
+#include <net/sockaddr_utils.h>
 
 /*
  * Forward a packet.  If some error occurs return the sender
@@ -126,24 +146,19 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
     int srcrt)
 {
 	struct ip6_hdr *ip6 = mtod(m, struct ip6_hdr *);
-	struct sockaddr_in6 *dst;
-	struct rtentry *rt;
+	struct sockaddr_in6 *__single dst;
+	struct rtentry *__single rt;
 	int error, type = 0, code = 0;
 	boolean_t proxy = FALSE;
 	struct mbuf *mcopy = NULL;
-	struct ifnet *ifp, *rcvifp, *origifp;   /* maybe unnecessary */
+	struct ifnet *__single ifp, *__single rcvifp, *__single origifp;
 	u_int32_t inzone, outzone, len = 0, pktcnt = 0;
 	struct in6_addr src_in6, dst_in6;
 	uint64_t curtime = net_uptime();
 #if IPSEC
-	struct secpolicy *sp = NULL;
+	struct secpolicy *__single sp = NULL;
 #endif
 	unsigned int ifscope = IFSCOPE_NONE;
-#if PF
-	struct pf_mtag *pf_mtag;
-	struct pf_fragment_tag *pf_ftagp, pf_ftag;
-	boolean_t pf_ftag_valid = FALSE;
-#endif /* PF */
 	uint32_t mpktlen = 0;
 
 	/*
@@ -166,24 +181,8 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 	}
 
 #if PF
-	pf_mtag = pf_find_mtag(m);
-	/*
-	 * save the PF fragmentation metadata as m_copy() removes the
-	 * mbufs tags from the original mbuf.
-	 */
-	pf_ftagp = pf_find_fragment_tag(m);
-	if (pf_ftagp != NULL) {
-		ASSERT(pf_mtag->pftag_flags & PF_TAG_REASSEMBLED);
-		pf_ftag = *pf_ftagp;
-		pf_ftag_valid = TRUE;
-		mpktlen = pf_ftag.ft_maxlen;
-		ASSERT(mpktlen);
-	}
-	if (pf_mtag != NULL && pf_mtag->pftag_rtableid != IFSCOPE_NONE) {
-		ifscope = pf_mtag->pftag_rtableid;
-	}
-	pf_mtag = NULL;
-	pf_ftagp = NULL;
+	adjust_scope_and_pktlen(m, &ifscope, &mpktlen);
+
 	/*
 	 * If the caller provides a route which is on a different interface
 	 * than the one specified for scoped forwarding, discard the route
@@ -212,7 +211,7 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 	if (ipsec_bypass == 0) {
 		if (ipsec6_in_reject(m, NULL)) {
 			IPSEC_STAT_INCREMENT(ipsec6stat.in_polvio);
-			m_freem(m);
+			m_drop(m, DROPTAP_FLAG_DIR_IN | DROPTAP_FLAG_L2_MISSING, DROP_REASON_IPSEC_REJECT, NULL, 0);
 			return NULL;
 		}
 	}
@@ -238,7 +237,7 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 			    ip6->ip6_nxt,
 			    if_name(m->m_pkthdr.rcvif));
 		}
-		m_freem(m);
+		m_drop(m, DROPTAP_FLAG_DIR_IN | DROPTAP_FLAG_L2_MISSING, DROP_REASON_IP_CANNOT_FORWARD, NULL, 0);
 		return NULL;
 	}
 
@@ -279,8 +278,8 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 	 * It is important to save it before IPsec processing as IPsec
 	 * processing may modify the mbuf.
 	 */
-	mcopy = m_copy(m, 0, imin(m->m_pkthdr.len, ICMPV6_PLD_MAXLEN));
-
+	mcopy = m_copym_mode(m, 0, imin(m->m_pkthdr.len, ICMPV6_PLD_MAXLEN),
+	    M_DONTWAIT, NULL, NULL, M_COPYM_COPY_HDR);
 #if IPSEC
 	if (ipsec_bypass != 0) {
 		goto skip_ipsec;
@@ -298,7 +297,7 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 			m_freem(mcopy);
 #endif
 		}
-		m_freem(m);
+		m_drop(m, DROPTAP_FLAG_DIR_IN | DROPTAP_FLAG_L2_MISSING, DROP_REASON_IP_CANNOT_FORWARD, NULL, 0);
 		return NULL;
 	}
 
@@ -321,7 +320,7 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 			m_freem(mcopy);
 #endif
 		}
-		m_freem(m);
+		m_drop(m, DROPTAP_FLAG_DIR_IN | DROPTAP_FLAG_L2_MISSING, DROP_REASON_IP_CANNOT_FORWARD, NULL, 0); // or IPPOLICY ?
 		return NULL;
 
 	case IPSEC_POLICY_BYPASS:
@@ -343,7 +342,7 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 				m_freem(mcopy);
 #endif
 			}
-			m_freem(m);
+			m_drop(m, DROPTAP_FLAG_DIR_IN | DROPTAP_FLAG_L2_MISSING, DROP_REASON_IP_CANNOT_FORWARD, NULL, 0); // or IPPOLICY ?
 			return NULL;
 		}
 		/* do IPsec */
@@ -393,7 +392,7 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 				break;
 			default:
 				printf("ip6_output (ipsec): error code %d\n", error);
-			/* fall through */
+				OS_FALLTHROUGH;
 			case ENOENT:
 				/* don't show these error codes to the user */
 				break;
@@ -413,7 +412,7 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 #endif /* IPSEC */
 skip_ipsec:
 
-	dst = (struct sockaddr_in6 *)&ip6forward_rt->ro_dst;
+	dst = SIN6(&ip6forward_rt->ro_dst);
 	if ((rt = ip6forward_rt->ro_rt) != NULL) {
 		RT_LOCK(rt);
 		/* Take an extra ref for ourselves */
@@ -450,12 +449,12 @@ skip_ipsec:
 				icmp6_error(mcopy, ICMP6_DST_UNREACH,
 				    ICMP6_DST_UNREACH_NOROUTE, 0);
 			}
-			m_freem(m);
+			m_drop(m, DROPTAP_FLAG_DIR_IN | DROPTAP_FLAG_L2_MISSING, DROP_REASON_IP_NO_ROUTE, NULL, 0);
 			return NULL;
 		}
 		RT_LOCK_ASSERT_HELD(rt);
 	} else if (ROUTE_UNUSABLE(ip6forward_rt) ||
-	    !IN6_ARE_ADDR_EQUAL(&ip6->ip6_dst, &dst->sin6_addr)) {
+	    !in6_are_addr_equal_scoped(&ip6->ip6_dst, &dst->sin6_addr, ip6_input_getdstifscope(m), dst->sin6_scope_id)) {
 		if (rt != NULL) {
 			/* Release extra ref */
 			RT_REMREF_LOCKED(rt);
@@ -463,7 +462,7 @@ skip_ipsec:
 		}
 		ROUTE_RELEASE(ip6forward_rt);
 
-		bzero(dst, sizeof(*dst));
+		SOCKADDR_ZERO(dst, sizeof(*dst));
 		dst->sin6_len = sizeof(struct sockaddr_in6);
 		dst->sin6_family = AF_INET6;
 		dst->sin6_addr = ip6->ip6_dst;
@@ -477,7 +476,7 @@ skip_ipsec:
 				icmp6_error(mcopy, ICMP6_DST_UNREACH,
 				    ICMP6_DST_UNREACH_NOROUTE, 0);
 			}
-			m_freem(m);
+			m_drop(m, DROPTAP_FLAG_DIR_IN | DROPTAP_FLAG_L2_MISSING, DROP_REASON_IP_NO_ROUTE, NULL, 0);
 			return NULL;
 		}
 		RT_LOCK(rt);
@@ -502,7 +501,7 @@ skip_ipsec:
 		/* XXX: this should not happen */
 		ip6stat.ip6s_cantforward++;
 		ip6stat.ip6s_badscope++;
-		m_freem(m);
+		m_drop(m, DROPTAP_FLAG_DIR_IN | DROPTAP_FLAG_L2_MISSING, DROP_REASON_IP6_BAD_SCOPE, NULL, 0);
 		return NULL;
 	}
 	if (in6_setscope(&src_in6, m->m_pkthdr.rcvif, &inzone)) {
@@ -510,7 +509,7 @@ skip_ipsec:
 		RT_UNLOCK(rt);
 		ip6stat.ip6s_cantforward++;
 		ip6stat.ip6s_badscope++;
-		m_freem(m);
+		m_drop(m, DROPTAP_FLAG_DIR_IN | DROPTAP_FLAG_L2_MISSING, DROP_REASON_IP6_BAD_SCOPE, NULL, 0);
 		return NULL;
 	}
 
@@ -536,7 +535,7 @@ skip_ipsec:
 			icmp6_error(mcopy, ICMP6_DST_UNREACH,
 			    ICMP6_DST_UNREACH_BEYONDSCOPE, 0);
 		}
-		m_freem(m);
+		m_drop(m, DROPTAP_FLAG_DIR_IN | DROPTAP_FLAG_L2_MISSING, DROP_REASON_IP6_BAD_SCOPE, NULL, 0);
 		return NULL;
 	}
 
@@ -555,7 +554,7 @@ skip_ipsec:
 		RT_UNLOCK(rt);
 		ip6stat.ip6s_cantforward++;
 		ip6stat.ip6s_badscope++;
-		m_freem(m);
+		m_drop(m, DROPTAP_FLAG_DIR_IN | DROPTAP_FLAG_L2_MISSING, DROP_REASON_IP6_BAD_SCOPE, NULL, 0);
 		return NULL;
 	}
 
@@ -568,7 +567,7 @@ skip_ipsec:
 		if (mcopy) {
 			uint32_t mtu;
 #if IPSEC
-			struct secpolicy *sp2;
+			struct secpolicy *__single sp2;
 			int ipsecerror;
 			size_t ipsechdrsiz;
 #endif
@@ -614,7 +613,7 @@ skip_ipsec:
 	}
 
 	if (rt->rt_flags & RTF_GATEWAY) {
-		dst = (struct sockaddr_in6 *)(void *)rt->rt_gateway;
+		dst = SIN6(rt->rt_gateway);
 	}
 
 	/*
@@ -729,14 +728,12 @@ skip_ipsec:
 		 * rules, in which case it will set the PF_TAG_REFRAGMENTED
 		 * flag in PF mbuf tag.
 		 */
-		if (pf_ftag_valid) {
-			pf_copy_fragment_tag(m, &pf_ftag, M_DONTWAIT);
-		}
 #if DUMMYNET
 		struct ip_fw_args args;
+		struct pf_mtag *__single pf_mtag;
+
 		bzero(&args, sizeof(args));
 
-		args.fwa_m = m;
 		args.fwa_oif = ifp;
 		args.fwa_oflags = 0;
 		args.fwa_ro6 = ip6forward_rt;
@@ -751,7 +748,7 @@ skip_ipsec:
 #endif /* !DUMMYNET */
 		if (error != 0 || m == NULL) {
 			if (m != NULL) {
-				panic("%s: unexpected packet %p\n", __func__, m);
+				panic("%s: unexpected packet %p", __func__, m);
 				/* NOTREACHED */
 			}
 			/* Already freed by callee */
@@ -763,7 +760,7 @@ skip_ipsec:
 		 * refragmented packets from PF.
 		 */
 		if ((pf_mtag->pftag_flags & PF_TAG_REFRAGMENTED) != 0) {
-			struct mbuf *t;
+			struct mbuf *__single t;
 
 			pf_mtag->pftag_flags &= ~PF_TAG_REFRAGMENTED;
 			/* for statistics */

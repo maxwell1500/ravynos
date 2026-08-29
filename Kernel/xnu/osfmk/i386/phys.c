@@ -54,7 +54,6 @@
  * the rights to redistribute these changes.
  */
 
-#include <mach_debug.h>
 #include <mach_ldebug.h>
 
 #include <sys/kdebug.h>
@@ -63,7 +62,6 @@
 #include <mach/thread_status.h>
 #include <mach/vm_param.h>
 
-#include <kern/counters.h>
 #include <kern/mach_param.h>
 #include <kern/task.h>
 #include <kern/thread.h>
@@ -196,7 +194,7 @@ kvtophys(
 }
 
 extern pt_entry_t *debugger_ptep;
-extern vm_map_offset_t debugger_window_kva;
+extern vm_offset_t debugger_window_kva;
 extern int _bcopy(const void *, void *, vm_size_t);
 extern int _bcopy2(const void *, void *);
 extern int _bcopy4(const void *, void *);
@@ -209,14 +207,6 @@ ml_copy_phys(addr64_t src64, addr64_t dst64, vm_size_t bytes)
 	int err = 0;
 
 	mp_disable_preemption();
-#if NCOPY_WINDOWS > 0
-	mapwindow_t *src_map, *dst_map;
-	/* We rely on MTRRs here */
-	src_map = pmap_get_mapwindow((pt_entry_t)(INTEL_PTE_VALID | ((pmap_paddr_t)src64 & PG_FRAME) | INTEL_PTE_REF));
-	dst_map = pmap_get_mapwindow((pt_entry_t)(INTEL_PTE_VALID | INTEL_PTE_RW | ((pmap_paddr_t)dst64 & PG_FRAME) | INTEL_PTE_REF | INTEL_PTE_MOD));
-	src = (void *) ((uintptr_t)src_map->prv_CADDR | ((uint32_t)src64 & INTEL_OFFMASK));
-	dst = (void *) ((uintptr_t)dst_map->prv_CADDR | ((uint32_t)dst64 & INTEL_OFFMASK));
-#elif defined(__x86_64__)
 	addr64_t debug_pa = 0;
 
 	/* If either destination or source are outside the
@@ -246,13 +236,12 @@ ml_copy_phys(addr64_t src64, addr64_t dst64, vm_size_t bytes)
 		/* Establish a cache-inhibited physical window; some platforms
 		 * may not cover arbitrary ranges with MTRRs
 		 */
-		pmap_store_pte(debugger_ptep, debug_pa | INTEL_PTE_NCACHE | INTEL_PTE_RW | INTEL_PTE_REF | INTEL_PTE_MOD | INTEL_PTE_VALID);
+		pmap_store_pte(FALSE, debugger_ptep, debug_pa | INTEL_PTE_NCACHE | INTEL_PTE_RW | INTEL_PTE_REF | INTEL_PTE_MOD | INTEL_PTE_VALID);
 		pmap_tlbi_range(0, ~0ULL, true, 0);
 #if     DEBUG
 		kprintf("Remapping debugger physical window at %p to 0x%llx\n", (void *)debugger_window_kva, debug_pa);
 #endif
 	}
-#endif
 	/* ensure we stay within a page */
 	if (((((uint32_t)src64 & (I386_PGBYTES - 1)) + bytes) > I386_PGBYTES) || ((((uint32_t)dst64 & (I386_PGBYTES - 1)) + bytes) > I386_PGBYTES)) {
 		panic("ml_copy_phys spans pages, src: 0x%llx, dst: 0x%llx", src64, dst64);
@@ -280,10 +269,6 @@ ml_copy_phys(addr64_t src64, addr64_t dst64, vm_size_t bytes)
 		break;
 	}
 
-#if NCOPY_WINDOWS > 0
-	pmap_put_mapwindow(src_map);
-	pmap_put_mapwindow(dst_map);
-#endif
 	mp_enable_preemption();
 
 	return err;

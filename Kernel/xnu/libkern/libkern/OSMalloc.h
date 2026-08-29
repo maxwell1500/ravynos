@@ -30,13 +30,20 @@
 #define LIBKERN_OSMALLOC_h
 
 #include <sys/cdefs.h>
+#include <stdint.h>
+#ifdef XNU_KERNEL_PRIVATE
+#include <kern/queue.h>
+#endif
+#if defined(KERNEL_PRIVATE)
+#ifndef OSMallocDeprecatedMsg
+#define OSMallocDeprecatedMsg(msg) __deprecated_msg(msg)
+#endif
+#include <kern/kalloc.h>
+#endif /* KERNEL_PRIVATE */
 
 __BEGIN_DECLS
 
-#include <stdint.h>
-#ifdef  MACH_KERNEL_PRIVATE
-#include <kern/queue.h>
-#endif
+#if XNU_PLATFORM_MacOSX
 
 /*!
  * @header
@@ -59,7 +66,7 @@ __BEGIN_DECLS
  * in a primary interrupt handler.
  */
 
-#ifdef  MACH_KERNEL_PRIVATE
+#ifdef XNU_KERNEL_PRIVATE
 
 #define OSMT_MAX_NAME  (64)
 
@@ -154,6 +161,9 @@ typedef struct __OSMallocTag__ * OSMallocTag_t;
  *        allocations smaller than a page are wired.</li>
  * </ul>
  */
+#if KERNEL_PRIVATE
+OSMallocDeprecatedMsg("Please adopt IOMallocType()/kalloc_type()")
+#endif
 extern OSMallocTag OSMalloc_Tagalloc(
 	const char * name,
 	uint32_t    flags);
@@ -174,6 +184,9 @@ extern OSMallocTag OSMalloc_Tagalloc(
  * Any OSMalloc function called on those blocks
  * will result in a panic.
  */
+#if KERNEL_PRIVATE
+OSMallocDeprecatedMsg("Please adopt IOMallocType()/kalloc_type()")
+#endif
 extern void OSMalloc_Tagfree(OSMallocTag tag);
 
 
@@ -198,10 +211,12 @@ extern void OSMalloc_Tagfree(OSMallocTag tag);
  * is a full page or larger, the allocated memory is pageable;
  * otherwise it is wired.
  */
+#if KERNEL_PRIVATE
+OSMallocDeprecatedMsg("Please use IOMallocType()/kalloc_type() instead")
+#endif
 extern void * OSMalloc(
 	uint32_t    size,
 	OSMallocTag tag) __attribute__((alloc_size(1)));
-
 
 /*!
  * @function OSMalloc_nowait
@@ -209,10 +224,12 @@ extern void * OSMalloc(
  * @abstract
  * Equivalent to <code>@link OSMalloc_noblock OSMalloc_noblock@/link</code>.
  */
+#if KERNEL_PRIVATE
+OSMallocDeprecatedMsg("Please use IOMallocType()/kalloc_type() instead")
+#endif
 extern void * OSMalloc_nowait(
 	uint32_t    size,
 	OSMallocTag tag) __attribute__((alloc_size(1)));
-
 
 /*!
  * @function OSMalloc_noblock
@@ -239,10 +256,12 @@ extern void * OSMalloc_nowait(
  *
  * This function is guaranteed not to block.
  */
+#if KERNEL_PRIVATE
+OSMallocDeprecatedMsg("Please use IOMallocType()/kalloc_type() instead")
+#endif
 extern void * OSMalloc_noblock(
 	uint32_t    size,
 	OSMallocTag tag) __attribute__((alloc_size(1)));
-
 
 /*!
  * @function OSFree
@@ -255,23 +274,15 @@ extern void * OSMalloc_noblock(
  * @param tag   The <code>@link OSMallocTag OSMallocTag@/link</code>
  *              with which <code>addr</code> was originally allocated.
  */
+#if KERNEL_PRIVATE
+OSMallocDeprecatedMsg("Please use IOFreeType()/kfree_type() instead")
+#endif
 extern void OSFree(
 	void      * addr,
 	uint32_t    size,
 	OSMallocTag tag);
 
-#ifdef XNU_KERNEL_PRIVATE
-/*!
- * @function OSMalloc_size
- *
- * @abstract
- * Returns the size of a block of memory allocated by <code>@link OSMalloc OSMalloc@/link</code>.
- *
- * @param addr A pointer to the memory block allocated via OSMalloc.
- */
-extern uint32_t OSMalloc_size(
-	void    * addr);
-#endif /* XNU_KERNEL_PRIVATE */
+#endif /* XNU_PLATFORM_MacOSX */
 
 __END_DECLS
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2023 Apple Inc. All rights reserved.
  * Copyright (c) 2005-2006 Apple Computer, Inc. All rights reserved.
  */
 #ifndef _PEXPERT_ARM_BOARD_CONFIG_H
@@ -7,277 +7,298 @@
 
 #include <mach/machine.h>
 
-
-#ifdef ARM64_BOARD_CONFIG_T7000
-#define APPLE_ARM64_ARCH_FAMILY  1
-#define APPLETYPHOON
-#define ARM_ARCH_TIMER
-#include <pexpert/arm64/T7000.h>
-#define __ARM_L2CACHE_SIZE_LOG__ 20
-#define ARM_BOARD_WFE_TIMEOUT_NS 1000
-#define ARM_BOARD_CLASS_T7000
-#define KERNEL_INTEGRITY_WT 1
-#define CORE_NCTRS 8
-#define CPMU_AIC_PMI 1
-#endif  /* ARM64_BOARD_CONFIG_T7000 */
-
-#ifdef ARM64_BOARD_CONFIG_T7001
-#define APPLE_ARM64_ARCH_FAMILY  1
-#define APPLETYPHOON
-#define ARM_ARCH_TIMER
-#include <pexpert/arm64/T7000.h>
-#define __ARM_L2CACHE_SIZE_LOG__ 21
-#define ARM_BOARD_WFE_TIMEOUT_NS 1000
-#define ARM_BOARD_CLASS_T7000
-#define KERNEL_INTEGRITY_WT 1
-#define CPU_COUNT 3
-#define CORE_NCTRS 8
-#define CPMU_AIC_PMI 1
-#endif  /* ARM64_BOARD_CONFIG_T7001 */
-
-#ifdef ARM64_BOARD_CONFIG_S8000
 /*
- * The L2 size for twister is in fact 3MB, not 4MB; we round up due
- * to the code being architected for power of 2 cache sizes, and rely
- * on the expected behavior that out of bounds operations will be
- * ignored.
- */
-#define APPLE_ARM64_ARCH_FAMILY  1
-#define APPLETWISTER
-#define ARM_ARCH_TIMER
-#include <pexpert/arm64/S8000.h>
-#define __ARM_L2CACHE_SIZE_LOG__ 22
-#define ARM_BOARD_WFE_TIMEOUT_NS 1000
-#define ARM_BOARD_CLASS_S8000
-#define KERNEL_INTEGRITY_WT 1
-#define CORE_NCTRS 8
-#define CPMU_AIC_PMI 1
-#endif  /* ARM64_BOARD_CONFIG_S8000 */
-
-#ifdef ARM64_BOARD_CONFIG_S8001
-/*
- * The L2 size for twister is in fact 3MB, not 4MB; we round up due
- * to the code being architected for power of 2 cache sizes, and rely
- * on the expect behavior that out of bounds operations will be
- * ignored.
- */
-#define APPLE_ARM64_ARCH_FAMILY  1
-#define APPLETWISTER
-#define ARM_ARCH_TIMER
-#include <pexpert/arm64/S8000.h>
-#define __ARM_L2CACHE_SIZE_LOG__ 22
-#define ARM_BOARD_WFE_TIMEOUT_NS 1000
-#define ARM_BOARD_CLASS_S8000
-#define KERNEL_INTEGRITY_WT 1
-#define CORE_NCTRS 8
-#define CPMU_AIC_PMI 1
-#endif  /* ARM64_BOARD_CONFIG_S8001 */
-
-#ifdef ARM64_BOARD_CONFIG_T8010
-/*
- * The L2 size for hurricane/zephyr is in fact 3MB, not 4MB; we round up due
- * to the code being architected for power of 2 cache sizes, and rely
- * on the expect behavior that out of bounds operations will be
- * ignored.
- */
-#define APPLE_ARM64_ARCH_FAMILY  1
-#define APPLEHURRICANE
-#define ARM_ARCH_TIMER
-#define KERNEL_INTEGRITY_KTRR
-#include <pexpert/arm64/T8010.h>
-#define __ARM_L2CACHE_SIZE_LOG__ 22
-#define ARM_BOARD_WFE_TIMEOUT_NS 1000
-#define ARM_BOARD_CLASS_T8010
-#define CORE_NCTRS 10
-#define CPMU_AIC_PMI 1
-#if DEVELOPMENT || DEBUG
-#define PMAP_CS                  1
-#define PMAP_CS_ENABLE           0
-#endif
-#endif  /* ARM64_BOARD_CONFIG_T8010 */
-
-#ifdef ARM64_BOARD_CONFIG_T8011
-#define APPLE_ARM64_ARCH_FAMILY  1
-#define APPLEHURRICANE
-#define ARM_ARCH_TIMER
-#define KERNEL_INTEGRITY_KTRR
-#include <pexpert/arm64/T8010.h>
-#define __ARM_L2CACHE_SIZE_LOG__ 23
-#define ARM_BOARD_WFE_TIMEOUT_NS 1000
-#define ARM_BOARD_CLASS_T8011
-#define CPU_COUNT 3
-#define CORE_NCTRS 10
-#define CPMU_AIC_PMI 1
-#if DEVELOPMENT || DEBUG
-#define PMAP_CS                  1
-#define PMAP_CS_ENABLE           0
-#endif
-#endif  /* ARM64_BOARD_CONFIG_T8011 */
-
-#ifdef ARM64_BOARD_CONFIG_T8015
-/*
- * The LLC size for monsoon is 8MB, but the L2E exposed to mistral is
- * only 1MB.  We use the larger cache size here.  The expectation is
- * that this may cause flushes from mistral to be less efficient
- * (cycles will be wasted on unnecessary way/set operations), but it
- * will be technically correct... the best kind of correct.
+ * Per-SoC configuration.  General order is:
  *
- * And is an explicit flush from L2E to LLC something we'll ever want
- * to do?
+ * CPU type
+ * CPU configuration
+ * CPU feature disables / workarounds
+ * CPU topology
+ * Other platform configuration (e.g. DARTs, PPL)
+ *
+ * This should answer the question: "what's unique about this SoC?"
+ *
+ * arm64/H*.h should answer the question: "what's unique about this CPU core?"
+ *
+ * For __ARM_AMP__ systems that have different cache line sizes on different
+ * clusters, MAX_L2_CLINE must reflect the largest L2 cache line size
+ * across all clusters.
  */
-#define APPLE_ARM64_ARCH_FAMILY  1
-#define APPLEMONSOON
-#define ARM_ARCH_TIMER
-#define KERNEL_INTEGRITY_KTRR
-#include <pexpert/arm64/T8015.h>
-#define __ARM_L2CACHE_SIZE_LOG__ 23
-#define ARM_BOARD_WFE_TIMEOUT_NS 1000
-#define ARM_BOARD_CLASS_T8015
-#define CPU_COUNT 6
-#define BROKEN_FRIGGING_SLEEP 1 /* Spurious wake: See rdar://problem/29762505 */
-#define HAS_UNCORE_CTRS 1
-#define UNCORE_VERSION 1
-#define UNCORE_PER_CLUSTER 0
-#define UNCORE_NCTRS 8
-#define CORE_NCTRS 10
+
+#ifdef ARM64_BOARD_CONFIG_T6000
+#include <pexpert/arm64/H13.h>
+
+
+#define MAX_L2_CLINE                   7
+#define MAX_CPUS                       20
+#define MAX_CPU_CLUSTERS               6
+#define MAX_CPU_CLUSTER_PHY_ID         10
+#define HAS_IOA                        1
+
+#define PMAP_CS                        1
+#define PMAP_CS_ENABLE                 1
+#define XNU_MONITOR                    1 /* Secure pmap runtime */
+#define __ARM_42BIT_PA_SPACE__         1
+#define USE_APPLEARMSMP                1
+
+
 #if DEVELOPMENT || DEBUG
-#define PMAP_CS                  1
-#define PMAP_CS_ENABLE           0
+#define XNU_ENABLE_PROCESSOR_EXIT      1 /* Enable xnu processor_exit() by default */
 #endif
-#endif  /* ARM64_BOARD_CONFIG_T8015 */
+#define XNU_HANDLE_MCC                 1 /* This platform may support MCC error recovery */
+#endif  /* ARM64_BOARD_CONFIG_T6000 */
 
-#ifdef ARM64_BOARD_CONFIG_T8020
+#ifdef ARM64_BOARD_CONFIG_T6020
+#include <pexpert/arm64/H14.h>
+
+#define MAX_L2_CLINE                   7
+#define MAX_CPUS                       24
+#define MAX_CPU_CLUSTERS               6
+#define MAX_CPU_CLUSTER_PHY_ID         10
+#define HAS_IOA                        1
+
+#ifndef CONFIG_SPTM
+#define PMAP_CS                        1
+#define PMAP_CS_ENABLE                 1
+#define XNU_MONITOR                    1 /* Secure pmap runtime */
+#endif /* CONFIG_SPTM */
+
+
+#define __ARM_42BIT_PA_SPACE__         1
+#define USE_APPLEARMSMP                1
+#define XNU_CLUSTER_POWER_DOWN         1 /* Enable xnu cluster power down by default */
+#define RHODES_CLUSTER_POWERDOWN_WORKAROUND 1 /* Workaround for rdar://89107373 (Rhodes cluster power down: cannot manually power down and up a core multiple times without powering down the cluster) */
+#define XNU_PLATFORM_ERROR_HANDLER     1 /* This platform uses the platform error handler inside XNU rather than a kext */
+#ifndef CONFIG_SPTM
+#define XNU_HANDLE_ECC                 1 /* This platform may support ECC error recovery */
+#endif /* !CONFIG_SPTM */
+#define XNU_HANDLE_MCC                 1 /* This platform may support MCC error recovery */
+#define EXTENDED_USER_VA_SUPPORT       1 /* On certain OSes, support larger user address spaces */
+#endif  /* ARM64_BOARD_CONFIG_T6020 */
+
+
+
+
+
+
+
+
+#ifdef ARM64_BOARD_CONFIG_T8101
+#include <pexpert/arm64/H13.h>
+
+#define MAX_L2_CLINE                   7
+#define MAX_CPUS                       8
+#define MAX_CPU_CLUSTERS               2
+
+#define PMAP_CS                        1
+#define PMAP_CS_ENABLE                 1
+#define XNU_MONITOR                    1 /* Secure pmap runtime */
+#endif  /* ARM64_BOARD_CONFIG_T8101 */
+
+#ifdef ARM64_BOARD_CONFIG_T8103
+#include <pexpert/arm64/H13.h>
+
+#define MAX_L2_CLINE                   7
+#define MAX_CPUS                       8
+#define MAX_CPU_CLUSTERS               2
+
+#define PMAP_CS                        1
+#define PMAP_CS_ENABLE                 1
+#define XNU_MONITOR                    1 /* Secure pmap runtime */
+#endif  /* ARM64_BOARD_CONFIG_T8103 */
+
+
+#ifdef ARM64_BOARD_CONFIG_T8112
+#include <pexpert/arm64/H14.h>
+
+#define MAX_L2_CLINE                   7
+#define MAX_CPUS                       8 /* Actually has 6 CPUs, see doc/xnu_build_consolidation.md for more info */
+#define MAX_CPU_CLUSTERS               2
+
+#ifndef CONFIG_SPTM
+#define PMAP_CS                        1
+#define PMAP_CS_ENABLE                 1
+#define XNU_MONITOR                    1 /* Secure pmap runtime */
+#endif /* CONFIG_SPTM */
+
+#if CONFIG_SPTM
+/* SPTM TODO: Add support for HWTRACE */
+#undef CPU_HAS_SW_TRACE_DATA
+#endif
+
+#define USE_APPLEARMSMP                1
+#endif  /* ARM64_BOARD_CONFIG_T8112 */
+
+
+#ifdef ARM64_BOARD_CONFIG_T8122_T8130
+#include <pexpert/arm64/H15.h>
+
+#define MAX_L2_CLINE                   7
+#define MAX_CPUS                       8
+#define MAX_CPU_CLUSTERS               2
+#define HAS_IOA                        1
+
+#ifndef CONFIG_SPTM
+#define PMAP_CS                        1
+#define PMAP_CS_ENABLE                 1
+#define XNU_MONITOR                    1 /* Secure pmap runtime */
+#endif /* CONFIG_SPTM */
+
+
+#if CONFIG_SPTM
+/* SPTM TODO: Add support for HWTRACE */
+#undef CPU_HAS_SW_TRACE_DATA
+#endif
+
+#define __ARM_42BIT_PA_SPACE__         1
+#define USE_APPLEARMSMP                1
+#define XNU_PLATFORM_ERROR_HANDLER     1 /* This platform uses the platform error handler inside XNU rather than a kext */
+#define XNU_HANDLE_MCC                 1 /* This platform may support MCC error recovery */
+#endif  /* ARM64_BOARD_CONFIG_T8122_T8130 */
+
+#ifdef ARM64_BOARD_CONFIG_T8132
+#include <pexpert/arm64/H16.h>
+
+#define MAX_L2_CLINE                   7
+#define MAX_CPUS                       10
+#define MAX_CPU_CLUSTERS               2
+
+#ifndef CONFIG_SPTM
+#define PMAP_CS                        1
+#define PMAP_CS_ENABLE                 1
+#define XNU_MONITOR                    1 /* Secure pmap runtime */
+#endif /* CONFIG_SPTM */
+
+#if CONFIG_SPTM
+/* SPTM TODO: Add support for HWTRACE */
+#undef CPU_HAS_SW_TRACE_DATA
+#endif
+
+#define __ARM_42BIT_PA_SPACE__         1
+#define USE_APPLEARMSMP                1
+#define XNU_PLATFORM_ERROR_HANDLER     1 /* This platform uses the platform error handler inside XNU rather than a kext */
+#define XNU_HANDLE_MCC                 1 /* This platform may support MCC error recovery */
+#define NO_CPU_OVRD                    1 /* CPU_OVRD register accesses are banned */
+
+
+
+#endif  /* ARM64_BOARD_CONFIG_T8132 */
+
+
+
+
+
+
+#ifdef ARM64_BOARD_CONFIG_T6030
+
+#include <pexpert/arm64/H15.h>
+
+#define MAX_L2_CLINE                   7
+#define MAX_CPUS                       12
+#define MAX_CPU_CLUSTERS               2
+#define HAS_IOA                        1
+
+#ifndef CONFIG_SPTM
+#define PMAP_CS                        1
+#define PMAP_CS_ENABLE                 1
+#define XNU_MONITOR                    1 /* Secure pmap runtime */
+#endif /* CONFIG_SPTM */
+
+#define __ARM_42BIT_PA_SPACE__         1
+#define USE_APPLEARMSMP                1
+#define XNU_PLATFORM_ERROR_HANDLER     1 /* This platform uses the platform error handler inside XNU rather than a kext */
+#define XNU_HANDLE_MCC                 1 /* This platform may support MCC error recovery */
+#endif  /* ARM64_BOARD_CONFIG_T6030 */
+
+
+#ifdef ARM64_BOARD_CONFIG_T6031
+
+#include <pexpert/arm64/H15.h>
+
+#define MAX_L2_CLINE                   7
+#define MAX_CPUS                       32
+#define MAX_CPU_CLUSTERS               6
+#define MAX_CPU_CLUSTER_PHY_ID         10
+#define HAS_IOA                        1
+
+#ifndef CONFIG_SPTM
+#define PMAP_CS                        1
+#define PMAP_CS_ENABLE                 1
+#define XNU_MONITOR                    1 /* Secure pmap runtime */
+#endif /* CONFIG_SPTM */
+
+#define __ARM_42BIT_PA_SPACE__         1
+#define USE_APPLEARMSMP                1
+#define XNU_CLUSTER_POWER_DOWN         1 /* Enable xnu cluster power down by default */
+#define RHODES_CLUSTER_POWERDOWN_WORKAROUND 1 /* Workaround for rdar://89107373 (Rhodes cluster power down: cannot manually power down and up a core multiple times without powering down the cluster) */
+#endif  /* ARM64_BOARD_CONFIG_T6031 */
+
+
+
+
+
+#ifdef ARM64_BOARD_CONFIG_VMAPPLE
+#include <pexpert/arm64/VMAPPLE.h>
+
+#define MAX_L2_CLINE                   7
+#define MAX_CPUS                       32 /* limited by CPU copy window size and cpu checkin mask */
+#define MAX_CPU_CLUSTERS               1
+
+#define CORE_NCTRS                     2
+
+#define USE_APPLEARMSMP                1
+
+#if XNU_TARGET_OS_WATCH
+#define PREFER_ARM64_32_BINARIES       1
+#endif
+
+
+#endif  /* ARM64_BOARD_CONFIG_VMAPPLE */
+
+
+
+#ifndef HAS_UNCORE_CTRS
+#undef UNCORE_VERSION
+#undef UNCORE_PER_CLUSTER
+#undef UNCORE_NCTRS
+#endif
+
+#if MAX_CPU_CLUSTERS == 1
+#undef __ARM_AMP__
+#endif
+
+#ifndef MAX_CPU_CLUSTER_PHY_ID
+#define MAX_CPU_CLUSTER_PHY_ID (MAX_CPU_CLUSTERS - 1)
+#endif
+
+#ifdef PREFER_ARM64_32_BINARIES
+#define PREFERRED_USER_CPU_TYPE CPU_TYPE_ARM64_32
+#define PREFERRED_USER_CPU_SUBTYPE CPU_SUBTYPE_ARM64_32_V8
+#endif
+
+
 /*
- * The LLC size for Vortex is 8MB, but the LLC on Tempest is only 2MB.
- * We use the larger cache size here.  The expectation is
- * that this may cause flushes from Tempest to be less efficient
- * (cycles will be wasted on unnecessary way/set operations), but it
- * will be technically correct... the best kind of correct.
+ * Some platforms have very expensive timebase routines.  An optimization
+ * is to avoid switching timers on kernel exit/entry, which results in all
+ * time billed to the system timer.  However, when exposed to userspace, it's
+ * reported as user time to indicate that work was done on behalf of
+ * userspace.
  */
-#define APPLE_ARM64_ARCH_FAMILY  1
-#define APPLEVORTEX
-#define ARM_ARCH_TIMER
-#define KERNEL_INTEGRITY_CTRR
-#include <pexpert/arm64/T8020.h>
-#define __ARM_L2CACHE_SIZE_LOG__ 23
-#define ARM_BOARD_WFE_TIMEOUT_NS 1000
-#define ARM_BOARD_CLASS_T8020
-#define CPU_COUNT 6
-#define CPU_CLUSTER_OFFSETS {0, 4}
-#define HAS_UNCORE_CTRS 1
-#define UNCORE_VERSION 2
-#define UNCORE_PER_CLUSTER 1
-#define UNCORE_NCTRS 16
-#define CORE_NCTRS 10
-#define PMAP_PV_LOAD_FACTOR 5
-#define PMAP_CS             1
-#define PMAP_CS_ENABLE      1
-#endif  /* ARM64_BOARD_CONFIG_T8020 */
 
-#ifdef ARM64_BOARD_CONFIG_T8006
-/*
- * The T8006 consists of 2 Tempest cores (i.e. T8020 eCores) and for most
- * of our purposes here may be considered a functional subset of T8020.
+#if CONFIG_SKIP_PRECISE_USER_KERNEL_TIME
+#define PRECISE_USER_KERNEL_TIME HAS_FAST_CNTVCT
+#else /* CONFIG_SKIP_PRECISE_USER_KERNEL_TIME */
+#define PRECISE_USER_KERNEL_TIME 1
+#endif /* !CONFIG_SKIP_PRECISE_USER_KERNEL_TIME */
+
+/**
+ * On supported hardware, debuggable builds make the HID bits read-only
+ * without locking them.  This lets people manually modify HID bits while
+ * debugging, since they can use a debugging tool to first reset the HID
+ * bits back to read/write.  However it will still catch xnu changes that
+ * accidentally write to HID bits after they've been made read-only.
  */
-#define APPLE_ARM64_ARCH_FAMILY  1
-#define APPLEVORTEX
-#define ARM_ARCH_TIMER
-#define KERNEL_INTEGRITY_CTRR
-#include <pexpert/arm64/T8020.h>
-#define __ARM_L2CACHE_SIZE_LOG__ 21
-#define ARM_BOARD_WFE_TIMEOUT_NS 1000
-#define ARM_BOARD_CLASS_T8006
-#define PEXPERT_NO_3X_IMAGES    1
-#define CORE_NCTRS 10
-#define PMAP_PV_LOAD_FACTOR 5
-#define PMAP_CS             1
-#define PMAP_CS_ENABLE      1
-#endif /* ARM64_BOARD_CONFIG_T8006 */
-
-#ifdef ARM64_BOARD_CONFIG_T8027
-#define APPLE_ARM64_ARCH_FAMILY  1
-#define APPLEVORTEX
-#define ARM_ARCH_TIMER
-#define KERNEL_INTEGRITY_CTRR
-#include <pexpert/arm64/T8020.h>
-#define __ARM_L2CACHE_SIZE_LOG__ 23
-#define ARM_BOARD_WFE_TIMEOUT_NS 1000
-#define ARM_BOARD_CLASS_T8027
-#define CPU_COUNT 8
-#define CPU_CLUSTER_OFFSETS {0, 4}
-#define HAS_UNCORE_CTRS 1
-#define UNCORE_VERSION 2
-#define UNCORE_PER_CLUSTER 1
-#define UNCORE_NCTRS 16
-#define CORE_NCTRS 10
-#define PMAP_PV_LOAD_FACTOR 5
-#define PMAP_CS             1
-#define PMAP_CS_ENABLE      1
-#endif  /* ARM64_BOARD_CONFIG_T8027 */
-
-#ifdef ARM64_BOARD_CONFIG_T8028
-#define APPLE_ARM64_ARCH_FAMILY  1
-#define APPLEVORTEX
-#define ARM_ARCH_TIMER
-#define KERNEL_INTEGRITY_CTRR
-#include <pexpert/arm64/T8020.h>
-#define __ARM_L2CACHE_SIZE_LOG__ 23
-#define ARM_BOARD_WFE_TIMEOUT_NS 1000
-#define ARM_BOARD_CLASS_T8028
-#define CPU_COUNT 8
-#define CPU_CLUSTER_OFFSETS {0, 4}
-#define HAS_UNCORE_CTRS 1
-#define UNCORE_VERSION 2
-#define UNCORE_PER_CLUSTER 1
-#define UNCORE_NCTRS 16
-#define CORE_NCTRS 10
-#define PMAP_PV_LOAD_FACTOR 5
-#define PMAP_CS             1
-#define PMAP_CS_ENABLE      1
-#endif  /* ARM64_BOARD_CONFIG_T8028 */
-
-#ifdef ARM64_BOARD_CONFIG_T8030
-/*
- * The LLC size for Lightning is 8MB, but the LLC on Thunder is only 4MB.
- * We use the larger cache size here.  The expectation is
- * that this may cause flushes from Tempest to be less efficient
- * (cycles will be wasted on unnecessary way/set operations), but it
- * will be technically correct... the best kind of correct.
- */
-#define APPLE_ARM64_ARCH_FAMILY  1
-#define APPLELIGHTNING
-#define ARM_ARCH_TIMER
-#define KERNEL_INTEGRITY_CTRR
-#include <pexpert/arm64/T8030.h>
-#define __ARM_L2CACHE_SIZE_LOG__ 23
-#define ARM_BOARD_WFE_TIMEOUT_NS 1000
-#define ARM_BOARD_CLASS_T8030
-#define CPU_COUNT 6
-#define CPU_CLUSTER_OFFSETS {0, 4}
-#define CPU_PIO_RO_CTL_OFFSETS {0x210055000, 0x210155000, 0x210255000, 0x210355000, 0x211055000, 0x211155000}
-#define CLUSTER_PIO_RO_CTL_OFFSETS {0x210e49000, 0x211e49000}
-#define HAS_UNCORE_CTRS 1
-#define UNCORE_VERSION 2
-#define UNCORE_PER_CLUSTER 1
-#define UNCORE_NCTRS 16
-#define CORE_NCTRS 10
-#define PMAP_PV_LOAD_FACTOR 7
-#define PMAP_CS             1
-#define PMAP_CS_ENABLE      1
-#endif  /* ARM64_BOARD_CONFIG_T8030 */
 
 
-
-
-#ifdef ARM64_BOARD_CONFIG_BCM2837
-#define BCM2837
-#define BCM2837_BRINGUP
-#define ARM_ARCH_TIMER
-#include <pexpert/arm64/BCM2837.h>
-#define __ARM_L2CACHE_SIZE_LOG__ 19
-#define ARM_BOARD_CLASS_BCM2837
-#define CPU_COUNT 4
-#define CORE_NCTRS 8 /* Placeholder; KPC is not enabled for this target */
-#endif  /* ARM64_BOARD_CONFIG_BCM2837 */
 
 #endif /* ! _PEXPERT_ARM_BOARD_CONFIG_H */

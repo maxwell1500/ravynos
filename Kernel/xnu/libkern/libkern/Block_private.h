@@ -93,7 +93,7 @@ public:
 			return 0;
 		} else {
 			return (uintptr_t)
-			       ptrauth_auth_and_resign(fn, ptrauth_key_function_pointer, 0,
+			       ptrauth_auth_and_resign(fn, ptrauth_key_function_pointer, ptrauth_function_pointer_type_discriminator(Fn),
 			           Key, &bits);
 		}
 	}
@@ -122,7 +122,7 @@ public:
 		if (ptr == 0) {
 			return nullptr;
 		} else {
-			return ptrauth_auth_function((Fn)ptr, Key, &bits);
+			return (Fn)ptrauth_auth_function((void *)ptr, Key, &bits);
 		}
 	}
 
@@ -225,11 +225,56 @@ typedef uintptr_t BlockByrefDestroyFunction;
 
 #endif
 
+#if !__has_feature(ptrauth_calls)
+#define BLOCK_SMALL_DESCRIPTOR_SUPPORTED 1
+#endif
+
+#if BLOCK_SMALL_DESCRIPTOR_SUPPORTED
+#if __has_feature(ptrauth_signed_block_descriptors)
+#define _Block_get_relative_function_pointer(aBlock, field, type) \
+	({ \
+	        __typeof__(type) _fn; \
+	        __asm__ ( \
+	                "mov	x17, %[bds] \n\t" \
+	                "movk	x17, %[disc], lsl 48 \n\t" \
+	                "ldr	x16, [%[bds]] \n\t" \
+	                "autda	x16, x17 \n\t" \
+	                "add	x16, x16, %[offset] \n\t" \
+	                "ldrsw	x17, [x16] \n\t" \
+	                "add	x16, x16, x17 \n\t" \
+	                "paciza	x16 \n\t" \
+	                "mov	%[fn], x16 \n\t" \
+	                : [fn] "=r" (_fn) \
+	                : [disc] "i" (_Block_descriptor_ptrauth_discriminator), \
+	                  [bds] "r" (&(aBlock)->descriptor), \
+	                  [offset] "i" (offsetof(struct Block_descriptor_small, field)) \
+	                : "x16", "x17" \
+	        ); \
+	        _fn; \
+	})
+#else /* __has_feature(ptrauth_calls) */
+#define _Block_get_relative_function_pointer(aBlock, field, type) \
+	({ \
+	        struct Block_descriptor_small *_bds = (struct Block_descriptor_small *) \
+	                (aBlock)->descriptor; \
+	        (type)((uintptr_t)&_bds->field + (uintptr_t)(intptr_t)_bds->field); \
+	})
+#endif /* __has_feature(ptrauth_calls) */
+#endif /* BLOCK_SMALL_DESCRIPTOR_SUPPORTED */
+
+#define _Block_descriptor_ptrauth_discriminator 0xC0BB
 
 // Values for Block_layout->flags to describe block objects
 enum {
 	BLOCK_DEALLOCATING =      (0x0001),// runtime
 	BLOCK_REFCOUNT_MASK =     (0xfffe),// runtime
+	BLOCK_INLINE_LAYOUT_STRING = (1 << 21), // compiler
+
+#if BLOCK_SMALL_DESCRIPTOR_SUPPORTED
+	BLOCK_SMALL_DESCRIPTOR =  (1 << 22),// compiler
+#endif
+
+	BLOCK_IS_NOESCAPE =       (1 << 23), // compiler
 	BLOCK_NEEDS_FREE =        (1 << 24),// runtime
 	BLOCK_HAS_COPY_DISPOSE =  (1 << 25),// compiler
 	BLOCK_HAS_CTOR =          (1 << 26),// compiler: helpers have C++ code
@@ -259,6 +304,19 @@ struct Block_descriptor_3 {
 	const char *signature;
 	const char *layout; // contents depend on BLOCK_HAS_EXTENDED_LAYOUT
 };
+
+struct Block_descriptor_small {
+	uint32_t size;
+
+	int32_t signature;
+	int32_t layout;
+
+	/* copy & dispose are optional, only access them if
+	 *        Block_layout->flags & BLOCK_HAS_COPY_DIPOSE */
+	int32_t copy;
+	int32_t dispose;
+};
+
 
 struct Block_layout {
 	void *isa;
@@ -375,6 +433,17 @@ _Block_set_invoke_fn(struct Block_layout *block, void (*fn)(void *, ...))
 	_Block_set_function_pointer(block->invoke, fn);
 }
 
+static inline void *
+_Block_get_descriptor(struct Block_layout *aBlock)
+{
+#if __has_feature(ptrauth_signed_block_descriptors)
+	uintptr_t disc = ptrauth_blend_discriminator(
+		&aBlock->descriptor, _Block_descriptor_ptrauth_discriminator);
+	return ptrauth_auth_data(aBlock->descriptor, ptrauth_key_asda, disc);
+#else
+	return aBlock->descriptor;
+#endif
+}
 
 static inline __typeof__(void (*)(void *, const void *))
 _Block_get_copy_fn(struct Block_descriptor_2 *desc)
@@ -403,6 +472,52 @@ _Block_set_dispose_fn(struct Block_descriptor_2 *desc,
 	_Block_set_function_pointer(desc->dispose, fn);
 }
 
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wcast-align"
+
+static inline __typeof__(void (*)(void *, const void *))
+_Block_get_copy_function(struct Block_layout *aBlock)
+{
+	if (!(aBlock->flags & BLOCK_HAS_COPY_DISPOSE)) {
+		return NULL;
+	}
+
+#if BLOCK_SMALL_DESCRIPTOR_SUPPORTED
+	if (aBlock->flags & BLOCK_SMALL_DESCRIPTOR) {
+		return _Block_get_relative_function_pointer(
+			aBlock, copy, void (*)(void *, const void *));
+	}
+#endif
+
+	void *desc = _Block_get_descriptor(aBlock);
+	struct Block_descriptor_2 *bd2 =
+	    (struct Block_descriptor_2 *)((unsigned char *)desc +
+	    sizeof(struct Block_descriptor_1));
+	return _Block_get_copy_fn(bd2);
+}
+
+static inline __typeof__(void (*)(const void *))
+_Block_get_dispose_function(struct Block_layout *aBlock)
+{
+	if (!(aBlock->flags & BLOCK_HAS_COPY_DISPOSE)) {
+		return NULL;
+	}
+
+#if BLOCK_SMALL_DESCRIPTOR_SUPPORTED
+	if (aBlock->flags & BLOCK_SMALL_DESCRIPTOR) {
+		return _Block_get_relative_function_pointer(
+			aBlock, dispose, void (*)(const void *));
+	}
+#endif
+
+	void *desc = _Block_get_descriptor(aBlock);
+	struct Block_descriptor_2 *bd2 =
+	    (struct Block_descriptor_2 *)((unsigned char *)desc +
+	    sizeof(struct Block_descriptor_1));
+	return _Block_get_dispose_fn(bd2);
+}
+
+#pragma clang diagnostic pop
 
 // Other support functions
 
@@ -460,6 +575,7 @@ __OSX_AVAILABLE_STARTING(__MAC_10_6, __IPHONE_3_2);
 // BLOCK_EXPORT void * _NSConcreteStackBlock[32];
 
 
+#if !KERNEL
 struct Block_callbacks_RR {
 	size_t  size;               // size == sizeof(struct Block_callbacks_RR)
 	void  (*retain)(const void *);
@@ -469,6 +585,6 @@ struct Block_callbacks_RR {
 typedef struct Block_callbacks_RR Block_callbacks_RR;
 
 BLOCK_EXPORT void _Block_use_RR2(const Block_callbacks_RR *callbacks);
-
+#endif // !KERNEL
 
 #endif

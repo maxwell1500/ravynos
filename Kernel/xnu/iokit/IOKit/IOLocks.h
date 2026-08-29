@@ -43,13 +43,12 @@
 
 #include <IOKit/IOReturn.h>
 #include <IOKit/IOTypes.h>
+#include <machine/machine_routines.h>
+#include <libkern/locks.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-#include <libkern/locks.h>
-#include <machine/machine_routines.h>
 
 /*! @var IOLockGroup
  *   Global lock group used by all IOKit locks.  To simplify kext debugging and lock-heat analysis, consider using lck_* locks with a per-driver lock group, as defined in kern/locks.h.
@@ -149,8 +148,24 @@ typedef enum {
 	kIOLockAssertNotOwned = LCK_ASSERT_NOTOWNED
 } IOLockAssertState;
 
+int     IOLockSleepWithInheritor( IOLock * lock, UInt32 lck_sleep_action,
+    void *event, thread_t inheritor, UInt32 interType, uint64_t deadline);
+
+void    IOLockWakeupAllWithInheritor(IOLock * lock, void *event);
+
 #ifdef IOLOCKS_INLINE
 #define IOLockAssert(l, type) LCK_MTX_ASSERT(l, type)
+
+/*! @function   IOLockInlineInit()
+ * @abstract    Initializes an inline lock.
+ */
+void    IOLockInlineInit(IOLock *);
+
+/*! @function   IOLockInlineDestroy()
+ * @abstract    Destroys an inline lock.
+ */
+void    IOLockInlineDestroy(IOLock *);
+
 #else
 /*! @function   IOLockAssert
  *  @abstract   Assert that lock is either held or not held by current thread.
@@ -298,6 +313,17 @@ lck_rw_t * IORWLockGetMachLock( IORWLock * lock);
 void    IORWLockRead(IORWLock * lock);
 #endif  /* !IOLOCKS_INLINE */
 
+/*! @function IORWLockTryRead
+ *   @abstract Attempt to lock a read/write lock for read.
+ *  @discussion Lock the lock for read, allowing multiple readers when there are no writers. If the lock is held for write, return false. Return true otherwise.
+ *   @param lock Pointer to the allocated lock. */
+
+#ifdef  IOLOCKS_INLINE
+#define IORWLockTryRead(l)        lck_rw_try_lock_shared(l)
+#else
+void    IORWLockTryRead( IORWLock * lock);
+#endif  /* !IOLOCKS_INLINE */
+
 /*! @function IORWLockWrite
  *   @abstract Lock a read/write lock for write.
  *   @discussion Lock the lock for write, allowing one writer exlusive access. If the lock is held for read or write, block waiting for its unlock. This function may block and so should not be called from interrupt level or while a spin lock is held. Locking the lock recursively from one thread, for read or write, can result in deadlock.
@@ -307,6 +333,17 @@ void    IORWLockRead(IORWLock * lock);
 #define IORWLockWrite(l)        lck_rw_lock_exclusive(l)
 #else
 void    IORWLockWrite( IORWLock * lock);
+#endif  /* !IOLOCKS_INLINE */
+
+/*! @function IORWLockTryWrite
+ *   @abstract Attempt to lock a read/write lock for write.
+ *   @discussion Lock the lock for write, allowing one writer exlusive access. If the lock is held for read or write, return false. Return true otherwise.
+ *   @param lock Pointer to the allocated lock. */
+
+#ifdef  IOLOCKS_INLINE
+#define IORWLockTryWrite(l)        lck_rw_try_lock_exclusive(l)
+#else
+void    IORWLockTryWrite( IORWLock * lock);
 #endif  /* !IOLOCKS_INLINE */
 
 /*! @function IORWLockUnlock
@@ -333,6 +370,17 @@ typedef enum {
 
 #ifdef IOLOCKS_INLINE
 #define IORWLockAssert(l, type) LCK_RW_ASSERT(l, type)
+
+/*! @function   IORWLockInlineInit()
+ * @abstract    Initializes an inline lock.
+ */
+void    IORWLockInlineInit(IORWLock *);
+
+/*! @function   IORWLockInlineDestroy()
+ * @abstract    Destroys an inline lock.
+ */
+void    IORWLockInlineDestroy(IORWLock *);
+
 #else
 /*! @function   IORWLockAssert
  *  @abstract   Assert that a reader-writer lock is either held or not held

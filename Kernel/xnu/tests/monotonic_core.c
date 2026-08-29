@@ -1,11 +1,7 @@
-/*
- * Must come before including darwintest.h
- */
-#ifdef T_NAMESPACE
-#undef T_NAMESPACE
-#endif /* defined(T_NAMESPACE) */
+// Copyright (c) 2021-2022 Apple Inc.  All rights reserved.
 
 #include <darwintest.h>
+#include "test_utils.h"
 #include <fcntl.h>
 #include <inttypes.h>
 #ifndef PRIVATE
@@ -25,6 +21,8 @@
 #include <System/sys/monotonic.h>
 #include <sys/ioctl.h>
 #include <sys/kdebug.h>
+#include <sys/resource.h>
+#include <sys/resource_private.h>
 #include <sys/sysctl.h>
 #include <unistd.h>
 
@@ -53,43 +51,26 @@ skip_if_unsupported(void)
 }
 
 static void
-check_fixed_counts(uint64_t counts[2][2])
+check_fixed_counts(struct thsc_cpi counts[2])
 {
 	T_QUIET;
-	T_EXPECT_GT(counts[0][0], UINT64_C(0), "instructions are larger than 0");
+	T_EXPECT_GT(counts[0].tcpi_instructions, UINT64_C(0), "non-zero instructions");
 	T_QUIET;
-	T_EXPECT_GT(counts[0][1], UINT64_C(0), "cycles are larger than 0");
+	T_EXPECT_GT(counts[0].tcpi_cycles, UINT64_C(0), "non-zero cycles");
 
-	T_EXPECT_GT(counts[1][0], counts[0][0], "instructions increase monotonically");
-	T_EXPECT_GT(counts[1][1], counts[0][1], "cycles increase monotonically");
-}
-
-T_DECL(core_fixed_thread_self, "check the current thread's fixed counters",
-    T_META_ASROOT(true))
-{
-	int err;
-	extern int thread_selfcounts(int type, void *buf, size_t nbytes);
-	uint64_t counts[2][2];
-
-	T_SETUPBEGIN;
-	skip_if_unsupported();
-	T_SETUPEND;
-
-	err = thread_selfcounts(1, &counts[0], sizeof(counts[0]));
-	T_ASSERT_POSIX_ZERO(err, "thread_selfcounts");
-	err = thread_selfcounts(1, &counts[1], sizeof(counts[1]));
-	T_ASSERT_POSIX_ZERO(err, "thread_selfcounts");
-
-	check_fixed_counts(counts);
+	T_EXPECT_GT(counts[1].tcpi_instructions, counts[0].tcpi_instructions,
+	    "monotonically-increasing instructions");
+	T_EXPECT_GT(counts[1].tcpi_cycles, counts[0].tcpi_cycles,
+	    "monotonically-increasing cycles");
 }
 
 T_DECL(core_fixed_task, "check that task counting is working",
-    T_META_ASROOT(true))
+    XNU_T_META_SOC_SPECIFIC, T_META_ASROOT(true), T_META_TAG_VM_NOT_ELIGIBLE)
 {
 	task_t task = mach_task_self();
 	kern_return_t kr;
 	mach_msg_type_number_t size = TASK_INSPECT_BASIC_COUNTS_COUNT;
-	uint64_t counts[2][2];
+	struct thsc_cpi counts[2];
 
 	skip_if_unsupported();
 
@@ -108,7 +89,7 @@ T_DECL(core_fixed_task, "check that task counting is working",
 }
 
 T_DECL(core_fixed_kdebug, "check that the kdebug macros for monotonic work",
-    T_META_ASROOT(true))
+    T_META_ASROOT(true), T_META_TAG_VM_NOT_ELIGIBLE)
 {
 	__block bool saw_events = false;
 	ktrace_session_t s;
@@ -125,14 +106,14 @@ T_DECL(core_fixed_kdebug, "check that the kdebug macros for monotonic work",
 	    KDBG_EVENTID(DBG_MONOTONIC, DBG_MT_TMPCPU, 0x3fff),
 	    ^(struct trace_point *start, struct trace_point *end)
 	{
-		uint64_t counts[2][2];
+		struct thsc_cpi counts[2];
 
 		saw_events = true;
 
-		counts[0][0] = start->arg1;
-		counts[0][1] = start->arg2;
-		counts[1][0] = end->arg1;
-		counts[1][1] = end->arg2;
+		counts[0].tcpi_instructions = start->arg1;
+		counts[0].tcpi_cycles = start->arg2;
+		counts[1].tcpi_instructions = end->arg1;
+		counts[1].tcpi_cycles = end->arg2;
 
 		check_fixed_counts(counts);
 	});
@@ -158,10 +139,9 @@ T_DECL(core_fixed_kdebug, "check that the kdebug macros for monotonic work",
 static void *
 spin_thread_self_counts(__unused void *arg)
 {
-	extern int thread_selfcounts(int, void *, size_t);
-	uint64_t counts[2] = { 0 };
+	struct thsc_cpi counts = { 0 };
 	while (true) {
-		(void)thread_selfcounts(1, &counts, sizeof(counts));
+		(void)thread_selfcounts(THSC_CPI, &counts, sizeof(counts));
 	}
 }
 
@@ -187,7 +167,7 @@ spin_task_inspect(__unused void *arg)
 }
 
 T_DECL(core_fixed_stack_leak_race,
-    "ensure no stack data is leaked by TASK_INSPECT_BASIC_COUNTS")
+    "ensure no stack data is leaked by TASK_INSPECT_BASIC_COUNTS", T_META_TAG_VM_NOT_ELIGIBLE)
 {
 	T_SETUPBEGIN;
 
@@ -246,54 +226,20 @@ perf_sysctl_deltas(const char *sysctl_name, const char *stat_name)
 }
 
 T_DECL(perf_core_fixed_cpu, "test the performance of fixed CPU counter access",
-    T_META_ASROOT(true), T_META_TAG_PERF)
+    T_META_ASROOT(true), XNU_T_META_SOC_SPECIFIC, T_META_TAG_PERF, T_META_TAG_VM_NOT_ELIGIBLE)
 {
 	perf_sysctl_deltas("kern.monotonic.fixed_cpu_perf", "fixed_cpu_counters");
 }
 
 T_DECL(perf_core_fixed_thread, "test the performance of fixed thread counter access",
-    T_META_ASROOT(true), T_META_TAG_PERF)
+    T_META_ASROOT(true), XNU_T_META_SOC_SPECIFIC, T_META_TAG_PERF, T_META_TAG_VM_NOT_ELIGIBLE)
 {
 	perf_sysctl_deltas("kern.monotonic.fixed_thread_perf",
 	    "fixed_thread_counters");
 }
 
 T_DECL(perf_core_fixed_task, "test the performance of fixed task counter access",
-    T_META_ASROOT(true), T_META_TAG_PERF)
+    T_META_ASROOT(true), XNU_T_META_SOC_SPECIFIC, T_META_TAG_PERF, T_META_TAG_VM_NOT_ELIGIBLE)
 {
 	perf_sysctl_deltas("kern.monotonic.fixed_task_perf", "fixed_task_counters");
-}
-
-T_DECL(perf_core_fixed_thread_self, "test the performance of thread self counts",
-    T_META_TAG_PERF)
-{
-	extern int thread_selfcounts(int type, void *buf, size_t nbytes);
-	uint64_t counts[2][2];
-
-	T_SETUPBEGIN;
-	dt_stat_t instrs = dt_stat_create("fixed_thread_self_instrs", "instructions");
-	dt_stat_t cycles = dt_stat_create("fixed_thread_self_cycles", "cycles");
-
-	skip_if_unsupported();
-	T_SETUPEND;
-
-	while (!dt_stat_stable(instrs) || !dt_stat_stable(cycles)) {
-		int r1, r2;
-
-		r1 = thread_selfcounts(1, &counts[0], sizeof(counts[0]));
-		r2 = thread_selfcounts(1, &counts[1], sizeof(counts[1]));
-		T_QUIET; T_ASSERT_POSIX_ZERO(r1, "__thread_selfcounts");
-		T_QUIET; T_ASSERT_POSIX_ZERO(r2, "__thread_selfcounts");
-
-		T_QUIET; T_ASSERT_GT(counts[1][0], counts[0][0],
-		    "instructions increase monotonically");
-		dt_stat_add(instrs, counts[1][0] - counts[0][0]);
-
-		T_QUIET; T_ASSERT_GT(counts[1][1], counts[0][1],
-		    "cycles increase monotonically");
-		dt_stat_add(cycles, counts[1][1] - counts[0][1]);
-	}
-
-	dt_stat_finalize(instrs);
-	dt_stat_finalize(cycles);
 }

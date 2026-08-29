@@ -38,41 +38,112 @@
 #include <kern/debug.h>
 #include <kern/kern_types.h>
 #include <kern/kalloc.h>
+#include <libkern/kernel_mach_header.h>
 #include <os/overflow.h>
+
+#if defined(KERNEL_INTEGRITY_KTRR) || defined(KERNEL_INTEGRITY_CTRR)
+extern addr64_t kvtophys(vm_offset_t va);
+#endif /* defined(KERNEL_INTEGRITY_KTRR) || defined(KERNEL_INTEGRITY_CTRR) */
 
 #include <sys/types.h>
 
-static int DTInitialized;
-static RealDTEntry DTRootNode;
+SECURITY_READ_ONLY_LATE(static int) DTInitialized;
+SECURITY_READ_ONLY_LATE(RealDTEntry) DTRootNode;
+SECURITY_READ_ONLY_LATE(static vm_size_t) DTSize;
+SECURITY_READ_ONLY_LATE(static vm_offset_t) DTEnd;
 
 /*
+ *
  * Support Routines
+ *
  */
-static inline DeviceTreeNodeProperty*
-next_prop(DeviceTreeNodeProperty* prop)
+
+static inline void
+assert_in_dt_region(vm_offset_t const start, vm_offset_t const end, void const *p)
+{
+	if ((vm_offset_t)p < start || (vm_offset_t)p > end) {
+		panic("Device tree pointer outside of device tree region: pointer %p, DTEnd %lx", p, (unsigned long)DTEnd);
+	}
+}
+#define ASSERT_IN_DT(p) assert_in_dt_region((vm_offset_t)DTRootNode, (vm_offset_t)DTEnd, (p))
+
+static inline void
+assert_prop_in_dt_region(vm_offset_t const start, vm_offset_t const end, DeviceTreeNodeProperty const *prop)
+{
+	vm_offset_t prop_end;
+
+	assert_in_dt_region(start, end, prop);
+	assert_in_dt_region(start, end, (uint8_t const *)prop + sizeof(DeviceTreeNodeProperty));
+	if (os_add3_overflow((vm_offset_t)prop, sizeof(DeviceTreeNodeProperty), prop->length, &prop_end)) {
+		panic("Device tree property overflow: prop %p, length 0x%x", prop, prop->length);
+	}
+	assert_in_dt_region(start, end, (void*)prop_end);
+}
+#define ASSERT_PROP_IN_DT(prop) assert_prop_in_dt_region((vm_offset_t)DTRootNode, (vm_offset_t)DTEnd, (prop))
+
+#define ASSERT_HEADER_IN_DT_REGION(start, end, p, size) assert_in_dt_region((start), (end), (uint8_t const *)(p) + (size))
+#define ASSERT_HEADER_IN_DT(p, size) ASSERT_IN_DT((uint8_t const *)(p) + (size))
+
+/*
+ * Since there is no way to know the size of a device tree node
+ * without fully walking it, we employ the following principle to make
+ * sure that the accessed device tree is fully within its memory
+ * region:
+ *
+ * Internally, we check anything we want to access just before we want
+ * to access it (not after creating a pointer).
+ *
+ * Then, before returning a DTEntry to the caller, we check whether
+ * the start address (only!) of the entry is still within the device
+ * tree region.
+ *
+ * Before returning a property value the caller, we check whether the
+ * property is fully within the region.
+ *
+ * "DTEntry"s are opaque to the caller, so only checking their
+ * starting address is enough to satisfy existence within the device
+ * tree region, while for property values we need to make sure that
+ * they are fully within the region.
+ */
+
+static inline DeviceTreeNodeProperty const *
+next_prop_region(vm_offset_t const start, vm_offset_t end, DeviceTreeNodeProperty const *prop)
 {
 	uintptr_t next_addr;
+
+	ASSERT_HEADER_IN_DT_REGION(start, end, prop, sizeof(DeviceTreeNodeProperty));
+
 	if (os_add3_overflow((uintptr_t)prop, prop->length, sizeof(DeviceTreeNodeProperty) + 3, &next_addr)) {
-		panic("Device tree property overflow: prop %p, length 0x%x\n", prop, prop->length);
+		panic("Device tree property overflow: prop %p, length 0x%x", prop, prop->length);
 	}
+
 	next_addr &= ~(3ULL);
+
 	return (DeviceTreeNodeProperty*)next_addr;
 }
+#define next_prop(prop) next_prop_region((vm_offset_t)DTRootNode, (vm_offset_t)DTEnd, (prop))
 
 static RealDTEntry
 skipProperties(RealDTEntry entry)
 {
-	DeviceTreeNodeProperty *prop;
+	DeviceTreeNodeProperty const *prop;
 	unsigned int k;
 
-	if (entry == NULL || entry->nProperties == 0) {
+	if (entry == NULL) {
+		return NULL;
+	}
+
+	ASSERT_HEADER_IN_DT(entry, sizeof(DeviceTreeNode));
+
+	if (entry->nProperties == 0) {
 		return NULL;
 	} else {
-		prop = (DeviceTreeNodeProperty *) (entry + 1);
+		prop = (DeviceTreeNodeProperty const *) (entry + 1);
 		for (k = 0; k < entry->nProperties; k++) {
 			prop = next_prop(prop);
 		}
 	}
+	ASSERT_IN_DT(prop);
 	return (RealDTEntry) prop;
 }
 
@@ -81,6 +152,8 @@ skipTree(RealDTEntry root)
 {
 	RealDTEntry entry;
 	unsigned int k;
+
+	ASSERT_HEADER_IN_DT(root, sizeof(DeviceTreeNode));
 
 	entry = skipProperties(root);
 	if (entry == NULL) {
@@ -130,8 +203,10 @@ FindChild(RealDTEntry cur, char *buf)
 {
 	RealDTEntry     child;
 	unsigned long   index;
-	char *                  str;
+	char const *    str;
 	unsigned int    dummy;
+
+	ASSERT_HEADER_IN_DT(cur, sizeof(DeviceTreeNode));
 
 	if (cur->nChildren == 0) {
 		return NULL;
@@ -139,7 +214,7 @@ FindChild(RealDTEntry cur, char *buf)
 	index = 1;
 	child = GetFirstChild(cur);
 	while (1) {
-		if (DTGetProperty(child, "name", (void **)&str, &dummy) != kSuccess) {
+		if (SecureDTGetProperty(child, "name", (void const **)&str, &dummy) != kSuccess) {
 			break;
 		}
 		if (strcmp(str, buf) == 0) {
@@ -154,58 +229,91 @@ FindChild(RealDTEntry cur, char *buf)
 	return NULL;
 }
 
-
 /*
  * External Routines
  */
 void
-DTInit(void *base)
+SecureDTInit(void const *base, size_t size)
 {
-	DTRootNode = (RealDTEntry) base;
+	if ((uintptr_t)base + size < (uintptr_t)base) {
+		panic("DeviceTree overflow: %p, size %#zx", base, size);
+	}
+	DTRootNode = base;
+	DTSize = size;
+	DTEnd = (vm_offset_t)DTRootNode + DTSize;
 	DTInitialized = (DTRootNode != 0);
 }
 
+bool
+SecureDTIsLockedDown(void)
+{
+#if CONFIG_SPTM
+	return true;
+#elif defined(KERNEL_INTEGRITY_KTRR) || defined(KERNEL_INTEGRITY_CTRR)
+	/*
+	 * We cannot check if the DT is in the CTRR region early on,
+	 * because knowledge of the CTRR region is set up later.  But the
+	 * DT is used in all kinds of early bootstrapping before that.
+	 *
+	 * Luckily, we know that the device tree must be in front of the
+	 * kernel if set up in EXTRADATA (which means it's covered by
+	 * CTRR), and after it otherwise.
+	 */
+	addr64_t exec_header_phys = kvtophys((vm_offset_t)&_mh_execute_header);
+
+	if (kvtophys((vm_offset_t)DTRootNode) < exec_header_phys) {
+		assert(kvtophys(DTEnd) <= exec_header_phys);
+		return true;
+	}
+#endif
+	return false;
+}
+
 int
-DTEntryIsEqual(const DTEntry ref1, const DTEntry ref2)
+SecureDTEntryIsEqual(const DTEntry ref1, const DTEntry ref2)
 {
 	/* equality of pointers */
 	return ref1 == ref2;
 }
 
-static char *startingP;         // needed for find_entry
+static char const *startingP;         // needed for find_entry
 int find_entry(const char *propName, const char *propValue, DTEntry *entryH);
 
 int
-DTFindEntry(const char *propName, const char *propValue, DTEntry *entryH)
+SecureDTFindEntry(const char *propName, const char *propValue, DTEntry *entryH)
 {
 	if (!DTInitialized) {
 		return kError;
 	}
 
-	startingP = (char *)DTRootNode;
+	startingP = (char const *)DTRootNode;
 	return find_entry(propName, propValue, entryH);
 }
 
 int
 find_entry(const char *propName, const char *propValue, DTEntry *entryH)
 {
-	DeviceTreeNode *nodeP = (DeviceTreeNode *) (void *) startingP;
+	DeviceTreeNode const *nodeP = (DeviceTreeNode const *) (void const *) startingP;
 	unsigned int k;
+
+	ASSERT_HEADER_IN_DT(nodeP, sizeof(DeviceTreeNode));
 
 	if (nodeP->nProperties == 0) {
 		return kError;                        // End of the list of nodes
 	}
-	startingP = (char *) (nodeP + 1);
+	startingP = (char const *) (nodeP + 1);
 
 	// Search current entry
 	for (k = 0; k < nodeP->nProperties; ++k) {
-		DeviceTreeNodeProperty *propP = (DeviceTreeNodeProperty *) (void *) startingP;
+		DeviceTreeNodeProperty const *propP = (DeviceTreeNodeProperty const *) (void const *) startingP;
+		ASSERT_PROP_IN_DT(propP);
 
 		startingP += sizeof(*propP) + ((propP->length + 3) & -4);
 
 		if (strcmp(propP->name, propName) == 0) {
-			if (propValue == NULL || strcmp((char *)(propP + 1), propValue) == 0) {
+			if (propValue == NULL || strcmp((char const *)(propP + 1), propValue) == 0) {
 				*entryH = (DTEntry)nodeP;
+				ASSERT_HEADER_IN_DT(*entryH, sizeof(DeviceTreeNode));
 				return kSuccess;
 			}
 		}
@@ -220,8 +328,128 @@ find_entry(const char *propName, const char *propValue, DTEntry *entryH)
 	return kError;
 }
 
+/**
+ * @brief Recursive helper function for SecureDTFindNodeWithPropertyEqualToValue().
+ *
+ * @param[in] currentNode The root node of the subtree currently being searched.
+ * @param[out] currentNodeSize The size (in bytes) of the current node. This is
+ * only set if the current subtree doesn't contain the target node so that our
+ * parent can know where to continue the search.
+ */
+static int
+SecureDTFindNodeWithPropertyEqualToValueHelper(
+	const char *const propertyName,
+	const void *const propertyValue,
+	const size_t propertyValueSize,
+	const DeviceTreeNode **const devicetreeNode,
+	const DeviceTreeNode *const currentNode,
+	size_t *const currentNodeSize)
+{
+	// This variable tracks our current position in the devicetree blob. This is
+	// necessary because the sizes of both properties and nodes are variable.
+	uintptr_t current_position = (uintptr_t)(currentNode + 1);
+
+	// Check to see if the target node is this one. That is, check if the
+	// current node has the specified property equal to the specified value.
+	for (int i = 0; i < currentNode->nProperties; i++) {
+		const DeviceTreeNodeProperty *const property = (const DeviceTreeNodeProperty *const)current_position;
+
+		// Move on if the property name doesn't match.
+		if (strncmp(propertyName, property->name, kPropNameLength) != 0) {
+			goto next_property;
+		}
+
+		// Move on if the property value doesn't match.
+		if (propertyValueSize != property->length) {
+			goto next_property;
+		}
+		const void *const value = property + 1;
+		if (memcmp(propertyValue, value, propertyValueSize) != 0) {
+			goto next_property;
+		}
+
+		// Both name and value match!
+		*devicetreeNode = currentNode;
+		return kSuccess;
+
+next_property:
+		// The next property can be found at the closest 4-byte boundary after
+		// the current property's value.
+		current_position += sizeof(DeviceTreeNodeProperty) + ((property->length + 3) & ~3);
+	}
+
+	// If we're here, then the current node isn't the target node. Check to see
+	// if the target node can be found in any of the child subtrees.
+	for (int i = 0; i < currentNode->nChildren; i++) {
+		const DeviceTreeNode *const child = (const DeviceTreeNode *const)current_position;
+		size_t child_size;
+		const int retval = SecureDTFindNodeWithPropertyEqualToValueHelper(
+			propertyName,
+			propertyValue,
+			propertyValueSize,
+			devicetreeNode,
+			child,
+			&child_size);
+		if (retval == kSuccess) {
+			return kSuccess;
+		}
+		current_position += child_size;
+	}
+
+	// The target node cannot be found in the current subtree.
+	*currentNodeSize = current_position - (uintptr_t)currentNode;
+	return kError;
+}
+
 int
-DTLookupEntry(const DTEntry searchPoint, const char *pathName, DTEntry *foundEntry)
+SecureDTFindNodeWithPropertyEqualToValue(
+	const char *const propertyName,
+	const void *const propertyValue,
+	const size_t propertyValueSize,
+	const DeviceTreeNode **const devicetreeNode)
+{
+	if (!DTInitialized) {
+		return kError;
+	}
+	size_t unused;
+	return SecureDTFindNodeWithPropertyEqualToValueHelper(
+		propertyName,
+		propertyValue,
+		propertyValueSize,
+		devicetreeNode,
+		DTRootNode,
+		&unused);
+};
+
+int
+SecureDTFindNodeWithPhandle(
+	const uint32_t phandle,
+	const DeviceTreeNode **const devicetreeNode)
+{
+	return SecureDTFindNodeWithPropertyEqualToValue(
+		"AAPL,phandle",
+		&phandle,
+		sizeof(phandle),
+		devicetreeNode);
+}
+
+int
+SecureDTFindNodeWithStringProperty(
+	const char *const propertyName,
+	const char *const propertyValue,
+	const DeviceTreeNode **const devicetreeNode)
+{
+	// The property length for strings that gets encoded in the devicetree blob
+	// includes the null-terminator.
+	return SecureDTFindNodeWithPropertyEqualToValue(
+		propertyName,
+		propertyValue,
+		strlen(propertyValue) + 1,
+		devicetreeNode);
+}
+
+int
+SecureDTLookupEntry(const DTEntry searchPoint, const char *pathName, DTEntry *foundEntry)
 {
 	DTEntryNameBuf  buf;
 	RealDTEntry     cur;
@@ -235,6 +463,7 @@ DTLookupEntry(const DTEntry searchPoint, const char *pathName, DTEntry *foundEnt
 	} else {
 		cur = searchPoint;
 	}
+	ASSERT_IN_DT(cur);
 	cp = pathName;
 	if (*cp == kDTPathNameSeparator) {
 		cp++;
@@ -262,7 +491,7 @@ DTLookupEntry(const DTEntry searchPoint, const char *pathName, DTEntry *foundEnt
 }
 
 int
-DTInitEntryIterator(const DTEntry startEntry, DTEntryIterator iter)
+SecureDTInitEntryIterator(const DTEntry startEntry, DTEntryIterator iter)
 {
 	if (!DTInitialized) {
 		return kError;
@@ -283,14 +512,14 @@ DTInitEntryIterator(const DTEntry startEntry, DTEntryIterator iter)
 }
 
 int
-DTEnterEntry(DTEntryIterator iter, DTEntry childEntry)
+SecureDTEnterEntry(DTEntryIterator iter, DTEntry childEntry)
 {
 	DTSavedScopePtr newScope;
 
 	if (childEntry == NULL) {
 		return kError;
 	}
-	newScope = (DTSavedScopePtr) kalloc(sizeof(struct DTSavedScope));
+	newScope = (DTSavedScopePtr) kalloc_type(struct DTSavedScope, Z_WAITOK);
 	newScope->nextScope = iter->savedScope;
 	newScope->scope = iter->currentScope;
 	newScope->entry = iter->currentEntry;
@@ -305,7 +534,7 @@ DTEnterEntry(DTEntryIterator iter, DTEntry childEntry)
 }
 
 int
-DTExitEntry(DTEntryIterator iter, DTEntry *currentPosition)
+SecureDTExitEntry(DTEntryIterator iter, DTEntry *currentPosition)
 {
 	DTSavedScopePtr newScope;
 
@@ -319,13 +548,13 @@ DTExitEntry(DTEntryIterator iter, DTEntry *currentPosition)
 	iter->currentIndex = newScope->index;
 	*currentPosition = iter->currentEntry;
 
-	kfree(newScope, sizeof(struct DTSavedScope));
+	kfree_type(struct DTSavedScope, newScope);
 
 	return kSuccess;
 }
 
 int
-DTIterateEntries(DTEntryIterator iter, DTEntry *nextEntry)
+SecureDTIterateEntries(DTEntryIterator iter, DTEntry *nextEntry)
 {
 	if (iter->currentIndex >= iter->currentScope->nChildren) {
 		*nextEntry = NULL;
@@ -337,13 +566,14 @@ DTIterateEntries(DTEntryIterator iter, DTEntry *nextEntry)
 		} else {
 			iter->currentEntry = GetNextChild(iter->currentEntry);
 		}
+		ASSERT_IN_DT(iter->currentEntry);
 		*nextEntry = iter->currentEntry;
 		return kSuccess;
 	}
 }
 
 int
-DTRestartEntryIteration(DTEntryIterator iter)
+SecureDTRestartEntryIteration(DTEntryIterator iter)
 {
 #if 0
 	// This commented out code allows a second argument (outer)
@@ -354,7 +584,7 @@ DTRestartEntryIteration(DTEntryIterator iter)
 	if (outer) {
 		while ((scope = iter->savedScope) != NULL) {
 			iter->savedScope = scope->nextScope;
-			kfree((vm_offset_t) scope, sizeof(struct DTSavedScope));
+			kfree_type(struct DTSavedScope, scope);
 		}
 		iter->currentScope = iter->outerScope;
 	}
@@ -364,31 +594,53 @@ DTRestartEntryIteration(DTEntryIterator iter)
 	return kSuccess;
 }
 
-int
-DTGetProperty(const DTEntry entry, const char *propertyName, void **propertyValue, unsigned int *propertySize)
+static int
+SecureDTGetPropertyInternal(const DTEntry entry, const char *propertyName, void const **propertyValue, unsigned int *propertySize, vm_offset_t const region_start, vm_size_t region_size)
 {
-	DeviceTreeNodeProperty *prop;
+	DeviceTreeNodeProperty const *prop;
 	unsigned int k;
 
-	if (entry == NULL || entry->nProperties == 0) {
+	if (entry == NULL) {
+		return kError;
+	}
+
+	ASSERT_HEADER_IN_DT_REGION(region_start, region_start + region_size, entry, sizeof(DeviceTreeNode));
+
+	if (entry->nProperties == 0) {
 		return kError;
 	} else {
-		prop = (DeviceTreeNodeProperty *) (entry + 1);
+		prop = (DeviceTreeNodeProperty const *) (entry + 1);
 		for (k = 0; k < entry->nProperties; k++) {
+			assert_prop_in_dt_region(region_start, region_start + region_size, prop);
 			if (strcmp(prop->name, propertyName) == 0) {
-				*propertyValue = (void *) (((uintptr_t)prop)
+				*propertyValue = (void const *) (((uintptr_t)prop)
 				    + sizeof(DeviceTreeNodeProperty));
 				*propertySize = prop->length;
 				return kSuccess;
 			}
-			prop = next_prop(prop);
+			prop = next_prop_region(region_start, region_start + region_size, prop);
 		}
 	}
 	return kError;
 }
 
 int
-DTInitPropertyIterator(const DTEntry entry, DTPropertyIterator iter)
+SecureDTGetProperty(const DTEntry entry, const char *propertyName, void const **propertyValue, unsigned int *propertySize)
+{
+	return SecureDTGetPropertyInternal(entry, propertyName, propertyValue, propertySize,
+	           (vm_offset_t)DTRootNode, (vm_size_t)((uintptr_t)DTEnd - (uintptr_t)DTRootNode));
+}
+
+int
+SecureDTGetPropertyRegion(const DTEntry entry, const char *propertyName, void const **propertyValue, unsigned int *propertySize, vm_offset_t const region_start, vm_size_t region_size)
+{
+	return SecureDTGetPropertyInternal(entry, propertyName, propertyValue, propertySize,
+	           region_start, region_size);
+}
+
+
+int
+SecureDTInitPropertyIterator(const DTEntry entry, DTPropertyIterator iter)
 {
 	iter->entry = entry;
 	iter->currentProperty = NULL;
@@ -397,7 +649,7 @@ DTInitPropertyIterator(const DTEntry entry, DTPropertyIterator iter)
 }
 
 int
-DTIterateProperties(DTPropertyIterator iter, char **foundProperty)
+SecureDTIterateProperties(DTPropertyIterator iter, char const **foundProperty)
 {
 	if (iter->currentIndex >= iter->entry->nProperties) {
 		*foundProperty = NULL;
@@ -405,17 +657,18 @@ DTIterateProperties(DTPropertyIterator iter, char **foundProperty)
 	} else {
 		iter->currentIndex++;
 		if (iter->currentIndex == 1) {
-			iter->currentProperty = (DeviceTreeNodeProperty *) (iter->entry + 1);
+			iter->currentProperty = (DeviceTreeNodeProperty const *) (iter->entry + 1);
 		} else {
 			iter->currentProperty = next_prop(iter->currentProperty);
 		}
+		ASSERT_PROP_IN_DT(iter->currentProperty);
 		*foundProperty = iter->currentProperty->name;
 		return kSuccess;
 	}
 }
 
 int
-DTRestartPropertyIteration(DTPropertyIterator iter)
+SecureDTRestartPropertyIteration(DTPropertyIterator iter)
 {
 	iter->currentProperty = NULL;
 	iter->currentIndex = 0;

@@ -27,6 +27,7 @@
 
 #include <sys/cdefs.h>
 #include <libproc.h>
+#include <libproc_private.h>
 #include <mach/message.h>
 
 __BEGIN_DECLS
@@ -160,6 +161,9 @@ int proc_pidoriginatorinfo(int flavor, void *buffer, int buffersize) __OSX_AVAIL
 
 int proc_listcoalitions(int flavor, int coaltype, void *buffer, int buffersize) __OSX_AVAILABLE_STARTING(__MAC_10_11, __IPHONE_8_3);
 
+/* get scheduler stats for current thread */
+int proc_current_thread_schedinfo(void *buffer, size_t buffersize);
+
 #if !TARGET_OS_SIMULATOR
 
 #define PROC_SUPPRESS_SUCCESS                (0)
@@ -169,6 +173,11 @@ int proc_listcoalitions(int flavor, int coaltype, void *buffer, int buffersize) 
 
 int proc_suppress(pid_t pid, uint64_t *generation);
 #endif /* !TARGET_OS_SIMULATOR */
+
+/* for use by dyld when it relocates itself */
+int proc_set_dyld_all_image_info(void *buffer, int buffersize);
+
+
 
 __END_DECLS
 

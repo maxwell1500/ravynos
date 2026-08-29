@@ -53,27 +53,41 @@ typedef struct kcdata_item      *task_crashinfo_item_t;
 
 #ifdef XNU_KERNEL_PRIVATE
 
-#define CORPSEINFO_ALLOCATION_SIZE (1024 * 16)
+#define CORPSEINFO_ALLOCATION_SIZE (1024 * 48)
+#define BTINFO_ALLOCATION_SIZE (1024 * 20)
+
+#if XNU_TARGET_OS_WATCH
+#define TOTAL_CORPSES_ALLOWED 4
+#else /* XNU_TARGET_OS_WATCH */
 #define TOTAL_CORPSES_ALLOWED 5
+#endif /* XNU_TARGET_OS_WATCH */
+
 #define TOTAL_USER_FAULTS_ALLOWED 1
 
+#if DEBUG || DEVELOPMENT
+extern bool corpse_threshold_system_limit;
+#endif /* DEBUG || DEVELOPMENT */
+extern bool exc_via_corpse_forking;
+extern bool corpse_for_fatal_memkill;
 
 extern kern_return_t task_mark_corpse(task_t task);
 
 extern kern_return_t task_deliver_crash_notification(task_t, thread_t, exception_type_t, mach_exception_subcode_t);
 
 /* In the corpseinfo kcd_user_flags */
-#define CORPSE_CRASHINFO_HAS_REF    0x1
-#define CORPSE_CRASHINFO_USER_FAULT 0x2
+__options_closed_decl(corpse_flags_t, uint16_t, {
+	CORPSE_CRASHINFO_HAS_REF    = 0x1,
+	CORPSE_CRASHINFO_USER_FAULT = 0x2
+});
 
 extern kcdata_descriptor_t task_get_corpseinfo(task_t task);
 
 extern kcdata_descriptor_t  task_crashinfo_alloc_init(
 	mach_vm_address_t crash_data_p,
-	unsigned size, uint32_t kc_u_flags, unsigned kc_flags);
+	unsigned size, corpse_flags_t kc_u_flags, unsigned kc_flags);
+extern kcdata_descriptor_t task_btinfo_alloc_init(
+	mach_vm_address_t addr, unsigned size);
 extern kern_return_t task_crashinfo_destroy(kcdata_descriptor_t data);
-
-extern void corpses_init(void);
 
 extern unsigned long total_corpses_count(void) __attribute__((pure));
 extern boolean_t corpses_enabled(void);
@@ -96,10 +110,19 @@ extern kern_return_t task_duplicate_map_and_threads(
 	thread_t *thread,
 	uint64_t **udata_buffer,
 	int *size,
-	int *num_udata);
+	int *num_udata,
+	bool for_exception);
 
 extern kern_return_t task_enqueue_exception_with_corpse(
 	task_t task,
+	exception_type_t etype,
+	mach_exception_data_t code,
+	mach_msg_type_number_t codeCnt,
+	void *reason,
+	boolean_t lightweight);
+
+extern kern_return_t current_thread_collect_backtrace_info(
+	kcdata_descriptor_t *new_desc,
 	exception_type_t etype,
 	mach_exception_data_t code,
 	mach_msg_type_number_t codeCnt,
@@ -108,6 +131,7 @@ extern kern_return_t task_enqueue_exception_with_corpse(
 extern void task_add_to_corpse_task_list(task_t corpse_task);
 void task_remove_from_corpse_task_list(task_t corpse_task);
 void task_purge_all_corpses(void);
+kern_return_t find_corpse_task_by_uniqueid_grp(uint64_t uid, task_t *target, task_grp_t grp);
 extern uint64_t task_corpse_get_crashed_thread_id(task_t corpse_task);
 
 #endif /* XNU_KERNEL_PRIVATE */

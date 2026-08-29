@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -63,16 +63,14 @@
  *	The proverbial page-out daemon.
  */
 
+#include "mach/kern_return.h"
 #include <stdint.h>
+#include <ptrauth.h>
 
 #include <debug.h>
-#include <mach_pagemap.h>
-#include <mach_cluster_stats.h>
 
 #include <mach/mach_types.h>
 #include <mach/memory_object.h>
-#include <mach/memory_object_default.h>
-#include <mach/memory_object_control_server.h>
 #include <mach/mach_host_server.h>
 #include <mach/upl.h>
 #include <mach/vm_map.h>
@@ -81,36 +79,45 @@
 #include <mach/sdt.h>
 
 #include <kern/kern_types.h>
-#include <kern/counters.h>
+#include <kern/counter.h>
 #include <kern/host_statistics.h>
 #include <kern/machine.h>
 #include <kern/misc_protos.h>
 #include <kern/sched.h>
 #include <kern/thread.h>
 #include <kern/kalloc.h>
+#include <kern/zalloc_internal.h>
 #include <kern/policy_internal.h>
 #include <kern/thread_group.h>
+
+#include <os/log.h>
+
+#include <sys/kdebug_triage.h>
 
 #include <machine/vm_tuning.h>
 #include <machine/commpage.h>
 
 #include <vm/pmap.h>
-#include <vm/vm_compressor_pager.h>
-#include <vm/vm_fault.h>
-#include <vm/vm_map.h>
-#include <vm/vm_object.h>
-#include <vm/vm_page.h>
-#include <vm/vm_pageout.h>
-#include <vm/vm_protos.h> /* must be last */
+#include <vm/vm_compressor_pager_internal.h>
+#include <vm/vm_fault_internal.h>
+#include <vm/vm_map_internal.h>
+#include <vm/vm_object_internal.h>
+#include <vm/vm_page_internal.h>
+#include <vm/vm_pageout_internal.h>
+#include <vm/vm_protos_internal.h> /* must be last */
 #include <vm/memory_object.h>
 #include <vm/vm_purgeable_internal.h>
 #include <vm/vm_shared_region.h>
-#include <vm/vm_compressor.h>
+#include <vm/vm_compressor_internal.h>
+#include <vm/vm_kern_xnu.h>
+#include <vm/vm_iokit.h>
+#include <vm/vm_ubc.h>
 
 #include <san/kasan.h>
+#include <sys/kern_memorystatus_xnu.h>
 
 #if CONFIG_PHANTOM_CACHE
-#include <vm/vm_phantom_cache.h>
+#include <vm/vm_phantom_cache_internal.h>
 #endif
 
 #if UPL_DEBUG
@@ -119,41 +126,40 @@
 
 extern int cs_debug;
 
+#if CONFIG_MBUF_MCACHE
 extern void mbuf_drain(boolean_t);
+#endif /* CONFIG_MBUF_MCACHE */
 
-#if VM_PRESSURE_EVENTS
-#if CONFIG_JETSAM
-extern unsigned int memorystatus_available_pages;
-extern unsigned int memorystatus_available_pages_pressure;
-extern unsigned int memorystatus_available_pages_critical;
-#else /* CONFIG_JETSAM */
-extern uint64_t memorystatus_available_pages;
-extern uint64_t memorystatus_available_pages_pressure;
-extern uint64_t memorystatus_available_pages_critical;
-#endif /* CONFIG_JETSAM */
-
+#if CONFIG_FREEZE
 extern unsigned int memorystatus_frozen_count;
 extern unsigned int memorystatus_suspended_count;
+#endif /* CONFIG_FREEZE */
 extern vm_pressure_level_t memorystatus_vm_pressure_level;
 
-extern lck_mtx_t memorystatus_jetsam_fg_band_lock;
+extern lck_mtx_t memorystatus_jetsam_broadcast_lock;
 extern uint32_t memorystatus_jetsam_fg_band_waiters;
+extern uint32_t memorystatus_jetsam_bg_band_waiters;
 
 void vm_pressure_response(void);
 extern void consider_vm_pressure_events(void);
 
 #define MEMORYSTATUS_SUSPENDED_THRESHOLD  4
-#endif /* VM_PRESSURE_EVENTS */
 
-thread_t  vm_pageout_scan_thread = THREAD_NULL;
-boolean_t vps_dynamic_priority_enabled = FALSE;
+SECURITY_READ_ONLY_LATE(thread_t) vm_pageout_scan_thread;
+SECURITY_READ_ONLY_LATE(thread_t) vm_pageout_gc_thread;
+#if CONFIG_VPS_DYNAMIC_PRIO
+TUNABLE(bool, vps_dynamic_priority_enabled, "vps_dynamic_priority_enabled", false);
+#else
+const bool vps_dynamic_priority_enabled = false;
+#endif
+boolean_t vps_yield_for_pgqlockwaiters = TRUE;
 
 #ifndef VM_PAGEOUT_BURST_INACTIVE_THROTTLE  /* maximum iterations of the inactive queue w/o stealing/cleaning a page */
-#ifdef  CONFIG_EMBEDDED
+#if !XNU_TARGET_OS_OSX
 #define VM_PAGEOUT_BURST_INACTIVE_THROTTLE 1024
-#else
+#else /* !XNU_TARGET_OS_OSX */
 #define VM_PAGEOUT_BURST_INACTIVE_THROTTLE 4096
-#endif
+#endif /* !XNU_TARGET_OS_OSX */
 #endif
 
 #ifndef VM_PAGEOUT_DEADLOCK_RELIEF
@@ -184,7 +190,13 @@ boolean_t vps_dynamic_priority_enabled = FALSE;
 #define VM_PAGEOUT_SWAP_WAIT    10      /* milliseconds */
 #endif  /* VM_PAGEOUT_SWAP_WAIT */
 
+/*
+ * vm_page_max_speculative_age_q should be less than or equal to
+ * VM_PAGE_RESERVED_SPECULATIVE_AGE_Q which is number of allocated
+ * vm_page_queue_speculative entries.
+ */
 
+TUNABLE_DEV_WRITEABLE(unsigned int, vm_page_max_speculative_age_q, "vm_page_max_speculative_age_q", VM_PAGE_DEFAULT_MAX_SPECULATIVE_AGE_Q);
 #ifndef VM_PAGE_SPECULATIVE_TARGET
 #define VM_PAGE_SPECULATIVE_TARGET(total) ((total) * 1 / (100 / vm_pageout_state.vm_page_speculative_percentage))
 #endif /* VM_PAGE_SPECULATIVE_TARGET */
@@ -212,11 +224,11 @@ boolean_t vps_dynamic_priority_enabled = FALSE;
  */
 
 #ifndef VM_PAGE_FREE_TARGET
-#ifdef  CONFIG_EMBEDDED
+#if !XNU_TARGET_OS_OSX
 #define VM_PAGE_FREE_TARGET(free)       (15 + (free) / 100)
-#else
+#else /* !XNU_TARGET_OS_OSX */
 #define VM_PAGE_FREE_TARGET(free)       (15 + (free) / 80)
-#endif
+#endif /* !XNU_TARGET_OS_OSX */
 #endif  /* VM_PAGE_FREE_TARGET */
 
 
@@ -226,22 +238,22 @@ boolean_t vps_dynamic_priority_enabled = FALSE;
  */
 
 #ifndef VM_PAGE_FREE_MIN
-#ifdef  CONFIG_EMBEDDED
+#if !XNU_TARGET_OS_OSX
 #define VM_PAGE_FREE_MIN(free)          (10 + (free) / 200)
-#else
+#else /* !XNU_TARGET_OS_OSX */
 #define VM_PAGE_FREE_MIN(free)          (10 + (free) / 100)
-#endif
+#endif /* !XNU_TARGET_OS_OSX */
 #endif  /* VM_PAGE_FREE_MIN */
 
-#ifdef  CONFIG_EMBEDDED
+#if !XNU_TARGET_OS_OSX
 #define VM_PAGE_FREE_RESERVED_LIMIT     100
 #define VM_PAGE_FREE_MIN_LIMIT          1500
 #define VM_PAGE_FREE_TARGET_LIMIT       2000
-#else
+#else /* !XNU_TARGET_OS_OSX */
 #define VM_PAGE_FREE_RESERVED_LIMIT     1700
 #define VM_PAGE_FREE_MIN_LIMIT          3500
 #define VM_PAGE_FREE_TARGET_LIMIT       4000
-#endif
+#endif /* !XNU_TARGET_OS_OSX */
 
 /*
  *	When vm_page_free_count falls below vm_page_free_reserved,
@@ -267,28 +279,20 @@ boolean_t vps_dynamic_priority_enabled = FALSE;
 #define VM_PAGE_REACTIVATE_LIMIT_MAX 20000
 
 #ifndef VM_PAGE_REACTIVATE_LIMIT
-#ifdef  CONFIG_EMBEDDED
+#if !XNU_TARGET_OS_OSX
 #define VM_PAGE_REACTIVATE_LIMIT(avail) (VM_PAGE_INACTIVE_TARGET(avail) / 2)
-#else
+#else /* !XNU_TARGET_OS_OSX */
 #define VM_PAGE_REACTIVATE_LIMIT(avail) (MAX((avail) * 1 / 20,VM_PAGE_REACTIVATE_LIMIT_MAX))
-#endif
+#endif /* !XNU_TARGET_OS_OSX */
 #endif  /* VM_PAGE_REACTIVATE_LIMIT */
 #define VM_PAGEOUT_INACTIVE_FORCE_RECLAIM       1000
 
+int vm_pageout_protect_realtime = true;
+
 extern boolean_t hibernate_cleaning_in_progress;
 
-/*
- * Forward declarations for internal routines.
- */
-struct cq {
-	struct vm_pageout_queue *q;
-	void                    *current_chead;
-	char                    *scratch_buf;
-	int                     id;
-};
-
-struct cq ciq[MAX_COMPRESSOR_THREAD_COUNT];
-
+struct pgo_iothread_state pgo_iothread_internal_state[MAX_COMPRESSOR_THREAD_COUNT];
+struct pgo_iothread_state pgo_iothread_external_state;
 
 #if VM_PRESSURE_EVENTS
 void vm_pressure_thread(void);
@@ -300,24 +304,21 @@ boolean_t VM_PRESSURE_WARNING_TO_NORMAL(void);
 boolean_t VM_PRESSURE_CRITICAL_TO_WARNING(void);
 #endif
 
-void vm_pageout_garbage_collect(int);
-static void vm_pageout_iothread_external(void);
-static void vm_pageout_iothread_internal(struct cq *cq);
-static void vm_pageout_adjust_eq_iothrottle(struct vm_pageout_queue *, boolean_t);
+static void vm_pageout_iothread_external(struct pgo_iothread_state *, wait_result_t);
+static void vm_pageout_iothread_internal(struct pgo_iothread_state *, wait_result_t);
+static void vm_pageout_adjust_eq_iothrottle(struct pgo_iothread_state *, boolean_t);
 
 extern void vm_pageout_continue(void);
 extern void vm_pageout_scan(void);
-
-void vm_tests(void); /* forward */
 
 boolean_t vm_pageout_running = FALSE;
 
 uint32_t vm_page_upl_tainted = 0;
 uint32_t vm_page_iopl_tainted = 0;
 
-#if !CONFIG_EMBEDDED
+#if XNU_TARGET_OS_OSX
 static boolean_t vm_pageout_waiter  = FALSE;
-#endif /* !CONFIG_EMBEDDED */
+#endif /* XNU_TARGET_OS_OSX */
 
 
 #if DEVELOPMENT || DEBUG
@@ -327,8 +328,11 @@ struct vm_pageout_vminfo vm_pageout_vminfo;
 struct vm_pageout_state  vm_pageout_state;
 struct vm_config         vm_config;
 
-struct  vm_pageout_queue vm_pageout_queue_internal __attribute__((aligned(VM_PACKED_POINTER_ALIGNMENT)));
-struct  vm_pageout_queue vm_pageout_queue_external __attribute__((aligned(VM_PACKED_POINTER_ALIGNMENT)));
+struct  vm_pageout_queue vm_pageout_queue_internal VM_PAGE_PACKED_ALIGNED;
+struct  vm_pageout_queue vm_pageout_queue_external VM_PAGE_PACKED_ALIGNED;
+#if DEVELOPMENT || DEBUG
+struct vm_pageout_queue vm_pageout_queue_benchmark VM_PAGE_PACKED_ALIGNED;
+#endif /* DEVELOPMENT || DEBUG */
 
 int         vm_upl_wait_for_pages = 0;
 vm_object_t vm_pageout_scan_wants_object = VM_OBJECT_NULL;
@@ -337,10 +341,10 @@ boolean_t(*volatile consider_buffer_cache_collect)(int) = NULL;
 
 int     vm_debug_events = 0;
 
-lck_grp_t vm_pageout_lck_grp;
+LCK_GRP_DECLARE(vm_pageout_lck_grp, "vm_pageout");
 
 #if CONFIG_MEMORYSTATUS
-extern boolean_t memorystatus_kill_on_VM_page_shortage(boolean_t async);
+extern void memorystatus_kill_on_vps_starvation(void);
 
 uint32_t vm_pageout_memorystatus_fb_factor_nr = 5;
 uint32_t vm_pageout_memorystatus_fb_factor_dr = 2;
@@ -348,9 +352,23 @@ uint32_t vm_pageout_memorystatus_fb_factor_dr = 2;
 #endif
 
 #if __AMP__
-int vm_compressor_ebound = 1;
+
+
+/*
+ * Bind compressor threads to e-cores unless there are multiple non-e clusters
+ */
+#if (MAX_CPU_CLUSTERS > 2)
+#define VM_COMPRESSOR_EBOUND_DEFAULT false
+#elif defined(XNU_TARGET_OS_XR)
+#define VM_COMPRESSOR_EBOUND_DEFAULT false
+#else
+#define VM_COMPRESSOR_EBOUND_DEFAULT true
+#endif
+
+TUNABLE(bool, vm_compressor_ebound, "vmcomp_ecluster", VM_COMPRESSOR_EBOUND_DEFAULT);
 int vm_pgo_pbound = 0;
-extern void thread_bind_cluster_type(char);
+extern void thread_bind_cluster_type(thread_t, char, bool);
+
 #endif /* __AMP__ */
 
 
@@ -446,8 +464,8 @@ vm_pageout_object_terminate(
 
 			if (m->vmp_dirty) {
 				vm_page_unwire(m, TRUE);        /* reactivates */
-				VM_STAT_INCR(reactivations);
-				PAGE_WAKEUP_DONE(m);
+				counter_inc(&vm_statistics_reactivations);
+				vm_page_wakeup_done(object, m);
 			} else {
 				vm_page_free(m);  /* clears busy, etc. */
 			}
@@ -503,7 +521,7 @@ vm_pageout_object_terminate(
 		/*
 		 * Wakeup any thread waiting for the page to be un-cleaning.
 		 */
-		PAGE_WAKEUP(m);
+		vm_page_wakeup(object, m);
 		vm_page_unlock_queues();
 	}
 	/*
@@ -512,7 +530,7 @@ vm_pageout_object_terminate(
 	vm_object_activity_end(shadow_object);
 	vm_object_unlock(shadow_object);
 
-	assert(object->ref_count == 0);
+	assert(os_ref_get_count_raw(&object->ref_count) == 0);
 	assert(object->paging_in_progress == 0);
 	assert(object->activity_in_progress == 0);
 	assert(object->resident_page_count == 0);
@@ -608,7 +626,6 @@ vm_pageout_initialize_page(
 	 *	Verify that we really want to clean this page
 	 */
 	assert(!m->vmp_absent);
-	assert(!m->vmp_error);
 	assert(m->vmp_dirty);
 
 	/*
@@ -616,7 +633,7 @@ vm_pageout_initialize_page(
 	 */
 	paging_offset = m->vmp_offset + object->paging_offset;
 
-	if (m->vmp_absent || m->vmp_error || m->vmp_restart || (!m->vmp_dirty && !m->vmp_precious)) {
+	if (m->vmp_absent || VMP_ERROR_GET(m) || m->vmp_restart || (!m->vmp_dirty && !m->vmp_precious)) {
 		panic("reservation without pageout?"); /* alan */
 
 		VM_PAGE_FREE(m);
@@ -697,18 +714,18 @@ vmct_state_t vmct_state[MAX_COMPRESSOR_THREAD_COUNT];
 #endif
 
 
-void
-vm_pageout_cluster(vm_page_t m)
+
+static void
+vm_pageout_cluster_to_queue(vm_page_t m, struct vm_pageout_queue *q)
 {
-	vm_object_t     object = VM_PAGE_OBJECT(m);
-	struct          vm_pageout_queue *q;
+	vm_object_t object = VM_PAGE_OBJECT(m);
 
 	VM_PAGE_CHECK(m);
 	LCK_MTX_ASSERT(&vm_page_queue_lock, LCK_MTX_ASSERT_OWNED);
 	vm_object_lock_assert_exclusive(object);
 
 	/*
-	 * Only a certain kind of page is appreciated here.
+	 * Make sure it's OK to page this out.
 	 */
 	assert((m->vmp_dirty || m->vmp_precious) && (!VM_PAGE_WIRED(m)));
 	assert(!m->vmp_cleaning && !m->vmp_laundry);
@@ -719,15 +736,6 @@ vm_pageout_cluster(vm_page_t m)
 	 */
 	vm_object_activity_begin(object);
 
-	if (object->internal == TRUE) {
-		assert(VM_CONFIG_COMPRESSOR_IS_PRESENT);
-
-		m->vmp_busy = TRUE;
-
-		q = &vm_pageout_queue_internal;
-	} else {
-		q = &vm_pageout_queue_external;
-	}
 
 	/*
 	 * pgo_laundry count is tied to the laundry bit
@@ -738,11 +746,42 @@ vm_pageout_cluster(vm_page_t m)
 	m->vmp_q_state = VM_PAGE_ON_PAGEOUT_Q;
 	vm_page_queue_enter(&q->pgo_pending, m, vmp_pageq);
 
-	if (q->pgo_idle == TRUE) {
-		q->pgo_idle = FALSE;
-		thread_wakeup((event_t) &q->pgo_pending);
+	if (object->internal == TRUE) {
+		assert(VM_CONFIG_COMPRESSOR_IS_PRESENT);
+		m->vmp_busy = TRUE;
+#if DEVELOPMENT || DEBUG
+		/*
+		 * The benchmark queue will be woken up independently by the benchmark
+		 * itself.
+		 */
+		if (q != &vm_pageout_queue_benchmark) {
+#else /* DEVELOPMENT || DEBUG */
+		if (true) {
+#endif /* DEVELOPMENT || DEBUG */
+			/*
+			 * Wake up the first compressor thread. It will wake subsequent
+			 * threads if necessary.
+			 */
+			sched_cond_signal(&pgo_iothread_internal_state[0].pgo_wakeup,
+			    pgo_iothread_internal_state[0].pgo_iothread);
+		}
+	} else {
+		sched_cond_signal(&pgo_iothread_external_state.pgo_wakeup, pgo_iothread_external_state.pgo_iothread);
 	}
 	VM_PAGE_CHECK(m);
+}
+
+void
+vm_pageout_cluster(vm_page_t m)
+{
+	struct          vm_pageout_queue *q;
+	vm_object_t     object = VM_PAGE_OBJECT(m);
+	if (object->internal) {
+		q = &vm_pageout_queue_internal;
+	} else {
+		q = &vm_pageout_queue_external;
+	}
+	vm_pageout_cluster_to_queue(m, q);
 }
 
 
@@ -763,7 +802,7 @@ vm_pageout_throttle_up(
 	m_object = VM_PAGE_OBJECT(m);
 
 	assert(m_object != VM_OBJECT_NULL);
-	assert(m_object != kernel_object);
+	assert(!is_kernel_object(m_object));
 
 	LCK_MTX_ASSERT(&vm_page_queue_lock, LCK_MTX_ASSERT_OWNED);
 	vm_object_lock_assert_exclusive(m_object);
@@ -876,6 +915,7 @@ struct vm_pageout_stat {
 	unsigned int considered_bq_external;
 
 	unsigned int skipped_external;
+	unsigned int skipped_internal;
 	unsigned int filecache_min_reactivations;
 
 	unsigned int freed_speculative;
@@ -896,7 +936,13 @@ struct vm_pageout_stat {
 
 	unsigned int phantom_ghosts_found;
 	unsigned int phantom_ghosts_added;
-} vm_pageout_stats[VM_PAGEOUT_STAT_SIZE] = {{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}, };
+
+	unsigned int vm_page_realtime_count;
+	unsigned int forcereclaimed_sharedcache;
+	unsigned int forcereclaimed_realtime;
+	unsigned int protected_sharedcache;
+	unsigned int protected_realtime;
+} vm_pageout_stats[VM_PAGEOUT_STAT_SIZE];
 
 unsigned int vm_pageout_stat_now = 0;
 
@@ -1056,29 +1102,37 @@ vm_pageout_disconnect_all_pages_in_queue(vm_page_queue_head_t *, int);
  * condition variable used to make sure there is
  * only a single sweep going on at a time
  */
-boolean_t       vm_pageout_disconnect_all_pages_active = FALSE;
-
+bool vm_pageout_disconnect_all_pages_active = false;
 
 void
 vm_pageout_disconnect_all_pages()
 {
 	vm_page_lock_queues();
 
-	if (vm_pageout_disconnect_all_pages_active == TRUE) {
+	if (vm_pageout_disconnect_all_pages_active) {
 		vm_page_unlock_queues();
 		return;
 	}
-	vm_pageout_disconnect_all_pages_active = TRUE;
+	vm_pageout_disconnect_all_pages_active = true;
+
+	vm_pageout_disconnect_all_pages_in_queue(&vm_page_queue_throttled,
+	    vm_page_throttled_count);
+	vm_pageout_disconnect_all_pages_in_queue(&vm_page_queue_anonymous,
+	    vm_page_anonymous_count);
+	vm_pageout_disconnect_all_pages_in_queue(&vm_page_queue_inactive,
+	    (vm_page_inactive_count - vm_page_anonymous_count));
+	vm_pageout_disconnect_all_pages_in_queue(&vm_page_queue_active,
+	    vm_page_active_count);
+#ifdef CONFIG_SECLUDED_MEMORY
+	vm_pageout_disconnect_all_pages_in_queue(&vm_page_queue_secluded,
+	    vm_page_secluded_count);
+#endif /* CONFIG_SECLUDED_MEMORY */
 	vm_page_unlock_queues();
 
-	vm_pageout_disconnect_all_pages_in_queue(&vm_page_queue_throttled, vm_page_throttled_count);
-	vm_pageout_disconnect_all_pages_in_queue(&vm_page_queue_anonymous, vm_page_anonymous_count);
-	vm_pageout_disconnect_all_pages_in_queue(&vm_page_queue_active, vm_page_active_count);
-
-	vm_pageout_disconnect_all_pages_active = FALSE;
+	vm_pageout_disconnect_all_pages_active = false;
 }
 
-
+/* NB: assumes the page_queues lock is held on entry, returns with page queue lock held */
 void
 vm_pageout_disconnect_all_pages_in_queue(vm_page_queue_head_t *q, int qcount)
 {
@@ -1092,16 +1146,26 @@ vm_pageout_disconnect_all_pages_in_queue(vm_page_queue_head_t *q, int qcount)
 	int             paused_count = 0;
 	int             object_locked_count = 0;
 
-	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, (MACHDBG_CODE(DBG_MACH_WORKINGSET, VM_DISCONNECT_ALL_PAGE_MAPPINGS)) | DBG_FUNC_START,
-	    q, qcount, 0, 0, 0);
-
-	vm_page_lock_queues();
+	KDBG((MACHDBG_CODE(DBG_MACH_WORKINGSET, VM_DISCONNECT_ALL_PAGE_MAPPINGS) |
+	    DBG_FUNC_START),
+	    q, qcount);
 
 	while (qcount && !vm_page_queue_empty(q)) {
 		LCK_MTX_ASSERT(&vm_page_queue_lock, LCK_MTX_ASSERT_OWNED);
 
 		m = (vm_page_t) vm_page_queue_first(q);
 		m_object = VM_PAGE_OBJECT(m);
+
+		if (m_object == VM_OBJECT_NULL) {
+			/*
+			 * Bumped into a free page. This should only happen on the
+			 * secluded queue
+			 */
+#if CONFIG_SECLUDED_MEMORY
+			assert(q == &vm_page_queue_secluded);
+#endif /* CONFIG_SECLUDED_MEMORY */
+			goto reenter_pg_on_q;
+		}
 
 		/*
 		 * check to see if we currently are working
@@ -1147,7 +1211,9 @@ vm_pageout_disconnect_all_pages_in_queue(vm_page_queue_head_t *q, int qcount)
 
 			l_object = m_object;
 		}
-		if (!m_object->alive || m->vmp_cleaning || m->vmp_laundry || m->vmp_busy || m->vmp_absent || m->vmp_error || m->vmp_free_when_done) {
+		if (!m_object->alive || m->vmp_cleaning || m->vmp_laundry ||
+		    m->vmp_busy || m->vmp_absent || VMP_ERROR_GET(m) ||
+		    m->vmp_free_when_done) {
 			/*
 			 * put it back on the head of its queue
 			 */
@@ -1178,17 +1244,54 @@ reenter_pg_on_q:
 		vm_object_unlock(l_object);
 		l_object = NULL;
 	}
-	vm_page_unlock_queues();
 
-	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, (MACHDBG_CODE(DBG_MACH_WORKINGSET, VM_DISCONNECT_ALL_PAGE_MAPPINGS)) | DBG_FUNC_END,
-	    q, disconnected_count, object_locked_count, paused_count, 0);
+	KDBG((MACHDBG_CODE(DBG_MACH_WORKINGSET, VM_DISCONNECT_ALL_PAGE_MAPPINGS) |
+	    DBG_FUNC_END),
+	    q, disconnected_count, object_locked_count, paused_count);
 }
 
-#endif
+extern const char *proc_best_name(struct proc* proc);
+
+int
+vm_toggle_task_selfdonate_pages(task_t task)
+{
+	int state = 0;
+	if (vm_page_donate_mode == VM_PAGE_DONATE_DISABLED) {
+		printf("VM Donation mode is OFF on the system\n");
+		return state;
+	}
+	if (task != kernel_task) {
+		task_lock(task);
+		if (!task->donates_own_pages) {
+			printf("SELF DONATE for %s ON\n", proc_best_name(get_bsdtask_info(task)));
+			task->donates_own_pages = true;
+			state = 1;
+		} else if (task->donates_own_pages) {
+			printf("SELF DONATE for %s OFF\n", proc_best_name(get_bsdtask_info(task)));
+			task->donates_own_pages = false;
+			state = 0;
+		}
+		task_unlock(task);
+	}
+	return state;
+}
+#endif /* DEVELOPMENT || DEBUG */
+
+void
+vm_task_set_selfdonate_pages(task_t task, bool donate)
+{
+	assert(vm_page_donate_mode != VM_PAGE_DONATE_DISABLED);
+	assert(task != kernel_task);
+
+	task_lock(task);
+	task->donates_own_pages = donate;
+	task_unlock(task);
+}
 
 
-static void
-vm_pageout_page_queue(vm_page_queue_head_t *, int);
+
+static size_t
+vm_pageout_page_queue(vm_page_queue_head_t *, size_t, bool);
 
 /*
  * condition variable used to make sure there is
@@ -1197,22 +1300,27 @@ vm_pageout_page_queue(vm_page_queue_head_t *, int);
 boolean_t       vm_pageout_anonymous_pages_active = FALSE;
 
 
-void
+kern_return_t
 vm_pageout_anonymous_pages()
 {
 	if (VM_CONFIG_COMPRESSOR_IS_PRESENT) {
+		size_t throttled_pages_moved, anonymous_pages_moved, active_pages_moved;
 		vm_page_lock_queues();
 
 		if (vm_pageout_anonymous_pages_active == TRUE) {
 			vm_page_unlock_queues();
-			return;
+			return KERN_RESOURCE_SHORTAGE;
 		}
 		vm_pageout_anonymous_pages_active = TRUE;
 		vm_page_unlock_queues();
 
-		vm_pageout_page_queue(&vm_page_queue_throttled, vm_page_throttled_count);
-		vm_pageout_page_queue(&vm_page_queue_anonymous, vm_page_anonymous_count);
-		vm_pageout_page_queue(&vm_page_queue_active, vm_page_active_count);
+		throttled_pages_moved = vm_pageout_page_queue(&vm_page_queue_throttled, vm_page_throttled_count, false);
+		anonymous_pages_moved = vm_pageout_page_queue(&vm_page_queue_anonymous, vm_page_anonymous_count, false);
+		active_pages_moved = vm_pageout_page_queue(&vm_page_queue_active, vm_page_active_count, false);
+
+		os_log(OS_LOG_DEFAULT,
+		    "%s: throttled pages moved: %zu, anonymous pages moved: %zu, active pages moved: %zu",
+		    __func__, throttled_pages_moved, anonymous_pages_moved, active_pages_moved);
 
 		if (VM_CONFIG_SWAP_IS_PRESENT) {
 			vm_consider_swapping();
@@ -1221,12 +1329,15 @@ vm_pageout_anonymous_pages()
 		vm_page_lock_queues();
 		vm_pageout_anonymous_pages_active = FALSE;
 		vm_page_unlock_queues();
+		return KERN_SUCCESS;
+	} else {
+		return KERN_NOT_SUPPORTED;
 	}
 }
 
 
-void
-vm_pageout_page_queue(vm_page_queue_head_t *q, int qcount)
+size_t
+vm_pageout_page_queue(vm_page_queue_head_t *q, size_t qcount, bool perf_test)
 {
 	vm_page_t       m;
 	vm_object_t     t_object = NULL;
@@ -1238,11 +1349,20 @@ vm_pageout_page_queue(vm_page_queue_head_t *q, int qcount)
 	int             pmap_options;
 	struct          vm_pageout_queue *iq;
 	ppnum_t         phys_page;
+	size_t          pages_moved = 0;
 
 
 	iq = &vm_pageout_queue_internal;
 
 	vm_page_lock_queues();
+
+#if DEVELOPMENT || DEBUG
+	if (perf_test) {
+		iq = &vm_pageout_queue_benchmark;
+		// ensure the benchmark queue isn't throttled
+		iq->pgo_maxlaundry = (unsigned int) qcount;
+	}
+#endif /* DEVELOPMENT ||DEBUG */
 
 	while (qcount && !vm_page_queue_empty(q)) {
 		LCK_MTX_ASSERT(&vm_page_queue_lock, LCK_MTX_ASSERT_OWNED);
@@ -1310,7 +1430,7 @@ vm_pageout_page_queue(vm_page_queue_head_t *q, int qcount)
 			}
 			l_object = m_object;
 		}
-		if (!m_object->alive || m->vmp_cleaning || m->vmp_laundry || m->vmp_busy || m->vmp_absent || m->vmp_error || m->vmp_free_when_done) {
+		if (!m_object->alive || m->vmp_cleaning || m->vmp_laundry || m->vmp_busy || m->vmp_absent || VMP_ERROR_GET(m) || m->vmp_free_when_done) {
 			/*
 			 * page is not to be cleaned
 			 * put it back on the head of its queue
@@ -1368,6 +1488,13 @@ vm_pageout_page_queue(vm_page_queue_head_t *q, int qcount)
 				delayed_unlock = 0;
 			}
 			if (!m_object->pager_initialized || m_object->pager == MEMORY_OBJECT_NULL) {
+				/*
+				 * We dropped the page queues lock above, so
+				 * "m" might no longer be on this queue...
+				 */
+				if (m != (vm_page_t) vm_page_queue_first(q)) {
+					continue;
+				}
 				goto reenter_pg_on_q;
 			}
 			/*
@@ -1376,17 +1503,33 @@ vm_pageout_page_queue(vm_page_queue_head_t *q, int qcount)
 			 */
 			continue;
 		}
-		/*
-		 * we've already factored out pages in the laundry which
-		 * means this page can't be on the pageout queue so it's
-		 * safe to do the vm_page_queues_remove
-		 */
-		vm_page_queues_remove(m, TRUE);
+
+		if (!perf_test) {
+			/*
+			 * we've already factored out pages in the laundry which
+			 * means this page can't be on the pageout queue so it's
+			 * safe to do the vm_page_queues_remove
+			 */
+			bool donate = (m->vmp_on_specialq == VM_PAGE_SPECIAL_Q_DONATE);
+			vm_page_queues_remove(m, TRUE);
+			if (donate) {
+				/*
+				 * The compressor needs to see this bit to know
+				 * where this page needs to land. Also if stolen,
+				 * this bit helps put the page back in the right
+				 * special queue where it belongs.
+				 */
+				m->vmp_on_specialq = VM_PAGE_SPECIAL_Q_DONATE;
+			}
+		} else {
+			vm_page_queue_remove(q, m, vmp_pageq);
+		}
 
 		LCK_MTX_ASSERT(&vm_page_queue_lock, LCK_MTX_ASSERT_OWNED);
 
-		vm_pageout_cluster(m);
+		vm_pageout_cluster_to_queue(m, iq);
 
+		pages_moved++;
 		goto next_pg;
 
 reenter_pg_on_q:
@@ -1410,6 +1553,7 @@ next_pg:
 		l_object = NULL;
 	}
 	vm_page_unlock_queues();
+	return pages_moved;
 }
 
 
@@ -1453,11 +1597,10 @@ struct flow_control {
 };
 
 
-#if CONFIG_BACKGROUND_QUEUE
 uint64_t vm_pageout_rejected_bq_internal = 0;
 uint64_t vm_pageout_rejected_bq_external = 0;
 uint64_t vm_pageout_skipped_bq_internal = 0;
-#endif
+uint64_t vm_pageout_skipped_bq_external = 0;
 
 #define ANONS_GRABBED_LIMIT     2
 
@@ -1480,12 +1623,12 @@ vm_pageout_delayed_unlock(int *delayed_unlock, int *local_freed, vm_page_t *loca
 		vm_page_unlock_queues();
 
 		VM_DEBUG_CONSTANT_EVENT(
-			vm_pageout_freelist, VM_PAGEOUT_FREELIST, DBG_FUNC_START,
+			vm_pageout_freelist, DBG_VM_PAGEOUT_FREELIST, DBG_FUNC_START,
 			vm_page_free_count, 0, 0, 1);
 
 		vm_page_free_list(*local_freeq, TRUE);
 
-		VM_DEBUG_CONSTANT_EVENT(vm_pageout_freelist, VM_PAGEOUT_FREELIST, DBG_FUNC_END,
+		VM_DEBUG_CONSTANT_EVENT(vm_pageout_freelist, DBG_VM_PAGEOUT_FREELIST, DBG_FUNC_END,
 		    vm_page_free_count, *local_freed, 0, 1);
 
 		*local_freeq = NULL;
@@ -1545,7 +1688,8 @@ extern struct memory_object_pager_ops shared_region_pager_ops;
 void
 update_vm_info(void)
 {
-	uint64_t tmp;
+	unsigned long tmp;
+	uint64_t tmp64;
 
 	vm_pageout_stats[vm_pageout_stat_now].vm_page_active_count = vm_page_active_count;
 	vm_pageout_stats[vm_pageout_stat_now].vm_page_speculative_count = vm_page_speculative_count;
@@ -1560,23 +1704,23 @@ update_vm_info(void)
 	vm_pageout_stats[vm_pageout_stat_now].vm_page_pageable_internal_count = vm_page_pageable_internal_count;
 	vm_pageout_stats[vm_pageout_stat_now].vm_page_pageable_external_count = vm_page_pageable_external_count;
 	vm_pageout_stats[vm_pageout_stat_now].vm_page_xpmapped_external_count = vm_page_xpmapped_external_count;
-
+	vm_pageout_stats[vm_pageout_stat_now].vm_page_realtime_count = vm_page_realtime_count;
 
 	tmp = vm_pageout_vminfo.vm_pageout_considered_page;
 	vm_pageout_stats[vm_pageout_stat_now].considered = (unsigned int)(tmp - last.vm_pageout_considered_page);
 	last.vm_pageout_considered_page = tmp;
 
-	tmp = vm_pageout_vminfo.vm_pageout_compressions;
-	vm_pageout_stats[vm_pageout_stat_now].pages_compressed = (unsigned int)(tmp - last.vm_pageout_compressions);
-	last.vm_pageout_compressions = tmp;
+	tmp64 = vm_pageout_vminfo.vm_pageout_compressions;
+	vm_pageout_stats[vm_pageout_stat_now].pages_compressed = (unsigned int)(tmp64 - last.vm_pageout_compressions);
+	last.vm_pageout_compressions = tmp64;
 
 	tmp = vm_pageout_vminfo.vm_compressor_failed;
 	vm_pageout_stats[vm_pageout_stat_now].failed_compressions = (unsigned int)(tmp - last.vm_compressor_failed);
 	last.vm_compressor_failed = tmp;
 
-	tmp = vm_pageout_vminfo.vm_compressor_pages_grabbed;
-	vm_pageout_stats[vm_pageout_stat_now].pages_grabbed_by_compressor = (unsigned int)(tmp - last.vm_compressor_pages_grabbed);
-	last.vm_compressor_pages_grabbed = tmp;
+	tmp64 = vm_pageout_vminfo.vm_compressor_pages_grabbed;
+	vm_pageout_stats[vm_pageout_stat_now].pages_grabbed_by_compressor = (unsigned int)(tmp64 - last.vm_compressor_pages_grabbed);
+	last.vm_compressor_pages_grabbed = tmp64;
 
 	tmp = vm_pageout_vminfo.vm_phantom_cache_found_ghost;
 	vm_pageout_stats[vm_pageout_stat_now].phantom_ghosts_found = (unsigned int)(tmp - last.vm_phantom_cache_found_ghost);
@@ -1586,14 +1730,13 @@ update_vm_info(void)
 	vm_pageout_stats[vm_pageout_stat_now].phantom_ghosts_added = (unsigned int)(tmp - last.vm_phantom_cache_added_ghost);
 	last.vm_phantom_cache_added_ghost = tmp;
 
-	tmp = get_pages_grabbed_count();
-	vm_pageout_stats[vm_pageout_stat_now].pages_grabbed = (unsigned int)(tmp - last_vm_page_pages_grabbed);
-	last_vm_page_pages_grabbed = tmp;
+	tmp64 = counter_load(&vm_page_grab_count);
+	vm_pageout_stats[vm_pageout_stat_now].pages_grabbed = (unsigned int)(tmp64 - last_vm_page_pages_grabbed);
+	last_vm_page_pages_grabbed = tmp64;
 
 	tmp = vm_pageout_vminfo.vm_page_pages_freed;
 	vm_pageout_stats[vm_pageout_stat_now].pages_freed = (unsigned int)(tmp - last.vm_page_pages_freed);
 	last.vm_page_pages_freed = tmp;
-
 
 	if (vm_pageout_stats[vm_pageout_stat_now].considered) {
 		tmp = vm_pageout_vminfo.vm_pageout_pages_evicted;
@@ -1640,6 +1783,10 @@ update_vm_info(void)
 		vm_pageout_stats[vm_pageout_stat_now].skipped_external = (unsigned int)(tmp - last.vm_pageout_skipped_external);
 		last.vm_pageout_skipped_external = tmp;
 
+		tmp = vm_pageout_vminfo.vm_pageout_skipped_internal;
+		vm_pageout_stats[vm_pageout_stat_now].skipped_internal = (unsigned int)(tmp - last.vm_pageout_skipped_internal);
+		last.vm_pageout_skipped_internal = tmp;
+
 		tmp = vm_pageout_vminfo.vm_pageout_reactivation_limit_exceeded;
 		vm_pageout_stats[vm_pageout_stat_now].reactivation_limit_exceeded = (unsigned int)(tmp - last.vm_pageout_reactivation_limit_exceeded);
 		last.vm_pageout_reactivation_limit_exceeded = tmp;
@@ -1667,73 +1814,85 @@ update_vm_info(void)
 		tmp = vm_pageout_vminfo.vm_pageout_inactive_dirty_internal;
 		vm_pageout_stats[vm_pageout_stat_now].cleaned_dirty_internal = (unsigned int)(tmp - last.vm_pageout_inactive_dirty_internal);
 		last.vm_pageout_inactive_dirty_internal = tmp;
+
+		tmp = vm_pageout_vminfo.vm_pageout_forcereclaimed_sharedcache;
+		vm_pageout_stats[vm_pageout_stat_now].forcereclaimed_sharedcache = (unsigned int)(tmp - last.vm_pageout_forcereclaimed_sharedcache);
+		last.vm_pageout_forcereclaimed_sharedcache = tmp;
+
+		tmp = vm_pageout_vminfo.vm_pageout_forcereclaimed_realtime;
+		vm_pageout_stats[vm_pageout_stat_now].forcereclaimed_realtime = (unsigned int)(tmp - last.vm_pageout_forcereclaimed_realtime);
+		last.vm_pageout_forcereclaimed_realtime = tmp;
+
+		tmp = vm_pageout_vminfo.vm_pageout_protected_sharedcache;
+		vm_pageout_stats[vm_pageout_stat_now].protected_sharedcache = (unsigned int)(tmp - last.vm_pageout_protected_sharedcache);
+		last.vm_pageout_protected_sharedcache = tmp;
+
+		tmp = vm_pageout_vminfo.vm_pageout_protected_realtime;
+		vm_pageout_stats[vm_pageout_stat_now].protected_realtime = (unsigned int)(tmp - last.vm_pageout_protected_realtime);
+		last.vm_pageout_protected_realtime = tmp;
 	}
 
-	KERNEL_DEBUG_CONSTANT((MACHDBG_CODE(DBG_MACH_VM, VM_INFO1)) | DBG_FUNC_NONE,
+	KDBG((VMDBG_CODE(DBG_VM_INFO1)) | DBG_FUNC_NONE,
 	    vm_pageout_stats[vm_pageout_stat_now].vm_page_active_count,
 	    vm_pageout_stats[vm_pageout_stat_now].vm_page_speculative_count,
 	    vm_pageout_stats[vm_pageout_stat_now].vm_page_inactive_count,
-	    vm_pageout_stats[vm_pageout_stat_now].vm_page_anonymous_count,
-	    0);
+	    vm_pageout_stats[vm_pageout_stat_now].vm_page_anonymous_count);
 
-	KERNEL_DEBUG_CONSTANT((MACHDBG_CODE(DBG_MACH_VM, VM_INFO2)) | DBG_FUNC_NONE,
+	KDBG((VMDBG_CODE(DBG_VM_INFO2)) | DBG_FUNC_NONE,
 	    vm_pageout_stats[vm_pageout_stat_now].vm_page_free_count,
 	    vm_pageout_stats[vm_pageout_stat_now].vm_page_wire_count,
-	    vm_pageout_stats[vm_pageout_stat_now].vm_page_compressor_count,
-	    0,
-	    0);
+	    vm_pageout_stats[vm_pageout_stat_now].vm_page_compressor_count);
 
-	KERNEL_DEBUG_CONSTANT((MACHDBG_CODE(DBG_MACH_VM, VM_INFO3)) | DBG_FUNC_NONE,
+	KDBG((VMDBG_CODE(DBG_VM_INFO3)) | DBG_FUNC_NONE,
 	    vm_pageout_stats[vm_pageout_stat_now].vm_page_pages_compressed,
 	    vm_pageout_stats[vm_pageout_stat_now].vm_page_pageable_internal_count,
 	    vm_pageout_stats[vm_pageout_stat_now].vm_page_pageable_external_count,
-	    vm_pageout_stats[vm_pageout_stat_now].vm_page_xpmapped_external_count,
-	    0);
+	    vm_pageout_stats[vm_pageout_stat_now].vm_page_xpmapped_external_count);
 
 	if (vm_pageout_stats[vm_pageout_stat_now].considered ||
 	    vm_pageout_stats[vm_pageout_stat_now].pages_compressed ||
 	    vm_pageout_stats[vm_pageout_stat_now].failed_compressions) {
-		KERNEL_DEBUG_CONSTANT((MACHDBG_CODE(DBG_MACH_VM, VM_INFO4)) | DBG_FUNC_NONE,
+		KDBG((VMDBG_CODE(DBG_VM_INFO4)) | DBG_FUNC_NONE,
 		    vm_pageout_stats[vm_pageout_stat_now].considered,
 		    vm_pageout_stats[vm_pageout_stat_now].freed_speculative,
 		    vm_pageout_stats[vm_pageout_stat_now].freed_external,
-		    vm_pageout_stats[vm_pageout_stat_now].inactive_referenced,
-		    0);
+		    vm_pageout_stats[vm_pageout_stat_now].inactive_referenced);
 
-		KERNEL_DEBUG_CONSTANT((MACHDBG_CODE(DBG_MACH_VM, VM_INFO5)) | DBG_FUNC_NONE,
+		KDBG((VMDBG_CODE(DBG_VM_INFO5)) | DBG_FUNC_NONE,
 		    vm_pageout_stats[vm_pageout_stat_now].throttled_external_q,
 		    vm_pageout_stats[vm_pageout_stat_now].cleaned_dirty_external,
 		    vm_pageout_stats[vm_pageout_stat_now].freed_cleaned,
-		    vm_pageout_stats[vm_pageout_stat_now].inactive_nolock,
-		    0);
+		    vm_pageout_stats[vm_pageout_stat_now].inactive_nolock);
 
-		KERNEL_DEBUG_CONSTANT((MACHDBG_CODE(DBG_MACH_VM, VM_INFO6)) | DBG_FUNC_NONE,
+		KDBG((VMDBG_CODE(DBG_VM_INFO6)) | DBG_FUNC_NONE,
 		    vm_pageout_stats[vm_pageout_stat_now].throttled_internal_q,
 		    vm_pageout_stats[vm_pageout_stat_now].pages_compressed,
 		    vm_pageout_stats[vm_pageout_stat_now].pages_grabbed_by_compressor,
-		    vm_pageout_stats[vm_pageout_stat_now].skipped_external,
-		    0);
+		    vm_pageout_stats[vm_pageout_stat_now].skipped_external);
 
-		KERNEL_DEBUG_CONSTANT((MACHDBG_CODE(DBG_MACH_VM, VM_INFO7)) | DBG_FUNC_NONE,
+		KDBG((VMDBG_CODE(DBG_VM_INFO7)) | DBG_FUNC_NONE,
 		    vm_pageout_stats[vm_pageout_stat_now].reactivation_limit_exceeded,
 		    vm_pageout_stats[vm_pageout_stat_now].forced_inactive_reclaim,
 		    vm_pageout_stats[vm_pageout_stat_now].failed_compressions,
-		    vm_pageout_stats[vm_pageout_stat_now].freed_internal,
-		    0);
+		    vm_pageout_stats[vm_pageout_stat_now].freed_internal);
 
-		KERNEL_DEBUG_CONSTANT((MACHDBG_CODE(DBG_MACH_VM, VM_INFO8)) | DBG_FUNC_NONE,
+		KDBG((VMDBG_CODE(DBG_VM_INFO8)) | DBG_FUNC_NONE,
 		    vm_pageout_stats[vm_pageout_stat_now].considered_bq_internal,
 		    vm_pageout_stats[vm_pageout_stat_now].considered_bq_external,
 		    vm_pageout_stats[vm_pageout_stat_now].filecache_min_reactivations,
-		    vm_pageout_stats[vm_pageout_stat_now].cleaned_dirty_internal,
-		    0);
+		    vm_pageout_stats[vm_pageout_stat_now].cleaned_dirty_internal);
+
+		KDBG((VMDBG_CODE(DBG_VM_INFO10)) | DBG_FUNC_NONE,
+		    vm_pageout_stats[vm_pageout_stat_now].forcereclaimed_sharedcache,
+		    vm_pageout_stats[vm_pageout_stat_now].forcereclaimed_realtime,
+		    vm_pageout_stats[vm_pageout_stat_now].protected_sharedcache,
+		    vm_pageout_stats[vm_pageout_stat_now].protected_realtime);
 	}
-	KERNEL_DEBUG_CONSTANT((MACHDBG_CODE(DBG_MACH_VM, VM_INFO9)) | DBG_FUNC_NONE,
+	KDBG((VMDBG_CODE(DBG_VM_INFO9)) | DBG_FUNC_NONE,
 	    vm_pageout_stats[vm_pageout_stat_now].pages_grabbed,
 	    vm_pageout_stats[vm_pageout_stat_now].pages_freed,
 	    vm_pageout_stats[vm_pageout_stat_now].phantom_ghosts_found,
-	    vm_pageout_stats[vm_pageout_stat_now].phantom_ghosts_added,
-	    0);
+	    vm_pageout_stats[vm_pageout_stat_now].phantom_ghosts_added);
 
 	record_memory_pressure();
 }
@@ -1857,18 +2016,18 @@ vps_purge_object()
 #endif /* VM_PRESSURE_EVENTS */
 
 	if (available_for_purge || force_purge) {
-		memoryshot(VM_PAGEOUT_PURGEONE, DBG_FUNC_START);
+		memoryshot(DBG_VM_PAGEOUT_PURGEONE, DBG_FUNC_START);
 
-		VM_DEBUG_EVENT(vm_pageout_purgeone, VM_PAGEOUT_PURGEONE, DBG_FUNC_START, vm_page_free_count, 0, 0, 0);
+		VM_DEBUG_EVENT(vm_pageout_purgeone, DBG_VM_PAGEOUT_PURGEONE, DBG_FUNC_START, vm_page_free_count, 0, 0, 0);
 		if (vm_purgeable_object_purge_one(force_purge, C_DONT_BLOCK)) {
 			VM_PAGEOUT_DEBUG(vm_pageout_purged_objects, 1);
-			VM_DEBUG_EVENT(vm_pageout_purgeone, VM_PAGEOUT_PURGEONE, DBG_FUNC_END, vm_page_free_count, 0, 0, 0);
-			memoryshot(VM_PAGEOUT_PURGEONE, DBG_FUNC_END);
+			VM_DEBUG_EVENT(vm_pageout_purgeone, DBG_VM_PAGEOUT_PURGEONE, DBG_FUNC_END, vm_page_free_count, 0, 0, 0);
+			memoryshot(DBG_VM_PAGEOUT_PURGEONE, DBG_FUNC_END);
 
 			return VM_PAGEOUT_SCAN_NEXT_ITERATION;
 		}
-		VM_DEBUG_EVENT(vm_pageout_purgeone, VM_PAGEOUT_PURGEONE, DBG_FUNC_END, 0, 0, 0, -1);
-		memoryshot(VM_PAGEOUT_PURGEONE, DBG_FUNC_END);
+		VM_DEBUG_EVENT(vm_pageout_purgeone, DBG_VM_PAGEOUT_PURGEONE, DBG_FUNC_END, 0, 0, 0, -1);
+		memoryshot(DBG_VM_PAGEOUT_PURGEONE, DBG_FUNC_END);
 	}
 
 	return VM_PAGEOUT_SCAN_PROCEED;
@@ -1886,7 +2045,7 @@ vps_age_speculative_queue(boolean_t force_speculative_aging)
 
 	/*
 	 * try to pull pages from the aging bins...
-	 * see vm_page.h for an explanation of how
+	 * see vm_page_internal.h for an explanation of how
 	 * this mechanism works
 	 */
 	boolean_t                       can_steal = FALSE;
@@ -1902,17 +2061,17 @@ vps_age_speculative_queue(boolean_t force_speculative_aging)
 
 	num_scanned_queues = 0;
 	while (vm_page_queue_empty(&aq->age_q) &&
-	    num_scanned_queues++ != VM_PAGE_MAX_SPECULATIVE_AGE_Q) {
+	    num_scanned_queues++ != vm_page_max_speculative_age_q) {
 		speculative_steal_index++;
 
-		if (speculative_steal_index > VM_PAGE_MAX_SPECULATIVE_AGE_Q) {
+		if (speculative_steal_index > vm_page_max_speculative_age_q) {
 			speculative_steal_index = VM_PAGE_MIN_SPECULATIVE_AGE_Q;
 		}
 
 		aq = &vm_page_queue_speculative[speculative_steal_index];
 	}
 
-	if (num_scanned_queues == VM_PAGE_MAX_SPECULATIVE_AGE_Q + 1) {
+	if (num_scanned_queues == vm_page_max_speculative_age_q + 1) {
 		/*
 		 * XXX We've scanned all the speculative
 		 * queues but still haven't found one
@@ -1937,8 +2096,8 @@ vps_age_speculative_queue(boolean_t force_speculative_aging)
 		if (!delay_speculative_age) {
 			mach_timespec_t ts_fully_aged;
 
-			ts_fully_aged.tv_sec = (VM_PAGE_MAX_SPECULATIVE_AGE_Q * vm_pageout_state.vm_page_speculative_q_age_ms) / 1000;
-			ts_fully_aged.tv_nsec = ((VM_PAGE_MAX_SPECULATIVE_AGE_Q * vm_pageout_state.vm_page_speculative_q_age_ms) % 1000)
+			ts_fully_aged.tv_sec = (vm_page_max_speculative_age_q * vm_pageout_state.vm_page_speculative_q_age_ms) / 1000;
+			ts_fully_aged.tv_nsec = ((vm_page_max_speculative_age_q * vm_pageout_state.vm_page_speculative_q_age_ms) % 1000)
 			    * 1000 * NSEC_PER_USEC;
 
 			ADD_MACH_TIMESPEC(&ts_fully_aged, &aq->age_ts);
@@ -1987,18 +2146,18 @@ vps_object_cache_evict(vm_object_t *object_to_unlock)
 			vm_object_unlock(*object_to_unlock);
 			*object_to_unlock = NULL;
 		}
-		KERNEL_DEBUG_CONSTANT(0x13001ec | DBG_FUNC_START, 0, 0, 0, 0, 0);
+		KDBG(0x13001ec | DBG_FUNC_START);
 
 		pages_evicted = vm_object_cache_evict(100, 10);
 
-		KERNEL_DEBUG_CONSTANT(0x13001ec | DBG_FUNC_END, pages_evicted, 0, 0, 0, 0);
+		KDBG(0x13001ec | DBG_FUNC_END, pages_evicted);
 
 		if (pages_evicted) {
 			vm_pageout_vminfo.vm_pageout_pages_evicted += pages_evicted;
 
-			VM_DEBUG_EVENT(vm_pageout_cache_evict, VM_PAGEOUT_CACHE_EVICT, DBG_FUNC_NONE,
+			VM_DEBUG_EVENT(vm_pageout_cache_evict, DBG_VM_PAGEOUT_CACHE_EVICT, DBG_FUNC_NONE,
 			    vm_page_free_count, pages_evicted, vm_pageout_vminfo.vm_pageout_pages_evicted, 0);
-			memoryshot(VM_PAGEOUT_CACHE_EVICT, DBG_FUNC_NONE);
+			memoryshot(DBG_VM_PAGEOUT_CACHE_EVICT, DBG_FUNC_NONE);
 
 			/*
 			 * we just freed up to 100 pages,
@@ -2185,7 +2344,7 @@ vps_flow_control(struct flow_control *flow_control, int *anons_grabbed, vm_objec
 				    vm_page_free_wanted + vm_page_free_wanted_privileged;
 				VM_PAGEOUT_DEBUG(vm_pageout_scan_deadlock_detected, 1);
 				flow_control->state = FCS_DEADLOCK_DETECTED;
-				thread_wakeup((event_t) &vm_pageout_garbage_collect);
+				thread_wakeup(VM_PAGEOUT_GC_EVENT);
 				return VM_PAGEOUT_SCAN_PROCEED;
 			}
 			/*
@@ -2245,15 +2404,15 @@ vps_flow_control(struct flow_control *flow_control, int *anons_grabbed, vm_objec
 		 * if it has, no problem, we will make the threads
 		 * non-throttled before actually blocking
 		 */
-		vm_pageout_adjust_eq_iothrottle(eq, TRUE);
+		vm_pageout_adjust_eq_iothrottle(&pgo_iothread_external_state, TRUE);
 	}
-	lck_mtx_lock(&vm_page_queue_free_lock);
+	vm_free_page_lock();
 
 	if (vm_page_free_count >= vm_page_free_target &&
 	    (vm_page_free_wanted == 0) && (vm_page_free_wanted_privileged == 0)) {
 		return VM_PAGEOUT_SCAN_DONE_RETURN;
 	}
-	lck_mtx_unlock(&vm_page_queue_free_lock);
+	vm_free_page_unlock();
 
 	if ((vm_page_free_count + vm_page_cleaned_count) < vm_page_free_target) {
 		/*
@@ -2269,7 +2428,7 @@ vps_flow_control(struct flow_control *flow_control, int *anons_grabbed, vm_objec
 		 * running unthrottled since the sum of free +
 		 * clean pages is still under our free target
 		 */
-		vm_pageout_adjust_eq_iothrottle(eq, FALSE);
+		vm_pageout_adjust_eq_iothrottle(&pgo_iothread_external_state, FALSE);
 	}
 	if (vm_page_cleaned_count > 0 && exceeded_burst_throttle == FALSE) {
 		/*
@@ -2298,21 +2457,19 @@ vps_flow_control(struct flow_control *flow_control, int *anons_grabbed, vm_objec
 	iq->pgo_throttled = TRUE;
 	assert_wait_timeout((event_t) &iq->pgo_laundry, THREAD_INTERRUPTIBLE, msecs, 1000 * NSEC_PER_USEC);
 
-	counter(c_vm_pageout_scan_block++);
-
 	vm_page_unlock_queues();
 
 	assert(vm_pageout_scan_wants_object == VM_OBJECT_NULL);
 
-	VM_DEBUG_EVENT(vm_pageout_thread_block, VM_PAGEOUT_THREAD_BLOCK, DBG_FUNC_START,
+	VM_DEBUG_EVENT(vm_pageout_thread_block, DBG_VM_PAGEOUT_THREAD_BLOCK, DBG_FUNC_START,
 	    iq->pgo_laundry, iq->pgo_maxlaundry, msecs, 0);
-	memoryshot(VM_PAGEOUT_THREAD_BLOCK, DBG_FUNC_START);
+	memoryshot(DBG_VM_PAGEOUT_THREAD_BLOCK, DBG_FUNC_START);
 
 	thread_block(THREAD_CONTINUE_NULL);
 
-	VM_DEBUG_EVENT(vm_pageout_thread_block, VM_PAGEOUT_THREAD_BLOCK, DBG_FUNC_END,
+	VM_DEBUG_EVENT(vm_pageout_thread_block, DBG_VM_PAGEOUT_THREAD_BLOCK, DBG_FUNC_END,
 	    iq->pgo_laundry, iq->pgo_maxlaundry, msecs, 0);
-	memoryshot(VM_PAGEOUT_THREAD_BLOCK, DBG_FUNC_END);
+	memoryshot(DBG_VM_PAGEOUT_THREAD_BLOCK, DBG_FUNC_END);
 
 	vm_page_lock_queues();
 
@@ -2323,6 +2480,7 @@ vps_flow_control(struct flow_control *flow_control, int *anons_grabbed, vm_objec
 	return VM_PAGEOUT_SCAN_NEXT_ITERATION;
 }
 
+extern boolean_t vm_darkwake_mode;
 /*
  * This function is called only from vm_pageout_scan and
  * it will find and return the most appropriate page to be
@@ -2330,7 +2488,7 @@ vps_flow_control(struct flow_control *flow_control, int *anons_grabbed, vm_objec
  */
 static int
 vps_choose_victim_page(vm_page_t *victim_page, int *anons_grabbed, boolean_t *grab_anonymous, boolean_t force_anonymous,
-    boolean_t *is_page_from_bg_q, unsigned int reactivated_this_call)
+    boolean_t *is_page_from_bg_q, unsigned int *reactivated_this_call)
 {
 	vm_page_t                       m = NULL;
 	vm_object_t                     m_object = VM_OBJECT_NULL;
@@ -2342,184 +2500,211 @@ vps_choose_victim_page(vm_page_t *victim_page, int *anons_grabbed, boolean_t *gr
 	sq = &vm_page_queue_speculative[VM_PAGE_SPECULATIVE_AGED_Q];
 	iq = &vm_pageout_queue_internal;
 
-	while (1) {
-		*is_page_from_bg_q = FALSE;
+	*is_page_from_bg_q = FALSE;
 
-		m = NULL;
-		m_object = VM_OBJECT_NULL;
+	m = NULL;
+	m_object = VM_OBJECT_NULL;
 
-		if (VM_DYNAMIC_PAGING_ENABLED()) {
-			assert(vm_page_throttled_count == 0);
-			assert(vm_page_queue_empty(&vm_page_queue_throttled));
+	if (VM_DYNAMIC_PAGING_ENABLED()) {
+		assert(vm_page_throttled_count == 0);
+		assert(vm_page_queue_empty(&vm_page_queue_throttled));
+	}
+
+	/*
+	 * Try for a clean-queue inactive page.
+	 * These are pages that vm_pageout_scan tried to steal earlier, but
+	 * were dirty and had to be cleaned.  Pick them up now that they are clean.
+	 */
+	if (!vm_page_queue_empty(&vm_page_queue_cleaned)) {
+		m = (vm_page_t) vm_page_queue_first(&vm_page_queue_cleaned);
+
+		assert(m->vmp_q_state == VM_PAGE_ON_INACTIVE_CLEANED_Q);
+
+		goto found_page;
+	}
+
+	/*
+	 * The next most eligible pages are ones we paged in speculatively,
+	 * but which have not yet been touched and have been aged out.
+	 */
+	if (!vm_page_queue_empty(&sq->age_q)) {
+		m = (vm_page_t) vm_page_queue_first(&sq->age_q);
+
+		assert(m->vmp_q_state == VM_PAGE_ON_SPECULATIVE_Q);
+
+		if (!m->vmp_dirty || force_anonymous == FALSE) {
+			goto found_page;
+		} else {
+			m = NULL;
 		}
+	}
 
-		/*
-		 * Try for a clean-queue inactive page.
-		 * These are pages that vm_pageout_scan tried to steal earlier, but
-		 * were dirty and had to be cleaned.  Pick them up now that they are clean.
-		 */
-		if (!vm_page_queue_empty(&vm_page_queue_cleaned)) {
-			m = (vm_page_t) vm_page_queue_first(&vm_page_queue_cleaned);
-
-			assert(m->vmp_q_state == VM_PAGE_ON_INACTIVE_CLEANED_Q);
-
-			break;
+#if !CONFIG_JETSAM
+	if (vm_page_donate_mode != VM_PAGE_DONATE_DISABLED) {
+		if (vm_page_donate_queue_ripe && !vm_page_queue_empty(&vm_page_queue_donate)) {
+			m = (vm_page_t) vm_page_queue_first(&vm_page_queue_donate);
+			assert(m->vmp_on_specialq == VM_PAGE_SPECIAL_Q_DONATE);
+			goto found_page;
 		}
+	}
+#endif /* !CONFIG_JETSAM */
 
-		/*
-		 * The next most eligible pages are ones we paged in speculatively,
-		 * but which have not yet been touched and have been aged out.
-		 */
-		if (!vm_page_queue_empty(&sq->age_q)) {
-			m = (vm_page_t) vm_page_queue_first(&sq->age_q);
+	if (vm_page_background_mode != VM_PAGE_BG_DISABLED && (vm_page_background_count > vm_page_background_target)) {
+		vm_object_t     bg_m_object = NULL;
 
-			assert(m->vmp_q_state == VM_PAGE_ON_SPECULATIVE_Q);
+		m = (vm_page_t) vm_page_queue_first(&vm_page_queue_background);
 
-			if (!m->vmp_dirty || force_anonymous == FALSE) {
-				break;
-			} else {
-				m = NULL;
-			}
-		}
+		bg_m_object = VM_PAGE_OBJECT(m);
 
-#if CONFIG_BACKGROUND_QUEUE
-		if (vm_page_background_mode != VM_PAGE_BG_DISABLED && (vm_page_background_count > vm_page_background_target)) {
-			vm_object_t     bg_m_object = NULL;
-
-			m = (vm_page_t) vm_page_queue_first(&vm_page_queue_background);
-
-			bg_m_object = VM_PAGE_OBJECT(m);
-
-			if (!VM_PAGE_PAGEABLE(m)) {
-				/*
-				 * This page is on the background queue
-				 * but not on a pageable queue.  This is
-				 * likely a transient state and whoever
-				 * took it out of its pageable queue
-				 * will likely put it back on a pageable
-				 * queue soon but we can't deal with it
-				 * at this point, so let's ignore this
-				 * page.
-				 */
-			} else if (force_anonymous == FALSE || bg_m_object->internal) {
-				if (bg_m_object->internal &&
-				    (VM_PAGE_Q_THROTTLED(iq) ||
-				    vm_compressor_out_of_space() == TRUE ||
-				    vm_page_free_count < (vm_page_free_reserved / 4))) {
+		if (!VM_PAGE_PAGEABLE(m) || (vm_darkwake_mode && m->vmp_busy)) {
+			/*
+			 * This page is on the background queue
+			 * but not on a pageable queue OR is busy during
+			 * darkwake mode when the target is artificially lowered.
+			 * If it is busy during darkwake mode, and we don't skip it,
+			 * we will just swing back around and try again with the same
+			 * queue and might hit the same page or its neighbor in a
+			 * similar state. Both of these are transient states and will
+			 * get resolved, but, at this point let's ignore this page.
+			 */
+			if (vm_darkwake_mode && m->vmp_busy) {
+				if (bg_m_object->internal) {
 					vm_pageout_skipped_bq_internal++;
 				} else {
-					*is_page_from_bg_q = TRUE;
-
-					if (bg_m_object->internal) {
-						vm_pageout_vminfo.vm_pageout_considered_bq_internal++;
-					} else {
-						vm_pageout_vminfo.vm_pageout_considered_bq_external++;
-					}
-					break;
+					vm_pageout_skipped_bq_external++;
 				}
 			}
+		} else if (force_anonymous == FALSE || bg_m_object->internal) {
+			if (bg_m_object->internal &&
+			    (VM_PAGE_Q_THROTTLED(iq) ||
+			    vm_compressor_out_of_space() == TRUE ||
+			    vm_page_free_count < (vm_page_free_reserved / 4))) {
+				vm_pageout_skipped_bq_internal++;
+			} else {
+				*is_page_from_bg_q = TRUE;
+
+				if (bg_m_object->internal) {
+					vm_pageout_vminfo.vm_pageout_considered_bq_internal++;
+				} else {
+					vm_pageout_vminfo.vm_pageout_considered_bq_external++;
+				}
+				goto found_page;
+			}
 		}
-#endif /* CONFIG_BACKGROUND_QUEUE */
+	}
 
-		inactive_external_count = vm_page_inactive_count - vm_page_anonymous_count;
+	inactive_external_count = vm_page_inactive_count - vm_page_anonymous_count;
 
-		if ((vm_page_pageable_external_count < vm_pageout_state.vm_page_filecache_min || force_anonymous == TRUE) ||
-		    (inactive_external_count < VM_PAGE_INACTIVE_TARGET(vm_page_pageable_external_count))) {
-			*grab_anonymous = TRUE;
-			*anons_grabbed = 0;
+	if ((vm_page_pageable_external_count < vm_pageout_state.vm_page_filecache_min || force_anonymous == TRUE) ||
+	    (inactive_external_count < VM_PAGE_INACTIVE_TARGET(vm_page_pageable_external_count))) {
+		*grab_anonymous = TRUE;
+		*anons_grabbed = 0;
 
+		if (VM_CONFIG_SWAP_IS_ACTIVE) {
 			vm_pageout_vminfo.vm_pageout_skipped_external++;
-			goto want_anonymous;
+		} else {
+			if (vm_page_free_count < (COMPRESSOR_FREE_RESERVED_LIMIT * 2)) {
+				/*
+				 * No swap and we are in dangerously low levels of free memory.
+				 * If we keep going ahead with anonymous pages, we are going to run into a situation
+				 * where the compressor will be stuck waiting for free pages (if it isn't already).
+				 *
+				 * So, pick a file backed page...
+				 */
+				*grab_anonymous = FALSE;
+				*anons_grabbed = ANONS_GRABBED_LIMIT;
+				vm_pageout_vminfo.vm_pageout_skipped_internal++;
+			}
 		}
-		*grab_anonymous = (vm_page_anonymous_count > vm_page_anonymous_min);
+		goto want_anonymous;
+	}
+	*grab_anonymous = (vm_page_anonymous_count > vm_page_anonymous_min);
 
 #if CONFIG_JETSAM
-		/* If the file-backed pool has accumulated
-		 * significantly more pages than the jetsam
-		 * threshold, prefer to reclaim those
-		 * inline to minimise compute overhead of reclaiming
-		 * anonymous pages.
-		 * This calculation does not account for the CPU local
-		 * external page queues, as those are expected to be
-		 * much smaller relative to the global pools.
-		 */
+	/* If the file-backed pool has accumulated
+	 * significantly more pages than the jetsam
+	 * threshold, prefer to reclaim those
+	 * inline to minimise compute overhead of reclaiming
+	 * anonymous pages.
+	 * This calculation does not account for the CPU local
+	 * external page queues, as those are expected to be
+	 * much smaller relative to the global pools.
+	 */
 
-		struct vm_pageout_queue *eq = &vm_pageout_queue_external;
+	struct vm_pageout_queue *eq = &vm_pageout_queue_external;
 
-		if (*grab_anonymous == TRUE && !VM_PAGE_Q_THROTTLED(eq)) {
-			if (vm_page_pageable_external_count >
-			    vm_pageout_state.vm_page_filecache_min) {
-				if ((vm_page_pageable_external_count *
-				    vm_pageout_memorystatus_fb_factor_dr) >
-				    (memorystatus_available_pages_critical *
-				    vm_pageout_memorystatus_fb_factor_nr)) {
-					*grab_anonymous = FALSE;
+	if (*grab_anonymous == TRUE && !VM_PAGE_Q_THROTTLED(eq)) {
+		if (vm_page_pageable_external_count >
+		    vm_pageout_state.vm_page_filecache_min) {
+			if ((vm_page_pageable_external_count *
+			    vm_pageout_memorystatus_fb_factor_dr) >
+			    (memorystatus_get_critical_page_shortage_threshold() *
+			    vm_pageout_memorystatus_fb_factor_nr)) {
+				*grab_anonymous = FALSE;
 
-					VM_PAGEOUT_DEBUG(vm_grab_anon_overrides, 1);
-				}
-			}
-			if (*grab_anonymous) {
-				VM_PAGEOUT_DEBUG(vm_grab_anon_nops, 1);
+				VM_PAGEOUT_DEBUG(vm_grab_anon_overrides, 1);
 			}
 		}
+		if (*grab_anonymous) {
+			VM_PAGEOUT_DEBUG(vm_grab_anon_nops, 1);
+		}
+	}
 #endif /* CONFIG_JETSAM */
 
 want_anonymous:
-		if (*grab_anonymous == FALSE || *anons_grabbed >= ANONS_GRABBED_LIMIT || vm_page_queue_empty(&vm_page_queue_anonymous)) {
-			if (!vm_page_queue_empty(&vm_page_queue_inactive)) {
-				m = (vm_page_t) vm_page_queue_first(&vm_page_queue_inactive);
+	if (*grab_anonymous == FALSE || *anons_grabbed >= ANONS_GRABBED_LIMIT || vm_page_queue_empty(&vm_page_queue_anonymous)) {
+		if (!vm_page_queue_empty(&vm_page_queue_inactive)) {
+			m = (vm_page_t) vm_page_queue_first(&vm_page_queue_inactive);
 
-				assert(m->vmp_q_state == VM_PAGE_ON_INACTIVE_EXTERNAL_Q);
-				*anons_grabbed = 0;
+			assert(m->vmp_q_state == VM_PAGE_ON_INACTIVE_EXTERNAL_Q);
+			*anons_grabbed = 0;
 
-				if (vm_page_pageable_external_count < vm_pageout_state.vm_page_filecache_min) {
-					if (!vm_page_queue_empty(&vm_page_queue_anonymous)) {
-						if ((++reactivated_this_call % 100)) {
-							vm_pageout_vminfo.vm_pageout_filecache_min_reactivated++;
+			if (vm_page_pageable_external_count < vm_pageout_state.vm_page_filecache_min) {
+				if (!vm_page_queue_empty(&vm_page_queue_anonymous)) {
+					if ((++(*reactivated_this_call) % 100)) {
+						vm_pageout_vminfo.vm_pageout_filecache_min_reactivated++;
 
-							vm_page_activate(m);
-							VM_STAT_INCR(reactivations);
-#if CONFIG_BACKGROUND_QUEUE
+						vm_page_activate(m);
+						counter_inc(&vm_statistics_reactivations);
 #if DEVELOPMENT || DEBUG
-							if (*is_page_from_bg_q == TRUE) {
-								if (m_object->internal) {
-									vm_pageout_rejected_bq_internal++;
-								} else {
-									vm_pageout_rejected_bq_external++;
-								}
+						if (*is_page_from_bg_q == TRUE) {
+							if (m_object->internal) {
+								vm_pageout_rejected_bq_internal++;
+							} else {
+								vm_pageout_rejected_bq_external++;
 							}
-#endif /* DEVELOPMENT || DEBUG */
-#endif /* CONFIG_BACKGROUND_QUEUE */
-							vm_pageout_state.vm_pageout_inactive_used++;
-
-							m = NULL;
-							retval = VM_PAGEOUT_SCAN_NEXT_ITERATION;
-
-							break;
 						}
+#endif /* DEVELOPMENT || DEBUG */
+						vm_pageout_state.vm_pageout_inactive_used++;
 
-						/*
-						 * steal 1% of the file backed pages even if
-						 * we are under the limit that has been set
-						 * for a healthy filecache
-						 */
+						m = NULL;
+						retval = VM_PAGEOUT_SCAN_NEXT_ITERATION;
+
+						goto found_page;
 					}
+
+					/*
+					 * steal 1 of the file backed pages even if
+					 * we are under the limit that has been set
+					 * for a healthy filecache
+					 */
 				}
-				break;
 			}
+			goto found_page;
 		}
-		if (!vm_page_queue_empty(&vm_page_queue_anonymous)) {
-			m = (vm_page_t) vm_page_queue_first(&vm_page_queue_anonymous);
+	}
+	if (!vm_page_queue_empty(&vm_page_queue_anonymous)) {
+		m = (vm_page_t) vm_page_queue_first(&vm_page_queue_anonymous);
 
-			assert(m->vmp_q_state == VM_PAGE_ON_INACTIVE_INTERNAL_Q);
-			*anons_grabbed += 1;
+		assert(m->vmp_q_state == VM_PAGE_ON_INACTIVE_INTERNAL_Q);
+		*anons_grabbed += 1;
 
-			break;
-		}
-
-		m = NULL;
+		goto found_page;
 	}
 
+	m = NULL;
+
+found_page:
 	*victim_page = m;
 
 	return retval;
@@ -2539,7 +2724,6 @@ vps_requeue_page(vm_page_t m, int page_prev_q_state, __unused boolean_t page_fro
 		vm_page_activate(m);
 	}
 
-#if CONFIG_BACKGROUND_QUEUE
 #if DEVELOPMENT || DEBUG
 	vm_object_t m_object = VM_PAGE_OBJECT(m);
 
@@ -2551,7 +2735,6 @@ vps_requeue_page(vm_page_t m, int page_prev_q_state, __unused boolean_t page_fro
 		}
 	}
 #endif /* DEVELOPMENT || DEBUG */
-#endif /* CONFIG_BACKGROUND_QUEUE */
 }
 
 /*
@@ -2613,7 +2796,9 @@ vps_switch_object(vm_page_t m, vm_object_t m_object, vm_object_t *object, int pa
 			 */
 			m_object->scan_collisions = 1;
 		}
-		if (!vm_page_queue_empty(&vm_page_queue_cleaned)) {
+		if (page_from_bg_q) {
+			m_want = (vm_page_t) vm_page_queue_first(&vm_page_queue_background);
+		} else if (!vm_page_queue_empty(&vm_page_queue_cleaned)) {
 			m_want = (vm_page_t) vm_page_queue_first(&vm_page_queue_cleaned);
 		} else if (!vm_page_queue_empty(&sq->age_q)) {
 			m_want = (vm_page_t) vm_page_queue_first(&sq->age_q);
@@ -2654,7 +2839,7 @@ vps_switch_object(vm_page_t m, vm_object_t m_object, vm_object_t *object, int pa
  */
 static void
 vps_deal_with_throttled_queues(vm_page_t m, vm_object_t *object, uint32_t *vm_pageout_inactive_external_forced_reactivate_limit,
-    int *delayed_unlock, boolean_t *force_anonymous, __unused boolean_t is_page_from_bg_q)
+    boolean_t *force_anonymous, __unused boolean_t is_page_from_bg_q)
 {
 	struct  vm_pageout_queue *eq;
 	vm_object_t cur_object = VM_OBJECT_NULL;
@@ -2698,7 +2883,7 @@ vps_deal_with_throttled_queues(vm_page_t m, vm_object_t *object, uint32_t *vm_pa
 		vm_page_active_count++;
 		vm_page_pageable_external_count++;
 
-		vm_pageout_adjust_eq_iothrottle(eq, FALSE);
+		vm_pageout_adjust_eq_iothrottle(&pgo_iothread_external_state, FALSE);
 
 #if CONFIG_MEMORYSTATUS && CONFIG_JETSAM
 
@@ -2711,46 +2896,20 @@ vps_deal_with_throttled_queues(vm_page_t m, vm_object_t *object, uint32_t *vm_pa
 			/*
 			 * Possible deadlock scenario so request jetsam action
 			 */
-
-			assert(cur_object);
-			vm_object_unlock(cur_object);
-
-			cur_object = VM_OBJECT_NULL;
-
-			/*
-			 * VM pageout scan needs to know we have dropped this lock and so set the
-			 * object variable we got passed in to NULL.
-			 */
-			*object = VM_OBJECT_NULL;
-
-			vm_page_unlock_queues();
-
-			VM_DEBUG_CONSTANT_EVENT(vm_pageout_jetsam, VM_PAGEOUT_JETSAM, DBG_FUNC_START,
+			memorystatus_kill_on_vps_starvation();
+			VM_DEBUG_CONSTANT_EVENT(vm_pageout_jetsam, DBG_VM_PAGEOUT_JETSAM, DBG_FUNC_NONE,
 			    vm_page_active_count, vm_page_inactive_count, vm_page_free_count, vm_page_free_count);
-
-			/* Kill first suitable process. If this call returned FALSE, we might have simply purged a process instead. */
-			if (memorystatus_kill_on_VM_page_shortage(FALSE) == TRUE) {
-				VM_PAGEOUT_DEBUG(vm_pageout_inactive_external_forced_jetsam_count, 1);
-			}
-
-			VM_DEBUG_CONSTANT_EVENT(vm_pageout_jetsam, VM_PAGEOUT_JETSAM, DBG_FUNC_END,
-			    vm_page_active_count, vm_page_inactive_count, vm_page_free_count, vm_page_free_count);
-
-			vm_page_lock_queues();
-			*delayed_unlock = 1;
 		}
 #else /* CONFIG_MEMORYSTATUS && CONFIG_JETSAM */
 
 #pragma unused(vm_pageout_inactive_external_forced_reactivate_limit)
-#pragma unused(delayed_unlock)
 
 		*force_anonymous = TRUE;
 #endif /* CONFIG_MEMORYSTATUS && CONFIG_JETSAM */
 	} else {
 		vm_page_activate(m);
-		VM_STAT_INCR(reactivations);
+		counter_inc(&vm_statistics_reactivations);
 
-#if CONFIG_BACKGROUND_QUEUE
 #if DEVELOPMENT || DEBUG
 		if (is_page_from_bg_q == TRUE) {
 			if (cur_object->internal) {
@@ -2760,7 +2919,6 @@ vps_deal_with_throttled_queues(vm_page_t m, vm_object_t *object, uint32_t *vm_pa
 			}
 		}
 #endif /* DEVELOPMENT || DEBUG */
-#endif /* CONFIG_BACKGROUND_QUEUE */
 
 		vm_pageout_state.vm_pageout_inactive_used++;
 	}
@@ -2774,7 +2932,7 @@ vm_page_balance_inactive(int max_to_move)
 
 	LCK_MTX_ASSERT(&vm_page_queue_lock, LCK_MTX_ASSERT_OWNED);
 
-	if (hibernation_vmqueues_inspection == TRUE) {
+	if (hibernation_vmqueues_inspection || hibernate_cleaning_in_progress) {
 		/*
 		 * It is likely that the hibernation code path is
 		 * dealing with these very queues as we are about
@@ -2796,7 +2954,7 @@ vm_page_balance_inactive(int max_to_move)
 
 		assert(m->vmp_q_state == VM_PAGE_ON_ACTIVE_Q);
 		assert(!m->vmp_laundry);
-		assert(VM_PAGE_OBJECT(m) != kernel_object);
+		assert(!is_kernel_object(VM_PAGE_OBJECT(m)));
 		assert(VM_PAGE_GET_PHYS_PAGE(m) != vm_page_guard_addr);
 
 		DTRACE_VM2(scan, int, 1, (uint64_t *), NULL);
@@ -2813,6 +2971,14 @@ vm_page_balance_inactive(int max_to_move)
 		 * have happened before we moved the page
 		 */
 		if (m->vmp_pmapped == TRUE) {
+			/*
+			 * We might be holding the page queue lock as a
+			 * spin lock and clearing the "referenced" bit could
+			 * take a while if there are lots of mappings of
+			 * that page, so make sure we acquire the lock as
+			 * as mutex to avoid a spinlock timeout.
+			 */
+			vm_page_lockconvert_queues();
 			pmap_clear_refmod_options(VM_PAGE_GET_PHYS_PAGE(m), VM_MEM_REFERENCED, PMAP_OPTIONS_NOFLUSH, (void *)NULL);
 		}
 
@@ -2824,7 +2990,6 @@ vm_page_balance_inactive(int max_to_move)
 		vm_page_deactivate_internal(m, FALSE);
 	}
 }
-
 
 /*
  *	vm_pageout_scan does the dirty work for the pageout daemon.
@@ -2863,7 +3028,7 @@ vm_pageout_scan(void)
 	boolean_t       lock_yield_check = FALSE;
 
 
-	VM_DEBUG_CONSTANT_EVENT(vm_pageout_scan, VM_PAGEOUT_SCAN, DBG_FUNC_START,
+	VM_DEBUG_CONSTANT_EVENT(vm_pageout_scan, DBG_VM_PAGEOUT_SCAN, DBG_FUNC_START,
 	    vm_pageout_vminfo.vm_pageout_freed_speculative,
 	    vm_pageout_state.vm_pageout_inactive_clean,
 	    vm_pageout_vminfo.vm_pageout_inactive_dirty_internal,
@@ -2875,11 +3040,9 @@ vm_pageout_scan(void)
 	sq = &vm_page_queue_speculative[VM_PAGE_SPECULATIVE_AGED_Q];
 
 	/* Ask the pmap layer to return any pages it no longer needs. */
-	uint64_t pmap_wired_pages_freed = pmap_release_pages_fast();
+	pmap_release_pages_fast();
 
 	vm_page_lock_queues();
-
-	vm_page_wire_count -= pmap_wired_pages_freed;
 
 	delayed_unlock = 1;
 
@@ -2918,17 +3081,14 @@ vm_pageout_scan(void)
 			lock_yield_check = FALSE;
 
 			if (delayed_unlock++ > delayed_unlock_limit) {
-				int freed = local_freed;
-
 				vm_pageout_prepare_to_block(&object, &delayed_unlock, &local_freeq, &local_freed,
 				    VM_PAGEOUT_PB_CONSIDER_WAKING_COMPACTOR_SWAPPER);
-				if (freed == 0) {
-					lck_mtx_yield(&vm_page_queue_lock);
-				}
 			} else if (vm_pageout_scan_wants_object) {
 				vm_page_unlock_queues();
 				mutex_pause(0);
 				vm_page_lock_queues();
+			} else if (vps_yield_for_pgqlockwaiters && lck_mtx_yield(&vm_page_queue_lock)) {
+				VM_PAGEOUT_DEBUG(vm_pageout_yield_for_free_pages, 1);
 			}
 		}
 
@@ -2971,9 +3131,9 @@ vm_pageout_scan(void)
 			 * fashion... so let's avoid interfering with foreground
 			 * activity
 			 */
-			vm_pageout_adjust_eq_iothrottle(eq, TRUE);
+			vm_pageout_adjust_eq_iothrottle(&pgo_iothread_external_state, TRUE);
 
-			lck_mtx_lock(&vm_page_queue_free_lock);
+			vm_free_page_lock();
 
 			if ((vm_page_free_count >= vm_page_free_target) &&
 			    (vm_page_free_wanted == 0) && (vm_page_free_wanted_privileged == 0)) {
@@ -2984,10 +3144,10 @@ vm_pageout_scan(void)
 return_from_scan:
 				assert(vm_pageout_scan_wants_object == VM_OBJECT_NULL);
 
-				VM_DEBUG_CONSTANT_EVENT(vm_pageout_scan, VM_PAGEOUT_SCAN, DBG_FUNC_NONE,
+				VM_DEBUG_CONSTANT_EVENT(vm_pageout_scan, DBG_VM_PAGEOUT_SCAN, DBG_FUNC_NONE,
 				    vm_pageout_state.vm_pageout_inactive,
 				    vm_pageout_state.vm_pageout_inactive_used, 0, 0);
-				VM_DEBUG_CONSTANT_EVENT(vm_pageout_scan, VM_PAGEOUT_SCAN, DBG_FUNC_END,
+				VM_DEBUG_CONSTANT_EVENT(vm_pageout_scan, DBG_VM_PAGEOUT_SCAN, DBG_FUNC_END,
 				    vm_pageout_vminfo.vm_pageout_freed_speculative,
 				    vm_pageout_state.vm_pageout_inactive_clean,
 				    vm_pageout_vminfo.vm_pageout_inactive_dirty_internal,
@@ -2995,7 +3155,7 @@ return_from_scan:
 
 				return;
 			}
-			lck_mtx_unlock(&vm_page_queue_free_lock);
+			vm_free_page_unlock();
 		}
 
 		/*
@@ -3101,12 +3261,10 @@ return_from_scan:
 		 */
 
 		m = NULL;
-		retval = vps_choose_victim_page(&m, &anons_grabbed, &grab_anonymous, force_anonymous, &page_from_bg_q, reactivated_this_call);
+		retval = vps_choose_victim_page(&m, &anons_grabbed, &grab_anonymous, force_anonymous, &page_from_bg_q, &reactivated_this_call);
 
 		if (m == NULL) {
 			if (retval == VM_PAGEOUT_SCAN_NEXT_ITERATION) {
-				reactivated_this_call++;
-
 				inactive_burst_count = 0;
 
 				if (page_prev_q_state == VM_PAGE_ON_INACTIVE_CLEANED_Q) {
@@ -3153,12 +3311,22 @@ return_from_scan:
 		 * it can't also be on the pageout queue, so safe
 		 * to call vm_page_queues_remove
 		 */
+		bool donate = (m->vmp_on_specialq == VM_PAGE_SPECIAL_Q_DONATE);
 		vm_page_queues_remove(m, TRUE);
+		if (donate) {
+			/*
+			 * The compressor needs to see this bit to know
+			 * where this page needs to land. Also if stolen,
+			 * this bit helps put the page back in the right
+			 * special queue where it belongs.
+			 */
+			m->vmp_on_specialq = VM_PAGE_SPECIAL_Q_DONATE;
+		}
 
 		assert(!m->vmp_laundry);
 		assert(!m->vmp_private);
 		assert(!m->vmp_fictitious);
-		assert(m_object != kernel_object);
+		assert(!is_kernel_object(m_object));
 		assert(VM_PAGE_GET_PHYS_PAGE(m) != vm_page_guard_addr);
 
 		vm_pageout_vminfo.vm_pageout_considered_page++;
@@ -3239,10 +3407,13 @@ return_from_scan:
 		 *	from reclaiming it - busy or cleaning - that we've already
 		 *	dealt with
 		 */
-		if (m->vmp_absent || m->vmp_error || !object->alive) {
+		if (m->vmp_absent || VMP_ERROR_GET(m) || !object->alive ||
+		    (!object->internal && object->pager == MEMORY_OBJECT_NULL)) {
 			if (m->vmp_absent) {
 				VM_PAGEOUT_DEBUG(vm_pageout_inactive_absent, 1);
-			} else if (!object->alive) {
+			} else if (!object->alive ||
+			    (!object->internal &&
+			    object->pager == MEMORY_OBJECT_NULL)) {
 				VM_PAGEOUT_DEBUG(vm_pageout_inactive_notalive, 1);
 			} else {
 				VM_PAGEOUT_DEBUG(vm_pageout_inactive_error, 1);
@@ -3301,7 +3472,7 @@ reclaim_page:
 			lock_yield_check = TRUE;
 			continue;
 		}
-		if (object->copy == VM_OBJECT_NULL) {
+		if (object->vo_copy == VM_OBJECT_NULL) {
 			/*
 			 * No one else can have any interest in this page.
 			 * If this is an empty purgable object, the page can be
@@ -3351,7 +3522,7 @@ reclaim_page:
 
 				goto reactivate_page;
 			}
-		}
+		} /* vo_copy NULL */
 		/*
 		 *	If it's being used, reactivate.
 		 *	(Fictitious pages are either busy or absent.)
@@ -3379,7 +3550,8 @@ reclaim_page:
 		if (vm_pageout_state.vm_page_xpmapped_min_divisor == 0) {
 			vm_pageout_state.vm_page_xpmapped_min = 0;
 		} else {
-			vm_pageout_state.vm_page_xpmapped_min = (vm_page_external_count * 10) / vm_pageout_state.vm_page_xpmapped_min_divisor;
+			vm_pageout_state.vm_page_xpmapped_min = (vm_page_pageable_external_count * 10) /
+			    vm_pageout_state.vm_page_xpmapped_min_divisor;
 		}
 
 		if (!m->vmp_no_cache &&
@@ -3394,13 +3566,32 @@ reclaim_page:
 			 * inactive queue, so we limit the number of
 			 * reactivations.
 			 */
-			if (++reactivated_this_call >= reactivate_limit) {
+			if (++reactivated_this_call >= reactivate_limit &&
+			    !object->object_is_shared_cache &&
+			    !((m->vmp_realtime ||
+			    object->for_realtime) &&
+			    vm_pageout_protect_realtime)) {
 				vm_pageout_vminfo.vm_pageout_reactivation_limit_exceeded++;
 			} else if (++inactive_reclaim_run >= VM_PAGEOUT_INACTIVE_FORCE_RECLAIM) {
 				vm_pageout_vminfo.vm_pageout_inactive_force_reclaim++;
+				if (object->object_is_shared_cache) {
+					vm_pageout_vminfo.vm_pageout_forcereclaimed_sharedcache++;
+				} else if (m->vmp_realtime ||
+				    object->for_realtime) {
+					vm_pageout_vminfo.vm_pageout_forcereclaimed_realtime++;
+				}
 			} else {
 				uint32_t isinuse;
 
+				if (reactivated_this_call >= reactivate_limit) {
+					if (object->object_is_shared_cache) {
+						vm_pageout_vminfo.vm_pageout_protected_sharedcache++;
+					} else if ((m->vmp_realtime ||
+					    object->for_realtime) &&
+					    vm_pageout_protect_realtime) {
+						vm_pageout_vminfo.vm_pageout_protected_realtime++;
+					}
+				}
 				if (page_prev_q_state == VM_PAGE_ON_INACTIVE_CLEANED_Q) {
 					VM_PAGEOUT_DEBUG(vm_pageout_cleaned_reference_reactivated, 1);
 				}
@@ -3420,10 +3611,9 @@ reactivate_page:
 					 * The page was/is being used, so put back on active list.
 					 */
 					vm_page_activate(m);
-					VM_STAT_INCR(reactivations);
+					counter_inc(&vm_statistics_reactivations);
 					inactive_burst_count = 0;
 				}
-#if CONFIG_BACKGROUND_QUEUE
 #if DEVELOPMENT || DEBUG
 				if (page_from_bg_q == TRUE) {
 					if (m_object->internal) {
@@ -3433,7 +3623,6 @@ reactivate_page:
 					}
 				}
 #endif /* DEVELOPMENT || DEBUG */
-#endif /* CONFIG_BACKGROUND_QUEUE */
 
 				if (page_prev_q_state == VM_PAGE_ON_INACTIVE_CLEANED_Q) {
 					VM_PAGEOUT_DEBUG(vm_pageout_cleaned_reactivated, 1);
@@ -3505,7 +3694,7 @@ throttle_inactive:
 		}
 		if (inactive_throttled == TRUE) {
 			vps_deal_with_throttled_queues(m, &object, &vm_pageout_inactive_external_forced_reactivate_limit,
-			    &delayed_unlock, &force_anonymous, page_from_bg_q);
+			    &force_anonymous, page_from_bg_q);
 
 			inactive_burst_count = 0;
 
@@ -3619,23 +3808,9 @@ throttle_inactive:
 		if (inactive_throttled == TRUE) {
 			goto throttle_inactive;
 		}
-
-#if VM_PRESSURE_EVENTS
-#if CONFIG_JETSAM
-
-		/*
-		 * If Jetsam is enabled, then the sending
-		 * of memory pressure notifications is handled
-		 * from the same thread that takes care of high-water
-		 * and other jetsams i.e. the memorystatus_thread.
-		 */
-
-#else /* CONFIG_JETSAM */
-
-		vm_pressure_response();
-
-#endif /* CONFIG_JETSAM */
-#endif /* VM_PRESSURE_EVENTS */
+#if !CONFIG_JETSAM
+		memorystatus_update_available_page_count(AVAILABLE_NON_COMPRESSED_MEMORY);
+#endif /* !CONFIG_JETSAM */
 
 		if (page_prev_q_state == VM_PAGE_ON_SPECULATIVE_Q) {
 			VM_PAGEOUT_DEBUG(vm_pageout_speculative_dirty, 1);
@@ -3715,9 +3890,9 @@ vm_pageout_continue(void)
 	DTRACE_VM2(pgrrun, int, 1, (uint64_t *), NULL);
 	VM_PAGEOUT_DEBUG(vm_pageout_scan_event_counter, 1);
 
-	lck_mtx_lock(&vm_page_queue_free_lock);
+	vm_free_page_lock();
 	vm_pageout_running = TRUE;
-	lck_mtx_unlock(&vm_page_queue_free_lock);
+	vm_free_page_unlock();
 
 	vm_pageout_scan();
 	/*
@@ -3729,28 +3904,27 @@ vm_pageout_continue(void)
 	assert_wait((event_t) &vm_page_free_wanted, THREAD_UNINT);
 
 	vm_pageout_running = FALSE;
-#if !CONFIG_EMBEDDED
+#if XNU_TARGET_OS_OSX
 	if (vm_pageout_waiter) {
 		vm_pageout_waiter = FALSE;
 		thread_wakeup((event_t)&vm_pageout_waiter);
 	}
-#endif /* !CONFIG_EMBEDDED */
+#endif /* XNU_TARGET_OS_OSX */
 
-	lck_mtx_unlock(&vm_page_queue_free_lock);
+	vm_free_page_unlock();
 	vm_page_unlock_queues();
 
-	counter(c_vm_pageout_block++);
 	thread_block((thread_continue_t)vm_pageout_continue);
 	/*NOTREACHED*/
 }
 
-#if !CONFIG_EMBEDDED
+#if XNU_TARGET_OS_OSX
 kern_return_t
 vm_pageout_wait(uint64_t deadline)
 {
 	kern_return_t kr;
 
-	lck_mtx_lock(&vm_page_queue_free_lock);
+	vm_free_page_lock();
 	for (kr = KERN_SUCCESS; vm_pageout_running && (KERN_SUCCESS == kr);) {
 		vm_pageout_waiter = TRUE;
 		if (THREAD_AWAKENED != lck_mtx_sleep_deadline(
@@ -3759,168 +3933,210 @@ vm_pageout_wait(uint64_t deadline)
 			kr = KERN_OPERATION_TIMED_OUT;
 		}
 	}
-	lck_mtx_unlock(&vm_page_queue_free_lock);
+	vm_free_page_unlock();
 
 	return kr;
 }
-#endif /* !CONFIG_EMBEDDED */
+#endif /* XNU_TARGET_OS_OSX */
 
-
+OS_NORETURN
 static void
-vm_pageout_iothread_external_continue(struct vm_pageout_queue *q)
+vm_pageout_iothread_external_continue(struct pgo_iothread_state *ethr, __unused wait_result_t w)
 {
 	vm_page_t       m = NULL;
 	vm_object_t     object;
 	vm_object_offset_t offset;
 	memory_object_t pager;
+	struct vm_pageout_queue *q = ethr->q;
 
 	/* On systems with a compressor, the external IO thread clears its
 	 * VM privileged bit to accommodate large allocations (e.g. bulk UPL
 	 * creation)
 	 */
-	if (vm_pageout_state.vm_pageout_internal_iothread != THREAD_NULL) {
+	if (VM_CONFIG_COMPRESSOR_IS_PRESENT) {
 		current_thread()->options &= ~TH_OPT_VMPRIV;
 	}
 
-	vm_page_lockspin_queues();
+	sched_cond_ack(&(ethr->pgo_wakeup));
 
-	while (!vm_page_queue_empty(&q->pgo_pending)) {
-		q->pgo_busy = TRUE;
-		vm_page_queue_remove_first(&q->pgo_pending, m, vmp_pageq);
+	while (true) {
+		vm_page_lockspin_queues();
 
-		assert(m->vmp_q_state == VM_PAGE_ON_PAGEOUT_Q);
-		VM_PAGE_CHECK(m);
-		/*
-		 * grab a snapshot of the object and offset this
-		 * page is tabled in so that we can relookup this
-		 * page after we've taken the object lock - these
-		 * fields are stable while we hold the page queues lock
-		 * but as soon as we drop it, there is nothing to keep
-		 * this page in this object... we hold an activity_in_progress
-		 * on this object which will keep it from terminating
-		 */
-		object = VM_PAGE_OBJECT(m);
-		offset = m->vmp_offset;
+		while (!vm_page_queue_empty(&q->pgo_pending)) {
+			q->pgo_busy = TRUE;
+			vm_page_queue_remove_first(&q->pgo_pending, m, vmp_pageq);
 
-		m->vmp_q_state = VM_PAGE_NOT_ON_Q;
-		VM_PAGE_ZERO_PAGEQ_ENTRY(m);
+			assert(m->vmp_q_state == VM_PAGE_ON_PAGEOUT_Q);
+			VM_PAGE_CHECK(m);
+			/*
+			 * grab a snapshot of the object and offset this
+			 * page is tabled in so that we can relookup this
+			 * page after we've taken the object lock - these
+			 * fields are stable while we hold the page queues lock
+			 * but as soon as we drop it, there is nothing to keep
+			 * this page in this object... we hold an activity_in_progress
+			 * on this object which will keep it from terminating
+			 */
+			object = VM_PAGE_OBJECT(m);
+			offset = m->vmp_offset;
+
+			m->vmp_q_state = VM_PAGE_NOT_ON_Q;
+			VM_PAGE_ZERO_PAGEQ_ENTRY(m);
+
+			vm_page_unlock_queues();
+
+			vm_object_lock(object);
+
+			m = vm_page_lookup(object, offset);
+
+			if (m == NULL || m->vmp_busy || m->vmp_cleaning ||
+			    !m->vmp_laundry || (m->vmp_q_state != VM_PAGE_NOT_ON_Q)) {
+				/*
+				 * it's either the same page that someone else has
+				 * started cleaning (or it's finished cleaning or
+				 * been put back on the pageout queue), or
+				 * the page has been freed or we have found a
+				 * new page at this offset... in all of these cases
+				 * we merely need to release the activity_in_progress
+				 * we took when we put the page on the pageout queue
+				 */
+				vm_object_activity_end(object);
+				vm_object_unlock(object);
+
+				vm_page_lockspin_queues();
+				continue;
+			}
+			pager = object->pager;
+
+			if (pager == MEMORY_OBJECT_NULL) {
+				/*
+				 * This pager has been destroyed by either
+				 * memory_object_destroy or vm_object_destroy, and
+				 * so there is nowhere for the page to go.
+				 */
+				if (m->vmp_free_when_done) {
+					/*
+					 * Just free the page... VM_PAGE_FREE takes
+					 * care of cleaning up all the state...
+					 * including doing the vm_pageout_throttle_up
+					 */
+					VM_PAGE_FREE(m);
+				} else {
+					vm_page_lockspin_queues();
+
+					vm_pageout_throttle_up(m);
+					vm_page_activate(m);
+
+					vm_page_unlock_queues();
+
+					/*
+					 *	And we are done with it.
+					 */
+				}
+				vm_object_activity_end(object);
+				vm_object_unlock(object);
+
+				vm_page_lockspin_queues();
+				continue;
+			}
+	#if 0
+			/*
+			 * we don't hold the page queue lock
+			 * so this check isn't safe to make
+			 */
+			VM_PAGE_CHECK(m);
+	#endif
+			/*
+			 * give back the activity_in_progress reference we
+			 * took when we queued up this page and replace it
+			 * it with a paging_in_progress reference that will
+			 * also hold the paging offset from changing and
+			 * prevent the object from terminating
+			 */
+			vm_object_activity_end(object);
+			vm_object_paging_begin(object);
+			vm_object_unlock(object);
+
+			/*
+			 * Send the data to the pager.
+			 * any pageout clustering happens there
+			 */
+			memory_object_data_return(pager,
+			    m->vmp_offset + object->paging_offset,
+			    PAGE_SIZE,
+			    NULL,
+			    NULL,
+			    FALSE,
+			    FALSE,
+			    0);
+
+			vm_object_lock(object);
+			vm_object_paging_end(object);
+			vm_object_unlock(object);
+
+			vm_pageout_io_throttle();
+
+			vm_page_lockspin_queues();
+		}
+		q->pgo_busy = FALSE;
 
 		vm_page_unlock_queues();
-
-		vm_object_lock(object);
-
-		m = vm_page_lookup(object, offset);
-
-		if (m == NULL || m->vmp_busy || m->vmp_cleaning ||
-		    !m->vmp_laundry || (m->vmp_q_state != VM_PAGE_NOT_ON_Q)) {
-			/*
-			 * it's either the same page that someone else has
-			 * started cleaning (or it's finished cleaning or
-			 * been put back on the pageout queue), or
-			 * the page has been freed or we have found a
-			 * new page at this offset... in all of these cases
-			 * we merely need to release the activity_in_progress
-			 * we took when we put the page on the pageout queue
-			 */
-			vm_object_activity_end(object);
-			vm_object_unlock(object);
-
-			vm_page_lockspin_queues();
-			continue;
-		}
-		pager = object->pager;
-
-		if (pager == MEMORY_OBJECT_NULL) {
-			/*
-			 * This pager has been destroyed by either
-			 * memory_object_destroy or vm_object_destroy, and
-			 * so there is nowhere for the page to go.
-			 */
-			if (m->vmp_free_when_done) {
-				/*
-				 * Just free the page... VM_PAGE_FREE takes
-				 * care of cleaning up all the state...
-				 * including doing the vm_pageout_throttle_up
-				 */
-				VM_PAGE_FREE(m);
-			} else {
-				vm_page_lockspin_queues();
-
-				vm_pageout_throttle_up(m);
-				vm_page_activate(m);
-
-				vm_page_unlock_queues();
-
-				/*
-				 *	And we are done with it.
-				 */
-			}
-			vm_object_activity_end(object);
-			vm_object_unlock(object);
-
-			vm_page_lockspin_queues();
-			continue;
-		}
-#if 0
-		/*
-		 * we don't hold the page queue lock
-		 * so this check isn't safe to make
-		 */
-		VM_PAGE_CHECK(m);
-#endif
-		/*
-		 * give back the activity_in_progress reference we
-		 * took when we queued up this page and replace it
-		 * it with a paging_in_progress reference that will
-		 * also hold the paging offset from changing and
-		 * prevent the object from terminating
-		 */
-		vm_object_activity_end(object);
-		vm_object_paging_begin(object);
-		vm_object_unlock(object);
-
-		/*
-		 * Send the data to the pager.
-		 * any pageout clustering happens there
-		 */
-		memory_object_data_return(pager,
-		    m->vmp_offset + object->paging_offset,
-		    PAGE_SIZE,
-		    NULL,
-		    NULL,
-		    FALSE,
-		    FALSE,
-		    0);
-
-		vm_object_lock(object);
-		vm_object_paging_end(object);
-		vm_object_unlock(object);
-
-		vm_pageout_io_throttle();
-
-		vm_page_lockspin_queues();
+		sched_cond_wait_parameter(&(ethr->pgo_wakeup), THREAD_UNINT, (thread_continue_t)vm_pageout_iothread_external_continue, ethr);
 	}
-	q->pgo_busy = FALSE;
-	q->pgo_idle = TRUE;
-
-	assert_wait((event_t) &q->pgo_pending, THREAD_UNINT);
-	vm_page_unlock_queues();
-
-	thread_block_parameter((thread_continue_t)vm_pageout_iothread_external_continue, (void *) q);
 	/*NOTREACHED*/
 }
 
+uint32_t vm_compressor_time_thread; /* Set via sysctl 'vm.compressor_timing_enabled' to record time accrued by this thread. */
+
+#if DEVELOPMENT || DEBUG
+static void
+vm_pageout_record_thread_time(int cqid, int ncomps)
+{
+	if (__improbable(vm_compressor_time_thread)) {
+		vmct_stats.vmct_runtimes[cqid] = thread_get_runtime_self();
+		vmct_stats.vmct_pages[cqid] += ncomps;
+		vmct_stats.vmct_iterations[cqid]++;
+		if (ncomps > vmct_stats.vmct_maxpages[cqid]) {
+			vmct_stats.vmct_maxpages[cqid] = ncomps;
+		}
+		if (ncomps < vmct_stats.vmct_minpages[cqid]) {
+			vmct_stats.vmct_minpages[cqid] = ncomps;
+		}
+	}
+}
+#endif
+
+static void *
+vm_pageout_select_filling_chead(struct pgo_iothread_state *cq, vm_page_t m)
+{
+	/*
+	 * Technically we need the pageq locks to manipulate the vmp_on_specialq field.
+	 * However, this page has been removed from all queues and is only
+	 * known to this compressor thread dealing with this local queue.
+	 *
+	 * TODO: Add a second localq that is the early localq and
+	 * put special pages like this one on that queue in the block above
+	 * under the pageq lock to avoid this 'works but not clean' logic.
+	 */
+	void *donate_queue_head;
+#if XNU_TARGET_OS_OSX /* tag:DONATE */
+	donate_queue_head = &cq->current_early_swapout_chead;
+#else /* XNU_TARGET_OS_OSX */
+	donate_queue_head = &cq->current_late_swapout_chead;
+#endif /* XNU_TARGET_OS_OSX */
+	if (m->vmp_on_specialq == VM_PAGE_SPECIAL_Q_DONATE) {
+		m->vmp_on_specialq = VM_PAGE_SPECIAL_Q_EMPTY;
+		return donate_queue_head;
+	} else {
+		return &cq->current_regular_swapout_chead;
+	}
+}
 
 #define         MAX_FREE_BATCH          32
-uint32_t vm_compressor_time_thread; /* Set via sysctl to record time accrued by
-                                     * this thread.
-                                     */
 
-
-void
-vm_pageout_iothread_internal_continue(struct cq *);
-void
-vm_pageout_iothread_internal_continue(struct cq *cq)
+OS_NORETURN
+static void
+vm_pageout_iothread_internal_continue(struct pgo_iothread_state *cq, __unused wait_result_t w)
 {
 	struct vm_pageout_queue *q;
 	vm_page_t       m = NULL;
@@ -3933,208 +4149,251 @@ vm_pageout_iothread_internal_continue(struct cq *cq)
 #if DEVELOPMENT || DEBUG
 	int       ncomps = 0;
 	boolean_t marked_active = FALSE;
+	int       num_pages_processed = 0;
 #endif
-	KERNEL_DEBUG(0xe040000c | DBG_FUNC_END, 0, 0, 0, 0, 0);
+	void *chead = NULL;
+
+	KDBG_FILTERED(0xe040000c | DBG_FUNC_END);
+
+	sched_cond_ack(&(cq->pgo_wakeup));
 
 	q = cq->q;
+
+	while (true) { /* this top loop is for the compressor_running_perf_test running a full speed without blocking */
+#if DEVELOPMENT || DEBUG
+		bool benchmark_accounting = false;
+		/* If we're running the compressor perf test, only process the benchmark pages.
+		 * We'll get back to our regular queue once the benchmark is done */
+		if (compressor_running_perf_test) {
+			q = cq->benchmark_q;
+			if (!vm_page_queue_empty(&q->pgo_pending)) {
+				benchmark_accounting = true;
+			} else {
+				q = cq->q;
+				benchmark_accounting = false;
+			}
+		}
+#endif /* DEVELOPMENT || DEBUG */
+
 #if __AMP__
-	if (vm_compressor_ebound && (vm_pageout_state.vm_compressor_thread_count > 1)) {
-		local_batch_size = (q->pgo_maxlaundry >> 3);
-		local_batch_size = MAX(local_batch_size, 16);
-	} else {
-		local_batch_size = q->pgo_maxlaundry / (vm_pageout_state.vm_compressor_thread_count * 2);
-	}
+		if (vm_compressor_ebound && (vm_pageout_state.vm_compressor_thread_count > 1)) {
+			local_batch_size = (q->pgo_maxlaundry >> 3);
+			local_batch_size = MAX(local_batch_size, 16);
+		} else {
+			local_batch_size = q->pgo_maxlaundry / (vm_pageout_state.vm_compressor_thread_count * 2);
+		}
 #else
-	local_batch_size = q->pgo_maxlaundry / (vm_pageout_state.vm_compressor_thread_count * 2);
+		local_batch_size = q->pgo_maxlaundry / (vm_pageout_state.vm_compressor_thread_count * 2);
 #endif
 
 #if RECORD_THE_COMPRESSED_DATA
-	if (q->pgo_laundry) {
-		c_compressed_record_init();
-	}
+		if (q->pgo_laundry) {
+			c_compressed_record_init();
+		}
 #endif
-	while (TRUE) {
-		int     pages_left_on_q = 0;
+		while (true) { /* this loop is for working though all the pages in the pending queue */
+			int     pages_left_on_q = 0;
 
-		local_cnt = 0;
-		local_q = NULL;
+			local_cnt = 0;
+			local_q = NULL;
 
-		KERNEL_DEBUG(0xe0400014 | DBG_FUNC_START, 0, 0, 0, 0, 0);
+			KDBG_FILTERED(0xe0400014 | DBG_FUNC_START);
 
-		vm_page_lock_queues();
+			vm_page_lock_queues();
 #if DEVELOPMENT || DEBUG
-		if (marked_active == FALSE) {
-			vmct_active++;
-			vmct_state[cq->id] = VMCT_ACTIVE;
-			marked_active = TRUE;
-			if (vmct_active == 1) {
-				vm_compressor_epoch_start = mach_absolute_time();
+			if (marked_active == FALSE) {
+				vmct_active++;
+				vmct_state[cq->id] = VMCT_ACTIVE;
+				marked_active = TRUE;
+				if (vmct_active == 1) {
+					vm_compressor_epoch_start = mach_absolute_time();
+				}
 			}
-		}
 #endif
-		KERNEL_DEBUG(0xe0400014 | DBG_FUNC_END, 0, 0, 0, 0, 0);
+			KDBG_FILTERED(0xe0400014 | DBG_FUNC_END);
 
-		KERNEL_DEBUG(0xe0400018 | DBG_FUNC_START, q->pgo_laundry, 0, 0, 0, 0);
+			KDBG_FILTERED(0xe0400018 | DBG_FUNC_START, q->pgo_laundry);
 
-		while (!vm_page_queue_empty(&q->pgo_pending) && local_cnt < local_batch_size) {
-			vm_page_queue_remove_first(&q->pgo_pending, m, vmp_pageq);
-			assert(m->vmp_q_state == VM_PAGE_ON_PAGEOUT_Q);
-			VM_PAGE_CHECK(m);
+			/* empty the entire content of the thread input q to local_q, but not more than local_batch_size pages */
+			while (!vm_page_queue_empty(&q->pgo_pending) && local_cnt < local_batch_size) {
+				vm_page_queue_remove_first(&q->pgo_pending, m, vmp_pageq);
+				assert(m->vmp_q_state == VM_PAGE_ON_PAGEOUT_Q);
+				VM_PAGE_CHECK(m);
 
-			m->vmp_q_state = VM_PAGE_NOT_ON_Q;
-			VM_PAGE_ZERO_PAGEQ_ENTRY(m);
-			m->vmp_laundry = FALSE;
+				m->vmp_q_state = VM_PAGE_NOT_ON_Q;
+				VM_PAGE_ZERO_PAGEQ_ENTRY(m);
+				m->vmp_laundry = FALSE;
 
-			m->vmp_snext = local_q;
-			local_q = m;
-			local_cnt++;
-		}
-		if (local_q == NULL) {
-			break;
-		}
+				m->vmp_snext = local_q;
+				local_q = m;
+				local_cnt++;
+			}
+			if (local_q == NULL) {
+				break;
+			}
 
-		q->pgo_busy = TRUE;
+			q->pgo_busy = TRUE;
 
-		if ((pgo_draining = q->pgo_draining) == FALSE) {
-			vm_pageout_throttle_up_batch(q, local_cnt);
-			pages_left_on_q = q->pgo_laundry;
-		} else {
-			pages_left_on_q = q->pgo_laundry - local_cnt;
-		}
+			if ((pgo_draining = q->pgo_draining) == FALSE) {
+				vm_pageout_throttle_up_batch(q, local_cnt);
+				pages_left_on_q = q->pgo_laundry;
+			} else {
+				pages_left_on_q = q->pgo_laundry - local_cnt;
+			}
 
-		vm_page_unlock_queues();
+			vm_page_unlock_queues();
 
 #if !RECORD_THE_COMPRESSED_DATA
-		if (pages_left_on_q >= local_batch_size && cq->id < (vm_pageout_state.vm_compressor_thread_count - 1)) {
-			thread_wakeup((event_t) ((uintptr_t)&q->pgo_pending + cq->id + 1));
-		}
-#endif
-		KERNEL_DEBUG(0xe0400018 | DBG_FUNC_END, q->pgo_laundry, 0, 0, 0, 0);
-
-		while (local_q) {
-			KERNEL_DEBUG(0xe0400024 | DBG_FUNC_START, local_cnt, 0, 0, 0, 0);
-
-			m = local_q;
-			local_q = m->vmp_snext;
-			m->vmp_snext = NULL;
-
-			if (vm_pageout_compress_page(&cq->current_chead, cq->scratch_buf, m) == KERN_SUCCESS) {
-#if DEVELOPMENT || DEBUG
-				ncomps++;
-#endif
-				KERNEL_DEBUG(0xe0400024 | DBG_FUNC_END, local_cnt, 0, 0, 0, 0);
-
-				m->vmp_snext = local_freeq;
-				local_freeq = m;
-				local_freed++;
-
-				if (local_freed >= MAX_FREE_BATCH) {
-					OSAddAtomic64(local_freed, &vm_pageout_vminfo.vm_pageout_compressions);
-
-					vm_page_free_list(local_freeq, TRUE);
-
-					local_freeq = NULL;
-					local_freed = 0;
-				}
-			}
-#if !CONFIG_JETSAM
-			while (vm_page_free_count < COMPRESSOR_FREE_RESERVED_LIMIT) {
-				kern_return_t   wait_result;
-				int             need_wakeup = 0;
-
-				if (local_freeq) {
-					OSAddAtomic64(local_freed, &vm_pageout_vminfo.vm_pageout_compressions);
-
-					vm_page_free_list(local_freeq, TRUE);
-					local_freeq = NULL;
-					local_freed = 0;
-
-					continue;
-				}
-				lck_mtx_lock_spin(&vm_page_queue_free_lock);
-
-				if (vm_page_free_count < COMPRESSOR_FREE_RESERVED_LIMIT) {
-					if (vm_page_free_wanted_privileged++ == 0) {
-						need_wakeup = 1;
-					}
-					wait_result = assert_wait((event_t)&vm_page_free_wanted_privileged, THREAD_UNINT);
-
-					lck_mtx_unlock(&vm_page_queue_free_lock);
-
-					if (need_wakeup) {
-						thread_wakeup((event_t)&vm_page_free_wanted);
-					}
-
-					if (wait_result == THREAD_WAITING) {
-						thread_block(THREAD_CONTINUE_NULL);
-					}
-				} else {
-					lck_mtx_unlock(&vm_page_queue_free_lock);
-				}
+			/* if we have lots to compress, wake up the other thread to help.
+			 * disabled when recording data since record data is not protected with a mutex so this may cause races */
+			if (pages_left_on_q >= local_batch_size && cq->id < (vm_pageout_state.vm_compressor_thread_count - 1)) {
+				// wake up the next compressor thread
+				sched_cond_signal(&pgo_iothread_internal_state[cq->id + 1].pgo_wakeup,
+				    pgo_iothread_internal_state[cq->id + 1].pgo_iothread);
 			}
 #endif
-		}
-		if (local_freeq) {
-			OSAddAtomic64(local_freed, &vm_pageout_vminfo.vm_pageout_compressions);
+			KDBG_FILTERED(0xe0400018 | DBG_FUNC_END, q->pgo_laundry);
 
-			vm_page_free_list(local_freeq, TRUE);
-			local_freeq = NULL;
-			local_freed = 0;
-		}
-		if (pgo_draining == TRUE) {
-			vm_page_lockspin_queues();
-			vm_pageout_throttle_up_batch(q, local_cnt);
-			vm_page_unlock_queues();
-		}
-	}
-	KERNEL_DEBUG(0xe040000c | DBG_FUNC_START, 0, 0, 0, 0, 0);
+			while (local_q) {
+				KDBG_FILTERED(0xe0400024 | DBG_FUNC_START, local_cnt);
 
-	/*
-	 * queue lock is held and our q is empty
-	 */
-	q->pgo_busy = FALSE;
-	q->pgo_idle = TRUE;
+				m = local_q;
+				local_q = m->vmp_snext;
+				m->vmp_snext = NULL;
 
-	assert_wait((event_t) ((uintptr_t)&q->pgo_pending + cq->id), THREAD_UNINT);
+
+				chead = vm_pageout_select_filling_chead(cq, m);
+
+				if (vm_pageout_compress_page(chead, cq->scratch_buf, m) == KERN_SUCCESS) {
 #if DEVELOPMENT || DEBUG
-	if (marked_active == TRUE) {
-		vmct_active--;
-		vmct_state[cq->id] = VMCT_IDLE;
+					ncomps++;
+#endif
+					KDBG_FILTERED(0xe0400024 | DBG_FUNC_END, local_cnt);
 
-		if (vmct_active == 0) {
-			vm_compressor_epoch_stop = mach_absolute_time();
-			assertf(vm_compressor_epoch_stop >= vm_compressor_epoch_start,
-			    "Compressor epoch non-monotonic: 0x%llx -> 0x%llx",
-			    vm_compressor_epoch_start, vm_compressor_epoch_stop);
-			/* This interval includes intervals where one or more
-			 * compressor threads were pre-empted
+					m->vmp_snext = local_freeq;
+					local_freeq = m;
+					local_freed++;
+
+					/* if we gathered enough free pages, free them now */
+					if (local_freed >= MAX_FREE_BATCH) {
+						OSAddAtomic64(local_freed, &vm_pageout_vminfo.vm_pageout_compressions);
+
+						vm_page_free_list(local_freeq, TRUE);
+
+						local_freeq = NULL;
+						local_freed = 0;
+					}
+				}
+#if DEVELOPMENT || DEBUG
+				num_pages_processed++;
+#endif /* DEVELOPMENT || DEBUG */
+#if !CONFIG_JETSAM /* Maybe: if there's no JETSAM, be more proactive in waking up anybody that needs free pages */
+				while (vm_page_free_count < COMPRESSOR_FREE_RESERVED_LIMIT) {
+					kern_return_t   wait_result;
+					int             need_wakeup = 0;
+
+					if (local_freeq) {
+						OSAddAtomic64(local_freed, &vm_pageout_vminfo.vm_pageout_compressions);
+
+						vm_page_free_list(local_freeq, TRUE);
+						local_freeq = NULL;
+						local_freed = 0;
+
+						continue;
+					}
+					vm_free_page_lock_spin();
+
+					if (vm_page_free_count < COMPRESSOR_FREE_RESERVED_LIMIT) {
+						if (vm_page_free_wanted_privileged++ == 0) {
+							need_wakeup = 1;
+						}
+						wait_result = assert_wait((event_t)&vm_page_free_wanted_privileged, THREAD_UNINT);
+
+						vm_free_page_unlock();
+
+						if (need_wakeup) {
+							thread_wakeup((event_t)&vm_page_free_wanted);
+						}
+
+						if (wait_result == THREAD_WAITING) {
+							thread_block(THREAD_CONTINUE_NULL);
+						}
+					} else {
+						vm_free_page_unlock();
+					}
+				}
+#endif
+			}  /* while (local_q) */
+			/* free any leftovers in the freeq */
+			if (local_freeq) {
+				OSAddAtomic64(local_freed, &vm_pageout_vminfo.vm_pageout_compressions);
+
+				vm_page_free_list(local_freeq, TRUE);
+				local_freeq = NULL;
+				local_freed = 0;
+			}
+			if (pgo_draining == TRUE) {
+				vm_page_lockspin_queues();
+				vm_pageout_throttle_up_batch(q, local_cnt);
+				vm_page_unlock_queues();
+			}
+		}
+		KDBG_FILTERED(0xe040000c | DBG_FUNC_START);
+
+		/*
+		 * queue lock is held and our q is empty
+		 */
+		q->pgo_busy = FALSE;
+#if DEVELOPMENT || DEBUG
+		if (marked_active == TRUE) {
+			vmct_active--;
+			vmct_state[cq->id] = VMCT_IDLE;
+
+			if (vmct_active == 0) {
+				vm_compressor_epoch_stop = mach_absolute_time();
+				assertf(vm_compressor_epoch_stop >= vm_compressor_epoch_start,
+				    "Compressor epoch non-monotonic: 0x%llx -> 0x%llx",
+				    vm_compressor_epoch_start, vm_compressor_epoch_stop);
+				/* This interval includes intervals where one or more
+				 * compressor threads were pre-empted
+				 */
+				vmct_stats.vmct_cthreads_total += vm_compressor_epoch_stop - vm_compressor_epoch_start;
+			}
+		}
+		if (compressor_running_perf_test && benchmark_accounting) {
+			/*
+			 * We could turn ON compressor_running_perf_test while still processing
+			 * regular non-benchmark pages. We shouldn't count them here else we
+			 * could overshoot. We might also still be populating that benchmark Q
+			 * and be under pressure. So we will go back to the regular queues. And
+			 * benchmark accounting will be off for that case too.
 			 */
-			vmct_stats.vmct_cthreads_total += vm_compressor_epoch_stop - vm_compressor_epoch_start;
+			compressor_perf_test_pages_processed += num_pages_processed;
+			thread_wakeup(&compressor_perf_test_pages_processed);
 		}
-	}
 #endif
-	vm_page_unlock_queues();
+		vm_page_unlock_queues();
 #if DEVELOPMENT || DEBUG
-	if (__improbable(vm_compressor_time_thread)) {
-		vmct_stats.vmct_runtimes[cq->id] = thread_get_runtime_self();
-		vmct_stats.vmct_pages[cq->id] += ncomps;
-		vmct_stats.vmct_iterations[cq->id]++;
-		if (ncomps > vmct_stats.vmct_maxpages[cq->id]) {
-			vmct_stats.vmct_maxpages[cq->id] = ncomps;
-		}
-		if (ncomps < vmct_stats.vmct_minpages[cq->id]) {
-			vmct_stats.vmct_minpages[cq->id] = ncomps;
-		}
-	}
+		vm_pageout_record_thread_time(cq->id, ncomps);
 #endif
 
-	KERNEL_DEBUG(0xe0400018 | DBG_FUNC_END, 0, 0, 0, 0, 0);
+		KDBG_FILTERED(0xe0400018 | DBG_FUNC_END);
+#if DEVELOPMENT || DEBUG
+		if (compressor_running_perf_test && benchmark_accounting) {
+			/*
+			 * We've been exclusively compressing pages from the benchmark queue,
+			 * do 1 pass over the internal queue before blocking.
+			 */
+			continue;
+		}
+#endif
 
-	thread_block_parameter((thread_continue_t)vm_pageout_iothread_internal_continue, (void *) cq);
+		sched_cond_wait_parameter(&(cq->pgo_wakeup), THREAD_UNINT, (thread_continue_t)vm_pageout_iothread_internal_continue, (void *) cq);
+	}
 	/*NOTREACHED*/
 }
 
-
+/* resolves the pager and maintain stats in the pager and in the vm_object */
 kern_return_t
 vm_pageout_compress_page(void **current_chead, char *scratch_buf, vm_page_t m)
 {
@@ -4151,7 +4410,7 @@ vm_pageout_compress_page(void **current_chead, char *scratch_buf, vm_page_t m)
 	pager = object->pager;
 
 	if (!object->pager_initialized || pager == MEMORY_OBJECT_NULL) {
-		KERNEL_DEBUG(0xe0400010 | DBG_FUNC_START, object, pager, 0, 0, 0);
+		KDBG_FILTERED(0xe0400010 | DBG_FUNC_START, object, pager);
 
 		vm_object_lock(object);
 
@@ -4178,7 +4437,7 @@ vm_pageout_compress_page(void **current_chead, char *scratch_buf, vm_page_t m)
 			 * Should only happen if there is no
 			 * compression pager
 			 */
-			PAGE_WAKEUP_DONE(m);
+			vm_page_wakeup_done(object, m);
 
 			vm_page_lockspin_queues();
 			vm_page_activate(m);
@@ -4195,10 +4454,25 @@ vm_pageout_compress_page(void **current_chead, char *scratch_buf, vm_page_t m)
 		}
 		vm_object_unlock(object);
 
-		KERNEL_DEBUG(0xe0400010 | DBG_FUNC_END, object, pager, 0, 0, 0);
+		KDBG_FILTERED(0xe0400010 | DBG_FUNC_END, object, pager);
 	}
 	assert(object->pager_initialized && pager != MEMORY_OBJECT_NULL);
 	assert(object->activity_in_progress > 0);
+
+#if CONFIG_TRACK_UNMODIFIED_ANON_PAGES
+	if (m->vmp_unmodified_ro == true) {
+		os_atomic_inc(&compressor_ro_uncompressed_total_returned, relaxed);
+	}
+#endif /* CONFIG_TRACK_UNMODIFIED_ANON_PAGES */
+
+	vm_compressor_options_t flags = 0;
+
+#if CONFIG_TRACK_UNMODIFIED_ANON_PAGES
+	if (m->vmp_unmodified_ro) {
+		flags |= C_PAGE_UNMODIFIED;
+	}
+#endif /* CONFIG_TRACK_UNMODIFIED_ANON_PAGES */
+
 
 	retval = vm_compressor_pager_put(
 		pager,
@@ -4206,7 +4480,8 @@ vm_pageout_compress_page(void **current_chead, char *scratch_buf, vm_page_t m)
 		VM_PAGE_GET_PHYS_PAGE(m),
 		current_chead,
 		scratch_buf,
-		&compressed_count_delta);
+		&compressed_count_delta,
+		flags);
 
 	vm_object_lock(object);
 
@@ -4227,20 +4502,19 @@ vm_pageout_compress_page(void **current_chead, char *scratch_buf, vm_page_t m)
 		 * contributes to the owner's memory footprint,
 		 * so account for it as such.
 		 */
+		if (m->vmp_tabled) {
+			vm_page_remove(m, TRUE);
+		}
 		if ((object->purgable != VM_PURGABLE_DENY ||
 		    object->vo_ledger_tag) &&
 		    object->vo_owner != NULL) {
 			/* one more compressed purgeable/tagged page */
 			vm_object_owner_compressed_update(object,
-			    +1);
+			    compressed_count_delta);
 		}
-		VM_STAT_INCR(compressions);
-
-		if (m->vmp_tabled) {
-			vm_page_remove(m, TRUE);
-		}
+		counter_inc(&vm_statistics_compressions);
 	} else {
-		PAGE_WAKEUP_DONE(m);
+		vm_page_wakeup_done(object, m);
 
 		vm_page_lockspin_queues();
 
@@ -4257,7 +4531,7 @@ vm_pageout_compress_page(void **current_chead, char *scratch_buf, vm_page_t m)
 
 
 static void
-vm_pageout_adjust_eq_iothrottle(struct vm_pageout_queue *eq, boolean_t req_lowpriority)
+vm_pageout_adjust_eq_iothrottle(struct pgo_iothread_state *ethr, boolean_t req_lowpriority)
 {
 	uint32_t        policy;
 
@@ -4265,7 +4539,7 @@ vm_pageout_adjust_eq_iothrottle(struct vm_pageout_queue *eq, boolean_t req_lowpr
 		req_lowpriority = FALSE;
 	}
 
-	if (eq->pgo_inited == TRUE && eq->pgo_lowpriority != req_lowpriority) {
+	if (ethr->q->pgo_inited == TRUE && ethr->q->pgo_lowpriority != req_lowpriority) {
 		vm_page_unlock_queues();
 
 		if (req_lowpriority == TRUE) {
@@ -4275,18 +4549,17 @@ vm_pageout_adjust_eq_iothrottle(struct vm_pageout_queue *eq, boolean_t req_lowpr
 			policy = THROTTLE_LEVEL_PAGEOUT_UNTHROTTLED;
 			DTRACE_VM(laundryunthrottle);
 		}
-		proc_set_thread_policy_with_tid(kernel_task, eq->pgo_tid,
+		proc_set_thread_policy(ethr->pgo_iothread,
 		    TASK_POLICY_EXTERNAL, TASK_POLICY_IO, policy);
 
-		eq->pgo_lowpriority = req_lowpriority;
-
 		vm_page_lock_queues();
+		ethr->q->pgo_lowpriority = req_lowpriority;
 	}
 }
 
-
+OS_NORETURN
 static void
-vm_pageout_iothread_external(void)
+vm_pageout_iothread_external(struct pgo_iothread_state *ethr, __unused wait_result_t w)
 {
 	thread_t        self = current_thread();
 
@@ -4299,20 +4572,23 @@ vm_pageout_iothread_external(void)
 
 	vm_page_lock_queues();
 
-	vm_pageout_queue_external.pgo_tid = self->thread_id;
 	vm_pageout_queue_external.pgo_lowpriority = TRUE;
 	vm_pageout_queue_external.pgo_inited = TRUE;
 
 	vm_page_unlock_queues();
 
-	vm_pageout_iothread_external_continue(&vm_pageout_queue_external);
+#if CONFIG_THREAD_GROUPS
+	thread_group_vm_add();
+#endif /* CONFIG_THREAD_GROUPS */
 
+	vm_pageout_iothread_external_continue(ethr, 0);
 	/*NOTREACHED*/
 }
 
 
+OS_NORETURN
 static void
-vm_pageout_iothread_internal(struct cq *cq)
+vm_pageout_iothread_internal(struct pgo_iothread_state *cthr, __unused wait_result_t w)
 {
 	thread_t        self = current_thread();
 
@@ -4320,9 +4596,14 @@ vm_pageout_iothread_internal(struct cq *cq)
 
 	vm_page_lock_queues();
 
-	vm_pageout_queue_internal.pgo_tid = self->thread_id;
 	vm_pageout_queue_internal.pgo_lowpriority = TRUE;
 	vm_pageout_queue_internal.pgo_inited = TRUE;
+
+#if DEVELOPMENT || DEBUG
+	vm_pageout_queue_benchmark.pgo_lowpriority = vm_pageout_queue_internal.pgo_lowpriority;
+	vm_pageout_queue_benchmark.pgo_inited = vm_pageout_queue_internal.pgo_inited;
+	vm_pageout_queue_benchmark.pgo_busy = FALSE;
+#endif /* DEVELOPMENT || DEBUG */
 
 	vm_page_unlock_queues();
 
@@ -4330,18 +4611,25 @@ vm_pageout_iothread_internal(struct cq *cq)
 		thread_vm_bind_group_add();
 	}
 
+#if CONFIG_THREAD_GROUPS
+	thread_group_vm_add();
+#endif /* CONFIG_THREAD_GROUPS */
 
 #if __AMP__
 	if (vm_compressor_ebound) {
-		thread_bind_cluster_type('E');
+		/*
+		 * Use the soft bound option for vm_compressor to allow it to run on
+		 * P-cores if E-cluster is unavailable.
+		 */
+		thread_bind_cluster_type(self, 'E', true);
 	}
 #endif /* __AMP__ */
 
 	thread_set_thread_name(current_thread(), "VM_compressor");
 #if DEVELOPMENT || DEBUG
-	vmct_stats.vmct_minpages[cq->id] = INT32_MAX;
+	vmct_stats.vmct_minpages[cthr->id] = INT32_MAX;
 #endif
-	vm_pageout_iothread_internal_continue(cq);
+	vm_pageout_iothread_internal_continue(cthr, 0);
 
 	/*NOTREACHED*/
 }
@@ -4349,7 +4637,7 @@ vm_pageout_iothread_internal(struct cq *cq)
 kern_return_t
 vm_set_buffer_cleanup_callout(boolean_t (*func)(int))
 {
-	if (OSCompareAndSwapPtr(NULL, func, (void * volatile *) &consider_buffer_cache_collect)) {
+	if (OSCompareAndSwapPtr(NULL, ptrauth_nop_cast(void *, func), (void * volatile *) &consider_buffer_cache_collect)) {
 		return KERN_SUCCESS;
 	} else {
 		return KERN_FAILURE; /* Already set */
@@ -4364,6 +4652,23 @@ extern unsigned int     memorystatus_level;
 
 boolean_t vm_pressure_events_enabled = FALSE;
 
+extern uint64_t next_warning_notification_sent_at_ts;
+extern uint64_t next_critical_notification_sent_at_ts;
+
+#define PRESSURE_LEVEL_STUCK_THRESHOLD_MINS    (30)    /* 30 minutes. */
+
+/*
+ * The last time there was change in pressure level OR we forced a check
+ * because the system is stuck in a non-normal pressure level.
+ */
+uint64_t  vm_pressure_last_level_transition_abs = 0;
+
+/*
+ *  This is how the long the system waits 'stuck' in an unchanged non-normal pressure
+ * level before resending out notifications for that level again.
+ */
+int  vm_pressure_level_transition_threshold = PRESSURE_LEVEL_STUCK_THRESHOLD_MINS;
+
 void
 vm_pressure_response(void)
 {
@@ -4371,21 +4676,16 @@ vm_pressure_response(void)
 	int                     new_level = -1;
 	unsigned int            total_pages;
 	uint64_t                available_memory = 0;
+	uint64_t                curr_ts, abs_time_since_level_transition, time_in_ns;
+	bool                    force_check = false;
+	int                     time_in_mins;
+
 
 	if (vm_pressure_events_enabled == FALSE) {
 		return;
 	}
 
-#if CONFIG_EMBEDDED
-
-	available_memory = (uint64_t) memorystatus_available_pages;
-
-#else /* CONFIG_EMBEDDED */
-
-	available_memory = (uint64_t) AVAILABLE_NON_COMPRESSED_MEMORY;
-	memorystatus_available_pages = (uint64_t) AVAILABLE_NON_COMPRESSED_MEMORY;
-
-#endif /* CONFIG_EMBEDDED */
+	available_memory = (uint64_t) memorystatus_get_available_page_count();
 
 	total_pages = (unsigned int) atop_64(max_mem);
 #if CONFIG_SECLUDED_MEMORY
@@ -4396,6 +4696,13 @@ vm_pressure_response(void)
 	if (memorystatus_manual_testing_on) {
 		return;
 	}
+
+	curr_ts = mach_absolute_time();
+	abs_time_since_level_transition = curr_ts - vm_pressure_last_level_transition_abs;
+
+	absolutetime_to_nanoseconds(abs_time_since_level_transition, &time_in_ns);
+	time_in_mins = (int) ((time_in_ns / NSEC_PER_SEC) / 60);
+	force_check = (time_in_mins >= vm_pressure_level_transition_threshold);
 
 	old_level = memorystatus_vm_pressure_level;
 
@@ -4417,6 +4724,9 @@ vm_pressure_response(void)
 			new_level = kVMPressureNormal;
 		} else if (VM_PRESSURE_WARNING_TO_CRITICAL()) {
 			new_level = kVMPressureCritical;
+		} else if (force_check) {
+			new_level = kVMPressureWarning;
+			next_warning_notification_sent_at_ts = curr_ts;
 		}
 		break;
 	}
@@ -4427,6 +4737,9 @@ vm_pressure_response(void)
 			new_level = kVMPressureNormal;
 		} else if (VM_PRESSURE_CRITICAL_TO_WARNING()) {
 			new_level = kVMPressureWarning;
+		} else if (force_check) {
+			new_level = kVMPressureCritical;
+			next_critical_notification_sent_at_ts = curr_ts;
 		}
 		break;
 	}
@@ -4435,15 +4748,31 @@ vm_pressure_response(void)
 		return;
 	}
 
-	if (new_level != -1) {
-		memorystatus_vm_pressure_level = (vm_pressure_level_t) new_level;
+	if (new_level != -1 || force_check) {
+		if (new_level != -1) {
+			memorystatus_vm_pressure_level = (vm_pressure_level_t) new_level;
 
-		if (new_level != (int) old_level) {
-			VM_DEBUG_CONSTANT_EVENT(vm_pressure_level_change, VM_PRESSURE_LEVEL_CHANGE, DBG_FUNC_NONE,
-			    new_level, old_level, 0, 0);
+			if (new_level != (int) old_level) {
+				VM_DEBUG_CONSTANT_EVENT(vm_pressure_level_change, DBG_VM_PRESSURE_LEVEL_CHANGE, DBG_FUNC_NONE,
+				    new_level, old_level, 0, 0);
+			}
+		} else {
+			VM_DEBUG_CONSTANT_EVENT(vm_pressure_level_change, DBG_VM_PRESSURE_LEVEL_CHANGE, DBG_FUNC_NONE,
+			    new_level, old_level, force_check, 0);
 		}
 
-		if ((memorystatus_vm_pressure_level != kVMPressureNormal) || (old_level != memorystatus_vm_pressure_level)) {
+		if (hibernation_vmqueues_inspection || hibernate_cleaning_in_progress) {
+			/*
+			 * We don't want to schedule a wakeup while hibernation is in progress
+			 * because that could collide with checks for non-monotonicity in the scheduler.
+			 * We do however do all the updates to memorystatus_vm_pressure_level because
+			 * we _might_ want to use that for decisions regarding which pages or how
+			 * many pages we want to dump in hibernation.
+			 */
+			return;
+		}
+
+		if ((memorystatus_vm_pressure_level != kVMPressureNormal) || (old_level != memorystatus_vm_pressure_level) || force_check) {
 			if (vm_pageout_state.vm_pressure_thread_running == FALSE) {
 				thread_wakeup(&vm_pressure_thread);
 			}
@@ -4451,67 +4780,109 @@ vm_pressure_response(void)
 			if (old_level != memorystatus_vm_pressure_level) {
 				thread_wakeup(&vm_pageout_state.vm_pressure_changed);
 			}
+			vm_pressure_last_level_transition_abs = curr_ts; /* renew the window of observation for a stuck pressure level */
 		}
 	}
 }
 #endif /* VM_PRESSURE_EVENTS */
+
+
+/**
+ * Called by a kernel thread to ask if a number of pages may be wired.
+ */
+kern_return_t
+mach_vm_wire_level_monitor(int64_t requested_pages)
+{
+	if (requested_pages <= 0) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	const int64_t max_wire_pages = atop_64(vm_global_user_wire_limit);
+	/**
+	 * Available pages can be negative in the case where more system memory is
+	 * wired than the threshold, so we must use a signed integer.
+	 */
+	const int64_t available_pages = max_wire_pages - vm_page_wire_count;
+
+	if (requested_pages > available_pages) {
+		return KERN_RESOURCE_SHORTAGE;
+	}
+	return KERN_SUCCESS;
+}
 
 /*
  * Function called by a kernel thread to either get the current pressure level or
  * wait until memory pressure changes from a given level.
  */
 kern_return_t
-mach_vm_pressure_level_monitor(__unused boolean_t wait_for_pressure, __unused unsigned int *pressure_level)
+mach_vm_pressure_level_monitor(boolean_t wait_for_pressure, unsigned int *pressure_level)
 {
 #if !VM_PRESSURE_EVENTS
-
-	return KERN_FAILURE;
-
+	(void)wait_for_pressure;
+	(void)pressure_level;
+	return KERN_NOT_SUPPORTED;
 #else /* VM_PRESSURE_EVENTS */
 
-	wait_result_t       wr = 0;
+	uint32_t *waiters = NULL;
+	wait_result_t wr = 0;
 	vm_pressure_level_t old_level = memorystatus_vm_pressure_level;
 
 	if (pressure_level == NULL) {
 		return KERN_INVALID_ARGUMENT;
 	}
-
-	if (*pressure_level == kVMPressureJetsam) {
-		if (!wait_for_pressure) {
-			return KERN_INVALID_ARGUMENT;
-		}
-
-		lck_mtx_lock(&memorystatus_jetsam_fg_band_lock);
-		wr = assert_wait((event_t)&memorystatus_jetsam_fg_band_waiters,
-		    THREAD_INTERRUPTIBLE);
-		if (wr == THREAD_WAITING) {
-			++memorystatus_jetsam_fg_band_waiters;
-			lck_mtx_unlock(&memorystatus_jetsam_fg_band_lock);
-			wr = thread_block(THREAD_CONTINUE_NULL);
-		} else {
-			lck_mtx_unlock(&memorystatus_jetsam_fg_band_lock);
-		}
-		if (wr != THREAD_AWAKENED) {
-			return KERN_ABORTED;
-		}
-		*pressure_level = kVMPressureJetsam;
-		return KERN_SUCCESS;
+	if (!wait_for_pressure && (*pressure_level == kVMPressureBackgroundJetsam ||
+	    *pressure_level == kVMPressureForegroundJetsam)) {
+		return KERN_INVALID_ARGUMENT;
 	}
 
-	if (wait_for_pressure == TRUE) {
-		while (old_level == *pressure_level) {
-			wr = assert_wait((event_t) &vm_pageout_state.vm_pressure_changed,
-			    THREAD_INTERRUPTIBLE);
-			if (wr == THREAD_WAITING) {
-				wr = thread_block(THREAD_CONTINUE_NULL);
+	if (wait_for_pressure) {
+		switch (*pressure_level) {
+		case kVMPressureForegroundJetsam:
+		case kVMPressureBackgroundJetsam:
+
+			if (*pressure_level == kVMPressureForegroundJetsam) {
+				waiters = &memorystatus_jetsam_fg_band_waiters;
+			} else {
+				/* kVMPressureBackgroundJetsam */
+				waiters = &memorystatus_jetsam_bg_band_waiters;
 			}
-			if (wr == THREAD_INTERRUPTED) {
+
+			lck_mtx_lock(&memorystatus_jetsam_broadcast_lock);
+			wr = assert_wait((event_t)waiters, THREAD_INTERRUPTIBLE);
+			if (wr == THREAD_WAITING) {
+				*waiters += 1;
+				lck_mtx_unlock(&memorystatus_jetsam_broadcast_lock);
+				wr = thread_block(THREAD_CONTINUE_NULL);
+			} else {
+				lck_mtx_unlock(&memorystatus_jetsam_broadcast_lock);
+			}
+
+			if (wr != THREAD_AWAKENED) {
 				return KERN_ABORTED;
 			}
 
-			if (wr == THREAD_AWAKENED) {
-				old_level = memorystatus_vm_pressure_level;
+			return KERN_SUCCESS;
+		case kVMPressureNormal:
+		case kVMPressureWarning:
+		case kVMPressureUrgent:
+		case kVMPressureCritical:
+			while (old_level == *pressure_level) {
+				wr = assert_wait((event_t) &vm_pageout_state.vm_pressure_changed,
+				    THREAD_INTERRUPTIBLE);
+				if (wr == THREAD_WAITING) {
+					wr = thread_block(THREAD_CONTINUE_NULL);
+				}
+				if (wr == THREAD_INTERRUPTED) {
+					return KERN_ABORTED;
+				}
+
+				if (wr == THREAD_AWAKENED) {
+					old_level = memorystatus_vm_pressure_level;
+				}
 			}
+			break;
+		default:
+			return KERN_INVALID_ARGUMENT;
 		}
 	}
 
@@ -4532,6 +4903,10 @@ vm_pressure_thread(void)
 		vm_pageout_state.vm_pressure_thread_running = FALSE;
 	}
 
+#if CONFIG_THREAD_GROUPS
+	thread_group_vm_add();
+#endif /* CONFIG_THREAD_GROUPS */
+
 	thread_set_thread_name(current_thread(), "VM_pressure");
 	thread_initialized = TRUE;
 	assert_wait((event_t) &vm_pressure_thread, THREAD_UNINT);
@@ -4549,7 +4924,7 @@ compute_pageout_gc_throttle(__unused void *arg)
 	if (vm_pageout_vminfo.vm_pageout_considered_page != vm_pageout_state.vm_pageout_considered_page_last) {
 		vm_pageout_state.vm_pageout_considered_page_last = vm_pageout_vminfo.vm_pageout_considered_page;
 
-		thread_wakeup((event_t) &vm_pageout_garbage_collect);
+		thread_wakeup(VM_PAGEOUT_GC_EVENT);
 	}
 }
 
@@ -4570,67 +4945,71 @@ compute_pageout_gc_throttle(__unused void *arg)
  *
  * 2. The jetsam path might need to allocate zone memory itself. We could try
  * using the non-blocking variant of zalloc for this path, but we can still
- * end up trying to do a kernel_memory_allocate when the zone_map is almost
- * full.
+ * end up trying to do a kmem_alloc when the zone maps are almost full.
  */
-
-extern boolean_t is_zone_map_nearing_exhaustion(void);
-
+__dead2
 void
-vm_pageout_garbage_collect(int collect)
+vm_pageout_garbage_collect(void *step, wait_result_t wr __unused)
 {
-	if (collect) {
-		if (is_zone_map_nearing_exhaustion()) {
-			/*
-			 * Woken up by the zone allocator for zone-map-exhaustion jetsams.
-			 *
-			 * Bail out after calling zone_gc (which triggers the
-			 * zone-map-exhaustion jetsams). If we fall through, the subsequent
-			 * operations that clear out a bunch of caches might allocate zone
-			 * memory themselves (for eg. vm_map operations would need VM map
-			 * entries). Since the zone map is almost full at this point, we
-			 * could end up with a panic. We just need to quickly jetsam a
-			 * process and exit here.
-			 *
-			 * It could so happen that we were woken up to relieve memory
-			 * pressure and the zone map also happened to be near its limit at
-			 * the time, in which case we'll skip out early. But that should be
-			 * ok; if memory pressure persists, the thread will simply be woken
-			 * up again.
-			 */
-			consider_zone_gc(TRUE);
-		} else {
-			/* Woken up by vm_pageout_scan or compute_pageout_gc_throttle. */
-			boolean_t buf_large_zfree = FALSE;
-			boolean_t first_try = TRUE;
+	assert(step == VM_PAGEOUT_GC_INIT || step == VM_PAGEOUT_GC_COLLECT);
 
-			stack_collect();
+	if (step == VM_PAGEOUT_GC_INIT) {
+		/* first time being called is not about GC */
+#if CONFIG_THREAD_GROUPS
+		thread_group_vm_add();
+#endif /* CONFIG_THREAD_GROUPS */
+	} else if (zone_map_nearing_exhaustion()) {
+		/*
+		 * Woken up by the zone allocator for zone-map-exhaustion jetsams.
+		 *
+		 * Bail out after calling zone_gc (which triggers the
+		 * zone-map-exhaustion jetsams). If we fall through, the subsequent
+		 * operations that clear out a bunch of caches might allocate zone
+		 * memory themselves (for eg. vm_map operations would need VM map
+		 * entries). Since the zone map is almost full at this point, we
+		 * could end up with a panic. We just need to quickly jetsam a
+		 * process and exit here.
+		 *
+		 * It could so happen that we were woken up to relieve memory
+		 * pressure and the zone map also happened to be near its limit at
+		 * the time, in which case we'll skip out early. But that should be
+		 * ok; if memory pressure persists, the thread will simply be woken
+		 * up again.
+		 */
+		zone_gc(ZONE_GC_JETSAM);
+	} else {
+		/* Woken up by vm_pageout_scan or compute_pageout_gc_throttle. */
+		boolean_t buf_large_zfree = FALSE;
+		boolean_t first_try = TRUE;
 
-			consider_machine_collect();
-			mbuf_drain(FALSE);
+		stack_collect();
 
-			do {
-				if (consider_buffer_cache_collect != NULL) {
-					buf_large_zfree = (*consider_buffer_cache_collect)(0);
-				}
-				if (first_try == TRUE || buf_large_zfree == TRUE) {
-					/*
-					 * consider_zone_gc should be last, because the other operations
-					 * might return memory to zones.
-					 */
-					consider_zone_gc(FALSE);
-				}
-				first_try = FALSE;
-			} while (buf_large_zfree == TRUE && vm_page_free_count < vm_page_free_target);
+		consider_machine_collect();
+#if CONFIG_MBUF_MCACHE
+		mbuf_drain(FALSE);
+#endif /* CONFIG_MBUF_MCACHE */
 
-			consider_machine_adjust();
-		}
+		do {
+			if (consider_buffer_cache_collect != NULL) {
+				buf_large_zfree = (*consider_buffer_cache_collect)(0);
+			}
+			if (first_try == TRUE || buf_large_zfree == TRUE) {
+				/*
+				 * zone_gc should be last, because the other operations
+				 * might return memory to zones.
+				 */
+				zone_gc(ZONE_GC_TRIM);
+			}
+			first_try = FALSE;
+		} while (buf_large_zfree == TRUE && vm_page_free_count < vm_page_free_target);
+
+		consider_machine_adjust();
 	}
 
-	assert_wait((event_t) &vm_pageout_garbage_collect, THREAD_UNINT);
+	assert_wait(VM_PAGEOUT_GC_EVENT, THREAD_UNINT);
 
-	thread_block_parameter((thread_continue_t) vm_pageout_garbage_collect, (void *)1);
-	/*NOTREACHED*/
+	thread_block_parameter(vm_pageout_garbage_collect, VM_PAGEOUT_GC_COLLECT);
+	__builtin_unreachable();
 }
 
 
@@ -4643,7 +5022,7 @@ extern vm_map_offset_t vm_page_fake_buckets_start, vm_page_fake_buckets_end;
 
 
 void
-vm_set_restrictions()
+vm_set_restrictions(unsigned int num_cpus)
 {
 	int vm_restricted_to_single_processor = 0;
 
@@ -4651,15 +5030,9 @@ vm_set_restrictions()
 		kprintf("Overriding vm_restricted_to_single_processor to %d\n", vm_restricted_to_single_processor);
 		vm_pageout_state.vm_restricted_to_single_processor = (vm_restricted_to_single_processor ? TRUE : FALSE);
 	} else {
-		host_basic_info_data_t hinfo;
-		mach_msg_type_number_t count = HOST_BASIC_INFO_COUNT;
+		assert(num_cpus > 0);
 
-#define BSD_HOST 1
-		host_info((host_t)BSD_HOST, HOST_BASIC_INFO, (host_info_t)&hinfo, &count);
-
-		assert(hinfo.max_cpus > 0);
-
-		if (hinfo.max_cpus <= 3) {
+		if (num_cpus <= 3) {
 			/*
 			 * on systems with a limited number of CPUS, bind the
 			 * 4 major threads that can free memory and that tend to use
@@ -4683,6 +5056,80 @@ vm_set_restrictions()
 	}
 }
 
+/*
+ * Set up vm_config based on the vm_compressor_mode.
+ * Must run BEFORE the pageout thread starts up.
+ */
+__startup_func
+void
+vm_config_init(void)
+{
+	bzero(&vm_config, sizeof(vm_config));
+
+	switch (vm_compressor_mode) {
+	case VM_PAGER_DEFAULT:
+		printf("mapping deprecated VM_PAGER_DEFAULT to VM_PAGER_COMPRESSOR_WITH_SWAP\n");
+		OS_FALLTHROUGH;
+
+	case VM_PAGER_COMPRESSOR_WITH_SWAP:
+		vm_config.compressor_is_present = TRUE;
+		vm_config.swap_is_present = TRUE;
+		vm_config.compressor_is_active = TRUE;
+		vm_config.swap_is_active = TRUE;
+		break;
+
+	case VM_PAGER_COMPRESSOR_NO_SWAP:
+		vm_config.compressor_is_present = TRUE;
+		vm_config.swap_is_present = TRUE;
+		vm_config.compressor_is_active = TRUE;
+		break;
+
+	case VM_PAGER_FREEZER_DEFAULT:
+		printf("mapping deprecated VM_PAGER_FREEZER_DEFAULT to VM_PAGER_FREEZER_COMPRESSOR_NO_SWAP\n");
+		OS_FALLTHROUGH;
+
+	case VM_PAGER_FREEZER_COMPRESSOR_NO_SWAP:
+		vm_config.compressor_is_present = TRUE;
+		vm_config.swap_is_present = TRUE;
+		break;
+
+	case VM_PAGER_COMPRESSOR_NO_SWAP_PLUS_FREEZER_COMPRESSOR_WITH_SWAP:
+		vm_config.compressor_is_present = TRUE;
+		vm_config.swap_is_present = TRUE;
+		vm_config.compressor_is_active = TRUE;
+		vm_config.freezer_swap_is_active = TRUE;
+		break;
+
+	case VM_PAGER_NOT_CONFIGURED:
+		break;
+
+	default:
+		printf("unknown compressor mode - %x\n", vm_compressor_mode);
+		break;
+	}
+}
+
+__startup_func
+static void
+vm_pageout_create_gc_thread(void)
+{
+	thread_t thread;
+
+	if (kernel_thread_create(vm_pageout_garbage_collect,
+	    VM_PAGEOUT_GC_INIT, BASEPRI_DEFAULT, &thread) != KERN_SUCCESS) {
+		panic("vm_pageout_garbage_collect: create failed");
+	}
+	thread_set_thread_name(thread, "VM_pageout_garbage_collect");
+	if (thread->reserved_stack == 0) {
+		assert(thread->kernel_stack);
+		thread->reserved_stack = thread->kernel_stack;
+	}
+
+	/* thread is started in vm_pageout() */
+	vm_pageout_gc_thread = thread;
+}
+STARTUP(EARLY_BOOT, STARTUP_RANK_MIDDLE, vm_pageout_create_gc_thread);
+
 void
 vm_pageout(void)
 {
@@ -4696,35 +5143,15 @@ vm_pageout(void)
 	 */
 	s = splsched();
 
-	vm_pageout_scan_thread = self;
-
 #if CONFIG_VPS_DYNAMIC_PRIO
-
-	int             vps_dynprio_bootarg = 0;
-
-	if (PE_parse_boot_argn("vps_dynamic_priority_enabled", &vps_dynprio_bootarg, sizeof(vps_dynprio_bootarg))) {
-		vps_dynamic_priority_enabled = (vps_dynprio_bootarg ? TRUE : FALSE);
-		kprintf("Overriding vps_dynamic_priority_enabled to %d\n", vps_dynamic_priority_enabled);
-	} else {
-		if (vm_pageout_state.vm_restricted_to_single_processor == TRUE) {
-			vps_dynamic_priority_enabled = TRUE;
-		} else {
-			vps_dynamic_priority_enabled = FALSE;
-		}
-	}
-
 	if (vps_dynamic_priority_enabled) {
 		sched_set_kernel_thread_priority(self, MAXPRI_THROTTLE);
 		thread_set_eager_preempt(self);
 	} else {
 		sched_set_kernel_thread_priority(self, BASEPRI_VM);
 	}
-
 #else /* CONFIG_VPS_DYNAMIC_PRIO */
-
-	vps_dynamic_priority_enabled = FALSE;
 	sched_set_kernel_thread_priority(self, BASEPRI_VM);
-
 #endif /* CONFIG_VPS_DYNAMIC_PRIO */
 
 	thread_lock(self);
@@ -4736,19 +5163,29 @@ vm_pageout(void)
 	}
 
 	if (vm_pageout_state.vm_restricted_to_single_processor == TRUE &&
-	    vps_dynamic_priority_enabled == FALSE) {
+	    !vps_dynamic_priority_enabled) {
 		thread_vm_bind_group_add();
 	}
 
 
+#if CONFIG_THREAD_GROUPS
+	thread_group_vm_add();
+#endif /* CONFIG_THREAD_GROUPS */
 
 #if __AMP__
 	PE_parse_boot_argn("vmpgo_pcluster", &vm_pgo_pbound, sizeof(vm_pgo_pbound));
 	if (vm_pgo_pbound) {
-		thread_bind_cluster_type('P');
+		/*
+		 * Use the soft bound option for vm pageout to allow it to run on
+		 * E-cores if P-cluster is unavailable.
+		 */
+		thread_bind_cluster_type(self, 'P', true);
 	}
 #endif /* __AMP__ */
 
+	PE_parse_boot_argn("vmpgo_protect_realtime",
+	    &vm_pageout_protect_realtime,
+	    sizeof(vm_pageout_protect_realtime));
 	splx(s);
 
 	thread_set_thread_name(current_thread(), "VM_pageout_scan");
@@ -4765,9 +5202,6 @@ vm_pageout(void)
 	vm_pageout_state.vm_page_speculative_q_age_ms = VM_PAGE_SPECULATIVE_Q_AGE_MS;
 	vm_pageout_state.vm_page_speculative_percentage = 5;
 	vm_pageout_state.vm_page_speculative_target = 0;
-
-	vm_pageout_state.vm_pageout_external_iothread = THREAD_NULL;
-	vm_pageout_state.vm_pageout_internal_iothread = THREAD_NULL;
 
 	vm_pageout_state.vm_pageout_swap_wait = 0;
 	vm_pageout_state.vm_pageout_idle_wait = 0;
@@ -4834,49 +5268,46 @@ vm_pageout(void)
 		vm_page_free_reserve(0);
 	}
 
+	bzero(&vm_pageout_queue_external, sizeof(struct vm_pageout_queue));
+	bzero(&vm_pageout_queue_internal, sizeof(struct vm_pageout_queue));
 
 	vm_page_queue_init(&vm_pageout_queue_external.pgo_pending);
 	vm_pageout_queue_external.pgo_maxlaundry = VM_PAGE_LAUNDRY_MAX;
-	vm_pageout_queue_external.pgo_laundry = 0;
-	vm_pageout_queue_external.pgo_idle = FALSE;
-	vm_pageout_queue_external.pgo_busy = FALSE;
-	vm_pageout_queue_external.pgo_throttled = FALSE;
-	vm_pageout_queue_external.pgo_draining = FALSE;
-	vm_pageout_queue_external.pgo_lowpriority = FALSE;
-	vm_pageout_queue_external.pgo_tid = -1;
-	vm_pageout_queue_external.pgo_inited = FALSE;
 
 	vm_page_queue_init(&vm_pageout_queue_internal.pgo_pending);
-	vm_pageout_queue_internal.pgo_maxlaundry = 0;
-	vm_pageout_queue_internal.pgo_laundry = 0;
-	vm_pageout_queue_internal.pgo_idle = FALSE;
-	vm_pageout_queue_internal.pgo_busy = FALSE;
-	vm_pageout_queue_internal.pgo_throttled = FALSE;
-	vm_pageout_queue_internal.pgo_draining = FALSE;
-	vm_pageout_queue_internal.pgo_lowpriority = FALSE;
-	vm_pageout_queue_internal.pgo_tid = -1;
-	vm_pageout_queue_internal.pgo_inited = FALSE;
+
+#if DEVELOPMENT || DEBUG
+	bzero(&vm_pageout_queue_benchmark, sizeof(struct vm_pageout_queue));
+	vm_page_queue_init(&vm_pageout_queue_benchmark.pgo_pending);
+#endif /* DEVELOPMENT || DEBUG */
+
 
 	/* internal pageout thread started when default pager registered first time */
 	/* external pageout and garbage collection threads started here */
+	struct pgo_iothread_state *ethr = &pgo_iothread_external_state;
+	ethr->id = 0;
+	ethr->q = &vm_pageout_queue_external;
+	/* in external_state these cheads are never used, they are used only in internal_state for te compressor */
+	ethr->current_early_swapout_chead = NULL;
+	ethr->current_regular_swapout_chead = NULL;
+	ethr->current_late_swapout_chead = NULL;
+	ethr->scratch_buf = NULL;
+#if DEVELOPMENT || DEBUG
+	ethr->benchmark_q = NULL;
+#endif /* DEVELOPMENT || DEBUG */
+	sched_cond_init(&(ethr->pgo_wakeup));
 
-	result = kernel_thread_start_priority((thread_continue_t)vm_pageout_iothread_external, NULL,
-	    BASEPRI_VM,
-	    &vm_pageout_state.vm_pageout_external_iothread);
+	result = kernel_thread_start_priority((thread_continue_t)vm_pageout_iothread_external,
+	    (void *)ethr, BASEPRI_VM,
+	    &(ethr->pgo_iothread));
 	if (result != KERN_SUCCESS) {
-		panic("vm_pageout_iothread_external: create failed");
+		panic("vm_pageout: Unable to create external thread (%d)\n", result);
 	}
-	thread_set_thread_name(vm_pageout_state.vm_pageout_external_iothread, "VM_pageout_external_iothread");
-	thread_deallocate(vm_pageout_state.vm_pageout_external_iothread);
+	thread_set_thread_name(ethr->pgo_iothread, "VM_pageout_external_iothread");
 
-	result = kernel_thread_start_priority((thread_continue_t)vm_pageout_garbage_collect, NULL,
-	    BASEPRI_DEFAULT,
-	    &thread);
-	if (result != KERN_SUCCESS) {
-		panic("vm_pageout_garbage_collect: create failed");
-	}
-	thread_set_thread_name(thread, "VM_pageout_garbage_collect");
-	thread_deallocate(thread);
+	thread_mtx_lock(vm_pageout_gc_thread );
+	thread_start(vm_pageout_gc_thread );
+	thread_mtx_unlock(vm_pageout_gc_thread);
 
 #if VM_PRESSURE_EVENTS
 	result = kernel_thread_start_priority((thread_continue_t)vm_pressure_thread, NULL,
@@ -4893,49 +5324,8 @@ vm_pageout(void)
 	vm_object_reaper_init();
 
 
-	bzero(&vm_config, sizeof(vm_config));
-
-	switch (vm_compressor_mode) {
-	case VM_PAGER_DEFAULT:
-		printf("mapping deprecated VM_PAGER_DEFAULT to VM_PAGER_COMPRESSOR_WITH_SWAP\n");
-
-	case VM_PAGER_COMPRESSOR_WITH_SWAP:
-		vm_config.compressor_is_present = TRUE;
-		vm_config.swap_is_present = TRUE;
-		vm_config.compressor_is_active = TRUE;
-		vm_config.swap_is_active = TRUE;
-		break;
-
-	case VM_PAGER_COMPRESSOR_NO_SWAP:
-		vm_config.compressor_is_present = TRUE;
-		vm_config.swap_is_present = TRUE;
-		vm_config.compressor_is_active = TRUE;
-		break;
-
-	case VM_PAGER_FREEZER_DEFAULT:
-		printf("mapping deprecated VM_PAGER_FREEZER_DEFAULT to VM_PAGER_FREEZER_COMPRESSOR_NO_SWAP\n");
-
-	case VM_PAGER_FREEZER_COMPRESSOR_NO_SWAP:
-		vm_config.compressor_is_present = TRUE;
-		vm_config.swap_is_present = TRUE;
-		break;
-
-	case VM_PAGER_COMPRESSOR_NO_SWAP_PLUS_FREEZER_COMPRESSOR_WITH_SWAP:
-		vm_config.compressor_is_present = TRUE;
-		vm_config.swap_is_present = TRUE;
-		vm_config.compressor_is_active = TRUE;
-		vm_config.freezer_swap_is_active = TRUE;
-		break;
-
-	case VM_PAGER_NOT_CONFIGURED:
-		break;
-
-	default:
-		printf("unknown compressor mode - %x\n", vm_compressor_mode);
-		break;
-	}
 	if (VM_CONFIG_COMPRESSOR_IS_PRESENT) {
-		vm_compressor_pager_init();
+		vm_compressor_init();
 	}
 
 #if VM_PRESSURE_EVENTS
@@ -4962,7 +5352,9 @@ vm_pageout(void)
 	vm_object_tracking_init();
 #endif /* VM_OBJECT_TRACKING */
 
-	vm_tests();
+#if __arm64__
+//	vm_tests();
+#endif /* __arm64__ */
 
 	vm_pageout_continue();
 
@@ -4995,9 +5387,9 @@ vm_pageout(void)
 kern_return_t
 vm_pageout_internal_start(void)
 {
-	kern_return_t   result;
-	int             i;
+	kern_return_t   result = KERN_SUCCESS;
 	host_basic_info_data_t hinfo;
+	vm_offset_t     buf, bufsize;
 
 	assert(VM_CONFIG_COMPRESSOR_IS_PRESENT);
 
@@ -5007,26 +5399,24 @@ vm_pageout_internal_start(void)
 
 	assert(hinfo.max_cpus > 0);
 
-	lck_grp_init(&vm_pageout_lck_grp, "vm_pageout", LCK_GRP_ATTR_NULL);
-
-#if CONFIG_EMBEDDED
+#if !XNU_TARGET_OS_OSX
 	vm_pageout_state.vm_compressor_thread_count = 1;
-#else
+#else /* !XNU_TARGET_OS_OSX */
 	if (hinfo.max_cpus > 4) {
 		vm_pageout_state.vm_compressor_thread_count = 2;
 	} else {
 		vm_pageout_state.vm_compressor_thread_count = 1;
 	}
-#endif
-	PE_parse_boot_argn("vmcomp_threads", &vm_pageout_state.vm_compressor_thread_count,
-	    sizeof(vm_pageout_state.vm_compressor_thread_count));
-
+#endif /* !XNU_TARGET_OS_OSX */
 #if     __AMP__
-	PE_parse_boot_argn("vmcomp_ecluster", &vm_compressor_ebound, sizeof(vm_compressor_ebound));
 	if (vm_compressor_ebound) {
 		vm_pageout_state.vm_compressor_thread_count = 2;
 	}
 #endif
+	PE_parse_boot_argn("vmcomp_threads", &vm_pageout_state.vm_compressor_thread_count,
+	    sizeof(vm_pageout_state.vm_compressor_thread_count));
+
+	/* did we get from the bootargs an unreasonable number? */
 	if (vm_pageout_state.vm_compressor_thread_count >= hinfo.max_cpus) {
 		vm_pageout_state.vm_compressor_thread_count = hinfo.max_cpus - 1;
 	}
@@ -5036,23 +5426,43 @@ vm_pageout_internal_start(void)
 		vm_pageout_state.vm_compressor_thread_count = MAX_COMPRESSOR_THREAD_COUNT;
 	}
 
-	vm_pageout_queue_internal.pgo_maxlaundry = (vm_pageout_state.vm_compressor_thread_count * 4) * VM_PAGE_LAUNDRY_MAX;
+	vm_pageout_queue_internal.pgo_maxlaundry =
+	    (vm_pageout_state.vm_compressor_thread_count * 4) * VM_PAGE_LAUNDRY_MAX;
 
-	PE_parse_boot_argn("vmpgoi_maxlaundry", &vm_pageout_queue_internal.pgo_maxlaundry, sizeof(vm_pageout_queue_internal.pgo_maxlaundry));
+	PE_parse_boot_argn("vmpgoi_maxlaundry",
+	    &vm_pageout_queue_internal.pgo_maxlaundry,
+	    sizeof(vm_pageout_queue_internal.pgo_maxlaundry));
 
-	for (i = 0; i < vm_pageout_state.vm_compressor_thread_count; i++) {
-		ciq[i].id = i;
-		ciq[i].q = &vm_pageout_queue_internal;
-		ciq[i].current_chead = NULL;
-		ciq[i].scratch_buf = kalloc(COMPRESSOR_SCRATCH_BUF_SIZE);
+#if DEVELOPMENT || DEBUG
+	// Note: this will be modified at enqueue-time such that the benchmark queue is never throttled
+	vm_pageout_queue_benchmark.pgo_maxlaundry = vm_pageout_queue_internal.pgo_maxlaundry;
+#endif /* DEVELOPMENT || DEBUG */
 
-		result = kernel_thread_start_priority((thread_continue_t)vm_pageout_iothread_internal, (void *)&ciq[i],
-		    BASEPRI_VM, &vm_pageout_state.vm_pageout_internal_iothread);
+	bufsize = COMPRESSOR_SCRATCH_BUF_SIZE;
 
-		if (result == KERN_SUCCESS) {
-			thread_deallocate(vm_pageout_state.vm_pageout_internal_iothread);
-		} else {
-			break;
+	kmem_alloc(kernel_map, &buf,
+	    bufsize * vm_pageout_state.vm_compressor_thread_count,
+	    KMA_DATA | KMA_NOFAIL | KMA_KOBJECT | KMA_PERMANENT,
+	    VM_KERN_MEMORY_COMPRESSOR);
+
+	for (int i = 0; i < vm_pageout_state.vm_compressor_thread_count; i++) {
+		struct pgo_iothread_state *iq = &pgo_iothread_internal_state[i];
+		iq->id = i;
+		iq->q = &vm_pageout_queue_internal;
+		iq->current_early_swapout_chead = NULL;
+		iq->current_regular_swapout_chead = NULL;
+		iq->current_late_swapout_chead = NULL;
+		iq->scratch_buf = (char *)(buf + i * bufsize);
+#if DEVELOPMENT || DEBUG
+		iq->benchmark_q = &vm_pageout_queue_benchmark;
+#endif /* DEVELOPMENT || DEBUG */
+		sched_cond_init(&(iq->pgo_wakeup));
+		result = kernel_thread_start_priority((thread_continue_t)vm_pageout_iothread_internal,
+		    (void *)iq, BASEPRI_VM,
+		    &(iq->pgo_iothread));
+
+		if (result != KERN_SUCCESS) {
+			panic("vm_pageout: Unable to create compressor thread no. %d (%d)\n", i, result);
 		}
 	}
 	return result;
@@ -5106,53 +5516,45 @@ int     upl_debug_enabled = 0;
 static upl_t
 upl_create(int type, int flags, upl_size_t size)
 {
-	upl_t   upl;
-	vm_size_t       page_field_size = 0;
-	int     upl_flags = 0;
-	vm_size_t       upl_size  = sizeof(struct upl);
+	uint32_t pages = (uint32_t)atop(round_page_32(size));
+	upl_t    upl;
 
-	size = round_page_32(size);
+	assert(page_aligned(size));
+
+	/*
+	 * FIXME: this code assumes the allocation always succeeds,
+	 *        however `pages` can be up to MAX_UPL_SIZE.
+	 *
+	 *        The allocation size is above 32k (resp. 128k)
+	 *        on 16k pages (resp. 4k), which kalloc might fail
+	 *        to allocate.
+	 */
+	upl = kalloc_type(struct upl, struct upl_page_info,
+	    (type & UPL_CREATE_INTERNAL) ? pages : 0, Z_WAITOK | Z_ZERO);
+	if (type & UPL_CREATE_INTERNAL) {
+		flags |= UPL_INTERNAL;
+	}
 
 	if (type & UPL_CREATE_LITE) {
-		page_field_size = (atop(size) + 7) >> 3;
-		page_field_size = (page_field_size + 3) & 0xFFFFFFFC;
-
-		upl_flags |= UPL_LITE;
-	}
-	if (type & UPL_CREATE_INTERNAL) {
-		upl_size += sizeof(struct upl_page_info) * atop(size);
-
-		upl_flags |= UPL_INTERNAL;
-	}
-	upl = (upl_t)kalloc(upl_size + page_field_size);
-
-	if (page_field_size) {
-		bzero((char *)upl + upl_size, page_field_size);
+		flags |= UPL_LITE;
+		if (pages) {
+			upl->lite_list = bitmap_alloc(pages);
+		}
 	}
 
-	upl->flags = upl_flags | flags;
-	upl->kaddr = (vm_offset_t)0;
-	upl->size = 0;
-	upl->map_object = NULL;
+	upl->flags = flags;
 	upl->ref_count = 1;
-	upl->ext_ref_count = 0;
-	upl->highest_page = 0;
 	upl_lock_init(upl);
-	upl->vector_upl = NULL;
-	upl->associated_upl = NULL;
-	upl->upl_iodone = NULL;
 #if CONFIG_IOSCHED
 	if (type & UPL_CREATE_IO_TRACKING) {
 		upl->upl_priority = proc_get_effective_thread_policy(current_thread(), TASK_POLICY_IO);
 	}
 
-	upl->upl_reprio_info = 0;
-	upl->decmp_io_upl = 0;
 	if ((type & UPL_CREATE_INTERNAL) && (type & UPL_CREATE_EXPEDITE_SUP)) {
 		/* Only support expedite on internal UPLs */
 		thread_t        curthread = current_thread();
-		upl->upl_reprio_info = (uint64_t *)kalloc(sizeof(uint64_t) * atop(size));
-		bzero(upl->upl_reprio_info, (sizeof(uint64_t) * atop(size)));
+		upl->upl_reprio_info = kalloc_data(sizeof(uint64_t) * pages,
+		    Z_WAITOK | Z_ZERO);
 		upl->flags |= UPL_EXPEDITE_SUPPORTED;
 		if (curthread->decmp_upl != NULL) {
 			upl_set_decmp_info(upl, curthread->decmp_upl);
@@ -5162,21 +5564,12 @@ upl_create(int type, int flags, upl_size_t size)
 #if CONFIG_IOSCHED || UPL_DEBUG
 	if ((type & UPL_CREATE_IO_TRACKING) || upl_debug_enabled) {
 		upl->upl_creator = current_thread();
-		upl->uplq.next = 0;
-		upl->uplq.prev = 0;
 		upl->flags |= UPL_TRACKED_BY_OBJECT;
 	}
 #endif
 
 #if UPL_DEBUG
-	upl->ubc_alias1 = 0;
-	upl->ubc_alias2 = 0;
-
-	upl->upl_state = 0;
-	upl->upl_commit_index = 0;
-	bzero(&upl->upl_commit_records[0], sizeof(upl->upl_commit_records));
-
-	(void) OSBacktrace(&upl->upl_create_retaddr[0], UPL_DEBUG_STACK_FRAMES);
+	upl->upl_create_btref = btref_get(__builtin_frame_address(0), 0);
 #endif /* UPL_DEBUG */
 
 	return upl;
@@ -5185,8 +5578,9 @@ upl_create(int type, int flags, upl_size_t size)
 static void
 upl_destroy(upl_t upl)
 {
-	int     page_field_size;  /* bit field in word size buf */
-	int     size;
+	uint32_t pages;
+
+//	DEBUG4K_UPL("upl %p (u_offset 0x%llx u_size 0x%llx) object %p\n", upl, (uint64_t)upl->u_offset, (uint64_t)upl->u_size, upl->map_object);
 
 	if (upl->ext_ref_count) {
 		panic("upl(%p) ext_ref_count", upl);
@@ -5205,7 +5599,8 @@ upl_destroy(upl_t upl)
 #endif /* CONFIG_IOSCHED */
 
 #if CONFIG_IOSCHED || UPL_DEBUG
-	if ((upl->flags & UPL_TRACKED_BY_OBJECT) && !(upl->flags & UPL_VECTOR)) {
+	if (((upl->flags & UPL_TRACKED_BY_OBJECT) || upl_debug_enabled) &&
+	    !(upl->flags & UPL_VECTOR)) {
 		vm_object_t     object;
 
 		if (upl->flags & UPL_SHADOWED) {
@@ -5230,33 +5625,31 @@ upl_destroy(upl_t upl)
 	}
 
 	if (upl->flags & UPL_DEVICE_MEMORY) {
-		size = PAGE_SIZE;
+		pages = 1;
 	} else {
-		size = upl->size;
+		pages = (uint32_t)atop(upl_adjusted_size(upl, PAGE_MASK));
 	}
-	page_field_size = 0;
 
-	if (upl->flags & UPL_LITE) {
-		page_field_size = ((size / PAGE_SIZE) + 7) >> 3;
-		page_field_size = (page_field_size + 3) & 0xFFFFFFFC;
-	}
 	upl_lock_destroy(upl);
-	upl->vector_upl = (vector_upl_t) 0xfeedbeef;
 
 #if CONFIG_IOSCHED
 	if (upl->flags & UPL_EXPEDITE_SUPPORTED) {
-		kfree(upl->upl_reprio_info, sizeof(uint64_t) * (size / PAGE_SIZE));
+		kfree_data(upl->upl_reprio_info, sizeof(uint64_t) * pages);
 	}
 #endif
 
-	if (upl->flags & UPL_INTERNAL) {
-		kfree(upl,
-		    sizeof(struct upl) +
-		    (sizeof(struct upl_page_info) * (size / PAGE_SIZE))
-		    + page_field_size);
-	} else {
-		kfree(upl, sizeof(struct upl) + page_field_size);
+#if UPL_DEBUG
+	for (int i = 0; i < upl->upl_commit_index; i++) {
+		btref_put(upl->upl_commit_records[i].c_btref);
 	}
+	btref_put(upl->upl_create_btref);
+#endif /* UPL_DEBUG */
+
+	if ((upl->flags & UPL_LITE) && pages) {
+		bitmap_free(upl->lite_list, pages);
+	}
+	kfree_type(struct upl, struct upl_page_info,
+	    (upl->flags & UPL_INTERNAL) ? pages : 0, upl);
 }
 
 void
@@ -5316,6 +5709,52 @@ must_throttle_writes()
 	return FALSE;
 }
 
+int vm_page_delayed_work_ctx_needed = 0;
+KALLOC_TYPE_DEFINE(dw_ctx_zone, struct vm_page_delayed_work_ctx, KT_PRIV_ACCT);
+
+__startup_func
+static void
+vm_page_delayed_work_init_ctx(void)
+{
+	uint16_t min_delayed_work_ctx_allocated = 16;
+
+	/*
+	 * try really hard to always keep NCPU elements around in the zone
+	 * in order for the UPL code to almost always get an element.
+	 */
+	if (min_delayed_work_ctx_allocated < zpercpu_count()) {
+		min_delayed_work_ctx_allocated = (uint16_t)zpercpu_count();
+	}
+
+	zone_raise_reserve(dw_ctx_zone, min_delayed_work_ctx_allocated);
+}
+STARTUP(ZALLOC, STARTUP_RANK_LAST, vm_page_delayed_work_init_ctx);
+
+struct vm_page_delayed_work*
+vm_page_delayed_work_get_ctx(void)
+{
+	struct vm_page_delayed_work_ctx * dw_ctx = NULL;
+
+	dw_ctx = zalloc_flags(dw_ctx_zone, Z_ZERO | Z_NOWAIT);
+
+	if (__probable(dw_ctx)) {
+		dw_ctx->delayed_owner = current_thread();
+	} else {
+		vm_page_delayed_work_ctx_needed++;
+	}
+	return dw_ctx ? dw_ctx->dwp : NULL;
+}
+
+void
+vm_page_delayed_work_finish_ctx(struct vm_page_delayed_work* dwp)
+{
+	struct  vm_page_delayed_work_ctx *ldw_ctx;
+
+	ldw_ctx = (struct vm_page_delayed_work_ctx *)dwp;
+	ldw_ctx->delayed_owner = NULL;
+
+	zfree(dw_ctx_zone, ldw_ctx);
+}
 
 /*
  *	Routine:	vm_object_upl_request
@@ -5382,10 +5821,11 @@ vm_object_upl_request(
 	unsigned int            entry;
 	vm_page_t               alias_page = NULL;
 	int                     refmod_state = 0;
-	wpl_array_t             lite_list = NULL;
 	vm_object_t             last_copy_object;
-	struct  vm_page_delayed_work    dw_array[DEFAULT_DELAYED_WORK_LIMIT];
-	struct  vm_page_delayed_work    *dwp;
+	uint32_t                last_copy_version;
+	struct  vm_page_delayed_work    dw_array;
+	struct  vm_page_delayed_work    *dwp, *dwp_start;
+	bool                    dwp_finish_ctx = TRUE;
 	int                     dw_count;
 	int                     dw_limit;
 	int                     io_tracking_flag = 0;
@@ -5398,6 +5838,8 @@ vm_object_upl_request(
 	task_t                  task = current_task();
 #endif /* DEVELOPMENT || DEBUG */
 
+	dwp_start = dwp = NULL;
+
 	if (cntrl_flags & ~UPL_VALID_FLAGS) {
 		/*
 		 * For forward compatibility's sake,
@@ -5406,13 +5848,28 @@ vm_object_upl_request(
 		return KERN_INVALID_VALUE;
 	}
 	if ((!object->internal) && (object->paging_offset != 0)) {
-		panic("vm_object_upl_request: external object with non-zero paging offset\n");
+		panic("vm_object_upl_request: external object with non-zero paging offset");
 	}
 	if (object->phys_contiguous) {
-		panic("vm_object_upl_request: contiguous object specified\n");
+		panic("vm_object_upl_request: contiguous object specified");
 	}
 
-	VM_DEBUG_CONSTANT_EVENT(vm_object_upl_request, VM_UPL_REQUEST, DBG_FUNC_START, size, cntrl_flags, 0, 0);
+	assertf(page_aligned(offset) && page_aligned(size),
+	    "offset 0x%llx size 0x%x",
+	    offset, size);
+
+	VM_DEBUG_CONSTANT_EVENT(vm_object_upl_request, DBG_VM_UPL_REQUEST, DBG_FUNC_START, size, cntrl_flags, 0, 0);
+
+	dw_count = 0;
+	dw_limit = DELAYED_WORK_LIMIT(DEFAULT_DELAYED_WORK_LIMIT);
+	dwp_start = vm_page_delayed_work_get_ctx();
+	if (dwp_start == NULL) {
+		dwp_start = &dw_array;
+		dw_limit = 1;
+		dwp_finish_ctx = FALSE;
+	}
+
+	dwp = dwp_start;
 
 	if (size > MAX_UPL_SIZE_BYTES) {
 		size = MAX_UPL_SIZE_BYTES;
@@ -5436,31 +5893,13 @@ vm_object_upl_request(
 	if (cntrl_flags & UPL_SET_INTERNAL) {
 		if (cntrl_flags & UPL_SET_LITE) {
 			upl = upl_create(UPL_CREATE_INTERNAL | UPL_CREATE_LITE | io_tracking_flag, 0, size);
-
-			user_page_list = (upl_page_info_t *) (((uintptr_t)upl) + sizeof(struct upl));
-			lite_list = (wpl_array_t)
-			    (((uintptr_t)user_page_list) +
-			    ((size / PAGE_SIZE) * sizeof(upl_page_info_t)));
-			if (size == 0) {
-				user_page_list = NULL;
-				lite_list = NULL;
-			}
 		} else {
 			upl = upl_create(UPL_CREATE_INTERNAL | io_tracking_flag, 0, size);
-
-			user_page_list = (upl_page_info_t *) (((uintptr_t)upl) + sizeof(struct upl));
-			if (size == 0) {
-				user_page_list = NULL;
-			}
 		}
+		user_page_list = size ? upl->page_list : NULL;
 	} else {
 		if (cntrl_flags & UPL_SET_LITE) {
 			upl = upl_create(UPL_CREATE_EXTERNAL | UPL_CREATE_LITE | io_tracking_flag, 0, size);
-
-			lite_list = (wpl_array_t) (((uintptr_t)upl) + sizeof(struct upl));
-			if (size == 0) {
-				lite_list = NULL;
-			}
 		} else {
 			upl = upl_create(UPL_CREATE_EXTERNAL | io_tracking_flag, 0, size);
 		}
@@ -5475,18 +5914,23 @@ vm_object_upl_request(
 		upl->map_object = object;
 	} else {
 		upl->map_object = vm_object_allocate(size);
+		vm_object_lock(upl->map_object);
 		/*
 		 * No neeed to lock the new object: nobody else knows
 		 * about it yet, so it's all ours so far.
 		 */
 		upl->map_object->shadow = object;
-		upl->map_object->pageout = TRUE;
-		upl->map_object->can_persist = FALSE;
+		VM_OBJECT_SET_PAGEOUT(upl->map_object, TRUE);
+		VM_OBJECT_SET_CAN_PERSIST(upl->map_object, FALSE);
 		upl->map_object->copy_strategy = MEMORY_OBJECT_COPY_NONE;
 		upl->map_object->vo_shadow_offset = offset;
 		upl->map_object->wimg_bits = object->wimg_bits;
+		assertf(page_aligned(upl->map_object->vo_shadow_offset),
+		    "object %p shadow_offset 0x%llx",
+		    upl->map_object, upl->map_object->vo_shadow_offset);
+		vm_object_unlock(upl->map_object);
 
-		VM_PAGE_GRAB_FICTITIOUS(alias_page);
+		alias_page = vm_page_grab_fictitious(TRUE);
 
 		upl->flags |= UPL_SHADOWED;
 	}
@@ -5507,8 +5951,8 @@ vm_object_upl_request(
 	/*
 	 * we can lock in the paging_offset once paging_in_progress is set
 	 */
-	upl->size = size;
-	upl->offset = offset + object->paging_offset;
+	upl->u_size = size;
+	upl->u_offset = offset + object->paging_offset;
 
 #if CONFIG_IOSCHED || UPL_DEBUG
 	if (object->io_tracking || upl_debug_enabled) {
@@ -5516,7 +5960,7 @@ vm_object_upl_request(
 		queue_enter(&object->uplq, upl, upl_t, uplq);
 	}
 #endif
-	if ((cntrl_flags & UPL_WILL_MODIFY) && object->copy != VM_OBJECT_NULL) {
+	if ((cntrl_flags & UPL_WILL_MODIFY) && object->vo_copy != VM_OBJECT_NULL) {
 		/*
 		 * Honor copy-on-write obligations
 		 *
@@ -5541,16 +5985,13 @@ vm_object_upl_request(
 	/*
 	 * remember which copy object we synchronized with
 	 */
-	last_copy_object = object->copy;
+	last_copy_object = object->vo_copy;
+	last_copy_version = object->vo_copy_version;
 	entry = 0;
 
 	xfer_size = size;
 	dst_offset = offset;
 	size_in_pages = size / PAGE_SIZE;
-
-	dwp = &dw_array[0];
-	dw_count = 0;
-	dw_limit = DELAYED_WORK_LIMIT(DEFAULT_DELAYED_WORK_LIMIT);
 
 	if (vm_page_free_count > (vm_page_free_target + size_in_pages) ||
 	    object->resident_page_count < ((MAX_UPL_SIZE_BYTES * 2) >> PAGE_SHIFT)) {
@@ -5560,11 +6001,11 @@ vm_object_upl_request(
 	if ((cntrl_flags & UPL_WILL_MODIFY) && must_throttle_writes() == TRUE) {
 		boolean_t       isSSD = FALSE;
 
-#if CONFIG_EMBEDDED
+#if !XNU_TARGET_OS_OSX
 		isSSD = TRUE;
-#else
+#else /* !XNU_TARGET_OS_OSX */
 		vnode_pager_get_isSSD(object->pager, &isSSD);
-#endif
+#endif /* !XNU_TARGET_OS_OSX */
 		vm_object_unlock(object);
 
 		OSAddAtomic(size_in_pages, &vm_upl_wait_for_pages);
@@ -5584,7 +6025,7 @@ vm_object_upl_request(
 
 		if ((alias_page == NULL) && !(cntrl_flags & UPL_SET_LITE)) {
 			vm_object_unlock(object);
-			VM_PAGE_GRAB_FICTITIOUS(alias_page);
+			alias_page = vm_page_grab_fictitious(TRUE);
 			vm_object_lock(object);
 		}
 		if (cntrl_flags & UPL_COPYOUT_FROM) {
@@ -5593,7 +6034,7 @@ vm_object_upl_request(
 			if (((dst_page = vm_page_lookup(object, dst_offset)) == VM_PAGE_NULL) ||
 			    dst_page->vmp_fictitious ||
 			    dst_page->vmp_absent ||
-			    dst_page->vmp_error ||
+			    VMP_ERROR_GET(dst_page) ||
 			    dst_page->vmp_cleaning ||
 			    (VM_PAGE_WIRED(dst_page))) {
 				if (user_page_list) {
@@ -5694,7 +6135,7 @@ check_busy:
 				 * someone else is playing with the
 				 * page.  We will have to wait.
 				 */
-				PAGE_SLEEP(object, dst_page, THREAD_UNINT);
+				vm_page_sleep(object, dst_page, THREAD_UNINT, LCK_SLEEP_EXCLUSIVE);
 
 				continue;
 			}
@@ -5727,7 +6168,7 @@ check_busy:
 
 				pg_num = (unsigned int) ((dst_offset - offset) / PAGE_SIZE);
 				assert(pg_num == (dst_offset - offset) / PAGE_SIZE);
-				lite_list[pg_num >> 5] |= 1U << (pg_num & 31);
+				bitmap_set(upl->lite_list, pg_num);
 
 				if (hw_dirty) {
 					if (pmap_flushes_delayed == FALSE) {
@@ -5775,7 +6216,9 @@ check_busy:
 				}
 			}
 		} else {
-			if ((cntrl_flags & UPL_WILL_MODIFY) && object->copy != last_copy_object) {
+			if ((cntrl_flags & UPL_WILL_MODIFY) &&
+			    (object->vo_copy != last_copy_object ||
+			    object->vo_copy_version != last_copy_version)) {
 				/*
 				 * Honor copy-on-write obligations
 				 *
@@ -5797,7 +6240,7 @@ check_busy:
 				 * atomicity.  We just don't want new mappings
 				 * to see both the *before* and *after* pages.
 				 */
-				if (object->copy != VM_OBJECT_NULL) {
+				if (object->vo_copy != VM_OBJECT_NULL) {
 					vm_object_update(
 						object,
 						dst_offset,/* current offset */
@@ -5814,7 +6257,8 @@ check_busy:
 				/*
 				 * remember the copy object we synced with
 				 */
-				last_copy_object = object->copy;
+				last_copy_object = object->vo_copy;
+				last_copy_version = object->vo_copy_version;
 			}
 			dst_page = vm_page_lookup(object, dst_offset);
 
@@ -5838,7 +6282,7 @@ check_busy:
 					 * someone else is playing with the
 					 * page.  We will have to wait.
 					 */
-					PAGE_SLEEP(object, dst_page, THREAD_UNINT);
+					vm_page_sleep(object, dst_page, THREAD_UNINT, LCK_SLEEP_EXCLUSIVE);
 
 					continue;
 				}
@@ -5914,12 +6358,12 @@ check_busy:
 
 					OSAddAtomic(size_in_pages, &vm_upl_wait_for_pages);
 
-					VM_DEBUG_EVENT(vm_upl_page_wait, VM_UPL_PAGE_WAIT, DBG_FUNC_START, vm_upl_wait_for_pages, 0, 0, 0);
+					VM_DEBUG_EVENT(vm_upl_page_wait, DBG_VM_UPL_PAGE_WAIT, DBG_FUNC_START, vm_upl_wait_for_pages, 0, 0, 0);
 
 					VM_PAGE_WAIT();
 					OSAddAtomic(-size_in_pages, &vm_upl_wait_for_pages);
 
-					VM_DEBUG_EVENT(vm_upl_page_wait, VM_UPL_PAGE_WAIT, DBG_FUNC_END, vm_upl_wait_for_pages, 0, 0, 0);
+					VM_DEBUG_EVENT(vm_upl_page_wait, DBG_VM_UPL_PAGE_WAIT, DBG_FUNC_END, vm_upl_wait_for_pages, 0, 0, 0);
 
 					vm_object_lock(object);
 
@@ -5942,7 +6386,7 @@ check_busy:
 					dst_page->vmp_clustered = TRUE;
 
 					if (!(cntrl_flags & UPL_FILE_IO)) {
-						VM_STAT_INCR(pageins);
+						counter_inc(&vm_statistics_pageins);
 					}
 				}
 			}
@@ -5972,7 +6416,7 @@ check_busy:
 
 				pg_num = (unsigned int) ((dst_offset - offset) / PAGE_SIZE);
 				assert(pg_num == (dst_offset - offset) / PAGE_SIZE);
-				lite_list[pg_num >> 5] |= 1U << (pg_num & 31);
+				bitmap_set(upl->lite_list, pg_num);
 
 				if (hw_dirty) {
 					pmap_clear_modify(phys_page);
@@ -6008,8 +6452,8 @@ check_busy:
 				 * all pmaps so processes have to fault it back in and
 				 * deal with the tainted bit.
 				 */
-				if (object->code_signed && dst_page->vmp_cs_tainted == FALSE) {
-					dst_page->vmp_cs_tainted = TRUE;
+				if (object->code_signed && dst_page->vmp_cs_tainted != VMP_CS_ALL_TRUE) {
+					dst_page->vmp_cs_tainted = VMP_CS_ALL_TRUE;
 					vm_page_upl_tainted++;
 					if (dst_page->vmp_pmapped) {
 						refmod_state = pmap_disconnect(VM_PAGE_GET_PHYS_PAGE(dst_page));
@@ -6113,15 +6557,15 @@ check_busy:
 try_next_page:
 		if (dwp->dw_mask) {
 			if (dwp->dw_mask & DW_vm_page_activate) {
-				VM_STAT_INCR(reactivations);
+				counter_inc(&vm_statistics_reactivations);
 			}
 
 			VM_PAGE_ADD_DELAYED_WORK(dwp, dst_page, dw_count);
 
 			if (dw_count >= dw_limit) {
-				vm_page_do_delayed_work(object, tag, &dw_array[0], dw_count);
+				vm_page_do_delayed_work(object, tag, dwp_start, dw_count);
 
-				dwp = &dw_array[0];
+				dwp = dwp_start;
 				dw_count = 0;
 			}
 		}
@@ -6130,7 +6574,9 @@ try_next_page:
 		xfer_size -= PAGE_SIZE;
 	}
 	if (dw_count) {
-		vm_page_do_delayed_work(object, tag, &dw_array[0], dw_count);
+		vm_page_do_delayed_work(object, tag, dwp_start, dw_count);
+		dwp = dwp_start;
+		dw_count = 0;
 	}
 
 	if (alias_page != NULL) {
@@ -6152,12 +6598,17 @@ try_next_page:
 #endif
 	vm_object_unlock(object);
 
-	VM_DEBUG_CONSTANT_EVENT(vm_object_upl_request, VM_UPL_REQUEST, DBG_FUNC_END, page_grab_count, 0, 0, 0);
+	VM_DEBUG_CONSTANT_EVENT(vm_object_upl_request, DBG_VM_UPL_REQUEST, DBG_FUNC_END, page_grab_count, 0, 0, 0);
 #if DEVELOPMENT || DEBUG
 	if (task != NULL) {
 		ledger_credit(task->ledger, task_ledgers.pages_grabbed_upl, page_grab_count);
 	}
 #endif /* DEVELOPMENT || DEBUG */
+
+	if (dwp_start && dwp_finish_ctx) {
+		vm_page_delayed_work_finish_ctx(dwp_start);
+		dwp_start = dwp = NULL;
+	}
 
 	return KERN_SUCCESS;
 }
@@ -6226,11 +6677,9 @@ vm_object_super_upl_request(
 	return vm_object_upl_request(object, offset, size, upl, user_page_list, page_list_count, cntrl_flags, tag);
 }
 
-#if CONFIG_EMBEDDED
 int cs_executable_create_upl = 0;
 extern int proc_selfpid(void);
 extern char *proc_name_address(void *p);
-#endif /* CONFIG_EMBEDDED */
 
 kern_return_t
 vm_map_create_upl(
@@ -6251,8 +6700,19 @@ vm_map_create_upl(
 	vm_map_offset_t         local_offset;
 	vm_map_offset_t         local_start;
 	kern_return_t           ret;
+	vm_map_address_t        original_offset;
+	vm_map_size_t           original_size, adjusted_size;
+	vm_map_offset_t         local_entry_start;
+	vm_object_offset_t      local_entry_offset;
+	vm_object_offset_t      offset_in_mapped_page;
+	boolean_t               release_map = FALSE;
 
-	assert(page_aligned(offset));
+
+start_with_map:
+
+	original_offset = offset;
+	original_size = *upl_size;
+	adjusted_size = original_size;
 
 	caller_flags = *flags;
 
@@ -6261,13 +6721,15 @@ vm_map_create_upl(
 		 * For forward compatibility's sake,
 		 * reject any unknown flag.
 		 */
-		return KERN_INVALID_VALUE;
+		ret = KERN_INVALID_VALUE;
+		goto done;
 	}
 	force_data_sync = (caller_flags & UPL_FORCE_DATA_SYNC);
 	sync_cow_data = !(caller_flags & UPL_COPYOUT_FROM);
 
 	if (upl == NULL) {
-		return KERN_INVALID_ARGUMENT;
+		ret = KERN_INVALID_ARGUMENT;
+		goto done;
 	}
 
 REDISCOVER_ENTRY:
@@ -6275,12 +6737,22 @@ REDISCOVER_ENTRY:
 
 	if (!vm_map_lookup_entry(map, offset, &entry)) {
 		vm_map_unlock_read(map);
-		return KERN_FAILURE;
+		ret = KERN_FAILURE;
+		goto done;
 	}
 
-	if ((entry->vme_end - offset) < *upl_size) {
-		*upl_size = (upl_size_t) (entry->vme_end - offset);
-		assert(*upl_size == entry->vme_end - offset);
+	local_entry_start = entry->vme_start;
+	local_entry_offset = VME_OFFSET(entry);
+
+	if (VM_MAP_PAGE_SHIFT(map) < PAGE_SHIFT) {
+		DEBUG4K_UPL("map %p (%d) offset 0x%llx size 0x%x flags 0x%llx\n", map, VM_MAP_PAGE_SHIFT(map), (uint64_t)offset, *upl_size, *flags);
+	}
+
+	if (entry->vme_end - original_offset < adjusted_size) {
+		adjusted_size = entry->vme_end - original_offset;
+		assert(adjusted_size > 0);
+		*upl_size = (upl_size_t) adjusted_size;
+		assert(*upl_size == adjusted_size);
 	}
 
 	if (caller_flags & UPL_QUERY_OBJECT_TYPE) {
@@ -6297,42 +6769,59 @@ REDISCOVER_ENTRY:
 			}
 		}
 		vm_map_unlock_read(map);
-		return KERN_SUCCESS;
+		ret = KERN_SUCCESS;
+		goto done;
 	}
 
-	if (VME_OBJECT(entry) == VM_OBJECT_NULL ||
-	    !VME_OBJECT(entry)->phys_contiguous) {
-		if (*upl_size > MAX_UPL_SIZE_BYTES) {
-			*upl_size = MAX_UPL_SIZE_BYTES;
+	offset_in_mapped_page = 0;
+	if (VM_MAP_PAGE_SIZE(map) < PAGE_SIZE) {
+		offset = vm_map_trunc_page(original_offset, VM_MAP_PAGE_MASK(map));
+		*upl_size = (upl_size_t)
+		    (vm_map_round_page(original_offset + adjusted_size,
+		    VM_MAP_PAGE_MASK(map))
+		    - offset);
+
+		offset_in_mapped_page = original_offset - offset;
+		assert(offset_in_mapped_page < VM_MAP_PAGE_SIZE(map));
+
+		DEBUG4K_UPL("map %p (%d) offset 0x%llx size 0x%llx flags 0x%llx -> offset 0x%llx adjusted_size 0x%llx *upl_size 0x%x offset_in_mapped_page 0x%llx\n", map, VM_MAP_PAGE_SHIFT(map), (uint64_t)original_offset, (uint64_t)original_size, *flags, (uint64_t)offset, (uint64_t)adjusted_size, *upl_size, offset_in_mapped_page);
+	}
+
+	if (!entry->is_sub_map) {
+		if (VME_OBJECT(entry) == VM_OBJECT_NULL ||
+		    !VME_OBJECT(entry)->phys_contiguous) {
+			if (*upl_size > MAX_UPL_SIZE_BYTES) {
+				*upl_size = MAX_UPL_SIZE_BYTES;
+			}
+		}
+
+		/*
+		 *      Create an object if necessary.
+		 */
+		if (VME_OBJECT(entry) == VM_OBJECT_NULL) {
+			if (vm_map_lock_read_to_write(map)) {
+				goto REDISCOVER_ENTRY;
+			}
+
+			VME_OBJECT_SET(entry,
+			    vm_object_allocate((vm_size_t)
+			    vm_object_round_page((entry->vme_end - entry->vme_start))),
+			    false, 0);
+			VME_OFFSET_SET(entry, 0);
+			assert(entry->use_pmap);
+
+			vm_map_lock_write_to_read(map);
+		}
+
+		if (!(caller_flags & UPL_COPYOUT_FROM) &&
+		    !(entry->protection & VM_PROT_WRITE)) {
+			vm_map_unlock_read(map);
+			ret = KERN_PROTECTION_FAILURE;
+			goto done;
 		}
 	}
 
-	/*
-	 *      Create an object if necessary.
-	 */
-	if (VME_OBJECT(entry) == VM_OBJECT_NULL) {
-		if (vm_map_lock_read_to_write(map)) {
-			goto REDISCOVER_ENTRY;
-		}
-
-		VME_OBJECT_SET(entry,
-		    vm_object_allocate((vm_size_t)
-		    (entry->vme_end -
-		    entry->vme_start)));
-		VME_OFFSET_SET(entry, 0);
-		assert(entry->use_pmap);
-
-		vm_map_lock_write_to_read(map);
-	}
-
-	if (!(caller_flags & UPL_COPYOUT_FROM) &&
-	    !entry->is_sub_map &&
-	    !(entry->protection & VM_PROT_WRITE)) {
-		vm_map_unlock_read(map);
-		return KERN_PROTECTION_FAILURE;
-	}
-
-#if CONFIG_EMBEDDED
+#if !XNU_TARGET_OS_OSX
 	if (map->pmap != kernel_pmap &&
 	    (caller_flags & UPL_COPYOUT_FROM) &&
 	    (entry->protection & VM_PROT_EXECUTE) &&
@@ -6354,16 +6843,14 @@ REDISCOVER_ENTRY:
 		 */
 
 		vm_map_unlock_read(map);
+		entry = VM_MAP_ENTRY_NULL;
 		/* allocate kernel buffer */
 		ksize = round_page(*upl_size);
 		kaddr = 0;
-		ret = kmem_alloc_pageable(kernel_map,
-		    &kaddr,
-		    ksize,
-		    tag);
+		ret = kmem_alloc(kernel_map, &kaddr, ksize,
+		    KMA_PAGEABLE | KMA_DATA, tag);
 		if (ret == KERN_SUCCESS) {
 			/* copyin the user data */
-			assert(page_aligned(offset));
 			ret = copyinmap(map, offset, (void *)kaddr, *upl_size);
 		}
 		if (ret == KERN_SUCCESS) {
@@ -6374,8 +6861,17 @@ REDISCOVER_ENTRY:
 				    ksize - *upl_size);
 			}
 			/* create the UPL from the kernel buffer */
-			ret = vm_map_create_upl(kernel_map, kaddr, upl_size,
-			    upl, page_list, count, flags, tag);
+			vm_object_offset_t      offset_in_object;
+			vm_object_offset_t      offset_in_object_page;
+
+			offset_in_object = offset - local_entry_start + local_entry_offset;
+			offset_in_object_page = offset_in_object - vm_object_trunc_page(offset_in_object);
+			assert(offset_in_object_page < PAGE_SIZE);
+			assert(offset_in_object_page + offset_in_mapped_page < PAGE_SIZE);
+			*upl_size -= offset_in_object_page + offset_in_mapped_page;
+			ret = vm_map_create_upl(kernel_map,
+			    (vm_map_address_t)(kaddr + offset_in_object_page + offset_in_mapped_page),
+			    upl_size, upl, page_list, count, flags, tag);
 		}
 		if (kaddr != 0) {
 			/* free the kernel buffer */
@@ -6390,12 +6886,14 @@ REDISCOVER_ENTRY:
 		    upl_size_t, *upl_size,
 		    kern_return_t, ret);
 #endif /* DEVELOPMENT || DEBUG */
-		return ret;
+		goto done;
 	}
-#endif /* CONFIG_EMBEDDED */
+#endif /* !XNU_TARGET_OS_OSX */
 
-	local_object = VME_OBJECT(entry);
-	assert(local_object != VM_OBJECT_NULL);
+	if (!entry->is_sub_map) {
+		local_object = VME_OBJECT(entry);
+		assert(local_object != VM_OBJECT_NULL);
+	}
 
 	if (!entry->is_sub_map &&
 	    !entry->needs_copy &&
@@ -6408,7 +6906,7 @@ REDISCOVER_ENTRY:
 	    ( /* case 2 */
 		    local_object->internal &&
 		    (local_object->copy_strategy == MEMORY_OBJECT_COPY_SYMMETRIC) &&
-		    local_object->ref_count > 1))) {
+		    os_ref_get_count_raw(&local_object->ref_count) > 1))) {
 		vm_prot_t       prot;
 
 		/*
@@ -6457,6 +6955,7 @@ REDISCOVER_ENTRY:
 		    map->mapped_in_other_pmaps)
 		    ? PMAP_NULL
 		    : map->pmap),
+		    VM_MAP_PAGE_SIZE(map),
 		    entry->vme_start,
 		    prot);
 
@@ -6507,22 +7006,23 @@ REDISCOVER_ENTRY:
 		} else {
 			fault_type = VM_PROT_WRITE;
 		}
-		if (vm_map_lookup_locked(&local_map,
+		if (vm_map_lookup_and_lock_object(&local_map,
 		    offset, fault_type,
 		    OBJECT_LOCK_EXCLUSIVE,
 		    &version, &object,
 		    &new_offset, &prot, &wired,
 		    NULL,
-		    &real_map) != KERN_SUCCESS) {
+		    &real_map, NULL) != KERN_SUCCESS) {
 			if (fault_type == VM_PROT_WRITE) {
 				vm_counters.create_upl_lookup_failure_write++;
 			} else {
 				vm_counters.create_upl_lookup_failure_copy++;
 			}
 			vm_map_unlock_read(local_map);
-			return KERN_FAILURE;
+			ret = KERN_FAILURE;
+			goto done;
 		}
-		if (real_map != map) {
+		if (real_map != local_map) {
 			vm_map_unlock(real_map);
 		}
 		vm_map_unlock_read(local_map);
@@ -6537,30 +7037,35 @@ REDISCOVER_ENTRY:
 
 		submap = VME_SUBMAP(entry);
 		local_start = entry->vme_start;
-		local_offset = VME_OFFSET(entry);
+		local_offset = (vm_map_offset_t)VME_OFFSET(entry);
 
 		vm_map_reference(submap);
 		vm_map_unlock_read(map);
 
-		ret = vm_map_create_upl(submap,
-		    local_offset + (offset - local_start),
-		    upl_size, upl, page_list, count, flags, tag);
-		vm_map_deallocate(submap);
+		DEBUG4K_UPL("map %p offset 0x%llx (0x%llx) size 0x%x (adjusted 0x%llx original 0x%llx) offset_in_mapped_page 0x%llx submap %p\n", map, (uint64_t)offset, (uint64_t)original_offset, *upl_size, (uint64_t)adjusted_size, (uint64_t)original_size, offset_in_mapped_page, submap);
+		offset += offset_in_mapped_page;
+		*upl_size -= offset_in_mapped_page;
 
-		return ret;
+		if (release_map) {
+			vm_map_deallocate(map);
+		}
+		map = submap;
+		release_map = TRUE;
+		offset = local_offset + (offset - local_start);
+		goto start_with_map;
 	}
 
 	if (sync_cow_data &&
 	    (VME_OBJECT(entry)->shadow ||
-	    VME_OBJECT(entry)->copy)) {
+	    VME_OBJECT(entry)->vo_copy)) {
 		local_object = VME_OBJECT(entry);
 		local_start = entry->vme_start;
-		local_offset = VME_OFFSET(entry);
+		local_offset = (vm_map_offset_t)VME_OFFSET(entry);
 
 		vm_object_reference(local_object);
 		vm_map_unlock_read(map);
 
-		if (local_object->shadow && local_object->copy) {
+		if (local_object->shadow && local_object->vo_copy) {
 			vm_object_lock_request(local_object->shadow,
 			    ((vm_object_offset_t)
 			    ((offset - local_start) +
@@ -6578,7 +7083,7 @@ REDISCOVER_ENTRY:
 	if (force_data_sync) {
 		local_object = VME_OBJECT(entry);
 		local_start = entry->vme_start;
-		local_offset = VME_OFFSET(entry);
+		local_offset = (vm_map_offset_t)VME_OFFSET(entry);
 
 		vm_object_reference(local_object);
 		vm_map_unlock_read(map);
@@ -6608,10 +7113,9 @@ REDISCOVER_ENTRY:
 	}
 
 	local_object = VME_OBJECT(entry);
-	local_offset = VME_OFFSET(entry);
+	local_offset = (vm_map_offset_t)VME_OFFSET(entry);
 	local_start = entry->vme_start;
 
-#if CONFIG_EMBEDDED
 	/*
 	 * Wiring will copy the pages to the shadow object.
 	 * The shadow object will not be code-signed so
@@ -6624,8 +7128,8 @@ REDISCOVER_ENTRY:
 		    "0x%llx to 0x%llx: side effects may include "
 		    "code-signing violations later on\n",
 		    proc_selfpid(),
-		    (current_task()->bsd_info
-		    ? proc_name_address(current_task()->bsd_info)
+		    (get_bsdtask_info(current_task())
+		    ? proc_name_address(get_bsdtask_info(current_task()))
 		    : "?"),
 		    (uint64_t) entry->vme_start,
 		    (uint64_t) entry->vme_end);
@@ -6635,7 +7139,6 @@ REDISCOVER_ENTRY:
 		    uint64_t, (uint64_t)entry->vme_end);
 		cs_executable_create_upl++;
 	}
-#endif /* CONFIG_EMBEDDED */
 
 	vm_object_lock(local_object);
 
@@ -6649,24 +7152,18 @@ REDISCOVER_ENTRY:
 	if (local_object->true_share) {
 		assert(local_object->copy_strategy !=
 		    MEMORY_OBJECT_COPY_SYMMETRIC);
-	} else if (local_object != kernel_object &&
+	} else if (!is_kernel_object(local_object) &&
 	    local_object != compressor_object &&
 	    !local_object->phys_contiguous) {
 #if VM_OBJECT_TRACKING_OP_TRUESHARE
 		if (!local_object->true_share &&
-		    vm_object_tracking_inited) {
-			void *bt[VM_OBJECT_TRACKING_BTDEPTH];
-			int num = 0;
-			num = OSBacktrace(bt,
-			    VM_OBJECT_TRACKING_BTDEPTH);
-			btlog_add_entry(vm_object_tracking_btlog,
-			    local_object,
+		    vm_object_tracking_btlog) {
+			btlog_record(vm_object_tracking_btlog, local_object,
 			    VM_OBJECT_TRACKING_OP_TRUESHARE,
-			    bt,
-			    num);
+			    btref_get(__builtin_frame_address(0), 0));
 		}
 #endif /* VM_OBJECT_TRACKING_OP_TRUESHARE */
-		local_object->true_share = TRUE;
+		VM_OBJECT_SET_TRUE_SHARE(local_object, TRUE);
 		if (local_object->copy_strategy ==
 		    MEMORY_OBJECT_COPY_SYMMETRIC) {
 			local_object->copy_strategy = MEMORY_OBJECT_COPY_DELAY;
@@ -6677,6 +7174,10 @@ REDISCOVER_ENTRY:
 	vm_object_unlock(local_object);
 
 	vm_map_unlock_read(map);
+
+	offset += offset_in_mapped_page;
+	assert(*upl_size > offset_in_mapped_page);
+	*upl_size -= offset_in_mapped_page;
 
 	ret = vm_object_iopl_request(local_object,
 	    ((vm_object_offset_t)
@@ -6689,6 +7190,11 @@ REDISCOVER_ENTRY:
 	    tag);
 	vm_object_deallocate(local_object);
 
+done:
+	if (release_map) {
+		vm_map_deallocate(map);
+	}
+
 	return ret;
 }
 
@@ -6699,9 +7205,12 @@ REDISCOVER_ENTRY:
  * vm_map_enter() API.
  */
 kern_return_t
-vm_map_enter_upl(
+vm_map_enter_upl_range(
 	vm_map_t                map,
 	upl_t                   upl,
+	vm_object_offset_t      offset_to_map,
+	vm_size_t               size_to_map,
+	vm_prot_t               prot_to_map,
 	vm_map_offset_t         *dst_addr)
 {
 	vm_map_size_t           size;
@@ -6711,7 +7220,7 @@ vm_map_enter_upl(
 	kern_return_t           kr;
 	int                     isVectorUPL = 0, curr_upl = 0;
 	upl_t                   vector_upl = NULL;
-	vm_offset_t             vector_upl_dst_addr = 0;
+	mach_vm_offset_t        vector_upl_dst_addr = 0;
 	vm_map_t                vector_upl_submap = NULL;
 	upl_offset_t            subupl_offset = 0;
 	upl_size_t              subupl_size = 0;
@@ -6720,12 +7229,15 @@ vm_map_enter_upl(
 		return KERN_INVALID_ARGUMENT;
 	}
 
+	DEBUG4K_UPL("map %p upl %p flags 0x%x object %p offset 0x%llx (uploff: 0x%llx) size 0x%lx (uplsz: 0x%x) \n", map, upl, upl->flags, upl->map_object, offset_to_map, upl->u_offset, size_to_map, upl->u_size);
+	assert(map == kernel_map);
+
 	if ((isVectorUPL = vector_upl_is_valid(upl))) {
 		int mapped = 0, valid_upls = 0;
 		vector_upl = upl;
 
 		upl_lock(vector_upl);
-		for (curr_upl = 0; curr_upl < MAX_VECTOR_UPL_ELEMENTS; curr_upl++) {
+		for (curr_upl = 0; curr_upl < vector_upl_max_upls(vector_upl); curr_upl++) {
 			upl =  vector_upl_subupl_byindex(vector_upl, curr_upl );
 			if (upl == NULL) {
 				continue;
@@ -6738,19 +7250,21 @@ vm_map_enter_upl(
 
 		if (mapped) {
 			if (mapped != valid_upls) {
-				panic("Only %d of the %d sub-upls within the Vector UPL are alread mapped\n", mapped, valid_upls);
+				panic("Only %d of the %d sub-upls within the Vector UPL are alread mapped", mapped, valid_upls);
 			} else {
 				upl_unlock(vector_upl);
 				return KERN_FAILURE;
 			}
 		}
 
-		kr = kmem_suballoc(map, &vector_upl_dst_addr, vector_upl->size, FALSE,
-		    VM_FLAGS_ANYWHERE, VM_MAP_KERNEL_FLAGS_NONE, VM_KERN_MEMORY_NONE,
-		    &vector_upl_submap);
-		if (kr != KERN_SUCCESS) {
-			panic("Vector UPL submap allocation failed\n");
+		if (VM_MAP_PAGE_MASK(map) < PAGE_MASK) {
+			panic("TODO4K: vector UPL not implemented");
 		}
+
+		vector_upl_submap = kmem_suballoc(map, &vector_upl_dst_addr,
+		    vector_upl->u_size, VM_MAP_CREATE_DEFAULT,
+		    VM_FLAGS_ANYWHERE, KMS_NOFAIL | KMS_DATA,
+		    VM_KERN_MEMORY_NONE).kmr_submap;
 		map = vector_upl_submap;
 		vector_upl_set_submap(vector_upl, vector_upl_submap, vector_upl_dst_addr);
 		curr_upl = 0;
@@ -6760,7 +7274,7 @@ vm_map_enter_upl(
 
 process_upl_to_enter:
 	if (isVectorUPL) {
-		if (curr_upl == MAX_VECTOR_UPL_ELEMENTS) {
+		if (curr_upl == vector_upl_max_upls(vector_upl)) {
 			*dst_addr = vector_upl_dst_addr;
 			upl_unlock(vector_upl);
 			return KERN_SUCCESS;
@@ -6781,6 +7295,7 @@ process_upl_to_enter:
 			return KERN_FAILURE;
 		}
 	}
+
 	if ((!(upl->flags & UPL_SHADOWED)) &&
 	    ((upl->flags & UPL_HAS_BUSY) ||
 	    !((upl->flags & (UPL_DEVICE_MEMORY | UPL_IO_WIRE)) || (upl->map_object->phys_contiguous)))) {
@@ -6788,29 +7303,25 @@ process_upl_to_enter:
 		vm_page_t               alias_page;
 		vm_object_offset_t      new_offset;
 		unsigned int            pg_num;
-		wpl_array_t             lite_list;
 
-		if (upl->flags & UPL_INTERNAL) {
-			lite_list = (wpl_array_t)
-			    ((((uintptr_t)upl) + sizeof(struct upl))
-			    + ((upl->size / PAGE_SIZE) * sizeof(upl_page_info_t)));
-		} else {
-			lite_list = (wpl_array_t)(((uintptr_t)upl) + sizeof(struct upl));
-		}
+		size = upl_adjusted_size(upl, VM_MAP_PAGE_MASK(map));
 		object = upl->map_object;
-		upl->map_object = vm_object_allocate(upl->size);
+		upl->map_object = vm_object_allocate(vm_object_round_page(size));
 
 		vm_object_lock(upl->map_object);
 
 		upl->map_object->shadow = object;
-		upl->map_object->pageout = TRUE;
-		upl->map_object->can_persist = FALSE;
+		VM_OBJECT_SET_PAGEOUT(upl->map_object, TRUE);
+		VM_OBJECT_SET_CAN_PERSIST(upl->map_object, FALSE);
 		upl->map_object->copy_strategy = MEMORY_OBJECT_COPY_NONE;
-		upl->map_object->vo_shadow_offset = upl->offset - object->paging_offset;
+		upl->map_object->vo_shadow_offset = upl_adjusted_offset(upl, PAGE_MASK) - object->paging_offset;
+		assertf(page_aligned(upl->map_object->vo_shadow_offset),
+		    "object %p shadow_offset 0x%llx",
+		    upl->map_object,
+		    (uint64_t)upl->map_object->vo_shadow_offset);
 		upl->map_object->wimg_bits = object->wimg_bits;
 		offset = upl->map_object->vo_shadow_offset;
 		new_offset = 0;
-		size = upl->size;
 
 		upl->flags |= UPL_SHADOWED;
 
@@ -6818,14 +7329,14 @@ process_upl_to_enter:
 			pg_num = (unsigned int) (new_offset / PAGE_SIZE);
 			assert(pg_num == new_offset / PAGE_SIZE);
 
-			if (lite_list[pg_num >> 5] & (1U << (pg_num & 31))) {
-				VM_PAGE_GRAB_FICTITIOUS(alias_page);
+			if (bitmap_test(upl->lite_list, pg_num)) {
+				alias_page = vm_page_grab_fictitious(TRUE);
 
 				vm_object_lock(object);
 
 				m = vm_page_lookup(object, offset);
 				if (m == VM_PAGE_NULL) {
-					panic("vm_upl_map: page missing\n");
+					panic("vm_upl_map: page missing");
 				}
 
 				/*
@@ -6863,12 +7374,23 @@ process_upl_to_enter:
 		vm_object_unlock(upl->map_object);
 	}
 	if (upl->flags & UPL_SHADOWED) {
-		offset = 0;
+		if (isVectorUPL) {
+			offset = 0;
+		} else {
+			offset = offset_to_map;
+		}
 	} else {
-		offset = upl->offset - upl->map_object->paging_offset;
+		offset = upl_adjusted_offset(upl, VM_MAP_PAGE_MASK(map)) - upl->map_object->paging_offset;
+		if (!isVectorUPL) {
+			offset += offset_to_map;
+		}
 	}
 
-	size = upl->size;
+	if (isVectorUPL) {
+		size = upl_adjusted_size(upl, VM_MAP_PAGE_MASK(map));
+	} else {
+		size = MIN(upl_adjusted_size(upl, VM_MAP_PAGE_MASK(map)), size_to_map);
+	}
 
 	vm_object_reference(upl->map_object);
 
@@ -6878,9 +7400,9 @@ process_upl_to_enter:
 		 * NEED A UPL_MAP ALIAS
 		 */
 		kr = vm_map_enter(map, dst_addr, (vm_map_size_t)size, (vm_map_offset_t) 0,
-		    VM_FLAGS_ANYWHERE, VM_MAP_KERNEL_FLAGS_NONE, VM_KERN_MEMORY_OSFMK,
+		    VM_MAP_KERNEL_FLAGS_DATA_ANYWHERE(.vm_tag = VM_KERN_MEMORY_OSFMK),
 		    upl->map_object, offset, FALSE,
-		    VM_PROT_DEFAULT, VM_PROT_ALL, VM_INHERIT_DEFAULT);
+		    prot_to_map, VM_PROT_ALL, VM_INHERIT_DEFAULT);
 
 		if (kr != KERN_SUCCESS) {
 			vm_object_deallocate(upl->map_object);
@@ -6889,13 +7411,16 @@ process_upl_to_enter:
 		}
 	} else {
 		kr = vm_map_enter(map, dst_addr, (vm_map_size_t)size, (vm_map_offset_t) 0,
-		    VM_FLAGS_FIXED, VM_MAP_KERNEL_FLAGS_NONE, VM_KERN_MEMORY_OSFMK,
+		    VM_MAP_KERNEL_FLAGS_FIXED(.vm_tag = VM_KERN_MEMORY_OSFMK),
 		    upl->map_object, offset, FALSE,
-		    VM_PROT_DEFAULT, VM_PROT_ALL, VM_INHERIT_DEFAULT);
+		    prot_to_map, VM_PROT_ALL, VM_INHERIT_DEFAULT);
 		if (kr) {
-			panic("vm_map_enter failed for a Vector UPL\n");
+			panic("vm_map_enter failed for a Vector UPL");
 		}
 	}
+	upl->u_mapped_size = (upl_size_t) size; /* When we allow multiple submappings of the UPL */
+	                                        /* this will have to be an increment rather than */
+	                                        /* an assignment. */
 	vm_object_lock(upl->map_object);
 
 	for (addr = *dst_addr; size > 0; size -= PAGE_SIZE, addr += PAGE_SIZE) {
@@ -6904,13 +7429,15 @@ process_upl_to_enter:
 		if (m) {
 			m->vmp_pmapped = TRUE;
 
-			/* CODE SIGNING ENFORCEMENT: page has been wpmapped,
+			/*
+			 * CODE SIGNING ENFORCEMENT: page has been wpmapped,
 			 * but only in kernel space. If this was on a user map,
-			 * we'd have to set the wpmapped bit. */
+			 * we'd have to set the wpmapped bit.
+			 */
 			/* m->vmp_wpmapped = TRUE; */
 			assert(map->pmap == kernel_pmap);
 
-			PMAP_ENTER(map->pmap, addr, m, VM_PROT_DEFAULT, VM_PROT_NONE, 0, TRUE, kr);
+			kr = pmap_enter_check(map->pmap, addr, m, prot_to_map, VM_PROT_NONE, 0, TRUE);
 
 			assert(kr == KERN_SUCCESS);
 #if KASAN
@@ -6933,9 +7460,30 @@ process_upl_to_enter:
 		goto process_upl_to_enter;
 	}
 
+	if (!isVectorUPL) {
+		vm_map_offset_t addr_adjustment;
+
+		addr_adjustment = (vm_map_offset_t)(upl->u_offset - upl_adjusted_offset(upl, VM_MAP_PAGE_MASK(map)));
+		if (addr_adjustment) {
+			assert(VM_MAP_PAGE_MASK(map) != PAGE_MASK);
+			DEBUG4K_UPL("dst_addr 0x%llx (+ 0x%llx) -> 0x%llx\n", (uint64_t)*dst_addr, (uint64_t)addr_adjustment, (uint64_t)(*dst_addr + addr_adjustment));
+			*dst_addr += addr_adjustment;
+		}
+	}
+
 	upl_unlock(upl);
 
 	return KERN_SUCCESS;
+}
+
+kern_return_t
+vm_map_enter_upl(
+	vm_map_t                map,
+	upl_t                   upl,
+	vm_map_offset_t         *dst_addr)
+{
+	upl_size_t upl_size = upl_adjusted_size(upl, VM_MAP_PAGE_MASK(map));
+	return vm_map_enter_upl_range(map, upl, 0, upl_size, VM_PROT_DEFAULT, dst_addr);
 }
 
 /*
@@ -6949,9 +7497,11 @@ process_upl_to_enter:
  * maps yet.
  */
 kern_return_t
-vm_map_remove_upl(
+vm_map_remove_upl_range(
 	vm_map_t        map,
-	upl_t           upl)
+	upl_t           upl,
+	__unused vm_object_offset_t    offset_to_unmap,
+	__unused vm_size_t             size_to_unmap)
 {
 	vm_address_t    addr;
 	upl_size_t      size;
@@ -6966,7 +7516,7 @@ vm_map_remove_upl(
 		int     unmapped = 0, valid_upls = 0;
 		vector_upl = upl;
 		upl_lock(vector_upl);
-		for (curr_upl = 0; curr_upl < MAX_VECTOR_UPL_ELEMENTS; curr_upl++) {
+		for (curr_upl = 0; curr_upl < vector_upl_max_upls(vector_upl); curr_upl++) {
 			upl =  vector_upl_subupl_byindex(vector_upl, curr_upl );
 			if (upl == NULL) {
 				continue;
@@ -6979,7 +7529,7 @@ vm_map_remove_upl(
 
 		if (unmapped) {
 			if (unmapped != valid_upls) {
-				panic("%d of the %d sub-upls within the Vector UPL is/are not mapped\n", unmapped, valid_upls);
+				panic("%d of the %d sub-upls within the Vector UPL is/are not mapped", unmapped, valid_upls);
 			} else {
 				upl_unlock(vector_upl);
 				return KERN_FAILURE;
@@ -6992,12 +7542,13 @@ vm_map_remove_upl(
 
 process_upl_to_remove:
 	if (isVectorUPL) {
-		if (curr_upl == MAX_VECTOR_UPL_ELEMENTS) {
+		if (curr_upl == vector_upl_max_upls(vector_upl)) {
 			vm_map_t v_upl_submap;
 			vm_offset_t v_upl_submap_dst_addr;
 			vector_upl_get_submap(vector_upl, &v_upl_submap, &v_upl_submap_dst_addr);
 
-			vm_map_remove(map, v_upl_submap_dst_addr, v_upl_submap_dst_addr + vector_upl->size, VM_MAP_REMOVE_NO_FLAGS);
+			kmem_free_guard(map, v_upl_submap_dst_addr,
+			    vector_upl->u_size, KMF_NONE, KMEM_GUARD_SUBMAP);
 			vm_map_deallocate(v_upl_submap);
 			upl_unlock(vector_upl);
 			return KERN_SUCCESS;
@@ -7011,26 +7562,16 @@ process_upl_to_remove:
 
 	if (upl->flags & UPL_PAGE_LIST_MAPPED) {
 		addr = upl->kaddr;
-		size = upl->size;
+		size = upl->u_mapped_size;
 
 		assert(upl->ref_count > 1);
 		upl->ref_count--;               /* removing mapping ref */
 
 		upl->flags &= ~UPL_PAGE_LIST_MAPPED;
 		upl->kaddr = (vm_offset_t) 0;
+		upl->u_mapped_size = 0;
 
-		if (!isVectorUPL) {
-			upl_unlock(upl);
-
-			vm_map_remove(
-				map,
-				vm_map_trunc_page(addr,
-				VM_MAP_PAGE_MASK(map)),
-				vm_map_round_page(addr + size,
-				VM_MAP_PAGE_MASK(map)),
-				VM_MAP_REMOVE_NO_FLAGS);
-			return KERN_SUCCESS;
-		} else {
+		if (isVectorUPL) {
 			/*
 			 * If it's a Vectored UPL, we'll be removing the entire
 			 * submap anyways, so no need to remove individual UPL
@@ -7038,1192 +7579,27 @@ process_upl_to_remove:
 			 */
 			goto process_upl_to_remove;
 		}
+
+		upl_unlock(upl);
+
+		vm_map_remove(map,
+		    vm_map_trunc_page(addr, VM_MAP_PAGE_MASK(map)),
+		    vm_map_round_page(addr + size, VM_MAP_PAGE_MASK(map)));
+		return KERN_SUCCESS;
 	}
 	upl_unlock(upl);
 
 	return KERN_FAILURE;
 }
 
-
 kern_return_t
-upl_commit_range(
-	upl_t                   upl,
-	upl_offset_t            offset,
-	upl_size_t              size,
-	int                     flags,
-	upl_page_info_t         *page_list,
-	mach_msg_type_number_t  count,
-	boolean_t               *empty)
+vm_map_remove_upl(
+	vm_map_t        map,
+	upl_t           upl)
 {
-	upl_size_t              xfer_size, subupl_size = size;
-	vm_object_t             shadow_object;
-	vm_object_t             object;
-	vm_object_t             m_object;
-	vm_object_offset_t      target_offset;
-	upl_offset_t            subupl_offset = offset;
-	int                     entry;
-	wpl_array_t             lite_list;
-	int                     occupied;
-	int                     clear_refmod = 0;
-	int                     pgpgout_count = 0;
-	struct  vm_page_delayed_work    dw_array[DEFAULT_DELAYED_WORK_LIMIT];
-	struct  vm_page_delayed_work    *dwp;
-	int                     dw_count;
-	int                     dw_limit;
-	int                     isVectorUPL = 0;
-	upl_t                   vector_upl = NULL;
-	boolean_t               should_be_throttled = FALSE;
-
-	vm_page_t               nxt_page = VM_PAGE_NULL;
-	int                     fast_path_possible = 0;
-	int                     fast_path_full_commit = 0;
-	int                     throttle_page = 0;
-	int                     unwired_count = 0;
-	int                     local_queue_count = 0;
-	vm_page_t               first_local, last_local;
-
-	*empty = FALSE;
-
-	if (upl == UPL_NULL) {
-		return KERN_INVALID_ARGUMENT;
-	}
-
-	if (count == 0) {
-		page_list = NULL;
-	}
-
-	if ((isVectorUPL = vector_upl_is_valid(upl))) {
-		vector_upl = upl;
-		upl_lock(vector_upl);
-	} else {
-		upl_lock(upl);
-	}
-
-process_upl_to_commit:
-
-	if (isVectorUPL) {
-		size = subupl_size;
-		offset = subupl_offset;
-		if (size == 0) {
-			upl_unlock(vector_upl);
-			return KERN_SUCCESS;
-		}
-		upl =  vector_upl_subupl_byoffset(vector_upl, &offset, &size);
-		if (upl == NULL) {
-			upl_unlock(vector_upl);
-			return KERN_FAILURE;
-		}
-		page_list = UPL_GET_INTERNAL_PAGE_LIST_SIMPLE(upl);
-		subupl_size -= size;
-		subupl_offset += size;
-	}
-
-#if UPL_DEBUG
-	if (upl->upl_commit_index < UPL_DEBUG_COMMIT_RECORDS) {
-		(void) OSBacktrace(&upl->upl_commit_records[upl->upl_commit_index].c_retaddr[0], UPL_DEBUG_STACK_FRAMES);
-
-		upl->upl_commit_records[upl->upl_commit_index].c_beg = offset;
-		upl->upl_commit_records[upl->upl_commit_index].c_end = (offset + size);
-
-		upl->upl_commit_index++;
-	}
-#endif
-	if (upl->flags & UPL_DEVICE_MEMORY) {
-		xfer_size = 0;
-	} else if ((offset + size) <= upl->size) {
-		xfer_size = size;
-	} else {
-		if (!isVectorUPL) {
-			upl_unlock(upl);
-		} else {
-			upl_unlock(vector_upl);
-		}
-		return KERN_FAILURE;
-	}
-	if (upl->flags & UPL_SET_DIRTY) {
-		flags |= UPL_COMMIT_SET_DIRTY;
-	}
-	if (upl->flags & UPL_CLEAR_DIRTY) {
-		flags |= UPL_COMMIT_CLEAR_DIRTY;
-	}
-
-	if (upl->flags & UPL_INTERNAL) {
-		lite_list = (wpl_array_t) ((((uintptr_t)upl) + sizeof(struct upl))
-		    + ((upl->size / PAGE_SIZE) * sizeof(upl_page_info_t)));
-	} else {
-		lite_list = (wpl_array_t) (((uintptr_t)upl) + sizeof(struct upl));
-	}
-
-	object = upl->map_object;
-
-	if (upl->flags & UPL_SHADOWED) {
-		vm_object_lock(object);
-		shadow_object = object->shadow;
-	} else {
-		shadow_object = object;
-	}
-	entry = offset / PAGE_SIZE;
-	target_offset = (vm_object_offset_t)offset;
-
-	assert(!(target_offset & PAGE_MASK));
-	assert(!(xfer_size & PAGE_MASK));
-
-	if (upl->flags & UPL_KERNEL_OBJECT) {
-		vm_object_lock_shared(shadow_object);
-	} else {
-		vm_object_lock(shadow_object);
-	}
-
-	VM_OBJECT_WIRED_PAGE_UPDATE_START(shadow_object);
-
-	if (upl->flags & UPL_ACCESS_BLOCKED) {
-		assert(shadow_object->blocked_access);
-		shadow_object->blocked_access = FALSE;
-		vm_object_wakeup(object, VM_OBJECT_EVENT_UNBLOCKED);
-	}
-
-	if (shadow_object->code_signed) {
-		/*
-		 * CODE SIGNING:
-		 * If the object is code-signed, do not let this UPL tell
-		 * us if the pages are valid or not.  Let the pages be
-		 * validated by VM the normal way (when they get mapped or
-		 * copied).
-		 */
-		flags &= ~UPL_COMMIT_CS_VALIDATED;
-	}
-	if (!page_list) {
-		/*
-		 * No page list to get the code-signing info from !?
-		 */
-		flags &= ~UPL_COMMIT_CS_VALIDATED;
-	}
-	if (!VM_DYNAMIC_PAGING_ENABLED() && shadow_object->internal) {
-		should_be_throttled = TRUE;
-	}
-
-	dwp = &dw_array[0];
-	dw_count = 0;
-	dw_limit = DELAYED_WORK_LIMIT(DEFAULT_DELAYED_WORK_LIMIT);
-
-	if ((upl->flags & UPL_IO_WIRE) &&
-	    !(flags & UPL_COMMIT_FREE_ABSENT) &&
-	    !isVectorUPL &&
-	    shadow_object->purgable != VM_PURGABLE_VOLATILE &&
-	    shadow_object->purgable != VM_PURGABLE_EMPTY) {
-		if (!vm_page_queue_empty(&shadow_object->memq)) {
-			if (size == shadow_object->vo_size) {
-				nxt_page = (vm_page_t)vm_page_queue_first(&shadow_object->memq);
-				fast_path_full_commit = 1;
-			}
-			fast_path_possible = 1;
-
-			if (!VM_DYNAMIC_PAGING_ENABLED() && shadow_object->internal &&
-			    (shadow_object->purgable == VM_PURGABLE_DENY ||
-			    shadow_object->purgable == VM_PURGABLE_NONVOLATILE ||
-			    shadow_object->purgable == VM_PURGABLE_VOLATILE)) {
-				throttle_page = 1;
-			}
-		}
-	}
-	first_local = VM_PAGE_NULL;
-	last_local = VM_PAGE_NULL;
-
-	while (xfer_size) {
-		vm_page_t       t, m;
-
-		dwp->dw_mask = 0;
-		clear_refmod = 0;
-
-		m = VM_PAGE_NULL;
-
-		if (upl->flags & UPL_LITE) {
-			unsigned int    pg_num;
-
-			if (nxt_page != VM_PAGE_NULL) {
-				m = nxt_page;
-				nxt_page = (vm_page_t)vm_page_queue_next(&nxt_page->vmp_listq);
-				target_offset = m->vmp_offset;
-			}
-			pg_num = (unsigned int) (target_offset / PAGE_SIZE);
-			assert(pg_num == target_offset / PAGE_SIZE);
-
-			if (lite_list[pg_num >> 5] & (1U << (pg_num & 31))) {
-				lite_list[pg_num >> 5] &= ~(1U << (pg_num & 31));
-
-				if (!(upl->flags & UPL_KERNEL_OBJECT) && m == VM_PAGE_NULL) {
-					m = vm_page_lookup(shadow_object, target_offset + (upl->offset - shadow_object->paging_offset));
-				}
-			} else {
-				m = NULL;
-			}
-		}
-		if (upl->flags & UPL_SHADOWED) {
-			if ((t = vm_page_lookup(object, target_offset)) != VM_PAGE_NULL) {
-				t->vmp_free_when_done = FALSE;
-
-				VM_PAGE_FREE(t);
-
-				if (!(upl->flags & UPL_KERNEL_OBJECT) && m == VM_PAGE_NULL) {
-					m = vm_page_lookup(shadow_object, target_offset + object->vo_shadow_offset);
-				}
-			}
-		}
-		if (m == VM_PAGE_NULL) {
-			goto commit_next_page;
-		}
-
-		m_object = VM_PAGE_OBJECT(m);
-
-		if (m->vmp_q_state == VM_PAGE_USED_BY_COMPRESSOR) {
-			assert(m->vmp_busy);
-
-			dwp->dw_mask |= (DW_clear_busy | DW_PAGE_WAKEUP);
-			goto commit_next_page;
-		}
-
-		if (flags & UPL_COMMIT_CS_VALIDATED) {
-			/*
-			 * CODE SIGNING:
-			 * Set the code signing bits according to
-			 * what the UPL says they should be.
-			 */
-			m->vmp_cs_validated = page_list[entry].cs_validated;
-			m->vmp_cs_tainted = page_list[entry].cs_tainted;
-			m->vmp_cs_nx = page_list[entry].cs_nx;
-		}
-		if (flags & UPL_COMMIT_WRITTEN_BY_KERNEL) {
-			m->vmp_written_by_kernel = TRUE;
-		}
-
-		if (upl->flags & UPL_IO_WIRE) {
-			if (page_list) {
-				page_list[entry].phys_addr = 0;
-			}
-
-			if (flags & UPL_COMMIT_SET_DIRTY) {
-				SET_PAGE_DIRTY(m, FALSE);
-			} else if (flags & UPL_COMMIT_CLEAR_DIRTY) {
-				m->vmp_dirty = FALSE;
-
-				if (!(flags & UPL_COMMIT_CS_VALIDATED) &&
-				    m->vmp_cs_validated && !m->vmp_cs_tainted) {
-					/*
-					 * CODE SIGNING:
-					 * This page is no longer dirty
-					 * but could have been modified,
-					 * so it will need to be
-					 * re-validated.
-					 */
-					m->vmp_cs_validated = FALSE;
-
-					VM_PAGEOUT_DEBUG(vm_cs_validated_resets, 1);
-
-					pmap_disconnect(VM_PAGE_GET_PHYS_PAGE(m));
-				}
-				clear_refmod |= VM_MEM_MODIFIED;
-			}
-			if (upl->flags & UPL_ACCESS_BLOCKED) {
-				/*
-				 * We blocked access to the pages in this UPL.
-				 * Clear the "busy" bit and wake up any waiter
-				 * for this page.
-				 */
-				dwp->dw_mask |= (DW_clear_busy | DW_PAGE_WAKEUP);
-			}
-			if (fast_path_possible) {
-				assert(m_object->purgable != VM_PURGABLE_EMPTY);
-				assert(m_object->purgable != VM_PURGABLE_VOLATILE);
-				if (m->vmp_absent) {
-					assert(m->vmp_q_state == VM_PAGE_NOT_ON_Q);
-					assert(m->vmp_wire_count == 0);
-					assert(m->vmp_busy);
-
-					m->vmp_absent = FALSE;
-					dwp->dw_mask |= (DW_clear_busy | DW_PAGE_WAKEUP);
-				} else {
-					if (m->vmp_wire_count == 0) {
-						panic("wire_count == 0, m = %p, obj = %p\n", m, shadow_object);
-					}
-					assert(m->vmp_q_state == VM_PAGE_IS_WIRED);
-
-					/*
-					 * XXX FBDP need to update some other
-					 * counters here (purgeable_wired_count)
-					 * (ledgers), ...
-					 */
-					assert(m->vmp_wire_count > 0);
-					m->vmp_wire_count--;
-
-					if (m->vmp_wire_count == 0) {
-						m->vmp_q_state = VM_PAGE_NOT_ON_Q;
-						unwired_count++;
-					}
-				}
-				if (m->vmp_wire_count == 0) {
-					assert(m->vmp_pageq.next == 0 && m->vmp_pageq.prev == 0);
-
-					if (last_local == VM_PAGE_NULL) {
-						assert(first_local == VM_PAGE_NULL);
-
-						last_local = m;
-						first_local = m;
-					} else {
-						assert(first_local != VM_PAGE_NULL);
-
-						m->vmp_pageq.next = VM_PAGE_CONVERT_TO_QUEUE_ENTRY(first_local);
-						first_local->vmp_pageq.prev = VM_PAGE_CONVERT_TO_QUEUE_ENTRY(m);
-						first_local = m;
-					}
-					local_queue_count++;
-
-					if (throttle_page) {
-						m->vmp_q_state = VM_PAGE_ON_THROTTLED_Q;
-					} else {
-						if (flags & UPL_COMMIT_INACTIVATE) {
-							if (shadow_object->internal) {
-								m->vmp_q_state = VM_PAGE_ON_INACTIVE_INTERNAL_Q;
-							} else {
-								m->vmp_q_state = VM_PAGE_ON_INACTIVE_EXTERNAL_Q;
-							}
-						} else {
-							m->vmp_q_state = VM_PAGE_ON_ACTIVE_Q;
-						}
-					}
-				}
-			} else {
-				if (flags & UPL_COMMIT_INACTIVATE) {
-					dwp->dw_mask |= DW_vm_page_deactivate_internal;
-					clear_refmod |= VM_MEM_REFERENCED;
-				}
-				if (m->vmp_absent) {
-					if (flags & UPL_COMMIT_FREE_ABSENT) {
-						dwp->dw_mask |= DW_vm_page_free;
-					} else {
-						m->vmp_absent = FALSE;
-						dwp->dw_mask |= (DW_clear_busy | DW_PAGE_WAKEUP);
-
-						if (!(dwp->dw_mask & DW_vm_page_deactivate_internal)) {
-							dwp->dw_mask |= DW_vm_page_activate;
-						}
-					}
-				} else {
-					dwp->dw_mask |= DW_vm_page_unwire;
-				}
-			}
-			goto commit_next_page;
-		}
-		assert(m->vmp_q_state != VM_PAGE_USED_BY_COMPRESSOR);
-
-		if (page_list) {
-			page_list[entry].phys_addr = 0;
-		}
-
-		/*
-		 * make sure to clear the hardware
-		 * modify or reference bits before
-		 * releasing the BUSY bit on this page
-		 * otherwise we risk losing a legitimate
-		 * change of state
-		 */
-		if (flags & UPL_COMMIT_CLEAR_DIRTY) {
-			m->vmp_dirty = FALSE;
-
-			clear_refmod |= VM_MEM_MODIFIED;
-		}
-		if (m->vmp_laundry) {
-			dwp->dw_mask |= DW_vm_pageout_throttle_up;
-		}
-
-		if (VM_PAGE_WIRED(m)) {
-			m->vmp_free_when_done = FALSE;
-		}
-
-		if (!(flags & UPL_COMMIT_CS_VALIDATED) &&
-		    m->vmp_cs_validated && !m->vmp_cs_tainted) {
-			/*
-			 * CODE SIGNING:
-			 * This page is no longer dirty
-			 * but could have been modified,
-			 * so it will need to be
-			 * re-validated.
-			 */
-			m->vmp_cs_validated = FALSE;
-
-			VM_PAGEOUT_DEBUG(vm_cs_validated_resets, 1);
-
-			pmap_disconnect(VM_PAGE_GET_PHYS_PAGE(m));
-		}
-		if (m->vmp_overwriting) {
-			/*
-			 * the (COPY_OUT_FROM == FALSE) request_page_list case
-			 */
-			if (m->vmp_busy) {
-#if CONFIG_PHANTOM_CACHE
-				if (m->vmp_absent && !m_object->internal) {
-					dwp->dw_mask |= DW_vm_phantom_cache_update;
-				}
-#endif
-				m->vmp_absent = FALSE;
-
-				dwp->dw_mask |= DW_clear_busy;
-			} else {
-				/*
-				 * alternate (COPY_OUT_FROM == FALSE) page_list case
-				 * Occurs when the original page was wired
-				 * at the time of the list request
-				 */
-				assert(VM_PAGE_WIRED(m));
-
-				dwp->dw_mask |= DW_vm_page_unwire; /* reactivates */
-			}
-			m->vmp_overwriting = FALSE;
-		}
-		m->vmp_cleaning = FALSE;
-
-		if (m->vmp_free_when_done) {
-			/*
-			 * With the clean queue enabled, UPL_PAGEOUT should
-			 * no longer set the pageout bit. Its pages now go
-			 * to the clean queue.
-			 *
-			 * We don't use the cleaned Q anymore and so this
-			 * assert isn't correct. The code for the clean Q
-			 * still exists and might be used in the future. If we
-			 * go back to the cleaned Q, we will re-enable this
-			 * assert.
-			 *
-			 * assert(!(upl->flags & UPL_PAGEOUT));
-			 */
-			assert(!m_object->internal);
-
-			m->vmp_free_when_done = FALSE;
-
-			if ((flags & UPL_COMMIT_SET_DIRTY) ||
-			    (m->vmp_pmapped && (pmap_disconnect(VM_PAGE_GET_PHYS_PAGE(m)) & VM_MEM_MODIFIED))) {
-				/*
-				 * page was re-dirtied after we started
-				 * the pageout... reactivate it since
-				 * we don't know whether the on-disk
-				 * copy matches what is now in memory
-				 */
-				SET_PAGE_DIRTY(m, FALSE);
-
-				dwp->dw_mask |= DW_vm_page_activate | DW_PAGE_WAKEUP;
-
-				if (upl->flags & UPL_PAGEOUT) {
-					VM_STAT_INCR(reactivations);
-					DTRACE_VM2(pgrec, int, 1, (uint64_t *), NULL);
-				}
-			} else {
-				/*
-				 * page has been successfully cleaned
-				 * go ahead and free it for other use
-				 */
-				if (m_object->internal) {
-					DTRACE_VM2(anonpgout, int, 1, (uint64_t *), NULL);
-				} else {
-					DTRACE_VM2(fspgout, int, 1, (uint64_t *), NULL);
-				}
-				m->vmp_dirty = FALSE;
-				m->vmp_busy = TRUE;
-
-				dwp->dw_mask |= DW_vm_page_free;
-			}
-			goto commit_next_page;
-		}
-		/*
-		 * It is a part of the semantic of COPYOUT_FROM
-		 * UPLs that a commit implies cache sync
-		 * between the vm page and the backing store
-		 * this can be used to strip the precious bit
-		 * as well as clean
-		 */
-		if ((upl->flags & UPL_PAGE_SYNC_DONE) || (flags & UPL_COMMIT_CLEAR_PRECIOUS)) {
-			m->vmp_precious = FALSE;
-		}
-
-		if (flags & UPL_COMMIT_SET_DIRTY) {
-			SET_PAGE_DIRTY(m, FALSE);
-		} else {
-			m->vmp_dirty = FALSE;
-		}
-
-		/* with the clean queue on, move *all* cleaned pages to the clean queue */
-		if (hibernate_cleaning_in_progress == FALSE && !m->vmp_dirty && (upl->flags & UPL_PAGEOUT)) {
-			pgpgout_count++;
-
-			VM_STAT_INCR(pageouts);
-			DTRACE_VM2(pgout, int, 1, (uint64_t *), NULL);
-
-			dwp->dw_mask |= DW_enqueue_cleaned;
-		} else if (should_be_throttled == TRUE && (m->vmp_q_state == VM_PAGE_NOT_ON_Q)) {
-			/*
-			 * page coming back in from being 'frozen'...
-			 * it was dirty before it was frozen, so keep it so
-			 * the vm_page_activate will notice that it really belongs
-			 * on the throttle queue and put it there
-			 */
-			SET_PAGE_DIRTY(m, FALSE);
-			dwp->dw_mask |= DW_vm_page_activate;
-		} else {
-			if ((flags & UPL_COMMIT_INACTIVATE) && !m->vmp_clustered && (m->vmp_q_state != VM_PAGE_ON_SPECULATIVE_Q)) {
-				dwp->dw_mask |= DW_vm_page_deactivate_internal;
-				clear_refmod |= VM_MEM_REFERENCED;
-			} else if (!VM_PAGE_PAGEABLE(m)) {
-				if (m->vmp_clustered || (flags & UPL_COMMIT_SPECULATE)) {
-					dwp->dw_mask |= DW_vm_page_speculate;
-				} else if (m->vmp_reference) {
-					dwp->dw_mask |= DW_vm_page_activate;
-				} else {
-					dwp->dw_mask |= DW_vm_page_deactivate_internal;
-					clear_refmod |= VM_MEM_REFERENCED;
-				}
-			}
-		}
-		if (upl->flags & UPL_ACCESS_BLOCKED) {
-			/*
-			 * We blocked access to the pages in this URL.
-			 * Clear the "busy" bit on this page before we
-			 * wake up any waiter.
-			 */
-			dwp->dw_mask |= DW_clear_busy;
-		}
-		/*
-		 * Wakeup any thread waiting for the page to be un-cleaning.
-		 */
-		dwp->dw_mask |= DW_PAGE_WAKEUP;
-
-commit_next_page:
-		if (clear_refmod) {
-			pmap_clear_refmod(VM_PAGE_GET_PHYS_PAGE(m), clear_refmod);
-		}
-
-		target_offset += PAGE_SIZE_64;
-		xfer_size -= PAGE_SIZE;
-		entry++;
-
-		if (dwp->dw_mask) {
-			if (dwp->dw_mask & ~(DW_clear_busy | DW_PAGE_WAKEUP)) {
-				VM_PAGE_ADD_DELAYED_WORK(dwp, m, dw_count);
-
-				if (dw_count >= dw_limit) {
-					vm_page_do_delayed_work(shadow_object, VM_KERN_MEMORY_NONE, &dw_array[0], dw_count);
-
-					dwp = &dw_array[0];
-					dw_count = 0;
-				}
-			} else {
-				if (dwp->dw_mask & DW_clear_busy) {
-					m->vmp_busy = FALSE;
-				}
-
-				if (dwp->dw_mask & DW_PAGE_WAKEUP) {
-					PAGE_WAKEUP(m);
-				}
-			}
-		}
-	}
-	if (dw_count) {
-		vm_page_do_delayed_work(shadow_object, VM_KERN_MEMORY_NONE, &dw_array[0], dw_count);
-	}
-
-	if (fast_path_possible) {
-		assert(shadow_object->purgable != VM_PURGABLE_VOLATILE);
-		assert(shadow_object->purgable != VM_PURGABLE_EMPTY);
-
-		if (local_queue_count || unwired_count) {
-			if (local_queue_count) {
-				vm_page_t       first_target;
-				vm_page_queue_head_t    *target_queue;
-
-				if (throttle_page) {
-					target_queue = &vm_page_queue_throttled;
-				} else {
-					if (flags & UPL_COMMIT_INACTIVATE) {
-						if (shadow_object->internal) {
-							target_queue = &vm_page_queue_anonymous;
-						} else {
-							target_queue = &vm_page_queue_inactive;
-						}
-					} else {
-						target_queue = &vm_page_queue_active;
-					}
-				}
-				/*
-				 * Transfer the entire local queue to a regular LRU page queues.
-				 */
-				vm_page_lockspin_queues();
-
-				first_target = (vm_page_t) vm_page_queue_first(target_queue);
-
-				if (vm_page_queue_empty(target_queue)) {
-					target_queue->prev = VM_PAGE_CONVERT_TO_QUEUE_ENTRY(last_local);
-				} else {
-					first_target->vmp_pageq.prev = VM_PAGE_CONVERT_TO_QUEUE_ENTRY(last_local);
-				}
-
-				target_queue->next = VM_PAGE_CONVERT_TO_QUEUE_ENTRY(first_local);
-				first_local->vmp_pageq.prev = VM_PAGE_CONVERT_TO_QUEUE_ENTRY(target_queue);
-				last_local->vmp_pageq.next = VM_PAGE_CONVERT_TO_QUEUE_ENTRY(first_target);
-
-				/*
-				 * Adjust the global page counts.
-				 */
-				if (throttle_page) {
-					vm_page_throttled_count += local_queue_count;
-				} else {
-					if (flags & UPL_COMMIT_INACTIVATE) {
-						if (shadow_object->internal) {
-							vm_page_anonymous_count += local_queue_count;
-						}
-						vm_page_inactive_count += local_queue_count;
-
-						token_new_pagecount += local_queue_count;
-					} else {
-						vm_page_active_count += local_queue_count;
-					}
-
-					if (shadow_object->internal) {
-						vm_page_pageable_internal_count += local_queue_count;
-					} else {
-						vm_page_pageable_external_count += local_queue_count;
-					}
-				}
-			} else {
-				vm_page_lockspin_queues();
-			}
-			if (unwired_count) {
-				vm_page_wire_count -= unwired_count;
-				VM_CHECK_MEMORYSTATUS;
-			}
-			vm_page_unlock_queues();
-
-			VM_OBJECT_WIRED_PAGE_COUNT(shadow_object, -unwired_count);
-		}
-	}
-	occupied = 1;
-
-	if (upl->flags & UPL_DEVICE_MEMORY) {
-		occupied = 0;
-	} else if (upl->flags & UPL_LITE) {
-		int     pg_num;
-		int     i;
-
-		occupied = 0;
-
-		if (!fast_path_full_commit) {
-			pg_num = upl->size / PAGE_SIZE;
-			pg_num = (pg_num + 31) >> 5;
-
-			for (i = 0; i < pg_num; i++) {
-				if (lite_list[i] != 0) {
-					occupied = 1;
-					break;
-				}
-			}
-		}
-	} else {
-		if (vm_page_queue_empty(&upl->map_object->memq)) {
-			occupied = 0;
-		}
-	}
-	if (occupied == 0) {
-		/*
-		 * If this UPL element belongs to a Vector UPL and is
-		 * empty, then this is the right function to deallocate
-		 * it. So go ahead set the *empty variable. The flag
-		 * UPL_COMMIT_NOTIFY_EMPTY, from the caller's point of view
-		 * should be considered relevant for the Vector UPL and not
-		 * the internal UPLs.
-		 */
-		if ((upl->flags & UPL_COMMIT_NOTIFY_EMPTY) || isVectorUPL) {
-			*empty = TRUE;
-		}
-
-		if (object == shadow_object && !(upl->flags & UPL_KERNEL_OBJECT)) {
-			/*
-			 * this is not a paging object
-			 * so we need to drop the paging reference
-			 * that was taken when we created the UPL
-			 * against this object
-			 */
-			vm_object_activity_end(shadow_object);
-			vm_object_collapse(shadow_object, 0, TRUE);
-		} else {
-			/*
-			 * we dontated the paging reference to
-			 * the map object... vm_pageout_object_terminate
-			 * will drop this reference
-			 */
-		}
-	}
-	VM_OBJECT_WIRED_PAGE_UPDATE_END(shadow_object, shadow_object->wire_tag);
-	vm_object_unlock(shadow_object);
-	if (object != shadow_object) {
-		vm_object_unlock(object);
-	}
-
-	if (!isVectorUPL) {
-		upl_unlock(upl);
-	} else {
-		/*
-		 * If we completed our operations on an UPL that is
-		 * part of a Vectored UPL and if empty is TRUE, then
-		 * we should go ahead and deallocate this UPL element.
-		 * Then we check if this was the last of the UPL elements
-		 * within that Vectored UPL. If so, set empty to TRUE
-		 * so that in ubc_upl_commit_range or ubc_upl_commit, we
-		 * can go ahead and deallocate the Vector UPL too.
-		 */
-		if (*empty == TRUE) {
-			*empty = vector_upl_set_subupl(vector_upl, upl, 0);
-			upl_deallocate(upl);
-		}
-		goto process_upl_to_commit;
-	}
-	if (pgpgout_count) {
-		DTRACE_VM2(pgpgout, int, pgpgout_count, (uint64_t *), NULL);
-	}
-
-	return KERN_SUCCESS;
+	upl_size_t upl_size = upl_adjusted_size(upl, VM_MAP_PAGE_MASK(map));
+	return vm_map_remove_upl_range(map, upl, 0, upl_size);
 }
-
-kern_return_t
-upl_abort_range(
-	upl_t                   upl,
-	upl_offset_t            offset,
-	upl_size_t              size,
-	int                     error,
-	boolean_t               *empty)
-{
-	upl_page_info_t         *user_page_list = NULL;
-	upl_size_t              xfer_size, subupl_size = size;
-	vm_object_t             shadow_object;
-	vm_object_t             object;
-	vm_object_offset_t      target_offset;
-	upl_offset_t            subupl_offset = offset;
-	int                     entry;
-	wpl_array_t             lite_list;
-	int                     occupied;
-	struct  vm_page_delayed_work    dw_array[DEFAULT_DELAYED_WORK_LIMIT];
-	struct  vm_page_delayed_work    *dwp;
-	int                     dw_count;
-	int                     dw_limit;
-	int                     isVectorUPL = 0;
-	upl_t                   vector_upl = NULL;
-
-	*empty = FALSE;
-
-	if (upl == UPL_NULL) {
-		return KERN_INVALID_ARGUMENT;
-	}
-
-	if ((upl->flags & UPL_IO_WIRE) && !(error & UPL_ABORT_DUMP_PAGES)) {
-		return upl_commit_range(upl, offset, size, UPL_COMMIT_FREE_ABSENT, NULL, 0, empty);
-	}
-
-	if ((isVectorUPL = vector_upl_is_valid(upl))) {
-		vector_upl = upl;
-		upl_lock(vector_upl);
-	} else {
-		upl_lock(upl);
-	}
-
-process_upl_to_abort:
-	if (isVectorUPL) {
-		size = subupl_size;
-		offset = subupl_offset;
-		if (size == 0) {
-			upl_unlock(vector_upl);
-			return KERN_SUCCESS;
-		}
-		upl =  vector_upl_subupl_byoffset(vector_upl, &offset, &size);
-		if (upl == NULL) {
-			upl_unlock(vector_upl);
-			return KERN_FAILURE;
-		}
-		subupl_size -= size;
-		subupl_offset += size;
-	}
-
-	*empty = FALSE;
-
-#if UPL_DEBUG
-	if (upl->upl_commit_index < UPL_DEBUG_COMMIT_RECORDS) {
-		(void) OSBacktrace(&upl->upl_commit_records[upl->upl_commit_index].c_retaddr[0], UPL_DEBUG_STACK_FRAMES);
-
-		upl->upl_commit_records[upl->upl_commit_index].c_beg = offset;
-		upl->upl_commit_records[upl->upl_commit_index].c_end = (offset + size);
-		upl->upl_commit_records[upl->upl_commit_index].c_aborted = 1;
-
-		upl->upl_commit_index++;
-	}
-#endif
-	if (upl->flags & UPL_DEVICE_MEMORY) {
-		xfer_size = 0;
-	} else if ((offset + size) <= upl->size) {
-		xfer_size = size;
-	} else {
-		if (!isVectorUPL) {
-			upl_unlock(upl);
-		} else {
-			upl_unlock(vector_upl);
-		}
-
-		return KERN_FAILURE;
-	}
-	if (upl->flags & UPL_INTERNAL) {
-		lite_list = (wpl_array_t)
-		    ((((uintptr_t)upl) + sizeof(struct upl))
-		    + ((upl->size / PAGE_SIZE) * sizeof(upl_page_info_t)));
-
-		user_page_list = (upl_page_info_t *) (((uintptr_t)upl) + sizeof(struct upl));
-	} else {
-		lite_list = (wpl_array_t)
-		    (((uintptr_t)upl) + sizeof(struct upl));
-	}
-	object = upl->map_object;
-
-	if (upl->flags & UPL_SHADOWED) {
-		vm_object_lock(object);
-		shadow_object = object->shadow;
-	} else {
-		shadow_object = object;
-	}
-
-	entry = offset / PAGE_SIZE;
-	target_offset = (vm_object_offset_t)offset;
-
-	assert(!(target_offset & PAGE_MASK));
-	assert(!(xfer_size & PAGE_MASK));
-
-	if (upl->flags & UPL_KERNEL_OBJECT) {
-		vm_object_lock_shared(shadow_object);
-	} else {
-		vm_object_lock(shadow_object);
-	}
-
-	if (upl->flags & UPL_ACCESS_BLOCKED) {
-		assert(shadow_object->blocked_access);
-		shadow_object->blocked_access = FALSE;
-		vm_object_wakeup(object, VM_OBJECT_EVENT_UNBLOCKED);
-	}
-
-	dwp = &dw_array[0];
-	dw_count = 0;
-	dw_limit = DELAYED_WORK_LIMIT(DEFAULT_DELAYED_WORK_LIMIT);
-
-	if ((error & UPL_ABORT_DUMP_PAGES) && (upl->flags & UPL_KERNEL_OBJECT)) {
-		panic("upl_abort_range: kernel_object being DUMPED");
-	}
-
-	while (xfer_size) {
-		vm_page_t       t, m;
-		unsigned int    pg_num;
-		boolean_t       needed;
-
-		pg_num = (unsigned int) (target_offset / PAGE_SIZE);
-		assert(pg_num == target_offset / PAGE_SIZE);
-
-		needed = FALSE;
-
-		if (user_page_list) {
-			needed = user_page_list[pg_num].needed;
-		}
-
-		dwp->dw_mask = 0;
-		m = VM_PAGE_NULL;
-
-		if (upl->flags & UPL_LITE) {
-			if (lite_list[pg_num >> 5] & (1U << (pg_num & 31))) {
-				lite_list[pg_num >> 5] &= ~(1U << (pg_num & 31));
-
-				if (!(upl->flags & UPL_KERNEL_OBJECT)) {
-					m = vm_page_lookup(shadow_object, target_offset +
-					    (upl->offset - shadow_object->paging_offset));
-				}
-			}
-		}
-		if (upl->flags & UPL_SHADOWED) {
-			if ((t = vm_page_lookup(object, target_offset)) != VM_PAGE_NULL) {
-				t->vmp_free_when_done = FALSE;
-
-				VM_PAGE_FREE(t);
-
-				if (m == VM_PAGE_NULL) {
-					m = vm_page_lookup(shadow_object, target_offset + object->vo_shadow_offset);
-				}
-			}
-		}
-		if ((upl->flags & UPL_KERNEL_OBJECT)) {
-			goto abort_next_page;
-		}
-
-		if (m != VM_PAGE_NULL) {
-			assert(m->vmp_q_state != VM_PAGE_USED_BY_COMPRESSOR);
-
-			if (m->vmp_absent) {
-				boolean_t must_free = TRUE;
-
-				/*
-				 * COPYOUT = FALSE case
-				 * check for error conditions which must
-				 * be passed back to the pages customer
-				 */
-				if (error & UPL_ABORT_RESTART) {
-					m->vmp_restart = TRUE;
-					m->vmp_absent = FALSE;
-					m->vmp_unusual = TRUE;
-					must_free = FALSE;
-				} else if (error & UPL_ABORT_UNAVAILABLE) {
-					m->vmp_restart = FALSE;
-					m->vmp_unusual = TRUE;
-					must_free = FALSE;
-				} else if (error & UPL_ABORT_ERROR) {
-					m->vmp_restart = FALSE;
-					m->vmp_absent = FALSE;
-					m->vmp_error = TRUE;
-					m->vmp_unusual = TRUE;
-					must_free = FALSE;
-				}
-				if (m->vmp_clustered && needed == FALSE) {
-					/*
-					 * This page was a part of a speculative
-					 * read-ahead initiated by the kernel
-					 * itself.  No one is expecting this
-					 * page and no one will clean up its
-					 * error state if it ever becomes valid
-					 * in the future.
-					 * We have to free it here.
-					 */
-					must_free = TRUE;
-				}
-				m->vmp_cleaning = FALSE;
-
-				if (m->vmp_overwriting && !m->vmp_busy) {
-					/*
-					 * this shouldn't happen since
-					 * this is an 'absent' page, but
-					 * it doesn't hurt to check for
-					 * the 'alternate' method of
-					 * stabilizing the page...
-					 * we will mark 'busy' to be cleared
-					 * in the following code which will
-					 * take care of the primary stabilzation
-					 * method (i.e. setting 'busy' to TRUE)
-					 */
-					dwp->dw_mask |= DW_vm_page_unwire;
-				}
-				m->vmp_overwriting = FALSE;
-
-				dwp->dw_mask |= (DW_clear_busy | DW_PAGE_WAKEUP);
-
-				if (must_free == TRUE) {
-					dwp->dw_mask |= DW_vm_page_free;
-				} else {
-					dwp->dw_mask |= DW_vm_page_activate;
-				}
-			} else {
-				/*
-				 * Handle the trusted pager throttle.
-				 */
-				if (m->vmp_laundry) {
-					dwp->dw_mask |= DW_vm_pageout_throttle_up;
-				}
-
-				if (upl->flags & UPL_ACCESS_BLOCKED) {
-					/*
-					 * We blocked access to the pages in this UPL.
-					 * Clear the "busy" bit and wake up any waiter
-					 * for this page.
-					 */
-					dwp->dw_mask |= DW_clear_busy;
-				}
-				if (m->vmp_overwriting) {
-					if (m->vmp_busy) {
-						dwp->dw_mask |= DW_clear_busy;
-					} else {
-						/*
-						 * deal with the 'alternate' method
-						 * of stabilizing the page...
-						 * we will either free the page
-						 * or mark 'busy' to be cleared
-						 * in the following code which will
-						 * take care of the primary stabilzation
-						 * method (i.e. setting 'busy' to TRUE)
-						 */
-						dwp->dw_mask |= DW_vm_page_unwire;
-					}
-					m->vmp_overwriting = FALSE;
-				}
-				m->vmp_free_when_done = FALSE;
-				m->vmp_cleaning = FALSE;
-
-				if (error & UPL_ABORT_DUMP_PAGES) {
-					pmap_disconnect(VM_PAGE_GET_PHYS_PAGE(m));
-
-					dwp->dw_mask |= DW_vm_page_free;
-				} else {
-					if (!(dwp->dw_mask & DW_vm_page_unwire)) {
-						if (error & UPL_ABORT_REFERENCE) {
-							/*
-							 * we've been told to explictly
-							 * reference this page... for
-							 * file I/O, this is done by
-							 * implementing an LRU on the inactive q
-							 */
-							dwp->dw_mask |= DW_vm_page_lru;
-						} else if (!VM_PAGE_PAGEABLE(m)) {
-							dwp->dw_mask |= DW_vm_page_deactivate_internal;
-						}
-					}
-					dwp->dw_mask |= DW_PAGE_WAKEUP;
-				}
-			}
-		}
-abort_next_page:
-		target_offset += PAGE_SIZE_64;
-		xfer_size -= PAGE_SIZE;
-		entry++;
-
-		if (dwp->dw_mask) {
-			if (dwp->dw_mask & ~(DW_clear_busy | DW_PAGE_WAKEUP)) {
-				VM_PAGE_ADD_DELAYED_WORK(dwp, m, dw_count);
-
-				if (dw_count >= dw_limit) {
-					vm_page_do_delayed_work(shadow_object, VM_KERN_MEMORY_NONE, &dw_array[0], dw_count);
-
-					dwp = &dw_array[0];
-					dw_count = 0;
-				}
-			} else {
-				if (dwp->dw_mask & DW_clear_busy) {
-					m->vmp_busy = FALSE;
-				}
-
-				if (dwp->dw_mask & DW_PAGE_WAKEUP) {
-					PAGE_WAKEUP(m);
-				}
-			}
-		}
-	}
-	if (dw_count) {
-		vm_page_do_delayed_work(shadow_object, VM_KERN_MEMORY_NONE, &dw_array[0], dw_count);
-	}
-
-	occupied = 1;
-
-	if (upl->flags & UPL_DEVICE_MEMORY) {
-		occupied = 0;
-	} else if (upl->flags & UPL_LITE) {
-		int     pg_num;
-		int     i;
-
-		pg_num = upl->size / PAGE_SIZE;
-		pg_num = (pg_num + 31) >> 5;
-		occupied = 0;
-
-		for (i = 0; i < pg_num; i++) {
-			if (lite_list[i] != 0) {
-				occupied = 1;
-				break;
-			}
-		}
-	} else {
-		if (vm_page_queue_empty(&upl->map_object->memq)) {
-			occupied = 0;
-		}
-	}
-	if (occupied == 0) {
-		/*
-		 * If this UPL element belongs to a Vector UPL and is
-		 * empty, then this is the right function to deallocate
-		 * it. So go ahead set the *empty variable. The flag
-		 * UPL_COMMIT_NOTIFY_EMPTY, from the caller's point of view
-		 * should be considered relevant for the Vector UPL and
-		 * not the internal UPLs.
-		 */
-		if ((upl->flags & UPL_COMMIT_NOTIFY_EMPTY) || isVectorUPL) {
-			*empty = TRUE;
-		}
-
-		if (object == shadow_object && !(upl->flags & UPL_KERNEL_OBJECT)) {
-			/*
-			 * this is not a paging object
-			 * so we need to drop the paging reference
-			 * that was taken when we created the UPL
-			 * against this object
-			 */
-			vm_object_activity_end(shadow_object);
-			vm_object_collapse(shadow_object, 0, TRUE);
-		} else {
-			/*
-			 * we dontated the paging reference to
-			 * the map object... vm_pageout_object_terminate
-			 * will drop this reference
-			 */
-		}
-	}
-	vm_object_unlock(shadow_object);
-	if (object != shadow_object) {
-		vm_object_unlock(object);
-	}
-
-	if (!isVectorUPL) {
-		upl_unlock(upl);
-	} else {
-		/*
-		 * If we completed our operations on an UPL that is
-		 * part of a Vectored UPL and if empty is TRUE, then
-		 * we should go ahead and deallocate this UPL element.
-		 * Then we check if this was the last of the UPL elements
-		 * within that Vectored UPL. If so, set empty to TRUE
-		 * so that in ubc_upl_abort_range or ubc_upl_abort, we
-		 * can go ahead and deallocate the Vector UPL too.
-		 */
-		if (*empty == TRUE) {
-			*empty = vector_upl_set_subupl(vector_upl, upl, 0);
-			upl_deallocate(upl);
-		}
-		goto process_upl_to_abort;
-	}
-
-	return KERN_SUCCESS;
-}
-
-
-kern_return_t
-upl_abort(
-	upl_t   upl,
-	int     error)
-{
-	boolean_t       empty;
-
-	if (upl == UPL_NULL) {
-		return KERN_INVALID_ARGUMENT;
-	}
-
-	return upl_abort_range(upl, 0, upl->size, error, &empty);
-}
-
-
-/* an option on commit should be wire */
-kern_return_t
-upl_commit(
-	upl_t                   upl,
-	upl_page_info_t         *page_list,
-	mach_msg_type_number_t  count)
-{
-	boolean_t       empty;
-
-	if (upl == UPL_NULL) {
-		return KERN_INVALID_ARGUMENT;
-	}
-
-	return upl_commit_range(upl, 0, upl->size, 0, page_list, count, &empty);
-}
-
 
 void
 iopl_valid_data(
@@ -8248,7 +7624,7 @@ iopl_valid_data(
 
 	object = upl->map_object;
 
-	if (object == kernel_object || object == compressor_object) {
+	if (is_kernel_object(object) || object == compressor_object) {
 		panic("iopl_valid_data: object == kernel or compressor");
 	}
 
@@ -8258,21 +7634,27 @@ iopl_valid_data(
 		    object, object->purgable);
 	}
 
-	size = upl->size;
+	size = upl_adjusted_size(upl, PAGE_MASK);
 
 	vm_object_lock(object);
 	VM_OBJECT_WIRED_PAGE_UPDATE_START(object);
 
+	bool whole_object;
+
 	if (object->vo_size == size && object->resident_page_count == (size / PAGE_SIZE)) {
 		nxt_page = (vm_page_t)vm_page_queue_first(&object->memq);
+		whole_object = true;
 	} else {
-		offset = 0 + upl->offset - object->paging_offset;
+		offset = (vm_offset_t)(upl_adjusted_offset(upl, PAGE_MASK) - object->paging_offset);
+		whole_object = false;
 	}
 
 	while (size) {
-		if (nxt_page != VM_PAGE_NULL) {
-			m = nxt_page;
-			nxt_page = (vm_page_t)vm_page_queue_next(&nxt_page->vmp_listq);
+		if (whole_object) {
+			if (nxt_page != VM_PAGE_NULL) {
+				m = nxt_page;
+				nxt_page = (vm_page_t)vm_page_queue_next(&nxt_page->vmp_listq);
+			}
 		} else {
 			m = vm_page_lookup(object, offset);
 			offset += PAGE_SIZE;
@@ -8303,10 +7685,10 @@ iopl_valid_data(
 				m->vmp_q_state = VM_PAGE_IS_WIRED;
 				wired_count++;
 			} else {
-				panic("iopl_valid_data: %p already wired\n", m);
+				panic("iopl_valid_data: %p already wired", m);
 			}
 
-			PAGE_WAKEUP_DONE(m);
+			vm_page_wakeup_done(object, m);
 		}
 		size -= PAGE_SIZE;
 	}
@@ -8344,14 +7726,13 @@ vm_object_set_pmap_cache_attr(
 }
 
 
-boolean_t       vm_object_iopl_wire_full(vm_object_t, upl_t, upl_page_info_array_t, wpl_array_t, upl_control_flags_t, vm_tag_t);
-kern_return_t   vm_object_iopl_wire_empty(vm_object_t, upl_t, upl_page_info_array_t, wpl_array_t, upl_control_flags_t, vm_tag_t, vm_object_offset_t *, int, int*);
-
-
-
-boolean_t
-vm_object_iopl_wire_full(vm_object_t object, upl_t upl, upl_page_info_array_t user_page_list,
-    wpl_array_t lite_list, upl_control_flags_t cntrl_flags, vm_tag_t tag)
+static bool
+vm_object_iopl_wire_full(
+	vm_object_t             object,
+	upl_t                   upl,
+	upl_page_info_array_t   user_page_list,
+	upl_control_flags_t     cntrl_flags,
+	vm_tag_t                tag)
 {
 	vm_page_t       dst_page;
 	unsigned int    entry;
@@ -8364,7 +7745,7 @@ vm_object_iopl_wire_full(vm_object_t object, upl_t upl, upl_page_info_array_t us
 	assert(object->purgable != VM_PURGABLE_VOLATILE);
 	assert(object->purgable != VM_PURGABLE_EMPTY);
 	assert(object->pager == NULL);
-	assert(object->copy == NULL);
+	assert(object->vo_copy == NULL);
 	assert(object->shadow == NULL);
 
 	page_count = object->resident_page_count;
@@ -8376,7 +7757,7 @@ vm_object_iopl_wire_full(vm_object_t object, upl_t upl, upl_page_info_array_t us
 		if (dst_page->vmp_busy ||
 		    dst_page->vmp_fictitious ||
 		    dst_page->vmp_absent ||
-		    dst_page->vmp_error ||
+		    VMP_ERROR_GET(dst_page) ||
 		    dst_page->vmp_cleaning ||
 		    dst_page->vmp_restart ||
 		    dst_page->vmp_laundry) {
@@ -8396,7 +7777,7 @@ vm_object_iopl_wire_full(vm_object_t object, upl_t upl, upl_page_info_array_t us
 		}
 		entry = (unsigned int)(dst_page->vmp_offset / PAGE_SIZE);
 		assert(entry >= 0 && entry < object->resident_page_count);
-		lite_list[entry >> 5] |= 1U << (entry & 31);
+		bitmap_set(upl->lite_list, entry);
 
 		phys_page = VM_PAGE_GET_PHYS_PAGE(dst_page);
 
@@ -8435,10 +7816,16 @@ done:
 }
 
 
-kern_return_t
-vm_object_iopl_wire_empty(vm_object_t object, upl_t upl, upl_page_info_array_t user_page_list,
-    wpl_array_t lite_list, upl_control_flags_t cntrl_flags, vm_tag_t tag, vm_object_offset_t *dst_offset,
-    int page_count, int* page_grab_count)
+static kern_return_t
+vm_object_iopl_wire_empty(
+	vm_object_t             object,
+	upl_t                   upl,
+	upl_page_info_array_t   user_page_list,
+	upl_control_flags_t     cntrl_flags,
+	vm_tag_t                tag,
+	vm_object_offset_t     *dst_offset,
+	int                     page_count,
+	int                    *page_grab_count)
 {
 	vm_page_t       dst_page;
 	boolean_t       no_zero_fill = FALSE;
@@ -8455,7 +7842,7 @@ vm_object_iopl_wire_empty(vm_object_t object, upl_t upl, upl_page_info_array_t u
 	assert(object->purgable != VM_PURGABLE_VOLATILE);
 	assert(object->purgable != VM_PURGABLE_EMPTY);
 	assert(object->pager == NULL);
-	assert(object->copy == NULL);
+	assert(object->vo_copy == NULL);
 	assert(object->shadow == NULL);
 
 	if (cntrl_flags & UPL_SET_INTERRUPTIBLE) {
@@ -8480,7 +7867,7 @@ vm_object_iopl_wire_empty(vm_object_t object, upl_t upl, upl_page_info_array_t u
 		    == VM_PAGE_NULL) {
 			OSAddAtomic(page_count, &vm_upl_wait_for_pages);
 
-			VM_DEBUG_EVENT(vm_iopl_page_wait, VM_IOPL_PAGE_WAIT, DBG_FUNC_START, vm_upl_wait_for_pages, 0, 0, 0);
+			VM_DEBUG_EVENT(vm_iopl_page_wait, DBG_VM_IOPL_PAGE_WAIT, DBG_FUNC_START, vm_upl_wait_for_pages, 0, 0, 0);
 
 			if (vm_page_wait(interruptible) == FALSE) {
 				/*
@@ -8488,14 +7875,14 @@ vm_object_iopl_wire_empty(vm_object_t object, upl_t upl, upl_page_info_array_t u
 				 */
 				OSAddAtomic(-page_count, &vm_upl_wait_for_pages);
 
-				VM_DEBUG_EVENT(vm_iopl_page_wait, VM_IOPL_PAGE_WAIT, DBG_FUNC_END, vm_upl_wait_for_pages, 0, 0, -1);
+				VM_DEBUG_EVENT(vm_iopl_page_wait, DBG_VM_IOPL_PAGE_WAIT, DBG_FUNC_END, vm_upl_wait_for_pages, 0, 0, -1);
 
 				ret = MACH_SEND_INTERRUPTED;
 				goto done;
 			}
 			OSAddAtomic(-page_count, &vm_upl_wait_for_pages);
 
-			VM_DEBUG_EVENT(vm_iopl_page_wait, VM_IOPL_PAGE_WAIT, DBG_FUNC_END, vm_upl_wait_for_pages, 0, 0, 0);
+			VM_DEBUG_EVENT(vm_iopl_page_wait, DBG_VM_IOPL_PAGE_WAIT, DBG_FUNC_END, vm_upl_wait_for_pages, 0, 0, 0);
 		}
 		if (no_zero_fill == FALSE) {
 			vm_page_zero_fill(dst_page);
@@ -8515,13 +7902,13 @@ vm_object_iopl_wire_empty(vm_object_t object, upl_t upl, upl_page_info_array_t u
 			dst_page->vmp_q_state = VM_PAGE_IS_WIRED;
 			assert(dst_page->vmp_wire_count);
 			pages_wired++;
-			PAGE_WAKEUP_DONE(dst_page);
+			vm_page_wakeup_done(object, dst_page);
 		}
 		pages_inserted++;
 
 		vm_page_insert_internal(dst_page, object, *dst_offset, tag, FALSE, TRUE, TRUE, TRUE, &delayed_ledger_update);
 
-		lite_list[entry >> 5] |= 1U << (entry & 31);
+		bitmap_set(upl->lite_list, entry);
 
 		phys_page = VM_PAGE_GET_PHYS_PAGE(dst_page);
 
@@ -8565,6 +7952,8 @@ done:
 		int             ledger_idx_nonvolatile;
 		int             ledger_idx_volatile_compressed;
 		int             ledger_idx_nonvolatile_compressed;
+		int             ledger_idx_composite;
+		int             ledger_idx_external_wired;
 		boolean_t       do_footprint;
 
 		owner = VM_OBJECT_OWNER(object);
@@ -8575,17 +7964,40 @@ done:
 		    &ledger_idx_nonvolatile,
 		    &ledger_idx_volatile_compressed,
 		    &ledger_idx_nonvolatile_compressed,
+		    &ledger_idx_composite,
+		    &ledger_idx_external_wired,
 		    &do_footprint);
 
-		/* more non-volatile bytes */
-		ledger_credit(owner->ledger,
-		    ledger_idx_nonvolatile,
-		    delayed_ledger_update);
-		if (do_footprint) {
-			/* more footprint */
+		if (object->internal) {
+			/* more non-volatile bytes */
 			ledger_credit(owner->ledger,
-			    task_ledgers.phys_footprint,
+			    ledger_idx_nonvolatile,
 			    delayed_ledger_update);
+			if (do_footprint) {
+				/* more footprint */
+				ledger_credit(owner->ledger,
+				    task_ledgers.phys_footprint,
+				    delayed_ledger_update);
+			} else if (ledger_idx_composite != -1) {
+				ledger_credit(owner->ledger,
+				    ledger_idx_composite,
+				    delayed_ledger_update);
+			}
+		} else {
+			/* more external wired bytes */
+			ledger_credit(owner->ledger,
+			    ledger_idx_external_wired,
+			    delayed_ledger_update);
+			if (do_footprint) {
+				/* more footprint */
+				ledger_credit(owner->ledger,
+				    task_ledgers.phys_footprint,
+				    delayed_ledger_update);
+			} else if (ledger_idx_composite != -1) {
+				ledger_credit(owner->ledger,
+				    ledger_idx_composite,
+				    delayed_ledger_update);
+			}
 		}
 	}
 
@@ -8613,7 +8025,6 @@ vm_object_iopl_request(
 	upl_size_t              xfer_size;
 	upl_t                   upl = NULL;
 	unsigned int            entry;
-	wpl_array_t             lite_list = NULL;
 	int                     no_zero_fill = FALSE;
 	unsigned int            size_in_pages;
 	int                     page_grab_count = 0;
@@ -8621,8 +8032,9 @@ vm_object_iopl_request(
 	kern_return_t           ret;
 	vm_prot_t               prot;
 	struct vm_object_fault_info fault_info = {};
-	struct  vm_page_delayed_work    dw_array[DEFAULT_DELAYED_WORK_LIMIT];
-	struct  vm_page_delayed_work    *dwp;
+	struct  vm_page_delayed_work    dw_array;
+	struct  vm_page_delayed_work    *dwp, *dwp_start;
+	bool                    dwp_finish_ctx = TRUE;
 	int                     dw_count;
 	int                     dw_limit;
 	int                     dw_index;
@@ -8639,6 +8051,19 @@ vm_object_iopl_request(
 #if DEVELOPMENT || DEBUG
 	task_t                  task = current_task();
 #endif /* DEVELOPMENT || DEBUG */
+
+	dwp_start = dwp = NULL;
+
+	vm_object_offset_t original_offset = offset;
+	upl_size_t original_size = size;
+
+//	DEBUG4K_UPL("object %p offset 0x%llx size 0x%llx cntrl_flags 0x%llx\n", object, (uint64_t)offset, (uint64_t)size, cntrl_flags);
+
+	size = (upl_size_t)(vm_object_round_page(offset + size) - vm_object_trunc_page(offset));
+	offset = vm_object_trunc_page(offset);
+	if (size != original_size || offset != original_offset) {
+		DEBUG4K_IOKIT("flags 0x%llx object %p offset 0x%llx size 0x%x -> offset 0x%llx size 0x%x\n", cntrl_flags, object, original_offset, original_size, offset, size);
+	}
 
 	if (cntrl_flags & ~UPL_VALID_FLAGS) {
 		/*
@@ -8677,13 +8102,14 @@ vm_object_iopl_request(
 	}
 
 	if ((!object->internal) && (object->paging_offset != 0)) {
-		panic("vm_object_iopl_request: external object with non-zero paging offset\n");
+		panic("vm_object_iopl_request: external object with non-zero paging offset");
 	}
 
-	VM_DEBUG_CONSTANT_EVENT(vm_object_iopl_request, VM_IOPL_REQUEST, DBG_FUNC_START, size, cntrl_flags, prot, 0);
+
+	VM_DEBUG_CONSTANT_EVENT(vm_object_iopl_request, DBG_VM_IOPL_REQUEST, DBG_FUNC_START, size, cntrl_flags, prot, 0);
 
 #if CONFIG_IOSCHED || UPL_DEBUG
-	if ((object->io_tracking && object != kernel_object) || upl_debug_enabled) {
+	if ((object->io_tracking && !is_kernel_object(object)) || upl_debug_enabled) {
 		io_tracking_flag |= UPL_CREATE_IO_TRACKING;
 	}
 #endif
@@ -8691,7 +8117,7 @@ vm_object_iopl_request(
 #if CONFIG_IOSCHED
 	if (object->io_tracking) {
 		/* Check if we're dealing with the kernel object. We do not support expedite on kernel object UPLs */
-		if (object != kernel_object) {
+		if (!is_kernel_object(object)) {
 			io_tracking_flag |= UPL_CREATE_EXPEDITE_SUP;
 		}
 	}
@@ -8701,25 +8127,24 @@ vm_object_iopl_request(
 		psize = PAGE_SIZE;
 	} else {
 		psize = size;
+
+		dw_count = 0;
+		dw_limit = DELAYED_WORK_LIMIT(DEFAULT_DELAYED_WORK_LIMIT);
+		dwp_start = vm_page_delayed_work_get_ctx();
+		if (dwp_start == NULL) {
+			dwp_start = &dw_array;
+			dw_limit = 1;
+			dwp_finish_ctx = FALSE;
+		}
+
+		dwp = dwp_start;
 	}
 
 	if (cntrl_flags & UPL_SET_INTERNAL) {
 		upl = upl_create(UPL_CREATE_INTERNAL | UPL_CREATE_LITE | io_tracking_flag, UPL_IO_WIRE, psize);
-
-		user_page_list = (upl_page_info_t *) (((uintptr_t)upl) + sizeof(struct upl));
-		lite_list = (wpl_array_t) (((uintptr_t)user_page_list) +
-		    ((psize / PAGE_SIZE) * sizeof(upl_page_info_t)));
-		if (size == 0) {
-			user_page_list = NULL;
-			lite_list = NULL;
-		}
+		user_page_list = size ? upl->page_list : NULL;
 	} else {
 		upl = upl_create(UPL_CREATE_LITE | io_tracking_flag, UPL_IO_WIRE, psize);
-
-		lite_list = (wpl_array_t) (((uintptr_t)upl) + sizeof(struct upl));
-		if (size == 0) {
-			lite_list = NULL;
-		}
 	}
 	if (user_page_list) {
 		user_page_list[0].device = FALSE;
@@ -8735,11 +8160,12 @@ vm_object_iopl_request(
 	}
 
 	upl->map_object = object;
-	upl->size = size;
+	upl->u_offset = original_offset;
+	upl->u_size = original_size;
 
 	size_in_pages = size / PAGE_SIZE;
 
-	if (object == kernel_object &&
+	if (is_kernel_object(object) &&
 	    !(cntrl_flags & (UPL_NEED_32BIT_ADDR | UPL_BLOCK_ACCESS))) {
 		upl->flags |= UPL_KERNEL_OBJECT;
 #if UPL_DEBUG
@@ -8754,7 +8180,7 @@ vm_object_iopl_request(
 	/*
 	 * paging in progress also protects the paging_offset
 	 */
-	upl->offset = offset + object->paging_offset;
+	upl->u_offset = original_offset + object->paging_offset;
 
 	if (cntrl_flags & UPL_BLOCK_ACCESS) {
 		/*
@@ -8765,7 +8191,7 @@ vm_object_iopl_request(
 	}
 
 #if CONFIG_IOSCHED || UPL_DEBUG
-	if (upl->flags & UPL_TRACKED_BY_OBJECT) {
+	if ((upl->flags & UPL_TRACKED_BY_OBJECT) || upl_debug_enabled) {
 		vm_object_activity_begin(object);
 		queue_enter(&object->uplq, upl, upl_t, uplq);
 	}
@@ -8799,7 +8225,7 @@ vm_object_iopl_request(
 			}
 		}
 
-		VM_DEBUG_CONSTANT_EVENT(vm_object_iopl_request, VM_IOPL_REQUEST, DBG_FUNC_END, page_grab_count, KERN_SUCCESS, 0, 0);
+		VM_DEBUG_CONSTANT_EVENT(vm_object_iopl_request, DBG_VM_IOPL_REQUEST, DBG_FUNC_END, page_grab_count, KERN_SUCCESS, 0, 0);
 #if DEVELOPMENT || DEBUG
 		if (task != NULL) {
 			ledger_credit(task->ledger, task_ledgers.pages_grabbed_iopl, page_grab_count);
@@ -8807,28 +8233,21 @@ vm_object_iopl_request(
 #endif /* DEVELOPMENT || DEBUG */
 		return KERN_SUCCESS;
 	}
-	if (object != kernel_object && object != compressor_object) {
+	if (!is_kernel_object(object) && object != compressor_object) {
 		/*
 		 * Protect user space from future COW operations
 		 */
 #if VM_OBJECT_TRACKING_OP_TRUESHARE
 		if (!object->true_share &&
-		    vm_object_tracking_inited) {
-			void *bt[VM_OBJECT_TRACKING_BTDEPTH];
-			int num = 0;
-
-			num = OSBacktrace(bt,
-			    VM_OBJECT_TRACKING_BTDEPTH);
-			btlog_add_entry(vm_object_tracking_btlog,
-			    object,
+		    vm_object_tracking_btlog) {
+			btlog_record(vm_object_tracking_btlog, object,
 			    VM_OBJECT_TRACKING_OP_TRUESHARE,
-			    bt,
-			    num);
+			    btref_get(__builtin_frame_address(0), 0));
 		}
 #endif /* VM_OBJECT_TRACKING_OP_TRUESHARE */
 
 		vm_object_lock_assert_exclusive(object);
-		object->true_share = TRUE;
+		VM_OBJECT_SET_TRUE_SHARE(object, TRUE);
 
 		if (object->copy_strategy == MEMORY_OBJECT_COPY_SYMMETRIC) {
 			object->copy_strategy = MEMORY_OBJECT_COPY_DELAY;
@@ -8836,7 +8255,7 @@ vm_object_iopl_request(
 	}
 
 	if (!(cntrl_flags & UPL_COPYOUT_FROM) &&
-	    object->copy != VM_OBJECT_NULL) {
+	    object->vo_copy != VM_OBJECT_NULL) {
 		/*
 		 * Honor copy-on-write obligations
 		 *
@@ -8868,18 +8287,18 @@ vm_object_iopl_request(
 	if (!(cntrl_flags & (UPL_NEED_32BIT_ADDR | UPL_BLOCK_ACCESS)) &&
 	    object->purgable != VM_PURGABLE_VOLATILE &&
 	    object->purgable != VM_PURGABLE_EMPTY &&
-	    object->copy == NULL &&
+	    object->vo_copy == NULL &&
 	    size == object->vo_size &&
 	    offset == 0 &&
 	    object->shadow == NULL &&
 	    object->pager == NULL) {
 		if (object->resident_page_count == size_in_pages) {
 			assert(object != compressor_object);
-			assert(object != kernel_object);
+			assert(!is_kernel_object(object));
 			fast_path_full_req = TRUE;
 		} else if (object->resident_page_count == 0) {
 			assert(object != compressor_object);
-			assert(object != kernel_object);
+			assert(!is_kernel_object(object));
 			fast_path_empty_req = TRUE;
 			set_cache_attr_needed = TRUE;
 		}
@@ -8895,10 +8314,9 @@ vm_object_iopl_request(
 
 	xfer_size = size;
 	dst_offset = offset;
-	dw_count = 0;
 
 	if (fast_path_full_req) {
-		if (vm_object_iopl_wire_full(object, upl, user_page_list, lite_list, cntrl_flags, tag) == TRUE) {
+		if (vm_object_iopl_wire_full(object, upl, user_page_list, cntrl_flags, tag) == TRUE) {
 			goto finish;
 		}
 		/*
@@ -8910,7 +8328,8 @@ vm_object_iopl_request(
 			ret = KERN_MEMORY_ERROR;
 			goto return_err;
 		}
-		ret = vm_object_iopl_wire_empty(object, upl, user_page_list, lite_list, cntrl_flags, tag, &dst_offset, size_in_pages, &page_grab_count);
+		ret = vm_object_iopl_wire_empty(object, upl, user_page_list,
+		    cntrl_flags, tag, &dst_offset, size_in_pages, &page_grab_count);
 
 		if (ret) {
 			free_wired_pages = TRUE;
@@ -8926,9 +8345,6 @@ vm_object_iopl_request(
 	fault_info.interruptible = interruptible;
 	fault_info.batch_pmap_op = TRUE;
 
-	dwp = &dw_array[0];
-	dw_limit = DELAYED_WORK_LIMIT(DEFAULT_DELAYED_WORK_LIMIT);
-
 	while (xfer_size) {
 		vm_fault_return_t       result;
 
@@ -8943,7 +8359,7 @@ vm_object_iopl_request(
 			 * the following check is needed to determine whether
 			 * this page was already processed in the fast path
 			 */
-			if (lite_list[entry >> 5] & (1 << (entry & 31))) {
+			if (bitmap_test(upl->lite_list, entry)) {
 				goto skip_page;
 			}
 		}
@@ -8951,21 +8367,36 @@ vm_object_iopl_request(
 
 		if (dst_page == VM_PAGE_NULL ||
 		    dst_page->vmp_busy ||
-		    dst_page->vmp_error ||
+		    VMP_ERROR_GET(dst_page) ||
 		    dst_page->vmp_restart ||
 		    dst_page->vmp_absent ||
 		    dst_page->vmp_fictitious) {
-			if (object == kernel_object) {
-				panic("vm_object_iopl_request: missing/bad page in kernel object\n");
+			if (is_kernel_object(object)) {
+				panic("vm_object_iopl_request: missing/bad page in kernel object");
 			}
 			if (object == compressor_object) {
-				panic("vm_object_iopl_request: missing/bad page in compressor object\n");
+				panic("vm_object_iopl_request: missing/bad page in compressor object");
 			}
 
 			if (cntrl_flags & UPL_REQUEST_NO_FAULT) {
 				ret = KERN_MEMORY_ERROR;
 				goto return_err;
 			}
+
+			if (dst_page != VM_PAGE_NULL &&
+			    dst_page->vmp_busy) {
+				wait_result_t wait_result;
+				vm_object_lock_assert_exclusive(object);
+				wait_result = vm_page_sleep(object, dst_page,
+				    interruptible, LCK_SLEEP_DEFAULT);
+				if (wait_result == THREAD_AWAKENED ||
+				    wait_result == THREAD_RESTART) {
+					continue;
+				}
+				ret = MACH_SEND_INTERRUPTED;
+				goto return_err;
+			}
+
 			set_cache_attr_needed = TRUE;
 
 			/*
@@ -8990,7 +8421,7 @@ vm_object_iopl_request(
 				    &prot, &dst_page, &top_page,
 				    (int *)0,
 				    &error_code, no_zero_fill,
-				    FALSE, &fault_info);
+				    &fault_info);
 
 				/* our lookup is no longer valid at this point */
 				caller_lookup = FALSE;
@@ -9000,7 +8431,7 @@ vm_object_iopl_request(
 					page_grab_count++;
 
 					if (!dst_page->vmp_absent) {
-						PAGE_WAKEUP_DONE(dst_page);
+						vm_page_wakeup_done(object, dst_page);
 					} else {
 						/*
 						 * we only get back an absent page if we
@@ -9047,24 +8478,25 @@ vm_object_iopl_request(
 				case VM_FAULT_MEMORY_SHORTAGE:
 					OSAddAtomic((size_in_pages - entry), &vm_upl_wait_for_pages);
 
-					VM_DEBUG_EVENT(vm_iopl_page_wait, VM_IOPL_PAGE_WAIT, DBG_FUNC_START, vm_upl_wait_for_pages, 0, 0, 0);
+					VM_DEBUG_EVENT(vm_iopl_page_wait, DBG_VM_IOPL_PAGE_WAIT, DBG_FUNC_START, vm_upl_wait_for_pages, 0, 0, 0);
 
 					if (vm_page_wait(interruptible)) {
 						OSAddAtomic(-(size_in_pages - entry), &vm_upl_wait_for_pages);
 
-						VM_DEBUG_EVENT(vm_iopl_page_wait, VM_IOPL_PAGE_WAIT, DBG_FUNC_END, vm_upl_wait_for_pages, 0, 0, 0);
+						VM_DEBUG_EVENT(vm_iopl_page_wait, DBG_VM_IOPL_PAGE_WAIT, DBG_FUNC_END, vm_upl_wait_for_pages, 0, 0, 0);
 						vm_object_lock(object);
 
 						break;
 					}
 					OSAddAtomic(-(size_in_pages - entry), &vm_upl_wait_for_pages);
 
-					VM_DEBUG_EVENT(vm_iopl_page_wait, VM_IOPL_PAGE_WAIT, DBG_FUNC_END, vm_upl_wait_for_pages, 0, 0, -1);
-
-				/* fall thru */
+					VM_DEBUG_EVENT(vm_iopl_page_wait, DBG_VM_IOPL_PAGE_WAIT, DBG_FUNC_END, vm_upl_wait_for_pages, 0, 0, -1);
+					ktriage_record(thread_tid(current_thread()), KDBG_TRIAGE_EVENTID(KDBG_TRIAGE_SUBSYS_VM, KDBG_TRIAGE_RESERVED, KDBG_TRIAGE_VM_FAULT_OBJIOPLREQ_MEMORY_SHORTAGE), 0 /* arg */);
+					OS_FALLTHROUGH;
 
 				case VM_FAULT_INTERRUPTED:
 					error_code = MACH_SEND_INTERRUPTED;
+					OS_FALLTHROUGH;
 				case VM_FAULT_MEMORY_ERROR:
 memory_error:
 					ret = (error_code ? error_code: KERN_MEMORY_ERROR);
@@ -9107,7 +8539,7 @@ memory_error:
 			 * then try again.
 			 */
 			VM_PAGEOUT_DEBUG(vm_object_iopl_request_sleep_for_cleaning, 1);
-			PAGE_SLEEP(object, dst_page, THREAD_UNINT);
+			vm_page_sleep(object, dst_page, THREAD_UNINT, LCK_SLEEP_EXCLUSIVE);
 			continue;
 		}
 		if (dst_page->vmp_laundry) {
@@ -9207,8 +8639,8 @@ memory_error:
 			 * all pmaps so processes have to fault it back in and
 			 * deal with the tainted bit.
 			 */
-			if (object->code_signed && dst_page->vmp_cs_tainted == FALSE) {
-				dst_page->vmp_cs_tainted = TRUE;
+			if (object->code_signed && dst_page->vmp_cs_tainted != VMP_CS_ALL_TRUE) {
+				dst_page->vmp_cs_tainted = VMP_CS_ALL_TRUE;
 				vm_page_iopl_tainted++;
 				if (dst_page->vmp_pmapped) {
 					int refmod = pmap_disconnect(VM_PAGE_GET_PHYS_PAGE(dst_page));
@@ -9228,7 +8660,7 @@ record_phys_addr:
 			upl->flags |= UPL_HAS_BUSY;
 		}
 
-		lite_list[entry >> 5] |= 1U << (entry & 31);
+		bitmap_set(upl->lite_list, entry);
 
 		if (phys_page > upl->highest_page) {
 			upl->highest_page = phys_page;
@@ -9252,7 +8684,7 @@ record_phys_addr:
 			user_page_list[entry].cs_nx = dst_page->vmp_cs_nx;
 			user_page_list[entry].mark      = FALSE;
 		}
-		if (object != kernel_object && object != compressor_object) {
+		if (!is_kernel_object(object) && object != compressor_object) {
 			/*
 			 * someone is explicitly grabbing this page...
 			 * update clustered and speculative state
@@ -9271,9 +8703,9 @@ skip_page:
 			VM_PAGE_ADD_DELAYED_WORK(dwp, dst_page, dw_count);
 
 			if (dw_count >= dw_limit) {
-				vm_page_do_delayed_work(object, tag, &dw_array[0], dw_count);
+				vm_page_do_delayed_work(object, tag, dwp_start, dw_count);
 
-				dwp = &dw_array[0];
+				dwp = dwp_start;
 				dw_count = 0;
 			}
 		}
@@ -9281,7 +8713,9 @@ skip_page:
 	assert(entry == size_in_pages);
 
 	if (dw_count) {
-		vm_page_do_delayed_work(object, tag, &dw_array[0], dw_count);
+		vm_page_do_delayed_work(object, tag, dwp_start, dw_count);
+		dwp = dwp_start;
+		dw_count = 0;
 	}
 finish:
 	if (user_page_list && set_cache_attr_needed == TRUE) {
@@ -9305,17 +8739,25 @@ finish:
 		 * can't be accessed without causing a page fault.
 		 */
 		vm_object_pmap_protect(object, offset, (vm_object_size_t)size,
-		    PMAP_NULL, 0, VM_PROT_NONE);
+		    PMAP_NULL,
+		    PAGE_SIZE,
+		    0, VM_PROT_NONE);
 		assert(!object->blocked_access);
 		object->blocked_access = TRUE;
 	}
 
-	VM_DEBUG_CONSTANT_EVENT(vm_object_iopl_request, VM_IOPL_REQUEST, DBG_FUNC_END, page_grab_count, KERN_SUCCESS, 0, 0);
+	VM_DEBUG_CONSTANT_EVENT(vm_object_iopl_request, DBG_VM_IOPL_REQUEST, DBG_FUNC_END, page_grab_count, KERN_SUCCESS, 0, 0);
 #if DEVELOPMENT || DEBUG
 	if (task != NULL) {
 		ledger_credit(task->ledger, task_ledgers.pages_grabbed_iopl, page_grab_count);
 	}
 #endif /* DEVELOPMENT || DEBUG */
+
+	if (dwp_start && dwp_finish_ctx) {
+		vm_page_delayed_work_finish_ctx(dwp_start);
+		dwp_start = dwp = NULL;
+	}
+
 	return KERN_SUCCESS;
 
 return_err:
@@ -9323,11 +8765,12 @@ return_err:
 
 	for (; offset < dst_offset; offset += PAGE_SIZE) {
 		boolean_t need_unwire;
+		bool need_wakeup;
 
 		dst_page = vm_page_lookup(object, offset);
 
 		if (dst_page == VM_PAGE_NULL) {
-			panic("vm_object_iopl_request: Wired page missing. \n");
+			panic("vm_object_iopl_request: Wired page missing.");
 		}
 
 		/*
@@ -9342,14 +8785,25 @@ return_err:
 		 */
 		need_unwire = TRUE;
 
+		need_wakeup = false;
 		if (dw_count) {
-			if (dw_array[dw_index].dw_m == dst_page) {
+			if ((dwp_start)[dw_index].dw_m == dst_page) {
 				/*
 				 * still in the deferred work list
 				 * which means we haven't yet called
 				 * vm_page_wire on this page
 				 */
 				need_unwire = FALSE;
+
+				if (dst_page->vmp_busy &&
+				    ((dwp_start)[dw_index].dw_mask & DW_clear_busy)) {
+					/*
+					 * It's our own "busy" bit, so we need to clear it
+					 * now and wake up waiters below.
+					 */
+					dst_page->vmp_busy = false;
+					need_wakeup = true;
+				}
 
 				dw_index++;
 				dw_count--;
@@ -9365,13 +8819,19 @@ return_err:
 			if (need_unwire == TRUE) {
 				vm_page_unwire(dst_page, TRUE);
 			}
-
-			PAGE_WAKEUP_DONE(dst_page);
+			if (dst_page->vmp_busy) {
+				/* not our "busy" or we would have cleared it above */
+				assert(!need_wakeup);
+			}
+			if (need_wakeup) {
+				assert(!dst_page->vmp_busy);
+				vm_page_wakeup(object, dst_page);
+			}
 		}
 		vm_page_unlock_queues();
 
 		if (need_unwire == TRUE) {
-			VM_STAT_INCR(reactivations);
+			counter_inc(&vm_statistics_reactivations);
 		}
 	}
 #if UPL_DEBUG
@@ -9384,12 +8844,17 @@ return_err:
 	vm_object_unlock(object);
 	upl_destroy(upl);
 
-	VM_DEBUG_CONSTANT_EVENT(vm_object_iopl_request, VM_IOPL_REQUEST, DBG_FUNC_END, page_grab_count, ret, 0, 0);
+	VM_DEBUG_CONSTANT_EVENT(vm_object_iopl_request, DBG_VM_IOPL_REQUEST, DBG_FUNC_END, page_grab_count, ret, 0, 0);
 #if DEVELOPMENT || DEBUG
 	if (task != NULL) {
 		ledger_credit(task->ledger, task_ledgers.pages_grabbed_iopl, page_grab_count);
 	}
 #endif /* DEVELOPMENT || DEBUG */
+
+	if (dwp_start && dwp_finish_ctx) {
+		vm_page_delayed_work_finish_ctx(dwp_start);
+		dwp_start = dwp = NULL;
+	}
 	return ret;
 }
 
@@ -9402,6 +8867,7 @@ upl_transpose(
 	boolean_t               upls_locked;
 	vm_object_t             object1, object2;
 
+	/* LD: Should mapped UPLs be eligible for a transpose? */
 	if (upl1 == UPL_NULL || upl2 == UPL_NULL || upl1 == upl2 || ((upl1->flags & UPL_VECTOR) == UPL_VECTOR) || ((upl2->flags & UPL_VECTOR) == UPL_VECTOR)) {
 		return KERN_INVALID_ARGUMENT;
 	}
@@ -9424,8 +8890,8 @@ upl_transpose(
 	object1 = upl1->map_object;
 	object2 = upl2->map_object;
 
-	if (upl1->offset != 0 || upl2->offset != 0 ||
-	    upl1->size != upl2->size) {
+	if (upl1->u_offset != 0 || upl2->u_offset != 0 ||
+	    upl1->u_size != upl2->u_size) {
 		/*
 		 * We deal only with full objects, not subsets.
 		 * That's because we exchange the entire backing store info
@@ -9440,7 +8906,7 @@ upl_transpose(
 	 * Tranpose the VM objects' backing store.
 	 */
 	retval = vm_object_transpose(object1, object2,
-	    (vm_object_size_t) upl1->size);
+	    upl_adjusted_size(upl1, PAGE_MASK));
 
 	if (retval == KERN_SUCCESS) {
 		/*
@@ -9452,10 +8918,10 @@ upl_transpose(
 			vm_object_lock(object1);
 			vm_object_lock(object2);
 		}
-		if (upl1->flags & UPL_TRACKED_BY_OBJECT) {
+		if ((upl1->flags & UPL_TRACKED_BY_OBJECT) || upl_debug_enabled) {
 			queue_remove(&object1->uplq, upl1, upl_t, uplq);
 		}
-		if (upl2->flags & UPL_TRACKED_BY_OBJECT) {
+		if ((upl2->flags & UPL_TRACKED_BY_OBJECT) || upl_debug_enabled) {
 			queue_remove(&object2->uplq, upl2, upl_t, uplq);
 		}
 #endif
@@ -9463,10 +8929,10 @@ upl_transpose(
 		upl2->map_object = object1;
 
 #if CONFIG_IOSCHED || UPL_DEBUG
-		if (upl1->flags & UPL_TRACKED_BY_OBJECT) {
+		if ((upl1->flags & UPL_TRACKED_BY_OBJECT) || upl_debug_enabled) {
 			queue_enter(&object2->uplq, upl1, upl_t, uplq);
 		}
-		if (upl2->flags & UPL_TRACKED_BY_OBJECT) {
+		if ((upl2->flags & UPL_TRACKED_BY_OBJECT) || upl_debug_enabled) {
 			queue_enter(&object1->uplq, upl2, upl_t, uplq);
 		}
 		if ((upl1->flags & UPL_TRACKED_BY_OBJECT) || (upl2->flags & UPL_TRACKED_BY_OBJECT)) {
@@ -9495,19 +8961,16 @@ upl_range_needed(
 	int             index,
 	int             count)
 {
-	upl_page_info_t *user_page_list;
 	int             size_in_pages;
 
 	if (!(upl->flags & UPL_INTERNAL) || count <= 0) {
 		return;
 	}
 
-	size_in_pages = upl->size / PAGE_SIZE;
-
-	user_page_list = (upl_page_info_t *) (((uintptr_t)upl) + sizeof(struct upl));
+	size_in_pages = upl_adjusted_size(upl, PAGE_MASK) / PAGE_SIZE;
 
 	while (count-- && index < size_in_pages) {
-		user_page_list[index++].needed = TRUE;
+		upl->page_list[index++].needed = TRUE;
 	}
 }
 
@@ -9521,10 +8984,10 @@ upl_range_needed(
  * virtaul address space each time we need to work with
  * a physical page.
  */
-decl_simple_lock_data(, vm_paging_lock);
+SIMPLE_LOCK_DECLARE(vm_paging_lock, 0);
 #define VM_PAGING_NUM_PAGES     64
-vm_map_offset_t vm_paging_base_address = 0;
-boolean_t       vm_paging_page_inuse[VM_PAGING_NUM_PAGES] = { FALSE, };
+SECURITY_READ_ONLY_LATE(vm_offset_t) vm_paging_base_address = 0;
+bool            vm_paging_page_inuse[VM_PAGING_NUM_PAGES] = { FALSE, };
 int             vm_paging_max_index = 0;
 int             vm_paging_page_waiter = 0;
 int             vm_paging_page_waiter_total = 0;
@@ -9535,42 +8998,16 @@ unsigned long   vm_paging_pages_mapped = 0;
 unsigned long   vm_paging_objects_mapped_slow = 0;
 unsigned long   vm_paging_pages_mapped_slow = 0;
 
-void
+__startup_func
+static void
 vm_paging_map_init(void)
 {
-	kern_return_t   kr;
-	vm_map_offset_t page_map_offset;
-	vm_map_entry_t  map_entry;
-
-	assert(vm_paging_base_address == 0);
-
-	/*
-	 * Initialize our pool of pre-allocated kernel
-	 * virtual addresses.
-	 */
-	page_map_offset = 0;
-	kr = vm_map_find_space(kernel_map,
-	    &page_map_offset,
-	    VM_PAGING_NUM_PAGES * PAGE_SIZE,
-	    0,
-	    0,
-	    VM_MAP_KERNEL_FLAGS_NONE,
-	    VM_KERN_MEMORY_NONE,
-	    &map_entry);
-	if (kr != KERN_SUCCESS) {
-		panic("vm_paging_map_init: kernel_map full\n");
-	}
-	VME_OBJECT_SET(map_entry, kernel_object);
-	VME_OFFSET_SET(map_entry, page_map_offset);
-	map_entry->protection = VM_PROT_NONE;
-	map_entry->max_protection = VM_PROT_NONE;
-	map_entry->permanent = TRUE;
-	vm_object_reference(kernel_object);
-	vm_map_unlock(kernel_map);
-
-	assert(vm_paging_base_address == 0);
-	vm_paging_base_address = page_map_offset;
+	kmem_alloc(kernel_map, &vm_paging_base_address,
+	    ptoa(VM_PAGING_NUM_PAGES),
+	    KMA_DATA | KMA_NOFAIL | KMA_KOBJECT | KMA_PERMANENT | KMA_PAGEABLE,
+	    VM_KERN_MEMORY_NONE);
 }
+STARTUP(ZALLOC, STARTUP_RANK_LAST, vm_paging_map_init);
 
 /*
  * vm_paging_map_object:
@@ -9679,14 +9116,13 @@ vm_paging_map_object(
 			 * or this pmap mapping might get undone by a
 			 * vm_object_pmap_protect() call...
 			 */
-			PMAP_ENTER(kernel_pmap,
+			kr = pmap_enter_check(kernel_pmap,
 			    page_map_offset,
 			    page,
 			    protection,
 			    VM_PROT_NONE,
 			    0,
-			    TRUE,
-			    kr);
+			    TRUE);
 			assert(kr == KERN_SUCCESS);
 			vm_paging_objects_mapped++;
 			vm_paging_pages_mapped++;
@@ -9723,7 +9159,9 @@ vm_paging_map_object(
 
 	/*
 	 * Try and map the required range of the object
-	 * in the kernel_map
+	 * in the kernel_map. Given that allocation is
+	 * for pageable memory, it shouldn't contain
+	 * pointers and is mapped into the data range.
 	 */
 
 	vm_object_reference_locked(object);     /* for the map entry */
@@ -9733,9 +9171,7 @@ vm_paging_map_object(
 	    address,
 	    map_size,
 	    0,
-	    VM_FLAGS_ANYWHERE,
-	    VM_MAP_KERNEL_FLAGS_NONE,
-	    VM_KERN_MEMORY_NONE,
+	    VM_MAP_KERNEL_FLAGS_DATA_ANYWHERE(),
 	    object,
 	    object_offset,
 	    FALSE,
@@ -9771,9 +9207,7 @@ vm_paging_map_object(
 		if (page == VM_PAGE_NULL) {
 			printf("vm_paging_map_object: no page !?");
 			vm_object_unlock(object);
-			kr = vm_map_remove(kernel_map, *address, *size,
-			    VM_MAP_REMOVE_NO_FLAGS);
-			assert(kr == KERN_SUCCESS);
+			vm_map_remove(kernel_map, *address, *size);
 			*address = 0;
 			*size = 0;
 			*need_unmap = FALSE;
@@ -9782,15 +9216,13 @@ vm_paging_map_object(
 		}
 		page->vmp_pmapped = TRUE;
 
-		//assert(pmap_verify_free(VM_PAGE_GET_PHYS_PAGE(page)));
-		PMAP_ENTER(kernel_pmap,
+		kr = pmap_enter_check(kernel_pmap,
 		    *address + page_map_offset,
 		    page,
 		    protection,
 		    VM_PROT_NONE,
 		    0,
-		    TRUE,
-		    kr);
+		    TRUE);
 		assert(kr == KERN_SUCCESS);
 #if KASAN
 		kasan_notify_address(*address + page_map_offset, PAGE_SIZE);
@@ -9819,7 +9251,6 @@ vm_paging_unmap_object(
 	vm_map_offset_t start,
 	vm_map_offset_t end)
 {
-	kern_return_t   kr;
 	int             i;
 
 	if ((vm_paging_base_address == 0) ||
@@ -9834,12 +9265,10 @@ vm_paging_unmap_object(
 		if (object != VM_OBJECT_NULL) {
 			vm_object_unlock(object);
 		}
-		kr = vm_map_remove(kernel_map, start, end,
-		    VM_MAP_REMOVE_NO_FLAGS);
+		vm_map_remove(kernel_map, start, end);
 		if (object != VM_OBJECT_NULL) {
 			vm_object_lock(object);
 		}
-		assert(kr == KERN_SUCCESS);
 	} else {
 		/*
 		 * We used a kernel virtual address from our
@@ -9889,67 +9318,80 @@ vm_pageout_steal_laundry(vm_page_t page, boolean_t queues_locked)
 	}
 }
 
+#define VECTOR_UPL_ELEMENTS_UPPER_LIMIT 64
+
 upl_t
-vector_upl_create(vm_offset_t upl_offset)
+vector_upl_create(vm_offset_t upl_offset, uint32_t max_upls)
 {
-	int     vector_upl_size  = sizeof(struct _vector_upl);
 	int i = 0;
 	upl_t   upl;
-	vector_upl_t vector_upl = (vector_upl_t)kalloc(vector_upl_size);
+
+	assert(max_upls > 0);
+	if (max_upls == 0) {
+		return NULL;
+	}
+
+	if (max_upls > VECTOR_UPL_ELEMENTS_UPPER_LIMIT) {
+		max_upls = VECTOR_UPL_ELEMENTS_UPPER_LIMIT;
+	}
+	vector_upl_t vector_upl = kalloc_type(struct _vector_upl, typeof(vector_upl->upls[0]), max_upls, Z_WAITOK | Z_NOFAIL);
 
 	upl = upl_create(0, UPL_VECTOR, 0);
 	upl->vector_upl = vector_upl;
-	upl->offset = upl_offset;
+	upl->u_offset = upl_offset;
 	vector_upl->size = 0;
 	vector_upl->offset = upl_offset;
 	vector_upl->invalid_upls = 0;
 	vector_upl->num_upls = 0;
 	vector_upl->pagelist = NULL;
+	vector_upl->max_upls = max_upls;
 
-	for (i = 0; i < MAX_VECTOR_UPL_ELEMENTS; i++) {
-		vector_upl->upl_iostates[i].size = 0;
-		vector_upl->upl_iostates[i].offset = 0;
+	for (i = 0; i < max_upls; i++) {
+		vector_upl->upls[i].iostate.size = 0;
+		vector_upl->upls[i].iostate.offset = 0;
 	}
 	return upl;
+}
+
+upl_size_t
+vector_upl_get_size(const upl_t upl)
+{
+	if (!vector_upl_is_valid(upl)) {
+		return upl_get_size(upl);
+	} else {
+		return round_page_32(upl->vector_upl->size);
+	}
+}
+
+uint32_t
+vector_upl_max_upls(const upl_t upl)
+{
+	if (!vector_upl_is_valid(upl)) {
+		return 0;
+	}
+	return ((vector_upl_t)(upl->vector_upl))->max_upls;
 }
 
 void
 vector_upl_deallocate(upl_t upl)
 {
-	if (upl) {
-		vector_upl_t vector_upl = upl->vector_upl;
-		if (vector_upl) {
-			if (vector_upl->invalid_upls != vector_upl->num_upls) {
-				panic("Deallocating non-empty Vectored UPL\n");
-			}
-			kfree(vector_upl->pagelist, (sizeof(struct upl_page_info) * (vector_upl->size / PAGE_SIZE)));
-			vector_upl->invalid_upls = 0;
-			vector_upl->num_upls = 0;
-			vector_upl->pagelist = NULL;
-			vector_upl->size = 0;
-			vector_upl->offset = 0;
-			kfree(vector_upl, sizeof(struct _vector_upl));
-			vector_upl = (vector_upl_t)0xfeedfeed;
-		} else {
-			panic("vector_upl_deallocate was passed a non-vectored upl\n");
-		}
-	} else {
-		panic("vector_upl_deallocate was passed a NULL upl\n");
+	vector_upl_t vector_upl = upl->vector_upl;
+
+	assert(vector_upl_is_valid(upl));
+
+	if (vector_upl->invalid_upls != vector_upl->num_upls) {
+		panic("Deallocating non-empty Vectored UPL");
 	}
+	uint32_t max_upls = vector_upl->max_upls;
+	kfree_type(struct upl_page_info, atop(vector_upl->size), vector_upl->pagelist);
+	kfree_type(struct _vector_upl, typeof(vector_upl->upls[0]), max_upls, vector_upl);
+	upl->vector_upl = NULL;
 }
 
 boolean_t
 vector_upl_is_valid(upl_t upl)
 {
-	if (upl && ((upl->flags & UPL_VECTOR) == UPL_VECTOR)) {
-		vector_upl_t vector_upl = upl->vector_upl;
-		if (vector_upl == NULL || vector_upl == (vector_upl_t)0xfeedfeed || vector_upl == (vector_upl_t)0xfeedbeef) {
-			return FALSE;
-		} else {
-			return TRUE;
-		}
-	}
-	return FALSE;
+	return upl && (upl->flags & UPL_VECTOR) && upl->vector_upl;
 }
 
 boolean_t
@@ -9965,13 +9407,13 @@ vector_upl_set_subupl(upl_t upl, upl_t subupl, uint32_t io_size)
 						io_size = PAGE_SIZE;
 					}
 					subupl->vector_upl = (void*)vector_upl;
-					vector_upl->upl_elems[vector_upl->num_upls++] = subupl;
+					vector_upl->upls[vector_upl->num_upls++].elem = subupl;
 					vector_upl->size += io_size;
-					upl->size += io_size;
+					upl->u_size += io_size;
 				} else {
 					uint32_t i = 0, invalid_upls = 0;
 					for (i = 0; i < vector_upl->num_upls; i++) {
-						if (vector_upl->upl_elems[i] == subupl) {
+						if (vector_upl->upls[i].elem == subupl) {
 							break;
 						}
 					}
@@ -9979,7 +9421,7 @@ vector_upl_set_subupl(upl_t upl, upl_t subupl, uint32_t io_size)
 						panic("Trying to remove sub-upl when none exists");
 					}
 
-					vector_upl->upl_elems[i] = NULL;
+					vector_upl->upls[i].elem = NULL;
 					invalid_upls = os_atomic_inc(&(vector_upl)->invalid_upls,
 					    relaxed);
 					if (invalid_upls == vector_upl->num_upls) {
@@ -9989,13 +9431,13 @@ vector_upl_set_subupl(upl_t upl, upl_t subupl, uint32_t io_size)
 					}
 				}
 			} else {
-				panic("vector_upl_set_subupl was passed a NULL upl element\n");
+				panic("vector_upl_set_subupl was passed a NULL upl element");
 			}
 		} else {
-			panic("vector_upl_set_subupl was passed a non-vectored upl\n");
+			panic("vector_upl_set_subupl was passed a non-vectored upl");
 		}
 	} else {
-		panic("vector_upl_set_subupl was passed a NULL upl\n");
+		panic("vector_upl_set_subupl was passed a NULL upl");
 	}
 
 	return FALSE;
@@ -10011,22 +9453,23 @@ vector_upl_set_pagelist(upl_t upl)
 		if (vector_upl) {
 			vm_offset_t pagelist_size = 0, cur_upl_pagelist_size = 0;
 
-			vector_upl->pagelist = (upl_page_info_array_t)kalloc(sizeof(struct upl_page_info) * (vector_upl->size / PAGE_SIZE));
+			vector_upl->pagelist = kalloc_type(struct upl_page_info,
+			    atop(vector_upl->size), Z_WAITOK);
 
 			for (i = 0; i < vector_upl->num_upls; i++) {
-				cur_upl_pagelist_size = sizeof(struct upl_page_info) * vector_upl->upl_elems[i]->size / PAGE_SIZE;
-				bcopy(UPL_GET_INTERNAL_PAGE_LIST_SIMPLE(vector_upl->upl_elems[i]), (char*)vector_upl->pagelist + pagelist_size, cur_upl_pagelist_size);
+				cur_upl_pagelist_size = sizeof(struct upl_page_info) * upl_adjusted_size(vector_upl->upls[i].elem, PAGE_MASK) / PAGE_SIZE;
+				bcopy(vector_upl->upls[i].elem->page_list, (char*)vector_upl->pagelist + pagelist_size, cur_upl_pagelist_size);
 				pagelist_size += cur_upl_pagelist_size;
-				if (vector_upl->upl_elems[i]->highest_page > upl->highest_page) {
-					upl->highest_page = vector_upl->upl_elems[i]->highest_page;
+				if (vector_upl->upls[i].elem->highest_page > upl->highest_page) {
+					upl->highest_page = vector_upl->upls[i].elem->highest_page;
 				}
 			}
 			assert( pagelist_size == (sizeof(struct upl_page_info) * (vector_upl->size / PAGE_SIZE)));
 		} else {
-			panic("vector_upl_set_pagelist was passed a non-vectored upl\n");
+			panic("vector_upl_set_pagelist was passed a non-vectored upl");
 		}
 	} else {
-		panic("vector_upl_set_pagelist was passed a NULL upl\n");
+		panic("vector_upl_set_pagelist was passed a NULL upl");
 	}
 }
 
@@ -10037,10 +9480,10 @@ vector_upl_subupl_byindex(upl_t upl, uint32_t index)
 		vector_upl_t vector_upl = upl->vector_upl;
 		if (vector_upl) {
 			if (index < vector_upl->num_upls) {
-				return vector_upl->upl_elems[index];
+				return vector_upl->upls[index].elem;
 			}
 		} else {
-			panic("vector_upl_subupl_byindex was passed a non-vectored upl\n");
+			panic("vector_upl_subupl_byindex was passed a non-vectored upl");
 		}
 	}
 	return NULL;
@@ -10058,8 +9501,8 @@ vector_upl_subupl_byoffset(upl_t upl, upl_offset_t *upl_offset, upl_size_t *upl_
 			vector_upl_iostates_t subupl_state;
 
 			for (i = 0; i < vector_upl->num_upls; i++) {
-				subupl = vector_upl->upl_elems[i];
-				subupl_state = vector_upl->upl_iostates[i];
+				subupl = vector_upl->upls[i].elem;
+				subupl_state = vector_upl->upls[i].iostate;
 				if (*upl_offset <= (subupl_state.offset + subupl_state.size - 1)) {
 					/* We could have been passed an offset/size pair that belongs
 					 * to an UPL element that has already been committed/aborted.
@@ -10077,13 +9520,13 @@ vector_upl_subupl_byoffset(upl_t upl, upl_offset_t *upl_offset, upl_size_t *upl_
 					if (*upl_offset >= subupl_state.offset) {
 						*upl_offset -= subupl_state.offset;
 					} else if (i) {
-						panic("Vector UPL offset miscalculation\n");
+						panic("Vector UPL offset miscalculation");
 					}
 					return subupl;
 				}
 			}
 		} else {
-			panic("vector_upl_subupl_byoffset was passed a non-vectored UPL\n");
+			panic("vector_upl_subupl_byoffset was passed a non-vectored UPL");
 		}
 	}
 	return NULL;
@@ -10100,10 +9543,10 @@ vector_upl_get_submap(upl_t upl, vm_map_t *v_upl_submap, vm_offset_t *submap_dst
 			*v_upl_submap = vector_upl->submap;
 			*submap_dst_addr = vector_upl->submap_dst_addr;
 		} else {
-			panic("vector_upl_get_submap was passed a non-vectored UPL\n");
+			panic("vector_upl_get_submap was passed a non-vectored UPL");
 		}
 	} else {
-		panic("vector_upl_get_submap was passed a null UPL\n");
+		panic("vector_upl_get_submap was passed a null UPL");
 	}
 }
 
@@ -10116,10 +9559,10 @@ vector_upl_set_submap(upl_t upl, vm_map_t submap, vm_offset_t submap_dst_addr)
 			vector_upl->submap = submap;
 			vector_upl->submap_dst_addr = submap_dst_addr;
 		} else {
-			panic("vector_upl_get_submap was passed a non-vectored UPL\n");
+			panic("vector_upl_get_submap was passed a non-vectored UPL");
 		}
 	} else {
-		panic("vector_upl_get_submap was passed a NULL UPL\n");
+		panic("vector_upl_get_submap was passed a NULL UPL");
 	}
 }
 
@@ -10132,7 +9575,7 @@ vector_upl_set_iostate(upl_t upl, upl_t subupl, upl_offset_t offset, upl_size_t 
 
 		if (vector_upl) {
 			for (i = 0; i < vector_upl->num_upls; i++) {
-				if (vector_upl->upl_elems[i] == subupl) {
+				if (vector_upl->upls[i].elem == subupl) {
 					break;
 				}
 			}
@@ -10141,16 +9584,16 @@ vector_upl_set_iostate(upl_t upl, upl_t subupl, upl_offset_t offset, upl_size_t 
 				panic("setting sub-upl iostate when none exists");
 			}
 
-			vector_upl->upl_iostates[i].offset = offset;
+			vector_upl->upls[i].iostate.offset = offset;
 			if (size < PAGE_SIZE) {
 				size = PAGE_SIZE;
 			}
-			vector_upl->upl_iostates[i].size = size;
+			vector_upl->upls[i].iostate.size = size;
 		} else {
-			panic("vector_upl_set_iostate was passed a non-vectored UPL\n");
+			panic("vector_upl_set_iostate was passed a non-vectored UPL");
 		}
 	} else {
-		panic("vector_upl_set_iostate was passed a NULL UPL\n");
+		panic("vector_upl_set_iostate was passed a NULL UPL");
 	}
 }
 
@@ -10163,7 +9606,7 @@ vector_upl_get_iostate(upl_t upl, upl_t subupl, upl_offset_t *offset, upl_size_t
 
 		if (vector_upl) {
 			for (i = 0; i < vector_upl->num_upls; i++) {
-				if (vector_upl->upl_elems[i] == subupl) {
+				if (vector_upl->upls[i].elem == subupl) {
 					break;
 				}
 			}
@@ -10172,13 +9615,13 @@ vector_upl_get_iostate(upl_t upl, upl_t subupl, upl_offset_t *offset, upl_size_t
 				panic("getting sub-upl iostate when none exists");
 			}
 
-			*offset = vector_upl->upl_iostates[i].offset;
-			*size = vector_upl->upl_iostates[i].size;
+			*offset = vector_upl->upls[i].iostate.offset;
+			*size = vector_upl->upls[i].iostate.size;
 		} else {
-			panic("vector_upl_get_iostate was passed a non-vectored UPL\n");
+			panic("vector_upl_get_iostate was passed a non-vectored UPL");
 		}
 	} else {
-		panic("vector_upl_get_iostate was passed a NULL UPL\n");
+		panic("vector_upl_get_iostate was passed a NULL UPL");
 	}
 }
 
@@ -10189,23 +9632,17 @@ vector_upl_get_iostate_byindex(upl_t upl, uint32_t index, upl_offset_t *offset, 
 		vector_upl_t vector_upl = upl->vector_upl;
 		if (vector_upl) {
 			if (index < vector_upl->num_upls) {
-				*offset = vector_upl->upl_iostates[index].offset;
-				*size = vector_upl->upl_iostates[index].size;
+				*offset = vector_upl->upls[index].iostate.offset;
+				*size = vector_upl->upls[index].iostate.size;
 			} else {
 				*offset = *size = 0;
 			}
 		} else {
-			panic("vector_upl_get_iostate_byindex was passed a non-vectored UPL\n");
+			panic("vector_upl_get_iostate_byindex was passed a non-vectored UPL");
 		}
 	} else {
-		panic("vector_upl_get_iostate_byindex was passed a NULL UPL\n");
+		panic("vector_upl_get_iostate_byindex was passed a NULL UPL");
 	}
-}
-
-upl_page_info_t *
-upl_get_internal_vectorupl_pagelist(upl_t upl)
-{
-	return ((vector_upl_t)(upl->vector_upl))->pagelist;
 }
 
 void *
@@ -10214,10 +9651,16 @@ upl_get_internal_vectorupl(upl_t upl)
 	return upl->vector_upl;
 }
 
-vm_size_t
-upl_get_internal_pagelist_offset(void)
+upl_page_info_t *
+upl_get_internal_vectorupl_pagelist(upl_t upl)
 {
-	return sizeof(struct upl);
+	return upl->vector_upl->pagelist;
+}
+
+upl_page_info_t *
+upl_get_internal_page_list(upl_t upl)
+{
+	return upl->vector_upl ? upl->vector_upl->pagelist : upl->page_list;
 }
 
 void
@@ -10242,10 +9685,35 @@ upl_set_referenced(
 		upl->ext_ref_count++;
 	} else {
 		if (!upl->ext_ref_count) {
-			panic("upl_set_referenced not %p\n", upl);
+			panic("upl_set_referenced not %p", upl);
 		}
 		upl->ext_ref_count--;
 	}
+	upl_unlock(upl);
+}
+
+void
+upl_set_map_exclusive(upl_t upl)
+{
+	upl_lock(upl);
+	while (upl->map_addr_owner) {
+		upl->flags |= UPL_MAP_EXCLUSIVE_WAIT;
+		upl_lock_sleep(upl, &upl->map_addr_owner, ctid_get_thread(upl->map_addr_owner));
+	}
+	upl->map_addr_owner = thread_get_ctid(current_thread());
+	upl_unlock(upl);
+}
+
+void
+upl_clear_map_exclusive(upl_t upl)
+{
+	assert(upl->map_addr_owner == thread_get_ctid(current_thread()));
+	upl_lock(upl);
+	if (upl->flags & UPL_MAP_EXCLUSIVE_WAIT) {
+		upl->flags &= ~UPL_MAP_EXCLUSIVE_WAIT;
+		upl_wakeup(&upl->map_addr_owner);
+	}
+	upl->map_addr_owner = 0;
 	upl_unlock(upl);
 }
 
@@ -10358,7 +9826,7 @@ vm_countdirtypages(void)
 			precpages++;
 		}
 
-		assert(VM_PAGE_OBJECT(m) != kernel_object);
+		assert(!is_kernel_object(VM_PAGE_OBJECT(m)));
 		m = (vm_page_t) vm_page_queue_next(&m->vmp_pageq);
 		if (m == (vm_page_t)0) {
 			break;
@@ -10376,7 +9844,7 @@ vm_countdirtypages(void)
 		dpages++;
 		assert(m->vmp_dirty);
 		assert(!m->vmp_free_when_done);
-		assert(VM_PAGE_OBJECT(m) != kernel_object);
+		assert(!is_kernel_object(VM_PAGE_OBJECT(m)));
 		m = (vm_page_t) vm_page_queue_next(&m->vmp_pageq);
 		if (m == (vm_page_t)0) {
 			break;
@@ -10401,7 +9869,7 @@ vm_countdirtypages(void)
 			precpages++;
 		}
 
-		assert(VM_PAGE_OBJECT(m) != kernel_object);
+		assert(!is_kernel_object(VM_PAGE_OBJECT(m)));
 		m = (vm_page_t) vm_page_queue_next(&m->vmp_pageq);
 		if (m == (vm_page_t)0) {
 			break;
@@ -10432,7 +9900,7 @@ vm_countdirtypages(void)
 			precpages++;
 		}
 
-		assert(VM_PAGE_OBJECT(m) != kernel_object);
+		assert(!is_kernel_object(VM_PAGE_OBJECT(m)));
 		m = (vm_page_t) vm_page_queue_next(&m->vmp_pageq);
 		if (m == (vm_page_t)0) {
 			break;
@@ -10500,7 +9968,35 @@ upl_size_t
 upl_get_size(
 	upl_t                      upl)
 {
-	return upl->size;
+	return upl_adjusted_size(upl, PAGE_MASK);
+}
+
+upl_size_t
+upl_adjusted_size(
+	upl_t upl,
+	vm_map_offset_t pgmask)
+{
+	vm_object_offset_t start_offset, end_offset;
+
+	start_offset = trunc_page_mask_64(upl->u_offset, pgmask);
+	end_offset = round_page_mask_64(upl->u_offset + upl->u_size, pgmask);
+
+	return (upl_size_t)(end_offset - start_offset);
+}
+
+vm_object_offset_t
+upl_adjusted_offset(
+	upl_t upl,
+	vm_map_offset_t pgmask)
+{
+	return trunc_page_mask_64(upl->u_offset, pgmask);
+}
+
+vm_object_offset_t
+upl_get_data_offset(
+	upl_t upl)
+{
+	return upl->u_offset - upl_adjusted_offset(upl, PAGE_MASK);
 }
 
 upl_t
@@ -10550,14 +10046,15 @@ upl_ubc_alias_get(upl_t upl, uintptr_t * al, uintptr_t * al2)
 /*
  * Upward trajectory.
  */
-extern boolean_t vm_compressor_low_on_space(void);
 
 boolean_t
 VM_PRESSURE_NORMAL_TO_WARNING(void)
 {
 	if (!VM_CONFIG_COMPRESSOR_IS_ACTIVE) {
 		/* Available pages below our threshold */
-		if (memorystatus_available_pages < memorystatus_available_pages_pressure) {
+		uint32_t available_pages = memorystatus_get_available_page_count();
+		if (available_pages < memorystatus_get_soft_memlimit_page_shortage_threshold()) {
+#if CONFIG_FREEZE
 			/* No frozen processes to kill */
 			if (memorystatus_frozen_count == 0) {
 				/* Not enough suspended processes available. */
@@ -10565,6 +10062,9 @@ VM_PRESSURE_NORMAL_TO_WARNING(void)
 					return TRUE;
 				}
 			}
+#else /* CONFIG_FREEZE */
+			return TRUE;
+#endif /* CONFIG_FREEZE */
 		}
 		return FALSE;
 	} else {
@@ -10577,10 +10077,8 @@ VM_PRESSURE_WARNING_TO_CRITICAL(void)
 {
 	if (!VM_CONFIG_COMPRESSOR_IS_ACTIVE) {
 		/* Available pages below our threshold */
-		if (memorystatus_available_pages < memorystatus_available_pages_critical) {
-			return TRUE;
-		}
-		return FALSE;
+		uint32_t available_pages = memorystatus_get_available_page_count();
+		return available_pages < memorystatus_get_critical_page_shortage_threshold();
 	} else {
 		return vm_compressor_low_on_space() || (AVAILABLE_NON_COMPRESSED_MEMORY < ((12 * VM_PAGE_COMPRESSOR_SWAP_UNTHROTTLE_THRESHOLD) / 10)) ? 1 : 0;
 	}
@@ -10594,11 +10092,9 @@ VM_PRESSURE_WARNING_TO_NORMAL(void)
 {
 	if (!VM_CONFIG_COMPRESSOR_IS_ACTIVE) {
 		/* Available pages above our threshold */
-		unsigned int target_threshold = (unsigned int) (memorystatus_available_pages_pressure + ((15 * memorystatus_available_pages_pressure) / 100));
-		if (memorystatus_available_pages > target_threshold) {
-			return TRUE;
-		}
-		return FALSE;
+		uint32_t available_pages = memorystatus_get_available_page_count();
+		uint32_t target_threshold = (((115 * memorystatus_get_soft_memlimit_page_shortage_threshold()) / 100));
+		return available_pages > target_threshold;
 	} else {
 		return (AVAILABLE_NON_COMPRESSED_MEMORY > ((12 * VM_PAGE_COMPRESSOR_COMPACT_THRESHOLD) / 10)) ? 1 : 0;
 	}
@@ -10608,451 +10104,223 @@ boolean_t
 VM_PRESSURE_CRITICAL_TO_WARNING(void)
 {
 	if (!VM_CONFIG_COMPRESSOR_IS_ACTIVE) {
-		/* Available pages above our threshold */
-		unsigned int target_threshold = (unsigned int)(memorystatus_available_pages_critical + ((15 * memorystatus_available_pages_critical) / 100));
-		if (memorystatus_available_pages > target_threshold) {
-			return TRUE;
-		}
-		return FALSE;
+		uint32_t available_pages = memorystatus_get_available_page_count();
+		uint32_t target_threshold = (((115 * memorystatus_get_critical_page_shortage_threshold()) / 100));
+		return available_pages > target_threshold;
 	} else {
 		return (AVAILABLE_NON_COMPRESSED_MEMORY > ((14 * VM_PAGE_COMPRESSOR_SWAP_UNTHROTTLE_THRESHOLD) / 10)) ? 1 : 0;
 	}
 }
 #endif /* VM_PRESSURE_EVENTS */
 
+#if DEVELOPMENT || DEBUG
+bool compressor_running_perf_test;
+uint64_t compressor_perf_test_pages_processed;
 
-
-#define VM_TEST_COLLAPSE_COMPRESSOR             0
-#define VM_TEST_WIRE_AND_EXTRACT                0
-#define VM_TEST_PAGE_WIRE_OVERFLOW_PANIC        0
-#if __arm64__
-#define VM_TEST_KERNEL_OBJECT_FAULT             0
-#endif /* __arm64__ */
-#define VM_TEST_DEVICE_PAGER_TRANSPOSE          (DEVELOPMENT || DEBUG)
-
-#if VM_TEST_COLLAPSE_COMPRESSOR
-extern boolean_t vm_object_collapse_compressor_allowed;
-#include <IOKit/IOLib.h>
-static void
-vm_test_collapse_compressor(void)
+static kern_return_t
+move_pages_to_queue(
+	vm_map_t map,
+	user_addr_t start_addr,
+	size_t buffer_size,
+	vm_page_queue_head_t *queue,
+	size_t *pages_moved)
 {
-	vm_object_size_t        backing_size, top_size;
-	vm_object_t             backing_object, top_object;
-	vm_map_offset_t         backing_offset, top_offset;
-	unsigned char           *backing_address, *top_address;
-	kern_return_t           kr;
+	kern_return_t err = KERN_SUCCESS;
+	vm_map_entry_t curr_entry = VM_MAP_ENTRY_NULL;
+	boolean_t addr_in_map = FALSE;
+	user_addr_t end_addr = USER_ADDR_NULL, curr_addr = USER_ADDR_NULL;
+	vm_object_t curr_object = VM_OBJECT_NULL;
+	*pages_moved = 0;
 
-	printf("VM_TEST_COLLAPSE_COMPRESSOR:\n");
 
-	/* create backing object */
-	backing_size = 15 * PAGE_SIZE;
-	backing_object = vm_object_allocate(backing_size);
-	assert(backing_object != VM_OBJECT_NULL);
-	printf("VM_TEST_COLLAPSE_COMPRESSOR: created backing object %p\n",
-	    backing_object);
-	/* map backing object */
-	backing_offset = 0;
-	kr = vm_map_enter(kernel_map, &backing_offset, backing_size, 0,
-	    VM_FLAGS_ANYWHERE, VM_MAP_KERNEL_FLAGS_NONE,
-	    backing_object, 0, FALSE,
-	    VM_PROT_DEFAULT, VM_PROT_DEFAULT, VM_INHERIT_DEFAULT);
-	assert(kr == KERN_SUCCESS);
-	backing_address = (unsigned char *) backing_offset;
-	printf("VM_TEST_COLLAPSE_COMPRESSOR: "
-	    "mapped backing object %p at 0x%llx\n",
-	    backing_object, (uint64_t) backing_offset);
-	/* populate with pages to be compressed in backing object */
-	backing_address[0x1 * PAGE_SIZE] = 0xB1;
-	backing_address[0x4 * PAGE_SIZE] = 0xB4;
-	backing_address[0x7 * PAGE_SIZE] = 0xB7;
-	backing_address[0xa * PAGE_SIZE] = 0xBA;
-	backing_address[0xd * PAGE_SIZE] = 0xBD;
-	printf("VM_TEST_COLLAPSE_COMPRESSOR: "
-	    "populated pages to be compressed in "
-	    "backing_object %p\n", backing_object);
-	/* compress backing object */
-	vm_object_pageout(backing_object);
-	printf("VM_TEST_COLLAPSE_COMPRESSOR: compressing backing_object %p\n",
-	    backing_object);
-	/* wait for all the pages to be gone */
-	while (*(volatile int *)&backing_object->resident_page_count != 0) {
-		IODelay(10);
+	if (VM_MAP_PAGE_SIZE(map) != PAGE_SIZE_64) {
+		/*
+		 * We don't currently support benchmarking maps with a different page size
+		 * than the kernel.
+		 */
+		return KERN_INVALID_ARGUMENT;
 	}
-	printf("VM_TEST_COLLAPSE_COMPRESSOR: backing_object %p compressed\n",
-	    backing_object);
-	/* populate with pages to be resident in backing object */
-	backing_address[0x0 * PAGE_SIZE] = 0xB0;
-	backing_address[0x3 * PAGE_SIZE] = 0xB3;
-	backing_address[0x6 * PAGE_SIZE] = 0xB6;
-	backing_address[0x9 * PAGE_SIZE] = 0xB9;
-	backing_address[0xc * PAGE_SIZE] = 0xBC;
-	printf("VM_TEST_COLLAPSE_COMPRESSOR: "
-	    "populated pages to be resident in "
-	    "backing_object %p\n", backing_object);
-	/* leave the other pages absent */
-	/* mess with the paging_offset of the backing_object */
-	assert(backing_object->paging_offset == 0);
-	backing_object->paging_offset = 0x3000;
 
-	/* create top object */
-	top_size = 9 * PAGE_SIZE;
-	top_object = vm_object_allocate(top_size);
-	assert(top_object != VM_OBJECT_NULL);
-	printf("VM_TEST_COLLAPSE_COMPRESSOR: created top object %p\n",
-	    top_object);
-	/* map top object */
-	top_offset = 0;
-	kr = vm_map_enter(kernel_map, &top_offset, top_size, 0,
-	    VM_FLAGS_ANYWHERE, VM_MAP_KERNEL_FLAGS_NONE,
-	    top_object, 0, FALSE,
-	    VM_PROT_DEFAULT, VM_PROT_DEFAULT, VM_INHERIT_DEFAULT);
-	assert(kr == KERN_SUCCESS);
-	top_address = (unsigned char *) top_offset;
-	printf("VM_TEST_COLLAPSE_COMPRESSOR: "
-	    "mapped top object %p at 0x%llx\n",
-	    top_object, (uint64_t) top_offset);
-	/* populate with pages to be compressed in top object */
-	top_address[0x3 * PAGE_SIZE] = 0xA3;
-	top_address[0x4 * PAGE_SIZE] = 0xA4;
-	top_address[0x5 * PAGE_SIZE] = 0xA5;
-	printf("VM_TEST_COLLAPSE_COMPRESSOR: "
-	    "populated pages to be compressed in "
-	    "top_object %p\n", top_object);
-	/* compress top object */
-	vm_object_pageout(top_object);
-	printf("VM_TEST_COLLAPSE_COMPRESSOR: compressing top_object %p\n",
-	    top_object);
-	/* wait for all the pages to be gone */
-	while (top_object->resident_page_count != 0) {
-		IODelay(10);
+	if (os_add_overflow(start_addr, buffer_size, &end_addr)) {
+		return KERN_INVALID_ARGUMENT;
 	}
-	printf("VM_TEST_COLLAPSE_COMPRESSOR: top_object %p compressed\n",
-	    top_object);
-	/* populate with pages to be resident in top object */
-	top_address[0x0 * PAGE_SIZE] = 0xA0;
-	top_address[0x1 * PAGE_SIZE] = 0xA1;
-	top_address[0x2 * PAGE_SIZE] = 0xA2;
-	printf("VM_TEST_COLLAPSE_COMPRESSOR: "
-	    "populated pages to be resident in "
-	    "top_object %p\n", top_object);
-	/* leave the other pages absent */
 
-	/* link the 2 objects */
-	vm_object_reference(backing_object);
-	top_object->shadow = backing_object;
-	top_object->vo_shadow_offset = 0x3000;
-	printf("VM_TEST_COLLAPSE_COMPRESSOR: linked %p and %p\n",
-	    top_object, backing_object);
+	vm_map_lock_read(map);
+	curr_addr = vm_map_trunc_page_mask(start_addr, VM_MAP_PAGE_MASK(map));
+	end_addr = vm_map_round_page_mask(start_addr + buffer_size, VM_MAP_PAGE_MASK(map));
 
-	/* unmap backing object */
-	vm_map_remove(kernel_map,
-	    backing_offset,
-	    backing_offset + backing_size,
-	    VM_MAP_REMOVE_NO_FLAGS);
-	printf("VM_TEST_COLLAPSE_COMPRESSOR: "
-	    "unmapped backing_object %p [0x%llx:0x%llx]\n",
-	    backing_object,
-	    (uint64_t) backing_offset,
-	    (uint64_t) (backing_offset + backing_size));
 
-	/* collapse */
-	printf("VM_TEST_COLLAPSE_COMPRESSOR: collapsing %p\n", top_object);
-	vm_object_lock(top_object);
-	vm_object_collapse(top_object, 0, FALSE);
-	vm_object_unlock(top_object);
-	printf("VM_TEST_COLLAPSE_COMPRESSOR: collapsed %p\n", top_object);
-
-	/* did it work? */
-	if (top_object->shadow != VM_OBJECT_NULL) {
-		printf("VM_TEST_COLLAPSE_COMPRESSOR: not collapsed\n");
-		printf("VM_TEST_COLLAPSE_COMPRESSOR: FAIL\n");
-		if (vm_object_collapse_compressor_allowed) {
-			panic("VM_TEST_COLLAPSE_COMPRESSOR: FAIL\n");
+	while (curr_addr < end_addr) {
+		addr_in_map = vm_map_lookup_entry(map, curr_addr, &curr_entry);
+		if (!addr_in_map) {
+			err = KERN_INVALID_ARGUMENT;
+			break;
 		}
-	} else {
-		/* check the contents of the mapping */
-		unsigned char expect[9] =
-		{ 0xA0, 0xA1, 0xA2,             /* resident in top */
-		  0xA3, 0xA4, 0xA5,             /* compressed in top */
-		  0xB9,         /* resident in backing + shadow_offset */
-		  0xBD,         /* compressed in backing + shadow_offset + paging_offset */
-		  0x00 };                       /* absent in both */
-		unsigned char actual[9];
-		unsigned int i, errors;
-
-		errors = 0;
-		for (i = 0; i < sizeof(actual); i++) {
-			actual[i] = (unsigned char) top_address[i * PAGE_SIZE];
-			if (actual[i] != expect[i]) {
-				errors++;
+		curr_object = VME_OBJECT(curr_entry);
+		if (curr_object) {
+			vm_object_lock(curr_object);
+			/* We really only want anonymous memory that's in the top level map and object here. */
+			if (curr_entry->is_sub_map || curr_entry->wired_count != 0 ||
+			    curr_object->shadow != VM_OBJECT_NULL || !curr_object->internal) {
+				err = KERN_INVALID_ARGUMENT;
+				vm_object_unlock(curr_object);
+				break;
+			}
+			vm_map_offset_t start_offset = (curr_addr - curr_entry->vme_start) + VME_OFFSET(curr_entry);
+			vm_map_offset_t end_offset = MIN(curr_entry->vme_end, end_addr) -
+			    (curr_entry->vme_start + VME_OFFSET(curr_entry));
+			vm_map_offset_t curr_offset = start_offset;
+			vm_page_t curr_page;
+			while (curr_offset < end_offset) {
+				curr_page = vm_page_lookup(curr_object, vm_object_trunc_page(curr_offset));
+				if (curr_page != VM_PAGE_NULL) {
+					vm_page_lock_queues();
+					if (curr_page->vmp_laundry) {
+						vm_pageout_steal_laundry(curr_page, TRUE);
+					}
+					/*
+					 * we've already factored out pages in the laundry which
+					 * means this page can't be on the pageout queue so it's
+					 * safe to do the vm_page_queues_remove
+					 */
+					bool donate = (curr_page->vmp_on_specialq == VM_PAGE_SPECIAL_Q_DONATE);
+					vm_page_queues_remove(curr_page, TRUE);
+					if (donate) {
+						/*
+						 * The compressor needs to see this bit to know
+						 * where this page needs to land. Also if stolen,
+						 * this bit helps put the page back in the right
+						 * special queue where it belongs.
+						 */
+						curr_page->vmp_on_specialq = VM_PAGE_SPECIAL_Q_DONATE;
+					}
+					// Clear the referenced bit so we ensure this gets paged out
+					curr_page->vmp_reference = false;
+					if (curr_page->vmp_pmapped) {
+						pmap_clear_refmod_options(VM_PAGE_GET_PHYS_PAGE(curr_page),
+						    VM_MEM_REFERENCED, PMAP_OPTIONS_NOFLUSH, (void*)NULL);
+					}
+					vm_page_queue_enter(queue, curr_page, vmp_pageq);
+					vm_page_unlock_queues();
+					*pages_moved += 1;
+				}
+				curr_offset += PAGE_SIZE_64;
+				curr_addr += PAGE_SIZE_64;
 			}
 		}
-		printf("VM_TEST_COLLAPSE_COMPRESSOR: "
-		    "actual [%x %x %x %x %x %x %x %x %x] "
-		    "expect [%x %x %x %x %x %x %x %x %x] "
-		    "%d errors\n",
-		    actual[0], actual[1], actual[2], actual[3],
-		    actual[4], actual[5], actual[6], actual[7],
-		    actual[8],
-		    expect[0], expect[1], expect[2], expect[3],
-		    expect[4], expect[5], expect[6], expect[7],
-		    expect[8],
-		    errors);
-		if (errors) {
-			panic("VM_TEST_COLLAPSE_COMPRESSOR: FAIL\n");
-		} else {
-			printf("VM_TEST_COLLAPSE_COMPRESSOR: PASS\n");
-		}
+		vm_object_unlock(curr_object);
 	}
+	vm_map_unlock_read(map);
+	return err;
 }
-#else /* VM_TEST_COLLAPSE_COMPRESSOR */
-#define vm_test_collapse_compressor()
-#endif /* VM_TEST_COLLAPSE_COMPRESSOR */
 
-#if VM_TEST_WIRE_AND_EXTRACT
-extern ledger_template_t        task_ledger_template;
-#include <mach/mach_vm.h>
-extern ppnum_t vm_map_get_phys_page(vm_map_t map,
-    vm_offset_t offset);
-static void
-vm_test_wire_and_extract(void)
+/*
+ * Local queue for processing benchmark pages.
+ * Can't be allocated on the stack because the pointer has to
+ * be packable.
+ */
+vm_page_queue_head_t compressor_perf_test_queue VM_PAGE_PACKED_ALIGNED;
+kern_return_t
+run_compressor_perf_test(
+	user_addr_t buf,
+	size_t buffer_size,
+	uint64_t *time,
+	uint64_t *bytes_compressed,
+	uint64_t *compressor_growth)
 {
-	ledger_t                ledger;
-	vm_map_t                user_map, wire_map;
-	mach_vm_address_t       user_addr, wire_addr;
-	mach_vm_size_t          user_size, wire_size;
-	mach_vm_offset_t        cur_offset;
-	vm_prot_t               cur_prot, max_prot;
-	ppnum_t                 user_ppnum, wire_ppnum;
-	kern_return_t           kr;
-
-	ledger = ledger_instantiate(task_ledger_template,
-	    LEDGER_CREATE_ACTIVE_ENTRIES);
-	user_map = vm_map_create(pmap_create_options(ledger, 0, PMAP_CREATE_64BIT),
-	    0x100000000ULL,
-	    0x200000000ULL,
-	    TRUE);
-	wire_map = vm_map_create(NULL,
-	    0x100000000ULL,
-	    0x200000000ULL,
-	    TRUE);
-	user_addr = 0;
-	user_size = 0x10000;
-	kr = mach_vm_allocate(user_map,
-	    &user_addr,
-	    user_size,
-	    VM_FLAGS_ANYWHERE);
-	assert(kr == KERN_SUCCESS);
-	wire_addr = 0;
-	wire_size = user_size;
-	kr = mach_vm_remap(wire_map,
-	    &wire_addr,
-	    wire_size,
-	    0,
-	    VM_FLAGS_ANYWHERE,
-	    user_map,
-	    user_addr,
-	    FALSE,
-	    &cur_prot,
-	    &max_prot,
-	    VM_INHERIT_NONE);
-	assert(kr == KERN_SUCCESS);
-	for (cur_offset = 0;
-	    cur_offset < wire_size;
-	    cur_offset += PAGE_SIZE) {
-		kr = vm_map_wire_and_extract(wire_map,
-		    wire_addr + cur_offset,
-		    VM_PROT_DEFAULT | VM_PROT_MEMORY_TAG_MAKE(VM_KERN_MEMORY_OSFMK),
-		    TRUE,
-		    &wire_ppnum);
-		assert(kr == KERN_SUCCESS);
-		user_ppnum = vm_map_get_phys_page(user_map,
-		    user_addr + cur_offset);
-		printf("VM_TEST_WIRE_AND_EXTRACT: kr=0x%x "
-		    "user[%p:0x%llx:0x%x] wire[%p:0x%llx:0x%x]\n",
-		    kr,
-		    user_map, user_addr + cur_offset, user_ppnum,
-		    wire_map, wire_addr + cur_offset, wire_ppnum);
-		if (kr != KERN_SUCCESS ||
-		    wire_ppnum == 0 ||
-		    wire_ppnum != user_ppnum) {
-			panic("VM_TEST_WIRE_AND_EXTRACT: FAIL\n");
-		}
+	kern_return_t err = KERN_SUCCESS;
+	if (!VM_CONFIG_COMPRESSOR_IS_ACTIVE) {
+		return KERN_NOT_SUPPORTED;
 	}
-	cur_offset -= PAGE_SIZE;
-	kr = vm_map_wire_and_extract(wire_map,
-	    wire_addr + cur_offset,
-	    VM_PROT_DEFAULT,
-	    TRUE,
-	    &wire_ppnum);
-	assert(kr == KERN_SUCCESS);
-	printf("VM_TEST_WIRE_AND_EXTRACT: re-wire kr=0x%x "
-	    "user[%p:0x%llx:0x%x] wire[%p:0x%llx:0x%x]\n",
-	    kr,
-	    user_map, user_addr + cur_offset, user_ppnum,
-	    wire_map, wire_addr + cur_offset, wire_ppnum);
-	if (kr != KERN_SUCCESS ||
-	    wire_ppnum == 0 ||
-	    wire_ppnum != user_ppnum) {
-		panic("VM_TEST_WIRE_AND_EXTRACT: FAIL\n");
+	if (current_task() == kernel_task) {
+		return KERN_INVALID_ARGUMENT;
 	}
-
-	printf("VM_TEST_WIRE_AND_EXTRACT: PASS\n");
-}
-#else /* VM_TEST_WIRE_AND_EXTRACT */
-#define vm_test_wire_and_extract()
-#endif /* VM_TEST_WIRE_AND_EXTRACT */
-
-#if VM_TEST_PAGE_WIRE_OVERFLOW_PANIC
-static void
-vm_test_page_wire_overflow_panic(void)
-{
-	vm_object_t object;
-	vm_page_t page;
-
-	printf("VM_TEST_PAGE_WIRE_OVERFLOW_PANIC: starting...\n");
-
-	object = vm_object_allocate(PAGE_SIZE);
-	vm_object_lock(object);
-	page = vm_page_alloc(object, 0x0);
 	vm_page_lock_queues();
-	do {
-		vm_page_wire(page, 1, FALSE);
-	} while (page->wire_count != 0);
+	if (compressor_running_perf_test) {
+		/* Only run one instance of the benchmark at a time. */
+		vm_page_unlock_queues();
+		return KERN_RESOURCE_SHORTAGE;
+	}
 	vm_page_unlock_queues();
-	vm_object_unlock(object);
-	panic("FBDP(%p,%p): wire_count overflow not detected\n",
-	    object, page);
-}
-#else /* VM_TEST_PAGE_WIRE_OVERFLOW_PANIC */
-#define vm_test_page_wire_overflow_panic()
-#endif /* VM_TEST_PAGE_WIRE_OVERFLOW_PANIC */
+	size_t page_count = 0;
+	vm_map_t map;
+	vm_page_t p, next;
+	uint64_t compressor_perf_test_start = 0, compressor_perf_test_end = 0;
+	uint64_t compressed_bytes_start = 0, compressed_bytes_end = 0;
+	*bytes_compressed = *compressor_growth = 0;
 
-#if __arm64__ && VM_TEST_KERNEL_OBJECT_FAULT
-extern int copyinframe(vm_address_t fp, char *frame, boolean_t is64bit);
-static void
-vm_test_kernel_object_fault(void)
-{
-	kern_return_t kr;
-	vm_offset_t stack;
-	uintptr_t frameb[2];
-	int ret;
-
-	kr = kernel_memory_allocate(kernel_map, &stack,
-	    kernel_stack_size + (2 * PAGE_SIZE),
-	    0,
-	    (KMA_KSTACK | KMA_KOBJECT |
-	    KMA_GUARD_FIRST | KMA_GUARD_LAST),
-	    VM_KERN_MEMORY_STACK);
-	if (kr != KERN_SUCCESS) {
-		panic("VM_TEST_KERNEL_OBJECT_FAULT: kernel_memory_allocate kr 0x%x\n", kr);
+	vm_page_queue_init(&compressor_perf_test_queue);
+	map = current_task()->map;
+	err = move_pages_to_queue(map, buf, buffer_size, &compressor_perf_test_queue, &page_count);
+	if (err != KERN_SUCCESS) {
+		goto out;
 	}
-	ret = copyinframe((uintptr_t)stack, (char *)frameb, TRUE);
-	if (ret != 0) {
-		printf("VM_TEST_KERNEL_OBJECT_FAULT: PASS\n");
-	} else {
-		printf("VM_TEST_KERNEL_OBJECT_FAULT: FAIL\n");
-	}
-	vm_map_remove(kernel_map,
-	    stack,
-	    stack + kernel_stack_size + (2 * PAGE_SIZE),
-	    VM_MAP_REMOVE_KUNWIRE);
-	stack = 0;
-}
-#else /* __arm64__ && VM_TEST_KERNEL_OBJECT_FAULT */
-#define vm_test_kernel_object_fault()
-#endif /* __arm64__ && VM_TEST_KERNEL_OBJECT_FAULT */
 
-#if VM_TEST_DEVICE_PAGER_TRANSPOSE
-static void
-vm_test_device_pager_transpose(void)
-{
-	memory_object_t device_pager;
-	vm_object_t     anon_object, device_object;
-	vm_size_t       size;
-	vm_map_offset_t device_mapping;
-	kern_return_t   kr;
-
-	size = 3 * PAGE_SIZE;
-	anon_object = vm_object_allocate(size);
-	assert(anon_object != VM_OBJECT_NULL);
-	device_pager = device_pager_setup(NULL, 0, size, 0);
-	assert(device_pager != NULL);
-	device_object = memory_object_to_vm_object(device_pager);
-	assert(device_object != VM_OBJECT_NULL);
-#if 0
+	vm_page_lock_queues();
+	compressor_running_perf_test = true;
+	compressor_perf_test_pages_processed = 0;
 	/*
-	 * Can't actually map this, since another thread might do a
-	 * vm_map_enter() that gets coalesced into this object, which
-	 * would cause the test to fail.
+	 * At this point the compressor threads should only process the benchmark queue
+	 * so we can look at the difference in c_segment_compressed_bytes while the perf test is running
+	 * to determine how many compressed bytes we ended up using.
 	 */
-	vm_map_offset_t anon_mapping = 0;
-	kr = vm_map_enter(kernel_map, &anon_mapping, size, 0,
-	    VM_FLAGS_ANYWHERE, VM_MAP_KERNEL_FLAGS_NONE, VM_KERN_MEMORY_NONE,
-	    anon_object, 0, FALSE, VM_PROT_DEFAULT, VM_PROT_ALL,
-	    VM_INHERIT_DEFAULT);
-	assert(kr == KERN_SUCCESS);
-#endif
-	device_mapping = 0;
-	kr = vm_map_enter_mem_object(kernel_map, &device_mapping, size, 0,
-	    VM_FLAGS_ANYWHERE,
-	    VM_MAP_KERNEL_FLAGS_NONE,
-	    VM_KERN_MEMORY_NONE,
-	    (void *)device_pager, 0, FALSE,
-	    VM_PROT_DEFAULT, VM_PROT_ALL,
-	    VM_INHERIT_DEFAULT);
-	assert(kr == KERN_SUCCESS);
-	memory_object_deallocate(device_pager);
+	compressed_bytes_start = os_atomic_load(&c_segment_compressed_bytes, relaxed);
+	vm_page_unlock_queues();
 
-	vm_object_lock(anon_object);
-	vm_object_activity_begin(anon_object);
-	anon_object->blocked_access = TRUE;
-	vm_object_unlock(anon_object);
-	vm_object_lock(device_object);
-	vm_object_activity_begin(device_object);
-	device_object->blocked_access = TRUE;
-	vm_object_unlock(device_object);
+	page_count = vm_pageout_page_queue(&compressor_perf_test_queue, page_count, true);
 
-	assert(anon_object->ref_count == 1);
-	assert(!anon_object->named);
-	assert(device_object->ref_count == 2);
-	assert(device_object->named);
+	vm_page_lock_queues();
+	compressor_perf_test_start = mach_absolute_time();
 
-	kr = vm_object_transpose(device_object, anon_object, size);
-	assert(kr == KERN_SUCCESS);
+	// Wake up the compressor thread(s)
+	sched_cond_signal(&pgo_iothread_internal_state[0].pgo_wakeup,
+	    pgo_iothread_internal_state[0].pgo_iothread);
 
-	vm_object_lock(anon_object);
-	vm_object_activity_end(anon_object);
-	anon_object->blocked_access = FALSE;
-	vm_object_unlock(anon_object);
-	vm_object_lock(device_object);
-	vm_object_activity_end(device_object);
-	device_object->blocked_access = FALSE;
-	vm_object_unlock(device_object);
+	/*
+	 * Depending on when this test is run we could overshoot or be right on the mark
+	 * with our page_count. So the comparison is of the _less than_ variety.
+	 */
+	while (compressor_perf_test_pages_processed < page_count) {
+		assert_wait((event_t) &compressor_perf_test_pages_processed, THREAD_UNINT);
+		vm_page_unlock_queues();
+		thread_block(THREAD_CONTINUE_NULL);
+		vm_page_lock_queues();
+	}
+	compressor_perf_test_end = mach_absolute_time();
+	compressed_bytes_end = os_atomic_load(&c_segment_compressed_bytes, relaxed);
+	vm_page_unlock_queues();
 
-	assert(anon_object->ref_count == 2);
-	assert(anon_object->named);
-#if 0
-	kr = vm_deallocate(kernel_map, anon_mapping, size);
-	assert(kr == KERN_SUCCESS);
-#endif
-	assert(device_object->ref_count == 1);
-	assert(!device_object->named);
-	kr = vm_deallocate(kernel_map, device_mapping, size);
-	assert(kr == KERN_SUCCESS);
 
-	printf("VM_TEST_DEVICE_PAGER_TRANSPOSE: PASS\n");
+out:
+	/*
+	 * If we errored out above, then we could still have some pages
+	 * on the local queue. Make sure to put them back on the active queue before
+	 * returning so they're not orphaned.
+	 */
+	vm_page_lock_queues();
+	absolutetime_to_nanoseconds(compressor_perf_test_end - compressor_perf_test_start, time);
+	p = (vm_page_t) vm_page_queue_first(&compressor_perf_test_queue);
+	while (p && !vm_page_queue_end(&compressor_perf_test_queue, (vm_page_queue_entry_t)p)) {
+		next = (vm_page_t)VM_PAGE_UNPACK_PTR(p->vmp_pageq.next);
+
+		vm_page_enqueue_active(p, FALSE);
+		p = next;
+	}
+
+	compressor_running_perf_test = false;
+	vm_page_unlock_queues();
+	if (err == KERN_SUCCESS) {
+		*bytes_compressed = page_count * PAGE_SIZE_64;
+		*compressor_growth = compressed_bytes_end - compressed_bytes_start;
+	}
+
+	/*
+	 * pageout_scan will consider waking the compactor swapper
+	 * before it blocks. Do the same thing here before we return
+	 * to ensure that back to back benchmark runs can't overly fragment the
+	 * compressor pool.
+	 */
+	vm_consider_waking_compactor_swapper();
+	return err;
 }
-#else /* VM_TEST_DEVICE_PAGER_TRANSPOSE */
-#define vm_test_device_pager_transpose()
-#endif /* VM_TEST_DEVICE_PAGER_TRANSPOSE */
-
-void
-vm_tests(void)
-{
-	vm_test_collapse_compressor();
-	vm_test_wire_and_extract();
-	vm_test_page_wire_overflow_panic();
-	vm_test_kernel_object_fault();
-	vm_test_device_pager_transpose();
-}
+#endif /* DEVELOPMENT || DEBUG */

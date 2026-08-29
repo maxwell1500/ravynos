@@ -65,120 +65,6 @@ extern "C" {
 #define _CASSERT(x)     _Static_assert(x, "compile-time assertion failed")
 
 /*
- * Atomic macros; these should be on their own someday.
- */
-#define atomic_add_16_ov(a, n)                                          \
-	((u_int16_t) OSAddAtomic16(n, (volatile SInt16 *)a))
-
-#define atomic_add_16(a, n)                                             \
-	((void) atomic_add_16_ov(a, n))
-
-#define atomic_add_32_ov(a, n)                                          \
-	((u_int32_t) OSAddAtomic(n, (volatile SInt32 *)a))
-
-#define atomic_add_32(a, n)                                             \
-	((void) atomic_add_32_ov(a, n))
-
-#define atomic_add_64_ov(a, n)                                          \
-	((u_int64_t) OSAddAtomic64(n, (volatile SInt64 *)a))
-
-#define atomic_add_64(a, n)                                             \
-	((void) atomic_add_64_ov(a, n))
-
-#define atomic_test_set_32(a, o, n)                                     \
-	OSCompareAndSwap(o, n, (volatile UInt32 *)a)
-
-#define atomic_set_32(a, n) do {                                        \
-	while (!atomic_test_set_32(a, *a, n))                           \
-	        ;                                                       \
-} while (0)
-
-#define atomic_test_set_64(a, o, n)                                     \
-	OSCompareAndSwap64(o, n, (volatile UInt64 *)a)
-
-#define atomic_set_64(a, n) do {                                        \
-	while (!atomic_test_set_64(a, *a, n))                           \
-	        ;                                                       \
-} while (0)
-
-#if defined(__LP64__)
-#define atomic_get_64(n, a) do {                                        \
-	(n) = *(a);                                                     \
-} while (0)
-#else
-#define atomic_get_64(n, a) do {                                        \
-	(n) = atomic_add_64_ov(a, 0);                                   \
-} while (0)
-#endif /* __LP64__ */
-
-#define atomic_test_set_ptr(a, o, n)                                    \
-	OSCompareAndSwapPtr(o, n, (void * volatile *)a)
-
-#define atomic_set_ptr(a, n) do {                                       \
-	while (!atomic_test_set_ptr(a, *a, n))                          \
-	        ;                                                       \
-} while (0)
-
-#define atomic_or_8_ov(a, n)                                            \
-	((u_int8_t) OSBitOrAtomic8(n, (volatile UInt8 *)a))
-
-#define atomic_or_8(a, n)                                               \
-	((void) atomic_or_8_ov(a, n))
-
-#define atomic_bitset_8(a, n)                                           \
-	atomic_or_8(a, n)
-
-#define atomic_or_16_ov(a, n)                                           \
-	((u_int16_t) OSBitOrAtomic16(n, (volatile UInt16 *)a))
-
-#define atomic_or_16(a, n)                                              \
-	((void) atomic_or_16_ov(a, n))
-
-#define atomic_bitset_16(a, n)                                          \
-	atomic_or_16(a, n)
-
-#define atomic_or_32_ov(a, n)                                           \
-	((u_int32_t) OSBitOrAtomic(n, (volatile UInt32 *)a))
-
-#define atomic_or_32(a, n)                                              \
-	((void) atomic_or_32_ov(a, n))
-
-#define atomic_bitset_32(a, n)                                          \
-	atomic_or_32(a, n)
-
-#define atomic_bitset_32_ov(a, n)                                       \
-	atomic_or_32_ov(a, n)
-
-#define atomic_and_8_ov(a, n)                                           \
-	((u_int8_t) OSBitAndAtomic8(n, (volatile UInt8 *)a))
-
-#define atomic_and_8(a, n)                                              \
-	((void) atomic_and_8_ov(a, n))
-
-#define atomic_bitclear_8(a, n)                                         \
-	atomic_and_8(a, ~(n))
-
-#define atomic_and_16_ov(a, n)                                          \
-	((u_int16_t) OSBitAndAtomic16(n, (volatile UInt16 *)a))
-
-#define atomic_and_16(a, n)                                             \
-	((void) atomic_and_16_ov(a, n))
-
-#define atomic_bitclear_16(a, n)                                        \
-	atomic_and_16(a, ~(n))
-
-#define atomic_and_32_ov(a, n)                                          \
-	((u_int32_t) OSBitAndAtomic(n, (volatile UInt32 *)a))
-
-#define atomic_and_32(a, n)                                             \
-	((void) atomic_and_32_ov(a, n))
-
-#define atomic_bitclear_32(a, n)                                        \
-	atomic_and_32(a, ~(n))
-
-#define membar_sync     OSMemoryBarrier
-
-/*
  * Use CPU_CACHE_LINE_SIZE instead of MAX_CPU_CACHE_LINE_SIZE, unless
  * wasting space is of no concern.
  */
@@ -306,23 +192,17 @@ typedef struct mcache {
 	u_int32_t       mc_nwretry_cnt; /* # of no-wait retry attempts */
 	u_int32_t       mc_nwfail_cnt;  /* # of no-wait retries that failed */
 	decl_lck_mtx_data(, mc_sync_lock); /* protects purges and reenables */
-	lck_attr_t      *mc_sync_lock_attr;
 	lck_grp_t       *mc_sync_lock_grp;
-	lck_grp_attr_t  *mc_sync_lock_grp_attr;
 	/*
 	 * Keep CPU and buckets layers lock statistics separate.
 	 */
-	lck_attr_t      *mc_cpu_lock_attr;
 	lck_grp_t       *mc_cpu_lock_grp;
-	lck_grp_attr_t  *mc_cpu_lock_grp_attr;
 
 	/*
 	 * Bucket layer common to all CPUs
 	 */
 	decl_lck_mtx_data(, mc_bkt_lock);
-	lck_attr_t      *mc_bkt_lock_attr;
 	lck_grp_t       *mc_bkt_lock_grp;
-	lck_grp_attr_t  *mc_bkt_lock_grp_attr;
 	mcache_bkttype_t *cache_bkttype;        /* bucket type */
 	mcache_bktlist_t mc_full;               /* full buckets */
 	mcache_bktlist_t mc_empty;              /* empty buckets */
@@ -357,6 +237,8 @@ typedef struct mcache {
 
 #define MCA_TRN_MAX     2               /* Number of transactions to record */
 
+#define DUMP_MCA_BUF_SIZE       512
+
 typedef struct mcache_audit {
 	struct mcache_audit *mca_next;  /* next audit struct */
 	void            *mca_addr;      /* address of buffer */
@@ -384,7 +266,7 @@ __private_extern__ void *mcache_alloc(mcache_t *, int);
 __private_extern__ void mcache_free(mcache_t *, void *);
 __private_extern__ mcache_t *mcache_create_ext(const char *, size_t,
     mcache_allocfn_t, mcache_freefn_t, mcache_auditfn_t, mcache_logfn_t,
-    mcache_notifyfn_t, void *, u_int32_t, int);
+    mcache_notifyfn_t, void *__unsafe_indexable, u_int32_t, int);
 __private_extern__ void mcache_destroy(mcache_t *);
 __private_extern__ unsigned int mcache_alloc_ext(mcache_t *, mcache_obj_t **,
     unsigned int, int);
@@ -396,24 +278,17 @@ __private_extern__ void mcache_waiter_inc(mcache_t *);
 __private_extern__ void mcache_waiter_dec(mcache_t *);
 __private_extern__ boolean_t mcache_bkt_isempty(mcache_t *);
 
+struct timeval;
 __private_extern__ void mcache_buffer_log(mcache_audit_t *, void *, mcache_t *,
     struct timeval *);
 __private_extern__ void mcache_set_pattern(u_int64_t, void *, size_t);
 __private_extern__ void *mcache_verify_pattern(u_int64_t, void *, size_t);
-__private_extern__ void *mcache_verify_set_pattern(u_int64_t, u_int64_t,
-    void *, size_t);
 __private_extern__ void mcache_audit_free_verify(mcache_audit_t *,
     void *, size_t, size_t);
 __private_extern__ void mcache_audit_free_verify_set(mcache_audit_t *,
     void *, size_t, size_t);
-__private_extern__ char *mcache_dump_mca(mcache_audit_t *);
-__private_extern__ void mcache_audit_panic(mcache_audit_t *, void *, size_t,
-    int64_t, int64_t) __abortlike;
+__private_extern__ char *mcache_dump_mca(char buf[DUMP_MCA_BUF_SIZE], mcache_audit_t *);
 
-extern int32_t total_sbmb_cnt;
-extern int32_t total_sbmb_cnt_floor;
-extern int32_t total_sbmb_cnt_peak;
-extern int64_t sbmb_limreached;
 extern mcache_t *mcache_audit_cache;
 
 #ifdef  __cplusplus

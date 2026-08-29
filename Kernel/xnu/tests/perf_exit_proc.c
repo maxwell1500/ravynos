@@ -46,7 +46,7 @@ allocate_and_wire_memory(mach_vm_size_t size)
 		printf("mach_vm_allocate returned non-zero: %s\n", mach_error_string(err));
 		return err;
 	}
-	err = mach_vm_protect(task, addr, size, 0, VM_PROT_READ | VM_PROT_WRITE);;
+	err = mach_vm_protect(task, addr, size, 0, VM_PROT_READ | VM_PROT_WRITE);
 	if (err != KERN_SUCCESS) {
 		printf("mach_vm_protect returned non-zero: %s\n", mach_error_string(err));
 		return err;
@@ -54,7 +54,7 @@ allocate_and_wire_memory(mach_vm_size_t size)
 	host_t host_priv_port;
 	err = host_get_host_priv_port(mach_host_self(), &host_priv_port);
 	if (err != KERN_SUCCESS) {
-		printf("host_get_host_priv_port retruned non-zero: %s\n", mach_error_string(err));
+		printf("host_get_host_priv_port returned non-zero: %s\n", mach_error_string(err));
 		return err;
 	}
 	err = mach_vm_wire(host_priv_port, task, addr, size, VM_PROT_READ | VM_PROT_WRITE);

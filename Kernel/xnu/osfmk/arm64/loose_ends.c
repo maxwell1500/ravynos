@@ -32,6 +32,7 @@
 #include <kern/timer.h>
 #include <kern/clock.h>
 #include <kern/machine.h>
+#include <kern/iotrace.h>
 #include <mach/machine.h>
 #include <mach/machine/vm_param.h>
 #include <mach_kdp.h>
@@ -50,6 +51,9 @@
 #include <arm/misc_protos.h>
 
 #include <sys/errno.h>
+
+#include <libkern/section_keywords.h>
+#include <libkern/OSDebug.h>
 
 #define INT_SIZE        (BYTE_SIZE * sizeof (int))
 
@@ -72,8 +76,12 @@ bcopy_phys_internal(addr64_t src, addr64_t dst, vm_size_t bytes, int flags)
 	addr64_t        end __assert_only;
 	kern_return_t   res = KERN_SUCCESS;
 
-	assert(!__improbable(os_add_overflow(src, bytes, &end)));
-	assert(!__improbable(os_add_overflow(dst, bytes, &end)));
+	if (!BCOPY_PHYS_SRC_IS_USER(flags)) {
+		assert(!__improbable(os_add_overflow(src, bytes, &end)));
+	}
+	if (!BCOPY_PHYS_DST_IS_USER(flags)) {
+		assert(!__improbable(os_add_overflow(dst, bytes, &end)));
+	}
 
 	while ((bytes > 0) && (res == KERN_SUCCESS)) {
 		src_offset = src & PAGE_MASK;
@@ -148,6 +156,7 @@ bcopy_phys_internal(addr64_t src, addr64_t dst, vm_size_t bytes, int flags)
 			count = bytes;
 		}
 
+
 		if (BCOPY_PHYS_SRC_IS_USER(flags)) {
 			res = copyin((user_addr_t)src, tmp_dst, count);
 		} else if (BCOPY_PHYS_DST_IS_USER(flags)) {
@@ -155,6 +164,7 @@ bcopy_phys_internal(addr64_t src, addr64_t dst, vm_size_t bytes, int flags)
 		} else {
 			bcopy(tmp_src, tmp_dst, count);
 		}
+
 
 		if (use_copy_window_src) {
 			pmap_unmap_cpu_windows_copy(src_index);
@@ -235,7 +245,36 @@ bzero_phys(addr64_t src, vm_size_t bytes)
 		case VM_WIMG_WCOMB:
 		case VM_WIMG_INNERWBACK:
 		case VM_WIMG_WTHRU:
-			bzero(buf, count);
+#if HAS_UCNORMAL_MEM
+		case VM_WIMG_RT:
+#endif
+			/**
+			 * When we are zerofilling a normal page, there are a couple of assumptions that can
+			 * be made.
+			 *
+			 * 1. The destination to be zeroed is page-sized and page-aligned, making the unconditional
+			 *    4 stp instructions in bzero redundant.
+			 * 2. The dczva loop for zerofilling can be fully unrolled at compile-time thanks to
+			 *    known size of the destination, reducing instruction fetch overhead caused by
+			 *    the branch backward in a tight loop.
+			 */
+			if (count == PAGE_SIZE) {
+				/**
+				 * Thanks to how count is computed above, buf should always be page-size aligned
+				 * when count == PAGE_SIZE.
+				 */
+				assert((((addr64_t) buf) & PAGE_MASK) == 0);
+
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wpass-failed"
+				#pragma unroll
+				for (addr64_t dczva_offset = 0; dczva_offset < PAGE_SIZE; dczva_offset += (1ULL << MMU_CLINE)) {
+					asm volatile ("dc zva, %0" : : "r"(buf + dczva_offset) : "memory");
+				}
+#pragma clang diagnostic pop
+			} else {
+				bzero(buf, count);
+			}
 			break;
 		default:
 			/* 'dc zva' performed by bzero is not safe for device memory */
@@ -257,84 +296,161 @@ bzero_phys(addr64_t src, vm_size_t bytes)
  *  Read data from a physical address.
  */
 
+#if BUILD_QUAD_WORD_FUNCS
+static inline uint128_t
+__read128(vm_address_t addr)
+{
+	uint64_t hi, lo;
 
-static unsigned long long
+	asm volatile (
+                    "ldp    %[lo], %[hi], [%[addr]]"   "\n"
+                    : [lo] "=r"(lo), [hi] "=r"(hi)
+                    : [addr] "r"(addr)
+                    : "memory"
+        );
+
+	return (((uint128_t)hi) << 64) + lo;
+}
+#endif /* BUILD_QUAD_WORD_FUNCS */
+
+static uint128_t
 ml_phys_read_data(pmap_paddr_t paddr, int size)
 {
+	vm_address_t   addr;
+	ppnum_t        pn = atop_kernel(paddr);
+	ppnum_t        pn_end = atop_kernel(paddr + size - 1);
+	uint128_t      result = 0;
+	uint8_t        s1;
+	uint16_t       s2;
+	uint32_t       s4;
+	uint64_t       s8;
 	unsigned int   index;
-	unsigned int   wimg_bits;
-	ppnum_t        pn = (ppnum_t)(paddr >> PAGE_SHIFT);
-	ppnum_t        pn_end = (ppnum_t)((paddr + size - 1) >> PAGE_SHIFT);
-	unsigned long  long result = 0;
-	vm_offset_t    copywindow_vaddr = 0;
-	unsigned char  s1;
-	unsigned short s2;
-	unsigned int   s4;
+	bool           use_copy_window = true;
 
 	if (__improbable(pn_end != pn)) {
 		panic("%s: paddr 0x%llx spans a page boundary", __func__, (uint64_t)paddr);
 	}
 
+#ifdef ML_IO_TIMEOUTS_ENABLED
+	bool istate, timeread = false;
+	uint64_t sabs, eabs;
+
+	uint32_t report_phy_read_delay = os_atomic_load(&report_phy_read_delay_to, relaxed);
+	uint32_t const trace_phy_read_delay = os_atomic_load(&trace_phy_read_delay_to, relaxed);
+
+	if (__improbable(report_phy_read_delay != 0)) {
+		istate = ml_set_interrupts_enabled_with_debug(false, false);
+		sabs = ml_get_timebase();
+		timeread = true;
+	}
+#ifdef ML_IO_SIMULATE_STRETCHED_ENABLED
+	if (__improbable(timeread && simulate_stretched_io)) {
+		sabs -= simulate_stretched_io;
+	}
+#endif /* ML_IO_SIMULATE_STRETCHED_ENABLED */
+#endif /* ML_IO_TIMEOUTS_ENABLED */
+
 #if defined(__ARM_COHERENT_IO__) || __ARM_PTE_PHYSMAP__
 	if (pmap_valid_address(paddr)) {
-		switch (size) {
-		case 1:
-			s1 = *(volatile unsigned char *)phystokv(paddr);
-			result = s1;
-			break;
-		case 2:
-			s2 = *(volatile unsigned short *)phystokv(paddr);
-			result = s2;
-			break;
-		case 4:
-			s4 = *(volatile unsigned int *)phystokv(paddr);
-			result = s4;
-			break;
-		case 8:
-			result = *(volatile unsigned long long *)phystokv(paddr);
-			break;
-		default:
-			panic("Invalid size %d for ml_phys_read_data\n", size);
-			break;
-		}
-		return result;
+		addr = phystokv(paddr);
+		use_copy_window = false;
 	}
-#endif
+#endif /* defined(__ARM_COHERENT_IO__) || __ARM_PTE_PHYSMAP__ */
 
-	mp_disable_preemption();
-	wimg_bits = pmap_cache_attributes(pn);
-	index = pmap_map_cpu_windows_copy(pn, VM_PROT_READ, wimg_bits);
-	copywindow_vaddr = pmap_cpu_windows_copy_addr(cpu_number(), index) | ((uint32_t)paddr & PAGE_MASK);
+	if (use_copy_window) {
+		mp_disable_preemption();
+		unsigned int wimg_bits = pmap_cache_attributes(pn);
+		index = pmap_map_cpu_windows_copy(pn, VM_PROT_READ, wimg_bits);
+		addr = pmap_cpu_windows_copy_addr(cpu_number(), index) | ((uint32_t)paddr & PAGE_MASK);
+	}
 
 	switch (size) {
 	case 1:
-		s1 = *(volatile unsigned char *)copywindow_vaddr;
+		s1 = *(volatile uint8_t *)addr;
 		result = s1;
 		break;
 	case 2:
-		s2 = *(volatile unsigned short *)copywindow_vaddr;
+		s2 = *(volatile uint16_t *)addr;
 		result = s2;
 		break;
 	case 4:
-		s4 = *(volatile unsigned int *)copywindow_vaddr;
+		s4 = *(volatile uint32_t *)addr;
 		result = s4;
 		break;
 	case 8:
-		result = *(volatile unsigned long long*)copywindow_vaddr;
+		s8 = *(volatile uint64_t *)addr;
+		result = s8;
 		break;
+#if BUILD_QUAD_WORD_FUNCS
+	case 16:
+		result = __read128(addr);
+		break;
+#endif /* BUILD_QUAD_WORD_FUNCS */
 	default:
-		panic("Invalid size %d for ml_phys_read_data\n", size);
+		panic("Invalid size %d for ml_phys_read_data", size);
 		break;
 	}
 
-	pmap_unmap_cpu_windows_copy(index);
-	mp_enable_preemption();
+	if (use_copy_window) {
+		pmap_unmap_cpu_windows_copy(index);
+		mp_enable_preemption();
+	}
+
+#ifdef ML_IO_TIMEOUTS_ENABLED
+	if (__improbable(timeread)) {
+		eabs = ml_get_timebase();
+
+		iotrace(IOTRACE_PHYS_READ, 0, addr, size, result, sabs, eabs - sabs);
+
+		if (__improbable((eabs - sabs) > report_phy_read_delay)) {
+			DTRACE_PHYSLAT4(physread, uint64_t, (eabs - sabs),
+			    uint64_t, addr, uint32_t, size, uint64_t, result);
+
+			uint64_t override = 0;
+			override_io_timeouts(0, paddr, &override, NULL);
+
+			if (override != 0) {
+#if SCHED_HYGIENE_DEBUG
+				/*
+				 * The IO timeout was overridden. If we were called in an
+				 * interrupt handler context, that can lead to a timeout
+				 * panic, so we need to abandon the measurement.
+				 */
+				if (interrupt_masked_debug_mode == SCHED_HYGIENE_MODE_PANIC) {
+					ml_irq_debug_abandon();
+				}
+#endif
+				report_phy_read_delay = override;
+			}
+		}
+
+		if (__improbable((eabs - sabs) > report_phy_read_delay)) {
+			if (phy_read_panic && (machine_timeout_suspended() == FALSE)) {
+				const uint64_t hi = (uint64_t)(result >> 64);
+				const uint64_t lo = (uint64_t)(result);
+				uint64_t nsec = 0;
+				absolutetime_to_nanoseconds(eabs - sabs, &nsec);
+				panic("Read from physical addr 0x%llx took %llu ns, "
+				    "result: 0x%016llx%016llx (start: %llu, end: %llu), ceiling: %llu",
+				    (unsigned long long)addr, nsec, hi, lo, sabs, eabs,
+				    (uint64_t)report_phy_read_delay);
+			}
+		}
+
+		if (__improbable(trace_phy_read_delay > 0 && (eabs - sabs) > trace_phy_read_delay)) {
+			KDBG(MACHDBG_CODE(DBG_MACH_IO, DBC_MACH_IO_PHYS_READ),
+			    (eabs - sabs), sabs, addr, result);
+		}
+
+		ml_set_interrupts_enabled_with_debug(istate, false);
+	}
+#endif /*  ML_IO_TIMEOUTS_ENABLED */
 
 	return result;
 }
 
 unsigned int
-ml_phys_read( vm_offset_t paddr)
+ml_phys_read(vm_offset_t paddr)
 {
 	return (unsigned int)ml_phys_read_data((pmap_paddr_t)paddr, 4);
 }
@@ -393,75 +509,161 @@ ml_phys_read_double_64(addr64_t paddr64)
 	return ml_phys_read_data((pmap_paddr_t)paddr64, 8);
 }
 
+#if BUILD_QUAD_WORD_FUNCS
+uint128_t
+ml_phys_read_quad(vm_offset_t paddr)
+{
+	return ml_phys_read_data((pmap_paddr_t)paddr, 16);
+}
 
+uint128_t
+ml_phys_read_quad_64(addr64_t paddr64)
+{
+	return ml_phys_read_data((pmap_paddr_t)paddr64, 16);
+}
+#endif /* BUILD_QUAD_WORD_FUNCS */
 
 /*
  *  Write data to a physical address.
  */
 
-static void
-ml_phys_write_data(pmap_paddr_t paddr, unsigned long long data, int size)
+#if BUILD_QUAD_WORD_FUNCS
+static inline void
+__write128(vm_address_t addr, uint128_t data)
 {
-	unsigned int    index;
-	unsigned int    wimg_bits;
-	ppnum_t         pn = (ppnum_t)(paddr >> PAGE_SHIFT);
-	ppnum_t         pn_end = (ppnum_t)((paddr + size - 1) >> PAGE_SHIFT);
-	vm_offset_t     copywindow_vaddr = 0;
+	const uint64_t hi = (uint64_t)(data >> 64);
+	const uint64_t lo = (uint64_t)(data);
+
+	asm volatile (
+                    "stp    %[lo], %[hi], [%[addr]]"   "\n"
+                    : /**/
+                    : [lo] "r"(lo), [hi] "r"(hi), [addr] "r"(addr)
+                    : "memory"
+        );
+}
+#endif /* BUILD_QUAD_WORD_FUNCS */
+
+static void
+ml_phys_write_data(pmap_paddr_t paddr, uint128_t data, int size)
+{
+	vm_address_t   addr;
+	ppnum_t        pn = atop_kernel(paddr);
+	ppnum_t        pn_end = atop_kernel(paddr + size - 1);
+	unsigned int   index;
+	bool           use_copy_window = true;
 
 	if (__improbable(pn_end != pn)) {
 		panic("%s: paddr 0x%llx spans a page boundary", __func__, (uint64_t)paddr);
 	}
 
+#ifdef ML_IO_TIMEOUTS_ENABLED
+	bool istate, timewrite = false;
+	uint64_t sabs, eabs;
+
+	uint32_t report_phy_write_delay = os_atomic_load(&report_phy_write_delay_to, relaxed);
+	uint32_t const trace_phy_write_delay = os_atomic_load(&trace_phy_write_delay_to, relaxed);
+
+	if (__improbable(report_phy_write_delay != 0)) {
+		istate = ml_set_interrupts_enabled_with_debug(false, false);
+		sabs = ml_get_timebase();
+		timewrite = true;
+	}
+#ifdef ML_IO_SIMULATE_STRETCHED_ENABLED
+	if (__improbable(timewrite && simulate_stretched_io)) {
+		sabs -= simulate_stretched_io;
+	}
+#endif /* ML_IO_SIMULATE_STRETCHED_ENABLED */
+#endif /* ML_IO_TIMEOUTS_ENABLED */
+
 #if defined(__ARM_COHERENT_IO__) || __ARM_PTE_PHYSMAP__
 	if (pmap_valid_address(paddr)) {
-		switch (size) {
-		case 1:
-			*(volatile unsigned char *)phystokv(paddr) = (unsigned char)data;
-			return;
-		case 2:
-			*(volatile unsigned short *)phystokv(paddr) = (unsigned short)data;
-			return;
-		case 4:
-			*(volatile unsigned int *)phystokv(paddr) = (unsigned int)data;
-			return;
-		case 8:
-			*(volatile unsigned long long *)phystokv(paddr) = data;
-			return;
-		default:
-			panic("Invalid size %d for ml_phys_write_data\n", size);
-		}
+		addr = phystokv(paddr);
+		use_copy_window = false;
 	}
-#endif
+#endif /* defined(__ARM_COHERENT_IO__) || __ARM_PTE_PHYSMAP__ */
 
-	mp_disable_preemption();
-	wimg_bits = pmap_cache_attributes(pn);
-	index = pmap_map_cpu_windows_copy(pn, VM_PROT_READ | VM_PROT_WRITE, wimg_bits);
-	copywindow_vaddr = pmap_cpu_windows_copy_addr(cpu_number(), index) | ((uint32_t)paddr & PAGE_MASK);
+	if (use_copy_window) {
+		mp_disable_preemption();
+		unsigned int wimg_bits = pmap_cache_attributes(pn);
+		index = pmap_map_cpu_windows_copy(pn, VM_PROT_READ | VM_PROT_WRITE, wimg_bits);
+		addr = pmap_cpu_windows_copy_addr(cpu_number(), index) | ((uint32_t)paddr & PAGE_MASK);
+	}
 
 	switch (size) {
 	case 1:
-		*(volatile unsigned char *)(copywindow_vaddr) =
-		    (unsigned char)data;
+		*(volatile uint8_t *)addr = (uint8_t)data;
 		break;
 	case 2:
-		*(volatile unsigned short *)(copywindow_vaddr) =
-		    (unsigned short)data;
+		*(volatile uint16_t *)addr = (uint16_t)data;
 		break;
 	case 4:
-		*(volatile unsigned int *)(copywindow_vaddr) =
-		    (uint32_t)data;
+		*(volatile uint32_t *)addr = (uint32_t)data;
 		break;
 	case 8:
-		*(volatile unsigned long long *)(copywindow_vaddr) =
-		    (unsigned long long)data;
+		*(volatile uint64_t *)addr = (uint64_t)data;
 		break;
+#if BUILD_QUAD_WORD_FUNCS
+	case 16:
+		__write128(addr, data);
+		break;
+#endif /* BUILD_QUAD_WORD_FUNCS */
 	default:
-		panic("Invalid size %d for ml_phys_write_data\n", size);
-		break;
+		panic("Invalid size %d for ml_phys_write_data", size);
 	}
 
-	pmap_unmap_cpu_windows_copy(index);
-	mp_enable_preemption();
+	if (use_copy_window) {
+		pmap_unmap_cpu_windows_copy(index);
+		mp_enable_preemption();
+	}
+
+#ifdef ML_IO_TIMEOUTS_ENABLED
+	if (__improbable(timewrite)) {
+		eabs = ml_get_timebase();
+
+		iotrace(IOTRACE_PHYS_WRITE, 0, paddr, size, data, sabs, eabs - sabs);
+
+		if (__improbable((eabs - sabs) > report_phy_write_delay)) {
+			DTRACE_PHYSLAT4(physwrite, uint64_t, (eabs - sabs),
+			    uint64_t, paddr, uint32_t, size, uint64_t, data);
+
+			uint64_t override = 0;
+			override_io_timeouts(0, paddr, NULL, &override);
+			if (override != 0) {
+#if SCHED_HYGIENE_DEBUG
+				/*
+				 * The IO timeout was overridden. If we were called in an
+				 * interrupt handler context, that can lead to a timeout
+				 * panic, so we need to abandon the measurement.
+				 */
+				if (interrupt_masked_debug_mode == SCHED_HYGIENE_MODE_PANIC) {
+					ml_irq_debug_abandon();
+				}
+#endif
+				report_phy_write_delay = override;
+			}
+		}
+
+		if (__improbable((eabs - sabs) > report_phy_write_delay)) {
+			if (phy_write_panic && (machine_timeout_suspended() == FALSE)) {
+				const uint64_t hi = (uint64_t)(data >> 64);
+				const uint64_t lo = (uint64_t)(data);
+				uint64_t nsec = 0;
+				absolutetime_to_nanoseconds(eabs - sabs, &nsec);
+				panic("Write from physical addr 0x%llx took %llu ns, "
+				    "data: 0x%016llx%016llx (start: %llu, end: %llu), ceiling: %llu",
+				    (unsigned long long)paddr, nsec, hi, lo, sabs, eabs,
+				    (uint64_t)report_phy_write_delay);
+			}
+		}
+
+		if (__improbable(trace_phy_write_delay > 0 && (eabs - sabs) > trace_phy_write_delay)) {
+			KDBG(MACHDBG_CODE(DBG_MACH_IO, DBC_MACH_IO_PHYS_WRITE),
+			    (eabs - sabs), sabs, paddr, data);
+		}
+
+		ml_set_interrupts_enabled_with_debug(istate, false);
+	}
+#endif /*  ML_IO_TIMEOUTS_ENABLED */
 }
 
 void
@@ -524,6 +726,19 @@ ml_phys_write_double_64(addr64_t paddr64, unsigned long long data)
 	ml_phys_write_data((pmap_paddr_t)paddr64, data, 8);
 }
 
+#if BUILD_QUAD_WORD_FUNCS
+void
+ml_phys_write_quad(vm_offset_t paddr, uint128_t data)
+{
+	ml_phys_write_data((pmap_paddr_t)paddr, data, 16);
+}
+
+void
+ml_phys_write_quad_64(addr64_t paddr64, uint128_t data)
+{
+	ml_phys_write_data((pmap_paddr_t)paddr64, data, 16);
+}
+#endif /* BUILD_QUAD_WORD_FUNCS */
 
 /*
  * Set indicated bit in bit string.
@@ -617,54 +832,6 @@ flsll(unsigned long long mask)
 	return (sizeof(mask) << 3) - __builtin_clzll(mask);
 }
 
-#undef bcmp
-int
-bcmp(
-	const void *pa,
-	const void *pb,
-	size_t len)
-{
-	const char     *a = (const char *) pa;
-	const char     *b = (const char *) pb;
-
-	if (len == 0) {
-		return 0;
-	}
-
-	do{
-		if (*a++ != *b++) {
-			break;
-		}
-	} while (--len);
-
-	/*
-	 * Check for the overflow case but continue to handle the non-overflow
-	 * case the same way just in case someone is using the return value
-	 * as more than zero/non-zero
-	 */
-	if ((len & 0xFFFFFFFF00000000ULL) && !(len & 0x00000000FFFFFFFFULL)) {
-		return 0xFFFFFFFFL;
-	} else {
-		return (int)len;
-	}
-}
-
-#undef memcmp
-int
-memcmp(const void *s1, const void *s2, size_t n)
-{
-	if (n != 0) {
-		const unsigned char *p1 = s1, *p2 = s2;
-
-		do {
-			if (*p1++ != *p2++) {
-				return *--p1 - *--p2;
-			}
-		} while (--n != 0);
-	}
-	return 0;
-}
-
 kern_return_t
 copypv(addr64_t source, addr64_t sink, unsigned int size, int which)
 {
@@ -686,59 +853,6 @@ copypv(addr64_t source, addr64_t sink, unsigned int size, int which)
 
 	return res;
 }
-
-#if     MACH_ASSERT
-
-extern int copyinframe(vm_address_t fp, char *frame, boolean_t is64bit);
-
-/*
- * Machine-dependent routine to fill in an array with up to callstack_max
- * levels of return pc information.
- */
-void
-machine_callstack(
-	uintptr_t * buf,
-	vm_size_t callstack_max)
-{
-	/* Captures the USER call stack */
-	uint32_t i = 0;
-
-	struct arm_saved_state *state = find_user_regs(current_thread());
-
-	if (!state) {
-		while (i < callstack_max) {
-			buf[i++] = 0;
-		}
-	} else {
-		if (is_saved_state64(state)) {
-			uint64_t frame[2];
-			buf[i++] = (uintptr_t)get_saved_state_pc(state);
-			frame[0] = get_saved_state_fp(state);
-			while (i < callstack_max && frame[0] != 0) {
-				if (copyinframe(frame[0], (void*) frame, TRUE)) {
-					break;
-				}
-				buf[i++] = (uintptr_t)frame[1];
-			}
-		} else {
-			uint32_t frame[2];
-			buf[i++] = (uintptr_t)get_saved_state_pc(state);
-			frame[0] = (uint32_t)get_saved_state_fp(state);
-			while (i < callstack_max && frame[0] != 0) {
-				if (copyinframe(frame[0], (void*) frame, FALSE)) {
-					break;
-				}
-				buf[i++] = (uintptr_t)frame[1];
-			}
-		}
-
-		while (i < callstack_max) {
-			buf[i++] = 0;
-		}
-	}
-}
-
-#endif                          /* MACH_ASSERT */
 
 int
 clr_be_bit(void)
@@ -800,3 +914,36 @@ kdp_register_callout(kdp_callout_fn_t fn, void *arg)
 #pragma unused(fn,arg)
 }
 #endif
+
+/*
+ * Get a quick virtual mapping of a physical page and run a callback on that
+ * page's virtual address.
+ *
+ * @param dst64 Physical address to access (doesn't need to be page-aligned).
+ * @param bytes Number of bytes to be accessed. This cannot cross page boundaries.
+ * @param func Callback function to call with the page's virtual address.
+ * @param arg Argument passed directly to `func`.
+ *
+ * @return The return value from `func`.
+ */
+int
+apply_func_phys(
+	addr64_t dst64,
+	vm_size_t bytes,
+	int (*func)(void * buffer, vm_size_t bytes, void * arg),
+	void * arg)
+{
+	/* The physical aperture is only guaranteed to work with kernel-managed addresses. */
+	if (!pmap_valid_address(dst64)) {
+		panic("%s address error: passed in address (%#llx) not a kernel managed address",
+		    __FUNCTION__, dst64);
+	}
+
+	/* Ensure we stay within a single page */
+	if (((((uint32_t)dst64 & (ARM_PGBYTES - 1)) + bytes) > ARM_PGBYTES)) {
+		panic("%s alignment error: tried accessing addresses spanning more than one page %#llx %#lx",
+		    __FUNCTION__, dst64, bytes);
+	}
+
+	return func((void*)phystokv(dst64), bytes, arg);
+}

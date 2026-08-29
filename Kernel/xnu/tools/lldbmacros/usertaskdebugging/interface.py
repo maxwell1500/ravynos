@@ -5,7 +5,7 @@ import select
 class Interface(object):
     """Basic communication interface."""
     def __init__(self, host_cfg, portnum):
-        super(Interface, self).__init__()
+        super().__init__()
         self.host_cfg = host_cfg
         self.portnum = portnum
         self.pkt_size = 8192
@@ -24,34 +24,34 @@ class Interface(object):
             ra,wa,ea = select.select([self.socket], [], [], 30)
             if not ra:
                 num_retries -= 1
-                logging.error("select returned empty list")
+                logging.warning("timeout: select returned empty list. retrying..")
                 continue
             self.connection, addr = self.socket.accept()
             logging.info("Connected to client from %s" % str(addr))
             return True
         logging.error("Failed to connect. Exiting after multiple attempts.")
         return False
-    
+
     def read(self):
         if self.isblocking:
             #BUG TODO make this unblocking soon
             #logging.warn("blocking read bug")
             self.connection.settimeout(15)
             self.isblocking = False
-        r_bytes = ''
+        r_bytes = bytes()
         try:
             r_bytes = self.connection.recv(self.pkt_size)
-        except(Exception, e):
+        except Exception as e:
             #logging.debug("Found exception in recv. %s " % (str(e)))
             pass
 
         return r_bytes
     
-    def write(self, bytes):
+    def write(self, str):
         if not self.isblocking:
             self.connection.setblocking(1)
             self.isblocking = True
-        return self.connection.send(bytes)
+        return self.connection.send(str.encode())
 
     def close(self):
         if self.connection:

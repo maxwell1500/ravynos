@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2021 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -30,6 +30,8 @@
 #ifndef _NET_IF_UTUN_H_
 #define _NET_IF_UTUN_H_
 
+#include <sys/types.h>
+
 #ifdef KERNEL_PRIVATE
 
 #include <sys/kern_control.h>
@@ -37,6 +39,9 @@
 void* utun_alloc(size_t size);
 void utun_free(void *ptr);
 errno_t utun_register_control(void);
+#if SKYWALK
+boolean_t utun_interface_needs_netagent(ifnet_t interface);
+#endif /* SKYWALK */
 
 #endif
 

@@ -148,9 +148,8 @@ extern int      ffs(unsigned int);
 extern int      ffsll(unsigned long long);
 extern int      fls(unsigned int);
 extern int      flsll(unsigned long long);
-extern u_int32_t	random(void);
-extern int      scanc(u_int, u_char *, const u_char *, int);
-extern int      skpc(int, int, char *);
+extern u_int32_t        random(void);
+extern size_t   scanc(size_t, u_char *, const u_char *, u_char);
 extern long     strtol(const char*, char **, int);
 extern u_long   strtoul(const char *, char **, int);
 extern quad_t   strtoq(const char *, char **, int);
@@ -164,8 +163,21 @@ extern void     url_decode(char *str);
  * couldn't fit in the supplied buffer.
  * Use scnprintf() if you need the actual number of bytes (minus the \0)
  */
-int     snprintf(char *, size_t, const char *, ...) __printflike(3, 4);
-int     scnprintf(char *, size_t, const char *, ...) __printflike(3, 4);
+int     snprintf(char *__counted_by(count), size_t count, const char *, ...) __printflike(3, 4);
+int     scnprintf(char *__counted_by(count), size_t count, const char *, ...) __printflike(3, 4);
+
+/*
+ * Like (v)snprintf, but returns a __null_terminated pointer to `dst` (or NULL
+ * if `count` was 0). This can be used to "finalize" editing a char array and
+ * turn it into a NUL-terminated string when -fbounds-safety is enabled.
+ * Care must be taken to avoid aliasing the character data after the string
+ * has been finalized.
+ */
+const char *
+    tsnprintf(char *__counted_by(count) dst, size_t count, const char *fmt, ...) __printflike(3, 4);
+
+const char *
+    vtsnprintf(char *__counted_by(count) dst, size_t count, const char *fmt, va_list ap) __printflike(3, 0);
 
 /* sprintf() is being deprecated. Please use snprintf() instead. */
 int     sprintf(char *bufp, const char *, ...) __deprecated __printflike(2, 3);
@@ -184,20 +196,7 @@ int     _consume_printf_args(int, ...);
 #endif
 #endif
 
-uint16_t        crc16(uint16_t crc, const void *bufp, size_t len);
 uint32_t        crc32(uint32_t crc, const void *bufp, size_t len);
-
-#if XNU_KERNEL_PRIVATE
-#if KASAN
-uint16_t __nosan_crc16(uint16_t crc, const void *bufp, size_t len);
-#else
-static inline uint16_t
-__nosan_crc16(uint16_t crc, const void *bufp, size_t len)
-{
-	return crc16(crc, bufp, len);
-}
-#endif
-#endif
 
 int     copystr(const void *kfaddr, void *kdaddr, size_t len, size_t *done);
 int     copyinstr(const user_addr_t uaddr, void *kaddr, size_t len, size_t *done) OS_WARN_RESULT;
@@ -218,7 +217,8 @@ extern int      vsnprintf(char *, size_t, const char *, va_list) __printflike(3,
 extern int      vscnprintf(char *, size_t, const char *, va_list) __printflike(3, 0);
 
 #if XNU_KERNEL_PRIVATE
-extern int      vprintf_log_locked(const char *, va_list, bool addcr) __printflike(1, 0);
+extern bool     printf_log_locked(bool addcr, const char*, ...) __printflike(2, 3);
+extern bool     vprintf_log_locked(const char *, va_list, bool driverkit) __printflike(1, 0);
 extern void     osobject_retain(void * object);
 extern void     osobject_release(void * object);
 #endif
@@ -262,7 +262,7 @@ clz(unsigned int num)
 #define UNSUPPORTED_API(funcname, ...) \
 	_Pragma("clang diagnostic push") \
 	_Pragma("clang diagnostic ignored \"-Wunused-parameter\"") \
-	funcname(__VA_ARGS__) { panic(__func__ ": unsupported API\n"); } \
+	funcname(__VA_ARGS__) { panic("%s: unsupported API", __func__); } \
 	_Pragma("clang diagnostic pop")
 
 #endif

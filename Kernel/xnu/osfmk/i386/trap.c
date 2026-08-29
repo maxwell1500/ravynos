@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -65,10 +65,10 @@
 
 #include <types.h>
 #include <i386/eflags.h>
-#include <i386/trap.h>
+#include <i386/trap_internal.h>
 #include <i386/pmap.h>
 #include <i386/fpu.h>
-#include <i386/misc_protos.h> /* panic_io_port_read() */
+#include <i386/panic_notify.h>
 #include <i386/lapic.h>
 
 #include <mach/exception.h>
@@ -78,11 +78,13 @@
 
 #include <vm/vm_kern.h>
 #include <vm/vm_fault.h>
+#include <vm/vm_map_xnu.h>
 
 #include <kern/kern_types.h>
 #include <kern/processor.h>
 #include <kern/thread.h>
 #include <kern/task.h>
+#include <kern/restartable.h>
 #include <kern/sched.h>
 #include <kern/sched_prim.h>
 #include <kern/exception.h>
@@ -92,15 +94,18 @@
 #if CONFIG_TELEMETRY
 #include <kern/telemetry.h>
 #endif
+#include <kern/zalloc_internal.h>
 #include <sys/kdebug.h>
 #include <kperf/kperf.h>
 #include <prng/random.h>
+#include <prng/entropy.h>
 
 #include <string.h>
 
 #include <i386/postcode.h>
 #include <i386/mp_desc.h>
 #include <i386/proc_reg.h>
+#include <i386/machine_routines.h>
 #if CONFIG_MCA
 #include <i386/machine_check.h>
 #endif
@@ -109,22 +114,41 @@
 #include <libkern/OSDebug.h>
 #include <i386/cpu_threads.h>
 #include <machine/pal_routines.h>
+#include <i386/lbr.h>
 
 extern void throttle_lowpri_io(int);
 extern void kprint_state(x86_saved_state64_t *saved_state);
+#if DEVELOPMENT || DEBUG
+int insnstream_force_cacheline_mismatch = 0;
+extern int panic_on_cacheline_mismatch;
+extern char panic_on_trap_procname[];
+extern uint32_t panic_on_trap_mask;
+#endif
+
+extern int insn_copyin_count;
 
 /*
  * Forward declarations
  */
-static void panic_trap(x86_saved_state64_t *saved_state, uint32_t pl, kern_return_t fault_result) __dead2;
+static void panic_trap(x86_saved_state64_t *saved_state, const char *trapreason, uint32_t pl, kern_return_t fault_result) __dead2;
 static void set_recovery_ip(x86_saved_state64_t *saved_state, vm_offset_t ip);
+#if DEVELOPMENT || DEBUG
+static __attribute__((noinline)) void copy_instruction_stream(thread_t thread, uint64_t rip, int trap_code, bool inspect_cacheline);
+#else
+static __attribute__((noinline)) void copy_instruction_stream(thread_t thread, uint64_t rip, int trap_code);
+#endif
 
 #if CONFIG_DTRACE
 /* See <rdar://problem/4613924> */
 perfCallback tempDTraceTrapHook = NULL; /* Pointer to DTrace fbt trap hook routine */
 
 extern boolean_t dtrace_tally_fault(user_addr_t);
+extern boolean_t dtrace_handle_trap(int, x86_saved_state_t *);
 #endif
+
+#ifdef MACH_BSD
+extern char *   proc_name_address(void *p);
+#endif /* MACH_BSD */
 
 extern boolean_t pmap_smep_enabled;
 extern boolean_t pmap_smap_enabled;
@@ -335,6 +359,7 @@ interrupt(x86_saved_state_t *state)
 	int             itype = DBG_INTR_TYPE_UNKNOWN;
 	int             handled;
 
+
 	x86_saved_state64_t     *state64 = saved_state64(state);
 	rip = state64->isf.rip;
 	rsp = state64->isf.rsp;
@@ -366,7 +391,7 @@ interrupt(x86_saved_state_t *state)
 	    (user_mode ? rip : VM_KERNEL_UNSLIDE(rip)),
 	    user_mode, itype, 0);
 
-	SCHED_STATS_INTERRUPT(current_processor());
+	SCHED_STATS_INC(interrupt_count);
 
 #if CONFIG_TELEMETRY
 	if (telemetry_needs_record) {
@@ -398,7 +423,7 @@ interrupt(x86_saved_state_t *state)
 	}
 
 	if (__improbable(get_preemption_level() != ipl)) {
-		panic("Preemption level altered by interrupt vector 0x%x: initial 0x%x, final: 0x%x\n", interrupt_num, ipl, get_preemption_level());
+		panic("Preemption level altered by interrupt vector 0x%x: initial 0x%x, final: 0x%x", interrupt_num, ipl, get_preemption_level());
 	}
 
 
@@ -455,7 +480,7 @@ interrupt(x86_saved_state_t *state)
 	}
 
 	if (cnum == master_cpu) {
-		ml_entropy_collect();
+		entropy_collect();
 	}
 
 #if KPERF
@@ -486,6 +511,112 @@ unsigned kdp_has_active_watchpoints = 0;
 #else
 #define NO_WATCHPOINTS 1
 #endif
+
+static uint32_t bound_chk_violations_event;
+
+static void
+xnu_soft_trap_handle_breakpoint(
+	__unused void     *tstate,
+	uint16_t          comment)
+{
+	if (comment == CLANG_SOFT_TRAP_BOUND_CHK) {
+		os_atomic_inc(&bound_chk_violations_event, relaxed);
+	}
+}
+
+KERNEL_BRK_DESCRIPTOR_DEFINE(clang_desc,
+    .type                = KERNEL_BRK_TYPE_CLANG,
+    .base                = CLANG_X86_TRAP_START,
+    .max                 = CLANG_X86_TRAP_END,
+    .options             = KERNEL_BRK_UNRECOVERABLE,
+    .handle_breakpoint   = NULL);
+
+KERNEL_BRK_DESCRIPTOR_DEFINE(xnu_soft_traps_desc,
+    .type                = KERNEL_BRK_TYPE_TELEMETRY,
+    .base                = XNU_SOFT_TRAP_START,
+    .max                 = XNU_SOFT_TRAP_END,
+    .options             = KERNEL_BRK_RECOVERABLE | KERNEL_BRK_CORE_ANALYTICS,
+    .handle_breakpoint   = xnu_soft_trap_handle_breakpoint);
+
+KERNEL_BRK_DESCRIPTOR_DEFINE(libcxx_desc,
+    .type                = KERNEL_BRK_TYPE_LIBCXX,
+    .base                = LIBCXX_TRAP_START,
+    .max                 = LIBCXX_TRAP_END,
+    .options             = KERNEL_BRK_UNRECOVERABLE,
+    .handle_breakpoint   = NULL);
+
+KERNEL_BRK_DESCRIPTOR_DEFINE(xnu_hard_traps_desc,
+    .type                = KERNEL_BRK_TYPE_XNU,
+    .base                = XNU_HARD_TRAP_START,
+    .max                 = XNU_HARD_TRAP_END,
+    .options             = KERNEL_BRK_UNRECOVERABLE,
+    .handle_breakpoint   = NULL);
+
+static bool
+handle_kernel_breakpoint(x86_saved_state64_t *state, uint16_t *out_comment)
+{
+	uint16_t comment;
+	const struct kernel_brk_descriptor *desc;
+	uint8_t inst_buf[8];
+	uint32_t prefix16 = 0x80B90F67; /* Encoding prefix for ud1 <16-bit code>(%eax), %eax */
+	uint32_t prefix8 = 0x40B90F67; /* Encoding prefix for ud1 <8-bit code>(%eax), %eax */
+	bool found_prefix8 = false;
+
+	vm_size_t sz = ml_nofault_copy(state->isf.rip, (vm_offset_t)inst_buf, sizeof(inst_buf));
+	if (sz != sizeof(inst_buf)) {
+		return false;
+	}
+
+	if (bcmp(inst_buf, &prefix16, sizeof(prefix16)) == 0) {
+		/* The two bytes following the prefix is our code */
+		comment = inst_buf[5] << 8 | inst_buf[4];
+	} else if (bcmp(inst_buf, &prefix8, sizeof(prefix8)) == 0) {
+		/* The one byte following the prefix is our code */
+		found_prefix8 = true;
+		comment = inst_buf[4];
+	} else {
+		return false;
+	}
+
+	if (out_comment) {
+		*out_comment = comment;
+	}
+	desc = find_brk_descriptor_by_comment(comment);
+
+	if (!desc) {
+		return false;
+	}
+
+	if (desc->options & KERNEL_BRK_TELEMETRY_OPTIONS) {
+		telemetry_kernel_brk(desc->type, desc->options, (void *)state, comment);
+	}
+
+	if (desc->handle_breakpoint) {
+		desc->handle_breakpoint(state, comment); /* May trigger panic */
+	}
+
+	/* Still alive? Check if we should recover. */
+	if (desc->options & KERNEL_BRK_RECOVERABLE) {
+		/* ud1 can be five or eight-byte long depending on the prefix */
+		set_recovery_ip(state, state->isf.rip + (found_prefix8 ? 5 : 8));
+		return true;
+	}
+
+	return false;
+}
+
+// Find a recovery entry for an instruction address if one is present.
+static struct recovery const*
+find_recovery_entry(vm_offset_t kern_ip)
+{
+	for (struct recovery const* rp = recover_table; rp < recover_table_end; rp++) {
+		if (kern_ip == rp->fault_addr) {
+			return rp;
+		}
+	}
+	return NULL;
+}
+
 /*
  * Trap from kernel mode.  Only page-fault errors are recoverable,
  * and then only in special circumstances.  All other errors are
@@ -497,6 +628,10 @@ kernel_trap(
 	x86_saved_state_t       *state,
 	uintptr_t *lo_spp)
 {
+	char                    trapreason[32];
+	const char              *trapname = NULL;
+	uint16_t                trapcomment = 0;
+
 	x86_saved_state64_t     *saved_state;
 	int                     code;
 	user_addr_t             vaddr;
@@ -507,11 +642,8 @@ kernel_trap(
 	thread_t                thread;
 	boolean_t               intr;
 	vm_prot_t               prot;
-	struct recovery         *rp;
+	struct recovery const   *rp = NULL;
 	vm_offset_t             kern_ip;
-#if NCOPY_WINDOWS > 0
-	int                     fault_in_copy_window = -1;
-#endif
 	int                     is_user;
 	int                     trap_pl = get_preemption_level();
 
@@ -549,6 +681,14 @@ kernel_trap(
 			goto common_return;
 		}
 	}
+
+	/* Handle traps originated from probe context. */
+	if (thread != THREAD_NULL && thread->t_dtrace_inprobe) {
+		if (dtrace_handle_trap(type, state)) {
+			goto common_return;
+		}
+	}
+
 #endif /* CONFIG_DTRACE */
 
 	/*
@@ -579,79 +719,50 @@ kernel_trap(
 		 */
 		map = kernel_map;
 
-		if (__probable(thread != THREAD_NULL && thread->map != kernel_map)) {
-#if NCOPY_WINDOWS > 0
-			vm_offset_t     copy_window_base;
-			vm_offset_t     kvaddr;
-			int             window_index;
+		if (__probable((thread != THREAD_NULL) && (thread->map != kernel_map) &&
+		    (vaddr < VM_MAX_USER_PAGE_ADDRESS))) {
+			/* fault occurred in userspace */
+			map = thread->map;
 
-			kvaddr = (vm_offset_t)vaddr;
-			/*
-			 * must determine if fault occurred in
-			 * the copy window while pre-emption is
-			 * disabled for this processor so that
-			 * we only need to look at the window
-			 * associated with this processor
+			/* Intercept a potential Supervisor Mode Execute
+			 * Protection fault. These criteria identify
+			 * both NX faults and SMEP faults, but both
+			 * are fatal. We avoid checking PTEs (racy).
+			 * (The VM could just redrive a SMEP fault, hence
+			 * the intercept).
 			 */
-			copy_window_base = current_cpu_datap()->cpu_copywindow_base;
-
-			if (kvaddr >= copy_window_base && kvaddr < (copy_window_base + (NBPDE * NCOPY_WINDOWS))) {
-				window_index = (int)((kvaddr - copy_window_base) / NBPDE);
-
-				if (thread->machine.copy_window[window_index].user_base != (user_addr_t)-1) {
-					kvaddr -= (copy_window_base + (NBPDE * window_index));
-					vaddr = thread->machine.copy_window[window_index].user_base + kvaddr;
-
-					map = thread->map;
-					fault_in_copy_window = window_index;
-				}
+			if (__improbable((code == (T_PF_PROT | T_PF_EXECUTE)) &&
+			    (pmap_smep_enabled) && (saved_state->isf.rip == vaddr))) {
+				goto debugger_entry;
 			}
-#else
-			if (__probable(vaddr < VM_MAX_USER_PAGE_ADDRESS)) {
-				/* fault occurred in userspace */
-				map = thread->map;
 
-				/* Intercept a potential Supervisor Mode Execute
-				 * Protection fault. These criteria identify
-				 * both NX faults and SMEP faults, but both
-				 * are fatal. We avoid checking PTEs (racy).
-				 * (The VM could just redrive a SMEP fault, hence
-				 * the intercept).
-				 */
-				if (__improbable((code == (T_PF_PROT | T_PF_EXECUTE)) &&
-				    (pmap_smep_enabled) && (saved_state->isf.rip == vaddr))) {
-					goto debugger_entry;
-				}
-
-				/*
-				 * Additionally check for SMAP faults...
-				 * which are characterized by page-present and
-				 * the AC bit unset (i.e. not from copyin/out path).
-				 */
-				if (__improbable(code & T_PF_PROT &&
-				    pmap_smap_enabled &&
-				    (saved_state->isf.rflags & EFL_AC) == 0)) {
-					goto debugger_entry;
-				}
-
-				/*
-				 * If we're not sharing cr3 with the user
-				 * and we faulted in copyio,
-				 * then switch cr3 here and dismiss the fault.
-				 */
-				if (no_shared_cr3 &&
-				    (thread->machine.specFlags & CopyIOActive) &&
-				    map->pmap->pm_cr3 != get_cr3_base()) {
-					pmap_assert(current_cpu_datap()->cpu_pmap_pcid_enabled == FALSE);
-					set_cr3_raw(map->pmap->pm_cr3);
-					return;
-				}
-				if (__improbable(vaddr < PAGE_SIZE) &&
-				    ((thread->machine.specFlags & CopyIOActive) == 0)) {
-					goto debugger_entry;
-				}
+			/*
+			 * Additionally check for SMAP faults...
+			 * which are characterized by page-present and
+			 * the AC bit unset (i.e. not from copyin/out path).
+			 */
+			if (__improbable(code & T_PF_PROT &&
+			    pmap_smap_enabled &&
+			    (saved_state->isf.rflags & EFL_AC) == 0)) {
+				goto debugger_entry;
 			}
-#endif
+
+			/*
+			 * If we're not sharing cr3 with the user
+			 * and we faulted in copyio,
+			 * then switch cr3 here and dismiss the fault.
+			 */
+			if (no_shared_cr3 &&
+			    (thread->machine.specFlags & CopyIOActive) &&
+			    map->pmap->pm_cr3 != get_cr3_base()) {
+				pmap_assert(current_cpu_datap()->cpu_pmap_pcid_enabled == FALSE);
+				set_cr3_raw(map->pmap->pm_cr3);
+				return;
+			}
+			if (__improbable(vaddr < PAGE_SIZE) &&
+			    ((thread->machine.specFlags & CopyIOActive) == 0)) {
+				goto debugger_entry;
+			}
 		}
 	}
 
@@ -675,10 +786,20 @@ kernel_trap(
 		goto common_return;
 
 	case T_INVALID_OPCODE:
+		if (handle_kernel_breakpoint(saved_state, &trapcomment)) {
+			goto common_return;
+		} else if (trapcomment != 0) {
+			/* augment trap name with trap comment */
+			trapname = tsnprintf(trapreason, sizeof(trapreason), "%s #%#04hx", trap_type[type], trapcomment);
+		}
 		fpUDflt(kern_ip);
 		goto debugger_entry;
 
 	case T_DEBUG:
+		/*
+		 * Re-enable LBR tracing for core/panic files if necessary. i386_lbr_enable confirms LBR should be re-enabled.
+		 */
+		i386_lbr_enable();
 		if ((saved_state->isf.rflags & EFL_TF) == 0 && NO_WATCHPOINTS) {
 			/* We've somehow encountered a debug
 			 * register match that does not belong
@@ -715,56 +836,61 @@ kernel_trap(
 			prot |= VM_PROT_EXECUTE;
 		}
 
+		/**
+		 * vm_fault() can be called with preemption disabled (and indeed this is expected for
+		 * certain copyio() scenarios), but can't safely be called with interrupts disabled
+		 * once the system has gone multi-threaded.  Other than some early-boot situations
+		 * such as startup kext loading, kernel paging operations should never be triggered
+		 * by non-interruptible code in the first place, so a fault from such a context will
+		 * ultimately produce a kernel page fault panic anyway.  In these cases, skip calling
+		 * vm_fault() to avoid masking the real kernel panic with a failed VM locking assertion.
+		 */
+		if (__improbable(!(intr ||
+		    startup_phase < STARTUP_SUB_EARLY_BOOT ||
+		    current_cpu_datap()->cpu_hibernate))) {
+			fault_result = result = KERN_FAILURE;
+			goto FALL_THROUGH;
+		}
+
+		// VM will query this property when deciding to throttle this fault, we don't want to
+		// throttle kernel faults for copyio faults. The presence of a recovery entry is used as a
+		// proxy for being in copyio code.
+		rp = find_recovery_entry(kern_ip);
+		const bool was_recover = thread->recover;
+		thread->recover = was_recover || (rp != NULL);
+
 		fault_result = result = vm_fault(map,
 		    vaddr,
 		    prot,
 		    FALSE, VM_KERN_MEMORY_NONE,
 		    THREAD_UNINT, NULL, 0);
 
+		thread->recover = was_recover;
 		if (result == KERN_SUCCESS) {
-#if NCOPY_WINDOWS > 0
-			if (fault_in_copy_window != -1) {
-				ml_set_interrupts_enabled(FALSE);
-				copy_window_fault(thread, map,
-				    fault_in_copy_window);
-				(void) ml_set_interrupts_enabled(intr);
-			}
-#endif /* NCOPY_WINDOWS > 0 */
 			goto common_return;
 		}
 		/*
 		 * fall through
 		 */
-#if CONFIG_DTRACE
 FALL_THROUGH:
-#endif /* CONFIG_DTRACE */
 
 	case T_GENERAL_PROTECTION:
 		/*
 		 * If there is a failure recovery address
 		 * for this fault, go there.
 		 */
-		for (rp = recover_table; rp < recover_table_end; rp++) {
-			if (kern_ip == rp->fault_addr) {
-				set_recovery_ip(saved_state, rp->recover_addr);
-				goto common_return;
-			}
+		if ((rp != NULL) || (rp = find_recovery_entry(kern_ip))) {
+			set_recovery_ip(saved_state, rp->recover_addr);
+			goto common_return;
 		}
 
 		/*
-		 * Check thread recovery address also.
+		 * Unanticipated page-fault errors in kernel
+		 * should not happen.
+		 *
+		 * fall through...
 		 */
-		if (thread != THREAD_NULL && thread->recover) {
-			set_recovery_ip(saved_state, thread->recover);
-			thread->recover = 0;
-			goto common_return;
-		}
-	/*
-	 * Unanticipated page-fault errors in kernel
-	 * should not happen.
-	 *
-	 * fall through...
-	 */
+		OS_FALLTHROUGH;
 	default:
 		/*
 		 * Exception 15 is reserved but some chips may generate it
@@ -787,8 +913,16 @@ debugger_entry:
 		}
 #endif
 	}
+	if (type == T_PAGE_FAULT) {
+		panic_fault_address = vaddr;
+	}
 	pal_cli();
-	panic_trap(saved_state, trap_pl, fault_result);
+
+	if (trapname == NULL) {
+		trapname = type < TRAP_TYPES ? trap_type[type] : "Unknown";
+	}
+
+	panic_trap(saved_state, trapname, trap_pl, fault_result);
 	/*
 	 * NO RETURN
 	 */
@@ -809,9 +943,8 @@ set_recovery_ip(x86_saved_state64_t  *saved_state, vm_offset_t ip)
 }
 
 static void
-panic_trap(x86_saved_state64_t *regs, uint32_t pl, kern_return_t fault_result)
+panic_trap(x86_saved_state64_t *regs, const char *trapname, uint32_t pl, kern_return_t fault_result)
 {
-	const char      *trapname = "Unknown";
 	pal_cr_t        cr0, cr2, cr3, cr4;
 	boolean_t       potential_smep_fault = FALSE, potential_kernel_NX_fault = FALSE;
 	boolean_t       potential_smap_fault = FALSE;
@@ -823,16 +956,12 @@ panic_trap(x86_saved_state64_t *regs, uint32_t pl, kern_return_t fault_result)
 	 * Issue an I/O port read if one has been requested - this is an
 	 * event logic analyzers can use as a trigger point.
 	 */
-	panic_io_port_read();
+	panic_notify();
 
 	kprintf("CPU %d panic trap number 0x%x, rip 0x%016llx\n",
 	    cpu_number(), regs->isf.trapno, regs->isf.rip);
 	kprintf("cr0 0x%016llx cr2 0x%016llx cr3 0x%016llx cr4 0x%016llx\n",
 	    cr0, cr2, cr3, cr4);
-
-	if (regs->isf.trapno < TRAP_TYPES) {
-		trapname = trap_type[regs->isf.trapno];
-	}
 
 	if ((regs->isf.trapno == T_PAGE_FAULT) && (regs->isf.err == (T_PF_PROT | T_PF_EXECUTE)) && (regs->isf.rip == regs->cr2)) {
 		if (pmap_smep_enabled && (regs->isf.rip < VM_MAX_USER_PAGE_ADDRESS)) {
@@ -900,7 +1029,9 @@ user_trap(
 	kern_return_t           kret;
 	user_addr_t             rip;
 	unsigned long           dr6 = 0; /* 32 bit for i386, 64 bit for x86_64 */
+	int                     current_cpu = cpu_number();
 #if DEVELOPMENT || DEBUG
+	bool                    inspect_cacheline = false;
 	uint32_t                traptrace_index;
 #endif
 	assert((is_saved_state32(saved_state) && !thread_is_64bit_addr(thread)) ||
@@ -912,7 +1043,7 @@ user_trap(
 		regs = saved_state64(saved_state);
 
 		/* Record cpu where state was captured */
-		regs->isf.cpu = cpu_number();
+		regs->isf.cpu = current_cpu;
 
 		type = regs->isf.trapno;
 		err  = (int)regs->isf.err & 0xffff;
@@ -927,7 +1058,7 @@ user_trap(
 		regs = saved_state32(saved_state);
 
 		/* Record cpu where state was captured */
-		regs->cpu = cpu_number();
+		regs->cpu = current_cpu;
 
 		type  = regs->trapno;
 		err   = regs->err & 0xffff;
@@ -938,14 +1069,39 @@ user_trap(
 #endif
 	}
 
+#if DEVELOPMENT || DEBUG
+	/*
+	 * Copy the cacheline of code into the thread's instruction stream save area
+	 * before enabling interrupts (the assumption is that we have not otherwise faulted or
+	 * trapped since the original cache line stores).  If the saved code is not valid,
+	 * we'll catch it below when we process the copyin() for unhandled faults.
+	 */
+	if (thread->machine.insn_copy_optout == false &&
+	    (type == T_PAGE_FAULT || type == T_INVALID_OPCODE || type == T_GENERAL_PROTECTION)) {
+#define CACHELINE_SIZE 64
+		THREAD_TO_PCB(thread)->insn_cacheline[CACHELINE_SIZE] = (uint8_t)(rip & (CACHELINE_SIZE - 1));
+		bcopy(&cpu_shadowp(current_cpu)->cpu_rtimes[0],
+		    &THREAD_TO_PCB(thread)->insn_cacheline[0],
+		    sizeof(THREAD_TO_PCB(thread)->insn_cacheline) - 1);
+		inspect_cacheline = true;
+	}
+#endif
 
-	if ((type == T_DEBUG) && thread->machine.ids) {
-		unsigned long clear = 0;
-		/* Stash and clear this processor's DR6 value, in the event
-		 * this was a debug register match
-		 */
-		__asm__ volatile ("mov %%db6, %0" : "=r" (dr6));
-		__asm__ volatile ("mov %0, %%db6" : : "r" (clear));
+	if (type == T_DEBUG) {
+		if (thread->machine.ids) {
+			unsigned long clear = 0;
+			/* Stash and clear this processor's DR6 value, in the event
+			 * this was a debug register match
+			 */
+			__asm__ volatile ("mov %%db6, %0" : "=r" (dr6));
+			__asm__ volatile ("mov %0, %%db6" : : "r" (clear));
+		}
+		/* [Re]Enable LBRs *BEFORE* enabling interrupts to ensure we hit the right CPU */
+		i386_lbr_enable();
+	}
+
+	if (type == T_PAGE_FAULT) {
+		thread_reset_pcs_will_fault(thread);
 	}
 
 	pal_sti();
@@ -1094,8 +1250,9 @@ user_trap(
 			prot |= VM_PROT_EXECUTE;
 		}
 #if DEVELOPMENT || DEBUG
+		bool do_simd_hash = thread_fpsimd_hash_enabled();
 		uint32_t fsig = 0;
-		fsig = thread_fpsimd_hash(thread);
+		fsig = do_simd_hash ? thread_fpsimd_hash(thread) : 0;
 #if DEBUG
 		fsigs[0] = fsig;
 #endif
@@ -1105,7 +1262,7 @@ user_trap(
 		    prot, FALSE, VM_KERN_MEMORY_NONE,
 		    THREAD_ABORTSAFE, NULL, 0);
 #if DEVELOPMENT || DEBUG
-		if (fsig) {
+		if (do_simd_hash && fsig) {
 			uint32_t fsig2 = thread_fpsimd_hash(thread);
 #if DEBUG
 			fsigcs++;
@@ -1171,19 +1328,246 @@ user_trap(
 		panic("Unexpected user trap, type %d", type);
 	}
 
-#if DEVELOPMENT || DEBUG
-	if (traptrace_index != TRAPTRACE_INVALID_INDEX) {
-		traptrace_end(traptrace_index, mach_absolute_time());
+	if (type == T_PAGE_FAULT) {
+		thread_reset_pcs_done_faulting(thread);
 	}
-#endif
 
 	if (exc != 0) {
+		uint16_t cs;
+		boolean_t intrs;
+
+		if (is_saved_state64(saved_state)) {
+			cs = saved_state64(saved_state)->isf.cs;
+		} else {
+			cs = saved_state32(saved_state)->cs;
+		}
+
+		if (last_branch_enabled_modes == LBR_ENABLED_USERMODE) {
+			intrs = ml_set_interrupts_enabled(FALSE);
+			/*
+			 * This is a bit racy (it's possible for this thread to migrate to another CPU, then
+			 * migrate back, but that seems rather rare in practice), but good enough to ensure
+			 * the LBRs are saved before proceeding with exception/signal dispatch.
+			 */
+			if (current_cpu == cpu_number()) {
+				i386_lbr_synch(thread);
+			}
+			ml_set_interrupts_enabled(intrs);
+		}
+
+		/*
+		 * Do not try to copyin from the instruction stream if the page fault was due
+		 * to an access to rip and was unhandled.
+		 * Do not deal with cases when %cs != USER[64]_CS
+		 * And of course there's no need to copy the instruction stream if the boot-arg
+		 * was set to 0.
+		 */
+		if (thread->machine.insn_copy_optout == false && insn_copyin_count > 0 &&
+		    (cs == USER64_CS || cs == USER_CS) && (type != T_PAGE_FAULT || vaddr != rip)) {
+#if DEVELOPMENT || DEBUG
+			copy_instruction_stream(thread, rip, type, inspect_cacheline);
+#else
+			copy_instruction_stream(thread, rip, type);
+#endif
+		}
+
+#if DEVELOPMENT || DEBUG
+		if (traptrace_index != TRAPTRACE_INVALID_INDEX) {
+			traptrace_end(traptrace_index, mach_absolute_time());
+		}
+#endif
 		/*
 		 * Note: Codepaths that directly return from user_trap() have pending
 		 * ASTs processed in locore
 		 */
 		i386_exception(exc, code, subcode);
 		/* NOTREACHED */
+	} else {
+#if DEVELOPMENT || DEBUG
+		if (traptrace_index != TRAPTRACE_INVALID_INDEX) {
+			traptrace_end(traptrace_index, mach_absolute_time());
+		}
+#endif
+	}
+}
+
+/*
+ * Copyin up to x86_INSTRUCTION_STATE_MAX_INSN_BYTES bytes from the page that includes `rip`,
+ * ensuring that we stay on the same page, clipping the start or end, as needed.
+ * Add the clipped amount back at the start or end, depending on where it fits.
+ * Consult the variable populated by the boot-arg `insn_capcnt'
+ */
+static __attribute__((noinline)) void
+copy_instruction_stream(thread_t thread, uint64_t rip, int __unused trap_code
+#if DEVELOPMENT || DEBUG
+    , bool inspect_cacheline
+#endif
+    )
+{
+#if x86_INSTRUCTION_STATE_MAX_INSN_BYTES > 4096
+#error x86_INSTRUCTION_STATE_MAX_INSN_BYTES cannot exceed a page in size.
+#endif
+	pcb_t pcb = THREAD_TO_PCB(thread);
+	vm_map_offset_t pagemask = ~vm_map_page_mask(current_map());
+	vm_map_offset_t rip_page = rip & pagemask;
+	vm_map_offset_t start_addr;
+	vm_map_offset_t insn_offset;
+	vm_map_offset_t end_addr = rip + (insn_copyin_count / 2);
+	void *stack_buffer;
+	int copyin_err = 0;
+#if defined(MACH_BSD) && (DEVELOPMENT || DEBUG)
+	void *procname;
+#endif
+
+#if DEVELOPMENT || DEBUG
+	assert(insn_copyin_count <= x86_INSTRUCTION_STATE_MAX_INSN_BYTES);
+#else
+	if (insn_copyin_count > x86_INSTRUCTION_STATE_MAX_INSN_BYTES ||
+	    insn_copyin_count < 64 /* CACHELINE_SIZE */) {
+		return;
+	}
+#endif
+
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Walloca"
+	stack_buffer = __builtin_alloca(insn_copyin_count);
+#pragma clang diagnostic pop
+
+	if (rip >= (insn_copyin_count / 2)) {
+		start_addr = rip - (insn_copyin_count / 2);
+	} else {
+		start_addr = 0;
+	}
+
+	if (start_addr < rip_page) {
+		insn_offset = (insn_copyin_count / 2) - (rip_page - start_addr);
+		end_addr += (rip_page - start_addr);
+		start_addr = rip_page;
+	} else if (end_addr >= (rip_page + (~pagemask + 1))) {
+		start_addr -= (end_addr - (rip_page + (~pagemask + 1))); /* Adjust start address backward */
+		/* Adjust instruction offset due to start address change */
+		insn_offset = (insn_copyin_count / 2) + (end_addr - (rip_page + (~pagemask + 1)));
+		end_addr = rip_page + (~pagemask + 1);  /* clip to the start of the next page (non-inclusive */
+	} else {
+		insn_offset = insn_copyin_count / 2;
+	}
+
+	disable_preemption();   /* Prevent copyin from faulting in the instruction stream */
+	if (
+#if DEVELOPMENT || DEBUG
+		(insnstream_force_cacheline_mismatch < 2) &&
+#endif
+		((end_addr > start_addr) && (copyin_err = copyin(start_addr, stack_buffer, end_addr - start_addr)) == 0)) {
+		enable_preemption();
+
+		if (pcb->insn_state == 0) {
+			pcb->insn_state = kalloc_data(sizeof(x86_instruction_state_t), Z_WAITOK);
+		}
+
+		if (pcb->insn_state != 0) {
+			bcopy(stack_buffer, pcb->insn_state->insn_bytes, end_addr - start_addr);
+			bzero(&pcb->insn_state->insn_bytes[end_addr - start_addr],
+			    insn_copyin_count - (end_addr - start_addr));
+
+			pcb->insn_state->insn_stream_valid_bytes = (int)(end_addr - start_addr);
+			pcb->insn_state->insn_offset = (int)insn_offset;
+
+#if DEVELOPMENT || DEBUG
+			/* Now try to validate the cacheline we read at early-fault time matches the code
+			 * copied in. Before we do that, we have to make sure the buffer contains a valid
+			 * cacheline by looking for the 2 sentinel values written in the event the cacheline
+			 * could not be copied.
+			 */
+#define CACHELINE_DATA_NOT_PRESENT 0xdeadc0debeefcafeULL
+#define CACHELINE_MASK (CACHELINE_SIZE - 1)
+
+			if (inspect_cacheline &&
+			    (*(uint64_t *)(uintptr_t)&pcb->insn_cacheline[0] != CACHELINE_DATA_NOT_PRESENT &&
+			    *(uint64_t *)(uintptr_t)&pcb->insn_cacheline[8] != CACHELINE_DATA_NOT_PRESENT)) {
+				/*
+				 * The position of the cacheline in the instruction buffer is at offset
+				 * insn_offset - (rip & CACHELINE_MASK)
+				 */
+				if (__improbable((rip & CACHELINE_MASK) > insn_offset)) {
+					printf("thread %p code cacheline @ %p clipped wrt copied-in code (offset %d)\n",
+					    thread, (void *)(rip & ~CACHELINE_MASK), (int)(rip & CACHELINE_MASK));
+				} else if (bcmp(&pcb->insn_state->insn_bytes[insn_offset - (rip & CACHELINE_MASK)],
+				    &pcb->insn_cacheline[0], CACHELINE_SIZE) != 0
+				    || insnstream_force_cacheline_mismatch
+				    ) {
+#if x86_INSTRUCTION_STATE_CACHELINE_SIZE != CACHELINE_SIZE
+#error cacheline size mismatch
+#endif
+					bcopy(&pcb->insn_cacheline[0], &pcb->insn_state->insn_cacheline[0],
+					    x86_INSTRUCTION_STATE_CACHELINE_SIZE);
+					/* Mark the instruction stream as being out-of-synch */
+					pcb->insn_state->out_of_synch = 1;
+
+					printf("thread %p code cacheline @ %p mismatches with copied-in code [trap 0x%x]\n",
+					    thread, (void *)(rip & ~CACHELINE_MASK), trap_code);
+					for (int i = 0; i < 8; i++) {
+						printf("\t[%d] cl=0x%08llx vs. ci=0x%08llx\n", i, *(uint64_t *)(uintptr_t)&pcb->insn_cacheline[i * 8],
+						    *(uint64_t *)(uintptr_t)&pcb->insn_state->insn_bytes[(i * 8) + insn_offset - (rip & CACHELINE_MASK)]);
+					}
+					if (panic_on_cacheline_mismatch) {
+						panic("Cacheline mismatch while processing unhandled exception.");
+					}
+				} else {
+					pcb->insn_state->out_of_synch = 0;
+				}
+			} else if (inspect_cacheline) {
+				printf("thread %p could not capture code cacheline at fault IP %p [offset %d]\n",
+				    (void *)thread, (void *)rip, (int)(insn_offset - (rip & CACHELINE_MASK)));
+				pcb->insn_state->out_of_synch = 0;
+			}
+#else
+			pcb->insn_state->out_of_synch = 0;
+#endif /* DEVELOPMENT || DEBUG */
+
+#if defined(MACH_BSD) && (DEVELOPMENT || DEBUG)
+			if (panic_on_trap_procname[0] != 0) {
+				task_t task = get_threadtask(thread);
+				char procnamebuf[65] = {0};
+
+				if (get_bsdtask_info(task) != NULL) {
+					procname = proc_name_address(get_bsdtask_info(task));
+					strlcpy(procnamebuf, procname, sizeof(procnamebuf));
+
+					if (strcasecmp(panic_on_trap_procname, procnamebuf) == 0 &&
+					    ((1U << trap_code) & panic_on_trap_mask) != 0) {
+						panic("Panic requested on trap type 0x%x for process `%s'", trap_code,
+						    panic_on_trap_procname);
+						/*NORETURN*/
+					}
+				}
+			}
+#endif /* MACH_BSD && (DEVELOPMENT || DEBUG) */
+		}
+	} else {
+		enable_preemption();
+
+		pcb->insn_state_copyin_failure_errorcode = copyin_err;
+#if DEVELOPMENT || DEBUG
+		if (inspect_cacheline && pcb->insn_state == 0) {
+			pcb->insn_state = kalloc_data(sizeof(x86_instruction_state_t), Z_WAITOK);
+		}
+		if (pcb->insn_state != 0) {
+			pcb->insn_state->insn_stream_valid_bytes = 0;
+			pcb->insn_state->insn_offset = 0;
+
+			if (inspect_cacheline &&
+			    (*(uint64_t *)(uintptr_t)&pcb->insn_cacheline[0] != CACHELINE_DATA_NOT_PRESENT &&
+			    *(uint64_t *)(uintptr_t)&pcb->insn_cacheline[8] != CACHELINE_DATA_NOT_PRESENT)) {
+				/*
+				 * We can still copy the cacheline into the instruction state structure
+				 * if it contains valid data
+				 */
+				pcb->insn_state->out_of_synch = 1;
+				bcopy(&pcb->insn_cacheline[0], &pcb->insn_state->insn_cacheline[0],
+				    x86_INSTRUCTION_STATE_CACHELINE_SIZE);
+			}
+		}
+#endif /* DEVELOPMENT || DEBUG */
 	}
 }
 
@@ -1310,9 +1694,12 @@ void
 thread_exception_return(void)
 {
 	thread_t thread = current_thread();
+	task_t   task   = current_task();
+
 	ml_set_interrupts_enabled(FALSE);
-	if (thread_is_64bit_addr(thread) != task_has_64Bit_addr(thread->task)) {
-		panic("Task/thread bitness mismatch %p %p, task: %d, thread: %d", thread, thread->task, thread_is_64bit_addr(thread), task_has_64Bit_addr(thread->task));
+	if (thread_is_64bit_addr(thread) != task_has_64Bit_addr(task)) {
+		panic("Task/thread bitness mismatch %p %p, task: %d, thread: %d",
+		    thread, task, thread_is_64bit_addr(thread), task_has_64Bit_addr(task));
 	}
 
 	if (thread_is_64bit_addr(thread)) {
@@ -1327,4 +1714,37 @@ thread_exception_return(void)
 	assert(get_preemption_level() == 0);
 	thread_exception_return_internal();
 }
+#endif
+
+#if DEVELOPMENT || DEBUG
+static int trap_handled;
+
+static void
+handle_recoverable_kernel_trap(
+	__unused void     *tstate,
+	uint16_t          comment)
+{
+	assert(comment == TEST_RECOVERABLE_SOFT_TRAP);
+
+	printf("Recoverable trap handled.\n");
+	trap_handled = 1;
+}
+
+KERNEL_BRK_DESCRIPTOR_DEFINE(test_desc,
+    .type                = KERNEL_BRK_TYPE_TEST,
+    .base                = TEST_RECOVERABLE_SOFT_TRAP,
+    .max                 = TEST_RECOVERABLE_SOFT_TRAP,
+    .options             = KERNEL_BRK_RECOVERABLE,
+    .handle_breakpoint   = handle_recoverable_kernel_trap);
+
+static int
+recoverable_kernel_trap_test(__unused int64_t in, int64_t *out)
+{
+	ml_recoverable_trap(TEST_RECOVERABLE_SOFT_TRAP);
+
+	*out = trap_handled;
+	return 0;
+}
+
+SYSCTL_TEST_REGISTER(recoverable_kernel_trap, recoverable_kernel_trap_test);
 #endif

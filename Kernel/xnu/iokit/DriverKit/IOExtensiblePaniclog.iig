@@ -1,0 +1,69 @@
+/*
+ * Copyright (c) 2022 Apple Computer, Inc. All rights reserved.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ *
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ *
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ */
+
+#if !__IIG
+#if KERNEL
+#include <IOKit/IOExtensiblePaniclog.h>
+#endif
+#endif
+
+#ifndef _IOKIT_UIOEXTENSIBLEPANICLOG_H
+#define _IOKIT_UIOEXTENSIBLEPANICLOG_H
+
+#include <DriverKit/OSObject.iig>
+#include <DriverKit/IOBufferMemoryDescriptor.iig>
+
+/*!
+@iig implementation
+#include <DriverKit/IODispatchQueue.h>
+#include <DriverKit/IOUserClient.h>
+#include <DriverKit/IOServiceStateNotificationDispatchSource.h>
+@iig end
+*/
+
+enum {
+    kIOExtensiblePaniclogOptionsNone = 0x0,
+    kIOExtensiblePaniclogOptionsWithBuffer = 0x1,
+};
+
+class KERNEL IOExtensiblePaniclog : public OSObject
+{
+public:
+    virtual bool
+    init() override;
+
+    virtual void
+    free() override;
+
+    static kern_return_t
+    Create(OSData *uuid, OSString *data_id, uint32_t max_len, uint32_t options,
+            IOExtensiblePaniclog **out);
+
+    virtual kern_return_t SetActive();
+    virtual kern_return_t SetInactive();
+    virtual kern_return_t InsertData(OSData *data);
+    virtual kern_return_t AppendData(OSData *data);
+    virtual kern_return_t CopyMemoryDescriptor(IOBufferMemoryDescriptor **mem);
+    virtual kern_return_t ClaimBuffer(uint64_t *addr, uint64_t *len) LOCALONLY;
+    virtual kern_return_t YieldBuffer(uint32_t used_len) LOCALONLY;
+    virtual kern_return_t SetUsedLen(uint32_t used_len);
+};
+
+#endif /* _IOKIT_UIOEXTENSIBLEPANICLOG_H */

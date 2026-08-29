@@ -87,7 +87,7 @@ static void
 sched_dualq_processor_init(processor_t processor);
 
 static thread_t
-sched_dualq_choose_thread(processor_t processor, int priority, ast_t reason);
+sched_dualq_choose_thread(processor_t processor, int priority, __unused thread_t prev, ast_t reason);
 
 static void
 sched_dualq_processor_queue_shutdown(processor_t processor);
@@ -96,7 +96,7 @@ static sched_mode_t
 sched_dualq_initial_thread_sched_mode(task_t parent_task);
 
 static bool
-sched_dualq_thread_avoid_processor(processor_t processor, thread_t thread);
+sched_dualq_thread_avoid_processor(processor_t processor, thread_t thread, __unused ast_t reason);
 
 const struct sched_dispatch_table sched_dualq_dispatch = {
 	.sched_name                                     = "dualq",
@@ -109,6 +109,7 @@ const struct sched_dispatch_table sched_dualq_dispatch = {
 	.steal_thread_enabled                           = sched_steal_thread_enabled,
 	.steal_thread                                   = sched_dualq_steal_thread,
 	.compute_timeshare_priority                     = sched_compute_timeshare_priority,
+	.choose_node                                    = sched_choose_node,
 	.choose_processor                               = choose_processor,
 	.processor_enqueue                              = sched_dualq_processor_enqueue,
 	.processor_queue_shutdown                       = sched_dualq_processor_queue_shutdown,
@@ -128,25 +129,27 @@ const struct sched_dispatch_table sched_dualq_dispatch = {
 	.processor_bound_count                          = sched_dualq_processor_bound_count,
 	.thread_update_scan                             = sched_dualq_thread_update_scan,
 	.multiple_psets_enabled                         = TRUE,
-	.sched_groups_enabled                           = FALSE,
 	.avoid_processor_enabled                        = TRUE,
 	.thread_avoid_processor                         = sched_dualq_thread_avoid_processor,
 	.processor_balance                              = sched_SMT_balance,
 
-	.rt_runq                                        = sched_rtglobal_runq,
-	.rt_init                                        = sched_rtglobal_init,
-	.rt_queue_shutdown                              = sched_rtglobal_queue_shutdown,
-	.rt_runq_scan                                   = sched_rtglobal_runq_scan,
-	.rt_runq_count_sum                              = sched_rtglobal_runq_count_sum,
+	.rt_runq                                        = sched_rtlocal_runq,
+	.rt_init                                        = sched_rtlocal_init,
+	.rt_queue_shutdown                              = sched_rtlocal_queue_shutdown,
+	.rt_runq_scan                                   = sched_rtlocal_runq_scan,
+	.rt_runq_count_sum                              = sched_rtlocal_runq_count_sum,
+	.rt_steal_thread                                = sched_rtlocal_steal_thread,
 
 	.qos_max_parallelism                            = sched_qos_max_parallelism,
 	.check_spill                                    = sched_check_spill,
 	.ipi_policy                                     = sched_ipi_policy,
 	.thread_should_yield                            = sched_thread_should_yield,
-	.run_count_incr                                 = sched_run_incr,
-	.run_count_decr                                 = sched_run_decr,
-	.update_thread_bucket                           = sched_update_thread_bucket,
+	.run_count_incr                                 = sched_smt_run_incr,
+	.run_count_decr                                 = sched_smt_run_decr,
+	.update_thread_bucket                           = sched_smt_update_thread_bucket,
 	.pset_made_schedulable                          = sched_pset_made_schedulable,
+	.cpu_init_completed                             = NULL,
+	.thread_eligible_for_pset                       = NULL,
 };
 
 __attribute__((always_inline))
@@ -212,6 +215,7 @@ static thread_t
 sched_dualq_choose_thread(
 	processor_t      processor,
 	int              priority,
+	__unused thread_t         prev_thread,
 	__unused ast_t            reason)
 {
 	run_queue_t main_runq  = dualq_main_runq(processor);
@@ -290,7 +294,7 @@ sched_dualq_processor_enqueue(
 	boolean_t       result;
 
 	result = run_queue_enqueue(rq, thread, options);
-	thread->runq = processor;
+	thread_set_runq_locked(thread, processor);
 
 	return result;
 }
@@ -308,7 +312,7 @@ sched_dualq_processor_csw_check(processor_t processor)
 	boolean_t       has_higher;
 	int             pri;
 
-	if (sched_dualq_thread_avoid_processor(processor, current_thread())) {
+	if (sched_dualq_thread_avoid_processor(processor, current_thread(), AST_NONE)) {
 		return AST_PREEMPT | AST_URGENT;
 	}
 
@@ -426,7 +430,7 @@ sched_dualq_processor_queue_remove(
 
 	rq = dualq_runq_for_thread(processor, thread);
 
-	if (processor == thread->runq) {
+	if (processor == thread_get_runq_locked(thread)) {
 		/*
 		 * Thread is on a run queue and we have a lock on
 		 * that run queue.
@@ -437,7 +441,7 @@ sched_dualq_processor_queue_remove(
 		 * The thread left the run queue before we could
 		 * lock the run queue.
 		 */
-		assert(thread->runq == PROCESSOR_NULL);
+		thread_assert_runq_null(thread);
 		processor = PROCESSOR_NULL;
 	}
 
@@ -453,12 +457,15 @@ sched_dualq_steal_thread(processor_set_t pset)
 	processor_set_t nset = next_pset(cset);
 	thread_t        thread;
 
+	/* Secondary processors on SMT systems never steal */
+	assert(current_processor()->processor_primary == current_processor());
+
 	while (nset != pset) {
 		pset_unlock(cset);
 		cset = nset;
 		pset_lock(cset);
 
-		if (cset->pset_runq.count > 0) {
+		if (pset_has_stealable_threads(cset)) {
 			/* Need task_restrict logic here */
 			thread = run_queue_dequeue(&cset->pset_runq, SCHED_HEADQ);
 			pset_unlock(cset);
@@ -542,7 +549,7 @@ extern int sched_allow_rt_smt;
 
 /* Return true if this thread should not continue running on this processor */
 static bool
-sched_dualq_thread_avoid_processor(processor_t processor, thread_t thread)
+sched_dualq_thread_avoid_processor(processor_t processor, thread_t thread, __unused ast_t reason)
 {
 	if (thread->bound_processor == processor) {
 		/* Thread is bound here */

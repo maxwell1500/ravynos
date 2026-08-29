@@ -18,6 +18,8 @@
  * @APPLE_APACHE_LICENSE_HEADER_END@
  */
 
+#if KERNEL
+
 #ifndef __OS_OBJECT__
 #define __OS_OBJECT__
 
@@ -163,7 +165,7 @@ __BEGIN_DECLS
  * @result
  * The retained object.
  */
-    __OSX_AVAILABLE_STARTING(__MAC_10_12, __IPHONE_10_0)
+__OSX_AVAILABLE_STARTING(__MAC_10_12, __IPHONE_10_0)
 OS_EXPORT
 void*
 os_retain(void *object);
@@ -199,4 +201,11 @@ os_release(void *object);
 
 __END_DECLS
 
-#endif
+#endif /* OS_OBJECT file guard */
+
+#else /* KERNEL */
+
+/* This should use the libdispatch header */
+#include_next <os/object.h>
+
+#endif /* KERNEL */

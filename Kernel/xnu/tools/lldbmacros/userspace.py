@@ -67,7 +67,7 @@ def ShowX86UserStack(thread, user_lib_info = None):
     frameno = 0
     while True:
         frameno = frameno + 1
-        frame = GetUserDataAsString(thread.task, unsigned(cur_frame), user_abi_ret_offset*2)
+        frame = GetUserDataAsString(thread.t_tro.tro_task, unsigned(cur_frame), user_abi_ret_offset*2)
         cur_ip = _ExtractDataFromString(frame, user_abi_ret_offset, user_abi_type)
         cur_frame = _ExtractDataFromString(frame, 0, user_abi_type)
         if not cur_frame or cur_frame == 0x0000000800000008:
@@ -87,26 +87,17 @@ def _PrintARMUserStack(task, cur_pc, cur_fp, framesize, frametype, frameformat, 
         frameno = frameno + 1
         frame = GetUserDataAsString(task, cur_fp, framesize)
         cur_fp = _ExtractDataFromString(frame, 0, frametype)
-        cur_pc = _ExtractDataFromString(frame, (framesize / 2), frametype)
+        cur_pc = _ExtractDataFromString(frame, (framesize // 2), frametype)
         cur_pc = kern.StripUserPAC(cur_pc)
         if not cur_fp:
             break
         print(frameformat.format(frameno, cur_fp, cur_pc, GetBinaryNameForPC(cur_pc, user_lib_info)))
 
-def ShowARMUserStack(thread, user_lib_info = None):
-    cur_pc = unsigned(thread.machine.PcbData.pc)
-    cur_fp = unsigned(thread.machine.PcbData.r[7])
-    frameformat = "{0:>2d} FP: 0x{1:x}  PC: 0x{2:x}"
-    if user_lib_info is not None:
-        frameformat = "{0:>2d} {3: <30s}  0x{2:0>8x}"
-    framesize = 8
-    frametype = "uint32_t"
-    _PrintARMUserStack(thread.task, cur_pc, cur_fp, framesize, frametype, frameformat, user_lib_info=user_lib_info)
-
 def ShowARM64UserStack(thread, user_lib_info = None):
     SAVED_STATE_FLAVOR_ARM=20
     SAVED_STATE_FLAVOR_ARM64=21
-    upcb = thread.machine.upcb
+    upcb_addr = kern.StripKernelPAC(thread.machine.upcb)
+    upcb = kern.GetValueFromAddress(upcb_addr, 'arm_saved_state_t *')
     flavor = upcb.ash.flavor
     frameformat = "{0:>2d} FP: 0x{1:x}  PC: 0x{2:x}"
     if flavor == SAVED_STATE_FLAVOR_ARM64:
@@ -126,7 +117,7 @@ def ShowARM64UserStack(thread, user_lib_info = None):
     else:
         raise RuntimeError("Thread {0} has an invalid flavor {1}".format(unsigned(thread), flavor))
 
-    _PrintARMUserStack(thread.task, cur_pc, cur_fp, framesize, frametype, frameformat, user_lib_info=user_lib_info)
+    _PrintARMUserStack(thread.t_tro.tro_task, cur_pc, cur_fp, framesize, frametype, frameformat, user_lib_info=user_lib_info)
 
 
 @lldb_command('showthreaduserstack')
@@ -140,15 +131,13 @@ def ShowThreadUserStack(cmd_args=None):
     thread = kern.GetValueFromAddress(ArgumentStringToInt(cmd_args[0]), 'thread *')
     if kern.arch == "x86_64":
         ShowX86UserStack(thread)
-    elif kern.arch == "arm":
-        ShowARMUserStack(thread)
     elif kern.arch.startswith("arm64"):
         ShowARM64UserStack(thread)
     return True
 
 @lldb_command('printuserdata','XO:')
 def PrintUserspaceData(cmd_args=None, cmd_options={}):
-    """ Read userspace data for given task and print(based on format provided.)
+    """ Read userspace data for given task and print based on format provided.
         Syntax: (lldb) printuserdata <task_t> <uspace_address> <format_specifier>
         params:
             <task_t> : pointer to task
@@ -158,7 +147,7 @@ def PrintUserspaceData(cmd_args=None, cmd_options={}):
                                  10i -> 10 ints, 20s -> 20 character string, s -> null terminated string
                                  See: https://docs.python.org/2/library/struct.html#format-characters
         options:
-            -X : print(all values in hex.)
+            -X : print all values in hex.
             -O <file path>: Save data to file 
     """
 
@@ -174,7 +163,7 @@ def PrintUserspaceData(cmd_args=None, cmd_options={}):
 
     try:
         user_data_len = struct.calcsize(format_specifier_str)
-    except (Exception, e):
+    except Exception as e:
         raise ArgumentError("Invalid format specifier provided.")
 
     user_data_string = GetUserDataAsString(task, uspace_addr, user_data_len)
@@ -188,7 +177,7 @@ def PrintUserspaceData(cmd_args=None, cmd_options={}):
         print("Written %d bytes to %s." % (user_data_len, cmd_options['-O']))
         return True
     upacked_data = struct.unpack(format_specifier_str, user_data_string)
-    element_size = user_data_len / len(upacked_data)
+    element_size = user_data_len // len(upacked_data)
     for i in range(len(upacked_data)):
         if "-X" in cmd_options:
             print("0x%x: " % (uspace_addr + i*element_size) + hex(upacked_data[i]))
@@ -208,7 +197,9 @@ def ShowTaskUserArgs(cmd_args=None, cmd_options={}):
         raise ArgumentError("Insufficient arguments")
 
     task = kern.GetValueFromAddress(cmd_args[0], 'task *')
-    proc = Cast(task.bsd_info, 'proc *')
+    if (proc := GetProcFromTask(task)) is None:
+        print("Task has no associated BSD process.")
+        return False
     ptrsize = 8 if int(task.t_flags) & 0x1 else 4
 
     format_string = "Q" if ptrsize == 8 else "I"
@@ -241,18 +232,18 @@ def ShowTaskUserArgs(cmd_args=None, cmd_options={}):
 
             if string_area_addr <= ptr and ptr < string_area_addr+string_area_size :
                 string_offset = ptr - string_area_addr
-                string = string_area[string_offset:];
+                string = string_area[string_offset:].decode()
             else:
                 string = GetUserspaceString(task, ptr)
 
-            print(name + "[]: " + string)
+            print(name + "[]: " + string + '\n')
 
     return True
 
 def ShowTaskUserStacks(task):
-    #print(GetTaskSummary.header + " " + GetProcSummary.header)
-    pval = Cast(task.bsd_info, 'proc *')
-    #print(GetTaskSummary(task) + " " + GetProcSummary(pval) + "\n \n")
+    #print GetTaskSummary.header + " " + GetProcSummary.header
+    pval = GetProcFromTask(task)
+    #print GetTaskSummary(task) + " " + GetProcSummary(pval) + "\n \n"
     crash_report_format_string = """\
 Process:         {pname:s} [{pid:d}]
 Path:            {path: <50s}
@@ -275,7 +266,7 @@ Synthetic crash log generated from Kernel userstacks
 """
     user_lib_rex = re.compile("([0-9a-fx]+)\s-\s([0-9a-fx]+)\s+(.*?)\s", re.IGNORECASE|re.MULTILINE)
     from datetime import datetime
-    if pval:
+    if pval is not None:
         ts = datetime.fromtimestamp(int(pval.p_start.tv_sec))
         date_string = ts.strftime('%Y-%m-%d %H:%M:%S')
     else:
@@ -295,9 +286,9 @@ Synthetic crash log generated from Kernel userstacks
         osversion = "iOS"
     osversion += " ({:s})".format(kern.globals.osversion)
     if pval:
-        pid = pval.p_pid
-        pname = pval.p_comm
-        path = pval.p_comm
+        pid = GetProcPID(pval)
+        pname = GetProcName(pval)
+        path = GetProcName(pval)
         ppid = pval.p_ppid
     else:
         pid = 0
@@ -318,17 +309,15 @@ Synthetic crash log generated from Kernel userstacks
     ShowTaskUserLibraries([hex(task)])
     usertask_lib_info = [] # will host [startaddr, endaddr, lib_name] entries
     for entry in ShowTaskUserLibraries.found_images:
-        #print("processing line %s" % line)
+        #print "processing line %s" % line
         arr = user_lib_rex.findall(entry[3])
-        #print("%r" % arr)
+        #print "%r" % arr
         if len(arr) == 0 :
             continue
         usertask_lib_info.append([int(arr[0][0],16), int(arr[0][1],16), str(arr[0][2]).strip()])
 
     printthread_user_stack_ptr = ShowX86UserStack
-    if kern.arch == "arm":
-        printthread_user_stack_ptr = ShowARMUserStack
-    elif kern.arch.startswith("arm64"):
+    if kern.arch.startswith("arm64"):
         printthread_user_stack_ptr = ShowARM64UserStack
 
     counter = 0
@@ -347,7 +336,7 @@ Synthetic crash log generated from Kernel userstacks
 
 @lldb_command('showtaskuserstacks', "P:F:")
 def ShowTaskUserStacksCmdHelper(cmd_args=None, cmd_options={}):
-    """ print(out the user stack for each thread in a task, followed by the user libraries.)
+    """ Print out the user stack for each thread in a task, followed by the user libraries.
         Syntax: (lldb) showtaskuserstacks <task_t>
             or: (lldb) showtaskuserstacks -P <pid>
             or: (lldb) showtaskuserstacks -F <task_name>
@@ -363,8 +352,8 @@ def ShowTaskUserStacksCmdHelper(cmd_args=None, cmd_options={}):
     elif "-P" in cmd_options:
         pidval = ArgumentStringToInt(cmd_options["-P"])
         for t in kern.tasks:
-            pval = Cast(t.bsd_info, 'proc *')
-            if pval and pval.p_pid == pidval:
+            pval = GetProcFromTask(t)
+            if pval is not None and GetProcPID(pval) == pidval:
                 task_list.append(t)
                 break
     elif cmd_args:
@@ -383,31 +372,31 @@ def GetUserDataAsString(task, addr, size):
             addr: int - start address to get data from.
             size: int - no of bytes to read.
         returns:
-            str - a stream of bytes. Empty string if read fails.
+            data - a stream of bytes. Empty bytes() if read fails.
     """
     err = lldb.SBError()
     if GetConnectionProtocol() == "kdp":
         kdp_pmap_addr = unsigned(addressof(kern.globals.kdp_pmap))
         if not WriteInt64ToMemoryAddress(unsigned(task.map.pmap), kdp_pmap_addr):
             debuglog("Failed to write in kdp_pmap from GetUserDataAsString.")
-            return ""
+            return b""
         content = LazyTarget.GetProcess().ReadMemory(addr, size, err)
         if not err.Success():
             debuglog("Failed to read process memory. Error: " + err.description)
-            return ""
+            return b""
         if not WriteInt64ToMemoryAddress(0, kdp_pmap_addr):
             debuglog("Failed to reset in kdp_pmap from GetUserDataAsString.")
-            return ""
-    elif (kern.arch == 'x86_64' or kern.arch.startswith('arm')) and (long(size) < (2 * kern.globals.page_size)):
+            return b""
+    elif (kern.arch == 'x86_64' or kern.arch.startswith('arm')) and (int(size) < (2 * kern.globals.page_size)):
         # Without the benefit of a KDP stub on the target, try to
         # find the user task's physical mapping and memcpy the data.
         # If it straddles a page boundary, copy in two passes
-        range1_addr = long(addr)
-        range1_size = long(size)
+        range1_addr = int(addr)
+        range1_size = int(size)
         if kern.StraddlesPage(range1_addr, range1_size):
-            range2_addr = long(kern.TruncPage(range1_addr + range1_size))
-            range2_size = long(range1_addr + range1_size - range2_addr)
-            range1_size = long(range2_addr - range1_addr)
+            range2_addr = int(kern.TruncPage(range1_addr + range1_size))
+            range2_size = int(range1_addr + range1_size - range2_addr)
+            range1_size = int(range2_addr - range1_addr)
         else:
             range2_addr = 0
             range2_size = 0
@@ -416,7 +405,7 @@ def GetUserDataAsString(task, addr, size):
         paddr_range1 = PmapWalk(task.map.pmap, range1_addr, vSILENT)
         if not paddr_range1:
             debuglog("Not mapped task 0x{:x} address 0x{:x}".format(task, addr))
-            return ""
+            return b""
 
         range1_in_kva = kern.PhysToKernelVirt(paddr_range1)
         content = LazyTarget.GetProcess().ReadMemory(range1_in_kva, range1_size, err)
@@ -427,7 +416,7 @@ def GetUserDataAsString(task, addr, size):
             paddr_range2 = PmapWalk(task.map.pmap, range2_addr, vSILENT)
             if not paddr_range2:
                 debuglog("Not mapped task 0x{:x} address 0x{:x}".format(task, addr))
-                return ""
+                return b""
             range2_in_kva = kern.PhysToKernelVirt(paddr_range2)
             content += LazyTarget.GetProcess().ReadMemory(range2_in_kva, range2_size, err)
             if not err.Success():
@@ -463,7 +452,12 @@ def _ExtractDataFromString(strdata, offset, data_type, length=0):
     if offset > data_len or (offset + length) > data_len or offset < 0:
         debuglog("Invalid arguments to _ExtractDataFromString.")
         return 0
-    return struct.unpack(unpack_str, strdata[offset:(offset + length)])[0]
+
+    data = struct.unpack(unpack_str, strdata[offset:(offset + length)])[0]
+    if data_type == 'string':
+        return data.decode()
+
+    return data
 
 def GetUserspaceString(task, string_address):
     """ Maps 32 bytes at a time and packs as string
@@ -473,31 +467,20 @@ def GetUserspaceString(task, string_address):
         returns:
             str - string path of the file. "" if failed to read.
     """
-    done = False
-    retval = ""
-
-    if string_address == 0:
-        done = True
-
-    while not done:
+    retval = []
+    while string_address > 0:
         str_data = GetUserDataAsString(task, string_address, 32)
-        if len(str_data) == 0:
+        if not str_data:
             break
-        i = 0
-        while i < 32:
-            if ord(str_data[i]):
-                retval += str_data[i]
-            else:
-                break
-            i += 1
-        if i < 32:
-            done = True
-        else:
-            string_address += 32
-    return retval
+        str_data = str_data.split(b"\x00", 1)[0]
+        retval.append(str_data)
+        if len(str_data) < 32:
+            break # short read or found NUL byte
+        string_address += 32
+    return b"".join(retval).decode()
 
 def GetImageInfo(task, mh_image_address, mh_path_address, approx_end_address=None):
-    """ print(user library informaiton.)
+    """ Print user library informaiton.
         params:
             task : obj referencing the task for which Image info printed
             mh_image_address : int - address which has image info
@@ -548,11 +531,11 @@ def GetImageInfo(task, mh_image_address, mh_path_address, approx_end_address=Non
         path_out_string = ""
 
         if lc_cmd == 0x1b:
-            # need to print(the uuid now.)
-            uuid_data = [ord(x) for x in lc_data]
+            # need to print the uuid now.
+            uuid_data = bytes(lc_data)
             found_uuid_data = True
             uuid_out_string = "{a[0]:02X}{a[1]:02X}{a[2]:02X}{a[3]:02X}-{a[4]:02X}{a[5]:02X}-{a[6]:02X}{a[7]:02X}-{a[8]:02X}{a[9]:02X}-{a[10]:02X}{a[11]:02X}{a[12]:02X}{a[13]:02X}{a[14]:02X}{a[15]:02X}".format(a=uuid_data)
-            #also print(image path)
+            #also print image path
             path_out_string = GetUserspaceString(task, mh_path_address)
             path_base_name = path_out_string.split("/")[-1]
             retval = print_format.format(mh_image_address, image_end_load_address, path_base_name, uuid_out_string, path_out_string)
@@ -575,7 +558,7 @@ def GetImageInfo(task, mh_image_address, mh_path_address, approx_end_address=Non
 @lldb_command("showtaskuserlibraries")
 def ShowTaskUserLibraries(cmd_args=None):
     """ Show binary images known by dyld in target task
-        For a given user task, inspect the dyld shared library state and print(information about all Mach-O images.)
+        For a given user task, inspect the dyld shared library state and print information about all Mach-O images.
         Syntax: (lldb)showtaskuserlibraries <task_t>
         Note: the address ranges are approximations. Also the list may not be completely accurate. This command expects memory read failures
         and hence will skip a library if unable to read information. Please use your good judgement and not take the output as accurate
@@ -628,7 +611,7 @@ def ShowTaskUserLibraries(cmd_args=None):
         img_data = ""
         try:
             img_data = GetUserDataAsString(task, image_info_address, image_info_size)
-        except (Exception, e):
+        except Exception as e:
             debuglog("Failed to read user data for task 0x{:x} addr 0x{:x}, exception {:s}".format(task, image_info_address, str(e)))
             pass
 
@@ -660,8 +643,8 @@ def ShowTaskUserLibraries(cmd_args=None):
                 print(image_print_s)
                 ShowTaskUserLibraries.found_images.append((image_info_addr, n_im_info_addr, image_info_path, image_print_s))
             else:
-                debuglog("Failed to print(image info for task 0x{:x} image_info 0x{:x}".format(task, image_info_addr))
-        except (Exception,e):
+                debuglog("Failed to print image info for task 0x{:x} image_info 0x{:x}".format(task, image_info_addr))
+        except Exception as e:
             if config['debug']:
                 raise e
 
@@ -674,7 +657,7 @@ def ShowTaskUserLibraries(cmd_args=None):
             ShowTaskUserLibraries.found_images.append((dyld_load_address, dyld_load_address + 0xffffffff,
                     ShowTaskUserLibraries.exec_load_path, image_print_s))
         else:
-            debuglog("Failed to print(image for main executable for task 0x{:x} dyld_load_addr 0x{:x}".format(task, dyld_load_address))
+            debuglog("Failed to print image for main executable for task 0x{:x} dyld_load_addr 0x{:x}".format(task, dyld_load_address))
     else:
         debuglog("Falling back to vm entry method for finding executable load address")
         print("# NOTE: Failed to find executable using all_image_infos. Using fuzzy match to find best possible load address for executable.")
@@ -683,10 +666,10 @@ def ShowTaskUserLibraries(cmd_args=None):
 
 @lldb_command("showtaskuserdyldinfo")
 def ShowTaskUserDyldInfo(cmd_args=None):
-    """ Inspect the dyld global info for the given user task & print(out all fields including error messages)
+    """ Inspect the dyld global info for the given user task & print out all fields including error messages
         Syntax: (lldb)showtaskuserdyldinfo <task_t>
     """
-    if cmd_args == None or len(cmd_args) < 1:
+    if cmd_args is None or len(cmd_args) < 1:
         print("No arguments passed")
         print(ShowTaskUserDyldInfo.__doc__.strip())
         return
@@ -832,40 +815,6 @@ def ShowTaskUserDyldInfo(cmd_args=None):
         out_str += "No dyld information available for task\n"
     print(out_str)
 
-# Macro: showosmalloc
-@lldb_type_summary(['OSMallocTag'])
-@header("{0: <20s} {1: >5s} {2: ^16s} {3: <5s} {4: <40s}".format("TAG", "COUNT", "STATE", "ATTR", "NAME"))
-def GetOSMallocTagSummary(malloc_tag):
-    """ Summarize the given OSMalloc tag.
-        params:
-          malloc_tag : value - value representing a _OSMallocTag_ * in kernel
-        returns:
-          out_str - string summary of the OSMalloc tag.
-    """
-    if not malloc_tag:
-        return "Invalid malloc tag value: 0x0"
-
-    out_str = "{: <#20x} {: >5d} {: ^#16x} {: <5d} {: <40s}\n".format(malloc_tag,
-        malloc_tag.OSMT_refcnt, malloc_tag.OSMT_state, malloc_tag.OSMT_attr, malloc_tag.OSMT_name)
-    return out_str
-
-@lldb_command('showosmalloc')
-def ShowOSMalloc(cmd_args=None):
-    """ print(the outstanding allocation count of OSMalloc tags)
-        Usage: showosmalloc
-    """
-    summary_str = ""
-    tag_headp = Cast(addressof(kern.globals.OSMalloc_tag_list), 'struct _OSMallocTag_ *')
-    tagp = Cast(tag_headp.OSMT_link.next, 'struct _OSMallocTag_ *')
-    summary_str += GetOSMallocTagSummary.header + "\n"
-    while tagp != tag_headp:
-        summary_str += GetOSMallocTagSummary(tagp)
-        tagp = Cast(tagp.OSMT_link.next, 'struct _OSMallocTag_ *')
-
-    print(summary_str)
-
-# EndMacro: showosmalloc
-
 def SaveDataToFile(start_addr, length, outputfile, task=None,):
     """ Save the data at the specified address (of the specified length) to the file.
         params: start_addr : start address of the region of memory to save
@@ -877,22 +826,17 @@ def SaveDataToFile(start_addr, length, outputfile, task=None,):
     if task:
         memory_data = GetUserDataAsString(task, start_addr, length)
     else:
-        data_ptr = kern.GetValueFromAddress(start_addr, 'uint8_t *')
-        if data_ptr == 0:
-            print("invalid kernel start address specified")
+        err = lldb.SBError()
+        memory_data = LazyTarget.GetProcess().ReadMemory(start_addr, length, err)
+        if not err.Success():
+            print("Failed to read process memory. {:d} bytes from address {: <#020x}. Error: {}".format(length, start_addr, err.description))
             return False
-        memory_data = []
-        for i in range(length):
-            memory_data.append(chr(data_ptr[i]))
-            if i % 50000 == 0:
-                print("%d of %d            \r" % (i, length)),
-        memory_data = ''.join(memory_data)
 
     if len(memory_data) != length:
         print("Failed to read {:d} bytes from address {: <#020x}".format(length, start_addr))
         return False
 
-    fh = open(outputfile, 'w')
+    fh = open(outputfile, 'wb')
     fh.write(memory_data)
     fh.close()
     print("Saved {:d} bytes to file {:s}".format(length, outputfile))

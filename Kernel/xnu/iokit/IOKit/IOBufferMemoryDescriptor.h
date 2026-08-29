@@ -28,6 +28,7 @@
 #ifndef _IOBUFFERMEMORYDESCRIPTOR_H
 #define _IOBUFFERMEMORYDESCRIPTOR_H
 
+#include <libkern/c++/OSPtr.h>
 #include <IOKit/IOMemoryDescriptor.h>
 #include <DriverKit/IOBufferMemoryDescriptor.h>
 
@@ -102,12 +103,51 @@ public:
 		mach_vm_address_t alignment,
 		mach_vm_address_t physicalMask);
 
+#ifdef XNU_KERNEL_PRIVATE
+/*
+ * By default the buffer allocated in IOBufferMemoryDescriptor is
+ * considered to contain "pure data" and no kernel pointers. It
+ * is therefore colocated with other data buffers.
+ *
+ * This API allows to create a buffer that contains pointers and
+ * will not be redirected to the data heap/map.
+ */
+	bool initControlWithPhysicalMask(
+		task_t            inTask,
+		IOOptionBits      options,
+		mach_vm_size_t    capacity,
+		mach_vm_address_t alignment,
+		mach_vm_address_t physicalMask);
+#endif
+
+#ifdef KERNEL_PRIVATE
+	/*
+	 * Create an IOBufferMemoryDescriptor with guard pages on each side of the buffer allocation.
+	 * @param inTask The task the buffer will be allocated in.
+	 * @param options Options for the IOBufferMemoryDescriptor. See inTaskWithOptions for a description of available options.
+	 *                Some options are not available when using guard pages. Specifically, physically contiguous memory and pageable memory
+	 *                options are not supported. If these options are used, this will fail to create the memory descriptor and return NULL.
+	 * @param capacity The number of bytes to allocate. Due to how memory with guard pages is allocated, this will be rounded up to page size.
+	 *                 The buffer will also always be aligned to the page size.
+	 * @result Returns an instance of class IOBufferMemoryDescriptor to be released by the caller, which will free the memory descriptor and associated buffer.
+	 */
+	static OSPtr<IOBufferMemoryDescriptor> inTaskWithGuardPages(
+		task_t            inTask,
+		IOOptionBits      options,
+		mach_vm_size_t    capacity);
+
+	bool initWithGuardPages(
+		task_t            inTask,
+		IOOptionBits      options,
+		mach_vm_size_t    capacity);
+#endif
+
 #ifdef __LP64__
 	OSMetaClassDeclareReservedUnused(IOBufferMemoryDescriptor, 0);
 	OSMetaClassDeclareReservedUnused(IOBufferMemoryDescriptor, 1);
 #else /* !__LP64__ */
-	OSMetaClassDeclareReservedUsed(IOBufferMemoryDescriptor, 0);
-	OSMetaClassDeclareReservedUsed(IOBufferMemoryDescriptor, 1);
+	OSMetaClassDeclareReservedUsedX86(IOBufferMemoryDescriptor, 0);
+	OSMetaClassDeclareReservedUsedX86(IOBufferMemoryDescriptor, 1);
 #endif /* !__LP64__ */
 	OSMetaClassDeclareReservedUnused(IOBufferMemoryDescriptor, 2);
 	OSMetaClassDeclareReservedUnused(IOBufferMemoryDescriptor, 3);
@@ -142,14 +182,14 @@ public:
 	    vm_offset_t  alignment) APPLE_KEXT_DEPRECATED;                         /* use withOptions() instead */
 #endif /* !__LP64__ */
 
-	static IOBufferMemoryDescriptor * withCopy(
+	static OSPtr<IOBufferMemoryDescriptor> withCopy(
 		task_t            inTask,
 		IOOptionBits      options,
 		vm_map_t          sourceMap,
 		mach_vm_address_t source,
 		mach_vm_size_t    size);
 
-	static IOBufferMemoryDescriptor * withOptions(  IOOptionBits options,
+	static OSPtr<IOBufferMemoryDescriptor> withOptions(  IOOptionBits options,
 	    vm_size_t    capacity,
 	    vm_offset_t  alignment = 1);
 
@@ -171,7 +211,7 @@ public:
  *   @param alignment The minimum required alignment of the buffer in bytes - 1 is the default for no required alignment. For example, pass 256 to get memory allocated at an address with bits 0-7 zero.
  *   @result Returns an instance of class IOBufferMemoryDescriptor to be released by the caller, which will free the memory desriptor and associated buffer. */
 
-	static IOBufferMemoryDescriptor * inTaskWithOptions(
+	static OSPtr<IOBufferMemoryDescriptor> inTaskWithOptions(
 		task_t       inTask,
 		IOOptionBits options,
 		vm_size_t    capacity,
@@ -197,7 +237,7 @@ public:
  *   @param userTag The user memory tag
  *   @result Returns an instance of class IOBufferMemoryDescriptor to be released by the caller, which will free the memory desriptor and associated buffer. */
 
-	static IOBufferMemoryDescriptor * inTaskWithOptions(
+	static OSPtr<IOBufferMemoryDescriptor> inTaskWithOptions(
 		task_t       inTask,
 		IOOptionBits options,
 		vm_size_t    capacity,
@@ -221,7 +261,7 @@ public:
  *   @param physicalMask The buffer will be allocated with pages such that physical addresses will only have bits set present in physicalMask. For example, pass 0x00000000FFFFFFFFULL for a buffer to be accessed by hardware that has 32 address bits.
  *   @result Returns an instance of class IOBufferMemoryDescriptor to be released by the caller, which will free the memory desriptor and associated buffer. */
 
-	static IOBufferMemoryDescriptor * inTaskWithPhysicalMask(
+	static OSPtr<IOBufferMemoryDescriptor> inTaskWithPhysicalMask(
 		task_t            inTask,
 		IOOptionBits      options,
 		mach_vm_size_t    capacity,
@@ -234,8 +274,8 @@ public:
  * hold capacity bytes.  The descriptor's length is initially set to the
  * capacity.
  */
-	static IOBufferMemoryDescriptor * withCapacity(
-		vm_size_t    capacity,
+	static OSPtr<IOBufferMemoryDescriptor> withCapacity(
+		vm_size_t    capacity __xnu_data_size,
 		IODirection  withDirection,
 		bool         withContiguousMemory = false);
 #ifndef __LP64__
@@ -251,9 +291,9 @@ public:
  * Returns a new IOBufferMemoryDescriptor preloaded with bytes (copied).
  * The descriptor's length and capacity are set to the input buffer's size.
  */
-	static IOBufferMemoryDescriptor * withBytes(
+	static OSPtr<IOBufferMemoryDescriptor> withBytes(
 		const void * bytes,
-		vm_size_t    withLength,
+		vm_size_t    withLength __xnu_data_size,
 		IODirection  withDirection,
 		bool         withContiguousMemory = false);
 
@@ -290,6 +330,7 @@ public:
  *
  * Return the virtual address of the beginning of the buffer
  */
+	__xnu_returns_data_pointer
 	virtual void *getBytesNoCopy();
 
 /*
@@ -297,6 +338,7 @@ public:
  *
  * Return the virtual address of an offset from the beginning of the buffer
  */
+	__xnu_returns_data_pointer
 	virtual void *getBytesNoCopy(vm_size_t start, vm_size_t withLength);
 
 /*
@@ -306,7 +348,7 @@ public:
  * maintains the memory descriptor buffer length.  Note that appendBytes
  * will not copy past the end of the memory descriptor's current capacity.
  */
-	virtual bool appendBytes(const void *bytes, vm_size_t withLength);
+	virtual bool appendBytes(const void *bytes, vm_size_t withLength __xnu_data_size);
 
 #ifndef __LP64__
 	virtual void * getVirtualSegment(IOByteCount offset,

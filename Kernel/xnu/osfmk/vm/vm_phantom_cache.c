@@ -26,31 +26,32 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
-#include <vm/vm_page.h>
-#include <vm/vm_object.h>
-#include <vm/vm_kern.h>
-#include <vm/vm_pageout.h>
-#include <vm/vm_phantom_cache.h>
-#include <vm/vm_compressor.h>
+#include <vm/vm_page_internal.h>
+#include <vm/vm_object_internal.h>
+#include <vm/vm_kern_xnu.h>
+#include <vm/vm_pageout_xnu.h>
+#include <vm/vm_phantom_cache_internal.h>
+#include <vm/vm_compressor_internal.h>
+#include <vm/vm_protos_internal.h>
 
 
 uint32_t phantom_cache_eval_period_in_msecs = 250;
 uint32_t phantom_cache_thrashing_threshold_ssd = 1000;
-#if CONFIG_EMBEDDED
+#if !XNU_TARGET_OS_OSX
 uint32_t phantom_cache_thrashing_threshold = 500;
-#else
+#else /* !XNU_TARGET_OS_OSX */
 uint32_t phantom_cache_thrashing_threshold = 50;
-#endif
+#endif /* !XNU_TARGET_OS_OSX */
 
 /*
  * Number of consecutive thrashing periods required before
  * vm_phantom_cache_check_pressure() returns true.
  */
-#if CONFIG_EMBEDDED
+#if !XNU_TARGET_OS_OSX
 unsigned phantom_cache_contiguous_periods = 4;
-#else
+#else /* !XNU_TARGET_OS_OSX */
 unsigned phantom_cache_contiguous_periods = 2;
-#endif
+#endif /* !XNU_TARGET_OS_OSX */
 
 clock_sec_t     pc_start_of_eval_period_sec = 0;
 clock_nsec_t    pc_start_of_eval_period_nsec = 0;
@@ -104,7 +105,7 @@ struct phantom_cache_stats {
 
 
 void
-vm_phantom_cache_init()
+vm_phantom_cache_init(void)
 {
 	unsigned int    num_entries;
 	unsigned int    log1;
@@ -113,11 +114,11 @@ vm_phantom_cache_init()
 	if (!VM_CONFIG_COMPRESSOR_IS_ACTIVE) {
 		return;
 	}
-#if CONFIG_EMBEDDED
+#if !XNU_TARGET_OS_OSX
 	num_entries = (uint32_t)(((max_mem / PAGE_SIZE) / 10) / VM_GHOST_PAGES_PER_ENTRY);
-#else
+#else /* !XNU_TARGET_OS_OSX */
 	num_entries = (uint32_t)(((max_mem / PAGE_SIZE) / 4) / VM_GHOST_PAGES_PER_ENTRY);
-#endif
+#endif /* !XNU_TARGET_OS_OSX */
 	vm_phantom_cache_num_entries = 1;
 
 	while (vm_phantom_cache_num_entries < num_entries) {
@@ -134,16 +135,15 @@ vm_phantom_cache_init()
 	vm_phantom_cache_size = sizeof(struct vm_ghost) * vm_phantom_cache_num_entries;
 	vm_phantom_cache_hash_size = sizeof(vm_phantom_hash_entry_t) * vm_phantom_cache_num_entries;
 
-	if (kernel_memory_allocate(kernel_map, (vm_offset_t *)(&vm_phantom_cache), vm_phantom_cache_size, 0, KMA_KOBJECT | KMA_PERMANENT, VM_KERN_MEMORY_PHANTOM_CACHE) != KERN_SUCCESS) {
-		panic("vm_phantom_cache_init: kernel_memory_allocate failed\n");
-	}
-	bzero(vm_phantom_cache, vm_phantom_cache_size);
+	kmem_alloc(kernel_map, (vm_offset_t *)&vm_phantom_cache,
+	    vm_phantom_cache_size,
+	    KMA_DATA | KMA_NOFAIL | KMA_KOBJECT | KMA_ZERO | KMA_PERMANENT,
+	    VM_KERN_MEMORY_PHANTOM_CACHE);
 
-	if (kernel_memory_allocate(kernel_map, (vm_offset_t *)(&vm_phantom_cache_hash), vm_phantom_cache_hash_size, 0, KMA_KOBJECT | KMA_PERMANENT, VM_KERN_MEMORY_PHANTOM_CACHE) != KERN_SUCCESS) {
-		panic("vm_phantom_cache_init: kernel_memory_allocate failed\n");
-	}
-	bzero(vm_phantom_cache_hash, vm_phantom_cache_hash_size);
-
+	kmem_alloc(kernel_map, (vm_offset_t *)&vm_phantom_cache_hash,
+	    vm_phantom_cache_hash_size,
+	    KMA_NOFAIL | KMA_KOBJECT | KMA_ZERO | KMA_PERMANENT,
+	    VM_KERN_MEMORY_PHANTOM_CACHE);
 
 	vm_ghost_hash_mask = vm_phantom_cache_num_entries - 1;
 
@@ -241,7 +241,7 @@ vm_phantom_cache_add_ghost(vm_page_t m)
 		} else {
 			for (;;) {
 				if (nvpce->g_next_index == 0) {
-					panic("didn't find ghost in hash\n");
+					panic("didn't find ghost in hash");
 				}
 
 				if (&vm_phantom_cache[nvpce->g_next_index] == vpce) {
@@ -487,7 +487,7 @@ vm_phantom_cache_check_pressure()
 		pressure_detected = TRUE;
 	}
 
-	if (vm_page_external_count > ((AVAILABLE_MEMORY) * 50) / 100) {
+	if (vm_page_pageable_external_count > ((AVAILABLE_MEMORY) * 50) / 100) {
 		pressure_detected = FALSE;
 	}
 

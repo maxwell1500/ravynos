@@ -29,14 +29,14 @@
 #ifndef _CRYPTO_REGISTER_CRYPTO_H_
 #define _CRYPTO_REGISTER_CRYPTO_H_
 
-#ifdef  __cplusplus
-extern "C" {
-#endif
+#include <libkern/crypto/crypto.h>
+#include <libkern/crypto/rand.h>
+
+__BEGIN_DECLS
 
 #include <corecrypto/ccdigest.h>
 #include <corecrypto/cchmac.h>
 #include <corecrypto/ccmode.h>
-#include <corecrypto/ccrc4.h>
 #include <corecrypto/ccrng.h>
 #include <corecrypto/ccrsa.h>
 #include <corecrypto/ccchacha20poly1305.h>
@@ -94,13 +94,6 @@ typedef void (*ccpbkdf2_hmac_fn_t)(const struct ccdigest_info *di,
 typedef int (*ccdes_key_is_weak_fn_t)(void *key, unsigned long  length);
 typedef void (*ccdes_key_set_odd_parity_fn_t)(void *key, unsigned long length);
 
-/* XTS padding */
-typedef void (*ccpad_xts_decrypt_fn_t)(const struct ccmode_xts *xts, ccxts_ctx *ctx,
-    unsigned long nbytes, const void *in, void *out);
-
-typedef void (*ccpad_xts_encrypt_fn_t)(const struct ccmode_xts *xts, ccxts_ctx *ctx,
-    unsigned long nbytes, const void *in, void *out);
-
 /* CBC padding (such as PKCS7 or CTSx per NIST standard) */
 typedef size_t (*ccpad_cts3_crypt_fn_t)(const struct ccmode_cbc *cbc, cccbc_ctx *cbc_key,
     cccbc_iv *iv, size_t nbytes, const void *in, void *out);
@@ -117,6 +110,93 @@ typedef int (*ccrsa_verify_pkcs1v15_fn_t)(ccrsa_pub_ctx_t key, const uint8_t *oi
     size_t digest_len, const uint8_t *digest,
     size_t sig_len, const uint8_t *sig,
     bool *valid);
+
+__enum_decl(crypto_digest_alg_t, unsigned int, {
+	CRYPTO_DIGEST_ALG_NONE,
+	CRYPTO_DIGEST_ALG_MD5,
+	CRYPTO_DIGEST_ALG_SHA1,
+	CRYPTO_DIGEST_ALG_SHA256,
+	CRYPTO_DIGEST_ALG_SHA384,
+	CRYPTO_DIGEST_ALG_SHA512
+});
+
+typedef size_t (*crypto_digest_ctx_size_fn_t)(
+	crypto_digest_alg_t alg);
+
+typedef void (*crypto_digest_init_fn_t)(
+	crypto_digest_alg_t alg,
+	void *ctx,
+	size_t ctx_size);
+
+typedef void (*crypto_digest_update_fn_t)(
+	crypto_digest_alg_t alg,
+	void *ctx,
+	size_t ctx_size,
+	const void *data,
+	size_t data_size);
+
+typedef void (*crypto_digest_final_fn_t)(
+	crypto_digest_alg_t alg,
+	void *ctx,
+	size_t ctx_size,
+	void *digest,
+	size_t digest_size);
+
+typedef void (*crypto_digest_fn_t)(
+	crypto_digest_alg_t alg,
+	const void *data,
+	size_t data_size,
+	void *digest,
+	size_t digest_size);
+
+typedef size_t (*crypto_hmac_ctx_size_fn_t)(
+	crypto_digest_alg_t alg);
+
+typedef void (*crypto_hmac_init_fn_t)(
+	crypto_digest_alg_t alg,
+	void *ctx,
+	size_t ctx_size,
+	const void *key,
+	size_t key_size);
+
+typedef void (*crypto_hmac_update_fn_t)(
+	crypto_digest_alg_t alg,
+	void *ctx,
+	size_t ctx_size,
+	const void *data,
+	size_t data_size);
+
+typedef void (*crypto_hmac_final_generate_fn_t)(
+	crypto_digest_alg_t alg,
+	void *ctx,
+	size_t ctx_size,
+	void *tag,
+	size_t tag_size);
+
+typedef bool (*crypto_hmac_final_verify_fn_t)(
+	crypto_digest_alg_t alg,
+	void *ctx,
+	size_t ctx_size,
+	const void *tag,
+	size_t tag_size);
+
+typedef void (*crypto_hmac_generate_fn_t)(
+	crypto_digest_alg_t alg,
+	const void *key,
+	size_t key_size,
+	const void *data,
+	size_t data_size,
+	void *tag,
+	size_t tag_size);
+
+typedef bool (*crypto_hmac_verify_fn_t)(
+	crypto_digest_alg_t alg,
+	const void *key,
+	size_t key_size,
+	const void *data,
+	size_t data_size,
+	const void *tag,
+	size_t tag_size);
 
 typedef struct crypto_functions {
 	/* digests common functions */
@@ -164,20 +244,9 @@ typedef struct crypto_functions {
 	const struct ccmode_ecb *cctdes_ecb_decrypt;
 	const struct ccmode_cbc *cctdes_cbc_encrypt;
 	const struct ccmode_cbc *cctdes_cbc_decrypt;
-	/* RC4 */
-	const struct ccrc4_info *ccrc4_info;
-	/* Blowfish - ECB only */
-	const struct ccmode_ecb *ccblowfish_ecb_encrypt;
-	const struct ccmode_ecb *ccblowfish_ecb_decrypt;
-	/* CAST - ECB only */
-	const struct ccmode_ecb *cccast_ecb_encrypt;
-	const struct ccmode_ecb *cccast_ecb_decrypt;
 	/* DES key helper functions */
 	ccdes_key_is_weak_fn_t ccdes_key_is_weak_fn;
 	ccdes_key_set_odd_parity_fn_t ccdes_key_set_odd_parity_fn;
-	/* XTS padding+encrypt functions */
-	ccpad_xts_encrypt_fn_t ccpad_xts_encrypt_fn;
-	ccpad_xts_decrypt_fn_t ccpad_xts_decrypt_fn;
 	/* CTS3 padding+encrypt functions */
 	ccpad_cts3_crypt_fn_t ccpad_cts3_encrypt_fn;
 	ccpad_cts3_crypt_fn_t ccpad_cts3_decrypt_fn;
@@ -188,12 +257,32 @@ typedef struct crypto_functions {
 	/* rsa */
 	ccrsa_make_pub_fn_t        ccrsa_make_pub_fn;
 	ccrsa_verify_pkcs1v15_fn_t ccrsa_verify_pkcs1v15_fn;
+
+	// Random functions
+	crypto_random_generate_fn_t random_generate_fn;
+	crypto_random_uniform_fn_t random_uniform_fn;
+	crypto_random_kmem_ctx_size_fn_t random_kmem_ctx_size_fn;
+	crypto_random_kmem_init_fn_t random_kmem_init_fn;
+
+	// Digest functions
+	crypto_digest_ctx_size_fn_t digest_ctx_size_fn;
+	crypto_digest_init_fn_t digest_init_fn;
+	crypto_digest_update_fn_t digest_update_fn;
+	crypto_digest_final_fn_t digest_final_fn;
+	crypto_digest_fn_t digest_fn;
+
+	// HMAC functions
+	crypto_hmac_ctx_size_fn_t hmac_ctx_size_fn;
+	crypto_hmac_init_fn_t hmac_init_fn;
+	crypto_hmac_update_fn_t hmac_update_fn;
+	crypto_hmac_final_generate_fn_t hmac_final_generate_fn;
+	crypto_hmac_final_verify_fn_t hmac_final_verify_fn;
+	crypto_hmac_generate_fn_t hmac_generate_fn;
+	crypto_hmac_verify_fn_t hmac_verify_fn;
 } *crypto_functions_t;
 
 int register_crypto_functions(const crypto_functions_t funcs);
 
-#ifdef  __cplusplus
-}
-#endif
+__END_DECLS
 
 #endif /*_CRYPTO_REGISTER_CRYPTO_H_*/

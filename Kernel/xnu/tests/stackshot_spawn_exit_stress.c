@@ -14,6 +14,9 @@
 
 T_GLOBAL_META(
 	T_META_NAMESPACE("xnu.stackshot"),
+	T_META_RADAR_COMPONENT_NAME("xnu"),
+	T_META_RADAR_COMPONENT_VERSION("stackshot"),
+	T_META_OWNER("jonathan_w_adams"),
 	T_META_CHECK_LEAKS(false),
 	T_META_ASROOT(true)
 	);
@@ -42,7 +45,7 @@ T_HELPER_DECL(spawn_children_helper, "spawn_children helper")
 static void
 take_stackshot(void)
 {
-	uint32_t stackshot_flags = (STACKSHOT_SAVE_LOADINFO | STACKSHOT_GET_GLOBAL_MEM_STATS |
+	uint64_t stackshot_flags = (STACKSHOT_SAVE_LOADINFO | STACKSHOT_GET_GLOBAL_MEM_STATS |
 	    STACKSHOT_SAVE_IMP_DONATION_PIDS | STACKSHOT_KCDATA_FORMAT);
 
 	void *config = stackshot_config_create();
@@ -72,7 +75,7 @@ retry:
 	T_QUIET; T_EXPECT_POSIX_ZERO(ret, "deallocated stackshot config");
 }
 
-T_DECL(stackshot_spawn_exit, "tests taking many stackshots while children processes are spawning+exiting", T_META_TIMEOUT(120))
+T_DECL(stackshot_spawn_exit, "tests taking many stackshots while children processes are spawning+exiting", T_META_TIMEOUT(120), T_META_TAG_VM_PREFERRED)
 {
 	char path[PATH_MAX];
 	uint32_t path_size = sizeof(path);

@@ -6,7 +6,12 @@
 #include <sys/sysctl.h>
 #include <unistd.h>
 
-T_GLOBAL_META(T_META_RUN_CONCURRENTLY(true));
+T_GLOBAL_META(
+	T_META_NAMESPACE("xnu.ipc"),
+	T_META_RUN_CONCURRENTLY(TRUE),
+	T_META_RADAR_COMPONENT_NAME("xnu"),
+	T_META_RADAR_COMPONENT_VERSION("IPC"),
+	T_META_TAG_VM_PREFERRED);
 
 typedef struct {
 	mach_msg_header_t   header;
@@ -111,14 +116,14 @@ server(struct args *args)
 
 	ipc_complex_message *request_complexmsg = (ipc_complex_message *)request;
 	T_ASSERT_NE(request_complexmsg->guarded_port_descriptor1.name, 0, "server: Should not receive mach_port_null; name = %x", request_complexmsg->guarded_port_descriptor1.name);
-	T_ASSERT_EQ(request_complexmsg->guarded_port_descriptor1.type, MACH_MSG_GUARDED_PORT_DESCRIPTOR, "server: Received a guarded port descriptor");
-	T_ASSERT_EQ(request_complexmsg->guarded_port_descriptor1.disposition, MACH_MSG_TYPE_PORT_RECEIVE, "server: Received a receive right");
+	T_ASSERT_EQ((mach_msg_descriptor_type_t)request_complexmsg->guarded_port_descriptor1.type, MACH_MSG_GUARDED_PORT_DESCRIPTOR, "server: Received a guarded port descriptor");
+	T_ASSERT_EQ((mach_msg_type_name_t)request_complexmsg->guarded_port_descriptor1.disposition, MACH_MSG_TYPE_PORT_RECEIVE, "server: Received a receive right");
 	T_ASSERT_EQ(request_complexmsg->guarded_port_descriptor1.context, (unsigned long)request, "server: Received a port with correct context = %p", request);
 	T_LOG("Guard flags = %d", request_complexmsg->guarded_port_descriptor1.flags);
 
 	T_ASSERT_NE(request_complexmsg->guarded_port_descriptor2.name, 0, "server: Should not receive mach_port_null; name = %x", request_complexmsg->guarded_port_descriptor2.name);
-	T_ASSERT_EQ(request_complexmsg->guarded_port_descriptor2.type, MACH_MSG_GUARDED_PORT_DESCRIPTOR, "server: Received a guarded port descriptor");
-	T_ASSERT_EQ(request_complexmsg->guarded_port_descriptor2.disposition, MACH_MSG_TYPE_PORT_RECEIVE, "server: Received a receive right");
+	T_ASSERT_EQ((mach_msg_descriptor_type_t)request_complexmsg->guarded_port_descriptor2.type, MACH_MSG_GUARDED_PORT_DESCRIPTOR, "server: Received a guarded port descriptor");
+	T_ASSERT_EQ((mach_msg_type_name_t)request_complexmsg->guarded_port_descriptor2.disposition, MACH_MSG_TYPE_PORT_RECEIVE, "server: Received a receive right");
 	T_ASSERT_EQ(request_complexmsg->guarded_port_descriptor2.context, (unsigned long)request, "server: Received a port with correct context = %p", request);
 
 	mach_port_status_t status;

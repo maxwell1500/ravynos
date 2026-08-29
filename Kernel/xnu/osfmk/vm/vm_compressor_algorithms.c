@@ -31,12 +31,12 @@
  */
 #include "lz4.h"
 #include "WKdm_new.h"
-#include <vm/vm_compressor_algorithms.h>
-#include <vm/vm_compressor.h>
+#include <vm/vm_compressor_algorithms_internal.h>
+#include <vm/vm_compressor_internal.h>
 
 #define MZV_MAGIC (17185)
 #if defined(__arm64__)
-#include <arm/proc_reg.h>
+#include <arm64/proc_reg.h>
 #endif
 
 #define LZ4_SCRATCH_ALIGN (64)
@@ -44,9 +44,6 @@
 
 #define LZ4_SCRATCH_ALIGN (64)
 #define WKC_SCRATCH_ALIGN (64)
-
-#define memcpy_T_NT memcpy
-#define memcpy_NT_T memcpy
 
 typedef union {
 	uint8_t lz4state[lz4_encode_scratch_size]__attribute((aligned(LZ4_SCRATCH_ALIGN)));
@@ -102,6 +99,7 @@ enum compressor_preselect_t {
 	CPRESELWK = 2,
 };
 
+/* changeable via sysctl */
 vm_compressor_mode_t vm_compressor_current_codec = VM_COMPRESSOR_DEFAULT_CODEC;
 
 boolean_t vm_compressor_force_sw_wkdm = FALSE;
@@ -222,7 +220,7 @@ WKdm_hv(uint32_t *wkbuf)
 	uint32_t *inw = (uint32_t *) wkbuf;
 	if (*inw != MZV_MAGIC) {
 		if ((*inw | *(inw + 1) | *(inw + 2)) & 0xFFFF0000) {
-			panic("WKdm(%p): invalid header 0x%x 0x%x 0x%x\n", wkbuf, *inw, *(inw + 1), *(inw + 2));
+			panic("WKdm(%p): invalid header 0x%x 0x%x 0x%x", wkbuf, *inw, *(inw + 1), *(inw + 2));
 		}
 	}
 #else /* DEVELOPMENT || DEBUG */
@@ -237,16 +235,20 @@ WKdm_hv(uint32_t *wkbuf)
 #if defined(__arm64__)
 #endif
 
-static inline void
-WKdmD(WK_word* src_buf, WK_word* dest_buf, WK_word* scratch, unsigned int bytes)
+static inline bool
+WKdmD(WK_word* src_buf, WK_word* dest_buf, WK_word* scratch, unsigned int bytes,
+    __unused uint32_t *pop_count)
 {
 #if defined(__arm64__)
 #endif
 	WKdm_hv(src_buf);
 #if defined(__arm64__)
+#ifndef __ARM_16K_PG__
 	if (PAGE_SIZE == 4096) {
 		WKdm_decompress_4k(src_buf, dest_buf, scratch, bytes);
-	} else {
+	} else
+#endif /* !____ARM_16K_PG__ */
+	{
 		__unused uint64_t wdsstart;
 
 		VM_COMPRESSOR_STAT_DBG(wdsstart = mach_absolute_time());
@@ -258,20 +260,25 @@ WKdmD(WK_word* src_buf, WK_word* dest_buf, WK_word* scratch, unsigned int bytes)
 #else /* !defined arm64 */
 	WKdm_decompress_new(src_buf, dest_buf, scratch, bytes);
 #endif
+	return true;
 }
 #if DEVELOPMENT || DEBUG
 int precompy, wkswhw;
 #endif
 
 static inline int
-WKdmC(WK_word* src_buf, WK_word* dest_buf, WK_word* scratch, boolean_t *incomp_copy, unsigned int limit)
+WKdmC(WK_word* src_buf, WK_word* dest_buf, WK_word* scratch,
+    boolean_t *incomp_copy, unsigned int limit, __unused uint32_t *pop_count)
 {
 	(void)incomp_copy;
 	int wkcval;
 #if defined(__arm64__)
+#ifndef __ARM_16K_PG__
 	if (PAGE_SIZE == 4096) {
 		wkcval = WKdm_compress_4k(src_buf, dest_buf, scratch, limit);
-	} else {
+	} else
+#endif /* !____ARM_16K_PG__ */
+	{
 		__unused uint64_t wcswstart;
 
 		VM_COMPRESSOR_STAT_DBG(wcswstart = mach_absolute_time());
@@ -290,12 +297,15 @@ WKdmC(WK_word* src_buf, WK_word* dest_buf, WK_word* scratch, boolean_t *incomp_c
 
 
 int
-metacompressor(const uint8_t *in, uint8_t *cdst, int32_t outbufsz, uint16_t *codec, void *cscratchin, boolean_t *incomp_copy)
+metacompressor(const uint8_t *in, uint8_t *cdst, int32_t outbufsz, uint16_t *codec,
+    void *cscratchin, boolean_t *incomp_copy, uint32_t *pop_count_p)
 {
 	int sz = -1;
 	int dowk = FALSE, dolz4 = FALSE, skiplz4 = FALSE;
 	int insize = PAGE_SIZE;
 	compressor_encode_scratch_t *cscratch = cscratchin;
+	/* Not all paths lead to an inline population count. */
+	uint32_t pop_count = C_SLOT_NO_POPCOUNT;
 
 	if (vm_compressor_current_codec == CMODE_WK) {
 		dowk = TRUE;
@@ -318,7 +328,7 @@ metacompressor(const uint8_t *in, uint8_t *cdst, int32_t outbufsz, uint16_t *cod
 	if (dowk) {
 		*codec = CCWK;
 		VM_COMPRESSOR_STAT(compressor_stats.wk_compressions++);
-		sz = WKdmC(in, cdst, &cscratch->wkscratch[0], incomp_copy, outbufsz);
+		sz = WKdmC(in, cdst, &cscratch->wkscratch[0], incomp_copy, outbufsz, &pop_count);
 
 		if (sz == -1) {
 			VM_COMPRESSOR_STAT(compressor_stats.wk_compressed_bytes_total += PAGE_SIZE);
@@ -367,33 +377,43 @@ lz4compress:
 		}
 	}
 cexit:
+	assert(pop_count_p != NULL);
+	*pop_count_p = pop_count;
 	return sz;
 }
 
-void
-metadecompressor(const uint8_t *source, uint8_t *dest, uint32_t csize, uint16_t ccodec, void *compressor_dscratchin)
+bool
+metadecompressor(const uint8_t *source, uint8_t *dest, uint32_t csize,
+    uint16_t ccodec, void *compressor_dscratchin, uint32_t *pop_count_p)
 {
 	int dolz4 = (ccodec == CCLZ4);
 	int rval;
 	compressor_decode_scratch_t *compressor_dscratch = compressor_dscratchin;
+	/* Not all paths lead to an inline population count. */
+	uint32_t pop_count = C_SLOT_NO_POPCOUNT;
+	bool success;
 
 	if (dolz4) {
 		rval = (int)lz4raw_decode_buffer(dest, PAGE_SIZE, source, csize, &compressor_dscratch->lz4decodestate[0]);
 		VM_DECOMPRESSOR_STAT(compressor_stats.lz4_decompressions += 1);
 		VM_DECOMPRESSOR_STAT(compressor_stats.lz4_decompressed_bytes += csize);
-#if DEVELOPMENT || DEBUG
-		uint32_t *d32 = dest;
-#endif
+
+		__assert_only uint32_t *d32 = dest;
 		assertf(rval == PAGE_SIZE, "LZ4 decode: size != pgsize %d, header: 0x%x, 0x%x, 0x%x",
 		    rval, *d32, *(d32 + 1), *(d32 + 2));
+		success = (rval == PAGE_SIZE);
 	} else {
 		assert(ccodec == CCWK);
 
-		WKdmD(source, dest, &compressor_dscratch->wkdecompscratch[0], csize);
+		success = WKdmD(source, dest, &compressor_dscratch->wkdecompscratch[0], csize, &pop_count);
 
 		VM_DECOMPRESSOR_STAT(compressor_stats.wk_decompressions += 1);
 		VM_DECOMPRESSOR_STAT(compressor_stats.wk_decompressed_bytes += csize);
 	}
+
+	assert(pop_count_p != NULL);
+	*pop_count_p = pop_count;
+	return success;
 }
 #pragma clang diagnostic pop
 
@@ -442,7 +462,7 @@ vm_compressor_algorithm_init(void)
 	    (new_codec == CMODE_LZ4) || (new_codec == CMODE_HYB)),
 	    "Invalid VM compression codec: %u", new_codec);
 
-#if defined(__arm__) || defined(__arm64__)
+#if defined(__arm64__)
 	uint32_t tmpc;
 	if (PE_parse_boot_argn("-vm_compressor_wk", &tmpc, sizeof(tmpc))) {
 		new_codec = VM_COMPRESSOR_DEFAULT_CODEC;

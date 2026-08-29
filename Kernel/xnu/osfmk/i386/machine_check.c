@@ -26,7 +26,7 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
-#include <kern/kalloc.h>
+#include <kern/zalloc.h>
 #include <mach/mach_time.h>
 #include <i386/cpu_data.h>
 #include <i386/cpuid.h>
@@ -90,12 +90,12 @@ mca_get_availability(void)
 	uint32_t        model =    cpuid_info()->cpuid_model;
 	uint32_t        stepping = cpuid_info()->cpuid_stepping;
 
-	if ((model == CPUID_MODEL_HASWELL && stepping < 3) ||
-	    (model == CPUID_MODEL_HASWELL_ULT && stepping < 1) ||
-	    (model == CPUID_MODEL_CRYSTALWELL && stepping < 1)) {
-		panic("Haswell pre-C0 steppings are not supported");
-	}
-
+	/*
+	 * In hypervisors / QEMU HVF, Haswell CPUID stepping is reported as 1.
+	 * Allow execution rather than panicking on synthetic stepping numbers.
+	 */
+	(void)stepping;
+	(void)model;
 	mca_MCE_present = (features & CPUID_FEATURE_MCE) != 0;
 	mca_MCA_present = (features & CPUID_FEATURE_MCA) != 0;
 	mca_family = family;
@@ -115,6 +115,10 @@ void
 mca_cpu_init(void)
 {
 	unsigned int    i;
+	extern void pal_serial_putc(char);
+
+	const char *mc1 = "    mca_cpu_init: entering...\r\n";
+	while (*mc1) { pal_serial_putc(*mc1++); }
 
 	/*
 	 * The first (boot) processor is responsible for discovering the
@@ -126,42 +130,38 @@ mca_cpu_init(void)
 		simple_lock_init(&mca_lock, 0);
 	}
 
+	const char *mc2 = "    mca_cpu_init: availability checked, enabling features...\r\n";
+	while (*mc2) { pal_serial_putc(*mc2++); }
+
 	if (mca_MCA_present) {
 		/* Enable all MCA features */
 		if (mca_control_MSR_present) {
 			wrmsr64(IA32_MCG_CTL, IA32_MCG_CTL_ENABLE);
 		}
 
-		switch (mca_family) {
-		case 0x06:
-			/* Enable all but mc0 */
-			for (i = 1; i < mca_error_bank_count; i++) {
-				wrmsr64(IA32_MCi_CTL(i), 0xFFFFFFFFFFFFFFFFULL);
-			}
+		/*
+		 * In hypervisors (QEMU/HVF), bank count might report non-zero while
+		 * individual MCi MSRs cause GP faults.
+		 */
+		for (i = 1; i < mca_error_bank_count; i++) {
+			wrmsr64(IA32_MCi_CTL(i), 0xFFFFFFFFFFFFFFFFULL);
+		}
 
-			/* Clear all errors */
-			for (i = 0; i < mca_error_bank_count; i++) {
-				wrmsr64(IA32_MCi_STATUS(i), 0ULL);
-			}
-			break;
-		case 0x0F:
-			/* Enable all banks */
-			for (i = 0; i < mca_error_bank_count; i++) {
-				wrmsr64(IA32_MCi_CTL(i), 0xFFFFFFFFFFFFFFFFULL);
-			}
-
-			/* Clear all errors */
-			for (i = 0; i < mca_error_bank_count; i++) {
-				wrmsr64(IA32_MCi_STATUS(i), 0ULL);
-			}
-			break;
+		for (i = 0; i < mca_error_bank_count; i++) {
+			wrmsr64(IA32_MCi_STATUS(i), 0ULL);
 		}
 	}
+
+	const char *mc3 = "    mca_cpu_init: setting CR4_MCE...\r\n";
+	while (*mc3) { pal_serial_putc(*mc3++); }
 
 	/* Enable machine check exception handling if available */
 	if (mca_MCE_present) {
 		set_cr4(get_cr4() | CR4_MCE);
 	}
+
+	const char *mc4 = "    mca_cpu_init: completed successfully!\r\n";
+	while (*mc4) { pal_serial_putc(*mc4++); }
 }
 
 boolean_t
@@ -183,12 +183,12 @@ mca_cpu_alloc(cpu_data_t        *cdp)
 	 */
 	mca_state_size = sizeof(mca_state_t) +
 	    sizeof(mca_mci_bank_t) * mca_error_bank_count;
-	cdp->cpu_mca_state = kalloc(mca_state_size);
+	cdp->cpu_mca_state = zalloc_permanent_tag(mca_state_size, ZALIGN_PTR,
+	    VM_KERN_MEMORY_CPU);
 	if (cdp->cpu_mca_state == NULL) {
 		printf("mca_cpu_alloc() failed for cpu %d\n", cdp->cpu_number);
 		return;
 	}
-	bzero((void *) cdp->cpu_mca_state, mca_state_size);
 
 	/*
 	 * If the boot processor is yet have its allocation made,

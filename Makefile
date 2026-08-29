@@ -92,8 +92,8 @@ DARWIN_MAJOR != echo ${DARWIN_VERSION} | sed 's/^([0-9]+\.\*)/\\1/'
 DARWIN_MINOR != echo ${DARWIN_VERSION} | sed 's/^[0-9]+\.([0-9]+)\./\\1/'
 DARWIN_PATCH != echo ${DARWIN_VERSION} | sed 's/([0-9]+)$$/\\1/'
 
-MACOSX_DEPLOYMENT_TARGET = 10.15
-MACOS_VERSION_MIN = 10.15
+MACOSX_DEPLOYMENT_TARGET = 15.0
+MACOS_VERSION_MIN = 15.0
 
 RUNTIME_SPEC_PATH = ${ROOT_SOURCE_DIR}/Developer/xcbuild/Specifications
 

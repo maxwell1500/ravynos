@@ -76,13 +76,13 @@
 #include <mach/vm_inherit.h>
 #include <mach/vm_param.h>
 #include <kern/thread.h>
-#include <vm/vm_map.h>
-#include <vm/vm_kern.h>
-#include <vm/vm_object.h>
+#include <vm/vm_map_internal.h>
+#include <vm/vm_kern_xnu.h>
+#include <vm/vm_object_xnu.h>
 #include <kern/task.h>
 #include <kern/host.h>
 #include <ipc/ipc_port.h>
-#include <vm/vm_debug.h>
+#include <vm/vm_debug_internal.h>
 #endif
 
 #if !MACH_VM_DEBUG
@@ -111,9 +111,9 @@
  */
 
 kern_return_t
-vm32_region_info(
+vm32_mach_vm_region_info(
 	__DEBUG_ONLY vm_map_t                   map,
-	__DEBUG_ONLY vm32_offset_t              address,
+	__DEBUG_ONLY vm32_offset_ut             address_u,
 	__DEBUG_ONLY vm_info_region_t           *regionp,
 	__DEBUG_ONLY vm_info_object_array_t     *objectsp,
 	__DEBUG_ONLY mach_msg_type_number_t     *objectsCntp)
@@ -121,6 +121,8 @@ vm32_region_info(
 #if !MACH_VM_DEBUG
 	return KERN_FAILURE;
 #else
+	/* This unwrap is safe as this function is DEBUG only. */
+	vm32_offset_t address = VM_SANITIZE_UNSAFE_UNWRAP(address_u);
 	vm_map_copy_t copy;
 	vm_offset_t addr = 0;   /* memory for OOL data */
 	vm_size_t size;         /* size of the memory */
@@ -147,7 +149,7 @@ vm32_region_info(
 		for (cmap = map;; cmap = nmap) {
 			/* cmap is read-locked */
 
-			if (!vm_map_lookup_entry(cmap,
+			if (!vm_map_lookup_entry_allow_pgz(cmap,
 			    (vm_map_address_t)address, &entry)) {
 				entry = entry->vme_next;
 				if (entry == vm_map_to_entry(cmap)) {
@@ -214,7 +216,7 @@ vm32_region_info(
 				vio->vio_resident_page_count =
 				    cobject->resident_page_count;
 				vio->vio_copy =
-				    (natural_t)(uintptr_t) cobject->copy;
+				    (natural_t)(uintptr_t) cobject->vo_copy;
 				vio->vio_shadow =
 				    (natural_t)(uintptr_t) cobject->shadow;
 				vio->vio_shadow_offset =
@@ -274,21 +276,11 @@ vm32_region_info(
 		size = vm_map_round_page(2 * used * sizeof(vm_info_object_t),
 		    VM_MAP_PAGE_MASK(ipc_kernel_map));
 
-		kr = vm_allocate_kernel(ipc_kernel_map, &addr, size, VM_FLAGS_ANYWHERE, VM_KERN_MEMORY_IPC);
+		kr = kmem_alloc(ipc_kernel_map, &addr, size,
+		    KMA_DATA, VM_KERN_MEMORY_IPC);
 		if (kr != KERN_SUCCESS) {
 			return KERN_RESOURCE_SHORTAGE;
 		}
-
-		kr = vm_map_wire_kernel(
-			ipc_kernel_map,
-			vm_map_trunc_page(addr,
-			VM_MAP_PAGE_MASK(ipc_kernel_map)),
-			vm_map_round_page(addr + size,
-			VM_MAP_PAGE_MASK(ipc_kernel_map)),
-			VM_PROT_READ | VM_PROT_WRITE,
-			VM_KERN_MEMORY_IPC,
-			FALSE);
-		assert(kr == KERN_SUCCESS);
 	}
 
 	/* free excess memory; make remaining memory pageable */
@@ -304,13 +296,11 @@ vm32_region_info(
 		vm_size_t vmsize_used = vm_map_round_page(size_used,
 		    VM_MAP_PAGE_MASK(ipc_kernel_map));
 
-		kr = vm_map_unwire(
-			ipc_kernel_map,
-			vm_map_trunc_page(addr,
-			VM_MAP_PAGE_MASK(ipc_kernel_map)),
-			vm_map_round_page(addr + size_used,
-			VM_MAP_PAGE_MASK(ipc_kernel_map)),
-			FALSE);
+		if (size_used < vmsize_used) {
+			bzero((char *)addr + size_used, vmsize_used - size_used);
+		}
+
+		kr = vm_map_unwire(ipc_kernel_map, addr, addr + size_used, FALSE);
 		assert(kr == KERN_SUCCESS);
 
 		kr = vm_map_copyin(ipc_kernel_map, (vm_map_address_t)addr,
@@ -335,9 +325,9 @@ vm32_region_info(
  */
 
 kern_return_t
-vm32_region_info_64(
+vm32_mach_vm_region_info_64(
 	__DEBUG_ONLY vm_map_t                   map,
-	__DEBUG_ONLY vm32_offset_t              address,
+	__DEBUG_ONLY vm32_offset_ut             address_u,
 	__DEBUG_ONLY vm_info_region_64_t        *regionp,
 	__DEBUG_ONLY vm_info_object_array_t     *objectsp,
 	__DEBUG_ONLY mach_msg_type_number_t     *objectsCntp)
@@ -345,6 +335,8 @@ vm32_region_info_64(
 #if !MACH_VM_DEBUG
 	return KERN_FAILURE;
 #else
+	/* This unwrap is safe as this function is DEBUG only. */
+	vm32_offset_t address = VM_SANITIZE_UNSAFE_UNWRAP(address_u);
 	vm_map_copy_t copy;
 	vm_offset_t addr = 0;   /* memory for OOL data */
 	vm_size_t size;         /* size of the memory */
@@ -371,7 +363,7 @@ vm32_region_info_64(
 		for (cmap = map;; cmap = nmap) {
 			/* cmap is read-locked */
 
-			if (!vm_map_lookup_entry(cmap, address, &entry)) {
+			if (!vm_map_lookup_entry_allow_pgz(cmap, address, &entry)) {
 				entry = entry->vme_next;
 				if (entry == vm_map_to_entry(cmap)) {
 					vm_map_unlock_read(cmap);
@@ -437,7 +429,7 @@ vm32_region_info_64(
 				vio->vio_resident_page_count =
 				    cobject->resident_page_count;
 				vio->vio_copy =
-				    (natural_t)(uintptr_t) cobject->copy;
+				    (natural_t)(uintptr_t) cobject->vo_copy;
 				vio->vio_shadow =
 				    (natural_t)(uintptr_t) cobject->shadow;
 				vio->vio_shadow_offset =
@@ -497,21 +489,11 @@ vm32_region_info_64(
 		size = vm_map_round_page(2 * used * sizeof(vm_info_object_t),
 		    VM_MAP_PAGE_MASK(ipc_kernel_map));
 
-		kr = vm_allocate_kernel(ipc_kernel_map, &addr, size, VM_FLAGS_ANYWHERE, VM_KERN_MEMORY_IPC);
+		kr = kmem_alloc(ipc_kernel_map, &addr, size,
+		    KMA_DATA, VM_KERN_MEMORY_IPC);
 		if (kr != KERN_SUCCESS) {
 			return KERN_RESOURCE_SHORTAGE;
 		}
-
-		kr = vm_map_wire_kernel(
-			ipc_kernel_map,
-			vm_map_trunc_page(addr,
-			VM_MAP_PAGE_MASK(ipc_kernel_map)),
-			vm_map_round_page(addr + size,
-			VM_MAP_PAGE_MASK(ipc_kernel_map)),
-			VM_PROT_READ | VM_PROT_WRITE,
-			VM_KERN_MEMORY_IPC,
-			FALSE);
-		assert(kr == KERN_SUCCESS);
 	}
 
 	/* free excess memory; make remaining memory pageable */
@@ -527,13 +509,11 @@ vm32_region_info_64(
 		vm_size_t vmsize_used = vm_map_round_page(size_used,
 		    VM_MAP_PAGE_MASK(ipc_kernel_map));
 
-		kr = vm_map_unwire(
-			ipc_kernel_map,
-			vm_map_trunc_page(addr,
-			VM_MAP_PAGE_MASK(ipc_kernel_map)),
-			vm_map_round_page(addr + size_used,
-			VM_MAP_PAGE_MASK(ipc_kernel_map)),
-			FALSE);
+		if (size_used < vmsize_used) {
+			bzero((char *)addr + size_used, vmsize_used - size_used);
+		}
+
+		kr = vm_map_unwire(ipc_kernel_map, addr, addr + size_used, FALSE);
 		assert(kr == KERN_SUCCESS);
 
 		kr = vm_map_copyin(ipc_kernel_map, (vm_map_address_t)addr,
@@ -556,19 +536,22 @@ vm32_region_info_64(
  * Return an array of virtual pages that are mapped to a task.
  */
 kern_return_t
-vm32_mapped_pages_info(
+vm32_vm_mapped_pages_info(
 	__DEBUG_ONLY vm_map_t                   map,
 	__DEBUG_ONLY page_address_array_t       *pages,
 	__DEBUG_ONLY mach_msg_type_number_t     *pages_count)
 {
 #if !MACH_VM_DEBUG
 	return KERN_FAILURE;
+#elif 1 /* pmap_resident_count is gone with rdar://68290810 */
+	(void)map; (void)pages; (void)pages_count;
+	return KERN_FAILURE;
 #else
 	pmap_t          pmap;
 	vm_size_t       size, size_used;
 	unsigned int    actual, space;
 	page_address_array_t list;
-	vm_offset_t     addr = 0;
+	mach_vm_offset_t addr = 0;
 
 	if (map == VM_MAP_NULL) {
 		return KERN_INVALID_ARGUMENT;
@@ -580,7 +563,8 @@ vm32_mapped_pages_info(
 	    VM_MAP_PAGE_MASK(ipc_kernel_map));
 
 	for (;;) {
-		(void) vm_allocate_kernel(ipc_kernel_map, &addr, size, VM_FLAGS_ANYWHERE, VM_KERN_MEMORY_IPC);
+		(void) mach_vm_allocate_kernel(ipc_kernel_map, &addr, size,
+		    VM_MAP_KERNEL_FLAGS_ANYWHERE(.vm_tag = VM_KERN_MEMORY_IPC));
 		(void) vm_map_unwire(
 			ipc_kernel_map,
 			vm_map_trunc_page(addr,
@@ -697,8 +681,8 @@ host_virtual_physical_table_info(
 
 		size = vm_map_round_page(actual * sizeof *info,
 		    VM_MAP_PAGE_MASK(ipc_kernel_map));
-		kr = vm_allocate_kernel(ipc_kernel_map, &addr, size,
-		    VM_FLAGS_ANYWHERE, VM_KERN_MEMORY_IPC);
+		kr = kmem_alloc(ipc_kernel_map, &addr, size,
+		    KMA_PAGEABLE | KMA_DATA, VM_KERN_MEMORY_IPC);
 		if (kr != KERN_SUCCESS) {
 			return KERN_RESOURCE_SHORTAGE;
 		}

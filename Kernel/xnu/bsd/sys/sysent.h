@@ -38,13 +38,11 @@
 typedef int32_t sy_call_t(struct proc *, void *, int *);
 #if CONFIG_REQUIRES_U32_MUNGING
 typedef void    sy_munge_t(void *);
-#elif __arm__ && (__BIGGEST_ALIGNMENT__ > 4)
-typedef int     sy_munge_t(const void *, void *);
 #endif
 
 struct sysent {         /* system call table */
 	sy_call_t       *sy_call;       /* implementing function */
-#if CONFIG_REQUIRES_U32_MUNGING || (__arm__ && (__BIGGEST_ALIGNMENT__ > 4))
+#if CONFIG_REQUIRES_U32_MUNGING
 	sy_munge_t      *sy_arg_munge32; /* system call arguments munger for 32-bit process */
 #endif
 	int32_t         sy_return_type; /* system call return types */
@@ -54,10 +52,7 @@ struct sysent {         /* system call table */
 	                                 */
 };
 
-#ifndef __INIT_SYSENT_C__
-extern struct sysent sysent[];
-#endif  /* __INIT_SYSENT_C__ */
-
+extern const struct sysent sysent[];
 extern const unsigned int nsysent;
 
 /*

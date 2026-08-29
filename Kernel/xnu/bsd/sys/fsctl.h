@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2014 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -158,8 +158,6 @@ typedef struct namespace_handler_data {
 } namespace_handler_data;
 
 
-extern int resolve_nspace_item_ext(struct vnode *vp, uint64_t op, void *arg);
-
 #else
 
 typedef struct namespace_handler_info {
@@ -191,8 +189,9 @@ typedef struct namespace_handler_data {
 #ifdef KERNEL_PRIVATE
 
 #define NSPACE_REARM_NO_ARG ((void *)1)
-int resolve_nspace_item(struct vnode *vp, uint64_t op);
-int nspace_snapshot_event(vnode_t vp, time_t ctime, uint64_t op_type, void *arg);
+int vfs_materialize_file(struct vnode *vp, uint64_t op, int64_t offset, int64_t size);
+int vfs_materialize_dir(struct vnode *vp, uint64_t op, char *file_name, size_t namelen);
+int vfs_materialize_reparent(struct vnode *vp, struct vnode *tdvp);
 
 #endif // defined(KERNEL_PRIVATE)
 
@@ -212,6 +211,8 @@ int nspace_snapshot_event(vnode_t vp, time_t ctime, uint64_t op_type, void *arg)
 #define NAMESPACE_HANDLER_NSPACE_EVENT        0x1000
 #define NAMESPACE_HANDLER_SNAPSHOT_EVENT      0x0100
 #define NAMESPACE_HANDLER_TRACK_EVENT         0x2000
+
+#define NAMESPACE_HANDLER_LOOKUP_OP           0x4000
 
 #define NAMESPACE_HANDLER_EVENT_TYPE_MASK (NAMESPACE_HANDLER_NSPACE_EVENT | NAMESPACE_HANDLER_SNAPSHOT_EVENT | NAMESPACE_HANDLER_TRACK_EVENT)
 
@@ -278,6 +279,62 @@ struct fsioc_cas_bsdflags {
 	uint32_t actual_flags;          /* [OUT] the actual flags in inode */
 };
 
+#define FSIOC_GRAFT_VERSION          2
+
+/* Grafting flags */
+#define FSCTL_GRAFT_PRESERVE_MOUNT              0x0001  /* Preserve underlying mount until shutdown */
+#define FSCTL_GRAFT_ALTERNATE_SHARED_REGION     0x0002  /* Binaries within should use alternate shared region */
+#define FSCTL_GRAFT_SYSTEM_CONTENT              0x0004  /* Cryptex contains system content */
+#define FSCTL_GRAFT_PANIC_ON_AUTHFAIL           0x0008  /* On failure to authenticate, panic */
+#define FSCTL_GRAFT_STRICT_AUTH                 0x0010  /* Strict authentication mode */
+#define FSCTL_GRAFT_PRESERVE_GRAFT              0x0020  /* Preserve graft itself until unmount */
+
+/* Ungrafting flags */
+#define FSCTL_UNGRAFT_UNGRAFTALL                0x0001  /* Ungraft all currently grafted filesystems */
+
+#ifdef KERNEL
+
+typedef struct fsioc_graft_fs {
+	uint32_t graft_version;
+	uint32_t graft_type;
+	uint32_t graft_4cc;
+	uint64_t graft_flags;
+	uint64_t dir_ino;
+
+	void *authentic_manifest;
+	size_t authentic_manifest_size;
+	void *user_manifest;
+	size_t user_manifest_size;
+	void *payload;
+	size_t payload_size;
+} fsioc_graft_fs_t;
+
+typedef struct fsioc_ungraft_fs {
+	uint64_t ungraft_flags;
+} fsioc_ungraft_fs_t;
+
+/* auth fs flags */
+#define AUTH_FS_ALLOW_UNAUTH_ROOT_HASH          0x0001  /* Allow a sealed volume with an unauthenticated root hash */
+
+typedef struct fsioc_auth_fs {
+	vnode_t authvp;
+	uint64_t flags;
+} fsioc_auth_fs_t;
+
+#endif /* KERNEL */
+
+/* exclave fs filesystem tags */
+typedef enum {
+	EFT_EXCLAVE,
+	EFT_SYSTEM,
+	EFT_EXCLAVE_MAIN,
+	EFT_FS_NUM_TAGS,
+} exclave_fs_tag_t;
+
+typedef struct fsioc_exclave_fs_register {
+	uint32_t fs_tag;
+} fsioc_exclave_fs_register_t;
+
 #define FSCTL_SYNC_FULLSYNC     (1<<0)  /* Flush the data fully to disk, if supported by the filesystem */
 #define FSCTL_SYNC_WAIT         (1<<1)  /* Wait for the sync to complete */
 
@@ -326,6 +383,73 @@ struct fsioc_cas_bsdflags {
 /* Check if a file is only open once (pass zero for the extra arg) */
 #define FSIOC_FD_ONLY_OPEN_ONCE _IOWR('A', 21, uint32_t)
 
+#ifdef KERNEL
+
+/* Graft a filesystem onto a directory in its parent filesystem */
+#define FSIOC_GRAFT_FS _IOW('A', 22, fsioc_graft_fs_t)
+
+/* Ungraft filesystem(s) */
+#define FSIOC_UNGRAFT_FS _IOW('A', 23, fsioc_ungraft_fs_t)
+
+/* Check if a file is on an authenticated volume/Cryptex */
+#define FSIOC_AUTH_FS _IOW('A', 24, fsioc_auth_fs_t)
+
+#endif /* KERNEL */
+
+/* Register an exclave fs base directory */
+#define FSIOC_EXCLAVE_FS_REGISTER _IOW('A', 25, fsioc_exclave_fs_register_t)
+
+/* Unregister an exclave fs base directory (pass zero for the extra arg)  */
+#define FSIOC_EXCLAVE_FS_UNREGISTER _IOW('A', 26, uint32_t)
+
+typedef struct {
+	uint32_t fs_tag;       // exclave fs tag associated with base directory
+	fsid_t fsid;           // fsid of volume which contains base directory
+	uint64_t base_dir;     // inode number of base directory
+	uint64_t graft_file;   // inode number of graft file (0 if not a graft)
+} exclave_fs_base_dir_t;
+
+typedef struct {
+	uint32_t count;       // input: number of records that can be written to output buffer
+	                      // output: if output buffer is null, number of registered base dirs
+	                      //         if non-null, number of entries written to base_dirs buffer
+	exclave_fs_base_dir_t *base_dirs; // output buffer (base directory entries)
+} exclave_fs_get_base_dirs_t;
+
+#define EXCLAVE_FS_GET_BASE_DIRS_MAX_COUNT (10 * 1024)
+
+#define FSIOC_EXCLAVE_FS_GET_BASE_DIRS _IOWR('A', 27, exclave_fs_get_base_dirs_t)
+
+typedef struct {
+	uint64_t        gi_graft_file;            // inode number of graft file
+	uint64_t        gi_graft_dir;             // inode number of graft directory
+	uint64_t        gi_inum_base;             // base of inode range allocated to graft
+	uint64_t        gi_inum_len:56;           // length of inode range allocated to graft
+	uint64_t        gi_graft_lut_reduction:8; // reduction in lut size when switching to metadata based (in percents)
+	uint64_t        gi_graft_flags;           // FSCTL_GRAFT_* flags from bsd/sys/fsctl.h
+} fsioc_graft_info_t;
+
+typedef struct {
+	uint16_t        ggi_count;       // input: number of records that can be written to output buffer
+	                                 // output: if output buffer is null, number of grafts in volume
+	                                 // if non-null, number of records written to buffer
+	uint16_t        ggi_graft_index; // output: if inode is in a graft and buffer is not null,
+	                                 //         the index of the graft which contains this inode, 0 otherwise
+	uint8_t         ggi_is_in_graft; // output: 1 if inode in a graft, 0 otherwise
+	uint8_t         ggi_padding[3];  // padding, should be zero
+#ifdef KERNEL
+	user64_addr_t   ggi_buffer;      // graft info records buffer
+#else
+	void            *ggi_buffer;
+#if __SIZEOF_POINTER__ == 4
+	uint32_t        padding;
+#endif
+#endif
+} fsioc_get_graft_info_t;
+
+/* This used to be defined in APFS, we keep the group as 'J' for backward compatability */
+#define FSIOC_GET_GRAFT_INFO _IOWR('J', 102, fsioc_get_graft_info_t)
+
 //
 // Spotlight and fseventsd use these fsctl()'s to find out
 // the mount time of a volume and the last time it was
@@ -348,13 +472,23 @@ struct fsioc_cas_bsdflags {
 #define FSIOC_THAW_EXTENTS                              _IO('h', 21)
 #define FSCTL_THAW_EXTENTS                              IOCBASECMD(FSIOC_THAW_EXTENTS)
 
-/* this FSCTL selector is duplicated in XNU with the intent of making the VFS/generic one the only one eventually */
+/* Selectors on 'h' from 22 -> 49 are defined in HFS repo */
+
+#define FSIOC_EVAL_ROOTAUTH                              _IO('h', 50)
+#define FSCTL_EVAL_ROOTAUTH                              IOCBASECMD(FSIOC_EVAL_ROOTAUTH)
+
+/* This op should only be invoked from within the kernel */
+#define FSIOC_KERNEL_ROOTAUTH                            _IOW('h', 51, uint32_t)
+
 #define FIRMLINK_STRUCT_LEN 1032
 typedef struct generic_firmlink {
 	uint8_t array[FIRMLINK_STRUCT_LEN];
 } generic_firmlink_t;
 
 #define FSIOC_FIRMLINK_CTL _IOWR ('J', 60, generic_firmlink_t)
+
+/* For testing /dev/fsevents FSE_ACCESS_GRANTED. */
+#define FSIOC_TEST_FSE_ACCESS_GRANTED                    _IO('h', 52)
 
 #ifndef KERNEL
 
@@ -366,6 +500,5 @@ int     fsctl(const char *, unsigned long, void*, unsigned int);
 int     ffsctl(int, unsigned long, void*, unsigned int);
 
 __END_DECLS
-
 #endif /* !KERNEL */
 #endif /* !_SYS_FSCTL_H_ */

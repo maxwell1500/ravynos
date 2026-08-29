@@ -70,6 +70,29 @@ typedef unsigned int    u_bit32_t;      /* unsigned 32-bit quantity */
 /* Only 32 bits of the "bit64_t" are significant on this 32-bit machine */
 typedef struct { int __val[2]; } bit64_t;       /* signed 64-bit quantity */
 typedef struct { unsigned int __val[2]; } u_bit64_t;/* unsigned 64-bit quantity */
+
+/* Pointer-sized integers */
+typedef unsigned long   uintptr_t;
+typedef long            intptr_t;
+typedef unsigned int    u_int;
+typedef unsigned int    uint_t;
+typedef uint64_t        user_addr_t;
+typedef int64_t         user_saddr_t;
+typedef uint64_t        user_size_t;
+typedef uint32_t        user32_addr_t;
+typedef uint32_t        user32_size_t;
+typedef int64_t         user32_off_t;
+typedef uint64_t        user64_addr_t;
+typedef uint64_t        user64_size_t;
 #define _SIG64_BITS     __val[0]        /* bits of interest (32) */
+#define user_time_t int64_t
+#define user_long_t int64_t
+#define user32_time_t int32_t
+#define user64_time_t int64_t
+#define user64_long_t int64_t
+#define user32_long_t int32_t
+#define user32_ulong_t uint32_t
+#define user64_ulong_t uint64_t
+#define syscall_arg_t u_int64_t
 
 #endif /*  _MACH_MACHINE_TYPES_H_ */

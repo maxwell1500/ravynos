@@ -45,45 +45,12 @@ static mach_port_t sr_port;
 
 #pragma mark Mach receive
 
-static mach_voucher_t
-create_pthpriority_voucher(mach_msg_priority_t qos)
-{
-	char voucher_buf[sizeof(mach_voucher_attr_recipe_data_t) + sizeof(ipc_pthread_priority_value_t)];
-
-	mach_voucher_t voucher = MACH_PORT_NULL;
-	kern_return_t ret;
-	ipc_pthread_priority_value_t ipc_pthread_priority_value =
-	    (ipc_pthread_priority_value_t)qos;
-
-	mach_voucher_attr_raw_recipe_array_t recipes;
-	mach_voucher_attr_raw_recipe_size_t recipe_size = 0;
-	mach_voucher_attr_recipe_t recipe =
-	    (mach_voucher_attr_recipe_t)&voucher_buf[recipe_size];
-
-	recipe->key = MACH_VOUCHER_ATTR_KEY_PTHPRIORITY;
-	recipe->command = MACH_VOUCHER_ATTR_PTHPRIORITY_CREATE;
-	recipe->previous_voucher = MACH_VOUCHER_NULL;
-	memcpy((char *)&recipe->content[0], &ipc_pthread_priority_value, sizeof(ipc_pthread_priority_value));
-	recipe->content_size = sizeof(ipc_pthread_priority_value_t);
-	recipe_size += sizeof(mach_voucher_attr_recipe_data_t) + recipe->content_size;
-
-	recipes = (mach_voucher_attr_raw_recipe_array_t)&voucher_buf[0];
-
-	ret = host_create_mach_voucher(mach_host_self(),
-	    recipes,
-	    recipe_size,
-	    &voucher);
-
-	T_QUIET; T_ASSERT_MACH_SUCCESS(ret, "client host_create_mach_voucher");
-	return voucher;
-}
-
 static void
 send(
 	mach_port_t send_port,
 	mach_port_t reply_port,
 	mach_port_t msg_port,
-	mach_msg_priority_t qos,
+	mach_msg_priority_t priority,
 	mach_msg_option_t options,
 	int send_disposition)
 {
@@ -98,8 +65,7 @@ send(
 			.msgh_remote_port = send_port,
 			.msgh_local_port  = reply_port,
 			.msgh_bits        = MACH_MSGH_BITS_SET(send_disposition,
-	    reply_port ? MACH_MSG_TYPE_MAKE_SEND_ONCE : 0,
-	    MACH_MSG_TYPE_MOVE_SEND,
+	    reply_port ? MACH_MSG_TYPE_MAKE_SEND_ONCE : 0, 0,
 	    MACH_MSGH_BITS_COMPLEX),
 			.msgh_id          = 0x100,
 			.msgh_size        = sizeof(send_msg),
@@ -114,10 +80,6 @@ send(
 		},
 	};
 
-	if (options & MACH_SEND_SYNC_USE_THRPRI) {
-		send_msg.header.msgh_voucher_port = create_pthpriority_voucher(qos);
-	}
-
 	if (msg_port == MACH_PORT_NULL) {
 		send_msg.body.msgh_descriptor_count = 0;
 	}
@@ -126,12 +88,12 @@ send(
 	    MACH_SEND_MSG |
 	    MACH_SEND_TIMEOUT |
 	    MACH_SEND_OVERRIDE |
-	    ((reply_port ? MACH_SEND_SYNC_OVERRIDE : 0) | options),
+	    options,
 	    send_msg.header.msgh_size,
 	    0,
 	    MACH_PORT_NULL,
 	    10000,
-	    0);
+	    priority);
 
 	T_QUIET; T_ASSERT_MACH_SUCCESS(ret, "client mach_msg");
 }
@@ -509,7 +471,7 @@ register_workloop_for_port(
  * Create a port with sync IPC push and then pass the port to posix_spawn as a watch port and
  * test that spawned binary has the temp owner push of the port.
  */
-T_DECL(posix_spawn_basic_priority, "Basic posix spawn temp owner priority test", T_META_ASROOT(YES))
+T_DECL(posix_spawn_basic_priority, "Basic posix spawn temp owner priority test", T_META_ASROOT(YES), T_META_TAG_VM_PREFERRED)
 {
 	mach_port_t port;
 	pid_t pid;
@@ -532,7 +494,7 @@ T_DECL(posix_spawn_basic_priority, "Basic posix spawn temp owner priority test",
  * test that spawned binary has the temp owner push of the port. The spawned binary will exec
  * and verify that it still has the push.
  */
-T_DECL(posix_spawn_exec_basic_priority, "Basic posix spawn/exec temp owner priority test", T_META_ASROOT(YES))
+T_DECL(posix_spawn_exec_basic_priority, "Basic posix spawn/exec temp owner priority test", T_META_ASROOT(YES), T_META_TAG_VM_PREFERRED)
 {
 	mach_port_t port;
 	pid_t pid;
@@ -555,7 +517,7 @@ T_DECL(posix_spawn_exec_basic_priority, "Basic posix spawn/exec temp owner prior
  * test that spawned binary has the temp owner push of the port. The spawned binary will
  * posix_spawn set exec and verify that it still has the push.
  */
-T_DECL(posix_spawn_set_exec_basic_priority, "Basic posix spawn set exec temp owner priority test", T_META_ASROOT(YES))
+T_DECL(posix_spawn_set_exec_basic_priority, "Basic posix spawn set exec temp owner priority test", T_META_ASROOT(YES), T_META_TAG_VM_PREFERRED)
 {
 	mach_port_t port;
 	pid_t pid;
@@ -578,7 +540,7 @@ T_DECL(posix_spawn_set_exec_basic_priority, "Basic posix spawn set exec temp own
  * test that spawned binary has the temp owner push of the port. The spawned binary already
  * having the temp owner push will try to do set exec with watchports which should fail.
  */
-T_DECL(posix_spawn_set_exec_with_more_ports, "posix spawn set exec with more watch ports", T_META_ASROOT(YES))
+T_DECL(posix_spawn_set_exec_with_more_ports, "posix spawn set exec with more watch ports", T_META_ASROOT(YES), T_META_TAG_VM_PREFERRED)
 {
 	mach_port_t port;
 	pid_t pid;
@@ -601,7 +563,7 @@ T_DECL(posix_spawn_set_exec_with_more_ports, "posix spawn set exec with more wat
  * pass the same port as a watchport to another posix_spawn and verify that the boost was
  * transferred to the new process.
  */
-T_DECL(posix_spawn_multiple, "multiple posix_spawn with same watchport", T_META_ASROOT(YES))
+T_DECL(posix_spawn_multiple, "multiple posix_spawn with same watchport", T_META_ASROOT(YES), T_META_TAG_VM_PREFERRED)
 {
 	mach_port_t port;
 	pid_t pid1, pid2;
@@ -632,7 +594,7 @@ T_DECL(posix_spawn_multiple, "multiple posix_spawn with same watchport", T_META_
  * test that spawned binary has the temp owner push of the port. Destroy the port and verify
  * the temp owner push has gone away.
  */
-T_DECL(posix_spawn_dead_reply_port, "posix spawn with reply port destory", T_META_ASROOT(YES))
+T_DECL(posix_spawn_dead_reply_port, "posix spawn with reply port destory", T_META_ASROOT(YES), T_META_TAG_VM_PREFERRED)
 {
 	mach_port_t port;
 	kern_return_t kr;
@@ -663,7 +625,7 @@ T_DECL(posix_spawn_dead_reply_port, "posix spawn with reply port destory", T_MET
  * test that spawned binary has the temp owner push of the port. Destroy the port and verify
  * the temp owner push has gone.
  */
-T_DECL(posix_spawn_dead_port, "posix spawn with port destory", T_META_ASROOT(YES))
+T_DECL(posix_spawn_dead_port, "posix spawn with port destory", T_META_ASROOT(YES), T_META_TAG_VM_PREFERRED)
 {
 	mach_port_t port;
 	kern_return_t kr;
@@ -691,7 +653,7 @@ T_DECL(posix_spawn_dead_port, "posix spawn with port destory", T_META_ASROOT(YES
  * test that spawned binary has the temp owner push of the port. Copyin the port and verify
  * the temp owner push has gone.
  */
-T_DECL(posix_spawn_copyin_port, "posix spawn with copyin port", T_META_ASROOT(YES))
+T_DECL(posix_spawn_copyin_port, "posix spawn with copyin port", T_META_ASROOT(YES), T_META_TAG_VM_PREFERRED)
 {
 	mach_port_t port;
 	pid_t pid;
@@ -720,7 +682,7 @@ T_DECL(posix_spawn_copyin_port, "posix spawn with copyin port", T_META_ASROOT(YE
  * test that spawned binary has the temp owner push of the ports. Copyin ports one by one and verify
  * the push has gone.
  */
-T_DECL(posix_spawn_multiple_port, "posix spawn with multiple ports", T_META_ASROOT(YES))
+T_DECL(posix_spawn_multiple_port, "posix spawn with multiple ports", T_META_ASROOT(YES), T_META_TAG_VM_PREFERRED)
 {
 	mach_port_t port[2];
 	pid_t pid;
@@ -756,7 +718,7 @@ T_DECL(posix_spawn_multiple_port, "posix spawn with multiple ports", T_META_ASRO
  * servicer pass the port to posix_spawn as a watch port and test that spawned binary has the temp owner
  * push of the port and the servicer looses the boost.
  */
-T_DECL(posix_spawn_knote, "posix spawn with temp owner port attached to knote", T_META_ASROOT(YES))
+T_DECL(posix_spawn_knote, "posix spawn with temp owner port attached to knote", T_META_ASROOT(YES), T_META_TAG_VM_PREFERRED)
 {
 	mach_port_t port;
 
@@ -766,7 +728,8 @@ T_DECL(posix_spawn_knote, "posix spawn with temp owner port attached to knote", 
 	register_workloop_for_port(port, workloop_cb_test_intransit, MACH_RCV_OPTIONS);
 
 	/* send a message on port to activate workloop handler */
-	send(port, MACH_PORT_NULL, MACH_PORT_NULL, QOS_CLASS_DEFAULT, 0, MACH_MSG_TYPE_COPY_SEND);
+	send(port, MACH_PORT_NULL, MACH_PORT_NULL,
+	    mach_msg_priority_encode(0, THREAD_QOS_LEGACY, 0), 0, MACH_MSG_TYPE_COPY_SEND);
 	sigsuspend(0);
 }
 
@@ -778,7 +741,7 @@ T_DECL(posix_spawn_knote, "posix spawn with temp owner port attached to knote", 
  * push of the port and the servicer looses the boost, verify that once the spawned binary dies, the servicer
  * gets the push.
  */
-T_DECL(posix_spawn_knote_ret, "posix spawn with temp owner port attached to knote with spawned binary dead", T_META_ASROOT(YES))
+T_DECL(posix_spawn_knote_ret, "posix spawn with temp owner port attached to knote with spawned binary dead", T_META_ASROOT(YES), T_META_TAG_VM_PREFERRED)
 {
 	mach_port_t port;
 
@@ -787,7 +750,8 @@ T_DECL(posix_spawn_knote_ret, "posix spawn with temp owner port attached to knot
 	register_workloop_for_port(port, workloop_cb_test_knote_kill, MACH_RCV_OPTIONS);
 
 	/* send a message on port to activate workloop handler */
-	send(port, MACH_PORT_NULL, MACH_PORT_NULL, QOS_CLASS_DEFAULT, 0, MACH_MSG_TYPE_COPY_SEND);
+	send(port, MACH_PORT_NULL, MACH_PORT_NULL,
+	    mach_msg_priority_encode(0, THREAD_QOS_LEGACY, 0), 0, MACH_MSG_TYPE_COPY_SEND);
 	sigsuspend(0);
 }
 
@@ -799,7 +763,7 @@ T_DECL(posix_spawn_knote_ret, "posix spawn with temp owner port attached to knot
  * push of the port and the servicer looses the boost, the spawn binary then does a sync bootstrap_checkin
  * with test binary to get the receive right and verify that is still has the boost.
  */
-T_DECL(mach_msg_sync_boostrap_checkin, "test mach msg option for sync bootstrap_checkin", T_META_ASROOT(YES))
+T_DECL(mach_msg_sync_boostrap_checkin, "test mach msg option for sync bootstrap_checkin", T_META_ASROOT(YES), T_META_TAG_VM_PREFERRED)
 {
 	mach_port_t port;
 	mach_port_t sync_port;
@@ -833,6 +797,7 @@ T_DECL(mach_msg_sync_boostrap_checkin, "test mach msg option for sync bootstrap_
 	T_QUIET; T_ASSERT_MACH_SUCCESS(kr, "mach_msg_sync_boostrap_checkin mach_ports_register");
 
 	/* send a message on port to activate workloop handler */
-	send(port, MACH_PORT_NULL, MACH_PORT_NULL, QOS_CLASS_DEFAULT, 0, MACH_MSG_TYPE_COPY_SEND);
+	send(port, MACH_PORT_NULL, MACH_PORT_NULL,
+	    mach_msg_priority_encode(0, THREAD_QOS_LEGACY, 0), 0, MACH_MSG_TYPE_COPY_SEND);
 	sigsuspend(0);
 }

@@ -26,9 +26,13 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
+#define IOKIT_ENABLE_SHARED_PTR
+
 #include <libkern/c++/OSDictionary.h>
-#include <libkern/c++/OSOrderedSet.h>
 #include <libkern/c++/OSLib.h>
+#include <libkern/c++/OSOrderedSet.h>
+#include <libkern/c++/OSSharedPtr.h>
+#include <os/cpp_util.h>
 
 #define super OSCollection
 
@@ -44,8 +48,7 @@ OSMetaClassDefineReservedUnused(OSOrderedSet, 7);
 
 
 struct _Element {
-	const OSMetaClassBase *             obj;
-//    unsigned int	pri;
+	OSTaggedPtr<const OSMetaClassBase> obj;
 };
 
 #define EXT_CAST(obj) \
@@ -56,8 +59,6 @@ OSOrderedSet::
 initWithCapacity(unsigned int inCapacity,
     OSOrderFunction inOrdering, void *inOrderingRef)
 {
-	unsigned int size;
-
 	if (!super::init()) {
 		return false;
 	}
@@ -66,8 +67,7 @@ initWithCapacity(unsigned int inCapacity,
 		return false;
 	}
 
-	size = sizeof(_Element) * inCapacity;
-	array = (_Element *) kalloc_container(size);
+	array = kallocp_type_container(_Element, &inCapacity, Z_WAITOK_ZERO);
 	if (!array) {
 		return false;
 	}
@@ -78,22 +78,43 @@ initWithCapacity(unsigned int inCapacity,
 	ordering = inOrdering;
 	orderingRef = inOrderingRef;
 
-	bzero(array, size);
-	OSCONTAINER_ACCUMSIZE(size);
+	OSCONTAINER_ACCUMSIZE(sizeof(_Element) * inCapacity);
 
 	return true;
 }
 
-OSOrderedSet *
+OSSharedPtr<OSOrderedSet>
 OSOrderedSet::
 withCapacity(unsigned int capacity,
     OSOrderFunction ordering, void * orderingRef)
 {
-	OSOrderedSet *me = new OSOrderedSet;
+	auto me = OSMakeShared<OSOrderedSet>();
 
 	if (me && !me->initWithCapacity(capacity, ordering, orderingRef)) {
-		me->release();
-		me = NULL;
+		return nullptr;
+	}
+
+	return me;
+}
+
+static SInt32
+OSOrderedSetBlockToFunc(const OSMetaClassBase * obj1,
+    const OSMetaClassBase * obj2,
+    void * context)
+{
+	OSOrderedSet::OSOrderBlock ordering = (typeof(ordering))context;
+
+	return ordering(obj1, obj2);
+}
+
+
+OSSharedPtr<OSOrderedSet>
+OSOrderedSet::withCapacity(unsigned int capacity, OSOrderBlock ordering)
+{
+	auto me = OSMakeShared<OSOrderedSet>();
+
+	if (me && !me->initWithCapacity(capacity, &OSOrderedSetBlockToFunc, ordering)) {
+		return nullptr;
 	}
 
 	return me;
@@ -106,7 +127,7 @@ OSOrderedSet::free()
 	flushCollection();
 
 	if (array) {
-		kfree(array, sizeof(_Element) * capacity);
+		kfree_type(_Element, capacity, array);
 		OSCONTAINER_ACCUMSIZE( -(sizeof(_Element) * capacity));
 	}
 
@@ -140,7 +161,6 @@ OSOrderedSet::ensureCapacity(unsigned int newCapacity)
 {
 	_Element *newArray;
 	unsigned int finalCapacity;
-	vm_size_t    oldSize, newSize;
 
 	if (newCapacity <= capacity) {
 		return capacity;
@@ -149,24 +169,14 @@ OSOrderedSet::ensureCapacity(unsigned int newCapacity)
 	// round up
 	finalCapacity = (((newCapacity - 1) / capacityIncrement) + 1)
 	    * capacityIncrement;
-	if ((finalCapacity < newCapacity) ||
-	    (finalCapacity > (UINT_MAX / sizeof(_Element)))) {
+	if (finalCapacity < newCapacity) {
 		return capacity;
 	}
-	newSize = sizeof(_Element) * finalCapacity;
 
-	newArray = (_Element *) kallocp_container(&newSize);
+	newArray = kreallocp_type_container(_Element, array,
+	    capacity, &finalCapacity, Z_WAITOK_ZERO);
 	if (newArray) {
-		// use all of the actual allocation size
-		finalCapacity = newSize / sizeof(_Element);
-
-		oldSize = sizeof(_Element) * capacity;
-
-		OSCONTAINER_ACCUMSIZE(((size_t)newSize) - ((size_t)oldSize));
-
-		bcopy(array, newArray, oldSize);
-		bzero(&newArray[capacity], newSize - oldSize);
-		kfree(array, oldSize);
+		OSCONTAINER_ACCUMSIZE(sizeof(_Element) * (finalCapacity - capacity));
 		array = newArray;
 		capacity = finalCapacity;
 	}
@@ -182,7 +192,7 @@ OSOrderedSet::flushCollection()
 	haveUpdated();
 
 	for (i = 0; i < count; i++) {
-		array[i].obj->taggedRelease(OSTypeID(OSCollection));
+		array[i].obj.reset();
 	}
 
 	count = 0;
@@ -211,17 +221,20 @@ OSOrderedSet::setObject(unsigned int index, const OSMetaClassBase *anObject)
 	haveUpdated();
 	if (index != count) {
 		for (i = count; i > index; i--) {
-			array[i] = array[i - 1];
+			array[i] = os::move(array[i - 1]);
 		}
 	}
-	array[index].obj = anObject;
-//    array[index].pri = pri;
-	anObject->taggedRetain(OSTypeID(OSCollection));
+	array[index].obj.reset(anObject, OSRetain);
 	count++;
 
 	return true;
 }
 
+bool
+OSOrderedSet::setObject(unsigned int index, OSSharedPtr<const OSMetaClassBase> const& anObject)
+{
+	return setObject(index, anObject.get());
+}
 
 bool
 OSOrderedSet::setFirstObject(const OSMetaClassBase *anObject)
@@ -230,9 +243,21 @@ OSOrderedSet::setFirstObject(const OSMetaClassBase *anObject)
 }
 
 bool
+OSOrderedSet::setFirstObject(OSSharedPtr<const OSMetaClassBase> const& anObject)
+{
+	return setFirstObject(anObject.get());
+}
+
+bool
 OSOrderedSet::setLastObject(const OSMetaClassBase *anObject)
 {
 	return setObject( count, anObject);
+}
+
+bool
+OSOrderedSet::setLastObject(OSSharedPtr<const OSMetaClassBase> const& anObject)
+{
+	return setLastObject(anObject.get());
 }
 
 
@@ -246,11 +271,17 @@ OSOrderedSet::setObject(const OSMetaClassBase *anObject )
 
 	// queue it behind those with same priority
 	for (i = 0;
-	    (i < count) && (ORDER(array[i].obj, anObject) >= 0);
+	    (i < count) && (ORDER(array[i].obj.get(), anObject) >= 0);
 	    i++) {
 	}
 
 	return setObject(i, anObject);
+}
+
+bool
+OSOrderedSet::setObject(OSSharedPtr<const OSMetaClassBase> const& anObject)
+{
+	return setObject(anObject.get());
 }
 
 void
@@ -261,17 +292,23 @@ OSOrderedSet::removeObject(const OSMetaClassBase *anObject)
 
 	for (i = 0; i < count; i++) {
 		if (deleted) {
-			array[i - 1] = array[i];
+			array[i - 1] = os::move(array[i]);
 		} else if (array[i].obj == anObject) {
 			deleted = true;
 			haveUpdated(); // Pity we can't flush the log
-			array[i].obj->taggedRelease(OSTypeID(OSCollection));
+			array[i].obj.reset();
 		}
 	}
 
 	if (deleted) {
 		count--;
 	}
+}
+
+void
+OSOrderedSet::removeObject(OSSharedPtr<const OSMetaClassBase> const& anObject)
+{
+	return removeObject(anObject.get());
 }
 
 bool
@@ -301,17 +338,14 @@ OSOrderedSet::getObject( unsigned int index ) const
 		return NULL;
 	}
 
-//    if( pri)
-//	*pri = array[index].pri;
-
-	return const_cast<OSObject *>((const OSObject *) array[index].obj);
+	return const_cast<OSObject *>((const OSObject *) array[index].obj.get());
 }
 
 OSObject *
 OSOrderedSet::getFirstObject() const
 {
 	if (count) {
-		return const_cast<OSObject *>((const OSObject *) array[0].obj);
+		return const_cast<OSObject *>((const OSObject *) array[0].obj.get());
 	} else {
 		return NULL;
 	}
@@ -321,7 +355,7 @@ OSObject *
 OSOrderedSet::getLastObject() const
 {
 	if (count) {
-		return const_cast<OSObject *>((const OSObject *) array[count - 1].obj);
+		return const_cast<OSObject *>((const OSObject *) array[count - 1].obj.get());
 	} else {
 		return NULL;
 	}
@@ -397,7 +431,7 @@ getNextObjectForIterator(void *inIterator, OSObject **ret) const
 	unsigned int index = (*iteratorP)++;
 
 	if (index < count) {
-		*ret = const_cast<OSObject *>((const OSObject *) array[index].obj);
+		*ret = const_cast<OSObject *>((const OSObject *) array[index].obj.get());
 	} else {
 		*ret = NULL;
 	}
@@ -413,7 +447,7 @@ OSOrderedSet::setOptions(unsigned options, unsigned mask, void *)
 	if ((old ^ options) & mask) {
 		// Value changed need to recurse over all of the child collections
 		for (unsigned i = 0; i < count; i++) {
-			OSCollection *coll = OSDynamicCast(OSCollection, array[i].obj);
+			OSCollection *coll = OSDynamicCast(OSCollection, array[i].obj.get());
 			if (coll) {
 				coll->setOptions(options, mask);
 			}
@@ -423,18 +457,19 @@ OSOrderedSet::setOptions(unsigned options, unsigned mask, void *)
 	return old;
 }
 
-OSCollection *
+OSSharedPtr<OSCollection>
 OSOrderedSet::copyCollection(OSDictionary *cycleDict)
 {
-	bool allocDict = !cycleDict;
-	OSCollection *ret = NULL;
-	OSOrderedSet *newSet = NULL;
+	OSSharedPtr<OSDictionary> ourCycleDict;
+	OSSharedPtr<OSCollection> ret;
+	OSSharedPtr<OSOrderedSet> newSet;
 
-	if (allocDict) {
-		cycleDict = OSDictionary::withCapacity(16);
-		if (!cycleDict) {
-			return NULL;
+	if (!cycleDict) {
+		ourCycleDict = OSDictionary::withCapacity(16);
+		if (!ourCycleDict) {
+			return nullptr;
 		}
+		cycleDict = ourCycleDict.get();
 	}
 
 	do {
@@ -451,40 +486,28 @@ OSOrderedSet::copyCollection(OSDictionary *cycleDict)
 		}
 
 		// Insert object into cycle Dictionary
-		cycleDict->setObject((const OSSymbol *) this, newSet);
+		cycleDict->setObject((const OSSymbol *) this, newSet.get());
 
 		newSet->capacityIncrement = capacityIncrement;
 
 		// Now copy over the contents to the new duplicate
 		for (unsigned int i = 0; i < count; i++) {
-			OSObject *obj = EXT_CAST(array[i].obj);
+			OSObject *obj = EXT_CAST(array[i].obj.get());
 			OSCollection *coll = OSDynamicCast(OSCollection, obj);
 			if (coll) {
-				OSCollection *newColl = coll->copyCollection(cycleDict);
+				OSSharedPtr<OSCollection> newColl = coll->copyCollection(cycleDict);
 				if (newColl) {
-					obj = newColl; // Rely on cycleDict ref for a bit
-					newColl->release();
+					obj = newColl.get(); // Rely on cycleDict ref for a bit
 				} else {
-					goto abortCopy;
+					return ret;
 				}
 			}
-			;
+
 			newSet->setLastObject(obj);
 		}
-		;
 
-		ret = newSet;
-		newSet = NULL;
+		ret = os::move(newSet);
 	} while (false);
-
-abortCopy:
-	if (newSet) {
-		newSet->release();
-	}
-
-	if (allocDict) {
-		cycleDict->release();
-	}
 
 	return ret;
 }

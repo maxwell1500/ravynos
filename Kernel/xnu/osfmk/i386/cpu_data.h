@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2023 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -35,6 +35,7 @@
 
 #include <mach_assert.h>
 #include <machine/atomic.h>
+#include <machine/monotonic.h>
 
 #include <kern/assert.h>
 #include <kern/kern_types.h>
@@ -56,9 +57,7 @@
 #include <i386/vmx/vmx_cpu.h>
 #endif
 
-#if MONOTONIC
-#include <machine/monotonic.h>
-#endif /* MONOTONIC */
+#include <san/kcov_data.h>
 
 #include <machine/pal_routines.h>
 
@@ -126,25 +125,6 @@ typedef struct {
 } plrecord_t;
 
 #if     DEVELOPMENT || DEBUG
-typedef enum {
-	IOTRACE_PHYS_READ = 1,
-	IOTRACE_PHYS_WRITE,
-	IOTRACE_IO_READ,
-	IOTRACE_IO_WRITE,
-	IOTRACE_PORTIO_READ,
-	IOTRACE_PORTIO_WRITE
-} iotrace_type_e;
-
-typedef struct {
-	iotrace_type_e  iotype;
-	int             size;
-	uint64_t        vaddr;
-	uint64_t        paddr;
-	uint64_t        val;
-	uint64_t        start_time_abs;
-	uint64_t        duration;
-	uint64_t        backtrace[MAX_TRACE_BTFRAMES];
-} iotrace_entry_t;
 
 typedef struct {
 	int             vector;                 /* Vector number of interrupt */
@@ -157,22 +137,13 @@ typedef struct {
 	uint64_t        backtrace[MAX_TRACE_BTFRAMES];
 } traptrace_entry_t;
 
-#define DEFAULT_IOTRACE_ENTRIES_PER_CPU (64)
-#define IOTRACE_MAX_ENTRIES_PER_CPU (256)
-extern volatile int mmiotrace_enabled;
-extern int iotrace_generators;
-extern int iotrace_entries_per_cpu;
-extern int *iotrace_next;
-extern iotrace_entry_t **iotrace_ring;
-
 #define TRAPTRACE_INVALID_INDEX (~0U)
 #define DEFAULT_TRAPTRACE_ENTRIES_PER_CPU (16)
 #define TRAPTRACE_MAX_ENTRIES_PER_CPU (256)
 extern volatile int traptrace_enabled;
-extern int traptrace_generators;
-extern int traptrace_entries_per_cpu;
-extern int *traptrace_next;
-extern traptrace_entry_t **traptrace_ring;
+extern uint32_t traptrace_entries_per_cpu;
+PERCPU_DECL(uint32_t, traptrace_next);
+PERCPU_DECL(traptrace_entry_t * __unsafe_indexable, traptrace_ring);
 #endif /* DEVELOPMENT || DEBUG */
 
 /*
@@ -199,6 +170,7 @@ typedef struct cpu_data {
 	struct pal_cpu_data     cpu_pal_data;           /* PAL-specific data */
 #define                         cpu_pd cpu_pal_data     /* convenience alias */
 	struct cpu_data         *cpu_this;              /* pointer to myself */
+	vm_offset_t             cpu_pcpu_base;
 	thread_t                cpu_active_thread;
 	thread_t                cpu_nthread;
 	int                     cpu_number;             /* Logical CPU */
@@ -220,11 +192,10 @@ typedef struct cpu_data {
 	int                     cpu_interrupt_level;
 	volatile int            cpu_preemption_level;
 	volatile int            cpu_running;
-#if !MONOTONIC
+#if !CONFIG_CPU_COUNTERS
 	boolean_t               cpu_fixed_pmcs_enabled;
-#endif /* !MONOTONIC */
+#endif /* !CONFIG_CPU_COUNTERS */
 	rtclock_timer_t         rtclock_timer;
-	uint64_t                quantum_timer_deadline;
 	volatile addr64_t       cpu_active_cr3 __attribute((aligned(64)));
 	union {
 		volatile uint32_t cpu_tlb_invalid;
@@ -262,20 +233,10 @@ typedef struct cpu_data {
 	uint16_t                cpu_tlb_gen_counts_global[MAX_CPUS];
 
 	struct processor        *cpu_processor;
-#if NCOPY_WINDOWS > 0
-	struct cpu_pmap         *cpu_pmap;
-#endif
 	struct real_descriptor  *cpu_ldtp;
 	struct cpu_desc_table   *cpu_desc_tablep;
 	cpu_desc_index_t        cpu_desc_index;
 	int                     cpu_ldt;
-#if NCOPY_WINDOWS > 0
-	vm_offset_t             cpu_copywindow_base;
-	uint64_t                *cpu_copywindow_pdp;
-
-	vm_offset_t             cpu_physwindow_base;
-	uint64_t                *cpu_physwindow_ptep;
-#endif
 
 #define HWINTCNT_SIZE 256
 	uint32_t                cpu_hwIntCnt[HWINTCNT_SIZE];    /* Interrupt counts */
@@ -283,16 +244,14 @@ typedef struct cpu_data {
 	uint64_t                cpu_dr7; /* debug control register */
 	uint64_t                cpu_int_event_time;     /* intr entry/exit time */
 	pal_rtc_nanotime_t      *cpu_nanotime;          /* Nanotime info */
-#if KPC
+#if CONFIG_CPU_COUNTERS
 	/* double-buffered performance counter data */
 	uint64_t                *cpu_kpc_buf[2];
 	/* PMC shadow and reload value buffers */
 	uint64_t                *cpu_kpc_shadow;
 	uint64_t                *cpu_kpc_reload;
-#endif
-#if MONOTONIC
 	struct mt_cpu cpu_monotonic;
-#endif /* MONOTONIC */
+#endif /* CONFIG_CPU_COUNTERS */
 	uint32_t                cpu_pmap_pcid_enabled;
 	pcid_t                  cpu_active_pcid;
 	pcid_t                  cpu_last_pcid;
@@ -313,13 +272,19 @@ typedef struct cpu_data {
 	uint64_t                cpu_rtime_total;
 	uint64_t                cpu_ixtime;
 	uint64_t                cpu_idle_exits;
+	/*
+	 * Note that the cacheline-copy mechanism uses the cpu_rtimes field in the shadow CPU
+	 * structures to temporarily stash the code cacheline that includes the instruction
+	 * pointer at the time of the fault (this field is otherwise unused in the shadow
+	 * CPU structures).
+	 */
 	uint64_t                cpu_rtimes[CPU_RTIME_BINS];
 	uint64_t                cpu_itimes[CPU_ITIME_BINS];
-#if !MONOTONIC
+#if !CONFIG_CPU_COUNTERS
 	uint64_t                cpu_cur_insns;
 	uint64_t                cpu_cur_ucc;
 	uint64_t                cpu_cur_urc;
-#endif /* !MONOTONIC */
+#endif /* !CONFIG_CPU_COUNTERS */
 	uint64_t                cpu_gpmcs[4];
 	uint64_t                cpu_max_observed_int_latency;
 	int                     cpu_max_observed_int_latency_vector;
@@ -352,7 +317,6 @@ typedef struct cpu_data {
 	int                     cpu_plri;
 	plrecord_t              plrecords[MAX_PREEMPTION_RECORDS];
 #endif
-	void                    *cpu_console_buf;
 	struct x86_lcpu         lcpu;
 	int                     cpu_phys_number;        /* Physical CPU */
 	cpu_id_t                cpu_id;                 /* Platform Expert */
@@ -362,76 +326,35 @@ typedef struct cpu_data {
 	uint64_t                cpu_pcid_last_cr3;
 #endif
 	boolean_t               cpu_rendezvous_in_progress;
+#if CST_DEMOTION_DEBUG
+	/* Count of thread wakeups issued by this processor */
+	uint64_t                cpu_wakeups_issued_total;
+#endif
+#if DEBUG || DEVELOPMENT
+	uint64_t                tsc_sync_delta;
+#endif
+	uint32_t                cpu_soft_apic_lvt_timer;
+#if CONFIG_KCOV
+	kcov_cpu_data_t         cpu_kcov_data;
+#endif
 } cpu_data_t;
 
-extern cpu_data_t       *cpu_data_ptr[];
+extern cpu_data_t *__single cpu_data_ptr[MAX_CPUS];
 
-/* Macro to generate inline bodies to retrieve per-cpu data fields. */
-#if defined(__clang__)
-#define GS_RELATIVE volatile __attribute__((address_space(256)))
-#ifndef offsetof
-#define offsetof(TYPE, MEMBER) __builtin_offsetof(TYPE,MEMBER)
+/*
+ * __SEG_GS marks %gs-relative operations:
+ *   https://clang.llvm.org/docs/LanguageExtensions.html#memory-references-to-specified-segments
+ *   https://gcc.gnu.org/onlinedocs/gcc/Named-Address-Spaces.html#x86-Named-Address-Spaces
+ */
+#if defined(__SEG_GS)
+// __seg_gs exists
+#elif defined(__clang__)
+#define __seg_gs __attribute__((address_space(256)))
+#else
+#error use a compiler that supports address spaces or __seg_gs
 #endif
 
-#define CPU_DATA_GET(member, type)                                                                               \
-	cpu_data_t GS_RELATIVE *cpu_data =                                                      \
-	        (cpu_data_t GS_RELATIVE *)0UL;                                                                  \
-	type ret;                                                                                                                       \
-	ret = cpu_data->member;                                                                                         \
-	return ret;
-
-#define CPU_DATA_GET_INDEX(member, index, type)                                                   \
-	cpu_data_t GS_RELATIVE *cpu_data =                                                      \
-	        (cpu_data_t GS_RELATIVE *)0UL;                                                                  \
-	type ret;                                                                                                                       \
-	ret = cpu_data->member[index];                                                                          \
-	return ret;
-
-#define CPU_DATA_SET(member, value)                                                                              \
-	cpu_data_t GS_RELATIVE *cpu_data =                                                      \
-	        (cpu_data_t GS_RELATIVE *)0UL;                                                                  \
-	cpu_data->member = value;
-
-#define CPU_DATA_XCHG(member, value, type)                                                                \
-	cpu_data_t GS_RELATIVE *cpu_data =                                                      \
-	        (cpu_data_t GS_RELATIVE *)0UL;                                                                  \
-	type ret;                                                                                                                       \
-	ret = cpu_data->member;                                                                                         \
-	cpu_data->member = value;                                                                                       \
-	return ret;
-
-#else /* !defined(__clang__) */
-
-#ifndef offsetof
-#define offsetof(TYPE, MEMBER) ((size_t) &((TYPE *)0)->MEMBER)
-#endif /* offsetof */
-#define CPU_DATA_GET(member, type)                                       \
-	type ret;                                                       \
-	__asm__ volatile ("mov %%gs:%P1,%0"                             \
-	        : "=r" (ret)                                            \
-	        : "i" (offsetof(cpu_data_t,member)));                   \
-	return ret;
-
-#define CPU_DATA_GET_INDEX(member, index, type)   \
-	type ret;                                                       \
-	__asm__ volatile ("mov %%gs:(%1),%0"                            \
-	        : "=r" (ret)                                            \
-	        : "r" (offsetof(cpu_data_t,member[index])));                    \
-	return ret;
-
-#define CPU_DATA_SET(member, value)                                      \
-	__asm__ volatile ("mov %0,%%gs:%P1"                             \
-	        :                                                       \
-	        : "r" (value), "i" (offsetof(cpu_data_t,member)));
-
-#define CPU_DATA_XCHG(member, value, type)                                \
-	type ret;                                                       \
-	__asm__ volatile ("xchg %0,%%gs:%P1"                            \
-	        : "=r" (ret)                                            \
-	        : "i" (offsetof(cpu_data_t,member)), "0" (value));      \
-	return ret;
-
-#endif /* !defined(__clang__) */
+#define CPU_DATA()            ((cpu_data_t __seg_gs *)0UL)
 
 /*
  * Everyone within the osfmk part of the kernel can use the fast
@@ -458,46 +381,50 @@ extern cpu_data_t       *cpu_data_ptr[];
 static inline thread_t
 get_active_thread_volatile(void)
 {
-	CPU_DATA_GET(cpu_active_thread, thread_t)
+	return CPU_DATA()->cpu_active_thread;
 }
 
 static inline __attribute__((const)) thread_t
 get_active_thread(void)
 {
-	CPU_DATA_GET(cpu_active_thread, thread_t)
+	return CPU_DATA()->cpu_active_thread;
 }
 
 #define current_thread_fast()           get_active_thread()
 #define current_thread_volatile()       get_active_thread_volatile()
-#define current_thread()                current_thread_fast()
 
 #define cpu_mode_is64bit()              TRUE
 
 static inline int
 get_preemption_level(void)
 {
-	CPU_DATA_GET(cpu_preemption_level, int)
+	return CPU_DATA()->cpu_preemption_level;
 }
 static inline int
 get_interrupt_level(void)
 {
-	CPU_DATA_GET(cpu_interrupt_level, int)
+	return CPU_DATA()->cpu_interrupt_level;
 }
 static inline int
 get_cpu_number(void)
 {
-	CPU_DATA_GET(cpu_number, int)
+	return CPU_DATA()->cpu_number;
+}
+static inline vm_offset_t
+get_current_percpu_base(void)
+{
+	return CPU_DATA()->cpu_pcpu_base;
 }
 static inline int
 get_cpu_phys_number(void)
 {
-	CPU_DATA_GET(cpu_phys_number, int)
+	return CPU_DATA()->cpu_phys_number;
 }
 
 static inline cpu_data_t *
 current_cpu_datap(void)
 {
-	CPU_DATA_GET(cpu_this, cpu_data_t *);
+	return CPU_DATA()->cpu_this;
 }
 
 /*
@@ -514,7 +441,8 @@ current_cpu_datap(void)
  */
 #if DEVELOPMENT || DEBUG
 static inline void
-rbtrace_bt(uint64_t *rets, int maxframes, cpu_data_t *cdata, uint64_t frameptr, bool use_cursp)
+rbtrace_bt(uint64_t *__counted_by(maxframes)rets, int maxframes,
+    cpu_data_t *cdata, uint64_t frameptr, bool use_cursp)
 {
 	extern uint32_t         low_intstack[];         /* bottom */
 	extern uint32_t         low_eintstack[];        /* top */
@@ -534,7 +462,7 @@ rbtrace_bt(uint64_t *rets, int maxframes, cpu_data_t *cdata, uint64_t frameptr, 
                      : "rax");
 	}
 
-	thread_t cplthread = cdata->cpu_active_thread;
+	thread_t __single cplthread = cdata->cpu_active_thread;
 	if (cplthread) {
 		uintptr_t csp;
 		if (use_cursp == true) {
@@ -555,10 +483,10 @@ rbtrace_bt(uint64_t *rets, int maxframes, cpu_data_t *cdata, uint64_t frameptr, 
 				kstackt = cdata->cpu_int_stack_top;
 				kstackb = kstackt - INTSTACK_SIZE;
 				if (csp < kstackb || csp > kstackt) {
-					kstackt = (uintptr_t)low_eintstack;
+					kstackt = (uintptr_t)&low_eintstack;
 					kstackb = kstackt - INTSTACK_SIZE;
 					if (csp < kstackb || csp > kstackt) {
-						kstackb = (uintptr_t) mp_slave_stack;
+						kstackb = (uintptr_t)&mp_slave_stack;
 						kstackt = kstackb + PAGE_SIZE;
 					} else {
 						kstackb = 0;
@@ -569,21 +497,29 @@ rbtrace_bt(uint64_t *rets, int maxframes, cpu_data_t *cdata, uint64_t frameptr, 
 		}
 
 		if (__probable(kstackb && kstackt)) {
-			uint64_t *cfp = (uint64_t *) frameptr;
+			uint64_t *cfp = __unsafe_forge_single(uint64_t *, frameptr);
 			int rbbtf;
 
 			for (rbbtf = btidx; rbbtf < maxframes; rbbtf++) {
-				if (((uint64_t)cfp == 0) || (((uint64_t)cfp < kstackb) || ((uint64_t)cfp > kstackt))) {
+				uint64_t cur_retp;
+				/*
+				 * cfp == 0 is covered by the first comparison, and we're guaranteed
+				 * that kstackb is non-zero from the containing if block.  The os_add_overflow is
+				 * necessary because it's not uncommon for backtraces to terminate with bogus
+				 * frame pointers.
+				 */
+				if (((uint64_t)cfp < kstackb) || os_add_overflow((uint64_t)cfp, sizeof(uint64_t), &cur_retp) || cur_retp >= kstackt) {
 					rets[rbbtf] = 0;
 					continue;
 				}
-				rets[rbbtf] = *(cfp + 1);
-				cfp = (uint64_t *) (*cfp);
+				rets[rbbtf] = *(uint64_t *)cur_retp;
+				cfp = __unsafe_forge_single(uint64_t *, *cfp);
 			}
 		}
 	}
 }
 
+__attribute__((noinline))
 static inline void
 pltrace_internal(boolean_t enable)
 {
@@ -607,64 +543,34 @@ pltrace_internal(boolean_t enable)
 
 	cdata->cpu_plri = cplrecord;
 
-	rbtrace_bt(plbts, MAX_TRACE_BTFRAMES - 1, cdata, (uint64_t)__builtin_frame_address(0), true);
+	rbtrace_bt(plbts, MAX_TRACE_BTFRAMES - 1, cdata, (uint64_t)__builtin_frame_address(0), false);
 }
 
 extern int plctrace_enabled;
-
-static inline void
-iotrace(iotrace_type_e type, uint64_t vaddr, uint64_t paddr, int size, uint64_t val,
-    uint64_t sabs, uint64_t duration)
-{
-	cpu_data_t *cdata;
-	int cpu_num, nextidx;
-	iotrace_entry_t *cur_iotrace_ring;
-
-	if (__improbable(mmiotrace_enabled == 0 || iotrace_generators == 0)) {
-		return;
-	}
-
-	cdata = current_cpu_datap();
-	cpu_num = cdata->cpu_number;
-	nextidx = iotrace_next[cpu_num];
-	cur_iotrace_ring = iotrace_ring[cpu_num];
-
-	cur_iotrace_ring[nextidx].iotype = type;
-	cur_iotrace_ring[nextidx].vaddr = vaddr;
-	cur_iotrace_ring[nextidx].paddr = paddr;
-	cur_iotrace_ring[nextidx].size = size;
-	cur_iotrace_ring[nextidx].val = val;
-	cur_iotrace_ring[nextidx].start_time_abs = sabs;
-	cur_iotrace_ring[nextidx].duration = duration;
-
-	iotrace_next[cpu_num] = ((nextidx + 1) >= iotrace_entries_per_cpu) ? 0 : (nextidx + 1);
-
-	rbtrace_bt(&cur_iotrace_ring[nextidx].backtrace[0],
-	    MAX_TRACE_BTFRAMES - 1, cdata, (uint64_t)__builtin_frame_address(0), true);
-}
 
 static inline uint32_t
 traptrace_start(int vecnum, uint64_t ipc, uint64_t sabs, uint64_t frameptr)
 {
 	cpu_data_t *cdata;
-	int cpu_num, nextidx;
+	uint32_t nextidx;
 	traptrace_entry_t *cur_traptrace_ring;
+	uint32_t *nextidxp;
 
-	if (__improbable(traptrace_enabled == 0 || traptrace_generators == 0)) {
+	if (__improbable(traptrace_enabled == 0 || traptrace_entries_per_cpu == 0)) {
 		return TRAPTRACE_INVALID_INDEX;
 	}
 
 	assert(ml_get_interrupts_enabled() == FALSE);
 	cdata = current_cpu_datap();
-	cpu_num = cdata->cpu_number;
-	nextidx = traptrace_next[cpu_num];
+	nextidxp = PERCPU_GET(traptrace_next);
+	nextidx = *nextidxp;
 	/* prevent nested interrupts from clobbering this record */
-	traptrace_next[cpu_num] = ((nextidx + 1) >= traptrace_entries_per_cpu) ? 0 : (nextidx + 1);
+	*nextidxp = (((nextidx + 1) >= (unsigned int)traptrace_entries_per_cpu) ? 0 : (nextidx + 1));
 
-	cur_traptrace_ring = traptrace_ring[cpu_num];
-
+	cur_traptrace_ring = __unsafe_forge_bidi_indexable(traptrace_entry_t *,
+	    *PERCPU_GET(traptrace_ring), sizeof(traptrace_entry_t) * traptrace_entries_per_cpu);
 	cur_traptrace_ring[nextidx].vector = vecnum;
-	cur_traptrace_ring[nextidx].curthread = current_thread();
+	cur_traptrace_ring[nextidx].curthread = current_thread_fast();
 	cur_traptrace_ring[nextidx].interrupted_pc = ipc;
 	cur_traptrace_ring[nextidx].curpl = cdata->cpu_preemption_level;
 	cur_traptrace_ring[nextidx].curil = cdata->cpu_interrupt_level;
@@ -676,22 +582,29 @@ traptrace_start(int vecnum, uint64_t ipc, uint64_t sabs, uint64_t frameptr)
 
 	assert(nextidx <= 0xFFFF);
 
-	return ((unsigned)cpu_num << 16) | nextidx;
+	/*
+	 * encode the cpu number we're on because traptrace_end()
+	 * might be called from a different CPU.
+	 */
+	return ((uint32_t)cdata->cpu_number << 16) | nextidx;
 }
 
 static inline void
 traptrace_end(uint32_t index, uint64_t eabs)
 {
-	if (index != TRAPTRACE_INVALID_INDEX) {
-		traptrace_entry_t *ttentp = &traptrace_ring[index >> 16][index & 0xFFFF];
+	traptrace_entry_t *__unsafe_indexable ring;
 
-		ttentp->duration = eabs - ttentp->start_time_abs;
+	if (index != TRAPTRACE_INVALID_INDEX) {
+		ring = *PERCPU_GET_WITH_BASE(other_percpu_base(index >> 16),
+		    traptrace_ring);
+		index &= 0XFFFF;
+		ring[index].duration = eabs - ring[index].start_time_abs;
 	}
 }
 
 #endif /* DEVELOPMENT || DEBUG */
 
-static inline void
+__header_always_inline void
 pltrace(boolean_t plenable)
 {
 #if DEVELOPMENT || DEBUG
@@ -708,16 +621,9 @@ disable_preemption_internal(void)
 {
 	assert(get_preemption_level() >= 0);
 
-	os_compiler_barrier(release);
-#if defined(__clang__)
-	cpu_data_t GS_RELATIVE *cpu_data = (cpu_data_t GS_RELATIVE *)0UL;
-	cpu_data->cpu_preemption_level++;
-#else
-	__asm__ volatile ("incl %%gs:%P0"
-            :
-            : "i" (offsetof(cpu_data_t, cpu_preemption_level)));
-#endif
-	os_compiler_barrier(acquire);
+	os_compiler_barrier();
+	CPU_DATA()->cpu_preemption_level++;
+	os_compiler_barrier();
 	pltrace(FALSE);
 }
 
@@ -726,22 +632,11 @@ enable_preemption_internal(void)
 {
 	assert(get_preemption_level() > 0);
 	pltrace(TRUE);
-	os_compiler_barrier(release);
-#if defined(__clang__)
-	cpu_data_t GS_RELATIVE *cpu_data = (cpu_data_t GS_RELATIVE *)0UL;
-	if (0 == --cpu_data->cpu_preemption_level) {
+	os_compiler_barrier();
+	if (0 == --CPU_DATA()->cpu_preemption_level) {
 		kernel_preempt_check();
 	}
-#else
-	__asm__ volatile ("decl %%gs:%P0		\n\t"
-                          "jne 1f			\n\t"
-                          "call _kernel_preempt_check	\n\t"
-                          "1:"
-                        : /* no outputs */
-                        : "i" (offsetof(cpu_data_t, cpu_preemption_level))
-                        : "eax", "ecx", "edx", "cc", "memory");
-#endif
-	os_compiler_barrier(acquire);
+	os_compiler_barrier();
 }
 
 static inline void
@@ -750,17 +645,9 @@ enable_preemption_no_check(void)
 	assert(get_preemption_level() > 0);
 
 	pltrace(TRUE);
-	os_compiler_barrier(release);
-#if defined(__clang__)
-	cpu_data_t GS_RELATIVE *cpu_data = (cpu_data_t GS_RELATIVE *)0UL;
-	cpu_data->cpu_preemption_level--;
-#else
-	__asm__ volatile ("decl %%gs:%P0"
-                        : /* no outputs */
-                        : "i" (offsetof(cpu_data_t, cpu_preemption_level))
-                        : "cc", "memory");
-#endif
-	os_compiler_barrier(acquire);
+	os_compiler_barrier();
+	CPU_DATA()->cpu_preemption_level--;
+	os_compiler_barrier();
 }
 
 static inline void
@@ -807,6 +694,7 @@ _mp_enable_preemption_no_check(void)
 
 #ifdef XNU_KERNEL_PRIVATE
 #define disable_preemption() disable_preemption_internal()
+#define disable_preemption_without_measurements() disable_preemption_internal()
 #define enable_preemption() enable_preemption_internal()
 #define MACHINE_PREEMPTION_MACROS (1)
 #endif

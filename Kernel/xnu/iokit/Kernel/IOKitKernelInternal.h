@@ -39,27 +39,7 @@ __BEGIN_DECLS
 #include <device/device_port.h>
 #include <IOKit/IODMACommand.h>
 #include <IOKit/IOKitServer.h>
-
-/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
-
-#if (KDEBUG_LEVEL >= KDEBUG_LEVEL_STANDARD)
-
-#define IOServiceTrace(csc, a, b, c, d) do {                            \
-    if(kIOTraceIOService & gIOKitTrace) {                               \
-	KERNEL_DEBUG_CONSTANT(IODBG_IOSERVICE(csc), a, b, c, d, 0);     \
-    }                                                                   \
-} while(0)
-
-#else /* (KDEBUG_LEVEL >= KDEBUG_LEVEL_STANDARD) */
-
-#define IOServiceTrace(csc, a, b, c, d) do {    \
-  (void)a;                                      \
-  (void)b;                                      \
-  (void)c;                                      \
-  (void)d;                                      \
-} while (0)
-
-#endif /* (KDEBUG_LEVEL >= KDEBUG_LEVEL_STANDARD) */
+#include <kern/socd_client.h>
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
@@ -84,10 +64,17 @@ IOMemoryDescriptorMapAlloc(vm_map_t map, void * ref);
 
 
 mach_vm_address_t
-IOKernelAllocateWithPhysicalRestrict(mach_vm_size_t size, mach_vm_address_t maxPhys,
-    mach_vm_size_t alignment, bool contiguous);
+IOKernelAllocateWithPhysicalRestrict(
+	kalloc_heap_t       kheap,
+	mach_vm_size_t      size,
+	mach_vm_address_t   maxPhys,
+	mach_vm_size_t      alignment,
+	bool                contiguous);
 void
-IOKernelFreePhysical(mach_vm_address_t address, mach_vm_size_t size);
+IOKernelFreePhysical(
+	kalloc_heap_t       kheap,
+	mach_vm_address_t   address,
+	mach_vm_size_t      size);
 
 #if IOTRACKING
 IOReturn
@@ -111,6 +98,11 @@ __END_DECLS
    ({ typeof(expr) expr_ = (type)(uintptr_t)(expr);             \
        (type)(uintptr_t)(expr_); })
 
+struct IODMACommandMapSegment {
+	uint64_t fDMAOffset;       // The offset of this segment in DMA
+	uint64_t fMapOffset;       // Offset of segment in mapping
+	uint64_t fPageOffset;      // Offset within first page of segment
+};
 
 struct IODMACommandInternal {
 	IOMDDMAWalkSegmentState      fState;
@@ -125,7 +117,6 @@ struct IODMACommandInternal {
 	UInt8  fCheckAddressing;
 	UInt8  fIterateOnly;
 	UInt8  fMisaligned;
-	UInt8  fMapContig;
 	UInt8  fPrepared;
 	UInt8  fDoubleBuffer;
 	UInt8  fNewMD;
@@ -143,14 +134,23 @@ struct IODMACommandInternal {
 	uint64_t  fLocalMapperAlloc;
 	uint64_t  fLocalMapperAllocLength;
 
-	class IOBufferMemoryDescriptor * fCopyMD;
+	OSPtr<IOBufferMemoryDescriptor> fCopyMD;
 
 	IOService * fDevice;
+	IOLock * fDextLock;
 
 	// IODMAEventSource use
 	IOReturn fStatus;
 	UInt64   fActualByteCount;
 	AbsoluteTime    fTimeStamp;
+
+	// Multisegment vars
+	IODMACommandMapSegment * fMapSegments;
+	uint32_t                 fMapSegmentsCount;
+	uint64_t fLocalMapperAllocBase;
+	uint64_t fOffset2Index;
+	uint64_t fNextOffset;
+	uint64_t fIndex;
 };
 
 struct IOMemoryDescriptorDevicePager {
@@ -162,14 +162,17 @@ struct IOMemoryDescriptorDevicePager {
 
 struct IOMemoryDescriptorReserved {
 	IOMemoryDescriptorDevicePager dp;
+	uint64_t                      descriptorID;
 	uint64_t                      preparationID;
 	// for kernel IOMD subclasses... they have no expansion
 	uint64_t                      kernReserved[4];
 	vm_tag_t                      kernelTag;
 	vm_tag_t                      userTag;
 	task_t                        creator;
+	OSObject                    * contextObject;
 };
 
+#if defined(__x86_64__)
 struct iopa_t {
 	IOLock       * lock;
 	queue_head_t   list;
@@ -184,18 +187,21 @@ struct iopa_page_t {
 };
 typedef struct iopa_page_t iopa_page_t;
 
-typedef uintptr_t (*iopa_proc_t)(iopa_t * a);
+typedef uintptr_t (*iopa_proc_t)(kalloc_heap_t kheap, iopa_t * a);
 
 enum{
 	kIOPageAllocSignature  = 'iopa'
 };
 
 extern "C" void      iopa_init(iopa_t * a);
-extern "C" uintptr_t iopa_alloc(iopa_t * a, iopa_proc_t alloc, vm_size_t bytes, uint32_t balign);
+extern "C" uintptr_t iopa_alloc(iopa_t * a, iopa_proc_t alloc, kalloc_heap_t kheap,
+    vm_size_t bytes, vm_size_t balign);
 extern "C" uintptr_t iopa_free(iopa_t * a, uintptr_t addr, vm_size_t bytes);
 extern "C" uint32_t  gIOPageAllocChunkBytes;
 
 extern "C" iopa_t    gIOBMDPageAllocator;
+#endif /* defined(__x86_64__) */
+
 
 extern "C" struct timeval gIOLastSleepTime;
 extern "C" struct timeval gIOLastWakeTime;
@@ -205,6 +211,9 @@ extern clock_sec_t gIOConsoleLockTime;
 extern bool gCPUsRunning;
 
 extern OSSet * gIORemoveOnReadProperties;
+
+extern uint32_t gHaltTimeMaxLog;
+extern uint32_t gHaltTimeMaxPanic;
 
 extern "C" void IOKitInitializeTime( void );
 extern void IOMachPortInitialize(void);
@@ -229,6 +238,18 @@ void IOScreenLockTimeUpdate(clock_sec_t secs);
 
 void     IOCPUInitialize(void);
 IOReturn IOInstallServicePlatformActions(IOService * service);
+IOReturn IOInstallServiceSleepPlatformActions(IOService * service);
 IOReturn IORemoveServicePlatformActions(IOService * service);
+void     IOCPUSleepKernel(void);
+void     IOPlatformActionsInitialize(void);
+
+class IOSystemStateNotification : public IOService
+{
+	OSDeclareDefaultStructors(IOSystemStateNotification);
+public:
+	static IOService * initialize(void);
+	virtual IOReturn setProperties( OSObject * properties) APPLE_KEXT_OVERRIDE;
+	virtual bool serializeProperties(OSSerialize * serialize) const APPLE_KEXT_OVERRIDE;
+};
 
 #endif /* ! _IOKIT_KERNELINTERNAL_H */

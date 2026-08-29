@@ -51,13 +51,13 @@ struct wait_queue { unsigned char opaque[32]; };
 #endif  /* MACH_KERNEL_PRIVATE */
 
 typedef struct zone                     *zone_t;
-#define         ZONE_NULL                       ((zone_t) 0)
+#define         ZONE_NULL               ((zone_t) 0)
 
 typedef struct wait_queue               *wait_queue_t;
 #define         WAIT_QUEUE_NULL         ((wait_queue_t) 0)
 #define                 SIZEOF_WAITQUEUE        sizeof(struct wait_queue)
 
-typedef vm_offset_t                     ipc_kobject_t;
+typedef void *                          ipc_kobject_t;
 #define         IKO_NULL                        ((ipc_kobject_t) 0)
 
 #endif  /* KERNEL_PRIVATE */
@@ -65,6 +65,17 @@ typedef vm_offset_t                     ipc_kobject_t;
 typedef void *event_t;          /* wait event */
 #define         NO_EVENT                        ((event_t) 0)
 
+/*
+ * Events are used to selectively wake up threads waiting
+ * on a specified wait queue.
+ *
+ * The NO_EVENT64 value is a special event that is used
+ * on wait queues that can be members of wait queue sets
+ * for waits/wakeups that need to prepost to the set.
+ *
+ * This event must be "unique" and it is customary to use
+ * a pointer to memory related to the event.
+ */
 typedef uint64_t event64_t;             /* 64 bit wait event */
 #define         NO_EVENT64              ((event64_t) 0)
 #define         CAST_EVENT64_T(a_ptr)   ((event64_t)((uintptr_t)(a_ptr)))
@@ -223,17 +234,6 @@ typedef struct affinity_set             *affinity_set_t;
 typedef struct run_queue               *run_queue_t;
 #define RUN_QUEUE_NULL                 ((run_queue_t) 0)
 
-typedef struct grrr_run_queue               *grrr_run_queue_t;
-#define GRRR_RUN_QUEUE_NULL                 ((grrr_run_queue_t) 0)
-
-typedef struct grrr_group                                       *grrr_group_t;
-#define GRRR_GROUP_NULL                                         ((grrr_group_t) 0)
-
-#if defined(CONFIG_SCHED_MULTIQ)
-typedef struct sched_group              *sched_group_t;
-#define SCHED_GROUP_NULL                ((sched_group_t) 0)
-#endif /* defined(CONFIG_SCHED_MULTIQ) */
-
 #else   /* MACH_KERNEL_PRIVATE */
 
 struct wait_queue_set;
@@ -276,16 +276,27 @@ typedef enum perfcontrol_event {
 } perfcontrol_event;
 
 /*
- * Flags for the sched_perfcontrol_csw_t & sched_perfcontrol_state_update_t
+ * Flags for the sched_perfcontrol_csw_t, sched_perfcontrol_state_update_t
+ * & sched_perfcontrol_thread_group_blocked_t/sched_perfcontrol_thread_group_unblocked_t
  * callouts.
  * Currently defined flags are:
- * PERFCONTROL_CALLOUT_WAKE_UNSAFE - Flag to indicate its unsafe to
- *      do a wakeup as part of this callout. If this is set, it
- *      indicates that the scheduler holds a spinlock which might be needed
- *      in the wakeup path. In that case CLPC should do a thread_call
- *      instead of a direct wakeup to run their workloop thread.
+ *
+ * PERFCONTROL_CALLOUT_WAKE_UNSAFE: Flag to indicate its unsafe to
+ * do a wakeup as part of this callout. If this is set, it
+ * indicates that the scheduler holds a spinlock which might be needed
+ * in the wakeup path. In that case CLPC should do a thread_call
+ * instead of a direct wakeup to run their workloop thread.
+ *
+ * PERFCONTROL_CALLOUT_BLOCKING_TG_RENDER_SERVER: Flag to indicate
+ * that the render server thread group is blocking/unblocking progress
+ * of another thread group. The render server thread group is well
+ * known to CLPC, so XNU simply passes this flag instead of taking
+ * a reference on it. It is illegal to pass both the TG identity and
+ * this flag in the callout; this flag should only be set with the
+ * blocking/unblocking TG being NULL.
  */
-#define PERFCONTROL_CALLOUT_WAKE_UNSAFE            0x1
+#define PERFCONTROL_CALLOUT_WAKE_UNSAFE                 (0x1)
+#define PERFCONTROL_CALLOUT_BLOCKING_TG_RENDER_SERVER   (0x2)
 
 /*
  * Enum to define the perfcontrol class for thread.
@@ -306,11 +317,67 @@ typedef enum perfcontrol_class {
 	PERFCONTROL_CLASS_UTILITY        = 5,
 	/* Non-UI Thread (Default/Legacy) */
 	PERFCONTROL_CLASS_NONUI          = 6,
-	/* UI Thread (UI/IN) */
+	/* UI Thread (UI QoS / Per-Frame work) */
 	PERFCONTROL_CLASS_UI             = 7,
 	/* Above UI Thread */
 	PERFCONTROL_CLASS_ABOVEUI        = 8,
+	/* Frame-async UI Thread */
+	PERFCONTROL_CLASS_USER_INITIATED = 9,
+	/* Maximum class */
+	PERFCONTROL_CLASS_MAX            = 10,
 } perfcontrol_class_t;
+
+typedef enum {
+	REASON_NONE,
+	REASON_SYSTEM,
+	REASON_USER,
+	REASON_CLPC_SYSTEM,
+	REASON_CLPC_USER,
+	REASON_PMGR_SYSTEM,
+} processor_reason_t;
+
+
+/*
+ * struct sched_clutch_edge
+ *
+ * Represents an edge from one cluster to another in the Edge Scheduler.
+ * An edge has the following properties:
+ * - Edge Weight: A value which indicates the likelihood of migrating threads
+ *   across that edge. The actual unit of the edge weight is in (usecs) of
+ *   scheduling delay.
+ * - Migration Allowed: Bit indicating if migrations are allowed across this
+ *   edge from src to dst.
+ * - Steal Allowed: Bit indicating whether the dst cluster is allowed to steal
+ *   across that edge when a processor in that cluster goes idle.
+ *
+ * These values can be modified by CLPC for better load balancing, thermal
+ * mitigations etc.
+ */
+typedef union sched_clutch_edge {
+	struct {
+		uint32_t
+		/* boolean_t */ sce_migration_allowed : 1,
+		/* boolean_t */ sce_steal_allowed     : 1,
+		    _reserved             : 30;
+		uint32_t        sce_migration_weight;
+	};
+	uint64_t sce_edge_packed;
+} sched_clutch_edge;
+
+/*
+ * Cluster shared resource management
+ *
+ * The options describe the various shared cluster resource
+ * types that can be contended under load and need special
+ * handling from the scheduler.
+ */
+__options_decl(cluster_shared_rsrc_type_t, uint32_t, {
+	CLUSTER_SHARED_RSRC_TYPE_RR                     = 0,
+	CLUSTER_SHARED_RSRC_TYPE_NATIVE_FIRST           = 1,
+	CLUSTER_SHARED_RSRC_TYPE_COUNT                  = 2,
+	CLUSTER_SHARED_RSRC_TYPE_MIN                    = CLUSTER_SHARED_RSRC_TYPE_RR,
+	CLUSTER_SHARED_RSRC_TYPE_NONE                   = CLUSTER_SHARED_RSRC_TYPE_COUNT,
+});
 
 #endif  /* KERNEL_PRIVATE */
 

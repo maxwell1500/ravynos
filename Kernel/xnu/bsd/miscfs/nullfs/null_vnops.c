@@ -77,6 +77,7 @@
 #include <sys/ubc.h>
 #include <sys/types.h>
 #include <sys/dirent.h>
+#include <sys/kauth.h>
 
 #include "nullfs.h"
 
@@ -118,6 +119,33 @@ nullfs_checkspecialvp(struct vnode* vp)
 	return result;
 }
 
+vfs_context_t
+nullfs_get_patched_context(struct null_mount * null_mp, vfs_context_t ctx)
+{
+	struct vfs_context *ectx = ctx;
+	kauth_cred_t ucred;
+
+	if ((null_mp->nullm_flags & NULLM_UNVEIL) == NULLM_UNVEIL) {
+		ectx = vfs_context_create(ctx);
+		ucred = kauth_cred_derive(ectx->vc_ucred,
+		    ^bool (kauth_cred_t parent __unused, kauth_cred_t model) {
+			return kauth_cred_model_setuidgid(model,
+			null_mp->uid, null_mp->gid);
+		});
+		kauth_cred_unref(&ectx->vc_ucred);
+		ectx->vc_ucred = ucred;
+	}
+	return ectx;
+}
+
+void
+nullfs_cleanup_patched_context(struct null_mount * null_mp, vfs_context_t ctx)
+{
+	if ((null_mp->nullm_flags & NULLM_UNVEIL) == NULLM_UNVEIL) {
+		vfs_context_rele(ctx);
+	}
+}
+
 static int
 nullfs_default(__unused struct vnop_generic_args * args)
 {
@@ -134,6 +162,7 @@ nullfs_special_getattr(struct vnop_getattr_args * args)
 	ino_t ino = NULL_ROOT_INO;
 	struct vnode_attr covered_rootattr;
 	vnode_t checkvp = null_mp->nullm_lowerrootvp;
+	vfs_context_t ectx = nullfs_get_patched_context(null_mp, args->a_context);
 
 	VATTR_INIT(&covered_rootattr);
 	VATTR_WANTED(&covered_rootattr, va_uid);
@@ -147,16 +176,18 @@ nullfs_special_getattr(struct vnop_getattr_args * args)
 	if (vnode_getwithvid(checkvp, null_mp->nullm_lowerrootvid)) {
 		checkvp = vfs_vnodecovered(mp);
 		if (checkvp == NULL) {
+			nullfs_cleanup_patched_context(null_mp, ectx);
 			return EIO;
 		}
 	}
 
-	int error = vnode_getattr(checkvp, &covered_rootattr, args->a_context);
+	int error = vnode_getattr(checkvp, &covered_rootattr, ectx);
 
 	vnode_put(checkvp);
 	if (error) {
 		/* we should have been able to get attributes fore one of the two choices so
 		 * fail if we didn't */
+		nullfs_cleanup_patched_context(null_mp, ectx);
 		return error;
 	}
 
@@ -175,7 +206,12 @@ nullfs_special_getattr(struct vnop_getattr_args * args)
 	VATTR_RETURN(args->a_vap, va_iosize, vfs_statfs(mp)->f_iosize);
 	VATTR_RETURN(args->a_vap, va_fileid, ino);
 	VATTR_RETURN(args->a_vap, va_linkid, ino);
-	VATTR_RETURN(args->a_vap, va_fsid, vfs_statfs(mp)->f_fsid.val[0]); // return the fsid of the mount point
+	if (VATTR_IS_ACTIVE(args->a_vap, va_fsid)) {
+		VATTR_RETURN(args->a_vap, va_fsid, vfs_statfs(mp)->f_fsid.val[0]); // return the fsid of the mount point
+	}
+	if (VATTR_IS_ACTIVE(args->a_vap, va_fsid64)) {
+		VATTR_RETURN(args->a_vap, va_fsid64, vfs_statfs(mp)->f_fsid);
+	}
 	VATTR_RETURN(args->a_vap, va_filerev, 0);
 	VATTR_RETURN(args->a_vap, va_gen, 0);
 	VATTR_RETURN(args->a_vap, va_flags, UF_HIDDEN); /* mark our fake directories as hidden. People
@@ -216,6 +252,7 @@ nullfs_special_getattr(struct vnop_getattr_args * args)
 		args->a_vap->va_modify_time.tv_nsec = covered_rootattr.va_access_time.tv_nsec;
 	}
 
+	nullfs_cleanup_patched_context(null_mp, ectx);
 	return 0;
 }
 
@@ -224,30 +261,67 @@ nullfs_getattr(struct vnop_getattr_args * args)
 {
 	int error;
 	struct null_mount * null_mp = MOUNTTONULLMOUNT(vnode_mount(args->a_vp));
+	kauth_cred_t cred = vfs_context_ucred(args->a_context);
 	NULLFSDEBUG("%s %p\n", __FUNCTION__, args->a_vp);
 
-	lck_mtx_lock(&null_mp->nullm_lock);
-	if (nullfs_isspecialvp(args->a_vp)) {
+	if (nullfs_checkspecialvp(args->a_vp)) {
 		error = nullfs_special_getattr(args);
-		lck_mtx_unlock(&null_mp->nullm_lock);
 		return error;
 	}
-	lck_mtx_unlock(&null_mp->nullm_lock);
 
 	/* this will return a different inode for third than read dir will */
 	struct vnode * lowervp = NULLVPTOLOWERVP(args->a_vp);
-
+	vfs_context_t ectx = nullfs_get_patched_context(null_mp, args->a_context);
 	error = vnode_getwithref(lowervp);
+
 	if (error == 0) {
-		error = VNOP_GETATTR(lowervp, args->a_vap, args->a_context);
+		error = VNOP_GETATTR(lowervp, args->a_vap, ectx);
 		vnode_put(lowervp);
 
 		if (error == 0) {
 			/* fix up fsid so it doesn't say the underlying fs*/
-			VATTR_RETURN(args->a_vap, va_fsid, vfs_statfs(vnode_mount(args->a_vp))->f_fsid.val[0]);
+			if (VATTR_IS_ACTIVE(args->a_vap, va_fsid)) {
+				VATTR_RETURN(args->a_vap, va_fsid, vfs_statfs(vnode_mount(args->a_vp))->f_fsid.val[0]);
+			}
+			if (VATTR_IS_ACTIVE(args->a_vap, va_fsid64)) {
+				VATTR_RETURN(args->a_vap, va_fsid64, vfs_statfs(vnode_mount(args->a_vp))->f_fsid);
+			}
+
+			/* Conjure up permissions */
+			if ((null_mp->nullm_flags & NULLM_UNVEIL) == NULLM_UNVEIL) {
+				if (VATTR_IS_ACTIVE(args->a_vap, va_mode)) {
+					mode_t mode = args->a_vap->va_mode; // We will take away permisions if we don't have them
+
+					// Check for authorizations
+					// If we can read:
+					if (vnode_authorize(lowervp, NULL, KAUTH_VNODE_GENERIC_READ_BITS, ectx) == 0) {
+						mode |= S_IRUSR;
+					} else {
+						mode &= ~S_IRUSR;
+					}
+
+					// Or execute
+					// Directories need an execute bit...
+					if (vnode_authorize(lowervp, NULL, KAUTH_VNODE_GENERIC_EXECUTE_BITS, ectx) == 0) {
+						mode |= S_IXUSR;
+					} else {
+						mode &= ~S_IXUSR;
+					}
+
+					NULLFSDEBUG("Settings bits to %d\n", mode);
+					VATTR_RETURN(args->a_vap, va_mode, mode);
+				}
+				if (VATTR_IS_ACTIVE(args->a_vap, va_uid)) {
+					VATTR_RETURN(args->a_vap, va_uid, kauth_cred_getuid(cred));
+				}
+				if (VATTR_IS_ACTIVE(args->a_vap, va_gid)) {
+					VATTR_RETURN(args->a_vap, va_gid, kauth_cred_getgid(cred));
+				}
+			}
 		}
 	}
 
+	nullfs_cleanup_patched_context(null_mp, ectx);
 	return error;
 }
 
@@ -256,21 +330,24 @@ nullfs_open(struct vnop_open_args * args)
 {
 	int error;
 	struct vnode *vp, *lvp;
-
+	mount_t mp                  = vnode_mount(args->a_vp);
+	struct null_mount * null_mp = MOUNTTONULLMOUNT(mp);
 	NULLFSDEBUG("%s %p\n", __FUNCTION__, args->a_vp);
 
 	if (nullfs_checkspecialvp(args->a_vp)) {
 		return 0; /* nothing extra needed */
 	}
 
+	vfs_context_t ectx = nullfs_get_patched_context(null_mp, args->a_context);
 	vp    = args->a_vp;
 	lvp   = NULLVPTOLOWERVP(vp);
 	error = vnode_getwithref(lvp);
 	if (error == 0) {
-		error = VNOP_OPEN(lvp, args->a_mode, args->a_context);
+		error = VNOP_OPEN(lvp, args->a_mode, ectx);
 		vnode_put(lvp);
 	}
 
+	nullfs_cleanup_patched_context(null_mp, ectx);
 	return error;
 }
 
@@ -279,6 +356,8 @@ nullfs_close(struct vnop_close_args * args)
 {
 	int error;
 	struct vnode *vp, *lvp;
+	mount_t mp                  = vnode_mount(args->a_vp);
+	struct null_mount * null_mp = MOUNTTONULLMOUNT(mp);
 
 	NULLFSDEBUG("%s %p\n", __FUNCTION__, args->a_vp);
 
@@ -286,14 +365,17 @@ nullfs_close(struct vnop_close_args * args)
 		return 0; /* nothing extra needed */
 	}
 
+	vfs_context_t ectx = nullfs_get_patched_context(null_mp, args->a_context);
 	vp  = args->a_vp;
 	lvp = NULLVPTOLOWERVP(vp);
 
 	error = vnode_getwithref(lvp);
 	if (error == 0) {
-		error = VNOP_CLOSE(lvp, args->a_fflag, args->a_context);
+		error = VNOP_CLOSE(lvp, args->a_fflag, ectx);
 		vnode_put(lvp);
 	}
+
+	nullfs_cleanup_patched_context(null_mp, ectx);
 	return error;
 }
 
@@ -326,6 +408,9 @@ null_get_lowerparent(vnode_t lvp, vnode_t * dvpp, vfs_context_t ctx)
 	error = vnode_getattr(lvp, &va, ctx);
 
 	if (error || !VATTR_IS_SUPPORTED(&va, va_parentid)) {
+		if (!error) {
+			error = ENOTSUP;
+		}
 		goto end;
 	}
 
@@ -347,16 +432,20 @@ null_special_lookup(struct vnop_lookup_args * ap)
 	struct vnode * ldvp         = NULL;
 	struct vnode * lvp          = NULL;
 	struct vnode * vp           = NULL;
+	struct vnode * tempvp       = NULL;
 	struct mount * mp           = vnode_mount(dvp);
 	struct null_mount * null_mp = MOUNTTONULLMOUNT(mp);
 	int error                   = ENOENT;
+	vfs_context_t ectx     = nullfs_get_patched_context(null_mp, ap->a_context);
 
+	// null_mp->nullm_lock is locked
 	if (dvp == null_mp->nullm_rootvp) {
 		/* handle . and .. */
 		if (cnp->cn_nameptr[0] == '.') {
 			if (cnp->cn_namelen == 1 || (cnp->cn_namelen == 2 && cnp->cn_nameptr[1] == '.')) {
 				/* this is the root so both . and .. give back the root */
-				vp    = dvp;
+				vp = dvp;
+				lck_mtx_unlock(&null_mp->nullm_lock);
 				error = vnode_get(vp);
 				goto end;
 			}
@@ -368,35 +457,57 @@ null_special_lookup(struct vnop_lookup_args * ap)
 		    (cnp->cn_nameptr[0] == 'd' || (null_mp->nullm_flags & NULLM_CASEINSENSITIVE ? cnp->cn_nameptr[0] == 'D' : 0))) {
 			error = 0;
 			if (null_mp->nullm_secondvp == NULL) {
+				// drop the lock before making a new vnode
+				lck_mtx_unlock(&null_mp->nullm_lock);
 				error = null_getnewvnode(mp, NULL, dvp, &vp, cnp, 0);
 				if (error) {
 					goto end;
 				}
+				// Get the lock before modifying nullm_secondvp
+				lck_mtx_lock(&null_mp->nullm_lock);
+				if (null_mp->nullm_secondvp == NULL) {
+					null_mp->nullm_secondvp = vp;
+					lck_mtx_unlock(&null_mp->nullm_lock);
+				} else {
+					/* Another thread already set null_mp->nullm_secondvp while the
+					 * lock was dropped so recycle the vnode we just made */
+					tempvp = vp;
+					vp = null_mp->nullm_secondvp;
+					lck_mtx_unlock(&null_mp->nullm_lock);
+					/* recycle will call reclaim which will get rid of the internals */
+					vnode_recycle(tempvp);
+					vnode_put(tempvp);
 
-				null_mp->nullm_secondvp = vp;
+					error = vnode_get(vp);
+				}
 			} else {
-				vp    = null_mp->nullm_secondvp;
+				vp = null_mp->nullm_secondvp;
+				lck_mtx_unlock(&null_mp->nullm_lock);
 				error = vnode_get(vp);
 			}
+		} else {
+			lck_mtx_unlock(&null_mp->nullm_lock);
 		}
 	} else if (dvp == null_mp->nullm_secondvp) {
 		/* handle . and .. */
 		if (cnp->cn_nameptr[0] == '.') {
 			if (cnp->cn_namelen == 1) {
-				vp    = dvp;
+				vp = dvp;
+				lck_mtx_unlock(&null_mp->nullm_lock);
 				error = vnode_get(vp);
 				goto end;
 			} else if (cnp->cn_namelen == 2 && cnp->cn_nameptr[1] == '.') {
 				/* parent here is the root vp */
 				vp    = null_mp->nullm_rootvp;
+				lck_mtx_unlock(&null_mp->nullm_lock);
 				error = vnode_get(vp);
 				goto end;
 			}
 		}
 		/* nullmp->nullm_lowerrootvp was set at mount time so don't need to lock to
 		 * access it */
-		/* v_name should be null terminated but cn_nameptr is not necessarily.
-		 *  cn_namelen is the number of characters before the null in either case */
+		/* Drop the global lock since we aren't accessing rootvp or secondvp any more */
+		lck_mtx_unlock(&null_mp->nullm_lock);
 		error = vnode_getwithvid(null_mp->nullm_lowerrootvp, null_mp->nullm_lowerrootvid);
 		if (error) {
 			goto end;
@@ -411,22 +522,18 @@ null_special_lookup(struct vnop_lookup_args * ap)
 		 *  so we got a match
 		 *   4. Anything else results in ENOENT.
 		 */
-		error = null_get_lowerparent(null_mp->nullm_lowerrootvp, &ldvp, ap->a_context);
+		error = null_get_lowerparent(null_mp->nullm_lowerrootvp, &ldvp, ectx);
 
 		if (error == 0) {
-			error = VNOP_LOOKUP(ldvp, &lvp, cnp, ap->a_context);
+			error = VNOP_LOOKUP(ldvp, &lvp, cnp, ectx);
 			vnode_put(ldvp);
 
 			if (error == 0) {
+				// nullm_lowerrootvp is only touched during mount and unmount so we don't need the lock to check it.
 				if (lvp == null_mp->nullm_lowerrootvp) {
 					/* always check the hashmap for a vnode for this, the root of the
 					 * mirrored system */
 					error = null_nodeget(mp, lvp, dvp, &vp, cnp, 0);
-
-					if (error == 0 && null_mp->nullm_thirdcovervp == NULL) {
-						/* if nodeget succeeded then vp has an iocount*/
-						null_mp->nullm_thirdcovervp = vp;
-					}
 				} else {
 					error = ENOENT;
 				}
@@ -437,6 +544,7 @@ null_special_lookup(struct vnop_lookup_args * ap)
 	}
 
 end:
+	nullfs_cleanup_patched_context(null_mp, ectx);
 	if (error == 0) {
 		*ap->a_vpp = vp;
 	}
@@ -457,6 +565,7 @@ null_lookup(struct vnop_lookup_args * ap)
 	struct mount * mp;
 	struct null_mount * null_mp;
 	int error;
+	vfs_context_t ectx;
 
 	NULLFSDEBUG("%s parent: %p component: %.*s\n", __FUNCTION__, ap->a_dvp, cnp->cn_namelen, cnp->cn_nameptr);
 
@@ -467,10 +576,11 @@ null_lookup(struct vnop_lookup_args * ap)
 	}
 	null_mp = MOUNTTONULLMOUNT(mp);
 
+
 	lck_mtx_lock(&null_mp->nullm_lock);
 	if (nullfs_isspecialvp(dvp)) {
 		error = null_special_lookup(ap);
-		lck_mtx_unlock(&null_mp->nullm_lock);
+		// null_special_lookup drops the lock
 		return error;
 	}
 	lck_mtx_unlock(&null_mp->nullm_lock);
@@ -496,6 +606,7 @@ null_lookup(struct vnop_lookup_args * ap)
 	}
 
 notdot:
+	ectx = nullfs_get_patched_context(null_mp, ap->a_context);
 	ldvp = NULLVPTOLOWERVP(dvp);
 	vp = lvp = NULL;
 
@@ -505,10 +616,11 @@ notdot:
 	 */
 	error = vnode_getwithref(ldvp);
 	if (error) {
+		nullfs_cleanup_patched_context(null_mp, ectx);
 		return error;
 	}
 
-	error = VNOP_LOOKUP(ldvp, &lvp, cnp, ap->a_context);
+	error = VNOP_LOOKUP(ldvp, &lvp, cnp, ectx);
 
 	vnode_put(ldvp);
 
@@ -522,13 +634,13 @@ notdot:
 		if (error == 0) {
 			*ap->a_vpp = vp;
 		}
+		/* if we got lvp, drop the iocount from VNOP_LOOKUP */
+		if (lvp != NULL) {
+			vnode_put(lvp);
+		}
 	}
 
-	/* if we got lvp, drop the iocount from VNOP_LOOKUP */
-	if (lvp != NULL) {
-		vnode_put(lvp);
-	}
-
+	nullfs_cleanup_patched_context(null_mp, ectx);
 	return error;
 }
 
@@ -572,17 +684,13 @@ null_reclaim(struct vnop_reclaim_args * ap)
 			 *  conditions */
 			null_hashrem(xp);
 		}
-		vnode_getwithref(lowervp);
 		vnode_rele(lowervp);
-		vnode_put(lowervp);
 	}
 
 	if (vp == null_mp->nullm_rootvp) {
 		null_mp->nullm_rootvp = NULL;
 	} else if (vp == null_mp->nullm_secondvp) {
 		null_mp->nullm_secondvp = NULL;
-	} else if (vp == null_mp->nullm_thirdcovervp) {
-		null_mp->nullm_thirdcovervp = NULL;
 	}
 
 	lck_mtx_unlock(&null_mp->nullm_lock);
@@ -590,7 +698,7 @@ null_reclaim(struct vnop_reclaim_args * ap)
 	cache_purge(vp);
 	vnode_clearfsnode(vp);
 
-	FREE(xp, M_TEMP);
+	kfree_type(struct null_node, xp);
 
 	return 0;
 }
@@ -633,8 +741,10 @@ nullfs_special_readdir(struct vnop_readdir_args * ap)
 	int items                   = 0;
 	ino_t ino                   = 0;
 	const char * name           = NULL;
+	boolean_t locked = TRUE;
 
 	if (ap->a_flags & (VNODE_READDIR_EXTENDED | VNODE_READDIR_REQSEEKOFF)) {
+		lck_mtx_unlock(&null_mp->nullm_lock);
 		return EINVAL;
 	}
 
@@ -670,6 +780,9 @@ nullfs_special_readdir(struct vnop_readdir_args * ap)
 			ino  = NULL_SECOND_INO;
 			name = "d";
 		} else { /* only get here if vp matches nullm_rootvp or nullm_secondvp */
+			// drop the lock before performing operations on nullm_lowerrootvp
+			lck_mtx_unlock(&null_mp->nullm_lock);
+			locked = FALSE;
 			ino = NULL_THIRD_INO;
 			if (vnode_getwithvid(null_mp->nullm_lowerrootvp, null_mp->nullm_lowerrootvid)) {
 				/* In this case the lower file system has been ripped out from under us,
@@ -695,6 +808,9 @@ nullfs_special_readdir(struct vnop_readdir_args * ap)
 	}
 
 out:
+	if (locked) {
+		lck_mtx_unlock(&null_mp->nullm_lock);
+	}
 	if (error == EMSGSIZE) {
 		error = 0; /* return success if we ran out of space, but we wanted to make
 		            *  sure that we didn't update offset and items incorrectly */
@@ -720,19 +836,21 @@ nullfs_readdir(struct vnop_readdir_args * ap)
 	lck_mtx_lock(&null_mp->nullm_lock);
 	if (nullfs_isspecialvp(ap->a_vp)) {
 		error = nullfs_special_readdir(ap);
-		lck_mtx_unlock(&null_mp->nullm_lock);
+		// nullfs_special_readdir drops the lock
 		return error;
 	}
 	lck_mtx_unlock(&null_mp->nullm_lock);
 
+	vfs_context_t ectx = nullfs_get_patched_context(null_mp, ap->a_context);
 	vp    = ap->a_vp;
 	lvp   = NULLVPTOLOWERVP(vp);
 	error = vnode_getwithref(lvp);
 	if (error == 0) {
-		error = VNOP_READDIR(lvp, ap->a_uio, ap->a_flags, ap->a_eofflag, ap->a_numdirent, ap->a_context);
+		error = VNOP_READDIR(lvp, ap->a_uio, ap->a_flags, ap->a_eofflag, ap->a_numdirent, ectx);
 		vnode_put(lvp);
 	}
 
+	nullfs_cleanup_patched_context(null_mp, ectx);
 	return error;
 }
 
@@ -742,17 +860,19 @@ nullfs_readlink(struct vnop_readlink_args * ap)
 	NULLFSDEBUG("%s %p\n", __FUNCTION__, ap->a_vp);
 	int error;
 	struct vnode *vp, *lvp;
+	struct null_mount * null_mp = MOUNTTONULLMOUNT(vnode_mount(ap->a_vp));
 
 	if (nullfs_checkspecialvp(ap->a_vp)) {
 		return ENOTSUP; /* the special vnodes aren't links */
 	}
 
+	vfs_context_t ectx = nullfs_get_patched_context(null_mp, ap->a_context);
 	vp  = ap->a_vp;
 	lvp = NULLVPTOLOWERVP(vp);
 
 	error = vnode_getwithref(lvp);
 	if (error == 0) {
-		error = VNOP_READLINK(lvp, ap->a_uio, ap->a_context);
+		error = VNOP_READLINK(lvp, ap->a_uio, ectx);
 		vnode_put(lvp);
 
 		if (error) {
@@ -760,6 +880,7 @@ nullfs_readlink(struct vnop_readlink_args * ap)
 		}
 	}
 
+	nullfs_cleanup_patched_context(null_mp, ectx);
 	return error;
 }
 
@@ -782,6 +903,7 @@ nullfs_mmap(struct vnop_mmap_args * args)
 {
 	int error;
 	struct vnode *vp, *lvp;
+	struct null_mount * null_mp = MOUNTTONULLMOUNT(vnode_mount(args->a_vp));
 
 	NULLFSDEBUG("%s %p\n", __FUNCTION__, args->a_vp);
 
@@ -789,14 +911,16 @@ nullfs_mmap(struct vnop_mmap_args * args)
 		return 0; /* nothing extra needed */
 	}
 
+	vfs_context_t ectx = nullfs_get_patched_context(null_mp, args->a_context);
 	vp    = args->a_vp;
 	lvp   = NULLVPTOLOWERVP(vp);
 	error = vnode_getwithref(lvp);
 	if (error == 0) {
-		error = VNOP_MMAP(lvp, args->a_fflags, args->a_context);
+		error = VNOP_MMAP(lvp, args->a_fflags, ectx);
 		vnode_put(lvp);
 	}
 
+	nullfs_cleanup_patched_context(null_mp, ectx);
 	return error;
 }
 
@@ -805,6 +929,7 @@ nullfs_mnomap(struct vnop_mnomap_args * args)
 {
 	int error;
 	struct vnode *vp, *lvp;
+	struct null_mount * null_mp = MOUNTTONULLMOUNT(vnode_mount(args->a_vp));
 
 	NULLFSDEBUG("%s %p\n", __FUNCTION__, args->a_vp);
 
@@ -812,14 +937,16 @@ nullfs_mnomap(struct vnop_mnomap_args * args)
 		return 0; /* nothing extra needed */
 	}
 
+	vfs_context_t ectx = nullfs_get_patched_context(null_mp, args->a_context);
 	vp    = args->a_vp;
 	lvp   = NULLVPTOLOWERVP(vp);
 	error = vnode_getwithref(lvp);
 	if (error == 0) {
-		error = VNOP_MNOMAP(lvp, args->a_context);
+		error = VNOP_MNOMAP(lvp, ectx);
 		vnode_put(lvp);
 	}
 
+	nullfs_cleanup_patched_context(null_mp, ectx);
 	return error;
 }
 
@@ -828,6 +955,7 @@ nullfs_getxattr(struct vnop_getxattr_args * args)
 {
 	int error;
 	struct vnode *vp, *lvp;
+	struct null_mount * null_mp = MOUNTTONULLMOUNT(vnode_mount(args->a_vp));
 
 	NULLFSDEBUG("%s %p\n", __FUNCTION__, args->a_vp);
 
@@ -835,14 +963,16 @@ nullfs_getxattr(struct vnop_getxattr_args * args)
 		return ENOATTR; /* no xattrs on the special vnodes */
 	}
 
+	vfs_context_t ectx = nullfs_get_patched_context(null_mp, args->a_context);
 	vp    = args->a_vp;
 	lvp   = NULLVPTOLOWERVP(vp);
 	error = vnode_getwithref(lvp);
 	if (error == 0) {
-		error = VNOP_GETXATTR(lvp, args->a_name, args->a_uio, args->a_size, args->a_options, args->a_context);
+		error = VNOP_GETXATTR(lvp, args->a_name, args->a_uio, args->a_size, args->a_options, ectx);
 		vnode_put(lvp);
 	}
 
+	nullfs_cleanup_patched_context(null_mp, ectx);
 	return error;
 }
 
@@ -851,6 +981,7 @@ nullfs_listxattr(struct vnop_listxattr_args * args)
 {
 	int error;
 	struct vnode *vp, *lvp;
+	struct null_mount * null_mp = MOUNTTONULLMOUNT(vnode_mount(args->a_vp));
 
 	NULLFSDEBUG("%s %p\n", __FUNCTION__, args->a_vp);
 
@@ -858,14 +989,16 @@ nullfs_listxattr(struct vnop_listxattr_args * args)
 		return 0; /* no xattrs on the special vnodes */
 	}
 
+	vfs_context_t ectx = nullfs_get_patched_context(null_mp, args->a_context);
 	vp    = args->a_vp;
 	lvp   = NULLVPTOLOWERVP(vp);
 	error = vnode_getwithref(lvp);
 	if (error == 0) {
-		error = VNOP_LISTXATTR(lvp, args->a_uio, args->a_size, args->a_options, args->a_context);
+		error = VNOP_LISTXATTR(lvp, args->a_uio, args->a_size, args->a_options, ectx);
 		vnode_put(lvp);
 	}
 
+	nullfs_cleanup_patched_context(null_mp, ectx);
 	return error;
 }
 
@@ -875,7 +1008,7 @@ nullfs_pagein(struct vnop_pagein_args * ap)
 {
 	int error = EIO;
 	struct vnode *vp, *lvp;
-
+	struct null_mount * null_mp = MOUNTTONULLMOUNT(vnode_mount(ap->a_vp));
 	NULLFSDEBUG("%s %p\n", __FUNCTION__, ap->a_vp);
 
 	vp  = ap->a_vp;
@@ -885,6 +1018,7 @@ nullfs_pagein(struct vnop_pagein_args * ap)
 		return ENOTSUP;
 	}
 
+	vfs_context_t ectx = nullfs_get_patched_context(null_mp, ap->a_context);
 	/*
 	 * Ask VM/UBC/VFS to do our bidding
 	 */
@@ -920,7 +1054,7 @@ nullfs_pagein(struct vnop_pagein_args * ap)
 			(void)ubc_setsize(vp, lowersize); /* ignore failures, nothing can be done */
 		}
 
-		error = VNOP_READ(lvp, auio, ((ap->a_flags & UPL_IOSYNC) ? IO_SYNC : 0), ap->a_context);
+		error = VNOP_READ(lvp, auio, ((ap->a_flags & UPL_IOSYNC) ? IO_SYNC : 0), ectx);
 
 		bytes_remaining = uio_resid(auio);
 		if (bytes_remaining > 0 && bytes_remaining <= (user_ssize_t)ap->a_size) {
@@ -966,6 +1100,8 @@ exit_no_unmap:
 	} else if ((ap->a_flags & UPL_NOCOMMIT) == 0) {
 		ubc_upl_abort_range(ap->a_pl, ap->a_pl_offset, (upl_size_t)ap->a_size, UPL_ABORT_ERROR | UPL_ABORT_FREE_ON_EMPTY);
 	}
+
+	nullfs_cleanup_patched_context(null_mp, ectx);
 	return error;
 }
 
@@ -975,13 +1111,14 @@ nullfs_read(struct vnop_read_args * ap)
 	int error = EIO;
 
 	struct vnode *vp, *lvp;
-
+	struct null_mount * null_mp = MOUNTTONULLMOUNT(vnode_mount(ap->a_vp));
 	NULLFSDEBUG("%s %p\n", __FUNCTION__, ap->a_vp);
 
 	if (nullfs_checkspecialvp(ap->a_vp)) {
 		return ENOTSUP; /* the special vnodes can't be read */
 	}
 
+	vfs_context_t ectx = nullfs_get_patched_context(null_mp, ap->a_context);
 	vp  = ap->a_vp;
 	lvp = NULLVPTOLOWERVP(vp);
 
@@ -1003,13 +1140,15 @@ nullfs_read(struct vnop_read_args * ap)
 		 * Now ask VM/UBC/VFS to do our bidding
 		 */
 
-		error = VNOP_READ(lvp, ap->a_uio, ap->a_ioflag, ap->a_context);
+		error = VNOP_READ(lvp, ap->a_uio, ap->a_ioflag, ectx);
 		if (error) {
 			NULLFSDEBUG("VNOP_READ failed: %d\n", error);
 		}
 end:
 		vnode_put(lvp);
 	}
+
+	nullfs_cleanup_patched_context(null_mp, ectx);
 	return error;
 }
 

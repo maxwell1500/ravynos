@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2006-2020 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -65,13 +65,17 @@
 #define POSIX_SPAWN_SETSID              0x0400
 #ifdef  PRIVATE
 /* unused                               0x0800 */
-/* unused                               0x1000 */
+#if (DEBUG || DEVELOPMENT)
+#define _POSIX_SPAWN_FORCE_4K_PAGES     0x1000
+#endif /* (DEBUG || DEVELOPMENT) */
 #define _POSIX_SPAWN_ALLOW_DATA_EXEC    0x2000
 #endif  /* PRIVATE */
 #define POSIX_SPAWN_CLOEXEC_DEFAULT     0x4000
 #ifdef PRIVATE
 #define _POSIX_SPAWN_HIGH_BITS_ASLR     0x8000
 #endif /* PRIVATE */
+
+#define _POSIX_SPAWN_RESLIDE            0x0800
 
 /*
  * Possible values to be set for the process control actions on resource starvation.
@@ -83,6 +87,11 @@
 #define POSIX_SPAWN_PCONTROL_THROTTLE   0x0001
 #define POSIX_SPAWN_PCONTROL_SUSPEND    0x0002
 #define POSIX_SPAWN_PCONTROL_KILL       0x0003
+
+#define POSIX_SPAWN_PANIC_ON_CRASH         0x1
+#define POSIX_SPAWN_PANIC_ON_NON_ZERO_EXIT 0x2
+#define POSIX_SPAWN_PANIC_ON_EXIT          0x4
+#define POSIX_SPAWN_PANIC_ON_SPAWN_FAIL    0x8
 
 #endif /* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 

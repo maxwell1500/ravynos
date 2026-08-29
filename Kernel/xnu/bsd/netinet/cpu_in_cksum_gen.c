@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2012-2021 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -75,6 +75,8 @@
 #include <unistd.h>
 #include <strings.h>
 #include <mach/boolean.h>
+#include <skywalk/os_skywalk_private.h>
+#define CKSUM_ERR(fmt, args...) fprintf_stderr(fmt, ## args)
 #endif /* !KERNEL */
 
 /* compile time assert */
@@ -97,38 +99,57 @@
 struct _mbuf {
 	struct _mbuf    *_m_next;
 	void            *_m_pad;
-	uint8_t         *_m_data;
+	uint8_t         *__sized_by(_m_len) _m_data;
 	int32_t         _m_len;
 };
 
-extern uint32_t os_cpu_in_cksum(const void *, uint32_t, uint32_t);
+extern uint32_t os_cpu_in_cksum(const void *__sized_by(len), uint32_t len, uint32_t);
 extern uint32_t os_cpu_in_cksum_mbuf(struct _mbuf *, int, int, uint32_t);
 
 uint32_t
-os_cpu_in_cksum(const void *data, uint32_t len, uint32_t initial_sum)
+os_cpu_in_cksum(const void *__sized_by(len) data, uint32_t len, uint32_t initial_sum)
 {
 	/*
-	 * If data is 4-bytes aligned, length is multiple of 4-bytes,
-	 * and the amount to checksum is small, this would be quicker;
-	 * this is suitable for IPv4 header.
+	 * If data is 4-bytes aligned (conditional), length is multiple
+	 * of 4-bytes (required), and the amount to checksum is small,
+	 * this would be quicker; this is suitable for IPv4/TCP header.
 	 */
-	if (IS_P2ALIGNED(data, sizeof(uint32_t)) &&
-	    len <= 64 && (len & 3) == 0) {
-		uint8_t *p = __DECONST(uint8_t *, data);
+	if (
+#if !defined(__arm64__) && !defined(__x86_64__)
+		IS_P2ALIGNED(data, sizeof(uint32_t)) &&
+#endif /* !__arm64__ && !__x86_64__ */
+		len <= 64 && (len & 3) == 0) {
+		uint32_t plen = len;
+		uint8_t *__sized_by(plen) p = __DECONST(uint8_t *, data);
 		uint64_t sum = initial_sum;
 
-		if (PREDICT_TRUE(len == 20)) {  /* simple IPv4 header */
+		switch (len) {
+		case 20:                /* simple IPv4 or TCP header */
 			sum += *(uint32_t *)(void *)p;
 			sum += *(uint32_t *)(void *)(p + 4);
 			sum += *(uint32_t *)(void *)(p + 8);
 			sum += *(uint32_t *)(void *)(p + 12);
 			sum += *(uint32_t *)(void *)(p + 16);
-		} else {
-			while (len) {
+			break;
+
+		case 32:                /* TCP header + timestamp option */
+			sum += *(uint32_t *)(void *)p;
+			sum += *(uint32_t *)(void *)(p + 4);
+			sum += *(uint32_t *)(void *)(p + 8);
+			sum += *(uint32_t *)(void *)(p + 12);
+			sum += *(uint32_t *)(void *)(p + 16);
+			sum += *(uint32_t *)(void *)(p + 20);
+			sum += *(uint32_t *)(void *)(p + 24);
+			sum += *(uint32_t *)(void *)(p + 28);
+			break;
+
+		default:
+			while (plen) {
 				sum += *(uint32_t *)(void *)p;
 				p += 4;
-				len -= 4;
+				plen -= 4;
 			}
+			break;
 		}
 
 		/* fold 64-bit to 16-bit (deferred carries) */

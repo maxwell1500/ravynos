@@ -75,6 +75,11 @@ int             rtclock_init(void);
 
 uint64_t        tsc_rebase_abs_time = 0;
 
+volatile uint64_t gAcpiLastSleepTscBase = 0;
+volatile uint64_t gAcpiLastSleepNanoBase = 0;
+volatile uint64_t gAcpiLastWakeTscBase = 0;
+volatile uint64_t gAcpiLastWakeNanoBase = 0;
+
 static void     rtc_set_timescale(uint64_t cycles);
 static uint64_t rtc_export_speed(uint64_t cycles);
 
@@ -148,7 +153,14 @@ _rtc_nanotime_init(pal_rtc_nanotime_t *rntp, uint64_t base)
 void
 rtc_nanotime_init(uint64_t base)
 {
+	gAcpiLastSleepTscBase = pal_rtc_nanotime_info.tsc_base;
+	gAcpiLastSleepNanoBase = pal_rtc_nanotime_info.ns_base;
+
 	_rtc_nanotime_init(&pal_rtc_nanotime_info, base);
+
+	gAcpiLastWakeTscBase = pal_rtc_nanotime_info.tsc_base;
+	gAcpiLastWakeNanoBase = pal_rtc_nanotime_info.ns_base;
+
 	rtc_nanotime_set_commpage(&pal_rtc_nanotime_info);
 }
 
@@ -295,7 +307,6 @@ rtclock_init(void)
 
 		rtc_timer_init();
 		clock_timebase_init();
-		ml_init_lock_timeout();
 		ml_init_delay_spin_threshold(10);
 	}
 
@@ -405,7 +416,7 @@ clock_timebase_info(
 /*
  * Real-time clock device interrupt.
  */
-void
+int
 rtclock_intr(
 	x86_saved_state_t       *tregs)
 {
@@ -437,6 +448,8 @@ rtclock_intr(
 
 	/* call the generic etimer */
 	timer_intr(user_mode, rip);
+
+	return 0;
 }
 
 

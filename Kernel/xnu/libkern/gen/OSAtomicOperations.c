@@ -29,11 +29,7 @@
 #include <libkern/OSAtomic.h>
 #include <kern/debug.h>
 #include <machine/atomic.h>
-
-enum {
-	false   = 0,
-	true    = 1
-};
+#include <stdbool.h>
 
 #ifndef NULL
 #define NULL ((void *)0)
@@ -42,7 +38,7 @@ enum {
 #define ATOMIC_DEBUG DEBUG
 
 #if ATOMIC_DEBUG
-#define ALIGN_TEST(p, t) do{if((uintptr_t)p&(sizeof(t)-1)) panic("Unaligned atomic pointer %p\n",p);}while(0)
+#define ALIGN_TEST(p, t) do{if((uintptr_t)p&(sizeof(t)-1)) panic("Unaligned atomic pointer %p",p);}while(0)
 #else
 #define ALIGN_TEST(p, t) do{}while(0)
 #endif
@@ -59,14 +55,14 @@ enum {
 Boolean
 OSCompareAndSwap8(UInt8 oldValue, UInt8 newValue, volatile UInt8 *address)
 {
-	return os_atomic_cmpxchg(address, oldValue, newValue, acq_rel);
+	return (Boolean)os_atomic_cmpxchg(address, oldValue, newValue, acq_rel);
 }
 
 #undef OSCompareAndSwap16
 Boolean
 OSCompareAndSwap16(UInt16 oldValue, UInt16 newValue, volatile UInt16 *address)
 {
-	return os_atomic_cmpxchg(address, oldValue, newValue, acq_rel);
+	return (Boolean)os_atomic_cmpxchg(address, oldValue, newValue, acq_rel);
 }
 
 #undef OSCompareAndSwap
@@ -74,7 +70,7 @@ Boolean
 OSCompareAndSwap(UInt32 oldValue, UInt32 newValue, volatile UInt32 *address)
 {
 	ALIGN_TEST(address, UInt32);
-	return os_atomic_cmpxchg(address, oldValue, newValue, acq_rel);
+	return (Boolean)os_atomic_cmpxchg(address, oldValue, newValue, acq_rel);
 }
 
 #undef OSCompareAndSwap64
@@ -89,26 +85,26 @@ OSCompareAndSwap64(UInt64 oldValue, UInt64 newValue, volatile UInt64 *address)
 	_Atomic UInt64 *aligned_addr = (_Atomic UInt64 *)(uintptr_t)address;
 
 	ALIGN_TEST(address, UInt64);
-	return os_atomic_cmpxchg(aligned_addr, oldValue, newValue, acq_rel);
+	return (Boolean)os_atomic_cmpxchg(aligned_addr, oldValue, newValue, acq_rel);
 }
 
 #undef OSCompareAndSwapPtr
 Boolean
 OSCompareAndSwapPtr(void *oldValue, void *newValue, void * volatile *address)
 {
-	return os_atomic_cmpxchg(address, oldValue, newValue, acq_rel);
+	return (Boolean)os_atomic_cmpxchg(address, oldValue, newValue, acq_rel);
 }
 
 SInt8
 OSAddAtomic8(SInt32 amount, volatile SInt8 *address)
 {
-	return os_atomic_add_orig(address, amount, relaxed);
+	return os_atomic_add_orig(address, (SInt8)amount, relaxed);
 }
 
 SInt16
 OSAddAtomic16(SInt32 amount, volatile SInt16 *address)
 {
-	return os_atomic_add_orig(address, amount, relaxed);
+	return os_atomic_add_orig(address, (SInt16)amount, relaxed);
 }
 
 #undef OSAddAtomic
@@ -172,7 +168,7 @@ OSBitXorAtomic(UInt32 mask, volatile UInt32 * value)
 }
 
 static Boolean
-OSTestAndSetClear(UInt32 bit, Boolean wantSet, volatile UInt8 * startAddress)
+OSTestAndSetClear(UInt32 bit, bool wantSet, volatile UInt8 * startAddress)
 {
 	UInt8           mask = 1;
 	UInt8           oldValue, newValue;
@@ -222,19 +218,19 @@ OSDecrementAtomic8(volatile SInt8 * value)
 UInt8
 OSBitAndAtomic8(UInt32 mask, volatile UInt8 * value)
 {
-	return os_atomic_and_orig(value, mask, relaxed);
+	return os_atomic_and_orig(value, (UInt8)mask, relaxed);
 }
 
 UInt8
 OSBitOrAtomic8(UInt32 mask, volatile UInt8 * value)
 {
-	return os_atomic_or_orig(value, mask, relaxed);
+	return os_atomic_or_orig(value, (UInt8)mask, relaxed);
 }
 
 UInt8
 OSBitXorAtomic8(UInt32 mask, volatile UInt8 * value)
 {
-	return os_atomic_xor_orig(value, mask, relaxed);
+	return os_atomic_xor_orig(value, (UInt8)mask, relaxed);
 }
 
 SInt16
@@ -252,17 +248,17 @@ OSDecrementAtomic16(volatile SInt16 * value)
 UInt16
 OSBitAndAtomic16(UInt32 mask, volatile UInt16 * value)
 {
-	return os_atomic_and_orig(value, mask, relaxed);
+	return os_atomic_and_orig(value, (UInt16)mask, relaxed);
 }
 
 UInt16
 OSBitOrAtomic16(UInt32 mask, volatile UInt16 * value)
 {
-	return os_atomic_or_orig(value, mask, relaxed);
+	return os_atomic_or_orig(value, (UInt16)mask, relaxed);
 }
 
 UInt16
 OSBitXorAtomic16(UInt32 mask, volatile UInt16 * value)
 {
-	return os_atomic_xor_orig(value, mask, relaxed);
+	return os_atomic_xor_orig(value, (UInt16)mask, relaxed);
 }

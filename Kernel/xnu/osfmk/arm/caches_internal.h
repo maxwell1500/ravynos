@@ -28,19 +28,23 @@
 #ifndef _ARM_CACHES_INTERNAL
 #define _ARM_CACHES_INTERNAL    1
 
-#include <arm/proc_reg.h>
+#include <arm64/proc_reg.h>
 
 #include <kern/kern_types.h>
 
 extern void flush_dcache_syscall( vm_offset_t addr, unsigned length);
 
 #ifdef MACH_KERNEL_PRIVATE
+
+extern void enable_dc_mva_ops(void);
+extern void disable_dc_mva_ops(void);
+
 extern void flush_dcache(vm_offset_t addr, unsigned count, int phys);
 extern void flush_dcache64(addr64_t addr, unsigned count, int phys);
 extern void invalidate_icache(vm_offset_t addr, unsigned cnt, int phys);
 extern void invalidate_icache64(addr64_t addr, unsigned cnt, int phys);
 
-#if     __ARM_SMP__ && defined(ARMA7)
+#if     defined(ARMA7)
 #define LWFlush 1
 #define LWClean 2
 extern void cache_xcall(unsigned int op);
@@ -60,7 +64,7 @@ extern void CleanPoU_Dcache(void);
  * This is the one you need unless you really know what
  * you're doing.
  */
-extern void CleanPoC_DcacheRegion(vm_offset_t va, unsigned length);
+extern void CleanPoC_DcacheRegion(vm_offset_t va, size_t length);
 
 /*
  * Always actually flushes the cache, even on platforms
@@ -69,28 +73,21 @@ extern void CleanPoC_DcacheRegion(vm_offset_t va, unsigned length);
  * panic save routine (where caches will be yanked by reset
  * and coherency doesn't help).
  */
-extern void CleanPoC_DcacheRegion_Force(vm_offset_t va, unsigned length);
+extern void CleanPoC_DcacheRegion_Force(vm_offset_t va, size_t length);
 
-extern void CleanPoU_DcacheRegion(vm_offset_t va, unsigned length);
+extern void CleanPoU_DcacheRegion(vm_offset_t va, size_t length);
 
 extern void FlushPoC_Dcache(void);
 extern void FlushPoU_Dcache(void);
-extern void FlushPoC_DcacheRegion(vm_offset_t va, unsigned length);
-
-#ifdef  __arm__
-extern void invalidate_mmu_cache(void);
-extern void invalidate_mmu_dcache(void);
-extern void invalidate_mmu_dcache_region(vm_offset_t va, unsigned length);
-#endif
+extern void FlushPoC_DcacheRegion(vm_offset_t va, size_t length);
 
 extern void InvalidatePoU_Icache(void);
-extern void InvalidatePoU_IcacheRegion(vm_offset_t va, unsigned length);
+extern void InvalidatePoU_IcacheRegion(vm_offset_t va, size_t length);
 
 extern void cache_sync_page(ppnum_t pp);
 
 extern void platform_cache_init(void);
 extern void platform_cache_idle_enter(void);
-extern void platform_cache_idle_exit(void);
 extern void platform_cache_flush(void);
 extern boolean_t platform_cache_batch_wimg(unsigned int new_wimg, unsigned int size);
 extern void platform_cache_flush_wimg(unsigned int new_wimg);

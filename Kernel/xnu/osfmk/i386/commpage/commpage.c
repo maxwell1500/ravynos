@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -60,9 +60,8 @@
 #include <machine/cpu_capabilities.h>
 #include <machine/commpage.h>
 #include <machine/pmap.h>
-#include <pexpert/pexpert.h>
-#include <vm/vm_kern.h>
-#include <vm/vm_map.h>
+#include <vm/vm_kern_xnu.h>
+#include <vm/vm_map_xnu.h>
 #include <stdatomic.h>
 
 #include <ipc/ipc_port.h>
@@ -71,6 +70,7 @@
 #include <kern/processor.h>
 
 #include <sys/kdebug.h>
+#include <sys/random.h>
 
 #if CONFIG_ATM
 #include <atm/atm_internal.h>
@@ -121,8 +121,8 @@ commpage_allocate(
 	size_t          area_used,              // _COMM_PAGE32_AREA_USED or _COMM_PAGE64_AREA_USED
 	vm_prot_t       uperm)
 {
-	vm_offset_t     kernel_addr = 0;        // address of commpage in kernel map
-	vm_offset_t     zero = 0;
+	mach_vm_offset_t kernel_addr = 0;        // address of commpage in kernel map
+	mach_vm_offset_t zero = 0;
 	vm_size_t       size = area_used;       // size actually populated
 	vm_map_entry_t  entry;
 	ipc_port_t      handle;
@@ -133,13 +133,11 @@ commpage_allocate(
 		panic("commpage submap is null");
 	}
 
-	kr = vm_map_kernel(kernel_map,
+	kr = mach_vm_map_kernel(kernel_map,
 	    &kernel_addr,
 	    area_used,
 	    0,
-	    VM_FLAGS_ANYWHERE,
-	    VM_MAP_KERNEL_FLAGS_NONE,
-	    VM_KERN_MEMORY_OSFMK,
+	    VM_MAP_KERNEL_FLAGS_ANYWHERE(.vm_tag = VM_KERN_MEMORY_OSFMK),
 	    NULL,
 	    0,
 	    FALSE,
@@ -180,7 +178,7 @@ commpage_allocate(
 		panic("cannot make entry for commpage %d", kr);
 	}
 
-	vmk_flags = VM_MAP_KERNEL_FLAGS_NONE;
+	vmk_flags = VM_MAP_KERNEL_FLAGS_FIXED();
 	if (uperm == (VM_PROT_READ | VM_PROT_EXECUTE)) {
 		/*
 		 * Mark this unsigned executable mapping as "jit" to avoid
@@ -190,14 +188,12 @@ commpage_allocate(
 		vmk_flags.vmkf_map_jit = TRUE;
 	}
 
-	kr = vm_map_64_kernel(
+	kr = mach_vm_map_kernel(
 		submap,                 // target map (shared submap)
 		&zero,                  // address (map into 1st page in submap)
 		area_used,              // size
 		0,                      // mask
-		VM_FLAGS_FIXED,         // flags (it must be 1st page in submap)
 		vmk_flags,
-		VM_KERN_MEMORY_NONE,
 		handle,                 // port is the memory entry we just made
 		0,                      // offset (map 1st page in memory entry)
 		FALSE,                  // copy
@@ -248,9 +244,9 @@ commpage_specific_addr_of(char *commPageBase, commpage_address_t addr_at_runtime
 static int
 commpage_cpus( void )
 {
-	int cpus = 0;
+	unsigned int cpus;
 
-	cpus = ml_get_max_cpus();                   // NB: this call can block
+	cpus = ml_wait_max_cpus();                   // NB: this call can block
 
 	if (cpus == 0) {
 		panic("commpage cpus==0");
@@ -277,27 +273,28 @@ commpage_init_cpu_capabilities( void )
 	switch (cpu_info.vector_unit) {
 	case 9:
 		bits |= kHasAVX1_0;
-	/* fall thru */
+		OS_FALLTHROUGH;
 	case 8:
 		bits |= kHasSSE4_2;
-	/* fall thru */
+		OS_FALLTHROUGH;
 	case 7:
 		bits |= kHasSSE4_1;
-	/* fall thru */
+		OS_FALLTHROUGH;
 	case 6:
 		bits |= kHasSupplementalSSE3;
-	/* fall thru */
+		OS_FALLTHROUGH;
 	case 5:
 		bits |= kHasSSE3;
-	/* fall thru */
+		OS_FALLTHROUGH;
 	case 4:
 		bits |= kHasSSE2;
-	/* fall thru */
+		OS_FALLTHROUGH;
 	case 3:
 		bits |= kHasSSE;
-	/* fall thru */
+		OS_FALLTHROUGH;
 	case 2:
 		bits |= kHasMMX;
+		OS_FALLTHROUGH;
 	default:
 		break;
 	}
@@ -388,16 +385,11 @@ commpage_init_cpu_capabilities( void )
 		    CPUID_LEAF7_FEATURE_AVX512VPCDQ);
 	}
 
-	/* Adapted patch from Samuel Zormeister (PureDarwin) */
-	i386_cpu_info_t *infop = cpuid_info();
-
-	/* MSR_IA32_MISC_ENABLE != present on AMD */
-	if (!strncmp(infop->cpuid_vendor, CPUID_VID_INTEL, sizeof(infop->cpuid_vendor))) {
-	    uint64_t misc_enable = rdmsr64(MSR_IA32_MISC_ENABLE);
-	    setif(bits, kHasENFSTRG, (misc_enable & 1ULL) &&
-        	(cpuid_leaf7_features() &
-        	CPUID_LEAF7_FEATURE_ERMS));
+	if (cpuid_leaf7_features() & CPUID_LEAF7_FEATURE_ERMS) {
+		uint64_t misc_enable = rdmsr64(MSR_IA32_MISC_ENABLE);
+		setif(bits, kHasENFSTRG, (misc_enable & 1ULL));
 	}
+
 	_cpu_capabilities = bits;               // set kernel version for use by drivers etc
 }
 
@@ -515,18 +507,13 @@ commpage_populate_one(
 {
 	uint8_t         c1;
 	uint16_t        c2;
-	int             c4;
 	uint64_t        c8;
+	uint8_t         c256[256] = {0};
 	uint32_t        cfamily;
 	short   version = _COMM_PAGE_THIS_VERSION;
 
 	next = 0;
 	commPagePtr = (char *)commpage_allocate( submap, (vm_size_t) area_used, uperm );
-
-	/* The page is only lazily faulted in as the writes below touch it, so keep
-	 * interrupts off until the whole area has been populated. */
-	boolean_t istate = ml_set_interrupts_enabled(FALSE);
-
 	*kernAddressPtr = commPagePtr;                          // save address either in commPagePtr32 or 64
 	commPageBaseOffset = base_offset;
 
@@ -551,26 +538,29 @@ commpage_populate_one(
 	}
 	commpage_stuff(_COMM_PAGE_CACHE_LINESIZE, &c2, 2);
 
-	c4 = MP_SPIN_TRIES;
-	commpage_stuff(_COMM_PAGE_SPIN_COUNT, &c4, 4);
-
-	/* machine_info valid after ml_get_max_cpus() */
+	/* machine_info valid after ml_wait_max_cpus() */
 	c1 = machine_info.physical_cpu_max;
 	commpage_stuff(_COMM_PAGE_PHYSICAL_CPUS, &c1, 1);
 	c1 = machine_info.logical_cpu_max;
 	commpage_stuff(_COMM_PAGE_LOGICAL_CPUS, &c1, 1);
+	c1 = ml_get_cluster_count();
+	commpage_stuff(_COMM_PAGE_CPU_CLUSTERS, &c1, 1);
 
 	c8 = ml_cpu_cache_size(0);
 	commpage_stuff(_COMM_PAGE_MEMORY_SIZE, &c8, 8);
 
 	cfamily = cpuid_info()->cpuid_cpufamily;
 	commpage_stuff(_COMM_PAGE_CPUFAMILY, &cfamily, 4);
+	c1 = PAGE_SHIFT;
+	commpage_stuff(_COMM_PAGE_KERNEL_PAGE_SHIFT, &c1, 1);
+	commpage_stuff(_COMM_PAGE_USER_PAGE_SHIFT_64, &c1, 1);
+
+	ml_map_cpus_to_clusters(c256);
+	commpage_stuff(_COMM_PAGE_CPU_TO_CLUSTER, c256, 256);
 
 	if (next > _COMM_PAGE_END) {
 		panic("commpage overflow: next = 0x%08x, commPagePtr = 0x%p", next, commPagePtr);
 	}
-
-	ml_set_interrupts_enabled(istate);
 }
 
 
@@ -627,6 +617,41 @@ commpage_populate( void )
 #if CONFIG_ATM
 	commpage_update_atm_diagnostic_config(atm_get_diagnostic_config());
 #endif
+
+	/*
+	 * Set random values for targets in Apple Security Bounty
+	 * addr should be unmapped for userland processes
+	 * kaddr should be unmapped for kernel
+	 */
+	uint64_t asb_value, asb_addr, asb_kvalue, asb_kaddr;
+	uint64_t asb_rand_vals[] = {
+		0x93e78adcded4d3d5, 0xd16c5b76ad99bccf, 0x67dfbbd12c4a594e, 0x7365636e6f6f544f,
+		0x239a974c9811e04b, 0xbf60e7fa45741446, 0x8acf5210b466b05, 0x67dfbbd12c4a594e
+	};
+	const int nrandval = sizeof(asb_rand_vals) / sizeof(asb_rand_vals[0]);
+	uint8_t randidx;
+	read_random(&randidx, sizeof(uint8_t));
+
+
+	asb_value = asb_rand_vals[randidx++ % nrandval];
+	commpage_update(_COMM_PAGE_ASB_TARGET_VALUE, &asb_value, sizeof(asb_value));
+
+	asb_addr = asb_rand_vals[randidx++ % nrandval];
+	uint64_t user_min = MACH_VM_MAX_ADDRESS;
+	uint64_t user_max = UINT64_MAX;
+	asb_addr %= (user_max - user_min);
+	asb_addr += user_min;
+	commpage_update(_COMM_PAGE_ASB_TARGET_ADDRESS, &asb_addr, sizeof(asb_addr));
+
+	asb_kvalue = asb_rand_vals[randidx++ % nrandval];
+	commpage_update(_COMM_PAGE_ASB_TARGET_KERN_VALUE, &asb_kvalue, sizeof(asb_kvalue));
+
+	asb_kaddr = asb_rand_vals[randidx++ % nrandval];
+	uint64_t kernel_min = 0x0LL;
+	uint64_t kernel_max = VM_MIN_KERNEL_ADDRESS;
+	asb_kaddr %= (kernel_max - kernel_min);
+	asb_kaddr += kernel_min;
+	commpage_update(_COMM_PAGE_ASB_TARGET_KERN_ADDRESS, &asb_kaddr, sizeof(asb_kaddr));
 }
 
 /* Fill in the common routines during kernel initialization.
@@ -798,35 +823,6 @@ commpage_set_memory_pressure(
 	}
 }
 
-
-/* Update _COMM_PAGE_SPIN_COUNT.  We might want to reduce when running on a battery, etc. */
-
-void
-commpage_set_spin_count(
-	unsigned int    count )
-{
-	char        *cp;
-	uint32_t    *ip;
-
-	if (count == 0) {   /* we test for 0 after decrement, not before */
-		count = 1;
-	}
-
-	cp = commPagePtr32;
-	if (cp) {
-		cp += (_COMM_PAGE_SPIN_COUNT - _COMM_PAGE32_BASE_ADDRESS);
-		ip = (uint32_t*) (void *) cp;
-		*ip = (uint32_t) count;
-	}
-
-	cp = commPagePtr64;
-	if (cp) {
-		cp += (_COMM_PAGE_SPIN_COUNT - _COMM_PAGE32_START_ADDRESS);
-		ip = (uint32_t*) (void *) cp;
-		*ip = (uint32_t) count;
-	}
-}
-
 /* Updated every time a logical CPU goes offline/online */
 void
 commpage_update_active_cpus(void)
@@ -943,13 +939,13 @@ commpage_update_dyld_flags(uint64_t value)
 
 	cp = commPagePtr32;
 	if (cp) {
-		cp += (_COMM_PAGE_DYLD_SYSTEM_FLAGS - _COMM_PAGE32_BASE_ADDRESS);
+		cp += (_COMM_PAGE_DYLD_FLAGS - _COMM_PAGE32_BASE_ADDRESS);
 		*(uint64_t *)cp = value;
 	}
 
 	cp = commPagePtr64;
 	if (cp) {
-		cp += (_COMM_PAGE_DYLD_SYSTEM_FLAGS - _COMM_PAGE32_BASE_ADDRESS);
+		cp += (_COMM_PAGE_DYLD_FLAGS - _COMM_PAGE32_BASE_ADDRESS);
 		*(uint64_t *)cp = value;
 	}
 }

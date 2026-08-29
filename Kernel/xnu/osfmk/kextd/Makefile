@@ -13,7 +13,7 @@ PRIVATE_DATAFILES = ${MIG_DEFS}
 KERNELFILES = ${MIG_DEFS}
 
 INSTALL_MI_LIST =
-INSTALL_MI_LCL_LIST = ${PRIVATE_DATAFILES}
+INSTALL_SF_MI_LCL_LIST = ${PRIVATE_DATAFILES}
 
 INSTALL_MI_GEN_LIST =
 
@@ -41,7 +41,7 @@ COMP_FILES = ${MIG_KUSRC}
 do_build_all:: $(COMP_FILES)
 
 ${MIG_KUSRC} : kextd_mach.defs
-	$(call makelog,$(ColorM)MIG$(Color0) $(ColorF)$@$(Color0))
+	@$(LOG_MIG) $@
 	$(_v)${MIG} ${MIGFLAGS} ${MIGKUFLAGS}	\
 		-user    kextd_mach.c		\
 		-header  kextd_mach.h		\

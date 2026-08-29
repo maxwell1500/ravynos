@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -72,8 +72,7 @@
 #include <mach/mig.h>
 #include <mach/kern_return.h>
 #include <mach/memory_object.h>
-#include <mach/memory_object_default.h>
-#include <mach/memory_object_control_server.h>
+#include <mach/memory_object_control.h>
 #include <mach/host_priv_server.h>
 #include <mach/boolean.h>
 #include <mach/vm_prot.h>
@@ -89,23 +88,26 @@
 #include <kern/ipc_mig.h>
 #include <kern/misc_protos.h>
 
-#include <vm/vm_object.h>
-#include <vm/vm_fault.h>
-#include <vm/memory_object.h>
-#include <vm/vm_page.h>
-#include <vm/vm_pageout.h>
+#include <vm/vm_object_internal.h>
+#include <vm/vm_fault_internal.h>
+#include <vm/memory_object_internal.h>
+#include <vm/vm_page_internal.h>
+#include <vm/vm_pageout_internal.h>
 #include <vm/pmap.h>            /* For pmap_clear_modify */
 #include <vm/vm_kern.h>         /* For kernel_map, vm_move */
-#include <vm/vm_map.h>          /* For vm_map_pageable */
+#include <vm/vm_map_xnu.h>          /* For vm_map_pageable */
 #include <vm/vm_purgeable_internal.h>   /* Needed by some vm_page.h macros */
 #include <vm/vm_shared_region.h>
+#include <vm/vm_memory_entry_xnu.h>
 
 #include <vm/vm_external.h>
 
-#include <vm/vm_protos.h>
+#include <vm/vm_protos_internal.h>
+#include <vm/vm_iokit.h>
+#include <vm/vm_ubc.h>
 
 memory_object_default_t memory_manager_default = MEMORY_OBJECT_DEFAULT_NULL;
-decl_lck_mtx_data(, memory_manager_default_lock);
+LCK_MTX_DECLARE(memory_manager_default_lock, &vm_object_lck_grp);
 
 
 /*
@@ -165,6 +167,10 @@ memory_object_lock_page(
 	boolean_t               should_flush,
 	vm_prot_t               prot)
 {
+	if (prot == VM_PROT_NO_CHANGE_LEGACY) {
+		prot = VM_PROT_NO_CHANGE;
+	}
+
 	if (m->vmp_busy || m->vmp_cleaning) {
 		return MEMORY_OBJECT_LOCK_RESULT_MUST_BLOCK;
 	}
@@ -177,8 +183,8 @@ memory_object_lock_page(
 	 *	Don't worry about pages for which the kernel
 	 *	does not have any data.
 	 */
-	if (m->vmp_absent || m->vmp_error || m->vmp_restart) {
-		if (m->vmp_error && should_flush && !VM_PAGE_WIRED(m)) {
+	if (m->vmp_absent || VMP_ERROR_GET(m) || m->vmp_restart) {
+		if (VMP_ERROR_GET(m) && should_flush && !VM_PAGE_WIRED(m)) {
 			/*
 			 * dump the page, pager wants us to
 			 * clean it up and there is no
@@ -307,6 +313,10 @@ memory_object_lock_request(
 {
 	vm_object_t     object;
 
+	if (prot == VM_PROT_NO_CHANGE_LEGACY) {
+		prot = VM_PROT_NO_CHANGE;
+	}
+
 	/*
 	 *	Check for bogus arguments.
 	 */
@@ -315,7 +325,7 @@ memory_object_lock_request(
 		return KERN_INVALID_ARGUMENT;
 	}
 
-	if ((prot & ~VM_PROT_ALL) != 0 && prot != VM_PROT_NO_CHANGE) {
+	if ((prot & ~(VM_PROT_ALL | VM_PROT_ALLEXEC)) != 0 && prot != VM_PROT_NO_CHANGE) {
 		return KERN_INVALID_ARGUMENT;
 	}
 
@@ -329,7 +339,7 @@ memory_object_lock_request(
 	vm_object_paging_begin(object);
 
 	if (flags & MEMORY_OBJECT_DATA_FLUSH_ALL) {
-		if ((should_return != MEMORY_OBJECT_RETURN_NONE) || offset || object->copy) {
+		if ((should_return != MEMORY_OBJECT_RETURN_NONE) || offset || object->vo_copy) {
 			flags &= ~MEMORY_OBJECT_DATA_FLUSH_ALL;
 			flags |= MEMORY_OBJECT_DATA_FLUSH;
 		}
@@ -350,40 +360,6 @@ memory_object_lock_request(
 }
 
 /*
- *	memory_object_release_name:  [interface]
- *
- *	Enforces name semantic on memory_object reference count decrement
- *	This routine should not be called unless the caller holds a name
- *	reference gained through the memory_object_named_create or the
- *	memory_object_rename call.
- *	If the TERMINATE_IDLE flag is set, the call will return if the
- *	reference count is not 1. i.e. idle with the only remaining reference
- *	being the name.
- *	If the decision is made to proceed the name field flag is set to
- *	false and the reference count is decremented.  If the RESPECT_CACHE
- *	flag is set and the reference count has gone to zero, the
- *	memory_object is checked to see if it is cacheable otherwise when
- *	the reference count is zero, it is simply terminated.
- */
-
-kern_return_t
-memory_object_release_name(
-	memory_object_control_t control,
-	int                             flags)
-{
-	vm_object_t     object;
-
-	object = memory_object_control_to_vm_object(control);
-	if (object == VM_OBJECT_NULL) {
-		return KERN_INVALID_ARGUMENT;
-	}
-
-	return vm_object_release_name(object, flags);
-}
-
-
-
-/*
  *	Routine:	memory_object_destroy [user interface]
  *	Purpose:
  *		Shut down a memory object, despite the
@@ -392,8 +368,8 @@ memory_object_release_name(
  */
 kern_return_t
 memory_object_destroy(
-	memory_object_control_t control,
-	kern_return_t           reason)
+	memory_object_control_t                 control,
+	vm_object_destroy_reason_t   reason)
 {
 	vm_object_t             object;
 
@@ -532,15 +508,24 @@ vm_object_update_extent(
 	vm_object_offset_t      next_offset = offset;
 	memory_object_lock_result_t     page_lock_result;
 	memory_object_cluster_size_t    data_cnt = 0;
-	struct vm_page_delayed_work     dw_array[DEFAULT_DELAYED_WORK_LIMIT];
-	struct vm_page_delayed_work     *dwp;
+	struct  vm_page_delayed_work    dw_array;
+	struct  vm_page_delayed_work    *dwp, *dwp_start;
+	bool            dwp_finish_ctx = TRUE;
 	int             dw_count;
 	int             dw_limit;
 	int             dirty_count;
 
-	dwp = &dw_array[0];
+	dwp_start = dwp = NULL;
 	dw_count = 0;
 	dw_limit = DELAYED_WORK_LIMIT(DEFAULT_DELAYED_WORK_LIMIT);
+	dwp_start = vm_page_delayed_work_get_ctx();
+	if (dwp_start == NULL) {
+		dwp_start = &dw_array;
+		dw_limit = 1;
+		dwp_finish_ctx = FALSE;
+	}
+	dwp = dwp_start;
+
 	dirty_count = 0;
 
 	for (;
@@ -553,8 +538,8 @@ vm_object_update_extent(
 		if (data_cnt) {
 			if ((data_cnt >= MAX_UPL_TRANSFER_BYTES) || (next_offset != offset)) {
 				if (dw_count) {
-					vm_page_do_delayed_work(object, VM_KERN_MEMORY_NONE, &dw_array[0], dw_count);
-					dwp = &dw_array[0];
+					vm_page_do_delayed_work(object, VM_KERN_MEMORY_NONE, dwp_start, dw_count);
+					dwp = dwp_start;
 					dw_count = 0;
 				}
 				LIST_REQ_PAGEOUT_PAGES(object, data_cnt,
@@ -572,8 +557,8 @@ vm_object_update_extent(
 				 *	End of a run of dirty/precious pages.
 				 */
 				if (dw_count) {
-					vm_page_do_delayed_work(object, VM_KERN_MEMORY_NONE, &dw_array[0], dw_count);
-					dwp = &dw_array[0];
+					vm_page_do_delayed_work(object, VM_KERN_MEMORY_NONE, dwp_start, dw_count);
+					dwp = dwp_start;
 					dw_count = 0;
 				}
 				LIST_REQ_PAGEOUT_PAGES(object, data_cnt,
@@ -599,7 +584,7 @@ vm_object_update_extent(
 				break;
 
 			case MEMORY_OBJECT_LOCK_RESULT_MUST_BLOCK:
-				PAGE_SLEEP(object, m, THREAD_UNINT);
+				vm_page_sleep(object, m, THREAD_UNINT, LCK_SLEEP_EXCLUSIVE);
 				continue;
 
 			case MEMORY_OBJECT_LOCK_RESULT_MUST_RETURN:
@@ -638,8 +623,8 @@ vm_object_update_extent(
 				VM_PAGE_ADD_DELAYED_WORK(dwp, m, dw_count);
 
 				if (dw_count >= dw_limit) {
-					vm_page_do_delayed_work(object, VM_KERN_MEMORY_NONE, &dw_array[0], dw_count);
-					dwp = &dw_array[0];
+					vm_page_do_delayed_work(object, VM_KERN_MEMORY_NONE, dwp_start, dw_count);
+					dwp = dwp_start;
 					dw_count = 0;
 				}
 			}
@@ -655,13 +640,19 @@ vm_object_update_extent(
 	 *	Clean any pages that have been saved.
 	 */
 	if (dw_count) {
-		vm_page_do_delayed_work(object, VM_KERN_MEMORY_NONE, &dw_array[0], dw_count);
+		vm_page_do_delayed_work(object, VM_KERN_MEMORY_NONE, dwp_start, dw_count);
 	}
 
 	if (data_cnt) {
 		LIST_REQ_PAGEOUT_PAGES(object, data_cnt,
 		    paging_offset, offset_resid, io_errno, should_iosync);
 	}
+
+	if (dwp_start && dwp_finish_ctx) {
+		vm_page_delayed_work_finish_ctx(dwp_start);
+		dwp_start = dwp = NULL;
+	}
+
 	return retval;
 }
 
@@ -727,7 +718,7 @@ vm_object_update(
 	if (update_cow || (flags & (MEMORY_OBJECT_DATA_PURGE | MEMORY_OBJECT_DATA_SYNC))) {
 		int collisions = 0;
 
-		while ((copy_object = object->copy) != VM_OBJECT_NULL) {
+		while ((copy_object = object->vo_copy) != VM_OBJECT_NULL) {
 			/*
 			 * need to do a try here since we're swimming upstream
 			 * against the normal lock ordering... however, we need
@@ -757,9 +748,9 @@ vm_object_update(
 		}
 	}
 	if ((copy_object != VM_OBJECT_NULL && update_cow) || (flags & MEMORY_OBJECT_DATA_SYNC)) {
-		vm_map_size_t           i;
-		vm_map_size_t           copy_size;
-		vm_map_offset_t         copy_offset;
+		vm_object_offset_t      i;
+		vm_object_size_t        copy_size;
+		vm_object_offset_t      copy_offset;
 		vm_prot_t               prot;
 		vm_page_t               page;
 		vm_page_t               top_page;
@@ -771,8 +762,7 @@ vm_object_update(
 			 * translate offset with respect to shadow's offset
 			 */
 			copy_offset = (offset >= copy_object->vo_shadow_offset) ?
-			    (vm_map_offset_t)(offset - copy_object->vo_shadow_offset) :
-			    (vm_map_offset_t) 0;
+			    (offset - copy_object->vo_shadow_offset) : 0;
 
 			if (copy_offset > copy_object->vo_size) {
 				copy_offset = copy_object->vo_size;
@@ -784,7 +774,7 @@ vm_object_update(
 			if (offset >= copy_object->vo_shadow_offset) {
 				copy_size = size;
 			} else if (size >= copy_object->vo_shadow_offset - offset) {
-				copy_size = size - (copy_object->vo_shadow_offset - offset);
+				copy_size = (size - (copy_object->vo_shadow_offset - offset));
 			} else {
 				copy_size = 0;
 			}
@@ -809,7 +799,7 @@ vm_object_update(
 		fault_info.hi_offset = copy_size;
 		fault_info.stealth = TRUE;
 		assert(fault_info.cs_bypass == FALSE);
-		assert(fault_info.pmap_cs_associated == FALSE);
+		assert(fault_info.csm_associated == FALSE);
 
 		vm_object_paging_begin(copy_object);
 
@@ -830,7 +820,7 @@ RETRY_COW_OF_LOCK_REQUEST:
 			    (int *)0,
 			    &error,
 			    FALSE,
-			    FALSE, &fault_info);
+			    &fault_info);
 
 			switch (result) {
 			case VM_FAULT_SUCCESS:
@@ -848,7 +838,7 @@ RETRY_COW_OF_LOCK_REQUEST:
 					}
 					vm_page_unlock_queues();
 				}
-				PAGE_WAKEUP_DONE(page);
+				vm_page_wakeup_done(copy_object, page);
 				break;
 			case VM_FAULT_RETRY:
 				prot =  VM_PROT_WRITE | VM_PROT_READ;
@@ -870,7 +860,7 @@ RETRY_COW_OF_LOCK_REQUEST:
 				/* success but no VM page: fail */
 				vm_object_paging_end(copy_object);
 				vm_object_unlock(copy_object);
-			/*FALLTHROUGH*/
+				OS_FALLTHROUGH;
 			case VM_FAULT_MEMORY_ERROR:
 				if (object != copy_object) {
 					vm_object_deallocate(copy_object);
@@ -895,8 +885,8 @@ RETRY_COW_OF_LOCK_REQUEST:
 	if (copy_object != VM_OBJECT_NULL && copy_object != object) {
 		if ((flags & MEMORY_OBJECT_DATA_PURGE)) {
 			vm_object_lock_assert_exclusive(copy_object);
-			copy_object->shadow_severed = TRUE;
-			copy_object->shadowed = FALSE;
+			VM_OBJECT_SET_SHADOW_SEVERED(copy_object, TRUE);
+			VM_OBJECT_SET_SHADOWED(copy_object, FALSE);
 			copy_object->shadow = NULL;
 			/*
 			 * delete the ref the COW was holding on the target object
@@ -1059,6 +1049,7 @@ vm_object_set_attributes_common(
 	switch (copy_strategy) {
 	case MEMORY_OBJECT_COPY_NONE:
 	case MEMORY_OBJECT_COPY_DELAY:
+	case MEMORY_OBJECT_COPY_DELAY_FORK:
 		break;
 	default:
 		return KERN_INVALID_ARGUMENT;
@@ -1076,7 +1067,7 @@ vm_object_set_attributes_common(
 	assert(!object->internal);
 	object_became_ready = !object->pager_ready;
 	object->copy_strategy = copy_strategy;
-	object->can_persist = may_cache;
+	VM_OBJECT_SET_CAN_PERSIST(object, may_cache);
 
 	/*
 	 *	Wake up anyone waiting for the ready attribute
@@ -1084,24 +1075,13 @@ vm_object_set_attributes_common(
 	 */
 
 	if (object_became_ready) {
-		object->pager_ready = TRUE;
+		VM_OBJECT_SET_PAGER_READY(object, TRUE);
 		vm_object_wakeup(object, VM_OBJECT_EVENT_PAGER_READY);
 	}
 
 	vm_object_unlock(object);
 
 	return KERN_SUCCESS;
-}
-
-
-kern_return_t
-memory_object_synchronize_completed(
-	__unused    memory_object_control_t control,
-	__unused    memory_object_offset_t  offset,
-	__unused    memory_object_size_t    length)
-{
-	panic("memory_object_synchronize_completed no longer supported\n");
-	return KERN_FAILURE;
 }
 
 
@@ -1247,133 +1227,6 @@ memory_object_change_attributes(
 }
 
 kern_return_t
-memory_object_get_attributes(
-	memory_object_control_t control,
-	memory_object_flavor_t  flavor,
-	memory_object_info_t    attributes,     /* pointer to OUT array */
-	mach_msg_type_number_t  *count)         /* IN/OUT */
-{
-	kern_return_t           ret = KERN_SUCCESS;
-	vm_object_t             object;
-
-	object = memory_object_control_to_vm_object(control);
-	if (object == VM_OBJECT_NULL) {
-		return KERN_INVALID_ARGUMENT;
-	}
-
-	vm_object_lock(object);
-
-	switch (flavor) {
-	case OLD_MEMORY_OBJECT_BEHAVIOR_INFO:
-	{
-		old_memory_object_behave_info_t behave;
-
-		if (*count < OLD_MEMORY_OBJECT_BEHAVE_INFO_COUNT) {
-			ret = KERN_INVALID_ARGUMENT;
-			break;
-		}
-
-		behave = (old_memory_object_behave_info_t) attributes;
-		behave->copy_strategy = object->copy_strategy;
-		behave->temporary = FALSE;
-#if notyet      /* remove when vm_msync complies and clean in place fini */
-		behave->invalidate = object->invalidate;
-#else
-		behave->invalidate = FALSE;
-#endif
-
-		*count = OLD_MEMORY_OBJECT_BEHAVE_INFO_COUNT;
-		break;
-	}
-
-	case MEMORY_OBJECT_BEHAVIOR_INFO:
-	{
-		memory_object_behave_info_t     behave;
-
-		if (*count < MEMORY_OBJECT_BEHAVE_INFO_COUNT) {
-			ret = KERN_INVALID_ARGUMENT;
-			break;
-		}
-
-		behave = (memory_object_behave_info_t) attributes;
-		behave->copy_strategy = object->copy_strategy;
-		behave->temporary = FALSE;
-#if notyet      /* remove when vm_msync complies and clean in place fini */
-		behave->invalidate = object->invalidate;
-#else
-		behave->invalidate = FALSE;
-#endif
-		behave->advisory_pageout = FALSE;
-		behave->silent_overwrite = FALSE;
-		*count = MEMORY_OBJECT_BEHAVE_INFO_COUNT;
-		break;
-	}
-
-	case MEMORY_OBJECT_PERFORMANCE_INFO:
-	{
-		memory_object_perf_info_t       perf;
-
-		if (*count < MEMORY_OBJECT_PERF_INFO_COUNT) {
-			ret = KERN_INVALID_ARGUMENT;
-			break;
-		}
-
-		perf = (memory_object_perf_info_t) attributes;
-		perf->cluster_size = PAGE_SIZE;
-		perf->may_cache = object->can_persist;
-
-		*count = MEMORY_OBJECT_PERF_INFO_COUNT;
-		break;
-	}
-
-	case OLD_MEMORY_OBJECT_ATTRIBUTE_INFO:
-	{
-		old_memory_object_attr_info_t       attr;
-
-		if (*count < OLD_MEMORY_OBJECT_ATTR_INFO_COUNT) {
-			ret = KERN_INVALID_ARGUMENT;
-			break;
-		}
-
-		attr = (old_memory_object_attr_info_t) attributes;
-		attr->may_cache = object->can_persist;
-		attr->copy_strategy = object->copy_strategy;
-
-		*count = OLD_MEMORY_OBJECT_ATTR_INFO_COUNT;
-		break;
-	}
-
-	case MEMORY_OBJECT_ATTRIBUTE_INFO:
-	{
-		memory_object_attr_info_t       attr;
-
-		if (*count < MEMORY_OBJECT_ATTR_INFO_COUNT) {
-			ret = KERN_INVALID_ARGUMENT;
-			break;
-		}
-
-		attr = (memory_object_attr_info_t) attributes;
-		attr->copy_strategy = object->copy_strategy;
-		attr->cluster_size = PAGE_SIZE;
-		attr->may_cache_object = object->can_persist;
-		attr->temporary = FALSE;
-
-		*count = MEMORY_OBJECT_ATTR_INFO_COUNT;
-		break;
-	}
-
-	default:
-		ret = KERN_INVALID_ARGUMENT;
-		break;
-	}
-
-	vm_object_unlock(object);
-
-	return ret;
-}
-
-
-kern_return_t
 memory_object_iopl_request(
 	ipc_port_t              port,
 	memory_object_offset_t  offset,
@@ -1387,6 +1240,7 @@ memory_object_iopl_request(
 	vm_object_t             object;
 	kern_return_t           ret;
 	upl_control_flags_t     caller_flags;
+	vm_named_entry_t        named_entry;
 
 	caller_flags = *flags;
 
@@ -1398,10 +1252,8 @@ memory_object_iopl_request(
 		return KERN_INVALID_VALUE;
 	}
 
-	if (ip_kotype(port) == IKOT_NAMED_ENTRY) {
-		vm_named_entry_t        named_entry;
-
-		named_entry = (vm_named_entry_t) ip_get_kobject(port);
+	named_entry = mach_memory_entry_from_port(port);
+	if (named_entry != NULL) {
 		/* a few checks to make sure user is obeying rules */
 		if (*upl_size == 0) {
 			if (offset >= named_entry->size) {
@@ -1431,28 +1283,22 @@ memory_object_iopl_request(
 		/* the callers parameter offset is defined to be the */
 		/* offset from beginning of named entry offset in object */
 		offset = offset + named_entry->offset;
+		offset += named_entry->data_offset;
 
 		if (named_entry->is_sub_map ||
 		    named_entry->is_copy) {
 			return KERN_INVALID_ARGUMENT;
 		}
+		if (!named_entry->is_object) {
+			return KERN_INVALID_ARGUMENT;
+		}
 
 		named_entry_lock(named_entry);
 
-		object = named_entry->backing.object;
+		object = vm_named_entry_to_vm_object(named_entry);
+		assert(object != VM_OBJECT_NULL);
 		vm_object_reference(object);
 		named_entry_unlock(named_entry);
-	} else if (ip_kotype(port) == IKOT_MEM_OBJ_CONTROL) {
-		memory_object_control_t control;
-		control = (memory_object_control_t) port;
-		if (control == NULL) {
-			return KERN_INVALID_ARGUMENT;
-		}
-		object = memory_object_control_to_vm_object(control);
-		if (object == VM_OBJECT_NULL) {
-			return KERN_INVALID_ARGUMENT;
-		}
-		vm_object_reference(object);
 	} else {
 		return KERN_INVALID_ARGUMENT;
 	}
@@ -1503,6 +1349,8 @@ memory_object_upl_request(
 	int                     tag)
 {
 	vm_object_t             object;
+	vm_tag_t                vmtag = (vm_tag_t)tag;
+	assert(vmtag == tag);
 
 	object = memory_object_control_to_vm_object(control);
 	if (object == VM_OBJECT_NULL) {
@@ -1516,49 +1364,9 @@ memory_object_upl_request(
 	           user_page_list,
 	           page_list_count,
 	           (upl_control_flags_t)(unsigned int) cntrl_flags,
-	           tag);
+	           vmtag);
 }
 
-/*
- *	Routine:	memory_object_super_upl_request [interface]
- *	Purpose:
- *		Cause the population of a portion of a vm_object
- *		in much the same way as memory_object_upl_request.
- *		Depending on the nature of the request, the pages
- *		returned may be contain valid data or be uninitialized.
- *		However, the region may be expanded up to the super
- *		cluster size provided.
- */
-
-kern_return_t
-memory_object_super_upl_request(
-	memory_object_control_t control,
-	memory_object_offset_t  offset,
-	upl_size_t              size,
-	upl_size_t              super_cluster,
-	upl_t                   *upl,
-	upl_page_info_t         *user_page_list,
-	unsigned int            *page_list_count,
-	int                     cntrl_flags,
-	int                     tag)
-{
-	vm_object_t             object;
-
-	object = memory_object_control_to_vm_object(control);
-	if (object == VM_OBJECT_NULL) {
-		return KERN_INVALID_ARGUMENT;
-	}
-
-	return vm_object_super_upl_request(object,
-	           offset,
-	           size,
-	           super_cluster,
-	           upl,
-	           user_page_list,
-	           page_list_count,
-	           (upl_control_flags_t)(unsigned int) cntrl_flags,
-	           tag);
-}
 
 kern_return_t
 memory_object_cluster_size(
@@ -1615,8 +1423,6 @@ host_default_memory_manager(
 		return KERN_INVALID_HOST;
 	}
 
-	assert(host_priv == &realhost);
-
 	new_manager = *default_manager;
 	lck_mtx_lock(&memory_manager_default_lock);
 	current_manager = memory_manager_default;
@@ -1626,8 +1432,7 @@ host_default_memory_manager(
 		/*
 		 *	Retrieve the current value.
 		 */
-		returned_manager = current_manager;
-		memory_object_default_reference(returned_manager);
+		returned_manager = ipc_port_make_send_mqueue(current_manager);
 	} else {
 		/*
 		 *	Only allow the kernel to change the value.
@@ -1657,8 +1462,7 @@ host_default_memory_manager(
 		 *	one.
 		 */
 		returned_manager = current_manager;
-		memory_manager_default = new_manager;
-		memory_object_default_reference(new_manager);
+		memory_manager_default = ipc_port_make_send_mqueue(new_manager);
 
 		/*
 		 *	In case anyone's been waiting for a memory
@@ -1708,7 +1512,7 @@ memory_manager_default_reference(void)
 		assert(res == THREAD_AWAKENED);
 		current_manager = memory_manager_default;
 	}
-	memory_object_default_reference(current_manager);
+	current_manager = ipc_port_make_send_mqueue(current_manager);
 	lck_mtx_unlock(&memory_manager_default_lock);
 
 	return current_manager;
@@ -1747,15 +1551,6 @@ memory_manager_default_check(void)
 		return KERN_SUCCESS;
 	}
 }
-
-__private_extern__ void
-memory_manager_default_init(void)
-{
-	memory_manager_default = MEMORY_OBJECT_DEFAULT_NULL;
-	lck_mtx_init(&memory_manager_default_lock, &vm_object_lck_grp, &vm_object_lck_attr);
-}
-
-
 
 /* Allow manipulation of individual page state.  This is actually part of */
 /* the UPL regimen but takes place on the object rather than on a UPL */
@@ -1800,6 +1595,11 @@ memory_object_range_op(
 
 	object = memory_object_control_to_vm_object(control);
 	if (object == VM_OBJECT_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	if (offset_end - offset_beg > (uint32_t) -1) {
+		/* range is too big and would overflow "*range" */
 		return KERN_INVALID_ARGUMENT;
 	}
 
@@ -1878,10 +1678,37 @@ memory_object_mark_trusted(
 
 	if (object != VM_OBJECT_NULL) {
 		vm_object_lock(object);
-		object->pager_trusted = TRUE;
+		VM_OBJECT_SET_PAGER_TRUSTED(object, TRUE);
 		vm_object_unlock(object);
 	}
 }
+
+#if FBDP_DEBUG_OBJECT_NO_PAGER
+kern_return_t
+memory_object_mark_as_tracked(
+	memory_object_control_t control,
+	bool                    new_value,
+	bool                    *old_value)
+{
+	vm_object_t             object;
+
+	if (control == NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
+	object = memory_object_control_to_vm_object(control);
+
+	if (object == VM_OBJECT_NULL) {
+		return KERN_FAILURE;
+	}
+
+	vm_object_lock(object);
+	*old_value = object->fbdp_tracked;
+	VM_OBJECT_SET_FBDP_TRACKED(object, new_value);
+	vm_object_unlock(object);
+
+	return KERN_SUCCESS;
+}
+#endif /* FBDP_DEBUG_OBJECT_NO_PAGER */
 
 #if CONFIG_SECLUDED_MEMORY
 void
@@ -1918,6 +1745,27 @@ memory_object_mark_eligible_for_secluded(
 	vm_object_unlock(object);
 }
 #endif /* CONFIG_SECLUDED_MEMORY */
+
+void
+memory_object_mark_for_realtime(
+	memory_object_control_t control,
+	bool                    for_realtime)
+{
+	vm_object_t             object;
+
+	if (control == NULL) {
+		return;
+	}
+	object = memory_object_control_to_vm_object(control);
+
+	if (object == VM_OBJECT_NULL) {
+		return;
+	}
+
+	vm_object_lock(object);
+	VM_OBJECT_SET_FOR_REALTIME(object, for_realtime);
+	vm_object_unlock(object);
+}
 
 kern_return_t
 memory_object_pages_resident(
@@ -1992,54 +1840,26 @@ memory_object_is_shared_cache(
 	return object->object_is_shared_cache;
 }
 
-static zone_t mem_obj_control_zone;
-
-__private_extern__ void
-memory_object_control_bootstrap(void)
-{
-	int     i;
-
-	i = (vm_size_t) sizeof(struct memory_object_control);
-	mem_obj_control_zone = zinit(i, 8192 * i, 4096, "mem_obj_control");
-	zone_change(mem_obj_control_zone, Z_CALLERACCT, FALSE);
-	zone_change(mem_obj_control_zone, Z_NOENCRYPT, TRUE);
-	return;
-}
-
 __private_extern__ memory_object_control_t
 memory_object_control_allocate(
 	vm_object_t             object)
 {
-	memory_object_control_t control;
-
-	control = (memory_object_control_t)zalloc(mem_obj_control_zone);
-	if (control != MEMORY_OBJECT_CONTROL_NULL) {
-		control->moc_object = object;
-		control->moc_ikot = IKOT_MEM_OBJ_CONTROL; /* fake ip_kotype */
-	}
-	return control;
+	return object;
 }
 
 __private_extern__ void
 memory_object_control_collapse(
-	memory_object_control_t control,
+	memory_object_control_t *control,
 	vm_object_t             object)
 {
-	assert((control->moc_object != VM_OBJECT_NULL) &&
-	    (control->moc_object != object));
-	control->moc_object = object;
+	*control = object;
 }
 
 __private_extern__ vm_object_t
 memory_object_control_to_vm_object(
 	memory_object_control_t control)
 {
-	if (control == MEMORY_OBJECT_CONTROL_NULL ||
-	    control->moc_ikot != IKOT_MEM_OBJ_CONTROL) {
-		return VM_OBJECT_NULL;
-	}
-
-	return control->moc_object;
+	return control;
 }
 
 __private_extern__ vm_object_t
@@ -2058,21 +1878,6 @@ memory_object_to_vm_object(
 	return memory_object_control_to_vm_object(mo_control);
 }
 
-memory_object_control_t
-convert_port_to_mo_control(
-	__unused mach_port_t    port)
-{
-	return MEMORY_OBJECT_CONTROL_NULL;
-}
-
-
-mach_port_t
-convert_mo_control_to_port(
-	__unused memory_object_control_t        control)
-{
-	return MACH_PORT_NULL;
-}
-
 void
 memory_object_control_reference(
 	__unused memory_object_control_t        control)
@@ -2087,31 +1892,16 @@ memory_object_control_reference(
  */
 void
 memory_object_control_deallocate(
-	memory_object_control_t control)
+	__unused memory_object_control_t control)
 {
-	zfree(mem_obj_control_zone, control);
 }
 
 void
 memory_object_control_disable(
-	memory_object_control_t control)
+	memory_object_control_t *control)
 {
-	assert(control->moc_object != VM_OBJECT_NULL);
-	control->moc_object = VM_OBJECT_NULL;
-}
-
-void
-memory_object_default_reference(
-	memory_object_default_t dmm)
-{
-	ipc_port_make_send(dmm);
-}
-
-void
-memory_object_default_deallocate(
-	memory_object_default_t dmm)
-{
-	ipc_port_release_send(dmm);
+	assert(*control != VM_OBJECT_NULL);
+	*control = VM_OBJECT_NULL;
 }
 
 memory_object_t
@@ -2234,43 +2024,6 @@ memory_object_data_initialize
 		size);
 }
 
-/* Routine memory_object_data_unlock */
-kern_return_t
-memory_object_data_unlock
-(
-	memory_object_t memory_object,
-	memory_object_offset_t offset,
-	memory_object_size_t size,
-	vm_prot_t desired_access
-)
-{
-	return (memory_object->mo_pager_ops->memory_object_data_unlock)(
-		memory_object,
-		offset,
-		size,
-		desired_access);
-}
-
-/* Routine memory_object_synchronize */
-kern_return_t
-memory_object_synchronize
-(
-	memory_object_t memory_object,
-	memory_object_offset_t offset,
-	memory_object_size_t size,
-	vm_sync_t sync_flags
-)
-{
-	panic("memory_object_syncrhonize no longer supported\n");
-
-	return (memory_object->mo_pager_ops->memory_object_synchronize)(
-		memory_object,
-		offset,
-		size,
-		sync_flags);
-}
-
-
 /*
  * memory_object_map() is called by VM (in vm_map_enter() and its variants)
  * each time a "named" VM object gets mapped directly or indirectly
@@ -2313,39 +2066,29 @@ memory_object_last_unmap
 		memory_object);
 }
 
-/* Routine memory_object_data_reclaim */
-kern_return_t
-memory_object_data_reclaim
+boolean_t
+memory_object_backing_object
 (
 	memory_object_t memory_object,
-	boolean_t       reclaim_backing_store
-)
+	memory_object_offset_t offset,
+	vm_object_t *backing_object,
+	vm_object_offset_t *backing_offset)
 {
-	if (memory_object->mo_pager_ops->memory_object_data_reclaim == NULL) {
-		return KERN_NOT_SUPPORTED;
+	if (memory_object->mo_pager_ops->memory_object_backing_object == NULL) {
+		return FALSE;
 	}
-	return (memory_object->mo_pager_ops->memory_object_data_reclaim)(
+	return (memory_object->mo_pager_ops->memory_object_backing_object)(
 		memory_object,
-		reclaim_backing_store);
+		offset,
+		backing_object,
+		backing_offset);
 }
 
 upl_t
 convert_port_to_upl(
-	ipc_port_t      port)
+	__unused ipc_port_t      port)
 {
-	upl_t upl;
-
-	ip_lock(port);
-	if (!ip_active(port) || (ip_kotype(port) != IKOT_UPL)) {
-		ip_unlock(port);
-		return (upl_t)NULL;
-	}
-	upl = (upl_t) ip_get_kobject(port);
-	ip_unlock(port);
-	upl_lock(upl);
-	upl->ref_count += 1;
-	upl_unlock(upl);
-	return upl;
+	return NULL;
 }
 
 mach_port_t
@@ -2353,12 +2096,4 @@ convert_upl_to_port(
 	__unused upl_t          upl)
 {
 	return MACH_PORT_NULL;
-}
-
-__private_extern__ void
-upl_no_senders(
-	__unused ipc_port_t                             port,
-	__unused mach_port_mscount_t    mscount)
-{
-	return;
 }

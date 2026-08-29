@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2021 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -71,32 +71,14 @@ struct proto_family_str {
 	proto_unplumb_handler           detach_proto;
 };
 
+static LCK_GRP_DECLARE(proto_family_grp, "protocol kpi");
+static LCK_MTX_DECLARE(proto_family_mutex, &proto_family_grp);
+
 static struct proto_input_entry *proto_hash[PROTO_HASH_SLOTS];
 static int proto_total_waiting = 0;
 static struct proto_input_entry *proto_input_add_list = NULL;
-decl_lck_mtx_data(static, proto_family_mutex_data);
-static lck_mtx_t *proto_family_mutex = &proto_family_mutex_data;
 static TAILQ_HEAD(, proto_family_str) proto_family_head =
     TAILQ_HEAD_INITIALIZER(proto_family_head);
-
-__private_extern__ void
-proto_kpi_init(void)
-{
-	lck_grp_attr_t  *grp_attrib = NULL;
-	lck_attr_t      *lck_attrib = NULL;
-	lck_grp_t       *lck_group = NULL;
-
-	/* Allocate a mtx lock */
-	grp_attrib = lck_grp_attr_alloc_init();
-	lck_group = lck_grp_alloc_init("protocol kpi", grp_attrib);
-	lck_grp_attr_free(grp_attrib);
-	lck_attrib = lck_attr_alloc_init();
-	lck_mtx_init(proto_family_mutex, lck_group, lck_attrib);
-	lck_grp_free(lck_group);
-	lck_attr_free(lck_attrib);
-
-	bzero(proto_hash, sizeof(proto_hash));
-}
 
 __private_extern__ errno_t
 proto_register_input(protocol_family_t protocol, proto_input_handler input,
@@ -105,9 +87,9 @@ proto_register_input(protocol_family_t protocol, proto_input_handler input,
 	struct proto_input_entry *entry;
 	struct dlil_threading_info *inp = dlil_main_input_thread;
 	struct domain *dp;
-	domain_guard_t guard;
+	domain_guard_t __single guard;
 
-	entry = _MALLOC(sizeof(*entry), M_IFADDR, M_WAITOK | M_ZERO);
+	entry = kalloc_type(struct proto_input_entry, Z_WAITOK | Z_ZERO);
 	if (entry == NULL) {
 		return ENOMEM;
 	}
@@ -131,15 +113,15 @@ proto_register_input(protocol_family_t protocol, proto_input_handler input,
 
 	entry->domain = dp;
 
-	lck_mtx_lock(&inp->input_lck);
+	lck_mtx_lock(&inp->dlth_lock);
 	entry->next = proto_input_add_list;
 	proto_input_add_list = entry;
 
-	inp->input_waiting |= DLIL_PROTO_REGISTER;
-	if ((inp->input_waiting & DLIL_INPUT_RUNNING) == 0) {
-		wakeup((caddr_t)&inp->input_waiting);
+	inp->dlth_flags |= DLIL_PROTO_REGISTER;
+	if ((inp->dlth_flags & DLIL_INPUT_RUNNING) == 0) {
+		wakeup((caddr_t)&inp->dlth_flags);
 	}
-	lck_mtx_unlock(&inp->input_lck);
+	lck_mtx_unlock(&inp->dlth_lock);
 
 	return 0;
 }
@@ -185,7 +167,7 @@ proto_delayed_attach(struct proto_input_entry *entry)
 			if (entry->detached) {
 				entry->detached(entry->protocol);
 			}
-			FREE(entry, M_IFADDR);
+			kfree_type(struct proto_input_entry, entry);
 		} else {
 			entry->next = proto_hash[hash_slot];
 			proto_hash[hash_slot] = entry;
@@ -201,14 +183,14 @@ proto_input_run(void)
 	mbuf_t packet_list;
 	int i, locked = 0;
 
-	LCK_MTX_ASSERT(&inp->input_lck, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(&inp->dlth_lock, LCK_MTX_ASSERT_NOTOWNED);
 
-	if (inp->input_waiting & DLIL_PROTO_REGISTER) {
-		lck_mtx_lock_spin(&inp->input_lck);
+	if (inp->dlth_flags & DLIL_PROTO_REGISTER) {
+		lck_mtx_lock_spin(&inp->dlth_lock);
 		entry = proto_input_add_list;
 		proto_input_add_list = NULL;
-		inp->input_waiting &= ~DLIL_PROTO_REGISTER;
-		lck_mtx_unlock(&inp->input_lck);
+		inp->dlth_flags &= ~DLIL_PROTO_REGISTER;
+		lck_mtx_unlock(&inp->dlth_lock);
 		proto_delayed_attach(entry);
 	}
 
@@ -220,8 +202,8 @@ proto_input_run(void)
 		for (entry = proto_hash[i];
 		    entry != NULL && proto_total_waiting; entry = entry->next) {
 			if (entry->inject_first != NULL) {
-				lck_mtx_lock_spin(&inp->input_lck);
-				inp->input_waiting &= ~DLIL_PROTO_WAITING;
+				lck_mtx_lock_spin(&inp->dlth_lock);
+				inp->dlth_flags &= ~DLIL_PROTO_WAITING;
 
 				packet_list = entry->inject_first;
 
@@ -229,7 +211,7 @@ proto_input_run(void)
 				entry->inject_last = NULL;
 				proto_total_waiting--;
 
-				lck_mtx_unlock(&inp->input_lck);
+				lck_mtx_unlock(&inp->dlth_lock);
 
 				if (entry->domain != NULL && !(entry->domain->
 				    dom_flags & DOM_REENTRANT)) {
@@ -324,19 +306,19 @@ proto_inject(protocol_family_t protocol, mbuf_t packet_list)
 	}
 
 	if (entry != NULL) {
-		lck_mtx_lock(&inp->input_lck);
+		lck_mtx_lock(&inp->dlth_lock);
 		if (entry->inject_first == NULL) {
 			proto_total_waiting++;
-			inp->input_waiting |= DLIL_PROTO_WAITING;
+			inp->dlth_flags |= DLIL_PROTO_WAITING;
 			entry->inject_first = packet_list;
 		} else {
 			mbuf_setnextpkt(entry->inject_last, packet_list);
 		}
 		entry->inject_last = last_packet;
-		if ((inp->input_waiting & DLIL_INPUT_RUNNING) == 0) {
-			wakeup((caddr_t)&inp->input_waiting);
+		if ((inp->dlth_flags & DLIL_INPUT_RUNNING) == 0) {
+			wakeup((caddr_t)&inp->dlth_flags);
 		}
-		lck_mtx_unlock(&inp->input_lck);
+		lck_mtx_unlock(&inp->dlth_lock);
 	} else {
 		return ENOENT;
 	}
@@ -370,23 +352,18 @@ proto_register_plumber(protocol_family_t protocol_family,
 		return EINVAL;
 	}
 
-	lck_mtx_lock(proto_family_mutex);
+	lck_mtx_lock(&proto_family_mutex);
 
 	TAILQ_FOREACH(proto_family, &proto_family_head, proto_fam_next) {
 		if (proto_family->proto_family == protocol_family &&
 		    proto_family->if_family == interface_family) {
-			lck_mtx_unlock(proto_family_mutex);
+			lck_mtx_unlock(&proto_family_mutex);
 			return EEXIST;
 		}
 	}
 
-	proto_family = (struct proto_family_str *)
-	    _MALLOC(sizeof(struct proto_family_str), M_IFADDR,
-	    M_WAITOK | M_ZERO);
-	if (!proto_family) {
-		lck_mtx_unlock(proto_family_mutex);
-		return ENOMEM;
-	}
+	proto_family = kalloc_type(struct proto_family_str,
+	    Z_WAITOK | Z_ZERO | Z_NOFAIL);
 
 	proto_family->proto_family      = protocol_family;
 	proto_family->if_family         = interface_family & 0xffff;
@@ -394,7 +371,7 @@ proto_register_plumber(protocol_family_t protocol_family,
 	proto_family->detach_proto      = detach;
 
 	TAILQ_INSERT_TAIL(&proto_family_head, proto_family, proto_fam_next);
-	lck_mtx_unlock(proto_family_mutex);
+	lck_mtx_unlock(&proto_family_mutex);
 	return 0;
 }
 
@@ -404,18 +381,18 @@ proto_unregister_plumber(protocol_family_t protocol_family,
 {
 	struct proto_family_str  *proto_family;
 
-	lck_mtx_lock(proto_family_mutex);
+	lck_mtx_lock(&proto_family_mutex);
 
 	proto_family = proto_plumber_find(protocol_family, interface_family);
 	if (proto_family == NULL) {
-		lck_mtx_unlock(proto_family_mutex);
+		lck_mtx_unlock(&proto_family_mutex);
 		return;
 	}
 
 	TAILQ_REMOVE(&proto_family_head, proto_family, proto_fam_next);
-	FREE(proto_family, M_IFADDR);
+	kfree_type(struct proto_family_str, proto_family);
 
-	lck_mtx_unlock(proto_family_mutex);
+	lck_mtx_unlock(&proto_family_mutex);
 }
 
 __private_extern__ errno_t
@@ -424,16 +401,16 @@ proto_plumb(protocol_family_t protocol_family, ifnet_t ifp)
 	struct proto_family_str  *proto_family;
 	int ret = 0;
 
-	lck_mtx_lock(proto_family_mutex);
+	lck_mtx_lock(&proto_family_mutex);
 	proto_family = proto_plumber_find(protocol_family, ifp->if_family);
 	if (proto_family == NULL) {
-		lck_mtx_unlock(proto_family_mutex);
+		lck_mtx_unlock(&proto_family_mutex);
 		return ENXIO;
 	}
 
 	ret = proto_family->attach_proto(ifp, protocol_family);
 
-	lck_mtx_unlock(proto_family_mutex);
+	lck_mtx_unlock(&proto_family_mutex);
 	return ret;
 }
 
@@ -444,7 +421,7 @@ proto_unplumb(protocol_family_t protocol_family, ifnet_t ifp)
 	struct proto_family_str  *proto_family;
 	int ret = 0;
 
-	lck_mtx_lock(proto_family_mutex);
+	lck_mtx_lock(&proto_family_mutex);
 
 	proto_family = proto_plumber_find(protocol_family, ifp->if_family);
 	if (proto_family != NULL && proto_family->detach_proto) {
@@ -453,6 +430,6 @@ proto_unplumb(protocol_family_t protocol_family, ifnet_t ifp)
 		ret = ifnet_detach_protocol(ifp, protocol_family);
 	}
 
-	lck_mtx_unlock(proto_family_mutex);
+	lck_mtx_unlock(&proto_family_mutex);
 	return ret;
 }

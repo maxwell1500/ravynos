@@ -62,24 +62,12 @@
 #include <kern/sched_prim.h>
 #include <kern/timer.h>
 
-#if CONFIG_EMBEDDED
-int precise_user_kernel_time = 0;
-#else
-int precise_user_kernel_time = 1;
-#endif
+#include <machine/config.h>
 
 void
 timer_init(timer_t timer)
 {
 	memset(timer, 0, sizeof(*timer));
-}
-
-uint64_t
-timer_delta(timer_t timer, uint64_t *prev_in_cur_out)
-{
-	uint64_t old = *prev_in_cur_out;
-	uint64_t new = *prev_in_cur_out = timer_grab(timer);
-	return new - old;
 }
 
 static void
@@ -117,32 +105,4 @@ timer_update(timer_t timer, uint64_t tstamp)
 {
 	timer_advance(timer, tstamp - timer->tstamp);
 	timer->tstamp = tstamp;
-}
-
-void
-timer_switch(timer_t timer, uint64_t tstamp, timer_t new_timer)
-{
-	timer_advance(timer, tstamp - timer->tstamp);
-	new_timer->tstamp = tstamp;
-}
-
-/*
- * Update the current processor's thread timer with `tstamp` and switch the
- * processor's thread timer to `new_timer`.
- *
- * Called with interrupts disabled.
- */
-void
-processor_timer_switch_thread(uint64_t tstamp, timer_t new_timer)
-{
-	processor_t processor = current_processor();
-	timer_t timer;
-
-	/* Update current timer. */
-	timer = PROCESSOR_DATA(processor, thread_timer);
-	timer_advance(timer, tstamp - timer->tstamp);
-
-	/* Start new timer. */
-	PROCESSOR_DATA(processor, thread_timer) = new_timer;
-	new_timer->tstamp = tstamp;
 }

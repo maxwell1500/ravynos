@@ -30,8 +30,6 @@
 #define _LIBKERN_OSKEXTLIB_H
 
 #include <sys/cdefs.h>
-__BEGIN_DECLS
-
 #include <stdint.h>
 #include <mach/kmod.h>
 #include <mach/vm_types.h>
@@ -41,9 +39,10 @@ __BEGIN_DECLS
 #include <libkern/OSTypes.h>
 #include <libkern/OSReturn.h>
 #else
-#include <CoreFoundation/CoreFoundation.h>
 #include <libkern/OSReturn.h>
 #endif /* KERNEL */
+
+__BEGIN_DECLS
 
 /*!
  * @header
@@ -244,6 +243,38 @@ __BEGIN_DECLS
  */
 #define kOSKextReturnSystemPolicy                    libkern_kext_err(0x1b)
 
+/*!
+ * @define   kOSKextReturnKCLoadFailure
+ * @abstract Loading of the System KC failed
+ */
+#define kOSKextReturnKCLoadFailure                  libkern_kext_err(0x1c)
+
+/*!
+ * @define   kOSKextReturnKCLoadFailureSystemKC
+ * @abstract Loading of the System KC failed
+ *
+ * This a sub-code of kOSKextReturnKCLoadFailure. It can be OR'd together
+ * with: kOSKextReturnKCLoadFailureAuxKC
+ *
+ * If both the System and Aux KCs fail to load, then the error code will be:
+ * libkern_kext_err(0x1f)
+ */
+#define kOSKextReturnKCLoadFailureSystemKC          libkern_kext_err(0x1d)
+
+/*!
+ * @define   kOSKextReturnKCLoadFailureAuxKC
+ * @abstract Loading of the Aux KC failed
+ *
+ * This a sub-code of kOSKextReturnKCLoadFailure. It can be OR'd together
+ * with: kOSKextReturnKCLoadFailureSystemKC
+ *
+ * If both the System and Aux KCs fail to load, then the error code will be:
+ * libkern_kext_err(0x1f)
+ */
+#define kOSKextReturnKCLoadFailureAuxKC             libkern_kext_err(0x1e)
+
+/* next available error is: libkern_kext_err(0x20) */
+
 #if PRAGMA_MARK
 #pragma mark -
 /********************************************************************/
@@ -267,6 +298,7 @@ __BEGIN_DECLS
 #define kCFBundleExecutableKey                  "CFBundleExecutable"
 #define kCFBundlePackageTypeKey                 "CFBundlePackageType"
 #define kCFBundleDriverKitUUIDKey               "CFBundleDriverKitUUID"
+#define kCFBundleDriverKitExecutableKey         "CFBundleUEXTExecutable"
 #endif /* KERNEL */
 
 /*!
@@ -321,6 +353,13 @@ __BEGIN_DECLS
  * or startup kext caches must include it.
  */
 #define kOSBundleRequiredKey                    "OSBundleRequired"
+
+/*!
+ * @define   kOSBundleRequireExplicitLoadKey
+ * @abstract A boolean value indicating whether the kext requires an
+ *           explicit kextload in order to start/match.
+ */
+#define kOSBundleRequireExplicitLoadKey         "OSBundleRequireExplicitLoad"
 
 /*!
  * @define   kOSBundleAllowUserLoadKey
@@ -380,6 +419,14 @@ __BEGIN_DECLS
 #define kAppleTextHashesKey                     "AppleTextHashes"
 #endif
 
+/*!
+ * @define   kOSMutableSegmentCopy
+ * @abstract A boolean value indicating whether the kext requires a copy of
+ *           its mutable segments to be kept in memory, and then reset when the kext
+ *           unloads. This should be used with caution as it will increase the
+ *           amount of memory used by the kext.
+ */
+#define kOSMutableSegmentCopy                   "OSMutableSegmentCopy"
 
 
 #if PRAGMA_MARK
@@ -426,6 +473,22 @@ __BEGIN_DECLS
  * This is the CFBundleIdentifier user for the kernel itself.
  */
 #define kOSKextKernelIdentifier                 "__kernel__"
+
+#if CONFIG_SPTM && PRIVATE
+/*!
+ * @define   kOSKextSPTMIdentifier
+ * @abstract
+ * This is the CFBundleIdentifier used by the Secure Page Table Monitor (SPTM).
+ */
+#define kOSKextSPTMIdentifier                 "com.apple.sptm"
+
+/*!
+ * @define   kOSKextTXMIdentifier
+ * @abstract
+ * This is the CFBundleIdentifier used by the Trusted Execution Monitor (TXM).
+ */
+#define kOSKextTXMIdentifier                 "com.apple.txm"
+#endif /* CONFIG_SPTM */
 
 /*!
  * @define  kOSKextBundlePackageTypeKext

@@ -69,6 +69,7 @@ timer_intr(__unused int inuser, __unused uint64_t iaddr)
 	uint64_t        abstime, new_idle_timeout_ticks;
 	rtclock_timer_t *mytimer;
 	cpu_data_t     *cpu_data_ptr;
+	processor_t     processor;
 
 	cpu_data_ptr = getCpuDatap();
 	mytimer = &cpu_data_ptr->rtclock_timer; /* Point to the event timer */
@@ -79,9 +80,9 @@ timer_intr(__unused int inuser, __unused uint64_t iaddr)
 		cpu_data_ptr->idle_timer_deadline = 0x0ULL;
 		new_idle_timeout_ticks = 0x0ULL;
 
-		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_COMMON, MACHDBG_CODE(DBG_MACH_EXCP_DECI, 3) | DBG_FUNC_START, 0, 0, 0, 0, 0);
-		((idle_timer_t)cpu_data_ptr->idle_timer_notify)(cpu_data_ptr->idle_timer_refcon, &new_idle_timeout_ticks);
-		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_COMMON, MACHDBG_CODE(DBG_MACH_EXCP_DECI, 3) | DBG_FUNC_END, 0, 0, 0, 0, 0);
+		KDBG_RELEASE(DECR_PM_DEADLINE | DBG_FUNC_START);
+		cpu_data_ptr->idle_timer_notify(cpu_data_ptr->idle_timer_refcon, &new_idle_timeout_ticks);
+		KDBG_RELEASE(DECR_PM_DEADLINE | DBG_FUNC_END);
 
 		/* if a new idle timeout was requested set the new idle timer deadline */
 		if (new_idle_timeout_ticks != 0x0ULL) {
@@ -104,12 +105,11 @@ timer_intr(__unused int inuser, __unused uint64_t iaddr)
 		abstime = mach_absolute_time(); /* Get the time again since we ran a bit */
 	}
 
-	uint64_t quantum_deadline = cpu_data_ptr->quantum_timer_deadline;
-	/* is it the quantum timer expiration? */
-	if ((quantum_deadline <= abstime) && (quantum_deadline > 0)) {
-		cpu_data_ptr->quantum_timer_deadline = 0;
-		quantum_timer_expire(abstime);
-	}
+	processor = PERCPU_GET_RELATIVE(processor, cpu_data, cpu_data_ptr);
+	(void)running_timers_expire(processor, abstime);
+	/*
+	 * No need to update abstime.
+	 */
 
 	/* Force reload our next deadline */
 	cpu_data_ptr->rtcPop = EndOfAllTime;
@@ -136,19 +136,6 @@ timer_set_deadline(uint64_t deadline)
 	timer_resync_deadlines();
 
 	splx(s);
-}
-
-void
-quantum_timer_set_deadline(uint64_t deadline)
-{
-	cpu_data_t     *cpu_data_ptr;
-
-	/* We should've only come into this path with interrupts disabled */
-	assert(ml_get_interrupts_enabled() == FALSE);
-
-	cpu_data_ptr = getCpuDatap();
-	cpu_data_ptr->quantum_timer_deadline = deadline;
-	timer_resync_deadlines();
 }
 
 /*
@@ -180,10 +167,10 @@ timer_resync_deadlines(void)
 		deadline = cpu_data_ptr->idle_timer_deadline;
 	}
 
-	/* If we have the quantum timer setup, check that */
-	if ((cpu_data_ptr->quantum_timer_deadline > 0)
-	    && (cpu_data_ptr->quantum_timer_deadline < deadline)) {
-		deadline = cpu_data_ptr->quantum_timer_deadline;
+	uint64_t run_deadline = running_timers_deadline(
+		PERCPU_GET_RELATIVE(processor, cpu_data, cpu_data_ptr));
+	if (run_deadline < deadline) {
+		deadline = run_deadline;
 	}
 
 	if ((deadline == EndOfAllTime)
@@ -192,9 +179,7 @@ timer_resync_deadlines(void)
 
 		decr = setPop(deadline);
 
-		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-		    MACHDBG_CODE(DBG_MACH_EXCP_DECI, 1) | DBG_FUNC_NONE,
-		    decr, 2, 0, 0, 0);
+		KDBG_RELEASE(DECR_SET_DEADLINE | DBG_FUNC_NONE, decr, 2);
 	}
 	splx(s);
 }
@@ -206,12 +191,20 @@ timer_queue_expire_local(
 	rtclock_timer_t         *mytimer = &getCpuDatap()->rtclock_timer;
 	uint64_t                abstime;
 
+	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
+	    DECR_TIMER_EXPIRE_LOCAL | DBG_FUNC_START,
+	    mytimer->deadline, 0, 0, 0, 0);
+
 	abstime = mach_absolute_time();
 	mytimer->has_expired = TRUE;
 	mytimer->deadline = timer_queue_expire(&mytimer->queue, abstime);
 	mytimer->has_expired = FALSE;
 
 	timer_resync_deadlines();
+
+	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
+	    DECR_TIMER_EXPIRE_LOCAL | DBG_FUNC_END,
+	    mytimer->deadline, 0, 0, 0, 0);
 }
 
 boolean_t
@@ -234,6 +227,13 @@ timer_queue_assign(
 			timer_set_deadline(deadline);
 		}
 	} else {
+		/*
+		 * No timers should be armed by powered down CPUs, except
+		 * already badly behaved code in the hibernation path, and
+		 * that is running on master_cpu.
+		 */
+		assert(ml_is_quiescing());
+
 		queue = &cpu_datap(master_cpu)->rtclock_timer.queue;
 	}
 
@@ -288,10 +288,17 @@ static timer_coalescing_priority_params_ns_t tcoal_prio_params_init =
 	.timer_coalesce_kt_ns_max = 1 * NSEC_PER_MSEC,
 	.timer_coalesce_fp_ns_max = 1 * NSEC_PER_MSEC,
 	.timer_coalesce_ts_ns_max = 1 * NSEC_PER_MSEC,
+#if XNU_TARGET_OS_OSX
+	.latency_qos_scale = {3, 2, 1, -2, 3, 3},
+	.latency_qos_ns_max = {1 * NSEC_PER_MSEC, 5 * NSEC_PER_MSEC, 20 * NSEC_PER_MSEC,
+		               75 * NSEC_PER_MSEC, 1 * NSEC_PER_MSEC, 1 * NSEC_PER_MSEC},
+	.latency_tier_rate_limited = {FALSE, FALSE, FALSE, FALSE, FALSE, FALSE},
+#else /* XNU_TARGET_OS_OSX */
 	.latency_qos_scale = {3, 2, 1, -2, -15, -15},
 	.latency_qos_ns_max = {1 * NSEC_PER_MSEC, 5 * NSEC_PER_MSEC, 20 * NSEC_PER_MSEC,
 		               75 * NSEC_PER_MSEC, 10000 * NSEC_PER_MSEC, 10000 * NSEC_PER_MSEC},
 	.latency_tier_rate_limited = {FALSE, FALSE, FALSE, FALSE, TRUE, TRUE},
+#endif /* XNU_TARGET_OS_OSX */
 };
 timer_coalescing_priority_params_ns_t *
 timer_call_get_priority_params(void)

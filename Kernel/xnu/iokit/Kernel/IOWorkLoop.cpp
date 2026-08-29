@@ -47,9 +47,9 @@ OSMetaClassDefineReservedUnused(IOWorkLoop, 0);
 OSMetaClassDefineReservedUnused(IOWorkLoop, 1);
 OSMetaClassDefineReservedUnused(IOWorkLoop, 2);
 #else
-OSMetaClassDefineReservedUsed(IOWorkLoop, 0);
-OSMetaClassDefineReservedUsed(IOWorkLoop, 1);
-OSMetaClassDefineReservedUsed(IOWorkLoop, 2);
+OSMetaClassDefineReservedUsedX86(IOWorkLoop, 0);
+OSMetaClassDefineReservedUsedX86(IOWorkLoop, 1);
+OSMetaClassDefineReservedUsedX86(IOWorkLoop, 2);
 #endif
 OSMetaClassDefineReservedUnused(IOWorkLoop, 3);
 OSMetaClassDefineReservedUnused(IOWorkLoop, 4);
@@ -133,12 +133,7 @@ IOWorkLoop::init()
 
 	// Allocate our ExpansionData if it hasn't been allocated already.
 	if (!reserved) {
-		reserved = IONew(ExpansionData, 1);
-		if (!reserved) {
-			return false;
-		}
-
-		bzero(reserved, sizeof(ExpansionData));
+		reserved = IOMallocType(ExpansionData);
 	}
 
 	if (gateLock == NULL) {
@@ -203,12 +198,7 @@ IOWorkLoop::workLoopWithOptions(IOOptionBits options)
 	IOWorkLoop *me = new IOWorkLoop;
 
 	if (me && options) {
-		me->reserved = IONew(ExpansionData, 1);
-		if (!me->reserved) {
-			me->release();
-			return NULL;
-		}
-		bzero(me->reserved, sizeof(ExpansionData));
+		me->reserved = IOMallocType(ExpansionData);
 		me->reserved->options = options;
 	}
 
@@ -220,6 +210,29 @@ IOWorkLoop::workLoopWithOptions(IOOptionBits options)
 	return me;
 }
 
+void
+IOWorkLoop::releaseEventChain(LIBKERN_CONSUMED IOEventSource *eventChain)
+{
+	IOEventSource *event, *next;
+	for (event = eventChain; event; event = next) {
+		next = event->getNext();
+#ifdef __clang_analyzer__
+		// Unlike the usual IOKit memory management convention, IOWorkLoop
+		// manages the retain count for the IOEventSource instances in the
+		// the chain rather than have IOEventSource do that itself. This means
+		// it is safe to call release() on the result of getNext() while the
+		// chain is being torn down. However, the analyzer doesn't
+		// realize this. We add an extra retain under analysis to suppress
+		// an analyzer diagnostic about violations of the memory management rules.
+		if (next) {
+			next->retain();
+		}
+#endif
+		event->setWorkLoop(NULL);
+		event->setNext(NULL);
+		event->release();
+	}
+}
 // Free is called twice:
 // First when the atomic retainCount transitions from 1 -> 0
 // Secondly when the work loop itself is commiting hari kari
@@ -246,22 +259,10 @@ IOWorkLoop::free()
 
 		openGate();
 	} else { /* !workThread */
-		IOEventSource *event, *next;
-
-		for (event = eventChain; event; event = next) {
-			next = event->getNext();
-			event->setWorkLoop(NULL);
-			event->setNext(NULL);
-			event->release();
-		}
+		releaseEventChain(eventChain);
 		eventChain = NULL;
 
-		for (event = passiveEventChain; event; event = next) {
-			next = event->getNext();
-			event->setWorkLoop(NULL);
-			event->setNext(NULL);
-			event->release();
-		}
+		releaseEventChain(passiveEventChain);
 		passiveEventChain = NULL;
 
 		// Either we have a partial initialization to clean up
@@ -287,7 +288,7 @@ IOWorkLoop::free()
 		IOStatisticsUnregisterCounter();
 
 		if (reserved) {
-			IODelete(reserved, ExpansionData, 1);
+			IOFreeType(reserved, ExpansionData);
 			reserved = NULL;
 		}
 

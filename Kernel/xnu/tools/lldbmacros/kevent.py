@@ -1,6 +1,8 @@
 from xnu import *
 from workqueue import GetWorkqueueThreadRequestSummary
 
+import kmemory
+
 def IterateProcKqueues(proc):
     """ Iterate through all kqueues in the given process
 
@@ -26,23 +28,21 @@ def IterateProcKqfiles(proc):
     """
     filetype_KQUEUE = 5
 
-    proc_filedesc = proc.p_fd
-    proc_lastfile = unsigned(proc_filedesc.fd_lastfile)
+    proc_filedesc = addressof(proc.p_fd)
     proc_ofiles = proc_filedesc.fd_ofiles
     queues = list()
-    count = 0
 
     if unsigned(proc_ofiles) == 0:
         return
 
-    while count <= proc_lastfile:
-        if unsigned(proc_ofiles[count]) != 0:
-            proc_fd_flags = proc_ofiles[count].f_flags
-            proc_fd_fglob = proc_ofiles[count].f_fglob
+    for fd in range(0, unsigned(proc_filedesc.fd_afterlast)):
+        if unsigned(proc_ofiles[fd]) != 0:
+            proc_fd_flags = proc_ofiles[fd].fp_flags
+            proc_fd_fglob = proc_ofiles[fd].fp_glob
             proc_fd_ftype = unsigned(proc_fd_fglob.fg_ops.fo_type)
             if proc_fd_ftype == xnudefines.DTYPE_KQUEUE:
-                yield kern.GetValueFromAddress(int(proc_fd_fglob.fg_data), 'struct kqfile *')
-        count += 1
+                proc_fd_fglob_fg_data = Cast(proc_fd_fglob.fg_data, 'void *')
+                yield Cast(proc_fd_fglob_fg_data, 'struct kqfile *')
 
 def IterateProcKqworkloops(proc):
     """ Iterate through all kqworkloops in the given process
@@ -52,13 +52,13 @@ def IterateProcKqworkloops(proc):
         returns: nothing, this is meant to be used as a generator function
             kqwl - yields each kqworkloop in the process
     """
-    proc_filedesc = proc.p_fd
+    proc_filedesc = addressof(proc.p_fd)
     if int(proc_filedesc.fd_kqhash) == 0:
         return
 
     hash_mask = proc_filedesc.fd_kqhashmask
-    for i in xrange(hash_mask + 1):
-        for kqwl in IterateListEntry(proc_filedesc.fd_kqhash[i], 'struct kqworkloop *', 'kqwl_hashlink'):
+    for i in range(hash_mask + 1):
+        for kqwl in IterateListEntry(proc_filedesc.fd_kqhash[i], 'kqwl_hashlink'):
             yield kqwl
 
 def IterateAllKqueues():
@@ -68,10 +68,10 @@ def IterateAllKqueues():
             kq - yields each kqueue in the system
     """
     for t in kern.tasks:
-        proc = unsigned(t.bsd_info)
-        if proc == 0:
+        proc = GetProcFromTask(t)
+        if proc is None:
             continue
-        proc = kern.GetValueFromAddress(proc, 'proc_t')
+        proc = kern.GetValueFromAddress(unsigned(proc), 'proc_t')
         for kq in IterateProcKqueues(proc):
             yield kq
 
@@ -83,15 +83,15 @@ def IterateProcKnotes(proc):
         returns: nothing, this is meant to be used as a generator function
             kn - yields each knote in the process
     """
-    proc_filedesc = proc.p_fd
+    proc_filedesc = addressof(proc.p_fd)
 
     if int(proc.p_fd.fd_knlist) != 0:
-        for i in xrange(proc.p_fd.fd_knlistsize):
-            for kn in IterateListEntry(proc.p_fd.fd_knlist[i], 'struct knote *', 'kn_link', list_prefix='s'):
+        for i in range(proc.p_fd.fd_knlistsize):
+            for kn in IterateListEntry(proc.p_fd.fd_knlist[i], 'kn_link', list_prefix='s'):
                 yield kn
     if int(proc.p_fd.fd_knhash) != 0:
-        for i in xrange(proc.p_fd.fd_knhashmask + 1):
-            for kn in IterateListEntry(proc.p_fd.fd_knhash[i], 'struct knote *', 'kn_link', list_prefix='s'):
+        for i in range(proc.p_fd.fd_knhashmask + 1):
+            for kn in IterateListEntry(proc.p_fd.fd_knhash[i], 'kn_link', list_prefix='s'):
                 yield kn
 
 def GetKnoteKqueue(kn):
@@ -101,7 +101,11 @@ def GetKnoteKqueue(kn):
             kn - the knote object
         returns: kq - the kqueue corresponding to the knote
     """
-    return kern.GetValueFromAddress(int(kn.kn_kq_packed), 'struct kqueue *')
+
+    kmem = kmemory.KMem.get_shared()
+    addr = kmem.kn_kq_packing.unpack(unsigned(kn.kn_kq_packed))
+    return kern.CreateTypedPointerFromAddress(addr, 'struct kqueue')
+
 
 @lldb_type_summary(['knote *'])
 @header('{:<20s} {:<20s} {:<10s} {:<20s} {:<20s} {:<30s} {:<10} {:<10} {:<10} {:<20s}'.format('knote', 'ident', 'kev_flags', 'kqueue', 'udata', 'filtops', 'qos_req', 'qos_use', 'qos_ovr', 'status'))
@@ -123,7 +127,7 @@ def GetKnoteSummary(kn):
             qos_req=xnudefines.thread_qos_short_strings[qos_req],
             qos_use=xnudefines.thread_qos_short_strings[qos_index],
             qos_ovr=xnudefines.thread_qos_short_strings[int(kn.kn_qos_override)],
-            st_str=xnudefines.GetStateString(xnudefines.kn_state_strings, state),
+            st_str=GetOptionString('kn_status_t', state, 'KN_'),
             kq_ptr=int(GetKnoteKqueue(kn)),
             ops_str=fops_str)
 
@@ -154,15 +158,15 @@ def IterateKqueueKnotes(kq):
             continue
         yield kn
 
-kqueue_summary_fmt = '{ptr: <#020x} {o.kq_p: <#020x} {dyn_id: <#020x} {servicer: <#20x} {owner: <#20x} {o.kq_count: <6d} {wqs: <#020x} {st_str: <10s}'
+kqueue_summary_fmt = '{ptr: <#020x} {o.kq_p: <#020x} {dyn_id: <#020x} {servicer: <#20x} {owner: <#20x} {o.kq_count: <6d} {st_str: <10s}'
 
 def GetServicer(req):
-    if req.tr_state in [3, 4]: # [ BINDING , BOUND ]
+    if req.tr_state in [4, 5]: # [ BINDING , BOUND ]
         return int(req.tr_thread)
     return 0
 
 @lldb_type_summary(['struct kqueue *'])
-@header('{: <20s} {: <20s} {: <20s} {: <20s} {: <20s} {: <6s} {: <20s} {: <10s}'.format('kqueue', 'process', 'dynamic_id', 'servicer', 'owner', '#evts', 'wqs', 'state'))
+@header('{: <20s} {: <20s} {: <20s} {: <20s} {: <20s} {: <6s} {: <10s}'.format('kqueue', 'process', 'dynamic_id', 'servicer', 'owner', '#evts', 'state'))
 def GetKqueueSummary(kq):
     """ Summarize kqueue information
 
@@ -170,10 +174,10 @@ def GetKqueueSummary(kq):
             kq - the kqueue object
         returns: str - summary of kqueue
     """
-    if kq.kq_state & xnudefines.KQ_WORKLOOP:
-        return GetKqworkloopSummary(kern.GetValueFromAddress(int(kq), 'struct kqworkloop *'))
-    elif kq.kq_state & xnudefines.KQ_WORKQ:
+    if int(kq.kq_state) & GetEnumValue('kq_state_t', 'KQ_WORKQ'):
         return GetKqworkqSummary(kern.GetValueFromAddress(int(kq), 'struct kqworkq *'))
+    elif int(kq.kq_state) & GetEnumValue('kq_state_t', 'KQ_WORKLOOP'):
+        return GetKqworkloopSummary(kern.GetValueFromAddress(int(kq), 'struct kqworkloop *'))
     else:
         return GetKqfileSummary(kern.GetValueFromAddress(int(kq), 'struct kqfile *'))
 
@@ -185,9 +189,8 @@ def GetKqfileSummary(kqf):
     return kqueue_summary_fmt.format(
             o=kq,
             ptr=int(kq),
-            wqs=int(kq.kq_wqs),
             dyn_id=0,
-            st_str=xnudefines.GetStateString(xnudefines.kq_state_strings, state),
+            st_str=GetOptionString('kq_state_t', state, 'KQ_'),
             servicer=0,
             owner=0)
 
@@ -236,15 +239,12 @@ def ShowKqworkq(cmd_args=None, cmd_options={}, O=None):
         print(GetKqworkqSummary(kqwq))
 
     with O.table(GetWorkqueueThreadRequestSummary.header):
-        for i in range(1, 8):
+        for i in range(0, 7):
             print(GetWorkqueueThreadRequestSummary(kq.kq_p, kqwq.kqwq_request[i]))
 
     with O.table(GetKnoteSummary.header):
         for kn in IterateKqueueKnotes(kq):
             print(GetKnoteSummary(kn))
-        for i in xrange(0, xnudefines.KQWQ_NBUCKETS):
-            for kn in IterateTAILQ_HEAD(kq.kq_queue[i], 'kn_tqe'):
-                print(GetKnoteSummary(kn))
 
 @lldb_type_summary(['struct kqworkloop *'])
 @header(GetKqueueSummary.header)
@@ -259,9 +259,8 @@ def GetKqworkloopSummary(kqwl):
     return kqueue_summary_fmt.format(
             ptr=int(kqwl),
             o=kqwl.kqwl_kqueue,
-            wqs=int(kqwl.kqwl_kqueue.kq_wqs),
             dyn_id=kqwl.kqwl_dynamicid,
-            st_str=xnudefines.GetStateString(xnudefines.kq_state_strings, state),
+            st_str=GetOptionString('kq_state_t', state, 'KQ_'),
             servicer=GetServicer(kqwl.kqwl_request),
             owner=int(kqwl.kqwl_owner)
             )
@@ -297,9 +296,9 @@ def ShowKqueue(cmd_args=None, cmd_options={}, O=None):
         return O.error('missing struct kqueue * argument')
 
     kq = kern.GetValueFromAddress(cmd_args[0], 'struct kqueue *')
-    if int(kq.kq_state) & xnudefines.KQ_WORKQ:
+    if int(kq.kq_state) & GetEnumValue('kq_state_t', 'KQ_WORKQ'):
         ShowKqworkq(cmd_args, cmd_options, O)
-    elif int(kq.kq_state) & xnudefines.KQ_WORKLOOP:
+    elif int(kq.kq_state) & GetEnumValue('kq_state_t', 'KQ_WORKLOOP'):
         ShowKqworkloop(cmd_args, cmd_options, O)
     else:
         ShowKqfile(cmd_args, cmd_options, O)
@@ -356,3 +355,24 @@ def ShowAllKqueues(cmd_args=None, cmd_options={}, O=None):
     with O.table(GetKqueueSummary.header):
         for kq in IterateAllKqueues():
             print(GetKqueueSummary(kq))
+
+@lldb_command('showkqueuecounts', fancy=True)
+def ShowKqCounts(cmd_args=None, cmd_options={}, O=None):
+    """ Display a count of all the kqueues in the system - lskq summary
+
+        usage: showkqueuecounts
+    """
+    print ('{: <20s} {: <35s} {: <10s} {: <6s}'.format('process', 'proc_name', '#kqfiles', '#kqworkloop'))
+    for t in kern.tasks:
+        proc = GetProcFromTask(t)
+        if proc is None:
+            continue
+        proc = kern.GetValueFromAddress(unsigned(proc), 'proc_t')
+        kqfcount = 0
+        kqwlcount = 0
+        for kqf in IterateProcKqfiles(proc):
+            kqfcount += 1
+        for kqwl in IterateProcKqworkloops(proc):
+            kqwlcount += 1
+        print("{proc: <#20x} {name: <35s} {kqfile: <10d} {kqwl: <6d}".format(proc=proc,
+            name=GetProcName(proc), kqfile=kqfcount, kqwl=kqwlcount))

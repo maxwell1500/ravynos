@@ -86,10 +86,11 @@
 kernel_trap(_kernelrpc_mach_vm_allocate_trap,-10,5) /* 4 args, +1 for mach_vm_size_t */
 kernel_trap(_kernelrpc_mach_vm_purgable_control_trap,-11,5) /* 4 args, +1 for mach_vm_offset_t */
 kernel_trap(_kernelrpc_mach_vm_deallocate_trap,-12,5) /* 3 args, +2 for mach_vm_size_t and mach_vm_address_t */
+kernel_trap(task_dyld_process_info_notify_get,-13,4) /* 2 args, +2 for mach_vm_address_t */
 kernel_trap(_kernelrpc_mach_vm_protect_trap,-14,7) /* 5 args, +2 for mach_vm_address_t and mach_vm_size_t */
 kernel_trap(_kernelrpc_mach_vm_map_trap,-15,9)
 kernel_trap(_kernelrpc_mach_port_allocate_trap,-16,3)
-kernel_trap(_kernelrpc_mach_port_destroy_trap,-17,2)
+/* mach_port_destroy */
 kernel_trap(_kernelrpc_mach_port_deallocate_trap,-18,2)
 kernel_trap(_kernelrpc_mach_port_mod_refs_trap,-19,4)
 kernel_trap(_kernelrpc_mach_port_move_member_trap,-20,3)
@@ -123,6 +124,10 @@ kernel_trap(task_name_for_pid,-44,3)
 kernel_trap(task_for_pid,-45,3)
 kernel_trap(pid_for_task,-46,2)
 
+#if defined(__LP64__) || defined(__arm64__)
+kernel_trap(mach_msg2_trap, -47, 8)
+#endif
+
 #if defined(__LP64__)
 kernel_trap(macx_swapon,-48, 4)
 kernel_trap(macx_swapoff,-49, 2)
@@ -155,10 +160,16 @@ kernel_trap(mach_voucher_extract_attr_recipe_trap,-72,4)
 kernel_trap(_kernelrpc_mach_port_type_trap,-76,3)
 kernel_trap(_kernelrpc_mach_port_request_notification_trap,-77,7)
 
+#if defined(__LP64__)
+kernel_trap(_exclaves_ctl_trap,-88,8)
+#else	/* __LP64__ */
+kernel_trap(_exclaves_ctl_trap,-88,14)
+#endif	/* __LP64__ */
+
 kernel_trap(mach_timebase_info_trap,-89,1)
 
 #if		defined(__LP64__)
-/* unit64_t arguments passed in one register in LP64 */
+/* uint64_t arguments passed in one register in LP64 */
 kernel_trap(mach_wait_until,-90,1)
 #else	/* __LP64__ */
 kernel_trap(mach_wait_until,-90,2)
@@ -168,7 +179,7 @@ kernel_trap(mk_timer_create,-91,0)
 kernel_trap(mk_timer_destroy,-92,1)
 
 #if		defined(__LP64__)
-/* unit64_t arguments passed in one register in LP64 */
+/* uint64_t arguments passed in one register in LP64 */
 kernel_trap(mk_timer_arm,-93,2)
 #else	/* __LP64__ */
 kernel_trap(mk_timer_arm,-93,3)

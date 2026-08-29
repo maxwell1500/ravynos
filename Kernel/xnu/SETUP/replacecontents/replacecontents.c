@@ -144,10 +144,6 @@ void
 usage(void)
 {
 	fprintf(stderr, "Usage: %s <dst> <new> <contents> <...>\n",
-#ifdef __linux__
-		"replacecontents");
-#else
 	    getprogname());
-#endif
 	exit(EX_USAGE);
 }

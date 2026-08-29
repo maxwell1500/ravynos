@@ -31,17 +31,16 @@
 
 
 #include <sys/cdefs.h>
-#include <uuid/uuid.h>
 
 __BEGIN_DECLS
-#ifdef KERNEL
+
 #include <libkern/OSTypes.h>
 #include <mach/kmod.h>
+
+#ifdef KERNEL
 #include <mach/vm_types.h>
-#else
-#include <CoreFoundation/CoreFoundation.h>
-#include <mach/kmod.h>
 #endif /* KERNEL */
+
 __END_DECLS
 
 #include <libkern/OSReturn.h>
@@ -60,7 +59,17 @@ typedef uint8_t OSKextExcludeLevel;
 #define kOSKextExcludeKext  (1)
 #define kOSKextExcludeAll   (2)
 
-#define kOSKextManagementEntitlement "com.apple.private.security.kext-management"
+#define kIOCatalogManagementEntitlement "com.apple.private.security.iocatalog-management"
+#define kOSKextCollectionManagementEntitlement "com.apple.private.security.kext-collection-management"
+#define kOSKextOnlyBootKCManagementEntitlement "com.apple.private.security.only-bootkc-management"
+
+#define kOSKextCodelessKextLoadAddr (0x7FFFFFFFFFFFFFFFULL)
+
+#if XNU_TARGET_OS_OSX
+#define kIOKitDaemonName "kernelmanagerd"
+#else
+#define kIOKitDaemonName "driverkitd"
+#endif /* XNU_TARGET_OS_OSX */
 
 #if PRAGMA_MARK
 #pragma mark -
@@ -103,6 +112,28 @@ typedef uint8_t OSKextExcludeLevel;
  *           KPI, and needs special loading behavior.
  */
 #define kAppleKernelExternalComponentKey        "AppleKernelExternalComponent"
+
+/*!
+ * @define kOSKextInfoPlistDigestKey
+ * @abstract SHA-256 data of the kext's Info.plist
+ */
+#define kOSKextInfoPlistDigestKey       "_InfoPlistDigest"
+
+/*!
+ * @define kOSKextBundleCollectionTypeKey
+ * @abstract The type of collection in which a kext is linked. Possible
+ *           values: kKCTypePrimary, kKCTypeSystem, kKCTypeAuxiliary,
+ *                   kKCTypeCodeless
+ */
+#define kOSKextBundleCollectionTypeKey  "_BundleCollectionType"
+
+/*!
+ * @define kOSKextAuxKCAvailabilityKey
+ * @abstract boolean value: false if the kext is in the AuxKC and
+ *           is not loadable; true otherwise.
+ */
+#define kOSKextAuxKCAvailabilityKey     "_AuxKCAvailability"
+
 
 // properties found in the registry root
 #define kOSKernelCPUTypeKey             "OSKernelCPUType"
@@ -148,17 +179,37 @@ typedef uint8_t OSKextExcludeLevel;
 #define kOSBundleKextsInKernelTextKey           "OSBundleKextsInKernelText"
 // OSKextCopyLoadedKextInfo includes non-started kexts when present:
 #define kOSBundleAllPrelinkedKey                "OSBundleAllPrelinked"
+// OSKextCopyDextsInfo states:
+#define kOSBundleDextStateKey                   "OSBundleDextState"
+#define kOSBundleDextStateActiveKey             "OSBundleDextStateActive"
+#define kOSBundleDextStateActiveLoadedKey       "OSBundleDextStateActiveLoaded"
+#define kOSBundleDextStateActiveUnloadedKey     "OSBundleDextStateActiveUnloaded"
+#define kOSBundleDextStatePendingUpgradeKey     "OSBundleDextStatePendingUpgrade"
+
 
 /* Dictionary of metaclass info keyed by classname.
  */
 #define kOSBundleClassesKey                     "OSBundleClasses"
 
+#define kOSBundleDextUniqueIdentifierKey        "kOSBundleDextUniqueIdentifier"
 /* These are contained in kOSBundleClassesKey. kOSMetaClassSuperclassNameKey
  * may be absent (for the root class).
  */
 #define kOSMetaClassNameKey                     "OSMetaClassName"
 #define kOSMetaClassSuperclassNameKey           "OSMetaClassSuperclassName"
 #define kOSMetaClassTrackingCountKey            "OSMetaClassTrackingCount"
+
+#if PRAGMA_MARK
+#pragma mark -
+/********************************************************************/
+#pragma mark Kext Collection Type Keys
+/********************************************************************/
+#endif
+#define kKCTypePrimary   "Primary"
+#define kKCTypeSystem    "System"
+#define kKCTypeAuxiliary "Auxiliary"
+#define kKCTypeCodeless  "Codeless"
+#define kKCTypeAny       "Any"
 
 #if PRAGMA_MARK
 #pragma mark -
@@ -690,6 +741,8 @@ Boolean OSKextVersionGetString(
 	uint32_t        bufferSize);
 
 
+#define KOSBundleDextUniqueIdentifierMaxLength (1024)
+
 #ifdef KERNEL
 
 
@@ -745,6 +798,12 @@ void kext_dump_panic_lists(int (*printf_func)(const char *fmt, ...));
 #endif /* XNU_KERNEL_PRIVATE */
 
 #ifdef XNU_KERNEL_PRIVATE
+
+/*!
+ * @define kOSKextReceiptQueried
+ * @abstract Whether or not the kext receipt has been successfully loaded.
+ */
+#define kOSKextReceiptQueried  "OSKextReceiptQueried"
 
 #if PRAGMA_MARK
 #pragma mark -
@@ -864,6 +923,8 @@ OSReturn OSKextUnloadKextWithLoadTag(uint32_t loadTag);
  * @field loadTag The kext's load tag.
  * @field flags Internal tracking flags.
  * @field reference_list who this refs (links on).
+ * @field text_exec_address The address of the __TEXT_EXEC segment (if it exists), otherwise __TEXT
+ * @field text_exec_size The size of the segment pointed to by text_address
  *
  * @discussion
  * The OSKextLoadedKextSummary structure contains a basic set of information
@@ -878,6 +939,8 @@ typedef struct _loaded_kext_summary {
 	uint32_t    loadTag;
 	uint32_t    flags;
 	uint64_t    reference_list;
+	uint64_t    text_exec_address;
+	size_t      text_exec_size;
 } OSKextLoadedKextSummary;
 
 /*!
@@ -938,6 +1001,13 @@ extern uint32_t                     OSKextGetKmodIDForSite(const vm_allocation_s
     char * name, vm_size_t namelen);
 extern void                         OSKextFreeSite(vm_allocation_site_t * site);
 
+extern kern_return_t                OSKextSetReceiptQueried(void);
+
+#if DEVELOPMENT || DEBUG
+extern void                         OSKextGetRefGrpForCaller(uintptr_t address,
+    void (^)(struct os_refgrp *));
+#endif
+
 #if CONFIG_IMAGEBOOT
 extern int OSKextGetUUIDForName(const char *, uuid_t);
 #endif
@@ -945,6 +1015,21 @@ extern int OSKextGetUUIDForName(const char *, uuid_t);
 extern vm_tag_t gIOSurfaceTag;
 
 extern void *OSKextKextForAddress(const void *addr);
+
+/*!
+ * @function OSKextGetLoadedKextSummaryForAddress
+ * @abstract Given an address, retrieve the summary of the kext which contains it.
+ *
+ * @discussion
+ * This function invokes OSKext::summaryForAddressExt, which will copy into the
+ * caller-provided pointer the summary of the kext containing the given address.
+ * This is done while holding the sKextSummariesLock lock, thus making it possible
+ * to use the content of the summary even if gLoadedKextSummaries is reallocated
+ * in the meantime.
+ */
+extern kern_return_t OSKextGetLoadedKextSummaryForAddress(
+	const void              * addr,
+	OSKextLoadedKextSummary * summary);
 
 #endif /* XNU_KERNEL_PRIVATE */
 

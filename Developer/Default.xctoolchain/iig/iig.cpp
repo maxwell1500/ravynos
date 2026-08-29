@@ -4,9 +4,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
-#include <filesystem>
 #include <iostream>
 #include <regex>
+#include <set>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -20,450 +20,653 @@ struct Options {
 };
 
 struct MethodInfo {
-    std::string returnType;
     std::string name;
+    std::string returnType;
     std::string args;
-    bool isStatic{false};
-    bool isVirtual{false};
-    bool isLocalOnly{false};
+    bool isStatic = false;
+    bool isVirtual = false;
+    bool isConst = false;
+    bool isOverride = false;
+    bool isLocal = false;
+    bool isLocalOnly = false;
+    bool isQueued = false;
+    bool isKernelOnly = false;
+    bool hasTypeAttribute = false;
+    bool isPureVirtual = false;
 };
-
-static void
-usage(const char *prog)
-{
-    std::cerr
-        << "usage: " << prog << " --def <input.iig> --header <output.h> [--impl <output.cpp|/dev/null>] [-- ...cflags]\n"
-        << "       " << prog << " <input.iig> -o <output.h>\n";
-}
-
-static bool
-readFile(const std::string &path, std::string &out)
-{
-    std::ifstream f(path);
-    if (!f) {
-        return false;
-    }
-    std::stringstream ss;
-    ss << f.rdbuf();
-    out = ss.str();
-    return true;
-}
-
-static bool
-writeFile(const std::string &path, const std::string &content)
-{
-    std::ofstream f(path);
-    if (!f) {
-        return false;
-    }
-    f << content;
-    return true;
-}
 
 static std::string
 trim(const std::string &s)
 {
-    size_t b = 0;
-    while (b < s.size() && std::isspace(static_cast<unsigned char>(s[b]))) {
-        b++;
+    size_t start = 0;
+    while (start < s.size() && (std::isspace(static_cast<unsigned char>(s[start])) != 0)) {
+        start++;
     }
-    size_t e = s.size();
-    while (e > b && std::isspace(static_cast<unsigned char>(s[e - 1]))) {
-        e--;
+    size_t end = s.size();
+    while (end > start && (std::isspace(static_cast<unsigned char>(s[end - 1])) != 0)) {
+        end--;
     }
-    return s.substr(b, e - b);
-}
-
-
-static std::string
-rewriteIncludes(const std::string &input)
-{
-    std::stringstream in(input);
-    std::ostringstream out;
-    std::string line;
-    std::regex incl(R"(^\s*#\s*include\s*<([^>]+)\.iig>\s*$)");
-    std::smatch m;
-    while (std::getline(in, line)) {
-        if (std::regex_match(line, m, incl)) {
-            out << "#include <" << m[1].str() << ".h>  /* .iig include */\n";
-        } else {
-            out << line << "\n";
-        }
-    }
-    return out.str();
+    return s.substr(start, end - start);
 }
 
 static std::string
-removeExtendsClasses(const std::string &input)
-{
-    std::string out = input;
-    size_t p = 0;
-    while (true) {
-        size_t start = out.find("class EXTENDS", p);
-        if (start == std::string::npos) {
-            break;
-        }
-        size_t brace = out.find('{', start);
-        if (brace == std::string::npos) {
-            break;
-        }
-        int depth = 1;
-        size_t i = brace + 1;
-        for (; i < out.size() && depth > 0; i++) {
-            if (out[i] == '{') {
-                depth++;
-            } else if (out[i] == '}') {
-                depth--;
-            }
-        }
-        if (depth != 0) {
-            break;
-        }
-        size_t semi = out.find(';', i);
-        if (semi == std::string::npos) {
-            break;
-        }
-        out.replace(start, (semi + 1) - start, "/* EXTENDS class omitted by iig-linux */\n");
-        p = start;
-    }
-    return out;
-}
-
-static std::string
-sanitizeDocumentationText(const std::string &input)
-{
-    std::string out = input;
-    out = std::regex_replace(out, std::regex(R"(\bLOCALONLY\b)"), "");
-    out = std::regex_replace(out, std::regex(R"(\bLOCAL\b)"), "");
-    out = std::regex_replace(out, std::regex(R"(class\s+KERNEL\s+)"), "class ");
-    out = std::regex_replace(out, std::regex(R"(\n\s*#\s*undef\s+KERNEL\s*\n)"), "\n");
-    return out;
-}
-
-static std::string
-sanitizeTypeText(std::string s)
-{
-    s = std::regex_replace(s, std::regex(R"(\bLOCALONLY\b)"), "");
-    s = std::regex_replace(s, std::regex(R"(\bLOCAL\b)"), "");
-    s = std::regex_replace(s, std::regex(R"(\bKERNEL\b)"), "");
-    s = std::regex_replace(s, std::regex(R"(\bTARGET\b)"), "");
-    s = std::regex_replace(s, std::regex(R"(\s+)"), " ");
-    return trim(s);
-}
-
-static std::string
-escapeMacroContinuation(const std::string &s)
+stripComments(const std::string &src)
 {
     std::string out;
-    out.reserve(s.size() + 8);
-    for (char c : s) {
-        if (c == '\\') {
-            out += "\\\\";
-        } else {
-            out.push_back(c);
+    out.reserve(src.size());
+
+    bool inBlock = false;
+    bool inLine = false;
+
+    for (size_t i = 0; i < src.size(); i++) {
+        if (!inBlock && !inLine && i + 1 < src.size() && src[i] == '/' && src[i + 1] == '*') {
+            inBlock = true;
+            out.push_back(' ');
+            i++;
+            continue;
+        }
+        if (inBlock && i + 1 < src.size() && src[i] == '*' && src[i + 1] == '/') {
+            inBlock = false;
+            out.push_back(' ');
+            i++;
+            continue;
+        }
+        if (!inBlock && !inLine && i + 1 < src.size() && src[i] == '/' && src[i + 1] == '/') {
+            inLine = true;
+            out.push_back(' ');
+            i++;
+            continue;
+        }
+        if (inLine && (src[i] == '\n' || src[i] == '\r')) {
+            inLine = false;
+            out.push_back(src[i]);
+            continue;
+        }
+        if (inBlock) {
+            if (src[i] == '\n' || src[i] == '\r') {
+                out.push_back(src[i]);
+            } else {
+                out.push_back(' ');
+            }
+        } else if (!inLine) {
+            out.push_back(src[i]);
         }
     }
+
     return out;
 }
 
 static uint64_t
 fnv1a64(const std::string &s)
 {
-    uint64_t h = 14695981039346656037ULL;
-    for (unsigned char c : s) {
-        h ^= static_cast<uint64_t>(c);
-        h *= 1099511628211ULL;
+    uint64_t hash = 14695981039346656037ULL;
+    for (char c : s) {
+        hash ^= static_cast<uint8_t>(c);
+        hash *= 1099511628211ULL;
     }
-    return h;
+    return hash;
+}
+
+static bool
+findMainClass(const std::string &clean,
+              std::string &className,
+              std::string &superClassName,
+              bool &isNative,
+              size_t &bodyStart,
+              size_t &bodyEnd)
+{
+    std::regex classRe(R"(\bclass\s+(?:(?:KERNEL|NATIVE)\s+)*([A-Za-z0-9_]+)\s*(?::\s*(public\s+)?([A-Za-z0-9_]+))?\s*\{)");
+    auto words_begin = std::sregex_iterator(clean.begin(), clean.end(), classRe);
+    auto words_end = std::sregex_iterator();
+
+    std::smatch m;
+    bool found = false;
+    for (std::sregex_iterator i = words_begin; i != words_end; ++i) {
+        std::smatch match = *i;
+        std::string name = match[1].str();
+        if (name == "OSMetaClassBase" && clean.find("class OSObject") != std::string::npos) {
+            continue; // skip OSMetaClassBase declaration in OSObject.iig
+        }
+        m = match;
+        found = true;
+        break;
+    }
+
+    if (!found) {
+        return false;
+    }
+
+    className = m[1].str();
+    if (m[3].matched) {
+        superClassName = m[3].str();
+    } else {
+        superClassName = "OSMetaClassBase";
+    }
+
+    size_t openBrace = m.position(0) + m.length(0) - 1;
+    int depth = 1;
+    size_t closeBrace = std::string::npos;
+    for (size_t i = openBrace + 1; i < clean.size(); i++) {
+        if (clean[i] == '{') {
+            depth++;
+        } else if (clean[i] == '}') {
+            depth--;
+            if (depth == 0) {
+                closeBrace = i;
+                break;
+            }
+        }
+    }
+
+    if (closeBrace == std::string::npos) {
+        return false;
+    }
+
+    bodyStart = openBrace + 1;
+    bodyEnd = closeBrace;
+
+    std::string declPrefix = clean.substr(0, openBrace);
+    isNative = (declPrefix.find("NATIVE") != std::string::npos);
+
+    return true;
 }
 
 static std::vector<std::string>
 splitArgs(const std::string &args)
 {
-    std::vector<std::string> out;
-    std::string cur;
-    int angle = 0;
-    int paren = 0;
-    int bracket = 0;
+    std::vector<std::string> res;
+    std::string current;
+    int templDepth = 0;
+    int parenDepth = 0;
+
     for (char c : args) {
         if (c == '<') {
-            angle++;
+            templDepth++;
         } else if (c == '>') {
-            if (angle > 0) {
-                angle--;
-            }
+            templDepth = std::max(0, templDepth - 1);
         } else if (c == '(') {
-            paren++;
+            parenDepth++;
         } else if (c == ')') {
-            if (paren > 0) {
-                paren--;
-            }
-        } else if (c == '[') {
-            bracket++;
-        } else if (c == ']') {
-            if (bracket > 0) {
-                bracket--;
-            }
+            parenDepth = std::max(0, parenDepth - 1);
         }
 
-        if (c == ',' && angle == 0 && paren == 0 && bracket == 0) {
-            std::string t = trim(cur);
-            if (!t.empty()) {
-                out.push_back(t);
+        if (c == ',' && templDepth == 0 && parenDepth == 0) {
+            std::string t = trim(current);
+            if (!t.empty() && t != "void") {
+                res.push_back(t);
             }
-            cur.clear();
-            continue;
+            current.clear();
+        } else {
+            current.push_back(c);
         }
-        cur.push_back(c);
     }
-    std::string t = trim(cur);
+
+    std::string t = trim(current);
     if (!t.empty() && t != "void") {
-        out.push_back(t);
+        res.push_back(t);
     }
-    return out;
-}
 
-static std::vector<MethodInfo>
-parseMethods(const std::string &classText, const std::string &className)
-{
-    std::vector<MethodInfo> methods;
-    std::string body = classText;
-    body = std::regex_replace(body, std::regex(R"(/\*[\s\S]*?\*/)"), "");
-    body = std::regex_replace(body, std::regex(R"(//.*?$)", std::regex::multiline), "");
-    body = std::regex_replace(body, std::regex(R"(#pragma[^\n]*\n)"), "\n");
-
-    std::stringstream ss(body);
-    std::string line;
-    std::string stmt;
-    int depth = 0;
-    while (std::getline(ss, line)) {
-        std::string t = trim(line);
-        if (t.empty()) {
-            continue;
-        }
-        for (char c : line) {
-            if (c == '{') {
-                depth++;
-            } else if (c == '}') {
-                depth--;
-            }
-        }
-        if (depth < 1) {
-            continue;
-        }
-        if (t == "public:" || t == "private:" || t == "protected:") {
-            continue;
-        }
-
-        stmt += " " + t;
-        if (t.find(';') == std::string::npos) {
-            continue;
-        }
-
-        std::string cand = trim(stmt);
-        stmt.clear();
-        if (cand.empty() || cand.find('(') == std::string::npos) {
-            continue;
-        }
-        if (cand.rfind("typedef ", 0) == 0) {
-            continue;
-        }
-
-        cand = cand.substr(0, cand.find(';'));
-
-        size_t lp = cand.find('(');
-        size_t rp = cand.rfind(')');
-        if (lp == std::string::npos || rp == std::string::npos || rp < lp) {
-            continue;
-        }
-        std::string left = trim(cand.substr(0, lp));
-        std::string args = trim(cand.substr(lp + 1, rp - lp - 1));
-
-        std::smatch m;
-        std::regex nameRx(R"(([~A-Za-z_][A-Za-z0-9_]*)\s*$)");
-        if (!std::regex_search(left, m, nameRx)) {
-            continue;
-        }
-        std::string name = m[1].str();
-        if (name == className || name == ("~" + className)) {
-            continue;
-        }
-        left = trim(left.substr(0, m.position(1)));
-
-        MethodInfo mi;
-        mi.isLocalOnly = (cand.find("LOCALONLY") != std::string::npos);
-        mi.isStatic = (left.find("static ") != std::string::npos);
-        mi.isVirtual = (left.find("virtual ") != std::string::npos);
-        mi.name = name;
-        mi.returnType = sanitizeTypeText(left);
-        mi.args = sanitizeTypeText(args);
-        if (mi.returnType.empty()) {
-            continue;
-        }
-        methods.push_back(mi);
-    }
-    return methods;
+    return res;
 }
 
 static std::string
-emitGeneratedMetadata(const std::string &className, const std::vector<MethodInfo> &methods)
+extractParamName(const std::string &argDecl)
 {
-    std::ostringstream out;
-    for (const auto &m : methods) {
-        if (m.isLocalOnly) {
-            continue;
-        }
-        std::ostringstream sig;
-        sig << className << "::" << m.name << "(" << m.args << ")";
-        uint64_t id = fnv1a64(sig.str());
-        out << "#define " << className << "_" << m.name << "_ID            0x"
-            << std::hex << std::nouppercase << id << "ULL" << std::dec << "\n";
+    std::string s = trim(argDecl);
+    if (s.empty() || s == "void") {
+        return "";
     }
-    out << "\n";
 
-    for (const auto &m : methods) {
-        if (m.isLocalOnly) {
+    size_t eq = s.find('=');
+    if (eq != std::string::npos) {
+        s = trim(s.substr(0, eq));
+    }
+
+    // Strip array brackets: "const char reason[1024]" -> "const char reason"
+    size_t lbracket = s.find('[');
+    if (lbracket != std::string::npos) {
+        s = trim(s.substr(0, lbracket));
+    }
+
+    while (!s.empty() && (s.back() == ')' || s.back() == ']' || s.back() == '*' || s.back() == '&')) {
+        s.pop_back();
+    }
+    s = trim(s);
+
+    size_t lastSpace = s.find_last_of(" \t*&");
+    if (lastSpace == std::string::npos) {
+        return "";
+    }
+
+    std::string name = trim(s.substr(lastSpace + 1));
+    return name;
+}
+
+static std::string
+sanitizeArgDecl(const std::string &argDecl)
+{
+    std::string s = trim(argDecl);
+    static const std::vector<std::string> keywords = {
+        "PORT", "PORTMAP", "KERNEL", "RPC", "LOCAL", "LOCALONLY", "QUEUED", "FINAL", "TARGET"
+    };
+
+    for (const auto &kw : keywords) {
+        std::regex r(R"(\b)" + kw + R"(\b)");
+        s = std::regex_replace(s, r, "");
+    }
+
+    // Remove TYPE(...) annotations like TYPE(IOUserClient::AsyncCompletion)
+    std::regex typeRe(R"(TYPE\s*\([^)]*\))");
+    s = std::regex_replace(s, typeRe, "");
+
+    std::regex ws(R"(\s+)");
+    s = std::regex_replace(s, ws, " ");
+    return trim(s);
+}
+
+static std::vector<MethodInfo>
+parseMethods(const std::string &body, const std::string &/*className*/)
+{
+    std::vector<MethodInfo> methods;
+    std::istringstream stream(body);
+    std::string line;
+    std::string stmt;
+
+    while (std::getline(stream, line)) {
+        line = trim(line);
+        if (line.empty() || line[0] == '#') {
             continue;
         }
-        out << "#define " << className << "_" << m.name << "_Args \\\n";
-        auto args = splitArgs(m.args);
-        if (args.empty()) {
-            out << "\n\n";
+
+        if (line == "public:" || line == "protected:" || line == "private:") {
             continue;
         }
-        for (size_t i = 0; i < args.size(); i++) {
-            out << "        " << args[i];
-            if (i + 1 < args.size()) {
-                out << ", \\\n";
-            } else {
-                out << "\n\n";
+
+        stmt += (stmt.empty() ? "" : " ") + line;
+        if (stmt.back() == ';') {
+            std::string s = stmt.substr(0, stmt.size() - 1);
+            stmt.clear();
+
+            bool isType = false;
+            std::regex typeAttrRe(R"(__attribute__\s*\(\s*\(\s*annotate\s*\(\s*"type"\s*\)\s*\)\s*\))");
+            if (std::regex_search(s, typeAttrRe)) {
+                isType = true;
+                s = std::regex_replace(s, typeAttrRe, "");
+            }
+            if (s.rfind("TYPE", 0) == 0 && s.size() > 4 && std::isspace(static_cast<unsigned char>(s[4]))) {
+                isType = true;
+                s = trim(s.substr(4));
+            }
+
+            size_t lparen = s.find('(');
+            if (lparen == std::string::npos) {
+                continue;
+            }
+            // Find matching ')' for the method's arg list (handle nested parens)
+            int depth = 1;
+            size_t rparen = std::string::npos;
+            for (size_t i = lparen + 1; i < s.size(); i++) {
+                if (s[i] == '(') depth++;
+                else if (s[i] == ')') {
+                    depth--;
+                    if (depth == 0) { rparen = i; break; }
+                }
+            }
+            if (rparen == std::string::npos) {
+                continue;
+            }
+
+            std::string pre = trim(s.substr(0, lparen));
+            std::string args = trim(s.substr(lparen + 1, rparen - lparen - 1));
+            std::string post = trim(s.substr(rparen + 1));
+
+            MethodInfo info;
+            info.args = args;
+            info.hasTypeAttribute = isType;
+
+            if (pre.rfind("static ", 0) == 0) {
+                info.isStatic = true;
+                pre = trim(pre.substr(7));
+            }
+            if (pre.rfind("virtual ", 0) == 0) {
+                info.isVirtual = true;
+                pre = trim(pre.substr(8));
+            }
+
+            size_t namePos = pre.find_last_of(" \t*&");
+            if (namePos == std::string::npos) {
+                continue;
+            }
+
+            info.name = trim(pre.substr(namePos + 1));
+            info.returnType = trim(pre.substr(0, namePos + 1));
+
+            if (info.name.empty() || info.name[0] == '~') {
+                continue;
+            }
+
+            info.isConst = (post.find("const") != std::string::npos);
+            info.isOverride = (post.find("override") != std::string::npos);
+            info.isLocal = (post.find("LOCAL") != std::string::npos || post.find("LOCALONLY") != std::string::npos);
+            info.isLocalOnly = (post.find("LOCALONLY") != std::string::npos);
+            info.isQueued = (post.find("QUEUED") != std::string::npos);
+            info.isKernelOnly = (post.find("KERNEL") != std::string::npos);
+            // Pure virtual: "= 0" appears after signature, possibly with spaces
+            info.isPureVirtual = (post.find("= 0") != std::string::npos || post.find("=0") != std::string::npos);
+            methods.push_back(info);
+        }
+    }
+
+    return methods;
+}
+
+static std::vector<MethodInfo>
+parseExtendsMethods(const std::string &clean, const std::string &className)
+{
+    std::vector<MethodInfo> extMethods;
+
+    std::regex extRe(R"(\bclass\s+EXTENDS\s*\(\s*([A-Za-z0-9_]+)\s*\)\s*([A-Za-z0-9_]+)\s*\{)");
+    auto words_begin = std::sregex_iterator(clean.begin(), clean.end(), extRe);
+    auto words_end = std::sregex_iterator();
+
+    for (std::sregex_iterator i = words_begin; i != words_end; ++i) {
+        std::smatch m = *i;
+        std::string targetClass = m[1].str();
+        if (targetClass != className) {
+            continue;
+        }
+
+        size_t openBrace = m.position(0) + m.length(0) - 1;
+        int depth = 1;
+        size_t closeBrace = std::string::npos;
+        for (size_t k = openBrace + 1; k < clean.size(); k++) {
+            if (clean[k] == '{') {
+                depth++;
+            } else if (clean[k] == '}') {
+                depth--;
+                if (depth == 0) {
+                    closeBrace = k;
+                    break;
+                }
             }
         }
+        if (closeBrace != std::string::npos) {
+            std::string body = clean.substr(openBrace + 1, closeBrace - openBrace - 1);
+            auto parsed = parseMethods(body, className);
+            extMethods.insert(extMethods.end(), parsed.begin(), parsed.end());
+        }
     }
 
-    out << "#define " << className << "_Methods \\\n\\\npublic:\\\n\\\n";
-    out << "    virtual kern_return_t\\\n"
-        << "    Dispatch(const IORPC rpc) APPLE_KEXT_OVERRIDE;\\\n\\\n";
-    out << "    static kern_return_t\\\n"
-        << "    _Dispatch(" << className << " * self, const IORPC rpc);\\\n\\\n";
+    return extMethods;
+}
+
+static std::string
+emitHeader(const std::string &input, const std::string &basename)
+{
+    std::string clean = stripComments(input);
+    std::string className;
+    std::string superClassName;
+    bool isNative = false;
+    size_t classStart = 0;
+    size_t classEnd = 0;
+
+    if (!findMainClass(clean, className, superClassName, isNative, classStart, classEnd)) {
+        return "/* iig(iig-linux) generated from " + basename + " */\n";
+    }
+
+    std::string classText = clean.substr(classStart, classEnd - classStart);
+    std::vector<MethodInfo> methods = parseMethods(classText, className);
+    auto extMethods = parseExtendsMethods(clean, className);
+    methods.insert(methods.end(), extMethods.begin(), extMethods.end());
+
+    std::ostringstream out;
+    out << "/* iig(iig-linux) generated from " << basename << " */\n\n"
+        << "#ifndef _IOKIT_" << className << "_H\n"
+        << "#define _IOKIT_" << className << "_H\n\n"
+        << "#include <stdint.h>\n"
+        << "#include <DriverKit/OSObject.h>\n"
+        << "#include <DriverKit/IORPC.h>\n\n";
+
+    if (superClassName != "OSMetaClassBase" && superClassName != "OSObject") {
+        out << "#include <DriverKit/" << superClassName << ".h>\n\n";
+    }
+
+    out << "class " << className << ";\n\n";
 
     for (const auto &m : methods) {
-        out << "    " << escapeMacroContinuation(m.returnType) << "\\\n"
-            << "    " << m.name << "(\\\n";
-        auto args = splitArgs(m.args);
-        if (args.empty()) {
-            out << ");\\\n\\\n";
+        if (m.isLocalOnly || m.isKernelOnly) {
             continue;
         }
-        for (size_t i = 0; i < args.size(); i++) {
-            out << "        " << escapeMacroContinuation(args[i]);
-            if (i + 1 < args.size()) {
-                out << ",\\\n";
-            } else {
-                if (!m.isLocalOnly && !m.isStatic) {
-                    out << ",\\\n        OSDispatchMethod supermethod = NULL);\\\n\\\n";
+        std::string msgIdName = className + "_" + m.name + "_ID";
+        uint64_t msgId = fnv1a64(className + "::" + m.name);
+        out << "#define " << msgIdName << " 0x" << std::hex << msgId << "ULL\n";
+    }
+    out << std::dec << "\n";
+
+    for (const auto &m : methods) {
+        if (m.isLocalOnly || m.isKernelOnly) {
+            continue;
+        }
+        std::string argsMacro = className + "_" + m.name + "_Args";
+        out << "#define " << argsMacro << " \\\n";
+        auto args = splitArgs(m.args);
+        if (args.empty()) {
+            out << "    /* no arguments */\n\n";
+        } else {
+            for (size_t i = 0; i < args.size(); i++) {
+                out << "    " << sanitizeArgDecl(args[i]);
+                if (i + 1 < args.size()) {
+                    out << ", \\\n";
                 } else {
-                    out << ");\\\n\\\n";
+                    out << "\n\n";
                 }
             }
         }
     }
 
-    out << "#define " << className << "_KernelMethods\n";
-    out << "#define " << className << "_VirtualMethods\n";
+    out << "#define " << className << "_Methods \\\n";
+    for (const auto &m : methods) {
+        std::string retType = trim(m.returnType);
+        if (retType.rfind("virtual ", 0) == 0) {
+            retType = trim(retType.substr(8));
+        }
+        out << "    virtual " << retType << " \\\n"
+            << "    " << m.name << "(\\\n";
+
+        auto args = splitArgs(m.args);
+        bool hasSupermethod = (!m.isLocalOnly && !m.isLocal && !m.isStatic);
+
+        for (size_t i = 0; i < args.size(); i++) {
+            out << "        " << sanitizeArgDecl(args[i]);
+            if (i + 1 < args.size() || hasSupermethod) {
+                out << ",\\\n";
+            }
+        }
+        if (hasSupermethod) {
+            out << "        OSDispatchMethod supermethod = NULL\\\n";
+        }
+        out << "    )" << (m.isConst ? " const" : "") << (m.isOverride ? " override" : "") << ";\\\n";
+    }
+    out << "\n";
+
+    out << "#define " << className << "_KernelMethods \\\n";
+    for (const auto &m : methods) {
+        if (m.isLocalOnly) {
+            continue;
+        }
+        std::string retType = trim(m.returnType);
+        if (retType.rfind("virtual ", 0) == 0) {
+            retType = trim(retType.substr(8));
+        }
+
+        if (m.isStatic) {
+            out << "    static kern_return_t \\\n"
+                << "    " << m.name << "_Call(\\\n"
+                << "        IORPC rpc";
+            auto args = splitArgs(m.args);
+            if (!args.empty()) {
+                out << ",\\\n";
+                for (size_t i = 0; i < args.size(); i++) {
+                    out << "        " << sanitizeArgDecl(args[i]);
+                    if (i + 1 < args.size()) {
+                        out << ",\\\n";
+                    }
+                }
+            }
+            out << ");\\\n";
+        } else {
+            out << "    " << retType << " \\\n"
+                << "    " << m.name << "_Impl(\\\n";
+
+            auto args = splitArgs(m.args);
+            for (size_t i = 0; i < args.size(); i++) {
+                out << "        " << sanitizeArgDecl(args[i]);
+                if (i + 1 < args.size()) {
+                    out << ",\\\n";
+                }
+            }
+            out << ");\\\n";
+        }
+    }
+    out << "\n";
+
+    out << "class " << className;
+    if (!superClassName.empty() && superClassName != "OSMetaClassBase") {
+        out << " : public " << superClassName;
+    } else {
+        out << " : public OSMetaClassBase";
+    }
+    out << "\n{\n"
+        << "#if KERNEL\n"
+        << "    OSDeclareDefaultStructorsWithDispatch(" << className << ");\n"
+        << "#endif /* KERNEL */\n\n"
+        << "public:\n"
+        << "    virtual kern_return_t Dispatch(const IORPC rpc) override;\n"
+        << "    static kern_return_t _Dispatch(" << className << " * self, const IORPC rpc);\n\n"
+        << "    " << className << "_Methods\n"
+        << "    " << className << "_KernelMethods\n"
+        << "};\n\n"
+        << "#endif /* !_IOKIT_" << className << "_H */\n";
+
     return out.str();
 }
 
-static bool
-findMainClass(const std::string &input,
-              std::string &className,
-              size_t &classStart,
-              size_t &classEnd)
-{
-    std::regex cls(R"(class\s+(?:KERNEL\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*:\s*public\s+[A-Za-z_][A-Za-z0-9_]*)");
-    std::smatch m;
-    std::string work = input;
-    size_t searchOffset = 0;
-
-    while (std::regex_search(work, m, cls)) {
-        size_t abs = searchOffset + static_cast<size_t>(m.position(0));
-        if (input.compare(abs, 13, "class EXTENDS") == 0) {
-            searchOffset = abs + 13;
-            work = input.substr(searchOffset);
-            continue;
-        }
-        className = m[1].str();
-        classStart = abs;
-        size_t brace = input.find('{', classStart);
-        if (brace == std::string::npos) {
-            return false;
-        }
-        int depth = 1;
-        size_t i = brace + 1;
-        for (; i < input.size() && depth > 0; i++) {
-            if (input[i] == '{') {
-                depth++;
-            } else if (input[i] == '}') {
-                depth--;
-            }
-        }
-        if (depth != 0) {
-            return false;
-        }
-        size_t semi = input.find(';', i);
-        if (semi == std::string::npos) {
-            return false;
-        }
-        classEnd = semi + 1;
-        return true;
-    }
-
-    return false;
-}
-
 static std::string
-buildHeader(const std::string &input, const std::string &basename)
+emitImpl(const std::string &input, const std::string &basename)
 {
-    std::string transformed = rewriteIncludes(input);
-    transformed = removeExtendsClasses(transformed);
-
+    std::string clean = stripComments(input);
     std::string className;
+    std::string superClassName;
+    bool isNative = false;
     size_t classStart = 0;
     size_t classEnd = 0;
-    if (!findMainClass(transformed, className, classStart, classEnd)) {
-        return "/* iig(iig-linux) generated from " + basename + " */\n\n" + transformed;
+    if (!findMainClass(clean, className, superClassName, isNative, classStart, classEnd)) {
+        return "/* iig(iig-linux) generated from " + basename + " */\n";
     }
 
-    size_t guardEnd = transformed.rfind("#endif");
-    if (guardEnd == std::string::npos || guardEnd < classEnd) {
-        guardEnd = transformed.size();
-    }
+    // IOUserServer's vtable is defined in IOUserServer.cpp but its RPC methods still need stubs for linking.
+    // Fall through to generate Dispatch + method stubs like other classes.
 
-    std::string prologue = transformed.substr(0, classStart);
-    std::string classText = transformed.substr(classStart, classEnd - classStart);
-    std::string epilogue = transformed.substr(guardEnd);
 
-    std::string classTextDoc = sanitizeDocumentationText(classText);
-    std::vector<MethodInfo> methods = parseMethods(classTextDoc, className);
+    std::string classText = clean.substr(classStart, classEnd - classStart);
+    std::vector<MethodInfo> methods = parseMethods(classText, className);
+    auto extMethods = parseExtendsMethods(clean, className);
+    methods.insert(methods.end(), extMethods.begin(), extMethods.end());
 
     std::ostringstream out;
-    out << "/* iig(iig-linux) generated from " << basename << " */\n\n";
-    out << prologue;
-    out << "\n/* source class " << className << " " << basename << " */\n\n";
-    out << "#if __DOCUMENTATION__\n\n";
-    out << classTextDoc << "\n\n";
-    out << "#else /* __DOCUMENTATION__ */\n\n";
-    out << "#if KERNEL\n";
-    out << "#ifndef " << className << "_Methods\n#define " << className << "_Methods\n#endif\n";
-    out << "#ifndef " << className << "_KernelMethods\n#define " << className << "_KernelMethods\n#endif\n";
-    out << "#ifndef " << className << "_VirtualMethods\n#define " << className << "_VirtualMethods\n#endif\n";
-    out << "#else /* !KERNEL */\n\n";
-    out << "/* generated class " << className << " " << basename << " */\n\n";
-    out << emitGeneratedMetadata(className, methods) << "\n";
-    out << classTextDoc << "\n\n";
-    out << "#endif /* !KERNEL */\n\n";
-    out << "#endif /* !__DOCUMENTATION__ */\n\n";
-    out << epilogue;
+    out << "/* iig(iig-linux) generated from " << basename << " */\n\n"
+        << "#undef  IIG_IMPLEMENTATION\n"
+        << "#define IIG_IMPLEMENTATION  " << basename << "\n\n"
+        << "#ifndef KERNEL\n"
+        << "#define KERNEL 1\n"
+        << "#endif\n\n"
+        << "#include <libkern/c++/OSString.h>\n"
+        << "#include <DriverKit/IOReturn.h>\n";
+
+    if (className != "OSObject" && superClassName != "OSMetaClassBase" && superClassName != "OSObject") {
+        out << "#include <DriverKit/" << superClassName << ".h>\n";
+    }
+    out << "#include <DriverKit/" << className << ".h>\n\n";
+
+    out << "kern_return_t\n"
+        << className << "::Dispatch(const IORPC rpc)\n"
+        << "{\n"
+        << "    return _Dispatch(this, rpc);\n"
+        << "}\n\n";
+
+    out << "kern_return_t\n"
+        << className << "::_Dispatch(" << className << " * self, const IORPC rpc)\n"
+        << "{\n"
+        << "    (void)self;\n"
+        << "    (void)rpc;\n"
+        << "    return kIOReturnUnsupported;\n"
+        << "}\n\n";
+
+    if (className != "OSObject") {
+        out << "kern_return_t\n"
+            << className << "::MetaClass::Dispatch(const IORPC rpc)\n"
+            << "{\n"
+            << "    (void)rpc;\n"
+            << "    return kIOReturnUnsupported;\n"
+            << "}\n\n";
+    }
+
+    for (const auto &m : methods) {
+        if (m.isPureVirtual) {
+            continue;
+        }
+        if (m.name == "init" || m.name == "free") {
+            continue;
+        }
+        if (m.isStatic) {
+            continue;
+        }
+
+        std::string retType = trim(m.returnType);
+        if (retType.rfind("virtual ", 0) == 0) {
+            retType = trim(retType.substr(8));
+        }
+
+        auto args = splitArgs(m.args);
+        bool hasSupermethod = (!m.isLocalOnly && !m.isLocal && !m.isStatic);
+        std::string constSuffix = m.isConst ? " const" : "";
+
+        out << retType << "\n"
+            << className << "::" << m.name << "(\n";
+
+        for (size_t i = 0; i < args.size(); i++) {
+            out << "        " << sanitizeArgDecl(args[i]);
+            if (i + 1 < args.size() || hasSupermethod) {
+                out << ",\n";
+            }
+        }
+        if (hasSupermethod) {
+            out << "        OSDispatchMethod supermethod\n";
+        }
+        out << ")" << constSuffix << "\n"
+            << "{\n";
+
+        for (const auto &arg : args) {
+            std::string pname = extractParamName(sanitizeArgDecl(arg));
+            if (!pname.empty()) {
+                out << "    (void)" << pname << ";\n";
+            }
+        }
+        if (hasSupermethod) {
+            out << "    (void)supermethod;\n";
+        }
+
+        if (retType == "void") {
+            out << "}\n\n";
+        } else if (retType == "bool") {
+            out << "    return true;\n}\n\n";
+        } else if (retType.find('*') != std::string::npos) {
+            out << "    return NULL;\n}\n\n";
+        } else {
+            out << "    return kIOReturnUnsupported;\n}\n\n";
+        }
+    }
+
     return out.str();
 }
 
@@ -472,76 +675,87 @@ parseArgs(int argc, const char **argv, Options &opts)
 {
     bool sawDoubleDash = false;
     for (int i = 1; i < argc; i++) {
-        std::string a = argv[i];
-        if (a == "--") {
+        std::string arg = argv[i];
+        if (arg == "--") {
             sawDoubleDash = true;
             continue;
         }
-        if (sawDoubleDash) {
-            continue;
-        }
-        if ((a == "--def") && (i + 1 < argc)) {
+        if (arg == "--def" && i + 1 < argc) {
             opts.defPath = argv[++i];
-            continue;
-        }
-        if ((a == "--header") && (i + 1 < argc)) {
+        } else if (arg == "--header" && i + 1 < argc) {
             opts.headerPath = argv[++i];
-            continue;
-        }
-        if ((a == "--impl") && (i + 1 < argc)) {
+        } else if (arg == "--impl" && i + 1 < argc) {
             opts.implPath = argv[++i];
-            continue;
-        }
-        if ((a == "-o") && (i + 1 < argc)) {
-            opts.headerPath = argv[++i];
-            continue;
-        }
-        if ((a == "--xnu-root") && (i + 1 < argc)) {
-            i++;
-            continue;
-        }
-        if (a == "-h" || a == "--help") {
-            return false;
-        }
-        if (!a.empty() && a[0] != '-' && opts.defPath.empty()) {
-            opts.defPath = a;
-            continue;
+        } else if (arg.rfind("-I", 0) == 0) {
+            // Include paths ignored for now
+        } else if (arg.rfind("-D", 0) == 0) {
+            // Macro defines ignored for now
+        } else if (arg[0] != '-' && opts.defPath.empty()) {
+            opts.defPath = arg;
         }
     }
-
-    return !opts.defPath.empty() && !opts.headerPath.empty();
+    (void)sawDoubleDash;
+    return !opts.defPath.empty();
 }
 
-} // namespace
+static bool
+readFile(const std::string &path, std::string &out)
+{
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        return false;
+    }
+    std::ostringstream ss;
+    ss << in.rdbuf();
+    out = ss.str();
+    return true;
+}
+
+static bool
+writeFile(const std::string &path, const std::string &content)
+{
+    std::ofstream out(path, std::ios::binary);
+    if (!out) {
+        return false;
+    }
+    out.write(content.data(), content.size());
+    return out.good();
+}
+
+} // anonymous namespace
 
 int
 main(int argc, const char **argv)
 {
     Options opts;
     if (!parseArgs(argc, argv, opts)) {
-        usage(argv[0]);
+        std::cerr << "Usage: iig-linux --def <file.iig> [--header <file.h>] [--impl <file.iig.cpp>]\n";
         return 1;
     }
 
     std::string input;
     if (!readFile(opts.defPath, input)) {
-        std::cerr << "iig-linux: failed to read input: " << opts.defPath << "\n";
+        std::cerr << "iig-linux: failed to read: " << opts.defPath << "\n";
         return 1;
     }
 
-    std::string base = std::filesystem::path(opts.defPath).filename().string();
-    std::string header = buildHeader(input, base);
-
-    if (!writeFile(opts.headerPath, header)) {
-        std::cerr << "iig-linux: failed to write header: " << opts.headerPath << "\n";
-        return 1;
+    std::string basename = opts.defPath;
+    size_t lastSlash = basename.find_last_of("/\\");
+    if (lastSlash != std::string::npos) {
+        basename = basename.substr(lastSlash + 1);
     }
 
-    if (!opts.implPath.empty() && opts.implPath != "/dev/null") {
-        std::ostringstream impl;
-        impl << "/* iig(iig-linux) generated from " << base << " */\n";
-        impl << "/* implementation generation is intentionally minimal in iig-linux */\n";
-        if (!writeFile(opts.implPath, impl.str())) {
+    if (!opts.headerPath.empty()) {
+        std::string header = emitHeader(input, basename);
+        if (!writeFile(opts.headerPath, header)) {
+            std::cerr << "iig-linux: failed to write header: " << opts.headerPath << "\n";
+            return 1;
+        }
+    }
+
+    if (!opts.implPath.empty()) {
+        std::string impl = emitImpl(input, basename);
+        if (!writeFile(opts.implPath, impl)) {
             std::cerr << "iig-linux: failed to write impl: " << opts.implPath << "\n";
             return 1;
         }
@@ -549,4 +763,3 @@ main(int argc, const char **argv)
 
     return 0;
 }
-

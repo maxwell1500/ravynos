@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2019-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -35,7 +35,7 @@
 #include <kern/sched_prim.h>
 #include <kern/misc_protos.h>
 #include <kern/thread_call.h>
-#include <kern/zalloc.h>
+#include <kern/zalloc_internal.h>
 #include <kern/kalloc.h>
 #include <tests/ktest.h>
 #include <sys/errno.h>
@@ -43,9 +43,11 @@
 #include <kern/kern_cdata.h>
 #include <machine/lowglobals.h>
 #include <vm/vm_page.h>
-#include <vm/vm_object.h>
-#include <kern/priority_queue.h>
+#include <vm/vm_object_internal.h>
+#include <vm/vm_protos.h>
+#include <vm/vm_iokit.h>
 #include <string.h>
+#include <kern/kern_apfs_reflock.h>
 
 #if !(DEVELOPMENT || DEBUG)
 #error "Testing is not enabled on RELEASE configurations"
@@ -63,35 +65,52 @@ void xnupost_reset_panic_widgets(void);
 kern_return_t zalloc_test(void);
 kern_return_t RandomULong_test(void);
 kern_return_t kcdata_api_test(void);
-kern_return_t priority_queue_test(void);
 kern_return_t ts_kernel_primitive_test(void);
 kern_return_t ts_kernel_sleep_inheritor_test(void);
 kern_return_t ts_kernel_gate_test(void);
 kern_return_t ts_kernel_turnstile_chain_test(void);
 kern_return_t ts_kernel_timingsafe_bcmp_test(void);
 
+#if __ARM_VFP__
+extern kern_return_t vfp_state_test(void);
+#endif
+
 extern kern_return_t kprintf_hhx_test(void);
 
-#if defined(__arm__) || defined(__arm64__)
+#if defined(__arm64__)
 kern_return_t pmap_coredump_test(void);
 #endif
 
 extern kern_return_t console_serial_test(void);
-extern kern_return_t console_serial_alloc_rel_tests(void);
 extern kern_return_t console_serial_parallel_log_tests(void);
+extern kern_return_t test_printf(void);
 extern kern_return_t test_os_log(void);
+extern kern_return_t test_os_log_handles(void);
 extern kern_return_t test_os_log_parallel(void);
 extern kern_return_t bitmap_post_test(void);
+extern kern_return_t counter_tests(void);
+#if ML_IO_TIMEOUTS_ENABLED
+extern kern_return_t ml_io_timeout_test(void);
+#endif
 
 #ifdef __arm64__
 extern kern_return_t arm64_munger_test(void);
-extern kern_return_t ex_cb_test(void);
 #if __ARM_PAN_AVAILABLE__
 extern kern_return_t arm64_pan_test(void);
 #endif
 #if defined(HAS_APPLE_PAC)
 extern kern_return_t arm64_ropjop_test(void);
 #endif /* defined(HAS_APPLE_PAC) */
+#if CONFIG_SPTM
+extern kern_return_t arm64_panic_lockdown_test(void);
+#endif /* CONFIG_SPTM */
+#if HAS_SPECRES
+extern kern_return_t specres_test(void);
+#endif /* HAS_SPECRES */
+#if BTI_ENFORCED
+kern_return_t arm64_bti_test(void);
+#endif /* BTI_ENFORCED */
+extern kern_return_t arm64_speculation_guard_test(void);
 #endif /* __arm64__ */
 
 extern kern_return_t test_thread_call(void);
@@ -104,35 +123,50 @@ struct xnupost_panic_widget xt_panic_widgets = {.xtp_context_p = NULL,
 
 struct xnupost_test kernel_post_tests[] = {XNUPOST_TEST_CONFIG_BASIC(zalloc_test),
 	                                   XNUPOST_TEST_CONFIG_BASIC(RandomULong_test),
+	                                   XNUPOST_TEST_CONFIG_BASIC(test_printf),
+	                                   XNUPOST_TEST_CONFIG_BASIC(test_os_log_handles),
 	                                   XNUPOST_TEST_CONFIG_BASIC(test_os_log),
 	                                   XNUPOST_TEST_CONFIG_BASIC(test_os_log_parallel),
 #ifdef __arm64__
 	                                   XNUPOST_TEST_CONFIG_BASIC(arm64_munger_test),
-	                                   XNUPOST_TEST_CONFIG_BASIC(ex_cb_test),
 #if __ARM_PAN_AVAILABLE__
 	                                   XNUPOST_TEST_CONFIG_BASIC(arm64_pan_test),
 #endif
 #if defined(HAS_APPLE_PAC)
 	                                   XNUPOST_TEST_CONFIG_BASIC(arm64_ropjop_test),
 #endif /* defined(HAS_APPLE_PAC) */
+#if CONFIG_SPTM
+	                                   XNUPOST_TEST_CONFIG_BASIC(arm64_panic_lockdown_test),
+#endif /* CONFIG_SPTM */
+	                                   XNUPOST_TEST_CONFIG_BASIC(arm64_speculation_guard_test),
 #endif /* __arm64__ */
 	                                   XNUPOST_TEST_CONFIG_BASIC(kcdata_api_test),
 	                                   XNUPOST_TEST_CONFIG_BASIC(console_serial_test),
-	                                   XNUPOST_TEST_CONFIG_BASIC(console_serial_alloc_rel_tests),
 	                                   XNUPOST_TEST_CONFIG_BASIC(console_serial_parallel_log_tests),
-#if defined(__arm__) || defined(__arm64__)
+#if defined(__arm64__)
 	                                   XNUPOST_TEST_CONFIG_BASIC(pmap_coredump_test),
 #endif
 	                                   XNUPOST_TEST_CONFIG_BASIC(bitmap_post_test),
 	                                   //XNUPOST_TEST_CONFIG_TEST_PANIC(kcdata_api_assert_tests)
 	                                   XNUPOST_TEST_CONFIG_BASIC(test_thread_call),
-	                                   XNUPOST_TEST_CONFIG_BASIC(priority_queue_test),
 	                                   XNUPOST_TEST_CONFIG_BASIC(ts_kernel_primitive_test),
 	                                   XNUPOST_TEST_CONFIG_BASIC(ts_kernel_sleep_inheritor_test),
 	                                   XNUPOST_TEST_CONFIG_BASIC(ts_kernel_gate_test),
 	                                   XNUPOST_TEST_CONFIG_BASIC(ts_kernel_turnstile_chain_test),
 	                                   XNUPOST_TEST_CONFIG_BASIC(ts_kernel_timingsafe_bcmp_test),
-	                                   XNUPOST_TEST_CONFIG_BASIC(kprintf_hhx_test), };
+	                                   XNUPOST_TEST_CONFIG_BASIC(kprintf_hhx_test),
+#if __ARM_VFP__
+	                                   XNUPOST_TEST_CONFIG_BASIC(vfp_state_test),
+#endif
+	                                   XNUPOST_TEST_CONFIG_BASIC(vm_tests),
+	                                   XNUPOST_TEST_CONFIG_BASIC(counter_tests),
+#if ML_IO_TIMEOUTS_ENABLED
+	                                   XNUPOST_TEST_CONFIG_BASIC(ml_io_timeout_test),
+#endif
+#if HAS_SPECRES
+	                                   XNUPOST_TEST_CONFIG_BASIC(specres_test),
+#endif
+};
 
 uint32_t kernel_post_tests_count = sizeof(kernel_post_tests) / sizeof(xnupost_test_data_t);
 
@@ -205,7 +239,8 @@ xnupost_list_tests(xnupost_test_t test_list, uint32_t test_count)
 	for (uint32_t i = 0; i < test_count; i++) {
 		testp = &test_list[i];
 		if (testp->xt_test_num == 0) {
-			testp->xt_test_num = ++total_post_tests_count;
+			assert(total_post_tests_count < UINT16_MAX);
+			testp->xt_test_num = (uint16_t)++total_post_tests_count;
 		}
 		/* make sure the boot-arg based test run list is honored */
 		if (kernel_post_args & POSTARGS_CUSTOM_TEST_RUNLIST) {
@@ -228,6 +263,7 @@ xnupost_run_tests(xnupost_test_t test_list, uint32_t test_count)
 {
 	uint32_t i = 0;
 	int retval = KERN_SUCCESS;
+	int test_retval = KERN_FAILURE;
 
 	if ((kernel_post_args & POSTARGS_RUN_TESTS) == 0) {
 		printf("No POST boot-arg set.\n");
@@ -238,6 +274,7 @@ xnupost_run_tests(xnupost_test_t test_list, uint32_t test_count)
 	xnupost_test_t testp;
 	for (; i < test_count; i++) {
 		xnupost_reset_panic_widgets();
+		T_TESTRESULT = T_STATE_UNRESOLVED;
 		testp = &test_list[i];
 		T_BEGIN(testp->xt_name);
 		testp->xt_begin_time = mach_absolute_time();
@@ -261,7 +298,18 @@ xnupost_run_tests(xnupost_test_t test_list, uint32_t test_count)
 			continue;
 		}
 
-		testp->xt_func();
+		test_retval = testp->xt_func();
+		if (T_STATE_UNRESOLVED == T_TESTRESULT) {
+			/*
+			 * If test result is unresolved due to that no T_* test cases are called,
+			 * determine the test result based on the return value of the test function.
+			 */
+			if (KERN_SUCCESS == test_retval) {
+				T_PASS("Test passed because retval == KERN_SUCCESS");
+			} else {
+				T_FAIL("Test failed because retval == KERN_FAILURE");
+			}
+		}
 		T_END;
 		testp->xt_retval = T_TESTRESULT;
 		testp->xt_end_time = mach_absolute_time();
@@ -388,16 +436,17 @@ xnupost_reset_tests(xnupost_test_t test_list, uint32_t test_count)
 
 
 kern_return_t
-zalloc_test()
+zalloc_test(void)
 {
 	zone_t test_zone;
 	void * test_ptr;
 
 	T_SETUPBEGIN;
-	test_zone = zinit(sizeof(uint64_t), 100 * sizeof(uint64_t), sizeof(uint64_t), "test_uint64_zone");
+	test_zone = zone_create("test_uint64_zone", sizeof(uint64_t),
+	    ZC_DESTRUCTIBLE);
 	T_ASSERT_NOTNULL(test_zone, NULL);
 
-	T_ASSERT_EQ_INT(zone_free_count(test_zone), 0, NULL);
+	T_ASSERT_EQ_INT(test_zone->z_elems_free, 0, NULL);
 	T_SETUPEND;
 
 	T_ASSERT_NOTNULL(test_ptr = zalloc(test_zone), NULL);
@@ -425,129 +474,6 @@ compare_numbers_ascending(const void * a, const void * b)
 	} else {
 		return 0;
 	}
-}
-
-/*
- * Function used for comparison by qsort()
- */
-static int
-compare_numbers_descending(const void * a, const void * b)
-{
-	const uint32_t x = *(const uint32_t *)a;
-	const uint32_t y = *(const uint32_t *)b;
-	if (x > y) {
-		return -1;
-	} else if (x < y) {
-		return 1;
-	} else {
-		return 0;
-	}
-}
-
-/* Node structure for the priority queue tests */
-struct priority_queue_test_node {
-	struct priority_queue_entry     link;
-	priority_queue_key_t            node_key;
-};
-
-static void
-priority_queue_test_queue(struct priority_queue *pq, int type,
-    priority_queue_compare_fn_t cmp_fn)
-{
-	/* Configuration for the test */
-#define PRIORITY_QUEUE_NODES    7
-	static uint32_t priority_list[] = { 20, 3, 7, 6, 50, 2, 8};
-	uint32_t increase_pri = 100;
-	uint32_t decrease_pri = 90;
-	struct priority_queue_test_node *result;
-	uint32_t key = 0;
-	boolean_t update_result = false;
-
-	struct priority_queue_test_node *node = NULL;
-	/* Add all priorities to the first priority queue */
-	for (int i = 0; i < PRIORITY_QUEUE_NODES; i++) {
-		node = kalloc(sizeof(struct priority_queue_test_node));
-		T_ASSERT_NOTNULL(node, NULL);
-
-		priority_queue_entry_init(&(node->link));
-		node->node_key = priority_list[i];
-		key = (type == PRIORITY_QUEUE_GENERIC_KEY) ? PRIORITY_QUEUE_KEY_NONE : priority_list[i];
-		priority_queue_insert(pq, &(node->link), key, cmp_fn);
-	}
-
-	T_ASSERT_NOTNULL(node, NULL);
-	key = (type == PRIORITY_QUEUE_GENERIC_KEY) ? node->node_key : priority_queue_entry_key(pq, &(node->link));
-	T_ASSERT((key == node->node_key), "verify node stored key correctly");
-
-	/* Test the priority increase operation by updating the last node added (8) */
-	T_ASSERT_NOTNULL(node, NULL);
-	node->node_key = increase_pri;
-	key = (type == PRIORITY_QUEUE_GENERIC_KEY) ? PRIORITY_QUEUE_KEY_NONE : node->node_key;
-	update_result = priority_queue_entry_increase(pq, &node->link, key, cmp_fn);
-	T_ASSERT((update_result == true), "increase key updated root");
-	result = priority_queue_max(pq, struct priority_queue_test_node, link);
-	T_ASSERT((result->node_key == increase_pri), "verify priority_queue_entry_increase() operation");
-
-
-	/* Test the priority decrease operation by updating the last node added */
-	T_ASSERT((result == node), NULL);
-	node->node_key = decrease_pri;
-	key = (type == PRIORITY_QUEUE_GENERIC_KEY) ? PRIORITY_QUEUE_KEY_NONE : node->node_key;
-	update_result = priority_queue_entry_decrease(pq, &node->link, key, cmp_fn);
-	T_ASSERT((update_result == true), "decrease key updated root");
-	result = priority_queue_max(pq, struct priority_queue_test_node, link);
-	T_ASSERT((result->node_key == decrease_pri), "verify priority_queue_entry_decrease() operation");
-
-	/* Update our local priority list as well */
-	priority_list[PRIORITY_QUEUE_NODES - 1] = decrease_pri;
-
-	/* Sort the local list in descending order */
-	qsort(priority_list, PRIORITY_QUEUE_NODES, sizeof(priority_list[0]), compare_numbers_descending);
-
-	/* Test the maximum operation by comparing max node with local list */
-	result = priority_queue_max(pq, struct priority_queue_test_node, link);
-	T_ASSERT((result->node_key == priority_list[0]), "(heap (%u) == qsort (%u)) priority queue max node lookup",
-	    (uint32_t)result->node_key, priority_list[0]);
-
-	/* Remove all remaining elements and verify they match local list */
-	for (int i = 0; i < PRIORITY_QUEUE_NODES; i++) {
-		result = priority_queue_remove_max(pq, struct priority_queue_test_node, link, cmp_fn);
-		T_ASSERT((result->node_key == priority_list[i]), "(heap (%u) == qsort (%u)) priority queue max node removal",
-		    (uint32_t)result->node_key, priority_list[i]);
-	}
-
-	priority_queue_destroy(pq, struct priority_queue_test_node, link, ^(void *n) {
-		kfree(n, sizeof(struct priority_queue_test_node));
-	});
-}
-
-kern_return_t
-priority_queue_test(void)
-{
-	/*
-	 * Initialize two priority queues
-	 * - One which uses the key comparator
-	 * - Other which uses the node comparator
-	 */
-	static struct priority_queue pq;
-	static struct priority_queue pq_nodes;
-
-	T_SETUPBEGIN;
-
-	priority_queue_init(&pq, PRIORITY_QUEUE_BUILTIN_KEY | PRIORITY_QUEUE_MAX_HEAP);
-	priority_queue_init(&pq_nodes, PRIORITY_QUEUE_GENERIC_KEY | PRIORITY_QUEUE_MAX_HEAP);
-
-	T_SETUPEND;
-
-	priority_queue_test_queue(&pq, PRIORITY_QUEUE_BUILTIN_KEY,
-	    PRIORITY_QUEUE_SCHED_PRI_MAX_HEAP_COMPARE);
-
-	priority_queue_test_queue(&pq_nodes, PRIORITY_QUEUE_GENERIC_KEY,
-	    priority_heap_make_comparator(a, b, struct priority_queue_test_node, link, {
-		return (a->node_key > b->node_key) ? 1 : ((a->node_key == b->node_key) ? 0 : -1);
-	}));
-
-	return KERN_SUCCESS;
 }
 
 /*
@@ -739,7 +665,7 @@ struct kcdata_subtype_descriptor test_disk_io_stats_def[] = {
 };
 
 kern_return_t
-kcdata_api_test()
+kcdata_api_test(void)
 {
 	kern_return_t retval = KERN_SUCCESS;
 
@@ -751,7 +677,7 @@ kcdata_api_test()
 	char data[30] = "sample_disk_io_stats";
 	retval = kcdata_memory_static_init(&test_kc_data, (mach_vm_address_t)&data, KCDATA_BUFFER_BEGIN_CRASHINFO, sizeof(data),
 	    KCFLAG_USE_MEMCOPY);
-	T_ASSERT(retval == KERN_RESOURCE_SHORTAGE, "init with 30 bytes failed as expected with KERN_RESOURCE_SHORTAGE");
+	T_ASSERT(retval == KERN_INSUFFICIENT_BUFFER_SIZE, "init with 30 bytes failed as expected with KERN_INSUFFICIENT_BUFFER_SIZE");
 
 	/* test with COPYOUT for 0x0 address. Should return KERN_NO_ACCESS */
 	retval = kcdata_memory_static_init(&test_kc_data, (mach_vm_address_t)0, KCDATA_BUFFER_BEGIN_CRASHINFO, PAGE_SIZE,
@@ -760,7 +686,9 @@ kcdata_api_test()
 
 	/* test with successful kcdata_memory_static_init */
 	test_kc_data.kcd_length   = 0xdeadbeef;
-	mach_vm_address_t address = (mach_vm_address_t)kalloc(PAGE_SIZE);
+
+	void *data_ptr = kalloc_data(PAGE_SIZE, Z_WAITOK_ZERO_NOFAIL);
+	mach_vm_address_t address = (mach_vm_address_t)data_ptr;
 	T_EXPECT_NOTNULL(address, "kalloc of PAGE_SIZE data.");
 
 	retval = kcdata_memory_static_init(&test_kc_data, (mach_vm_address_t)address, KCDATA_BUFFER_BEGIN_STACKSHOT, PAGE_SIZE,
@@ -809,7 +737,7 @@ kcdata_api_test()
 	user_addr  = 0xdeadbeef;
 	bytes_used = kcdata_memory_get_used_bytes(&test_kc_data);
 	retval = kcdata_get_memory_addr(&test_kc_data, KCDATA_TYPE_MACH_ABSOLUTE_TIME, PAGE_SIZE * 4, &user_addr);
-	T_ASSERT(retval == KERN_RESOURCE_SHORTAGE, "Allocating entry with size > buffer -> KERN_RESOURCE_SHORTAGE");
+	T_ASSERT(retval == KERN_INSUFFICIENT_BUFFER_SIZE, "Allocating entry with size > buffer -> KERN_INSUFFICIENT_BUFFER_SIZE");
 	T_ASSERT(user_addr == 0xdeadbeef, "user_addr remained unaffected with failed kcdata_get_memory_addr");
 	T_ASSERT(bytes_used == kcdata_memory_get_used_bytes(&test_kc_data), "The data structure should be unaffected");
 
@@ -830,7 +758,7 @@ kcdata_api_test()
 	T_ASSERT(retval == KERN_SUCCESS, "Array of 20 integers should be possible");
 	T_ASSERT(user_addr != 0xdeadbeef, "user_addr is updated as expected");
 	T_ASSERT((kcdata_memory_get_used_bytes(&test_kc_data) - bytes_used) >= 20 * sizeof(uint64_t), "memory allocation is in range");
-	kcdata_iter_t iter = kcdata_iter(item_p, PAGE_SIZE - kcdata_memory_get_used_bytes(&test_kc_data));
+	kcdata_iter_t iter = kcdata_iter(item_p, (unsigned long)(PAGE_SIZE - kcdata_memory_get_used_bytes(&test_kc_data)));
 	T_ASSERT(kcdata_iter_array_elem_count(iter) == 20, "array count is 20");
 
 	/* FIXME add tests here for ranges of sizes and counts */
@@ -843,6 +771,7 @@ kcdata_api_test()
 	    sizeof(test_disk_io_stats_def) / sizeof(struct kcdata_subtype_descriptor));
 	T_ASSERT(retval == KERN_SUCCESS, "adding custom type succeeded.");
 
+	kfree_data(data_ptr, PAGE_SIZE);
 	return KERN_SUCCESS;
 }
 
@@ -873,7 +802,7 @@ kcdata_api_test()
  *  }
  */
 
-#if defined(__arm__) || defined(__arm64__)
+#if defined(__arm64__)
 
 #include <arm/pmap.h>
 
@@ -906,13 +835,6 @@ astris_vm_page_unpack_ptr(uintptr_t p)
 
 #endif
 
-#if defined(__arm__)
-
-// assume next pointer is the first element
-#define astris_vm_page_queue_next(qc) *((uintptr_t *)(qc))
-
-#endif
-
 #define astris_vm_page_queue_first(q) astris_vm_page_queue_next(q)
 
 #define astris_vm_page_queue_end(q, qe) ((q) == (qe))
@@ -942,19 +864,19 @@ pmap_coredump_test(void)
 	T_ASSERT_GE_ULONG(lowGlo.lgStaticAddr, gPhysBase, NULL);
 	T_ASSERT_LE_ULONG(lowGlo.lgStaticAddr + lowGlo.lgStaticSize, first_avail, NULL);
 	T_ASSERT_EQ_ULONG(lowGlo.lgLayoutMajorVersion, 3, NULL);
-	T_ASSERT_EQ_ULONG(lowGlo.lgLayoutMinorVersion, 0, NULL);
+	T_ASSERT_GE_ULONG(lowGlo.lgLayoutMinorVersion, 2, NULL);
 	T_ASSERT_EQ_ULONG(lowGlo.lgLayoutMagic, LOWGLO_LAYOUT_MAGIC, NULL);
 
 	// check the constant values in lowGlo
-	T_ASSERT_EQ_ULONG(lowGlo.lgPmapMemQ, ((uint64_t) &(pmap_object_store.memq)), NULL);
+	T_ASSERT_EQ_ULONG(lowGlo.lgPmapMemQ, ((typeof(lowGlo.lgPmapMemQ)) & (pmap_object_store.memq)), NULL);
 	T_ASSERT_EQ_ULONG(lowGlo.lgPmapMemPageOffset, offsetof(struct vm_page_with_ppnum, vmp_phys_page), NULL);
 	T_ASSERT_EQ_ULONG(lowGlo.lgPmapMemChainOffset, offsetof(struct vm_page, vmp_listq), NULL);
 	T_ASSERT_EQ_ULONG(lowGlo.lgPmapMemPagesize, sizeof(struct vm_page), NULL);
 
 #if defined(__arm64__)
-	T_ASSERT_EQ_ULONG(lowGlo.lgPmapMemFromArrayMask, VM_PACKED_FROM_VM_PAGES_ARRAY, NULL);
-	T_ASSERT_EQ_ULONG(lowGlo.lgPmapMemPackedShift, VM_PACKED_POINTER_SHIFT, NULL);
-	T_ASSERT_EQ_ULONG(lowGlo.lgPmapMemPackedBaseAddr, VM_MIN_KERNEL_AND_KEXT_ADDRESS, NULL);
+	T_ASSERT_EQ_ULONG(lowGlo.lgPmapMemFromArrayMask, VM_PAGE_PACKED_FROM_ARRAY, NULL);
+	T_ASSERT_EQ_ULONG(lowGlo.lgPmapMemPackedShift, VM_PAGE_PACKED_PTR_SHIFT, NULL);
+	T_ASSERT_EQ_ULONG(lowGlo.lgPmapMemPackedBaseAddr, VM_PAGE_PACKED_PTR_BASE, NULL);
 #endif
 
 	vm_object_lock_shared(&pmap_object_store);
@@ -972,7 +894,7 @@ pmap_coredump_test(void)
 	T_ASSERT_GT_INT(iter, 0, NULL);
 	return KERN_SUCCESS;
 }
-#endif
+#endif /* defined(__arm64__) */
 
 struct ts_kern_prim_test_args {
 	int *end_barrier;
@@ -1023,10 +945,6 @@ thread_lock_unlock_kernel_primitive(
 	struct ts_kern_prim_test_args *info = (struct ts_kern_prim_test_args*) args;
 	int pri;
 
-	thread_lock(thread);
-	pri = thread->sched_pri;
-	thread_unlock(thread);
-
 	wait_threads(info->wait_event_b, info->before_num);
 	wake_threads(info->notify_b);
 
@@ -1038,9 +956,11 @@ thread_lock_unlock_kernel_primitive(
 	IOSleep(100);
 
 	if (info->priority_to_check) {
+		spl_t s = splsched();
 		thread_lock(thread);
 		pri = thread->sched_pri;
 		thread_unlock(thread);
+		splx(s);
 		T_ASSERT(pri == info->priority_to_check, "Priority thread: current sched %d sched wanted %d", pri, info->priority_to_check);
 	}
 
@@ -1112,7 +1032,7 @@ static kern_return_t
 init_synch_test_common(struct synch_test_common *info, unsigned int nthreads)
 {
 	info->nthreads = nthreads;
-	info->threads = kalloc(sizeof(thread_t) * nthreads);
+	info->threads = kalloc_type(thread_t, nthreads, Z_WAITOK);
 	if (!info->threads) {
 		return ENOMEM;
 	}
@@ -1123,7 +1043,7 @@ init_synch_test_common(struct synch_test_common *info, unsigned int nthreads)
 static void
 destroy_synch_test_common(struct synch_test_common *info)
 {
-	kfree(info->threads, sizeof(thread_t) * info->nthreads);
+	kfree_type(thread_t, info->nthreads, info->threads);
 }
 
 static void
@@ -1252,6 +1172,11 @@ struct info_sleep_inheritor_test {
 	int value;
 	int handoff_failure;
 	thread_t thread_inheritor;
+	bool use_alloc_gate;
+	gate_t *alloc_gate;
+	struct obj_cached **obj_cache;
+	kern_apfs_reflock_data(, reflock);
+	int reflock_protected_status;
 };
 
 static void
@@ -1346,13 +1271,17 @@ primitive_change_sleep_inheritor(struct info_sleep_inheritor_test *info)
 static kern_return_t
 primitive_gate_try_close(struct info_sleep_inheritor_test *info)
 {
+	gate_t *gate = &info->gate;
+	if (info->use_alloc_gate == true) {
+		gate = info->alloc_gate;
+	}
 	kern_return_t ret = KERN_SUCCESS;
 	switch (info->prim_type) {
 	case MTX_LOCK:
-		ret = lck_mtx_gate_try_close(&info->mtx_lock, &info->gate);
+		ret = lck_mtx_gate_try_close(&info->mtx_lock, gate);
 		break;
 	case RW_LOCK:
-		ret = lck_rw_gate_try_close(&info->rw_lock, &info->gate);
+		ret = lck_rw_gate_try_close(&info->rw_lock, gate);
 		break;
 	default:
 		panic("invalid type %d", info->prim_type);
@@ -1363,13 +1292,17 @@ primitive_gate_try_close(struct info_sleep_inheritor_test *info)
 static gate_wait_result_t
 primitive_gate_wait(struct info_sleep_inheritor_test *info)
 {
+	gate_t *gate = &info->gate;
+	if (info->use_alloc_gate == true) {
+		gate = info->alloc_gate;
+	}
 	gate_wait_result_t ret = GATE_OPENED;
 	switch (info->prim_type) {
 	case MTX_LOCK:
-		ret = lck_mtx_gate_wait(&info->mtx_lock, &info->gate, LCK_SLEEP_DEFAULT, THREAD_UNINT | THREAD_WAIT_NOREPORT_USER, TIMEOUT_WAIT_FOREVER);
+		ret = lck_mtx_gate_wait(&info->mtx_lock, gate, LCK_SLEEP_DEFAULT, THREAD_UNINT | THREAD_WAIT_NOREPORT_USER, TIMEOUT_WAIT_FOREVER);
 		break;
 	case RW_LOCK:
-		ret = lck_rw_gate_wait(&info->rw_lock, &info->gate, LCK_SLEEP_DEFAULT, THREAD_UNINT | THREAD_WAIT_NOREPORT_USER, TIMEOUT_WAIT_FOREVER);
+		ret = lck_rw_gate_wait(&info->rw_lock, gate, LCK_SLEEP_DEFAULT, THREAD_UNINT | THREAD_WAIT_NOREPORT_USER, TIMEOUT_WAIT_FOREVER);
 		break;
 	default:
 		panic("invalid type %d", info->prim_type);
@@ -1380,12 +1313,16 @@ primitive_gate_wait(struct info_sleep_inheritor_test *info)
 static void
 primitive_gate_open(struct info_sleep_inheritor_test *info)
 {
+	gate_t *gate = &info->gate;
+	if (info->use_alloc_gate == true) {
+		gate = info->alloc_gate;
+	}
 	switch (info->prim_type) {
 	case MTX_LOCK:
-		lck_mtx_gate_open(&info->mtx_lock, &info->gate);
+		lck_mtx_gate_open(&info->mtx_lock, gate);
 		break;
 	case RW_LOCK:
-		lck_rw_gate_open(&info->rw_lock, &info->gate);
+		lck_rw_gate_open(&info->rw_lock, gate);
 		break;
 	default:
 		panic("invalid type %d", info->prim_type);
@@ -1395,12 +1332,17 @@ primitive_gate_open(struct info_sleep_inheritor_test *info)
 static void
 primitive_gate_close(struct info_sleep_inheritor_test *info)
 {
+	gate_t *gate = &info->gate;
+	if (info->use_alloc_gate == true) {
+		gate = info->alloc_gate;
+	}
+
 	switch (info->prim_type) {
 	case MTX_LOCK:
-		lck_mtx_gate_close(&info->mtx_lock, &info->gate);
+		lck_mtx_gate_close(&info->mtx_lock, gate);
 		break;
 	case RW_LOCK:
-		lck_rw_gate_close(&info->rw_lock, &info->gate);
+		lck_rw_gate_close(&info->rw_lock, gate);
 		break;
 	default:
 		panic("invalid type %d", info->prim_type);
@@ -1410,12 +1352,17 @@ primitive_gate_close(struct info_sleep_inheritor_test *info)
 static void
 primitive_gate_steal(struct info_sleep_inheritor_test *info)
 {
+	gate_t *gate = &info->gate;
+	if (info->use_alloc_gate == true) {
+		gate = info->alloc_gate;
+	}
+
 	switch (info->prim_type) {
 	case MTX_LOCK:
-		lck_mtx_gate_steal(&info->mtx_lock, &info->gate);
+		lck_mtx_gate_steal(&info->mtx_lock, gate);
 		break;
 	case RW_LOCK:
-		lck_rw_gate_steal(&info->rw_lock, &info->gate);
+		lck_rw_gate_steal(&info->rw_lock, gate);
 		break;
 	default:
 		panic("invalid type %d", info->prim_type);
@@ -1425,13 +1372,18 @@ primitive_gate_steal(struct info_sleep_inheritor_test *info)
 static kern_return_t
 primitive_gate_handoff(struct info_sleep_inheritor_test *info, int flags)
 {
+	gate_t *gate = &info->gate;
+	if (info->use_alloc_gate == true) {
+		gate = info->alloc_gate;
+	}
+
 	kern_return_t ret = KERN_SUCCESS;
 	switch (info->prim_type) {
 	case MTX_LOCK:
-		ret = lck_mtx_gate_handoff(&info->mtx_lock, &info->gate, flags);
+		ret = lck_mtx_gate_handoff(&info->mtx_lock, gate, flags);
 		break;
 	case RW_LOCK:
-		ret = lck_rw_gate_handoff(&info->rw_lock, &info->gate, flags);
+		ret = lck_rw_gate_handoff(&info->rw_lock, gate, flags);
 		break;
 	default:
 		panic("invalid type %d", info->prim_type);
@@ -1442,12 +1394,17 @@ primitive_gate_handoff(struct info_sleep_inheritor_test *info, int flags)
 static void
 primitive_gate_assert(struct info_sleep_inheritor_test *info, int type)
 {
+	gate_t *gate = &info->gate;
+	if (info->use_alloc_gate == true) {
+		gate = info->alloc_gate;
+	}
+
 	switch (info->prim_type) {
 	case MTX_LOCK:
-		lck_mtx_gate_assert(&info->mtx_lock, &info->gate, type);
+		lck_mtx_gate_assert(&info->mtx_lock, gate, type);
 		break;
 	case RW_LOCK:
-		lck_rw_gate_assert(&info->rw_lock, &info->gate, type);
+		lck_rw_gate_assert(&info->rw_lock, gate, type);
 		break;
 	default:
 		panic("invalid type %d", info->prim_type);
@@ -1482,6 +1439,41 @@ primitive_gate_destroy(struct info_sleep_inheritor_test *info)
 	default:
 		panic("invalid type %d", info->prim_type);
 	}
+}
+
+static void
+primitive_gate_alloc(struct info_sleep_inheritor_test *info)
+{
+	gate_t *gate;
+	switch (info->prim_type) {
+	case MTX_LOCK:
+		gate = lck_mtx_gate_alloc_init(&info->mtx_lock);
+		break;
+	case RW_LOCK:
+		gate = lck_rw_gate_alloc_init(&info->rw_lock);
+		break;
+	default:
+		panic("invalid type %d", info->prim_type);
+	}
+	info->alloc_gate = gate;
+}
+
+static void
+primitive_gate_free(struct info_sleep_inheritor_test *info)
+{
+	T_ASSERT(info->alloc_gate != NULL, "gate not yet freed");
+
+	switch (info->prim_type) {
+	case MTX_LOCK:
+		lck_mtx_gate_free(&info->mtx_lock, info->alloc_gate);
+		break;
+	case RW_LOCK:
+		lck_rw_gate_free(&info->rw_lock, info->alloc_gate);
+		break;
+	default:
+		panic("invalid type %d", info->prim_type);
+	}
+	info->alloc_gate = NULL;
 }
 
 static void
@@ -1842,6 +1834,561 @@ try_again:
 	thread_terminate_self();
 }
 
+#define OBJ_STATE_UNUSED        0
+#define OBJ_STATE_REAL          1
+#define OBJ_STATE_PLACEHOLDER   2
+
+#define OBJ_BUFF_SIZE 11
+struct obj_cached {
+	int obj_id;
+	int obj_state;
+	struct kern_apfs_reflock *obj_refcount;
+	char obj_buff[OBJ_BUFF_SIZE];
+};
+
+#define CACHE_SIZE 2
+#define USE_CACHE_ROUNDS 15
+
+#define REFCOUNT_REFLOCK_ROUNDS 15
+
+/*
+ * For the reflock cache test the cache is allocated
+ * and its pointer is saved in obj_cache.
+ * The lock for the cache is going to be one of the exclusive
+ * locks already present in struct info_sleep_inheritor_test.
+ */
+
+static struct obj_cached *
+alloc_init_cache_entry(void)
+{
+	struct obj_cached *cache_entry = kalloc_type(struct obj_cached, 1, Z_WAITOK | Z_NOFAIL | Z_ZERO);
+	cache_entry->obj_id = 0;
+	cache_entry->obj_state = OBJ_STATE_UNUSED;
+	cache_entry->obj_refcount = kern_apfs_reflock_alloc_init();
+	snprintf(cache_entry->obj_buff, OBJ_BUFF_SIZE, "I am groot");
+	return cache_entry;
+}
+
+static void
+init_cache(struct info_sleep_inheritor_test *info)
+{
+	struct obj_cached **obj_cache = kalloc_type(struct obj_cached *, CACHE_SIZE, Z_WAITOK | Z_NOFAIL | Z_ZERO);
+
+	int i;
+	for (i = 0; i < CACHE_SIZE; i++) {
+		obj_cache[i] = alloc_init_cache_entry();
+	}
+
+	info->obj_cache = obj_cache;
+}
+
+static void
+check_cache_empty(struct info_sleep_inheritor_test *info)
+{
+	struct obj_cached **obj_cache = info->obj_cache;
+
+	int i, ret;
+	for (i = 0; i < CACHE_SIZE; i++) {
+		if (obj_cache[i] != NULL) {
+			T_ASSERT(obj_cache[i]->obj_state == OBJ_STATE_UNUSED, "checked OBJ_STATE_UNUSED");
+			T_ASSERT(obj_cache[i]->obj_refcount != NULL, "checked obj_refcount");
+			ret = memcmp(obj_cache[i]->obj_buff, "I am groot", OBJ_BUFF_SIZE);
+			T_ASSERT(ret == 0, "checked buff correctly emptied");
+		}
+	}
+}
+
+static void
+free_cache(struct info_sleep_inheritor_test *info)
+{
+	struct obj_cached **obj_cache = info->obj_cache;
+
+	int i;
+	for (i = 0; i < CACHE_SIZE; i++) {
+		if (obj_cache[i] != NULL) {
+			kern_apfs_reflock_free(obj_cache[i]->obj_refcount);
+			obj_cache[i]->obj_refcount = NULL;
+			kfree_type(struct obj_cached, 1, obj_cache[i]);
+			obj_cache[i] = NULL;
+		}
+	}
+
+	kfree_type(struct obj_cached *, CACHE_SIZE, obj_cache);
+	info->obj_cache = NULL;
+}
+
+static struct obj_cached *
+find_id_in_cache(int obj_id, struct info_sleep_inheritor_test *info)
+{
+	struct obj_cached **obj_cache = info->obj_cache;
+	int i;
+	for (i = 0; i < CACHE_SIZE; i++) {
+		if (obj_cache[i] != NULL && obj_cache[i]->obj_id == obj_id) {
+			return obj_cache[i];
+		}
+	}
+	return NULL;
+}
+
+static bool
+free_id_in_cache(int obj_id, struct info_sleep_inheritor_test *info, __assert_only struct obj_cached *expected)
+{
+	struct obj_cached **obj_cache = info->obj_cache;
+	int i;
+	for (i = 0; i < CACHE_SIZE; i++) {
+		if (obj_cache[i] != NULL && obj_cache[i]->obj_id == obj_id) {
+			assert(obj_cache[i] == expected);
+			kfree_type(struct obj_cached, 1, obj_cache[i]);
+			obj_cache[i] = NULL;
+			return true;
+		}
+	}
+	return false;
+}
+
+static struct obj_cached *
+find_empty_spot_in_cache(struct info_sleep_inheritor_test *info)
+{
+	struct obj_cached **obj_cache = info->obj_cache;
+	int i;
+	for (i = 0; i < CACHE_SIZE; i++) {
+		if (obj_cache[i] == NULL) {
+			obj_cache[i] = alloc_init_cache_entry();
+			return obj_cache[i];
+		}
+		if (obj_cache[i]->obj_state == OBJ_STATE_UNUSED) {
+			return obj_cache[i];
+		}
+	}
+	return NULL;
+}
+
+static int
+get_obj_cache(int obj_id, struct info_sleep_inheritor_test *info, char **buff)
+{
+	struct obj_cached *obj = NULL, *obj2 = NULL;
+	kern_apfs_reflock_t refcount = NULL;
+	bool ret;
+	kern_apfs_reflock_out_flags_t out_flags;
+
+try_again:
+	primitive_lock(info);
+	if ((obj = find_id_in_cache(obj_id, info)) != NULL) {
+		/* Found an allocated object on the cache with same id */
+
+		/*
+		 * copy the pointer to obj_refcount as obj might
+		 * get deallocated after primitive_unlock()
+		 */
+		refcount = obj->obj_refcount;
+		if (kern_apfs_reflock_try_get_ref(refcount, KERN_APFS_REFLOCK_IN_WILL_WAIT, &out_flags)) {
+			/*
+			 * Got a ref, let's check the state
+			 */
+			switch (obj->obj_state) {
+			case OBJ_STATE_UNUSED:
+				goto init;
+			case OBJ_STATE_REAL:
+				goto done;
+			case OBJ_STATE_PLACEHOLDER:
+				panic("Thread %p observed OBJ_STATE_PLACEHOLDER %d for obj %d", current_thread(), obj->obj_state, obj_id);
+			default:
+				panic("Thread %p observed an unknown obj_state %d for obj %d", current_thread(), obj->obj_state, obj_id);
+			}
+		} else {
+			/*
+			 * Didn't get a ref.
+			 * This means or an obj_put() of the last ref is ongoing
+			 * or a init of the object is happening.
+			 * Both cases wait for that to finish and retry.
+			 * While waiting the thread that is holding the reflock
+			 * will get a priority at least as the one of this thread.
+			 */
+			primitive_unlock(info);
+			kern_apfs_reflock_wait_for_unlock(refcount, THREAD_UNINT | THREAD_WAIT_NOREPORT_USER, TIMEOUT_WAIT_FOREVER);
+			goto try_again;
+		}
+	} else {
+		/* Look for a spot on the cache where we can save the object */
+
+		if ((obj = find_empty_spot_in_cache(info)) == NULL) {
+			/*
+			 * Sadness cache is full, and everyting in the cache is
+			 * used.
+			 */
+			primitive_unlock(info);
+			return -1;
+		} else {
+			/*
+			 * copy the pointer to obj_refcount as obj might
+			 * get deallocated after primitive_unlock()
+			 */
+			refcount = obj->obj_refcount;
+			if (kern_apfs_reflock_try_get_ref(refcount, KERN_APFS_REFLOCK_IN_WILL_WAIT, &out_flags)) {
+				/*
+				 * Got a ref on a OBJ_STATE_UNUSED obj.
+				 * Recicle time.
+				 */
+				obj->obj_id = obj_id;
+				goto init;
+			} else {
+				/*
+				 * This could happen if the obj_put() has just changed the
+				 * state to OBJ_STATE_UNUSED, but not unlocked the reflock yet.
+				 */
+				primitive_unlock(info);
+				kern_apfs_reflock_wait_for_unlock(refcount, THREAD_UNINT | THREAD_WAIT_NOREPORT_USER, TIMEOUT_WAIT_FOREVER);
+				goto try_again;
+			}
+		}
+	}
+init:
+	assert(obj->obj_id == obj_id);
+	assert(obj->obj_state == OBJ_STATE_UNUSED);
+	/*
+	 * We already got a ref on the object, but we need
+	 * to initialize it. Mark it as
+	 * OBJ_STATE_PLACEHOLDER and get the obj_reflock.
+	 * In this way all thread waiting for this init
+	 * to finish will push on this thread.
+	 */
+	ret = kern_apfs_reflock_try_lock(refcount, KERN_APFS_REFLOCK_IN_DEFAULT, NULL);
+	assert(ret == true);
+	obj->obj_state = OBJ_STATE_PLACEHOLDER;
+	primitive_unlock(info);
+
+	//let's pretend we are populating the obj
+	IOSleep(10);
+	/*
+	 * obj will not be deallocated while I hold a ref.
+	 * So it is safe to access it.
+	 */
+	snprintf(obj->obj_buff, OBJ_BUFF_SIZE, "I am %d", obj_id);
+
+	primitive_lock(info);
+	obj2 = find_id_in_cache(obj_id, info);
+	assert(obj == obj2);
+	assert(obj->obj_state == OBJ_STATE_PLACEHOLDER);
+
+	obj->obj_state = OBJ_STATE_REAL;
+	kern_apfs_reflock_unlock(refcount);
+
+done:
+	*buff = obj->obj_buff;
+	primitive_unlock(info);
+	return 0;
+}
+
+static void
+put_obj_cache(int obj_id, struct info_sleep_inheritor_test *info, bool free)
+{
+	struct obj_cached *obj = NULL, *obj2 = NULL;
+	bool ret;
+	kern_apfs_reflock_out_flags_t out_flags;
+	kern_apfs_reflock_t refcount = NULL;
+
+	primitive_lock(info);
+	obj = find_id_in_cache(obj_id, info);
+	primitive_unlock(info);
+
+	/*
+	 * Nobody should have been able to remove obj_id
+	 * from the cache.
+	 */
+	assert(obj != NULL);
+	assert(obj->obj_state == OBJ_STATE_REAL);
+
+	refcount = obj->obj_refcount;
+
+	/*
+	 * This should never fail, as or the reflock
+	 * was acquired when the state was OBJ_STATE_UNUSED to init,
+	 * or from a put that reached zero. And if the latter
+	 * happened subsequent reflock_get_ref() will had to wait to transition
+	 * to OBJ_STATE_REAL.
+	 */
+	ret = kern_apfs_reflock_try_put_ref(refcount, KERN_APFS_REFLOCK_IN_LOCK_IF_LAST, &out_flags);
+	assert(ret == true);
+	if ((out_flags & KERN_APFS_REFLOCK_OUT_LOCKED) == 0) {
+		return;
+	}
+
+	/*
+	 * Note: nobody at this point will be able to get a ref or a lock on
+	 * refcount.
+	 * All people waiting on refcount will push on this thread.
+	 */
+
+	//let's pretend we are flushing the obj somewhere.
+	IOSleep(10);
+	snprintf(obj->obj_buff, OBJ_BUFF_SIZE, "I am groot");
+
+	primitive_lock(info);
+	obj->obj_state = OBJ_STATE_UNUSED;
+	if (free) {
+		obj2 = find_id_in_cache(obj_id, info);
+		assert(obj == obj2);
+
+		ret = free_id_in_cache(obj_id, info, obj);
+		assert(ret == true);
+	}
+	primitive_unlock(info);
+
+	kern_apfs_reflock_unlock(refcount);
+
+	if (free) {
+		kern_apfs_reflock_free(refcount);
+	}
+}
+
+static void
+thread_use_cache(
+	void *args,
+	__unused wait_result_t wr)
+{
+	struct info_sleep_inheritor_test *info = (struct info_sleep_inheritor_test*) args;
+	int my_obj;
+
+	primitive_lock(info);
+	my_obj = ((info->value--) % (CACHE_SIZE + 1)) + 1;
+	primitive_unlock(info);
+
+	T_LOG("Thread %p started and it is going to use obj %d", current_thread(), my_obj);
+	/*
+	 * This is the string I would expect to see
+	 * on my_obj buff.
+	 */
+	char my_string[OBJ_BUFF_SIZE];
+	int my_string_size = snprintf(my_string, OBJ_BUFF_SIZE, "I am %d", my_obj);
+
+	/*
+	 * spin here to start concurrently with the other threads
+	 */
+	wake_threads(&info->synch);
+	wait_threads(&info->synch, info->synch_value);
+
+	for (int i = 0; i < USE_CACHE_ROUNDS; i++) {
+		char *buff;
+		while (get_obj_cache(my_obj, info, &buff) == -1) {
+			/*
+			 * Cache is full, wait.
+			 */
+			IOSleep(10);
+		}
+		T_ASSERT(memcmp(buff, my_string, my_string_size) == 0, "reflock: thread %p obj_id %d value in buff", current_thread(), my_obj);
+		IOSleep(10);
+		T_ASSERT(memcmp(buff, my_string, my_string_size) == 0, "reflock: thread %p obj_id %d value in buff", current_thread(), my_obj);
+		put_obj_cache(my_obj, info, (i % 2 == 0));
+	}
+
+	notify_waiter((struct synch_test_common *)info);
+	thread_terminate_self();
+}
+
+static void
+thread_refcount_reflock(
+	void *args,
+	__unused wait_result_t wr)
+{
+	struct info_sleep_inheritor_test *info = (struct info_sleep_inheritor_test*) args;
+	bool ret;
+	kern_apfs_reflock_out_flags_t out_flags;
+	kern_apfs_reflock_in_flags_t in_flags;
+
+	T_LOG("Thread %p started", current_thread());
+	/*
+	 * spin here to start concurrently with the other threads
+	 */
+	wake_threads(&info->synch);
+	wait_threads(&info->synch, info->synch_value);
+
+	for (int i = 0; i < REFCOUNT_REFLOCK_ROUNDS; i++) {
+		in_flags = KERN_APFS_REFLOCK_IN_LOCK_IF_FIRST;
+		if ((i % 2) == 0) {
+			in_flags |= KERN_APFS_REFLOCK_IN_WILL_WAIT;
+		}
+		ret = kern_apfs_reflock_try_get_ref(&info->reflock, in_flags, &out_flags);
+		if (ret == true) {
+			/* got reference, check if we did 0->1 */
+			if ((out_flags & KERN_APFS_REFLOCK_OUT_LOCKED) == KERN_APFS_REFLOCK_OUT_LOCKED) {
+				T_ASSERT(info->reflock_protected_status == 0, "status init check");
+				info->reflock_protected_status = 1;
+				kern_apfs_reflock_unlock(&info->reflock);
+			} else {
+				T_ASSERT(info->reflock_protected_status == 1, "status set check");
+			}
+			/* release the reference and check if we did 1->0 */
+			ret = kern_apfs_reflock_try_put_ref(&info->reflock, KERN_APFS_REFLOCK_IN_LOCK_IF_LAST, &out_flags);
+			T_ASSERT(ret == true, "kern_apfs_reflock_try_put_ref success");
+			if ((out_flags & KERN_APFS_REFLOCK_OUT_LOCKED) == KERN_APFS_REFLOCK_OUT_LOCKED) {
+				T_ASSERT(info->reflock_protected_status == 1, "status set check");
+				info->reflock_protected_status = 0;
+				kern_apfs_reflock_unlock(&info->reflock);
+			}
+		} else {
+			/* didn't get a reference */
+			if ((in_flags & KERN_APFS_REFLOCK_IN_WILL_WAIT) == KERN_APFS_REFLOCK_IN_WILL_WAIT) {
+				kern_apfs_reflock_wait_for_unlock(&info->reflock, THREAD_UNINT | THREAD_WAIT_NOREPORT_USER, TIMEOUT_WAIT_FOREVER);
+			}
+		}
+	}
+
+	notify_waiter((struct synch_test_common *)info);
+	thread_terminate_self();
+}
+
+static void
+thread_force_reflock(
+	void *args,
+	__unused wait_result_t wr)
+{
+	struct info_sleep_inheritor_test *info = (struct info_sleep_inheritor_test*) args;
+	bool ret;
+	kern_apfs_reflock_out_flags_t out_flags;
+	bool lock = false;
+	uint32_t count;
+
+	T_LOG("Thread %p started", current_thread());
+	if (os_atomic_inc_orig(&info->value, relaxed) == 0) {
+		T_LOG("Thread %p is locker", current_thread());
+		lock = true;
+		ret = kern_apfs_reflock_try_lock(&info->reflock, KERN_APFS_REFLOCK_IN_ALLOW_FORCE, &count);
+		T_ASSERT(ret == true, "kern_apfs_reflock_try_lock success");
+		T_ASSERT(count == 0, "refcount value");
+	}
+	/*
+	 * spin here to start concurrently with the other threads
+	 */
+	wake_threads(&info->synch);
+	wait_threads(&info->synch, info->synch_value);
+
+	if (lock) {
+		IOSleep(100);
+		kern_apfs_reflock_unlock(&info->reflock);
+	} else {
+		for (int i = 0; i < REFCOUNT_REFLOCK_ROUNDS; i++) {
+			ret = kern_apfs_reflock_try_get_ref(&info->reflock, KERN_APFS_REFLOCK_IN_FORCE, &out_flags);
+			T_ASSERT(ret == true, "kern_apfs_reflock_try_get_ref success");
+			ret = kern_apfs_reflock_try_put_ref(&info->reflock, KERN_APFS_REFLOCK_IN_FORCE, &out_flags);
+			T_ASSERT(ret == true, "kern_apfs_reflock_try_put_ref success");
+		}
+	}
+
+	notify_waiter((struct synch_test_common *)info);
+	thread_terminate_self();
+}
+
+static void
+thread_lock_reflock(
+	void *args,
+	__unused wait_result_t wr)
+{
+	struct info_sleep_inheritor_test *info = (struct info_sleep_inheritor_test*) args;
+	bool ret;
+	kern_apfs_reflock_out_flags_t out_flags;
+	bool lock = false;
+	uint32_t count;
+
+	T_LOG("Thread %p started", current_thread());
+	if (os_atomic_inc_orig(&info->value, relaxed) == 0) {
+		T_LOG("Thread %p is locker", current_thread());
+		lock = true;
+		ret = kern_apfs_reflock_try_lock(&info->reflock, KERN_APFS_REFLOCK_IN_DEFAULT, &count);
+		T_ASSERT(ret == true, "kern_apfs_reflock_try_lock success");
+		T_ASSERT(count == 0, "refcount value");
+		info->reflock_protected_status = 1;
+	}
+	/*
+	 * spin here to start concurrently with the other threads
+	 */
+	wake_threads(&info->synch);
+	wait_threads(&info->synch, info->synch_value);
+
+	if (lock) {
+		IOSleep(100);
+		info->reflock_protected_status = 0;
+		kern_apfs_reflock_unlock(&info->reflock);
+	} else {
+		for (int i = 0; i < REFCOUNT_REFLOCK_ROUNDS; i++) {
+			ret = kern_apfs_reflock_try_get_ref(&info->reflock, KERN_APFS_REFLOCK_IN_DEFAULT, &out_flags);
+			if (ret == true) {
+				T_ASSERT(info->reflock_protected_status == 0, "unlocked status check");
+				ret = kern_apfs_reflock_try_put_ref(&info->reflock, KERN_APFS_REFLOCK_IN_DEFAULT, &out_flags);
+				T_ASSERT(ret == true, "kern_apfs_reflock_try_put_ref success");
+				break;
+			}
+		}
+	}
+
+	notify_waiter((struct synch_test_common *)info);
+	thread_terminate_self();
+}
+
+static void
+test_cache_reflock(struct info_sleep_inheritor_test *info)
+{
+	info->synch = 0;
+	info->synch_value = info->head.nthreads;
+
+	info->value = info->head.nthreads;
+	/*
+	 * Use the mtx as cache lock
+	 */
+	info->prim_type = MTX_LOCK;
+
+	init_cache(info);
+
+	start_threads((thread_continue_t)thread_use_cache, (struct synch_test_common *)info, FALSE);
+	wait_all_thread((struct synch_test_common *)info);
+
+	check_cache_empty(info);
+	free_cache(info);
+}
+
+static void
+test_refcount_reflock(struct info_sleep_inheritor_test *info)
+{
+	info->synch = 0;
+	info->synch_value = info->head.nthreads;
+	kern_apfs_reflock_init(&info->reflock);
+	info->reflock_protected_status = 0;
+
+	start_threads((thread_continue_t)thread_refcount_reflock, (struct synch_test_common *)info, FALSE);
+	wait_all_thread((struct synch_test_common *)info);
+
+	kern_apfs_reflock_destroy(&info->reflock);
+
+	T_ASSERT(info->reflock_protected_status == 0, "unlocked status check");
+}
+
+static void
+test_force_reflock(struct info_sleep_inheritor_test *info)
+{
+	info->synch = 0;
+	info->synch_value = info->head.nthreads;
+	kern_apfs_reflock_init(&info->reflock);
+	info->value = 0;
+
+	start_threads((thread_continue_t)thread_force_reflock, (struct synch_test_common *)info, FALSE);
+	wait_all_thread((struct synch_test_common *)info);
+
+	kern_apfs_reflock_destroy(&info->reflock);
+}
+
+static void
+test_lock_reflock(struct info_sleep_inheritor_test *info)
+{
+	info->synch = 0;
+	info->synch_value = info->head.nthreads;
+	kern_apfs_reflock_init(&info->reflock);
+	info->value = 0;
+
+	start_threads((thread_continue_t)thread_lock_reflock, (struct synch_test_common *)info, FALSE);
+	wait_all_thread((struct synch_test_common *)info);
+
+	kern_apfs_reflock_destroy(&info->reflock);
+}
+
 static void
 test_sleep_with_wake_all(struct info_sleep_inheritor_test *info, int prim_type)
 {
@@ -2003,6 +2550,18 @@ ts_kernel_sleep_inheritor_test(void)
 	T_LOG("Testing rw locking combinations");
 	test_rw_lock(&info);
 
+	/*
+	 * Testing reflock / cond_sleep_with_inheritor
+	 */
+	T_LOG("Test cache reflock + cond_sleep_with_inheritor");
+	test_cache_reflock(&info);
+	T_LOG("Test force reflock + cond_sleep_with_inheritor");
+	test_force_reflock(&info);
+	T_LOG("Test refcount reflock + cond_sleep_with_inheritor");
+	test_refcount_reflock(&info);
+	T_LOG("Test lock reflock + cond_sleep_with_inheritor");
+	test_lock_reflock(&info);
+
 	destroy_synch_test_common((struct synch_test_common *)&info);
 
 	lck_attr_free(lck_attr);
@@ -2069,6 +2628,42 @@ thread_gate_aggressive(
 	primitive_unlock(info);
 
 	assert(current_thread()->kern_promotion_schedpri == 0);
+	notify_waiter((struct synch_test_common *)info);
+
+	thread_terminate_self();
+}
+
+static void
+thread_gate_free(
+	void *args,
+	__unused wait_result_t wr)
+{
+	struct info_sleep_inheritor_test *info = (struct info_sleep_inheritor_test*) args;
+	uint my_pri = current_thread()->sched_pri;
+
+	T_LOG("Started thread pri %d %p", my_pri, current_thread());
+
+	primitive_lock(info);
+
+	if (primitive_gate_try_close(info) == KERN_SUCCESS) {
+		primitive_gate_assert(info, GATE_ASSERT_HELD);
+		primitive_unlock(info);
+
+		wait_threads(&info->synch, info->synch_value - 1);
+		wait_for_waiters((struct synch_test_common *) info);
+
+		primitive_lock(info);
+		primitive_gate_open(info);
+		primitive_gate_free(info);
+	} else {
+		primitive_gate_assert(info, GATE_ASSERT_CLOSED);
+		wake_threads(&info->synch);
+		gate_wait_result_t ret = primitive_gate_wait(info);
+		T_ASSERT(ret == GATE_OPENED, "open gate");
+	}
+
+	primitive_unlock(info);
+
 	notify_waiter((struct synch_test_common *)info);
 
 	thread_terminate_self();
@@ -2168,6 +2763,7 @@ static void
 test_gate_push(struct info_sleep_inheritor_test *info, int prim_type)
 {
 	info->prim_type = prim_type;
+	info->use_alloc_gate = false;
 
 	primitive_gate_init(info);
 	info->work_to_do = TRUE;
@@ -2184,6 +2780,7 @@ static void
 test_gate_handoff(struct info_sleep_inheritor_test *info, int prim_type)
 {
 	info->prim_type = prim_type;
+	info->use_alloc_gate = false;
 
 	primitive_gate_init(info);
 
@@ -2205,6 +2802,7 @@ static void
 test_gate_steal(struct info_sleep_inheritor_test *info, int prim_type)
 {
 	info->prim_type = prim_type;
+	info->use_alloc_gate = false;
 
 	primitive_gate_init(info);
 
@@ -2217,6 +2815,26 @@ test_gate_steal(struct info_sleep_inheritor_test *info, int prim_type)
 	wait_all_thread((struct synch_test_common *)info);
 
 	primitive_gate_destroy(info);
+}
+
+static void
+test_gate_alloc_free(struct info_sleep_inheritor_test *info, int prim_type)
+{
+	(void)info;
+	(void) prim_type;
+	info->prim_type = prim_type;
+	info->use_alloc_gate = true;
+
+	primitive_gate_alloc(info);
+
+	info->synch = 0;
+	info->synch_value = NUM_THREADS;
+
+	start_threads((thread_continue_t)thread_gate_free, (struct synch_test_common *)info, FALSE);
+	wait_all_thread((struct synch_test_common *)info);
+
+	T_ASSERT(info->alloc_gate == NULL, "gate free");
+	info->use_alloc_gate = false;
 }
 
 kern_return_t
@@ -2239,7 +2857,7 @@ ts_kernel_gate_test(void)
 	 * Testing the priority inherited by the keeper
 	 * lck_mtx_gate_try_close, lck_mtx_gate_open, lck_mtx_gate_wait
 	 */
-	T_LOG("Testing gate push, lck");
+	T_LOG("Testing gate push, mtx");
 	test_gate_push(&info, MTX_LOCK);
 
 	T_LOG("Testing gate push, rw");
@@ -2249,7 +2867,7 @@ ts_kernel_gate_test(void)
 	 * Testing the handoff
 	 * lck_mtx_gate_wait, lck_mtx_gate_handoff
 	 */
-	T_LOG("Testing gate handoff, lck");
+	T_LOG("Testing gate handoff, mtx");
 	test_gate_handoff(&info, MTX_LOCK);
 
 	T_LOG("Testing gate handoff, rw");
@@ -2259,11 +2877,21 @@ ts_kernel_gate_test(void)
 	 * Testing the steal
 	 * lck_mtx_gate_close, lck_mtx_gate_wait, lck_mtx_gate_steal, lck_mtx_gate_handoff
 	 */
-	T_LOG("Testing gate steal, lck");
+	T_LOG("Testing gate steal, mtx");
 	test_gate_steal(&info, MTX_LOCK);
 
 	T_LOG("Testing gate steal, rw");
 	test_gate_steal(&info, RW_LOCK);
+
+	/*
+	 * Testing the alloc/free
+	 * lck_mtx_gate_alloc_init, lck_mtx_gate_close, lck_mtx_gate_wait, lck_mtx_gate_free
+	 */
+	T_LOG("Testing gate alloc/free, mtx");
+	test_gate_alloc_free(&info, MTX_LOCK);
+
+	T_LOG("Testing gate alloc/free, rw");
+	test_gate_alloc_free(&info, RW_LOCK);
 
 	destroy_synch_test_common((struct synch_test_common *)&info);
 
@@ -2622,7 +3250,7 @@ ts_kernel_timingsafe_bcmp_test(void)
 
 	// large
 	buf_size = 1024 * 16;
-	buf = kalloc(buf_size);
+	buf = kalloc_data(buf_size, Z_WAITOK);
 	T_EXPECT_NOTNULL(buf, "kalloc of buf");
 
 	read_random(buf, buf_size);
@@ -2633,7 +3261,7 @@ ts_kernel_timingsafe_bcmp_test(void)
 	memcpy(buf + 128, buf, 128);
 	T_ASSERT(timingsafe_bcmp(buf, buf + 128, 128) == 0, NULL);
 
-	kfree(buf, buf_size);
+	kfree_data(buf, buf_size);
 
 	return KERN_SUCCESS;
 }
@@ -2647,5 +3275,6 @@ kprintf_hhx_test(void)
 	    (unsigned char)'h', (unsigned char)'h', (unsigned char)'x',
 	    (unsigned char)'!',
 	    0xfeedfaceULL);
+	T_PASS("kprintf_hhx_test passed");
 	return KERN_SUCCESS;
 }

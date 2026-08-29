@@ -28,7 +28,11 @@
 #include <darwintest.h>
 #include <mach/port_descriptions.h>
 
-T_GLOBAL_META(T_META_RUN_CONCURRENTLY(true));
+T_GLOBAL_META(
+	T_META_NAMESPACE("xnu.ipc"),
+	T_META_RUN_CONCURRENTLY(TRUE),
+	T_META_RADAR_COMPONENT_NAME("xnu"),
+	T_META_RADAR_COMPONENT_VERSION("IPC"));
 
 static void
 expect_special_port_description(const char *(*fn)(int),
@@ -43,7 +47,7 @@ expect_special_port_description(const char *(*fn)(int),
 }
 
 T_DECL(host_special_port_descriptions,
-    "verify that host special ports can be described")
+    "verify that host special ports can be described", T_META_TAG_VM_PREFERRED)
 {
 #define TEST_HSP(portdef) \
 	        expect_special_port_description(mach_host_special_port_description, \
@@ -51,7 +55,7 @@ T_DECL(host_special_port_descriptions,
 
 	TEST_HSP(HOST_PORT);
 	TEST_HSP(HOST_PRIV_PORT);
-	TEST_HSP(HOST_IO_MASTER_PORT);
+	TEST_HSP(HOST_IO_MAIN_PORT);
 	TEST_HSP(HOST_DYNAMIC_PAGER_PORT);
 	TEST_HSP(HOST_AUDIT_CONTROL_PORT);
 	TEST_HSP(HOST_USER_NOTIFICATION_PORT);
@@ -76,10 +80,14 @@ T_DECL(host_special_port_descriptions,
 	TEST_HSP(HOST_SYSPOLICYD_PORT);
 	TEST_HSP(HOST_FILECOORDINATIOND_PORT);
 	TEST_HSP(HOST_FAIRPLAYD_PORT);
+	TEST_HSP(HOST_IOCOMPRESSIONSTATS_PORT);
+	TEST_HSP(HOST_MEMORY_ERROR_PORT);
+	TEST_HSP(HOST_MANAGEDAPPDISTD_PORT);
+	TEST_HSP(HOST_DOUBLEAGENTD_PORT);
 
 #undef TEST_HSP
 
-	T_EXPECT_EQ(HOST_FAIRPLAYD_PORT, HOST_MAX_SPECIAL_PORT,
+	T_EXPECT_EQ(HOST_DOUBLEAGENTD_PORT, HOST_MAX_SPECIAL_PORT,
 	    "checked all of the ports");
 
 	const char *invalid_hsp =
@@ -89,17 +97,18 @@ T_DECL(host_special_port_descriptions,
 }
 
 T_DECL(task_special_port_descriptions,
-    "verify that task special ports can be described")
+    "verify that task special ports can be described", T_META_TAG_VM_PREFERRED)
 {
 #define TEST_TSP(portdef) \
 	        expect_special_port_description(mach_task_special_port_description, \
 	        portdef, #portdef)
 
 	TEST_TSP(TASK_KERNEL_PORT);
+	TEST_TSP(TASK_READ_PORT);
+	TEST_TSP(TASK_INSPECT_PORT);
 	TEST_TSP(TASK_HOST_PORT);
 	TEST_TSP(TASK_NAME_PORT);
 	TEST_TSP(TASK_BOOTSTRAP_PORT);
-	TEST_TSP(TASK_SEATBELT_PORT);
 	TEST_TSP(TASK_ACCESS_PORT);
 	TEST_TSP(TASK_DEBUG_CONTROL_PORT);
 	TEST_TSP(TASK_RESOURCE_NOTIFY_PORT);
@@ -115,6 +124,28 @@ T_DECL(task_special_port_descriptions,
 	    "invalid task special port description should be NULL");
 }
 
+T_DECL(thread_special_port_descriptions,
+    "verify that thread special ports can be described", T_META_TAG_VM_PREFERRED)
+{
+#define TEST_TSP(portdef) \
+	        expect_special_port_description(mach_thread_special_port_description, \
+	        portdef, #portdef)
+
+	TEST_TSP(THREAD_KERNEL_PORT);
+	TEST_TSP(THREAD_READ_PORT);
+	TEST_TSP(THREAD_INSPECT_PORT);
+
+#undef TEST_TSP
+
+	T_EXPECT_EQ(THREAD_READ_PORT, THREAD_MAX_SPECIAL_PORT,
+	    "checked all of the ports");
+
+	const char *invalid_tsp =
+	    mach_thread_special_port_description(THREAD_MAX_SPECIAL_PORT + 1);
+	T_EXPECT_NULL(invalid_tsp,
+	    "invalid thread special port description should be NULL");
+}
+
 static void
 expect_special_port_id(int (*fn)(const char *id), int port, const char *portid)
 {
@@ -124,7 +155,7 @@ expect_special_port_id(int (*fn)(const char *id), int port, const char *portid)
 }
 
 T_DECL(host_special_port_mapping,
-    "verify that task special port names can be mapped to numbers")
+    "verify that task special port names can be mapped to numbers", T_META_TAG_VM_PREFERRED)
 {
 #define TEST_HSP(portdef) \
 	        expect_special_port_id(mach_host_special_port_for_id, \
@@ -132,7 +163,7 @@ T_DECL(host_special_port_mapping,
 
 	TEST_HSP(HOST_PORT);
 	TEST_HSP(HOST_PRIV_PORT);
-	TEST_HSP(HOST_IO_MASTER_PORT);
+	TEST_HSP(HOST_IO_MAIN_PORT);
 	TEST_HSP(HOST_DYNAMIC_PAGER_PORT);
 	TEST_HSP(HOST_AUDIT_CONTROL_PORT);
 	TEST_HSP(HOST_USER_NOTIFICATION_PORT);
@@ -165,17 +196,18 @@ T_DECL(host_special_port_mapping,
 }
 
 T_DECL(task_special_port_mapping,
-    "verify that task special port names can be mapped to numbers")
+    "verify that task special port names can be mapped to numbers", T_META_TAG_VM_PREFERRED)
 {
 #define TEST_TSP(portdef) \
 	        expect_special_port_id(mach_task_special_port_for_id, \
 	        portdef, #portdef)
 
 	TEST_TSP(TASK_KERNEL_PORT);
+	TEST_TSP(TASK_READ_PORT);
+	TEST_TSP(TASK_INSPECT_PORT);
 	TEST_TSP(TASK_HOST_PORT);
 	TEST_TSP(TASK_NAME_PORT);
 	TEST_TSP(TASK_BOOTSTRAP_PORT);
-	TEST_TSP(TASK_SEATBELT_PORT);
 	TEST_TSP(TASK_ACCESS_PORT);
 	TEST_TSP(TASK_DEBUG_CONTROL_PORT);
 	TEST_TSP(TASK_RESOURCE_NOTIFY_PORT);
@@ -185,4 +217,22 @@ T_DECL(task_special_port_mapping,
 	int invalid_tsp = mach_task_special_port_for_id("BOGUS_SPECIAL_PORT_NAME");
 	T_EXPECT_EQ(invalid_tsp, -1,
 	    "invalid task special port IDs should return -1");
+}
+
+T_DECL(thread_special_port_mapping,
+    "verify that thread special port names can be mapped to numbers", T_META_TAG_VM_PREFERRED)
+{
+#define TEST_TSP(portdef) \
+	        expect_special_port_id(mach_thread_special_port_for_id, \
+	        portdef, #portdef)
+
+	TEST_TSP(THREAD_KERNEL_PORT);
+	TEST_TSP(THREAD_READ_PORT);
+	TEST_TSP(THREAD_INSPECT_PORT);
+
+#undef TEST_TSP
+
+	int invalid_tsp = mach_thread_special_port_for_id("BOGUS_SPECIAL_PORT_NAME");
+	T_EXPECT_EQ(invalid_tsp, -1,
+	    "invalid thread special port IDs should return -1");
 }

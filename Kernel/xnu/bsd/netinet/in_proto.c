@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2024 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -89,8 +89,6 @@
 #include <netinet/udp.h>
 #include <netinet/udp_var.h>
 #include <netinet/ip_encap.h>
-#include <netinet/ip_divert.h>
-
 
 /*
  * TCP/IP protocol family: IP, ICMP, UDP, TCP.
@@ -241,40 +239,22 @@ static struct protosw inetsw[] = {
 		.pr_flags =             PR_ATOMIC | PR_ADDR | PR_LASTHDR,
 		.pr_input =             encap4_input,
 		.pr_ctloutput =         rip_ctloutput,
-		.pr_init =              encap4_init,
 		.pr_usrreqs =           &rip_usrreqs,
 		.pr_unlock =            rip_unlock,
 		.pr_update_last_owner = inp_update_last_owner,
 		.pr_copy_last_owner =   inp_copy_last_owner,
 	},
-#if INET6
 	{
 		.pr_type =              SOCK_RAW,
 		.pr_protocol =          IPPROTO_IPV6,
 		.pr_flags =             PR_ATOMIC | PR_ADDR | PR_LASTHDR,
 		.pr_input =             encap4_input,
 		.pr_ctloutput =         rip_ctloutput,
-		.pr_init =              encap4_init,
 		.pr_usrreqs =           &rip_usrreqs,
 		.pr_unlock =            rip_unlock,
 		.pr_update_last_owner = inp_update_last_owner,
 		.pr_copy_last_owner =   inp_copy_last_owner,
 	},
-#endif /* INET6 */
-#if IPDIVERT
-	{
-		.pr_type =              SOCK_RAW,
-		.pr_protocol =          IPPROTO_DIVERT,
-		.pr_flags =             PR_ATOMIC | PR_ADDR | PR_PCBLOCK,
-		.pr_input =             div_input,
-		.pr_ctloutput =         ip_ctloutput,
-		.pr_init =              div_init,
-		.pr_usrreqs =           &div_usrreqs,
-		.pr_lock =              div_lock,
-		.pr_unlock =            div_unlock,
-		.pr_getlock =           div_getlock,
-	},
-#endif /* IPDIVERT */
 /* raw wildcard */
 	{
 		.pr_type =              SOCK_RAW,
@@ -308,7 +288,7 @@ in_dinit(struct domain *dp)
 {
 	struct protosw *pr;
 	int i;
-	domain_unguard_t unguard;
+	domain_unguard_t __single unguard;
 
 	VERIFY(!(dp->dom_flags & DOM_INITIALIZED));
 	VERIFY(inetdomain == NULL);
@@ -337,7 +317,7 @@ in_dinit(struct domain *dp)
 	unguard = domain_unguard_deploy();
 	i = proto_register_input(PF_INET, ip_proto_input, NULL, 1);
 	if (i != 0) {
-		panic("%s: failed to register PF_INET protocol: %d\n",
+		panic("%s: failed to register PF_INET protocol: %d",
 		    __func__, i);
 		/* NOTREACHED */
 	}
@@ -379,7 +359,3 @@ SYSCTL_NODE(_net_inet, IPPROTO_AH, ipsec,
 #endif /* IPSEC */
 SYSCTL_NODE(_net_inet, IPPROTO_RAW, raw,
     CTLFLAG_RW | CTLFLAG_LOCKED, 0, "RAW");
-#if IPDIVERT
-SYSCTL_NODE(_net_inet, IPPROTO_DIVERT, div,
-    CTLFLAG_RW | CTLFLAG_LOCKED, 0, "DIVERT");
-#endif /* IPDIVERT */

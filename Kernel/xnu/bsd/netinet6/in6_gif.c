@@ -80,20 +80,18 @@
 #include <netinet/ip.h>
 #endif
 #include <netinet/ip_encap.h>
-#if INET6
 #include <netinet/ip6.h>
 #include <netinet6/ip6_var.h>
 #include <netinet6/in6_gif.h>
 #include <netinet6/in6_var.h>
-#endif
 #include <netinet/ip_ecn.h>
-#if INET6
 #include <netinet6/ip6_ecn.h>
-#endif
 
 #include <net/if_gif.h>
 
 #include <net/net_osdep.h>
+
+#include <net/sockaddr_utils.h>
 
 int
 in6_gif_output(
@@ -102,12 +100,10 @@ in6_gif_output(
 	struct mbuf *m,
 	__unused struct rtentry *rt)
 {
-	struct gif_softc *sc = ifnet_softc(ifp);
-	struct sockaddr_in6 *dst = (struct sockaddr_in6 *)&sc->gif_ro6.ro_dst;
-	struct sockaddr_in6 *sin6_src = (struct sockaddr_in6 *)
-	    (void *)sc->gif_psrc;
-	struct sockaddr_in6 *sin6_dst = (struct sockaddr_in6 *)
-	    (void *)sc->gif_pdst;
+	struct gif_softc *__single sc = ifnet_softc(ifp);
+	struct sockaddr_in6 *dst = SIN6(&sc->gif_ro6.ro_dst);
+	struct sockaddr_in6 *sin6_src = SIN6(sc->gif_psrc);
+	struct sockaddr_in6 *sin6_dst = SIN6(sc->gif_pdst);
 	struct ip6_hdr *ip6;
 	int proto;
 	u_int8_t itos, otos;
@@ -139,7 +135,6 @@ in6_gif_output(
 		break;
 	}
 #endif
-#if INET6
 	case AF_INET6:
 	{
 		proto = IPPROTO_IPV6;
@@ -153,7 +148,6 @@ in6_gif_output(
 		itos = (ntohl(ip6->ip6_flow) >> 20) & 0xff;
 		break;
 	}
-#endif
 	default:
 #if DEBUG
 		printf("in6_gif_output: warning: unknown family %d passed\n",
@@ -181,6 +175,8 @@ in6_gif_output(
 	ip6->ip6_nxt    = proto;
 	ip6->ip6_hlim   = ip6_gif_hlim;
 	ip6->ip6_src    = sin6_src->sin6_addr;
+	ip6_output_setsrcifscope(m, sin6_src->sin6_scope_id, NULL);
+	ip6_output_setdstifscope(m, sin6_dst->sin6_scope_id, NULL);
 	/* bidirectional configured tunnel mode */
 	if (!IN6_IS_ADDR_UNSPECIFIED(&sin6_dst->sin6_addr)) {
 		ip6->ip6_dst = sin6_dst->sin6_addr;
@@ -198,7 +194,7 @@ in6_gif_output(
 	    !IN6_ARE_ADDR_EQUAL(&dst->sin6_addr, &sin6_dst->sin6_addr) ||
 	    (sc->gif_ro6.ro_rt != NULL && sc->gif_ro6.ro_rt->rt_ifp == ifp)) {
 		/* cache route doesn't match or recursive route */
-		bzero(dst, sizeof(*dst));
+		SOCKADDR_ZERO(dst, sizeof(*dst));
 		dst->sin6_family = sin6_dst->sin6_family;
 		dst->sin6_len = sizeof(struct sockaddr_in6);
 		dst->sin6_addr = sin6_dst->sin6_addr;
@@ -264,7 +260,6 @@ in6_gif_input(struct mbuf **mp, int *offp, int proto)
 	m_adj(m, *offp);
 
 	switch (proto) {
-#if INET
 	case IPPROTO_IPV4:
 	{
 		struct ip *ip;
@@ -295,8 +290,6 @@ in6_gif_input(struct mbuf **mp, int *offp, int proto)
 		}
 		break;
 	}
-#endif /* INET */
-#if INET6
 	case IPPROTO_IPV6:
 	{
 		af = AF_INET6;
@@ -314,7 +307,6 @@ in6_gif_input(struct mbuf **mp, int *offp, int proto)
 		}
 		break;
 	}
-#endif
 	default:
 		ip6stat.ip6s_nogif++;
 		m_freem(m);
@@ -347,8 +339,8 @@ gif_validate6(
 {
 	struct sockaddr_in6 *src, *dst;
 
-	src = (struct sockaddr_in6 *)(void *)sc->gif_psrc;
-	dst = (struct sockaddr_in6 *)(void *)sc->gif_pdst;
+	src = SIN6(sc->gif_psrc);
+	dst = SIN6(sc->gif_pdst);
 
 	/*
 	 * Check for address match.  Note that the check is for an incoming
@@ -367,12 +359,12 @@ gif_validate6(
 		struct sockaddr_in6 sin6;
 		struct rtentry *rt;
 
-		bzero(&sin6, sizeof(sin6));
+		SOCKADDR_ZERO(&sin6, sizeof(sin6));
 		sin6.sin6_family = AF_INET6;
 		sin6.sin6_len = sizeof(struct sockaddr_in6);
 		sin6.sin6_addr = ip6->ip6_src;
 
-		rt = rtalloc1((struct sockaddr *)&sin6, 0, 0);
+		rt = rtalloc1(SA(&sin6), 0, 0);
 		if (rt != NULL) {
 			RT_LOCK(rt);
 		}
@@ -408,7 +400,7 @@ gif_encapcheck6(
 	void *arg)
 {
 	struct ip6_hdr ip6;
-	struct gif_softc *sc;
+	struct gif_softc *__single sc;
 	struct ifnet *ifp;
 
 	/* sanity check done in caller */
@@ -416,7 +408,7 @@ gif_encapcheck6(
 
 	GIF_LOCK_ASSERT(sc);
 
-	mbuf_copydata((struct mbuf *)(size_t)m, 0, sizeof(ip6), &ip6);
+	mbuf_copydata(__DECONST(struct mbuf *, m), 0, sizeof(ip6), &ip6);
 	ifp = ((m->m_flags & M_PKTHDR) != 0) ? m->m_pkthdr.rcvif : NULL;
 
 	return gif_validate6(&ip6, sc, ifp);

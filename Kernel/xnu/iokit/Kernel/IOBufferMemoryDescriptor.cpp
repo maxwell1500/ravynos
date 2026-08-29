@@ -25,6 +25,7 @@
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
+#define IOKIT_ENABLE_SHARED_PTR
 
 #define _IOMEMORYDESCRIPTOR_INTERNAL_
 
@@ -36,6 +37,8 @@
 #include <IOKit/IOBufferMemoryDescriptor.h>
 #include <libkern/OSDebug.h>
 #include <mach/mach_vm.h>
+
+#include <vm/vm_kern_xnu.h>
 
 #include "IOKitKernelInternal.h"
 
@@ -58,6 +61,7 @@ __BEGIN_DECLS
 void ipc_port_release_send(ipc_port_t port);
 #include <vm/pmap.h>
 
+KALLOC_HEAP_DEFINE(KHEAP_IOBMD_CONTROL, "IOBMD_control", KHEAP_ID_KT_VAR);
 __END_DECLS
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
@@ -66,35 +70,40 @@ enum{
 	kInternalFlagPhysical      = 0x00000001,
 	kInternalFlagPageSized     = 0x00000002,
 	kInternalFlagPageAllocated = 0x00000004,
-	kInternalFlagInit          = 0x00000008
+	kInternalFlagInit          = 0x00000008,
+	kInternalFlagHasPointers   = 0x00000010,
+	kInternalFlagGuardPages    = 0x00000020,
 };
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 #define super IOGeneralMemoryDescriptor
-OSDefineMetaClassAndStructors(IOBufferMemoryDescriptor,
-    IOGeneralMemoryDescriptor);
+OSDefineMetaClassAndStructorsWithZone(IOBufferMemoryDescriptor,
+    IOGeneralMemoryDescriptor, ZC_ZFREE_CLEARMEM);
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
+#if defined(__x86_64__)
 static uintptr_t
-IOBMDPageProc(iopa_t * a)
+IOBMDPageProc(kalloc_heap_t kheap, iopa_t * a)
 {
 	kern_return_t kr;
 	vm_address_t  vmaddr  = 0;
-	int           options = 0;// KMA_LOMEM;
+	kma_flags_t kma_flags = KMA_ZERO;
 
-	kr = kernel_memory_allocate(kernel_map, &vmaddr,
-	    page_size, 0, options, VM_KERN_MEMORY_IOKIT);
+	if (kheap == KHEAP_DATA_BUFFERS) {
+		kma_flags = (kma_flags_t) (kma_flags | KMA_DATA);
+	}
+	kr = kmem_alloc(kernel_map, &vmaddr, page_size,
+	    kma_flags, VM_KERN_MEMORY_IOKIT);
 
 	if (KERN_SUCCESS != kr) {
 		vmaddr = 0;
-	} else {
-		bzero((void *) vmaddr, page_size);
 	}
 
 	return (uintptr_t) vmaddr;
 }
+#endif /* defined(__x86_64__) */
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
@@ -111,7 +120,7 @@ IOBufferMemoryDescriptor::initWithOptions(
 }
 #endif /* !__LP64__ */
 
-IOBufferMemoryDescriptor *
+OSSharedPtr<IOBufferMemoryDescriptor>
 IOBufferMemoryDescriptor::withCopy(
 	task_t                inTask,
 	IOOptionBits      options,
@@ -119,7 +128,7 @@ IOBufferMemoryDescriptor::withCopy(
 	mach_vm_address_t source,
 	mach_vm_size_t    size)
 {
-	IOBufferMemoryDescriptor * inst;
+	OSSharedPtr<IOBufferMemoryDescriptor> inst;
 	kern_return_t              err;
 	vm_map_copy_t              copy;
 	vm_map_address_t           address;
@@ -127,14 +136,11 @@ IOBufferMemoryDescriptor::withCopy(
 	copy = NULL;
 	do {
 		err = kIOReturnNoMemory;
-		inst = new IOBufferMemoryDescriptor;
+		inst = OSMakeShared<IOBufferMemoryDescriptor>();
 		if (!inst) {
 			break;
 		}
-		inst->_ranges.v64 = IONew(IOAddressRange, 1);
-		if (!inst->_ranges.v64) {
-			break;
-		}
+		inst->_ranges.v64 = IOMallocType(IOAddressRange);
 
 		err = vm_map_copyin(sourceMap, source, size,
 		    false /* src_destroy */, &copy);
@@ -163,8 +169,8 @@ IOBufferMemoryDescriptor::withCopy(
 	if (copy) {
 		vm_map_copy_discard(copy);
 	}
-	OSSafeReleaseNULL(inst);
-	return NULL;
+
+	return nullptr;
 }
 
 
@@ -177,29 +183,27 @@ IOBufferMemoryDescriptor::initWithPhysicalMask(
 	mach_vm_address_t physicalMask)
 {
 	task_t                mapTask = NULL;
-	vm_map_t              vmmap = NULL;
+	kalloc_heap_t         kheap = KHEAP_DATA_BUFFERS;
 	mach_vm_address_t     highestMask = 0;
 	IOOptionBits          iomdOptions = kIOMemoryTypeVirtual64 | kIOMemoryAsReference;
 	IODMAMapSpecification mapSpec;
 	bool                  mapped = false;
 	bool                  withCopy = false;
-	bool                  needZero;
+	bool                  mappedOrShared = false;
 
 	if (!capacity) {
 		return false;
 	}
 
+	/*
+	 * The IOKit constructor requests the allocator for zeroed memory
+	 * so the members of the class do not need to be explicitly zeroed.
+	 */
 	_options          = options;
 	_capacity         = capacity;
-	_internalFlags    = 0;
-	_internalReserved = 0;
-	_buffer           = NULL;
 
 	if (!_ranges.v64) {
-		_ranges.v64 = IONew(IOAddressRange, 1);
-		if (!_ranges.v64) {
-			return false;
-		}
+		_ranges.v64 = IOMallocType(IOAddressRange);
 		_ranges.v64->address = 0;
 		_ranges.v64->length  = 0;
 	} else {
@@ -215,6 +219,14 @@ IOBufferMemoryDescriptor::initWithPhysicalMask(
 		_buffer = (void *) _ranges.v64->address;
 		withCopy = true;
 	}
+
+	/*
+	 * Set kalloc_heap to KHEAP_IOBMD_CONTROL if allocation contains pointers
+	 */
+	if (kInternalFlagHasPointers & _internalFlags) {
+		kheap = KHEAP_IOBMD_CONTROL;
+	}
+
 	//  make sure super::free doesn't dealloc _ranges before super::init
 	_flags = kIOMemoryAsReference;
 
@@ -225,7 +237,6 @@ IOBufferMemoryDescriptor::initWithPhysicalMask(
 		IOMapper::checkForSystemMapper();
 		mapped = (NULL != IOMapper::gSystem);
 	}
-	needZero = (mapped || (0 != (kIOMemorySharingTypeMask & options)));
 
 	if (physicalMask && (alignment <= 1)) {
 		alignment   = ((physicalMask ^ (-1ULL)) & (physicalMask - 1));
@@ -241,7 +252,9 @@ IOBufferMemoryDescriptor::initWithPhysicalMask(
 	}
 
 	if (alignment >= page_size) {
-		capacity = round_page(capacity);
+		if (round_page_overflow(capacity, &capacity)) {
+			return false;
+		}
 	}
 
 	if (alignment > page_size) {
@@ -263,9 +276,9 @@ IOBufferMemoryDescriptor::initWithPhysicalMask(
 	mapSpec.numAddressBits = 64;
 	if (highestMask && mapped) {
 		if (highestMask <= 0xFFFFFFFF) {
-			mapSpec.numAddressBits = (32 - __builtin_clz((unsigned int) highestMask));
+			mapSpec.numAddressBits = (uint8_t)(32 - __builtin_clz((unsigned int) highestMask));
 		} else {
-			mapSpec.numAddressBits = (64 - __builtin_clz((unsigned int) (highestMask >> 32)));
+			mapSpec.numAddressBits = (uint8_t)(64 - __builtin_clz((unsigned int) (highestMask >> 32)));
 		}
 		highestMask = 0;
 	}
@@ -273,13 +286,15 @@ IOBufferMemoryDescriptor::initWithPhysicalMask(
 	// set memory entry cache mode, pageable, purgeable
 	iomdOptions |= ((options & kIOMapCacheMask) >> kIOMapCacheShift) << kIOMemoryBufferCacheShift;
 	if (options & kIOMemoryPageable) {
+		if (_internalFlags & kInternalFlagGuardPages) {
+			printf("IOBMD: Unsupported use of guard pages with pageable memory.\n");
+			return false;
+		}
 		iomdOptions |= kIOMemoryBufferPageable;
 		if (options & kIOMemoryPurgeable) {
 			iomdOptions |= kIOMemoryBufferPurgeable;
 		}
 	} else {
-		vmmap = kernel_map;
-
 		// Buffer shouldn't auto prepare they should be prepared explicitly
 		// But it never was enforced so what are you going to do?
 		iomdOptions |= kIOMemoryAutoPrepare;
@@ -297,35 +312,73 @@ IOBufferMemoryDescriptor::initWithPhysicalMask(
 #endif
 		}
 
+		mappedOrShared = (mapped || (0 != (kIOMemorySharingTypeMask & options)));
 		if (contig || highestMask || (alignment > page_size)) {
+			if (_internalFlags & kInternalFlagGuardPages) {
+				printf("IOBMD: Unsupported use of guard pages with physical mask or contiguous memory.\n");
+				return false;
+			}
 			_internalFlags |= kInternalFlagPhysical;
 			if (highestMask) {
 				_internalFlags |= kInternalFlagPageSized;
-				capacity = round_page(capacity);
+				if (round_page_overflow(capacity, &capacity)) {
+					return false;
+				}
 			}
-			_buffer = (void *) IOKernelAllocateWithPhysicalRestrict(
-				capacity, highestMask, alignment, contig);
-		} else if (needZero
-		    && ((capacity + alignment) <= (page_size - gIOPageAllocChunkBytes))) {
+			_buffer = (void *) IOKernelAllocateWithPhysicalRestrict(kheap,
+			    capacity, highestMask, alignment, contig);
+		} else if (_internalFlags & kInternalFlagGuardPages) {
+			vm_offset_t address = 0;
+			kern_return_t kr;
+			uintptr_t alignMask;
+			kma_flags_t kma_flags = (kma_flags_t) (KMA_GUARD_FIRST |
+			    KMA_GUARD_LAST | KMA_ZERO);
+
+			if (((uint32_t) alignment) != alignment) {
+				return false;
+			}
+			if (kheap == KHEAP_DATA_BUFFERS) {
+				kma_flags = (kma_flags_t) (kma_flags | KMA_DATA);
+			}
+
+			alignMask = (1UL << log2up((uint32_t) alignment)) - 1;
+			kr = kernel_memory_allocate(kernel_map, &address,
+			    capacity + page_size * 2, alignMask, kma_flags,
+			    IOMemoryTag(kernel_map));
+			if (kr != KERN_SUCCESS || address == 0) {
+				return false;
+			}
+#if IOALLOCDEBUG
+			OSAddAtomicLong(capacity, &debug_iomalloc_size);
+#endif
+			IOStatisticsAlloc(kIOStatisticsMallocAligned, capacity);
+			_buffer = (void *)(address + page_size);
+#if defined(__x86_64__)
+		} else if (mappedOrShared
+		    && (capacity + alignment) <= (page_size - gIOPageAllocChunkBytes)) {
 			_internalFlags |= kInternalFlagPageAllocated;
-			needZero        = false;
-			_buffer         = (void *) iopa_alloc(&gIOBMDPageAllocator, &IOBMDPageProc, capacity, alignment);
+			_buffer         = (void *) iopa_alloc(&gIOBMDPageAllocator,
+			    &IOBMDPageProc, kheap, capacity, alignment);
 			if (_buffer) {
+				bzero(_buffer, capacity);
 				IOStatisticsAlloc(kIOStatisticsMallocAligned, capacity);
 #if IOALLOCDEBUG
-				OSAddAtomic(capacity, &debug_iomalloc_size);
+				OSAddAtomicLong(capacity, &debug_iomalloc_size);
 #endif
 			}
+#endif /* defined(__x86_64__) */
 		} else if (alignment > 1) {
-			_buffer = IOMallocAligned(capacity, alignment);
+			/* BEGIN IGNORE CODESTYLE */
+			__typed_allocators_ignore_push
+			_buffer = IOMallocAligned_internal(kheap, capacity, alignment,
+			    Z_ZERO_VM_TAG_BT_BIT);
 		} else {
-			_buffer = IOMalloc(capacity);
+			_buffer = IOMalloc_internal(kheap, capacity, Z_ZERO_VM_TAG_BT_BIT);
+			__typed_allocators_ignore_pop
+			/* END IGNORE CODESTYLE */
 		}
 		if (!_buffer) {
 			return false;
-		}
-		if (needZero) {
-			bzero(_buffer, capacity);
 		}
 	}
 
@@ -360,7 +413,7 @@ IOBufferMemoryDescriptor::initWithPhysicalMask(
 		}
 	}
 
-	_ranges.v64->address = (mach_vm_address_t) _buffer;
+	_ranges.v64->address = (mach_vm_address_t) pgz_decode(_buffer, _capacity);
 	_ranges.v64->length  = _capacity;
 
 	if (!super::initWithOptions(_ranges.v64, 1, 0,
@@ -383,13 +436,13 @@ IOBufferMemoryDescriptor::initWithPhysicalMask(
 
 	if (mapTask) {
 		if (!reserved) {
-			reserved = IONew( ExpansionData, 1 );
+			reserved = IOMallocType(ExpansionData);
 			if (!reserved) {
 				return false;
 			}
 		}
 		reserved->map = createMappingInTask(mapTask, 0,
-		    kIOMapAnywhere | (options & kIOMapPrefault) | (options & kIOMapCacheMask), 0, 0);
+		    kIOMapAnywhere | (options & kIOMapPrefault) | (options & kIOMapCacheMask), 0, 0).detach();
 		if (!reserved->map) {
 			_buffer = NULL;
 			return false;
@@ -409,23 +462,53 @@ IOBufferMemoryDescriptor::initWithPhysicalMask(
 	return true;
 }
 
-IOBufferMemoryDescriptor *
+bool
+IOBufferMemoryDescriptor::initControlWithPhysicalMask(
+	task_t            inTask,
+	IOOptionBits      options,
+	mach_vm_size_t    capacity,
+	mach_vm_address_t alignment,
+	mach_vm_address_t physicalMask)
+{
+	_internalFlags = kInternalFlagHasPointers;
+	return initWithPhysicalMask(inTask, options, capacity, alignment,
+	           physicalMask);
+}
+
+bool
+IOBufferMemoryDescriptor::initWithGuardPages(
+	task_t            inTask,
+	IOOptionBits      options,
+	mach_vm_size_t    capacity)
+{
+	mach_vm_size_t roundedCapacity;
+
+	_internalFlags = kInternalFlagGuardPages;
+
+	if (round_page_overflow(capacity, &roundedCapacity)) {
+		return false;
+	}
+
+	return initWithPhysicalMask(inTask, options, roundedCapacity, page_size,
+	           (mach_vm_address_t)0);
+}
+
+OSSharedPtr<IOBufferMemoryDescriptor>
 IOBufferMemoryDescriptor::inTaskWithOptions(
 	task_t       inTask,
 	IOOptionBits options,
 	vm_size_t    capacity,
 	vm_offset_t  alignment)
 {
-	IOBufferMemoryDescriptor *me = new IOBufferMemoryDescriptor;
+	OSSharedPtr<IOBufferMemoryDescriptor> me = OSMakeShared<IOBufferMemoryDescriptor>();
 
 	if (me && !me->initWithPhysicalMask(inTask, options, capacity, alignment, 0)) {
-		me->release();
-		me = NULL;
+		me.reset();
 	}
 	return me;
 }
 
-IOBufferMemoryDescriptor *
+OSSharedPtr<IOBufferMemoryDescriptor>
 IOBufferMemoryDescriptor::inTaskWithOptions(
 	task_t       inTask,
 	IOOptionBits options,
@@ -434,31 +517,43 @@ IOBufferMemoryDescriptor::inTaskWithOptions(
 	uint32_t     kernTag,
 	uint32_t     userTag)
 {
-	IOBufferMemoryDescriptor *me = new IOBufferMemoryDescriptor;
+	OSSharedPtr<IOBufferMemoryDescriptor> me = OSMakeShared<IOBufferMemoryDescriptor>();
 
 	if (me) {
 		me->setVMTags(kernTag, userTag);
 
 		if (!me->initWithPhysicalMask(inTask, options, capacity, alignment, 0)) {
-			me->release();
-			me = NULL;
+			me.reset();
 		}
 	}
 	return me;
 }
 
-IOBufferMemoryDescriptor *
+OSSharedPtr<IOBufferMemoryDescriptor>
 IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
 	task_t            inTask,
 	IOOptionBits      options,
 	mach_vm_size_t    capacity,
 	mach_vm_address_t physicalMask)
 {
-	IOBufferMemoryDescriptor *me = new IOBufferMemoryDescriptor;
+	OSSharedPtr<IOBufferMemoryDescriptor> me = OSMakeShared<IOBufferMemoryDescriptor>();
 
 	if (me && !me->initWithPhysicalMask(inTask, options, capacity, 1, physicalMask)) {
-		me->release();
-		me = NULL;
+		me.reset();
+	}
+	return me;
+}
+
+OSSharedPtr<IOBufferMemoryDescriptor>
+IOBufferMemoryDescriptor::inTaskWithGuardPages(
+	task_t            inTask,
+	IOOptionBits      options,
+	mach_vm_size_t    capacity)
+{
+	OSSharedPtr<IOBufferMemoryDescriptor> me = OSMakeShared<IOBufferMemoryDescriptor>();
+
+	if (me && !me->initWithGuardPages(inTask, options, capacity)) {
+		me.reset();
 	}
 	return me;
 }
@@ -474,17 +569,16 @@ IOBufferMemoryDescriptor::initWithOptions(
 }
 #endif /* !__LP64__ */
 
-IOBufferMemoryDescriptor *
+OSSharedPtr<IOBufferMemoryDescriptor>
 IOBufferMemoryDescriptor::withOptions(
 	IOOptionBits options,
 	vm_size_t    capacity,
 	vm_offset_t  alignment)
 {
-	IOBufferMemoryDescriptor *me = new IOBufferMemoryDescriptor;
+	OSSharedPtr<IOBufferMemoryDescriptor> me = OSMakeShared<IOBufferMemoryDescriptor>();
 
 	if (me && !me->initWithPhysicalMask(kernel_task, options, capacity, alignment, 0)) {
-		me->release();
-		me = NULL;
+		me.reset();
 	}
 	return me;
 }
@@ -496,7 +590,7 @@ IOBufferMemoryDescriptor::withOptions(
  * Returns a new IOBufferMemoryDescriptor with a buffer large enough to
  * hold capacity bytes.  The descriptor's length is initially set to the capacity.
  */
-IOBufferMemoryDescriptor *
+OSSharedPtr<IOBufferMemoryDescriptor>
 IOBufferMemoryDescriptor::withCapacity(vm_size_t   inCapacity,
     IODirection inDirection,
     bool        inContiguous)
@@ -543,20 +637,21 @@ IOBufferMemoryDescriptor::initWithBytes(const void * inBytes,
  * Returns a new IOBufferMemoryDescriptor preloaded with bytes (copied).
  * The descriptor's length and capacity are set to the input buffer's size.
  */
-IOBufferMemoryDescriptor *
+OSSharedPtr<IOBufferMemoryDescriptor>
 IOBufferMemoryDescriptor::withBytes(const void * inBytes,
     vm_size_t    inLength,
     IODirection  inDirection,
     bool         inContiguous)
 {
-	IOBufferMemoryDescriptor *me = new IOBufferMemoryDescriptor;
+	OSSharedPtr<IOBufferMemoryDescriptor> me = OSMakeShared<IOBufferMemoryDescriptor>();
+	mach_vm_address_t alignment;
 
+	alignment = (inLength <= page_size) ? inLength : page_size;
 	if (me && !me->initWithPhysicalMask(
 		    kernel_task, inDirection | kIOMemoryUnshared
 		    | (inContiguous ? kIOMemoryPhysicallyContiguous : 0),
-		    inLength, inLength, 0 )) {
-		me->release();
-		me = NULL;
+		    inLength, alignment, 0 )) {
+		me.reset();
 	}
 
 	if (me) {
@@ -564,8 +659,7 @@ IOBufferMemoryDescriptor::withBytes(const void * inBytes,
 		me->setLength(0);
 
 		if (!me->appendBytes(inBytes, inLength)) {
-			me->release();
-			me = NULL;
+			me.reset();
 		}
 	}
 	return me;
@@ -589,14 +683,18 @@ IOBufferMemoryDescriptor::free()
 	IOMemoryMap *    map       = NULL;
 	IOAddressRange * range     = _ranges.v64;
 	vm_offset_t      alignment = _alignment;
+	kalloc_heap_t    kheap     = KHEAP_DATA_BUFFERS;
+	vm_size_t        rsize;
 
 	if (alignment >= page_size) {
-		size = round_page(size);
+		if (!round_page_overflow(size, &rsize)) {
+			size = rsize;
+		}
 	}
 
 	if (reserved) {
 		map = reserved->map;
-		IODelete( reserved, ExpansionData, 1 );
+		IOFreeType(reserved, ExpansionData);
 		if (map) {
 			map->release();
 		}
@@ -604,7 +702,13 @@ IOBufferMemoryDescriptor::free()
 
 	if ((options & kIOMemoryPageable)
 	    || (kInternalFlagPageSized & internalFlags)) {
-		size = round_page(size);
+		if (!round_page_overflow(size, &rsize)) {
+			size = rsize;
+		}
+	}
+
+	if (internalFlags & kInternalFlagHasPointers) {
+		kheap = KHEAP_IOBMD_CONTROL;
 	}
 
 #if IOTRACKING
@@ -624,25 +728,41 @@ IOBufferMemoryDescriptor::free()
 #endif
 	} else if (buffer) {
 		if (kInternalFlagPhysical & internalFlags) {
-			IOKernelFreePhysical((mach_vm_address_t) buffer, size);
+			IOKernelFreePhysical(kheap, (mach_vm_address_t) buffer, size);
 		} else if (kInternalFlagPageAllocated & internalFlags) {
+#if defined(__x86_64__)
 			uintptr_t page;
 			page = iopa_free(&gIOBMDPageAllocator, (uintptr_t) buffer, size);
 			if (page) {
 				kmem_free(kernel_map, page, page_size);
 			}
 #if IOALLOCDEBUG
-			OSAddAtomic(-size, &debug_iomalloc_size);
+			OSAddAtomicLong(-size, &debug_iomalloc_size);
+#endif
+			IOStatisticsAlloc(kIOStatisticsFreeAligned, size);
+#else /* !defined(__x86_64__) */
+			/* should be unreachable */
+			panic("Attempting to free IOBMD with page allocated flag");
+#endif /* defined(__x86_64__) */
+		} else if (kInternalFlagGuardPages & internalFlags) {
+			vm_offset_t allocation = (vm_offset_t)buffer - page_size;
+			kmem_free(kernel_map, allocation, size + page_size * 2);
+#if IOALLOCDEBUG
+			OSAddAtomicLong(-size, &debug_iomalloc_size);
 #endif
 			IOStatisticsAlloc(kIOStatisticsFreeAligned, size);
 		} else if (alignment > 1) {
-			IOFreeAligned(buffer, size);
+			/* BEGIN IGNORE CODESTYLE */
+			__typed_allocators_ignore_push
+			IOFreeAligned_internal(kheap, buffer, size);
 		} else {
-			IOFree(buffer, size);
+			IOFree_internal(kheap, buffer, size);
+			__typed_allocators_ignore_pop
+			/* END IGNORE CODESTYLE */
 		}
 	}
 	if (range && (kIOMemoryAsReference & flags)) {
-		IODelete(range, IOAddressRange, 1);
+		IOFreeType(range, IOAddressRange);
 	}
 }
 
@@ -785,8 +905,8 @@ IOBufferMemoryDescriptor::getVirtualSegment(IOByteCount offset,
 OSMetaClassDefineReservedUnused(IOBufferMemoryDescriptor, 0);
 OSMetaClassDefineReservedUnused(IOBufferMemoryDescriptor, 1);
 #else /* !__LP64__ */
-OSMetaClassDefineReservedUsed(IOBufferMemoryDescriptor, 0);
-OSMetaClassDefineReservedUsed(IOBufferMemoryDescriptor, 1);
+OSMetaClassDefineReservedUsedX86(IOBufferMemoryDescriptor, 0);
+OSMetaClassDefineReservedUsedX86(IOBufferMemoryDescriptor, 1);
 #endif /* !__LP64__ */
 OSMetaClassDefineReservedUnused(IOBufferMemoryDescriptor, 2);
 OSMetaClassDefineReservedUnused(IOBufferMemoryDescriptor, 3);

@@ -82,18 +82,18 @@ serial_keyboard_poll(void)
 	uint64_t next;
 
 	while (1) {
-		chr = _serial_getc(0, 1, 0, 1); /* Get a character if there is one */
+		chr = _serial_getc(false); /* Get a character if there is one */
 		if (chr < 0) { /* The serial buffer is empty */
 			break;
 		}
-		cons_cinput((char)chr);                 /* Buffer up the character */
+		cons_cinput((char)chr); /* Buffer up the character */
 	}
 
 	clock_interval_to_deadline(16, 1000000, &next); /* Get time of pop */
 
-	assert_wait_deadline((event_t)serial_keyboard_poll, THREAD_UNINT, next);        /* Show we are "waiting" */
-	thread_block((thread_continue_t)serial_keyboard_poll);  /* Wait for it */
-	panic("serial_keyboard_poll: Shouldn't never ever get here...\n");
+	assert_wait_deadline((event_t)serial_keyboard_poll, THREAD_UNINT, next); /* Show we are "waiting" */
+	thread_block((thread_continue_t)serial_keyboard_poll); /* Wait for it */
+	panic("serial_keyboard_poll: Shouldn't never ever get here...");
 }
 
 boolean_t
@@ -113,8 +113,13 @@ switch_to_video_console(void)
 int
 switch_to_serial_console(void)
 {
+	extern bool serial_console_enabled;
 	int old_cons_ops = cons_ops_index;
-	cons_ops_index = SERIAL_CONS_OPS;
+
+	if (serial_console_enabled) {
+		cons_ops_index = SERIAL_CONS_OPS;
+	}
+
 	return old_cons_ops;
 }
 
@@ -156,7 +161,7 @@ console_printbuf_putc(int ch, void * arg)
 	struct console_printbuf_state * info = (struct console_printbuf_state *)arg;
 	info->total += 1;
 	if (info->pos < (SERIAL_CONS_BUF_SIZE - 1)) {
-		info->str[info->pos] = ch;
+		info->str[info->pos] = (char)ch;
 		info->pos += 1;
 	} else {
 		/*
@@ -168,7 +173,7 @@ console_printbuf_putc(int ch, void * arg)
 			info->str[info->pos] = '\0';
 			console_write(info->str, info->pos);
 			info->pos            = 0;
-			info->str[info->pos] = ch;
+			info->str[info->pos] = (char)ch;
 			info->pos += 1;
 		}
 	}

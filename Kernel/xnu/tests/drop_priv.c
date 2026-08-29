@@ -14,6 +14,8 @@
 #include <uuid/uuid.h>
 #endif
 
+#include "drop_priv.h"
+
 #if TARGET_OS_OSX
 #define INVOKER_UID "SUDO_UID"
 #define INVOKER_GID "SUDO_GID"
@@ -41,8 +43,6 @@ _get_sudo_invoker(const char *var)
 #endif /* TARGET_OS_OSX */
 
 void
-drop_priv(void);
-void
 drop_priv(void)
 {
 #if TARGET_OS_OSX
@@ -56,4 +56,10 @@ drop_priv(void)
 #endif
 	T_ASSERT_POSIX_SUCCESS(setgid(lower_gid), "Change group to %u", lower_gid);
 	T_ASSERT_POSIX_SUCCESS(setuid(lower_uid), "Change user to %u", lower_uid);
+}
+
+bool
+running_as_root(void)
+{
+	return geteuid() == 0;
 }

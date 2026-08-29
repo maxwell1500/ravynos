@@ -34,12 +34,15 @@
 #include <sys/sysctl.h>
 #include <libkern/libkern.h>
 #include <kern/assert.h>
+#include <kern/cpc.h>
 
 #include <kern/kpc.h>
 #include <sys/ktrace.h>
 
 #include <pexpert/pexpert.h>
 #include <kperf/kperf.h>
+
+#if CONFIG_CPU_COUNTERS
 
 /* Various sysctl requests */
 #define REQ_CLASSES              (1)
@@ -62,9 +65,8 @@ typedef int (*setint_t)(int);
 
 static int kpc_initted = 0;
 
-static lck_grp_attr_t *sysctl_lckgrp_attr = NULL;
-static lck_grp_t *sysctl_lckgrp = NULL;
-static lck_mtx_t sysctl_lock;
+static LCK_GRP_DECLARE(sysctl_lckgrp, "kpc");
+static LCK_MTX_DECLARE(sysctl_lock, &sysctl_lckgrp);
 
 /*
  * Another element is needed to hold the CPU number when getting counter values.
@@ -76,13 +78,7 @@ typedef int (*setget_func_t)(int);
 void
 kpc_init(void)
 {
-	sysctl_lckgrp_attr = lck_grp_attr_alloc_init();
-	sysctl_lckgrp = lck_grp_alloc_init("kpc", sysctl_lckgrp_attr);
-	lck_mtx_init(&sysctl_lock, sysctl_lckgrp, LCK_ATTR_NULL);
-
 	kpc_arch_init();
-	kpc_common_init();
-	kpc_thread_init();
 
 	kpc_initted = 1;
 }
@@ -105,7 +101,7 @@ kpc_get_bigarray(uint32_t *size_out)
 	 * Another element is needed to hold the CPU number when getting counter
 	 * values.
 	 */
-	bigarray = kalloc_tag(size, VM_KERN_MEMORY_DIAG);
+	bigarray = kalloc_data_tag(size, Z_WAITOK, VM_KERN_MEMORY_DIAG);
 	assert(bigarray != NULL);
 	return bigarray;
 }
@@ -258,7 +254,7 @@ sysctl_kpc_set_config(uint32_t classes, void* buf)
 	if (classes & KPC_CLASS_POWER_MASK) {
 		return EPERM;
 	}
-	return kpc_set_config( classes, buf);
+	return kpc_set_config_kernel(classes, buf);
 }
 
 static int
@@ -418,6 +414,10 @@ kpc_sysctl SYSCTL_HANDLER_ARGS
 
 	ktrace_unlock();
 
+	if (cpc_hw_in_use(CPC_HW_CPMU)) {
+		return EBUSY;
+	}
+
 	lck_mtx_lock(&sysctl_lock);
 
 	/* which request */
@@ -446,7 +446,6 @@ kpc_sysctl SYSCTL_HANDLER_ARGS
 		ret = sysctl_setget_int( req,
 		    (setget_func_t)kpc_get_counter_count );
 		break;
-
 
 	case REQ_THREAD_COUNTERS:
 		ret = sysctl_get_bigarray( req, sysctl_kpc_get_thread_counters );
@@ -582,3 +581,14 @@ SYSCTL_PROC(_kpc, OID_AUTO, actionid,
     "QU", "Set counter actionids");
 
 
+
+#ifdef __arm64__
+
+extern int kpc_pc_capture;
+SYSCTL_INT(_kpc, OID_AUTO, pc_capture_supported,
+    CTLFLAG_RD | CTLFLAG_ANYBODY | CTLFLAG_LOCKED, &kpc_pc_capture, 0,
+    "whether PC capture is supported by the hardware");
+
+#endif /* __arm64__ */
+
+#endif // CONFIG_CPU_COUNTERS

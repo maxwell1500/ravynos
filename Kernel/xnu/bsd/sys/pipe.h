@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2004-2020 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -59,6 +59,7 @@
 
 #ifdef  KERNEL
 #include <libkern/locks.h>
+#include <os/base.h>
 #endif
 #include <sys/queue.h>                  /* for TAILQ macros */
 #include <sys/ev.h>
@@ -103,7 +104,11 @@ struct pipebuf {
 	u_int   in;             /* in pointer */
 	u_int   out;            /* out pointer */
 	u_int   size;           /* size of buffer */
-	caddr_t buffer;         /* kva of buffer */
+#if KERNEL
+	caddr_t OS_PTRAUTH_SIGNED_PTR("pipe.buffer") buffer; /* kva of buffer */
+#else
+	caddr_t buffer; /* kva of buffer */
+#endif /* KERNEL */
 };
 
 
@@ -127,7 +132,7 @@ struct pipemapping {
 #define PIPE_WANTR      0x008   /* Reader wants some characters. */
 #define PIPE_WANTW      0x010   /* Writer wants space to put characters. */
 #define PIPE_WANT       0x020   /* Pipe is wanted to be run-down. */
-#define PIPE_SEL        0x040   /* Pipe has a select active. */
+// was  PIPE_SEL        0x040   /* Pipe has a select active. */
 #define PIPE_EOF        0x080   /* Pipe is in EOF condition. */
 #define PIPE_LOCKFL     0x100   /* Process has exclusive access to pointers/data. */
 #define PIPE_LWANT      0x200   /* Process wants exclusive access to pointers/data. */
@@ -157,7 +162,6 @@ struct pipe {
 	struct  pipe *pipe_peer;        /* link with other direction */
 	u_int   pipe_state;             /* pipe status info */
 	int     pipe_busy;              /* busy flag, mostly to handle rundown sanely */
-	TAILQ_HEAD(, eventqelt) pipe_evlist;
 	lck_mtx_t *pipe_mtxp;           /* shared mutex between both pipes */
 	struct  timespec st_atimespec;  /* time of last access */
 	struct  timespec st_mtimespec;  /* time of last data modification */
@@ -172,8 +176,10 @@ struct pipe {
 #define PIPE_LOCK_ASSERT(pipe, type)  LCK_MTX_ASSERT(PIPE_MTX(pipe), (type))
 
 __BEGIN_DECLS
-void pipeinit(void);
 extern int pipe_stat(struct pipe *, void *, int);
+#ifdef BSD_KERNEL_PRIVATE
+extern uint64_t pipe_id(struct pipe *);
+#endif
 __END_DECLS
 
 #endif  /* KERNEL */

@@ -1,8 +1,7 @@
 """ Please make sure you read the README file COMPLETELY BEFORE reading anything below.
     It is very critical that you read coding guidelines in Section E in README file.
-"""
 
-""" Note for adding new register support:
+    Note for adding new register support:
     
     1. Add target register to "supported registers" in the docstring of DecodeSysreg
     2. Populate _SYSREG_TO_DECODE_FUNC_MAP with your implementation, optionally using
@@ -10,7 +9,6 @@
     3. Populate _SUPPORTED_SYSREGS list with target register
     
 """
-
 from xnu import *
 import os
 import sys
@@ -47,7 +45,7 @@ def DecodeSysreg(cmd_args=None):
         raise ArgumentError("Missing arguments.")
 
     reg_name = cmd_args[0].upper()
-    reg_value = int(cmd_args[1], 0)
+    reg_value = ArgumentStringToInt(cmd_args[1])
 
     if reg_name not in _SUPPORTED_SYSREGS:
         raise ArgumentError("{} is not supported".format(reg_name))
@@ -70,7 +68,7 @@ def PrintEsrEl1Explanation(regval):
     ec = (regval >> 26) & ((1 << 6) - 1)
     ecstring = '0b{:06b}'.format(ec)
 
-    print( _Colorify(VT.Green, 'EC == ' + ecstring) )
+    print(_Colorify(VT.Green, 'EC == ' + ecstring))
 
     ecxpath = './registers/register/reg_fieldsets/fields/field[@id="EC_31_26"]/field_values/field_value_instance[field_value="{}"]/field_value_description//para'.format(ecstring)
     ec_desc_paras = root.findall(ecxpath)
@@ -112,7 +110,7 @@ def _GetParaChildrenStr(elem):
     if elem.tag == 'arm-defined-word':
         return elem.text
     elif elem.tag == 'xref':
-        return elem.attrib['browsertext'].encode('utf-8')
+        return elem.attrib['browsertext']
     elif elem.tag == 'register_link':
         return elem.text
     else:
@@ -147,7 +145,7 @@ def _PrintEsrIssField(elem, regval):
         print('\r\n')
         print('\r\n')
     else:
-        print(_Colorify(VT.Red, _GetIndentedString(2, '(No matching value, dumping out full description)')) )
+        print(_Colorify(VT.Red, _GetIndentedString(2, '(No matching value, dumping out full description)'))) 
         for para in fd_before_paras:
             sys.stdout.write(_GetIndentedString(2, ''))
             sys.stdout.write(para.text)

@@ -62,8 +62,6 @@
  *
  *	Exported IPC debug calls.
  */
-#include <mach_ipc_debug.h>
-
 #include <mach/vm_param.h>
 #include <mach/kern_return.h>
 #include <mach/machine/vm_types.h>
@@ -71,23 +69,21 @@
 #include <mach/mach_port_server.h>
 #include <mach_debug/ipc_info.h>
 #include <mach_debug/hash_info.h>
+#include <kern/task_ident.h>
 
-#if MACH_IPC_DEBUG
 #include <kern/host.h>
 #include <kern/misc_protos.h>
-#include <vm/vm_map.h>
-#include <vm/vm_kern.h>
+#include <vm/vm_map_xnu.h>
+#include <vm/vm_kern_xnu.h>
 #include <ipc/port.h>
 #include <ipc/ipc_types.h>
 #include <ipc/ipc_space.h>
 #include <ipc/ipc_port.h>
 #include <ipc/ipc_hash.h>
-#include <ipc/ipc_table.h>
 #include <ipc/ipc_right.h>
 
 #include <security/mac_mach_internal.h>
 #include <device/device_types.h>
-#endif
 
 /*
  *	Routine:	mach_port_get_srights [kernel call]
@@ -104,16 +100,6 @@
  *		KERN_INVALID_RIGHT	Name doesn't denote receive rights.
  */
 
-#if !MACH_IPC_DEBUG
-kern_return_t
-mach_port_get_srights(
-	__unused ipc_space_t            space,
-	__unused mach_port_name_t       name,
-	__unused mach_port_rights_t     *srightsp)
-{
-	return KERN_FAILURE;
-}
-#else
 kern_return_t
 mach_port_get_srights(
 	ipc_space_t             space,
@@ -135,12 +121,11 @@ mach_port_get_srights(
 	/* port is locked and active */
 
 	srights = port->ip_srights;
-	ip_unlock(port);
+	ip_mq_unlock(port);
 
 	*srightsp = srights;
 	return KERN_SUCCESS;
 }
-#endif /* MACH_IPC_DEBUG */
 
 
 /*
@@ -156,20 +141,7 @@ mach_port_get_srights(
  *		KERN_RESOURCE_SHORTAGE	Couldn't allocate memory.
  */
 
-#if !MACH_IPC_DEBUG
-kern_return_t
-mach_port_space_info(
-	__unused ipc_space_t                    space,
-	__unused ipc_info_space_t               *infop,
-	__unused ipc_info_name_array_t  *tablep,
-	__unused mach_msg_type_number_t         *tableCntp,
-	__unused ipc_info_tree_name_array_t *treep,
-	__unused mach_msg_type_number_t         *treeCntp)
-{
-	return KERN_FAILURE;
-}
-#else
-kern_return_t
+static kern_return_t
 mach_port_space_info(
 	ipc_space_t                     space,
 	ipc_info_space_t                *infop,
@@ -178,121 +150,160 @@ mach_port_space_info(
 	__unused ipc_info_tree_name_array_t     *treep,
 	__unused mach_msg_type_number_t         *treeCntp)
 {
+	const uint32_t BATCH_SIZE = 4 << 10;
 	ipc_info_name_t *table_info;
-	vm_offset_t table_addr;
+	vm_offset_t table_addr = 0;
 	vm_size_t table_size, table_size_needed;
-	ipc_entry_t table;
+	ipc_entry_table_t table;
 	ipc_entry_num_t tsize;
-	mach_port_index_t index;
 	kern_return_t kr;
 	vm_map_copy_t copy;
-
 
 	if (space == IS_NULL) {
 		return KERN_INVALID_TASK;
 	}
 
-#if !(DEVELOPMENT || DEBUG) && CONFIG_MACF
-	const boolean_t dbg_ok = (mac_task_check_expose_task(kernel_task) == 0);
-#else
-	const boolean_t dbg_ok = TRUE;
-#endif
-
 	/* start with in-line memory */
-
 	table_size = 0;
 
+	ipc_object_t *port_pointers = NULL;
+	ipc_entry_num_t pptrsize = 0;
+
+	is_read_lock(space);
+
+allocate_loop:
 	for (;;) {
-		is_read_lock(space);
 		if (!is_active(space)) {
 			is_read_unlock(space);
 			if (table_size != 0) {
 				kmem_free(ipc_kernel_map,
 				    table_addr, table_size);
+				kfree_type(ipc_object_t, pptrsize, port_pointers);
+				port_pointers = NULL;
 			}
 			return KERN_INVALID_TASK;
 		}
 
+		table = is_active_table(space);
+		tsize = ipc_entry_table_count(table);
+
 		table_size_needed =
-		    vm_map_round_page((space->is_table_size
-		    * sizeof(ipc_info_name_t)),
+		    vm_map_round_page(tsize * sizeof(ipc_info_name_t),
 		    VM_MAP_PAGE_MASK(ipc_kernel_map));
 
-		if (table_size_needed == table_size) {
+		if ((table_size_needed <= table_size) &&
+		    (pptrsize == tsize)) {
 			break;
 		}
 
 		is_read_unlock(space);
 
-		if (table_size != table_size_needed) {
-			if (table_size != 0) {
-				kmem_free(ipc_kernel_map, table_addr, table_size);
-			}
-			kr = kmem_alloc(ipc_kernel_map, &table_addr, table_size_needed, VM_KERN_MEMORY_IPC);
-			if (kr != KERN_SUCCESS) {
-				return KERN_RESOURCE_SHORTAGE;
-			}
-			table_size = table_size_needed;
+		if (table_size != 0) {
+			kmem_free(ipc_kernel_map, table_addr, table_size);
+			kfree_type(ipc_object_t, pptrsize, port_pointers);
 		}
+		kr = kmem_alloc(ipc_kernel_map, &table_addr, table_size_needed,
+		    KMA_DATA, VM_KERN_MEMORY_IPC);
+		if (kr != KERN_SUCCESS) {
+			return KERN_RESOURCE_SHORTAGE;
+		}
+
+		port_pointers = kalloc_type(ipc_object_t, tsize, Z_WAITOK | Z_ZERO);
+		if (port_pointers == NULL) {
+			kmem_free(ipc_kernel_map, table_addr, table_size);
+			return KERN_RESOURCE_SHORTAGE;
+		}
+
+		table_size = table_size_needed;
+		pptrsize = tsize;
+
+		is_read_lock(space);
 	}
 	/* space is read-locked and active; we have enough wired memory */
 
-	/* get the overall space info */
-	infop->iis_genno_mask = MACH_PORT_NGEN(MACH_PORT_DEAD);
-	infop->iis_table_size = space->is_table_size;
-	infop->iis_table_next = space->is_table_next->its_size;
-
 	/* walk the table for this space */
-	table = space->is_table;
-	tsize = space->is_table_size;
 	table_info = (ipc_info_name_array_t)table_addr;
-	for (index = 0; index < tsize; index++) {
+	for (mach_port_index_t index = 0; index < tsize; index++) {
 		ipc_info_name_t *iin = &table_info[index];
-		ipc_entry_t entry = &table[index];
+		ipc_entry_t entry = ipc_entry_table_get_nocheck(table, index);
 		ipc_entry_bits_t bits;
 
-		bits = entry->ie_bits;
+		if (index == 0) {
+			bits = IE_BITS_GEN_MASK;
+		} else {
+			bits = entry->ie_bits;
+		}
 		iin->iin_name = MACH_PORT_MAKE(index, IE_BITS_GEN(bits));
 		iin->iin_collision = 0;
 		iin->iin_type = IE_BITS_TYPE(bits);
-		if ((entry->ie_bits & MACH_PORT_TYPE_PORT_RIGHTS) != MACH_PORT_TYPE_NONE &&
+		if ((bits & MACH_PORT_TYPE_PORT_RIGHTS) != MACH_PORT_TYPE_NONE &&
 		    entry->ie_request != IE_REQ_NONE) {
 			ipc_port_t port = ip_object_to_port(entry->ie_object);
 
 			assert(IP_VALID(port));
-			ip_lock(port);
+			ip_mq_lock(port);
 			iin->iin_type |= ipc_port_request_type(port, iin->iin_name, entry->ie_request);
-			ip_unlock(port);
+			ip_mq_unlock(port);
 		}
 
 		iin->iin_urefs = IE_BITS_UREFS(bits);
-		iin->iin_object = (dbg_ok) ? (natural_t)VM_KERNEL_ADDRPERM((uintptr_t)entry->ie_object) : 0;
+		port_pointers[index] = entry->ie_object;
 		iin->iin_next = entry->ie_next;
 		iin->iin_hash = entry->ie_index;
+
+		if (index + 1 < tsize && (index + 1) % BATCH_SIZE == 0) {
+			/*
+			 * Give the system some breathing room,
+			 * and check if anything changed,
+			 * if yes start over.
+			 */
+			is_read_unlock(space);
+			is_read_lock(space);
+			if (!is_active(space)) {
+				goto allocate_loop;
+			}
+			table = is_active_table(space);
+			if (tsize < ipc_entry_table_count(table)) {
+				goto allocate_loop;
+			}
+			tsize = ipc_entry_table_count(table);
+		}
 	}
+
+	/* get the overall space info */
+	infop->iis_genno_mask = MACH_PORT_NGEN(MACH_PORT_DEAD);
+	infop->iis_table_size = tsize;
 
 	is_read_unlock(space);
 
 	/* prepare the table out-of-line data for return */
 	if (table_size > 0) {
-		vm_size_t used_table_size;
+		vm_map_size_t used = tsize * sizeof(ipc_info_name_t);
+		vm_map_size_t keep = vm_map_round_page(used,
+		    VM_MAP_PAGE_MASK(ipc_kernel_map));
 
-		used_table_size = infop->iis_table_size * sizeof(ipc_info_name_t);
-		if (table_size > used_table_size) {
-			bzero((char *)&table_info[infop->iis_table_size],
-			    table_size - used_table_size);
+		assert(pptrsize >= tsize);
+		for (int index = 0; index < tsize; index++) {
+			ipc_info_name_t *iin = &table_info[index];
+			iin->iin_object = (natural_t)VM_KERNEL_ADDRHASH((uintptr_t)port_pointers[index]);
+			port_pointers[index] = MACH_PORT_NULL;
+		}
+		kfree_type(ipc_object_t, pptrsize, port_pointers);
+
+		if (keep < table_size) {
+			kmem_free(ipc_kernel_map, table_addr + keep,
+			    table_size - keep);
+			table_size = keep;
+		}
+		if (table_size > used) {
+			bzero(&table_info[infop->iis_table_size],
+			    table_size - used);
 		}
 
-		kr = vm_map_unwire(
-			ipc_kernel_map,
-			vm_map_trunc_page(table_addr,
-			VM_MAP_PAGE_MASK(ipc_kernel_map)),
-			vm_map_round_page(table_addr + table_size,
-			VM_MAP_PAGE_MASK(ipc_kernel_map)),
-			FALSE);
+		kr = vm_map_unwire(ipc_kernel_map, table_addr,
+		    table_addr + table_size, FALSE);
 		assert(kr == KERN_SUCCESS);
-		kr = vm_map_copyin(ipc_kernel_map, (vm_map_address_t)table_addr,
-		    (vm_map_size_t)used_table_size, TRUE, &copy);
+		kr = vm_map_copyin(ipc_kernel_map, table_addr, used, TRUE, &copy);
 		assert(kr == KERN_SUCCESS);
 		*tablep = (ipc_info_name_t *)copy;
 		*tableCntp = infop->iis_table_size;
@@ -306,7 +317,29 @@ mach_port_space_info(
 	*treeCntp = 0;
 	return KERN_SUCCESS;
 }
-#endif /* MACH_IPC_DEBUG */
+
+kern_return_t
+mach_port_space_info_from_user(
+	mach_port_t                     port,
+	ipc_info_space_t                *infop,
+	ipc_info_name_array_t           *tablep,
+	mach_msg_type_number_t          *tableCntp,
+	__unused ipc_info_tree_name_array_t     *treep,
+	__unused mach_msg_type_number_t         *treeCntp)
+{
+	kern_return_t kr;
+
+	ipc_space_t space = convert_port_to_space_read_no_eval(port);
+
+	if (space == IPC_SPACE_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	kr = mach_port_space_info(space, infop, tablep, tableCntp, treep, treeCntp);
+
+	ipc_space_release(space);
+	return kr;
+}
 
 /*
  *	Routine:	mach_port_space_basic_info
@@ -320,24 +353,16 @@ mach_port_space_info(
  *		KERN_INVALID_TASK	The space is dead.
  */
 
-#if !MACH_IPC_DEBUG
-kern_return_t
-mach_port_space_basic_info(
-	__unused ipc_space_t                    space,
-	__unused ipc_info_space_basic_t         *infop)
-{
-	return KERN_FAILURE;
-}
-#else
 kern_return_t
 mach_port_space_basic_info(
 	ipc_space_t                     space,
 	ipc_info_space_basic_t          *infop)
 {
+	ipc_entry_num_t tsize;
+
 	if (space == IS_NULL) {
 		return KERN_INVALID_TASK;
 	}
-
 
 	is_read_lock(space);
 	if (!is_active(space)) {
@@ -345,11 +370,12 @@ mach_port_space_basic_info(
 		return KERN_INVALID_TASK;
 	}
 
+	tsize = ipc_entry_table_count(is_active_table(space));
+
 	/* get the basic space info */
 	infop->iisb_genno_mask = MACH_PORT_NGEN(MACH_PORT_DEAD);
-	infop->iisb_table_size = space->is_table_size;
-	infop->iisb_table_next = space->is_table_next->its_size;
-	infop->iisb_table_inuse = space->is_table_size - space->is_table_free - 1;
+	infop->iisb_table_size = tsize;
+	infop->iisb_table_inuse = tsize - space->is_table_free - 1;
 	infop->iisb_reserved[0] = 0;
 	infop->iisb_reserved[1] = 0;
 
@@ -357,7 +383,6 @@ mach_port_space_basic_info(
 
 	return KERN_SUCCESS;
 }
-#endif /* MACH_IPC_DEBUG */
 
 /*
  *	Routine:	mach_port_dnrequest_info
@@ -374,17 +399,6 @@ mach_port_space_basic_info(
  *		KERN_INVALID_RIGHT	Name doesn't denote receive rights.
  */
 
-#if !MACH_IPC_DEBUG
-kern_return_t
-mach_port_dnrequest_info(
-	__unused ipc_space_t            space,
-	__unused mach_port_name_t       name,
-	__unused unsigned int   *totalp,
-	__unused unsigned int   *usedp)
-{
-	return KERN_FAILURE;
-}
-#else
 kern_return_t
 mach_port_dnrequest_info(
 	ipc_space_t                     space,
@@ -392,7 +406,8 @@ mach_port_dnrequest_info(
 	unsigned int                    *totalp,
 	unsigned int                    *usedp)
 {
-	unsigned int total, used;
+	ipc_port_request_table_t requests;
+	unsigned int total = 0, used = 0;
 	ipc_port_t port;
 	kern_return_t kr;
 
@@ -406,31 +421,25 @@ mach_port_dnrequest_info(
 	}
 	/* port is locked and active */
 
-	if (port->ip_requests == IPR_NULL) {
-		total = 0;
-		used = 0;
-	} else {
-		ipc_port_request_t requests = port->ip_requests;
-		ipc_port_request_index_t index;
+	requests = port->ip_requests;
+	if (requests) {
+		ipc_port_request_t ipr = ipc_port_request_table_base(requests);
 
-		total = requests->ipr_size->its_size;
-
-		for (index = 1, used = 0;
-		    index < total; index++) {
-			ipc_port_request_t ipr = &requests[index];
-
-			if (ipr->ipr_name != MACH_PORT_NULL) {
+		while ((ipr = ipc_port_request_table_next_elem(requests, ipr))) {
+			if (ipr->ipr_soright != IP_NULL &&
+			    ipr->ipr_name != IPR_HOST_NOTIFY) {
 				used++;
 			}
 		}
+
+		total = ipc_port_request_table_count(requests);
 	}
-	ip_unlock(port);
+	ip_mq_unlock(port);
 
 	*totalp = total;
 	*usedp = used;
 	return KERN_SUCCESS;
 }
-#endif /* MACH_IPC_DEBUG */
 
 /*
  *	Routine:	mach_port_kobject [kernel call]
@@ -451,19 +460,7 @@ mach_port_dnrequest_info(
  *					send or receive rights.
  */
 
-#if !MACH_IPC_DEBUG
-kern_return_t
-mach_port_kobject_description(
-	__unused ipc_space_t            space,
-	__unused mach_port_name_t       name,
-	__unused natural_t              *typep,
-	__unused mach_vm_address_t      *addrp,
-	__unused kobject_description_t  desc)
-{
-	return KERN_FAILURE;
-}
-#else
-kern_return_t
+static kern_return_t
 mach_port_kobject_description(
 	ipc_space_t                     space,
 	mach_port_name_t                name,
@@ -471,66 +468,69 @@ mach_port_kobject_description(
 	mach_vm_address_t               *addrp,
 	kobject_description_t           desc)
 {
-	ipc_entry_t entry;
-	ipc_port_t port;
+	ipc_entry_bits_t bits;
+	ipc_object_t object;
 	kern_return_t kr;
-	mach_vm_address_t kaddr;
+	mach_vm_address_t kaddr = 0;
+	io_object_t obj = NULL;
+	io_kobject_t kobj = NULL;
+	ipc_port_t port = IP_NULL;
 
 	if (space == IS_NULL) {
 		return KERN_INVALID_TASK;
 	}
 
-	kr = ipc_right_lookup_read(space, name, &entry);
+	kr = ipc_right_lookup_read(space, name, &bits, &object);
 	if (kr != KERN_SUCCESS) {
 		return kr;
 	}
-	/* space is read-locked and active */
+	/* object is locked and active */
 
-	if ((entry->ie_bits & MACH_PORT_TYPE_SEND_RECEIVE) == 0) {
-		is_read_unlock(space);
+	if ((bits & MACH_PORT_TYPE_SEND_RECEIVE) == 0) {
+		io_unlock(object);
 		return KERN_INVALID_RIGHT;
 	}
 
-	port = ip_object_to_port(entry->ie_object);
-	assert(port != IP_NULL);
-
-	ip_lock(port);
-	is_read_unlock(space);
-
-	if (!ip_active(port)) {
-		ip_unlock(port);
-		return KERN_INVALID_RIGHT;
+	*typep = (unsigned int)io_kotype(object);
+	if (io_is_kobject(object)) {
+		port = ip_object_to_port(object);
+		kaddr = (mach_vm_address_t)ipc_kobject_get_raw(port, io_kotype(object));
 	}
-
-	*typep = (unsigned int) ip_kotype(port);
-	kaddr = (mach_vm_address_t)ip_get_kobject(port);
 	*addrp = 0;
-#if (DEVELOPMENT || DEBUG)
-	if (kaddr && ip_is_kobject(port)) {
-		*addrp = VM_KERNEL_UNSLIDE_OR_PERM(kaddr);
-	}
-#endif
 
-	io_object_t obj = NULL;
-	natural_t   kotype = ip_kotype(port);
 	if (desc) {
 		*desc = '\0';
-		switch (kotype) {
+		switch (io_kotype(object)) {
 		case IKOT_IOKIT_OBJECT:
 		case IKOT_IOKIT_CONNECT:
 		case IKOT_IOKIT_IDENT:
 		case IKOT_UEXT_OBJECT:
-			obj = (io_object_t) kaddr;
-			iokit_add_reference(obj, IKOT_IOKIT_OBJECT);
+			kobj = (io_kobject_t) kaddr;
+			if (kobj) {
+				iokit_kobject_retain(kobj);
+			}
 			break;
-
+		case IKOT_TASK_ID_TOKEN:
+		{
+			task_id_token_t token;
+			token = (task_id_token_t)ipc_kobject_get_stable(port, IKOT_TASK_ID_TOKEN);
+			snprintf(desc, KOBJECT_DESCRIPTION_LENGTH, "%d,%llu,%d", token->ident.p_pid, token->ident.p_uniqueid, token->ident.p_idversion);
+			break;
+		}
 		default:
 			break;
 		}
 	}
 
-	ip_unlock(port);
+	io_unlock(object);
 
+#if (DEVELOPMENT || DEBUG)
+	*addrp = VM_KERNEL_ADDRHASH(kaddr);
+#endif
+	if (kobj) {
+		// IKOT_IOKIT_OBJECT since iokit_remove_reference() follows
+		obj = iokit_copy_object_for_consumed_kobject(kobj, IKOT_IOKIT_OBJECT);
+	}
 	if (obj) {
 		iokit_port_object_description(obj, desc);
 		iokit_remove_reference(obj);
@@ -538,62 +538,38 @@ mach_port_kobject_description(
 
 	return KERN_SUCCESS;
 }
-#endif /* MACH_IPC_DEBUG */
 
 kern_return_t
-mach_port_kobject(
-	ipc_space_t                     space,
+mach_port_kobject_description_from_user(
+	mach_port_t                     port,
+	mach_port_name_t                name,
+	natural_t                       *typep,
+	mach_vm_address_t               *addrp,
+	kobject_description_t           desc)
+{
+	kern_return_t kr;
+
+	ipc_space_t space = convert_port_to_space_read_no_eval(port);
+
+	if (space == IPC_SPACE_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	kr = mach_port_kobject_description(space, name, typep, addrp, desc);
+
+	ipc_space_release(space);
+	return kr;
+}
+
+kern_return_t
+mach_port_kobject_from_user(
+	mach_port_t                     port,
 	mach_port_name_t                name,
 	natural_t                       *typep,
 	mach_vm_address_t               *addrp)
 {
-	return mach_port_kobject_description(space, name, typep, addrp, NULL);
+	return mach_port_kobject_description_from_user(port, name, typep, addrp, NULL);
 }
-
-/*
- *	Routine:	mach_port_kernel_object [Legacy kernel call]
- *	Purpose:
- *		Retrieve the type and address of the kernel object
- *		represented by a send or receive right. Hard-coded
- *		to return only the low-order 32-bits of the kernel
- *		object.
- *	Conditions:
- *		Nothing locked.
- *	Returns:
- *		KERN_SUCCESS		Retrieved kernel object info.
- *		KERN_INVALID_TASK	The space is null.
- *		KERN_INVALID_TASK	The space is dead.
- *		KERN_INVALID_NAME	The name doesn't denote a right.
- *		KERN_INVALID_RIGHT	Name doesn't denote
- *					send or receive rights.
- */
-
-#if !MACH_IPC_DEBUG
-kern_return_t
-mach_port_kernel_object(
-	__unused ipc_space_t            space,
-	__unused mach_port_name_t       name,
-	__unused unsigned int           *typep,
-	__unused unsigned int           *addrp)
-{
-	return KERN_FAILURE;
-}
-#else
-kern_return_t
-mach_port_kernel_object(
-	ipc_space_t                     space,
-	mach_port_name_t                name,
-	unsigned int                    *typep,
-	unsigned int                    *addrp)
-{
-	mach_vm_address_t addr = 0;
-	kern_return_t kr;
-
-	kr = mach_port_kobject(space, name, typep, &addr);
-	*addrp = (unsigned int) addr;
-	return kr;
-}
-#endif /* MACH_IPC_DEBUG */
 
 #if (DEVELOPMENT || DEBUG)
 kern_return_t
@@ -624,16 +600,14 @@ mach_port_special_reply_port_reset_link(
 	}
 
 	if (thread->ith_special_reply_port != port) {
-		ip_unlock(port);
+		ip_mq_unlock(port);
 		return KERN_INVALID_ARGUMENT;
 	}
 
-	imq_lock(&port->ip_messages);
 	*srp_lost_link = (port->ip_srp_lost_link == 1)? TRUE : FALSE;
 	port->ip_srp_lost_link = 0;
-	imq_unlock(&port->ip_messages);
 
-	ip_unlock(port);
+	ip_mq_unlock(port);
 	return KERN_SUCCESS;
 }
 #else

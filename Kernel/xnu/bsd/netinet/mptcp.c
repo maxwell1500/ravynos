@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2018 Apple Inc. All rights reserved.
+ * Copyright (c) 2012-2021 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -94,6 +94,7 @@
 
 #include <mach/sdt.h>
 
+#include <net/droptap.h>
 #include <net/if.h>
 #include <netinet/in.h>
 #include <netinet/in_var.h>
@@ -137,7 +138,6 @@ int mptcp_fail_thresh = 1;
 SYSCTL_INT(_net_inet_mptcp, OID_AUTO, fail, CTLFLAG_RW | CTLFLAG_LOCKED,
     &mptcp_fail_thresh, 0, "Failover threshold");
 
-
 /*
  * MPTCP subflows have TCP keepalives set to ON. Set a conservative keeptime
  * as carrier networks mostly have a 30 minute to 60 minute NAT Timeout.
@@ -150,13 +150,6 @@ SYSCTL_INT(_net_inet_mptcp, OID_AUTO, keepalive, CTLFLAG_RW | CTLFLAG_LOCKED,
 int mptcp_rtthist_rtthresh = 600;
 SYSCTL_INT(_net_inet_mptcp, OID_AUTO, rtthist_thresh, CTLFLAG_RW | CTLFLAG_LOCKED,
     &mptcp_rtthist_rtthresh, 0, "Rtt threshold");
-
-/*
- * Use RTO history for sending new data
- */
-int mptcp_use_rto = 1;
-SYSCTL_INT(_net_inet_mptcp, OID_AUTO, userto, CTLFLAG_RW | CTLFLAG_LOCKED,
-    &mptcp_use_rto, 0, "Disable RTO for subflow selection");
 
 int mptcp_rtothresh = 1500;
 SYSCTL_INT(_net_inet_mptcp, OID_AUTO, rto_thresh, CTLFLAG_RW | CTLFLAG_LOCKED,
@@ -173,11 +166,43 @@ uint32_t mptcp_probecnt = 5;
 SYSCTL_UINT(_net_inet_mptcp, OID_AUTO, probecnt, CTLFLAG_RW | CTLFLAG_LOCKED,
     &mptcp_probecnt, 0, "Number of probe writes");
 
-/*
- * Static declarations
- */
-static uint16_t mptcp_input_csum(struct tcpcb *, struct mbuf *, uint64_t,
-    uint32_t, uint16_t, uint16_t, uint16_t);
+uint32_t mptcp_enable_v1 = 1;
+SYSCTL_UINT(_net_inet_mptcp, OID_AUTO, enable_v1, CTLFLAG_RW | CTLFLAG_LOCKED,
+    &mptcp_enable_v1, 0, "Enable or disable v1");
+
+static int
+sysctl_mptcp_version_check SYSCTL_HANDLER_ARGS
+{
+#pragma unused(arg1, arg2)
+	int error;
+	int new_value = *(int *)oidp->oid_arg1;
+	int old_value = *(int *)oidp->oid_arg1;
+
+	error = sysctl_handle_int(oidp, &new_value, 0, req);
+	if (!error) {
+		if (new_value != MPTCP_VERSION_0 && new_value != MPTCP_VERSION_1) {
+			return EINVAL;
+		}
+		*(int *)oidp->oid_arg1 = new_value;
+	}
+
+	os_log(OS_LOG_DEFAULT,
+	    "%s:%u sysctl net.inet.tcp.mptcp_preferred_version: %d -> %d)",
+	    proc_best_name(current_proc()), proc_selfpid(),
+	    old_value, *(int *)oidp->oid_arg1);
+
+	return error;
+}
+
+int mptcp_preferred_version = MPTCP_VERSION_1;
+SYSCTL_PROC(_net_inet_tcp, OID_AUTO, mptcp_preferred_version,
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
+    &mptcp_preferred_version, 0, &sysctl_mptcp_version_check, "I", "");
+
+int mptcp_reass_total_qlen = 0;
+SYSCTL_INT(_net_inet_mptcp, OID_AUTO, reass_qlen,
+    CTLFLAG_RD | CTLFLAG_LOCKED, &mptcp_reass_total_qlen, 0,
+    "Total number of MPTCP segments in reassembly queues");
 
 static int
 mptcp_reass_present(struct socket *mp_so)
@@ -187,6 +212,7 @@ mptcp_reass_present(struct socket *mp_so)
 	struct tseg_qent *q;
 	int dowakeup = 0;
 	int flags = 0;
+	int count = 0;
 
 	/*
 	 * Present data to user, advancing rcv_nxt through
@@ -218,16 +244,20 @@ mptcp_reass_present(struct socket *mp_so)
 			m_freem(q->tqe_m);
 		} else {
 			flags = !!(q->tqe_m->m_pkthdr.pkt_flags & PKTF_MPTCP_DFIN);
-			if (sbappendstream_rcvdemux(mp_so, q->tqe_m, 0, 0)) {
+			if (sbappendstream_rcvdemux(mp_so, q->tqe_m)) {
 				dowakeup = 1;
 			}
 		}
 		zfree(tcp_reass_zone, q);
 		mp_tp->mpt_reassqlen--;
+		count++;
 		q = LIST_FIRST(&mp_tp->mpt_segq);
 	} while (q && q->tqe_m->m_pkthdr.mp_dsn == mp_tp->mpt_rcvnxt);
 	mp_tp->mpt_flags &= ~MPTCPF_REASS_INPROG;
 
+	if (count > 0) {
+		OSAddAtomic(-count, &mptcp_reass_total_qlen);
+	}
 	if (dowakeup) {
 		sorwakeup(mp_so); /* done with socket lock held */
 	}
@@ -243,7 +273,7 @@ mptcp_reass(struct socket *mp_so, struct pkthdr *phdr, int *tlenp, struct mbuf *
 	struct tseg_qent *p = NULL;
 	struct tseg_qent *nq;
 	struct tseg_qent *te = NULL;
-	u_int16_t qlimit;
+	uint32_t qlimit;
 
 	/*
 	 * Limit the number of segments in the reassembly queue to prevent
@@ -252,7 +282,7 @@ mptcp_reass(struct socket *mp_so, struct pkthdr *phdr, int *tlenp, struct mbuf *
 	 * queue.  Always keep one global queue entry spare to be able to
 	 * process the missing segment.
 	 */
-	qlimit = min(max(100, mp_so->so_rcv.sb_hiwat >> 10),
+	qlimit = MIN(MAX(100, mp_so->so_rcv.sb_hiwat >> 10),
 	    (tcp_autorcvbuf_max >> 10));
 	if (mb_dsn != mp_tp->mpt_rcvnxt &&
 	    (mp_tp->mpt_reassqlen + 1) >= qlimit) {
@@ -263,14 +293,10 @@ mptcp_reass(struct socket *mp_so, struct pkthdr *phdr, int *tlenp, struct mbuf *
 	}
 
 	/* Allocate a new queue entry. If we can't, just drop the pkt. XXX */
-	te = (struct tseg_qent *) zalloc(tcp_reass_zone);
-	if (te == NULL) {
-		tcpstat.tcps_mptcp_rcvmemdrop++;
-		m_freem(m);
-		return 0;
-	}
+	te = zalloc_flags(tcp_reass_zone, Z_WAITOK | Z_NOFAIL);
 
 	mp_tp->mpt_reassqlen++;
+	OSIncrementAtomic(&mptcp_reass_total_qlen);
 
 	/*
 	 * Find a segment which begins after this one does.
@@ -298,6 +324,7 @@ mptcp_reass(struct socket *mp_so, struct pkthdr *phdr, int *tlenp, struct mbuf *
 				zfree(tcp_reass_zone, te);
 				te = NULL;
 				mp_tp->mpt_reassqlen--;
+				OSDecrementAtomic(&mptcp_reass_total_qlen);
 				/*
 				 * Try to present any queued data
 				 * at the left window edge to the user.
@@ -306,7 +333,8 @@ mptcp_reass(struct socket *mp_so, struct pkthdr *phdr, int *tlenp, struct mbuf *
 				 */
 				goto out;
 			}
-			m_adj(m, i);
+			VERIFY(i <= INT_MAX);
+			m_adj(m, (int)i);
 			*tlenp -= i;
 			phdr->mp_dsn += i;
 		}
@@ -327,7 +355,9 @@ mptcp_reass(struct socket *mp_so, struct pkthdr *phdr, int *tlenp, struct mbuf *
 		if (i < q->tqe_len) {
 			q->tqe_m->m_pkthdr.mp_dsn += i;
 			q->tqe_len -= i;
-			m_adj(q->tqe_m, i);
+
+			VERIFY(i <= INT_MAX);
+			m_adj(q->tqe_m, (int)i);
 			break;
 		}
 
@@ -336,6 +366,7 @@ mptcp_reass(struct socket *mp_so, struct pkthdr *phdr, int *tlenp, struct mbuf *
 		m_freem(q->tqe_m);
 		zfree(tcp_reass_zone, q);
 		mp_tp->mpt_reassqlen--;
+		OSDecrementAtomic(&mptcp_reass_total_qlen);
 		q = nq;
 	}
 
@@ -366,7 +397,11 @@ mptcp_input(struct mptses *mpte, struct mbuf *m)
 	struct mbuf *save = NULL, *prev = NULL;
 	struct mbuf *freelist = NULL, *tail = NULL;
 
-	VERIFY(m->m_flags & M_PKTHDR);
+	ASSERT(m->m_flags & M_PKTHDR);
+	if (__improbable((m->m_flags & M_PKTHDR) == 0)) {
+		m_drop_list(m, NULL, DROPTAP_FLAG_DIR_IN | DROPTAP_FLAG_L2_MISSING, DROP_REASON_MPTCP_INPUT_MALFORMED, NULL, 0);
+		return;
+	}
 
 	mp_so = mptetoso(mpte);
 	mp_tp = mpte->mpte_mptcb;
@@ -390,8 +425,9 @@ mptcp_input(struct mptses *mpte, struct mbuf *m)
 	 */
 	if (mp_tp->mpt_flags & MPTCPF_FALLBACK_TO_TCP) {
 		struct mbuf *iter;
-		int mb_dfin = 0;
+		int mb_dfin;
 fallback:
+		mb_dfin = 0;
 		mptcp_sbrcv_grow(mp_tp);
 
 		iter = m;
@@ -425,7 +461,7 @@ fallback:
 		 * assume degraded flow as this may be the first packet
 		 * without DSS, and the subflow state is not updated yet.
 		 */
-		if (sbappendstream_rcvdemux(mp_so, m, 0, 0)) {
+		if (sbappendstream_rcvdemux(mp_so, m)) {
 			sorwakeup(mp_so);
 		}
 
@@ -508,7 +544,8 @@ fallback:
 				prev = save = NULL;
 				continue;
 			} else {
-				m_adj(m, -todrop);
+				VERIFY(todrop <= INT_MAX);
+				m_adj(m, (int)-todrop);
 				mb_datalen -= todrop;
 				m->m_pkthdr.mp_rlen -= todrop;
 			}
@@ -539,10 +576,12 @@ fallback:
 				prev = save = NULL;
 				continue;
 			} else {
-				m_adj(m, (mp_tp->mpt_rcvnxt - mb_dsn));
+				VERIFY((mp_tp->mpt_rcvnxt - mb_dsn) <= INT_MAX);
+				m_adj(m, (int)(mp_tp->mpt_rcvnxt - mb_dsn));
 				mb_datalen -= (mp_tp->mpt_rcvnxt - mb_dsn);
 				mb_dsn = mp_tp->mpt_rcvnxt;
-				m->m_pkthdr.mp_rlen = mb_datalen;
+				VERIFY(mb_datalen >= 0 && mb_datalen <= USHRT_MAX);
+				m->m_pkthdr.mp_rlen = (uint16_t)mb_datalen;
 				m->m_pkthdr.mp_dsn = mb_dsn;
 			}
 		}
@@ -557,7 +596,7 @@ fallback:
 
 		mptcp_sbrcv_grow(mp_tp);
 
-		if (sbappendstream_rcvdemux(mp_so, m, 0, 0)) {
+		if (sbappendstream_rcvdemux(mp_so, m)) {
 			wakeup = 1;
 		}
 
@@ -662,8 +701,6 @@ mptcp_output(struct mptses *mpte)
 		/* get the "best" subflow to be used for transmission */
 		mpts = mptcp_get_subflow(mpte, &preferred_mpts);
 		if (mpts == NULL) {
-			mptcplog((LOG_INFO, "%s: no subflow\n", __func__),
-			    MPTCP_SENDER_DBG, MPTCP_LOGLVL_LOG);
 			break;
 		}
 
@@ -683,9 +720,7 @@ mptcp_output(struct mptses *mpte)
 		 *	2. send buffer is filled to 7/8th with data (so we actually
 		 *	   have data to make use of it);
 		 */
-		if (tcp_do_autosendbuf == 1 &&
-		    (mp_so->so_snd.sb_flags & (SB_AUTOSIZE | SB_TRIM)) == SB_AUTOSIZE &&
-		    tcp_cansbgrow(&mp_so->so_snd)) {
+		if ((mp_so->so_snd.sb_flags & (SB_AUTOSIZE | SB_TRIM)) == SB_AUTOSIZE) {
 			if ((mp_tp->mpt_sndwnd / 4 * 5) >= mp_so->so_snd.sb_hiwat &&
 			    mp_so->so_snd.sb_cc >= (mp_so->so_snd.sb_hiwat / 8 * 7)) {
 				if (sbreserve(&mp_so->so_snd,
@@ -801,7 +836,7 @@ mptcp_subflow_is_slow(struct mptses *mpte, struct mptsub *mpts)
 	struct tcpcb *tp = sototcpcb(mpts->mpts_socket);
 	int fail_thresh = mptcp_fail_thresh;
 
-	if (mpte->mpte_svctype == MPTCP_SVCTYPE_HANDOVER) {
+	if (mpte->mpte_svctype == MPTCP_SVCTYPE_HANDOVER || mpte->mpte_svctype == MPTCP_SVCTYPE_PURE_HANDOVER) {
 		fail_thresh *= 2;
 	}
 
@@ -831,14 +866,6 @@ mptcp_get_subflow(struct mptses *mpte, struct mptsub **preferred)
 		struct socket *so = mpts->mpts_socket;
 		struct tcpcb *tp = sototcpcb(so);
 		struct inpcb *inp = sotoinpcb(so);
-
-		mptcplog((LOG_DEBUG, "%s mpts %u mpts_flags %#x, suspended %u sostate %#x tpstate %u cellular %d rtt %u rxtshift %u cheap %u exp %u cwnd %d\n",
-		    __func__, mpts->mpts_connid, mpts->mpts_flags,
-		    INP_WAIT_FOR_IF_FEEDBACK(inp), so->so_state, tp->t_state,
-		    inp->inp_last_outifp ? IFNET_IS_CELLULAR(inp->inp_last_outifp) : -1,
-		    tp->t_srtt, tp->t_rxtshift, cheap_rtt, exp_rtt,
-		    mptcp_subflow_cwnd_space(so)),
-		    MPTCP_SOCKET_DBG, MPTCP_LOGLVL_VERBOSE);
 
 		/*
 		 * First, the hard conditions to reject subflows
@@ -917,12 +944,15 @@ mptcp_get_subflow(struct mptses *mpte, struct mptsub **preferred)
 	 * Second Step: Among best and second_best. Choose the one that is
 	 * most appropriate for this particular service-type.
 	 */
-	if (mpte->mpte_svctype == MPTCP_SVCTYPE_HANDOVER) {
+	if (mpte->mpte_svctype == MPTCP_SVCTYPE_PURE_HANDOVER) {
+		return mptcp_return_subflow(best);
+	} else if (mpte->mpte_svctype == MPTCP_SVCTYPE_HANDOVER) {
 		/*
 		 * Only handover if Symptoms tells us to do so.
 		 */
 		if (!IFNET_IS_CELLULAR(bestinp->inp_last_outifp) &&
-		    mptcp_is_wifi_unusable_for_session(mpte) != 0 && mptcp_subflow_is_slow(mpte, best)) {
+		    mptcp_wifi_quality_for_session(mpte) != MPTCP_WIFI_QUALITY_GOOD &&
+		    mptcp_subflow_is_slow(mpte, best)) {
 			return mptcp_return_subflow(second_best);
 		}
 
@@ -933,7 +963,7 @@ mptcp_get_subflow(struct mptses *mpte, struct mptsub **preferred)
 
 		/* Adjust with symptoms information */
 		if (!IFNET_IS_CELLULAR(bestinp->inp_last_outifp) &&
-		    mptcp_is_wifi_unusable_for_session(mpte) != 0) {
+		    mptcp_wifi_quality_for_session(mpte) != MPTCP_WIFI_QUALITY_GOOD) {
 			rtt_thresh /= 2;
 			rto_thresh /= 2;
 		}
@@ -942,11 +972,6 @@ mptcp_get_subflow(struct mptses *mpte, struct mptsub **preferred)
 		    besttp->t_srtt >= rtt_thresh &&
 		    secondtp->t_srtt < rtt_thresh) {
 			tcpstat.tcps_mp_sel_rtt++;
-			mptcplog((LOG_DEBUG, "%s: best cid %d at rtt %d,  second cid %d at rtt %d\n", __func__,
-			    best->mpts_connid, besttp->t_srtt >> TCP_RTT_SHIFT,
-			    second_best->mpts_connid,
-			    secondtp->t_srtt >> TCP_RTT_SHIFT),
-			    MPTCP_SENDER_DBG, MPTCP_LOGLVL_LOG);
 			return mptcp_return_subflow(second_best);
 		}
 
@@ -960,10 +985,6 @@ mptcp_get_subflow(struct mptses *mpte, struct mptsub **preferred)
 		    besttp->t_rxtcur >= rto_thresh &&
 		    secondtp->t_rxtcur < rto_thresh) {
 			tcpstat.tcps_mp_sel_rto++;
-			mptcplog((LOG_DEBUG, "%s: best cid %d at rto %d, second cid %d at rto %d\n", __func__,
-			    best->mpts_connid, besttp->t_rxtcur,
-			    second_best->mpts_connid, secondtp->t_rxtcur),
-			    MPTCP_SENDER_DBG, MPTCP_LOGLVL_LOG);
 
 			return mptcp_return_subflow(second_best);
 		}
@@ -1004,71 +1025,12 @@ mptcp_get_subflow(struct mptses *mpte, struct mptsub **preferred)
 	return NULL;
 }
 
-static const char *
-mptcp_event_to_str(uint32_t event)
-{
-	const char *c = "UNDEFINED";
-	switch (event) {
-	case MPCE_CLOSE:
-		c = "MPCE_CLOSE";
-		break;
-	case MPCE_RECV_DATA_ACK:
-		c = "MPCE_RECV_DATA_ACK";
-		break;
-	case MPCE_RECV_DATA_FIN:
-		c = "MPCE_RECV_DATA_FIN";
-		break;
-	}
-	return c;
-}
-
-static const char *
-mptcp_state_to_str(mptcp_state_t state)
-{
-	const char *c = "UNDEFINED";
-	switch (state) {
-	case MPTCPS_CLOSED:
-		c = "MPTCPS_CLOSED";
-		break;
-	case MPTCPS_LISTEN:
-		c = "MPTCPS_LISTEN";
-		break;
-	case MPTCPS_ESTABLISHED:
-		c = "MPTCPS_ESTABLISHED";
-		break;
-	case MPTCPS_CLOSE_WAIT:
-		c = "MPTCPS_CLOSE_WAIT";
-		break;
-	case MPTCPS_FIN_WAIT_1:
-		c = "MPTCPS_FIN_WAIT_1";
-		break;
-	case MPTCPS_CLOSING:
-		c = "MPTCPS_CLOSING";
-		break;
-	case MPTCPS_LAST_ACK:
-		c = "MPTCPS_LAST_ACK";
-		break;
-	case MPTCPS_FIN_WAIT_2:
-		c = "MPTCPS_FIN_WAIT_2";
-		break;
-	case MPTCPS_TIME_WAIT:
-		c = "MPTCPS_TIME_WAIT";
-		break;
-	case MPTCPS_TERMINATE:
-		c = "MPTCPS_TERMINATE";
-		break;
-	}
-	return c;
-}
-
 void
 mptcp_close_fsm(struct mptcb *mp_tp, uint32_t event)
 {
 	struct socket *mp_so = mptetoso(mp_tp->mpt_mpte);
 
 	socket_lock_assert_owned(mp_so);
-
-	mptcp_state_t old_state = mp_tp->mpt_state;
 
 	DTRACE_MPTCP2(state__change, struct mptcb *, mp_tp,
 	    uint32_t, event);
@@ -1134,11 +1096,6 @@ mptcp_close_fsm(struct mptcb *mp_tp, uint32_t event)
 	}
 	DTRACE_MPTCP2(state__change, struct mptcb *, mp_tp,
 	    uint32_t, event);
-	mptcplog((LOG_INFO, "%s: %s to %s on event %s\n", __func__,
-	    mptcp_state_to_str(old_state),
-	    mptcp_state_to_str(mp_tp->mpt_state),
-	    mptcp_event_to_str(event)),
-	    MPTCP_STATE_DBG, MPTCP_LOGLVL_LOG);
 }
 
 /* If you change this function, match up mptcp_update_rcv_state_f */
@@ -1187,75 +1144,15 @@ mptcp_update_rcv_state_meat(struct mptcb *mp_tp, struct tcpcb *tp,
 }
 
 
-static int
-mptcp_validate_dss_map(struct socket *so, struct tcpcb *tp, struct mbuf *m,
-    int hdrlen)
-{
-	u_int32_t datalen;
-
-	if (!(m->m_pkthdr.pkt_flags & PKTF_MPTCP)) {
-		return 0;
-	}
-
-	datalen = m->m_pkthdr.mp_rlen;
-
-	/* unacceptable DSS option, fallback to TCP */
-	if (m->m_pkthdr.len > ((int) datalen + hdrlen)) {
-		os_log_error(mptcp_log_handle, "%s - %lx: mbuf len %d, MPTCP expected %d",
-		    __func__, (unsigned long)VM_KERNEL_ADDRPERM(tptomptp(tp)->mpt_mpte), m->m_pkthdr.len, datalen);
-	} else {
-		return 0;
-	}
-	tp->t_mpflags |= TMPF_SND_MPFAIL;
-	mptcp_notify_mpfail(so);
-	m_freem(m);
-	return -1;
-}
-
-int
-mptcp_input_preproc(struct tcpcb *tp, struct mbuf *m, struct tcphdr *th,
-    int drop_hdrlen)
-{
-	mptcp_insert_rmap(tp, m, th);
-	if (mptcp_validate_dss_map(tp->t_inpcb->inp_socket, tp, m,
-	    drop_hdrlen) != 0) {
-		return -1;
-	}
-	return 0;
-}
-
-/*
- * MPTCP Checksum support
- * The checksum is calculated whenever the MPTCP DSS option is included
- * in the TCP packet. The checksum includes the sum of the MPTCP psuedo
- * header and the actual data indicated by the length specified in the
- * DSS option.
- */
-
-int
-mptcp_validate_csum(struct tcpcb *tp, struct mbuf *m, uint64_t dsn,
-    uint32_t sseq, uint16_t dlen, uint16_t csum, uint16_t dfin)
-{
-	uint16_t mptcp_csum;
-
-	mptcp_csum = mptcp_input_csum(tp, m, dsn, sseq, dlen, csum, dfin);
-	if (mptcp_csum) {
-		tp->t_mpflags |= TMPF_SND_MPFAIL;
-		mptcp_notify_mpfail(tp->t_inpcb->inp_socket);
-		m_freem(m);
-		tcpstat.tcps_mp_badcsum++;
-		return -1;
-	}
-	return 0;
-}
-
 static uint16_t
 mptcp_input_csum(struct tcpcb *tp, struct mbuf *m, uint64_t dsn, uint32_t sseq,
-    uint16_t dlen, uint16_t csum, uint16_t dfin)
+    uint16_t dlen, uint16_t csum, int dfin)
 {
 	struct mptcb *mp_tp = tptomptp(tp);
-	uint16_t real_len = dlen - dfin;
+	int real_len = dlen - dfin;
 	uint32_t sum = 0;
+
+	VERIFY(real_len >= 0);
 
 	if (mp_tp == NULL) {
 		return 0;
@@ -1283,15 +1180,39 @@ mptcp_input_csum(struct tcpcb *tp, struct mbuf *m, uint64_t dsn, uint32_t sseq,
 
 	sum += in_pseudo64(htonll(dsn), htonl(sseq), htons(dlen) + csum);
 	ADDCARRY(sum);
+
 	DTRACE_MPTCP3(checksum__result, struct tcpcb *, tp, struct mbuf *, m,
 	    uint32_t, sum);
 
-	mptcplog((LOG_DEBUG, "%s: sum = %x \n", __func__, sum),
-	    MPTCP_RECEIVER_DBG, MPTCP_LOGLVL_VERBOSE);
 	return ~sum & 0xffff;
 }
 
-uint32_t
+/*
+ * MPTCP Checksum support
+ * The checksum is calculated whenever the MPTCP DSS option is included
+ * in the TCP packet. The checksum includes the sum of the MPTCP psuedo
+ * header and the actual data indicated by the length specified in the
+ * DSS option.
+ */
+
+int
+mptcp_validate_csum(struct tcpcb *tp, struct mbuf *m, uint64_t dsn,
+    uint32_t sseq, uint16_t dlen, uint16_t csum, int dfin)
+{
+	uint16_t mptcp_csum;
+
+	mptcp_csum = mptcp_input_csum(tp, m, dsn, sseq, dlen, csum, dfin);
+	if (mptcp_csum) {
+		tp->t_mpflags |= TMPF_SND_MPFAIL;
+		mptcp_notify_mpfail(tp->t_inpcb->inp_socket);
+		m_freem(m);
+		tcpstat.tcps_mp_badcsum++;
+		return -1;
+	}
+	return 0;
+}
+
+uint16_t
 mptcp_output_csum(struct mbuf *m, uint64_t dss_val, uint32_t sseq, uint16_t dlen)
 {
 	uint32_t sum = 0;
@@ -1308,10 +1229,8 @@ mptcp_output_csum(struct mbuf *m, uint64_t dss_val, uint32_t sseq, uint16_t dlen
 	ADDCARRY(sum);
 	sum = ~sum & 0xffff;
 	DTRACE_MPTCP2(checksum__result, struct mbuf *, m, uint32_t, sum);
-	mptcplog((LOG_DEBUG, "%s: sum = %x \n", __func__, sum),
-	    MPTCP_SENDER_DBG, MPTCP_LOGLVL_VERBOSE);
 
-	return sum;
+	return (uint16_t)sum;
 }
 
 /*
@@ -1327,12 +1246,6 @@ mptcp_no_rto_spike(struct socket *so)
 
 	if (tp->t_rxtcur > mptcp_rtothresh) {
 		spike = tp->t_rxtcur - mptcp_rtothresh;
-
-		mptcplog((LOG_DEBUG, "%s: spike = %d rto = %d best = %d cur = %d\n",
-		    __func__, spike,
-		    tp->t_rxtcur, tp->t_rttbest >> TCP_RTT_SHIFT,
-		    tp->t_rttcur),
-		    (MPTCP_SOCKET_DBG | MPTCP_SENDER_DBG), MPTCP_LOGLVL_LOG);
 	}
 
 	if (spike > 0) {
@@ -1371,16 +1284,6 @@ mptcp_handle_deferred_upcalls(struct mppcb *mpp, uint32_t flag)
 	}
 }
 
-void
-mptcp_ask_for_nat64(struct ifnet *ifp)
-{
-	in6_post_msg(ifp, KEV_INET6_REQUEST_NAT64_PREFIX, NULL, NULL);
-
-	os_log_info(mptcp_log_handle,
-	    "%s: asked for NAT64-prefix on %s\n", __func__,
-	    ifp->if_name);
-}
-
 static void
 mptcp_reset_itfinfo(struct mpt_itf_info *info)
 {
@@ -1399,8 +1302,9 @@ mptcp_session_necp_cb(void *handle, int action, uint32_t interface_index,
 	struct mptses *mpte = mptompte(mp);
 	struct socket *mp_so;
 	struct mptcb *mp_tp;
-	int locked = 0;
 	uint32_t i, ifindex;
+	struct ifnet *ifp;
+	int locked = 0;
 
 	ifindex = interface_index;
 	VERIFY(ifindex != IFSCOPE_NONE);
@@ -1426,8 +1330,13 @@ mptcp_session_necp_cb(void *handle, int action, uint32_t interface_index,
 
 	mp_tp = mpte->mpte_mptcb;
 
-	os_log_info(mptcp_log_handle, "%s - %lx: action: %u ifindex %u usecount %u mpt_flags %#x state %u v4 %u v6 %u nat64 %u power %u\n",
+	ifnet_head_lock_shared();
+	ifp = ifindex2ifnet[ifindex];
+	ifnet_head_done();
+
+	os_log(mptcp_log_handle, "%s - %lx: action: %u ifindex %u delegated to %u usecount %u mpt_flags %#x state %u v4 %u v6 %u nat64 %u power %u\n",
 	    __func__, (unsigned long)VM_KERNEL_ADDRPERM(mpte), action, ifindex,
+	    ifp && ifp->if_delegated.ifp ? ifp->if_delegated.ifp->if_index : IFSCOPE_NONE,
 	    mp->mpp_socket->so_usecount, mp_tp->mpt_flags, mp_tp->mpt_state,
 	    has_v4, has_v6, has_nat64, low_power);
 
@@ -1442,6 +1351,10 @@ mptcp_session_necp_cb(void *handle, int action, uint32_t interface_index,
 	 */
 	if (low_power) {
 		action = NECP_CLIENT_CBACTION_NONVIABLE;
+	}
+
+	if (action == NECP_CLIENT_CBACTION_INITIAL) {
+		mpte->mpte_flags |= MPTE_ITFINFO_INIT;
 	}
 
 	if (action == NECP_CLIENT_CBACTION_NONVIABLE) {
@@ -1460,11 +1373,6 @@ mptcp_session_necp_cb(void *handle, int action, uint32_t interface_index,
 	    action == NECP_CLIENT_CBACTION_INITIAL) {
 		int found_slot = 0, slot_index = -1;
 		struct sockaddr *dst;
-		struct ifnet *ifp;
-
-		ifnet_head_lock_shared();
-		ifp = ifindex2ifnet[ifindex];
-		ifnet_head_done();
 
 		if (ifp == NULL) {
 			goto out;
@@ -1524,20 +1432,20 @@ mptcp_session_necp_cb(void *handle, int action, uint32_t interface_index,
 		}
 
 		dst = mptcp_get_session_dst(mpte, has_v6, has_v4);
-		if (dst && (dst->sa_family == AF_INET || dst->sa_family == 0) &&
+		if (dst && dst->sa_family == AF_INET &&
 		    has_v6 && !has_nat64 && !has_v4) {
 			if (found_slot) {
+				mpte->mpte_itfinfo[slot_index].ifindex = ifindex;
 				mpte->mpte_itfinfo[slot_index].has_v4_conn = has_v4;
 				mpte->mpte_itfinfo[slot_index].has_v6_conn = has_v6;
 				mpte->mpte_itfinfo[slot_index].has_nat64_conn = has_nat64;
 			}
-			mptcp_ask_for_nat64(ifp);
 			goto out;
 		}
 
 		if (found_slot == 0) {
 			int new_size = mpte->mpte_itfinfo_size * 2;
-			struct mpt_itf_info *info = _MALLOC(sizeof(*info) * new_size, M_TEMP, M_ZERO);
+			struct mpt_itf_info *info = kalloc_data(sizeof(*info) * new_size, Z_ZERO);
 
 			if (info == NULL) {
 				os_log_error(mptcp_log_handle, "%s - %lx: malloc failed for %u\n",
@@ -1548,7 +1456,8 @@ mptcp_session_necp_cb(void *handle, int action, uint32_t interface_index,
 			memcpy(info, mpte->mpte_itfinfo, mpte->mpte_itfinfo_size * sizeof(*info));
 
 			if (mpte->mpte_itfinfo_size > MPTE_ITFINFO_SIZE) {
-				_FREE(mpte->mpte_itfinfo, M_TEMP);
+				kfree_data(mpte->mpte_itfinfo,
+				    sizeof(*info) * mpte->mpte_itfinfo_size);
 			}
 
 			/* We allocated a new one, thus the first must be empty */
@@ -1614,4 +1523,26 @@ mptcp_set_restrictions(struct socket *mp_so)
 	}
 
 	ifnet_head_done();
+}
+
+#define DUMP_BUF_CHK() {        \
+	clen -= k;              \
+	if (clen < 1)           \
+	        goto done;      \
+	c += k;                 \
+}
+
+int
+dump_mptcp_reass_qlen(char *str, int str_len)
+{
+	char *c = str;
+	int k, clen = str_len;
+
+	if (mptcp_reass_total_qlen != 0) {
+		k = scnprintf(c, clen, "\nmptcp reass qlen %d\n", mptcp_reass_total_qlen);
+		DUMP_BUF_CHK();
+	}
+
+done:
+	return str_len - clen;
 }

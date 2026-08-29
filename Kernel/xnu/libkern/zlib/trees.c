@@ -625,7 +625,7 @@ gen_codes(ct_data *tree, int max_code, ushf *bl_count)
      * without bit reversal.
      */
     for (bits = 1; bits <= MAX_BITS; bits++) {
-        next_code[bits] = code = (code + bl_count[bits-1]) << 1;
+        next_code[bits] = code = (ush)((code + bl_count[bits-1]) << 1);
     }
     /* Check that the bit counts in bl_count are consistent. The last code
      * must be all ones.
@@ -638,7 +638,7 @@ gen_codes(ct_data *tree, int max_code, ushf *bl_count)
         int len = tree[n].Len;
         if (len == 0) continue;
         /* Now reverse the bits */
-        tree[n].Code = bi_reverse(next_code[len]++, len);
+        tree[n].Code = (ush)bi_reverse(next_code[len]++, len);
 
         Tracecv(tree != static_ltree, (stderr,"\nn %3d %c l %2d c %4x (%x) ",
              n, (isgraph(n) ? n : ' '), len, tree[n].Code, next_code[len]-1));
@@ -1131,6 +1131,11 @@ _tr_tally(deflate_state *s, unsigned dist, unsigned lc)
  * @param ltree literal tree
  * @param dtree distance tree
  */
+
+__abortlike __printflike(1, 2)
+extern void panic(const char *string, ...);
+
+
 local void
 compress_block(deflate_state *s, ct_data *ltree, ct_data *dtree)
 {
@@ -1141,6 +1146,10 @@ compress_block(deflate_state *s, ct_data *ltree, ct_data *dtree)
     int extra;          /* number of extra bits to send */
 
     if (s->last_lit != 0) do {
+
+        if (&s->pending_buf[s->pending] > (Bytef *)&s->d_buf[lx]) {
+            panic("zlib deflate");
+        }
         dist = s->d_buf[lx];
         lc = s->l_buf[lx++];
         if (dist == 0) {

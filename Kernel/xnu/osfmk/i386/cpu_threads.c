@@ -26,19 +26,16 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 #include <vm/vm_kern.h>
-#include <kern/kalloc.h>
+#include <kern/zalloc.h>
 #include <kern/lock_group.h>
 #include <kern/timer_queue.h>
+#include <kern/monotonic.h>
 #include <mach/machine.h>
 #include <i386/cpu_threads.h>
 #include <i386/cpuid.h>
 #include <i386/machine_cpu.h>
 #include <i386/pmCPU.h>
 #include <i386/bit_routines.h>
-
-#if MONOTONIC
-#include <kern/monotonic.h>
-#endif /* MONOTONIC */
 
 #define DIVISOR_GUARD(denom)                            \
 	if ((denom) == 0) {                             \
@@ -66,18 +63,15 @@ x86_topology_parameters_t       topoParms;
 
 decl_simple_lock_data(, x86_topo_lock);
 
-/* Idempotent so i386_init() can bring the lock up before cpu_thread_init(). */
 void
 x86_topo_lock_init(void)
 {
 	static boolean_t x86_topo_lock_inited = FALSE;
-
 	if (!x86_topo_lock_inited) {
 		simple_lock_init(&x86_topo_lock, 0);
 		x86_topo_lock_inited = TRUE;
 	}
 }
-
 static struct cpu_cache {
 	int     level; int     type;
 } cpu_caches[LCACHE_MAX] = {
@@ -96,12 +90,6 @@ cpu_is_hyperthreaded(void)
 	return cpuinfo->thread_count > cpuinfo->core_count;
 }
 
-static uint32_t
-nonzero_u32(uint32_t value, uint32_t fallback)
-{
-	return value ? value : fallback;
-}
-
 static x86_cpu_cache_t *
 x86_cache_alloc(void)
 {
@@ -109,7 +97,9 @@ x86_cache_alloc(void)
 	int                 i;
 
 	if (x86_caches == NULL) {
-		cache = kalloc(sizeof(x86_cpu_cache_t) + (MAX_CPUS * sizeof(x86_lcpu_t *)));
+		cache = zalloc_permanent_tag(sizeof(x86_cpu_cache_t) +
+		    (MAX_CPUS * sizeof(x86_lcpu_t *)),
+		    ZALIGN(x86_cpu_cache_t), VM_KERN_MEMORY_CPU);
 		if (cache == NULL) {
 			return NULL;
 		}
@@ -119,7 +109,6 @@ x86_cache_alloc(void)
 		cache->next = NULL;
 	}
 
-	bzero(cache, sizeof(x86_cpu_cache_t));
 	cache->next = NULL;
 	cache->maxcpus = MAX_CPUS;
 	for (i = 0; i < cache->maxcpus; i += 1) {
@@ -170,18 +159,10 @@ x86_LLC_info(void)
 	 * nCPUsSharing represents the *maximum* number of cores or
 	 * logical CPUs sharing the cache.
 	 */
-	topoParms.maxSharingLLC = nonzero_u32(nCPUsSharing, 1);
-	if (topoParms.maxSharingLLC > nonzero_u32(cpuinfo->thread_count, 1)) {
-		topoParms.maxSharingLLC = nonzero_u32(cpuinfo->thread_count, 1);
-	}
+	topoParms.maxSharingLLC = nCPUsSharing;
 
-	uint32_t threads_per_core = nonzero_u32(cpuinfo->thread_count /
-	    nonzero_u32(cpuinfo->core_count, 1), 1);
-
-	topoParms.nCoresSharingLLC = topoParms.maxSharingLLC / threads_per_core;
-	if (topoParms.nCoresSharingLLC == 0) {
-		topoParms.nCoresSharingLLC = 1;
-	}
+	topoParms.nCoresSharingLLC = nCPUsSharing / (cpuinfo->thread_count /
+	    cpuinfo->core_count);
 	topoParms.nLCPUsSharingLLC = nCPUsSharing;
 
 	/*
@@ -217,33 +198,24 @@ initTopoParms(void)
 	 */
 	DIVISOR_GUARD(cpuinfo->core_count);
 	topoParms.nLThreadsPerCore = cpuinfo->thread_count / cpuinfo->core_count;
-	topoParms.nLThreadsPerCore = nonzero_u32(topoParms.nLThreadsPerCore, 1);
 	DIVISOR_GUARD(cpuinfo->cpuid_cores_per_package);
 	topoParms.nPThreadsPerCore = cpuinfo->cpuid_logical_per_package / cpuinfo->cpuid_cores_per_package;
-	topoParms.nPThreadsPerCore = nonzero_u32(topoParms.nPThreadsPerCore, 1);
 
 	/*
 	 * Compute the number of dies per package.
 	 */
 	DIVISOR_GUARD(topoParms.nCoresSharingLLC);
 	topoParms.nLDiesPerPackage = cpuinfo->core_count / topoParms.nCoresSharingLLC;
-	topoParms.nLDiesPerPackage = nonzero_u32(topoParms.nLDiesPerPackage, 1);
 	DIVISOR_GUARD(topoParms.nPThreadsPerCore);
 	DIVISOR_GUARD(topoParms.maxSharingLLC / topoParms.nPThreadsPerCore);
-	uint32_t pcores_sharing_llc = topoParms.maxSharingLLC / topoParms.nPThreadsPerCore;
-	pcores_sharing_llc = nonzero_u32(pcores_sharing_llc, 1);
-	if (pcores_sharing_llc > nonzero_u32(cpuinfo->cpuid_cores_per_package, 1)) {
-		pcores_sharing_llc = nonzero_u32(cpuinfo->cpuid_cores_per_package, 1);
-	}
-	topoParms.nPDiesPerPackage = cpuinfo->cpuid_cores_per_package / pcores_sharing_llc;
-	topoParms.nPDiesPerPackage = nonzero_u32(topoParms.nPDiesPerPackage, 1);
+	topoParms.nPDiesPerPackage = cpuinfo->cpuid_cores_per_package / (topoParms.maxSharingLLC / topoParms.nPThreadsPerCore);
 
 
 	/*
 	 * Compute the number of cores per die.
 	 */
 	topoParms.nLCoresPerDie = topoParms.nCoresSharingLLC;
-	topoParms.nPCoresPerDie = pcores_sharing_llc;
+	topoParms.nPCoresPerDie = (topoParms.maxSharingLLC / topoParms.nPThreadsPerCore);
 
 	/*
 	 * Compute the number of threads per die.
@@ -262,10 +234,6 @@ initTopoParms(void)
 	 */
 	topoParms.nLThreadsPerPackage = topoParms.nLThreadsPerCore * topoParms.nLCoresPerPackage;
 	topoParms.nPThreadsPerPackage = topoParms.nPThreadsPerCore * topoParms.nPCoresPerPackage;
-	topoParms.nLThreadsPerPackage = nonzero_u32(topoParms.nLThreadsPerPackage,
-	    nonzero_u32(cpuinfo->thread_count, 1));
-	topoParms.nPThreadsPerPackage = nonzero_u32(topoParms.nPThreadsPerPackage,
-	    nonzero_u32(cpuinfo->cpuid_logical_per_package, 1));
 
 	TOPO_DBG("\nCache Topology Parameters:\n");
 	TOPO_DBG("\tLLC Depth:           %d\n", topoParms.LLCDepth);
@@ -417,13 +385,11 @@ x86_core_alloc(int cpu)
 		simple_unlock(&x86_topo_lock);
 	} else {
 		simple_unlock(&x86_topo_lock);
-		core = kalloc(sizeof(x86_core_t));
+		core = zalloc_permanent_type(x86_core_t);
 		if (core == NULL) {
-			panic("x86_core_alloc() kalloc of x86_core_t failed!\n");
+			panic("x86_core_alloc() alloc of x86_core_t failed!");
 		}
 	}
-
-	bzero((void *) core, sizeof(x86_core_t));
 
 	core->pcore_num = cpup->cpu_phys_number / topoParms.nPThreadsPerCore;
 	core->lcore_num = core->pcore_num % topoParms.nPCoresPerPackage;
@@ -565,13 +531,11 @@ x86_die_alloc(int cpu)
 		simple_unlock(&x86_topo_lock);
 	} else {
 		simple_unlock(&x86_topo_lock);
-		die = kalloc(sizeof(x86_die_t));
+		die = zalloc_permanent_type(x86_die_t);
 		if (die == NULL) {
-			panic("x86_die_alloc() kalloc of x86_die_t failed!\n");
+			panic("x86_die_alloc() alloc of x86_die_t failed!");
 		}
 	}
-
-	bzero((void *) die, sizeof(x86_die_t));
 
 	die->pdie_num = cpup->cpu_phys_number / topoParms.nPThreadsPerDie;
 
@@ -608,13 +572,11 @@ x86_package_alloc(int cpu)
 		simple_unlock(&x86_topo_lock);
 	} else {
 		simple_unlock(&x86_topo_lock);
-		pkg = kalloc(sizeof(x86_pkg_t));
+		pkg = zalloc_permanent_type(x86_pkg_t);
 		if (pkg == NULL) {
-			panic("x86_package_alloc() kalloc of x86_pkg_t failed!\n");
+			panic("x86_package_alloc() alloc of x86_pkg_t failed!");
 		}
 	}
-
-	bzero((void *) pkg, sizeof(x86_pkg_t));
 
 	pkg->ppkg_num = cpup->cpu_phys_number / topoParms.nPThreadsPerPackage;
 
@@ -1000,7 +962,7 @@ cpu_thread_init(void)
 	 * the CPU topology infrastructure.
 	 */
 	if (my_cpu == master_cpu && !initialized) {
-		x86_topo_lock_init();
+		simple_lock_init(&x86_topo_lock, 0);
 
 		/*
 		 * Put this logical CPU into the physical CPU topology.

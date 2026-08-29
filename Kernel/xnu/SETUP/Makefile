@@ -6,12 +6,6 @@ export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 include $(MakeInc_cmd)
 include $(MakeInc_def)
 
-OPSYS := $(shell uname -s)
-export OPSYS
-ifeq ($(OPSYS),Linux)
-export HOST_CODESIGN=/bin/true
-endif
-
 SETUP_SUBDIRS =		\
 	config		\
 	kextsymboltool	\
@@ -19,10 +13,6 @@ SETUP_SUBDIRS =		\
 	decomment	\
 	installfile	\
 	replacecontents
-
-ifeq ($(BUILD_JSON_COMPILATION_DATABASE),1)
-SETUP_SUBDIRS += json_compilation_db
-endif
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)

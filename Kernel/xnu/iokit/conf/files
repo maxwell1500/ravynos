@@ -46,8 +46,9 @@ iokit/Kernel/IOPMinformee.cpp				optional iokitcpp
 iokit/Kernel/IOPMinformeeList.cpp			optional iokitcpp
 iokit/Kernel/IOPMPowerStateQueue.cpp			optional iokitcpp
 iokit/Kernel/IOCatalogue.cpp				optional iokitcpp
-iokit/Kernel/IOPMPowerSource.cpp                        optional iokitcpp
-iokit/Kernel/IOPMPowerSourceList.cpp                    optional iokitcpp
+iokit/Kernel/IOPMPowerSource.cpp			optional iokitcpp
+iokit/Kernel/IOPMPowerSourceList.cpp			optional iokitcpp
+iokit/Kernel/IOPMGR.cpp					optional iokitcpp
 iokit/Kernel/IOPolledInterface.cpp			optional iokitcpp
 
 iokit/Kernel/IOWorkLoop.cpp				optional iokitcpp
@@ -72,26 +73,38 @@ iokit/Kernel/IOMemoryDescriptor.cpp			optional iokitcpp
 iokit/Kernel/IOMultiMemoryDescriptor.cpp		optional iokitcpp
 iokit/Kernel/IORangeAllocator.cpp			optional iokitcpp
 iokit/Kernel/IOSubMemoryDescriptor.cpp			optional iokitcpp
+iokit/Kernel/IOGuardPageMemoryDescriptor.cpp		optional iokitcpp
 
 iokit/Kernel/IOPlatformExpert.cpp			optional iokitcpp
+iokit/Kernel/IOPlatformIO.cpp				optional iokitcpp
 
 iokit/Kernel/IOCPU.cpp					optional iokitcpp
+iokit/Kernel/IOPlatformActions.cpp			optional iokitcpp
 
 iokit/Kernel/IONVRAM.cpp				optional iokitcpp
 
+iokit/Kernel/IOExtensiblePaniclog.cpp   optional iokitcpp
+
 iokit/Kernel/IODMAController.cpp			optional iokitcpp
 iokit/Kernel/IOInterruptController.cpp			optional iokitcpp
+iokit/Kernel/PassthruInterruptController.cpp		optional iokitcpp
 
 iokit/Kernel/IOUserClient.cpp				optional iokitcpp
 
 iokit/Kernel/IOKitDebug.cpp				optional iokitcpp
 iokit/Kernel/IODataQueue.cpp				optional iokitcpp
 iokit/Kernel/IOSharedDataQueue.cpp			optional iokitcpp
+
+# IOKit tests
 iokit/Tests/Tests.cpp					optional iokitcpp
 iokit/Tests/TestIOMemoryDescriptor.cpp      optional iokitcpp
 # iokit/Tests/TestDevice.cpp                optional iokitcpp
 # iokit/Tests/TestContainers.cpp            optional iokitcpp
 # iokit/Tests/TestCollections.cpp           optional iokitcpp
+iokit/Tests/TestServices/TestIOConnectMapMemoryPortLeak45265408.cpp optional iokitcpp
+iokit/Tests/TestServices/TestIODeviceMemoryRosetta.cpp optional iokitcpp
+iokit/Tests/TestServices/TestIOUserClient2022Entitlements.cpp optional iokitcpp
+iokit/Tests/TestServices/TestIOServiceUserNotification.cpp optional iokitcpp
 
 iokit/Kernel/IOStatistics.cpp				optional iokitcpp
 iokit/Kernel/IOInterruptAccounting.cpp			optional iokitcpp
@@ -106,7 +119,7 @@ iokit/Kernel/IORTC.cpp				optional iokitcpp
 
 iokit/Kernel/IOStringFuncs.c				standard
 
-iokit/Kernel/IOUserServer.cpp				optional iokitcpp
+# iokit/Kernel/IOUserServer.cpp				optional iokitcpp
 
 # Property tables for kernel-linked objects
 
@@ -129,4 +142,11 @@ iokit/Families/IOSystemManagement/IOWatchDogTimer.cpp	optional iokitcpp
 # Performance Control
 iokit/Kernel/IOPerfControl.cpp		optional iokitcpp
 
-iokit/bsddev/skywalk/IOSkywalkSupport.cpp		optional iokitcpp
+# Workload Configuration
+iokit/Kernel/IOWorkloadConfig.cpp			optional iokitcpp
+
+# Skywalk
+iokit/bsddev/skywalk/IOSkywalkSupport.cpp		optional iokitcpp skywalk
+
+# Exclaves
+iokit/Exclaves/Exclaves.cpp			optional iokitcpp

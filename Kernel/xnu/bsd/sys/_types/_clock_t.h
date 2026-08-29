@@ -28,5 +28,7 @@
 #ifndef _CLOCK_T
 #define _CLOCK_T
 #include <machine/types.h> /* __darwin_clock_t */
+#if !defined(KERNEL) || !defined(MACH_KERNEL_PRIVATE)
 typedef __darwin_clock_t        clock_t;
+#endif
 #endif /* _CLOCK_T */

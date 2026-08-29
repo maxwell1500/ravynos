@@ -493,7 +493,7 @@ devfs_getattr(struct vnop_getattr_args *ap)
 	} else if (vp->v_type == VCHR) {
 		VATTR_RETURN(vap, va_iosize, MAXPHYSIO);
 	} else {
-		VATTR_RETURN(vap, va_iosize, vp->v_mount->mnt_vfsstat.f_iosize);
+		VATTR_RETURN(vap, va_iosize, (uint32_t)vp->v_mount->mnt_vfsstat.f_iosize);
 	}
 
 
@@ -564,9 +564,9 @@ devfs_setattr(struct vnop_setattr_args *ap)
 			file_node->dn_update = 1;
 		}
 		atimeval.tv_sec = vap->va_access_time.tv_sec;
-		atimeval.tv_usec = vap->va_access_time.tv_nsec / 1000;
+		atimeval.tv_usec = (suseconds_t)(vap->va_access_time.tv_nsec / 1000);
 		mtimeval.tv_sec = vap->va_modify_time.tv_sec;
-		mtimeval.tv_usec = vap->va_modify_time.tv_nsec / 1000;
+		mtimeval.tv_usec = (suseconds_t)(vap->va_modify_time.tv_nsec / 1000);
 
 		if ((error = devfs_update(vp, &atimeval, &mtimeval))) {
 			goto exit;
@@ -1226,7 +1226,7 @@ devfs_symlink(struct vnop_symlink_args *ap)
 
 /* Called with devfs locked */
 int
-devfs_make_symlink(devnode_t *dir_p, char *name, int mode, char *target, devdirent_t **newent)
+devfs_make_symlink(devnode_t *dir_p, char *name, mode_t mode, char *target, devdirent_t **newent)
 {
 	int error = 0;
 	devnode_type_t typeinfo;
@@ -1337,7 +1337,7 @@ devfs_readdir(struct vnop_readdir_args *ap)
 	int error = 0;
 	int reclen;
 	int nodenumber;
-	int     startpos, pos;
+	off_t startpos, pos;
 
 	if (ap->a_flags & (VNODE_READDIR_EXTENDED | VNODE_READDIR_REQSEEKOFF)) {
 		return EINVAL;
@@ -1376,7 +1376,7 @@ devfs_readdir(struct vnop_readdir_args *ap)
 			break;
 		default:
 			dirent.d_fileno = name_node->de_dnp->dn_ino;
-			dirent.d_namlen = strlen(name_node->de_name);
+			dirent.d_namlen = (__uint8_t) strlen(name_node->de_name);
 			name = name_node->de_name;
 			switch (name_node->de_dnp->dn_type) {
 			case DEV_BDEV:
@@ -1448,7 +1448,7 @@ devfs_readlink(struct vnop_readlink_args *ap)
 		goto out;
 	}
 	error = uiomove(lnk_node->dn_typeinfo.Slnk.name,
-	    lnk_node->dn_typeinfo.Slnk.namelen, uio);
+	    (int)lnk_node->dn_typeinfo.Slnk.namelen, uio);
 out:
 	return error;
 }
@@ -1581,10 +1581,12 @@ devfs_update(struct vnode *vp, struct timeval *access, struct timeval *modify)
 
 #define VOPFUNC int (*)(void *)
 
+#define devfs_default_error (void (*)(void))vn_default_error
+
 /* The following ops are used by directories and symlinks */
 int(**devfs_vnodeop_p)(void *);
 const static struct vnodeopv_entry_desc devfs_vnodeop_entries[] = {
-	{ .opve_op = &vnop_default_desc, .opve_impl = (VOPFUNC)vn_default_error },
+	{ .opve_op = &vnop_default_desc, .opve_impl = (VOPFUNC)devfs_default_error },
 	{ .opve_op = &vnop_lookup_desc, .opve_impl = (VOPFUNC)devfs_lookup },           /* lookup */
 	{ .opve_op = &vnop_create_desc, .opve_impl = (VOPFUNC)err_create },             /* create */
 	{ .opve_op = &vnop_whiteout_desc, .opve_impl = (VOPFUNC)err_whiteout },         /* whiteout */
@@ -1631,7 +1633,7 @@ const struct vnodeopv_desc devfs_vnodeop_opv_desc =
 /* The following ops are used by the device nodes */
 int(**devfs_spec_vnodeop_p)(void *);
 const static struct vnodeopv_entry_desc devfs_spec_vnodeop_entries[] = {
-	{ .opve_op = &vnop_default_desc, .opve_impl = (VOPFUNC)vn_default_error },
+	{ .opve_op = &vnop_default_desc, .opve_impl = (VOPFUNC)devfs_default_error },
 	{ .opve_op = &vnop_lookup_desc, .opve_impl = (VOPFUNC)spec_lookup },            /* lookup */
 	{ .opve_op = &vnop_create_desc, .opve_impl = (VOPFUNC)spec_create },            /* create */
 	{ .opve_op = &vnop_mknod_desc, .opve_impl = (VOPFUNC)spec_mknod },              /* mknod */
@@ -1678,7 +1680,7 @@ const struct vnodeopv_desc devfs_spec_vnodeop_opv_desc =
 #if FDESC
 int(**devfs_devfd_vnodeop_p)(void*);
 const static struct vnodeopv_entry_desc devfs_devfd_vnodeop_entries[] = {
-	{ .opve_op = &vnop_default_desc, .opve_impl = (VOPFUNC)vn_default_error },
+	{ .opve_op = &vnop_default_desc, .opve_impl = (VOPFUNC)devfs_default_error },
 	{ .opve_op = &vnop_lookup_desc, .opve_impl = (VOPFUNC)devfs_devfd_lookup},      /* lookup */
 	{ .opve_op = &vnop_open_desc, .opve_impl = (VOPFUNC)nop_open },                 /* open */
 	{ .opve_op = &vnop_close_desc, .opve_impl = (VOPFUNC)devfs_close },             /* close */

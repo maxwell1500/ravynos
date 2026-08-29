@@ -49,7 +49,19 @@ typedef enum thread_snapshot_wait_flags {
 	kThreadWaitWorkloopSyncWait     = 0x10,
 	kThreadWaitOnProcess            = 0x11,
 	kThreadWaitSleepWithInheritor   = 0x12,
+	kThreadWaitEventlink            = 0x13,
 	kThreadWaitCompressor           = 0x14,
+	kThreadWaitParkedBoundWorkQueue = 0x15,
+	kThreadWaitPageBusy             = 0x16,
+	kThreadWaitPagerInit            = 0x17,
+	kThreadWaitPagerReady           = 0x18,
+	kThreadWaitPagingActivity       = 0x19,
+	kThreadWaitMappingInProgress    = 0x1a,
+	kThreadWaitMemoryBlocked        = 0x1b,
+	kThreadWaitPagingInProgress     = 0x1c,
+	kThreadWaitPageInThrottle       = 0x1d,
+	kThreadWaitExclaveCore          = 0x1e,
+	kThreadWaitExclaveKit           = 0x1f,
 } __attribute__((packed)) block_hint_t;
 
 _Static_assert(sizeof(block_hint_t) <= sizeof(short),
@@ -57,15 +69,19 @@ _Static_assert(sizeof(block_hint_t) <= sizeof(short),
 
 #ifdef XNU_KERNEL_PRIVATE
 
+struct turnstile;
 struct waitq;
-struct stackshot_thread_waitinfo;
 typedef struct stackshot_thread_waitinfo thread_waitinfo_t;
+struct ipc_service_port_label;
+struct portlabel_info;
 
 /* Used for stackshot_thread_waitinfo_unsafe */
 extern void kdp_lck_mtx_find_owner(struct waitq * waitq, event64_t event, thread_waitinfo_t *waitinfo);
 extern void kdp_sema_find_owner(struct waitq * waitq, event64_t event, thread_waitinfo_t *waitinfo);
-extern void kdp_mqueue_send_find_owner(struct waitq * waitq, event64_t event, thread_waitinfo_t *waitinfo);
-extern void kdp_mqueue_recv_find_owner(struct waitq * waitq, event64_t event, thread_waitinfo_t *waitinfo);
+extern void kdp_mqueue_send_find_owner(struct waitq * waitq, event64_t event, thread_waitinfo_v2_t *waitinfo,
+    struct ipc_service_port_label **isplp);
+extern void kdp_mqueue_recv_find_owner(struct waitq * waitq, event64_t event, thread_waitinfo_v2_t *waitinfo,
+    struct ipc_service_port_label **isplp);
 extern void kdp_ulock_find_owner(struct waitq * waitq, event64_t event, thread_waitinfo_t *waitinfo);
 extern void kdp_rwlck_find_owner(struct waitq * waitq, event64_t event, thread_waitinfo_t *waitinfo);
 extern void kdp_pthread_find_owner(thread_t thread, thread_waitinfo_t *waitinfo);
@@ -73,7 +89,14 @@ extern void *kdp_pthread_get_thread_kwq(thread_t thread);
 extern void kdp_workloop_sync_wait_find_owner(thread_t thread, event64_t event, thread_waitinfo_t *waitinfo);
 extern void kdp_wait4_find_process(thread_t thread, event64_t event, thread_waitinfo_t *waitinfo);
 extern void kdp_sleep_with_inheritor_find_owner(struct waitq * waitq, __unused event64_t event, thread_waitinfo_t * waitinfo);
-extern void kdp_turnstile_fill_tsinfo(struct turnstile *ts, thread_turnstileinfo_t *tsinfo);
+extern void kdp_turnstile_fill_tsinfo(struct turnstile *ts, thread_turnstileinfo_v2_t *tsinfo, struct ipc_service_port_label **isplp);
+extern void kdp_ipc_fill_splabel(struct ipc_service_port_label *ispl, struct portlabel_info *spl, const char **namep);
+extern void kdp_ipc_splabel_size(size_t *ispl_size, size_t *maxnamelen);
+extern const bool kdp_ipc_have_splabel;
+void kdp_eventlink_find_owner(struct waitq *waitq, event64_t event, thread_waitinfo_t *waitinfo);
+#if CONFIG_EXCLAVES
+extern void kdp_esync_find_owner(struct waitq *waitq, event64_t event, thread_waitinfo_t *waitinfo);
+#endif /* CONFIG_EXCLAVES */
 
 #endif /* XNU_KERNEL_PRIVATE */
 

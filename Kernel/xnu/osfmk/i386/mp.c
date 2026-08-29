@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2021 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -48,8 +48,10 @@
 #include <kern/pms.h>
 #include <kern/misc_protos.h>
 #include <kern/timer_call.h>
-#include <kern/kalloc.h>
+#include <kern/zalloc.h>
 #include <kern/queue.h>
+#include <kern/monotonic.h>
+#include <kern/kern_stackshot.h>
 #include <prng/random.h>
 
 #include <vm/vm_map.h>
@@ -60,7 +62,7 @@
 #include <i386/cpu_threads.h>
 #include <i386/mp_desc.h>
 #include <i386/misc_protos.h>
-#include <i386/trap.h>
+#include <i386/trap_internal.h>
 #include <i386/postcode.h>
 #include <i386/machine_routines.h>
 #include <i386/mp.h>
@@ -79,9 +81,9 @@
 
 #include <console/serial_protos.h>
 
-#if MONOTONIC
-#include <kern/monotonic.h>
-#endif /* MONOTONIC */
+#if KPERF
+#include <kperf/kptimer.h>
+#endif /* KPERF */
 
 #if     MP_DEBUG
 #define PAUSE           delay(1000000)
@@ -124,14 +126,14 @@ boolean_t               mp_interrupt_watchdog_enabled = TRUE;
 uint32_t                mp_interrupt_watchdog_events = 0;
 #endif
 
-decl_simple_lock_data(, debugger_callback_lock);
+SIMPLE_LOCK_DECLARE(debugger_callback_lock, 0);
 struct debugger_callback *debugger_callback = NULL;
 
-decl_lck_mtx_data(static, mp_cpu_boot_lock);
-lck_mtx_ext_t   mp_cpu_boot_lock_ext;
+static LCK_GRP_DECLARE(smp_lck_grp, "i386_smp");
+static LCK_MTX_DECLARE(mp_cpu_boot_lock, &smp_lck_grp);
 
 /* Variables needed for MP rendezvous. */
-decl_simple_lock_data(, mp_rv_lock);
+SIMPLE_LOCK_DECLARE(mp_rv_lock, 0);
 static void     (*mp_rv_setup_func)(void *arg);
 static void     (*mp_rv_action_func)(void *arg);
 static void     (*mp_rv_teardown_func)(void *arg);
@@ -163,14 +165,13 @@ static void        (*mp_bc_action_func)(void *arg);
 static void        *mp_bc_func_arg;
 static int      mp_bc_ncpus;
 static volatile long   mp_bc_count;
-decl_lck_mtx_data(static, mp_bc_lock);
-lck_mtx_ext_t   mp_bc_lock_ext;
+static LCK_MTX_DECLARE(mp_bc_lock, &smp_lck_grp);
 static  volatile int    debugger_cpu = -1;
 volatile long    NMIPI_acks = 0;
 volatile long    NMI_count = 0;
-static NMI_reason_t     NMI_panic_reason = NONE;
 static int              vector_timed_out;
 
+NMI_reason_t    NMI_panic_reason = NONE;
 extern void     NMI_cpus(void);
 
 static void     mp_cpus_call_init(void);
@@ -186,9 +187,6 @@ void i386_start_cpu(int lapic_id, int cpu_num);
 void i386_send_NMI(int cpu);
 void NMIPI_enable(boolean_t);
 
-static lck_grp_t        smp_lck_grp;
-static lck_grp_attr_t   smp_lck_grp_attr;
-
 #define NUM_CPU_WARM_CALLS      20
 struct timer_call       cpu_warm_call_arr[NUM_CPU_WARM_CALLS];
 queue_head_t            cpu_warm_call_list;
@@ -201,7 +199,7 @@ typedef struct cpu_warm_data {
 } *cpu_warm_data_t;
 
 static void             cpu_prewarm_init(void);
-static void             cpu_warm_timer_call_func(call_entry_param_t p0, call_entry_param_t p1);
+static void             cpu_warm_timer_call_func(timer_call_param_t p0, timer_call_param_t p1);
 static void             _cpu_warm_setup(void *arg);
 static timer_call_t     grab_warm_timer_call(void);
 static void             free_warm_timer_call(timer_call_t call);
@@ -209,12 +207,6 @@ static void             free_warm_timer_call(timer_call_t call);
 void
 smp_init(void)
 {
-	simple_lock_init(&mp_rv_lock, 0);
-	simple_lock_init(&debugger_callback_lock, 0);
-	lck_grp_attr_setdefault(&smp_lck_grp_attr);
-	lck_grp_init(&smp_lck_grp, "i386_smp", &smp_lck_grp_attr);
-	lck_mtx_init_ext(&mp_cpu_boot_lock, &mp_cpu_boot_lock_ext, &smp_lck_grp, LCK_ATTR_NULL);
-	lck_mtx_init_ext(&mp_bc_lock, &mp_bc_lock_ext, &smp_lck_grp, LCK_ATTR_NULL);
 	console_init();
 
 	if (!i386_smp_init(LAPIC_NMI_INTERRUPT, NMIInterruptHandler,
@@ -410,11 +402,18 @@ start_cpu(void *arg)
 		tsc_delta = tsc_target - tsc_starter;
 		kprintf("TSC sync for cpu %d: 0x%016llx delta 0x%llx (%lld)\n",
 		    psip->target_cpu, tsc_target, tsc_delta, tsc_delta);
+#if DEBUG || DEVELOPMENT
+		/*
+		 * Stash the delta for inspection later, since we can no
+		 * longer print/log it with interrupts disabled.
+		 */
+		cpu_datap(psip->target_cpu)->tsc_sync_delta = tsc_delta;
+#endif
 		if (ABS(tsc_delta) > (int64_t) TSC_sync_margin) {
 #if DEBUG
 			panic(
 #else
-			printf(
+			kprintf(
 #endif
 				"Unsynchronized  TSC for cpu %d: "
 				"0x%016llx, delta 0x%llx\n",
@@ -503,7 +502,7 @@ cpu_signal_handler(x86_saved_state_t *regs)
 	int             my_cpu;
 	volatile int    *my_word;
 
-	SCHED_STATS_IPI(current_processor());
+	SCHED_STATS_INC(ipi_count);
 
 	my_cpu = cpu_number();
 	my_word = &cpu_data_ptr[my_cpu]->cpu_signals;
@@ -560,6 +559,20 @@ cpu_signal_handler(x86_saved_state_t *regs)
 	return 0;
 }
 
+long
+NMI_pte_corruption_callback(__unused void *arg0, __unused void *arg1, uint16_t lcpu)
+{
+	static char     pstr[256];      /* global since this callback is serialized */
+	void            *stackptr;
+	__asm__ volatile ("movq %%rbp, %0" : "=m" (stackptr));
+
+	snprintf(&pstr[0], sizeof(pstr),
+	    "Panic(CPU %d): PTE corruption detected on PTEP 0x%llx VAL 0x%llx\n",
+	    lcpu, (unsigned long long)(uintptr_t)PTE_corrupted_ptr, *(uint64_t *)PTE_corrupted_ptr);
+	panic_i386_backtrace(stackptr, 64, &pstr[0], TRUE, current_cpu_datap()->cpu_int_state);
+	return 0;
+}
+
 extern void kprintf_break_lock(void);
 int
 NMIInterruptHandler(x86_saved_state_t *regs)
@@ -587,9 +600,14 @@ NMIInterruptHandler(x86_saved_state_t *regs)
 	}
 
 	if (NMI_panic_reason == SPINLOCK_TIMEOUT) {
+		lck_spinlock_to_info_t lsti;
+
+		lsti = os_atomic_load(&lck_spinlock_timeout_in_progress, acquire);
 		snprintf(&pstr[0], sizeof(pstr),
-		    "Panic(CPU %d, time %llu): NMIPI for spinlock acquisition timeout, spinlock: %p, spinlock owner: %p, current_thread: %p, spinlock_owner_cpu: 0x%x\n",
-		    cpu_number(), now, spinlock_timed_out, (void *) spinlock_timed_out->interlock.lock_data, current_thread(), spinlock_owner_cpu);
+		    "Panic(CPU %d, time %llu): NMIPI for spinlock acquisition timeout, spinlock: %p, "
+		    "spinlock owner: %p, current_thread: %p, spinlock_owner_cpu: 0x%x\n",
+		    cpu_number(), now, lsti->lock, (void *)lsti->owner_thread_cur,
+		    current_thread(), lsti->owner_cpu);
 		panic_i386_backtrace(stackptr, 64, &pstr[0], TRUE, regs);
 	} else if (NMI_panic_reason == TLB_FLUSH_TIMEOUT) {
 		snprintf(&pstr[0], sizeof(pstr),
@@ -627,9 +645,11 @@ NMIInterruptHandler(x86_saved_state_t *regs)
 		 */
 		if (__sync_bool_compare_and_swap(&mp_kdp_is_NMI, FALSE, TRUE)) {
 			kprintf_break_lock();
-			kprintf("Debugger entry requested by NMI\n");
-			kdp_i386_trap(T_DEBUG, saved_state64(regs), 0, 0);
-			printf("Debugger entry requested by NMI\n");
+
+			DebuggerWithContext(EXC_BREAKPOINT, saved_state64(regs),
+			    "requested by NMI", DEBUGGER_OPTION_NONE,
+			    (unsigned long)(char *)__builtin_return_address(0));
+
 			mp_kdp_is_NMI = FALSE;
 		} else {
 			mp_kdp_wait(FALSE, FALSE);
@@ -644,7 +664,6 @@ NMIInterruptHandler(x86_saved_state_t *regs)
 NMExit:
 	return 1;
 }
-
 
 /*
  * cpu_interrupt is really just to be used by the scheduler to
@@ -813,23 +832,27 @@ mp_safe_spin_lock(usimple_lock_t lock)
 	if (ml_get_interrupts_enabled()) {
 		simple_lock(lock, LCK_GRP_NULL);
 		return TRUE;
-	} else {
-		uint64_t tsc_spin_start = rdtsc64();
-		while (!simple_lock_try(lock, LCK_GRP_NULL)) {
-			cpu_signal_handler(NULL);
-			if (mp_spin_timeout(tsc_spin_start)) {
-				uint32_t lock_cpu;
-				uintptr_t lowner = (uintptr_t)
-				    lock->interlock.lock_data;
-				spinlock_timed_out = lock;
-				lock_cpu = spinlock_timeout_NMI(lowner);
-				NMIPI_panic(cpu_to_cpumask(lock_cpu), SPINLOCK_TIMEOUT);
-				panic("mp_safe_spin_lock() timed out, lock: %p, owner thread: 0x%lx, current_thread: %p, owner on CPU 0x%x, time: %llu",
-				    lock, lowner, current_thread(), lock_cpu, mach_absolute_time());
-			}
-		}
-		return FALSE;
 	}
+
+	lck_spinlock_to_info_t lsti;
+	uint64_t tsc_spin_start = rdtsc64();
+
+	while (!simple_lock_try(lock, LCK_GRP_NULL)) {
+		cpu_signal_handler(NULL);
+		if (mp_spin_timeout(tsc_spin_start)) {
+			uintptr_t lowner = (uintptr_t)lock->interlock.lock_data;
+
+			lsti = lck_spinlock_timeout_hit(lock, lowner);
+			NMIPI_panic(cpu_to_cpumask(lsti->owner_cpu), SPINLOCK_TIMEOUT);
+			panic("mp_safe_spin_lock() timed out, lock: %p, "
+			    "owner thread: 0x%lx, current_thread: %p, "
+			    "owner on CPU 0x%x, time: %llu",
+			    lock, lowner, current_thread(),
+			    lsti->owner_cpu, mach_absolute_time());
+		}
+	}
+
+	return FALSE;
 }
 
 /*
@@ -1175,7 +1198,7 @@ mp_cpus_call_cpu_init(int cpu)
 	simple_lock_init(&cqp->lock, 0);
 	queue_init(&cqp->queue);
 	for (i = 0; i < MP_CPUS_CALL_BUFS_PER_CPU; i++) {
-		callp = (mp_call_t *) kalloc(sizeof(mp_call_t));
+		callp = zalloc_permanent_type(mp_call_t);
 		mp_call_free(callp);
 	}
 
@@ -1217,6 +1240,9 @@ mp_cpus_call_action(void)
 	mp_call_head_unlock(cqp, intrs_enabled);
 }
 
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wcast-function-type"
+
 /*
  * mp_cpus_call() runs a given function on cpus specified in a given cpu mask.
  * Possible modes are:
@@ -1245,6 +1271,8 @@ mp_cpus_call(
 		NULL,
 		NULL);
 }
+
+#pragma clang diagnostic pop
 
 static void
 mp_cpus_call_wait(boolean_t     intrs_enabled,
@@ -1502,8 +1530,7 @@ mp_cpus_kick(cpumask_t cpus)
 	mp_safe_spin_lock(&x86_topo_lock);
 
 	for (cpu = 0; cpu < (cpu_t) real_ncpus; cpu++) {
-		if ((cpu == (cpu_t) cpu_number())
-		    || ((cpu_to_cpumask(cpu) & cpus) == 0)
+		if (((cpu_to_cpumask(cpu) & cpus) == 0)
 		    || !cpu_is_running(cpu)) {
 			continue;
 		}
@@ -1552,13 +1579,20 @@ i386_deactivate_cpu(void)
 	/*
 	 * Move all of this cpu's timers to the master/boot cpu,
 	 * and poke it in case there's a sooner deadline for it to schedule.
+	 * We don't need to wait for it to ack the IPI.
 	 */
-	timer_queue_shutdown(&cdp->rtclock_timer.queue);
-	mp_cpus_call(cpu_to_cpumask(master_cpu), ASYNC, timer_queue_expire_local, NULL);
+	timer_queue_shutdown(master_cpu,
+	    &cdp->rtclock_timer.queue,
+	    &cpu_datap(master_cpu)->rtclock_timer.queue);
 
-#if MONOTONIC
+	mp_cpus_call(cpu_to_cpumask(master_cpu), NOSYNC, timer_queue_expire_local, NULL);
+
+#if CONFIG_CPU_COUNTERS
 	mt_cpu_down(cdp);
-#endif /* MONOTONIC */
+#endif /* CONFIG_CPU_COUNTERS */
+#if KPERF
+	kptimer_stop_curcpu();
+#endif /* KPERF */
 
 	/*
 	 * Open an interrupt window
@@ -1591,10 +1625,10 @@ volatile boolean_t      mp_kdp_trap = FALSE;
 volatile boolean_t      mp_kdp_is_NMI = FALSE;
 volatile unsigned long  mp_kdp_ncpus;
 boolean_t               mp_kdp_state;
-
+bool                    mp_kdp_is_stackshot = false;
 
 void
-mp_kdp_enter(boolean_t proceed_on_failure)
+mp_kdp_enter(boolean_t proceed_on_failure, bool is_stackshot)
 {
 	unsigned int    cpu;
 	unsigned int    ncpus = 0;
@@ -1610,6 +1644,7 @@ mp_kdp_enter(boolean_t proceed_on_failure)
 	 */
 	mp_kdp_state = ml_set_interrupts_enabled(FALSE);
 	my_cpu = cpu_number();
+	mp_kdp_is_stackshot = is_stackshot;
 
 	if (my_cpu == (unsigned) debugger_cpu) {
 		kprintf("\n\nRECURSIVE DEBUGGER ENTRY DETECTED\n\n");
@@ -1741,7 +1776,7 @@ mp_kdp_enter(boolean_t proceed_on_failure)
 				}
 			}
 		}
-	} else {
+	} else if (NMI_panic_reason != PTE_CORRUPTION) {  /* In the pte corruption case, the detecting CPU has already NMIed other CPUs */
 		for (cpu = 0; cpu < real_ncpus; cpu++) {
 			if (cpu == my_cpu || !cpu_is_running(cpu)) {
 				continue;
@@ -1791,8 +1826,10 @@ cpu_signal_pending(int cpu, mp_event_t event)
 
 long
 kdp_x86_xcpu_invoke(const uint16_t lcpu, kdp_x86_xcpu_func_t func,
-    void *arg0, void *arg1)
+    void *arg0, void *arg1, uint64_t timeout)
 {
+	uint64_t now;
+
 	if (lcpu > (real_ncpus - 1)) {
 		return -1;
 	}
@@ -1807,7 +1844,9 @@ kdp_x86_xcpu_invoke(const uint16_t lcpu, kdp_x86_xcpu_func_t func,
 	kdp_xcpu_call_func.arg1 = arg1;
 	kdp_xcpu_call_func.cpu  = lcpu;
 	DBG("Invoking function %p on CPU %d\n", func, (int32_t)lcpu);
-	while (kdp_xcpu_call_func.cpu != KDP_XCPU_NONE) {
+	now = mach_absolute_time();
+	while (kdp_xcpu_call_func.cpu != KDP_XCPU_NONE &&
+	    (timeout == 0 || (mach_absolute_time() - now) < timeout)) {
 		cpu_pause();
 	}
 	return kdp_xcpu_call_func.ret;
@@ -1836,7 +1875,18 @@ mp_kdp_wait(boolean_t flush, boolean_t isNMI)
 	mca_check_save();
 #endif
 
+	/* If this is a stackshot, setup the CPU state before signalling we've entered the debugger. */
+	if (mp_kdp_is_stackshot) {
+		stackshot_cpu_preflight();
+	}
+
 	atomic_incl((volatile long *)&mp_kdp_ncpus, 1);
+
+	/* If this is a stackshot, join in on the fun. */
+	if (mp_kdp_is_stackshot) {
+		stackshot_aux_cpu_entry();
+	}
+
 	while (mp_kdp_trap || (isNMI == TRUE)) {
 		/*
 		 * A TLB shootdown request may be pending--this would result
@@ -1865,6 +1915,7 @@ mp_kdp_exit(void)
 
 	debugger_exit_time = mach_absolute_time();
 
+	mp_kdp_is_stackshot = false;
 	mp_kdp_trap = FALSE;
 	mfence();
 
@@ -1913,6 +1964,8 @@ void
 cause_ast_check(
 	processor_t     processor)
 {
+	assert(processor != PROCESSOR_NULL);
+
 	int     cpu = processor->cpu_id;
 
 	if (cpu != cpu_number()) {
@@ -1922,12 +1975,12 @@ cause_ast_check(
 }
 
 void
-slave_machine_init(void *param)
+machine_cpu_reinit(void *param)
 {
 	/*
 	 * Here in process context, but with interrupts disabled.
 	 */
-	DBG("slave_machine_init() CPU%d\n", get_cpu_number());
+	DBG("machine_cpu_reinit() CPU%d\n", get_cpu_number());
 
 	if (param == FULL_SLAVE_INIT) {
 		/*
@@ -1943,6 +1996,18 @@ int
 cpu_number(void)
 {
 	return get_cpu_number();
+}
+
+vm_offset_t
+current_percpu_base(void)
+{
+	return get_current_percpu_base();
+}
+
+vm_offset_t
+other_percpu_base(int cpu)
+{
+	return cpu_datap(cpu)->cpu_pcpu_base;
 }
 
 static void
@@ -1991,8 +2056,8 @@ free_warm_timer_call(timer_call_t call)
  */
 static void
 cpu_warm_timer_call_func(
-	call_entry_param_t p0,
-	__unused call_entry_param_t p1)
+	timer_call_param_t p0,
+	__unused timer_call_param_t p1)
 {
 	free_warm_timer_call((timer_call_t)p0);
 	return;
@@ -2025,7 +2090,7 @@ ml_interrupt_prewarm(
 	cpu_t ct;
 
 	if (ml_get_interrupts_enabled() == FALSE) {
-		panic("%s: Interrupts disabled?\n", __FUNCTION__);
+		panic("%s: Interrupts disabled?", __FUNCTION__);
 	}
 
 	/*

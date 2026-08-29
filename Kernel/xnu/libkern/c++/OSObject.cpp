@@ -42,7 +42,7 @@
 #include <kern/queue.h>
 
 __BEGIN_DECLS
-int debug_ivars_size;
+size_t debug_ivars_size;
 __END_DECLS
 
 
@@ -289,7 +289,7 @@ OSObject::operator new(size_t size)
 	}
 #endif
 
-	void * mem = kalloc_tag_bt(size, VM_KERN_MEMORY_LIBKERN);
+	void * mem = kalloc_data(size, Z_WAITOK);
 	assert(mem);
 	bzero(mem, size);
 	OSIVAR_ACCUMSIZE(size);
@@ -310,7 +310,7 @@ OSObject::operator delete(void * mem, size_t size)
 	}
 #endif
 
-	kfree(mem, size);
+	kfree_data(mem, size);
 	OSIVAR_ACCUMSIZE(-size);
 }
 

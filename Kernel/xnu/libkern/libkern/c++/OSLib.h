@@ -49,23 +49,42 @@ __END_DECLS
 
 #if XNU_KERNEL_PRIVATE
 #include <libkern/OSAtomic.h>
+#include <libkern/c++/OSCPPDebug.h>
 
-#define kalloc_container(size)  \
-	({ kalloc_tag_bt(size, VM_KERN_MEMORY_LIBKERN); })
+#define kallocp_type_container(ty, countp, flags) ({                           \
+	uint32_t *__countp = (countp);                                         \
+	struct kalloc_result __kar;                                            \
+	static KALLOC_TYPE_VAR_DEFINE_3(kt_view_var, ty, KT_SHARED_ACCT);      \
+	__kar = kalloc_ext(kt_mangle_var_view(kt_view_var),                    \
+	    kt_size(0, sizeof(ty), *__countp),                                 \
+	    Z_VM_TAG_BT(flags | Z_FULLSIZE | Z_SPRAYQTN | Z_SET_NOTSHARED,     \
+	    VM_KERN_MEMORY_LIBKERN), NULL);                                    \
+	*__countp = (uint32_t)MIN(__kar.size / sizeof(ty), UINT32_MAX);        \
+	(ty *)__kar.addr;                                                      \
+})
 
-#define kallocp_container(size) \
-	({ kallocp_tag_bt(size, VM_KERN_MEMORY_LIBKERN); })
+#define kreallocp_type_container(ty, ptr, old_count, countp, flags) ({         \
+	uint32_t *__countp = (countp);                                         \
+	struct kalloc_result __kar;                                            \
+	static KALLOC_TYPE_VAR_DEFINE_3(kt_view_var, ty, KT_SHARED_ACCT);      \
+	__kar = krealloc_ext(kt_mangle_var_view(kt_view_var), ptr,             \
+	    kt_size(0, sizeof(ty), old_count),                                 \
+	    kt_size(0, sizeof(ty), *__countp),                                 \
+	    Z_VM_TAG_BT(flags | Z_FULLSIZE | Z_SPRAYQTN | Z_SET_NOTSHARED,     \
+	    VM_KERN_MEMORY_LIBKERN), NULL);                                    \
+	*__countp = (uint32_t)MIN(__kar.size / sizeof(ty), UINT32_MAX);        \
+	(ty *)__kar.addr;                                                      \
+})
 
 #if OSALLOCDEBUG
-extern "C" int debug_container_malloc_size;
-extern "C" int debug_ivars_size;
+
 #if IOTRACKING
-#define OSCONTAINER_ACCUMSIZE(s) do { OSAddAtomic((SInt32)(s), &debug_container_malloc_size); trackingAccumSize(s); } while(0)
+#define OSCONTAINER_ACCUMSIZE(s) do { OSAddAtomicLong((s), &debug_container_malloc_size); trackingAccumSize(s); } while(0)
 #else
-#define OSCONTAINER_ACCUMSIZE(s) do { OSAddAtomic((SInt32)(s), &debug_container_malloc_size); } while(0)
+#define OSCONTAINER_ACCUMSIZE(s) do { OSAddAtomicLong((s), &debug_container_malloc_size); } while(0)
 #endif
-#define OSMETA_ACCUMSIZE(s)      do { OSAddAtomic((SInt32)(s), &debug_container_malloc_size); } while(0)
-#define OSIVAR_ACCUMSIZE(s)      do { OSAddAtomic((SInt32)(s), &debug_ivars_size);            } while(0)
+#define OSMETA_ACCUMSIZE(s)      do { OSAddAtomicLong((s), &debug_container_malloc_size); } while(0)
+#define OSIVAR_ACCUMSIZE(s)      do { OSAddAtomicLong((s), &debug_ivars_size);            } while(0)
 
 #else /* OSALLOCDEBUG */
 

@@ -1,4 +1,3 @@
-#define T_NAMESPACE "xnu.ipc"
 #include <darwintest.h>
 
 #include <pthread.h>
@@ -8,9 +7,13 @@
 #include <unistd.h>
 #include <mach/mach.h>
 #include <pthread/qos_private.h>
-#include <voucher/ipc_pthread_priority_types.h>
+#include <mach/mach_voucher.h>
+#include <bank/bank_types.h>
 
-T_GLOBAL_META(T_META_RUN_CONCURRENTLY(true));
+T_GLOBAL_META(T_META_RUN_CONCURRENTLY(true),
+    T_META_NAMESPACE("xnu.ipc"),
+    T_META_RADAR_COMPONENT_NAME("xnu"),
+    T_META_RADAR_COMPONENT_VERSION("IPC"));
 
 #define MSG      1024
 #define PG_ALLOC 4096
@@ -58,30 +61,18 @@ reply_type_str(ReplyType rt)
 }
 
 static mach_voucher_t
-create_pthpriority_voucher(void)
+create_task_voucher(void)
 {
-	char voucher_buf[sizeof(mach_voucher_attr_recipe_data_t) + sizeof(ipc_pthread_priority_value_t)];
-
+	static mach_voucher_attr_recipe_data_t task_create_recipe = {
+		.key = MACH_VOUCHER_ATTR_KEY_BANK,
+		.command = MACH_VOUCHER_ATTR_BANK_CREATE,
+	};
 	mach_voucher_t voucher = MACH_PORT_NULL;
 	kern_return_t kr;
-	ipc_pthread_priority_value_t ipc_pthread_priority_value =
-	    (ipc_pthread_priority_value_t)_pthread_qos_class_encode(QOS_CLASS_USER_INTERACTIVE, 0, 0);
-
-	mach_voucher_attr_raw_recipe_size_t recipe_size = 0;
-	mach_voucher_attr_recipe_t recipe =
-	    (mach_voucher_attr_recipe_t)&voucher_buf[0];
-
-	recipe->key = MACH_VOUCHER_ATTR_KEY_PTHPRIORITY;
-	recipe->command = MACH_VOUCHER_ATTR_PTHPRIORITY_CREATE;
-	recipe->previous_voucher = MACH_VOUCHER_NULL;
-
-	memcpy((char *)&recipe->content[0], &ipc_pthread_priority_value, sizeof(ipc_pthread_priority_value));
-	recipe->content_size = sizeof(ipc_pthread_priority_value_t);
-	recipe_size += sizeof(mach_voucher_attr_recipe_data_t) + recipe->content_size;
 
 	kr = host_create_mach_voucher(mach_host_self(),
-	    (mach_voucher_attr_raw_recipe_array_t)&voucher_buf[0],
-	    recipe_size,
+	    (mach_voucher_attr_raw_recipe_array_t)&task_create_recipe,
+	    sizeof(task_create_recipe),
 	    &voucher);
 
 	T_QUIET; T_ASSERT_MACH_SUCCESS(kr, "host_create_mach_voucher");
@@ -104,7 +95,7 @@ handle_exceptions(void *arg)
 	kr = vm_allocate(mach_task_self(), &page, PG_ALLOC, VM_FLAGS_ANYWHERE);
 	T_QUIET; T_ASSERT_MACH_SUCCESS(kr, "ool page allocation of %d bytes", PG_ALLOC);
 
-	mach_voucher_t voucher = create_pthpriority_voucher();
+	mach_voucher_t voucher = create_task_voucher();
 
 	while (1) {
 		bzero(msg, sizeof(msg_store));
@@ -411,47 +402,47 @@ test_exc_reply_type(ReplyType reply_type)
 }
 
 T_DECL(mach_exc_ReplyNoError, "exception server reply with no error",
-    T_META_CHECK_LEAKS(false), T_META_IGNORECRASHES(".*mach_exception_reply.*"))
+    T_META_CHECK_LEAKS(false), T_META_IGNORECRASHES(".*mach_exception_reply.*"), T_META_TAG_VM_PREFERRED)
 {
 	test_exc_reply_type(ReplyWithNoError);
 }
 T_DECL(mach_exc_ReplyWithReplyPort, "exception server reply with reply port",
-    T_META_CHECK_LEAKS(false), T_META_IGNORECRASHES(".*mach_exception_reply.*"))
+    T_META_CHECK_LEAKS(false), T_META_IGNORECRASHES(".*mach_exception_reply.*"), T_META_TAG_VM_PREFERRED)
 {
 	test_exc_reply_type(ReplyWithReplyPort);
 }
 T_DECL(mach_exc_ReplyWithReplyPortMove, "exception server reply with reply port as MOVE_SEND",
-    T_META_CHECK_LEAKS(false), T_META_IGNORECRASHES(".*mach_exception_reply.*"))
+    T_META_CHECK_LEAKS(false), T_META_IGNORECRASHES(".*mach_exception_reply.*"), T_META_TAG_VM_PREFERRED)
 {
 	test_exc_reply_type(ReplyWithReplyPortMove);
 }
 T_DECL(mach_exc_ReplyWithReplyPortCplxBit, "exception server reply with reply port and complex bit set",
-    T_META_CHECK_LEAKS(false), T_META_IGNORECRASHES(".*mach_exception_reply.*"))
+    T_META_CHECK_LEAKS(false), T_META_IGNORECRASHES(".*mach_exception_reply.*"), T_META_TAG_VM_PREFERRED)
 {
 	test_exc_reply_type(ReplyWithReplyPortCplxBit);
 }
 T_DECL(mach_exc_ReplyWithReplyPortMoveCplxBit, "exception server reply with reply port as MOVE_SEND and complex bit set",
-    T_META_CHECK_LEAKS(false), T_META_IGNORECRASHES(".*mach_exception_reply.*"))
+    T_META_CHECK_LEAKS(false), T_META_IGNORECRASHES(".*mach_exception_reply.*"), T_META_TAG_VM_PREFERRED)
 {
 	test_exc_reply_type(ReplyWithReplyPortMoveCplxBit);
 }
 T_DECL(mach_exc_ReplyWithOOLPort, "exception server reply with OOL port descriptor",
-    T_META_CHECK_LEAKS(false), T_META_IGNORECRASHES(".*mach_exception_reply.*"))
+    T_META_CHECK_LEAKS(false), T_META_IGNORECRASHES(".*mach_exception_reply.*"), T_META_TAG_VM_PREFERRED)
 {
 	test_exc_reply_type(ReplyWithPortDesc);
 }
 T_DECL(mach_exc_ReplyWithOOLDesc, "exception server reply with OOL memory descriptor",
-    T_META_CHECK_LEAKS(false), T_META_IGNORECRASHES(".*mach_exception_reply.*"))
+    T_META_CHECK_LEAKS(false), T_META_IGNORECRASHES(".*mach_exception_reply.*"), T_META_TAG_VM_PREFERRED)
 {
 	test_exc_reply_type(ReplyWithOOLDesc);
 }
 T_DECL(mach_exc_ReplyWithVoucher, "exception server reply with a voucher",
-    T_META_CHECK_LEAKS(false), T_META_IGNORECRASHES(".*mach_exception_reply.*"))
+    T_META_CHECK_LEAKS(false), T_META_IGNORECRASHES(".*mach_exception_reply.*"), T_META_TAG_VM_PREFERRED)
 {
 	test_exc_reply_type(ReplyWithVoucher);
 }
 T_DECL(mach_exc_ReplyWithVoucherGarbage, "exception server reply with bits in msgh_voucher_port",
-    T_META_CHECK_LEAKS(false), T_META_IGNORECRASHES(".*mach_exception_reply.*"))
+    T_META_CHECK_LEAKS(false), T_META_IGNORECRASHES(".*mach_exception_reply.*"), T_META_TAG_VM_PREFERRED)
 {
 	test_exc_reply_type(ReplyWithVoucherGarbage);
 }

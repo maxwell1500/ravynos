@@ -26,10 +26,15 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
+#define IOKIT_ENABLE_SHARED_PTR
+
 #include <IOKit/IOSharedDataQueue.h>
 #include <IOKit/IODataQueueShared.h>
 #include <IOKit/IOLib.h>
 #include <IOKit/IOMemoryDescriptor.h>
+#include <libkern/c++/OSSharedPtr.h>
+
+#include <vm/vm_kern_xnu.h>
 
 #ifdef enqueue
 #undef enqueue
@@ -43,29 +48,28 @@
 
 OSDefineMetaClassAndStructors(IOSharedDataQueue, IODataQueue)
 
-IOSharedDataQueue *IOSharedDataQueue::withCapacity(UInt32 size)
+OSSharedPtr<IOSharedDataQueue>
+IOSharedDataQueue::withCapacity(UInt32 size)
 {
-	IOSharedDataQueue *dataQueue = new IOSharedDataQueue;
+	OSSharedPtr<IOSharedDataQueue> dataQueue = OSMakeShared<IOSharedDataQueue>();
 
 	if (dataQueue) {
 		if (!dataQueue->initWithCapacity(size)) {
-			dataQueue->release();
-			dataQueue = NULL;
+			return nullptr;
 		}
 	}
 
 	return dataQueue;
 }
 
-IOSharedDataQueue *
+OSSharedPtr<IOSharedDataQueue>
 IOSharedDataQueue::withEntries(UInt32 numEntries, UInt32 entrySize)
 {
-	IOSharedDataQueue *dataQueue = new IOSharedDataQueue;
+	OSSharedPtr<IOSharedDataQueue> dataQueue = OSMakeShared<IOSharedDataQueue>();
 
 	if (dataQueue) {
 		if (!dataQueue->initWithEntries(numEntries, entrySize)) {
-			dataQueue->release();
-			dataQueue = NULL;
+			return nullptr;
 		}
 	}
 
@@ -77,12 +81,13 @@ IOSharedDataQueue::initWithCapacity(UInt32 size)
 {
 	IODataQueueAppendix *   appendix;
 	vm_size_t               allocSize;
+	kern_return_t           kr;
 
 	if (!super::init()) {
 		return false;
 	}
 
-	_reserved = (ExpansionData *)IOMalloc(sizeof(struct ExpansionData));
+	_reserved = IOMallocType(ExpansionData);
 	if (!_reserved) {
 		return false;
 	}
@@ -97,11 +102,11 @@ IOSharedDataQueue::initWithCapacity(UInt32 size)
 		return false;
 	}
 
-	dataQueue = (IODataQueueMemory *)IOMallocAligned(allocSize, PAGE_SIZE);
-	if (dataQueue == NULL) {
+	kr = kmem_alloc(kernel_map, (vm_offset_t *)&dataQueue, allocSize,
+	    (kma_flags_t)(KMA_DATA | KMA_ZERO), IOMemoryTag(kernel_map));
+	if (kr != KERN_SUCCESS) {
 		return false;
 	}
-	bzero(dataQueue, allocSize);
 
 	dataQueue->queueSize    = size;
 //  dataQueue->head         = 0;
@@ -115,7 +120,7 @@ IOSharedDataQueue::initWithCapacity(UInt32 size)
 	appendix->version   = 0;
 
 	if (!notifyMsg) {
-		notifyMsg = IOMalloc(sizeof(mach_msg_header_t));
+		notifyMsg = IOMallocType(mach_msg_header_t);
 		if (!notifyMsg) {
 			return false;
 		}
@@ -131,26 +136,27 @@ void
 IOSharedDataQueue::free()
 {
 	if (dataQueue) {
-		IOFreeAligned(dataQueue, round_page(getQueueSize() + DATA_QUEUE_MEMORY_HEADER_SIZE + DATA_QUEUE_MEMORY_APPENDIX_SIZE));
+		kmem_free(kernel_map, (vm_offset_t)dataQueue, round_page(getQueueSize() +
+		    DATA_QUEUE_MEMORY_HEADER_SIZE + DATA_QUEUE_MEMORY_APPENDIX_SIZE));
 		dataQueue = NULL;
 		if (notifyMsg) {
-			IOFree(notifyMsg, sizeof(mach_msg_header_t));
+			IOFreeType(notifyMsg, mach_msg_header_t);
 			notifyMsg = NULL;
 		}
 	}
 
 	if (_reserved) {
-		IOFree(_reserved, sizeof(struct ExpansionData));
+		IOFreeType(_reserved, ExpansionData);
 		_reserved = NULL;
 	}
 
 	super::free();
 }
 
-IOMemoryDescriptor *
+OSSharedPtr<IOMemoryDescriptor>
 IOSharedDataQueue::getMemoryDescriptor()
 {
-	IOMemoryDescriptor *descriptor = NULL;
+	OSSharedPtr<IOMemoryDescriptor> descriptor;
 
 	if (dataQueue != NULL) {
 		descriptor = IOMemoryDescriptor::withAddress(dataQueue, getQueueSize() + DATA_QUEUE_MEMORY_HEADER_SIZE + DATA_QUEUE_MEMORY_APPENDIX_SIZE, kIODirectionOutIn);
@@ -182,7 +188,7 @@ IOSharedDataQueue::peek()
 		UInt32              headOffset   = dataQueue->head;
 		UInt32              queueSize    = getQueueSize();
 
-		if (headOffset >= queueSize) {
+		if (headOffset > queueSize) {
 			return NULL;
 		}
 

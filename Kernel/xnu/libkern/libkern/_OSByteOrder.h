@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2006-2023 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -29,26 +29,18 @@
 #ifndef _OS__OSBYTEORDER_H
 #define _OS__OSBYTEORDER_H
 
-/*
- * This header is normally included from <libkern/OSByteOrder.h>.  However,
- * <sys/_endian.h> also includes this in the case of little-endian
- * architectures, so that we can map OSByteOrder routines to the hton* and ntoh*
- * macros.  This results in the asymmetry below; we only include
- * <libkern/arch/_OSByteOrder.h> for little-endian architectures.
- */
-
 #include <sys/_types.h>
 
 /* Macros for swapping constant values in the preprocessing stage. */
 #define __DARWIN_OSSwapConstInt16(x) \
-    ((__uint16_t)((((__uint16_t)(x) & 0xff00) >> 8) | \
-	        (((__uint16_t)(x) & 0x00ff) << 8)))
+    ((__uint16_t)((((__uint16_t)(x) & 0xff00U) >> 8) | \
+	        (((__uint16_t)(x) & 0x00ffU) << 8)))
 
 #define __DARWIN_OSSwapConstInt32(x) \
-    ((__uint32_t)((((__uint32_t)(x) & 0xff000000) >> 24) | \
-	        (((__uint32_t)(x) & 0x00ff0000) >>  8) | \
-	        (((__uint32_t)(x) & 0x0000ff00) <<  8) | \
-	        (((__uint32_t)(x) & 0x000000ff) << 24)))
+    ((__uint32_t)((((__uint32_t)(x) & 0xff000000U) >> 24) | \
+	        (((__uint32_t)(x) & 0x00ff0000U) >>  8) | \
+	        (((__uint32_t)(x) & 0x0000ff00U) <<  8) | \
+	        (((__uint32_t)(x) & 0x000000ffU) << 24)))
 
 #define __DARWIN_OSSwapConstInt64(x) \
     ((__uint64_t)((((__uint64_t)(x) & 0xff00000000000000ULL) >> 56) | \
@@ -67,7 +59,7 @@
 #endif
 
 #if defined (__arm__) || defined(__arm64__)
-#include <libkern/arm/OSByteOrder.h>
+#include <libkern/arm/_OSByteOrder.h>
 #endif
 
 
@@ -95,27 +87,27 @@
 #endif
 
 __DARWIN_OS_INLINE
-uint16_t
+__uint16_t
 _OSSwapInt16(
-	uint16_t                    data
+	__uint16_t                    data
 	)
 {
 	return __DARWIN_OSSwapConstInt16(data);
 }
 
 __DARWIN_OS_INLINE
-uint32_t
+__uint32_t
 _OSSwapInt32(
-	uint32_t                    data
+	__uint32_t                    data
 	)
 {
 	return __DARWIN_OSSwapConstInt32(data);
 }
 
 __DARWIN_OS_INLINE
-uint64_t
+__uint64_t
 _OSSwapInt64(
-	uint64_t                    data
+	__uint64_t                    data
 	)
 {
 	return __DARWIN_OSSwapConstInt64(data);

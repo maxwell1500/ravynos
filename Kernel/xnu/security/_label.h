@@ -68,24 +68,29 @@
  * XXXMAC: This shouldn't be exported to userland, but is because of ucred.h
  * and various other messes.
  */
-#if CONFIG_EMBEDDED
+#if defined(XNU_TARGET_OS_OSX)
+#define MAC_MAX_SLOTS   7
+#else
 #if CONFIG_VNGUARD
 #define MAC_MAX_SLOTS   4
 #else
 #define MAC_MAX_SLOTS   3
 #endif
-#else
-#define MAC_MAX_SLOTS   7
 #endif
 
-#define MAC_FLAG_INITIALIZED    0x0000001       /* Is initialized for use. */
+#if XNU_KERNEL_PRIVATE
+/* l_owner set to this value means the label is inlined in the cred */
+#define MAC_LABEL_CRED_OWNED  ((struct label **)~0ul)
+#define MAC_LABEL_NULL_SLOT   (~0l)
 
 struct label {
-	int     l_flags;
-	union {
-		void    *l_ptr;
-		long     l_long;
-	}       l_perpolicy[MAC_MAX_SLOTS];
+	struct label **l_owner;
+	long           l_perpolicy[MAC_MAX_SLOTS];
 };
+
+extern const struct label empty_label;
+#else
+struct label;
+#endif
 
 #endif /* !_SECURITY_LABEL_H_ */

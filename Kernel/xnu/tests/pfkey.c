@@ -1,13 +1,16 @@
 #include <darwintest.h>
 #include <darwintest_utils.h>
 #include <dispatch/dispatch.h>
-#include <net/pfkeyv2.h>
+#include <net/if_var_private.h>
+#include <System/net/pfkeyv2.h>
 #include <netinet6/ipsec.h>
 #include <arpa/inet.h>
 
 T_GLOBAL_META(
 	T_META_NAMESPACE("xnu.pfkey"),
 	T_META_ASROOT(true),
+	T_META_RADAR_COMPONENT_NAME("xnu"),
+	T_META_RADAR_COMPONENT_VERSION("NetworkExtension"),
 	T_META_CHECK_LEAKS(false));
 
 #define MAX_SPD_CHECK       100
@@ -33,10 +36,14 @@ typedef enum {
 	TEST_SADB_EXT_MIGRATE_ADDRESS_IPv4 = 9,
 	TEST_SADB_EXT_MIGRATE_ADDRESS_IPv6 = 10,
 	TEST_SADB_EXT_MIGRATE_BAD_ADDRESS = 11,
+	TEST_TCP_INPUT_IPSEC_COPY_POLICY = 12,
+	TEST_SADB_X_SPDADD_MEMORY_LEAK_78944570 = 13,
+	TEST_SADB_EXT_MIGRATE_AFTER_EXPIRY_134671927 = 14,
 } test_identifier;
 
 static test_identifier test_id = TEST_INVALID;
 static dispatch_source_t pfkey_source = NULL;
+static unsigned long oldmax;
 
 static void pfkey_cleanup(void);
 
@@ -51,6 +58,8 @@ static void pfkey_process_message_test_60822823_1(uint8_t **mhp, int pfkey_socke
 static void pfkey_process_message_test_60687183(uint8_t **mhp, int pfkey_socket);
 static void pfkey_process_message_test_60687183_1(uint8_t **mhp, int pfkey_socket);
 static void pfkey_process_message_test_60687183_2(uint8_t **mhp, int pfkey_socket);
+static void pfkey_process_message_test_78944570(uint8_t **mhp, int pfkey_socket);
+static void pfkey_process_message_test_134671927(uint8_t **mhp, int pfkey_socket);
 
 static void(*const process_pfkey_message_tests[])(uint8_t * *mhp, int pfkey_socket) =
 {
@@ -66,6 +75,9 @@ static void(*const process_pfkey_message_tests[])(uint8_t * *mhp, int pfkey_sock
 	pfkey_process_message_test_60687183,    // TEST_SADB_EXT_MIGRATE_ADDRESS_IPv4
 	pfkey_process_message_test_60687183_1,  // TEST_SADB_EXT_MIGRATE_ADDRESS_IPv6
 	pfkey_process_message_test_60687183_2,  // TEST_SADB_EXT_MIGRATE_BAD_ADDRESS
+	NULL,                                   // TEST_TCP_INPUT_IPSEC_COPY_POLICY
+	pfkey_process_message_test_78944570,    // TEST_SADB_X_SPDADD_MEMORY_LEAK_78944570
+	pfkey_process_message_test_134671927,   // TEST_SADB_EXT_MIGRATE_AFTER_EXPIRY_134671927
 };
 
 static void
@@ -255,7 +267,11 @@ send_pfkey_spd_add_message(int pfkey_socket, uint8_t proto)
 	policy_payload->sadb_x_policy_len = PFKEY_UNIT64(sizeof(*policy_payload));
 	policy_payload->sadb_x_policy_exttype = SADB_X_EXT_POLICY;
 	policy_payload->sadb_x_policy_type = IPSEC_POLICY_DISCARD;
-	policy_payload->sadb_x_policy_dir = IPSEC_DIR_OUTBOUND;
+	if (test_id == TEST_SADB_X_SPDADD_MEMORY_LEAK_78944570) {
+		policy_payload->sadb_x_policy_dir = IPSEC_DIR_INVALID;
+	} else {
+		policy_payload->sadb_x_policy_dir = IPSEC_DIR_OUTBOUND;
+	}
 	tlen += sizeof(*policy_payload);
 
 	// Update the total length
@@ -426,6 +442,29 @@ send_pfkey_flush_sp(int pfkey_socket)
 }
 
 static void
+send_pfkey_register(int pfkey_socket)
+{
+	uint8_t payload[MCLBYTES] __attribute__ ((aligned(32)));
+	bzero(payload, sizeof(payload));
+	uint16_t tlen = 0;
+
+	struct sadb_msg *msg_payload = (struct sadb_msg *)payload;
+	msg_payload->sadb_msg_version = PF_KEY_V2;
+	msg_payload->sadb_msg_type = SADB_REGISTER;
+	msg_payload->sadb_msg_errno = 0;
+	msg_payload->sadb_msg_satype = SADB_SATYPE_ESP;
+	msg_payload->sadb_msg_len = PFKEY_UNIT64(tlen);
+	msg_payload->sadb_msg_reserved = 0;
+	msg_payload->sadb_msg_seq = 0;
+	msg_payload->sadb_msg_pid = (u_int32_t)getpid();
+	tlen += sizeof(*msg_payload);
+
+	// Update the total length
+	msg_payload->sadb_msg_len = PFKEY_UNIT64(tlen);
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(send(pfkey_socket, payload, (size_t)PFKEY_UNUNIT64(msg_payload->sadb_msg_len), 0), "pfkey flush security policies");
+}
+
+static void
 send_pkey_get_spi(int pfkey_socket)
 {
 	uint8_t payload[MCLBYTES] __attribute__ ((aligned(32)));
@@ -523,6 +562,9 @@ send_pkey_add_sa(int pfkey_socket, uint32_t spi, const char *src, const char *ds
 	sa2_x_payload->sadb_x_sa2_exttype = SADB_X_EXT_SA2;
 	sa2_x_payload->sadb_x_sa2_mode = IPSEC_MODE_TRANSPORT;
 	sa2_x_payload->sadb_x_sa2_reqid = 0;
+	if (test_id == TEST_SADB_EXT_MIGRATE_AFTER_EXPIRY_134671927) {
+		sa2_x_payload->sadb_x_sa2_alwaysexpire = 1;
+	}
 	tlen += sizeof(*sa2_x_payload);
 
 	uint8_t prefixlen = (family == AF_INET) ? (sizeof(struct in_addr) << 3) : (sizeof(struct in6_addr) << 3);
@@ -605,6 +647,9 @@ send_pkey_add_sa(int pfkey_socket, uint32_t spi, const char *src, const char *ds
 	struct sadb_lifetime *soft_lifetime_payload = (struct sadb_lifetime *)(void *)(payload + tlen);
 	soft_lifetime_payload->sadb_lifetime_len = PFKEY_UNIT64(sizeof(*soft_lifetime_payload));
 	soft_lifetime_payload->sadb_lifetime_exttype = SADB_EXT_LIFETIME_SOFT;
+	if (test_id == TEST_SADB_EXT_MIGRATE_AFTER_EXPIRY_134671927) {
+		soft_lifetime_payload->sadb_lifetime_addtime = 1;
+	}
 	tlen += sizeof(*soft_lifetime_payload);
 
 	// Update the total length
@@ -1042,6 +1087,10 @@ pfkey_cleanup(void)
 		dispatch_source_cancel(pfkey_source);
 		pfkey_source = NULL;
 	}
+
+	if (oldmax != 0) {
+		(void)sysctlbyname("kern.ipc.maxsockbuf", NULL, NULL, &oldmax, sizeof(oldmax));
+	}
 }
 
 static int
@@ -1050,7 +1099,6 @@ pfkey_setup_socket(void)
 	int pfkey_socket = -1;
 	int bufsiz = 0;
 	const unsigned long newbufk = 1536;
-	unsigned long oldmax;
 	size_t  oldmaxsize = sizeof(oldmax);
 	unsigned long newmax = newbufk * (1024 + 128);
 
@@ -1059,7 +1107,7 @@ pfkey_setup_socket(void)
 	if (sysctlbyname("kern.ipc.maxsockbuf", &oldmax, &oldmaxsize, &newmax, sizeof(newmax)) != 0) {
 		bufsiz = 233016;        /* Max allowed by default */
 	} else {
-		bufsiz = newbufk * 1024;
+		bufsiz = newbufk * 800;
 	}
 
 	T_QUIET; T_ASSERT_POSIX_SUCCESS(setsockopt(pfkey_socket, SOL_SOCKET, SO_SNDBUF, &bufsiz, sizeof(bufsiz)), "pfkey set snd socket buf failed %d", bufsiz);
@@ -1101,7 +1149,7 @@ pfkey_process_message_test_60822136(uint8_t **mhp, int pfkey_socket)
 		T_QUIET; T_ASSERT_NOTNULL(policy_message, "spd add policy message is NULL");
 		policy_id = policy_message->sadb_x_policy_id;
 		T_LOG("Added policy id %u", policy_id);
-		send_pfkey_spd_get_message(pfkey_socket, policy_id);;
+		send_pfkey_spd_get_message(pfkey_socket, policy_id);
 		break;
 	}
 	case SADB_X_SPDGET:
@@ -1171,7 +1219,7 @@ pfkey_process_message_test_60822924(uint8_t **mhp, int pfkey_socket)
 		T_QUIET; T_ASSERT_NOTNULL(policy_message, "spd add policy message is NULL");
 		policy_id = policy_message->sadb_x_policy_id;
 		T_LOG("Added policy id %u", policy_id);
-		send_pfkey_spd_enable_message(pfkey_socket, policy_id);;
+		send_pfkey_spd_enable_message(pfkey_socket, policy_id);
 		break;
 	}
 	case SADB_X_SPDENABLE:
@@ -1241,7 +1289,7 @@ pfkey_process_message_test_60822956(uint8_t **mhp, int pfkey_socket)
 		T_QUIET; T_ASSERT_NOTNULL(policy_message, "spd add policy message is NULL");
 		policy_id = policy_message->sadb_x_policy_id;
 		T_LOG("Added policy id %u", policy_id);
-		send_pfkey_spd_disable_message(pfkey_socket, policy_id);;
+		send_pfkey_spd_disable_message(pfkey_socket, policy_id);
 		break;
 	}
 	case SADB_X_SPDDISABLE:
@@ -1638,7 +1686,167 @@ pfkey_process_message_test_60687183_2(uint8_t **mhp, int pfkey_socket)
 	return;
 }
 
-T_DECL(sadb_x_get_60822136, "security policy reference count overflow")
+static void
+pfkey_process_message_test_78944570(uint8_t **mhp, __unused int pfkey_socket)
+{
+	struct sadb_msg *message = (struct sadb_msg *)(void *)mhp[0];
+
+	if (message->sadb_msg_pid != (uint32_t)getpid()) {
+		return;
+	}
+
+	switch (message->sadb_msg_type) {
+	case SADB_X_SPDADD:
+	{
+		if (message->sadb_msg_errno != 0) {
+			T_QUIET; T_ASSERT_EQ(message->sadb_msg_errno, EINVAL, "SADB error for type %u error %d", message->sadb_msg_type, message->sadb_msg_errno);
+			T_PASS("SADB spd add received EINVAL");
+		} else {
+			T_FAIL("SADB spd add received success");
+		}
+		T_END;
+		break;
+	}
+	case SADB_FLUSH:
+	case SADB_X_SPDFLUSH:
+		break;
+	default:
+		T_FAIL("bad SADB message type %u", message->sadb_msg_type);
+		T_END;
+	}
+	return;
+}
+
+static void
+pfkey_process_message_test_134671927(uint8_t **mhp, int pfkey_socket)
+{
+	struct sadb_msg *message = (struct sadb_msg *)(void *)mhp[0];
+	static uint32_t spi = 0;
+
+	if (message->sadb_msg_type != SADB_EXPIRE && message->sadb_msg_pid != (uint32_t)getpid()) {
+		return;
+	}
+
+	T_QUIET; T_ASSERT_EQ(message->sadb_msg_errno, 0, "SADB error for type %u error %d", message->sadb_msg_type, message->sadb_msg_errno);
+
+	switch (message->sadb_msg_type) {
+	case SADB_REGISTER:
+	{
+		T_LOG("registered for SA updates");
+		send_pkey_add_sa(pfkey_socket, 0x12345678, TEST_SRC_ADDRESS_IPv6, TEST_DST_ADDRESS_IPv6, AF_INET6);
+		break;
+	}
+	case SADB_ADD:
+	{
+		struct sadb_sa *sa_message = (struct sadb_sa *)(void *)mhp[SADB_EXT_SA];
+		T_QUIET; T_ASSERT_NOTNULL(sa_message, "add sa message is NULL");
+		spi = ntohl(sa_message->sadb_sa_spi);
+		T_LOG("added sa 0x%x", spi);
+		break;
+	}
+	case SADB_EXPIRE:
+	{
+		struct sadb_sa *sa_message = (struct sadb_sa *)(void *)mhp[SADB_EXT_SA];
+		T_QUIET; T_ASSERT_NOTNULL(sa_message, "expire sa message is NULL");
+		if (spi == 0 || spi != ntohl(sa_message->sadb_sa_spi)) {
+			break;
+		}
+		T_LOG("expire sa 0x%x", spi);
+		send_pkey_migrate_sa(pfkey_socket, spi, TEST_SRC_ADDRESS_IPv6, TEST_DST_ADDRESS_IPv6, AF_INET6,
+		    TEST_MIGRATE_SRC_ADDRESS_IPv6, TEST_MIGRATE_DST_ADDRESS_IPv6, AF_INET6);
+		break;
+	}
+	case SADB_MIGRATE:
+	{
+		T_PASS("migrate SA success");
+		T_END;
+	}
+	case SADB_FLUSH:
+	case SADB_X_SPDFLUSH:
+		break;
+	default:
+		T_FAIL("bad SADB message type %u", message->sadb_msg_type);
+		T_END;
+	}
+	return;
+}
+
+static int
+setup_tcp_server(uint16_t port)
+{
+	struct sockaddr_in server_addr = {};
+	int server_fd = -1;
+
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(server_fd = socket(AF_INET, SOCK_STREAM, 0),
+	    "tcp server socket creation failed");
+
+	server_addr.sin_family = AF_INET;
+	server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+	server_addr.sin_port = htons(port);
+
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(bind(server_fd, (struct sockaddr *)&server_addr,
+	    sizeof(server_addr)), "tcp server bind failed");
+
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(listen(server_fd, 2), "tcp server listen failed");
+	return server_fd;
+}
+
+static int
+setup_loopback_tcp_client(uint16_t server_port)
+{
+	struct sockaddr_in conn_addr = {};
+	int client_fd = -1;
+
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(client_fd = socket(AF_INET, SOCK_STREAM, 0),
+	    "tcp client socket creation failed");
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(inet_pton(AF_INET, "127.0.0.1", &conn_addr.sin_addr),
+	    "loopback address inet_pton failed");
+
+	conn_addr.sin_family = AF_INET;
+	conn_addr.sin_port = htons(server_port);
+
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(connect(client_fd, (struct sockaddr *)&conn_addr, sizeof(conn_addr)),
+	    "tcp loopback client connect failed");
+	return client_fd;
+}
+
+static void
+setup_socket_policy(int socket_fd)
+{
+	uint8_t __attribute__((aligned(4))) buf[
+		sizeof(struct sadb_x_policy) +
+		sizeof(struct sadb_x_ipsecrequest) +
+		sizeof(struct sockaddr_in) +
+		sizeof(struct sockaddr_in)
+	];
+
+	struct sadb_x_policy *xpl = (struct sadb_x_policy *)buf;
+	struct sadb_x_ipsecrequest *xisr = (struct sadb_x_ipsecrequest *)(xpl + 1);
+	struct sockaddr *sa;
+
+
+	bzero(buf, sizeof(buf));
+	/* xpl: */
+	xpl->sadb_x_policy_len = sizeof(buf) >> 3;
+	xpl->sadb_x_policy_dir = IPSEC_DIR_INBOUND;
+	xpl->sadb_x_policy_type = IPSEC_POLICY_IPSEC;
+	/* xisr: */
+	xisr->sadb_x_ipsecrequest_len = sizeof(buf) - sizeof(*xpl);
+	xisr->sadb_x_ipsecrequest_proto = IPPROTO_ESP;
+	xisr->sadb_x_ipsecrequest_mode = IPSEC_MODE_TRANSPORT;
+	xisr->sadb_x_ipsecrequest_level = IPSEC_LEVEL_DEFAULT;
+	/* src sockaddr: */
+	sa = (struct sockaddr *)(xisr + 1);
+	sa->sa_len = sizeof(struct sockaddr_in);
+	/* dst sockaddr: */
+	sa = (struct sockaddr *)((char *)(xisr + 1) + sa->sa_len);
+	sa->sa_len = sizeof(struct sockaddr_in);
+
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(setsockopt(socket_fd, IPPROTO_IP, IP_IPSEC_POLICY,
+	    buf, sizeof(buf)), "tcp server listen failed");
+}
+
+T_DECL(sadb_x_get_60822136, "security policy reference count overflow", T_META_TAG_VM_PREFERRED)
 {
 	test_id = TEST_SADB_X_GET_OVERFLOW_60822136;
 
@@ -1650,7 +1858,7 @@ T_DECL(sadb_x_get_60822136, "security policy reference count overflow")
 	dispatch_main();
 }
 
-T_DECL(sadb_x_spd_enable_60822924, "security policy reference count overflow")
+T_DECL(sadb_x_spd_enable_60822924, "security policy reference count overflow", T_META_TAG_VM_PREFERRED)
 {
 	test_id = TEST_SADB_X_SPDENABLE_OVERFLOW_60822924;
 
@@ -1662,7 +1870,7 @@ T_DECL(sadb_x_spd_enable_60822924, "security policy reference count overflow")
 	dispatch_main();
 }
 
-T_DECL(sadb_x_spd_disable_60822956, "security policy reference count overflow")
+T_DECL(sadb_x_spd_disable_60822956, "security policy reference count overflow", T_META_TAG_VM_PREFERRED)
 {
 	test_id = TEST_SADB_X_SPDDISABLE_OVERFLOW_60822956;
 
@@ -1674,7 +1882,7 @@ T_DECL(sadb_x_spd_disable_60822956, "security policy reference count overflow")
 	dispatch_main();
 }
 
-T_DECL(sadb_update_60679513, "security association use after free")
+T_DECL(sadb_update_60679513, "security association use after free", T_META_TAG_VM_PREFERRED)
 {
 	test_id = TEST_SADB_UPDATE_USE_AFTER_FREE_60679513;
 
@@ -1686,7 +1894,7 @@ T_DECL(sadb_update_60679513, "security association use after free")
 	dispatch_main();
 }
 
-T_DECL(sadb_dump_60768729, "security association sa dump heap overflow")
+T_DECL(sadb_dump_60768729, "security association sa dump heap overflow", T_META_ENABLED(false), T_META_TAG_VM_PREFERRED)
 {
 	test_id = TEST_SADB_DUMP_HEAP_OVERFLOW_60768729;
 
@@ -1699,7 +1907,8 @@ T_DECL(sadb_dump_60768729, "security association sa dump heap overflow")
 	dispatch_main();
 }
 
-T_DECL(sadb_policy_dump_60769680, "security association sa policy dump heap overflow")
+// Disabled due to rdar://92910783
+T_DECL(sadb_policy_dump_60769680, "security association sa policy dump heap overflow", T_META_ENABLED(false), T_META_TAG_VM_PREFERRED)
 {
 	test_id = TEST_SADB_POLICY_DUMP_HEAP_OVERFLOW_60769680;
 
@@ -1712,7 +1921,7 @@ T_DECL(sadb_policy_dump_60769680, "security association sa policy dump heap over
 	dispatch_main();
 }
 
-T_DECL(sadb_get_sastat_oob_60769680, "security association get sa stat oob read")
+T_DECL(sadb_get_sastat_oob_60769680, "security association get sa stat oob read", T_META_TAG_VM_PREFERRED)
 {
 	test_id = TEST_SADB_GETSASTAT_OOB_READ_60822823;
 
@@ -1725,7 +1934,7 @@ T_DECL(sadb_get_sastat_oob_60769680, "security association get sa stat oob read"
 	dispatch_main();
 }
 
-T_DECL(sadb_get_sastat_success, "security association get sa stat")
+T_DECL(sadb_get_sastat_success, "security association get sa stat", T_META_TAG_VM_PREFERRED)
 {
 	test_id = TEST_SADB_GETSASTAT_OOB_READ_SUCCESS;
 
@@ -1738,7 +1947,7 @@ T_DECL(sadb_get_sastat_success, "security association get sa stat")
 	dispatch_main();
 }
 
-T_DECL(sadb_key_migrate_address_ipv4, "security association migrate address ipv4")
+T_DECL(sadb_key_migrate_address_ipv4, "security association migrate address ipv4", T_META_TAG_VM_PREFERRED)
 {
 	test_id = TEST_SADB_EXT_MIGRATE_ADDRESS_IPv4;
 
@@ -1751,7 +1960,7 @@ T_DECL(sadb_key_migrate_address_ipv4, "security association migrate address ipv4
 	dispatch_main();
 }
 
-T_DECL(sadb_key_migrate_address_ipv6, "security association migrate address ipv6")
+T_DECL(sadb_key_migrate_address_ipv6, "security association migrate address ipv6", T_META_TAG_VM_PREFERRED)
 {
 	test_id = TEST_SADB_EXT_MIGRATE_ADDRESS_IPv6;
 
@@ -1764,7 +1973,7 @@ T_DECL(sadb_key_migrate_address_ipv6, "security association migrate address ipv6
 	dispatch_main();
 }
 
-T_DECL(sadb_key_migrate_bad_address, "security association migrate bad address")
+T_DECL(sadb_key_migrate_bad_address, "security association migrate bad address", T_META_TAG_VM_PREFERRED)
 {
 	test_id = TEST_SADB_EXT_MIGRATE_BAD_ADDRESS;
 
@@ -1773,6 +1982,46 @@ T_DECL(sadb_key_migrate_bad_address, "security association migrate bad address")
 	send_pfkey_flush_sa(pfkey_socket);
 	send_pfkey_flush_sp(pfkey_socket);
 	send_pkey_add_sa(pfkey_socket, 0x12345678, TEST_SRC_ADDRESS_IPv6, TEST_DST_ADDRESS_IPv6, AF_INET6);
+
+	dispatch_main();
+}
+
+T_DECL(tcp_input_ipsec_copy_policy, "listener policy copied to child", T_META_TAG_VM_PREFERRED)
+{
+	test_id = TEST_TCP_INPUT_IPSEC_COPY_POLICY;
+
+	int server_fd = setup_tcp_server(4000);
+	setup_socket_policy(server_fd);
+	int client_fd = setup_loopback_tcp_client(4000);
+
+	sleep(3);
+	close(client_fd);
+	close(server_fd);
+
+	T_PASS("listener policy copied to child");
+}
+
+T_DECL(sadb_x_spd_add_78944570, "security policy add failure", T_META_TAG_VM_PREFERRED)
+{
+	test_id = TEST_SADB_X_SPDADD_MEMORY_LEAK_78944570;
+
+	int pfkey_socket = pfkey_setup_socket();
+	send_pfkey_flush_sa(pfkey_socket);
+	send_pfkey_flush_sp(pfkey_socket);
+	send_pfkey_spd_add_message(pfkey_socket, IPSEC_ULPROTO_ANY);
+
+	dispatch_main();
+}
+
+T_DECL(sadb_key_migrate_after_expiry_134671927, "security association migrate after expiry", T_META_TAG_VM_PREFERRED)
+{
+	test_id = TEST_SADB_EXT_MIGRATE_AFTER_EXPIRY_134671927;
+
+	int pfkey_socket = pfkey_setup_socket();
+	T_ATEND(pfkey_cleanup);
+	send_pfkey_flush_sa(pfkey_socket);
+	send_pfkey_flush_sp(pfkey_socket);
+	send_pfkey_register(pfkey_socket);
 
 	dispatch_main();
 }

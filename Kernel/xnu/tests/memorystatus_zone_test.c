@@ -19,6 +19,8 @@
 
 T_GLOBAL_META(
 	T_META_NAMESPACE("xnu.vm"),
+	T_META_RADAR_COMPONENT_NAME("xnu"),
+	T_META_RADAR_COMPONENT_VERSION("VM"),
 	T_META_CHECK_LEAKS(false)
 	);
 
@@ -53,10 +55,6 @@ T_GLOBAL_META(
 
 #define VM_TAG1                                         100
 #define VM_TAG2                                         101
-
-#define LARGE_MEM_GB                                    32
-#define LARGE_MEM_JETSAM_LIMIT                          40
-#define JETSAM_LIMIT_LOWEST                             10
 
 enum {
 	VME_ZONE_TEST = 0,
@@ -96,7 +94,6 @@ static void spawn_child_process(void);
 static void run_test(void);
 static bool verify_generic_jetsam_criteria(void);
 static bool vme_zone_compares_to_vm_objects(void);
-static int query_zone_map_size(void);
 static void query_zone_info(void);
 static void print_zone_info(mach_zone_name_t *zn, mach_zone_info_t *zi);
 
@@ -177,12 +174,11 @@ allocate_vm_stuff(int flags)
 	kill(getppid(), SIGUSR1);
 
 	while (1) {
-		sleep(2);
+		usleep(500 * 1000);
 		/* Exit if parent has exited. Ensures child processes don't linger around after the test exits */
 		if (getppid() == 1) {
 			exit(0);
 		}
-
 		if (check_time(start, TIMEOUT_SECS)) {
 			printf("[%d] child timeout while waiting\n", getpid());
 			exit(0);
@@ -197,9 +193,19 @@ allocate_from_generic_zone(void)
 	uint64_t i = 0;
 	time_t start = time(NULL);
 	mach_port_t give_back[NUM_GIVE_BACK_PORTS];
+	int old_limit = 0;
 
 	printf("[%d] Allocating mach_ports\n", getpid());
-	for (i = 0;; i++) {
+
+	size_t size = sizeof(old_limit);
+	int kr = sysctlbyname("machdep.max_port_table_size", &old_limit, &size, NULL, 0);
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(kr, "sysctl kern.max_port_table_size failed");
+	T_LOG("machdep.max_port_table_size = %d", old_limit);
+
+	/* Avoid hitting the resource limit exception */
+	uint64_t limit = (uint64_t)(old_limit * 7 / 8);
+
+	for (i = 0; i < limit; i++) {
 		mach_port_t port;
 
 		if ((mach_port_allocate(mach_task_self(), MACH_PORT_RIGHT_RECEIVE, &port)) != KERN_SUCCESS) {
@@ -218,7 +224,9 @@ allocate_from_generic_zone(void)
 
 	/* return some of the resource to avoid O-O-M problems */
 	for (uint64_t j = 0; j < NUM_GIVE_BACK_PORTS && j < i; ++j) {
-		mach_port_deallocate(mach_task_self(), give_back[j]);
+		int ret;
+		ret = mach_port_mod_refs(mach_task_self(), give_back[j], MACH_PORT_RIGHT_RECEIVE, -1);
+		T_ASSERT_MACH_SUCCESS(ret, "mach_port_mod_refs(RECV_RIGHT, -1)");
 	}
 	printf("[%d] Number of allocations: %lld\n", getpid(), i);
 
@@ -226,7 +234,7 @@ allocate_from_generic_zone(void)
 	kill(getppid(), SIGUSR1);
 
 	while (1) {
-		sleep(2);
+		usleep(500 * 1000);
 		/* Exit if parent has exited. Ensures child processes don't linger around after the test exits */
 		if (getppid() == 1) {
 			exit(0);
@@ -415,7 +423,7 @@ cleanup_and_end_test(void)
 		}
 		pthread_mutex_lock(&test_mtx);
 	}
-	sleep(1);
+	usleep(500 * 1000);
 
 	/* Force zone_gc before starting test for another zone or exiting */
 	mach_zone_force_gc(mach_host_self());
@@ -533,8 +541,8 @@ setup_ktrace_session(void)
 	T_QUIET; T_ASSERT_POSIX_ZERO(ret, "ktrace_start");
 }
 
-static int
-query_zone_map_size(void)
+static void
+query_zone_map_size(uint64_t *current, uint64_t *total)
 {
 	int ret;
 	uint64_t zstats[2];
@@ -553,7 +561,12 @@ query_zone_map_size(void)
 
 	T_LOG("kern.memorystatus_level = %d%%", memstat_level);
 #endif
-	return (int)(zstats[0] * 100 / zstats[1]);
+	if (current) {
+		*current = zstats[0];
+	}
+	if (total) {
+		*total = zstats[1];
+	}
 }
 
 static void
@@ -594,20 +607,14 @@ run_test(void)
 {
 	uint64_t mem;
 	uint32_t testpath_buf_size, pages;
-	int ret, dev, pgsz, initial_zone_occupancy, old_limit, new_limit = 0;
+	int ret, pgsz, old_limit, new_limit = 0;
 	size_t sysctl_size;
+	uint64_t zone_cur, zone_tot, zone_target;
 
 	T_ATEND(cleanup_and_end_test);
 	T_SETUPBEGIN;
 
 	main_start = time(NULL);
-	dev = 0;
-	sysctl_size = sizeof(dev);
-	ret = sysctlbyname("kern.development", &dev, &sysctl_size, NULL, 0);
-	T_QUIET; T_ASSERT_POSIX_SUCCESS(ret, "sysctl kern.development failed");
-	if (dev == 0) {
-		T_SKIP("Skipping test on release kernel");
-	}
 
 	testpath_buf_size = sizeof(testpath);
 	ret = _NSGetExecutablePath(testpath, &testpath_buf_size);
@@ -634,25 +641,16 @@ run_test(void)
 	T_QUIET; T_ASSERT_POSIX_SUCCESS(ret, "sysctl kern.zone_map_jetsam_limit failed");
 	T_LOG("kern.zone_map_jetsam_limit: %d", old_limit);
 
-	initial_zone_occupancy = query_zone_map_size();
-
-	/* On large memory systems, set the zone_map jetsam limit lower so we can hit it without timing out. */
-	if (mem > (uint64_t)LARGE_MEM_GB * 1024 * 1024 * 1024) {
-		new_limit = LARGE_MEM_JETSAM_LIMIT;
-	}
-
 	/*
-	 * If we start out with the zone map < 5% full, aim for 10% as the limit, so we don't time out.
-	 * For anything else aim for 2x the initial size, capped by whatever value was set by T_META_SYSCTL_INT,
-	 * or LARGE_MEM_JETSAM_LIMIT for large memory systems.
+	 * In order to start jetsamming "quickly",
+	 * set up the limit to be about 2x of what the current usage is.
 	 */
-	if (initial_zone_occupancy < 5) {
-		new_limit = JETSAM_LIMIT_LOWEST;
-	} else {
-		new_limit = initial_zone_occupancy * 2;
-	}
+	query_zone_map_size(&zone_cur, &zone_tot);
+	zone_target = zone_cur * 2;
 
-	if (new_limit > 0 && new_limit < old_limit) {
+	new_limit = (int)howmany(zone_target * 100, zone_tot);
+
+	if (new_limit < old_limit) {
 		/*
 		 * We should be fine messing with the zone_map_jetsam_limit here, i.e. outside of T_META_SYSCTL_INT.
 		 * When the test ends, T_META_SYSCTL_INT will restore the zone_map_jetsam_limit to what it was
@@ -684,10 +682,16 @@ run_test(void)
 	T_QUIET; T_ASSERT_NOTNULL(ds_signal, "dispatch_source_create: signal");
 
 	dispatch_source_set_event_handler(ds_signal, ^{
-		(void)query_zone_map_size();
+		uint64_t cur, tot;
 
-		/* Wait a few seconds before spawning another child. Keeps us from allocating too aggressively */
-		sleep(5);
+		query_zone_map_size(&cur, &tot);
+
+		if (cur + cur / 20 >= zone_target) {
+		        /*
+		         * Slow down allocation pace when nearing target.
+		         */
+		        sleep(1);
+		}
 		spawn_child_process();
 	});
 	dispatch_activate(ds_signal);
@@ -765,7 +769,10 @@ T_DECL( memorystatus_vme_zone_test,
     T_META_TIMEOUT(1800),
 /*		T_META_LTEPHASE(LTE_POSTINIT),
  */
-    T_META_SYSCTL_INT(ZONEMAP_JETSAM_LIMIT_SYSCTL))
+    T_META_REQUIRES_SYSCTL_NE("kern.kasan.available", 1),
+    T_META_REQUIRES_SYSCTL_EQ("kern.development", 1),
+    T_META_SYSCTL_INT(ZONEMAP_JETSAM_LIMIT_SYSCTL),
+    T_META_TAG_VM_PREFERRED)
 {
 	current_test = (test_config_struct) {
 		.test_index = VME_ZONE_TEST,
@@ -784,7 +791,10 @@ T_DECL( memorystatus_vm_objects_zone_test,
     T_META_TIMEOUT(1800),
 /*		T_META_LTEPHASE(LTE_POSTINIT),
  */
-    T_META_SYSCTL_INT(ZONEMAP_JETSAM_LIMIT_SYSCTL))
+    T_META_REQUIRES_SYSCTL_NE("kern.kasan.available", 1),
+    T_META_REQUIRES_SYSCTL_EQ("kern.development", 1),
+    T_META_SYSCTL_INT(ZONEMAP_JETSAM_LIMIT_SYSCTL),
+    T_META_TAG_VM_PREFERRED)
 {
 	current_test = (test_config_struct) {
 		.test_index = VM_OBJECTS_ZONE_TEST,
@@ -804,7 +814,10 @@ T_DECL( memorystatus_generic_zone_test,
     T_META_TIMEOUT(1800),
 /*		T_META_LTEPHASE(LTE_POSTINIT),
  */
-    T_META_SYSCTL_INT(ZONEMAP_JETSAM_LIMIT_SYSCTL))
+    T_META_REQUIRES_SYSCTL_NE("kern.kasan.available", 1),
+    T_META_REQUIRES_SYSCTL_EQ("kern.development", 1),
+    T_META_SYSCTL_INT(ZONEMAP_JETSAM_LIMIT_SYSCTL),
+    T_META_TAG_VM_PREFERRED)
 {
 	current_test = (test_config_struct) {
 		.test_index = GENERIC_ZONE_TEST,

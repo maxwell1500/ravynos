@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2018 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2018, 2023 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -50,21 +50,12 @@
 #define FSOPT_PACK_INVAL_ATTRS  0x00000008
 
 #ifdef PRIVATE
-#define FSOPT_EXCHANGE_DATA_ONLY 0x0000010
+/* Additional FSOPT values in attr_private.h */
 #endif
 
 #define FSOPT_ATTR_CMN_EXTENDED 0x00000020
-#ifdef PRIVATE
-#define FSOPT_LIST_SNAPSHOT     0x00000040
-#ifndef FSOPT_NOFIRMLINKPATH /*a copy is in fsgetpath.h */
-#define FSOPT_NOFIRMLINKPATH     0x00000080
-#endif /* FSOPT_NOFIRMLINKPATH */
-#define FSOPT_FOLLOW_FIRMLINK    0x00000100
 #define FSOPT_RETURN_REALDEV     0x00000200
-#ifndef FSOPT_ISREALFSID  /*a copy is in fsgetpath.h */
-#define FSOPT_ISREALFSID         FSOPT_RETURN_REALDEV
-#endif
-#endif /* PRIVATE */
+#define FSOPT_NOFOLLOW_ANY       0x00000800
 
 /* we currently aren't anywhere near this amount for a valid
  * fssearchblock.sizeofsearchparams1 or fssearchblock.sizeofsearchparams2
@@ -96,6 +87,7 @@ struct attrlist {
 	attrgroup_t fileattr;                   /* file attribute group */
 	attrgroup_t forkattr;                   /* fork attribute group */
 };
+
 #define ATTR_BIT_MAP_COUNT 5
 
 typedef struct attribute_set {
@@ -105,6 +97,9 @@ typedef struct attribute_set {
 	attrgroup_t fileattr;                   /* file attribute group */
 	attrgroup_t forkattr;                   /* fork attribute group */
 } attribute_set_t;
+
+#define ATTRIBUTE_SET_INIT(a)               do {(a)->commonattr = (a)->volattr = (a)->dirattr = (a)->fileattr = (a)->forkattr = 0; } while(0)
+
 
 typedef struct attrreference {
 	int32_t     attr_dataoffset;
@@ -253,6 +248,16 @@ typedef struct vol_capabilities_attr {
  * that implies multiple volumes must be mounted in order to boot and root the
  * operating system. Typically, this means a read-only system volume and a
  * writable data volume.
+ *
+ * VOL_CAP_FMT_SEALED: When set, this volume is cryptographically sealed.
+ * Any modifications to volume data or metadata will be detected and may
+ * render the volume unusable.
+ *
+ * VOL_CAP_FMT_CLONE_MAPPING: When set, this volume supports full clone tracking.
+ * See ATTR_CMNEXT_CLONE_REFCNT and ATTR_CMNEXT_CLONEID for more details.
+ * Other features like extended directory statistics, for fast directory sizing,
+ * and attribution tags may be supported as well.
+ * See VOL_CAP_INT_ATTRIBUTION_TAG for more details related to tagging.
  */
 #define VOL_CAP_FMT_PERSISTENTOBJECTIDS         0x00000001
 #define VOL_CAP_FMT_SYMBOLICLINKS               0x00000002
@@ -279,6 +284,8 @@ typedef struct vol_capabilities_attr {
 #define VOL_CAP_FMT_NO_PERMISSIONS              0x00400000
 #define VOL_CAP_FMT_SHARED_SPACE                0x00800000
 #define VOL_CAP_FMT_VOL_GROUPS                  0x01000000
+#define VOL_CAP_FMT_SEALED                      0x02000000
+#define VOL_CAP_FMT_CLONE_MAPPING               0x04000000
 
 /*
  * VOL_CAP_INT_SEARCHFS: When set, the volume implements the
@@ -349,6 +356,16 @@ typedef struct vol_capabilities_attr {
  *
  * VOL_CAP_INT_RENAME_OPENFAIL: When set, the volume may fail rename
  * operations on files that are open.
+ *
+ * VOL_CAP_INT_RENAME_SECLUDE: When set, the volume supports a
+ * seclude rename operation.
+ *
+ * VOL_CAP_INT_ATTRIBUTION_TAG: When set, the volume supports establishing
+ * an owner relationship between a file (excluding small files) and a process
+ * on the first read/write/truncate/clone operation.
+ *
+ * VOL_CAP_INT_PUNCHHOLE: When set, the volume supports the F_PUNCHHOLE
+ * fcntl.
  */
 #define VOL_CAP_INT_SEARCHFS                    0x00000001
 #define VOL_CAP_INT_ATTRLIST                    0x00000002
@@ -366,14 +383,16 @@ typedef struct vol_capabilities_attr {
 #define VOL_CAP_INT_NAMEDSTREAMS                0x00002000
 #define VOL_CAP_INT_EXTENDED_ATTR               0x00004000
 #ifdef PRIVATE
-/* Volume supports kqueue notifications for remote events */
-#define VOL_CAP_INT_REMOTE_EVENT                0x00008000
+/* Additional VOL_CAP_INT values in attr_private.h */
 #endif /* PRIVATE */
 #define VOL_CAP_INT_CLONE                       0x00010000
 #define VOL_CAP_INT_SNAPSHOT                    0x00020000
 #define VOL_CAP_INT_RENAME_SWAP                 0x00040000
 #define VOL_CAP_INT_RENAME_EXCL                 0x00080000
 #define VOL_CAP_INT_RENAME_OPENFAIL             0x00100000
+#define VOL_CAP_INT_RENAME_SECLUDE              0x00200000
+#define VOL_CAP_INT_ATTRIBUTION_TAG             0x00400000
+#define VOL_CAP_INT_PUNCHHOLE                   0x00800000
 
 typedef struct vol_attributes_attr {
 	attribute_set_t validattr;
@@ -475,12 +494,16 @@ typedef struct vol_attributes_attr {
 #define ATTR_VOL_ENCODINGSUSED                  0x00010000
 #define ATTR_VOL_CAPABILITIES                   0x00020000
 #define ATTR_VOL_UUID                           0x00040000
+#define ATTR_VOL_MOUNTEXTFLAGS                  0x00080000
+#define ATTR_VOL_FSTYPENAME                     0x00100000
+#define ATTR_VOL_FSSUBTYPE                      0x00200000
+#define ATTR_VOL_SPACEUSED                      0x00800000
 #define ATTR_VOL_QUOTA_SIZE                     0x10000000
-#define ATTR_VOL_RESERVED_SIZE          0x20000000
+#define ATTR_VOL_RESERVED_SIZE                  0x20000000
 #define ATTR_VOL_ATTRIBUTES                     0x40000000
 #define ATTR_VOL_INFO                           0x80000000
 
-#define ATTR_VOL_VALIDMASK                      0xF007FFFF
+#define ATTR_VOL_VALIDMASK                      0xF0BFFFFF
 
 /*
  * The list of settable ATTR_VOL_* attributes include the following:
@@ -533,8 +556,11 @@ typedef struct vol_attributes_attr {
 #define ATTR_CMNEXT_REALFSID    0x00000080
 #define ATTR_CMNEXT_CLONEID     0x00000100
 #define ATTR_CMNEXT_EXT_FLAGS   0x00000200
+#define ATTR_CMNEXT_RECURSIVE_GENCOUNT 0x00000400
+#define ATTR_CMNEXT_ATTRIBUTION_TAG    0x00000800
+#define ATTR_CMNEXT_CLONE_REFCNT       0x00001000
 
-#define ATTR_CMNEXT_VALIDMASK   0x000003fc
+#define ATTR_CMNEXT_VALIDMASK   0x00001ffc
 #define ATTR_CMNEXT_SETMASK             0x00000000
 
 /* Deprecated fork attributes */
@@ -627,4 +653,9 @@ struct searchstate {
 #define FST_EOF (-1)                            /* end-of-file offset */
 
 #endif /* __APPLE_API_UNSTABLE */
+
+#ifdef PRIVATE
+#include <sys/attr_private.h>
+#endif
+
 #endif /* !_SYS_ATTR_H_ */

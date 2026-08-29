@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -143,23 +143,19 @@ struct machine_thread {
 #define         OnProc          0x1
 #define         CopyIOActive    0x2 /* Checked to ensure DTrace actions do not re-enter copyio(). */
 	uint64_t                thread_gpu_ns;
-#if NCOPY_WINDOWS > 0
-	struct {
-		user_addr_t     user_base;
-	} copy_window[NCOPY_WINDOWS];
-	int                     nxt_window;
-	int                     copyio_state;
-#define         WINDOWS_DIRTY   0
-#define         WINDOWS_CLEAN   1
-#define         WINDOWS_CLOSED  2
-#define         WINDOWS_OPENED  3
-	uint64_t                physwindow_pte;
-	int                     physwindow_busy;
-#endif
-
 	uint32_t                last_xcpm_ttd;
 	uint8_t                 last_xcpm_index;
 	int                     mthr_do_segchk;
+#define         MTHR_SEGCHK     1
+#define         MTHR_RSBST      2
+	int                     insn_state_copyin_failure_errorcode;    /* If insn_state is 0, this may hold the reason */
+	x86_instruction_state_t *insn_state;
+#if DEVELOPMENT || DEBUG
+	/* first byte specifies the offset of the instruction at the time of capture */
+	uint8_t                 insn_cacheline[65];     /* XXX: Hard-coded cacheline size */
+#endif
+	x86_lbrs_t              lbrs;
+	bool                    insn_copy_optout;
 };
 typedef struct machine_thread *pcb_t;
 
@@ -192,24 +188,39 @@ extern void act_thread_cfree(void *ctx);
 #define STACK_IKS(stack)        \
 	(&(((struct thread_kernel_state *)((stack) + kernel_stack_size)) - 1)->machine)
 
+extern vm_offset_t kernel_stack_size;
+
 /*
  * Return the current stack depth including thread_kernel_state
+ *
+ * Note: this is only valid to call on a thread's kernel stack,
+ * as opposed to the interrupt or special expection stacks, since
+ * it's computation is based on cpu_kernel_stack field of the cpu
+ * pointer.
+ *
  */
 static inline vm_offset_t
-current_stack_depth(void)
+current_kernel_stack_depth(void)
 {
 	vm_offset_t     stack_ptr;
+	vm_offset_t     stack_depth;
 
 	assert(get_preemption_level() > 0 || !ml_get_interrupts_enabled());
 
-#if defined(__x86_64__)
 	__asm__ volatile ("mov %%rsp, %0" : "=m" (stack_ptr));
-#else
-	__asm__ volatile ("mov %%esp, %0" : "=m" (stack_ptr));
-#endif
-	return current_cpu_datap()->cpu_kernel_stack
-	       + sizeof(struct thread_kernel_state)
-	       - stack_ptr;
+
+	stack_depth = current_cpu_datap()->cpu_kernel_stack
+	    + sizeof(struct thread_kernel_state)
+	    - stack_ptr;
+
+	if (stack_depth >= kernel_stack_size) {
+		panic("kernel stack overflow; stack base: 0x%16lx, "
+		    "stack top: 0x%016lx, stack depth: 0x%016lx, "
+		    "depth limit: 0x%016lx", current_cpu_datap()->cpu_kernel_stack,
+		    stack_ptr, stack_depth, kernel_stack_size);
+	}
+
+	return stack_depth;
 }
 
 /*

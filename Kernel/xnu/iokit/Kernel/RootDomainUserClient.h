@@ -42,7 +42,7 @@
 #include <IOKit/pwr_mgt/IOPMLibDefs.h>
 
 
-class RootDomainUserClient : public IOUserClient
+class RootDomainUserClient : public IOUserClient2022
 {
 	OSDeclareDefaultStructors(RootDomainUserClient);
 
@@ -69,15 +69,16 @@ private:
 
 	IOReturn            secureGetSystemSleepType( uint32_t *sleepType, uint32_t *sleepTimer);
 
+	IOReturn            secureAttemptIdleSleepAbort( uint32_t *outReverted);
+
 public:
 
 	virtual IOReturn clientClose( void ) APPLE_KEXT_OVERRIDE;
 
-	virtual IOReturn externalMethod( uint32_t selector,
-	    IOExternalMethodArguments * arguments,
-	    IOExternalMethodDispatch * dispatch,
-	    OSObject * target,
-	    void * reference ) APPLE_KEXT_OVERRIDE;
+	virtual IOReturn externalMethod(uint32_t selector,
+	    IOExternalMethodArgumentsOpaque * args) APPLE_KEXT_OVERRIDE;
+
+	static IOReturn externalMethodDispatched(OSObject * target, void * reference, IOExternalMethodArguments * args);
 
 	virtual bool start( IOService * provider ) APPLE_KEXT_OVERRIDE;
 

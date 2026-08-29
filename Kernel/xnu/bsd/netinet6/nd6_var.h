@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2016-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -71,7 +71,7 @@ struct nd_ifinfo {
 	u_int8_t chlim;                 /* CurHopLimit */
 	u_int8_t _pad[3];
 	/* the following 3 members are for privacy extension for addrconf */
-	u_int8_t randomseed0[8]; /* upper 64 bits of SHA1 digest */
+	u_int8_t randomseed0[8]; /* upper 64 bits of SHA256 digest */
 	u_int8_t randomseed1[8]; /* lower 64 bits (usually the EUI64 IFID) */
 	u_int8_t randomid[8];   /* current random ID */
 	/* keep track of routers and prefixes on this link */
@@ -79,6 +79,7 @@ struct nd_ifinfo {
 	int32_t ndefrouters;
 	boolean_t cga_initialized;
 	struct in6_cga_modifier local_cga_modifier;
+	uint8_t cga_collision_count;
 };
 #endif /* BSD_KERNEL_PRIVATE */
 #endif /* _NETINET6_ND6_VAR_H_ */

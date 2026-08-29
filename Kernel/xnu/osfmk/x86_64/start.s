@@ -118,7 +118,7 @@ EXT(mc_task_stack_end):
 	movl	%cr0,%eax					;\
 	orl	$(CR0_PG|CR0_WP),%eax	/* enable paging */	;\
 	movl	%eax,%cr0					;\
-	ljmp	$KERNEL64_CS,$64f				;\
+	ljmpl	$KERNEL64_CS,$64f				;\
 64:								;\
 	.code64
 
@@ -142,7 +142,6 @@ LEXT(pstart)
 
 /*
  * Here we do the minimal setup to switch from 32 bit mode to 64 bit long mode.
- * When entering from UEFI (i.e. ravynOS) we are already in 64bit long mode.
  *
  * Initial memory layout:
  *
@@ -171,8 +170,8 @@ LEXT(pstart)
 	/*
 	 * Set up segmentation
 	 */
-	// movl	$EXT(protected_mode_gdtr), %eax
-	// lgdtl	(%eax)
+	movl	$EXT(protected_mode_gdtr), %eax
+	lgdtl	(%eax)
 
 	/*
 	 * Rebase Boot page tables to kernel base address.
@@ -189,20 +188,12 @@ LEXT(pstart)
 
 	POSTCODE(PSTART_REBASE)
 
-/* the following code is shared by the master CPU and all slave CPUs */
+/* the following code is shared by the BSP CPU and all AP CPUs */
 L_pstart_common:
 	/*
 	 * switch to 64 bit mode
 	 */
-	// SWITCH_TO_64BIT_MODE
-
-	/* We're already 64bit. Install boot page tables and 64bit GDT */
-	.code64
-	xorq %rax, %rax
-	movl $EXT(BootPML4), %eax
-	movq %rax, %cr3
-	movl $EXT(master_gdtr), %eax
-	lgdt (%rax)
+	SWITCH_TO_64BIT_MODE
 
 	/* Flush data segment selectors */
 	xor	%eax, %eax
@@ -211,11 +202,6 @@ L_pstart_common:
 	mov	%ax, %es
 	mov	%ax, %fs
 	mov	%ax, %gs
-	pushq $KERNEL64_CS
-	leaq L_reloadCS(%rip), %rax
-	push %rax
-	lretq
-L_reloadCS:
 
 	test	%edi, %edi /* Populate stack canary on BSP */
 	jz	Lvstartshim

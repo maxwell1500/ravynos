@@ -36,16 +36,16 @@
 //
 // to build :
 //	bison -p OSUnserializeXML OSUnserializeXML.y
-//	head -50 OSUnserializeXML.y > OSUnserializeXML.cpp
-//	sed -e "s/#include <stdio.h>//" < OSUnserializeXML.tab.c >> OSUnserializeXML.cpp
+//	head -50 OSUnserializeXML.y > ../libkern/c++/OSUnserializeXMLSharedImplementation.h
+//	sed -e "s/#include <stdio.h>//" < OSUnserializeXML.tab.c >> ../libkern/c++/OSUnserializeXMLSharedImplementation.h
 //
-//	when changing code check in both OSUnserializeXML.y and OSUnserializeXML.cpp
-//
-//
+//	when changing code check in both OSUnserializeXML.y and OSUnserializeXMLSharedImplementation.h
 //
 //
 //
-//		 DO NOT EDIT OSUnserializeXML.cpp!
+//
+//
+//		 DO NOT EDIT OSUnserializeXMLSharedImplementation.h!
 //
 //			this means you!
 //
@@ -60,9 +60,14 @@
 
 %{
 #include <string.h>
+#if KERNEL
 #include <libkern/c++/OSMetaClass.h>
 #include <libkern/c++/OSContainers.h>
 #include <libkern/c++/OSLib.h>
+#else /* !KERNEL */
+#include <DriverKit/DriverKit.h>
+#endif /* KERNEL */
+
 
 #define MAX_OBJECTS              131071
 #define MAX_REFED_OBJECTS        65535
@@ -82,6 +87,7 @@ typedef struct object {
 	int             size;
 	void            *data;                  // for data
 	char            *string;                // for string & symbol
+	int             string_alloc_length;
 	long long       number;                 // for number
 	int             idref;
 } object_t;
@@ -124,11 +130,76 @@ static object_t         *buildData(parser_state_t *state, object_t *o);
 static object_t         *buildNumber(parser_state_t *state, object_t *o);
 static object_t         *buildBoolean(parser_state_t *state, object_t *o);
 
-#include <libkern/OSRuntime.h>
+#if KERNEL
+__BEGIN_DECLS
+#include <kern/kalloc.h>
+__END_DECLS
 
-#define malloc(s) kern_os_malloc(s)
-#define realloc(a, s) kern_os_realloc(a, s)
-#define free(a) kern_os_free((void *)a)
+#define malloc(size)         malloc_impl(size)
+#define malloc_type(type)    kalloc_type(type, Z_SET_NOTSHARED)
+static inline void *
+malloc_impl(size_t size)
+{
+	if (size == 0) {
+		return NULL;
+	}
+	return kalloc_data(size,
+		Z_VM_TAG_BT(Z_WAITOK_ZERO, VM_KERN_MEMORY_LIBKERN));
+}
+
+#define free(addr)             free_impl(addr)
+#define free_type(type, addr)  kfree_type(type, addr)
+static inline void
+free_impl(void *addr)
+{
+	kfree_data_addr(addr);
+}
+static inline void
+safe_free(void *addr, size_t size)
+{
+	kfree_data(addr, size);
+}
+
+#define realloc(addr, osize, nsize) realloc_impl(addr, osize, nsize)
+static inline void *
+realloc_impl(void *addr, size_t osize, size_t nsize)
+{
+	return krealloc_data(addr, osize, nsize,
+		Z_VM_TAG_BT(Z_WAITOK_ZERO, VM_KERN_MEMORY_LIBKERN));
+}
+#else /* !KERNEL */
+#define malloc(size)      malloc_impl(size)
+#define malloc_type(type) (type *) calloc(1, sizeof(type))
+static inline void *
+malloc_impl(size_t size)
+{
+	if (size == 0) {
+		return NULL;
+	}
+	return calloc(1, size);
+}
+#define safe_free(addr, size)       free(addr)
+#define free_type(type, addr)       safe_free(addr, sizeof(type))
+#define realloc(addr, osize, nsize) realloc_impl(addr, osize, nsize)
+static inline void *
+realloc_impl(void *addr, size_t osize, size_t nsize)
+{
+	void * nmem;
+
+	if (!addr) {
+		return malloc(nsize);
+	}
+	if (nsize == osize) {
+		return addr;
+	}
+	nmem = (realloc)(addr, nsize);
+	if (nmem && nsize > osize) {
+		bzero((uint8_t *)nmem + osize, nsize - osize);
+	}
+
+	return nmem;
+}
+#endif /* KERNEL */
 
 %}
 %token ARRAY
@@ -549,7 +620,7 @@ getTag(parser_state_t *state,
 }
 
 static char *
-getString(parser_state_t *state)
+getString(parser_state_t *state, int *alloc_lengthp)
 {
 	int c = currentChar();
 	int start, length, i, j;
@@ -579,6 +650,9 @@ getString(parser_state_t *state)
 	if (tempString == NULL) {
 		printf("OSUnserializeXML: can't alloc temp memory\n");
 		goto error;
+	}
+	if (alloc_lengthp) {
+		*alloc_lengthp = length + 1;
 	}
 
 	// copy out string in tempString
@@ -641,7 +715,10 @@ getString(parser_state_t *state)
 
 error:
 	if (tempString) {
-		free(tempString);
+		safe_free(tempString, length + 1);
+		if (alloc_lengthp) {
+			*alloc_lengthp = 0;
+		}
 	}
 	return 0;
 }
@@ -715,8 +792,9 @@ getCFEncodedData(parser_state_t *state, unsigned int *size)
 {
 	int numeq = 0, cntr = 0;
 	unsigned int acc = 0;
-	int tmpbufpos = 0, tmpbuflen = 0;
-	unsigned char *tmpbuf = (unsigned char *)malloc(DATA_ALLOC_SIZE);
+	int tmpbufpos = 0;
+	size_t tmpbuflen = DATA_ALLOC_SIZE;
+	unsigned char *tmpbuf = (unsigned char *)malloc(tmpbuflen);
 
 	int c = currentChar();
 	*size = 0;
@@ -724,7 +802,7 @@ getCFEncodedData(parser_state_t *state, unsigned int *size)
 	while (c != '<') {
 		c &= 0x7f;
 		if (c == 0) {
-			free(tmpbuf);
+			safe_free(tmpbuf, tmpbuflen);
 			return 0;
 		}
 		if (c == '=') {
@@ -744,8 +822,9 @@ getCFEncodedData(parser_state_t *state, unsigned int *size)
 		acc += __CFPLDataDecodeTable[c];
 		if (0 == (cntr & 0x3)) {
 			if (tmpbuflen <= tmpbufpos + 2) {
-				tmpbuflen += DATA_ALLOC_SIZE;
-				tmpbuf = (unsigned char *)realloc(tmpbuf, tmpbuflen);
+				size_t oldsize = tmpbuflen;
+				tmpbuflen *= 2;
+				tmpbuf = (unsigned char *)realloc(tmpbuf, oldsize, tmpbuflen);
 			}
 			tmpbuf[tmpbufpos++] = (acc >> 16) & 0xff;
 			if (numeq < 2) {
@@ -759,7 +838,7 @@ getCFEncodedData(parser_state_t *state, unsigned int *size)
 	}
 	*size = tmpbufpos;
 	if (*size == 0) {
-		free(tmpbuf);
+		safe_free(tmpbuf, tmpbuflen);
 		return 0;
 	}
 	return tmpbuf;
@@ -769,9 +848,10 @@ static void *
 getHexData(parser_state_t *state, unsigned int *size)
 {
 	int c;
-	unsigned char *d, *start, *lastStart;
+	unsigned char *d, *start;
 
-	start = lastStart = d = (unsigned char *)malloc(DATA_ALLOC_SIZE);
+	size_t buflen = DATA_ALLOC_SIZE; // initial buffer size
+	start = d = (unsigned char *)malloc(buflen);
 	c = currentChar();
 
 	while (c != '<') {
@@ -806,10 +886,12 @@ getHexData(parser_state_t *state, unsigned int *size)
 		}
 
 		d++;
-		if ((d - lastStart) >= DATA_ALLOC_SIZE) {
-			int oldsize = d - start;
-			start = (unsigned char *)realloc(start, oldsize + DATA_ALLOC_SIZE);
-			d = lastStart = start + oldsize;
+		size_t oldsize = d - start;
+		if (oldsize >= buflen) {
+			assert(oldsize == buflen);
+			buflen *= 2;
+			start = (unsigned char *)realloc(start, oldsize, buflen);
+			d = start + oldsize;
 		}
 		c = nextChar();
 	}
@@ -820,7 +902,7 @@ getHexData(parser_state_t *state, unsigned int *size)
 error:
 
 	*size = 0;
-	free(start);
+	safe_free(start, buflen);
 	return 0;
 }
 
@@ -834,7 +916,7 @@ yylex(YYSTYPE *lvalp, parser_state_t *state)
 	char attributes[TAG_MAX_ATTRIBUTES][TAG_MAX_LENGTH];
 	char values[TAG_MAX_ATTRIBUTES][TAG_MAX_LENGTH];
 	object_t *object;
-
+	int alloc_length;
 top:
 	c = currentChar();
 
@@ -968,10 +1050,11 @@ top:
 			if (tagType == TAG_EMPTY) {
 				return SYNTAX_ERROR;
 			}
-			object->string = getString(STATE);
+			object->string = getString(STATE, &alloc_length);
 			if (!object->string) {
 				return SYNTAX_ERROR;
 			}
+			object->string_alloc_length = alloc_length;
 			if ((getTag(STATE, tag, &attributeCount, attributes, values) != TAG_END)
 			    || strcmp(tag, "key")) {
 				return SYNTAX_ERROR;
@@ -989,13 +1072,15 @@ top:
 		if (!strcmp(tag, "string")) {
 			if (tagType == TAG_EMPTY) {
 				object->string = (char *)malloc(1);
+				object->string_alloc_length = 1;
 				object->string[0] = 0;
 				return STRING;
 			}
-			object->string = getString(STATE);
+			object->string = getString(STATE, &alloc_length);
 			if (!object->string) {
 				return SYNTAX_ERROR;
 			}
+			object->string_alloc_length = alloc_length;
 			if ((getTag(STATE, tag, &attributeCount, attributes, values) != TAG_END)
 			    || strcmp(tag, "string")) {
 				return SYNTAX_ERROR;
@@ -1005,7 +1090,7 @@ top:
 		if (!strcmp(tag, "set")) {
 			if (tagType == TAG_EMPTY) {
 				object->elements = NULL;
-				return SET;;
+				return SET;
 			}
 			if (tagType == TAG_START) {
 				return '[';
@@ -1046,9 +1131,8 @@ newObject(parser_state_t *state)
 		o = state->freeObjects;
 		state->freeObjects = state->freeObjects->next;
 	} else {
-		o = (object_t *)malloc(sizeof(object_t));
+		o = malloc_type(object_t);
 //		object_count++;
-		bzero(o, sizeof(object_t));
 		o->free = state->objects;
 		state->objects = o;
 	}
@@ -1088,7 +1172,7 @@ cleanupObjects(parser_state_t *state)
 
 		t = o;
 		o = o->free;
-		free(t);
+		free_type(object_t, t);
 //		object_count--;
 	}
 //	printf("object_count = %d\n", object_count);
@@ -1220,6 +1304,7 @@ buildSet(parser_state_t *state, object_t *header)
 {
 	object_t *o = buildArray(state, header);
 
+#if KERNEL
 	OSArray *array = (OSArray *)o->object;
 	OSSet *set = OSSet::withArray(array, array->getCapacity());
 
@@ -1230,6 +1315,7 @@ buildSet(parser_state_t *state, object_t *header)
 
 	array->release();
 	o->object = set;
+#endif /* KERNEL */
 	return o;
 };
 
@@ -1260,7 +1346,7 @@ buildSymbol(parser_state_t *state, object_t *o)
 		rememberObject(state, o->idref, symbol);
 	}
 
-	free(o->string);
+	safe_free(o->string, o->string_alloc_length);
 	o->string = 0;
 	o->object = symbol;
 
@@ -1318,7 +1404,7 @@ OSUnserializeXML(const char *buffer, OSString **errorString)
 	if (!buffer) {
 		return 0;
 	}
-	parser_state_t *state = (parser_state_t *)malloc(sizeof(parser_state_t));
+	parser_state_t *state = (parser_state_t *)malloc_type(parser_state_t);
 	if (!state) {
 		return 0;
 	}
@@ -1345,11 +1431,12 @@ OSUnserializeXML(const char *buffer, OSString **errorString)
 
 	cleanupObjects(state);
 	state->tags->release();
-	free(state);
+	free_type(parser_state_t, state);
 
 	return object;
 }
 
+#if KERNEL
 #include <libkern/OSSerializeBinary.h>
 
 OSObject*
@@ -1375,13 +1462,32 @@ OSUnserializeXML(const char *buffer, size_t bufferSize, OSString **errorString)
 	return OSUnserializeXML(buffer, errorString);
 }
 
+#else /* !KERNEL */
+
+OSObject*
+OSUnserializeXML(const char *buffer, size_t bufferSize, OSString **errorString)
+{
+	if (!buffer) {
+		return 0;
+	}
+
+	// XML must be null terminated
+	if (buffer[bufferSize - 1]) {
+		return 0;
+	}
+
+	return OSUnserializeXML(buffer, errorString);
+}
+
+#endif /* KERNEL */
+
 
 //
 //
 //
 //
 //
-//		 DO NOT EDIT OSUnserializeXML.cpp!
+//		 DO NOT EDIT OSUnserializeXMLSharedImplementation.h!
 //
 //			this means you!
 //

@@ -8,16 +8,19 @@
 #include <darwintest.h>
 #include <darwintest_utils.h>
 
-T_GLOBAL_META(T_META_RUN_CONCURRENTLY(true));
+T_GLOBAL_META(
+	T_META_NAMESPACE("xnu.vm"),
+	T_META_RADAR_COMPONENT_NAME("xnu"),
+	T_META_RADAR_COMPONENT_VERSION("VM"),
+	T_META_RUN_CONCURRENTLY(true));
 
 extern char * testpath;
 
 T_DECL(set_max_addr,
     "Description",
-    T_META_NAMESPACE("xnu.vm"),
-    T_META_CHECK_LEAKS(false))
+    T_META_CHECK_LEAKS(false), T_META_TAG_VM_PREFERRED)
 {
-#if (defined(__arm64__) && defined(__LP64__))
+#if (!defined(TARGET_OS_MAC) && defined(__arm64__) && defined(__LP64__))
 	int result = 0;
 	int code = 0;
 	int child_pid = 0;

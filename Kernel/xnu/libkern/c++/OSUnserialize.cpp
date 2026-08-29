@@ -184,11 +184,45 @@ static OSObject *parsedObject;
 
 #define YYSTYPE object_t *
 
-#include <libkern/OSRuntime.h>
+__BEGIN_DECLS
+#include <kern/kalloc.h>
+__END_DECLS
 
-#define malloc(s) kern_os_malloc(s)
-#define realloc(a, s) kern_os_realloc(a, s)
-#define free(a) kern_os_free(a)
+// Omit from static analysis.
+#ifndef __clang_analyzer__
+
+#define malloc(size)         malloc_impl(size)
+#define malloc_type(type)    kalloc_type(type, Z_SET_NOTSHARED)
+static inline void *
+malloc_impl(size_t size)
+{
+	if (size == 0) {
+		return NULL;
+	}
+	return kalloc_data(size,
+	           Z_VM_TAG_BT(Z_WAITOK_ZERO, VM_KERN_MEMORY_LIBKERN));
+}
+
+#define free(addr)             free_impl(addr)
+#define free_type(type, addr)  kfree_type(type, addr)
+static inline void
+free_impl(void *addr)
+{
+	kfree_data_addr(addr);
+}
+static inline void
+safe_free(void *addr, size_t size)
+{
+	kfree_data(addr, size);
+}
+
+#define realloc(addr, osize, nsize) realloc_impl(addr, osize, nsize)
+static inline void *
+realloc_impl(void *addr, size_t osize, size_t nsize)
+{
+	return krealloc_data(addr, osize, nsize,
+	           Z_VM_TAG_BT(Z_WAITOK_ZERO, VM_KERN_MEMORY_LIBKERN));
+}
 
 
 
@@ -223,7 +257,7 @@ typedef int YYSTYPE;
 
 
 /* Line 216 of yacc.c.  */
-#line 182 "OSUnserialize.tab.c"
+#line 212 "OSUnserialize.tab.c"
 
 #ifdef short
 # undef short
@@ -513,9 +547,9 @@ static const yytype_int8 yyrhs[] =
 /* YYRLINE[YYN] -- source line where rule number YYN was defined.  */
 static const yytype_uint8 yyrline[] =
 {
-	0, 121, 121, 122, 123, 126, 127, 128, 129, 130,
-	131, 132, 133, 142, 150, 151, 154, 155, 158, 168,
-	169, 172, 173, 176, 181, 192, 200, 205, 210
+	0, 151, 151, 152, 153, 156, 157, 158, 159, 160,
+	161, 162, 163, 172, 180, 181, 184, 185, 188, 198,
+	199, 202, 203, 206, 211, 222, 230, 235, 240
 };
 #endif
 
@@ -1454,57 +1488,57 @@ yyreduce:
 	YY_REDUCE_PRINT(yyn);
 	switch (yyn) {
 	case 2:
-#line 121 "OSUnserialize.y"
+#line 151 "OSUnserialize.y"
 		{ parsedObject = (OSObject *)NULL; YYACCEPT;;}
 		break;
 
 	case 3:
-#line 122 "OSUnserialize.y"
+#line 152 "OSUnserialize.y"
 		{ parsedObject = (OSObject *)(yyvsp[(1) - (1)]); YYACCEPT;;}
 		break;
 
 	case 4:
-#line 123 "OSUnserialize.y"
+#line 153 "OSUnserialize.y"
 		{ yyerror("syntax error"); YYERROR;;}
 		break;
 
 	case 5:
-#line 126 "OSUnserialize.y"
+#line 156 "OSUnserialize.y"
 		{ (yyval) = (object_t *)buildOSDictionary((yyvsp[(1) - (1)]));;}
 		break;
 
 	case 6:
-#line 127 "OSUnserialize.y"
+#line 157 "OSUnserialize.y"
 		{ (yyval) = (object_t *)buildOSArray((yyvsp[(1) - (1)]));;}
 		break;
 
 	case 7:
-#line 128 "OSUnserialize.y"
+#line 158 "OSUnserialize.y"
 		{ (yyval) = (object_t *)buildOSSet((yyvsp[(1) - (1)]));;}
 		break;
 
 	case 8:
-#line 129 "OSUnserialize.y"
+#line 159 "OSUnserialize.y"
 		{ (yyval) = (object_t *)buildOSString((yyvsp[(1) - (1)]));;}
 		break;
 
 	case 9:
-#line 130 "OSUnserialize.y"
+#line 160 "OSUnserialize.y"
 		{ (yyval) = (object_t *)buildOSData((yyvsp[(1) - (1)]));;}
 		break;
 
 	case 10:
-#line 131 "OSUnserialize.y"
+#line 161 "OSUnserialize.y"
 		{ (yyval) = (object_t *)buildOSOffset((yyvsp[(1) - (1)]));;}
 		break;
 
 	case 11:
-#line 132 "OSUnserialize.y"
+#line 162 "OSUnserialize.y"
 		{ (yyval) = (object_t *)buildOSBoolean((yyvsp[(1) - (1)]));;}
 		break;
 
 	case 12:
-#line 133 "OSUnserialize.y"
+#line 163 "OSUnserialize.y"
 		{ (yyval) = (object_t *)retrieveObject((yyvsp[(2) - (2)])->u.offset);
 		  if ((yyval)) {
 			  ((OSObject *)(yyval))->retain();
@@ -1517,7 +1551,7 @@ yyreduce:
 		break;
 
 	case 13:
-#line 142 "OSUnserialize.y"
+#line 172 "OSUnserialize.y"
 		{ (yyval) = (yyvsp[(1) - (3)]);
 		  rememberObject((yyvsp[(3) - (3)])->u.offset, (yyvsp[(1) - (3)]));
 		  freeObject((yyvsp[(3) - (3)]));
@@ -1525,22 +1559,22 @@ yyreduce:
 		break;
 
 	case 14:
-#line 150 "OSUnserialize.y"
+#line 180 "OSUnserialize.y"
 		{ (yyval) = NULL;;}
 		break;
 
 	case 15:
-#line 151 "OSUnserialize.y"
+#line 181 "OSUnserialize.y"
 		{ (yyval) = (yyvsp[(2) - (3)]);;}
 		break;
 
 	case 17:
-#line 155 "OSUnserialize.y"
+#line 185 "OSUnserialize.y"
 		{ (yyvsp[(2) - (2)])->next = (yyvsp[(1) - (2)]); (yyvsp[(1) - (2)])->prev = (yyvsp[(2) - (2)]); (yyval) = (yyvsp[(2) - (2)]);;}
 		break;
 
 	case 18:
-#line 158 "OSUnserialize.y"
+#line 188 "OSUnserialize.y"
 		{ (yyval) = newObject();
 		  (yyval)->next = NULL;
 		  (yyval)->prev = NULL;
@@ -1550,27 +1584,27 @@ yyreduce:
 		break;
 
 	case 19:
-#line 168 "OSUnserialize.y"
+#line 198 "OSUnserialize.y"
 		{ (yyval) = NULL;;}
 		break;
 
 	case 20:
-#line 169 "OSUnserialize.y"
+#line 199 "OSUnserialize.y"
 		{ (yyval) = (yyvsp[(2) - (3)]);;}
 		break;
 
 	case 21:
-#line 172 "OSUnserialize.y"
+#line 202 "OSUnserialize.y"
 		{ (yyval) = NULL;;}
 		break;
 
 	case 22:
-#line 173 "OSUnserialize.y"
+#line 203 "OSUnserialize.y"
 		{ (yyval) = (yyvsp[(2) - (3)]);;}
 		break;
 
 	case 23:
-#line 176 "OSUnserialize.y"
+#line 206 "OSUnserialize.y"
 		{ (yyval) = newObject();
 		  (yyval)->object = (yyvsp[(1) - (1)]);
 		  (yyval)->next = NULL;
@@ -1579,7 +1613,7 @@ yyreduce:
 		break;
 
 	case 24:
-#line 181 "OSUnserialize.y"
+#line 211 "OSUnserialize.y"
 		{ oo = newObject();
 		  oo->object = (yyvsp[(3) - (3)]);
 		  oo->next = (yyvsp[(1) - (3)]);
@@ -1590,7 +1624,7 @@ yyreduce:
 		break;
 
 	case 25:
-#line 192 "OSUnserialize.y"
+#line 222 "OSUnserialize.y"
 		{ (yyval) = (yyvsp[(1) - (3)]);
 		  (yyval)->size = (yyvsp[(3) - (3)])->u.offset;
 		  freeObject((yyvsp[(3) - (3)]));
@@ -1599,7 +1633,7 @@ yyreduce:
 
 
 /* Line 1267 of yacc.c.  */
-#line 1555 "OSUnserialize.tab.c"
+#line 1585 "OSUnserialize.tab.c"
 	default: break;
 	}
 	YY_SYMBOL_PRINT("-> $$ =", yyr1[yyn], &yyval, &yyloc);
@@ -1811,7 +1845,7 @@ yyreturn:
 }
 
 
-#line 213 "OSUnserialize.y"
+#line 243 "OSUnserialize.y"
 
 
 static int              lineNumber = 0;
@@ -1926,7 +1960,7 @@ top:
 
 		/* copy to null terminated buffer */
 		tempString = (char *)malloc(length + 1);
-		if (tempString == 0) {
+		if (tempString == NULL) {
 			printf("OSUnserialize: can't alloc temp memory\n");
 			return 0;
 		}
@@ -1960,7 +1994,7 @@ top:
 		(void)nextChar();
 		/* copy to null terminated buffer */
 		tempString = (char *)malloc(length + 1);
-		if (tempString == 0) {
+		if (tempString == NULL) {
 			printf("OSUnserialize: can't alloc temp memory\n");
 			return 0;
 		}
@@ -2020,7 +2054,8 @@ top:
 	if (c == '<') {
 		unsigned char *d, *start, *lastStart;
 
-		start = lastStart = d = (unsigned char *)malloc(OSDATA_ALLOC_SIZE);
+		size_t buflen = OSDATA_ALLOC_SIZE;
+		start = lastStart = d = (unsigned char *)malloc(buflen);
 		c = nextChar(); // skip over '<'
 		while (c != 0 && c != '>') {
 			if (isSpace(c)) {
@@ -2063,13 +2098,14 @@ top:
 			d++;
 			if ((d - lastStart) >= OSDATA_ALLOC_SIZE) {
 				int oldsize = d - start;
-				start = (unsigned char *)realloc(start, oldsize + OSDATA_ALLOC_SIZE);
+				assert(buflen == oldsize);
+				start = (unsigned char *)realloc(start, oldsize, buflen);
 				d = lastStart = start + oldsize;
 			}
 			c = nextChar();
 		}
 		if (c != '>') {
-			free(start);
+			safe_free(start, buflen);
 			return SYNTAX_ERROR;
 		}
 
@@ -2102,7 +2138,7 @@ newObject()
 #if DEBUG
 	debugUnserializeAllocCount++;
 #endif
-	return (object_t *)malloc(sizeof(object_t));
+	return malloc_type(object_t);
 }
 
 void
@@ -2111,7 +2147,7 @@ freeObject(object_t *o)
 #if DEBUG
 	debugUnserializeAllocCount--;
 #endif
-	free(o);
+	free_type(object_t, o);
 }
 
 static OSDictionary *tags;
@@ -2212,7 +2248,7 @@ buildOSString(object_t *o)
 {
 	OSString *s = OSString::withCString((char *)o);
 
-	free(o);
+	safe_free(o, strlen((char *)o) + 1);
 
 	return s;
 };
@@ -2227,7 +2263,7 @@ buildOSData(object_t *o)
 	} else {
 		d = OSData::withCapacity(0);
 	}
-	free(o->object);
+	safe_free(o->object, o->size);
 	freeObject(o);
 	return d;
 };
@@ -2276,10 +2312,10 @@ OSUnserialize(const char *buffer, OSString **errorString)
 	if (yyparse() == 0) {
 		object = parsedObject;
 		if (errorString) {
-			*errorString = 0;
+			*errorString = NULL;
 		}
 	} else {
-		object = 0;
+		object = NULL;
 		if (errorString) {
 			*errorString = OSString::withCString(yyerror_message);
 		}
@@ -2296,6 +2332,8 @@ OSUnserialize(const char *buffer, OSString **errorString)
 
 	return object;
 }
+
+#endif // not __clang_analyzer__
 
 
 //

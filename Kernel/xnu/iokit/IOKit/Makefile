@@ -3,14 +3,6 @@ export MakeInc_def=${SRCROOT}/makedefs/MakeInc.def
 export MakeInc_rule=${SRCROOT}/makedefs/MakeInc.rule
 export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 
-IOKIT_INCVERS = A
-IOKIT_INCFRAME = $(FRAMEDIR)/IOKit.framework
-IOKIT_INCDIR = $(IOKIT_INCFRAME)/Versions/$(IOKIT_INCVERS)/Headers
-IOKIT_PINCDIR = $(IOKIT_INCFRAME)/Versions/$(IOKIT_INCVERS)/PrivateHeaders
-
-INCDIR = $(IOKIT_INCDIR)
-LCLDIR = $(IOKIT_PINCDIR)
-
 include $(MakeInc_cmd)
 include $(MakeInc_def)
 
@@ -20,7 +12,8 @@ INSTINC_SUBDIRS = \
 	power \
 	pwr_mgt \
 	rtc \
-	system_management
+	system_management \
+	skywalk
 
 
 EXPINC_SUBDIRS = ${INSTINC_SUBDIRS}
@@ -32,7 +25,7 @@ EXPINC_SUBDIRS = ${INSTINC_SUBDIRS}
 ALL_HEADERS = $(notdir $(wildcard $(SOURCE)*.h))
 
 # Do not install these headers (anywhere).
-NOT_EXPORT_HEADERS = IOInterruptAccountingPrivate.h
+NOT_EXPORT_HEADERS =
 
 # Install these only in Kernel.framework's PrivateHeaders (not Headers).
 NOT_KF_MI_HEADERS  = $(NOT_EXPORT_HEADERS)			\
@@ -42,16 +35,21 @@ NOT_KF_MI_HEADERS  = $(NOT_EXPORT_HEADERS)			\
 		     IOSyncer.h AppleKeyStoreInterface.h	\
 		     IOStatistics.h IOStatisticsPrivate.h	\
 		     IOKernelReporters.h			\
-		     IOInterruptAccounting.h
+		     IOInterruptAccounting.h			\
+		     IOPlatformIO.h				\
+		     IOPMGR.h IOPlatformActions.h 	\
+		     IOExtensiblePaniclog.h
 
 
 # These should be additionally installed in IOKit.framework's public Headers
-INSTALL_MI_LIST	= IOBSD.h IOKitKeys.h IOKitServer.h IOReturn.h	    \
-		  IOSharedLock.h IOTypes.h OSMessageNotification.h  \
+INSTALL_IF_MI_LIST	= IOBSD.h IOKitKeys.h IOKitServer.h IOReturn.h	    \
+		  IOSharedLock.h IOTypes.h IOMapTypes.h OSMessageNotification.h  \
 		  IODataQueueShared.h IOMessage.h IORPC.h IOUserServer.h
 
 # These should be additionally installed in IOKit.framework's PrivateHeaders
-INSTALL_MI_LCL_LIST = IOKitKeysPrivate.h IOHibernatePrivate.h   \
+INSTALL_IF_MI_LCL_LIST = $(INSTALL_IF_MI_LIST)
+INSTALL_IF_MI_LCL_LIST += \
+		      IOKitKeysPrivate.h IOHibernatePrivate.h   \
 		      IOLocksPrivate.h IOStatistics.h 		\
 		      AppleKeyStoreInterface.h  		\
 		      IOReportTypes.h IOKernelReportStructs.h   \

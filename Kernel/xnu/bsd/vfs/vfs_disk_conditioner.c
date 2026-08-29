@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016-2018 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2016-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -124,9 +124,19 @@ disk_conditioner_delay(buf_t bp, int extents, int total_size, uint64_t already_e
 	}
 
 	// scale access time by (distance in blocks from previous I/O / maximum blocks)
-	access_time_scale = weighted_scale_factor((double)blkdiff / BLK_MAX(mp));
+	access_time_scale = weighted_scale_factor((double)blkdiff / (double)BLK_MAX(mp));
+	if (__builtin_isnan(access_time_scale)) {
+		return;
+	}
 	// most cases should pass in extents==1 for optimal delay calculation, otherwise just multiply delay by extents
-	delay_usec = (uint64_t)(((uint64_t)extents * info->access_time_usec) * access_time_scale);
+	double temp = (((double)extents * (double)info->access_time_usec) * access_time_scale);
+	if (temp <= 0) {
+		delay_usec = 0;
+	} else if (temp >= (double)(18446744073709549568ULL)) { /* highest 64-bit unsigned integer representable as a double */
+		delay_usec = UINT64_MAX;
+	} else {
+		delay_usec = (uint64_t)temp;
+	}
 
 	if (info->read_throughput_mbps && (bp->b_flags & B_READ)) {
 		delay_usec += (uint64_t)(total_size / ((double)(info->read_throughput_mbps * 1024 * 1024 / 8) / USEC_PER_SEC));
@@ -153,7 +163,8 @@ disk_conditioner_delay(buf_t bp, int extents, int total_size, uint64_t already_e
 
 	while (delay_usec) {
 		microuptime(&start);
-		delay(delay_usec);
+		assert(delay_usec <= INT_MAX);
+		delay((int)delay_usec);
 		microuptime(&elapsed);
 		timevalsub(&elapsed, &start);
 		if (elapsed.tv_sec * USEC_PER_SEC < delay_usec) {
@@ -207,7 +218,7 @@ disk_conditioner_set_info(mount_t mp, disk_conditioner_info *uinfo)
 	disk_conditioner_info *info;
 	struct saved_mount_fields *mnt_fields;
 
-	if (!kauth_cred_issuser(kauth_cred_get()) || !IOTaskHasEntitlement(current_task(), DISK_CONDITIONER_SET_ENTITLEMENT)) {
+	if (!kauth_cred_issuser(kauth_cred_get()) || !IOCurrentTaskHasEntitlement(DISK_CONDITIONER_SET_ENTITLEMENT)) {
 		return EPERM;
 	}
 
@@ -219,8 +230,8 @@ disk_conditioner_set_info(mount_t mp, disk_conditioner_info *uinfo)
 
 	internal_info = mp->mnt_disk_conditioner_info;
 	if (!internal_info) {
-		internal_info = kalloc(sizeof(struct _disk_conditioner_info_t));
-		bzero(internal_info, sizeof(struct _disk_conditioner_info_t));
+		internal_info = kalloc_type(struct _disk_conditioner_info_t,
+		    Z_WAITOK | Z_ZERO);
 		mp->mnt_disk_conditioner_info = internal_info;
 		mnt_fields = &(internal_info->mnt_fields);
 
@@ -292,7 +303,7 @@ disk_conditioner_unmount(mount_t mp)
 		disk_conditioner_restore_mount_fields(mp, &(internal_info->mnt_fields));
 	}
 	mp->mnt_disk_conditioner_info = NULL;
-	kfree(internal_info, sizeof(struct _disk_conditioner_info_t));
+	kfree_type(struct _disk_conditioner_info_t, internal_info);
 }
 
 boolean_t

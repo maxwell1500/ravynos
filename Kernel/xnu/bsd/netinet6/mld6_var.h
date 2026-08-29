@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -235,11 +235,12 @@ struct mld_tparams {
 	int     it;     /* interface_timers_running6 */
 	int     cst;    /* current_state_timers_running6 */
 	int     sct;    /* state_change_timers_running6 */
+	bool    fast;   /* fast timer */
 };
 
 extern int mld_change_state(struct in6_multi *, struct mld_tparams *,
     const int);
-extern struct mld_ifinfo *mld_domifattach(struct ifnet *, int);
+extern struct mld_ifinfo *mld_domifattach(struct ifnet *, zalloc_flags_t);
 extern void mld_domifreattach(struct mld_ifinfo *);
 extern void mld_domifdetach(struct ifnet *);
 extern void mld_fasttimo(void);
@@ -247,6 +248,7 @@ extern void mld_ifdetach(struct ifnet *);
 extern int mld_input(struct mbuf *, int, int);
 extern void mld_init(void);
 extern void mld_set_timeout(struct mld_tparams *);
+extern void mld_set_fast_timeout(struct mld_tparams *);
 extern void mli_addref(struct mld_ifinfo *, int);
 extern void mli_remref(struct mld_ifinfo *);
 __private_extern__ void mld6_initsilent(struct ifnet *, struct mld_ifinfo *);

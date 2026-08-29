@@ -61,6 +61,7 @@ DATAFILES = \
 	flock.2			\
 	fork.2			\
 	fpathconf.2		\
+	freadlink.2     \
 	fremovexattr.2		\
 	fsetxattr.2		\
 	fsgetpath.2		\
@@ -133,7 +134,9 @@ DATAFILES = \
 	mkdir.2			\
 	mkdirat.2		\
 	mkfifo.2		\
+	mkfifoat.2		\
 	mknod.2			\
+	mknodat.2		\
 	mlock.2			\
 	mmap.2			\
 	mount.2			\
@@ -150,10 +153,12 @@ DATAFILES = \
 	poll.2			\
 	posix_madvise.2		\
 	pread.2			\
+	preadv.2		\
 	pselect.2		\
 	pthread_setugid_np.2	\
 	ptrace.2		\
 	pwrite.2		\
+	pwritev.2		\
 	quotactl.2		\
 	read.2			\
 	readlink.2		\

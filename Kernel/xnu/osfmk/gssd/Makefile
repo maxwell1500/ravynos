@@ -12,7 +12,7 @@ PRIVATE_DATAFILES = gssd_mach_types.h ${MIG_DEFS}
 
 INSTALL_MI_LIST =
 
-INSTALL_MI_LCL_LIST = ${PRIVATE_DATAFILES}
+INSTALL_SF_MI_LCL_LIST = ${PRIVATE_DATAFILES}
 
 INSTALL_MI_GEN_LIST =
 
@@ -41,12 +41,12 @@ COMP_FILES = ${MIG_KUSRC}
 do_build_all:: $(COMP_FILES)
 
 ${MIG_KUSRC} : gssd_mach.defs
-	$(call makelog,$(ColorM)MIG$(Color0) $(ColorF)$@$(Color0))
-	$(_v)${MIG} ${MIGFLAGS} ${MIGKUFLAGS}	\
-		-user    gssd_mach.c		\
-		-header  gssd_mach.h		\
-		-server  /dev/null		\
-		-sheader /dev/null		\
+	@$(LOG_MIG) "$@"
+	$(_v)${MIG} ${MIGFLAGS} ${MIGKUFLAGS} \
+		-user    gssd_mach.c              \
+		-header  gssd_mach.h              \
+		-server  /dev/null                \
+		-sheader /dev/null                \
 		$<
 
 include $(MakeInc_rule)

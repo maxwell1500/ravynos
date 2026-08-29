@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2023 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -93,14 +93,18 @@
 #ifndef _NETINET6_IN6_VAR_H_
 #define _NETINET6_IN6_VAR_H_
 #include <sys/appleapiopts.h>
+#include <net/if_var.h>
 #include <net/net_kev.h>
 
 #ifdef BSD_KERNEL_PRIVATE
 #include <sys/tree.h>
 #include <sys/mcache.h>
 #endif /* BSD_KERNEL_PRIVATE */
+#include <sys/protosw.h>
+#include <netinet/in.h>
 #include <netinet6/scope6_var.h>
 #include <sys/kern_event.h>
+#include <sys/protosw.h>
 #include <net/ethernet.h>
 
 /*
@@ -165,6 +169,9 @@ struct in6_ifaddr {
 	TAILQ_ENTRY(in6_ifaddr) ia6_hash; /* hash bucket entry */
 	int ia6_flags;
 
+	/* cga collision count */
+	uint8_t   ia6_cga_collision_count;
+
 	struct in6_addrlifetime_i ia6_lifetime;
 	/*
 	 * the creation time of this address, which is
@@ -180,12 +187,40 @@ struct in6_ifaddr {
 	LIST_HEAD(, in6_multi_mship) ia6_memberships;
 };
 
-#define ifatoia6(ifa)   ((struct in6_ifaddr *)(void *)(ifa))
+static inline const struct in6_ifaddr *
+__attribute__((overloadable)) __pure2
+__ifatoia6_const(const struct ifaddr *ifa)
+{
+	return __container_of(ifa, const struct in6_ifaddr, ia_ifa);
+}
+static inline struct in6_ifaddr *
+__attribute__((overloadable)) __pure2
+__ifatoia6(struct ifaddr *ifa)
+{
+	return __container_of(ifa, struct in6_ifaddr, ia_ifa);
+}
+
+#if __has_ptrcheck
+#define ifatoia6(ifa) (_Generic((ifa),                           \
+	const struct ifaddr * __single         : __ifatoia6_const,   \
+	const struct ifaddr * __bidi_indexable : __ifatoia6_const,   \
+	const struct ifaddr * __indexable      : __ifatoia6_const,   \
+	      struct ifaddr * __single         : __ifatoia6,         \
+	      struct ifaddr * __bidi_indexable : __ifatoia6,         \
+	      struct ifaddr * __indexable      : __ifatoia6)         \
+	((ifa)))
+#else /* !__has_ptrcheck */
+#define ifatoia6(ifa) (_Generic((ifa),                           \
+	const struct ifaddr *                  : __ifatoia6_const,   \
+	      struct ifaddr *                  : __ifatoia6)         \
+	((ifa)))
+#endif /* !__has_ptrcheck */
 
 extern TAILQ_HEAD(in6_ifaddrhead, in6_ifaddr) in6_ifaddrhead;
-extern TAILQ_HEAD(in6_ifaddrhashhead, in6_ifaddr) * in6_ifaddrhashtbl;
+extern uint32_t in6_ifaddrlist_genid;
 extern uint32_t in6addr_nhash;                  /* hash table size */
 extern uint32_t in6addr_hashp;                  /* next largest prime */
+extern TAILQ_HEAD(in6_ifaddrhashhead, in6_ifaddr) * __counted_by(in6addr_nhash) in6_ifaddrhashtbl;
 
 static __inline uint32_t
 in6addr_hashval(const struct in6_addr *in6)
@@ -209,6 +244,8 @@ in6addr_hashval(const struct in6_addr *in6)
 
 #define IN6ADDR_HASH(x)                 (&in6_ifaddrhashtbl[in6addr_hashval(x)])
 
+extern lck_mtx_t nd6_mutex_data;
+#define nd6_mutex (&nd6_mutex_data)
 #endif /* BSD_KERNEL_PRIVATE */
 
 /* control structure to manage address selection policy */
@@ -392,50 +429,21 @@ struct in6_cga_nodecfg {
 	struct in6_cga_prepare cga_prepare;
 };
 
-/*
- * XXX in6_llstartreq will be removed once
- * configd adopts the more generically named
- * in6_cgareq structure.
- */
-struct in6_llstartreq {
-	char llsr_name[IFNAMSIZ];
-	int llsr_flags;
-	struct in6_cga_prepare llsr_cgaprep;
-	struct in6_addrlifetime llsr_lifetime;
-};
-
 struct in6_cgareq {
 	char cgar_name[IFNAMSIZ];
 	int cgar_flags;
 	struct in6_cga_prepare cgar_cgaprep;
 	struct in6_addrlifetime cgar_lifetime;
+	uint8_t cgar_collision_count;
 };
 
 #ifdef BSD_KERNEL_PRIVATE
-/*
- * XXX Corresponding versions of in6_llstartreq
- * will be removed after the new in6_cgareq is
- * adopted by configd
- */
-struct in6_llstartreq_32 {
-	char llsr_name[IFNAMSIZ];
-	int llsr_flags;
-	struct in6_cga_prepare llsr_cgaprep;
-	struct in6_addrlifetime_32 llsr_lifetime;
-};
-
-struct in6_llstartreq_64 {
-	char llsr_name[IFNAMSIZ];
-	int llsr_flags;
-	struct in6_cga_prepare llsr_cgaprep;
-	struct in6_addrlifetime_64 llsr_lifetime;
-};
-
 struct in6_cgareq_32 {
 	char cgar_name[IFNAMSIZ];
 	int cgar_flags;
 	struct in6_cga_prepare cgar_cgaprep;
 	struct in6_addrlifetime_32 cgar_lifetime;
+	uint8_t cgar_collision_count;
 };
 
 struct in6_cgareq_64 {
@@ -443,6 +451,7 @@ struct in6_cgareq_64 {
 	int cgar_flags;
 	struct in6_cga_prepare cgar_cgaprep;
 	struct in6_addrlifetime_64 cgar_lifetime;
+	uint8_t cgar_collision_count;
 };
 
 #endif /* !BSD_KERNEL_PRIVATE */
@@ -574,7 +583,8 @@ struct kev_in6_data {
 
 #ifdef BSD_KERNEL_PRIVATE
 /* Utility function used inside netinet6 kernel code for generating events */
-void in6_post_msg(struct ifnet *, u_int32_t, struct in6_ifaddr *, uint8_t *mac);
+void in6_post_msg(struct ifnet *, u_int32_t, struct in6_ifaddr *,
+    uint8_t *__sized_by(maclen) mac, size_t maclen);
 
 #define IN6_ARE_MASKED_ADDR_EQUAL(d, a, m)      (       \
 	(((d)->s6_addr32[0] ^ (a)->s6_addr32[0]) & (m)->s6_addr32[0]) == 0 && \
@@ -591,12 +601,18 @@ void in6_post_msg(struct ifnet *, u_int32_t, struct in6_ifaddr *, uint8_t *mac);
 #define IA6_MASKIN6(ia) (&((ia)->ia_prefixmask.sin6_addr))
 #define IA6_SIN6(ia)    (&((ia)->ia_addr))
 #define IA6_DSTSIN6(ia) (&((ia)->ia_dstaddr))
+#define IA6_SIN6_SCOPE(x) ((IA6_SIN6(x))->sin6_scope_id)
+
 #define IFA_IN6(x)      \
 	(&((struct sockaddr_in6 *)(void *)((x)->ifa_addr))->sin6_addr)
+#define IFA_SIN6(x)      \
+	((struct sockaddr_in6 *)(void *)((x)->ifa_addr))
 #define IFA_DSTIN6(x)   \
 	(&((struct sockaddr_in6 *)(void *)((x)->ifa_dstaddr))->sin6_addr)
 #define IFPR_IN6(x)     \
 	(&((struct sockaddr_in6 *)(void *)((x)->ifpr_prefix))->sin6_addr)
+#define IFA_SIN6_SCOPE(x) ((IFA_SIN6(x))->sin6_scope_id)
+
 #endif /* BSD_KERNEL_PRIVATE */
 
 #define SIOCSIFADDR_IN6          _IOW('i', 12, struct in6_ifreq)
@@ -628,17 +644,7 @@ void in6_post_msg(struct ifnet *, u_int32_t, struct in6_ifaddr *, uint8_t *mac);
 #define SIOCGIFPDSTADDR_IN6     _IOWR('i', 64, struct in6_ifreq)
 #define SIOCGIFAFLAG_IN6        _IOWR('i', 73, struct in6_ifreq)
 
-#define SIOCGDRLST_IN6          _IOWR('i', 74, struct in6_drlist)
-#ifdef BSD_KERNEL_PRIVATE
-#define SIOCGDRLST_IN6_32       _IOWR('i', 74, struct in6_drlist_32)
-#define SIOCGDRLST_IN6_64       _IOWR('i', 74, struct in6_drlist_64)
-#endif /* BSD_KERNEL_PRIVATE */
-
-#define SIOCGPRLST_IN6          _IOWR('i', 75, struct in6_prlist)
-#ifdef BSD_KERNEL_PRIVATE
-#define SIOCGPRLST_IN6_32       _IOWR('i', 75, struct in6_prlist_32)
-#define SIOCGPRLST_IN6_64       _IOWR('i', 75, struct in6_prlist_64)
-#endif /* BSD_KERNEL_PRIVATE */
+/* removed: #define SIOCGDRLST_IN6          _IOWR('i', 74, struct in6_drlist) */
 
 #define OSIOCGIFINFO_IN6        _IOWR('i', 108, struct in6_ondireq)
 #define SIOCGIFINFO_IN6         _IOWR('i', 76, struct in6_ondireq)
@@ -740,9 +746,36 @@ void in6_post_msg(struct ifnet *, u_int32_t, struct in6_ifaddr *, uint8_t *mac);
 #endif /* BSD_KERNEL_PRIVATE */
 
 /*
- * enable/disable IPv6 router mode on interface.
+ * SIOCSETROUTERMODE_IN6
+ * Set the IPv6 router mode on an interface.
+ *
+ * IPV6_ROUTER_MODE_DISABLED
+ * - disable IPv6 router mode if it is enabled
+ * - if the previous mode was IPV6_ROUTER_MODE_EXCUSIVE,
+ *   scrubs all IPv6 auto-configured addresses
+ *
+ * IPV6_ROUTER_MODE_EXCLUSIVE
+ * - act exclusively as an IPv6 router on the interface
+ * - disables accepting external Router Advertisements
+ * - scrubs all IPv6 auto-configured addresses
+ * - disables optimistic dad
+ * - disables ND6 prefix proxy, if enabled
+ * - used by the internet sharing/personal hotspot feature
+ *
+ * IPV6_ROUTER_MODE_HYBRID
+ * - act as both an IPv6 router and IPv6 client on the interface
+ * - does not modify whether to accept Router Advertisements
+ * - does not scrub any addresses
+ * - used when acting as the gateway/router for an otherwise isolated
+ *   network whose existence is likely advertised via a
+ *   a Route Information Option in a Router Advertisement
  */
+#define IPV6_ROUTER_MODE_DISABLED       0
+#define IPV6_ROUTER_MODE_EXCLUSIVE      1
+#define IPV6_ROUTER_MODE_HYBRID         2
 #define SIOCSETROUTERMODE_IN6   _IOWR('i', 136, struct in6_ifreq)
+
+#define SIOCGETROUTERMODE_IN6   _IOWR('i', 137, struct in6_ifreq)
 
 /*
  * start secure link-local interface addresses
@@ -753,8 +786,17 @@ void in6_post_msg(struct ifnet *, u_int32_t, struct in6_ifaddr *, uint8_t *mac);
 #define SIOCLL_CGASTART_64      _IOW('i', 160, struct in6_cgareq_64)
 #endif
 
+/*
+ * get/set the CGA parameters
+ */
 #define SIOCGIFCGAPREP_IN6      _IOWR('i', 187, struct in6_cgareq)
 #define SIOCSIFCGAPREP_IN6      _IOWR('i', 188, struct in6_cgareq)
+#ifdef BSD_KERNEL_PRIVATE
+#define SIOCGIFCGAPREP_IN6_32   _IOWR('i', 187, struct in6_cgareq_32)
+#define SIOCGIFCGAPREP_IN6_64   _IOWR('i', 187, struct in6_cgareq_64)
+#define SIOCSIFCGAPREP_IN6_32   _IOWR('i', 188, struct in6_cgareq_32)
+#define SIOCSIFCGAPREP_IN6_64   _IOWR('i', 188, struct in6_cgareq_64)
+#endif
 
 #define SIOCCLAT46_START        _IOWR('i', 189, struct in6_ifreq)
 #define SIOCCLAT46_STOP         _IOWR('i', 190, struct in6_ifreq)
@@ -772,7 +814,7 @@ void in6_post_msg(struct ifnet *, u_int32_t, struct in6_ifaddr *, uint8_t *mac);
 #define IN6_IFF_ANYCAST         0x0001  /* anycast address */
 #define IN6_IFF_TENTATIVE       0x0002  /* tentative address */
 #define IN6_IFF_DUPLICATED      0x0004  /* DAD detected duplicate */
-#define IN6_IFF_DETACHED        0x0008  /* may be detached from the link */
+#define IN6_IFF_DETACHED        0x0008  /* XXX Obsolete. May be detached from the link */
 #define IN6_IFF_DEPRECATED      0x0010  /* deprecated address */
 
 /* don't perform DAD on this address (used only at first SIOC* call) */
@@ -805,17 +847,20 @@ void in6_post_msg(struct ifnet *, u_int32_t, struct in6_ifaddr *, uint8_t *mac);
 
 #ifdef BSD_KERNEL_PRIVATE
 extern struct icmp6stat icmp6stat;
+extern lck_grp_t ip6_mutex_grp;
+extern lck_attr_t ip6_mutex_attr;
 extern lck_rw_t in6_ifaddr_rwlock;
 extern lck_mtx_t proxy6_lock;
-extern u_char inet6ctlerrmap[];
+extern u_char inet6ctlerrmap[PRC_NCMDS];
 extern u_int32_t in6_maxmtu;
 
 /* N.B.: if_inet6data is never freed once set, so we don't need to lock */
 #define in6_ifstat_add_common(_ifp, _tag, _count, _atomic) do {         \
 	if (_ifp != NULL && IN6_IFEXTRA(_ifp) != NULL) {                \
 	        if (_atomic)                                            \
-	                atomic_add_64(                                  \
-	                    &IN6_IFEXTRA(_ifp)->in6_ifstat._tag, _count);\
+	                os_atomic_add(                                  \
+	                        &IN6_IFEXTRA(_ifp)->in6_ifstat._tag,    \
+	                        _count, relaxed);                       \
 	        else                                                    \
 	                IN6_IFEXTRA(_ifp)->in6_ifstat._tag += _count;   \
 	}                                                               \
@@ -838,23 +883,23 @@ extern u_int32_t in6_maxmtu;
  * to a given interface (ifnet structure).
  */
 
-#define IFP_TO_IA6(ifp, ia)                                             \
+#define IFP_TO_IA6(ifp, ia)                                         \
 	/* struct ifnet *ifp; */                                        \
 	/* struct in6_ifaddr *ia; */                                    \
-do {                                                                    \
+do {                                                                \
 	struct ifaddr *_ifa;                                            \
 	ifnet_lock_assert(ifp, LCK_RW_ASSERT_HELD);                     \
 	for (_ifa = (ifp)->if_addrlist.tqh_first; _ifa != NULL;         \
 	    _ifa = _ifa->ifa_list.tqe_next) {                           \
 	        IFA_LOCK(_ifa);                                         \
 	        if (_ifa->ifa_addr->sa_family == AF_INET6) {            \
-	                IFA_ADDREF_LOCKED(_ifa);                        \
+	                ifa_addref(_ifa);                               \
 	                IFA_UNLOCK(_ifa);                               \
 	                break;                                          \
 	        }                                                       \
 	        IFA_UNLOCK(_ifa);                                       \
 	}                                                               \
-	(ia) = (struct in6_ifaddr *)_ifa;                               \
+	(ia) = ifatoia6(_ifa);                                          \
 } while (0)
 
 /*
@@ -905,7 +950,6 @@ struct in6_multi_mship {
 
 #ifdef BSD_KERNEL_PRIVATE
 #include <netinet6/nd6_var.h>
-#include <net/if_llatbl.h>
 
 /*
  * Per-interface IPv6 structures.
@@ -918,10 +962,8 @@ struct in6_ifextra {
 	uint32_t                netsig_len;
 	u_int8_t                netsig[IFNET_SIGNATURELEN];
 	struct ipv6_prefix      nat64_prefixes[NAT64_MAX_NUM_PREFIXES];
-	struct lltable          *ii_llt;        /* NDP state */
 };
-#define IN6_IFEXTRA(_ifp)       ((struct in6_ifextra *)(_ifp->if_inet6data))
-#define LLTABLE6(ifp)           ((IN6_IFEXTRA(ifp) == NULL) ? NULL : IN6_IFEXTRA(ifp)->ii_llt)
+#define IN6_IFEXTRA(_ifp)       (_ifp->if_inet6data)
 #endif /* BSD_KERNEL_PRIVATE */
 
 struct mld_ifinfo;
@@ -956,10 +998,12 @@ struct in6_multi {
 	u_int32_t in6m_debug;           /* see ifa_debug flags */
 	LIST_ENTRY(in6_multi) in6m_entry; /* list glue */
 	struct  in6_addr in6m_addr;     /* IP6 multicast address */
+	uint32_t ifscope;               /* IP6 address scope */
 	struct  ifnet *in6m_ifp;        /* back pointer to ifnet */
 	struct  ifmultiaddr *in6m_ifma; /* back pointer to ifmultiaddr */
 	u_int   in6m_state;             /* state of the membership */
 	u_int   in6m_timer;             /* MLD6 listener report timer */
+	bool    in6m_in_nrele;          /* if in nrele list */
 
 	/* New fields for MLDv2 follow. */
 	struct mld_ifinfo       *in6m_mli;      /* MLD info */
@@ -1114,7 +1158,7 @@ extern struct domain *inet6domain;
 struct ip6_pktopts;
 
 /* Multicast private KPIs. */
-extern int im6o_mc_filter(const struct ip6_moptions *, const struct ifnet *,
+extern int im6o_mc_filter(const struct ip6_moptions *, struct ifnet *,
     const struct sockaddr_in6 *, const struct sockaddr_in6 *);
 extern int in6_mc_join(struct ifnet *, const struct in6_addr *,
     struct in6_mfilter *, struct in6_multi **, int);
@@ -1130,15 +1174,14 @@ extern int ip6_setmoptions(struct inpcb *, struct sockopt *);
 extern struct in6_multi_mship *in6_joingroup(struct ifnet *,
     struct in6_addr *, int *, int);
 extern int in6_leavegroup(struct in6_multi_mship *);
-extern void in6_multi_init(void);
 extern void in6m_addref(struct in6_multi *, int);
 extern void in6m_remref(struct in6_multi *, int);
 extern int in6_multi_detach(struct in6_multi *);
 extern int in6_ifindex2scopeid(int);
-extern int in6_mask2len(struct in6_addr *, u_char *);
+extern int in6_mask2len(struct in6_addr *, u_char *__counted_by(0) lim0);
 extern void in6_len2mask(struct in6_addr *, int);
-extern int in6_control(struct socket *, u_long, caddr_t, struct ifnet *,
-    struct proc *);
+extern int in6_control(struct socket *, u_long cmd, caddr_t __sized_by(IOCPARM_LEN(cmd)),
+    struct ifnet *, struct proc *);
 extern int in6_update_ifa(struct ifnet *, struct in6_aliasreq *, int,
     struct in6_ifaddr **);
 extern void in6_purgeaddr(struct ifaddr *);
@@ -1151,14 +1194,14 @@ extern void in6_purgemkludge(struct ifnet *);
 extern struct in6_ifaddr *in6ifa_ifpforlinklocal(struct ifnet *, int);
 extern struct in6_ifaddr *in6ifa_ifpwithflag(struct ifnet *, int);
 extern struct in6_ifaddr *in6ifa_ifpwithaddr(struct ifnet *, struct in6_addr *);
-extern struct in6_ifaddr *in6ifa_prproxyaddr(struct in6_addr *);
+extern struct in6_ifaddr *in6ifa_prproxyaddr(struct in6_addr *, uint32_t);
 extern void in6ifa_getlifetime(struct in6_ifaddr *,
     struct in6_addrlifetime *, int);
 extern void in6ifa_setlifetime(struct in6_ifaddr *, struct in6_addrlifetime *);
-extern char *ip6_sprintf(const struct in6_addr *);
+extern const char *ip6_sprintf(const struct in6_addr *);
 extern int in6_addr2scopeid(struct ifnet *, struct in6_addr *);
 extern int in6_matchlen(struct in6_addr *, struct in6_addr *);
-extern int in6_are_prefix_equal(struct in6_addr *p1, struct in6_addr *p2,
+extern int in6_are_prefix_equal(struct in6_addr *p1, uint32_t ifscope1, struct in6_addr *p2, uint32_t ifscope2,
     int len);
 extern void in6_prefixlen2mask(struct in6_addr *maskp, int len);
 extern int in6_prefix_add_ifid(int iilen, struct in6_ifaddr *ia);
@@ -1170,7 +1213,7 @@ extern uint8_t im6s_get_mode(const struct in6_multi *,
 extern void im6f_leave(struct in6_mfilter *);
 extern void im6f_purge(struct in6_mfilter *);
 extern int in6_embedscope(struct in6_addr *, const struct sockaddr_in6 *,
-    struct inpcb *, struct ifnet **, struct ip6_pktopts *);
+    struct inpcb *, struct ifnet **, struct ip6_pktopts *, uint32_t *);
 extern int in6_recoverscope(struct sockaddr_in6 *, const struct in6_addr *,
     struct ifnet *);
 extern void in6_aliasreq_64_to_32(struct in6_aliasreq_64 *,
@@ -1181,8 +1224,8 @@ extern void in6_ifaddr_init(void);
 extern int in6_inithead(void **, int);
 extern void in6_rtqdrain(void);
 extern struct radix_node *in6_validate(struct radix_node *);
-extern int  in6_if2idlen(struct ifnet *);
-extern int in6_src_ioctl(u_long, caddr_t);
+extern int in6_if2idlen(struct ifnet *);
+extern int in6_src_ioctl(u_long cmd, caddr_t __sized_by(IOCPARM_LEN(cmd)));
 extern void in6_multihead_lock_exclusive(void);
 extern void in6_multihead_lock_shared(void);
 extern void in6_multihead_lock_assert(int);
@@ -1194,15 +1237,15 @@ extern void in6_cga_node_unlock(void);
 extern void in6_cga_query(struct in6_cga_nodecfg *);
 extern int in6_cga_start(const struct in6_cga_nodecfg *);
 extern int in6_cga_stop(void);
-extern ssize_t in6_cga_parameters_prepare(void *, size_t,
-    const struct in6_addr *, u_int8_t, const struct in6_cga_modifier *);
 extern int in6_cga_generate(struct in6_cga_prepare *, u_int8_t,
-    struct in6_addr *);
+    struct in6_addr *, struct ifnet *);
 extern int in6_getconninfo(struct socket *, sae_connid_t, uint32_t *,
     uint32_t *, int32_t *, user_addr_t, socklen_t *,
     user_addr_t, socklen_t *, uint32_t *, user_addr_t, uint32_t *);
-extern void in6_ip6_to_sockaddr(const struct in6_addr *ip6, u_int16_t port,
+extern void in6_ip6_to_sockaddr(const struct in6_addr *ip6, u_int16_t port, uint32_t ifscope,
     struct sockaddr_in6 *sin6, u_int32_t maxlen);
+extern void in6_cgareq_copy_from_user32(const void *__sized_by(sizeof(struct in6_cgareq_32)), struct in6_cgareq*);
+extern void in6_cgareq_copy_from_user64(const void *__sized_by(sizeof(struct in6_cgareq_64)), struct in6_cgareq*);
 
 #endif /* BSD_KERNEL_PRIVATE */
 #endif /* _NETINET6_IN6_VAR_H_ */

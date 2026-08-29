@@ -86,33 +86,43 @@
 #include <kern/arithmetic_128.h>
 #include <os/log.h>
 
-uint32_t        hz_tick_interval = 1;
-#if !HAS_CONTINUOUS_HWCLOCK
-static uint64_t has_monotonic_clock = 0;
-#endif
+#if HIBERNATION && HAS_CONTINUOUS_HWCLOCK
+// On ARM64, the hwclock keeps ticking across a normal S2R so we use it to reset the
+// system clock after a normal wake. However, on hibernation we cut power to the hwclock,
+// so we have to add an offset to the hwclock to compute continuous_time after hibernate resume.
+uint64_t hwclock_conttime_offset = 0;
+#endif /* HIBERNATION && HAS_CONTINUOUS_HWCLOCK */
 
-decl_simple_lock_data(, clock_lock);
-lck_grp_attr_t * settime_lock_grp_attr;
-lck_grp_t * settime_lock_grp;
-lck_attr_t * settime_lock_attr;
-lck_mtx_t settime_lock;
+#if HIBERNATION_USES_LEGACY_CLOCK || !HAS_CONTINUOUS_HWCLOCK
+#define ENABLE_LEGACY_CLOCK_CODE 1
+#endif /* HIBERNATION_USES_LEGACY_CLOCK || !HAS_CONTINUOUS_HWCLOCK */
+
+#if HIBERNATION_USES_LEGACY_CLOCK
+#include <IOKit/IOHibernatePrivate.h>
+#endif /* HIBERNATION_USES_LEGACY_CLOCK */
+
+uint32_t        hz_tick_interval = 1;
+#if ENABLE_LEGACY_CLOCK_CODE
+static uint64_t has_monotonic_clock = 0;
+#endif /* ENABLE_LEGACY_CLOCK_CODE */
+
+lck_ticket_t clock_lock;
+LCK_GRP_DECLARE(clock_lock_grp, "clock");
+
+static LCK_GRP_DECLARE(settime_lock_grp, "settime");
+static LCK_MTX_DECLARE(settime_lock, &settime_lock_grp);
 
 #define clock_lock()    \
-	simple_lock(&clock_lock, LCK_GRP_NULL)
+	lck_ticket_lock(&clock_lock, &clock_lock_grp)
 
 #define clock_unlock()  \
-	simple_unlock(&clock_lock)
+	lck_ticket_unlock(&clock_lock)
 
-#define clock_lock_init()       \
-	simple_lock_init(&clock_lock, 0)
-
-#ifdef kdp_simple_lock_is_acquired
 boolean_t
 kdp_clock_is_locked()
 {
-	return kdp_simple_lock_is_acquired(&clock_lock);
+	return kdp_lck_ticket_is_acquired(&clock_lock);
 }
-#endif
 
 struct bintime {
 	time_t  sec;
@@ -236,7 +246,7 @@ bintime2nsclock(const struct bintime *_bt, clock_sec_t *secs, clock_usec_t *nano
 	*nanosecs = ((uint64_t)NSEC_PER_SEC * (uint32_t)(_bt->frac >> 32)) >> 32;
 }
 
-#if !defined(HAS_CONTINUOUS_HWCLOCK)
+#if ENABLE_LEGACY_CLOCK_CODE
 static __inline void
 bintime2absolutetime(const struct bintime *_bt, uint64_t *abs)
 {
@@ -253,7 +263,7 @@ struct latched_time {
 extern int
 kernel_sysctlbyname(const char *name, void *oldp, size_t *oldlenp, void *newp, size_t newlen);
 
-#endif
+#endif /* ENABLE_LEGACY_CLOCK_CODE */
 /*
  *	Time of day (calendar) variables.
  *
@@ -274,9 +284,9 @@ static struct clock_calend {
 	struct bintime          offset; /* cumulative offset expressed in (sec, 64 bits frac of a second) */
 	struct bintime          bintime; /* cumulative offset (it includes bootime) expressed in (sec, 64 bits frac of a second) */
 	struct bintime          boottime; /* boot time expressed in (sec, 64 bits frac of a second) */
-#if !HAS_CONTINUOUS_HWCLOCK
+#if ENABLE_LEGACY_CLOCK_CODE
 	struct bintime          basesleep;
-#endif
+#endif /* ENABLE_LEGACY_CLOCK_CODE */
 } clock_calend;
 
 static uint64_t ticks_per_sec; /* ticks in a second (expressed in abs time) */
@@ -346,12 +356,7 @@ MACRO_END
 void
 clock_config(void)
 {
-	clock_lock_init();
-
-	settime_lock_grp_attr = lck_grp_attr_alloc_init();
-	settime_lock_grp = lck_grp_alloc_init("settime grp", settime_lock_grp_attr);
-	settime_lock_attr = lck_attr_alloc_init();
-	lck_mtx_init(&settime_lock, settime_lock_grp, settime_lock_attr);
+	lck_ticket_init(&clock_lock, &clock_lock_grp);
 
 	clock_oldconfig();
 
@@ -384,6 +389,9 @@ clock_timebase_init(void)
 {
 	uint64_t        abstime;
 
+	/*
+	 * BSD expects a tick to represent 10ms.
+	 */
 	nanoseconds_to_absolutetime(NSEC_PER_SEC / 100, &abstime);
 	hz_tick_interval = (uint32_t)abstime;
 
@@ -487,7 +495,7 @@ get_scale_factors_from_adj(int64_t adjustment, uint64_t* tick_scale_x, uint64_t*
 	 * Keep it as additional adjustment for the next sec.
 	 */
 	frac = (adjustment > 0)? ((uint32_t) adjustment) : -((uint32_t) (-adjustment));
-	*s_adj_nsx = (frac > 0)? frac << 32 : -((-frac) << 32);
+	*s_adj_nsx = (frac > 0)? ((uint64_t) frac) << 32 : -(((uint64_t) (-frac)) << 32);
 
 	return;
 }
@@ -1031,7 +1039,7 @@ clock_initialize_calendar(void)
 	clock_usec_t            utc_offset_microsecs;
 	spl_t                   s;
 	struct bintime          bt;
-#if !HAS_CONTINUOUS_HWCLOCK
+#if ENABLE_LEGACY_CLOCK_CODE
 	struct bintime          monotonic_bt;
 	struct latched_time     monotonic_time;
 	uint64_t                monotonic_usec_total;
@@ -1039,12 +1047,12 @@ clock_initialize_calendar(void)
 	clock_usec_t            microsys2, monotonic_usec;
 	size_t                  size;
 
-#endif
+#endif /* ENABLE_LEGACY_CLOCK_CODE */
 	//Get the UTC time and corresponding sys time
 	PEGetUTCTimeOfDay(&secs, &microsecs);
 	clock_get_system_microtime(&sys, &microsys);
 
-#if !HAS_CONTINUOUS_HWCLOCK
+#if ENABLE_LEGACY_CLOCK_CODE
 	/*
 	 * If the platform has a monotonic clock, use kern.monotonicclock_usecs
 	 * to estimate the sleep/wake time, otherwise use the UTC time to estimate
@@ -1060,7 +1068,7 @@ clock_initialize_calendar(void)
 		absolutetime_to_microtime(monotonic_time.mach_time, &sys2, &microsys2);
 		os_log(OS_LOG_DEFAULT, "%s system has monotonic clock\n", __func__);
 	}
-#endif
+#endif /* ENABLE_LEGACY_CLOCK_CODE */
 
 	s = splclock();
 	clock_lock();
@@ -1111,9 +1119,9 @@ clock_initialize_calendar(void)
 	clock_calend.s_scale_ns = NSEC_PER_SEC;
 	clock_calend.s_adj_nsx = 0;
 
-#if !HAS_CONTINUOUS_HWCLOCK
+#if ENABLE_LEGACY_CLOCK_CODE
 	if (has_monotonic_clock) {
-		monotonic_sec = monotonic_usec_total / (clock_sec_t)USEC_PER_SEC;
+		OS_ANALYZER_SUPPRESS("82347749") monotonic_sec = monotonic_usec_total / (clock_sec_t)USEC_PER_SEC;
 		monotonic_usec = monotonic_usec_total % (clock_usec_t)USEC_PER_SEC;
 
 		// monotonic clock - sys
@@ -1124,7 +1132,7 @@ clock_initialize_calendar(void)
 		// set the baseleep as the difference between monotonic clock - sys
 		clock_calend.basesleep = monotonic_bt;
 	}
-#endif
+#endif /* ENABLE_LEGACY_CLOCK_CODE */
 	commpage_update_mach_continuous_time(mach_absolutetime_asleep);
 
 #if DEVELOPMENT || DEBUG
@@ -1173,8 +1181,8 @@ scale_sleep_time(void)
 	bintime_add(&clock_calend.bintime, &sleep_time);
 }
 
-void
-clock_wakeup_calendar(void)
+static void
+clock_wakeup_calendar_hwclock(void)
 {
 	spl_t   s;
 
@@ -1184,22 +1192,23 @@ clock_wakeup_calendar(void)
 	commpage_disable_timestamp();
 
 	uint64_t abstime = mach_absolute_time();
-	uint64_t total_sleep_time = ml_get_hwclock() - abstime;
+	uint64_t total_sleep_time = mach_continuous_time() - abstime;
 
 	mach_absolutetime_last_sleep = total_sleep_time - mach_absolutetime_asleep;
 	mach_absolutetime_asleep = total_sleep_time;
 
 	scale_sleep_time();
 
-	KERNEL_DEBUG_CONSTANT(
-		MACHDBG_CODE(DBG_MACH_CLOCK, MACH_EPOCH_CHANGE) | DBG_FUNC_NONE,
-		(uintptr_t) mach_absolutetime_last_sleep,
-		(uintptr_t) mach_absolutetime_asleep,
-		(uintptr_t) (mach_absolutetime_last_sleep >> 32),
-		(uintptr_t) (mach_absolutetime_asleep >> 32),
-		0);
+	KDBG_RELEASE(MACHDBG_CODE(DBG_MACH_CLOCK, MACH_EPOCH_CHANGE),
+	    (uintptr_t)mach_absolutetime_last_sleep,
+	    (uintptr_t)mach_absolutetime_asleep,
+	    (uintptr_t)(mach_absolutetime_last_sleep >> 32),
+	    (uintptr_t)(mach_absolutetime_asleep >> 32));
 
 	commpage_update_mach_continuous_time(mach_absolutetime_asleep);
+#if HIBERNATION
+	commpage_update_mach_continuous_time_hw_offset(hwclock_conttime_offset);
+#endif
 	adjust_cont_time_thread_calls();
 
 	clock_unlock();
@@ -1212,10 +1221,12 @@ clock_wakeup_calendar(void)
 #endif
 }
 
-#else /* HAS_CONTINUOUS_HWCLOCK */
+#endif /* HAS_CONTINUOUS_HWCLOCK */
 
-void
-clock_wakeup_calendar(void)
+#if ENABLE_LEGACY_CLOCK_CODE
+
+static void
+clock_wakeup_calendar_legacy(void)
 {
 	clock_sec_t             wake_sys_sec;
 	clock_usec_t            wake_sys_usec;
@@ -1291,7 +1302,7 @@ clock_wakeup_calendar(void)
 #if DEVELOPMENT || DEBUG
 	os_log(OS_LOG_DEFAULT, "time at wake %lu s %d u from %s clock, abs %llu\n", (unsigned long)wake_sec, wake_usec, (has_monotonic_clock)?"monotonic":"UTC", wake_abs);
 	if (has_monotonic_clock) {
-		os_log(OS_LOG_DEFAULT, "UTC time %lu s %d u\n", (unsigned long)var_s, var_us);
+		OS_ANALYZER_SUPPRESS("82347749") os_log(OS_LOG_DEFAULT, "UTC time %lu s %d u\n", (unsigned long)var_s, var_us);
 	}
 #endif /* DEVELOPMENT || DEBUG */
 
@@ -1397,13 +1408,11 @@ clock_wakeup_calendar(void)
 		}
 	}
 done:
-	KERNEL_DEBUG_CONSTANT(
-		MACHDBG_CODE(DBG_MACH_CLOCK, MACH_EPOCH_CHANGE) | DBG_FUNC_NONE,
-		(uintptr_t) mach_absolutetime_last_sleep,
-		(uintptr_t) mach_absolutetime_asleep,
-		(uintptr_t) (mach_absolutetime_last_sleep >> 32),
-		(uintptr_t) (mach_absolutetime_asleep >> 32),
-		0);
+	KDBG_RELEASE(MACHDBG_CODE(DBG_MACH_CLOCK, MACH_EPOCH_CHANGE),
+	    (uintptr_t)mach_absolutetime_last_sleep,
+	    (uintptr_t)mach_absolutetime_asleep,
+	    (uintptr_t)(mach_absolutetime_last_sleep >> 32),
+	    (uintptr_t)(mach_absolutetime_asleep >> 32));
 
 	commpage_update_mach_continuous_time(mach_absolutetime_asleep);
 	adjust_cont_time_thread_calls();
@@ -1429,7 +1438,26 @@ done:
 #endif
 }
 
-#endif /* !HAS_CONTINUOUS_HWCLOCK */
+#endif /* ENABLE_LEGACY_CLOCK_CODE */
+
+void
+clock_wakeup_calendar(void)
+{
+#if HAS_CONTINUOUS_HWCLOCK
+#if HIBERNATION_USES_LEGACY_CLOCK
+	if (gIOHibernateState) {
+		// if we're resuming from hibernation, we have to take the legacy wakeup path
+		return clock_wakeup_calendar_legacy();
+	}
+#endif /* HIBERNATION_USES_LEGACY_CLOCK */
+	// use the hwclock wakeup path
+	return clock_wakeup_calendar_hwclock();
+#elif ENABLE_LEGACY_CLOCK_CODE
+	return clock_wakeup_calendar_legacy();
+#else
+#error "can't determine which clock code to run"
+#endif
+}
 
 /*
  *	clock_get_boottime_nanotime:
@@ -1503,6 +1531,7 @@ mach_wait_until_trap(
 {
 	uint64_t                deadline = args->deadline;
 	wait_result_t   wresult;
+
 
 	wresult = assert_wait_deadline_with_leeway((event_t)mach_wait_until_trap, THREAD_ABORTSAFE,
 	    TIMEOUT_URGENCY_USER_NORMAL, deadline, 0);
@@ -1625,6 +1654,20 @@ clock_interval_to_deadline(
 }
 
 void
+nanoseconds_to_deadline(
+	uint64_t                        interval,
+	uint64_t                        *result)
+{
+	uint64_t        abstime;
+
+	nanoseconds_to_absolutetime(interval, &abstime);
+
+	if (os_add_overflow(mach_absolute_time(), abstime, result)) {
+		*result = UINT64_MAX;
+	}
+}
+
+void
 clock_absolutetime_interval_to_deadline(
 	uint64_t                        abstime,
 	uint64_t                        *result)
@@ -1683,7 +1726,9 @@ clock_deadline_for_periodic_event(
 uint64_t
 mach_continuous_time(void)
 {
-#if HAS_CONTINUOUS_HWCLOCK
+#if HIBERNATION && HAS_CONTINUOUS_HWCLOCK
+	return ml_get_hwclock() + hwclock_conttime_offset;
+#elif HAS_CONTINUOUS_HWCLOCK
 	return ml_get_hwclock();
 #else
 	while (1) {
@@ -1703,7 +1748,7 @@ uint64_t
 mach_continuous_approximate_time(void)
 {
 #if HAS_CONTINUOUS_HWCLOCK
-	return ml_get_hwclock();
+	return mach_continuous_time();
 #else
 	while (1) {
 		uint64_t read1 = mach_absolutetime_asleep;

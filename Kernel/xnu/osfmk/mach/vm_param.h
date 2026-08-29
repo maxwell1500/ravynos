@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -70,6 +70,8 @@
 #include <mach/machine/vm_param.h>
 
 #ifdef  KERNEL
+
+#include <vm/vm_memtag.h>
 
 #ifndef ASSEMBLER
 #include <mach/vm_types.h>
@@ -162,6 +164,11 @@ mach_vm_round_page_overflow(mach_vm_offset_t in, mach_vm_offset_t *out)
 #define round_page_64(x) (((uint64_t)(x) + PAGE_MASK_64) & ~((uint64_t)PAGE_MASK_64))
 #define trunc_page_64(x) ((uint64_t)(x) & ~((uint64_t)PAGE_MASK_64))
 
+#define round_page_mask_32(x, mask) (((uint32_t)(x) + (mask)) & ~((uint32_t)(mask)))
+#define trunc_page_mask_32(x, mask) ((uint32_t)(x) & ~((uint32_t)(mask)))
+#define round_page_mask_64(x, mask) (((uint64_t)(x) + (mask)) & ~((uint64_t)(mask)))
+#define trunc_page_mask_64(x, mask) ((uint64_t)(x) & ~((uint64_t)(mask)))
+
 /*
  *      Enable the following block to find uses of xxx_32 macros that should
  *      be xxx_64.  These macros only work in C code, not C++.  The resulting
@@ -232,12 +239,13 @@ extern vm_size_t        mem_size;               /* 32-bit size of memory - limit
 extern uint64_t         max_mem;                /* 64-bit size of memory - limited by maxmem */
 
 /*
- * The default pager does not handle 64-bit offsets inside its objects,
- * so this limits the size of anonymous memory objects to 4GB minus 1 page.
+ * The VM compressor pager uses 32-bit page numbers, so this limits the size
+ * of anonymous memory objects to 0xffffffff pages.
  * When we need to allocate a chunk of anonymous memory over that size,
  * we have to allocate more than one chunk.
  */
-#define ANON_MAX_SIZE   0xFFFFF000ULL
+#define ANON_MAX_PAGES   0xFFFFFFFFULL
+#define ANON_MAX_SIZE (ANON_MAX_PAGES << PAGE_SHIFT)
 /*
  * Work-around for <rdar://problem/6626493>
  * Break large anonymous memory areas into 128MB chunks to alleviate
@@ -255,13 +263,19 @@ extern uint64_t         max_mem;                /* 64-bit size of memory - limit
  */
 #define MALLOC_MEDIUM_CHUNK_SIZE (8ULL * 1024 * 1024) /* 8 MB */
 
+#ifdef KERNEL_PRIVATE
+extern uint64_t         sane_size;              /* Memory size to use for defaults calculations */
+#endif /* KERNEL_PRIVATE */
+
 #ifdef  XNU_KERNEL_PRIVATE
 
 #include <kern/debug.h>
+#include <vm/vm_memtag.h>
 
 extern uint64_t         mem_actual;             /* 64-bit size of memory - not limited by maxmem */
-extern uint64_t         sane_size;              /* Memory size to use for defaults calculations */
-extern addr64_t         vm_last_addr;   /* Highest kernel virtual address known to the VM system */
+extern uint64_t         max_mem_actual;         /* Size of physical memory adjusted by maxmem */
+extern addr64_t         vm_last_addr;           /* Highest kernel virtual address known to the VM system */
+extern addr64_t         first_avail_phys;       /* First available physical address */
 
 extern const vm_offset_t        vm_min_kernel_address;
 extern const vm_offset_t        vm_max_kernel_address;
@@ -271,6 +285,20 @@ extern vm_offset_t              vm_kernel_etext;
 extern vm_offset_t              vm_kernel_slid_base;
 extern vm_offset_t              vm_kernel_slid_top;
 extern vm_offset_t              vm_kernel_slide;
+
+#if CONFIG_SPTM
+typedef struct {
+	vm_offset_t unslid_base;
+	vm_offset_t unslid_top;
+	vm_offset_t slid_base;
+	vm_offset_t slid_top;
+	vm_offset_t slide;
+} vm_image_offsets;
+
+extern vm_image_offsets         vm_sptm_offsets;
+extern vm_image_offsets         vm_txm_offsets;
+#endif /* CONFIG_SPTM */
+
 extern vm_offset_t              vm_kernel_addrperm;
 extern vm_offset_t              vm_kext_base;
 extern vm_offset_t              vm_kext_top;
@@ -281,11 +309,49 @@ extern vm_offset_t              vm_hib_base;
 extern vm_offset_t              vm_kernel_builtinkmod_text;
 extern vm_offset_t              vm_kernel_builtinkmod_text_end;
 
-#define VM_KERNEL_IS_SLID(_o)                                             \
-	(((vm_offset_t)VM_KERNEL_STRIP_PTR(_o) >= vm_kernel_slid_base) && \
-	 ((vm_offset_t)VM_KERNEL_STRIP_PTR(_o) <  vm_kernel_slid_top))
+/**
+ * While these function's implementations are machine specific, due to the need
+ * to prevent header file circular dependencies, they need to be externed here
+ * for usage in the sliding/unsliding macros.
+ */
+__BEGIN_DECLS
+vm_offset_t ml_static_slide(vm_offset_t vaddr);
+vm_offset_t ml_static_unslide(vm_offset_t vaddr);
+__END_DECLS
 
-#define VM_KERNEL_SLIDE(_u) ((vm_offset_t)(_u) + vm_kernel_slide)
+/**
+ * Determine whether a given address is an address within a static region (i.e.,
+ * coming from TEXT or DATA) that was slid during boot. Addresses of this type
+ * should have the slide removed before exposing them to userspace so as to not
+ * leak the slide itself to userspace.
+ *
+ * @param addr The virtual address to check.
+ *
+ * @return True if the address is a static/slid kernel address, false otherwise.
+ */
+static inline bool
+vm_is_addr_slid(vm_offset_t addr)
+{
+	const vm_offset_t stripped_addr = (vm_offset_t)VM_KERNEL_STRIP_PTR(addr);
+	const bool is_slid_kern_addr =
+	    (stripped_addr >= vm_kernel_slid_base) && (stripped_addr < vm_kernel_slid_top);
+
+#if CONFIG_SPTM
+	const bool is_slid_sptm_addr =
+	    (stripped_addr >= vm_sptm_offsets.slid_base) && (stripped_addr < vm_sptm_offsets.slid_top);
+
+	const bool is_slid_txm_addr =
+	    (stripped_addr >= vm_txm_offsets.slid_base) && (stripped_addr < vm_txm_offsets.slid_top);
+
+	return is_slid_kern_addr || is_slid_sptm_addr || is_slid_txm_addr;
+#else
+	return is_slid_kern_addr;
+#endif /* CONFIG_SPTM */
+}
+
+#define VM_KERNEL_IS_SLID(_o) (vm_is_addr_slid((vm_offset_t)(_o)))
+
+#define VM_KERNEL_SLIDE(_u) (ml_static_slide((vm_offset_t)(_u)))
 
 /*
  * The following macros are to be used when exposing kernel addresses to
@@ -326,16 +392,7 @@ extern vm_offset_t              vm_kernel_builtinkmod_text_end;
  * Nesting of these macros should be considered invalid.
  */
 
-__BEGIN_DECLS
-#if XNU_KERNEL_PRIVATE
-extern vm_offset_t vm_kernel_addrhash(vm_offset_t addr)
-__XNU_INTERNAL(vm_kernel_addrhash);
-#else
-extern vm_offset_t vm_kernel_addrhash(vm_offset_t addr);
-#endif
-__END_DECLS
-
-#define __DO_UNSLIDE(_v) ((vm_offset_t)VM_KERNEL_STRIP_PTR(_v) - vm_kernel_slide)
+#define __DO_UNSLIDE(_v) (ml_static_unslide((vm_offset_t)VM_KERNEL_STRIP_PTR(_v)))
 
 #if DEBUG || DEVELOPMENT
 #define VM_KERNEL_ADDRHIDE(_v) (VM_KERNEL_IS_SLID(_v) ? __DO_UNSLIDE(_v) : (vm_address_t)VM_KERNEL_STRIP_PTR(_v))
@@ -361,6 +418,22 @@ __END_DECLS
 #undef round_page
 #undef round_page_32
 #undef round_page_64
+
+static inline int
+mach_vm_size_unit(mach_vm_size_t size)
+{
+	uint32_t bits = 64u - (uint32_t)__builtin_clzll((size / 10) | 1);
+
+	return "BKMGTPE"[bits / 10];
+}
+
+static inline uint32_t
+mach_vm_size_pretty(mach_vm_size_t size)
+{
+	uint32_t bits = 64u - (uint32_t)__builtin_clzll((size / 10) | 1);
+
+	return (uint32_t)(size >> (bits - bits % 10));
+}
 
 static inline mach_vm_offset_t
 mach_vm_round_page(mach_vm_offset_t x)
@@ -397,6 +470,245 @@ round_page_32(uint32_t x)
 	}
 	return x;
 }
+
+
+/*!
+ * @typedef vm_packing_params_t
+ *
+ * @brief
+ * Data structure representing the packing parameters for a given packed pointer
+ * encoding.
+ *
+ * @discussion
+ * Several data structures wish to pack their pointers on less than 64bits
+ * on LP64 in order to save memory.
+ *
+ * Adopters are supposed to define 3 macros:
+ * - @c *_BITS:  number of storage bits used for the packing,
+ * - @c *_SHIFT: number of non significant low bits (expected to be 0),
+ * - @c *_BASE:  the base against which to encode.
+ *
+ * The encoding is a no-op when @c *_BITS is equal to @c __WORDSIZE and
+ * @c *_SHIFT is 0.
+ *
+ *
+ * The convenience macro @c VM_PACKING_PARAMS can be used to create
+ * a @c vm_packing_params_t structure out of those definitions.
+ *
+ * It is customary to declare a constant global per scheme for the sake
+ * of debuggers to be able to dynamically decide how to unpack various schemes.
+ *
+ *
+ * This uses 2 possible schemes (who both preserve @c NULL):
+ *
+ * 1. When the storage bits and shift are sufficiently large (strictly more than
+ *    VM_KERNEL_POINTER_SIGNIFICANT_BITS), a sign-extension scheme can be used.
+ *
+ *    This allows to represent any kernel pointer.
+ *
+ * 2. Else, a base-relative scheme can be used, typical bases are:
+ *
+ *     - @c KERNEL_PMAP_HEAP_RANGE_START when only pointers to heap (zone)
+ *       allocated objects need to be packed,
+ *
+ *     - @c VM_MIN_KERNEL_AND_KEXT_ADDRESS when pointers to kernel globals also
+ *       need this.
+ *
+ *    When such an ecoding is used, @c zone_restricted_va_max() must be taught
+ *    about it.
+ */
+typedef struct vm_packing_params {
+	vm_offset_t vmpp_base;
+	uint8_t     vmpp_bits;
+	uint8_t     vmpp_shift;
+	bool        vmpp_base_relative;
+} vm_packing_params_t;
+
+
+/*!
+ * @macro VM_PACKING_IS_BASE_RELATIVE
+ *
+ * @brief
+ * Whether the packing scheme with those parameters will be base-relative.
+ */
+#define VM_PACKING_IS_BASE_RELATIVE(ns) \
+	(ns##_BITS + ns##_SHIFT <= VM_KERNEL_POINTER_SIGNIFICANT_BITS)
+
+
+/*!
+ * @macro VM_PACKING_PARAMS
+ *
+ * @brief
+ * Constructs a @c vm_packing_params_t structure based on the convention that
+ * macros with the @c _BASE, @c _BITS and @c _SHIFT suffixes have been defined
+ * to the proper values.
+ */
+#define VM_PACKING_PARAMS(ns) \
+	(vm_packing_params_t){ \
+	    .vmpp_base  = ns##_BASE, \
+	    .vmpp_bits  = ns##_BITS, \
+	    .vmpp_shift = ns##_SHIFT, \
+	    .vmpp_base_relative = VM_PACKING_IS_BASE_RELATIVE(ns), \
+	}
+
+/**
+ * @function vm_pack_pointer
+ *
+ * @brief
+ * Packs a pointer according to the specified parameters.
+ *
+ * @discussion
+ * The convenience @c VM_PACK_POINTER macro allows to synthesize
+ * the @c params argument.
+ *
+ * @param ptr           The pointer to pack.
+ * @param params        The encoding parameters.
+ * @returns             The packed pointer.
+ */
+static inline vm_offset_t
+vm_pack_pointer(vm_offset_t ptr, vm_packing_params_t params)
+{
+	if (ptr != 0) {
+		ptr = vm_memtag_canonicalize_address(ptr);
+	}
+
+	if (!params.vmpp_base_relative) {
+		return ptr >> params.vmpp_shift;
+	}
+	if (ptr) {
+		return (ptr - params.vmpp_base) >> params.vmpp_shift;
+	}
+	return (vm_offset_t)0;
+}
+#define VM_PACK_POINTER(ptr, ns) \
+	vm_pack_pointer(ptr, VM_PACKING_PARAMS(ns))
+
+/**
+ * @function vm_unpack_pointer
+ *
+ * @brief
+ * Unpacks a pointer packed with @c vm_pack_pointer().
+ *
+ * @discussion
+ * The convenience @c VM_UNPACK_POINTER macro allows to synthesize
+ * the @c params argument.
+ *
+ * @param packed        The packed value to decode.
+ * @param params        The encoding parameters.
+ * @returns             The unpacked pointer.
+ */
+static inline vm_offset_t
+vm_unpack_pointer(vm_offset_t packed, vm_packing_params_t params)
+{
+	if (!params.vmpp_base_relative) {
+		intptr_t addr = (intptr_t)packed;
+		addr <<= __WORDSIZE - params.vmpp_bits;
+		addr >>= __WORDSIZE - params.vmpp_bits - params.vmpp_shift;
+		return vm_memtag_fixup_ptr((vm_offset_t)addr);
+	}
+	if (packed) {
+		return vm_memtag_fixup_ptr((packed << params.vmpp_shift) + params.vmpp_base);
+	}
+	return (vm_offset_t)0;
+}
+#define VM_UNPACK_POINTER(packed, ns) \
+	vm_unpack_pointer(packed, VM_PACKING_PARAMS(ns))
+
+/**
+ * @function vm_packing_max_packable
+ *
+ * @brief
+ * Returns the largest packable address for the given parameters.
+ *
+ * @discussion
+ * The convenience @c VM_PACKING_MAX_PACKABLE macro allows to synthesize
+ * the @c params argument.
+ *
+ * @param params        The encoding parameters.
+ * @returns             The largest packable pointer.
+ */
+static inline vm_offset_t
+vm_packing_max_packable(vm_packing_params_t params)
+{
+	if (!params.vmpp_base_relative) {
+		return VM_MAX_KERNEL_ADDRESS;
+	}
+
+	vm_offset_t ptr = params.vmpp_base +
+	    (((1ul << params.vmpp_bits) - 1) << params.vmpp_shift);
+
+	return ptr >= params.vmpp_base ? ptr : VM_MAX_KERNEL_ADDRESS;
+}
+#define VM_PACKING_MAX_PACKABLE(ns) \
+	vm_packing_max_packable(VM_PACKING_PARAMS(ns))
+
+
+__abortlike
+extern void
+vm_packing_pointer_invalid(vm_offset_t ptr, vm_packing_params_t params);
+
+/**
+ * @function vm_verify_pointer_packable
+ *
+ * @brief
+ * Panics if the specified pointer cannot be packed with the specified
+ * parameters.
+ *
+ * @discussion
+ * The convenience @c VM_VERIFY_POINTER_PACKABLE macro allows to synthesize
+ * the @c params argument.
+ *
+ * The convenience @c VM_ASSERT_POINTER_PACKABLE macro allows to synthesize
+ * the @c params argument, and is erased when assertions are disabled.
+ *
+ * @param ptr           The packed value to decode.
+ * @param params        The encoding parameters.
+ */
+static inline void
+vm_verify_pointer_packable(vm_offset_t ptr, vm_packing_params_t params)
+{
+	if (ptr != 0) {
+		ptr = vm_memtag_canonicalize_address(ptr);
+	}
+
+	if (ptr & ((1ul << params.vmpp_shift) - 1)) {
+		vm_packing_pointer_invalid(ptr, params);
+	}
+	if (!params.vmpp_base_relative || ptr == 0) {
+		return;
+	}
+	if (ptr <= params.vmpp_base || ptr > vm_packing_max_packable(params)) {
+		vm_packing_pointer_invalid(ptr, params);
+	}
+}
+#define VM_VERIFY_POINTER_PACKABLE(ptr, ns) \
+	vm_verify_pointer_packable(ptr, VM_PACKING_PARAMS(ns))
+
+#if DEBUG || DEVELOPMENT
+#define VM_ASSERT_POINTER_PACKABLE(ptr, ns) \
+    VM_VERIFY_POINTER_PACKABLE(ptr, ns)
+#else
+#define VM_ASSERT_POINTER_PACKABLE(ptr, ns) ((void)(ptr))
+#endif
+
+/**
+ * @function vm_verify_pointer_range
+ *
+ * @brief
+ * Panics if some pointers in the specified range can't be packed with the
+ * specified parameters.
+ *
+ * @param subsystem     The subsystem requiring the packing.
+ * @param min_address   The smallest address of the range.
+ * @param max_address   The largest address of the range.
+ * @param params        The encoding parameters.
+ */
+extern void
+vm_packing_verify_range(
+	const char         *subsystem,
+	vm_offset_t         min_address,
+	vm_offset_t         max_address,
+	vm_packing_params_t params);
 
 #endif  /* XNU_KERNEL_PRIVATE */
 

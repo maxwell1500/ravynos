@@ -151,9 +151,6 @@ __attribute__((malloc, visibility("hidden")));
 void * kxld_page_alloc_untracked(size_t size)
 __attribute__((malloc, visibility("hidden")));
 
-void * kxld_alloc_pageable(size_t size)
-__attribute__((malloc, visibility("hidden")));
-
 /*******************************************************************************
 * Deallocators
 *******************************************************************************/
@@ -198,9 +195,6 @@ __attribute__((const, visibility("hidden")));
 
 boolean_t kxld_is_32_bit(cpu_type_t)
 __attribute__((const, visibility("hidden")));
-
-const char * kxld_strstr(const char *s, const char *find)
-__attribute__((pure, visibility("hidden")));
 
 /*******************************************************************************
 * Debugging

@@ -29,7 +29,6 @@
 #include <mach/mach_types.h>
 #include <machine/machine_routines.h>
 #include <kern/processor.h>
-#include <kern/kalloc.h>
 #include <i386/cpuid.h>
 #include <i386/proc_reg.h>
 #include <i386/mp.h>
@@ -45,9 +44,12 @@
 
 #include <kern/monotonic.h>
 
-/* Fixed counter mask -- three counters, each with OS and USER */
-#define IA32_FIXED_CTR_ENABLE_ALL_CTRS_ALL_RINGS (0x333)
-#define IA32_FIXED_CTR_ENABLE_ALL_PMI (0x888)
+/* Fixed counter mask for each fixed counter -- each with OS and USER */
+#define IA32_FIXED_CTR_ENABLE_ALL_RINGS (0x3)
+#define IA32_FIXED_CTR_ENABLE_PMI (0x8)
+
+#define IA32_PERFEVT_USER_EN (0x10000)
+#define IA32_PERFEVT_OS_EN (0x20000)
 
 #define IA32_PERFEVTSEL_PMI (1ull << 20)
 #define IA32_PERFEVTSEL_EN (1ull << 22)
@@ -225,12 +227,14 @@ static void
 set_running_fixed(boolean_t on)
 {
 	uint64_t global = 0, mask = 0, fixed_ctrl = 0;
-	int i;
+	uint32_t i;
 	boolean_t enabled;
 
 	if (on) {
 		/* these are per-thread in SMT */
-		fixed_ctrl = IA32_FIXED_CTR_ENABLE_ALL_CTRS_ALL_RINGS | IA32_FIXED_CTR_ENABLE_ALL_PMI;
+		for (i = 0; i < kpc_fixed_count(); i++) {
+			fixed_ctrl |= ((uint64_t)(IA32_FIXED_CTR_ENABLE_ALL_RINGS | IA32_FIXED_CTR_ENABLE_PMI) << (4 * i));
+		}
 	} else {
 		/* don't allow disabling fixed counters */
 		return;
@@ -242,7 +246,7 @@ set_running_fixed(boolean_t on)
 
 	/* rmw the global control */
 	global = rdmsr64(MSR_IA32_PERF_GLOBAL_CTRL);
-	for (i = 0; i < (int) kpc_fixed_count(); i++) {
+	for (i = 0; i < kpc_fixed_count(); i++) {
 		mask |= (1ULL << (32 + i));
 	}
 
@@ -318,13 +322,13 @@ kpc_set_fixed_config(kpc_config_t *configv)
 int
 kpc_get_fixed_counters(uint64_t *counterv)
 {
-#if MONOTONIC
+#if CONFIG_CPU_COUNTERS
 	mt_fixed_counts(counterv);
 	return 0;
-#else /* MONOTONIC */
+#else /* CONFIG_CPU_COUNTERS */
 #pragma unused(counterv)
 	return ENOTSUP;
-#endif /* !MONOTONIC */
+#endif /* !CONFIG_CPU_COUNTERS */
 }
 
 int
@@ -456,7 +460,7 @@ kpc_get_all_cpus_counters(uint32_t classes, int *curcpu, uint64_t *buf)
 	enabled = ml_set_interrupts_enabled(FALSE);
 
 	if (curcpu) {
-		*curcpu = current_processor()->cpu_id;
+		*curcpu = cpu_number();
 	}
 	mp_cpus_call(CPUMASK_ALL, ASYNC, kpc_get_curcpu_counters_mp_call, &hdl);
 
@@ -598,7 +602,53 @@ kpc_set_config_arch(struct kpc_config_remote *mp_config)
 	return 0;
 }
 
-/* PMI stuff */
+static uintptr_t
+get_interrupted_pc(bool *kernel_out)
+{
+	x86_saved_state_t *state = current_cpu_datap()->cpu_int_state;
+	if (!state) {
+		return 0;
+	}
+
+	bool state_64 = is_saved_state64(state);
+	uint64_t cs;
+	if (state_64) {
+		cs = saved_state64(state)->isf.cs;
+	} else {
+		cs = saved_state32(state)->cs;
+	}
+	bool kernel = (cs & SEL_PL) != SEL_PL_U;
+	*kernel_out = kernel;
+
+	uintptr_t pc = 0;
+	if (state_64) {
+		pc = saved_state64(state)->isf.rip;
+	} else {
+		pc = saved_state32(state)->eip;
+	}
+	if (kernel) {
+		pc = VM_KERNEL_UNSLIDE(pc);
+	}
+	return pc;
+}
+
+static void
+kpc_sample_kperf_x86(uint32_t ctr, uint32_t actionid, uint64_t count,
+    uint64_t config)
+{
+	bool kernel = false;
+	uintptr_t pc = get_interrupted_pc(&kernel);
+	kperf_kpc_flags_t flags = kernel ? KPC_KERNEL_PC : 0;
+	if ((config) & IA32_PERFEVT_USER_EN) {
+		flags |= KPC_USER_COUNTING;
+	}
+	if ((config) & IA32_PERFEVT_OS_EN) {
+		flags |= KPC_KERNEL_COUNTING;
+	}
+	kpc_sample_kperf(actionid, ctr,
+	    config & 0xffff /* just the number and umask */, count, pc, flags);
+}
+
 void
 kpc_pmi_handler(void)
 {
@@ -618,30 +668,34 @@ kpc_pmi_handler(void)
 			FIXED_SHADOW(ctr)
 			        += (kpc_fixed_max() - FIXED_RELOAD(ctr) + 1 /* Wrap */) + extra;
 
-			BUF_INFO(PERF_KPC_FCOUNTER, ctr, FIXED_SHADOW(ctr), extra, FIXED_ACTIONID(ctr));
+			uint32_t actionid = FIXED_ACTIONID(ctr);
+			BUF_INFO(PERF_KPC_FCOUNTER, ctr, FIXED_SHADOW(ctr), extra, actionid);
 
-			if (FIXED_ACTIONID(ctr)) {
-				kpc_sample_kperf(FIXED_ACTIONID(ctr));
+			if (actionid != 0) {
+				kpc_sample_kperf_x86(ctr, actionid, FIXED_SHADOW(ctr) + extra, 0);
 			}
 		}
 	}
-#endif
+#endif // FIXED_COUNTER_SHADOW
 
 	for (ctr = 0; ctr < kpc_configurable_count(); ctr++) {
 		if ((1ULL << ctr) & status) {
 			extra = kpc_reload_configurable(ctr);
 
-			CONFIGURABLE_SHADOW(ctr)
-			        += kpc_configurable_max() - CONFIGURABLE_RELOAD(ctr) + extra;
+			CONFIGURABLE_SHADOW(ctr) += kpc_configurable_max() -
+			    CONFIGURABLE_RELOAD(ctr) + extra;
 
 			/* kperf can grab the PMCs when it samples so we need to make sure the overflow
 			 * bits are in the correct state before the call to kperf_sample */
 			wrmsr64(MSR_IA32_PERF_GLOBAL_OVF_CTRL, 1ull << ctr);
 
-			BUF_INFO(PERF_KPC_COUNTER, ctr, CONFIGURABLE_SHADOW(ctr), extra, CONFIGURABLE_ACTIONID(ctr));
+			unsigned int actionid = CONFIGURABLE_ACTIONID(ctr);
+			BUF_INFO(PERF_KPC_COUNTER, ctr, CONFIGURABLE_SHADOW(ctr), extra, actionid);
 
-			if (CONFIGURABLE_ACTIONID(ctr)) {
-				kpc_sample_kperf(CONFIGURABLE_ACTIONID(ctr));
+			if (actionid != 0) {
+				uint64_t config = IA32_PERFEVTSELx(ctr);
+				kpc_sample_kperf_x86(ctr + kpc_fixed_count(), actionid,
+				    CONFIGURABLE_SHADOW(ctr) + extra, config);
 			}
 		}
 	}

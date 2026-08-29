@@ -44,6 +44,7 @@ enum{
 #if defined(__cplusplus)
 
 #include <libkern/c++/OSObject.h>
+#include <libkern/c++/OSPtr.h>
 #include <IOKit/IOMemoryDescriptor.h>
 
 #define kIOPolledInterfaceSupportKey "IOPolledInterface"
@@ -90,7 +91,7 @@ public:
 
 	virtual IOReturn setEncryptionKey(const uint8_t * key, size_t keySize);
 
-	OSMetaClassDeclareReservedUsed(IOPolledInterface, 0);
+	OSMetaClassDeclareReservedUsedX86(IOPolledInterface, 0);
 	OSMetaClassDeclareReservedUnused(IOPolledInterface, 1);
 	OSMetaClassDeclareReservedUnused(IOPolledInterface, 2);
 	OSMetaClassDeclareReservedUnused(IOPolledInterface, 3);
@@ -127,6 +128,9 @@ enum{
 	kIOPolledFileSSD    = 0x00000001
 };
 
+enum { kDefaultIOSize = 128 * 1024 };
+enum { kDefaultIONumBuffers = 2 };
+
 #if !defined(__cplusplus)
 typedef struct IORegistryEntry IORegistryEntry;
 typedef struct OSData OSData;
@@ -142,16 +146,16 @@ struct IOPolledFileIOVars {
 	struct kern_direct_file_io_ref_t *  fileRef;
 	OSData *                            fileExtents;
 	uint64_t                            block0;
-	IOByteCount                         blockSize;
+	uint32_t                         blockSize;
 	uint64_t                            maxiobytes;
-	IOByteCount                         bufferLimit;
+	uint32_t                         bufferLimit;
 	uint8_t *                           buffer;
-	IOByteCount                         bufferSize;
-	IOByteCount                         bufferOffset;
-	IOByteCount                         bufferHalf;
-	IOByteCount                         extentRemaining;
-	IOByteCount                         lastRead;
-	IOByteCount                         readEnd;
+	uint32_t                         bufferSize;
+	uint32_t                         bufferOffset;
+	uint32_t                         bufferHalf;
+	uint64_t                         extentRemaining;
+	uint32_t                         lastRead;
+	uint64_t                         readEnd;
 	uint32_t                            flags;
 	uint64_t                            fileSize;
 	uint64_t                            position;
@@ -183,9 +187,17 @@ IOReturn IOPolledFileOpen(const char * filename,
     LIBKERN_RETURNS_RETAINED OSData ** imagePath,
     uint8_t * volumeCryptKey, size_t * keySize);
 
+IOReturn IOPolledFileOpen(const char * filename,
+    uint32_t flags,
+    uint64_t setFileSize, uint64_t fsFreeSize,
+    void * write_file_addr, size_t write_file_len,
+    IOPolledFileIOVars ** fileVars,
+    OSSharedPtr<OSData>& imagePath,
+    uint8_t * volumeCryptKey, size_t * keySize);
+
 IOReturn IOPolledFileClose(IOPolledFileIOVars ** pVars,
     off_t write_offset, void * addr, size_t write_length,
-    off_t discard_offset, off_t discard_end);
+    off_t discard_offset, off_t discard_end, bool unlink);
 
 IOReturn IOPolledFilePollersSetup(IOPolledFileIOVars * vars, uint32_t openState);
 
@@ -243,7 +255,7 @@ kern_open_file_for_direct_io(const char * name,
 void
 kern_close_file_for_direct_io(struct kern_direct_file_io_ref_t * ref,
     off_t write_offset, void * addr, size_t write_length,
-    off_t discard_offset, off_t discard_end);
+    off_t discard_offset, off_t discard_end, bool unlink);
 int
 kern_write_file(struct kern_direct_file_io_ref_t * ref, off_t offset, void * addr, size_t len, int ioflag);
 int

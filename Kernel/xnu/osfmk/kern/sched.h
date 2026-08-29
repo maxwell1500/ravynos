@@ -74,7 +74,6 @@
 #include <kern/macro_help.h>
 #include <kern/timer_call.h>
 #include <kern/ast.h>
-#include <kern/kalloc.h>
 #include <kern/bits.h>
 
 #define NRQS_MAX        (128)                           /* maximum number of priority levels */
@@ -173,8 +172,10 @@
 #define MINPRI_RWLOCK           (BASEPRI_BACKGROUND)    /* floor when holding rwlock count */
 #define MINPRI_EXEC             (BASEPRI_DEFAULT)       /* floor when in exec state */
 #define MINPRI_WAITQ            (BASEPRI_DEFAULT)       /* floor when in waitq handover state */
+#define MINPRI_FLOOR            (BASEPRI_BACKGROUND)    /* floor when boost requested */
 
 #define NRQS                    (BASEPRI_REALTIME)      /* Non-realtime levels for runqs */
+#define NRTQS                   (MAXPRI - BASEPRI_REALTIME) /* Realtime levels for runqs */
 
 /* Ensure that NRQS is large enough to represent all non-realtime threads; even promoted ones */
 _Static_assert((NRQS == (MAXPRI_PROMOTE + 1)), "Runqueues are too small to hold all non-realtime threads");
@@ -186,6 +187,24 @@ typedef enum {
 	TH_MODE_FIXED,                                          /* use fixed priorities, no decay */
 	TH_MODE_TIMESHARE,                                      /* use timesharing algorithm */
 } sched_mode_t;
+
+/*
+ * Determine whether the target platform should run the Clutch/Edge Scheduler.
+ * All arm64 platforms are eligible to do so.
+ */
+#if defined(__arm64__) && CONFIG_CLUTCH && !CONFIG_SCHED_EDGE_OPT_OUT
+
+/*
+ * Single-cluster, symmetric (SMP) systems can run with just the Clutch policy, but
+ * multi-cluster, asymmetric (AMP) systems must further enable the Edge policy
+ * extension to Clutch in order to manage scheduling across the multiple CPU clusters.
+ */
+#define CONFIG_SCHED_CLUTCH 1
+#if __AMP__
+#define CONFIG_SCHED_EDGE   1
+#endif /* __AMP__ */
+
+#endif /* defined(__arm64__) && CONFIG_CLUTCH && !CONFIG_SCHED_EDGE_OPT_OUT */
 
 /*
  * Since the clutch scheduler organizes threads based on the thread group
@@ -219,7 +238,7 @@ struct runq_stats {
 	uint64_t                last_change_timestamp;
 };
 
-#if defined(CONFIG_SCHED_TIMESHARE_CORE) || defined(CONFIG_SCHED_PROTO)
+#if defined(CONFIG_SCHED_TIMESHARE_CORE)
 
 struct run_queue {
 	int                     highq;                          /* highest runnable queue */
@@ -232,85 +251,48 @@ struct run_queue {
 };
 
 inline static void
-rq_bitmap_set(bitmap_t *map, u_int n)
+rq_bitmap_set(bitmap_t *__header_indexable map, u_int n)
 {
 	assert(n < NRQS);
 	bitmap_set(map, n);
 }
 
 inline static void
-rq_bitmap_clear(bitmap_t *map, u_int n)
+rq_bitmap_clear(bitmap_t *__header_indexable map, u_int n)
 {
 	assert(n < NRQS);
 	bitmap_clear(map, n);
 }
 
-#endif /* defined(CONFIG_SCHED_TIMESHARE_CORE) || defined(CONFIG_SCHED_PROTO) */
+#endif /* defined(CONFIG_SCHED_TIMESHARE_CORE) */
+
+typedef struct {
+	queue_head_t            pri_queue;                      /* runnable RT threads for this priority */
+	uint64_t                pri_earliest_deadline;          /* earliest deadline for this priority */
+	int                     pri_count;                      /* # of threads for this priority */
+	uint32_t                pri_constraint;                 /* constraint of earliest deadline thread for this priority */
+} rt_queue_pri_t;
 
 struct rt_queue {
+	_Atomic uint64_t        earliest_deadline;              /* earliest deadline */
 	_Atomic int             count;                          /* # of threads total */
-	queue_head_t            queue;                          /* all runnable RT threads */
-#if __SMP__
-	decl_simple_lock_data(, rt_lock);
-#endif
+	_Atomic uint32_t        constraint;                     /* constraint of earliest deadline thread */
+	_Atomic int             ed_index;                       /* index of earliest deadline thread */
+
+	bitmap_t                bitmap[BITMAP_LEN(NRTQS)];
+
+	rt_queue_pri_t          rt_queue_pri[NRTQS];
+
 	struct runq_stats       runq_stats;
 };
 typedef struct rt_queue *rt_queue_t;
 
-#if defined(CONFIG_SCHED_GRRR_CORE)
-
-/*
- * We map standard Mach priorities to an abstract scale that more properly
- * indicates how we want processor time allocated under contention.
- */
-typedef uint8_t grrr_proportional_priority_t;
-typedef uint8_t grrr_group_index_t;
-
-#define NUM_GRRR_PROPORTIONAL_PRIORITIES        256
-#define MAX_GRRR_PROPORTIONAL_PRIORITY ((grrr_proportional_priority_t)255)
-
-#if 0
-#define NUM_GRRR_GROUPS 8                                       /* log(256) */
-#endif
-
-#define NUM_GRRR_GROUPS 64                                      /* 256/4 */
-
-struct grrr_group {
-	queue_chain_t                   priority_order;                         /* next greatest weight group */
-	grrr_proportional_priority_t            minpriority;
-	grrr_group_index_t              index;
-
-	queue_head_t                    clients;
-	int                                             count;
-	uint32_t                                weight;
-#if 0
-	uint32_t                                deferred_removal_weight;
-#endif
-	uint32_t                                work;
-	thread_t                                current_client;
-};
-
-struct grrr_run_queue {
-	int                                     count;
-	uint32_t                        last_rescale_tick;
-	struct grrr_group       groups[NUM_GRRR_GROUPS];
-	queue_head_t            sorted_group_list;
-	uint32_t                        weight;
-	grrr_group_t            current_group;
-
-	struct runq_stats   runq_stats;
-};
-
-#endif /* defined(CONFIG_SCHED_GRRR_CORE) */
+#define RT_CONSTRAINT_NONE              UINT32_MAX
+#define RT_DEADLINE_NONE                UINT64_MAX
+#define RT_DEADLINE_QUANTUM_EXPIRED     (UINT64_MAX - 1)
 
 extern int rt_runq_count(processor_set_t);
-extern void rt_runq_count_incr(processor_set_t);
-extern void rt_runq_count_decr(processor_set_t);
-
-#if defined(CONFIG_SCHED_MULTIQ)
-sched_group_t   sched_group_create(void);
-void            sched_group_destroy(sched_group_t sched_group);
-#endif /* defined(CONFIG_SCHED_MULTIQ) */
+extern uint64_t rt_runq_earliest_deadline(processor_set_t);
 
 
 
@@ -323,6 +305,11 @@ extern void             thread_quantum_expire(
 	timer_call_param_t      processor,
 	timer_call_param_t      thread);
 
+/* Handle preemption timer expiration for an executing thread */
+extern void             thread_preempt_expire(
+	timer_call_param_t      processor,
+	timer_call_param_t      thread);
+
 /* Context switch check for current processor */
 extern ast_t    csw_check(
 	thread_t      thread,
@@ -331,6 +318,9 @@ extern ast_t    csw_check(
 
 /* Check for pending ASTs */
 extern void ast_check(processor_t processor);
+
+extern ast_t update_pending_nonurgent_preemption(processor_t processor, ast_t reason);
+extern void clear_pending_nonurgent_preemption(processor_t processor);
 
 extern void sched_update_generation_count(void);
 
@@ -346,7 +336,6 @@ extern uint32_t default_timeshare_constraint;
 extern uint32_t max_rt_quantum, min_rt_quantum;
 
 extern int default_preemption_rate;
-extern int default_bg_preemption_rate;
 
 #if defined(CONFIG_SCHED_TIMESHARE_CORE)
 
@@ -389,23 +378,26 @@ extern void             compute_pmap_gc_throttle(
 #if defined(CONFIG_SCHED_TIMESHARE_CORE)
 
 #define MAX_LOAD (NRQS - 1)
+#define SCHED_PRI_SHIFT_MAX ((8 * sizeof(uint32_t)) - 1)
 extern uint32_t         sched_pri_shifts[TH_BUCKET_MAX];
 extern uint32_t         sched_fixed_shift;
 extern int8_t           sched_load_shifts[NRQS];
 extern uint32_t         sched_decay_usage_age_factor;
-void sched_timeshare_consider_maintenance(uint64_t ctime);
+void sched_timeshare_consider_maintenance(uint64_t ctime, bool safe_point);
 #endif /* CONFIG_SCHED_TIMESHARE_CORE */
 
 void sched_consider_recommended_cores(uint64_t ctime, thread_t thread);
 
 extern int32_t          sched_poll_yield_shift;
-extern uint64_t         sched_safe_duration;
+extern uint64_t         sched_safe_rt_duration;
+extern uint64_t         sched_safe_fixed_duration;
 
 extern uint32_t         sched_load_average, sched_mach_factor;
 
 extern uint32_t         avenrun[3], mach_factor[3];
 
-extern uint64_t         max_unsafe_computation;
+extern uint64_t         max_unsafe_rt_computation;
+extern uint64_t         max_unsafe_fixed_computation;
 extern uint64_t         max_poll_computation;
 
 extern uint32_t         sched_run_buckets[TH_BUCKET_MAX];
@@ -414,6 +406,10 @@ extern uint32_t sched_run_incr(thread_t thread);
 extern uint32_t sched_run_decr(thread_t thread);
 extern void sched_update_thread_bucket(thread_t thread);
 
+extern uint32_t sched_smt_run_incr(thread_t thread);
+extern uint32_t sched_smt_run_decr(thread_t thread);
+extern void sched_smt_update_thread_bucket(thread_t thread);
+
 #define SCHED_DECAY_TICKS       32
 struct shift_data {
 	int     shift1;
@@ -421,14 +417,26 @@ struct shift_data {
 };
 
 /*
- *	thread_timer_delta macro takes care of both thread timers.
+ * Save the current thread time and compute a delta since the last call for the
+ * scheduler tick.
  */
-#define thread_timer_delta(thread, delta)                                       \
-MACRO_BEGIN                                                                                                     \
-	(delta) = (typeof(delta))timer_delta(&(thread)->system_timer,                   \
-	                                                &(thread)->system_timer_save);  \
-	(delta) += (typeof(delta))timer_delta(&(thread)->user_timer,                    \
-	                                                &(thread)->user_timer_save);    \
+#define sched_tick_delta(thread, delta) \
+MACRO_BEGIN \
+    uint64_t _total = recount_thread_time_mach(thread); \
+    (delta) = (typeof(delta))(_total - thread->sched_time_save); \
+    thread->sched_time_save = _total; \
 MACRO_END
+
+#define SCHED_MAX_BACKUP_PROCESSORS             7
+#if defined(__x86_64__)
+#define SCHED_DEFAULT_BACKUP_PROCESSORS         1
+#define SCHED_DEFAULT_BACKUP_PROCESSORS_SMT     2
+#else
+#define SCHED_DEFAULT_BACKUP_PROCESSORS         0
+#define SCHED_DEFAULT_BACKUP_PROCESSORS_SMT     0
+#endif
+extern int sched_rt_n_backup_processors;
+
+extern bool system_is_SMT;
 
 #endif  /* _KERN_SCHED_H_ */

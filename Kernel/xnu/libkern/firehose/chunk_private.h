@@ -21,12 +21,7 @@
 #ifndef __FIREHOSE_CHUNK_PRIVATE__
 #define __FIREHOSE_CHUNK_PRIVATE__
 
-#if KERNEL
-#include <machine/atomic.h>
-#endif
-#include <stdatomic.h>
 #include <sys/param.h>
-#include <os/base.h>
 #include "firehose_types_private.h"
 #include "tracepoint_private.h"
 
@@ -42,7 +37,7 @@ __BEGIN_DECLS
 	        ((((pos).fcp_pos >> 48) & 0x1ff) == (uint16_t)stream)
 
 typedef union {
-	_Atomic(uint64_t) fcp_atomic_pos;
+	os_atomic(uint64_t) fcp_atomic_pos;
 	uint64_t fcp_pos;
 	struct {
 		uint16_t fcp_next_entry_offs;
@@ -58,10 +53,14 @@ typedef union {
 } firehose_chunk_pos_u;
 
 typedef struct firehose_chunk_s {
-	uint8_t  fc_start[0];
-	firehose_chunk_pos_u fc_pos;
-	uint64_t fc_timestamp;
-	uint8_t  fc_data[FIREHOSE_CHUNK_SIZE - 8 - 8];
+	union {
+		uint8_t fc_start[FIREHOSE_CHUNK_SIZE];
+		struct {
+			firehose_chunk_pos_u fc_pos;
+			uint64_t fc_timestamp;
+			uint8_t  fc_data[FIREHOSE_CHUNK_SIZE - 8 - 8];
+		};
+	};
 } *firehose_chunk_t;
 
 typedef struct firehose_chunk_range_s {
@@ -69,13 +68,22 @@ typedef struct firehose_chunk_range_s {
 	uint16_t fcr_length;
 } *firehose_chunk_range_t;
 
+#if __has_include(<os/atomic_private.h>)
 #if defined(KERNEL) || defined(OS_FIREHOSE_SPI)
 
 OS_ALWAYS_INLINE
 static inline bool
-firehose_chunk_pos_fits(firehose_chunk_pos_u pos, uint16_t size)
+firehose_chunk_pos_fits(firehose_chunk_pos_u *pos, uint16_t size)
 {
-	return pos.fcp_next_entry_offs + size <= pos.fcp_private_offs;
+	return pos->fcp_next_entry_offs + size <= pos->fcp_private_offs;
+}
+
+OS_ALWAYS_INLINE
+static inline firehose_chunk_t
+firehose_chunk_for_address(void *addr)
+{
+	uintptr_t chunk_addr = (uintptr_t)addr & ~(FIREHOSE_CHUNK_SIZE - 1);
+	return (firehose_chunk_t)chunk_addr;
 }
 
 #define FIREHOSE_CHUNK_TRY_RESERVE_FAIL_ENQUEUE  (-1)
@@ -109,8 +117,8 @@ firehose_chunk_tracepoint_try_reserve(firehose_chunk_t fc, uint64_t stamp,
 		        // - read the chunk to find a very old thing
 		        os_atomic_rmw_loop_give_up(return FIREHOSE_CHUNK_TRY_RESERVE_FAIL);
 		}
-		pos = orig;
-		if (!firehose_chunk_pos_fits(orig,
+		pos.fcp_pos = orig.fcp_pos;
+		if (!firehose_chunk_pos_fits(&orig,
 		ft_size + pubsize + privsize) || !stamp_delta_fits) {
 		        pos.fcp_flag_full = true;
 		        reservation_failed = true;
@@ -126,7 +134,7 @@ firehose_chunk_tracepoint_try_reserve(firehose_chunk_t fc, uint64_t stamp,
 		        pos.fcp_pos -= privsize * FIREHOSE_CHUNK_POS_PRIVATE_OFFS_INC;
 		        pos.fcp_pos += FIREHOSE_CHUNK_POS_REFCNT_INC;
 		        const uint16_t minimum_payload_size = 16;
-		        if (!firehose_chunk_pos_fits(pos,
+		        if (!firehose_chunk_pos_fits(&pos,
 		        roundup(ft_size + minimum_payload_size, 8))) {
 		                // if we can't even have minimum_payload_size bytes of payload
 		                // for the next tracepoint, just flush right away
@@ -146,7 +154,7 @@ firehose_chunk_tracepoint_try_reserve(firehose_chunk_t fc, uint64_t stamp,
 		return FIREHOSE_CHUNK_TRY_RESERVE_FAIL_ENQUEUE;
 	}
 	if (privptr) {
-		*privptr = (uint8_t *)((uintptr_t)fc->fc_start + pos.fcp_private_offs);
+		*privptr = fc->fc_start + pos.fcp_private_offs;
 	}
 	return orig.fcp_next_entry_offs;
 }
@@ -157,13 +165,13 @@ firehose_chunk_tracepoint_begin(firehose_chunk_t fc, uint64_t stamp,
     uint16_t pubsize, uint64_t thread_id, long offset)
 {
 	firehose_tracepoint_t ft = (firehose_tracepoint_t)
-	    __builtin_assume_aligned((void *)((uintptr_t)fc->fc_start + (uintptr_t)offset), 8);
+	    __builtin_assume_aligned(fc->fc_start + offset, 8);
 	stamp -= fc->fc_timestamp;
 	stamp |= (uint64_t)pubsize << 48;
 	// The compiler barrier is needed for userland process death handling, see
 	// (tracepoint-begin) in libdispatch's firehose_buffer_stream_chunk_install.
-	atomic_store_explicit(&ft->ft_atomic_stamp_and_length, stamp,
-	    memory_order_relaxed);
+	os_atomic_std(atomic_store_explicit)(&ft->ft_atomic_stamp_and_length, stamp,
+	    os_atomic_std(memory_order_relaxed));
 	__asm__ __volatile__ ("" ::: "memory");
 	ft->ft_thread = thread_id;
 	return ft;
@@ -176,14 +184,15 @@ firehose_chunk_tracepoint_end(firehose_chunk_t fc,
 {
 	firehose_chunk_pos_u pos;
 
-	atomic_store_explicit(&ft->ft_id.ftid_atomic_value,
-	    ftid.ftid_value, memory_order_release);
-	pos.fcp_pos = atomic_fetch_sub_explicit(&fc->fc_pos.fcp_atomic_pos,
-	    FIREHOSE_CHUNK_POS_REFCNT_INC, memory_order_relaxed);
+	os_atomic_std(atomic_store_explicit)(&ft->ft_id.ftid_atomic_value,
+	    ftid.ftid_value, os_atomic_std(memory_order_release));
+	pos.fcp_pos = os_atomic_std(atomic_fetch_sub_explicit)(&fc->fc_pos.fcp_atomic_pos,
+	    FIREHOSE_CHUNK_POS_REFCNT_INC, os_atomic_std(memory_order_relaxed));
 	return pos.fcp_refcnt == 1 && pos.fcp_flag_full;
 }
 
 #endif // defined(KERNEL) || defined(OS_FIREHOSE_SPI)
+#endif // __has_include(<os/atomic_private.h>)
 
 __END_DECLS
 

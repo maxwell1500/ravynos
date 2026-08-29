@@ -28,7 +28,7 @@
 #ifndef KERN_MONOTONIC_H
 #define KERN_MONOTONIC_H
 
-#if MONOTONIC
+#if CONFIG_CPU_COUNTERS
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -41,12 +41,14 @@ extern _Atomic uint64_t mt_pmis;
 extern _Atomic uint64_t mt_retrograde;
 
 void mt_fixed_counts(uint64_t *counts);
-void mt_cur_thread_fixed_counts(uint64_t *counts);
-void mt_cur_task_fixed_counts(uint64_t *counts);
 uint64_t mt_cur_cpu_instrs(void);
 uint64_t mt_cur_cpu_cycles(void);
-uint64_t mt_cur_thread_instrs(void);
-uint64_t mt_cur_thread_cycles(void);
+void mt_cur_cpu_cycles_instrs_speculative(uint64_t *cycles, uint64_t *instrs);
+
+bool mt_acquire_counters(void);
+bool mt_owns_counters(void);
+void mt_ownership_change(bool available);
+void mt_release_counters(void);
 
 __END_DECLS
 
@@ -67,10 +69,6 @@ __BEGIN_DECLS
 #endif /* !defined(__arm__) && !defined(__arm64__) && !defined(__x86_64__) */
 
 void mt_update_fixed_counts(void);
-void mt_update_task(task_t task, thread_t thread);
-bool mt_update_thread(thread_t thread);
-int mt_fixed_thread_counts(thread_t thread, uint64_t *counts_out);
-int mt_fixed_task_counts(task_t task, uint64_t *counts_out);
 
 /*
  * Private API for the platform layers.
@@ -107,44 +105,15 @@ void mt_sleep(void);
  */
 void mt_wake_per_core(void);
 
-#if __ARM_CLUSTER_COUNT__
-/*
- * Called when a cluster is initialized.
- */
-void mt_cluster_init(void);
-#endif /* __ARM_CLUSTER_COUNT__ */
-
 /*
  * "Up-call" to the Mach layer to update counters from a PMI.
  */
 uint64_t mt_cpu_update_count(cpu_data_t *cpu, unsigned int ctr);
 
 /*
- * Private API for the scheduler.
- */
-
-/*
- * Called when a thread is switching off-core or expires its quantum.
- */
-void mt_sched_update(thread_t thread);
-
-/*
- * Called when a thread is terminating to save its counters into the task.  The
- * task lock must be held and the thread should be removed from the task's
- * thread list in that same critical section.
- */
-void mt_terminate_update(task_t task, thread_t thread);
-
-/*
  * Private API for the performance controller callout.
  */
 void mt_perfcontrol(uint64_t *instrs, uint64_t *cycles);
-
-/*
- * Private API for stackshot.
- */
-void mt_stackshot_thread(thread_t thread, uint64_t *instrs, uint64_t *cycles);
-void mt_stackshot_task(task_t task, uint64_t *instrs, uint64_t *cycles);
 
 /*
  * Private API for microstackshot.
@@ -158,6 +127,6 @@ __END_DECLS
 
 #endif /* MACH_KERNEL_PRIVATE */
 
-#endif /* MONOTONIC */
+#endif /* CONFIG_CPU_COUNTERS */
 
 #endif /* !defined(KERN_MONOTONIC_H) */

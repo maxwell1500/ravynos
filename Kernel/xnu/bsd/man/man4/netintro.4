@@ -58,8 +58,8 @@ All network protocols are associated with a specific
 .Em protocol family .
 A protocol family provides basic services to the protocol
 implementation to allow it to function within a specific
-network environment.  These services may include 
-packet fragmentation and reassembly, routing, addressing, and 
+network environment.  These services may include
+packet fragmentation and reassembly, routing, addressing, and
 basic transport.  A protocol family may support multiple
 methods of addressing, though the current protocol implementations
 do not.  A protocol family is normally comprised of a number
@@ -67,7 +67,7 @@ of protocols, one per
 .Xr socket 2
 type.  It is not required that a protocol family support
 all socket types.  A protocol family may contain multiple
-protocols supporting the same socket abstraction. 
+protocols supporting the same socket abstraction.
 .Pp
 A protocol supports one of the socket abstractions detailed in
 .Xr socket 2 .
@@ -151,6 +151,7 @@ are known to the system
 #define    AF_CCITT     10   /* CCITT protocols, X.25 etc */
 #define    AF_HYLINK    15   /* NSC Hyperchannel */
 #define    AF_ISO       18   /* ISO protocols */
+#define    AF_VSOCK     40   /* VM Sockets */
 .Ed
 .Sh ROUTING
 Mac OS X provides some packet routing facilities.
@@ -175,7 +176,7 @@ certain interfaces such as the loopback interface,
 .Xr lo 4 ,
 do not.
 .Pp
-The following 
+The following
 .Xr ioctl
 calls may be used to manipulate network interfaces.
 The
@@ -183,7 +184,7 @@ The
 is made on a socket (typically of type
 .Dv SOCK_DGRAM )
 in the desired domain.
-Most of the requests supported in earlier releases 
+Most of the requests supported in earlier releases
 take an
 .Ar ifreq
 structure as its parameter.  This structure has the form
@@ -248,7 +249,7 @@ The metric is used only by user-level routers.
 Get interface metric.
 .El
 .Pp
-There are two requests that make use of a new structure:
+There are requests that make use of a different structure:
 .Bl -tag -width SIOCGIFBRDADDR
 .It Dv SIOCAIFADDR
 An interface may have more than one address associated with it
@@ -270,20 +271,27 @@ identifier itself to include the total size, as described in
 .Xr ioctl .
 .It Dv SIOCDIFADDR
 This requests deletes the specified address from the list
-associated with an interface.  It also uses the
-.Ar if_aliasreq
-structure to allow for the possibility of protocols allowing
-multiple masks or destination addresses, and also adopts the
-convention that specification of the default address means
-to delete the first address for the interface belonging to
-the address family in which the original socket was opened.
+associated with an interface.  It  uses the
+.Ar ifreq
+structure for protocols like
+.Dv PF_INET
+whose
+address fit in the
+.Ar sockaddr
+structure.
+Protocols like
+.Dv PF_INET6
+with addresses that do not fit in the
+.Ar sockaddr
+structure
+must have a variant of that request.
 .It Dv SIOCGIFCONF
 Get interface configuration list.  This request takes an
 .Ar ifconf
-structure (see below) as a value-result parameter.  The 
+structure (see below) as a value-result parameter.  The
 .Ar ifc_len
 field should be initially set to the size of the buffer
-pointed to by 
+pointed to by
 .Ar ifc_buf .
 On return it will contain the length, in bytes, of the
 configuration list.
@@ -321,8 +329,6 @@ struct ifconf {
 .Xr ioctl 2 ,
 .Xr socket 2 ,
 .Xr intro 4 ,
-.Xr config 5 ,
-.Xr routed 8
 .Sh HISTORY
 The
 .Nm netintro

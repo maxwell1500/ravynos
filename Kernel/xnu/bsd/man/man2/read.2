@@ -32,12 +32,13 @@
 .\"     @(#)read.2	8.4 (Berkeley) 2/26/94
 .\" $FreeBSD: src/lib/libc/sys/read.2,v 1.9.2.6 2001/12/14 18:34:01 ru Exp $
 .\"
-.Dd February 26, 1994
+.Dd June 3, 2021
 .Dt READ 2
 .Os
 .Sh NAME
 .Nm pread ,
 .Nm read ,
+.Nm preadv ,
 .Nm readv
 .Nd read input
 .Sh LIBRARY
@@ -58,6 +59,13 @@
 .Fa "int fildes"
 .Fa "void *buf"
 .Fa "size_t nbyte"
+.Fc
+.Ft ssize_t
+.Fo preadv
+.Fa "int d"
+.Fa "const struct iovec *iov"
+.Fa "int iovcnt"
+.Fa "off_t offset"
 .Fc
 .Ft ssize_t
 .Fo readv
@@ -81,12 +89,16 @@ buffers specified by the members of the
 .Fa iov
 array: iov[0], iov[1], ..., iov[iovcnt\|\-\|1].
 .Fn pread
-performs the same function,
-but reads from the specified position in the file
+and
+.Fn preadv
+perform the same functions,
+but read from the specified position in the file
 without modifying the file pointer.
 .Pp
 For
-.Fn readv ,
+.Fn readv
+and
+.Fn preadv ,
 the
 .Fa iovec
 structure is defined as:
@@ -103,6 +115,8 @@ Each
 entry specifies the base address and length of an area
 in memory where data should be placed.
 .Fn readv
+and
+.Fn preadv
 will always fill an area completely before proceeding
 to the next.
 .Pp
@@ -124,12 +138,22 @@ object is undefined.
 Upon successful completion,
 .Fn read ,
 .Fn readv ,
+.Fn pread ,
 and
-.Fn pread
+.Fn preadv
 return the number of bytes actually read and placed in the buffer.
 The system guarantees to read the number of bytes requested if
 the descriptor references a normal file that has that many bytes left
 before the end-of-file, but in no other case.
+.Pp
+.Fn read
+and
+.Fn pread
+will fail if the parameter
+.Fa nbyte
+exceeds
+.Dv INT_MAX ,
+and they do not attempt a partial read.
 .Sh RETURN VALUES
 If successful, the
 number of bytes actually read is returned.
@@ -140,10 +164,11 @@ Otherwise, a -1 is returned and the global variable
 is set to indicate the error.
 .Sh ERRORS
 The
-.Fn pread ,
 .Fn read ,
+.Fn readv ,
+.Fn pread ,
 and
-.Fn readv
+.Fn preadv
 calls
 will succeed unless:
 .Bl -tag -width Er
@@ -201,7 +226,7 @@ An attempt to allocate a memory buffer fails.
 Insufficient memory is available.
 .\" ===========
 .It Bq Er ENXIO
-An action is requested of a device that does not exist..
+An action is requested of a device that does not exist.
 .\" ===========
 .It Bq Er ENXIO
 A requested action cannot be performed by the device.
@@ -214,11 +239,27 @@ the server.
 The connection timed out while reading a remote file from a soft mounted NFS
 volume (see
 .Xr mount_nfs 8 ) .
+.\" ===========
+.It Bq Er ETIMEDOUT
+The file is a
+.Dq dataless
+file that requires materialization and materialization timed out or
+encountered some other temporary failure.
+.\" ===========
+.It Bq Er EDEADLK
+The file is a
+.Dq dataless
+file that requires materialization and the I/O policy of the current thread
+or process disallows dataless file materialization
+.Po see
+.Xr getiopolicy_np 3
+.Pc .
 .El
 .Pp
-The
 .Fn pread
-call may also return the following errors:
+and
+.Fn preadv
+calls may also return the following errors:
 .Bl -tag -width Er
 .\" ===========
 .It Bq Er EINVAL
@@ -246,8 +287,24 @@ during a read attempt on a socket.
 .El
 .Pp
 The
+.Fn read
+and
+.Fn pread
+call may also return the following error:
+.Bl -tag -width Er
+.\" ===========
+.It Bq Er EINVAL
+The value provided for
+.Fa nbyte
+exceeds
+.Dv INT_MAX .
+.El
+.Pp
+The
 .Fn readv
-call may also return one of the following errors:
+and
+.Fn preadv
+calls may also return one of the following errors:
 .Bl -tag -width Er
 .\" ===========
 .It Bq Er EFAULT
@@ -303,6 +360,8 @@ and
 .Fn pread
 functions are expected to conform to
 .St -xpg4.2 .
+.Fn preadv
+is nonstandard.
 .Sh HISTORY
 The
 .Fn pread

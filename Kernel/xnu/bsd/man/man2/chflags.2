@@ -71,13 +71,15 @@ The file may only be appended to.
 The directory is opaque when viewed through a union stack.
 .It UF_HIDDEN
 The file or directory is not intended to be displayed to the user.
+.It UF_COMPRESSED
+File is compressed at the file system level.
 .It SF_ARCHIVED
 The file has been archived.
 .It SF_IMMUTABLE
 The file may not be changed.
 .It SF_APPEND
 The file may only be appended to.
-.It SF_DATALESSFAULT
+.It SF_DATALESS 
 The file is a dataless placeholder.
 The system will attempt to materialize it when accessed according to the dataless file materialization policy of the accessing thread or process.
 See
@@ -100,8 +102,12 @@ and
 flags may only be set or unset by the super-user.
 .Pp
 The
-.Dq SF_DATALESSFAULT
-flag is an internal flag and may not be set from user space.
+.Dq SF_DATALESS
+and
+.Dq UF_COMPRESSED
+flags are internal flags and may not be set or unset from user space.  Attempting to modify them using
+.Fn chflags
+will result in undefined behaviour.
 .Sh RETURN VALUES
 Upon successful completion, a value of 0 is returned.
 Otherwise, -1 is returned and the global variable

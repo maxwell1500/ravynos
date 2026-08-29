@@ -74,6 +74,7 @@
 #include <kern/thread.h>
 #include <kern/processor.h>
 #include <kern/ledger.h>
+#include <kern/monotonic.h>
 #include <machine/machparam.h>
 #include <kern/machine.h>
 #include <kern/policy_internal.h>
@@ -82,10 +83,6 @@
 #ifdef CONFIG_MACH_APPROXIMATE_TIME
 #include <machine/commpage.h>  /* for commpage_update_mach_approximate_time */
 #endif
-
-#if MONOTONIC
-#include <kern/monotonic.h>
-#endif /* MONOTONIC */
 
 /*
  *	thread_quantum_expire:
@@ -108,9 +105,10 @@ thread_quantum_expire(
 	assert(processor == current_processor());
 	assert(thread == current_thread());
 
-	KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_SCHED_QUANTUM_EXPIRED) | DBG_FUNC_START, 0, 0, 0, 0, 0);
+	KDBG_RELEASE(MACHDBG_CODE(
+		    DBG_MACH_SCHED, MACH_SCHED_QUANTUM_EXPIRED) | DBG_FUNC_START);
 
-	SCHED_STATS_QUANTUM_TIMER_EXPIRATION(processor);
+	SCHED_STATS_INC(quantum_timer_expirations);
 
 	/*
 	 * We bill CPU time to both the individual thread and its task.
@@ -132,15 +130,18 @@ thread_quantum_expire(
 	}
 	thread->t_deduct_bank_ledger_time = 0;
 
-	ctime = mach_absolute_time();
-
+	struct recount_snap snap = { 0 };
+	recount_snapshot(&snap);
+	ctime = snap.rsn_time_mach;
+	check_monotonic_time(ctime);
 #ifdef CONFIG_MACH_APPROXIMATE_TIME
 	commpage_update_mach_approximate_time(ctime);
-#endif
+#endif /* CONFIG_MACH_APPROXIMATE_TIME */
 
-#if MONOTONIC
-	mt_sched_update(thread);
-#endif /* MONOTONIC */
+	sched_update_pset_avg_execution_time(processor->processor_set, thread->quantum_remaining, ctime, thread->th_sched_bucket);
+
+	recount_switch_thread(&snap, thread, get_threadtask(thread));
+	recount_log_switch_thread(&snap);
 
 	thread_lock(thread);
 
@@ -163,12 +164,33 @@ thread_quantum_expire(
 
 		new_computation = ctime - thread->computation_epoch;
 		new_computation += thread->computation_metered;
-		if (new_computation > max_unsafe_computation) {
+		/*
+		 * Remove any time spent handling interrupts outside of the thread's
+		 * control.
+		 */
+		new_computation -= recount_current_thread_interrupt_time_mach() - thread->computation_interrupt_epoch;
+
+		bool demote = false;
+		switch (thread->sched_mode) {
+		case TH_MODE_REALTIME:
+			if (new_computation > max_unsafe_rt_computation) {
+				thread->safe_release = ctime + sched_safe_rt_duration;
+				demote = true;
+			}
+			break;
+		case TH_MODE_FIXED:
+			if (new_computation > max_unsafe_fixed_computation) {
+				thread->safe_release = ctime + sched_safe_fixed_duration;
+				demote = true;
+			}
+			break;
+		default:
+			panic("unexpected mode: %d", thread->sched_mode);
+		}
+
+		if (demote) {
 			KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_FAILSAFE) | DBG_FUNC_NONE,
 			    (uintptr_t)thread->sched_pri, (uintptr_t)thread->sched_mode, 0, 0, 0);
-
-			thread->safe_release = ctime + sched_safe_duration;
-
 			sched_thread_mode_demote(thread, TH_SFLAG_FAILSAFE);
 		}
 	}
@@ -191,21 +213,9 @@ thread_quantum_expire(
 	 */
 	processor->first_timeslice = FALSE;
 
-	thread_quantum_init(thread);
+	thread_quantum_init(thread, ctime);
 
-	/* Reload precise timing global policy to thread-local policy */
-	thread->precise_user_kernel_time = use_precise_user_kernel_time(thread);
-
-	/*
-	 * Since non-precise user/kernel time doesn't update the state/thread timer
-	 * during privilege transitions, synthesize an event now.
-	 */
-	if (!thread->precise_user_kernel_time) {
-		timer_update(PROCESSOR_DATA(processor, current_state), ctime);
-		timer_update(PROCESSOR_DATA(processor, thread_timer), ctime);
-		timer_update(&thread->runnable_timer, ctime);
-	}
-
+	timer_update(&thread->runnable_timer, ctime);
 
 	processor->quantum_end = ctime + thread->quantum_remaining;
 
@@ -217,7 +227,7 @@ thread_quantum_expire(
 	 */
 
 	ast_t check_reason = AST_QUANTUM;
-	if (thread->task == kernel_task) {
+	if (get_threadtask(thread) == kernel_task) {
 		check_reason |= AST_URGENT;
 	}
 
@@ -234,7 +244,13 @@ thread_quantum_expire(
 
 	thread_unlock(thread);
 
-	timer_call_quantum_timer_enter(&processor->quantum_timer, thread,
+	/* Now that the processor->thread_timer has been updated, evaluate to see if
+	 * the workqueue quantum expired and set AST_KEVENT if it has */
+	if (thread_get_tag(thread) & THREAD_TAG_WORKQUEUE) {
+		thread_evaluate_workqueue_quantum_expiry(thread);
+	}
+
+	running_timer_enter(processor, RUNNING_TIMER_QUANTUM, thread,
 	    processor->quantum_end, ctime);
 
 	/* Tell platform layer that we are still running this thread */
@@ -244,14 +260,14 @@ thread_quantum_expire(
 	    0, thread);
 
 #if defined(CONFIG_SCHED_TIMESHARE_CORE)
-	sched_timeshare_consider_maintenance(ctime);
+	sched_timeshare_consider_maintenance(ctime, false);
 #endif /* CONFIG_SCHED_TIMESHARE_CORE */
 
-#if __arm__ || __arm64__
+#if __arm64__
 	if (thread->sched_mode == TH_MODE_REALTIME) {
 		sched_consider_recommended_cores(ctime, thread);
 	}
-#endif /* __arm__ || __arm64__ */
+#endif /* __arm64__ */
 
 	KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_SCHED_QUANTUM_EXPIRED) | DBG_FUNC_END, preempt, 0, 0, 0, 0);
 }
@@ -273,17 +289,17 @@ sched_set_thread_base_priority(thread_t thread, int priority)
 	uint64_t ctime = 0;
 
 	if (thread->sched_mode == TH_MODE_REALTIME) {
-		assert(priority <= BASEPRI_RTQUEUES);
+		assert((priority >= BASEPRI_RTQUEUES) && (priority <= MAXPRI));
 	} else {
 		assert(priority < BASEPRI_RTQUEUES);
 	}
 
 	int old_base_pri = thread->base_pri;
-	thread->req_base_pri = priority;
+	thread->req_base_pri = (int16_t)priority;
 	if (thread->sched_flags & TH_SFLAG_BASE_PRI_FROZEN) {
 		priority = MAX(priority, old_base_pri);
 	}
-	thread->base_pri = priority;
+	thread->base_pri = (int16_t)priority;
 
 	if ((thread->state & TH_RUN) == TH_RUN) {
 		assert(thread->last_made_runnable_time != THREAD_NOT_RUNNABLE);
@@ -335,11 +351,11 @@ sched_set_kernel_thread_priority(thread_t thread, int new_priority)
 	if (new_priority > thread->max_priority) {
 		new_priority = thread->max_priority;
 	}
-#if CONFIG_EMBEDDED
+#if !defined(XNU_TARGET_OS_OSX)
 	if (new_priority < MAXPRI_THROTTLE) {
 		new_priority = MAXPRI_THROTTLE;
 	}
-#endif /* CONFIG_EMBEDDED */
+#endif /* !defined(XNU_TARGET_OS_OSX) */
 
 	thread->importance = new_priority - thread->task_priority;
 
@@ -370,10 +386,10 @@ thread_recompute_sched_pri(thread_t thread, set_sched_pri_options_t options)
 	uint32_t     sched_flags = thread->sched_flags;
 	sched_mode_t sched_mode  = thread->sched_mode;
 
-	int priority = thread->base_pri;
+	int16_t priority = thread->base_pri;
 
 	if (sched_mode == TH_MODE_TIMESHARE) {
-		priority = SCHED(compute_timeshare_priority)(thread);
+		priority = (int16_t)SCHED(compute_timeshare_priority)(thread);
 	}
 
 	if (sched_flags & TH_SFLAG_DEPRESS) {
@@ -413,6 +429,10 @@ thread_recompute_sched_pri(thread_t thread, set_sched_pri_options_t options)
 			if (sched_flags & TH_SFLAG_EXEC_PROMOTED) {
 				priority = MAX(priority, MINPRI_EXEC);
 			}
+
+			if (sched_flags & TH_SFLAG_FLOOR_PROMOTED) {
+				priority = MAX(priority, MINPRI_FLOOR);
+			}
 		}
 	}
 
@@ -427,6 +447,9 @@ sched_default_quantum_expire(thread_t thread __unused)
 	 * uses up its entire quantum
 	 */
 }
+
+int smt_timeshare_enabled = 1;
+int smt_sched_bonus_16ths = 8;
 
 #if defined(CONFIG_SCHED_TIMESHARE_CORE)
 
@@ -443,14 +466,14 @@ sched_default_quantum_expire(thread_t thread __unused)
 void
 lightweight_update_priority(thread_t thread)
 {
-	assert(thread->runq == PROCESSOR_NULL);
+	thread_assert_runq_null(thread);
 	assert(thread == current_thread());
 
 	if (thread->sched_mode == TH_MODE_TIMESHARE) {
 		int priority;
 		uint32_t delta;
 
-		thread_timer_delta(thread, delta);
+		sched_tick_delta(thread, delta);
 
 		/*
 		 *	Accumulate timesharing usage only
@@ -458,7 +481,11 @@ lightweight_update_priority(thread_t thread)
 		 *	resources.
 		 */
 		if (thread->pri_shift < INT8_MAX) {
-			thread->sched_usage += delta;
+			if (thread_no_smt(thread) && smt_timeshare_enabled) {
+				thread->sched_usage += (delta + ((delta * smt_sched_bonus_16ths) >> 4));
+			} else {
+				thread->sched_usage += delta;
+			}
 		}
 
 		thread->cpu_delta += delta;
@@ -531,17 +558,23 @@ const struct shift_data        sched_decay_shifts[SCHED_DECAY_TICKS] = {
 extern int sched_pri_decay_band_limit;
 
 
-/* Only use the decay floor logic on embedded non-clutch schedulers */
-#if CONFIG_EMBEDDED && !CONFIG_SCHED_CLUTCH
+/* Only use the decay floor logic on non-macOS and non-clutch schedulers */
+#if !defined(XNU_TARGET_OS_OSX) && !CONFIG_SCHED_CLUTCH
 
 int
 sched_compute_timeshare_priority(thread_t thread)
 {
-	int decay_amount = (thread->sched_usage >> thread->pri_shift);
+	int decay_amount;
 	int decay_limit = sched_pri_decay_band_limit;
 
 	if (thread->base_pri > BASEPRI_FOREGROUND) {
 		decay_limit += (thread->base_pri - BASEPRI_FOREGROUND);
+	}
+
+	if (thread->pri_shift == INT8_MAX) {
+		decay_amount = 0;
+	} else {
+		decay_amount = (thread->sched_usage >> thread->pri_shift);
 	}
 
 	if (decay_amount > decay_limit) {
@@ -552,7 +585,7 @@ sched_compute_timeshare_priority(thread_t thread)
 	int priority = thread->base_pri - decay_amount;
 
 	if (priority < MAXPRI_THROTTLE) {
-		if (thread->task->max_priority > MAXPRI_THROTTLE) {
+		if (get_threadtask(thread)->max_priority > MAXPRI_THROTTLE) {
 			priority = MAXPRI_THROTTLE;
 		} else if (priority < MINPRI_USER) {
 			priority = MINPRI_USER;
@@ -564,13 +597,17 @@ sched_compute_timeshare_priority(thread_t thread)
 	return priority;
 }
 
-#else /* CONFIG_EMBEDDED && !CONFIG_SCHED_CLUTCH */
+#else /* !defined(XNU_TARGET_OS_OSX) && !CONFIG_SCHED_CLUTCH */
 
 int
 sched_compute_timeshare_priority(thread_t thread)
 {
 	/* start with base priority */
-	int priority = thread->base_pri - (thread->sched_usage >> thread->pri_shift);
+	int priority = thread->base_pri;
+
+	if (thread->pri_shift != INT8_MAX) {
+		priority -= (thread->sched_usage >> thread->pri_shift);
+	}
 
 	if (priority < MINPRI_USER) {
 		priority = MINPRI_USER;
@@ -581,7 +618,7 @@ sched_compute_timeshare_priority(thread_t thread)
 	return priority;
 }
 
-#endif /* CONFIG_EMBEDDED && !CONFIG_SCHED_CLUTCH */
+#endif /* !defined(XNU_TARGET_OS_OSX) && !CONFIG_SCHED_CLUTCH */
 
 /*
  *	can_update_priority
@@ -627,7 +664,7 @@ update_priority(
 	/*
 	 *	Gather cpu usage data.
 	 */
-	thread_timer_delta(thread, delta);
+	sched_tick_delta(thread, delta);
 	if (ticks < SCHED_DECAY_TICKS) {
 		/*
 		 *	Accumulate timesharing usage only during contention for processor
@@ -635,7 +672,11 @@ update_priority(
 		 *	determine if the system was in a contended state.
 		 */
 		if (thread->pri_shift < INT8_MAX) {
-			thread->sched_usage += delta;
+			if (thread_no_smt(thread) && smt_timeshare_enabled) {
+				thread->sched_usage += (delta + ((delta * smt_sched_bonus_16ths) >> 4));
+			} else {
+				thread->sched_usage += delta;
+			}
 		}
 
 		thread->cpu_usage += delta + thread->cpu_delta;
@@ -729,6 +770,26 @@ sched_decr_bucket(sched_bucket_t bucket)
 	os_atomic_dec(&sched_run_buckets[bucket], relaxed);
 }
 
+static void
+sched_add_bucket(sched_bucket_t bucket, uint8_t run_weight)
+{
+	assert(bucket >= TH_BUCKET_FIXPRI &&
+	    bucket <= TH_BUCKET_SHARE_BG);
+
+	os_atomic_add(&sched_run_buckets[bucket], run_weight, relaxed);
+}
+
+static void
+sched_sub_bucket(sched_bucket_t bucket, uint8_t run_weight)
+{
+	assert(bucket >= TH_BUCKET_FIXPRI &&
+	    bucket <= TH_BUCKET_SHARE_BG);
+
+	assert(os_atomic_load(&sched_run_buckets[bucket], relaxed) > 0);
+
+	os_atomic_sub(&sched_run_buckets[bucket], run_weight, relaxed);
+}
+
 uint32_t
 sched_run_incr(thread_t thread)
 {
@@ -749,6 +810,35 @@ sched_run_decr(thread_t thread)
 	sched_decr_bucket(thread->th_sched_bucket);
 
 	uint32_t new_count = os_atomic_dec(&sched_run_buckets[TH_BUCKET_RUN], relaxed);
+
+	return new_count;
+}
+
+uint32_t
+sched_smt_run_incr(thread_t thread)
+{
+	assert((thread->state & (TH_RUN | TH_IDLE)) == TH_RUN);
+
+	uint8_t run_weight = (thread_no_smt(thread) && smt_timeshare_enabled) ? 2 : 1;
+	thread->sched_saved_run_weight = run_weight;
+
+	uint32_t new_count = os_atomic_add(&sched_run_buckets[TH_BUCKET_RUN], run_weight, relaxed);
+
+	sched_add_bucket(thread->th_sched_bucket, run_weight);
+
+	return new_count;
+}
+
+uint32_t
+sched_smt_run_decr(thread_t thread)
+{
+	assert((thread->state & (TH_RUN | TH_IDLE)) != TH_RUN);
+
+	uint8_t run_weight = thread->sched_saved_run_weight;
+
+	sched_sub_bucket(thread->th_sched_bucket, run_weight);
+
+	uint32_t new_count = os_atomic_sub(&sched_run_buckets[TH_BUCKET_RUN], run_weight, relaxed);
 
 	return new_count;
 }
@@ -793,6 +883,61 @@ sched_update_thread_bucket(thread_t thread)
 	}
 }
 
+void
+sched_smt_update_thread_bucket(thread_t thread)
+{
+	sched_bucket_t old_bucket = thread->th_sched_bucket;
+	sched_bucket_t new_bucket = TH_BUCKET_RUN;
+
+	switch (thread->sched_mode) {
+	case TH_MODE_FIXED:
+	case TH_MODE_REALTIME:
+		new_bucket = TH_BUCKET_FIXPRI;
+		break;
+
+	case TH_MODE_TIMESHARE:
+		if (thread->base_pri > BASEPRI_DEFAULT) {
+			new_bucket = TH_BUCKET_SHARE_FG;
+		} else if (thread->base_pri > BASEPRI_UTILITY) {
+			new_bucket = TH_BUCKET_SHARE_DF;
+		} else if (thread->base_pri > MAXPRI_THROTTLE) {
+			new_bucket = TH_BUCKET_SHARE_UT;
+		} else {
+			new_bucket = TH_BUCKET_SHARE_BG;
+		}
+		break;
+
+	default:
+		panic("unexpected mode: %d", thread->sched_mode);
+		break;
+	}
+
+	if (old_bucket != new_bucket) {
+		thread->th_sched_bucket = new_bucket;
+		thread->pri_shift = sched_pri_shifts[new_bucket];
+
+		if ((thread->state & (TH_RUN | TH_IDLE)) == TH_RUN) {
+			sched_sub_bucket(old_bucket, thread->sched_saved_run_weight);
+			sched_add_bucket(new_bucket, thread->sched_saved_run_weight);
+		}
+	}
+}
+
+static inline void
+sched_validate_mode(sched_mode_t mode)
+{
+	switch (mode) {
+	case TH_MODE_FIXED:
+	case TH_MODE_REALTIME:
+	case TH_MODE_TIMESHARE:
+		break;
+
+	default:
+		panic("unexpected mode: %d", mode);
+		break;
+	}
+}
+
 /*
  * Set the thread's true scheduling mode
  * Called with thread mutex and thread locked
@@ -803,22 +948,55 @@ sched_update_thread_bucket(thread_t thread)
 void
 sched_set_thread_mode(thread_t thread, sched_mode_t new_mode)
 {
-	assert(thread->runq == PROCESSOR_NULL);
+	thread_assert_runq_null(thread);
 
-	switch (new_mode) {
-	case TH_MODE_FIXED:
-	case TH_MODE_REALTIME:
-	case TH_MODE_TIMESHARE:
-		break;
+	sched_validate_mode(new_mode);
 
-	default:
-		panic("unexpected mode: %d", new_mode);
-		break;
+#if CONFIG_SCHED_AUTO_JOIN
+	/*
+	 * Realtime threads might have auto-joined a work interval based on
+	 * make runnable relationships. If such an RT thread is now being demoted
+	 * to non-RT, unjoin the thread from the work interval.
+	 */
+	if ((thread->sched_flags & TH_SFLAG_THREAD_GROUP_AUTO_JOIN) && (new_mode != TH_MODE_REALTIME)) {
+		assert((thread->sched_mode == TH_MODE_REALTIME) || (thread->th_work_interval_flags & TH_WORK_INTERVAL_FLAGS_AUTO_JOIN_LEAK));
+		work_interval_auto_join_demote(thread);
 	}
+#endif /* CONFIG_SCHED_AUTO_JOIN */
 
 	thread->sched_mode = new_mode;
 
 	SCHED(update_thread_bucket)(thread);
+}
+
+/*
+ * TODO: Instead of having saved mode, have 'user mode' and 'true mode'.
+ * That way there's zero confusion over which the user wants
+ * and which the kernel wants.
+ */
+void
+sched_set_thread_mode_user(thread_t thread, sched_mode_t new_mode)
+{
+	thread_assert_runq_null(thread);
+
+	sched_validate_mode(new_mode);
+
+	/* If demoted, only modify the saved mode. */
+	if (thread->sched_flags & TH_SFLAG_DEMOTED_MASK) {
+		thread->saved_mode = new_mode;
+	} else {
+		sched_set_thread_mode(thread, new_mode);
+	}
+}
+
+sched_mode_t
+sched_get_thread_mode_user(thread_t thread)
+{
+	if (thread->sched_flags & TH_SFLAG_DEMOTED_MASK) {
+		return thread->saved_mode;
+	} else {
+		return thread->sched_mode;
+	}
 }
 
 /*
@@ -832,6 +1010,21 @@ sched_thread_mode_demote(thread_t thread, uint32_t reason)
 
 	if (thread->policy_reset) {
 		return;
+	}
+
+	switch (reason) {
+	case TH_SFLAG_THROTTLED:
+		KDBG(MACHDBG_CODE(DBG_MACH_SCHED, MACH_MODE_DEMOTE_THROTTLED),
+		    thread_tid(thread), thread->sched_flags);
+		break;
+	case TH_SFLAG_FAILSAFE:
+		KDBG(MACHDBG_CODE(DBG_MACH_SCHED, MACH_MODE_DEMOTE_FAILSAFE),
+		    thread_tid(thread), thread->sched_flags);
+		break;
+	case TH_SFLAG_RT_DISALLOWED:
+		KDBG(MACHDBG_CODE(DBG_MACH_SCHED, MACH_MODE_DEMOTE_RT_DISALLOWED),
+		    thread_tid(thread), thread->sched_flags);
+		break;
 	}
 
 	if (thread->sched_flags & TH_SFLAG_DEMOTED_MASK) {
@@ -858,6 +1051,16 @@ sched_thread_mode_demote(thread_t thread, uint32_t reason)
 }
 
 /*
+ * Return true if the thread is demoted for the specified reason
+ */
+bool
+sched_thread_mode_has_demotion(thread_t thread, uint32_t reason)
+{
+	assert(reason & TH_SFLAG_DEMOTED_MASK);
+	return (thread->sched_flags & reason) != 0;
+}
+
+/*
  * Un-demote the true scheduler mode back to the saved mode (called with the thread locked)
  */
 void
@@ -868,6 +1071,21 @@ sched_thread_mode_undemote(thread_t thread, uint32_t reason)
 	assert(thread->saved_mode != TH_MODE_NONE);
 	assert(thread->sched_mode == TH_MODE_TIMESHARE);
 	assert(thread->policy_reset == 0);
+
+	switch (reason) {
+	case TH_SFLAG_THROTTLED:
+		KDBG(MACHDBG_CODE(DBG_MACH_SCHED, MACH_MODE_UNDEMOTE_THROTTLED),
+		    thread_tid(thread), thread->sched_flags);
+		break;
+	case TH_SFLAG_FAILSAFE:
+		KDBG(MACHDBG_CODE(DBG_MACH_SCHED, MACH_MODE_UNDEMOTE_FAILSAFE),
+		    thread_tid(thread), thread->sched_flags);
+		break;
+	case TH_SFLAG_RT_DISALLOWED:
+		KDBG(MACHDBG_CODE(DBG_MACH_SCHED, MACH_MODE_UNDEMOTE_RT_DISALLOWED),
+		    thread_tid(thread), thread->sched_flags);
+		break;
+	}
 
 	thread->sched_flags &= ~reason;
 
@@ -922,10 +1140,14 @@ sched_thread_promote_reason(thread_t    thread,
 		    thread_tid(thread), thread->sched_pri,
 		    thread->base_pri, trace_obj);
 		break;
+	case TH_SFLAG_FLOOR_PROMOTED:
+		KDBG(MACHDBG_CODE(DBG_MACH_SCHED, MACH_FLOOR_PROMOTE),
+		    thread_tid(thread), thread->sched_pri,
+		    thread->base_pri, trace_obj);
+		break;
 	}
 
 	thread->sched_flags |= reason;
-
 	thread_recompute_sched_pri(thread, SETPRI_DEFAULT);
 }
 
@@ -956,6 +1178,11 @@ sched_thread_unpromote_reason(thread_t  thread,
 		break;
 	case TH_SFLAG_EXEC_PROMOTED:
 		KDBG(MACHDBG_CODE(DBG_MACH_SCHED, MACH_EXEC_DEMOTE),
+		    thread_tid(thread), thread->sched_pri,
+		    thread->base_pri, trace_obj);
+		break;
+	case TH_SFLAG_FLOOR_PROMOTED:
+		KDBG(MACHDBG_CODE(DBG_MACH_SCHED, MACH_FLOOR_DEMOTE),
 		    thread_tid(thread), thread->sched_pri,
 		    thread->base_pri, trace_obj);
 		break;

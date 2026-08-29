@@ -31,7 +31,7 @@ SHA1ToDi(const struct ccdigest_info *di, SHA1_CTX *sha1_ctx, struct ccdigest_ctx
 {
 	uint64_t count = getCount(sha1_ctx);
 
-	ccdigest_num(di, di_ctx) = count % di->block_size;
+	ccdigest_num(di, di_ctx) = (unsigned)(count % di->block_size);
 	ccdigest_nbits(di, di_ctx) = (count - ccdigest_num(di, di_ctx)) * 8;
 	memcpy(ccdigest_data(di, di_ctx), sha1_ctx->m.b8, di->block_size);
 	memcpy(ccdigest_state_ccn(di, di_ctx), sha1_ctx->h.b8, di->state_size);
@@ -69,15 +69,6 @@ SHA1Final(void *digest, SHA1_CTX *ctx)
 	ccdigest_final(di, di_ctx, digest);
 }
 
-#ifdef XNU_KERNEL_PRIVATE
-void
-SHA1UpdateUsePhysicalAddress(SHA1_CTX *ctx, const void *data, size_t len)
-{
-	//TODO: What the hell ?
-	SHA1Update(ctx, data, len);
-}
-#endif
-
 /* This is not publicised in header, but exported in libkern.exports */
 void SHA1Final_r(SHA1_CTX *context, void *digest);
 void
@@ -87,7 +78,6 @@ SHA1Final_r(SHA1_CTX *context, void *digest)
 }
 
 
-#ifndef __linux__
 /*
  * This function is called by the SHA1 hardware kext during its init.
  * This will register the function to call to perform SHA1 using hardware.
@@ -109,7 +99,7 @@ sha1_hardware_hook(Boolean option, InKernelPerformSHA1Func func, void *ref)
 		OSCompareAndSwapPtr((void*)NULL, (void*)ref, (void * volatile*)&SHA1Ref);
 
 		if (!OSCompareAndSwapPtr((void *)NULL, (void *)func, (void * volatile *)&performSHA1WithinKernelOnly)) {
-			panic("sha1_hardware_hook: Called twice.. Should never happen\n");
+			panic("sha1_hardware_hook: Called twice.. Should never happen");
 		}
 	} else {
 		// The hardware is going away. Tear down the hook.
@@ -117,4 +107,3 @@ sha1_hardware_hook(Boolean option, InKernelPerformSHA1Func func, void *ref)
 		SHA1Ref = NULL;
 	}
 }
-#endif /* __linux__ */

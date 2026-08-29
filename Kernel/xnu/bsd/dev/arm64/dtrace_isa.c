@@ -41,23 +41,18 @@
 #include <sys/dtrace.h>
 #include <sys/dtrace_impl.h>
 #include <machine/atomic.h>
+#include <kern/cambria_layout.h>
 #include <kern/simple_lock.h>
 #include <kern/sched_prim.h>            /* for thread_wakeup() */
 #include <kern/thread_call.h>
 #include <kern/task.h>
+#include <machine/atomic.h>
+#include <machine/machine_routines.h>
 
 extern struct arm_saved_state *find_kern_regs(thread_t);
 
 extern dtrace_id_t      dtrace_probeid_error;   /* special ERROR probe */
 typedef arm_saved_state_t savearea_t;
-
-extern lck_attr_t       *dtrace_lck_attr;
-extern lck_grp_t        *dtrace_lck_grp;
-
-#if XNU_MONITOR
-extern void * pmap_stacks_start;
-extern void * pmap_stacks_end;
-#endif
 
 struct frame {
 	struct frame *backchain;
@@ -70,21 +65,13 @@ struct frame {
 inline void
 dtrace_membar_producer(void)
 {
-#if __ARM_SMP__
-	__asm__ volatile ("dmb ish" : : : "memory");
-#else
-	__asm__ volatile ("nop" : : : "memory");
-#endif
+	__builtin_arm_dmb(DMB_ISH);
 }
 
 inline void
 dtrace_membar_consumer(void)
 {
-#if __ARM_SMP__
-	__asm__ volatile ("dmb ish" : : : "memory");
-#else
-	__asm__ volatile ("nop" : : : "memory");
-#endif
+	__builtin_arm_dmb(DMB_ISH);
 }
 
 /*
@@ -102,12 +89,11 @@ dtrace_getipl(void)
 	return ml_at_interrupt_context() ? 1 : 0;
 }
 
-#if __ARM_SMP__
 /*
  * MP coordination
  */
 
-decl_lck_mtx_data(static, dt_xc_lock);
+static LCK_MTX_DECLARE_ATTR(dt_xc_lock, &dtrace_lck_grp, &dtrace_lck_attr);
 static uint32_t dt_xc_sync;
 
 typedef struct xcArg {
@@ -129,7 +115,6 @@ xcRemote(void *foo)
 		thread_wakeup((event_t) &dt_xc_sync);
 	}
 }
-#endif
 
 /*
  * dtrace_xcall() is not called from probe context.
@@ -137,7 +122,6 @@ xcRemote(void *foo)
 void
 dtrace_xcall(processorid_t cpu, dtrace_xcall_t f, void *arg)
 {
-#if __ARM_SMP__
 	/* Only one dtrace_xcall in flight allowed */
 	lck_mtx_lock(&dt_xc_lock);
 
@@ -150,24 +134,6 @@ dtrace_xcall(processorid_t cpu, dtrace_xcall_t f, void *arg)
 	cpu_broadcast_xcall(&dt_xc_sync, TRUE, xcRemote, (void*) &xcArg);
 
 	lck_mtx_unlock(&dt_xc_lock);
-	return;
-#else
-#pragma unused(cpu)
-	/* On uniprocessor systems, the cpu should always be either ourselves or all */
-	ASSERT(cpu == CPU->cpu_id || cpu == DTRACE_CPUALL);
-
-	(*f)(arg);
-	return;
-#endif
-}
-
-/*
- * Initialization
- */
-void
-dtrace_isa_init(void)
-{
-	lck_mtx_init(&dt_xc_lock, dtrace_lck_grp, dtrace_lck_attr);
 	return;
 }
 
@@ -202,12 +168,29 @@ dtrace_getreg(struct regs * savearea, uint_t reg)
 	return (uint64_t)get_saved_state_reg(regs, reg);
 }
 
+uint64_t
+dtrace_getvmreg(uint_t ndx)
+{
+#pragma unused(ndx)
+	DTRACE_CPUFLAG_SET(CPU_DTRACE_ILLOP);
+	return 0;
+}
+
+void
+dtrace_livedump(char *filename, size_t len)
+{
+#pragma unused(filename)
+#pragma unused(len)
+	DTRACE_CPUFLAG_SET(CPU_DTRACE_ILLOP);
+}
+
 #define RETURN_OFFSET64 8
 
 static int
 dtrace_getustack_common(uint64_t * pcstack, int pcstack_limit, user_addr_t pc,
     user_addr_t sp)
 {
+	volatile uint16_t *flags = (volatile uint16_t *) &cpu_core[CPU->cpu_id].cpuc_dtrace_flags;
 	int ret = 0;
 
 	ASSERT(pcstack == NULL || pcstack_limit > 0);
@@ -228,6 +211,12 @@ dtrace_getustack_common(uint64_t * pcstack, int pcstack_limit, user_addr_t pc,
 
 		pc = dtrace_fuword64((sp + RETURN_OFFSET64));
 		sp = dtrace_fuword64(sp);
+
+		/* Truncate ustack if the iterator causes fault. */
+		if (*flags & CPU_DTRACE_FAULT) {
+			*flags &= ~CPU_DTRACE_FAULT;
+			break;
+		}
 	}
 
 	return ret;
@@ -236,9 +225,9 @@ dtrace_getustack_common(uint64_t * pcstack, int pcstack_limit, user_addr_t pc,
 void
 dtrace_getupcstack(uint64_t * pcstack, int pcstack_limit)
 {
-	thread_t        thread = current_thread();
-	savearea_t     *regs;
-	user_addr_t     pc, sp, fp;
+	thread_t thread = current_thread();
+	savearea_t *regs;
+	user_addr_t pc, sp, fp;
 	volatile uint16_t *flags = (volatile uint16_t *) &cpu_core[CPU->cpu_id].cpuc_dtrace_flags;
 	int n;
 
@@ -271,7 +260,10 @@ dtrace_getupcstack(uint64_t * pcstack, int pcstack_limit)
 
 	pc = get_saved_state_pc(regs);
 	sp = get_saved_state_sp(regs);
-	fp = get_saved_state_fp(regs);
+
+	{
+		fp = get_saved_state_fp(regs);
+	}
 
 	if (DTRACE_CPUFLAG_ISSET(CPU_DTRACE_ENTRY)) {
 		*pcstack++ = (uint64_t) pc;
@@ -439,18 +431,11 @@ dtrace_getufpstack(uint64_t * pcstack, uint64_t * fpstack, int pcstack_limit)
 			sp = dtrace_fuword64(sp);
 		}
 
-#if 0
-		/* XXX ARMTODO*/
-		/*
-		 * This is totally bogus:  if we faulted, we're going to clear
-		 * the fault and break.  This is to deal with the apparently
-		 * broken Java stacks on x86.
-		 */
+		/* Truncate ustack if the iterator causes fault. */
 		if (*flags & CPU_DTRACE_FAULT) {
 			*flags &= ~CPU_DTRACE_FAULT;
 			break;
 		}
-#endif
 	}
 
 zero:
@@ -459,43 +444,36 @@ zero:
 	}
 }
 
-#if XNU_MONITOR
-static inline boolean_t
-dtrace_frame_in_ppl_stack(struct frame * fp)
+/**
+ * Return whether a frame is located within the current thread's kernel stack.
+ *
+ * @param fp The frame to check.
+ */
+static inline bool
+dtrace_frame_in_kernel_stack(struct frame * fp)
 {
-	return ((void *)fp >= pmap_stacks_start) &&
-	       ((void *)fp < pmap_stacks_end);
+	const uintptr_t bottom = dtrace_get_kernel_stack(current_thread());
+
+	/* Return early if there is no kernel stack. */
+	if (bottom == 0) {
+		return false;
+	}
+
+	const uintptr_t top = bottom + kernel_stack_size;
+	return ((uintptr_t)fp >= bottom) && ((uintptr_t)fp < top);
 }
-#endif
 
 void
 dtrace_getpcstack(pc_t * pcstack, int pcstack_limit, int aframes,
     uint32_t * intrpc)
 {
 	struct frame   *fp = (struct frame *) __builtin_frame_address(0);
-	struct frame   *nextfp, *minfp, *stacktop;
+	struct frame   *nextfp;
 	int             depth = 0;
-	int             on_intr;
-#if XNU_MONITOR
-	int             on_ppl_stack;
-#endif
+	int             on_intr = CPU_ON_INTR(CPU);
 	int             last = 0;
 	uintptr_t       pc;
 	uintptr_t       caller = CPU->cpu_dtrace_caller;
-
-	if ((on_intr = CPU_ON_INTR(CPU)) != 0) {
-		stacktop = (struct frame *) dtrace_get_cpu_int_stack_top();
-	}
-#if XNU_MONITOR
-	else if ((on_ppl_stack = dtrace_frame_in_ppl_stack(fp))) {
-		stacktop = (struct frame *) pmap_stacks_end;
-	}
-#endif
-	else {
-		stacktop = (struct frame *) (dtrace_get_kernel_stack(current_thread()) + kernel_stack_size);
-	}
-
-	minfp = fp;
 
 	aframes++;
 
@@ -504,38 +482,33 @@ dtrace_getpcstack(pc_t * pcstack, int pcstack_limit, int aframes,
 	}
 
 	while (depth < pcstack_limit) {
-		nextfp = *(struct frame **) fp;
-		pc = *(uintptr_t *) (((uintptr_t) fp) + RETURN_OFFSET64);
+		nextfp = fp->backchain;
+		pc = fp->retaddr;
 
-		if (nextfp <= minfp || nextfp >= stacktop) {
+		/*
+		 * Stacks grow down; backtracing should always be moving to higher
+		 * addresses except when the backtrace spans multiple different stacks.
+		 */
+		if (nextfp <= fp) {
 			if (on_intr) {
 				/*
-				 * Hop from interrupt stack to thread stack.
+				 * Let's check whether we're moving from the interrupt stack to
+				 * either a kernel stack or a non-XNU stack.
 				 */
 				arm_saved_state_t *arm_kern_regs = (arm_saved_state_t *) find_kern_regs(current_thread());
 				if (arm_kern_regs) {
-					nextfp = (struct frame *)(saved_state64(arm_kern_regs)->fp);
-
-#if XNU_MONITOR
-					on_ppl_stack = dtrace_frame_in_ppl_stack(nextfp);
-
-					if (on_ppl_stack) {
-						minfp = pmap_stacks_start;
-						stacktop = pmap_stacks_end;
-					} else
-#endif
-					{
-						vm_offset_t kstack_base = dtrace_get_kernel_stack(current_thread());
-
-						minfp = (struct frame *)kstack_base;
-						stacktop = (struct frame *)(kstack_base + kernel_stack_size);
-					}
-
-					on_intr = 0;
-
-					if (nextfp <= minfp || nextfp >= stacktop) {
+					/*
+					 * If this frame is not stitching from the interrupt stack
+					 * to either the kernel stack or a known non-XNU stack, then
+					 * stop the backtrace.
+					 */
+					if (!dtrace_frame_in_kernel_stack(nextfp) &&
+					    !ml_addr_in_non_xnu_stack((uintptr_t)nextfp)) {
 						last = 1;
 					}
+
+					/* Not on the interrupt stack anymore. */
+					on_intr = 0;
 				} else {
 					/*
 					 * If this thread was on the interrupt stack, but did not
@@ -544,38 +517,20 @@ dtrace_getpcstack(pc_t * pcstack, int pcstack_limit, int aframes,
 					 */
 					last = 1;
 				}
-			} else {
-#if XNU_MONITOR
-				if ((!on_ppl_stack) && dtrace_frame_in_ppl_stack(nextfp)) {
-					/*
-					 * We are switching from the kernel stack
-					 * to the PPL stack.
-					 */
-					on_ppl_stack = 1;
-					minfp = pmap_stacks_start;
-					stacktop = pmap_stacks_end;
-				} else if (on_ppl_stack) {
-					/*
-					 * We could be going from the PPL stack
-					 * to the kernel stack.
-					 */
-					vm_offset_t kstack_base = dtrace_get_kernel_stack(current_thread());
-
-					minfp = (struct frame *)kstack_base;
-					stacktop = (struct frame *)(kstack_base + kernel_stack_size);
-
-					if (nextfp <= minfp || nextfp >= stacktop) {
-						last = 1;
-					}
-				} else
-#endif
-				{
-					/*
-					 * This is the last frame we can process; indicate
-					 * that we should return after processing this frame.
-					 */
-					last = 1;
-				}
+			} else if (!ml_addr_in_non_xnu_stack((uintptr_t)fp) &&
+			    !ml_addr_in_non_xnu_stack((uintptr_t)nextfp)) {
+				/*
+				 * This is the last frame we can process; indicate that we
+				 * should return after processing this frame.
+				 *
+				 * This could be for a few reasons. If the nextfp is NULL, then
+				 * this logic will be triggered. Beyond that, the only valid
+				 * stack switches are either going from kernel stack to non-xnu
+				 * stack, non-xnu stack to kernel stack, or between one non-xnu
+				 * stack and another. So if none of those transitions are
+				 * happening, then stop the backtrace.
+				 */
+				last = 1;
 			}
 		}
 		if (aframes > 0) {
@@ -602,7 +557,6 @@ dtrace_getpcstack(pc_t * pcstack, int pcstack_limit, int aframes,
 			return;
 		}
 		fp = nextfp;
-		minfp = fp;
 	}
 }
 
@@ -623,7 +577,12 @@ dtrace_getarg(int arg, int aframes, dtrace_mstate_t *mstate, dtrace_vstate_t *vs
 	int inreg = 7;
 
 	for (i = 1; i <= aframes; ++i) {
+#if __has_feature(ptrauth_frames)
+		fp = ptrauth_strip(fp->backchain, ptrauth_key_frame_pointer);
+#else
 		fp = fp->backchain;
+#endif
+
 #if __has_feature(ptrauth_returns)
 		pc = (uintptr_t)ptrauth_strip((void*)fp->retaddr, ptrauth_key_return_address);
 #else

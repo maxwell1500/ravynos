@@ -60,10 +60,6 @@
 #include <sys/imageboot.h>
 #include <pexpert/pexpert.h>
 
-//#include <libkern/libkern.h>
-extern struct filedesc  filedesc0;
-
-extern int      nfs_mountroot(void);    /* nfs_vfsops.c */
 extern int (*mountroot)(void);
 
 extern unsigned char    rootdevice[];
@@ -94,7 +90,7 @@ IOBSDRegistryEntryGetData(void * entry, const char * property_name,
 
 typedef enum {
 	kNetBootImageTypeUnknown = 0,
-	kNetBootImageTypeNFS = 1,
+	kNetBootImageTypeNFS = 1, // Deprecated
 	kNetBootImageTypeHTTP = 2,
 } NetBootImageType;
 
@@ -102,14 +98,14 @@ struct netboot_info {
 	struct in_addr      client_ip;
 	struct in_addr      server_ip;
 	char *              server_name;
-	int                 server_name_length;
+	size_t              server_name_length;
 	char *              mount_point;
-	int                 mount_point_length;
+	size_t              mount_point_length;
 	char *              image_path;
-	int                 image_path_length;
+	size_t              image_path_length;
 	NetBootImageType    image_type;
 	char *              second_image_path;
-	int                 second_image_path_length;
+	size_t              second_image_path_length;
 };
 
 /*
@@ -308,10 +304,10 @@ get_root_path(char * root_path)
 }
 
 static void
-save_path(char * * str_p, int * length_p, char * path)
+save_path(char * * str_p, size_t * length_p, char * path)
 {
 	*length_p = strlen(path) + 1;
-	*str_p = (char *)kalloc(*length_p);
+	*str_p = kalloc_data(*length_p, Z_WAITOK);
 	strlcpy(*str_p, path, *length_p);
 	return;
 }
@@ -323,16 +319,13 @@ netboot_info_init(struct in_addr iaddr)
 	struct netboot_info *       info = NULL;
 	char *                      root_path = NULL;
 
-	info = (struct netboot_info *)kalloc(sizeof(*info));
-	bzero(info, sizeof(*info));
+	info = (struct netboot_info *)kalloc_type(struct netboot_info, Z_WAITOK | Z_ZERO);
 	info->client_ip = iaddr;
 	info->image_type = kNetBootImageTypeUnknown;
 
 	/* check for a booter-specified path then a NetBoot path */
-	MALLOC_ZONE(root_path, caddr_t, MAXPATHLEN, M_NAMEI, M_WAITOK);
-	if (root_path == NULL) {
-		panic("netboot_info_init: M_NAMEI zone exhausted");
-	}
+	root_path = zalloc(ZV_NAMEI);
+
 	if (PE_parse_boot_argn("rp0", root_path, MAXPATHLEN) == TRUE
 	    || PE_parse_boot_argn("rp", root_path, MAXPATHLEN) == TRUE
 	    || PE_parse_boot_argn("rootpath", root_path, MAXPATHLEN) == TRUE) {
@@ -354,37 +347,8 @@ netboot_info_init(struct in_addr iaddr)
 
 		if (parse_image_path(root_path, &server_ip, &server_name,
 		    &mount_point, &image_path)) {
-			info->image_type = kNetBootImageTypeNFS;
-			info->server_ip = server_ip;
-			info->server_name_length = strlen(server_name) + 1;
-			info->server_name = (char *)kalloc(info->server_name_length);
-			info->mount_point_length = strlen(mount_point) + 1;
-			info->mount_point = (char *)kalloc(info->mount_point_length);
-			strlcpy(info->server_name, server_name, info->server_name_length);
-			strlcpy(info->mount_point, mount_point, info->mount_point_length);
-
-			printf("netboot: NFS Server %s Mount %s",
-			    server_name, info->mount_point);
-			if (image_path != NULL) {
-				boolean_t       needs_slash = FALSE;
-
-				info->image_path_length = strlen(image_path) + 1;
-				if (image_path[0] != '/') {
-					needs_slash = TRUE;
-					info->image_path_length++;
-				}
-				info->image_path = (char *)kalloc(info->image_path_length);
-				if (needs_slash) {
-					info->image_path[0] = '/';
-					strlcpy(info->image_path + 1, image_path,
-					    info->image_path_length - 1);
-				} else {
-					strlcpy(info->image_path, image_path,
-					    info->image_path_length);
-				}
-				printf(" Image %s", info->image_path);
-			}
-			printf("\n");
+			/* kNetBootImageTypeNFS is deprecated */
+			printf("netboot: NFS boot is deprecated\n");
 		} else if (strncmp(root_path, kNetBootRootPathPrefixHTTP,
 		    strlen(kNetBootRootPathPrefixHTTP)) == 0) {
 			info->image_type = kNetBootImageTypeHTTP;
@@ -408,7 +372,7 @@ netboot_info_init(struct in_addr iaddr)
 			printf("netboot: nested image %s\n", info->second_image_path);
 		}
 	}
-	FREE_ZONE(root_path, MAXPATHLEN, M_NAMEI);
+	zfree(ZV_NAMEI, root_path);
 	return info;
 }
 
@@ -418,22 +382,14 @@ netboot_info_free(struct netboot_info * * info_p)
 	struct netboot_info * info = *info_p;
 
 	if (info) {
-		if (info->mount_point) {
-			kfree(info->mount_point, info->mount_point_length);
-		}
-		if (info->server_name) {
-			kfree(info->server_name, info->server_name_length);
-		}
-		if (info->image_path) {
-			kfree(info->image_path, info->image_path_length);
-		}
-		if (info->second_image_path) {
-			kfree(info->second_image_path, info->second_image_path_length);
-		}
-		kfree(info, sizeof(*info));
+		kfree_data(info->mount_point, info->mount_point_length);
+		kfree_data(info->server_name, info->server_name_length);
+		kfree_data(info->image_path, info->image_path_length);
+		kfree_data(info->second_image_path,
+		    info->second_image_path_length);
+		kfree_type(struct netboot_info, info);
 	}
 	*info_p = NULL;
-	return;
 }
 
 boolean_t
@@ -449,8 +405,8 @@ netboot_iaddr(struct in_addr * iaddr_p)
 
 boolean_t
 netboot_rootpath(struct in_addr * server_ip,
-    char * name, int name_len,
-    char * path, int path_len)
+    char * name, size_t name_len,
+    char * path, size_t path_len)
 {
 	if (S_netboot_info_p == NULL) {
 		return FALSE;
@@ -463,7 +419,7 @@ netboot_rootpath(struct in_addr * server_ip,
 		return FALSE;
 	}
 	if (path_len < S_netboot_info_p->mount_point_length) {
-		printf("netboot: path too small %d < %d\n",
+		printf("netboot: path too small %zu < %zu\n",
 		    path_len, S_netboot_info_p->mount_point_length);
 		return FALSE;
 	}
@@ -569,14 +525,6 @@ default_route_add(struct in_addr router, boolean_t proxy_arp)
 	return route_cmd(RTM_ADD, zeroes, router, zeroes, flags, IFSCOPE_NONE);
 }
 
-static int
-host_route_delete(struct in_addr host, unsigned int ifscope)
-{
-	struct in_addr              zeroes = { .s_addr = 0 };
-
-	return route_cmd(RTM_DELETE, host, zeroes, zeroes, RTF_HOST, ifscope);
-}
-
 static struct ifnet *
 find_interface(void)
 {
@@ -643,7 +591,6 @@ netboot_mountroot(void)
 	proc_t                      procp = current_proc();
 	struct in_addr              router = { .s_addr = 0 };
 	struct socket *             so = NULL;
-	unsigned int                try;
 
 	bzero(&ifr, sizeof(ifr));
 
@@ -674,7 +621,7 @@ netboot_mountroot(void)
 		printf("netboot: can't retrieve IP parameters\n");
 		goto failed;
 	}
-	printf("netboot: IP address " IP_FORMAT, IP_LIST(&iaddr));
+	OS_ANALYZER_SUPPRESS("12641116") printf("netboot: IP address " IP_FORMAT, IP_LIST(&iaddr));
 	if (netmask.s_addr) {
 		printf(" netmask " IP_FORMAT, IP_LIST(&netmask));
 	}
@@ -704,44 +651,8 @@ netboot_mountroot(void)
 	switch (S_netboot_info_p->image_type) {
 	default:
 	case kNetBootImageTypeNFS:
-		for (try = 1; TRUE; try++) {
-			error = nfs_mountroot();
-			if (error == 0) {
-				break;
-			}
-			printf("netboot: nfs_mountroot() attempt %u failed; "
-			    "clearing ARP entry and trying again\n", try);
-			/*
-			 * error is either EHOSTDOWN or EHOSTUNREACH, which likely means
-			 * that the port we're plugged into has spanning tree enabled,
-			 * and either the router or the server can't answer our ARP
-			 * requests.  Clear the incomplete ARP entry by removing the
-			 * appropriate route, depending on the error code:
-			 *     EHOSTDOWN		NFS server's route
-			 *     EHOSTUNREACH		router's route
-			 */
-			switch (error) {
-			default:
-			/* NOT REACHED */
-			case EHOSTDOWN:
-				/* remove the server's arp entry */
-				error = host_route_delete(S_netboot_info_p->server_ip,
-				    ifp->if_index);
-				if (error) {
-					printf("netboot: host_route_delete(" IP_FORMAT
-					    ") failed %d\n",
-					    IP_LIST(&S_netboot_info_p->server_ip), error);
-				}
-				break;
-			case EHOSTUNREACH:
-				error = host_route_delete(router, ifp->if_index);
-				if (error) {
-					printf("netboot: host_route_delete(" IP_FORMAT
-					    ") failed %d\n", IP_LIST(&router), error);
-				}
-				break;
-			}
-		}
+		/* kNetBootImageTypeNFS is deprecated */
+		error = ENOTSUP;
 		break;
 	case kNetBootImageTypeHTTP:
 		error = netboot_setup();
@@ -761,7 +672,7 @@ failed:
 }
 
 int
-netboot_setup()
+netboot_setup(void)
 {
 	int         error = 0;
 

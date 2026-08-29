@@ -1,5 +1,5 @@
 /*-
- * Copyright (c) 1999-2016 Apple Inc.
+ * Copyright (c) 1999-2020 Apple Inc.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -58,6 +58,14 @@ MALLOC_DECLARE(M_AUDITBSM);
 MALLOC_DECLARE(M_AUDITDATA);
 MALLOC_DECLARE(M_AUDITPATH);
 MALLOC_DECLARE(M_AUDITTEXT);
+#endif
+#if CONFIG_AUDIT
+/*
+ * mac_audit_data_zone is the zone used for data pushed into the audit
+ * record by policies. Using a zone simplifies memory management of this
+ * data, and allows tracking of the amount of data in flight.
+ */
+extern zone_t mac_audit_data_zone;
 #endif
 
 /*
@@ -316,7 +324,7 @@ struct audit_record {
  * Current thread macro.  get_bsdthread_info() returns a void ptr for some
  * reason.
  */
-#define curthread()     ((struct uthread *)get_bsdthread_info(current_thread()))
+#define curthread()     current_uthread()
 
 /*
  * In-kernel version of audit record; the basic record plus queue meta-data.
@@ -411,7 +419,7 @@ au_event_t       audit_flags_and_error_to_openbyidevent(int oflags,
     int error);
 au_event_t       audit_msgctl_to_event(int cmd);
 au_event_t       audit_semctl_to_event(int cmr);
-int              audit_canon_path(struct vnode *cwd_vp, char *path,
+int              audit_canon_path(struct vnode *cwd_vp, const char *path,
     char *cpath);
 au_event_t       auditon_command_event(int cmd);
 au_event_t       audit_fcntl_command_event(int cmd, int oflags, int error);
@@ -421,6 +429,7 @@ au_event_t       audit_fcntl_command_event(int cmd, int oflags, int error);
  * asynchronously.
  */
 int              audit_send_trigger(unsigned int trigger);
+int              audit_send_analytics(char* id, char* name);
 
 /*
  * Accessor functions to manage global audit state.
@@ -455,7 +464,6 @@ void     audit_pipe_submit_user(void *record, u_int record_len);
 /*
  * Audit MAC prototypes.
  */
-void    audit_mac_init(void);
 int     audit_mac_new(proc_t p, struct kaudit_record *ar);
 void    audit_mac_free(struct kaudit_record *ar);
 int     audit_mac_syscall_enter(unsigned short code, proc_t p,

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2014 Apple Computer, Inc.  All Rights Reserved.
+ * Copyright (c) 2012-2020 Apple Computer, Inc.  All Rights Reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -31,6 +31,7 @@
 
 #include "IOReportTypes.h"
 #include <string.h>
+#include <os/overflow.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -123,12 +124,17 @@ do {  \
  *    void* simp_buf - ptr to memory initialized by SIMPLEREPORT_INIT()
  * int64_t increment - amount by which to increment the value
  */
-#define SIMPLEREPORT_INCREMENTVALUE(simp_buf, new_value)  \
+#define SIMPLEREPORT_INCREMENTVALUE(simp_buf, increment_by)  \
 do {  \
     IOReportElement *__elem = (IOReportElement *)(simp_buf);  \
     IOSimpleReportValues *__vals;  \
     __vals = (IOSimpleReportValues*)&__elem->values;  \
-    __vals->simple_value += (new_value);  \
+    int64_t __simple_value = INT64_MAX;  \
+    if (os_add_overflow(__vals->simple_value, (increment_by), &__simple_value)) {  \
+    __vals->simple_value = INT64_MAX;  \
+    } else {  \
+    __vals->simple_value = __simple_value;  \
+    }  \
 } while(0)
 
 
@@ -218,7 +224,7 @@ typedef struct {
 /*
  * Initialize a StateReport buffer.
  *
- *                   int nstates - number of states to be reported
+ *              uint16_t nstates - number of states to be reported
  *                  void* buffer - ptr to STATEREPORT_BUFSIZE(nstates) bytes
  *                size_t bufSize - sanity check of buffer's size
  *           uint64_t providerID - registry Entry ID of the reporting service
@@ -235,7 +241,7 @@ do {  \
     IOStateReportValues *__rep;  \
     IOReportElement     *__elem;  \
     if ((bufSize) >= STATEREPORT_BUFSIZE(nstates)) {  \
-	for (unsigned __no = 0; __no < (nstates); __no++) {  \
+	for (uint16_t __no = 0; __no < (nstates); __no++) {  \
 	    __elem =  &(__info->elem[__no]);  \
 	    __rep = (IOStateReportValues *) &(__elem->values);  \
 	    __elem->provider_id = (providerID);  \
@@ -343,7 +349,9 @@ do {  \
     int *__nElements = (int *)(result);  \
     if (((action) == kIOReportGetDimensions) || ((action) == kIOReportCopyChannelData)) {  \
 	__elem =  &(__info->elem[0]);  \
-	*__nElements += __elem->channel_type.nelements;  \
+    if (os_add_overflow(*__nElements, __elem->channel_type.nelements, __nElements)) {  \
+	*__nElements = INT_MAX;  \
+    }  \
     }  \
 } while (0)
 
@@ -485,7 +493,9 @@ do {  \
 #define SIMPLEARRAY_INCREMENTVALUE(array_buf, idx, value)  \
 do {  \
     __SA_FINDREP((array_buf), (idx)) \
-	__rep->simple_values[__valueIdx] += (value);  \
+    if (os_add_overflow(__rep->simple_values[__valueIdx], (value), &__rep->simple_values[__valueIdx])) {  \
+	__rep->simple_values[__valueIdx] = INT64_MAX;  \
+    } \
     } \
 } while(0)
 
@@ -523,7 +533,9 @@ do {  \
     int *__nElements = (int *)(result);  \
     __elem = &(((IOReportElement *)(array_buf))[0]);  \
     if (((action) == kIOReportGetDimensions) || ((action) == kIOReportCopyChannelData)) {  \
-	*__nElements += __elem->channel_type.nelements;  \
+    if (os_add_overflow(*__nElements, __elem->channel_type.nelements, __nElements)) {  \
+	*__nElements = INT_MAX;  \
+    }  \
     }  \
 } while (0)
 
@@ -577,8 +589,8 @@ typedef struct {
 /*
  * Initialize a HistogramReport buffer. Supports only linear scale histogram.
  *
- *                   int nbuckets - number of buckets data is combined into
- *           uint32_t bucketWidth - size of each bucket
+ *             uint16_t nbuckets - number of buckets data is combined into
+ *          uint32_t bucketWidth - size of each bucket
  *                  void* buffer - ptr to HISTREPORT_BUFSIZE(nbuckets) bytes
  *                size_t bufSize - sanity check of buffer's size
  *           uint64_t providerID - registry Entry ID of the reporting service
@@ -596,7 +608,7 @@ do {  \
     IOHistogramReportValues *__rep;  \
     if ((bufSize) >= HISTREPORT_BUFSIZE(nbuckets)) {  \
 	__info->bucketWidth = (bktSize);  \
-	for (unsigned __no = 0; __no < (nbuckets); __no++) {  \
+	for (uint16_t __no = 0; __no < (nbuckets); __no++) {  \
 	    __elem =  &(__info->elem[__no]);  \
 	    __rep = (IOHistogramReportValues *) &(__elem->values);  \
 	    __elem->provider_id = (providerID);  \
@@ -640,7 +652,12 @@ do {  \
 	    else if ((value) > __rep->bucket_max) {  \
 	        __rep->bucket_max = (value);  \
 	    }  \
-	    __rep->bucket_sum += (value);  \
+	int64_t __sum = 0;  \
+	if (os_add_overflow(__rep->bucket_sum, (value), &__sum)) {  \
+	    __rep->bucket_sum = INT64_MAX;  \
+	} else {  \
+	    __rep->bucket_sum = __sum;  \
+	}  \
 	    __rep->bucket_hits++;  \
 	    break;  \
 	}  \
@@ -678,7 +695,9 @@ do {  \
     IOHistReportInfo   *__info = (IOHistReportInfo *)(hist_buf);  \
     int *__nElements = (int *)(result);  \
     if (((action) == kIOReportGetDimensions) || ((action) == kIOReportCopyChannelData)) {  \
-	*__nElements += __info->elem[0].channel_type.nelements;  \
+	if (os_add_overflow(*__nElements, __info->elem[0].channel_type.nelements, __nElements)) {  \
+	    *__nElements = INT_MAX;  \
+	}  \
     }  \
 } while (0)
 

@@ -13,7 +13,7 @@
 
 #include <TargetConditionals.h>
 
-T_GLOBAL_META(T_META_RUN_CONCURRENTLY(true));
+T_GLOBAL_META(T_META_RUN_CONCURRENTLY(false));  // rdar://79464597
 
 #define TMP_FILE_PATH "/tmp/test_kqueue_fifo_18776047"
 
@@ -113,7 +113,7 @@ kevent_one_shot(int kq, int fd, int filter)
 	T_ASSERT_POSIX_ZERO(retval, "ONESHOT kevent for fd %d, filter %d", fd, filter);
 }
 
-T_DECL(kqueue_fifo_18776047, "Tests kqueue, kevent for watching a fifo.", T_META_LTEPHASE(LTE_POSTINIT))
+T_DECL(kqueue_fifo_18776047, "Tests kqueue, kevent for watching a fifo.", T_META_LTEPHASE(LTE_POSTINIT), T_META_TAG_VM_PREFERRED)
 {
 	struct kevent kev[1];
 	int read_fd, write_fd, kq;

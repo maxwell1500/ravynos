@@ -26,9 +26,8 @@
 
 extern int      hz;
 
-extern void     cnputcusr(char);
-extern void     cnputsusr(char *, int);
-extern int      cngetc(void);
+extern void     console_write_char(char);
+extern void     console_write(char *, int);
 
 
 void    kminit(void);
@@ -38,12 +37,6 @@ void    cons_cinput(char ch);
  * 'Global' variables, shared only by this file and conf.c.
  */
 struct tty     *km_tty[1] = { 0 };
-
-/*
- * this works early on, after initialize_screen() but before autoconf (and thus
- * before we have a kmDevice).
- */
-int             disableConsoleOutput;
 
 /*
  * 'Global' variables, shared only by this file and kmDevice.m.
@@ -67,7 +60,7 @@ kminit(void)
  * cdevsw interface to km driver.
  */
 int
-kmopen(dev_t dev, int flag, __unused int devtype, proc_t pp)
+kmopen(dev_t dev, __unused int flag, __unused int devtype, proc_t pp)
 {
 	int             unit;
 	struct tty     *tp;
@@ -115,10 +108,6 @@ kmopen(dev_t dev, int flag, __unused int devtype, proc_t pp)
 
 		tty_unlock(tp);         /* XXX race window */
 
-		if (flag & O_POPUP) {
-			PE_initialize_console(0, kPETextScreen);
-		}
-
 		bzero(&video, sizeof(video));
 		PE_current_console(&video);
 
@@ -128,8 +117,13 @@ kmopen(dev_t dev, int flag, __unused int devtype, proc_t pp)
 			wp->ws_col = 80;
 			wp->ws_row = 24;
 		} else if (video.v_width != 0 && video.v_height != 0) {
-			wp->ws_col = video.v_width / wp->ws_xpixel;
-			wp->ws_row = video.v_height / wp->ws_ypixel;
+			unsigned long ws_col = video.v_width / wp->ws_xpixel;
+			unsigned long ws_row = video.v_height / wp->ws_ypixel;
+
+			assert((ws_col <= USHRT_MAX) && (ws_row <= USHRT_MAX));
+
+			wp->ws_col = (unsigned short)ws_col;
+			wp->ws_row = (unsigned short)ws_row;
 		} else {
 			wp->ws_col = 100;
 			wp->ws_row = 36;
@@ -242,7 +236,7 @@ fallthrough:
 /*
  * kmputc
  *
- * Output a character to the serial console driver via cnputcusr(),
+ * Output a character to the serial console driver via console_write_char(),
  * which is exported by that driver.
  *
  * Locks:	Assumes tp in the calling tty driver code is locked on
@@ -255,12 +249,12 @@ fallthrough:
 int
 kmputc(__unused dev_t dev, char c)
 {
-	if (!disableConsoleOutput && initialized) {
+	if (initialized) {
 		/* OCRNL */
 		if (c == '\n') {
-			cnputcusr('\r');
+			console_write_char('\r');
 		}
-		cnputcusr(c);
+		console_write_char(c);
 	}
 
 	return 0;
@@ -365,7 +359,7 @@ kmoutput(struct tty * tp)
 			*cp = *cp & 0x7f;
 		}
 		if (cc > 1) {
-			cnputsusr((char *)buf, cc);
+			console_write((char *)buf, cc);
 		} else {
 			kmputc(tp->t_dev, *buf);
 		}

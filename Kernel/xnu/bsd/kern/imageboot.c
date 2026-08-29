@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2006-2021 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -32,6 +32,7 @@
 #include <sys/systm.h>
 #include <sys/systm.h>
 #include <sys/mount_internal.h>
+#include <sys/fsctl.h>
 #include <sys/filedesc.h>
 #include <sys/vnode_internal.h>
 #include <sys/imageboot.h>
@@ -40,34 +41,29 @@
 #include <sys/namei.h>
 #include <sys/fcntl.h>
 #include <sys/vnode.h>
+#include <sys/xattr.h>
 #include <sys/sysproto.h>
 #include <sys/csr.h>
 #include <miscfs/devfs/devfsdefs.h>
 #include <libkern/crypto/sha2.h>
 #include <libkern/crypto/rsa.h>
 #include <libkern/OSKextLibPrivate.h>
+#include <sys/ubc_internal.h>
 
 #if CONFIG_IMAGEBOOT_IMG4
 #include <libkern/img4/interface.h>
-#include <img4/img4.h>
+#include <img4/firmware.h>
 #endif
 
 #include <kern/kalloc.h>
+#include <os/overflow.h>
+#include <vm/vm_kern_xnu.h>
 
 #include <pexpert/pexpert.h>
 #include <kern/chunklist.h>
 
-extern struct filedesc filedesc0;
-
 extern int (*mountroot)(void);
 extern char rootdevice[DEVMAXNAMESIZE];
-
-#if CONFIG_LOCKERBOOT
-typedef struct _locker_mount_args {
-	char lmnt_path[PATH_MAX];
-	uint16_t lmnt_preferred_hash;
-} locker_mount_args_t;
-#endif
 
 #define DEBUG_IMAGEBOOT 0
 
@@ -79,15 +75,16 @@ typedef struct _locker_mount_args {
 
 #define AUTHDBG(fmt, args...) do { printf("%s: " fmt "\n", __func__, ##args); } while (0)
 #define AUTHPRNT(fmt, args...) do { printf("%s: " fmt "\n", __func__, ##args); } while (0)
-#define kfree_safe(x) do { if ((x)) { kfree_addr((x)); (x) = NULL; } } while (0)
 
+extern int di_root_image_ext(const char *path, char *devname, size_t devsz, dev_t *dev_p, bool removable);
 extern int di_root_image(const char *path, char *devname, size_t devsz, dev_t *dev_p);
 extern int di_root_ramfile_buf(void *buf, size_t bufsz, char *devname, size_t devsz, dev_t *dev_p);
 
 static boolean_t imageboot_setup_new(imageboot_type_t type);
 
-vnode_t imgboot_get_image_file(const char *path, off_t *fsize, int *errp); /* may be required by chunklist.c */
-int read_file(const char *path, void **bufp, size_t *bufszp); /* may be required by chunklist.c */
+void *ubc_getobject_from_filename(const char *filename, struct vnode **vpp, off_t *file_size);
+
+extern lck_rw_t rootvnode_rw_lock;
 
 #define kIBFilePrefix "file://"
 
@@ -106,6 +103,50 @@ vnode_get_and_drop_always(vnode_t vp)
 	vnode_put(vp);
 }
 
+__private_extern__ bool
+imageboot_desired(void)
+{
+	bool do_imageboot = false;
+
+	char *root_path = NULL;
+	root_path = zalloc(ZV_NAMEI);
+	/*
+	 * Check for first layer DMG rooting.
+	 *
+	 * Note that here we are principally concerned with whether or not we
+	 * SHOULD try to imageboot, not whether or not we are going to be able to.
+	 *
+	 * If NONE of the boot-args are present, then assume that image-rooting
+	 * is not requested.
+	 *
+	 * [!! Note parens guard the entire logically OR'd set of statements, below. It validates
+	 * that NONE of the below-mentioned boot-args is present...!!]
+	 */
+	if (!(PE_parse_boot_argn("rp0", root_path, MAXPATHLEN) ||
+#if CONFIG_IMAGEBOOT_IMG4
+	    PE_parse_boot_argn("arp0", root_path, MAXPATHLEN) ||
+#endif
+	    PE_parse_boot_argn("rp", root_path, MAXPATHLEN) ||
+	    PE_parse_boot_argn(IMAGEBOOT_ROOT_ARG, root_path, MAXPATHLEN) ||
+	    PE_parse_boot_argn(IMAGEBOOT_AUTHROOT_ARG, root_path, MAXPATHLEN))) {
+		/* explicitly set to false */
+		do_imageboot = false;
+	} else {
+		/* now sanity check the file-path format */
+		if (imageboot_format_is_valid(root_path)) {
+			DBG_TRACE("%s: Found %s\n", __FUNCTION__, root_path);
+			/* root_path looks good and we have one of the aforementioned bootargs */
+			do_imageboot = true;
+		} else {
+			/* explicitly set to false */
+			do_imageboot = false;
+		}
+	}
+
+	zfree(ZV_NAMEI, root_path);
+	return do_imageboot;
+}
+
 __private_extern__ imageboot_type_t
 imageboot_needed(void)
 {
@@ -114,36 +155,11 @@ imageboot_needed(void)
 
 	DBG_TRACE("%s: checking for presence of root path\n", __FUNCTION__);
 
-	MALLOC_ZONE(root_path, caddr_t, MAXPATHLEN, M_NAMEI, M_WAITOK);
-	if (root_path == NULL) {
-		panic("%s: M_NAMEI zone exhausted", __FUNCTION__);
-	}
-
-#if CONFIG_LOCKERBOOT
-	if (PE_parse_boot_argn(IMAGEBOOT_LOCKER_ARG, root_path, MAXPATHLEN)) {
-		result = IMAGEBOOT_LOCKER;
-		goto out;
-	}
-#endif
-
-	/* Check for first layer */
-	if (!(PE_parse_boot_argn("rp0", root_path, MAXPATHLEN) ||
-#if CONFIG_IMAGEBOOT_IMG4
-	    PE_parse_boot_argn("arp0", root_path, MAXPATHLEN) ||
-#endif
-	    PE_parse_boot_argn("rp", root_path, MAXPATHLEN) ||
-	    PE_parse_boot_argn(IMAGEBOOT_ROOT_ARG, root_path, MAXPATHLEN) ||
-	    PE_parse_boot_argn(IMAGEBOOT_AUTHROOT_ARG, root_path, MAXPATHLEN))) {
+	if (!imageboot_desired()) {
 		goto out;
 	}
 
-	/* Sanity-check first layer */
-	if (imageboot_format_is_valid(root_path)) {
-		DBG_TRACE("%s: Found %s\n", __FUNCTION__, root_path);
-	} else {
-		goto out;
-	}
-
+	root_path = zalloc(ZV_NAMEI);
 	result = IMAGEBOOT_DMG;
 
 	/* Check for second layer */
@@ -156,16 +172,241 @@ imageboot_needed(void)
 	if (imageboot_format_is_valid(root_path)) {
 		DBG_TRACE("%s: Found %s\n", __FUNCTION__, root_path);
 	} else {
-		panic("%s: Invalid URL scheme for %s\n",
+		panic("%s: Invalid URL scheme for %s",
 		    __FUNCTION__, root_path);
 	}
 
 out:
-	FREE_ZONE(root_path, MAXPATHLEN, M_NAMEI);
-
+	if (root_path != NULL) {
+		zfree(ZV_NAMEI, root_path);
+	}
 	return result;
 }
 
+extern bool IOBaseSystemARVRootHashAvailable(void);
+
+
+/*
+ * Mounts new filesystem based on image path, and pivots it to the root.
+ * The image to be mounted is located at image_path.
+ * It will be mounted at mount_path.
+ * The vfs_switch_root operation will be performed.
+ * After the pivot, the outgoing root filesystem (the filesystem at root when
+ * this function begins) will be at outgoing_root_path.  If `skip_signature_check` is true,
+ * then ignore the chunklisted or authAPFS checks on this image
+ */
+__private_extern__ int
+imageboot_pivot_image(const char *image_path, imageboot_type_t type, const char *mount_path,
+    const char *outgoing_root_path, const bool rooted_dmg, const bool skip_signature_check)
+{
+	int error;
+	boolean_t authenticated_dmg_chunklist = false;
+	vnode_t mount_vp = NULLVP;
+	errno_t rootauth;
+
+
+	if (type != IMAGEBOOT_DMG) {
+		panic("not supported");
+	}
+
+	/*
+	 * Check that the image file actually exists.
+	 * We also need to find the mount it's on, to mark it as backing the
+	 * root.
+	 */
+	vnode_t imagevp = NULLVP;
+	error = vnode_lookup(image_path, 0, &imagevp, vfs_context_kernel());
+	if (error) {
+		printf("%s: image file not found or couldn't be read: %d\n", __FUNCTION__, error);
+		/*
+		 * bail out here to short-circuit out of panic logic below.
+		 * Failure to find the pivot-image should not be a fatal condition (ENOENT)
+		 * since it may result in natural consequences (ergo, cannot unlock filevault prompt).
+		 */
+		return error;
+	}
+
+	/*
+	 * load the disk image and obtain its device.
+	 * di_root_image's name and the names of its arguments suggest it has
+	 * to be mounted at the root, but that's not actually needed.
+	 * We just need to obtain the device info.
+	 */
+
+	dev_t dev;
+	char devname[DEVMAXNAMESIZE];
+
+	error = di_root_image_ext(image_path, devname, DEVMAXNAMESIZE, &dev, true);
+	if (error) {
+		panic("%s: di_root_image failed: %d", __FUNCTION__, error);
+	}
+
+	printf("%s: attached disk image %s as %s\n", __FUNCTION__, image_path, devname);
+
+
+#if CONFIG_IMAGEBOOT_CHUNKLIST
+	if ((rooted_dmg == false) && !IOBaseSystemARVRootHashAvailable()) {
+		error = authenticate_root_with_chunklist(image_path, NULL);
+		if (error == 0) {
+			printf("authenticated root-dmg via chunklist...\n");
+			authenticated_dmg_chunklist = true;
+		} else {
+			/* root hash was not available, and image is NOT chunklisted? */
+			printf("failed to chunklist-authenticate root-dmg @ %s\n", image_path);
+		}
+	}
+#endif
+
+	char fulldevname[DEVMAXNAMESIZE + 5]; // "/dev/"
+	strlcpy(fulldevname, "/dev/", sizeof(fulldevname));
+	strlcat(fulldevname, devname, sizeof(fulldevname));
+
+	/*
+	 * mount expects another layer of indirection (because it expects to
+	 * be getting a user_addr_t of a char *.
+	 * Make a pointer-to-pointer on our stack. It won't use this
+	 * address after it returns so this should be safe.
+	 */
+	char *fulldevnamep = &(fulldevname[0]);
+	char **fulldevnamepp = &fulldevnamep;
+
+#define PIVOTMNT "/System/Volumes/BaseSystem"
+
+
+	/* Attempt to mount as HFS; if it fails, then try as APFS */
+	printf("%s: attempting to mount as hfs...\n", __FUNCTION__);
+	error = kernel_mount("hfs", NULLVP, NULLVP, PIVOTMNT, fulldevnamepp, 0, (MNT_RDONLY | MNT_DONTBROWSE), (KERNEL_MOUNT_NOAUTH | KERNEL_MOUNT_BASESYSTEMROOT), vfs_context_kernel());
+	if (error) {
+		printf("mount failed: %d\n", error);
+		printf("%s: attempting to mount as apfs...\n", __FUNCTION__);
+		error = kernel_mount("apfs", NULLVP, NULLVP, PIVOTMNT, fulldevnamepp, 0, (MNT_RDONLY | MNT_DONTBROWSE), (KERNEL_MOUNT_NOAUTH | KERNEL_MOUNT_BASESYSTEMROOT), vfs_context_kernel());
+	}
+
+	/* If we didn't mount as either HFS or APFS, then bail out */
+	if (error) {
+		/*
+		 * Note that for this particular failure case (failure to mount), the disk image
+		 * being attached may have failed to quiesce within the alloted time out (20-30 sec).
+		 * For example, it may be still probing, or APFS container enumeration may have not
+		 * completed. If so, then we may have fallen into this particular error case. However,
+		 * failure to complete matching should be an exceptional case as 30 sec. is quite a
+		 * long time to wait for matching to complete (which would have occurred in
+		 * di_root_image_ext).
+		 */
+#if defined(__arm64__) && XNU_TARGET_OS_OSX
+		panic("%s: failed to mount pivot image(%d)!", __FUNCTION__, error);
+#endif
+		printf("%s: failed to mount pivot image(%d) !", __FUNCTION__, error);
+		goto done;
+	}
+
+	/* otherwise, if the mount succeeded, then assert that the DMG is authenticated (either chunklist or authapfs) */
+	error = vnode_lookup(PIVOTMNT, 0, &mount_vp, vfs_context_kernel());
+	if (error) {
+#if defined(__arm64__) && XNU_TARGET_OS_OSX
+		panic("%s: failed to lookup pivot root (%d) !", __FUNCTION__, error);
+#endif
+		printf("%s: failed to lookup pivot root (%d)!", __FUNCTION__, error);
+		goto done;
+	}
+
+	/* the 0x1 implies base system */
+	rootauth = VNOP_IOCTL(mount_vp, FSIOC_KERNEL_ROOTAUTH, (caddr_t)0x1, 0, vfs_context_kernel());
+	if (rootauth) {
+		printf("BS-DMG failed to authenticate intra-FS \n");
+		/*
+		 * If we are using a custom rooted DMG, or if we have already authenticated
+		 * the DMG via chunklist, then it is permissible to use.
+		 * Or, if CSR_ALLOW_ANY_RECOVERY_OS is set on Development or Debug build variant.
+		 */
+		if (rooted_dmg || authenticated_dmg_chunklist || skip_signature_check) {
+			rootauth = 0;
+		}
+		error = rootauth;
+	}
+	vnode_put(mount_vp);
+	mount_vp = NULLVP;
+
+	if (error) {
+		/*
+		 * Failure here exclusively means that the mount failed to authenticate.
+		 * This means that the disk image either was not sealed (authapfs), or it was
+		 * not hosted on a chunklisted DMG.  Both scenarios may be fatal depending
+		 * on the platform.
+		 */
+#if defined(__arm64__) && XNU_TARGET_OS_OSX
+		panic("%s: could not authenticate the pivot image: %d. giving up.", __FUNCTION__, error);
+#endif
+		printf("%s: could not authenticate the pivot image: %d. giving up.\n", __FUNCTION__, error);
+		goto done;
+	}
+
+	if (rootvnode) {
+		mount_t root_mp = vnode_mount(rootvnode);
+		if (root_mp && (root_mp->mnt_kern_flag & MNTK_SSD)) {
+			rootvp_is_ssd = true;
+		}
+	}
+	/*
+	 * pivot the incoming and outgoing filesystems
+	 */
+	error = vfs_switch_root(mount_path, outgoing_root_path, 0);
+	if (error) {
+		panic("%s: vfs_switch_root failed: %d", __FUNCTION__, error);
+	}
+
+	/*
+	 * Mark the filesystem containing the image as backing root, so it
+	 * won't be unmountable.
+	 *
+	 * vfs_switch_root() clears this flag, so we have to set it after
+	 * the pivot call.
+	 * If the system later pivots out of the image, vfs_switch_root
+	 * will clear it again, so the backing filesystem can be unmounted.
+	 */
+	mount_t imagemp = imagevp->v_mount;
+	lck_rw_lock_exclusive(&imagemp->mnt_rwlock);
+	imagemp->mnt_kern_flag |= MNTK_BACKS_ROOT;
+	lck_rw_done(&imagemp->mnt_rwlock);
+
+	error = 0;
+
+	/*
+	 * Note that we do NOT change kern.bootuuid here -
+	 * imageboot_mount_image() does, but imageboot_pivot_image() doesn't.
+	 * imageboot_mount_image() is used when the root volume uuid was
+	 * "always supposed to be" the one inside the dmg. imageboot_pivot_
+	 * image() is used when the true root volume just needs to be
+	 * obscured for a moment by the dmg.
+	 */
+
+done:
+	if (imagevp != NULLVP) {
+		vnode_put(imagevp);
+	}
+	return error;
+}
+
+/* kern_sysctl.c */
+extern uuid_string_t fake_bootuuid;
+
+static void
+set_fake_bootuuid(mount_t mp)
+{
+	struct vfs_attr va;
+	VFSATTR_INIT(&va);
+	VFSATTR_WANTED(&va, f_uuid);
+
+	if (vfs_getattr(mp, &va, vfs_context_current()) != 0) {
+		return;
+	}
+
+	if (!VFSATTR_IS_SUPPORTED(&va, f_uuid)) {
+		return;
+	}
+
+	uuid_unparse(va.f_uuid, fake_bootuuid);
+}
 
 /*
  * Swaps in new root filesystem based on image path.
@@ -173,6 +414,8 @@ out:
  * tagged MNTK_BACKS_ROOT, MNT_ROOTFS is cleared on it, and
  * "rootvnode" is reset.  Root vnode of currentroot filesystem
  * is returned with usecount (no iocount).
+ * kern.bootuuid is arranged to return the UUID of the mounted image. (If
+ * we did nothing here, it would be the UUID of the image source volume.)
  */
 __private_extern__ int
 imageboot_mount_image(const char *root_path, int height, imageboot_type_t type)
@@ -192,7 +435,7 @@ imageboot_mount_image(const char *root_path, int height, imageboot_type_t type)
 	if (type == IMAGEBOOT_DMG) {
 		error = di_root_image(root_path, rootdevice, DEVMAXNAMESIZE, &dev);
 		if (error) {
-			panic("%s: di_root_image failed: %d\n", __FUNCTION__, error);
+			panic("%s: di_root_image failed: %d", __FUNCTION__, error);
 		}
 
 		rootdev = dev;
@@ -200,35 +443,11 @@ imageboot_mount_image(const char *root_path, int height, imageboot_type_t type)
 		printf("%s: root device 0x%x\n", __FUNCTION__, rootdev);
 		error = vfs_mountroot();
 		if (error != 0) {
-			panic("vfs_mountroot() failed.\n");
+			panic("vfs_mountroot() failed.");
 		}
 
 		update_rootvnode = TRUE;
-	}
-#if CONFIG_LOCKERBOOT
-	else if (type == IMAGEBOOT_LOCKER) {
-		locker_mount_args_t *mntargs = kalloc(sizeof(*mntargs));
-		if (!mntargs) {
-			panic("could not alloc mount args");
-		}
-
-		strlcpy(mntargs->lmnt_path, root_path, sizeof(mntargs->lmnt_path));
-		mntargs->lmnt_preferred_hash = 0;
-
-		DBG_TRACE("%s: mounting locker: %s\n", __FUNCTION__, root_path);
-		error = kernel_mount(LOCKERFS_NAME, NULLVP, NULLVP, "/",
-		    mntargs, sizeof(*mntargs), 0, 0, vfs_context_kernel());
-		if (error) {
-			panic("failed to mount locker: %d", error);
-		}
-		kfree(mntargs, sizeof(*mntargs));
-
-		/* Clear the old mount association. */
-		old_rootvnode->v_mountedhere = NULL;
-		rootvnode->v_mount->mnt_vnodecovered = NULL;
-	}
-#endif
-	else {
+	} else {
 		panic("invalid imageboot type: %d", type);
 	}
 
@@ -247,16 +466,19 @@ imageboot_mount_image(const char *root_path, int height, imageboot_type_t type)
 
 		mount_list_remove(old_rootfs);
 		mount_lock(old_rootfs);
-#ifdef CONFIG_IMGSRC_ACCESS
 		old_rootfs->mnt_kern_flag |= MNTK_BACKS_ROOT;
-#endif /* CONFIG_IMGSRC_ACCESS */
 		old_rootfs->mnt_flag &= ~MNT_ROOTFS;
 		mount_unlock(old_rootfs);
 	}
 
+	vnode_ref(newdp);
+	vnode_put(newdp);
+
+	lck_rw_lock_exclusive(&rootvnode_rw_lock);
 	/* switch to the new rootvnode */
 	if (update_rootvnode) {
 		rootvnode = newdp;
+		set_fake_bootuuid(rootvnode->v_mount);
 	}
 
 	new_rootfs = rootvnode->v_mount;
@@ -264,14 +486,14 @@ imageboot_mount_image(const char *root_path, int height, imageboot_type_t type)
 	new_rootfs->mnt_flag |= MNT_ROOTFS;
 	mount_unlock(new_rootfs);
 
-	vnode_ref(newdp);
-	vnode_put(newdp);
-	filedesc0.fd_cdir = newdp;
+	kernproc->p_fd.fd_cdir = newdp;
+	lck_rw_unlock_exclusive(&rootvnode_rw_lock);
+
 	DBG_TRACE("%s: root switched\n", __FUNCTION__);
 
 	if (old_rootvnode != NULL) {
 #ifdef CONFIG_IMGSRC_ACCESS
-		if (height >= 0 && PE_imgsrc_mount_supported()) {
+		if (height >= 0) {
 			imgsrc_rootvnodes[height] = old_rootvnode;
 		} else {
 			vnode_get_and_drop_always(old_rootvnode);
@@ -284,14 +506,63 @@ imageboot_mount_image(const char *root_path, int height, imageboot_type_t type)
 	return 0;
 }
 
-int
-read_file(const char *path, void **bufp, size_t *bufszp)
+/*
+ * Return a memory object for given file path.
+ * Also returns a vnode reference for the given file path.
+ */
+void *
+ubc_getobject_from_filename(const char *filename, struct vnode **vpp, off_t *file_size)
 {
 	int err = 0;
 	struct nameidata ndp = {};
 	struct vnode *vp = NULL;
 	off_t fsize = 0;
-	int resid = 0;
+	vfs_context_t ctx = vfs_context_kernel();
+	void *control = NULL;
+
+	NDINIT(&ndp, LOOKUP, OP_OPEN, LOCKLEAF, UIO_SYSSPACE, CAST_USER_ADDR_T(filename), ctx);
+	if ((err = namei(&ndp)) != 0) {
+		goto errorout;
+	}
+	nameidone(&ndp);
+	vp = ndp.ni_vp;
+
+	if ((err = vnode_size(vp, &fsize, ctx)) != 0) {
+		goto errorout;
+	}
+
+	if (fsize < 0) {
+		goto errorout;
+	}
+
+	control = ubc_getobject(vp, UBC_FLAGS_NONE);
+	if (control == NULL) {
+		goto errorout;
+	}
+
+	*file_size = fsize;
+	*vpp = vp;
+	vp = NULL;
+
+errorout:
+	if (vp) {
+		vnode_put(vp);
+	}
+	return control;
+}
+
+static int
+imageboot_read_file_internal(const char *path, const off_t offset, const bool pageable, void **bufp, size_t *bufszp, off_t *fsizep)
+{
+	int err = 0;
+	struct nameidata ndp = {};
+	struct vnode *vp = NULL;
+	struct vnode *rsrc_vp = NULL;
+	char *readbuf = NULL;
+	off_t readsize = 0;
+	off_t readoff = 0;
+	off_t fsize = 0;
+	size_t maxsize = 0;
 	char *buf = NULL;
 	bool doclose = false;
 
@@ -299,7 +570,7 @@ read_file(const char *path, void **bufp, size_t *bufszp)
 	proc_t p = vfs_context_proc(ctx);
 	kauth_cred_t kerncred = vfs_context_ucred(ctx);
 
-	NDINIT(&ndp, LOOKUP, OP_OPEN, LOCKLEAF, UIO_SYSSPACE, CAST_USER_ADDR_T(path), ctx);
+	NDINIT(&ndp, LOOKUP, OP_OPEN, LOCKLEAF | FOLLOW, UIO_SYSSPACE, CAST_USER_ADDR_T(path), ctx);
 	if ((err = namei(&ndp)) != 0) {
 		AUTHPRNT("namei failed (%s) - %d", path, err);
 		goto out;
@@ -314,6 +585,15 @@ read_file(const char *path, void **bufp, size_t *bufszp)
 	if (fsize < 0) {
 		panic("negative file size");
 	}
+	if (offset < 0) {
+		AUTHPRNT("negative file offset");
+		err = EINVAL;
+		goto out;
+	}
+
+	if (fsizep) {
+		*fsizep = fsize;
+	}
 
 	if ((err = VNOP_OPEN(vp, FREAD, ctx)) != 0) {
 		AUTHPRNT("failed to open %s - %d", path, err);
@@ -321,32 +601,96 @@ read_file(const char *path, void **bufp, size_t *bufszp)
 	}
 	doclose = true;
 
-	/* if bufsz is non-zero, cap the read at bufsz bytes */
-	if (*bufszp && *bufszp < (size_t)fsize) {
-		fsize = *bufszp;
+	/* cap fsize to the amount that remains after offset */
+	if (os_sub_overflow(fsize, offset, &fsize)) {
+		fsize = 0;
+	} else if (fsize < 0) {
+		fsize = 0;
 	}
 
-	buf = kalloc(fsize);
+	/* if bufsz is non-zero, cap the read at bufsz bytes */
+	maxsize = *bufszp;
+	if (maxsize && (maxsize < (size_t)fsize)) {
+		fsize = maxsize;
+	}
+
+	/* if fsize is larger than the specified limit (presently 2.5GB) or a NVRAM-configured limit, fail */
+	maxsize = IMAGEBOOT_MAX_FILESIZE;
+	PE_parse_boot_argn("rootdmg-maxsize", &maxsize, sizeof(maxsize));
+	if (maxsize && (maxsize < (size_t)fsize)) {
+		AUTHPRNT("file is too large (%lld > %lld)", (long long) fsize, (long long) maxsize);
+		err = ENOMEM;
+		goto out;
+	}
+
+	if (pageable) {
+		vm_offset_t addr = 0;
+		if (kmem_alloc(kernel_map, &addr, (vm_size_t)fsize,
+		    KMA_PAGEABLE | KMA_DATA, VM_KERN_MEMORY_FILE) == KERN_SUCCESS) {
+			buf = (char *)addr;
+		} else {
+			buf = NULL;
+		}
+	} else {
+		//limit kalloc data calls to only 2GB.
+		if (fsize > IMAGEBOOT_MAX_KALLOCSIZE) {
+			AUTHPRNT("file is too large for non-pageable (%lld)", (long long) fsize);
+			err = ENOMEM;
+			goto out;
+		}
+		buf = (char *)kalloc_data((vm_size_t)fsize, Z_WAITOK);
+	}
 	if (buf == NULL) {
 		err = ENOMEM;
 		goto out;
 	}
 
-	if ((err = vn_rdwr(UIO_READ, vp, (caddr_t)buf, fsize, 0, UIO_SYSSPACE, IO_NODELOCKED, kerncred, &resid, p)) != 0) {
-		AUTHPRNT("Cannot read %d bytes from %s - %d", (int)fsize, path, err);
-		goto out;
+#if NAMEDSTREAMS
+	/* find resource fork so we can evict cached decmpfs data */
+	if (VNOP_GETNAMEDSTREAM(vp, &rsrc_vp, XATTR_RESOURCEFORK_NAME, NS_OPEN, /*flags*/ 0, ctx) == 0) {
+		vnode_ref(rsrc_vp);
+		vnode_put(rsrc_vp);
+		AUTHDBG("Found resource fork for %s", path);
 	}
+#endif
 
-	if (resid) {
-		/* didnt get everything we wanted */
-		AUTHPRNT("Short read of %d bytes from %s - %d", (int)fsize, path, resid);
-		err = EINVAL;
-		goto out;
+	/* read data in chunks to handle (fsize > INT_MAX) */
+	readbuf = buf;
+	readsize = fsize;
+	readoff = offset;
+	while (readsize > 0) {
+		const off_t chunksize_max = 16 * 1024 * 1024; /* 16 MiB */
+		const off_t chunksize = MIN(readsize, chunksize_max);
+
+		/* read next chunk, pass IO_NOCACHE to clarify our intent (even if ignored) */
+		if ((err = vn_rdwr(UIO_READ, vp, (caddr_t)readbuf, (int)chunksize, readoff, UIO_SYSSPACE, IO_NODELOCKED | IO_NOCACHE | IO_RAOFF, kerncred, /*resid*/ NULL, p)) != 0) {
+			AUTHPRNT("Cannot read %lld bytes at offset %lld from %s - %d", (long long)chunksize, (long long)readoff, path, err);
+			goto out;
+		}
+
+		/* evict cached pages so they don't accumulate during early boot */
+		ubc_msync(vp, readoff, readoff + chunksize, NULL, UBC_INVALIDATE | UBC_PUSHALL);
+
+		/* evict potentially-cached decmpfs data if we have a resource fork */
+		if (rsrc_vp != NULL) {
+			if (vnode_getwithref(rsrc_vp) == 0) {
+				ubc_msync(rsrc_vp, 0, ubc_getsize(rsrc_vp), NULL, UBC_INVALIDATE | UBC_PUSHALL);
+				vnode_put(rsrc_vp);
+			}
+		}
+
+		readbuf = &readbuf[chunksize];
+		readsize -= chunksize;
+		readoff += chunksize;
 	}
 
 out:
 	if (doclose) {
 		VNOP_CLOSE(vp, FREAD, ctx);
+	}
+	if (rsrc_vp) {
+		vnode_rele(rsrc_vp);
+		rsrc_vp = NULL;
 	}
 	if (vp) {
 		vnode_put(vp);
@@ -354,13 +698,37 @@ out:
 	}
 
 	if (err) {
-		kfree_safe(buf);
+		if (buf == NULL) {
+			/* nothing to free */
+		} else if (pageable) {
+			kmem_free(kernel_map, (vm_offset_t)buf, (vm_size_t)fsize);
+		} else {
+			kfree_data(buf, (vm_size_t)fsize);
+		}
 	} else {
 		*bufp = buf;
-		*bufszp = fsize;
+		*bufszp = (size_t)fsize;
 	}
 
 	return err;
+}
+
+int
+imageboot_read_file_pageable(const char *path, void **bufp, size_t *bufszp)
+{
+	return imageboot_read_file_internal(path, 0, true, bufp, bufszp, NULL);
+}
+
+int
+imageboot_read_file_from_offset(const char *path, const off_t offset, void **bufp, size_t *bufszp)
+{
+	return imageboot_read_file_internal(path, offset, false, bufp, bufszp, NULL);
+}
+
+int
+imageboot_read_file(const char *path, void **bufp, size_t *bufszp, off_t *fsizep)
+{
+	return imageboot_read_file_internal(path, 0, false, bufp, bufszp, fsizep);
 }
 
 #if CONFIG_IMAGEBOOT_IMG4 || CONFIG_IMAGEBOOT_CHUNKLIST
@@ -390,6 +758,9 @@ imgboot_get_image_file(const char *path, off_t *fsize, int *errp)
 	}
 
 	if (err) {
+		if (vp) {
+			vnode_put(vp);
+		}
 		*errp = err;
 		vp = NULL;
 	}
@@ -402,10 +773,10 @@ imgboot_get_image_file(const char *path, off_t *fsize, int *errp)
 #define APTICKET_NAME "apticket.der"
 
 static char *
-imgboot_get_apticket_path(const char *rootpath)
+imgboot_get_apticket_path(const char *rootpath, size_t *sz)
 {
-	size_t plen = strlen(rootpath) + sizeof(APTICKET_NAME);
-	char *path = kalloc(plen);
+	size_t plen = strlen(rootpath) + sizeof(APTICKET_NAME) + 1;
+	char *path = (char *)kalloc_data(plen, Z_WAITOK);
 
 	if (path) {
 		char *slash;
@@ -419,6 +790,8 @@ imgboot_get_apticket_path(const char *rootpath)
 		}
 		strlcpy(slash, APTICKET_NAME, sizeof(APTICKET_NAME) + 1);
 	}
+
+	*sz = plen;
 	return path;
 }
 
@@ -426,64 +799,63 @@ static int
 authenticate_root_with_img4(const char *rootpath)
 {
 	errno_t rv;
-	img4_t i4;
-	img4_payload_t i4pl;
-	vnode_t vp;
+	vnode_t vp = NULLVP;
+	size_t ticket_pathsz = 0;
 	char *ticket_path;
-	size_t tcksz = 0;
-	void *tckbuf = NULL;
+	img4_buff_t tck = IMG4_BUFF_INIT;
+	img4_firmware_execution_context_t exec = {
+		.i4fex_version = IMG4_FIRMWARE_EXECUTION_CONTEXT_STRUCT_VERSION,
+		.i4fex_execute = NULL,
+		.i4fex_context = NULL,
+	};
+	img4_firmware_t fw = NULL;
+	img4_firmware_flags_t fw_flags = IMG4_FIRMWARE_FLAG_BARE |
+	    IMG4_FIRMWARE_FLAG_SUBSEQUENT_STAGE;
 
 	DBG_TRACE("Check %s\n", rootpath);
 
-	if (img4if == NULL) {
-		AUTHPRNT("AppleImage4 is not ready");
-		return EAGAIN;
-	}
-
-	ticket_path = imgboot_get_apticket_path(rootpath);
+	ticket_path = imgboot_get_apticket_path(rootpath, &ticket_pathsz);
 	if (ticket_path == NULL) {
 		AUTHPRNT("Cannot construct ticket path - out of memory");
 		return ENOMEM;
 	}
 
-	rv = read_file(ticket_path, &tckbuf, &tcksz);
+	rv = imageboot_read_file(ticket_path, (void **)&tck.i4b_bytes, &tck.i4b_len, NULL);
 	if (rv) {
 		AUTHPRNT("Cannot get a ticket from %s - %d\n", ticket_path, rv);
 		goto out_with_ticket_path;
 	}
 
-	DBG_TRACE("Got %d bytes of manifest from %s\n", (int)tcksz, ticket_path);
-
-	rv = img4_init(&i4, 0, tckbuf, tcksz, NULL);
-	if (rv) {
-		AUTHPRNT("Cannot initialise verification handle - error %d", rv);
-		goto out_with_ticket_bytes;
-	}
+	DBG_TRACE("Got %lu bytes of manifest from %s\n", tck.i4b_len, ticket_path);
 
 	vp = imgboot_get_image_file(rootpath, NULL, &rv);
 	if (vp == NULL) {
 		/* Error message had been printed already */
-		goto out;
+		rv = EIO;
+		goto out_with_ticket_bytes;
 	}
 
-	rv = img4_payload_init_with_vnode_4xnu(&i4pl, 'rosi', vp, I4PLF_UNWRAPPED);
-	if (rv) {
-		AUTHPRNT("failed to init payload: %d", rv);
-		goto out;
+	fw = img4_firmware_new_from_vnode_4xnu(IMG4_RUNTIME_DEFAULT, &exec, 'rosi',
+	    vp, fw_flags);
+	if (!fw) {
+		AUTHPRNT("Could not allocate new firmware");
+		rv = ENOMEM;
+		goto out_with_ticket_bytes;
 	}
 
-	rv = img4_get_trusted_external_payload(&i4, &i4pl, IMG4_ENVIRONMENT_PPL, NULL, NULL);
-	if (rv) {
-		AUTHPRNT("failed to validate root image %s: %d", rootpath, rv);
-	}
+	img4_firmware_attach_manifest(fw, &tck);
+	rv = img4_firmware_evaluate(fw, img4_chip_select_personalized_ap(), NULL);
 
-	img4_payload_destroy(&i4pl);
-out:
-	img4_destroy(&i4);
 out_with_ticket_bytes:
-	kfree_safe(tckbuf);
+	kfree_data(tck.i4b_bytes, tck.i4b_len);
 out_with_ticket_path:
-	kfree_safe(ticket_path);
+	kfree_data(ticket_path, ticket_pathsz);
+
+	img4_firmware_destroy(&fw);
+
+	if (vp) {
+		vnode_put(vp);
+	}
 	return rv;
 }
 #endif /* CONFIG_IMAGEBOOT_IMG4 */
@@ -501,12 +873,13 @@ imageboot_mount_ramdisk(const char *path)
 	void *buf = NULL;
 	dev_t dev;
 	vnode_t newdp;
+	vnode_t tvp;
 	mount_t new_rootfs;
 
 	/* Read our target image from disk */
-	err = read_file(path, &buf, &bufsz);
+	err = imageboot_read_file_pageable(path, &buf, &bufsz);
 	if (err) {
-		printf("%s: failed: read_file() = %d\n", __func__, err);
+		printf("%s: failed: imageboot_read_file_pageable() = %d\n", __func__, err);
 		goto out;
 	}
 	DBG_TRACE("%s: read '%s' sz = %lu\n", __func__, path, bufsz);
@@ -534,10 +907,16 @@ imageboot_mount_ramdisk(const char *path)
 #endif
 
 	/* ... and unmount everything */
-	vnode_get_and_drop_always(rootvnode);
-	filedesc0.fd_cdir = NULL;
+	vfs_unmountall(FALSE);
+
+	lck_rw_lock_exclusive(&rootvnode_rw_lock);
+	kernproc->p_fd.fd_cdir = NULL;
+	tvp = rootvnode;
 	rootvnode = NULL;
-	vfs_unmountall();
+	rootvp = NULLVP;
+	rootdev = NODEV;
+	lck_rw_unlock_exclusive(&rootvnode_rw_lock);
+	vnode_get_and_drop_always(tvp);
 
 	/* Attach the ramfs image ... */
 	err = di_root_ramfile_buf(buf, bufsz, rootdevice, DEVMAXNAMESIZE, &dev);
@@ -559,6 +938,9 @@ imageboot_mount_ramdisk(const char *path)
 	if (VFS_ROOT(TAILQ_LAST(&mountlist, mntlist), &newdp, vfs_context_kernel())) {
 		panic("%s: cannot find root vnode", __func__);
 	}
+	vnode_ref(newdp);
+
+	lck_rw_lock_exclusive(&rootvnode_rw_lock);
 	rootvnode = newdp;
 	rootvnode->v_flag |= VROOT;
 	new_rootfs = rootvnode->v_mount;
@@ -566,15 +948,18 @@ imageboot_mount_ramdisk(const char *path)
 	new_rootfs->mnt_flag |= MNT_ROOTFS;
 	mount_unlock(new_rootfs);
 
-	vnode_ref(newdp);
+	set_fake_bootuuid(new_rootfs);
+
+	kernproc->p_fd.fd_cdir = newdp;
+	lck_rw_unlock_exclusive(&rootvnode_rw_lock);
+
 	vnode_put(newdp);
-	filedesc0.fd_cdir = newdp;
 
 	DBG_TRACE("%s: root switched\n", __func__);
 
 out:
-	if (err) {
-		kfree_safe(buf);
+	if (err && (buf != NULL)) {
+		kmem_free(kernel_map, (vm_offset_t)buf, (vm_size_t)bufsz);
 	}
 	return err;
 }
@@ -586,7 +971,7 @@ out:
  * Caller is expected to check if the pointers are different.
  */
 static char *
-url_to_path(char *url_path)
+url_to_path(char *url_path, size_t *sz)
 {
 	char *path = url_path;
 	size_t len = strlen(kIBFilePrefix);
@@ -598,15 +983,16 @@ url_to_path(char *url_path)
 		len = strlen(url_path);
 		if (len) {
 			/* Make a copy of the path to URL-decode */
-			path = kalloc(len + 1);
+			path = (char *)kalloc_data(len + 1, Z_WAITOK);
 			if (path == NULL) {
-				panic("imageboot path allocation failed - cannot allocate %d bytes\n", (int)len);
+				panic("imageboot path allocation failed - cannot allocate %d bytes", (int)len);
 			}
 
 			strlcpy(path, url_path, len + 1);
+			*sz = len + 1;
 			url_decode(path);
 		} else {
-			panic("Bogus imageboot path URL - missing path\n");
+			panic("Bogus imageboot path URL - missing path");
 		}
 
 		DBG_TRACE("%s: root image URL <%s> becomes %s\n", __func__, url_path, path);
@@ -625,30 +1011,8 @@ imageboot_setup_new(imageboot_type_t type)
 	boolean_t auth_root = TRUE;
 	boolean_t ramdisk_root = FALSE;
 
-	MALLOC_ZONE(root_path, caddr_t, MAXPATHLEN, M_NAMEI, M_WAITOK);
+	root_path = zalloc(ZV_NAMEI);
 	assert(root_path != NULL);
-
-#if CONFIG_LOCKERBOOT
-	if (type == IMAGEBOOT_LOCKER) {
-		if (!PE_parse_boot_argn(IMAGEBOOT_LOCKER_ARG, root_path, MAXPATHLEN)) {
-			panic("locker boot with no locker given");
-		}
-
-		DBG_TRACE("%s: root fsname: %s\n", __FUNCTION__, rootvnode->v_mount->mnt_vtable->vfc_name);
-
-		/*
-		 * The locker path is a path, not a URL, so just pass it directly to
-		 * imageboot_mount_image().
-		 */
-		error = imageboot_mount_image(root_path, 0, type);
-		if (error) {
-			panic("failed to mount system locker: %d", error);
-		}
-
-		done = TRUE;
-		goto out;
-	}
-#endif /* CONFIG_LOCKERBOOT */
 
 	unsigned imgboot_arg;
 	if (PE_parse_boot_argn("-rootdmg-ramdisk", &imgboot_arg, sizeof(imgboot_arg))) {
@@ -668,30 +1032,29 @@ imageboot_setup_new(imageboot_type_t type)
 	if (PE_parse_boot_argn(IMAGEBOOT_AUTHROOT_ARG, root_path, MAXPATHLEN) == FALSE &&
 	    PE_parse_boot_argn(IMAGEBOOT_ROOT_ARG, root_path, MAXPATHLEN) == FALSE) {
 		if (height > 0) {
-			panic("%s specified without %s or %s?\n", IMAGEBOOT_CONTAINER_ARG, IMAGEBOOT_AUTHROOT_ARG, IMAGEBOOT_ROOT_ARG);
+			panic("%s specified without %s or %s?", IMAGEBOOT_CONTAINER_ARG, IMAGEBOOT_AUTHROOT_ARG, IMAGEBOOT_ROOT_ARG);
 		}
 		goto out;
 	}
 
 	printf("%s: root image URL is '%s'\n", __func__, root_path);
 
-#if CONFIG_CSR
-	if (auth_root && (csr_check(CSR_ALLOW_ANY_RECOVERY_OS) == 0)) {
-		AUTHPRNT("CSR_ALLOW_ANY_RECOVERY_OS set, skipping root image authentication");
-		auth_root = FALSE;
-	}
-#endif
-
 	/* Make a copy of the path to URL-decode */
-	char *path = url_to_path(root_path);
+	size_t pathsz;
+	char *path = url_to_path(root_path, &pathsz);
 	assert(path);
 
 #if CONFIG_IMAGEBOOT_CHUNKLIST
 	if (auth_root) {
+		/*
+		 * This updates auth_root to reflect whether chunklist was
+		 * actually enforced. In effect, this clears auth_root if
+		 * CSR_ALLOW_ANY_RECOVERY_OS allowed an invalid image.
+		 */
 		AUTHDBG("authenticating root image at %s", path);
-		error = authenticate_root_with_chunklist(path);
+		error = authenticate_root_with_chunklist(path, &auth_root);
 		if (error) {
-			panic("root image authentication failed (err = %d)\n", error);
+			panic("root image authentication failed (err = %d)", error);
 		}
 		AUTHDBG("successfully authenticated %s", path);
 	}
@@ -704,11 +1067,11 @@ imageboot_setup_new(imageboot_type_t type)
 	}
 
 	if (path != root_path) {
-		kfree_safe(path);
+		kfree_data(path, pathsz);
 	}
 
 	if (error) {
-		panic("Failed to mount root image (err=%d, auth=%d, ramdisk=%d)\n",
+		panic("Failed to mount root image (err=%d, auth=%d, ramdisk=%d)",
 		    error, auth_root, ramdisk_root);
 	}
 
@@ -728,7 +1091,7 @@ imageboot_setup_new(imageboot_type_t type)
 	done = TRUE;
 
 out:
-	FREE_ZONE(root_path, MAXPATHLEN, M_NAMEI);
+	zfree(ZV_NAMEI, root_path);
 	return done;
 }
 
@@ -756,7 +1119,7 @@ imageboot_setup(imageboot_type_t type)
 		return;
 	}
 
-	MALLOC_ZONE(root_path, caddr_t, MAXPATHLEN, M_NAMEI, M_WAITOK);
+	root_path = zalloc(ZV_NAMEI);
 	assert(root_path != NULL);
 
 	/*
@@ -768,21 +1131,22 @@ imageboot_setup(imageboot_type_t type)
 	 */
 #if CONFIG_IMAGEBOOT_IMG4
 	if (PE_parse_boot_argn("arp0", root_path, MAXPATHLEN)) {
-		char *path = url_to_path(root_path);
+		size_t pathsz;
+		char *path = url_to_path(root_path, &pathsz);
 
 		assert(path);
 
 		if (authenticate_root_with_img4(path)) {
-			panic("Root image %s does not match the manifest\n", root_path);
+			panic("Root image %s does not match the manifest", root_path);
 		}
 		if (path != root_path) {
-			kfree_safe(path);
+			kfree_data(path, pathsz);
 		}
 	} else
 #endif /* CONFIG_IMAGEBOOT_IMG4 */
 	if ((PE_parse_boot_argn("rp", root_path, MAXPATHLEN) == FALSE) &&
 	    (PE_parse_boot_argn("rp0", root_path, MAXPATHLEN) == FALSE)) {
-		panic("%s: no valid path to image.\n", __FUNCTION__);
+		panic("%s: no valid path to image.", __FUNCTION__);
 	}
 
 	DBG_TRACE("%s: root image url is %s\n", __FUNCTION__, root_path);
@@ -811,7 +1175,7 @@ imageboot_setup(imageboot_type_t type)
 	}
 
 done:
-	FREE_ZONE(root_path, MAXPATHLEN, M_NAMEI);
+	zfree(ZV_NAMEI, root_path);
 
 	DBG_TRACE("%s: exit\n", __FUNCTION__);
 

@@ -43,11 +43,11 @@
 	.globl EXT(invalidate_mmu_icache)
 LEXT(InvalidatePoU_Icache)
 LEXT(invalidate_mmu_icache)
+	ARM64_PROLOG
 	dsb		sy
 	ic		ialluis								// Invalidate icache
 	dsb		sy
 	isb		sy
-L_imi_done:
 	ret
 
 /*
@@ -76,13 +76,132 @@ L_ipui_loop:
 	b.pl	L_ipui_loop							// Loop in counter not null
 	dsb		sy
 	isb		sy
-L_ipui_done:
 #else
 	bl		EXT(InvalidatePoU_Icache)
 #endif
 	POP_FRAME
 	ARM64_STACK_EPILOG
 
+/*
+ *	Obtains cache physical layout information required for way/set
+ *	data cache maintenance operations.
+ *
+ *	$0: Data cache level, starting from 0
+ *	$1: Output register for set increment
+ *	$2: Output register for last valid set
+ *	$3: Output register for way increment
+ */
+.macro GET_CACHE_CONFIG
+	lsl		$0, $0, #1
+	msr		CSSELR_EL1, $0						// Select appropriate cache
+	isb											// Synchronize context
+
+	mrs		$0, CCSIDR_EL1
+	ubfx	$1, $0, #3, #10						// extract number of ways - 1
+	mov		$2, $1
+	add		$1, $1, #1							// calculate number of ways
+
+	mov		$0, #63
+	and		$2, $2, $1
+	cmp		$2, #0
+	cinc	$0, $0, ne
+	clz		$1, $1
+	sub		$0, $0, $1
+
+	mov 	$1, #32								// calculate way increment
+	sub		$3, $1, $0
+	mov		$1, #1
+	lsl		$3, $1, $3
+
+	mrs		$0, CCSIDR_EL1
+	ubfx	$1, $0, #0, #3						// extract log2(line size) - 4
+	add		$1, $1, #4							// calculate log2(line size)
+	mov		$2, #1
+	lsl		$1, $2, $1							// calculate set increment
+
+	ubfx	$2, $0, #13, #15					// extract number of sets - 1
+	add		$2, $2, #1							// calculate number of sets
+	mul		$2, $1, $2							// calculate last valid set
+.endmacro
+
+/*
+ * Returns the cache configuration for the specified level
+ *	$0: Output register
+ *	$1: Cache level register
+ *	$2: Scratch register
+ */
+.macro CACHE_AT_LEVEL
+	mrs		$0, CLIDR_EL1
+	add		$2, $1, $1, lsl #1
+	lsr		$0, $0, $2
+	and		$0, $0, #7					// extract cache type
+.endmacro
+
+/*
+ * Perform set/way maintenance to the desired cache level
+ *	$0: 'dc' set/way variant, e.g. csw or cisw
+ *	x0: maximum cache level, 0-based, inclusive
+ */
+.macro DCACHE_SET_WAY
+	dmb		sy
+	mov		x1, #0
+1:
+	CACHE_AT_LEVEL x2, x1, x3
+	cbz		x2, 5f			// No cache at this level, all higher levels may be skipped
+	cmp		x2, #2
+	b.lt		4f			// No data cache at this level, skip to next level
+	mov		x2, x1
+	GET_CACHE_CONFIG x2, x9, x10, x11
+	lsl		x2, x1, #1		// level field for cisw/csw, bits 1:3
+2:
+3:
+	dc		$0, x2			// clean dcache line by way/set
+	add		x2, x2, x9		// increment set index
+	tst		x2, x10			// look for overflow
+	b.eq		3b
+	bic		x2, x2, x10		// clear set overflow
+	adds		w2, w2, w11		// increment way
+	b.cc		2b			// loop
+	dsb		sy			// ensure completion of prior level maintenance
+4:
+	add		x1, x1, #1
+	cmp		x1, x0
+	b.ls		1b			// next level
+5:
+	ret
+.endmacro
+
+#if defined(APPLE_ARM64_ARCH_FAMILY) && !APPLEVIRTUALPLATFORM
+/*
+ * Enables cache maintenance by VA instructions on Apple SoCs.
+ *
+ *	$0: Scratch register
+ *	$1: Scratch register
+ */
+.macro ENABLE_DC_MVA_OPS
+	isb		sy
+	ARM64_IS_ECORE          $0
+	ARM64_READ_CORE_SYSREG   $0, $1, EHID4, HID4
+	and                     $1, $1, (~ARM64_REG_HID4_DisDcMVAOps)
+	ARM64_WRITE_CORE_SYSREG  $0, $1, EHID4, HID4
+	isb		sy
+.endmacro
+
+/*
+ * Disables cache maintenance by VA instructions on Apple SoCs.
+ *
+ *	$0: Scratch register
+ *	$1: Scratch register
+ */
+.macro DISABLE_DC_MVA_OPS
+	isb		sy
+	ARM64_IS_ECORE          $0
+	ARM64_READ_CORE_SYSREG   $0, $1, EHID4, HID4
+	orr                     $1, $1, ARM64_REG_HID4_DisDcMVAOps
+	ARM64_WRITE_CORE_SYSREG  $0, $1, EHID4, HID4
+	isb		sy
+.endmacro
+#endif
 
 /*
  * void CleanPoC_Dcache(void)
@@ -94,42 +213,16 @@ L_ipui_done:
 	.globl EXT(CleanPoC_Dcache)
 	.globl EXT(clean_mmu_dcache)
 LEXT(CleanPoC_Dcache)
+	ARM64_PROLOG
 #if  defined(APPLE_ARM64_ARCH_FAMILY)
-	/* "Fully Coherent." */
-#else /* !defined(APPLE_ARM64_ARCH_FAMILY) */
-	mov		x0, #0
-	mov		x9, #(1 << MMU_I7SET)
-	mov		x10, #(1 << (MMU_NSET + MMU_I7SET))
-	mov		x11, #(1 << MMU_I7WAY)
-	dmb		sy
-L_cpcd_dcacheway:
-L_cpcd_dcacheline:
-	dc		csw, x0								// clean dcache line by way/set
-	add		x0, x0, x9							// increment set index
-	tst		x0, #(1 << (MMU_NSET + MMU_I7SET))	// look for overflow
-	b.eq	L_cpcd_dcacheline
-	bic		x0, x0, x10							// clear set overflow
-	adds	w0, w0, w11							// increment way
-	b.cc	L_cpcd_dcacheway					// loop
-#if __ARM_L2CACHE__
-	mov		x0, #2
-	mov		x9, #(1 << L2_I7SET)
-	mov		x10, #(1 << (L2_NSET + L2_I7SET))
-	mov		x11, #(1 << L2_I7WAY)
-	dsb		sy
-L_cpcd_l2dcacheway:
-L_cpcd_l2dcacheline:
-	dc		csw, x0								// clean dcache line by way/set
-	add		x0, x0, x9							// increment set index
-	tst		x0, #(1 << (L2_NSET + L2_I7SET))	// look for overflow
-	b.eq	L_cpcd_l2dcacheline
-	bic		x0, x0, x10							// clear set overflow
-	adds	w0, w0, w11							// increment way
-	b.cc	L_cpcd_l2dcacheway					// loop
-#endif
-#endif /* defined(APPLE_ARM64_ARCH_FAMILY) */
 	dsb		sy
 	ret
+	/* "Fully Coherent." */
+#else /* !defined(APPLE_ARM64_ARCH_FAMILY) */
+	mrs		x0, CLIDR_EL1
+	ubfx		x0, x0, #24, #3	// extract CLIDR_EL1.LoC
+	DCACHE_SET_WAY csw
+#endif /* defined(APPLE_ARM64_ARCH_FAMILY) */
 
 /*
  * void CleanPoU_Dcache(void)
@@ -140,26 +233,16 @@ L_cpcd_l2dcacheline:
 	.align 2
 	.globl EXT(CleanPoU_Dcache)
 LEXT(CleanPoU_Dcache)
+	ARM64_PROLOG
 #if defined(APPLE_ARM64_ARCH_FAMILY)
-	/* "Fully Coherent." */
-#else /* !defined(APPLE_ARM64_ARCH_FAMILY) */
-	mov		x0, #0
-	mov		x9, #(1 << MMU_I7SET)
-	mov		x10, #(1 << (MMU_NSET + MMU_I7SET))
-	mov		x11, #(1 << MMU_I7WAY)
-	dmb		sy
-L_cpud_dcacheway:
-L_cpud_dcacheline:
-	dc		csw, x0								// clean dcache line by way/set
-	add		x0, x0, x9							// increment set index
-	tst		x0, #(1 << (MMU_NSET + MMU_I7SET))	// look for overflow
-	b.eq	L_cpud_dcacheline
-	bic		x0, x0, x10							// clear set overflow
-	adds	w0, w0, w11							// increment way
-	b.cc	L_cpud_dcacheway					// loop
-#endif /* defined(APPLE_ARM64_ARCH_FAMILY) */
 	dsb sy
 	ret
+	/* "Fully Coherent." */
+#else /* !defined(APPLE_ARM64_ARCH_FAMILY) */
+	mrs		x0, CLIDR_EL1
+	ubfx		x0, x0, #21, 3	// extract CLIDR_EL1.LoUIS
+	DCACHE_SET_WAY csw
+#endif /* defined(APPLE_ARM64_ARCH_FAMILY) */
 
 /*
  *	void CleanPoU_DcacheRegion(vm_offset_t va, unsigned length)
@@ -170,6 +253,7 @@ L_cpud_dcacheline:
 	.align 2
 	.globl EXT(CleanPoU_DcacheRegion)
 LEXT(CleanPoU_DcacheRegion)
+	ARM64_PROLOG
 #if defined(APPLE_ARM64_ARCH_FAMILY)
 	/* "Fully Coherent." */
 #else /* !defined(APPLE_ARM64_ARCH_FAMILY) */
@@ -189,39 +273,45 @@ L_cpudr_loop:
 	dsb		sy
 	ret
 
+.macro CLEANPOC_DCACHEREGION
+	#define CLINE_FLUSH_STRIDE MMU_CLINE
+
+	ARM64_PROLOG
+	mov		x9, #((1<<CLINE_FLUSH_STRIDE)-1)
+	and		x2, x0, x9
+	bic		x0, x0, x9							// Cached aligned
+	add		x1, x1, x2
+	sub		x1, x1, #1
+	lsr		x1, x1, #(CLINE_FLUSH_STRIDE)		// Set cache line counter
+1:
+#if defined(APPLE_ARM64_ARCH_FAMILY)
+	// It may be tempting to clean the cache (dc cvac), but it's always a NOP on
+	// Apple hardware.
+	dc		civac, x0							// Clean & Invalidate dcache line to PoC
+#else /* defined(APPLE_ARM64_ARCH_FAMILY) */
+	dc		cvac, x0 							// Clean dcache line to PoC
+#endif /* defined(APPLE_ARM64_ARCH_FAMILY) */
+	add		x0, x0, #(1<<CLINE_FLUSH_STRIDE)	// Get next cache aligned addr
+	subs	x1, x1, #1							// Decrementer cache line counter
+	b.pl	1b						// Loop in counter not null
+.endmacro
+
+
 /*
- *	void CleanPoC_DcacheRegion_internal(vm_offset_t va, unsigned length)
+ *	void CleanPoC_DcacheRegion_internal(vm_offset_t va, size_t length)
  *
  *		Clean d-cache region to Point of Coherency
  */
 	.text
 	.align 2
 LEXT(CleanPoC_DcacheRegion_internal)
-	mov		x9, #((1<<MMU_CLINE)-1)
-	and		x2, x0, x9
-	bic		x0, x0, x9							// Cached aligned
-	add		x1, x1, x2
-	sub		x1, x1, #1
-	lsr		x1, x1, #MMU_CLINE					// Set cache line counter
-	dsb		sy	
-L_cpcdr_loop:
-#if defined(APPLE_ARM64_ARCH_FAMILY)
-	// It may be tempting to clean the cache (dc cvac), 
-	// but see Cyclone UM 5.3.8.3 -- it's always a NOP on Cyclone.
-	//
-	// Clean & Invalidate, however, will work as long as HID4.DisDCMvaOps isn't set.
-	dc		civac, x0							// Clean & Invalidate dcache line to PoC
-#else
-	dc		cvac, x0 							// Clean dcache line to PoC
-#endif
-	add		x0, x0, #(1<<MMU_CLINE)				// Get next cache aligned addr
-	subs	x1, x1, #1							// Decrementer cache line counter
-	b.pl	L_cpcdr_loop						// Loop in counter not null
+	dsb		sy
+	CLEANPOC_DCACHEREGION
 	dsb		sy
 	ret
 
 /*
- *	void CleanPoC_DcacheRegion(vm_offset_t va, unsigned length)
+ *	void CleanPoC_DcacheRegion(vm_offset_t va, size_t length)
  *
  *		Clean d-cache region to Point of Coherency
  */
@@ -229,6 +319,7 @@ L_cpcdr_loop:
 	.align 2
 	.globl EXT(CleanPoC_DcacheRegion)
 LEXT(CleanPoC_DcacheRegion)
+	ARM64_PROLOG
 #if defined(APPLE_ARM64_ARCH_FAMILY)
 	/* "Fully Coherent." */
 	dsb		sy
@@ -237,32 +328,9 @@ LEXT(CleanPoC_DcacheRegion)
 	b EXT(CleanPoC_DcacheRegion_internal)
 #endif /* defined(APPLE_ARM64_ARCH_FAMILY) */
 
-	.text
-	.align 2
-	.globl EXT(CleanPoC_DcacheRegion_Force_nopreempt)
-LEXT(CleanPoC_DcacheRegion_Force_nopreempt)
-#if defined(APPLE_ARM64_ARCH_FAMILY)
-	ARM64_STACK_PROLOG
-	PUSH_FRAME
-	isb		sy
-	ARM64_IS_PCORE x15
-	ARM64_READ_EP_SPR x15, x14, ARM64_REG_EHID4, ARM64_REG_HID4
-	and		x14, x14, (~ARM64_REG_HID4_DisDcMVAOps)
-	ARM64_WRITE_EP_SPR x15, x14, ARM64_REG_EHID4, ARM64_REG_HID4
-	isb		sy
-	bl		EXT(CleanPoC_DcacheRegion_internal)
-	isb		sy
-	orr		x14, x14, ARM64_REG_HID4_DisDcMVAOps
-	ARM64_WRITE_EP_SPR x15, x14, ARM64_REG_EHID4, ARM64_REG_HID4
-	isb		sy
-	POP_FRAME
-	ARM64_STACK_EPILOG
-#else
-	b		EXT(CleanPoC_DcacheRegion_internal)
-#endif // APPLE_ARM64_ARCH_FAMILY
 
 /*
- *	void CleanPoC_DcacheRegion_Force(vm_offset_t va, unsigned length)
+ *	void CleanPoC_DcacheRegion_Force(vm_offset_t va, size_t length)
  *
  *		Clean d-cache region to Point of Coherency -  when you really 
  *		need to flush even on coherent platforms, e.g. panic log
@@ -282,8 +350,9 @@ LEXT(CleanPoC_DcacheRegion_Force)
 	POP_FRAME
 	ARM64_STACK_EPILOG
 #else
+	ARM64_PROLOG
 	b		EXT(CleanPoC_DcacheRegion_internal)
-#endif // APPLE_ARM64_ARCH_FAMILY
+#endif /* APPLE_ARM64_ARCH_FAMILY */
 
 /*
  *	void FlushPoC_Dcache(void)
@@ -294,42 +363,29 @@ LEXT(CleanPoC_DcacheRegion_Force)
 	.align 2
 	.globl EXT(FlushPoC_Dcache)
 LEXT(FlushPoC_Dcache)
+	ARM64_PROLOG
 #if defined(APPLE_ARM64_ARCH_FAMILY)
+	dsb sy
+	ret
 	/* "Fully Coherent." */
 #else /* !defined(APPLE_ARM64_ARCH_FAMILY) */
-	mov		x0, #0
-	mov		x9, #(1 << MMU_I7SET)
-	mov		x10, #(1 << (MMU_NSET + MMU_I7SET))
-	mov		x11, #(1 << MMU_I7WAY)
-	dmb		sy
-L_fpcd_dcacheway:
-L_fpcd_dcacheline:
-	dc		cisw, x0							// clean invalidate dcache line by way/set
-	add		x0, x0, x9							// increment set index
-	tst		x0, #(1 << (MMU_NSET + MMU_I7SET))	// look for overflow
-	b.eq	L_fpcd_dcacheline
-	bic		x0, x0, x10							// clear set overflow
-	adds	w0, w0, w11							// increment way
-	b.cc	L_fpcd_dcacheway					// loop
-#if __ARM_L2CACHE__
-	dsb		sy
-	mov		x0, #2
-	mov		x9, #(1 << L2_I7SET)
-	mov		x10, #(1 << (L2_NSET + L2_I7SET))
-	mov		x11, #(1 << L2_I7WAY)
-L_fpcd_l2dcacheway:
-L_fpcd_l2dcacheline:
-	dc		cisw, x0							// clean invalide dcache line by way/set
-	add		x0, x0, x9							// increment set index
-	tst		x0, #(1 << (L2_NSET + L2_I7SET))	// look for overflow
-	b.eq	L_fpcd_l2dcacheline
-	bic		x0, x0, x10							// clear set overflow
-	adds	w0, w0, w11							// increment way
-	b.cc	L_fpcd_l2dcacheway					// loop
-#endif
+	mrs		x0, CLIDR_EL1
+	ubfx		x0, x0, #24, #3	// extract CLIDR_EL1.LoC
+	DCACHE_SET_WAY cisw
 #endif /* defined(APPLE_ARM64_ARCH_FAMILY) */
-	dsb		sy
-	ret
+
+/*
+ * 	void Flush_Dcache(void)
+ * 
+ * 		Clean and invalidate D-cache, all levels
+ */
+	.text
+	.align 2
+	.globl EXT(Flush_Dcache)
+LEXT(Flush_Dcache)
+	ARM64_PROLOG
+	mov x0, #6 // Maximum allowable caching level (0-based)
+	DCACHE_SET_WAY cisw 
 
 /*
  * void FlushPoU_Dcache(void)
@@ -340,26 +396,16 @@ L_fpcd_l2dcacheline:
 	.align 2
 	.globl EXT(FlushPoU_Dcache)
 LEXT(FlushPoU_Dcache)
+	ARM64_PROLOG
 #if defined(APPLE_ARM64_ARCH_FAMILY)
+	dsb sy
+	ret
 	/* "Fully Coherent." */
 #else /* !defined(APPLE_ARM64_ARCH_FAMILY) */
-	mov		x0, #0
-	mov		x9, #(1 << MMU_I7SET)
-	mov		x10, #(1 << (MMU_NSET + MMU_I7SET))
-	mov		x11, #(1 << MMU_I7WAY)
-	dmb		sy
-L_fpud_way:
-L_fpud_line:
-	dc		cisw, x0							// clean invalidate dcache line by way/set
-	add		x0, x0, x9							// increment set index
-	tst		x0, #1 << (MMU_NSET + MMU_I7SET)	// look for overflow
-	b.eq	L_fpud_line
-	bic		x0, x0, x10							// clear set overflow
-	adds	w0, w0, w11							// increment way
-	b.cc	L_fpud_way							// loop
+	mrs		x0, CLIDR_EL1
+	ubfx		x0, x0, #21, 3	// extract CLIDR_EL1.LoUIS
+	DCACHE_SET_WAY	cisw
 #endif /* defined(APPLE_ARM64_ARCH_FAMILY) */
-	dsb		sy
-	ret
 
 /*
  *	void FlushPoC_DcacheRegion(vm_offset_t va, unsigned length)
@@ -370,6 +416,7 @@ L_fpud_line:
 	.align 2
 	.globl EXT(FlushPoC_DcacheRegion)
 LEXT(FlushPoC_DcacheRegion)
+	ARM64_PROLOG
 #if defined(APPLE_ARM64_ARCH_FAMILY)
 	/* "Fully Coherent." */
 #else /* !defined(APPLE_ARM64_ARCH_FAMILY) */
@@ -396,6 +443,7 @@ L_fpcdr_loop:
         .align 2
         .globl EXT(flush_dcache64)
 LEXT(flush_dcache64)
+	ARM64_PROLOG
 	BRANCH_EXTERN    flush_dcache
 
 /*
@@ -405,6 +453,7 @@ LEXT(flush_dcache64)
         .align 2
         .globl EXT(clean_dcache64)
 LEXT(clean_dcache64)
+	ARM64_PROLOG
 	BRANCH_EXTERN    clean_dcache
 
 /*
@@ -417,6 +466,7 @@ LEXT(clean_dcache64)
         .globl EXT(invalidate_icache)
 LEXT(invalidate_icache64)
 LEXT(invalidate_icache)
+	ARM64_PROLOG
 	cmp     w2, #0								// Is it physical?
 	b.eq	Lcall_invalidate_worker
 	adrp	x2, _gPhysBase@page

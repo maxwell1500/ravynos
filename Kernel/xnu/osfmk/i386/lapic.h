@@ -247,9 +247,11 @@ typedef uint32_t lapic_timer_count_t;
 	(LAPIC_READ_OFFSET(ISR_BASE,(base+LAPIC_##src##_INTERRUPT)/32) \
 	        & (1 <<((base + LAPIC_##src##_INTERRUPT)%32)))
 
+extern uint32_t         lapic_safe_apicid(void);
+extern void             lapic_init_slave(void);
 extern void             lapic_init(void);
-extern void             lapic_configure(void);
-extern void             lapic_shutdown(void);
+extern void             lapic_configure(bool for_wake);
+extern void             lapic_shutdown(bool for_sleep);
 extern void             lapic_smm_restore(void);
 extern boolean_t        lapic_probe(void);
 extern void             lapic_dump(void);
@@ -260,6 +262,7 @@ extern void             lapic_end_of_interrupt(void);
 extern void             lapic_unmask_perfcnt_interrupt(void);
 extern void             lapic_set_perfcnt_interrupt_mask(boolean_t);
 extern void             lapic_send_ipi(int cpu, int interupt);
+extern void             lapic_send_nmi(int cpu);
 
 extern int              lapic_to_cpu[];
 extern int              cpu_to_lapic[];

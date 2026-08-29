@@ -26,16 +26,20 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
+#define IOKIT_ENABLE_SHARED_PTR
+
 #define DISABLE_DATAQUEUE_WARNING
 
 #include <IOKit/IODataQueue.h>
 
 #undef DISABLE_DATAQUEUE_WARNING
+#include <vm/vm_kern_xnu.h>
 
 #include <IOKit/IODataQueueShared.h>
 #include <IOKit/IOLib.h>
 #include <IOKit/IOMemoryDescriptor.h>
 #include <libkern/OSAtomic.h>
+#include <libkern/c++/OSSharedPtr.h>
 
 struct IODataQueueInternal {
 	mach_msg_header_t msg;
@@ -54,29 +58,28 @@ struct IODataQueueInternal {
 
 OSDefineMetaClassAndStructors(IODataQueue, OSObject)
 
-IODataQueue *IODataQueue::withCapacity(UInt32 size)
+OSSharedPtr<IODataQueue>
+IODataQueue::withCapacity(UInt32 size)
 {
-	IODataQueue *dataQueue = new IODataQueue;
+	OSSharedPtr<IODataQueue> dataQueue = OSMakeShared<IODataQueue>();
 
 	if (dataQueue) {
 		if (!dataQueue->initWithCapacity(size)) {
-			dataQueue->release();
-			dataQueue = NULL;
+			return nullptr;
 		}
 	}
 
 	return dataQueue;
 }
 
-IODataQueue *
+OSSharedPtr<IODataQueue>
 IODataQueue::withEntries(UInt32 numEntries, UInt32 entrySize)
 {
-	IODataQueue *dataQueue = new IODataQueue;
+	OSSharedPtr<IODataQueue> dataQueue = OSMakeShared<IODataQueue>();
 
 	if (dataQueue) {
 		if (!dataQueue->initWithEntries(numEntries, entrySize)) {
-			dataQueue->release();
-			dataQueue = NULL;
+			return nullptr;
 		}
 	}
 
@@ -87,6 +90,7 @@ Boolean
 IODataQueue::initWithCapacity(UInt32 size)
 {
 	vm_size_t allocSize = 0;
+	kern_return_t kr;
 
 	if (!super::init()) {
 		return false;
@@ -103,18 +107,14 @@ IODataQueue::initWithCapacity(UInt32 size)
 	}
 
 	assert(!notifyMsg);
-	notifyMsg = IONew(IODataQueueInternal, 1);
-	if (!notifyMsg) {
-		return false;
-	}
-	bzero(notifyMsg, sizeof(IODataQueueInternal));
+	notifyMsg = IOMallocType(IODataQueueInternal);
 	((IODataQueueInternal *)notifyMsg)->queueSize = size;
 
-	dataQueue = (IODataQueueMemory *)IOMallocAligned(allocSize, PAGE_SIZE);
-	if (dataQueue == NULL) {
+	kr = kmem_alloc(kernel_map, (vm_offset_t *)&dataQueue, allocSize,
+	    (kma_flags_t)(KMA_DATA | KMA_ZERO), IOMemoryTag(kernel_map));
+	if (kr != KERN_SUCCESS) {
 		return false;
 	}
-	bzero(dataQueue, allocSize);
 
 	dataQueue->queueSize    = size;
 //  dataQueue->head         = 0;
@@ -144,11 +144,13 @@ IODataQueue::free()
 {
 	if (notifyMsg) {
 		if (dataQueue) {
-			IOFreeAligned(dataQueue, round_page(((IODataQueueInternal *)notifyMsg)->queueSize + DATA_QUEUE_MEMORY_HEADER_SIZE));
+			kmem_free(kernel_map, (vm_offset_t)dataQueue,
+			    round_page(((IODataQueueInternal *)notifyMsg)->queueSize +
+			    DATA_QUEUE_MEMORY_HEADER_SIZE));
 			dataQueue = NULL;
 		}
 
-		IODelete(notifyMsg, IODataQueueInternal, 1);
+		IOFreeType(notifyMsg, IODataQueueInternal);
 		notifyMsg = NULL;
 	}
 
@@ -275,7 +277,8 @@ IODataQueue::sendDataAvailableNotification()
 
 	msgh = &((IODataQueueInternal *) notifyMsg)->msg;
 	if (msgh->msgh_remote_port) {
-		kr = mach_msg_send_from_kernel_with_options(msgh, msgh->msgh_size, MACH_SEND_TIMEOUT, MACH_MSG_TIMEOUT_NONE);
+		kr = mach_msg_send_from_kernel_with_options(msgh, msgh->msgh_size,
+		    MACH64_SEND_TIMEOUT, MACH_MSG_TIMEOUT_NONE);
 		switch (kr) {
 		case MACH_SEND_TIMED_OUT: // Notification already sent
 		case MACH_MSG_SUCCESS:
@@ -288,10 +291,10 @@ IODataQueue::sendDataAvailableNotification()
 	}
 }
 
-IOMemoryDescriptor *
+OSSharedPtr<IOMemoryDescriptor>
 IODataQueue::getMemoryDescriptor()
 {
-	IOMemoryDescriptor *descriptor = NULL;
+	OSSharedPtr<IOMemoryDescriptor> descriptor;
 	UInt32              queueSize;
 
 	queueSize = ((IODataQueueInternal *) notifyMsg)->queueSize;

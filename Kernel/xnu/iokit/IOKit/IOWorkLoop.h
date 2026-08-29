@@ -33,6 +33,7 @@
 #include <IOKit/IOReturn.h>
 #include <IOKit/IOLib.h>
 #include <IOKit/IOLocks.h>
+#include <libkern/c++/OSPtr.h>
 
 #include <IOKit/system.h>
 
@@ -43,6 +44,9 @@
 class IOEventSource;
 class IOTimerEventSource;
 class IOCommandGate;
+#if CONFIG_EXCLAVES
+class IOExclaveWorkLoopAperture;
+#endif /* CONFIG_EXCLAVES */
 
 /*! @class IOWorkLoop
  *   @discussion An IOWorkLoop is a thread of control that is intended to be used to provide single threaded access to hardware.  This class has no knowledge of the nature and type of the events that it marshals and forwards.  When a device driver successfully starts (see IOService::start), it is expected to create the event sources it will need to receive events.  Then a work loop is initialized and the events are added to the work loop for monitoring.  In general this set up will be automated by the family superclass of the specific device.
@@ -96,6 +100,12 @@ private:
  *       @param inEventSource The event source to check.
  */
 	bool eventSourcePerformsWork(IOEventSource *inEventSource);
+
+/*! @function releaseEventChain
+ *   @abstract Static function that releases the events in a chain and sets
+ *   their work loops to NULL.
+ */
+	static void releaseEventChain(LIBKERN_CONSUMED IOEventSource *eventChain);
 
 protected:
 
@@ -193,14 +203,14 @@ public:
  *   @abstract Factory member function to construct and intialize a work loop.
  *   @result Returns a workLoop instance if constructed successfully, 0 otherwise.
  */
-	static IOWorkLoop *workLoop();
+	static OSPtr<IOWorkLoop> workLoop();
 
 /*! @function workLoopWithOptions(IOOptionBits options)
  *   @abstract Factory member function to constuct and intialize a work loop.
  *   @param options Options - kPreciousStack to avoid stack deallocation on paging path.
  *   @result Returns a workLoop instance if constructed successfully, 0 otherwise.
  */
-	static IOWorkLoop *workLoopWithOptions(IOOptionBits options);
+	static OSPtr<IOWorkLoop> workLoopWithOptions(IOOptionBits options);
 
 /*! @function init
  *   @discussion Initializes an instance of the workloop.  This method creates and initializes the signaling semaphore, the controller gate lock, and spawns the thread that will continue executing.
@@ -270,6 +280,9 @@ protected:
 	friend class IOEventSource;
 	friend class IOTimerEventSource;
 	friend class IOCommandGate;
+#if CONFIG_EXCLAVES
+	friend class IOExclaveWorkLoopAperture;
+#endif /* CONFIG_EXCLAVES */
 #if IOKITSTATS
 	friend class IOStatistics;
 #endif
@@ -349,9 +362,9 @@ protected:
 	OSMetaClassDeclareReservedUnused(IOWorkLoop, 1);
 	OSMetaClassDeclareReservedUnused(IOWorkLoop, 2);
 #else
-	OSMetaClassDeclareReservedUsed(IOWorkLoop, 0);
-	OSMetaClassDeclareReservedUsed(IOWorkLoop, 1);
-	OSMetaClassDeclareReservedUsed(IOWorkLoop, 2);
+	OSMetaClassDeclareReservedUsedX86(IOWorkLoop, 0);
+	OSMetaClassDeclareReservedUsedX86(IOWorkLoop, 1);
+	OSMetaClassDeclareReservedUsedX86(IOWorkLoop, 2);
 #endif
 	OSMetaClassDeclareReservedUnused(IOWorkLoop, 3);
 	OSMetaClassDeclareReservedUnused(IOWorkLoop, 4);

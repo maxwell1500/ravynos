@@ -70,8 +70,6 @@
 #include <sys/socket.h>
 #include <sys/vnode_internal.h>
 #include <sys/file_internal.h>
-#include <sys/callout.h>
-#include <sys/clist.h>
 #include <sys/mbuf.h>
 #include <sys/domain.h>
 #include <sys/kernel.h>
@@ -82,7 +80,7 @@
 
 struct  timezone tz = { .tz_minuteswest = 0, .tz_dsttime = 0 };
 
-#if CONFIG_EMBEDDED
+#if !defined(__x86_64__)
 #define NPROC 1000          /* Account for TOTAL_CORPSES_ALLOWED by making this slightly lower than we can. */
 #define NPROC_PER_UID 950
 #else
@@ -95,20 +93,22 @@ struct  timezone tz = { .tz_minuteswest = 0, .tz_dsttime = 0 };
 int     maxproc = NPROC;
 int     maxprocperuid = NPROC_PER_UID;
 
-#if CONFIG_EMBEDDED
-int hard_maxproc = NPROC;       /* hardcoded limit -- for embedded the number of processes is limited by the ASID space */
+#if !defined(__x86_64__)
+int hard_maxproc = NPROC;       /* hardcoded limit -- for ARM the number of processes is limited by the ASID space */
 #else
 int hard_maxproc = HNPROC;      /* hardcoded limit */
 #endif
 
 int nprocs = 0; /* XXX */
 
-//#define	NTEXT (80 + NPROC / 8)			/* actually the object cache */
-int desiredvnodes = 0;                          /* desiredvnodes is set explicitly in unix_startup.c */
-uint32_t kern_maxvnodes = 0;            /* global, to be read from the device tree */
+int desiredvnodes = 0;          /* desiredvnodes is set explicitly in unix_startup.c */
+uint32_t kern_maxvnodes = 0;    /* global, to be read from the device tree */
 
-#define MAXFILES (OPEN_MAX + 2048)
-int     maxfiles = MAXFILES;
+#if __LP64__
+int     maxfiles = 3 * OPEN_MAX;
+#else
+int     maxfiles = OPEN_MAX + 2048;
+#endif
 
 unsigned int    ncallout = 16 + 2 * NPROC;
 unsigned int nmbclusters = NMBCLUSTERS;
@@ -121,14 +121,5 @@ int aio_max_requests = CONFIG_AIO_MAX;
 int aio_max_requests_per_process = CONFIG_AIO_PROCESS_MAX;
 int aio_worker_threads = CONFIG_AIO_THREAD_COUNT;
 
-/*
- * These have to be allocated somewhere; allocating
- * them here forces loader errors if this file is omitted
- * (if they've been externed everywhere else; hah!).
- */
-struct  callout *callout;
-struct  cblock *cfree;
-struct  cblock *cfreelist = NULL;
-int     cfreecount = 0;
 struct  buf *buf_headers;
 struct domains_head domains = TAILQ_HEAD_INITIALIZER(domains);

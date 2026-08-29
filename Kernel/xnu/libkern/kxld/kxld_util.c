@@ -47,6 +47,10 @@
 
 #include "kxld_util.h"
 
+/* swap_ functions are deprecated */
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+
 #if !KERNEL
 static void unswap_macho_32(u_char *file, enum NXByteOrder host_order,
     enum NXByteOrder target_order);
@@ -67,7 +71,13 @@ static void *s_callback_data = NULL;
 
 #if !KERNEL
 static boolean_t s_cross_link_enabled  = FALSE;
-static kxld_size_t s_cross_link_page_size = PAGE_SIZE;
+/* Can't use PAGE_SIZE here because it is not a compile-time constant.
+ * However from inspection below, s_cross_link_page_size is not used
+ * unless s_cross_link_enabled is TRUE, and s_cross_link_enabled is
+ * only set to TRUE when a client specifies the value. So the
+ * default should never be used in practice,
+ */
+static kxld_size_t s_cross_link_page_size;
 #endif
 
 
@@ -150,10 +160,8 @@ kxld_calloc(size_t size)
 	void * ptr = NULL;
 
 #if KERNEL
-	ptr = kalloc(size);
-	if (ptr) {
-		bzero(ptr, size);
-	}
+	ptr = kheap_alloc_tag(KHEAP_DEFAULT, size, Z_WAITOK | Z_ZERO,
+	    VM_KERN_MEMORY_OSKEXT);
 #else
 	ptr = calloc(1, size);
 #endif
@@ -174,7 +182,8 @@ kxld_alloc(size_t size)
 	void * ptr = NULL;
 
 #if KERNEL
-	ptr = kalloc(size);
+	ptr = kheap_alloc_tag(KHEAP_DEFAULT, size, Z_WAITOK | Z_ZERO,
+	    VM_KERN_MEMORY_OSKEXT);
 #else
 	ptr = malloc(size);
 #endif
@@ -195,25 +204,12 @@ void *
 kxld_page_alloc_untracked(size_t size)
 {
 	void * ptr = NULL;
-#if KERNEL
-	kern_return_t rval = 0;
-	vm_offset_t addr = 0;
-#endif /* KERNEL */
 
 	size = round_page(size);
 
 #if KERNEL
-	if (size < KALLOC_MAX) {
-		ptr = kalloc(size);
-	} else {
-		rval = kmem_alloc(kernel_map, &addr, size, VM_KERN_MEMORY_OSKEXT);
-		if (!rval) {
-			ptr = (void *) addr;
-		}
-	}
-	if (ptr) {
-		bzero(ptr, size);
-	}
+	ptr = kheap_alloc_tag(KHEAP_DEFAULT, size, Z_WAITOK | Z_ZERO,
+	    VM_KERN_MEMORY_OSKEXT);
 #else /* !KERNEL */
 	ptr = calloc(1, size);
 #endif /* KERNEL */
@@ -241,28 +237,6 @@ kxld_page_alloc(size_t size)
 
 /*******************************************************************************
 *******************************************************************************/
-void *
-kxld_alloc_pageable(size_t size)
-{
-	size = round_page(size);
-
-#if KERNEL
-	kern_return_t rval = 0;
-	vm_offset_t ptr = 0;
-
-	rval = kmem_alloc_pageable(kernel_map, &ptr, size, VM_KERN_MEMORY_OSKEXT);
-	if (rval) {
-		ptr = 0;
-	}
-
-	return (void *) ptr;
-#else
-	return kxld_page_alloc_untracked(size);
-#endif
-}
-
-/*******************************************************************************
-*******************************************************************************/
 void
 kxld_free(void *ptr, size_t size __unused)
 {
@@ -272,7 +246,7 @@ kxld_free(void *ptr, size_t size __unused)
 #endif
 
 #if KERNEL
-	kfree(ptr, size);
+	kheap_free(KHEAP_DEFAULT, ptr, size);
 #else
 	free(ptr);
 #endif
@@ -284,13 +258,7 @@ void
 kxld_page_free_untracked(void *ptr, size_t size __unused)
 {
 #if KERNEL
-	size = round_page(size);
-
-	if (size < KALLOC_MAX) {
-		kfree(ptr, size);
-	} else {
-		kmem_free(kernel_map, (vm_offset_t) ptr, size);
-	}
+	kheap_free(KHEAP_DEFAULT, ptr, round_page(size));
 #else /* !KERNEL */
 	free(ptr);
 #endif /* KERNEL */
@@ -836,37 +804,6 @@ kxld_is_32_bit(cpu_type_t cputype)
 }
 
 /*******************************************************************************
-* Borrowed (and slightly modified) the libc implementation for the kernel
-* until the kernel has a supported strstr().
-* Find the first occurrence of find in s.
-*******************************************************************************/
-const char *
-kxld_strstr(const char *s, const char *find)
-{
-#if KERNEL
-	char c, sc;
-	size_t len;
-	if (!s || !find) {
-		return s;
-	}
-	if ((c = *find++) != 0) {
-		len = strlen(find);
-		do {
-			do {
-				if ((sc = *s++) == 0) {
-					return NULL;
-				}
-			} while (sc != c);
-		} while (strncmp(s, find, len) != 0);
-		s--;
-	}
-	return s;
-#else
-	return strstr(s, find);
-#endif /* KERNEL */
-}
-
-/*******************************************************************************
 *******************************************************************************/
 void
 kxld_print_memory_report(void)
@@ -972,3 +909,5 @@ isTargetKextName(const char * the_name)
 	return FALSE;
 }
 #endif
+
+#pragma clang diagnostic pop

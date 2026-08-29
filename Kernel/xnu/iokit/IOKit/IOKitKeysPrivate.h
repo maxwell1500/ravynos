@@ -30,6 +30,7 @@
 #define _IOKIT_IOKITKEYSPRIVATE_H
 
 #include <IOKit/IOKitKeys.h>
+#include <libkern/OSTypes.h>
 
 // properties found in the registry root
 #define kIOConsoleLockedKey                     "IOConsoleLocked"               /* value is OSBoolean */
@@ -71,6 +72,13 @@
 // care.
 #define kIONVRAMForceSyncNowPropertyKey         "IONVRAM-FORCESYNCNOW-PROPERTY"
 
+// GUID to address variables for the system NVRAM region
+#define kIOKitSystemGUID                        "40A0DDD2-77F8-4392-B4A3-1E7304206516"
+#define kIOKitSystemGUIDPrefix                  (kIOKitSystemGUID ":")
+// Internal only key to give access to system region on internal builds
+#define kIONVRAMSystemInternalAllowKey          "com.apple.private.iokit.system-nvram-internal-allow"
+// Internal only key to give access to hidden system region variables
+#define kIONVRAMSystemHiddenAllowKey            "com.apple.private.iokit.system-nvram-hidden-allow"
 
 // clientHasPrivilege security token for kIOClientPrivilegeSecureConsoleProcess
 typedef struct _IOUCProcessToken {
@@ -88,12 +96,14 @@ typedef struct _IOUCProcessToken {
 #define kIOPlatformPanicActionKey                    "IOPlatformPanicAction"         /* value is OSNumber (priority) */
 
 #define kIOPlatformFunctionHandlerSet                "IOPlatformFunctionHandlerSet"
-#if defined(__i386__) || defined(__x86_64__)
-#define kIOPlatformFunctionHandlerMaxBusDelay        "IOPlatformFunctionHandlerMaxBusDelay"
-#define kIOPlatformFunctionHandlerMaxInterruptDelay  "IOPlatformFunctionHandlerMaxInterruptDelay"
 
-#define kIOPlatformMaxBusDelay        "IOPlatformMaxBusDelay"
-#define kIOPlatformMaxInterruptDelay  "IOPlatformMaxInterruptDelay"
+#define kIOPlatformFunctionHandlerMaxBusDelay        "IOPlatformFunctionHandlerMaxBusDelay"
+#define kIOPlatformMaxBusDelay                       "IOPlatformMaxBusDelay"
+
+#if defined(__i386__) || defined(__x86_64__)
+
+#define kIOPlatformFunctionHandlerMaxInterruptDelay  "IOPlatformFunctionHandlerMaxInterruptDelay"
+#define kIOPlatformMaxInterruptDelay                 "IOPlatformMaxInterruptDelay"
 
 #endif /* defined(__i386__) || defined(__x86_64__) */
 
@@ -112,6 +122,65 @@ enum {
 	kIOClassNameOverrideNone = 0x00000001,
 };
 
+#define kIOWaitQuietPanicsEntitlement "com.apple.private.security.waitquiet-panics"
+#define kIOSystemStateEntitlement "com.apple.private.iokit.systemstate"
+
+// Entitlement allows a DK driver to publish services to other dexts, using the
+// standard IOKit registerService() or DriverKit RegisterService() api.
+// Those client dexts must have an entitlement specified by the
+// kIODriverKitPublishEntitlementsKey property in the IOService being published,
+// and subscribed in the client dext with IOServiceNotificationDispatchSource.
+#define kIODriverKitAllowsPublishEntitlementsKey "com.apple.private.driverkit.allows-publish"
+// Property is an array of strings containing entitlements, one of which needs to be present
+// in the dext looking up the service with this property
+#define kIODriverKitPublishEntitlementsKey      "IODriverKitPublishEntitlementsKey"
+
+enum {
+	kIOWaitQuietPanicOnFailure = 0x00000001,
+};
+#define kIOServiceBusyTimeoutExtensionsKey      "IOServiceBusyTimeoutExtensions"
+
 #define kIOServiceLegacyMatchingRegistryIDKey "IOServiceLegacyMatchingRegistryID"
+
+#define kIOServiceMatchDeferredKey      "IOServiceMatchDeferred"
+
+#define kIOMatchedAtBootKey                                     "IOMatchedAtBoot"
+
+#define kIOPrimaryDriverTerminateOptionsKey "IOPrimaryDriverTerminateOptions"
+
+#define kIOServiceNotificationUserKey   "IOServiceNotificationUser"
+
+#define kIOExclaveAssignedKey    "exclave-assigned"
+#define kIOExclaveProxyKey       "IOExclaveProxy"
+
+
+// IONVRAMSystemVariableList:
+// "one-time-boot-command" - Needed for diags customer install flows
+// "prevent-restores" - Keep for factory <rdar://problem/70476321>
+// "sep-debug-args" - Needed to simplify debug flows for SEP
+// "StartupMute" - Set by customers via nvram tool
+
+#define IONVRAMSystemVariableList "allow-root-hash-mismatch", \
+	                          "auto-boot", \
+	                          "auto-boot-halt-stage", \
+	                          "base-system-path", \
+	                          "boot-args", \
+	                          "boot-command", \
+	                          "boot-image", \
+	                          "bootdelay", \
+	                          "com.apple.System.boot-nonce", \
+	                          "darkboot", \
+	                          "emu", \
+	                          "one-time-boot-command", \
+	                          "policy-nonce-digests", \
+	                          "prevent-restores", \
+	                          "prev-lang:kbd", \
+	                          "root-live-fs", \
+	                          "sep-debug-args", \
+	                          "StartupMute", \
+	                          "SystemAudioVolume", \
+	                          "SystemAudioVolumeExtension", \
+	                          "SystemAudioVolumeSaved"
+
 
 #endif /* ! _IOKIT_IOKITKEYSPRIVATE_H */

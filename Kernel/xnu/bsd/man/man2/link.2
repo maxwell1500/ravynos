@@ -33,7 +33,7 @@
 .\"
 .\"     @(#)link.2	8.3 (Berkeley) 1/12/94
 .\"
-.Dd October 29, 2008
+.Dd June 3, 2021
 .Dt LINK 2
 .Os BSD 4
 .Sh NAME
@@ -163,7 +163,7 @@ names a symbolic link, a new link is created for the symbolic link
 .Fa name1
 and not its target. On OS X, not assigning AT_SYMLINK_FOLLOW to
 .Fa flag
-may result in some filesystems returning an error.
+may result in some file systems returning an error.
 .Sh RETURN VALUES
 Upon successful completion, a value of 0 is returned.  Otherwise,
 a value of -1 is returned and
@@ -248,6 +248,17 @@ The link named by
 and the file named by
 .Fa path1
 are on different file systems.
+.\" ==========
+.It Bq Er EDEADLK
+The file named by
+.Fa path1
+is a
+.Dq dataless
+file that must be materialized before being linked and the I/O policy of
+the current thread or process disallows file materialization
+.Po see
+.Xr getiopolicy_np 3
+.Pc .
 .El
 .Pp
 In addition to the errors returned by the
@@ -275,7 +286,9 @@ argument is not valid.
 .It Bq Er ENOTSUP
 .Fa flag
 was not set to
-.Dv AT_SYMLINK_FOLLOW (some filesystems only)
+.Dv AT_SYMLINK_FOLLOW (some file systems only).
+.It Bq Er ENOTSUP
+The underlying file system does not support this call.
 .It Bq Er ENOTDIR
 The
 .Fa name1

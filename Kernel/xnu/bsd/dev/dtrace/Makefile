@@ -8,5 +8,9 @@ include $(MakeInc_def)
 
 INSTTEXTFILES_SUBDIRS = scripts
 
+INSTTEXTFILES_SUBDIRS_X86_64 = scripts
+INSTTEXTFILES_SUBDIRS_X86_64H = scripts
+INSTTEXTFILES_SUBDIRS_ARM64 = scripts
+
 include $(MakeInc_rule)
 include $(MakeInc_dir)

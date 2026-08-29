@@ -47,6 +47,8 @@
 #ifndef _MACH_TYPES_H_
 #define _MACH_TYPES_H_
 
+#include <stddef.h>
+#include <stdint.h>
 #include "libsa/machine/types.h"
 
 #ifndef _SIZE_T
@@ -69,7 +71,7 @@ typedef struct _quad_ {
 
 typedef char *          caddr_t;        /* address of a (signed) char */
 
-typedef unsigned int    daddr_t;        /* an unsigned 32 */
+typedef int32_t           daddr_t;        /* disk address - matches bsd/sys/types.h */
 #if 0 /* off_t should be 64-bit ! */
 typedef unsigned int    off_t;          /* another unsigned 32 */
 #endif

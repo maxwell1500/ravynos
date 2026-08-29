@@ -58,14 +58,17 @@
  */
 
 #include <kern/cpu_number.h>
-#include <kern/kalloc.h>
 #include <kern/cpu_data.h>
+#include <kern/percpu.h>
+#include <kern/monotonic.h>
+#include <kern/misc_protos.h>
 #include <mach/mach_types.h>
 #include <mach/machine.h>
 #include <mach/vm_map.h>
 #include <mach/machine/vm_param.h>
-#include <vm/vm_kern.h>
+#include <vm/vm_kern_xnu.h>
 #include <vm/vm_map.h>
+#include <san/kasan.h>
 
 #include <i386/bit_routines.h>
 #include <i386/mp_desc.h>
@@ -77,13 +80,6 @@
 #if CONFIG_MCA
 #include <i386/machine_check.h>
 #endif
-
-#include <kern/misc_protos.h>
-
-#if MONOTONIC
-#include <kern/monotonic.h>
-#endif /* MONOTONIC */
-#include <san/kasan.h>
 
 #define K_INTR_GATE (ACC_P|ACC_PL_K|ACC_INTR_GATE)
 #define U_INTR_GATE (ACC_P|ACC_PL_U|ACC_INTR_GATE)
@@ -188,9 +184,12 @@ cpu_data_t *cpu_data_master = &scdatas[0];
 
 cpu_data_t      *cpu_data_ptr[MAX_CPUS] = {[0] = &scdatas[0] };
 
+SECURITY_READ_ONLY_LATE(struct percpu_base) percpu_base;
+
 decl_simple_lock_data(, ncpus_lock);     /* protects real_ncpus */
 unsigned int    real_ncpus = 1;
 unsigned int    max_ncpus = MAX_CPUS;
+unsigned int    max_cpus_from_firmware = 0;
 
 extern void hi64_sysenter(void);
 extern void hi64_syscall(void);
@@ -470,12 +469,18 @@ cpu_desc_load(cpu_data_t *cdp)
 	cpu_desc_index_t        *cdi = &cdp->cpu_desc_index;
 
 	postcode(CPU_DESC_LOAD_ENTRY);
+	extern void pal_serial_putc(char);
+	const char *d1 = "    cpu_desc_load: Setting GS base MSRs...\r\n";
+	while (*d1) { pal_serial_putc(*d1++); }
 
 	/* Stuff the kernel per-cpu data area address into the MSRs */
 	postcode(CPU_DESC_LOAD_GS_BASE);
 	wrmsr64(MSR_IA32_GS_BASE, (uintptr_t) cdp);
 	postcode(CPU_DESC_LOAD_KERNEL_GS_BASE);
 	wrmsr64(MSR_IA32_KERNEL_GS_BASE, (uintptr_t) cdp);
+
+	const char *d2 = "    cpu_desc_load: GS base set! Clearing TSS busy...\r\n";
+	while (*d2) { pal_serial_putc(*d2++); }
 
 	/*
 	 * Ensure the TSS segment's busy bit is clear. This is required
@@ -490,6 +495,9 @@ cpu_desc_load(cpu_data_t *cdp)
 	cdi->cdi_idtb.size = 0x1000 + cdp->cpu_number;
 	cdi->cdi_idtu.size = cdi->cdi_idtb.size;
 
+	const char *d3 = "    cpu_desc_load: loading GDT/IDT/LDT/TSS...\r\n";
+	while (*d3) { pal_serial_putc(*d3++); }
+
 	postcode(CPU_DESC_LOAD_GDT);
 	lgdt((uintptr_t *) &cdi->cdi_gdtu);
 	postcode(CPU_DESC_LOAD_IDT);
@@ -500,8 +508,9 @@ cpu_desc_load(cpu_data_t *cdp)
 	set_tr(KERNEL_TSS);
 
 	postcode(CPU_DESC_LOAD_EXIT);
+	const char *d4 = "    cpu_desc_load: completed successfully!\r\n";
+	while (*d4) { pal_serial_putc(*d4++); }
 }
-
 /*
  * Set MSRs for sysenter/sysexit and syscall/sysret for 64-bit.
  */
@@ -510,11 +519,27 @@ cpu_syscall_init(cpu_data_t *cdp)
 {
 #pragma unused(cdp)
 
+	const char *s1 = "    cpu_syscall_init: wrmsr SYSENTER_CS/EIP/ESP...\r\n";
+	while (*s1) { pal_serial_putc(*s1++); }
+
+	const char *w1 = "      writing SYSENTER_CS...\r\n";
+	while (*w1) { pal_serial_putc(*w1++); }
 	wrmsr64(MSR_IA32_SYSENTER_CS, SYSENTER_CS);
+
+	const char *w2 = "      writing SYSENTER_EIP...\r\n";
+	while (*w2) { pal_serial_putc(*w2++); }
 	wrmsr64(MSR_IA32_SYSENTER_EIP, DBLMAP((uintptr_t) hi64_sysenter));
+
+	const char *w3 = "      writing SYSENTER_ESP...\r\n";
+	while (*w3) { pal_serial_putc(*w3++); }
 	wrmsr64(MSR_IA32_SYSENTER_ESP, current_cpu_datap()->cpu_desc_index.cdi_sstku);
+
+	const char *w4 = "      writing EFER SCE...\r\n";
+	while (*w4) { pal_serial_putc(*w4++); }
 	/* Enable syscall/sysret */
 	wrmsr64(MSR_IA32_EFER, rdmsr64(MSR_IA32_EFER) | MSR_IA32_EFER_SCE);
+	const char *s2 = "    cpu_syscall_init: wrmsr LSTAR/STAR/FMASK...\r\n";
+	while (*s2) { pal_serial_putc(*s2++); }
 
 	/*
 	 * MSRs for 64-bit syscall/sysret
@@ -531,14 +556,41 @@ cpu_syscall_init(cpu_data_t *cdp)
 	 * should we choose to return via an IRET.
 	 */
 	wrmsr64(MSR_IA32_FMASK, EFL_DF | EFL_IF | EFL_TF | EFL_NT);
+	const char *s3 = "    cpu_syscall_init: completed successfully!\r\n";
+	while (*s3) { pal_serial_putc(*s3++); }
 }
 extern vm_offset_t dyn_dblmap(vm_offset_t, vm_offset_t);
 uint64_t ldt_alias_offset;
 
+__startup_func
+static void
+cpu_data_startup_init(void)
+{
+	int flags = KMA_GUARD_FIRST | KMA_GUARD_LAST | KMA_PERMANENT |
+	    KMA_ZERO | KMA_KOBJECT | KMA_NOFAIL;
+	uint32_t cpus = max_cpus_from_firmware;
+	vm_size_t size = percpu_section_size() * (cpus - 1);
+
+	percpu_base.size = percpu_section_size();
+	if (cpus == 0) {
+		panic("percpu: max_cpus_from_firmware not yet initialized");
+	}
+	if (cpus == 1) {
+		percpu_base.start = VM_MAX_KERNEL_ADDRESS;
+		return;
+	}
+
+	kmem_alloc(kernel_map, &percpu_base.start,
+	    round_page(size) + ptoa(2), flags, VM_KERN_MEMORY_CPU);
+
+	percpu_base.start += PAGE_SIZE - percpu_section_start();
+	percpu_base.end    = percpu_base.start + size - 1;
+}
+STARTUP(PERCPU, STARTUP_RANK_FIRST, cpu_data_startup_init);
+
 cpu_data_t *
 cpu_data_alloc(boolean_t is_boot_cpu)
 {
-	int             ret;
 	cpu_data_t      *cdp;
 
 	if (is_boot_cpu) {
@@ -546,10 +598,7 @@ cpu_data_alloc(boolean_t is_boot_cpu)
 		cdp = cpu_datap(0);
 		if (cdp->cpu_processor == NULL) {
 			simple_lock_init(&ncpus_lock, 0);
-			cdp->cpu_processor = cpu_processor_alloc(TRUE);
-#if NCOPY_WINDOWS > 0
-			cdp->cpu_pmap = pmap_cpu_alloc(TRUE);
-#endif
+			cdp->cpu_processor = PERCPU_GET_MASTER(processor);
 		}
 		return cdp;
 	}
@@ -572,17 +621,16 @@ cpu_data_alloc(boolean_t is_boot_cpu)
 	cdp->cpu_this = cdp;
 	cdp->cpu_number = cnum;
 	cdp->cd_shadow = &cpshadows[cnum];
+	cdp->cpu_pcpu_base = percpu_base.start + (cnum - 1) * percpu_section_size();
+	cdp->cpu_processor = PERCPU_GET_WITH_BASE(cdp->cpu_pcpu_base, processor);
+
 	/*
 	 * Allocate interrupt stack:
 	 */
-	ret = kmem_alloc(kernel_map,
-	    (vm_offset_t *) &cdp->cpu_int_stack_top,
-	    INTSTACK_SIZE, VM_KERN_MEMORY_CPU);
-	if (ret != KERN_SUCCESS) {
-		panic("cpu_data_alloc() int stack failed, ret=%d\n", ret);
-	}
-	bzero((void*) cdp->cpu_int_stack_top, INTSTACK_SIZE);
-	cdp->cpu_int_stack_top += INTSTACK_SIZE;
+	kmem_alloc(kernel_map, (vm_offset_t *)&cdp->cpu_int_stack_top,
+	    INTSTACK_SIZE + ptoa(2), KMA_NOFAIL | KMA_PERMANENT | KMA_ZERO |
+	    KMA_GUARD_FIRST | KMA_GUARD_LAST | KMA_KOBJECT, VM_KERN_MEMORY_CPU);
+	cdp->cpu_int_stack_top += INTSTACK_SIZE + PAGE_SIZE;
 
 	/*
 	 * Allocate descriptor table:
@@ -599,10 +647,9 @@ cpu_data_alloc(boolean_t is_boot_cpu)
 		 * Allocate LDT
 		 */
 		vm_offset_t ldtalloc = 0, ldtallocsz = round_page_64(MAX_CPUS * sizeof(struct real_descriptor) * LDTSZ);
-		ret = kmem_alloc(kernel_map, (vm_offset_t *) &ldtalloc, ldtallocsz, VM_KERN_MEMORY_CPU);
-		if (ret != KERN_SUCCESS) {
-			panic("cpu_data_alloc() ldt failed, kmem_alloc=%d\n", ret);
-		}
+
+		kmem_alloc(kernel_map, (vm_offset_t *)&ldtalloc,
+		    ldtallocsz, KMA_NOFAIL | KMA_KOBJECT, VM_KERN_MEMORY_CPU);
 
 		simple_lock(&ncpus_lock, LCK_GRP_NULL);
 		if (dyn_ldts == NULL) {
@@ -739,93 +786,6 @@ valid_user_segment_selectors(uint16_t cs,
 	       valid_user_data_selector(gs);
 }
 
-#if NCOPY_WINDOWS > 0
-
-static vm_offset_t user_window_base = 0;
-
-void
-cpu_userwindow_init(int cpu)
-{
-	cpu_data_t              *cdp = cpu_data_ptr[cpu];
-	vm_offset_t             user_window;
-	vm_offset_t             vaddr;
-	int                     num_cpus;
-
-	num_cpus = ml_get_max_cpus();
-
-	if (cpu >= num_cpus) {
-		panic("cpu_userwindow_init: cpu > num_cpus");
-	}
-
-	if (user_window_base == 0) {
-		if (vm_allocate(kernel_map, &vaddr,
-		    (NBPDE * NCOPY_WINDOWS * num_cpus) + NBPDE,
-		    VM_FLAGS_ANYWHERE | VM_MAKE_TAG(VM_KERN_MEMORY_CPU)) != KERN_SUCCESS) {
-			panic("cpu_userwindow_init: "
-			    "couldn't allocate user map window");
-		}
-
-		/*
-		 * window must start on a page table boundary
-		 * in the virtual address space
-		 */
-		user_window_base = (vaddr + (NBPDE - 1)) & ~(NBPDE - 1);
-
-		/*
-		 * get rid of any allocation leading up to our
-		 * starting boundary
-		 */
-		vm_deallocate(kernel_map, vaddr, user_window_base - vaddr);
-
-		/*
-		 * get rid of tail that we don't need
-		 */
-		user_window = user_window_base +
-		    (NBPDE * NCOPY_WINDOWS * num_cpus);
-
-		vm_deallocate(kernel_map, user_window,
-		    (vaddr +
-		    ((NBPDE * NCOPY_WINDOWS * num_cpus) + NBPDE)) -
-		    user_window);
-	}
-
-	user_window = user_window_base + (cpu * NCOPY_WINDOWS * NBPDE);
-
-	cdp->cpu_copywindow_base = user_window;
-	/*
-	 * Abuse this pdp entry, the pdp now actually points to
-	 * an array of copy windows addresses.
-	 */
-	cdp->cpu_copywindow_pdp  = pmap_pde(kernel_pmap, user_window);
-}
-
-void
-cpu_physwindow_init(int cpu)
-{
-	cpu_data_t              *cdp = cpu_data_ptr[cpu];
-	vm_offset_t             phys_window = cdp->cpu_physwindow_base;
-
-	if (phys_window == 0) {
-		if (vm_allocate(kernel_map, &phys_window,
-		    PAGE_SIZE, VM_FLAGS_ANYWHERE | VM_MAKE_TAG(VM_KERN_MEMORY_CPU))
-		    != KERN_SUCCESS) {
-			panic("cpu_physwindow_init: "
-			    "couldn't allocate phys map window");
-		}
-
-		/*
-		 * make sure the page that encompasses the
-		 * pte pointer we're interested in actually
-		 * exists in the page table
-		 */
-		pmap_expand(kernel_pmap, phys_window, PMAP_EXPAND_OPTIONS_NONE);
-
-		cdp->cpu_physwindow_base = phys_window;
-		cdp->cpu_physwindow_ptep = vtopte(phys_window);
-	}
-}
-#endif /* NCOPY_WINDOWS > 0 */
-
 /*
  * Allocate a new interrupt stack for the boot processor from the
  * heap rather than continue to use the statically allocated space.
@@ -834,17 +794,15 @@ cpu_physwindow_init(int cpu)
 void
 cpu_data_realloc(void)
 {
-	int             ret;
 	vm_offset_t     istk;
 	cpu_data_t      *cdp;
 	boolean_t       istate;
 
-	ret = kmem_alloc(kernel_map, &istk, INTSTACK_SIZE, VM_KERN_MEMORY_CPU);
-	if (ret != KERN_SUCCESS) {
-		panic("cpu_data_realloc() stack alloc, ret=%d\n", ret);
-	}
-	bzero((void*) istk, INTSTACK_SIZE);
-	istk += INTSTACK_SIZE;
+	kmem_alloc(kernel_map, &istk,
+	    INTSTACK_SIZE + ptoa(2), KMA_NOFAIL | KMA_PERMANENT | KMA_ZERO |
+	    KMA_GUARD_FIRST | KMA_GUARD_LAST | KMA_KOBJECT, VM_KERN_MEMORY_CPU);
+
+	istk += INTSTACK_SIZE + PAGE_SIZE;
 
 	cdp = &scdatas[0];
 

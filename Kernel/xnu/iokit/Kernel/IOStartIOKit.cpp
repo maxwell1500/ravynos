@@ -28,6 +28,7 @@
 
 #include <libkern/c++/OSUnserialize.h>
 #include <libkern/c++/OSKext.h>
+#include <libkern/section_keywords.h>
 #include <libkern/version.h>
 #include <IOKit/IORegistryEntry.h>
 #include <IOKit/IODeviceTreeSupport.h>
@@ -35,6 +36,7 @@
 #include <IOKit/IOUserClient.h>
 #include <IOKit/IOMemoryDescriptor.h>
 #include <IOKit/IOPlatformExpert.h>
+#include <IOKit/IOKernelReporters.h>
 #include <IOKit/IOLib.h>
 #include <IOKit/IOKitKeys.h>
 #include <IOKit/IOKitDebug.h>
@@ -52,13 +54,17 @@ const OSSymbol * gIOProgressBackbufferKey;
 OSSet *          gIORemoveOnReadProperties;
 
 extern "C" {
-void StartIOKit( void * p1, void * p2, void * p3, void * p4 );
+void InitIOKit(void *dtTop);
+void ConfigureIOKit(void);
+void StartIOKitMatching(void);
 void IORegistrySetOSBuildVersion(char * build_version);
 void IORecordProgressBackbuffer(void * buffer, size_t size, uint32_t theme);
 
 extern void OSlibkernInit(void);
 
 void iokit_post_constructor_init(void);
+
+SECURITY_READ_ONLY_LATE(static IOPlatformExpertDevice*) gRootNub;
 
 #include <kern/clock.h>
 #include <sys/time.h>
@@ -71,11 +77,8 @@ IOKitInitializeTime( void )
 	t.tv_sec = 30;
 	t.tv_nsec = 0;
 
-// RTC is not present on this target
-#ifndef BCM2837
 	IOService::waitForService(
 		IOService::resourceMatching("IORTC"), &t );
-#endif
 #if defined(__i386__) || defined(__x86_64__)
 	IOService::waitForService(
 		IOService::resourceMatching("IONVRAM"), &t );
@@ -91,6 +94,7 @@ iokit_post_constructor_init(void)
 	OSObject *                  obj;
 
 	IOCPUInitialize();
+	IOPlatformActionsInitialize();
 	root = IORegistryEntry::initialize();
 	assert( root );
 	IOService::initialize();
@@ -100,6 +104,7 @@ iokit_post_constructor_init(void)
 	IOUserClient::initialize();
 	IOMemoryDescriptor::initialize();
 	IORootParent::initialize();
+	IOReporter::initialize();
 
 	// Initializes IOPMinformeeList class-wide shared lock
 	IOPMinformeeList::getSharedRecursiveLock();
@@ -123,35 +128,10 @@ iokit_post_constructor_init(void)
 void (*record_startup_extensions_function)(void) = NULL;
 
 void
-StartIOKit( void * p1, void * p2, void * p3, void * p4 )
+InitIOKit(void *dtTop)
 {
-	IOPlatformExpertDevice *    rootNub;
-	int                         debugFlags;
-
-	if (PE_parse_boot_argn( "io", &debugFlags, sizeof(debugFlags))) {
-		gIOKitDebug = debugFlags;
-	}
-#if DEVELOPMENT || DEBUG
-	else {
-		gIOKitDebug |= kIOWaitQuietPanics;
-	}
-#endif /* DEVELOPMENT || DEBUG */
-
-	if (PE_parse_boot_argn( "iotrace", &debugFlags, sizeof(debugFlags))) {
-		gIOKitTrace = debugFlags;
-	}
-
 	// Compat for boot-args
 	gIOKitTrace |= (gIOKitDebug & kIOTraceCompatBootArgs);
-
-	if (PE_parse_boot_argn( "pmtimeout", &debugFlags, sizeof(debugFlags))) {
-		gCanSleepTimeout = debugFlags;
-	}
-
-	if (PE_parse_boot_argn( "dk", &debugFlags, sizeof(debugFlags))) {
-		gIODKDebug = debugFlags;
-	}
-
 
 	//
 	// Have to start IOKit environment before we attempt to start
@@ -163,35 +143,57 @@ StartIOKit( void * p1, void * p2, void * p3, void * p4 )
 	IOLibInit();
 	OSlibkernInit();
 	IOMachPortInitialize();
-	devsw_init();
 
 	gIOProgressBackbufferKey  = OSSymbol::withCStringNoCopy(kIOProgressBackbufferKey);
 	gIORemoveOnReadProperties = OSSet::withObjects((const OSObject **) &gIOProgressBackbufferKey, 1);
 
 	interruptAccountingInit();
 
-	rootNub = new IOPlatformExpertDevice;
-	if (rootNub && rootNub->initWithArgs( p1, p2, p3, p4)) {
-		rootNub->attach( NULL );
+	gRootNub = new IOPlatformExpertDevice;
+	if (__improbable(gRootNub == NULL)) {
+		panic("Failed to allocate IOKit root nub");
+	}
+	bool ok = gRootNub->init(dtTop);
+	if (__improbable(!ok)) {
+		panic("Failed to initialize IOKit root nub");
+	}
+	gRootNub->attach(NULL);
 
-		/* If the bootstrap segment set up a function to record startup
-		 * extensions, call it now.
-		 */
-		if (record_startup_extensions_function) {
-		  record_startup_extensions_function();
-		}
+	/* If the bootstrap segment set up a function to record startup
+	 * extensions, call it now.
+	 */
+	if (record_startup_extensions_function) {
+		record_startup_extensions_function();
+	}
+}
 
-		rootNub->registerService();
+void
+ConfigureIOKit(void)
+{
+	assert(gRootNub != NULL);
+	gRootNub->configureDefaults();
+}
+
+void
+StartIOKitMatching(void)
+{
+	SOCD_TRACE_XNU(START_IOKIT);
+	assert(gRootNub != NULL);
+	bool ok = gRootNub->startIOServiceMatching();
+	if (__improbable(!ok)) {
+		panic("Failed to start IOService matching");
+	}
 
 #if !NO_KEXTD
-		/* Add a busy count to keep the registry busy until kextd has
-		 * completely finished launching. This is decremented when kextd
+	if (OSKext::iokitDaemonAvailable()) {
+		/* Add a busy count to keep the registry busy until the IOKit daemon has
+		 * completely finished launching. This is decremented when the IOKit daemon
 		 * messages the kernel after the in-kernel linker has been
 		 * removed and personalities have been sent.
 		 */
 		IOService::getServiceRoot()->adjustBusy(1);
-#endif
 	}
+#endif
 }
 
 void
@@ -214,8 +216,12 @@ void
 IORecordProgressBackbuffer(void * buffer, size_t size, uint32_t theme)
 {
 	IORegistryEntry * chosen;
+
+	if (((unsigned int) size) != size) {
+		return;
+	}
 	if ((chosen = IORegistryEntry::fromPath(kIODeviceTreePlane ":/chosen"))) {
-		chosen->setProperty(kIOProgressBackbufferKey, buffer, size);
+		chosen->setProperty(kIOProgressBackbufferKey, buffer, (unsigned int) size);
 		chosen->setProperty(kIOProgressColorThemeKey, theme, 32);
 
 		chosen->release();

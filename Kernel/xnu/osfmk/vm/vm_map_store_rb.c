@@ -27,12 +27,11 @@
  */
 
 #include <kern/backtrace.h>
-#include <vm/vm_map_store_rb.h>
+#include <vm/vm_map_xnu.h>
 
 RB_GENERATE(rb_head, vm_map_store, entry, rb_node_compare);
 
-#define VME_FOR_STORE( store)   \
-	(vm_map_entry_t)(((unsigned long)store) - ((unsigned long)sizeof(struct vm_map_links)))
+#define VME_FOR_STORE(ptr) __container_of(ptr, struct vm_map_entry, store)
 
 void
 vm_map_store_init_rb( struct vm_map_header* hdr )
@@ -47,7 +46,7 @@ rb_node_compare(struct vm_map_store *node, struct vm_map_store *parent)
 	vm_map_entry_t vme_p;
 
 	vme_c = VME_FOR_STORE(node);
-	vme_p =  VME_FOR_STORE(parent);
+	vme_p = VME_FOR_STORE(parent);
 	if (vme_c->vme_start < vme_p->vme_start) {
 		return -1;
 	}
@@ -57,24 +56,7 @@ rb_node_compare(struct vm_map_store *node, struct vm_map_store *parent)
 	return 0;
 }
 
-__dead2
-void
-vm_map_store_walk_rb(vm_map_t map, vm_map_entry_t *wrong_vme, vm_map_entry_t *vm_entry)
-{
-	struct vm_map_header *hdr = &map->hdr;
-	struct vm_map_store  *rb_entry = RB_ROOT(&hdr->rb_head_store);
-	vm_map_entry_t       cur = *vm_entry;
-
-	rb_entry = RB_FIND(rb_head, &hdr->rb_head_store, &(cur->store));
-	if (rb_entry == NULL) {
-		panic("NO SUCH ENTRY %p. Gave back %p", *vm_entry, *wrong_vme);
-	} else {
-		panic("Cur: %p, L: %p, R: %p", VME_FOR_STORE(rb_entry), VME_FOR_STORE(RB_LEFT(rb_entry, entry)), VME_FOR_STORE(RB_RIGHT(rb_entry, entry)));
-	}
-}
-
-
-boolean_t
+bool
 vm_map_store_lookup_entry_rb(vm_map_t map, vm_map_offset_t address, vm_map_entry_t *vm_entry)
 {
 	struct vm_map_header *hdr = &map->hdr;
@@ -84,9 +66,6 @@ vm_map_store_lookup_entry_rb(vm_map_t map, vm_map_offset_t address, vm_map_entry
 
 	while (rb_entry != (struct vm_map_store*)NULL) {
 		cur =  VME_FOR_STORE(rb_entry);
-		if (cur == VM_MAP_ENTRY_NULL) {
-			panic("no entry");
-		}
 		if (address >= cur->vme_start) {
 			if (address < cur->vme_end) {
 				*vm_entry = cur;
@@ -106,14 +85,18 @@ vm_map_store_lookup_entry_rb(vm_map_t map, vm_map_offset_t address, vm_map_entry
 }
 
 void
-vm_map_store_entry_link_rb( struct vm_map_header *mapHdr, __unused vm_map_entry_t after_where, vm_map_entry_t entry)
+vm_map_store_entry_link_rb(struct vm_map_header *mapHdr, vm_map_entry_t entry)
 {
 	struct rb_head *rbh = &(mapHdr->rb_head_store);
 	struct vm_map_store *store = &(entry->store);
 	struct vm_map_store *tmp_store;
+
 	if ((tmp_store = RB_INSERT( rb_head, rbh, store )) != NULL) {
-		panic("VMSEL: INSERT FAILED: 0x%lx, 0x%lx, 0x%lx, 0x%lx", (uintptr_t)entry->vme_start, (uintptr_t)entry->vme_end,
-		    (uintptr_t)(VME_FOR_STORE(tmp_store))->vme_start, (uintptr_t)(VME_FOR_STORE(tmp_store))->vme_end);
+		panic("VMSEL: INSERT FAILED: 0x%lx, 0x%lx, 0x%lx, 0x%lx",
+		    (uintptr_t)entry->vme_start,
+		    (uintptr_t)entry->vme_end,
+		    (uintptr_t)(VME_FOR_STORE(tmp_store))->vme_start,
+		    (uintptr_t)(VME_FOR_STORE(tmp_store))->vme_end);
 	}
 }
 
@@ -148,8 +131,6 @@ vm_map_store_copy_reset_rb( vm_map_copy_t copy, vm_map_entry_t entry, int nentri
 	}
 }
 
-extern zone_t   vm_map_holes_zone;      /* zone for vm map holes (vm_map_links) structures */
-
 void
 vm_map_combine_hole(vm_map_t map, vm_map_entry_t hole_entry);
 void
@@ -171,7 +152,7 @@ vm_map_combine_hole(__unused vm_map_t map, vm_map_entry_t hole_entry)
 	middle_hole_entry->vme_prev = NULL;
 	middle_hole_entry->vme_next = NULL;
 
-	zfree(vm_map_holes_zone, middle_hole_entry);
+	zfree_id(ZONE_ID_VM_MAP_HOLES, middle_hole_entry);
 
 	assert(hole_entry->vme_start < hole_entry->vme_end);
 	assert(last_hole_entry->vme_start < last_hole_entry->vme_end);
@@ -208,7 +189,7 @@ vm_map_delete_hole(vm_map_t map, vm_map_entry_t hole_entry)
 
 	hole_entry->vme_next = NULL;
 	hole_entry->vme_prev = NULL;
-	zfree(vm_map_holes_zone, hole_entry);
+	zfree_id(ZONE_ID_VM_MAP_HOLES, hole_entry);
 }
 
 
@@ -333,14 +314,14 @@ update_holes_on_entry_deletion(vm_map_t map, vm_map_entry_t old_entry)
 
 		if (hole_entry != CAST_TO_VM_MAP_ENTRY(map->holes_list)) {
 			if (hole_entry->vme_start > old_entry->vme_start) {
-				panic("Hole hint failed: Hole entry start: 0x%llx, entry start: 0x%llx, map hole start: 0x%llx, map hint start: 0x%llx\n",
+				panic("Hole hint failed: Hole entry start: 0x%llx, entry start: 0x%llx, map hole start: 0x%llx, map hint start: 0x%llx",
 				    (unsigned long long)hole_entry->vme_start,
 				    (unsigned long long)old_entry->vme_start,
 				    (unsigned long long)map->holes_list->start,
 				    (unsigned long long)map->hole_hint->start);
 			}
 			if (hole_entry->vme_end > old_entry->vme_start) {
-				panic("Hole hint failed: Hole entry end: 0x%llx, entry start: 0x%llx, map hole start: 0x%llx, map hint start: 0x%llx\n",
+				panic("Hole hint failed: Hole entry end: 0x%llx, entry start: 0x%llx, map hole start: 0x%llx, map hint start: 0x%llx",
 				    (unsigned long long)hole_entry->vme_end,
 				    (unsigned long long)old_entry->vme_start,
 				    (unsigned long long)map->holes_list->start,
@@ -427,7 +408,7 @@ update_holes_on_entry_deletion(vm_map_t map, vm_map_entry_t old_entry)
 		struct vm_map_links     *new_hole_entry = NULL;
 		vm_map_entry_t          l_next, l_prev;
 
-		new_hole_entry = zalloc(vm_map_holes_zone);
+		new_hole_entry = zalloc_id(ZONE_ID_VM_MAP_HOLES, Z_WAITOK | Z_NOFAIL);
 
 		/*
 		 * First hole in the map?
@@ -553,7 +534,7 @@ update_holes_on_entry_creation(vm_map_t map, vm_map_entry_t new_entry)
 			/* Case B */
 			struct vm_map_links *new_hole_entry = NULL;
 
-			new_hole_entry = zalloc(vm_map_holes_zone);
+			new_hole_entry = zalloc_id(ZONE_ID_VM_MAP_HOLES, Z_WAITOK | Z_NOFAIL);
 
 #if DEBUG
 			copy_hole_info(hole_entry, &old_hole_entry);
@@ -635,7 +616,7 @@ update_holes_on_entry_creation(vm_map_t map, vm_map_entry_t new_entry)
 		}
 	}
 
-	panic("Illegal action: h1: %p, s:0x%llx, e:0x%llx...h2:%p, s:0x%llx, e:0x%llx...h3:0x%p, s:0x%llx, e:0x%llx\n",
+	panic("Illegal action: h1: %p, s:0x%llx, e:0x%llx...h2:%p, s:0x%llx, e:0x%llx...h3:0x%p, s:0x%llx, e:0x%llx",
 	    hole_entry->vme_prev,
 	    (unsigned long long)hole_entry->vme_prev->vme_start,
 	    (unsigned long long)hole_entry->vme_prev->vme_end,
@@ -648,13 +629,13 @@ update_holes_on_entry_creation(vm_map_t map, vm_map_entry_t new_entry)
 }
 
 void
-update_first_free_rb(vm_map_t map, vm_map_entry_t entry, boolean_t new_entry_creation)
+update_first_free_rb(vm_map_t map, vm_map_entry_t entry, bool new_entry_creation)
 {
 	if (map->holelistenabled) {
 		/*
 		 * Holes can be used to track ranges all the way up to MACH_VM_MAX_ADDRESS or more (e.g. kernel map).
 		 */
-		vm_map_offset_t max_valid_offset = (map->max_offset > MACH_VM_MAX_ADDRESS) ? map->max_offset : MACH_VM_MAX_ADDRESS;
+		vm_map_offset_t max_valid_offset = MAX(map->max_offset, (vm_map_offset_t)MACH_VM_MAX_ADDRESS);
 
 		/*
 		 * Clipping an entry will not result in the creation/deletion/modification of

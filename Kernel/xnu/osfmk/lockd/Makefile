@@ -14,7 +14,7 @@ PRIVATE_DATAFILES = lockd_mach_types.h ${MIG_DEFS}
 KERNELFILES = ${PRIVATE_DATAFILES}
 
 INSTALL_MI_LIST =
-INSTALL_MI_LCL_LIST = ${PRIVATE_DATAFILES}
+INSTALL_SF_MI_LCL_LIST = ${PRIVATE_DATAFILES}
 
 INSTALL_MI_GEN_LIST =
 
@@ -42,7 +42,7 @@ COMP_FILES = ${MIG_KUSRC}
 do_build_all:: $(COMP_FILES)
 
 ${MIG_KUSRC} : lockd_mach.defs
-	$(call makelog,$(ColorM)MIG$(Color0) $(ColorF)$@$(Color0))
+	@$(LOG_MIG) $@
 	$(_v)${MIG} ${MIGFLAGS} ${MIGKUFLAGS}	\
 		-user    lockd_mach.c		\
 		-header  lockd_mach.h		\

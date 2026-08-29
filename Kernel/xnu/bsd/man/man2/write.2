@@ -32,12 +32,13 @@
 .\"     @(#)write.2	8.5 (Berkeley) 4/2/94
 .\" $FreeBSD: src/lib/libc/sys/write.2,v 1.12.2.7 2001/12/14 18:34:02 ru Exp $
 .\"
-.Dd March 18, 2015 
+.Dd June 3, 2021
 .Dt WRITE 2
 .Os
 .Sh NAME
 .Nm pwrite ,
 .Nm write ,
+.Nm pwritev ,
 .Nm writev
 .Nd write output
 .Sh LIBRARY
@@ -64,6 +65,13 @@
 .Fa "const struct iovec *iov"
 .Fa "int iovcnt"
 .Fc
+.Ft ssize_t
+.Fo pwritev
+.Fa "int fildes"
+.Fa "const struct iovec *iov"
+.Fa "int iovcnt"
+.Fa "off_t offset"
+.Fc
 .Sh DESCRIPTION
 .Fn write
 attempts to write
@@ -80,11 +88,15 @@ buffers specified by the members of the
 .Fa iov
 array: iov[0], iov[1], ..., iov[iovcnt\|-\|1].
 .Fn pwrite
-performs the same function, but writes to the specified position in
+and
+.Fn pwritev
+perform the same functions, but write to the specified position in
 the file without modifying the file pointer.
 .Pp
 For
-.Fn writev ,
+.Fn writev
+and
+.Fn pwritev ,
 the
 .Fa iovec
 structure is defined as:
@@ -101,6 +113,8 @@ Each
 entry specifies the base address and length of an area
 in memory from which data should be written.
 .Fn writev
+and
+.Fn pwritev
 will always write a complete area before proceeding
 to the next.
 .Pp
@@ -136,6 +150,15 @@ and
 may write fewer bytes than requested;
 the return value must be noted,
 and the remainder of the operation should be retried when possible.
+.Pp
+.Fn write
+and
+.Fn pwrite
+will fail if the parameter
+.Fa nbyte
+exceeds
+.Dv INT_MAX ,
+and they do not attempt a partial write.
 .Sh RETURN VALUES
 Upon successful completion the number of bytes
 which were written is returned.
@@ -146,8 +169,9 @@ is set to indicate the error.
 The
 .Fn write ,
 .Fn writev ,
+.Fn pwrite ,
 and
-.Fn pwrite
+.Fn pwritev
 system calls will fail and the file pointer will remain unchanged if:
 .Bl -tag -width Er
 .\" ===========
@@ -201,6 +225,12 @@ associated with
 .It Bq Er EINTR
 A signal interrupts the write before it could be completed.
 .\" ===========
+.It Bq Er EINVAL
+The value provided for
+.Fa nbyte
+exceeds
+.Dv INT_MAX .
+.\" ===========
 .It Bq Er EIO
 An I/O error occurs while reading from or writing to the file system.
 .\" ===========
@@ -226,6 +256,15 @@ for reading by any process.
 An attempt is made to write to a socket of type
 .Dv SOCK_STREAM
 that is not connected to a peer socket.
+.\" ===========
+.It Bq Er EDEADLK
+The file is a
+.Dq dataless
+file that requires materialization and the I/O policy of the current thread
+or process disallows dataless file materialization
+.Po see
+.Xr getiopolicy_np 3
+.Pc .
 .El
 .Pp
 The
@@ -259,6 +298,17 @@ or
 .Xr connectx 2
 had been used to set a destination address.
 .\" ===========
+.It Bq Er ENOBUFS
+The mbuf pool has been completely exhausted when writing to a socket.
+.El
+.Pp
+The
+.Fn writev
+and
+.Fn pwritev
+calls may also return the following errors:
+.Bl -tag -width Er
+.\" ===========
 .It Bq Er EINVAL
 .Fa Iovcnt
 is less than or equal to 0, or greater than
@@ -277,14 +327,13 @@ The sum of the
 values in the
 .Fa iov
 array overflows a 32-bit integer.
-.\" ===========
-.It Bq Er ENOBUFS
-The mbuf pool has been completely exhausted when writing to a socket.
 .El
 .Pp
 The
 .Fn pwrite
-call may also return the following errors:
+and
+.Fn pwritev
+calls may also return the following errors:
 .Bl -tag -width Er
 .\" ===========
 .It Bq Er EINVAL
@@ -317,6 +366,8 @@ and
 .Fn pwrite
 functions are expected to conform to
 .St -xpg4.2 .
+.Fn pwritev
+is nonstandard.
 .Sh HISTORY
 The
 .Fn pwrite

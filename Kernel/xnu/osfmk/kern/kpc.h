@@ -31,10 +31,12 @@
 
 /* Kernel interfaces to KPC PMC infrastructure. */
 
-#include <machine/machine_kpc.h>
 #include <kern/thread.h> /* thread_* */
+#include <machine/machine_kpc.h>
 
 __BEGIN_DECLS
+
+typedef uint64_t kpc_config_t;
 
 /* cross-platform class constants */
 #define KPC_CLASS_FIXED         (0)
@@ -78,17 +80,8 @@ __BEGIN_DECLS
  */
 typedef void (*kpc_pm_handler_t)(boolean_t);
 
-/*
- * Register a CPU to kpc and allocate its buffers.
- *
- * @param cpu_data
- * CPU data associated to the CPU being registered.
- *
- * @return
- * TRUE if buffers are correctly allocated, FALSE otherwise.
- */
 struct cpu_data;
-extern boolean_t kpc_register_cpu(struct cpu_data *cpu_data);
+extern void kpc_register_cpu(struct cpu_data *cpu_data);
 extern void kpc_unregister_cpu(struct cpu_data *cpu_data);
 
 extern bool kpc_supported;
@@ -96,14 +89,8 @@ extern bool kpc_supported;
 /* bootstrap */
 extern void kpc_init(void);
 
-/* common initialization */
-extern void kpc_common_init(void);
-
 /* Architecture specific initialisation */
 extern void kpc_arch_init(void);
-
-/* Thread counting initialization */
-extern void kpc_thread_init(void);
 
 /* Get the bitmask of available classes */
 extern uint32_t kpc_get_classes(void);
@@ -165,6 +152,10 @@ extern int kpc_threads_counting;
 /* AST callback for KPC */
 extern void kpc_thread_ast_handler( thread_t thread );
 
+#if XNU_KERNEL_PRIVATE
+int kpc_set_config_kernel(uint32_t classes, kpc_config_t *new_config);
+#endif /* XNU_KERNEL_PRIVATE */
+
 #ifdef MACH_KERNEL_PRIVATE
 
 /* context switch callback for KPC */
@@ -192,10 +183,6 @@ extern int kpc_get_force_all_ctrs( void );
 extern int kpc_force_all_ctrs_arch( task_t task, int val );
 
 extern int kpc_set_sw_inc( uint32_t mask );
-
-/* disable/enable whitelist of allowed events */
-extern int kpc_get_whitelist_disabled( void );
-extern int kpc_disable_whitelist( int val );
 
 /*
  * Register the Power Manager as a PMCs user.
@@ -289,6 +276,7 @@ struct kpc_config_remote {
 	uint32_t classes;
 	kpc_config_t *configv;
 	uint64_t pmc_mask;
+	bool secure;
 };
 
 /* handler for mp operations */
@@ -306,26 +294,36 @@ struct kpc_get_counters_remote {
 	uint64_t *buf;
 };
 
-extern int kpc_get_all_cpus_counters(uint32_t classes, int *curcpu, uint64_t *buf);
-extern int kpc_get_curcpu_counters(uint32_t classes, int *curcpu, uint64_t *buf);
-extern int kpc_get_fixed_counters(uint64_t *counterv);
-extern int kpc_get_configurable_counters(uint64_t *counterv, uint64_t pmc_mask);
-extern boolean_t kpc_is_running_fixed(void);
-extern boolean_t kpc_is_running_configurable(uint64_t pmc_mask);
-extern uint32_t kpc_fixed_count(void);
-extern uint32_t kpc_configurable_count(void);
-extern uint32_t kpc_fixed_config_count(void);
-extern uint32_t kpc_configurable_config_count(uint64_t pmc_mask);
-extern uint32_t kpc_rawpmu_config_count(void);
-extern int kpc_get_fixed_config(kpc_config_t *configv);
-extern int kpc_get_configurable_config(kpc_config_t *configv, uint64_t pmc_mask);
-extern int kpc_get_rawpmu_config(kpc_config_t *configv);
-extern uint64_t kpc_fixed_max(void);
-extern uint64_t kpc_configurable_max(void);
-extern int kpc_set_config_arch(struct kpc_config_remote *mp_config);
-extern int kpc_set_period_arch(struct kpc_config_remote *mp_config);
-extern void kpc_sample_kperf(uint32_t actionid);
-extern int kpc_set_running_arch(struct kpc_running_remote *mp_config);
+int kpc_get_all_cpus_counters(uint32_t classes, int *curcpu, uint64_t *buf);
+int kpc_get_curcpu_counters(uint32_t classes, int *curcpu, uint64_t *buf);
+int kpc_get_fixed_counters(uint64_t *counterv);
+int kpc_get_configurable_counters(uint64_t *counterv, uint64_t pmc_mask);
+boolean_t kpc_is_running_fixed(void);
+boolean_t kpc_is_running_configurable(uint64_t pmc_mask);
+uint32_t kpc_fixed_count(void);
+uint32_t kpc_configurable_count(void);
+uint32_t kpc_fixed_config_count(void);
+uint32_t kpc_configurable_config_count(uint64_t pmc_mask);
+uint32_t kpc_rawpmu_config_count(void);
+int kpc_get_fixed_config(kpc_config_t *configv);
+int kpc_get_configurable_config(kpc_config_t *configv, uint64_t pmc_mask);
+int kpc_get_rawpmu_config(kpc_config_t *configv);
+uint64_t kpc_fixed_max(void);
+uint64_t kpc_configurable_max(void);
+int kpc_set_config_arch(struct kpc_config_remote *mp_config);
+int kpc_set_period_arch(struct kpc_config_remote *mp_config);
+
+__options_decl(kperf_kpc_flags_t, uint16_t, {
+	KPC_KERNEL_PC = 0x01, // the PC is a kernel address
+	KPC_KERNEL_COUNTING = 0x02, // the counter counts while running in the kernel
+	KPC_USER_COUNTING = 0x04, // the counter counts while running in user space
+	KPC_CAPTURED_PC = 0x08, // the PC was captured by hardware
+});
+
+void kpc_sample_kperf(uint32_t actionid, uint32_t counter, uint64_t config,
+    uint64_t count, uintptr_t pc, kperf_kpc_flags_t flags);
+
+int kpc_set_running_arch(struct kpc_running_remote *mp_config);
 
 
 /*
@@ -338,23 +336,6 @@ extern uint8_t kpc_popcount(uint64_t value);
 /* for a set of classes, retrieve the configurable PMCs mask */
 extern uint64_t kpc_get_configurable_pmc_mask(uint32_t classes);
 
-
-/* Interface for kexts to publish a kpc interface */
-struct kpc_driver {
-	uint32_t (*get_classes)(void);
-	uint32_t (*get_running)(void);
-	int      (*set_running)(uint32_t classes);
-	int      (*get_cpu_counters)(boolean_t all_cpus, uint32_t classes,
-	    int *curcpu, uint64_t *buf);
-	int      (*get_curthread_counters)(uint32_t *inoutcount, uint64_t *buf);
-	uint32_t (*get_counter_count)(uint32_t classes);
-	uint32_t (*get_config_count)(uint32_t classes);
-	int      (*get_config)(uint32_t classes, kpc_config_t *current_config);
-	int      (*set_config)(uint32_t classes, kpc_config_t *new_config);
-	int      (*get_period)(uint32_t classes, uint64_t *period);
-	int      (*set_period)(uint32_t classes, uint64_t *period);
-};
-
 __END_DECLS
 
-#endif /* !definde(KERN_KPC_H) */
+#endif /* !defined(KERN_KPC_H) */

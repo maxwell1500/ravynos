@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2019-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -30,6 +30,7 @@
 #include <kern/kern_types.h>
 #include <mach/notify.h>
 #include <mach/resource_monitors.h>
+#include <os/log.h>
 
 #include <mach/host_special_ports.h>
 #include <mach/mach_host_server.h>
@@ -39,7 +40,6 @@
 
 #include <kern/kern_types.h>
 #include <kern/assert.h>
-#include <kern/kalloc.h>
 #include <kern/host.h>
 #include <kern/ast.h>
 #include <kern/task.h>
@@ -74,13 +74,17 @@ struct arcade_register {
 };
 typedef struct arcade_register *arcade_register_t;
 
-static struct arcade_register arcade_register_global;
+IPC_KOBJECT_DEFINE(IKOT_ARCADE_REG,
+    .iko_op_stable    = true,
+    .iko_op_permanent = true);
+
+static SECURITY_READ_ONLY_LATE(struct arcade_register) arcade_register_global;
 
 void
 arcade_prepare(task_t task, thread_t thread)
 {
 	/* Platform binaries are exempt */
-	if (task->t_flags & TF_PLATFORM) {
+	if (task_get_platform_binary(task)) {
 		return;
 	}
 
@@ -93,9 +97,8 @@ arcade_prepare(task_t task, thread_t thread)
 	thread_ast_set(thread, AST_ARCADE);
 }
 
-static lck_grp_attr_t *arcade_upcall_lck_grp_attr;
-static lck_grp_t *arcade_upcall_lck_grp;
-static lck_mtx_t arcade_upcall_mutex;
+static LCK_GRP_DECLARE(arcade_upcall_lck_grp, "arcade_upcall");
+static LCK_MTX_DECLARE(arcade_upcall_mutex, &arcade_upcall_lck_grp);
 
 static ipc_port_t arcade_upcall_port = IP_NULL;
 static boolean_t arcade_upcall_refresh_in_progress = FALSE;
@@ -106,14 +109,10 @@ arcade_init(void)
 {
 	ipc_port_t port;
 
-	arcade_upcall_lck_grp_attr = lck_grp_attr_alloc_init();
-	arcade_upcall_lck_grp = lck_grp_alloc_init("arcade_upcall", arcade_upcall_lck_grp_attr);
-	lck_mtx_init(&arcade_upcall_mutex, arcade_upcall_lck_grp, NULL);
-
 	/* Initialize the global arcade_register kobject and associated port */
 	port = ipc_kobject_alloc_port((ipc_kobject_t)&arcade_register_global,
 	    IKOT_ARCADE_REG, IPC_KOBJECT_ALLOC_MAKE_SEND);
-	arcade_register_global.ar_port = port;
+	os_atomic_store(&arcade_register_global.ar_port, port, release);
 }
 
 arcade_register_t
@@ -123,10 +122,8 @@ convert_port_to_arcade_register(
 	arcade_register_t arcade_reg = ARCADE_REG_NULL;
 
 	if (IP_VALID(port)) {
-		/* No need to lock port because of how refs managed */
-		if (ip_kotype(port) == IKOT_ARCADE_REG) {
-			assert(ip_active(port));
-			arcade_reg = (arcade_register_t)ip_get_kobject(port);
+		arcade_reg = ipc_kobject_get_stable(port, IKOT_ARCADE_REG);
+		if (arcade_reg) {
 			assert(arcade_reg == &arcade_register_global);
 			assert(arcade_reg->ar_port == port);
 		}
@@ -151,13 +148,14 @@ arcade_register_new_upcall(
 	arcade_register_t arcade_reg,
 	mach_port_t port)
 {
+	os_log(OS_LOG_DEFAULT, "arcade: received register request");
 	if (arcade_reg == ARCADE_REG_NULL) {
 		return KERN_INVALID_ARGUMENT;
 	}
 	assert(arcade_reg == &arcade_register_global);
 
 	/* Check to see if this is the real arcade subscription service */
-	if (!IOTaskHasEntitlement(current_task(), "com.apple.arcade.fpsd")) {
+	if (!IOCurrentTaskHasEntitlement("com.apple.arcade.fpsd")) {
 		return KERN_INVALID_VALUE;
 	}
 
@@ -176,7 +174,6 @@ arcade_register_new_upcall(
 		thread_wakeup(&arcade_upcall_port);
 		return KERN_SUCCESS;
 	}
-
 	lck_mtx_unlock(&arcade_upcall_mutex);
 	return KERN_FAILURE;
 }
@@ -207,16 +204,9 @@ arcade_upcall_refresh(uint64_t deadline)
 		arcade_upcall_port = IP_NULL;
 	}
 
-#if 0
 	if (host_get_fairplayd_port(host_priv_self(), &fairplayd_port) != KERN_SUCCESS) {
 		panic("arcade_upcall_refresh(get fairplayd)");
 	}
-#else
-	/* Temporary hack because launchd is rejecting the other special port number */
-	if (host_get_unfreed_port(host_priv_self(), &fairplayd_port) != KERN_SUCCESS) {
-		panic("arcade_upcall_refresh(get fairplayd)");
-	}
-#endif
 
 	/* If no valid fairplayd port registered, we're done */
 	if (!IP_VALID(fairplayd_port)) {
@@ -289,7 +279,7 @@ arcade_ast(__unused thread_t thread)
 
 restart:
 	lck_mtx_lock(&arcade_upcall_mutex);
-	port = ipc_port_copy_send(arcade_upcall_port);
+	port = ipc_port_copy_send_mqueue(arcade_upcall_port);
 	/*
 	 * if the arcade_upcall_port was inactive, "port" will be IP_DEAD.
 	 * Otherwise, it holds a send right to the arcade_upcall_port.
@@ -305,7 +295,7 @@ restart:
 			lck_mtx_unlock(&arcade_upcall_mutex);
 			goto fail;
 		}
-		port = ipc_port_copy_send(arcade_upcall_port);
+		port = ipc_port_copy_send_mqueue(arcade_upcall_port);
 	}
 	lck_mtx_unlock(&arcade_upcall_mutex);
 
@@ -317,33 +307,25 @@ restart:
 	char *path;
 	vm_map_copy_t copy;
 
-	kr = kmem_alloc(ipc_kernel_map, (vm_offset_t *)&path, MAXPATHLEN, VM_KERN_MEMORY_IPC);
-	if (kr != KERN_SUCCESS) {
-		ipc_port_release_send(port);
-		return;
-	}
-	bzero(path, MAXPATHLEN);
+	path = kalloc_data(MAXPATHLEN, Z_WAITOK | Z_ZERO);
 	retval = proc_pidpathinfo_internal(p, 0, path, MAXPATHLEN, NULL);
 	assert(!retval);
-	kr = vm_map_unwire(ipc_kernel_map,
-	    vm_map_trunc_page((vm_offset_t)path, VM_MAP_PAGE_MASK(ipc_kernel_map)),
-	    vm_map_round_page((vm_offset_t)path + MAXPATHLEN, VM_MAP_PAGE_MASK(ipc_kernel_map)),
-	    FALSE);
+	kr = vm_map_copyin(kernel_map, (vm_map_address_t)path, MAXPATHLEN, FALSE, &copy);
 	assert(kr == KERN_SUCCESS);
-	kr = vm_map_copyin(ipc_kernel_map, (vm_map_address_t)path, MAXPATHLEN, TRUE, &copy);
-	assert(kr == KERN_SUCCESS);
+	kfree_data(path, MAXPATHLEN);
 
 	offset = proc_getexecutableoffset(p);
 
 	/* MAKE THE UPCALL */
 	boolean_t should_kill = TRUE;
 	kr = __MAKING_UPCALL_TO_ARCADE_VALIDATION_SERVICE__(port, copy, MAXPATHLEN, offset, &should_kill);
+	os_log(OS_LOG_DEFAULT, "arcade: subscription validation upcall returned %#x", kr);
 	ipc_port_release_send(port);
 
 	switch (kr) {
 	case MACH_SEND_INVALID_DEST:
 		vm_map_copy_discard(copy);
-	/* fall thru */
+		OS_FALLTHROUGH;
 	case MIG_SERVER_DIED:
 		goto restart;
 	case KERN_SUCCESS:
@@ -363,6 +345,7 @@ fail:
 		 * process didn't launch. We might want this to be an exit_with_reason()
 		 * in the future.
 		 */
+		os_log(OS_LOG_DEFAULT, "arcade: unable to make subscription upcall, error %#x", kr);
 		task_terminate_internal(current_task());
 		break;
 	}

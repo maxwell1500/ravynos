@@ -36,21 +36,29 @@ __attribute__((visibility("hidden")))
 void *
 malloc(size_t size)
 {
-	return _libkernel_functions->malloc(size);
+	if (_libkernel_functions->malloc) {
+		return _libkernel_functions->malloc(size);
+	}
+	return NULL;
 }
 
 __attribute__((visibility("hidden")))
 void
 free(void *ptr)
 {
-	return _libkernel_functions->free(ptr);
+	if (_libkernel_functions->free) {
+		_libkernel_functions->free(ptr);
+	}
 }
 
 __attribute__((visibility("hidden")))
 void *
 realloc(void *ptr, size_t size)
 {
-	return _libkernel_functions->realloc(ptr, size);
+	if (_libkernel_functions->realloc) {
+		return _libkernel_functions->realloc(ptr, size);
+	}
+	return NULL;
 }
 
 __attribute__((visibility("hidden")))
@@ -58,6 +66,53 @@ void *
 reallocf(void *ptr, size_t size)
 {
 	void *nptr = realloc(ptr, size);
+	if (!nptr && ptr) {
+		free(ptr);
+	}
+	return nptr;
+}
+
+__attribute__((visibility("hidden")))
+void *
+malloc_type_malloc(size_t size, malloc_type_id_t type_id)
+{
+	if (_libkernel_functions->version >= 5) {
+		if (_libkernel_functions->malloc_type_malloc) {
+			return _libkernel_functions->malloc_type_malloc(size, type_id);
+		}
+	}
+	return malloc(size);
+}
+
+__attribute__((visibility("hidden")))
+void
+malloc_type_free(void *ptr, malloc_type_id_t type_id)
+{
+	if (_libkernel_functions->version >= 5) {
+		if (_libkernel_functions->malloc_type_free) {
+			return _libkernel_functions->malloc_type_free(ptr, type_id);
+		}
+	}
+	return free(ptr);
+}
+
+__attribute__((visibility("hidden")))
+void *
+malloc_type_realloc(void *ptr, size_t size, malloc_type_id_t type_id)
+{
+	if (_libkernel_functions->version >= 5) {
+		if (_libkernel_functions->malloc_type_realloc) {
+			return _libkernel_functions->malloc_type_realloc(ptr, size, type_id);
+		}
+	}
+	return realloc(ptr, size);
+}
+
+__attribute__((visibility("hidden")))
+void *
+malloc_type_reallocf(void *ptr, size_t size, malloc_type_id_t type_id)
+{
+	void *nptr = malloc_type_realloc(ptr, size, type_id);
 	if (!nptr && ptr) {
 		free(ptr);
 	}
@@ -127,6 +182,13 @@ __libkernel_platform_init(_libkernel_string_functions_t fns)
 __attribute__((visibility("hidden")))
 void
 bzero(void *s, size_t n)
+{
+	return _libkernel_string_functions->bzero(s, n);
+}
+
+__attribute__((visibility("hidden")))
+void
+__bzero(void *s, size_t n)
 {
 	return _libkernel_string_functions->bzero(s, n);
 }
@@ -272,14 +334,14 @@ voucher_mach_msg_set(mach_msg_header_t *msg)
 	if (_libkernel_voucher_functions->voucher_mach_msg_set) {
 		return _libkernel_voucher_functions->voucher_mach_msg_set(msg);
 	}
-	return 0;
+	return FALSE;
 }
 
 void
 voucher_mach_msg_clear(mach_msg_header_t *msg)
 {
 	if (_libkernel_voucher_functions->voucher_mach_msg_clear) {
-		return _libkernel_voucher_functions->voucher_mach_msg_clear(msg);
+		_libkernel_voucher_functions->voucher_mach_msg_clear(msg);
 	}
 }
 
@@ -296,6 +358,27 @@ void
 voucher_mach_msg_revert(voucher_mach_msg_state_t state)
 {
 	if (_libkernel_voucher_functions->voucher_mach_msg_revert) {
-		return _libkernel_voucher_functions->voucher_mach_msg_revert(state);
+		_libkernel_voucher_functions->voucher_mach_msg_revert(state);
 	}
+}
+
+mach_msg_size_t
+voucher_mach_msg_fill_aux(mach_msg_aux_header_t *aux_hdr, mach_msg_size_t sz)
+{
+	if (_libkernel_voucher_functions->version < 3) {
+		return 0;
+	}
+	if (_libkernel_voucher_functions->voucher_mach_msg_fill_aux) {
+		return _libkernel_voucher_functions->voucher_mach_msg_fill_aux(aux_hdr, sz);
+	}
+	return 0;
+}
+
+boolean_t
+voucher_mach_msg_fill_aux_supported(void)
+{
+	if (_libkernel_voucher_functions->version < 3) {
+		return FALSE;
+	}
+	return NULL != _libkernel_voucher_functions->voucher_mach_msg_fill_aux;
 }

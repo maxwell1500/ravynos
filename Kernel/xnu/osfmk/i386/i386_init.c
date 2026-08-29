@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2021 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -72,6 +72,7 @@
 #include <kern/pms.h>
 #include <kern/cpu_data.h>
 #include <kern/processor.h>
+#include <kern/monotonic.h>
 #include <sys/kdebug.h>
 #include <console/serial_protos.h>
 #include <vm/vm_page.h>
@@ -98,23 +99,37 @@
 #include <i386/Diagnostics.h>
 #include <i386/pmCPU.h>
 #include <i386/tsc.h>
-#include <i386/locks.h> /* LcksOpts */
+#include <i386/acpi.h>
+#if DEBUG
+#include <machine/pal_routines.h>
+#endif
+extern void xcpm_bootstrap(void);
+#if DEVELOPMENT || DEBUG
+#include <i386/trap_internal.h>
+#endif
 
-#if MONOTONIC
-#include <kern/monotonic.h>
-#endif /* MONOTONIC */
+#if KPERF
+#include <kperf/kptimer.h>
+#endif /* KPERF */
 
 #include <san/kasan.h>
 
-#if DEBUG
-#define DBG(x ...)       kprintf(x)
+#if DEBUG || DEVELOPMENT
+#define DBG(x, ...)          kprintf(x, ##__VA_ARGS__)
+#define dyldLogFunc(x, ...) kprintf(x, ##__VA_ARGS__)
 #else
 #define DBG(x ...)
 #endif
 
+#include <libkern/kernel_mach_header.h>
+#include <mach/dyld_kernel_fixups.h>
+
+
 int                     debug_task;
 
 int                     early_boot = 1;
+
+bool                    serial_console_enabled = false;
 
 static boot_args        *kernelBootArgs;
 
@@ -145,8 +160,23 @@ int                     kernPhysPML4EntryCount;
 ppnum_t                 released_PT_ppn = 0;
 uint32_t                released_PT_cnt = 0;
 
+#if DEVELOPMENT || DEBUG
+int panic_on_cacheline_mismatch = -1;
+char panic_on_trap_procname[64];
+uint32_t panic_on_trap_mask;
+#endif
+lbr_modes_t last_branch_enabled_modes;
+int insn_copyin_count;
+#if DEVELOPMENT || DEBUG
+#define DEFAULT_INSN_COPYIN_COUNT x86_INSTRUCTION_STATE_MAX_INSN_BYTES
+#else
+#define DEFAULT_INSN_COPYIN_COUNT 192
+#endif
+
 char *physfree;
 void idt64_remap(void);
+
+TUNABLE(bool, restore_boot, "-restore", false);
 
 /*
  * Note: ALLOCPAGES() can only be used safely within Idle_PTs_init()
@@ -382,6 +412,8 @@ Idle_PTs_init(void)
 	    INTEL_PTE_WRITE, (uintptr_t)ID_MAP_VTOP(IdlePDPT), 0, 1);
 
 	postcode(VSTART_PHYSMAP_INIT);
+	const char *pt1 = "  Idle_PTs: allocating physmap/doublemap...\r\n";
+	while (*pt1) { pal_serial_putc(*pt1++); }
 
 	/*
 	 * early_random() cannot be called more than one time before the cpu's
@@ -389,9 +421,20 @@ Idle_PTs_init(void)
 	 * two 8-bit entropy values needed for address randomization.
 	 */
 	rand64 = early_random();
+	const char *pt2 = "  Idle_PTs: early_random done!\r\n";
+	while (*pt2) { pal_serial_putc(*pt2++); }
+
 	physmap_init(rand64 & 0xFF, &new_physmap_base, &new_physmap_max);
+	const char *pt3 = "  Idle_PTs: physmap_init done!\r\n";
+	while (*pt3) { pal_serial_putc(*pt3++); }
+
 	doublemap_init((rand64 >> 8) & 0xFF);
+	const char *pt4 = "  Idle_PTs: doublemap_init done!\r\n";
+	while (*pt4) { pal_serial_putc(*pt4++); }
+
 	idt64_remap();
+	const char *pt5 = "  Idle_PTs: idt64_remap done!\r\n";
+	while (*pt5) { pal_serial_putc(*pt5++); }
 
 	postcode(VSTART_SET_CR3);
 
@@ -405,9 +448,13 @@ Idle_PTs_init(void)
 	 */
 	physmap_base = new_physmap_base;
 	physmap_max = new_physmap_max;
-	set_cr3_raw((uintptr_t)ID_MAP_VTOP(IdlePML4));
-}
+	const char *pt6 = "  Idle_PTs: switching CR3 to IdlePML4...\r\n";
+	while (*pt6) { pal_serial_putc(*pt6++); }
 
+	set_cr3_raw((uintptr_t)ID_MAP_VTOP(IdlePML4));
+	const char *pt7 = "  Idle_PTs: switched CR3 to IdlePML4 successfully!\r\n";
+	while (*pt7) { pal_serial_putc(*pt7++); }
+}
 /*
  * Release any still unused, preallocated boot kernel page tables.
  * start..end is the VA range currently unused.
@@ -543,15 +590,103 @@ __attribute__((aligned(PAGE_SIZE))) = {
 };
 
 static void
-vstart_idt_init(void)
+vstart_idt_init(boolean_t master)
 {
 	x86_64_desc_register_t  vstart_idt = {
 		sizeof(master_boot_idt64),
 		master_boot_idt64
 	};
 
-	fix_desc64(master_boot_idt64, 32);
+	if (master) {
+		fix_desc64(master_boot_idt64, 32);
+	}
 	lidt((void *)&vstart_idt);
+}
+
+extern void *collection_base_pointers[KCNumKinds];
+
+kern_return_t
+i386_slide_individual_kext(kernel_mach_header_t *mh, uintptr_t slide)
+{
+	int ret = kernel_collection_slide(mh, (const void **) (void *)collection_base_pointers);
+	if (ret != 0) {
+		printf("Sliding pageable kc was stopped\n");
+		return KERN_FAILURE;
+	}
+
+	kernel_collection_adjust_fileset_entry_addrs(mh, slide);
+	return KERN_SUCCESS;
+}
+
+kern_return_t
+i386_slide_kext_collection_mh_addrs(kernel_mach_header_t *mh, uintptr_t slide, bool adjust_mach_headers)
+{
+	int ret = kernel_collection_slide(mh, (const void **) (void *)collection_base_pointers);
+	if (ret != KERN_SUCCESS) {
+		printf("Kernel Collection slide was stopped with value %d\n", ret);
+		return KERN_FAILURE;
+	}
+
+	kernel_collection_adjust_mh_addrs(mh, slide, adjust_mach_headers,
+	    NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+
+	return KERN_SUCCESS;
+}
+
+static void
+i386_slide_and_rebase_image(uintptr_t kstart_addr)
+{
+	extern uintptr_t kc_highest_nonlinkedit_vmaddr;
+	kernel_mach_header_t *k_mh, *kc_mh = NULL;
+	kernel_segment_command_t *seg;
+	uintptr_t slide;
+
+	k_mh = &_mh_execute_header;
+	/*
+	 * If we're not booting, an MH_FILESET, we don't need to slide
+	 * anything because EFI has done that for us. When booting an
+	 * MH_FILESET, EFI will slide the kernel proper, but not the kexts.
+	 * Below, we infer the slide by comparing the slid address of the
+	 * kernel's mach-o header and the unslid vmaddr of the first segment
+	 * of the mach-o (which is assumed to always point to the mach-o
+	 * header).
+	 */
+	if (!kernel_mach_header_is_in_fileset(k_mh)) {
+		DBG("[MH] kcgen-style KC\n");
+		return;
+	}
+
+	/*
+	 * The kernel is part of a MH_FILESET kernel collection: determine slide
+	 * based on first segment's mach-o vmaddr.
+	 */
+	seg = (kernel_segment_command_t *)((uintptr_t)k_mh + sizeof(*k_mh));
+	assert(seg->cmd == LC_SEGMENT_KERNEL);
+	slide = (uintptr_t)k_mh - seg->vmaddr;
+	DBG("[MH] Sliding new-style KC: %llu\n", (unsigned long long)slide);
+
+	/*
+	 * The kernel collection mach-o header should be the start address
+	 * passed to us by EFI.
+	 */
+	kc_mh  = (kernel_mach_header_t *)(kstart_addr);
+	assert(kc_mh->filetype == MH_FILESET);
+
+	PE_set_kc_header(KCKindPrimary, kc_mh, slide);
+
+	/*
+	 * rebase/slide all the kexts in the collection
+	 * (EFI should have already rebased the kernel)
+	 */
+	kernel_collection_slide(kc_mh, (const void **) (void *)collection_base_pointers);
+
+
+	/*
+	 * Now adjust the vmaddr fields of all mach-o headers
+	 * and symbols in this MH_FILESET
+	 */
+	kernel_collection_adjust_mh_addrs(kc_mh, slide, false,
+	    NULL, NULL, NULL, NULL, NULL, NULL, &kc_highest_nonlinkedit_vmaddr);
 }
 
 /*
@@ -583,11 +718,12 @@ vstart(vm_offset_t boot_args_start)
 
 	postcode(VSTART_ENTRY);
 
+	/*
+	 * Set-up temporary trap handlers during page-table set-up.
+	 */
+
 	if (is_boot_cpu) {
-		/*
-		 * Set-up temporary trap handlers during page-table set-up.
-		 */
-		vstart_idt_init();
+		vstart_idt_init(TRUE);
 		postcode(VSTART_IDT_INIT);
 
 		/*
@@ -604,21 +740,23 @@ vstart(vm_offset_t boot_args_start)
 		physfree = (void *)(uintptr_t)((lphysfree + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1));
 
 		pal_serial_init();
+		pal_serial_putc('\r');
+		pal_serial_putc('\n');
+		const char *banner = "\r\n=== ravynOS XNU kernel entering i386_init ===\r\n";
+		while (*banner) { pal_serial_putc(*banner++); }
 
-		DBG("revision      0x%x\n", kernelBootArgs->Revision);
-		DBG("version       0x%x\n", kernelBootArgs->Version);
-		DBG("command line  %s\n", kernelBootArgs->CommandLine);
-		DBG("memory map    0x%x\n", kernelBootArgs->MemoryMap);
-		DBG("memory map sz 0x%x\n", kernelBootArgs->MemoryMapSize);
-		DBG("kaddr         0x%x\n", kernelBootArgs->kaddr);
-		DBG("ksize         0x%x\n", kernelBootArgs->ksize);
-		DBG("physfree      %p\n", physfree);
-		DBG("bootargs: %p, &ksize: %p &kaddr: %p\n",
-		    kernelBootArgs,
-		    &kernelBootArgs->ksize,
-		    &kernelBootArgs->kaddr);
-		DBG("SMBIOS mem sz 0x%llx\n", kernelBootArgs->PhysicalMemorySize);
+		const char *m1 = "Step 1: Check boot args...\r\n";
+		while (*m1) { pal_serial_putc(*m1++); }
 
+		if (kernelBootArgs->Version >= 2 && kernelBootArgs->Revision >= 1 &&
+		    kernelBootArgs->KC_hdrs_vaddr != 0) {
+			const char *m_slide = "Step 1b: Sliding KC image...\r\n";
+			while (*m_slide) { pal_serial_putc(*m_slide++); }
+			i386_slide_and_rebase_image((uintptr_t)ml_static_ptovirt(kernelBootArgs->KC_hdrs_vaddr));
+		}
+
+		const char *m2 = "Step 2: PE_init_platform...\r\n";
+		while (*m2) { pal_serial_putc(*m2++); }
 		/*
 		 * Setup boot args given the physical start address.
 		 * Note: PE_init_platform needs to be called before Idle_PTs_init
@@ -637,8 +775,13 @@ vstart(vm_offset_t boot_args_start)
 		PE_init_platform(FALSE, kernelBootArgs);
 		postcode(PE_INIT_PLATFORM_D);
 
+		const char *m3 = "Step 3: Idle_PTs_init...\r\n";
+		while (*m3) { pal_serial_putc(*m3++); }
+
 		Idle_PTs_init();
 		postcode(VSTART_IDLE_PTS_INIT);
+		const char *m3a = "Step 3a: Idle_PTs_init done! Allocating CPU data...\r\n";
+		while (*m3a) { pal_serial_putc(*m3a++); }
 
 #if KASAN
 		/* Init kasan and map whatever was stolen from physfree */
@@ -646,42 +789,63 @@ vstart(vm_offset_t boot_args_start)
 		kasan_notify_stolen((uintptr_t)ml_static_ptovirt((vm_offset_t)physfree));
 #endif
 
-#if MONOTONIC
+#if CONFIG_CPU_COUNTERS
 		mt_early_init();
-#endif /* MONOTONIC */
+#endif /* CONFIG_CPU_COUNTERS */
 
 		first_avail = (vm_offset_t)ID_MAP_VTOP(physfree);
 
 		cpu_data_alloc(TRUE);
 
+		const char *m3b = "Step 3b: cpu_desc_init...\r\n";
+		while (*m3b) { pal_serial_putc(*m3b++); }
+
 		cpu_desc_init(cpu_datap(0));
 		postcode(VSTART_CPU_DESC_INIT);
 		cpu_desc_load(cpu_datap(0));
 
+		const char *m3c = "Step 3c: cpu_syscall_init...\r\n";
+		while (*m3c) { pal_serial_putc(*m3c++); }
 		postcode(VSTART_CPU_MODE_INIT);
-		cpu_syscall_init(cpu_datap(0)); /* cpu_syscall_init() will be
-		                                 * invoked on the APs
-		                                 * via i386_init_slave()
-		                                 */
+		cpu_syscall_init(cpu_datap(0));
+		cpu = 0;
 	} else {
+		/* Slave CPUs should use the basic IDT until i386_init_slave() */
+		vstart_idt_init(FALSE);
+
 		/* Switch to kernel's page tables (from the Boot PTs) */
 		set_cr3_raw((uintptr_t)ID_MAP_VTOP(IdlePML4));
+
 		/* Find our logical cpu number */
-		cpu = lapic_to_cpu[(LAPIC_READ(ID) >> LAPIC_ID_SHIFT) & LAPIC_ID_MASK];
-#if DEBUG 
+		cpu = lapic_to_cpu[lapic_safe_apicid()];
+#if DEBUG
 		gsbase = rdmsr64(MSR_IA32_GS_BASE);
 #endif
 		cpu_desc_load(cpu_datap(cpu));
-#if DEBUG 
-		DBG("CPU: %d, GSBASE initial value: 0x%llx\n", cpu, gsbase);
+#if DEBUG
+		DBG("CPU: %d, GSBASE initial value: 0x%llx\n", cpu, (unsigned long long)gsbase);
 #endif
+
+		/*
+		 * Before we can discover our local APIC ID, we need to potentially
+		 * initialize X2APIC, if it's enabled and firmware started us with
+		 * the APIC in legacy mode.
+		 */
+		lapic_init_slave();
 	}
 
 	early_boot = 0;
 	postcode(VSTART_EXIT);
-	x86_init_wrapper(is_boot_cpu ? (uintptr_t) i386_init
-	    : (uintptr_t) i386_init_slave,
-	    cpu_datap(cpu)->cpu_int_stack_top);
+	const char *m4 = "Step 4: Jumping into i386_init via x86_init_wrapper...\r\n";
+	while (*m4) { pal_serial_putc(*m4++); }
+
+	uintptr_t target_fn = is_boot_cpu ? (uintptr_t) i386_init : (uintptr_t) i386_init_slave;
+	uintptr_t target_stack = cpu_datap(cpu)->cpu_int_stack_top;
+
+	const char *m4b = "Step 4b: Calling x86_init_wrapper...\r\n";
+	while (*m4b) { pal_serial_putc(*m4b++); }
+
+	x86_init_wrapper(target_fn, target_stack);
 }
 
 void
@@ -696,6 +860,9 @@ pstate_trace(void)
 void
 i386_init(void)
 {
+	pal_serial_init();
+	const char *m5 = "\r\n=== Entered i386_init (Main Kernel Loop) ===\r\n";
+	while (*m5) { pal_serial_putc(*m5++); }
 	unsigned int    maxmem;
 	uint64_t        maxmemtouse;
 	unsigned int    cpus = 0;
@@ -703,50 +870,82 @@ i386_init(void)
 	boolean_t       IA32e = TRUE;
 
 	postcode(I386_INIT_ENTRY);
-
+	const char *m5b = "Step 5: Initializing TSC & RTClock...\r\n";
+	while (*m5b) { pal_serial_putc(*m5b++); }
 	pal_i386_init();
-	/* Before anything can consult the CPU topology: the lock guarding it was
-	 * otherwise not initialised until cpu_thread_init(), and using it before
-	 * then panics from inside the panic path, hiding the real fault. */
-	x86_topo_lock_init();
 	tsc_init();
-	rtclock_early_init();   /* mach_absolute_time() now functionsl */
+	rtclock_early_init();   /* mach_absolute_time() now functional */
 
-	kernel_debug_string_early("i386_init");
-	/* pstate_trace() reads MSRs that are not present on AMD; leave it off
-	 * until it is proven safe there. */
+	const char *m6 = "Step 6: TSC & RTClock initialized!\r\n";
+	while (*m6) { pal_serial_putc(*m6++); }
 
 #if CONFIG_MCA
 	/* Initialize machine-check handling */
+	const char *m6a = "Step 6a: mca_cpu_init...\r\n";
+	while (*m6a) { pal_serial_putc(*m6a++); }
 	mca_cpu_init();
 #endif
 
 	master_cpu = 0;
 
-	lck_mod_init();
+	const char *m6b = "Step 6b: kernel_startup_bootstrap...\r\n";
+	while (*m6b) { pal_serial_putc(*m6b++); }
 
-	printf_init();                  /* Init this in case we need debugger */
+	kernel_debug_string_early("kernel_startup_bootstrap");
+	kernel_startup_bootstrap();
 
-	/*
-	 * Initialize the timer callout world
-	 */
+	const char *m6c = "Step 6c: timer_call_init...\r\n";
+	while (*m6c) { pal_serial_putc(*m6c++); }
+
 	timer_call_init();
+
+	const char *m6d = "Step 6d: cpu_init...\r\n";
+	while (*m6d) { pal_serial_putc(*m6d++); }
 
 	cpu_init();
 
+	const char *m6e = "Step 6e: cpu_init done! Starting up to kprintf...\r\n";
+	while (*m6e) { pal_serial_putc(*m6e++); }
+
 	postcode(CPU_INIT_D);
 
-	panic_init();                   /* Init this in case we need debugger */
-
 	/* setup debugging output if one has been chosen */
-	kernel_debug_string_early("PE_init_kprintf");
-	PE_init_kprintf(FALSE);
+	kernel_startup_initialize_upto(STARTUP_SUB_KPRINTF);
+	kprintf("kprintf initialized\n");
+	const char *m6f = "Step 6f: kprintf initialized!\r\n";
+	while (*m6f) { pal_serial_putc(*m6f++); }
 
-	kernel_debug_string_early("kernel_early_bootstrap");
-	kernel_early_bootstrap();
+	serialmode = SERIALMODE_OUTPUT;
+	serial_console_enabled = true;
+	(void)switch_to_serial_console();
+	disableConsoleOutput = FALSE;
 
-	if (!PE_parse_boot_argn("diag", &dgWork.dgFlags, sizeof(dgWork.dgFlags))) {
-		dgWork.dgFlags = 0;
+	const char *m7 = "\r\n========================================\r\n"
+	                 "  ravynOS Darwin Kernel 24.3 Live Boot  \r\n"
+	                 "========================================\r\n";
+	while (*m7) { pal_serial_putc(*m7++); }
+
+	/* setup console output */
+	kernel_debug_string_early("PE_init_printf");
+	PE_init_printf(FALSE);
+
+	const char *m8 = "Step 8: Console initialized, entering kernel_bootstrap...\r\n";
+	while (*m8) { pal_serial_putc(*m8++); }
+#if DEVELOPMENT || DEBUG
+	if (!PE_parse_boot_argn("panic_on_trap_mask", &panic_on_trap_mask,
+	    sizeof(panic_on_trap_mask))) {
+		if (panic_on_trap_procname[0] != 0) {
+			panic_on_trap_mask = DEFAULT_PANIC_ON_TRAP_MASK;
+		} else {
+			panic_on_trap_mask = 0;
+		}
+	}
+#endif
+	/* But allow that to be overridden via boot-arg: */
+	if (!PE_parse_boot_argn("lbr_support", &last_branch_enabled_modes,
+	    sizeof(last_branch_enabled_modes))) {
+		/* Disable LBR support by default due to its high context switch overhead */
+		last_branch_enabled_modes = LBR_ENABLED_NONE;
 	}
 
 	serialmode = 0;
@@ -754,6 +953,8 @@ i386_init(void)
 		/* We want a serial keyboard and/or console */
 		kprintf("Serial mode specified: %08X\n", serialmode);
 		int force_sync = serialmode & SERIALMODE_SYNCDRAIN;
+		disable_iolog_serial_output = (serialmode & SERIALMODE_NO_IOLOG) != 0;
+		enable_dklog_serial_output = restore_boot || (serialmode & SERIALMODE_DKLOG) != 0;
 		if (force_sync || PE_parse_boot_argn("drain_uart_sync", &force_sync, sizeof(force_sync))) {
 			if (force_sync) {
 				serialmode |= SERIALMODE_SYNCDRAIN;
@@ -765,6 +966,7 @@ i386_init(void)
 		}
 	}
 	if (serialmode & SERIALMODE_OUTPUT) {
+		serial_console_enabled = true;
 		(void)switch_to_serial_console();
 		disableConsoleOutput = FALSE; /* Allow printfs to happen */
 	}
@@ -781,6 +983,8 @@ i386_init(void)
 	} else {
 		maxmemtouse = ((uint64_t)maxmem) * MB;
 	}
+
+	max_cpus_from_firmware = acpi_count_enabled_logical_processors();
 
 	if (PE_parse_boot_argn("cpus", &cpus, sizeof(cpus))) {
 		if ((0 < cpus) && (cpus < max_ncpus)) {
@@ -818,28 +1022,48 @@ i386_init(void)
 	 * Thn maximum number of cpus must be set beforehand.
 	 */
 	kernel_debug_string_early("i386_vm_init");
+	const char *v1 = "Step 9: i386_vm_init...\r\n";
+	while (*v1) { pal_serial_putc(*v1++); }
+
 	i386_vm_init(maxmemtouse, IA32e, kernelBootArgs);
 
+	const char *v2 = "Step 10: i386_vm_init completed! Creating console (video/screen)...\r\n";
+	while (*v2) { pal_serial_putc(*v2++); }
+
 	/* create the console for verbose or pretty mode */
-	/* Note: doing this prior to tsc_init() allows for graceful panic! */
 	PE_init_platform(TRUE, kernelBootArgs);
 	PE_create_console();
+	const char *v3 = "Step 11: PE_create_console created! Initializing thread_bootstrap...\r\n";
+	while (*v3) { pal_serial_putc(*v3++); }
 
-	kernel_debug_string_early("power_management_init");
-	power_management_init();
-
-#if MONOTONIC
-	mt_cpu_up(cpu_datap(0));
-#endif /* MONOTONIC */
-
-	processor_bootstrap();
+	/* set %gs early so that power management can use locks */
 	thread_t thread = thread_bootstrap();
 	machine_set_current_thread(thread);
 
+	const char *v4 = "Step 12: thread_bootstrap done! power_management_init...\r\n";
+	while (*v4) { pal_serial_putc(*v4++); }
+
+	kernel_debug_string_early("power_management_init");
+	power_management_init();
+	xcpm_bootstrap();
+
+	const char *v5 = "Step 13: power management initialized! Calling processor_bootstrap & machine_startup...\r\n";
+	while (*v5) { pal_serial_putc(*v5++); }
+
+#if CONFIG_CPU_COUNTERS
+	mt_cpu_up(cpu_datap(0));
+#endif /* CONFIG_CPU_COUNTERS */
+
+	processor_bootstrap();
+
 	pstate_trace();
 	kernel_debug_string_early("machine_startup");
+	const char *v6 = "\r\n========================================\r\n"
+	                 "  Calling machine_startup() -> BSD / Mach Init  \r\n"
+	                 "========================================\r\n";
+	while (*v6) { pal_serial_putc(*v6++); }
+
 	machine_startup();
-	pstate_trace();
 }
 
 static void __dead2
@@ -866,7 +1090,15 @@ do_init_slave(boolean_t fast_restart)
 #endif
 
 		LAPIC_INIT();
-		lapic_configure();
+		/*
+		 * Note that the true argument here does not necessarily mean we're
+		 * here from a resume (this code path is also executed on boot).
+		 * The implementation of lapic_configure checks to see if the
+		 * state variable has been initialized, as it would be before
+		 * sleep.  If it has not been, it's construed as an indicator of
+		 * first boot.
+		 */
+		lapic_configure(true);
 		LAPIC_DUMP();
 		LAPIC_CPU_MAP_DUMP();
 
@@ -877,6 +1109,9 @@ do_init_slave(boolean_t fast_restart)
 #endif
 		/* update CPU microcode and apply CPU workarounds */
 		ucode_update_wake_and_apply_cpu_was();
+
+		/* Enable LBRs on non-boot CPUs */
+		i386_lbr_init(cpuid_info(), false);
 	} else {
 		init_param = FAST_SLAVE_INIT;
 	}
@@ -897,13 +1132,27 @@ do_init_slave(boolean_t fast_restart)
 	cpu_init();     /* Sets cpu_running which starter cpu waits for */
 
 
-#if MONOTONIC
+#if CONFIG_CPU_COUNTERS
 	mt_cpu_up(current_cpu_datap());
-#endif /* MONOTONIC */
+#endif /* CONFIG_CPU_COUNTERS */
 
-	slave_main(init_param);
+#if KPERF
+	/*
+	 * We can only directly invoke kptimer_curcpu_up() when there is already an
+	 * active thread (that is, that this CPU has already been started at some point),
+	 * otherwise the ktrace calls within the kptimer operations will try to deref
+	 * the current thread and will instead cause a system reset.
+	 * If this is the first time the CPU is being started, we don't need to call
+	 * kptimer_curcpu_up().
+	 */
+	if (current_processor()->active_thread != THREAD_NULL) {
+		kptimer_curcpu_up();
+	}
+#endif /* KPERF */
 
-	panic("do_init_slave() returned from slave_main()");
+	secondary_cpu_main(init_param);
+
+	panic("do_init_slave() returned from secondary_cpu_main()");
 }
 
 /*
@@ -930,7 +1179,6 @@ i386_init_slave_fast(void)
 	do_init_slave(TRUE);
 }
 
-#include <libkern/kernel_mach_header.h>
 
 /* TODO: Evaluate global PTEs for the double-mapped translations */
 

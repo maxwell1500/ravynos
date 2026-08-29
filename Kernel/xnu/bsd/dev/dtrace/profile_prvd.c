@@ -46,14 +46,11 @@
 
 #if defined(__x86_64__)
 extern x86_saved_state_t *find_kern_regs(thread_t);
-#elif defined (__arm__) || defined(__arm64__)
+#elif defined(__arm64__)
 extern struct arm_saved_state *find_kern_regs(thread_t);
 #else
 #error Unknown architecture
 #endif
-
-#undef ASSERT
-#define ASSERT(x) do {} while(0)
 
 extern void profile_init(void);
 
@@ -91,7 +88,7 @@ static dtrace_provider_id_t profile_id;
 
 #if defined(__x86_64__)
 #define PROF_ARTIFICIAL_FRAMES  9
-#elif defined(__arm__) || defined(__arm64__)
+#elif defined(__arm64__)
 #define PROF_ARTIFICIAL_FRAMES 8
 #else
 #error Unknown architecture
@@ -180,28 +177,6 @@ profile_fire(void *arg)
 			dtrace_probe(prof->prof_id, 0x0, regs->eip, late, 0, 0);
 		}
 	}
-#elif defined(__arm__)
-	{
-		arm_saved_state_t *arm_kern_regs = (arm_saved_state_t *) find_kern_regs(current_thread());
-
-		// We should only come in here from interrupt context, so we should always have valid kernel regs
-		assert(NULL != arm_kern_regs);
-
-		if (arm_kern_regs->cpsr & 0xF) {
-			/* Kernel was interrupted. */
-			dtrace_probe(prof->prof_id, arm_kern_regs->pc, 0x0, late, 0, 0);
-		} else {
-			/* Possibly a user interrupt */
-			arm_saved_state_t   *arm_user_regs = (arm_saved_state_t *)find_user_regs(current_thread());
-
-			if (NULL == arm_user_regs) {
-				/* Too bad, so sad, no useful interrupt state. */
-				dtrace_probe(prof->prof_id, 0xcafebabe, 0x0, late, 0, 0); /* XXX_BOGUS also see profile_usermode() below. */
-			} else {
-				dtrace_probe(prof->prof_id, 0x0, arm_user_regs->pc, late, 0, 0);
-			}
-		}
-	}
 #elif defined(__arm64__)
 	{
 		arm_saved_state_t *arm_kern_regs = (arm_saved_state_t *) find_kern_regs(current_thread());
@@ -210,8 +185,10 @@ profile_fire(void *arg)
 		assert(NULL != arm_kern_regs);
 
 		if (saved_state64(arm_kern_regs)->cpsr & 0xF) {
+			const uint64_t pc = ml_get_backtrace_pc(arm_kern_regs);
+
 			/* Kernel was interrupted. */
-			dtrace_probe(prof->prof_id, saved_state64(arm_kern_regs)->pc, 0x0, late, 0, 0);
+			dtrace_probe(prof->prof_id, pc, 0x0, late, 0, 0);
 		} else {
 			/* Possibly a user interrupt */
 			arm_saved_state_t   *arm_user_regs = (arm_saved_state_t *)find_user_regs(current_thread());
@@ -259,32 +236,15 @@ profile_tick(void *arg)
 			dtrace_probe(prof->prof_id, 0x0, regs->eip, 0, 0, 0);
 		}
 	}
-#elif defined(__arm__)
-	{
-		arm_saved_state_t *arm_kern_regs = (arm_saved_state_t *) find_kern_regs(current_thread());
-
-		if (NULL != arm_kern_regs) {
-			/* Kernel was interrupted. */
-			dtrace_probe(prof->prof_id, arm_kern_regs->pc, 0x0, 0, 0, 0);
-		} else {
-			/* Possibly a user interrupt */
-			arm_saved_state_t   *arm_user_regs = (arm_saved_state_t *)find_user_regs(current_thread());
-
-			if (NULL == arm_user_regs) {
-				/* Too bad, so sad, no useful interrupt state. */
-				dtrace_probe(prof->prof_id, 0xcafebabe, 0x0, 0, 0, 0); /* XXX_BOGUS also see profile_usermode() below. */
-			} else {
-				dtrace_probe(prof->prof_id, 0x0, arm_user_regs->pc, 0, 0, 0);
-			}
-		}
-	}
 #elif defined(__arm64__)
 	{
 		arm_saved_state_t *arm_kern_regs = (arm_saved_state_t *) find_kern_regs(current_thread());
 
 		if (NULL != arm_kern_regs) {
+			const uint64_t pc = ml_get_backtrace_pc(arm_kern_regs);
+
 			/* Kernel was interrupted. */
-			dtrace_probe(prof->prof_id, saved_state64(arm_kern_regs)->pc, 0x0, 0, 0, 0);
+			dtrace_probe(prof->prof_id, pc, 0x0, 0, 0, 0);
 		} else {
 			/* Possibly a user interrupt */
 			arm_saved_state_t   *arm_user_regs = (arm_saved_state_t *)find_user_regs(current_thread());
@@ -434,7 +394,9 @@ profile_provide(void *arg, const dtrace_probedesc_t *desc)
 		suffix = &name[j];
 	}
 
-	ASSERT(suffix != NULL);
+	if (!suffix) {
+		suffix = &name[strlen(name)];
+	}
 
 	/*
 	 * Now determine the numerical value present in the probe name.
@@ -711,26 +673,20 @@ _profile_open(dev_t dev, int flags, int devtype, struct proc *p)
 
 #define PROFILE_MAJOR  -24 /* let the kernel pick the device number */
 
-/*
- * A struct describing which functions will get invoked for certain
- * actions.
- */
-static struct cdevsw profile_cdevsw =
+static const struct cdevsw profile_cdevsw =
 {
-	_profile_open,          /* open */
-	eno_opcl,                       /* close */
-	eno_rdwrt,                      /* read */
-	eno_rdwrt,                      /* write */
-	eno_ioctl,                      /* ioctl */
-	(stop_fcn_t *)nulldev, /* stop */
-	(reset_fcn_t *)nulldev, /* reset */
-	NULL,                           /* tty's */
-	eno_select,                     /* select */
-	eno_mmap,                       /* mmap */
-	eno_strat,                      /* strategy */
-	eno_getc,                       /* getc */
-	eno_putc,                       /* putc */
-	0                                       /* type */
+	.d_open = _profile_open,
+	.d_close = eno_opcl,
+	.d_read = eno_rdwrt,
+	.d_write = eno_rdwrt,
+	.d_ioctl = eno_ioctl,
+	.d_stop = eno_stop,
+	.d_reset = eno_reset,
+	.d_select = eno_select,
+	.d_mmap = eno_mmap,
+	.d_strategy = eno_strat,
+	.d_reserved_1 = eno_getc,
+	.d_reserved_2 = eno_putc,
 };
 
 void

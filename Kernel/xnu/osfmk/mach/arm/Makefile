@@ -11,12 +11,19 @@ VPATH := $(VPATH):$(SOURCE)/../../arm
 DATAFILES = \
 	boolean.h exception.h kern_return.h ndr_def.h \
 	processor_info.h rpc.h thread_state.h thread_status.h \
-	vm_param.h vm_types.h \
+	traps.h vm_param.h vm_types.h \
 	syscall_sw.h _structs.h sdt_isa.h
 
+# These are covered by ../machine/mach_machine.modulemap.
 INSTALL_MD_LIST = ${DATAFILES}
 
+INSTALL_SF_MD_LCL_LIST = ${DATAFILES}
+
+# These are covered by ../machine/mach_machine.modulemap.
 INSTALL_MD_GEN_LIST = \
+	asm.h
+
+INSTALL_SF_MD_LCL_GEN_LIST = \
 	asm.h
 
 INSTALL_MD_DIR = mach/arm

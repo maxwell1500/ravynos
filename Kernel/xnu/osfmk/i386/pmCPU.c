@@ -54,8 +54,6 @@
 
 #include <kern/sched_urgency.h>
 
-extern int disableConsoleOutput;
-
 #define DELAY_UNSET             0xFFFFFFFFFFFFFFFFULL
 
 uint64_t cpu_itime_bins[CPU_ITIME_BINS] = {16 * NSEC_PER_USEC, 32 * NSEC_PER_USEC, 64 * NSEC_PER_USEC, 128 * NSEC_PER_USEC, 256 * NSEC_PER_USEC, 512 * NSEC_PER_USEC, 1024 * NSEC_PER_USEC, 2048 * NSEC_PER_USEC, 4096 * NSEC_PER_USEC, 8192 * NSEC_PER_USEC, 16384 * NSEC_PER_USEC, 32768 * NSEC_PER_USEC};
@@ -109,7 +107,7 @@ machine_idle(void)
 	uint64_t                ctime, rtime, itime;
 #if CST_DEMOTION_DEBUG
 	processor_t             cproc = my_cpu->cpu_processor;
-	uint64_t                cwakeups = PROCESSOR_DATA(cproc, wakeups_issued_total);
+	uint64_t                cwakeups = my_cpu->cpu_wakeups_issued_total;
 #endif /* CST_DEMOTION_DEBUG */
 	uint64_t esdeadline, ehdeadline;
 	boolean_t do_process_pending_timers = FALSE;
@@ -223,7 +221,7 @@ machine_idle_exit:
 		TCOAL_DEBUG(0xBBBB0000 | DBG_FUNC_END, ctime, esdeadline, idle_pending_timers_processed, 0, 0);
 	}
 #if CST_DEMOTION_DEBUG
-	uint64_t nwakeups = PROCESSOR_DATA(cproc, wakeups_issued_total);
+	uint64_t nwakeups = my_cpu->cpu_wakeups_issued_total;
 
 	if ((nwakeups == cwakeups) && (topoParms.nLThreadsPerPackage == my_cpu->lcpu.package->num_idle)) {
 		KERNEL_DEBUG_CONSTANT(0xceaa0000, cwakeups, 0, 0, 0, 0);
@@ -683,7 +681,7 @@ pmSafeMode(x86_lcpu_t *lcpu, uint32_t flags)
 
 		/*
 		 * Clear the halted flag for the specified CPU, that will
-		 * get it out of it's spin loop.
+		 * get it out of its spin loop.
 		 */
 		if (flags & PM_SAFE_FL_RESUME) {
 			lcpu->state = LCPU_RUN;
@@ -747,22 +745,8 @@ machine_choose_processor(processor_set_t pset,
 static int
 pmThreadGetUrgency(uint64_t *rt_period, uint64_t *rt_deadline)
 {
-	thread_urgency_t urgency;
-	uint64_t        arg1, arg2;
-
-	urgency = thread_get_urgency(THREAD_NULL, &arg1, &arg2);
-
-	if (urgency == THREAD_URGENCY_REAL_TIME) {
-		if (rt_period != NULL) {
-			*rt_period = arg1;
-		}
-
-		if (rt_deadline != NULL) {
-			*rt_deadline = arg2;
-		}
-	}
-
-	return (int)urgency;
+#pragma unused(rt_period, rt_deadline)
+	return THREAD_URGENCY_NONE;
 }
 
 #if     DEBUG

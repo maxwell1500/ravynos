@@ -56,6 +56,12 @@ bpf_get_blen(int fd, int * blen)
 }
 
 PRIVATE_EXTERN int
+bpf_set_blen(int fd, int blen)
+{
+	return ioctl(fd, BIOCSBLEN, &blen);
+}
+
+PRIVATE_EXTERN int
 bpf_set_header_complete(int fd, u_int header_complete)
 {
 	return ioctl(fd, BIOCSHDRCMPLT, &header_complete);
@@ -77,6 +83,27 @@ bpf_dispose(int bpf_fd)
 }
 
 PRIVATE_EXTERN int
+bpf_set_traffic_class(int fd, int tc)
+{
+	return ioctl(fd, BIOCSETTC, &tc);
+}
+
+#ifdef BIOCSDIRECTION
+PRIVATE_EXTERN int
+bpf_set_direction(int fd, u_int direction)
+{
+	return ioctl(fd, BIOCSDIRECTION, &direction);
+}
+
+PRIVATE_EXTERN int
+bpf_get_direction(int fd, u_int *direction)
+{
+	return ioctl(fd, BIOCGDIRECTION, direction);
+}
+
+#endif /* BIOCSDIRECTION */
+
+PRIVATE_EXTERN int
 bpf_new(void)
 {
 	char bpfdev[256];
@@ -87,10 +114,6 @@ bpf_new(void)
 		snprintf(bpfdev, sizeof(bpfdev), "/dev/bpf%d", i);
 		fd = open(bpfdev, O_RDWR, 0);
 		if (fd >= 0) {
-#ifdef SO_TC_CTL
-			int tc = SO_TC_CTL;
-			(void) ioctl(fd, BIOCSETTC, &tc);
-#endif /* SO_TC_CTL */
 			break;
 		}
 		if (errno != EBUSY) {
@@ -144,11 +167,54 @@ bpf_arp_filter(int fd, int type_offset, int type, u_int pkt_size)
 	return ioctl(fd, BIOCSETF, &prog);
 }
 
+PRIVATE_EXTERN int
+bpf_set_write_size_max(int fd, u_int value)
+{
+#ifdef BIOCSWRITEMAX
+	return ioctl(fd, BIOCSWRITEMAX, &value);
+#else
+#pragma unused(fd, value)
+	return ENOTSUP;
+#endif
+}
+
+PRIVATE_EXTERN int
+bpf_get_write_size_max(int fd, u_int *value)
+{
+#ifdef BIOCGWRITEMAX
+	return ioctl(fd, BIOCGWRITEMAX, value);
+#else
+#pragma unused(fd, value)
+	return ENOTSUP;
+#endif
+}
+
+PRIVATE_EXTERN int
+bpf_set_batch_write(int fd, u_int value)
+{
+#ifdef BIOCSBATCHWRITE
+	return ioctl(fd, BIOCSBATCHWRITE, &value);
+#else
+#pragma unused(fd, value)
+	return ENOTSUP;
+#endif
+}
+
+PRIVATE_EXTERN int
+bpf_get_batch_write(int fd, u_int *value)
+{
+#ifdef BIOCGBATCHWRITE
+	return ioctl(fd, BIOCGBATCHWRITE, value);
+#else
+#pragma unused(fd, value)
+	return ENOTSUP;
+#endif
+}
+
 #ifdef TESTING
 #include <net/if_arp.h>
 #include <net/ethernet.h>
 #include <netinet/if_ether.h>
-
 
 void
 bpf_read_continuously(int fd, u_int blen)
@@ -181,6 +247,7 @@ main(int argc, char * argv[])
 		perror("no bpf devices");
 		exit(1);
 	}
+	bpf_set_traffic_class(SO_TC_CTL);
 
 	if (argc > 1) {
 		en_name = argv[1];

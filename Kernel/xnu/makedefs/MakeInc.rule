@@ -1,6 +1,6 @@
 # -*- mode: makefile;-*-
 #
-# Copyright (C) 1999-2016 Apple Inc. All rights reserved.
+# Copyright (C) 1999-2020 Apple Inc. All rights reserved.
 #
 # MakeInc.rule defines the targets and rules for
 # leaf directories once MakeInc.dir has recursed
@@ -8,6 +8,18 @@
 # to allow the Makefile in the source directory
 # to augment the actions that will be performed.
 #
+include $(SRCROOT)/makedefs/MakeInc.color
+
+#
+# Empty the export lists of headers when building for exclaves
+#
+
+ifeq ($(EXPORTHDRS_SKIP_EXCLAVES),YES)
+EXPORT_MI_LIST =
+EXPORT_MI_GEN_LIST =
+EXPORT_MD_LIST =
+EXPORT_MD_GEN_LIST =
+endif
 
 #
 # Generic Install rules
@@ -45,46 +57,7 @@ ifndef INSTALL_KF_MD_GEN_LIST
     INSTALL_KF_MD_GEN_LIST = $(EXPORT_MD_GEN_LIST)
 endif
 
-ifeq (${XNU_LOGCOLORS},y)
-    LOGCOLORS ?= y
-endif
-
-ifeq ($(LOGCOLORS),y)
-    # Get a nice list of device code names associated with the build platform
-    ifndef CDevs
-        #ifdef EMBEDDED_DEVICE_MAP
-        #    export CDevs := $(shell $(EMBEDDED_DEVICE_MAP) -db $(EDM_DBPATH) -query "SELECT DISTINCT TargetType FROM Targets WHERE KernelPlatform = '$(CURRENT_MACHINE_CONFIG_LC)'" | tr '[\r\n]' ':' | sed 's,:$$,,')
-        #endif
-    endif
-    ifndef CMD_MC
-        export _MACHINE := $(CURRENT_MACHINE_CONFIG_LC)
-        ifeq ($(CURRENT_MACHINE_CONFIG),NONE)
-            export _MACHINE := $(subst Mac,,$(PLATFORM))
-        endif
-        export CMD_MC := $(shell __A="$(CURRENT_ARCH_CONFIG_LC)"; \
-                                         __As=$$((6-$${\#__A})); \
-                                         printf "\\033[1m%-.6s%*.*s %9.9s\\033[m" \
-                                                "$${__A}" \
-                                                $${__As} $${__As} " " \
-                                                "$(_MACHINE)")
-    endif
-    # Turn off colored output
-    Color0:=$(shell printf "\\033[m")
-    # Start a host command: bold, underlined pink text
-    ColorH:=$(shell printf "\\033[1;4;35m")
-    # Start a compilation-related command: bold, underlined blue text
-    ColorC:=$(shell printf "[$(CMD_MC)] \\033[1;4;34m")
-    # Start a MIG command: bold, green text on light grey background
-    ColorM:=$(shell printf "[$(CMD_MC)] \\033[1;32;40m")
-    # Start a linking command: bold, white text on blue background
-    ColorL:=$(shell printf "[$(CMD_MC)] \\033[1;37;44m")
-    # Start a filename: bold, white text
-    ColorF:=$(shell printf "\\033[1;37m")
-    # Start a linked file name: yellow text on light grey background
-    ColorLF:=$(shell printf "\\033[1;33;40m")
-    # Error strings: underlined bold white text on red background
-    ColorErr:=$(shell printf "\033[1;4;37;41m")
-endif
+$(eval $(call _setup_build_log_colors))
 
 .PHONY: ALWAYS
 
@@ -112,17 +85,17 @@ $(3)/.UNIFDEF_FLAGS: ALWAYS | $(3)_MKDIR
 	$$(_v)$$(REPLACECONTENTS) $$@ $$(UNIFDEF) $(4)
 
 $(1): $(dir $(firstword $(1)))% : $(if $(2),%,$$(SOURCE)/%) | $(3)_MKDIR
-	$$(call makelog,$$(ColorH)INSTALLHDR$$(Color0)    $$(ColorF)$$*$$(Color0))
-	$$(_v)$$(UNIFDEF) $(4) $$< > ./$(3)/$$*.unifdef.$$$$$$$$;	\
+	@$$(LOG_INSTALLHDR) "$$*"
+	$$(_v)$$(UNIFDEF) $(4) $$< > ./$(3)/$$*.unifdef.$$$$$$$$;		\
 	if [ $$$$? -eq 2 ]; then						\
-		$(ERR) Parse failure for $$<;				\
-		exit 1;							\
-	fi;								\
-	$$(DECOMMENT) ./$(3)/$$*.unifdef.$$$$$$$$ r >			\
-		./$(3)/$$*.strip.$$$$$$$$ || exit 1;			\
-	if [ -s ./$(3)/$$*.strip.$$$$$$$$ ]; then			\
+		$(ERR) Parse failure for $$<;					\
+		exit 1;								\
+	fi;									\
+	$$(DECOMMENT) ./$(3)/$$*.unifdef.$$$$$$$$ r >				\
+		./$(3)/$$*.strip.$$$$$$$$ || exit 1;				\
+	if [ -s ./$(3)/$$*.strip.$$$$$$$$ ]; then				\
 		$$(INSTALL) $$(INSTALL_FLAGS) ./$(3)/$$*.unifdef.$$$$$$$$ $$@ || exit 1;	\
-	fi;								\
+	fi;									\
 	$$(RM) ./$(3)/$$*.unifdef.$$$$$$$$ ./$(3)/$$*.strip.$$$$$$$$
 endef
 
@@ -148,7 +121,7 @@ $(3)/.UNIFDEF_FLAGS: ALWAYS | $(3)_MKDIR
 	$$(_v)$$(REPLACECONTENTS) $$@ $$(UNIFDEF) -t $(4)
 
 $(1): $(5)% : $(2) | $(3)_MKDIR
-	$$(call makelog,$$(ColorH)INSTALLPY$$(Color0)     $$(ColorF)$$*$$(Color0))
+	@$$(LOG_INSTALLPY) "$$*"
 	$$(_v)$$(MKDIR) $$(dir $$@) $$(dir ./$(3)/$$*)
 	$$(_v)$$(UNIFDEF) -t $(4) $$< > ./$(3)/$$*.unifdef.$$$$$$$$$$(suffix $$*); \
 	if [ $$$$? -eq 2 ]; then						\
@@ -157,25 +130,103 @@ $(1): $(5)% : $(2) | $(3)_MKDIR
 	fi;								\
 	$$(INSTALL) $$(DATA_INSTALL_FLAGS) \
 		./$(3)/$$*.unifdef.$$$$$$$$$$(suffix $$*) $$@ || exit 1; \
-	$$(PYTHON) $$(LLDBMACROS_SOURCE)/core/syntax_checker.py \
+	$$(PYTHON) $$(LLDBMACROS_SOURCE)/lint/syntax_checker.py \
 		./$(3)/$$*.unifdef.$$$$$$$$$$(suffix $$*) $$(_vstdout) || exit 1; \
 	$$(RM) ./$(3)/$$*.unifdef.$$$$$$$$$$(suffix $$*)
 	$$(_v)if [ -n "$(5)" ]; then $$(TOUCH) "$(5)"; fi
 endef
 
+# Template for Libsyscall header unifdef postprocessing in DSTROOT
+# $(1) is the install path
+# $(2) is the unifdef flags
+
+define LIBSYSCALL_DO_UNIFDEF_HEADERS_RULE_template
+do_unifdef_headers::
+	$$(_v)[ \! -d "$(1)" ] || $$(FIND) -x "$(1)"  -type f \( -name \*.h -o \
+		-name \*.defs -o -name \*.iig -o -name \*.modulemap \) \
+		-execdir $$(UNIFDEF) $(2) -o {} {} \;
+.PHONY: do_unifdef_headers
+endef
+
+# Helper function to call a verifier
+# Generally, a verifier is a function that post-processes a .o file to validate
+# some characteristics.
 #
-# Empty the install lists of non-host headers if building the host headers alias
+# This ensures that the output .o file is renamed if the verifier rejects the
+# input or fails. This forces the .o file to be re-generated & re-verified if
+# another build is run.
+#
+# Note: currently, it is possible to end up in an inconsistent state by
+# Ctrl+C-ing in the middle of a verifier run, causing a .o file that would
+# have failed verification to still exist as a .o instead o a .o.unverified.
+# The next build should be a "clean" build to prevent the .o file avoiding
+# verification.
+#
+# Any stderr output from the verifier is printed with an "error:" prefix.
+#
+# $(1) is the name of the verifier to call
+# $(2) is the name of the .o file to pass to the verifier
+define VERIFY
+{ ERROR_OUTPUT="$$({ $(call $(1),$(2)) } 2>&1 1>&3)"; } 3>&1; \
+RETURN=$$?; \
+$(ERR) "$$($(SED) -e 's/^/error: /' <<< "$$ERROR_OUTPUT")"; \
+if [ $$RETURN -ne 0 ]; then \
+	UNVERIFIED_FILE=$(@:o=o.unverified) ; \
+	$(MV) '$(2)' "$$UNVERIFIED_FILE"; \
+	$(ERR) "error: Moved object file $(2) with verifier failures to $$PWD/$$UNVERIFIED_FILE"; \
+	exit $$RETURN; \
+fi;
+endef
+
+# Verifier to ensure no UBSan runtime calls generated in a file
+# Compile with -fsanitize=... and WITHOUT -fsanitize-trap
+#
+# On failure, the build will fail and any offending symbols will be printed
+# along with a partial disassembly. A full disassembly of the object file may
+# also be useful, e.g.:
+# $ objdump -dSrl BUILD/obj/DEVELOPMENT_.../osfmk/DEVELOPMENT/vm_sanitize.o
+#
+# Note that objdump will not work on builds with LTO enabled, since the
+# intermediate files are LLVM bitcode instead of traditional object files.
+#
+# $(1) is the name of the .o file to be verified
+define VERIFIER_NO_UBSAN_CHECKS
+MATCHES="$$($(NM) -j '$(1)' | $(GREP) '^___ubsan')"; \
+if [[ ! -z "$$MATCHES" ]]; then \
+	$(ECHO) 1>&2 'UBSan verifier failure for $<:'; \
+	DISASM="$$($(OBJDUMP) -dSrl '$(1)' | $(GREP) -E '___ubsan|^;' | $(GREP) -B2 '___ubsan')"; \
+	if [[ -z "$$DISASM" ]]; then \
+		$(ECHO) 1>&2 "Failed to disassemble intermediate object file. It may be a bitcode file if LTO is enabled."; \
+	else \
+		$(ECHO) 1>&2 "$$($(SED) -e '/^--$$/d' -e 's/^/    /' <<< "$$DISASM")"; \
+	fi; \
+	exit 1; \
+fi;
+endef
+
+#
+# Empty the install lists of non-host and non-exclave headers if building the
+# host headers alias and exclave headers aliases. Separately, export headers
+# are also emptied for exclaves (but not for host headers) with
+# EXPORTHDRS_SKIP_EXCLAVES.
 #
 
 ifeq ($(INSTALLHDRS_SKIP_HOST),YES)
+
 INSTALL_MI_LIST =
 INSTALL_MI_GEN_LIST =
+INSTALL_IF_MI_LIST =
+INSTALL_IF_MI_GEN_LIST =
 INSTALL_DRIVERKIT_MI_LIST =
 INSTALL_DRIVERKIT_MI_GEN_LIST =
 INSTALL_KF_MI_LIST =
 INSTALL_KF_MI_GEN_LIST =
 INSTALL_MI_LCL_LIST =
 INSTALL_MI_LCL_GEN_LIST =
+INSTALL_IF_MI_LCL_LIST =
+INSTALL_IF_MI_LCL_GEN_LIST =
+INSTALL_SF_MI_LCL_LIST =
+INSTALL_SF_MI_LCL_GEN_LIST =
 INSTALL_DRIVERKIT_MI_LCL_LIST =
 INSTALL_DRIVERKIT_MI_LCL_GEN_LIST =
 INSTALL_KF_MI_LCL_LIST =
@@ -188,10 +239,24 @@ INSTALL_KF_MD_LIST =
 INSTALL_KF_MD_GEN_LIST =
 INSTALL_MD_LCL_LIST =
 INSTALL_MD_LCL_GEN_LIST =
+INSTALL_SF_MD_LCL_LIST =
+INSTALL_SF_MD_LCL_GEN_LIST =
 INSTALL_DRIVERKIT_MD_LCL_LIST =
 INSTALL_DRIVERKIT_MD_LCL_GEN_LIST =
 INSTALL_KF_MD_LCL_LIST =
 INSTALL_KF_MD_LCL_GEN_LIST =
+INSTALL_KF_LIBCXX_MI_LIST =
+
+# If there are no headers then there can be no module maps.
+INSTALLHDRS_MODULEMAPS_SKIP_HOST = YES
+
+endif
+
+ifeq ($(INSTALLHDRS_MODULEMAPS_SKIP_HOST),YES)
+INSTALL_MODULEMAP_MI_LIST =
+INSTALL_MODULEMAP_MI_LCL_LIST =
+INSTALL_MODULEMAP_MD_LIST =
+INSTALL_MODULEMAP_MD_LCL_LIST =
 endif
 
 #
@@ -200,9 +265,17 @@ endif
 
 INSTALL_MI_INC_FILES = $(addprefix $(DSTROOT)/$(INCDIR)/$(INSTALL_MI_DIR)/, $(INSTALL_MI_LIST))
 INSTALL_MI_INC_GEN_FILES = $(addprefix $(DSTROOT)/$(INCDIR)/$(INSTALL_MI_DIR)/, $(INSTALL_MI_GEN_LIST))
+INSTALL_MODULEMAP_MI_INC_FILES = $(addprefix $(DSTROOT)/$(INCDIR)/$(INSTALL_MODULEMAP_MI_DIR)/,$(INSTALL_MODULEMAP_MI_LIST))
 
 $(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_MI_INC_FILES),,incmidir,$(SINCFRAME_UNIFDEF)))
 $(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_MI_INC_GEN_FILES),1,incmigendir,$(SINCFRAME_UNIFDEF)))
+$(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_MODULEMAP_MI_INC_FILES),,mmincmidir,-t $(DATA_UNIFDEF)))
+
+INSTALL_IF_MI_FILES = $(addprefix $(DSTROOT)/$(IINCDIR)/$(INSTALL_MI_DIR)/, $(INSTALL_IF_MI_LIST))
+INSTALL_IF_MI_GEN_FILES = $(addprefix $(DSTROOT)/$(IINCDIR)/$(INSTALL_MI_DIR)/, $(INSTALL_IF_MI_GEN_LIST))
+
+$(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_IF_MI_FILES),,iincmidir,$(SINCFRAME_UNIFDEF)))
+$(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_IF_MI_GEN_FILES),1,iincmigendir,$(SINCFRAME_UNIFDEF)))
 
 ifeq ($(DRIVERKIT),1)
 INSTALL_DRIVERKIT_MI_INC_FILES = $(addprefix $(DSTROOT)/$(DRIVERKITINCDIR)/$(INSTALL_MI_DIR)/, $(INSTALL_DRIVERKIT_MI_LIST))
@@ -212,21 +285,55 @@ $(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_DRIVERKIT_MI_INC_FILES),,dkinc
 $(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_DRIVERKIT_MI_INC_GEN_FILES),1,dkincmigendir,$(DKINCFRAME_UNIFDEF)))
 endif
 
+ifeq ($(EXCLAVEKIT),1)
+INSTALL_EXCLAVEKIT_MI_INC_FILES = $(addprefix $(DSTROOT)/$(EXCLAVEKITINCDIR)/$(INSTALL_MI_DIR)/, $(INSTALL_EXCLAVEKIT_MI_LIST))
+INSTALL_EXCLAVEKIT_MI_INC_GEN_FILES = $(addprefix $(DSTROOT)/$(EXCLAVEKITINCDIR)/$(INSTALL_MI_DIR)/, $(INSTALL_EXCLAVEKIT_MI_GEN_LIST))
+
+$(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_EXCLAVEKIT_MI_INC_FILES),,ekincmidir,$(EKINCFRAME_UNIFDEF)))
+$(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_EXCLAVEKIT_MI_INC_GEN_FILES),1,ekincmigendir,$(EKINCFRAME_UNIFDEF)))
+endif
+
+ifeq ($(EXCLAVECORE),1)
+INSTALL_EXCLAVECORE_MI_INC_FILES = $(addprefix $(DSTROOT)/$(EXCLAVECOREINCDIR)/$(INSTALL_MI_DIR)/, $(INSTALL_EXCLAVECORE_MI_LIST))
+INSTALL_EXCLAVECORE_MI_INC_GEN_FILES = $(addprefix $(DSTROOT)/$(EXCLAVECOREINCDIR)/$(INSTALL_MI_DIR)/, $(INSTALL_EXCLAVECORE_MI_GEN_LIST))
+
+$(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_EXCLAVECORE_MI_INC_FILES),,ecincmidir,$(ECINCFRAME_UNIFDEF)))
+$(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_EXCLAVECORE_MI_INC_GEN_FILES),1,ecincmigendir,$(ECINCFRAME_UNIFDEF)))
+endif
+
 INSTALL_KF_MI_FILES = $(addprefix $(DSTROOT)/$(KINCDIR)/$(EXPORT_MI_DIR)/, $(INSTALL_KF_MI_LIST))
 INSTALL_KF_MI_GEN_FILES = $(addprefix $(DSTROOT)/$(KINCDIR)/$(EXPORT_MI_DIR)/, $(INSTALL_KF_MI_GEN_LIST))
 
 $(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_KF_MI_FILES),,kincmidir,$(KINCFRAME_UNIFDEF)))
 $(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_KF_MI_GEN_FILES),1,kincmigendir,$(KINCFRAME_UNIFDEF)))
 
+INSTALL_LIBCXX_MI_FILES = $(addprefix $(DSTROOT)/$(KLIBCXXINCDIR)/, $(INSTALL_KF_LIBCXX_MI_LIST))
+
+$(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_LIBCXX_MI_FILES),,cxxmidir,$(LIBCXXINCFRAME_UNIFDEF)))
+
 #
 # Machine-independent local (private) files
 #
 
-INSTALL_MI_LCL_FILES = $(addprefix $(DSTROOT)/$(LCLDIR)/$(INSTALL_MI_DIR)/, $(sort $(INSTALL_MI_LCL_LIST) $(INSTALL_MI_LIST)))
-INSTALL_MI_LCL_GEN_FILES = $(addprefix $(DSTROOT)/$(LCLDIR)/$(INSTALL_MI_DIR)/, $(sort $(INSTALL_MI_LCL_GEN_LIST) $(INSTALL_MI_GEN_LIST)))
+INSTALL_MI_LCL_FILES = $(addprefix $(DSTROOT)/$(LCLDIR)/$(INSTALL_MI_DIR)/, $(INSTALL_MI_LCL_LIST))
+INSTALL_MI_LCL_GEN_FILES = $(addprefix $(DSTROOT)/$(LCLDIR)/$(INSTALL_MI_DIR)/, $(INSTALL_MI_LCL_GEN_LIST))
+INSTALL_MODULEMAP_MI_LCL_FILES = $(addprefix $(DSTROOT)/$(LCLDIR)/$(INSTALL_MODULEMAP_MI_DIR)/,$(INSTALL_MODULEMAP_MI_LCL_LIST))
 
 $(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_MI_LCL_FILES),,pincmidir,$(SPINCFRAME_UNIFDEF)))
 $(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_MI_LCL_GEN_FILES),1,pincmigendir,$(SPINCFRAME_UNIFDEF)))
+$(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_MODULEMAP_MI_LCL_FILES),,mmpincmidir,-t $(PDATA_UNIFDEF)))
+
+INSTALL_IF_MI_LCL_FILES = $(addprefix $(DSTROOT)/$(IPINCDIR)/$(INSTALL_MI_DIR)/, $(INSTALL_IF_MI_LCL_LIST))
+INSTALL_IF_MI_LCL_GEN_FILES = $(addprefix $(DSTROOT)/$(IPINCDIR)/$(INSTALL_MI_DIR)/, $(INSTALL_IF_MI_LCL_GEN_LIST))
+
+$(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_IF_MI_LCL_FILES),,ipincmidir,$(SPINCFRAME_UNIFDEF)))
+$(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_IF_MI_LCL_GEN_FILES),1,ipincmigendir,$(SPINCFRAME_UNIFDEF)))
+
+INSTALL_SF_MI_LCL_FILES = $(addprefix $(DSTROOT)/$(SPINCDIR)/$(INSTALL_MI_DIR)/, $(sort $(INSTALL_SF_MI_LCL_LIST)))
+INSTALL_SF_MI_LCL_GEN_FILES = $(addprefix $(DSTROOT)/$(SPINCDIR)/$(INSTALL_MI_DIR)/, $(sort $(INSTALL_SF_MI_LCL_GEN_LIST)))
+
+$(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_SF_MI_LCL_FILES),,spincmidir,$(SPINCFRAME_UNIFDEF)))
+$(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_SF_MI_LCL_GEN_FILES),1,spincmigendir,$(SPINCFRAME_UNIFDEF)))
 
 ifeq ($(DRIVERKIT),1)
 INSTALL_DRIVERKIT_MI_LCL_FILES = $(addprefix $(DSTROOT)/$(DRIVERKITLCLDIR)/$(INSTALL_MI_DIR)/, $(INSTALL_DRIVERKIT_MI_LCL_LIST))
@@ -234,6 +341,22 @@ INSTALL_DRIVERKIT_MI_LCL_GEN_FILES = $(addprefix $(DSTROOT)/$(DRIVERKITLCLDIR)/$
 
 $(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_DRIVERKIT_MI_LCL_FILES),,dkpincmidir,$(DKPINCFRAME_UNIFDEF)))
 $(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_DRIVERKIT_MI_LCL_GEN_FILES),1,dkpincmigendir,$(DKPINCFRAME_UNIFDEF)))
+endif
+
+ifeq ($(EXCLAVEKIT),1)
+INSTALL_EXCLAVEKIT_MI_LCL_FILES = $(addprefix $(DSTROOT)/$(EXCLAVEKITLCLDIR)/$(INSTALL_MI_DIR)/, $(INSTALL_EXCLAVEKIT_MI_LCL_LIST))
+INSTALL_EXCLAVEKIT_MI_LCL_GEN_FILES = $(addprefix $(DSTROOT)/$(EXCLAVEKITLCLDIR)/$(INSTALL_MI_DIR)/, $(INSTALL_EXCLAVEKIT_MI_LCL_GEN_LIST))
+
+$(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_EXCLAVEKIT_MI_LCL_FILES),,ekpincmidir,$(EKPINCFRAME_UNIFDEF)))
+$(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_EXCLAVEKIT_MI_LCL_GEN_FILES),1,ekpincmigendir,$(EKPINCFRAME_UNIFDEF)))
+endif
+
+ifeq ($(EXCLAVECORE),1)
+INSTALL_EXCLAVECORE_MI_LCL_FILES = $(addprefix $(DSTROOT)/$(EXCLAVECORELCLDIR)/$(INSTALL_MI_DIR)/, $(INSTALL_EXCLAVECORE_MI_LCL_LIST))
+INSTALL_EXCLAVECORE_MI_LCL_GEN_FILES = $(addprefix $(DSTROOT)/$(EXCLAVECORELCLDIR)/$(INSTALL_MI_DIR)/, $(INSTALL_EXCLAVECORE_MI_LCL_GEN_LIST))
+
+$(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_EXCLAVECORE_MI_LCL_FILES),,ecpincmidir,$(ECPINCFRAME_UNIFDEF)))
+$(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_EXCLAVECORE_MI_LCL_GEN_FILES),1,ecpincmigendir,$(ECPINCFRAME_UNIFDEF)))
 endif
 
 INSTALL_KF_MI_LCL_FILES = $(addprefix $(DSTROOT)/$(KPINCDIR)/$(EXPORT_MI_DIR)/, $(INSTALL_KF_MI_LCL_LIST))
@@ -248,9 +371,11 @@ $(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_KF_MI_LCL_GEN_FILES),1,kpincmi
 
 INSTALL_MD_INC_FILES = $(addprefix $(DSTROOT)/$(INCDIR)/$(INSTALL_MD_DIR)/, $(INSTALL_MD_LIST))
 INSTALL_MD_INC_GEN_FILES = $(addprefix $(DSTROOT)/$(INCDIR)/$(INSTALL_MD_DIR)/, $(INSTALL_MD_GEN_LIST))
+INSTALL_MODULEMAP_MD_INC_FILES = $(addprefix $(DSTROOT)/$(INCDIR)/$(INSTALL_MODULEMAP_MD_DIR)/,$(INSTALL_MODULEMAP_MD_LIST))
 
 $(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_MD_INC_FILES),,incdir,$(SINCFRAME_UNIFDEF)))
 $(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_MD_INC_GEN_FILES),1,incgendir,$(SINCFRAME_UNIFDEF)))
+$(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_MODULEMAP_MD_INC_FILES),,mmincdir,-t $(DATA_UNIFDEF)))
 
 ifeq ($(DRIVERKIT),1)
 INSTALL_DRIVERKIT_MD_INC_FILES = $(addprefix $(DSTROOT)/$(DRIVERKITINCDIR)/$(INSTALL_MD_DIR)/, $(INSTALL_DRIVERKIT_MD_LIST))
@@ -258,6 +383,22 @@ INSTALL_DRIVERKIT_MD_INC_GEN_FILES = $(addprefix $(DSTROOT)/$(DRIVERKITINCDIR)/$
 
 $(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_DRIVERKIT_MD_INC_FILES),,dkincdir,$(DKINCFRAME_UNIFDEF)))
 $(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_DRIVERKIT_MD_INC_GEN_FILES),1,dkincgendir,$(DKINCFRAME_UNIFDEF)))
+endif
+
+ifeq ($(EXCLAVEKIT),1)
+INSTALL_EXCLAVEKIT_MD_INC_FILES = $(addprefix $(DSTROOT)/$(EXCLAVEKITINCDIR)/$(INSTALL_MD_DIR)/, $(INSTALL_EXCLAVEKIT_MD_LIST))
+INSTALL_EXCLAVEKIT_MD_INC_GEN_FILES = $(addprefix $(DSTROOT)/$(EXCLAVEKITINCDIR)/$(INSTALL_MD_DIR)/, $(INSTALL_EXCLAVEKIT_MD_GEN_LIST))
+
+$(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_EXCLAVEKIT_MD_INC_FILES),,ekincdir,$(EKINCFRAME_UNIFDEF)))
+$(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_EXCLAVEKIT_MD_INC_GEN_FILES),1,ekincgendir,$(EKINCFRAME_UNIFDEF)))
+endif
+
+ifeq ($(EXCLAVECORE),1)
+INSTALL_EXCLAVECORE_MD_INC_FILES = $(addprefix $(DSTROOT)/$(EXCLAVECOREINCDIR)/$(INSTALL_MD_DIR)/, $(INSTALL_EXCLAVECORE_MD_LIST))
+INSTALL_EXCLAVECORE_MD_INC_GEN_FILES = $(addprefix $(DSTROOT)/$(EXCLAVECOREINCDIR)/$(INSTALL_MD_DIR)/, $(INSTALL_EXCLAVECORE_MD_GEN_LIST))
+
+$(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_EXCLAVECORE_MD_INC_FILES),,ecincdir,$(ECINCFRAME_UNIFDEF)))
+$(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_EXCLAVECORE_MD_INC_GEN_FILES),1,ecincgendir,$(ECINCFRAME_UNIFDEF)))
 endif
 
 INSTALL_KF_MD_FILES = $(addprefix $(DSTROOT)/$(KINCDIR)/$(EXPORT_MD_DIR)/, $(INSTALL_KF_MD_LIST))
@@ -270,11 +411,19 @@ $(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_KF_MD_GEN_FILES),1,kincgendir,
 # Machine-dependent local (private) files
 #
 
-INSTALL_MD_LCL_FILES = $(addprefix $(DSTROOT)/$(LCLDIR)/$(INSTALL_MD_DIR)/, $(sort $(INSTALL_MD_LCL_LIST) $(INSTALL_MD_LIST)))
-INSTALL_MD_LCL_GEN_FILES = $(addprefix $(DSTROOT)/$(LCLDIR)/$(INSTALL_MD_DIR)/, $(sort $(INSTALL_MD_LCL_GEN_LIST) $(INSTALL_MD_GEN_LIST)))
+INSTALL_MD_LCL_FILES = $(addprefix $(DSTROOT)/$(LCLDIR)/$(INSTALL_MD_DIR)/, $(sort $(INSTALL_MD_LCL_LIST)))
+INSTALL_MD_LCL_GEN_FILES = $(addprefix $(DSTROOT)/$(LCLDIR)/$(INSTALL_MD_DIR)/, $(sort $(INSTALL_MD_LCL_GEN_LIST)))
+INSTALL_MODULEMAP_MD_LCL_FILES = $(addprefix $(DSTROOT)/$(LCLDIR)/$(INSTALL_MODULEMAP_MD_DIR)/,$(INSTALL_MODULEMAP_MD_LCL_LIST))
 
 $(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_MD_LCL_FILES),,pincdir,$(SPINCFRAME_UNIFDEF)))
 $(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_MD_LCL_GEN_FILES),1,pincgendir,$(SPINCFRAME_UNIFDEF)))
+$(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_MODULEMAP_MD_LCL_FILES),,mmpincdir,-t $(PDATA_UNIFDEF)))
+
+INSTALL_SF_MD_LCL_FILES = $(addprefix $(DSTROOT)/$(SPINCDIR)/$(INSTALL_MD_DIR)/, $(sort $(INSTALL_SF_MD_LCL_LIST)))
+INSTALL_SF_MD_LCL_GEN_FILES = $(addprefix $(DSTROOT)/$(SPINCDIR)/$(INSTALL_MD_DIR)/, $(sort $(INSTALL_SF_MD_LCL_GEN_LIST)))
+
+$(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_SF_MD_LCL_FILES),,spincdir,$(SPINCFRAME_UNIFDEF)))
+$(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_SF_MD_LCL_GEN_FILES),1,spincgendir,$(SPINCFRAME_UNIFDEF)))
 
 ifeq ($(DRIVERKIT),1)
 INSTALL_DRIVERKIT_MD_LCL_FILES = $(addprefix $(DSTROOT)/$(DRIVERKITLCLDIR)/$(INSTALL_MD_DIR)/, $(INSTALL_DRIVERKIT_MD_LCL_LIST))
@@ -282,6 +431,22 @@ INSTALL_DRIVERKIT_MD_LCL_GEN_FILES = $(addprefix $(DSTROOT)/$(DRIVERKITLCLDIR)/$
 
 $(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_DRIVERKIT_MD_LCL_FILES),,dkpincdir,$(DKPINCFRAME_UNIFDEF)))
 $(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_DRIVERKIT_MD_LCL_GEN_FILES),1,dkpincgendir,$(DKPINCFRAME_UNIFDEF)))
+endif
+
+ifeq ($(EXCLAVEKIT),1)
+INSTALL_EXCLAVEKIT_MD_LCL_FILES = $(addprefix $(DSTROOT)/$(EXCLAVEKITLCLDIR)/$(INSTALL_MD_DIR)/, $(INSTALL_EXCLAVEKIT_MD_LCL_LIST))
+INSTALL_EXCLAVEKIT_MD_LCL_GEN_FILES = $(addprefix $(DSTROOT)/$(EXCLAVEKITLCLDIR)/$(INSTALL_MD_DIR)/, $(INSTALL_EXCLAVEKIT_MD_LCL_GEN_LIST))
+
+$(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_EXCLAVEKIT_MD_LCL_FILES),,ekpincdir,$(EKPINCFRAME_UNIFDEF)))
+$(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_EXCLAVEKIT_MD_LCL_GEN_FILES),1,ekpincgendir,$(EKPINCFRAME_UNIFDEF)))
+endif
+
+ifeq ($(EXCLAVECORE),1)
+INSTALL_EXCLAVECORE_MD_LCL_FILES = $(addprefix $(DSTROOT)/$(EXCLAVECORELCLDIR)/$(INSTALL_MD_DIR)/, $(INSTALL_EXCLAVECORE_MD_LCL_LIST))
+INSTALL_EXCLAVECORE_MD_LCL_GEN_FILES = $(addprefix $(DSTROOT)/$(EXCLAVECORELCLDIR)/$(INSTALL_MD_DIR)/, $(INSTALL_EXCLAVECORE_MD_LCL_GEN_LIST))
+
+$(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_EXCLAVECORE_MD_LCL_FILES),,ecpincdir,$(ECPINCFRAME_UNIFDEF)))
+$(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_EXCLAVECORE_MD_LCL_GEN_FILES),1,ecpincgendir,$(ECPINCFRAME_UNIFDEF)))
 endif
 
 INSTALL_KF_MD_LCL_FILES = $(addprefix $(DSTROOT)/$(KPINCDIR)/$(EXPORT_MD_DIR)/, $(INSTALL_KF_MD_LCL_LIST))
@@ -293,21 +458,34 @@ $(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_KF_MD_LCL_GEN_FILES),1,kpincge
 .PHONY: do_installhdrs_mi
 
 # Double-colon rule so that MakeInc.kernel can add custom behaviors
-do_installhdrs_mi:: $(INSTALL_MI_INC_FILES) $(INSTALL_MI_INC_GEN_FILES) \
+do_installhdrs_mi:: $(INSTALL_MI_INC_FILES) $(INSTALL_MI_INC_GEN_FILES) $(INSTALL_MODULEMAP_MI_INC_FILES) \
+            $(INSTALL_IF_MI_FILES) $(INSTALL_IF_MI_GEN_FILES) \
 		    $(INSTALL_DRIVERKIT_MI_INC_FILES) $(INSTALL_DRIVERKIT_MI_INC_GEN_FILES) \
+		    $(INSTALL_EXCLAVEKIT_MI_INC_FILES) $(INSTALL_EXCLAVEKIT_MI_INC_GEN_FILES) \
+			$(INSTALL_EXCLAVECORE_MI_INC_FILES) $(INSTALL_EXCLAVECORE_MI_INC_GEN_FILES) \
 		    $(INSTALL_KF_MI_FILES) $(INSTALL_KF_MI_GEN_FILES) \
-		    $(INSTALL_MI_LCL_FILES) $(INSTALL_MI_LCL_GEN_FILES) \
+		    $(INSTALL_MI_LCL_FILES) $(INSTALL_MI_LCL_GEN_FILES) $(INSTALL_MODULEMAP_MI_LCL_FILES) \
+            $(INSTALL_IF_MI_LCL_FILES) $(INSTALL_IF_MI_LCL_GEN_FILES) \
+		    $(INSTALL_SF_MI_LCL_FILES) $(INSTALL_SF_MI_LCL_GEN_FILES) \
 		    $(INSTALL_DRIVERKIT_MI_LCL_FILES) $(INSTALL_DRIVERKIT_MI_LCL_GEN_FILES) \
-		    $(INSTALL_KF_MI_LCL_FILES) $(INSTALL_KF_MI_LCL_GEN_FILES)
+		    $(INSTALL_KF_MI_LCL_FILES) $(INSTALL_KF_MI_LCL_GEN_FILES) \
+			$(INSTALL_LIBCXX_MI_FILES) \
+			$(INSTALL_EXCLAVEKIT_MI_LCL_FILES) $(INSTALL_EXCLAVEKIT_MI_LCL_GEN_FILES) \
+			$(INSTALL_EXCLAVECORE_MI_LCL_FILES) $(INSTALL_EXCLAVECORE_MI_LCL_GEN_FILES)
 	@:
 
 .PHONY: do_installhdrs_md
 
-do_installhdrs_md: $(INSTALL_MD_INC_FILES) $(INSTALL_MD_INC_GEN_FILES) \
+do_installhdrs_md: $(INSTALL_MD_INC_FILES) $(INSTALL_MD_INC_GEN_FILES) $(INSTALL_MODULEMAP_MD_INC_FILES) \
 		   $(INSTALL_DRIVERKIT_MD_INC_FILES) $(INSTALL_DRIVERKIT_MD_INC_GEN_FILES) \
+		   $(INSTALL_EXCLAVEKIT_MD_INC_FILES) $(INSTALL_EXCLAVEKIT_MD_INC_GEN_FILES) \
+		   $(INSTALL_EXCLAVECORE_MD_INC_FILES) $(INSTALL_EXCLAVECORE_MD_INC_GEN_FILES) \
 		   $(INSTALL_KF_MD_FILES) $(INSTALL_KF_MD_GEN_FILES) \
-		   $(INSTALL_MD_LCL_FILES) $(INSTALL_MD_LCL_GEN_FILES) \
+		   $(INSTALL_MD_LCL_FILES) $(INSTALL_MD_LCL_GEN_FILES) $(INSTALL_MODULEMAP_MD_LCL_FILES) \
+		   $(INSTALL_SF_MD_LCL_FILES) $(INSTALL_SF_MD_LCL_GEN_FILES) \
 		   $(INSTALL_DRIVERKIT_MD_LCL_FILES) $(INSTALL_DRIVERKIT_MD_LCL_GEN_FILES) \
+		   $(INSTALL_EXCLAVEKIT_MD_LCL_FILES) $(INSTALL_EXCLAVEKIT_MD_LCL_GEN_FILES) \
+		   $(INSTALL_EXCLAVECORE_MD_LCL_FILES) $(INSTALL_EXCLAVECORE_MD_LCL_GEN_FILES) \
 		   $(INSTALL_KF_MD_LCL_FILES) $(INSTALL_KF_MD_LCL_GEN_FILES)
 	@:
 
@@ -323,10 +501,10 @@ EXP_MI_INC_DIR:
 	$(_v)$(MKDIR) $(OBJROOT)/$(EXPDIR)/$(EXPORT_MI_DIR)
 
 $(EXPORT_MI_GEN_INC_FILES): $(OBJROOT)/$(EXPDIR)/$(EXPORT_MI_DIR)/% : % | EXP_MI_INC_DIR
-	$(_v)$(INSTALL) $(DATA_INSTALL_FLAGS) $< $@
+	$(_v)$(INSTALL) $(DATA_INSTALL_FLAGS_RO) $< $@
 
 $(EXPORT_MI_INC_FILES): $(OBJROOT)/$(EXPDIR)/$(EXPORT_MI_DIR)/% : $(SOURCE)/% | EXP_MI_INC_DIR
-	$(_v)$(INSTALL) $(DATA_INSTALL_FLAGS) $< $@
+	$(_v)$(INSTALL) $(DATA_INSTALL_FLAGS_RO) $< $@
 
 EXPORT_MD_INC_FILES = $(addprefix $(OBJROOT)/$(EXPDIR)/$(EXPORT_MD_DIR)/, $(EXPORT_MD_LIST))
 EXPORT_MD_GEN_INC_FILES = $(addprefix $(OBJROOT)/$(EXPDIR)/$(EXPORT_MD_DIR)/, $(EXPORT_MD_GEN_LIST))
@@ -337,10 +515,10 @@ EXP_MD_INC_DIR:
 	$(_v)$(MKDIR) $(OBJROOT)/$(EXPDIR)/$(EXPORT_MD_DIR)
 
 $(EXPORT_MD_GEN_INC_FILES): $(OBJROOT)/$(EXPDIR)/$(EXPORT_MD_DIR)/% : % | EXP_MD_INC_DIR
-	$(_v)$(INSTALL) $(DATA_INSTALL_FLAGS) $< $@
+	$(_v)$(INSTALL) $(DATA_INSTALL_FLAGS_RO) $< $@
 
 $(EXPORT_MD_INC_FILES): $(OBJROOT)/$(EXPDIR)/$(EXPORT_MD_DIR)/% : $(SOURCE)/% | EXP_MD_INC_DIR
-	$(_v)$(INSTALL) $(DATA_INSTALL_FLAGS) $< $@
+	$(_v)$(INSTALL) $(DATA_INSTALL_FLAGS_RO) $< $@
 
 .PHONY: do_exporthdrs_mi
 
@@ -360,56 +538,54 @@ do_exporthdrs_md: $(EXPORT_MD_GEN_INC_FILES)  $(EXPORT_MD_INC_FILES)
 # Compilation rules to generate .o from .s
 #
 
-S_RULE_0=$(call makelog,$(ColorC)AS$(Color0)  $(ColorF)$@$(Color0))
-S_RULE_1A=$(_v)${S_KCC} -c ${SFLAGS} -MD -MF $(@:o=d) -MP ${$@_SFLAGS_ADD} ${INCFLAGS} ${$@_INCFLAGS}
+S_RULE_0=@$(LOG_AS) "$@"
+S_RULE_1A=$(_v)$(S_KCC) -c $(SFLAGS) -MD -MF $(@:o=d) -MJ $(@:o=o.json) -MP $($@_SFLAGS_ADD) $(INCFLAGS) $($@_INCFLAGS)
 S_RULE_1B=$(<F)
 S_RULE_2=
 
 #
 # Compilation rules to generate .o from .c for normal files
 #
-C_RULE_0=$(call makelog,$(ColorC)CC$(Color0)  $(ColorF)$@$(Color0))
-C_RULE_1A=$(_v)${KCC} -c ${filter-out ${$@_CFLAGS_RM}, ${CFLAGS} ${CWARNFLAGS}} -MD -MF $(@:o=d) -MP ${$@_CFLAGS_ADD} ${$@_CWARNFLAGS_ADD} ${INCFLAGS} ${$@_INCFLAGS}
+C_RULE_0=@$(LOG_CC) "$@"
+C_RULE_1A=$(_v)$(KCC) -c $(filter-out $($@_CFLAGS_RM), $(CFLAGS) $(CWARNFLAGS)) -MD -MF $(@:o=d) -MJ $(@:o=o.json) -MP $($@_CFLAGS_ADD) $($@_CWARNFLAGS_ADD) $(INCFLAGS) $($@_INCFLAGS)
 C_RULE_1B=$(<F)
 C_RULE_2=
 
-C_RULE_3=
-C_RULE_4A=
-C_RULE_4B=
+C_RULE_3=@$(if $($@_VERIFIER), $(LOG_VERIFIER) "$@")
+C_RULE_4=@$(if $($@_VERIFIER), $(call VERIFY,$($@_VERIFIER),$@))
 
 #
 # Compilation rules to generate .o from .c for driver files
 #
-C_RULE_0_D=${C_RULE_0}
-C_RULE_1A_D=${C_RULE_1A}
-C_RULE_1B_D=${C_RULE_1B}
-C_RULE_2_D=${C_RULE_2}
-C_RULE_3_D=${C_RULE_3}
-C_RULE_4A_D=${C_RULE_4A}
-C_RULE_4B_D=${C_RULE_4B}
+C_RULE_0_D=$(C_RULE_0)
+C_RULE_1A_D=$(C_RULE_1A)
+C_RULE_1B_D=$(C_RULE_1B)
+C_RULE_2_D=$(C_RULE_2)
+C_RULE_3_D=$(C_RULE_3)
+C_RULE_4_D=$(C_RULE_4)
 
 #
 # Compilation rules to generate .co from .cp or .cpo from .cpp
 #   The config tool slickly changes the last source filename char to 'o'
 #   for the object filename.
-P_RULE_0=$(call makelog,$(ColorC)C++$(Color0) $(ColorF)$@$(Color0))
-P_RULE_1A=$(_v)${KC++} -o $@ -c ${CXXFLAGS} ${filter-out ${$@_CFLAGS_RM}, ${CFLAGS} ${CXXWARNFLAGS}} -MD -MF $(@:o=d) -MP ${$@_CFLAGS_ADD} ${$@_CXXWARNFLAGS_ADD} ${INCFLAGS} ${$@_INCFLAGS}
+P_RULE_0=@$(LOG_CXX) "$@"
+P_RULE_1A=$(_v)$(KC++) -o $@ -c $(CXXFLAGS) $(filter-out $($@_CFLAGS_RM), $(CFLAGS) $(CXXWARNFLAGS)) -MD -MF $(@:o=d) -MJ $(@:o=o.json) -MP $($@_CFLAGS_ADD) $($@_CXXWARNFLAGS_ADD) $(INCFLAGS) $($@_INCFLAGS)
 P_RULE_1B=$(<F)
 P_RULE_2=
 
-P_RULE_3=
-P_RULE_4A=
-P_RULE_4B=
+P_RULE_3=@$(if $($@_VERIFIER), $(LOG_VERIFIER) "$@")
+P_RULE_4=@$(if $($@_VERIFIER), $(call VERIFY,$($@_VERIFIER),$@))
 
 #
-# This isn't the right place to put this, but we need to := override some settings
-# in Makefiles that include the generic helper fragments (like this file)
+# Explain how to make the bsd syscall list
 #
-ifeq ($(BUILD_JSON_COMPILATION_DATABASE),1)
-HIB_FILES :=
-LAST_FILES :=
-KLD_FILES :=
-endif
+$(TARGET)/bsd.syscalls.master: $(SRCROOT)/bsd/kern/syscalls.master $(MAKESYSCALLS)
+	@$(LOG_GENERATE) "$(@F)$(Color0) from $(ColorF)$<$(Color0)"
+	$(_v)$(UNIFDEF) $(SEED_DEFINES) $< > $@;	\
+	if [ $$? -eq 2 ]; then				\
+		$(ERR) Parse failure for $<;		\
+		exit 1;					\
+	fi
 
 .PHONY: do_build_all
 
@@ -440,12 +616,12 @@ INSTALL_MAN_DIR:
 	$(_v)$(MKDIR) $(DSTROOT)/$(MANDIR)/$(INSTALL_MAN_DIR)
 
 $(INSTALL_MAN_FILES): $(DSTROOT)/$(MANDIR)/$(INSTALL_MAN_DIR)/% : % | INSTALL_MAN_DIR
-	$(call makelog,$(ColorH)MAN$(Color0)           $(ColorF)$*$(Color0))
+	@$(LOG_MAN) "$*"
 	$(_v)$(INSTALL) $(INSTALL_FLAGS) $< $@
 
 define MAN_LINKS_RULE_template
 $$(DSTROOT)/$$(MANDIR)/$$(INSTALL_MAN_DIR)/$(2): $$(DSTROOT)/$$(MANDIR)/$$(INSTALL_MAN_DIR)/$(1)
-	$$(call makelog,$$(ColorH)MANLINK$$(Color0)       $$(ColorF)$(2)$$(Color0))
+	@$$(LOG_MANLINK) "$(2)"
 	$(_v)ln -f $$< $$@
 endef
 
@@ -458,11 +634,16 @@ INSTALL_MAN_FILES_LINKS = $(call function_generate_man_links_rules,$(INSTALL_MAN
 do_installman: $(INSTALL_MAN_FILES) $(INSTALL_MAN_FILES_LINKS)
 	@:
 
-.PHONY: do_textfiles_install
+.PHONY: do_textfiles_install do_textfiles_install_mi do_textfiles_install_md
 
 # Do-nothing rule, since not all levels of the recursive hierarchy might implement this
 # in their local Makefiles. Those that do will use a "::" rule to augment this.
-do_textfiles_install:: do_installman
+do_textfiles_install_mi:: do_installman
+	@:
+
+# Do-nothing rule, since not all levels of the recursive hierarchy might implement this
+# in their local Makefiles. Those that do will use a "::" rule to augment this.
+do_textfiles_install_md::
 	@:
 
 .PHONY: do_build_setup
@@ -477,6 +658,20 @@ do_build_setup::
 # Do-nothing rule, since not all levels of the recursive hierarchy might implement this
 # in their local Makefiles. Those that do will use a "::" rule to augment this.
 do_config_all::
+	@:
+
+.PHONY: do_config_install_primary
+
+# Do-nothing rule, since not all levels of the recursive hierarchy might implement this
+# in their local Makefiles. Those that do will use a "::" rule to augment this.
+do_config_install_primary::
+	@:
+
+.PHONY: do_config_install_variant
+
+# Do-nothing rule, since not all levels of the recursive hierarchy might implement this
+# in their local Makefiles. Those that do will use a "::" rule to augment this.
+do_config_install_variant::
 	@:
 
 .PHONY: do_config_install

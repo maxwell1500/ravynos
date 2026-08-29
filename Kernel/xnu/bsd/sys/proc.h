@@ -85,6 +85,11 @@
 
 #ifdef XNU_KERNEL_PRIVATE
 #include <mach/coalition.h>             /* COALITION_NUM_TYPES */
+#include <sys/codesign.h>
+#endif
+
+#ifndef KERNEL
+#include <Availability.h>
 #endif
 
 #if defined(XNU_KERNEL_PRIVATE) || !defined(KERNEL)
@@ -92,6 +97,7 @@
 struct session;
 struct pgrp;
 struct proc;
+struct proc_ident;
 
 /* Exported fields for kern sysctls */
 struct extern_proc {
@@ -233,9 +239,23 @@ __BEGIN_DECLS
 extern proc_t kernproc;
 
 extern int proc_is_classic(proc_t p);
+extern bool proc_is_exotic(proc_t p);
+extern bool proc_is_alien(proc_t p);
 proc_t current_proc_EXTERNAL(void);
 
-extern int      msleep(void *chan, lck_mtx_t *mtx, int pri, const char *wmesg, struct timespec * ts );
+#if XNU_KERNEL_PRIVATE
+
+extern bool proc_is_driver(proc_t p);
+extern bool proc_is_third_party_debuggable_driver(proc_t p);
+
+#endif /* XNU_KERNEL_PRIVATE */
+
+/*
+ * __unsafe_indexable is a workaround for
+ * rdar://88409003 (PredefinedExpr trips C string detection)
+ */
+extern int      msleep(void *chan, lck_mtx_t *mtx, int pri, const char *__unsafe_indexable wmesg, struct timespec * ts );
+extern int      msleep0(void *chan, lck_mtx_t *mtx, int pri, const char *__unsafe_indexable wmesg, int timo, int (*continuation)(int));
 extern void     wakeup(void *chan);
 extern void wakeup_one(caddr_t chan);
 
@@ -260,12 +280,18 @@ extern int proc_isinferior(int pid1, int pid2);
  */
 void proc_name(int pid, char * buf, int size);
 /* returns the 32-byte name if it exists, otherwise returns the 16-byte name */
+#ifdef XNU_KERNEL_PRIVATE
+extern const char *proc_best_name(proc_t p);
+#else
 extern char *proc_best_name(proc_t p);
-/* This routine is simillar to proc_name except it returns for current process */
+#endif
+/* this routine is similar to proc_name except it returns for current process */
 void proc_selfname(char * buf, int size);
 
 /* find a process with a given pid. This comes with a reference which needs to be dropped by proc_rele */
 extern proc_t proc_find(int pid);
+/* find a process with a given process identity */
+extern proc_t proc_find_ident(struct proc_ident const *i);
 /* returns a handle to current process which is referenced. The reference needs to be dropped with proc_rele */
 extern proc_t proc_self(void);
 /* releases the held reference on the process */
@@ -276,8 +302,14 @@ extern int proc_pid(proc_t);
 extern int proc_ppid(proc_t);
 /* returns the original pid of the parent of a given process */
 extern int proc_original_ppid(proc_t);
+/* returns the start time of the given process */
+extern int proc_starttime(proc_t, struct timeval *);
+/* returns whether the given process is on simulated platform */
+extern boolean_t proc_is_simulated(const proc_t);
 /* returns the platform (macos, ios, watchos, tvos, ...) of the given process */
-extern uint32_t proc_platform(proc_t);
+extern uint32_t proc_platform(const proc_t);
+/* returns the minimum sdk version used by the current process */
+extern uint32_t proc_min_sdk(proc_t);
 /* returns the sdk version used by the current process */
 extern uint32_t proc_sdk(proc_t);
 /* returns 1 if the process is marked for no remote hangs */
@@ -293,14 +325,21 @@ extern boolean_t proc_send_synchronous_EXC_RESOURCE(proc_t p);
 extern int proc_is64bit(proc_t);
 /* this routine returns 1 if the process is running with a 64bit register state, else 0 */
 extern int proc_is64bit_data(proc_t);
+/* this routine returns 1 if the process is initproc */
+extern int proc_isinitproc(proc_t);
 /* is this process exiting? */
 extern int proc_exiting(proc_t);
 /* returns whether the process has started down proc_exit() */
 extern int proc_in_teardown(proc_t);
 /* this routine returns error if the process is not one with super user privileges */
-int proc_suser(proc_t p);
+extern int proc_suser(proc_t p);
+
 /* returns the cred assicaited with the process; temporary api */
+#if !BSD_KERNEL_PRIVATE
+__deprecated_msg("proc_ucred is unsafe, use kauth_cred_proc_ref() or current_cached_proc_cred()")
 kauth_cred_t proc_ucred(proc_t p);
+#endif
+
 /* returns 1 if the process is tainted by uid or gid changes,e else 0 */
 extern int proc_issetugid(proc_t p);
 
@@ -335,7 +374,7 @@ pid_t proc_pgrpid(proc_t p);
  *  @function proc_sessionid
  *  @abstract Get the process session id for the passed-in process.
  *  @param p Process whose session id to grab.
- *  @return session id for "p", or -1 on failure
+ *  @return session id of current process.
  */
 pid_t proc_sessionid(proc_t p);
 
@@ -357,6 +396,8 @@ extern int      msleep1(void *chan, lck_mtx_t *mtx, int pri, const char *wmesg, 
 
 task_t proc_task(proc_t);
 extern int proc_pidversion(proc_t);
+extern proc_t proc_parent(proc_t);
+extern void proc_parent_audit_token(proc_t, audit_token_t *);
 extern uint32_t proc_persona_id(proc_t);
 extern uint32_t proc_getuid(proc_t);
 extern uint32_t proc_getgid(proc_t);
@@ -391,6 +432,43 @@ extern void proc_set_responsible_pid(proc_t target_proc, pid_t responsible_pid);
 /* return 1 if process is forcing case-sensitive HFS+ access, 0 for default */
 extern int proc_is_forcing_hfs_case_sensitivity(proc_t);
 
+/* returns 1 if the process is parent of a vfork */
+extern int proc_lvfork(proc_t);
+
+/* increments process block output operations counter. returns original value if valid long pointer was passed */
+extern int proc_increment_ru_oublock(proc_t, long *);
+
+/* Check if process is aborted, but not killed by a signal or is not the exiting thread or is not attempting to dump core */
+extern int proc_isabortedsignal(proc_t);
+
+/* return true if the process is translated, false for default */
+extern boolean_t proc_is_translated(proc_t);
+
+
+/* return true if this is an x86_64 process running under translation */
+extern bool proc_is_x86_64_compat(proc_t);
+
+/* true if the process ignores errors from content protection APIs */
+extern bool proc_ignores_content_protection(proc_t proc);
+
+/* true if the file system shouldn't update mtime for operations by the process */
+extern bool proc_skip_mtime_update(proc_t proc);
+
+/* return true if the process is flagged as allow-low-space */
+extern bool proc_allow_low_space_writes(proc_t p);
+
+/* return true if process needs to use alternative extended attribute for symlinks */
+bool proc_use_alternative_symlink_ea(proc_t p);
+
+/* return true if rsr is set for process */
+bool proc_is_rsr(proc_t p);
+
+/*
+ * Return true if the process disallows read or write access for files that
+ * it opens with O_EVTONLY.
+ */
+extern bool proc_disallow_rw_for_o_evtonly(proc_t p);
+
 /*!
  *  @function    proc_exitstatus
  *  @abstract    KPI to determine a process's exit status.
@@ -401,6 +479,17 @@ extern int proc_is_forcing_hfs_case_sensitivity(proc_t);
  *  @return      Value in the same format as wait()'s output parameter.
  */
 extern int proc_exitstatus(proc_t p);
+
+/*!
+ *  @function    proc_is_zombie
+ *  @abstract    KPI to determine if the provided process is a zombie
+ *  @discussion  This lookup is atomic and safe to call with either a proc ref or
+ *               or a zombie ref.
+ *  @param p     The process to be queried.
+ *  @return      Boolean indicating whether the process has been removed from the primary proclist
+ *               and moved to the zombproc list.
+ */
+extern bool   proc_is_zombie(proc_t p);
 
 #endif /* KERNEL_PRIVATE */
 
@@ -418,9 +507,6 @@ extern bool proc_is_traced(proc_t p);
 
 extern void proc_coalitionids(proc_t, uint64_t[COALITION_NUM_TYPES]);
 
-#ifdef CONFIG_32BIT_TELEMETRY
-extern void proc_log_32bit_telemetry(proc_t p);
-#endif /* CONFIG_32BIT_TELEMETRY */
 extern uint64_t get_current_unique_pid(void);
 #endif /* XNU_KERNEL_PRIVATE*/
 
@@ -429,11 +515,33 @@ extern uint64_t get_current_unique_pid(void);
 extern int proc_selfexecutableargs(uint8_t *buf, size_t *buflen);
 extern off_t proc_getexecutableoffset(proc_t p);
 extern vnode_t proc_getexecutablevnode(proc_t); /* Returned with iocount, use vnode_put() to drop */
-extern int networking_memstatus_callout(proc_t p, uint32_t);
+extern vnode_t proc_getexecutablevnode_noblock(proc_t); /* Returned with iocount, use vnode_put() to drop */
 
+/* System call filtering for BSD syscalls, mach traps and kobject routines. */
 #define SYSCALL_MASK_UNIX 0
+#define SYSCALL_MASK_MACH 1
+#define SYSCALL_MASK_KOBJ 2
+
+#define SYSCALL_FILTER_CALLBACK_VERSION 1
+typedef int (*syscall_filter_cbfunc_t)(proc_t p, int num);
+typedef int (*kobject_filter_cbfunc_t)(proc_t p, int msgid, int idx);
+struct syscall_filter_callbacks {
+	int version;
+	const syscall_filter_cbfunc_t unix_filter_cbfunc;
+	const syscall_filter_cbfunc_t mach_filter_cbfunc;
+	const kobject_filter_cbfunc_t kobj_filter_cbfunc;
+};
+typedef struct syscall_filter_callbacks * syscall_filter_cbs_t;
+
+extern int proc_set_syscall_filter_callbacks(syscall_filter_cbs_t callback);
+extern int proc_set_syscall_filter_index(int which, int num, int index);
 extern size_t proc_get_syscall_filter_mask_size(int which);
+extern unsigned char *proc_get_syscall_filter_mask(proc_t p, int which);
 extern int proc_set_syscall_filter_mask(proc_t p, int which, unsigned char *maskptr, size_t masklen);
+
+extern int proc_set_filter_message_flag(proc_t p, boolean_t flag);
+extern int proc_get_filter_message_flag(proc_t p, boolean_t *flag);
+
 #endif /* KERNEL_PRIVATE */
 
 __END_DECLS
@@ -458,6 +566,10 @@ __BEGIN_DECLS
 
 int pid_suspend(int pid);
 int pid_resume(int pid);
+__API_AVAILABLE(macos(11.3), ios(14.5), tvos(14.5), watchos(7.3))
+int task_inspect_for_pid(unsigned int target_tport, int pid, unsigned int *t);  /* Returns task inspect port */
+__API_AVAILABLE(macos(11.3), ios(14.5), tvos(14.5), watchos(7.3))
+int task_read_for_pid(unsigned int target_tport, int pid, unsigned int *t);     /* Returns task read port */
 
 #if defined(__arm__) || defined(__arm64__)
 int pid_hibernate(int pid);

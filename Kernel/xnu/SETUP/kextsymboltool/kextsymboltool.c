@@ -20,20 +20,11 @@
  *
  * @APPLE_LICENSE_HEADER_END@
  */
-#ifdef __APPLE__
 #include <libc.h>
-#else
-#include <stdio.h>
-#define PAGE_SIZE 4096
-#define PAGE_MASK (PAGE_SIZE-1)
-#define mach_vm_round_page(x) (((mach_vm_offset_t)(x) + PAGE_MASK) & ~((signed)PAGE_MASK))
-#endif
 #include <errno.h>
 #include <ctype.h>
 
-#ifdef __APPLE__
 #include <mach/mach_init.h>
-#endif
 
 #include <sys/stat.h>
 #include <sys/file.h>
@@ -47,8 +38,6 @@
 
 #include <uuid/uuid.h>
 #include <stdbool.h>
-
-extern int errno;
 
 #pragma mark Typedefs, Enums, Constants
 /*********************************************************************
@@ -487,6 +476,7 @@ lookup_arch(const char *archstring)
 		{ "armv7s", 12 /* CPU_TYPE_ARM */, 11 /* CPU_SUBTYPE_ARM_V7S */, NX_LittleEndian, NULL },
 		{ "armv7k", 12 /* CPU_TYPE_ARM */, 12 /* CPU_SUBTYPE_ARM_V7K */, NX_LittleEndian, NULL },
 		{ "arm64", 0x0100000c /* CPU_TYPE_ARM64 */, 0 /* CPU_SUBTYPE_ARM64_ALL */, NX_LittleEndian, NULL },
+		{ "arm64e", 0x0100000c /* CPU_TYPE_ARM64 */, 2 /* CPU_SUBTYPE_ARM64_E */, NX_LittleEndian, NULL },
 	};
 	unsigned long i;
 
@@ -621,8 +611,7 @@ main(int argc, char * argv[])
 		}
 		if (false && !files[filenum].nsyms) {
 			fprintf(stderr, "warning: file %s contains no names\n", files[filenum].path);
-
-                }
+		}
 	}
 
 

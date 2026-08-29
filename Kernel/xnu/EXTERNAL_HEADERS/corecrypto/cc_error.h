@@ -1,11 +1,12 @@
-/*
- *  cc_error.h
- *  corecrypto
+/* Copyright (c) (2017-2022) Apple Inc. All rights reserved.
  *
- *  Created on 11/14/2017
- *
- *  Copyright (c) 2017 Apple Inc. All rights reserved.
- *
+ * corecrypto is licensed under Apple Inc.’s Internal Use License Agreement (which
+ * is contained in the License.txt file distributed with corecrypto) and only to
+ * people who accept that license. IMPORTANT:  Any license rights granted to you by
+ * Apple Inc. (if any) are limited to internal use within your organization only on
+ * devices and computers you own or control, for the sole purpose of verifying the
+ * security characteristics and correct functioning of the Apple Software.  You may
+ * not, directly or indirectly, redistribute the Apple Software or any portions thereof.
  */
 
 #ifndef _CORECRYPTO_CC_ERROR_H_
@@ -96,7 +97,7 @@ enum {
     CCDRBG_STATUS_NEED_RESEED = -62,
     CCDRBG_STATUS_PARAM_ERROR = -63,
     // If this value is returned, the caller must abort or panic the process for
-    // security reasons. for example in the case of catastrophic error in
+    // security reasons. For example in the case of catastrophic error in
     // http://csrc.nist.gov/publications/drafts/800-90/sp800_90a_r1_draft.pdf
     // ccdrbg calls abort() or panic(), if they are available in the system.
     CCDRBG_STATUS_ABORT = -64,
@@ -140,6 +141,59 @@ enum {
     CCMODE_NONCE_EMPTY = -102,
     CCMODE_AD_EMPTY = -103,
     CCMODE_DECRYPTION_OR_VERIFICATION_ERR=-104,
+    CCMODE_BUFFER_OUT_IN_OVERLAP = -105,
+
+    // Error codes for Secret Sharing
+    CCSS_ELEMENT_TOO_LARGE_FOR_FIELD = -120,
+    CCSS_NOT_ENOUGH_SHARES = -121,
+    CCSS_TOO_MANY_SHARES = -122,
+    CCSS_IMPROPER_DEGREE = -123,
+    CCSS_TWO_SHARES_FOR_SAME_X = -124,
+    CCSS_THRESHOLD_NOT_LARGE_ENOUGH = -125,
+    CCSS_SHARE_BAG_FULL = -126,
+    CCSS_SHARE_ALREADY_PRESENT_IN_SHARE_BAG = -127,
+    CCSS_THRESHOLD_LARGER_OR_EQUAL_TO_FIELD = -128,
+    CCSS_TOO_MANY_SHARES_REQUESTED = -129,
+    CCSS_FIELD_MISMATCH = -130,
+    CCSS_INDEX_OUT_OF_RANGE = -131,
+    
+    CCSAE_NOT_ENOUGH_COMMIT_PARTIAL_CALLS = -132,
+    CCSAE_GENERATE_COMMIT_CALL_AGAIN = -133,
+
+    CCERR_VALID_SIGNATURE = CCERR_OK,
+    CCERR_INVALID_SIGNATURE = -146,
+
+    CCERR_IOSERVICE_GETMATCHING = -147,
+    CCERR_IOSERVICE_OPEN = -148,
+    CCERR_IOCONNECT_CALL = -149,
+    
+    CCEC_KEY_CANNOT_BE_UNIT = -160,
+    CCEC_COMPRESSED_POINT_ENCODING_ERROR = -161,
+
+    CCERR_RNG_NOT_SEEDED = -162,
+    
+    CCERR_BUFFER_TOO_SMALL = -163,
+
+    CCERR_XTS_KEYS_EQUAL = -164,
+
+    CCERR_RETRY = -165,
+
+    CCDH_GP_P_NOTPRIME = -166,
+    CCDH_GP_Q_NOTPRIME = -167,
+    CCDH_GP_NONSAFE_PRIME = -168,
+
+    // -169, // deprecated
+
+    CCEC_POINT_CANNOT_BE_UNIT = CCEC_KEY_CANNOT_BE_UNIT,
+    CCEC_UNCOMPRESSED_POINT_ENCODING_ERROR = -170,
+    CCEC_HYBRID_POINT_ENCODING_ERROR = -171,
+    CCEC_COMPACT_POINT_ENCODING_ERROR = -172,
+
+    CCERR_NOT_SUPPORTED = -173,
+    
+    // Always add error codes above this line, and always keep
+    // their value greater than the value of CCERR_MIN.
+    CCERR_MIN = -255,
 };
 
 #define CCDRBG_STATUS_OK CCERR_OK

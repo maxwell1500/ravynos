@@ -32,6 +32,9 @@
  *   1998-7-13	Godfrey van der Linden(gvdl)
  *       Created.
  *  ]*/
+
+#define IOKIT_ENABLE_SHARED_PTR
+
 #include <IOKit/IOLib.h>
 
 #include <IOKit/IOEventSource.h>
@@ -166,10 +169,7 @@ IOEventSource::init(OSObject *inOwner,
 	enabled = true;
 
 	if (!reserved) {
-		reserved = IONew(ExpansionData, 1);
-		if (!reserved) {
-			return false;
-		}
+		reserved = IOMallocType(ExpansionData);
 	}
 
 	IOStatisticsRegisterCounter();
@@ -187,7 +187,7 @@ IOEventSource::free( void )
 	}
 
 	if (reserved) {
-		IODelete(reserved, ExpansionData, 1);
+		IOFreeType(reserved, ExpansionData);
 	}
 
 	super::free();
@@ -230,6 +230,7 @@ IOEventSource::setAction(Action inAction)
 		Block_release(actionBlock);
 	}
 	action = inAction;
+	flags &= ~kActionBlock;
 }
 
 void

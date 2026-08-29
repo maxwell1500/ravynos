@@ -118,13 +118,13 @@ __END_DECLS
 
 #ifdef BSD_KERNEL_PRIVATE
 extern char version[];                  /* system version */
-extern const char copyright[];          /* system copyright */
+extern const char *const copyright;     /* system copyright */
 
 
 extern int      boothowto;      /* reboot flags, from console subsystem */
 extern int      show_space;
 extern int      minimalboot;
-#if CONFIG_EMBEDDED
+#if CONFIG_DARKBOOT
 extern int      darkboot;
 #endif
 
@@ -156,11 +156,9 @@ void    nullsys(void);
 int     errsys(void);
 int     seltrue(dev_t dev, int which, struct proc *p);
 void    ttyprintf(struct tty *, const char *, ...) __printflike(2, 3);
-void    realitexpire(struct proc *);
+void    realitexpire(struct proc *, void*);
 int     hzto(struct timeval *tv);
 void    tablefull(const char *);
-int     kvprintf(char const *, void (*)(int, void*), void *, int,
-    __darwin_va_list) __printflike(1, 0);
 void    uprintf(const char *, ...) __printflike(1, 2);
 int     copywithin(void *saddr, void *daddr, size_t len);
 int64_t fulong(user_addr_t addr);
@@ -190,9 +188,9 @@ void throttle_info_end_io(buf_t bp);
 void    timeout(void (*)(void *), void *arg, int ticks);
 void    timeout_with_leeway(void (*)(void *), void *arg, int ticks, int leeway_ticks);
 void    untimeout(void (*)(void *), void *arg);
-int     bsd_hostname(char *, int, int*);
-int     vslock(user_addr_t addr, user_size_t len);
-int     vsunlock(user_addr_t addr, user_size_t len, int dirtied);
+int     bsd_hostname(char *, size_t, size_t*);
+int     vslock(user_addr_ut addr, user_size_ut len);
+int     vsunlock(user_addr_ut addr, user_size_ut len, int dirtied);
 #endif /* KERNEL_PRIVATE */
 
 int     nullop(void);
@@ -202,6 +200,19 @@ int     enosys(void);
 int     enxio(void);
 int     eopnotsupp(void);
 void    *hashinit(int count, int type, u_long *hashmask);
+#if XNU_KERNEL_PRIVATE
+LIST_HEAD(generic_hash_head, generic);
+void    hashinit_generic(int elements,
+    struct generic_hash_head *__counted_by(*out_count) *out_ptr, size_t *out_count);
+#define hashinit_counted_by(_elements, _out_ptr, _out_count) do {         \
+	size_t __hashinit_out_count = 0;                                \
+	struct generic_hash_head *__counted_by(__hashinit_out_count) __hashinit_out_hash = NULL; \
+	hashinit_generic((_elements), &__hashinit_out_hash, &__hashinit_out_count); \
+	(_out_ptr) = (typeof(*(_out_ptr)) *)__hashinit_out_hash;        \
+	(_out_count) = __hashinit_out_count;                            \
+} while (0)
+#endif /* XNU_KERNEL_PRIVATE */
+void    hashdestroy(void *, int type, u_long hashmask);
 void    ovbcopy(const void *from, void *to, size_t len);
 int     fubyte(user_addr_t addr);
 int     fuibyte(user_addr_t addr);
@@ -215,7 +226,7 @@ int    suiword(user_addr_t addr, long word);
 #define susize(_a, _s)  sulong((_a), (_s))
 #define fuptr(a)        ((user_addr_t)fulong(_a)
 #define suptr(_a, _p)   sulong((_a), (_p))
-int     useracc(user_addr_t addr, user_size_t len, int prot);
+int     useracc(user_addr_ut addr, user_size_ut len, int prot);
 typedef void (*timeout_fcn_t)(void *);
 void    bsd_timeout(void (*)(void *), void *arg, struct timespec * ts);
 void    bsd_untimeout(void (*)(void *), void *arg);
@@ -231,7 +242,8 @@ uint32_t throttle_lowpri_io(int sleep_amount);
 /* returns TRUE if the throttle_lowpri_io called with the same sleep_amount would've slept */
 int     throttle_lowpri_io_will_be_throttled(int sleep_amount);
 void    throttle_set_thread_io_policy(int policy);
-int             throttle_get_thread_effective_io_policy(void);
+int     throttle_get_thread_effective_io_policy(void);
+int     throttle_thread_io_tier_above_metadata(void);
 
 typedef struct __throttle_info_handle *throttle_info_handle_t;
 int     throttle_info_ref_by_mask(uint64_t throttle_mask, throttle_info_handle_t *throttle_info_handle);
@@ -256,6 +268,7 @@ int  throttle_io_will_be_throttled(int lowpri_window_msecs, mount_t mp);
 int throttle_lowpri_window(void) __attribute__((pure));
 struct uthread;
 void throttle_info_reset_window(struct uthread *ut);
+void throttle_info_update_with_type(void *throttle_info, int flags, boolean_t isssd);
 
 #endif
 

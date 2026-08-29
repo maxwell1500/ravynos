@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2015-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -53,7 +53,6 @@
 #include <ipc/ipc_kmsg.h>
 #include <ipc/ipc_port.h>
 #include <ipc/ipc_pset.h>
-#include <ipc/ipc_table.h>
 #include <ipc/ipc_entry.h>
 
 #include <ipc/flipc.h>
@@ -73,21 +72,19 @@ mach_node_t                             localnode;                      // This 
 
 
 /*** Private to mach_node layer ***/
-static int                              mach_nodes_to_publish;
-static mach_node_t              mach_node_table[MACH_NODES_MAX];
-static lck_spin_t       mach_node_table_lock_data;
+static int              mach_nodes_to_publish;
+static mach_node_t      mach_node_table[MACH_NODES_MAX];
+static LCK_SPIN_DECLARE_ATTR(mach_node_table_lock_data,
+    &ipc_lck_grp, &ipc_lck_attr);
 #define MACH_NODE_TABLE_LOCK()      lck_spin_lock(&mach_node_table_lock_data)
 #define MACH_NODE_TABLE_UNLOCK()    lck_spin_unlock(&mach_node_table_lock_data)
-#define MACH_NODE_TABLE_LOCK_INIT() lck_spin_init(&mach_node_table_lock_data, \
-	                                          &ipc_lck_grp, &ipc_lck_attr)
 
 static volatile SInt64  mnl_name_next;
-static queue_head_t             mnl_name_table[MNL_NAME_TABLE_SIZE];
-static lck_spin_t       mnl_name_table_lock_data;
+static queue_head_t     mnl_name_table[MNL_NAME_TABLE_SIZE];
+static LCK_SPIN_DECLARE_ATTR(mnl_name_table_lock_data,
+    &ipc_lck_grp, &ipc_lck_attr);
 #define MNL_NAME_TABLE_LOCK()       lck_spin_lock(&mnl_name_table_lock_data)
 #define MNL_NAME_TABLE_UNLOCK()     lck_spin_unlock(&mnl_name_table_lock_data)
-#define MNL_NAME_TABLE_LOCK_INIT()  lck_spin_init(&mnl_name_table_lock_data, \
-	                                        &ipc_lck_grp, &ipc_lck_attr)
 
 static void mach_node_init(void);
 static void mnl_name_table_init(void);
@@ -113,14 +110,12 @@ mach_node_init(void)
 		    localnode_id, MACH_NODES_MAX);
 		mach_node_table_init();
 		mnl_name_table_init();
-		flipc_init();
 	} // TODO: else block until init is finished (init completion race)
 }
 
 void
 mach_node_table_init(void)
 {
-	MACH_NODE_TABLE_LOCK_INIT();
 	MACH_NODE_TABLE_LOCK();
 
 	/* Start with an enpty node table. */
@@ -134,7 +129,7 @@ mach_node_table_init(void)
 	MACH_NODE_TABLE_UNLOCK();
 
 	/* Set up localnode's struct */
-	bzero(localnode, sizeof(localnode));
+	bzero(localnode, sizeof(*localnode));
 	localnode->info.datamodel       = LOCAL_DATA_MODEL;
 	localnode->info.byteorder       = OSHostByteOrder();
 	localnode->info.proto_vers_min      = MNL_PROTOCOL_V1;
@@ -322,38 +317,28 @@ mach_node_register(mach_node_t  node)
 		goto out;
 	}
 
-	waitq_set_lazy_init_link(pp_set);
+	waitq_set_lazy_init_link(&pp_set->ips_wqset);
 	/* Add the bootstrap port to the proxy port set */
-	uint64_t wq_link_id = waitq_link_reserve(NULL);
-	uint64_t wq_reserved_prepost = waitq_prepost_reserve(NULL, 10,
-	    WAITQ_DONT_LOCK);
-	ips_lock(pp_set);
-	ip_lock(bs_port);
-	ipc_pset_add(pp_set,
-	    bs_port,
-	    &wq_link_id,
-	    &wq_reserved_prepost);
-	ip_unlock(bs_port);
-	ips_unlock(pp_set);
-
-	waitq_link_release(wq_link_id);
-	waitq_prepost_release_reserve(wq_reserved_prepost);
+	waitq_link_t link = waitq_link_alloc(WQT_PORT_SET);
+	ip_mq_lock(bs_port);
+	ips_mq_lock(pp_set); // Revisit the lock when enabling flipc
+	ipc_mqueue_add_locked(bs_port, pp_set, &link);
+	ips_mq_unlock(pp_set);
+	ip_mq_unlock(bs_port);
 
 	/* Add the control port to the proxy port set */
-	wq_link_id = waitq_link_reserve(NULL);
-	wq_reserved_prepost = waitq_prepost_reserve(NULL, 10,
-	    WAITQ_DONT_LOCK);
-	ips_lock(pp_set);
-	ip_lock(ack_port);
-	ipc_pset_add(pp_set,
-	    ack_port,
-	    &wq_link_id,
-	    &wq_reserved_prepost);
-	ip_unlock(ack_port);
-	ips_unlock(pp_set);
+	if (link.wqlh == NULL) {
+		link = waitq_link_alloc(WQT_PORT_SET);
+	}
+	ip_mq_lock(ack_port);
+	ips_mq_lock(pp_set); // Revisit the lock when enabling flipc
+	ipc_mqueue_add_locked(ack_port, pp_set, &link);
+	ips_mq_unlock(pp_set);
+	ips_mq_unlock(ack_port);
 
-	waitq_link_release(wq_link_id);
-	waitq_prepost_release_reserve(wq_reserved_prepost);
+	if (link.wqlh) {
+		waitq_link_free(WQT_PORT_SET, link);
+	}
 
 	// Setup mach_node struct
 	node->published         = 0;
@@ -384,7 +369,7 @@ mach_node_register(mach_node_t  node)
 out:
 	if (kr != KERN_SUCCESS) { // Dispose of whatever we allocated
 		if (pp_set) {
-			ips_lock(pp_set);
+			ips_mq_lock(pp_set);
 			ipc_pset_destroy(proxy_space, pp_set);
 		}
 
@@ -471,7 +456,6 @@ mnl_name_free(mnl_name_t name __unused)
 void
 mnl_name_table_init(void)
 {
-	MNL_NAME_TABLE_LOCK_INIT();
 	MNL_NAME_TABLE_LOCK();
 
 	// Set the first name to this node's bootstrap name
@@ -749,7 +733,7 @@ mnl_terminate(mnl_node_info_t   node,
 
 	// Wake any threads sleeping on the proxy port set
 	if (mnode->proxy_port_set != IPS_NULL) {
-		ips_lock(mnode->proxy_port_set);
+		ips_mq_lock(mnode->proxy_port_set);
 		ipc_pset_destroy(mnode->proxy_space, mnode->proxy_port_set);
 		mnode->proxy_port_set = IPS_NULL;
 	}

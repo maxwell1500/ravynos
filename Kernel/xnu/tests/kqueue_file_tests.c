@@ -534,6 +534,7 @@ execute_test(test_t *test)
 				if ((filefd = open(test->t_watchfile, O_RDONLY | O_SYMLINK)) == -1) {
 					T_LOG("open() of watchfile %s failed: %d (%s)\n", test->t_watchfile,
 					    errno, strerror(errno));
+					res = -1;
 				}
 			}
 
@@ -610,9 +611,6 @@ execute_test(test_t *test)
 				if (test->t_file_is_fifo) {
 					close(writefd);
 				}
-			} else {
-				T_LOG("Couldn't open test file %s to monitor: %d (%s)\n", test->t_watchfile);
-				res = -1;
 			}
 			if (!test->t_is_poll_test) {
 				close(kqfd);
@@ -1787,7 +1785,7 @@ run_all_tests()
 }
 
 T_DECL(kqueue_file_tests,
-    "Tests assorted kqueue operations for file-related events")
+    "Tests assorted kqueue operations for file-related events", T_META_TAG_VM_PREFERRED)
 {
 	char *which = NULL;
 	if (argc > 1) {

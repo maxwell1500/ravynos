@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -35,6 +35,10 @@
 #include <kern/kern_types.h>
 #endif
 
+#if XNU_KERNEL_PRIVATE
+#include <libkern/kernel_mach_header.h>
+#endif
+
 __BEGIN_DECLS
 #include <mach/boolean.h>
 #include <mach/kern_return.h>
@@ -52,7 +56,7 @@ typedef void *cpu_id_t;
 #endif
 
 #if XNU_KERNEL_PRIVATE
-#if CONFIG_EMBEDDED
+#if defined(__arm__) || defined(__arm64__)
 extern struct embedded_panic_header *panic_info;
 extern vm_offset_t gPanicBase;
 extern unsigned int gPanicSize;
@@ -61,13 +65,13 @@ extern unsigned int gPanicSize;
  * If invoked with NULL first argument, return the max buffer size that can
  * be saved in the second argument
  */
-void PE_save_buffer_to_vram(
+void PE_update_panic_crc(
 	unsigned char *,
 	unsigned int *);
 
-#else /* CONFIG_EMBEDDED */
+#else /* defined(__arm__) || defined(__arm64__) */
 extern struct macos_panic_header *panic_info;
-#endif /* CONFIG_EMBEDDED */
+#endif /* defined(__arm__) || defined(__arm64__) */
 #endif /* XNU_KERNEL_PRIVATE */
 
 extern void lpss_uart_enable(boolean_t on_off);
@@ -97,6 +101,17 @@ int PE_stub_poll_input(unsigned int options, char *c);
 boolean_t PE_panic_debugging_enabled(void);
 
 void PE_mark_hwaccess(uint64_t thread);
+void PE_mark_hwaccess_data(uint8_t type, uint8_t size, uint64_t paddr);
+
+#if XNU_KERNEL_PRIVATE
+/*
+ * Return whether the boot CPU has gotten far enough to initialize the
+ * debug and trace infrastructure; this indicates whether it's safe to
+ * take the full path through the debugger on a panic(), or whether we
+ * need to take a restricted path and spin forever.
+ */
+boolean_t PE_arm_debug_and_trace_initialized(void);
+#endif /* XNU_KERNEL_PRIVATE */
 #endif /* defined(__arm__) || defined(__arm64__) */
 
 /* Return the offset of the specified address into the panic region */
@@ -110,6 +125,10 @@ void PE_init_panicheader(
 /* Updates the panic header during a nested panic */
 void PE_update_panicheader_nestedpanic(
 	void);
+
+/* Invokes AppleARMIO::handlePlatformError() if present */
+bool PE_handle_platform_error(
+	vm_offset_t far);
 
 #if KERNEL_PRIVATE
 
@@ -128,14 +147,14 @@ extern uint32_t PE_i_can_has_kernel_configuration(void);
 
 #endif /* KERNEL_PRIVATE */
 
-void PE_init_kprintf(
-	boolean_t vm_initialized);
-
 extern int32_t gPESerialBaud;
 
 extern uint8_t gPlatformECID[8];
 
 extern uint32_t gPlatformMemoryID;
+#if defined(XNU_TARGET_OS_XR)
+extern uint32_t gPlatformChipRole;
+#endif /* not XNU_TARGET_OS_XR */
 
 unsigned int PE_init_taproot(vm_offset_t *taddr);
 
@@ -146,7 +165,27 @@ void PE_init_printf(
 
 extern void (*PE_putc)(char c);
 
+/*
+ * Perform pre-lockdown IOKit initialization.
+ * This is guaranteed to execute prior to machine_lockdown().
+ * The precise operations performed by this function depend upon
+ * the security model employed by the platform, but in general this
+ * function should be expected to at least perform basic C++ runtime
+ * and I/O registry initialization.
+ */
 void PE_init_iokit(
+	void);
+
+/*
+ * Perform post-lockdown IOKit initialization.
+ * This is guaranteed to execute after machine_lockdown().
+ * The precise operations performed by this function depend upon
+ * the security model employed by the platform.  For example, if
+ * the platform treats machine_lockdown() as a strict security
+ * checkpoint, general-purpose IOKit matching may not begin until
+ * this function is called.
+ */
+void PE_lockdown_iokit(
 	void);
 
 struct clock_frequency_info_t {
@@ -200,6 +239,9 @@ void PE_install_interrupt_handler(
 	void *target, IOInterruptHandler handler, void *refCon);
 #endif
 
+extern bool disable_serial_output;
+extern bool disable_kprintf_output;
+
 #ifndef _FN_KPRINTF
 #define _FN_KPRINTF
 void kprintf(const char *fmt, ...) __printflike(1, 2);
@@ -224,18 +266,11 @@ enum {
 	kPEReadTOD,
 	kPEWriteTOD
 };
-extern int (*PE_read_write_time_of_day)(
-	unsigned int options,
-	long * secs);
 
 enum {
 	kPEWaitForInput     = 0x00000001,
 	kPERawInput         = 0x00000002
 };
-extern int (*PE_write_IIC)(
-	unsigned char addr,
-	unsigned char reg,
-	unsigned char data);
 
 /* Private Stuff - eventually put in pexpertprivate.h */
 enum {
@@ -305,6 +340,7 @@ typedef struct PE_state {
 	PE_Video        video;
 	void            *deviceTreeHead;
 	void            *bootArgs;
+	vm_size_t       deviceTreeSize;
 } PE_state_t;
 
 extern PE_state_t PE_state;
@@ -317,12 +353,12 @@ extern boolean_t PE_parse_boot_argn(
 	void            *arg_ptr,
 	int                     max_arg);
 
-#if XNU_KERNEL_PRIVATE
+extern boolean_t PE_boot_arg_uint64_eq(const char *arg_string, uint64_t value);
+
 extern boolean_t PE_parse_boot_arg_str(
 	const char *arg_string,
 	char *      arg_ptr,
 	int         size);
-#endif /* XNU_KERNEL_PRIVATE */
 
 extern boolean_t PE_get_default(
 	const char      *property_name,
@@ -345,12 +381,30 @@ enum {
 extern boolean_t PE_get_hotkey(
 	unsigned char   key);
 
-extern kern_return_t PE_cpu_start(
+#if XNU_KERNEL_PRIVATE
+extern kern_return_t __abortlike
+PE_cpu_start_from_kext(
 	cpu_id_t target,
 	vm_offset_t start_paddr,
 	vm_offset_t arg_paddr);
 
+extern void PE_cpu_start_internal(
+	cpu_id_t target,
+	vm_offset_t start_paddr,
+	vm_offset_t arg_paddr);
+#endif /* XNU_KERNEL_PRIVATE */
+
+#if !XNU_KERNEL_PRIVATE
+extern kern_return_t PE_cpu_start(
+	cpu_id_t target,
+	vm_offset_t start_paddr,
+	vm_offset_t arg_paddr);
+#endif /* !XNU_KERNEL_PRIVATE */
+
 extern void PE_cpu_halt(
+	cpu_id_t target);
+
+extern bool PE_cpu_down(
 	cpu_id_t target);
 
 extern void PE_cpu_signal(
@@ -380,18 +434,87 @@ extern void PE_panic_hook(const char *str);
 
 extern void PE_init_cpu(void);
 
+extern void PE_handle_ext_interrupt(void);
+
+extern void PE_cpu_power_enable(int cpu_id);
+
+extern void PE_cpu_power_disable(int cpu_id);
+
+/* This has no locking to prevent races, so it is only used in the panic path */
+extern bool PE_cpu_power_check_kdp(int cpu_id);
+
+extern void PE_singlestep_hook(void);
+
 #if defined(__arm__) || defined(__arm64__)
 typedef void (*perfmon_interrupt_handler_func)(cpu_id_t source);
 extern kern_return_t PE_cpu_perfmon_interrupt_install_handler(perfmon_interrupt_handler_func handler);
 extern void PE_cpu_perfmon_interrupt_enable(cpu_id_t target, boolean_t enable);
 
 #if DEVELOPMENT || DEBUG
-extern void PE_arm_debug_enable_trace(void);
+/* panic_trace boot-arg modes */
+__options_decl(panic_trace_t, uint32_t, {
+	panic_trace_disabled                 = 0x00000000,
+	panic_trace_unused                   = 0x00000001,
+	panic_trace_enabled                  = 0x00000002,
+	panic_trace_alt_enabled              = 0x00000010,
+	panic_trace_partial_policy           = 0x00000020,
+});
+extern panic_trace_t panic_trace;
+
+extern void PE_arm_debug_enable_trace(bool should_kprintf);
 extern void (*PE_arm_debug_panic_hook)(const char *str);
 #else
 extern void(*const PE_arm_debug_panic_hook)(const char *str);
 #endif
 #endif
+
+
+typedef enum kc_kind {
+	KCKindNone      = -1,
+	KCKindUnknown   = 0,
+	KCKindPrimary   = 1,
+	KCKindPageable  = 2,
+	KCKindAuxiliary = 3,
+	KCNumKinds      = 4,
+} kc_kind_t;
+
+typedef enum kc_format {
+	KCFormatUnknown = 0,
+	KCFormatStatic  = 1,
+	KCFormatDynamic = 2,
+	KCFormatFileset = 3,
+	KCFormatKCGEN   = 4,
+} kc_format_t;
+
+#if XNU_KERNEL_PRIVATE
+/* set the mach-o header for a given KC type */
+extern void PE_set_kc_header(kc_kind_t type, kernel_mach_header_t *header, uintptr_t slide);
+void PE_reset_kc_header(kc_kind_t type);
+/* set both lowest VA (base) and mach-o header for a given KC type */
+extern void PE_set_kc_header_and_base(kc_kind_t type, kernel_mach_header_t *header, void *base, uintptr_t slide);
+/* The highest non-LINKEDIT virtual address */
+extern vm_offset_t kc_highest_nonlinkedit_vmaddr;
+/* whether this is an srd enabled device */
+extern uint32_t PE_srd_fused;
+#endif
+/* returns a pointer to the mach-o header for a give KC type, returns NULL if nothing's been set */
+extern void *PE_get_kc_header(kc_kind_t type);
+/* returns a pointer to the lowest VA of of the KC of the given type */
+extern void *PE_get_kc_baseaddress(kc_kind_t type);
+/* returns an array of length KCNumKinds of the lowest VAs of each KC type - members could be NULL */
+extern const void * const*PE_get_kc_base_pointers(void);
+/* returns the slide for the kext collection */
+extern uintptr_t PE_get_kc_slide(kc_kind_t type);
+/* quickly accesss the format of the primary kc */
+extern bool PE_get_primary_kc_format(kc_format_t *type);
+/* gets format of KC of the given type */
+extern bool PE_get_kc_format(kc_kind_t type, kc_format_t *format);
+/* set vnode ptr for kc fileset */
+extern void PE_set_kc_vp(kc_kind_t type, void *vp);
+/* quickly set vnode ptr for kc fileset */
+void * PE_get_kc_vp(kc_kind_t type);
+/* drop reference to kc fileset vnodes */
+void PE_reset_all_kc_vp(void);
 
 #if KERNEL_PRIVATE
 #if defined(__arm64__)
@@ -401,6 +524,7 @@ extern uint8_t PE_smc_stashed_x86_system_state;
 extern uint8_t PE_smc_stashed_x86_shutdown_cause;
 extern uint64_t PE_smc_stashed_x86_prev_power_transitions;
 extern uint32_t PE_pcie_stashed_link_state;
+extern uint64_t PE_nvram_stashed_x86_macos_slide;
 #endif
 
 boolean_t PE_reboot_on_panic(void);
@@ -412,6 +536,9 @@ typedef struct PE_panic_save_context {
 	uint32_t psc_length;
 } PE_panic_save_context_t;
 #endif
+
+extern vm_size_t PE_init_socd_client(void);
+extern void PE_write_socd_client_buffer(vm_offset_t offset, const void *buff, vm_size_t size);
 
 __END_DECLS
 

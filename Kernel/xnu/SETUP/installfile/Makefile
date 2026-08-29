@@ -8,30 +8,20 @@ include $(MakeInc_def)
 
 OBJS = installfile.o
 
-CFLAGS = -g -O0 -I$(SOURCE) -I. -Wimplicit-function-declaration
-LDFLAGS = 
+CFLAGS = -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION) -g -O0 -I$(SOURCE) -I.
 
-ifeq ($(OPSYS),Darwin)
-	CFLAGS += -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION)
-	LDFLAGS += -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION)
-endif
-ifeq ($(OPSYS),Linux)
-	CFLAGS += \
-	  -I$(SRCROOT)/../../Developer/Platforms/ravynOS.platform/Developer/SDKs/ravynOS.sdk/copyfile \
-	  -I$(SRCROOT)/../../Developer/cctools/include/foreign
-	LDFLAGS += -lbsd
-endif
+WARNFLAGS = -Wall
 
-WARNFLAGS = -Wall -Wno-implicit-function-declaration -Wno-int-conversion
+LDFLAGS = -isysroot $(HOST_SDKROOT) -mmacosx-version-min=$(HOST_OS_VERSION)
 
 installfile: $(OBJS)
-	$(call makelog,$(ColorH)HOST_LD$(Color0)       $(ColorF)$@$(Color0))
+	@$(LOG_HOST_LD) "$@"
 	$(_v)$(HOST_CC) $(LDFLAGS) -o $@ $^
-	$(call makelog,$(ColorH)HOST_CODESIGN$(Color0) $(ColorF)$@$(Color0))
+	@$(LOG_HOST_CODESIGN) "$@"
 	$(_v)env CODESIGN_ALLOCATE=$(HOST_CODESIGN_ALLOCATE) $(HOST_CODESIGN) -s - $@
 
 %.o: %.c
-	$(call makelog,$(ColorH)HOST_CC$(Color0)       $(ColorF)$@$(Color0))
+	@$(LOG_HOST_CC) "$@"
 	$(_v)$(HOST_CC) $(WARNFLAGS) $(CFLAGS) -c -o $@ $<
 
 do_build_setup:: installfile

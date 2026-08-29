@@ -49,12 +49,13 @@ extern void cpu_idle_tickle(void);
 
 extern void cpu_machine_idle_init(boolean_t from_boot);
 
-extern void arm_init_cpu(cpu_data_t *args);
+extern void arm_init_cpu(cpu_data_t *args, uint64_t hib_header_phys);
 
 extern void arm_init_idle_cpu(cpu_data_t *args);
 
 extern void init_cpu_timebase(boolean_t enable_fiq);
 
 #define cpu_pause() do {} while (0)     /* Not for this architecture */
-
+bool
+wfe_to_deadline_or_interrupt(uint32_t cid, uint64_t wfe_deadline, cpu_data_t *cdp, bool unmask, bool check_cluster_recommendation);
 #endif /* _ARM_MACHINE_CPU_H_ */

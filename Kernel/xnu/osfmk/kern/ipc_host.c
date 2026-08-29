@@ -71,29 +71,42 @@
 #include <kern/thread.h>
 #include <kern/ipc_host.h>
 #include <kern/ipc_kobject.h>
+#include <kern/ux_handler.h>
 #include <kern/misc_protos.h>
 #include <kern/spl.h>
 #include <ipc/ipc_port.h>
 #include <ipc/ipc_space.h>
+
+#if CONFIG_CSR
+#include <sys/csr.h>
+#endif
 
 #if CONFIG_MACF
 #include <security/mac_mach_internal.h>
 #endif
 
 /*
- * Forward declarations
- */
-
-boolean_t
-ref_pset_port_locked(
-	ipc_port_t port, boolean_t matchn, processor_set_t *ppset);
-
-/*
  *	ipc_host_init: set up various things.
  */
 
 extern lck_grp_t                host_notify_lock_grp;
-extern lck_attr_t               host_notify_lock_attr;
+
+IPC_KOBJECT_DEFINE(IKOT_HOST,
+    .iko_op_stable    = true,
+    .iko_op_permanent = true);
+IPC_KOBJECT_DEFINE(IKOT_HOST_PRIV,
+    .iko_op_stable    = true,
+    .iko_op_permanent = true);
+
+IPC_KOBJECT_DEFINE(IKOT_PROCESSOR,
+    .iko_op_stable    = true,
+    .iko_op_permanent = true);
+IPC_KOBJECT_DEFINE(IKOT_PSET,
+    .iko_op_stable    = true,
+    .iko_op_permanent = true);
+IPC_KOBJECT_DEFINE(IKOT_PSET_NAME,
+    .iko_op_stable    = true,
+    .iko_op_permanent = true);
 
 void
 ipc_host_init(void)
@@ -101,15 +114,11 @@ ipc_host_init(void)
 	ipc_port_t      port;
 	int i;
 
-	lck_mtx_init(&realhost.lock, &host_notify_lock_grp, &host_notify_lock_attr);
+	lck_mtx_init(&realhost.lock, &host_notify_lock_grp, LCK_ATTR_NULL);
 
 	/*
 	 *	Allocate and set up the two host ports.
 	 */
-	port = ipc_kobject_alloc_port((ipc_kobject_t) &realhost, IKOT_HOST_SECURITY,
-	    IPC_KOBJECT_ALLOC_MAKE_SEND);
-	kernel_set_special_port(&realhost, HOST_SECURITY_PORT, port);
-
 	port = ipc_kobject_alloc_port((ipc_kobject_t) &realhost, IKOT_HOST,
 	    IPC_KOBJECT_ALLOC_MAKE_SEND);
 	kernel_set_special_port(&realhost, HOST_PORT, port);
@@ -137,13 +146,11 @@ ipc_host_init(void)
 	 *	Set up ipc for default processor set.
 	 */
 	ipc_pset_init(&pset0);
-	ipc_pset_enable(&pset0);
 
 	/*
 	 *	And for master processor
 	 */
 	ipc_processor_init(master_processor);
-	ipc_processor_enable(master_processor);
 }
 
 /*
@@ -166,7 +173,7 @@ host_self_trap(
 	mach_port_name_t name;
 
 	itk_lock(self);
-	sright = ipc_port_copy_send(self->itk_host);
+	sright = host_port_copy_send(self->itk_host);
 	itk_unlock(self);
 	name = ipc_port_copyout_send(sright, current_space());
 	return name;
@@ -182,28 +189,8 @@ void
 ipc_processor_init(
 	processor_t     processor)
 {
-	ipc_port_t      port;
-
-	port = ipc_port_alloc_kernel();
-	if (port == IP_NULL) {
-		panic("ipc_processor_init");
-	}
-	processor->processor_self = port;
-}
-
-/*
- *	ipc_processor_enable:
- *
- *	Enable ipc control of processor by setting port object.
- */
-void
-ipc_processor_enable(
-	processor_t     processor)
-{
-	ipc_port_t      myport;
-
-	myport = processor->processor_self;
-	ipc_kobject_set(myport, (ipc_kobject_t) processor, IKOT_PROCESSOR);
+	processor->processor_self = ipc_kobject_alloc_port(processor,
+	    IKOT_PROCESSOR, IPC_KOBJECT_ALLOC_NONE);
 }
 
 /*
@@ -216,32 +203,10 @@ void
 ipc_pset_init(
 	processor_set_t         pset)
 {
-	ipc_port_t      port;
-
-	port = ipc_port_alloc_kernel();
-	if (port == IP_NULL) {
-		panic("ipc_pset_init");
-	}
-	pset->pset_self = port;
-
-	port = ipc_port_alloc_kernel();
-	if (port == IP_NULL) {
-		panic("ipc_pset_init");
-	}
-	pset->pset_name_self = port;
-}
-
-/*
- *	ipc_pset_enable:
- *
- *	Enable ipc access to a processor set.
- */
-void
-ipc_pset_enable(
-	processor_set_t         pset)
-{
-	ipc_kobject_set(pset->pset_self, (ipc_kobject_t) pset, IKOT_PSET);
-	ipc_kobject_set(pset->pset_name_self, (ipc_kobject_t) pset, IKOT_PSET_NAME);
+	pset->pset_self = ipc_kobject_alloc_port(pset,
+	    IKOT_PSET, IPC_KOBJECT_ALLOC_NONE);
+	pset->pset_name_self = ipc_kobject_alloc_port(pset,
+	    IKOT_PSET_NAME, IPC_KOBJECT_ALLOC_NONE);
 }
 
 /*
@@ -277,12 +242,15 @@ convert_port_to_host(
 	ipc_port_t      port)
 {
 	host_t host = HOST_NULL;
+	ipc_kobject_type_t type;
 
 	if (IP_VALID(port)) {
-		if (ip_kotype(port) == IKOT_HOST ||
-		    ip_kotype(port) == IKOT_HOST_PRIV) {
-			host = (host_t) ip_get_kobject(port);
-			require_ip_active(port);
+		type = ip_kotype(port);
+		if (type == IKOT_HOST || type == IKOT_HOST_PRIV) {
+			host = (host_t)ipc_kobject_get_stable(port, type);
+			if (host && host != &realhost) {
+				panic("unexpected host object: %p", host);
+			}
 		}
 	}
 	return host;
@@ -303,13 +271,16 @@ convert_port_to_host_priv(
 {
 	host_t host = HOST_NULL;
 
+	/* reject translation if itk_host is not host_priv */
+	if (port != current_task()->itk_host) {
+		return HOST_NULL;
+	}
+
 	if (IP_VALID(port)) {
-		ip_lock(port);
-		if (ip_active(port) &&
-		    (ip_kotype(port) == IKOT_HOST_PRIV)) {
-			host = (host_t) ip_get_kobject(port);
+		host = ipc_kobject_get_stable(port, IKOT_HOST_PRIV);
+		if (host && host != &realhost) {
+			panic("unexpected host object: %p", host);
 		}
-		ip_unlock(port);
 	}
 
 	return host;
@@ -332,12 +303,7 @@ convert_port_to_processor(
 	processor_t processor = PROCESSOR_NULL;
 
 	if (IP_VALID(port)) {
-		ip_lock(port);
-		if (ip_active(port) &&
-		    (ip_kotype(port) == IKOT_PROCESSOR)) {
-			processor = (processor_t) ip_get_kobject(port);
-		}
-		ip_unlock(port);
+		processor = ipc_kobject_get_stable(port, IKOT_PROCESSOR);
 	}
 
 	return processor;
@@ -347,7 +313,7 @@ convert_port_to_processor(
  *	Routine:	convert_port_to_pset
  *	Purpose:
  *		Convert from a port to a pset.
- *		Doesn't consume the port ref; produces a pset ref,
+ *		Doesn't consume the port ref
  *		which may be null.
  *	Conditions:
  *		Nothing locked.
@@ -357,15 +323,12 @@ processor_set_t
 convert_port_to_pset(
 	ipc_port_t      port)
 {
-	boolean_t r;
 	processor_set_t pset = PROCESSOR_SET_NULL;
 
-	r = FALSE;
-	while (!r && IP_VALID(port)) {
-		ip_lock(port);
-		r = ref_pset_port_locked(port, FALSE, &pset);
-		/* port unlocked */
+	if (IP_VALID(port)) {
+		pset = ipc_kobject_get_stable(port, IKOT_PSET);
 	}
+
 	return pset;
 }
 
@@ -373,7 +336,7 @@ convert_port_to_pset(
  *	Routine:	convert_port_to_pset_name
  *	Purpose:
  *		Convert from a port to a pset.
- *		Doesn't consume the port ref; produces a pset ref,
+ *		Doesn't consume the port ref
  *		which may be null.
  *	Conditions:
  *		Nothing locked.
@@ -383,34 +346,49 @@ processor_set_name_t
 convert_port_to_pset_name(
 	ipc_port_t      port)
 {
-	boolean_t r;
 	processor_set_t pset = PROCESSOR_SET_NULL;
+	ipc_kobject_type_t type;
 
-	r = FALSE;
-	while (!r && IP_VALID(port)) {
-		ip_lock(port);
-		r = ref_pset_port_locked(port, TRUE, &pset);
-		/* port unlocked */
+	if (IP_VALID(port)) {
+		type = ip_kotype(port);
+		if (type == IKOT_PSET || type == IKOT_PSET_NAME) {
+			pset = ipc_kobject_get_stable(port, type);
+		}
 	}
 	return pset;
 }
 
-boolean_t
-ref_pset_port_locked(ipc_port_t port, boolean_t matchn, processor_set_t *ppset)
-{
-	processor_set_t pset;
+/*
+ *	Routine:	host_port_copy_send
+ *	Purpose:
+ *		Copies a send right for a host port (priv or not)
+ *	Conditions:
+ *		Nothing locked.
+ */
 
-	pset = PROCESSOR_SET_NULL;
-	if (ip_active(port) &&
-	    ((ip_kotype(port) == IKOT_PSET) ||
-	    (matchn && (ip_kotype(port) == IKOT_PSET_NAME)))) {
-		pset = (processor_set_t) ip_get_kobject(port);
+ipc_port_t
+host_port_copy_send(ipc_port_t port)
+{
+	if (IP_VALID(port)) {
+		ipc_kobject_type_t kotype = ip_kotype(port);
+
+		if (kotype == IKOT_HOST) {
+			port = ipc_kobject_copy_send(port,
+			    host_self(), IKOT_HOST);
+		} else if (kotype == IKOT_HOST_PRIV) {
+			port = ipc_kobject_copy_send(port,
+			    host_priv_self(), IKOT_HOST_PRIV);
+#if CONFIG_CSR
+		} else if (kotype == IKOT_NONE &&
+		    (csr_check(CSR_ALLOW_KERNEL_DEBUGGER) == 0)) {
+			port = ipc_port_copy_send_mqueue(port);
+#endif
+		} else {
+			panic("port %p is an invalid host port", port);
+		}
 	}
 
-	*ppset = pset;
-	ip_unlock(port);
-
-	return TRUE;
+	return port;
 }
 
 /*
@@ -426,9 +404,11 @@ ipc_port_t
 convert_host_to_port(
 	host_t          host)
 {
-	ipc_port_t port;
+	ipc_port_t port = IP_NULL;
+	__assert_only kern_return_t kr;
 
-	host_get_host_port(host, &port);
+	kr = host_get_host_port(host, &port);
+	assert(kr == KERN_SUCCESS);
 	return port;
 }
 
@@ -449,7 +429,7 @@ convert_processor_to_port(
 	ipc_port_t port = processor->processor_self;
 
 	if (port != IP_NULL) {
-		port = ipc_port_make_send(port);
+		port = ipc_kobject_make_send(port, processor, IKOT_PROCESSOR);
 	}
 	return port;
 }
@@ -468,13 +448,7 @@ ipc_port_t
 convert_pset_to_port(
 	processor_set_t         pset)
 {
-	ipc_port_t port = pset->pset_self;
-
-	if (port != IP_NULL) {
-		port = ipc_port_make_send(port);
-	}
-
-	return port;
+	return ipc_kobject_make_send(pset->pset_self, pset, IKOT_PSET);
 }
 
 /*
@@ -491,40 +465,7 @@ ipc_port_t
 convert_pset_name_to_port(
 	processor_set_name_t            pset)
 {
-	ipc_port_t port = pset->pset_name_self;
-
-	if (port != IP_NULL) {
-		port = ipc_port_make_send(port);
-	}
-
-	return port;
-}
-
-/*
- *	Routine:	convert_port_to_host_security
- *	Purpose:
- *		Convert from a port to a host security.
- *		Doesn't consume the port ref; the port produced may be null.
- *	Conditions:
- *		Nothing locked.
- */
-
-host_t
-convert_port_to_host_security(
-	ipc_port_t port)
-{
-	host_t host = HOST_NULL;
-
-	if (IP_VALID(port)) {
-		ip_lock(port);
-		if (ip_active(port) &&
-		    (ip_kotype(port) == IKOT_HOST_SECURITY)) {
-			host = (host_t) ip_get_kobject(port);
-		}
-		ip_unlock(port);
-	}
-
-	return host;
+	return ipc_kobject_make_send(pset->pset_name_self, pset, IKOT_PSET_NAME);
 }
 
 /*
@@ -542,6 +483,7 @@ convert_port_to_host_security(
  *		KERN_INVALID_ARGUMENT	The host_priv is not valid,
  *					Illegal mask bit set.
  *					Illegal exception behavior
+ *		KERN_NO_ACCESS		Restricted access to set port
  */
 kern_return_t
 host_set_exception_ports(
@@ -563,28 +505,9 @@ host_set_exception_ports(
 		return KERN_INVALID_ARGUMENT;
 	}
 
-	if (exception_mask & ~EXC_MASK_VALID) {
-		return KERN_INVALID_ARGUMENT;
-	}
-
-	if (IP_VALID(new_port)) {
-		switch (new_behavior & ~MACH_EXCEPTION_MASK) {
-		case EXCEPTION_DEFAULT:
-		case EXCEPTION_STATE:
-		case EXCEPTION_STATE_IDENTITY:
-			break;
-		default:
-			return KERN_INVALID_ARGUMENT;
-		}
-	}
-
-	/*
-	 * Check the validity of the thread_state_flavor by calling the
-	 * VALID_THREAD_STATE_FLAVOR architecture dependent macro defined in
-	 * osfmk/mach/ARCHITECTURE/thread_status.h
-	 */
-	if (new_flavor != 0 && !VALID_THREAD_STATE_FLAVOR(new_flavor)) {
-		return KERN_INVALID_ARGUMENT;
+	kern_return_t kr = set_exception_ports_validation(NULL, exception_mask, new_port, new_behavior, new_flavor, false);
+	if (kr != KERN_SUCCESS) {
+		return kr;
 	}
 
 #if CONFIG_MACF
@@ -595,21 +518,19 @@ host_set_exception_ports(
 	new_label = mac_exc_create_label_for_current_proc();
 
 	for (i = FIRST_EXCEPTION; i < EXC_TYPES_COUNT; i++) {
-		if (host_priv->exc_actions[i].label == NULL) {
-			deferred_labels[i] = mac_exc_create_label();
+		if (mac_exc_label(&host_priv->exc_actions[i]) == NULL) {
+			deferred_labels[i] = mac_exc_create_label(&host_priv->exc_actions[i]);
 		} else {
 			deferred_labels[i] = NULL;
 		}
 	}
 #endif
 
-	assert(host_priv == &realhost);
-
 	host_lock(host_priv);
 
 	for (i = FIRST_EXCEPTION; i < EXC_TYPES_COUNT; i++) {
 #if CONFIG_MACF
-		if (host_priv->exc_actions[i].label == NULL) {
+		if (mac_exc_label(&host_priv->exc_actions[i]) == NULL) {
 			// Lazy initialization (see ipc_port_init).
 			mac_exc_associate_action_label(&host_priv->exc_actions[i], deferred_labels[i]);
 			deferred_labels[i] = NULL; // Label is used, do not free.
@@ -624,7 +545,7 @@ host_set_exception_ports(
 			old_port[i] = host_priv->exc_actions[i].port;
 
 			host_priv->exc_actions[i].port =
-			    ipc_port_copy_send(new_port);
+			    exception_port_copy_send(new_port);
 			host_priv->exc_actions[i].behavior = new_behavior;
 			host_priv->exc_actions[i].flavor = new_flavor;
 		} else {
@@ -697,8 +618,6 @@ host_get_exception_ports(
 		return KERN_INVALID_ARGUMENT;
 	}
 
-	assert(host_priv == &realhost);
-
 	host_lock(host_priv);
 
 	count = 0;
@@ -717,16 +636,13 @@ host_get_exception_ports(
 					break;
 				}
 			}/* for */
-			if (j == count) {
+			if (j == count && count < *CountCnt) {
 				masks[j] = (1 << i);
 				ports[j] =
-				    ipc_port_copy_send(host_priv->exc_actions[i].port);
+				    exception_port_copy_send(host_priv->exc_actions[i].port);
 				behaviors[j] = host_priv->exc_actions[i].behavior;
 				flavors[j] = host_priv->exc_actions[i].flavor;
 				count++;
-				if (count > *CountCnt) {
-					break;
-				}
 			}
 		}
 	}/* for */
@@ -763,23 +679,9 @@ host_swap_exception_ports(
 		return KERN_INVALID_ARGUMENT;
 	}
 
-	if (exception_mask & ~EXC_MASK_VALID) {
-		return KERN_INVALID_ARGUMENT;
-	}
-
-	if (IP_VALID(new_port)) {
-		switch (new_behavior) {
-		case EXCEPTION_DEFAULT:
-		case EXCEPTION_STATE:
-		case EXCEPTION_STATE_IDENTITY:
-			break;
-		default:
-			return KERN_INVALID_ARGUMENT;
-		}
-	}
-
-	if (new_flavor != 0 && !VALID_THREAD_STATE_FLAVOR(new_flavor)) {
-		return KERN_INVALID_ARGUMENT;
+	kern_return_t kr = set_exception_ports_validation(NULL, exception_mask, new_port, new_behavior, new_flavor, false);
+	if (kr != KERN_SUCCESS) {
+		return kr;
 	}
 
 #if CONFIG_MACF
@@ -790,8 +692,8 @@ host_swap_exception_ports(
 	new_label = mac_exc_create_label_for_current_proc();
 
 	for (i = FIRST_EXCEPTION; i < EXC_TYPES_COUNT; i++) {
-		if (host_priv->exc_actions[i].label == NULL) {
-			deferred_labels[i] = mac_exc_create_label();
+		if (mac_exc_label(&host_priv->exc_actions[i]) == NULL) {
+			deferred_labels[i] = mac_exc_create_label(&host_priv->exc_actions[i]);
 		} else {
 			deferred_labels[i] = NULL;
 		}
@@ -803,7 +705,7 @@ host_swap_exception_ports(
 	assert(EXC_TYPES_COUNT > FIRST_EXCEPTION);
 	for (count = 0, i = FIRST_EXCEPTION; i < EXC_TYPES_COUNT && count < *CountCnt; i++) {
 #if CONFIG_MACF
-		if (host_priv->exc_actions[i].label == NULL) {
+		if (mac_exc_label(&host_priv->exc_actions[i]) == NULL) {
 			// Lazy initialization (see ipc_port_init).
 			mac_exc_associate_action_label(&host_priv->exc_actions[i], deferred_labels[i]);
 			deferred_labels[i] = NULL; // Label is used, do not free.
@@ -830,14 +732,14 @@ host_swap_exception_ports(
 			if (j == count) {
 				masks[j] = (1 << i);
 				ports[j] =
-				    ipc_port_copy_send(host_priv->exc_actions[i].port);
+				    exception_port_copy_send(host_priv->exc_actions[i].port);
 				behaviors[j] = host_priv->exc_actions[i].behavior;
 				flavors[j] = host_priv->exc_actions[i].flavor;
 				count++;
 			}
 			old_port[i] = host_priv->exc_actions[i].port;
 			host_priv->exc_actions[i].port =
-			    ipc_port_copy_send(new_port);
+			    exception_port_copy_send(new_port);
 			host_priv->exc_actions[i].behavior = new_behavior;
 			host_priv->exc_actions[i].flavor = new_flavor;
 		} else {

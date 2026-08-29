@@ -51,6 +51,7 @@
 #include <kern/thread.h>
 #include <kern/task.h>
 #include <kern/ipc_kobject.h>
+#include <kern/monotonic.h>
 #include <mach/vm_param.h>
 #include <ipc/port.h>
 #include <ipc/ipc_entry.h>
@@ -74,10 +75,6 @@
 #include <i386/machine_cpu.h>
 #include <i386/misc_protos.h>
 #include <i386/cpuid.h>
-
-#if MONOTONIC
-#include <kern/monotonic.h>
-#endif /* MONOTONIC */
 
 #define PERMIT_PERMCHECK (0)
 
@@ -236,6 +233,8 @@ diagCall64(x86_saved_state_t * state)
 		switch (cpuid_cpufamily()) {
 		case CPUFAMILY_INTEL_SKYLAKE:
 		case CPUFAMILY_INTEL_KABYLAKE:
+		case CPUFAMILY_INTEL_ICELAKE:
+		case CPUFAMILY_INTEL_COMETLAKE:
 			ia_perf_limits = MSR_IA32_IA_PERF_LIMIT_REASONS_SKL;
 			break;
 		default:
@@ -283,11 +282,11 @@ diagCall64(x86_saved_state_t * state)
 			cest.citime_total = cpu_data_ptr[i]->cpu_itime_total;
 			cest.crtime_total = cpu_data_ptr[i]->cpu_rtime_total;
 			cest.cpu_idle_exits = cpu_data_ptr[i]->cpu_idle_exits;
-#if MONOTONIC
+#if CONFIG_CPU_COUNTERS
 			cest.cpu_insns = cpu_data_ptr[i]->cpu_monotonic.mtc_counts[MT_CORE_INSTRS];
 			cest.cpu_ucc = cpu_data_ptr[i]->cpu_monotonic.mtc_counts[MT_CORE_CYCLES];
 			cest.cpu_urc = cpu_data_ptr[i]->cpu_monotonic.mtc_counts[MT_CORE_REFCYCLES];
-#endif /* MONOTONIC */
+#endif /* CONFIG_CPU_COUNTERS */
 #if DIAG_ALL_PMCS
 			bcopy(&cpu_data_ptr[i]->cpu_gpmcs[0], &cest.gpmcs[0], sizeof(cest.gpmcs));
 #endif /* DIAG_ALL_PMCS */
@@ -320,8 +319,8 @@ diagCall64(x86_saved_state_t * state)
 	{
 		(void) ml_set_interrupts_enabled(TRUE);
 		if (diagflag) {
-			unsigned *ptr = (unsigned *)kalloc(1024);
-			kfree(ptr, 1024);
+			unsigned *ptr = (unsigned *)kalloc_data(1024, Z_WAITOK);
+			kfree_data(ptr, 1024);
 			*ptr = 0x42;
 		}
 		(void) ml_set_interrupts_enabled(FALSE);
@@ -377,13 +376,13 @@ cpu_powerstats(__unused void *arg)
 	cdp->cpu_c7res = ((uint64_t)ch << 32) | cl;
 
 	if (diag_pmc_enabled) {
-#if MONOTONIC
+#if CONFIG_CPU_COUNTERS
 		mt_update_fixed_counts();
-#else /* MONOTONIC */
+#else /* CONFIG_CPU_COUNTERS */
 		uint64_t insns = read_pmc(FIXED_PMC0);
 		uint64_t ucc = read_pmc(FIXED_PMC1);
 		uint64_t urc = read_pmc(FIXED_PMC2);
-#endif /* !MONOTONIC */
+#endif /* !CONFIG_CPU_COUNTERS */
 #if DIAG_ALL_PMCS
 		int i;
 
@@ -391,18 +390,18 @@ cpu_powerstats(__unused void *arg)
 			cdp->cpu_gpmcs[i] = read_pmc(i);
 		}
 #endif /* DIAG_ALL_PMCS */
-#if !MONOTONIC
+#if !CONFIG_CPU_COUNTERS
 		cdp->cpu_cur_insns = insns;
 		cdp->cpu_cur_ucc = ucc;
 		cdp->cpu_cur_urc = urc;
-#endif /* !MONOTONIC */
+#endif /* !CONFIG_CPU_COUNTERS */
 	}
 }
 
 void
 cpu_pmc_control(void *enablep)
 {
-#if !MONOTONIC
+#if !CONFIG_CPU_COUNTERS
 	boolean_t enable = *(boolean_t *)enablep;
 	cpu_data_t      *cdp = current_cpu_datap();
 
@@ -416,7 +415,7 @@ cpu_pmc_control(void *enablep)
 		set_cr4((get_cr4() & ~CR4_PCE));
 	}
 	cdp->cpu_fixed_pmcs_enabled = enable;
-#else /* !MONOTONIC */
+#else /* !CONFIG_CPU_COUNTERS */
 #pragma unused(enablep)
-#endif /* MONOTONIC */
+#endif /* CONFIG_CPU_COUNTERS */
 }

@@ -13,7 +13,9 @@
 #include <sys/sysctl.h>
 #include <unistd.h>
 
-T_GLOBAL_META(T_META_RUN_CONCURRENTLY(true));
+#include "test_utils.h"
+
+T_GLOBAL_META(T_META_RUN_CONCURRENTLY(true), T_META_TAG_VM_PREFERRED);
 
 /* *************************************************************************************
  * Test the task_info API.
@@ -51,7 +53,6 @@ void test_task_basic_info_32(void);
 void test_task_basic_info_64(void);
 void task_basic_info_32_debug(void);
 void task_basic2_info_32_warmup(void);
-static int is_development_kernel(void);
 void test_task_basic_info(enum info_kind kind);
 uint64_t info_get(enum info_kind kind, enum info_get get, void * data);
 
@@ -340,7 +341,7 @@ T_DECL(task_absolutetime_info, "tests task absolute time info", T_META_ASROOT(tr
 	user_time_diff   = absolute_time_info_data_new.total_user - absolute_time_info_data.total_user;
 	system_time_diff = absolute_time_info_data_new.total_system - absolute_time_info_data.total_system;
 
-#if !(defined(__arm__) || defined(__arm64__))
+#if !defined(__arm64__)
 	/*
 	 * On embedded devices the difference is always zero.
 	 * On non-embedded devices the difference occurs in this range. This was observed over ~10000 runs.
@@ -367,7 +368,7 @@ T_DECL(task_absolutetime_info, "tests task absolute time info", T_META_ASROOT(tr
 		T_PASS("task_info should return non-zero value for user threads time = %llu", absolute_time_info_data.threads_user);
 	}
 
-#if !(defined(__arm__) || defined(__arm64__))
+#if !defined(__arm64__)
 	/*
 	 * On iOS, system threads are always zero. On OS X this value can be some large positive number.
 	 * There is no real way to estimate the exact amount.
@@ -446,7 +447,8 @@ T_DECL(task_flags_info, "tests task_flags_info", T_META_ASROOT(true), T_META_LTE
 	    "Negative test case: task_info should verify that count is at least equal to what is defined in API.");
 }
 
-T_DECL(task_power_info_v2, "tests task_power_info_v2", T_META_ASROOT(true), T_META_LTEPHASE(LTE_POSTINIT))
+T_DECL(task_power_info_v2, "tests task_power_info_v2", T_META_ASROOT(true), T_META_LTEPHASE(LTE_POSTINIT),
+    T_META_TAG_VM_NOT_ELIGIBLE)
 {
 	T_SETUPBEGIN;
 	int is_dev = is_development_kernel();
@@ -476,7 +478,7 @@ T_DECL(task_power_info_v2, "tests task_power_info_v2", T_META_ASROOT(true), T_ME
 	err = task_info(mach_task_self(), TASK_POWER_INFO_V2, (task_info_t)&power_info_data_v2_new, &count);
 	T_ASSERT_MACH_SUCCESS(err, "verify task_info call succeeded");
 
-#if !(defined(__arm__) || defined(__arm64__))
+#if !defined(__arm64__)
 	/*
 	 * iOS does not have system_time.
 	 */
@@ -490,7 +492,7 @@ T_DECL(task_power_info_v2, "tests task_power_info_v2", T_META_ASROOT(true), T_ME
 	    "verify task_info call returns non-zero value for interrupt_wakeup (ret value = %llu)",
 	    power_info_data_v2.cpu_energy.task_interrupt_wakeups);
 
-#if !(defined(__arm__) || defined(__arm64__))
+#if !defined(__arm64__)
 	if (power_info_data_v2.cpu_energy.task_platform_idle_wakeups != 0) {
 		T_LOG("task_info call returned %llu for platform_idle_wakeup", power_info_data_v2.cpu_energy.task_platform_idle_wakeups);
 	}
@@ -513,18 +515,21 @@ T_DECL(task_power_info_v2, "tests task_power_info_v2", T_META_ASROOT(true), T_ME
 	    err, mach_error_string(err));
 }
 
-T_DECL(test_task_basic_info_32, "tests TASK_BASIC_INFO_32", T_META_ASROOT(true), T_META_LTEPHASE(LTE_POSTINIT))
+T_DECL(test_task_basic_info_32, "tests TASK_BASIC_INFO_32", T_META_ASROOT(true), T_META_LTEPHASE(LTE_POSTINIT),
+    T_META_TAG_VM_PREFERRED)
 {
 	test_task_basic_info(INFO_32);
 }
 
-T_DECL(test_task_basic_info_32_2, "tests TASK_BASIC_INFO_32_2", T_META_ASROOT(true), T_META_LTEPHASE(LTE_POSTINIT))
+T_DECL(test_task_basic_info_32_2, "tests TASK_BASIC_INFO_32_2", T_META_ASROOT(true), T_META_LTEPHASE(LTE_POSTINIT),
+    T_META_TAG_VM_PREFERRED)
 {
 	test_task_basic_info(INFO_32_2);
 }
 
-#if defined(__arm__) || defined(__arm64__)
-T_DECL(test_task_basic_info_64i_2, "tests TASK_BASIC_INFO_64_2", T_META_ASROOT(true), T_META_LTEPHASE(LTE_POSTINIT))
+#if defined(__arm64__)
+T_DECL(test_task_basic_info_64i_2, "tests TASK_BASIC_INFO_64_2", T_META_ASROOT(true), T_META_LTEPHASE(LTE_POSTINIT),
+    T_META_TAG_VM_PREFERRED)
 {
 	test_task_basic_info(INFO_64_2);
 }
@@ -533,7 +538,7 @@ T_DECL(test_task_basic_info_64, "tests TASK_BASIC_INFO_64", T_META_ASROOT(true),
 {
 	test_task_basic_info(INFO_64);
 }
-#endif /* defined(__arm__) || defined(__arm64__) */
+#endif /* defined(__arm64__) */
 
 T_DECL(test_mach_task_basic_info, "tests MACH_TASK_BASIC_INFO", T_META_ASROOT(true), T_META_LTEPHASE(LTE_POSTINIT))
 {
@@ -554,11 +559,11 @@ test_task_basic_info(enum info_kind kind)
 
 	task_info_t info_data[2];
 	task_basic_info_32_data_t basic_info_32_data[2];
-#if defined(__arm__) || defined(__arm64__)
+#if defined(__arm64__)
 	task_basic_info_64_2_data_t basic_info_64_2_data[2];
 #else
 	task_basic_info_64_data_t basic_info_64_data[2];
-#endif /* defined(__arm__) || defined(__arm64__) */
+#endif /* defined(__arm64__) */
 	mach_task_basic_info_data_t mach_basic_info_data[2];
 
 	kern_return_t kr;
@@ -588,7 +593,7 @@ test_task_basic_info(enum info_kind kind)
 		}
 
 		break;
-#if defined(__arm__) || defined(__arm64__)
+#if defined(__arm64__)
 	case INFO_64:
 		T_ASSERT_FAIL("invalid basic info kind");
 		break;
@@ -611,7 +616,7 @@ test_task_basic_info(enum info_kind kind)
 	case INFO_64_2:
 		T_ASSERT_FAIL("invalid basic info kind");
 		break;
-#endif /* defined(__arm__) || defined(__arm64__) */
+#endif /* defined(__arm64__) */
 	case INFO_MACH:
 		info_data[BEFORE] = (task_info_t)&mach_basic_info_data[BEFORE];
 		info_data[AFTER]  = (task_info_t)&mach_basic_info_data[AFTER];
@@ -973,7 +978,7 @@ info_get(enum info_kind kind, enum info_get get, void * data)
 		case INFO_32:
 		case INFO_32_2:
 			return (uint64_t)(((task_basic_info_32_t)data)->suspend_count);
-#if defined(__arm__) || defined(__arm64__)
+#if defined(__arm64__)
 		case INFO_64:
 			T_ASSERT_FAIL("illegal info_get %d %d", kind, get);
 			break;
@@ -987,7 +992,7 @@ info_get(enum info_kind kind, enum info_get get, void * data)
 		case INFO_64_2:
 			T_ASSERT_FAIL("illegal info_get %d %d", kind, get);
 			break;
-#endif /* defined(__arm__) || defined(__arm64__) */
+#endif /* defined(__arm64__) */
 		case INFO_MACH:
 			return (uint64_t)(((mach_task_basic_info_t)data)->suspend_count);
 		case INFO_MAX:
@@ -999,7 +1004,7 @@ info_get(enum info_kind kind, enum info_get get, void * data)
 		case INFO_32:
 		case INFO_32_2:
 			return (uint64_t)(((task_basic_info_32_t)data)->resident_size);
-#if defined(__arm__) || defined(__arm64__)
+#if defined(__arm64__)
 		case INFO_64:
 			T_ASSERT_FAIL("illegal info_get %d %d", kind, get);
 			break;
@@ -1013,7 +1018,7 @@ info_get(enum info_kind kind, enum info_get get, void * data)
 		case INFO_64_2:
 			T_ASSERT_FAIL("illegal info_get %d %d", kind, get);
 			break;
-#endif /* defined(__arm__) || defined(__arm64__) */
+#endif /* defined(__arm64__) */
 		case INFO_MACH:
 			return (uint64_t)(((mach_task_basic_info_t)data)->resident_size);
 		case INFO_MAX:
@@ -1025,7 +1030,7 @@ info_get(enum info_kind kind, enum info_get get, void * data)
 		case INFO_32:
 		case INFO_32_2:
 			return (uint64_t)(((task_basic_info_32_t)data)->virtual_size);
-#if defined(__arm__) || defined(__arm64__)
+#if defined(__arm64__)
 		case INFO_64:
 			T_ASSERT_FAIL("illegal info_get %d %d", kind, get);
 			break;
@@ -1039,7 +1044,7 @@ info_get(enum info_kind kind, enum info_get get, void * data)
 		case INFO_64_2:
 			T_ASSERT_FAIL("illegal info_get %d %d", kind, get);
 			break;
-#endif /* defined(__arm__) || defined(__arm64__) */
+#endif /* defined(__arm64__) */
 		case INFO_MACH:
 			return (uint64_t)(((mach_task_basic_info_t)data)->virtual_size);
 
@@ -1052,7 +1057,7 @@ info_get(enum info_kind kind, enum info_get get, void * data)
 		case INFO_32:
 		case INFO_32_2:
 			return (uint64_t) &(((task_basic_info_32_t)data)->user_time);
-#if defined(__arm__) || defined(__arm64__)
+#if defined(__arm64__)
 		case INFO_64:
 			T_ASSERT_FAIL("illegal info_get %d %d", kind, get);
 			break;
@@ -1066,7 +1071,7 @@ info_get(enum info_kind kind, enum info_get get, void * data)
 		case INFO_64_2:
 			T_ASSERT_FAIL("illegal info_get %d %d", kind, get);
 			break;
-#endif /* defined(__arm__) || defined(__arm64__) */
+#endif /* defined(__arm64__) */
 		case INFO_MACH:
 			return (uint64_t) &(((mach_task_basic_info_t)data)->user_time);
 
@@ -1079,7 +1084,7 @@ info_get(enum info_kind kind, enum info_get get, void * data)
 		case INFO_32:
 		case INFO_32_2:
 			return (uint64_t) &(((task_basic_info_32_t)data)->system_time);
-#if defined(__arm__) || defined(__arm64__)
+#if defined(__arm64__)
 		case INFO_64:
 			T_ASSERT_FAIL("illegal info_get %d %d", kind, get);
 			break;
@@ -1093,7 +1098,7 @@ info_get(enum info_kind kind, enum info_get get, void * data)
 		case INFO_64_2:
 			T_ASSERT_FAIL("illegal info_get %d %d", kind, get);
 			break;
-#endif /* defined(__arm__) || defined(__arm64__) */
+#endif /* defined(__arm64__) */
 		case INFO_MACH:
 			return (uint64_t) &(((mach_task_basic_info_t)data)->user_time);
 		case INFO_MAX:
@@ -1105,7 +1110,7 @@ info_get(enum info_kind kind, enum info_get get, void * data)
 		case INFO_32:
 		case INFO_32_2:
 			return (uint64_t)(((task_basic_info_32_t)data)->policy);
-#if defined(__arm__) || defined(__arm64__)
+#if defined(__arm64__)
 		case INFO_64:
 			T_ASSERT_FAIL("illegal info_get %d %d", kind, get);
 			break;
@@ -1119,7 +1124,7 @@ info_get(enum info_kind kind, enum info_get get, void * data)
 		case INFO_64_2:
 			T_ASSERT_FAIL("illegal info_get %d %d", kind, get);
 			break;
-#endif /* defined(__arm__) || defined(__arm64__) */
+#endif /* defined(__arm64__) */
 		case INFO_MACH:
 			return (uint64_t)(((mach_task_basic_info_t)data)->policy);
 
@@ -1143,29 +1148,4 @@ info_get(enum info_kind kind, enum info_get get, void * data)
 	}
 
 	__builtin_unreachable();
-}
-
-/*
- * Determines whether we're running on a development kernel
- */
-static int
-is_development_kernel(void)
-{
-#define NOTSET -1
-
-	static int is_dev = NOTSET;
-
-	if (is_dev == NOTSET) {
-		int dev;
-		size_t dev_size = sizeof(dev);
-
-		T_QUIET;
-		T_ASSERT_POSIX_SUCCESS(sysctlbyname("kern.development", &dev, &dev_size, NULL, 0), NULL);
-		is_dev = (dev != 0);
-
-		return is_dev;
-	} else {
-		return is_dev;
-	}
-#undef NOTSET
 }

@@ -31,10 +31,13 @@ extern "C" {
 #include <libkern/mkext.h>
 };
 
+#include <kern/telemetry.h>
 #include <libkern/c++/OSContainers.h>
 #include <libkern/c++/OSKext.h>
 #include <libkern/OSKextLib.h>
 #include <libkern/OSKextLibPrivate.h>
+#include <vm/vm_kern_xnu.h>
+#include <vm/vm_map_xnu.h>
 
 extern "C" {
 #if PRAGMA_MARK
@@ -74,6 +77,12 @@ finish:
 
 /*********************************************************************
 *********************************************************************/
+
+// FIXME: Implementation of this function is hidden from the static analyzer.
+// The analyzer is worried about the lack of release and suggests
+// refactoring the code into the typical non-owning container pattern.
+// Feel free to remove the #ifndef and address the warning!
+#ifndef __clang_analyzer__
 OSReturn
 OSKextRetainKextWithLoadTag(uint32_t loadTag)
 {
@@ -108,9 +117,16 @@ OSKextRetainKextWithLoadTag(uint32_t loadTag)
 finish:
 	return result;
 }
+#endif // __clang_analyzer__
 
 /*********************************************************************
 *********************************************************************/
+
+// FIXME: Implementation of this function is hidden from the static analyzer.
+// The analyzer is worried about the double release and suggests
+// refactoring the code into the typical non-owning container pattern.
+// Feel free to remove the #ifndef and address the warning!
+#ifndef __clang_analyzer__
 OSReturn
 OSKextReleaseKextWithLoadTag(uint32_t loadTag)
 {
@@ -146,6 +162,7 @@ OSKextReleaseKextWithLoadTag(uint32_t loadTag)
 finish:
 	return result;
 }
+#endif // __clang_analyzer__
 
 /*********************************************************************
 * Not to be called by the kext being unloaded!
@@ -270,7 +287,7 @@ kext_request(
 	}
 
 	if (isMkext) {
-#ifdef SECURE_KERNEL
+#if defined(SECURE_KERNEL) || !CONFIG_KXLD
 		// xxx - something tells me if we have a secure kernel we don't even
 		// xxx - want to log a message here. :-)
 		*op_result = KERN_NOT_SUPPORTED;
@@ -363,21 +380,31 @@ finish:
 * Gets the vm_map for the current kext
 *********************************************************************/
 extern vm_offset_t segPRELINKTEXTB;
+extern vm_offset_t segLINKB;
 extern unsigned long segSizePRELINKTEXT;
-extern int kth_started;
-extern vm_map_t g_kext_map;
 
 vm_map_t
 kext_get_vm_map(kmod_info_t *info)
 {
 	vm_map_t kext_map = NULL;
+	kc_format_t kcformat;
 
-	/* Set the vm map */
-	if ((info->address >= segPRELINKTEXTB) &&
-	    (info->address < (segPRELINKTEXTB + segSizePRELINKTEXT))) {
-		kext_map = kernel_map;
+	if (PE_get_primary_kc_format(&kcformat) && kcformat == KCFormatFileset) {
+		/* Check if the kext is from the boot KC */
+		assert(segLINKB >= (segPRELINKTEXTB + segSizePRELINKTEXT));
+		if ((info->address >= segPRELINKTEXTB) &&
+		    (info->address < segLINKB)) {
+			kext_map = kernel_map;
+		} else {
+			kext_map = g_kext_map;
+		}
 	} else {
-		kext_map = g_kext_map;
+		if ((info->address >= segPRELINKTEXTB) &&
+		    (info->address < (segPRELINKTEXTB + segSizePRELINKTEXT))) {
+			kext_map = kernel_map;
+		} else {
+			kext_map = g_kext_map;
+		}
 	}
 
 	return kext_map;
@@ -392,7 +419,7 @@ kext_get_vm_map(kmod_info_t *info)
 void
 kext_weak_symbol_referenced(void)
 {
-	panic("A kext referenced an unresolved weak symbol\n");
+	panic("A kext referenced an unresolved weak symbol");
 }
 
 const void * const gOSKextUnresolved = (const void *)&kext_weak_symbol_referenced;
@@ -456,6 +483,36 @@ kmod_panic_dump(vm_offset_t * addr, unsigned int cnt)
 	return;
 }
 
+void
+telemetry_backtrace_add_kexts(
+	char                 *buf,
+	size_t                buflen,
+	uintptr_t            *frames,
+	uint32_t              framecnt)
+{
+	__block size_t pos = 0;
+
+	OSKext::foreachKextInBacktrace(frames, framecnt, OSKext::kPrintKextsLock,
+	    ^(OSKextLoadedKextSummary *summary, uint32_t index __unused){
+			uuid_string_t uuid;
+			uint64_t tmpAddr;
+			uint64_t tmpSize;
+
+			(void) uuid_unparse(summary->uuid, uuid);
+
+#if defined(__arm__) || defined(__arm64__)
+			tmpAddr = summary->text_exec_address;
+			tmpSize = summary->text_exec_size;
+#else
+			tmpAddr = summary->address;
+			tmpSize = summary->size;
+#endif
+			tmpAddr -= vm_kernel_stext;
+			pos += scnprintf(buf + pos, buflen - pos, "%s@%llx:%llx\n",
+			uuid, tmpAddr, tmpAddr + tmpSize - 1);
+		});
+}
+
 /********************************************************************/
 void kmod_dump_log(vm_offset_t *addr, unsigned int cnt, boolean_t doUnslide);
 
@@ -478,6 +535,13 @@ OSKextKextForAddress(const void *addr)
 	return OSKext::kextForAddress(addr);
 }
 
+kern_return_t
+OSKextGetLoadedKextSummaryForAddress(
+	const void              * addr,
+	OSKextLoadedKextSummary * summary)
+{
+	return OSKext::summaryForAddressExt(addr, summary);
+}
 
 /*********************************************************************
 * Compatibility implementation for kmod_get_info() host_priv routine.

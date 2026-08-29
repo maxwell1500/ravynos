@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2022 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -74,7 +74,6 @@
 #include <firehose/tracepoint_private.h>
 #include <firehose/chunk_private.h>
 #include <firehose/ioctl_private.h>
-#define OS_FIREHOSE_SPI 1
 #include <os/firehose_buffer_private.h>
 
 #include <os/log_private.h>
@@ -97,33 +96,15 @@
 #include <mach/mach_port.h>
 #include <mach/mach_vm.h>
 #include <mach/vm_map.h>
-#include <vm/vm_kern.h>
+#include <vm/vm_kern_xnu.h>
 #include <kern/task.h>
 #include <kern/locks.h>
-
-/* XXX should be in a common header somewhere */
-extern void logwakeup(struct msgbuf *);
-extern void oslogwakeup(void);
-extern void oslog_streamwakeup(void);
-static void oslog_streamwakeup_locked(void);
-vm_offset_t kernel_firehose_addr = 0;
-
-/* log message counters for streaming mode */
-uint32_t oslog_s_streamed_msgcount = 0;
-uint32_t oslog_s_dropped_msgcount  = 0;
-extern uint32_t oslog_s_error_count;
-
-#define LOG_RDPRI       (PZERO + 1)
 
 #define LOG_NBIO        0x02
 #define LOG_ASYNC       0x04
 #define LOG_RDWAIT      0x08
 
-/* All globals should be accessed under LOG_LOCK() */
-
-static char amsg_bufc[1024];
-static struct msgbuf aslbuf = {.msg_magic = MSG_MAGIC, .msg_size = sizeof(amsg_bufc), .msg_bufx = 0, .msg_bufr = 0, .msg_bufc = amsg_bufc};
-struct msgbuf *aslbufp __attribute__((used)) = &aslbuf;
+/* All globals should be accessed under bsd_log_lock() or bsd_log_lock_safe() */
 
 /* logsoftc only valid while log_open=1 */
 struct logsoftc {
@@ -133,73 +114,37 @@ struct logsoftc {
 	struct msgbuf *sc_mbp;
 } logsoftc;
 
-static int log_open;
 char smsg_bufc[CONFIG_MSG_BSIZE]; /* static buffer */
-char oslog_stream_bufc[FIREHOSE_CHUNK_SIZE]; /* static buffer */
-struct firehose_chunk_s oslog_boot_buf = {
-	.fc_pos = {
-		.fcp_next_entry_offs = offsetof(struct firehose_chunk_s, fc_data),
-		.fcp_private_offs = FIREHOSE_CHUNK_SIZE,
-		.fcp_refcnt = 1, // indicate that there is a writer to this chunk
-		.fcp_stream = firehose_stream_persist,
-		.fcp_flag_io = 1, // for now, lets assume this is coming from the io bank
-	},
-}; /* static buffer */
-firehose_chunk_t firehose_boot_chunk = &oslog_boot_buf;
 struct msgbuf msgbuf = {.msg_magic  = MSG_MAGIC, .msg_size = sizeof(smsg_bufc), .msg_bufx = 0, .msg_bufr = 0, .msg_bufc = smsg_bufc};
-struct msgbuf oslog_stream_buf = {.msg_magic = MSG_MAGIC, .msg_size = 0, .msg_bufx = 0, .msg_bufr = 0, .msg_bufc = NULL};
 struct msgbuf *msgbufp __attribute__((used)) = &msgbuf;
-struct msgbuf *oslog_streambufp __attribute__((used)) = &oslog_stream_buf;
 
-// List entries for keeping track of the streaming buffer
-static oslog_stream_buf_entry_t oslog_stream_buf_entries;
-
-#define OSLOG_NUM_STREAM_ENTRIES        64
-#define OSLOG_STREAM_BUF_SIZE           4096
-
-int oslog_open = 0;
-int os_log_wakeup = 0;
-int oslog_stream_open = 0;
-int oslog_stream_buf_bytesavail = 0;
-int oslog_stream_buf_size = OSLOG_STREAM_BUF_SIZE;
-int oslog_stream_num_entries = OSLOG_NUM_STREAM_ENTRIES;
-
-uint8_t __firehose_buffer_kernel_chunk_count = FIREHOSE_BUFFER_KERNEL_DEFAULT_CHUNK_COUNT;
-uint8_t __firehose_num_kernel_io_pages = FIREHOSE_BUFFER_KERNEL_DEFAULT_IO_PAGES;
-
-/* oslogsoftc only valid while oslog_open=1 */
+/* oslogsoftc only valid while oslog_open=true */
 struct oslogsoftc {
 	int     sc_state;               /* see above for possibilities */
 	struct  selinfo sc_selp;        /* thread waiting for select */
 	int     sc_pgid;                /* process/group for async I/O */
 } oslogsoftc;
 
-struct oslog_streamsoftc {
-	int     sc_state;               /* see above for possibilities */
-	struct  selinfo sc_selp;        /* thread waiting for select */
-	int     sc_pgid;                /* process/group for async I/O */
-} oslog_streamsoftc;
+static bool log_open = false;
+static bool oslog_open = false;
+static bool os_log_wakeup = false;
 
-STAILQ_HEAD(, oslog_stream_buf_entry_s) oslog_stream_free_head =
-    STAILQ_HEAD_INITIALIZER(oslog_stream_free_head);
-STAILQ_HEAD(, oslog_stream_buf_entry_s) oslog_stream_buf_head =
-    STAILQ_HEAD_INITIALIZER(oslog_stream_buf_head);
+uint32_t oslog_msgbuf_dropped_charcount = 0;
+
+SECURITY_READ_ONLY_LATE(vm_offset_t) kernel_firehose_addr = 0;
+SECURITY_READ_ONLY_LATE(uint8_t) __firehose_buffer_kernel_chunk_count =
+    FIREHOSE_BUFFER_KERNEL_DEFAULT_CHUNK_COUNT;
+SECURITY_READ_ONLY_LATE(uint8_t) __firehose_num_kernel_io_pages =
+    FIREHOSE_BUFFER_KERNEL_DEFAULT_IO_PAGES;
 
 /* defined in osfmk/kern/printf.c  */
-extern void oslog_lock_init(void);
-extern void bsd_log_lock(void);
+extern bool bsd_log_lock(bool);
+extern void bsd_log_lock_safe(void);
 extern void bsd_log_unlock(void);
 
-/* defined for osfmk/kern/printf.c */
-void bsd_log_init(void);
-
-/*
- * Ideally this file would define this lock, but bsd doesn't have the definition
- * for lock groups.
- */
-decl_lck_spin_data(extern, oslog_stream_lock);
-#define stream_lock() lck_spin_lock(&oslog_stream_lock)
-#define stream_unlock() lck_spin_unlock(&oslog_stream_lock)
+extern void logwakeup(void);
+extern void oslogwakeup(void);
+extern bool os_log_disabled(void);
 
 /* XXX wants a linker set so these can be static */
 extern d_open_t         logopen;
@@ -214,35 +159,11 @@ extern d_close_t        oslogclose;
 extern d_select_t       oslogselect;
 extern d_ioctl_t        oslogioctl;
 
-/* XXX wants a linker set so these can be static */
-extern d_open_t         oslog_streamopen;
-extern d_close_t        oslog_streamclose;
-extern d_read_t         oslog_streamread;
-extern d_ioctl_t        oslog_streamioctl;
-extern d_select_t       oslog_streamselect;
-
-void oslog_init(void);
-void oslog_setsize(int size);
-void oslog_streamwrite_locked(firehose_tracepoint_id_u ftid,
-    uint64_t stamp, const void *pubdata, size_t publen);
-void oslog_streamwrite_metadata_locked(oslog_stream_buf_entry_t m_entry);
-static oslog_stream_buf_entry_t oslog_stream_find_free_buf_entry_locked(void);
-static void oslog_streamwrite_append_bytes(const char *buffer, int buflen);
-
 /*
  * Serialize log access.  Note that the log can be written at interrupt level,
  * so any log manipulations that can be done from, or affect, another processor
  * at interrupt level must be guarded with a spin lock.
  */
-
-#define LOG_LOCK() bsd_log_lock()
-#define LOG_UNLOCK() bsd_log_unlock()
-
-#if DEBUG
-#define LOG_SETSIZE_DEBUG(x...) kprintf(x)
-#else
-#define LOG_SETSIZE_DEBUG(x...) do { } while(0)
-#endif
 
 static int sysctl_kern_msgbuf(struct sysctl_oid *oidp,
     void *arg1, int arg2, struct sysctl_req *req);
@@ -251,177 +172,65 @@ static int sysctl_kern_msgbuf(struct sysctl_oid *oidp,
 int
 logopen(__unused dev_t dev, __unused int flags, __unused int mode, struct proc *p)
 {
-	LOG_LOCK();
+	bsd_log_lock_safe();
+
 	if (log_open) {
-		LOG_UNLOCK();
+		bsd_log_unlock();
 		return EBUSY;
 	}
-	if (atm_get_diagnostic_config() & ATM_ENABLE_LEGACY_LOGGING) {
+
+	/*
+	 * Legacy logging has to be supported as long as userspace supports it.
+	 */
+	if ((atm_get_diagnostic_config() & ATM_ENABLE_LEGACY_LOGGING)) {
 		logsoftc.sc_mbp = msgbufp;
-	} else {
-		/*
-		 * Support for messagetracer (kern_asl_msg())
-		 * In this mode, /dev/klog exports only ASL-formatted messages
-		 * written into aslbufp via vaddlog().
-		 */
-		logsoftc.sc_mbp = aslbufp;
+		logsoftc.sc_pgid = proc_getpid(p); /* signal process only */
+		log_open = true;
+		bsd_log_unlock();
+		return 0;
 	}
-	logsoftc.sc_pgid = p->p_pid;            /* signal process only */
-	log_open = 1;
 
-	LOG_UNLOCK();
-
-	return 0;
+	bsd_log_unlock();
+	return ENOTSUP;
 }
 
 /*ARGSUSED*/
 int
 logclose(__unused dev_t dev, __unused int flag, __unused int devtype, __unused struct proc *p)
 {
-	LOG_LOCK();
+	bsd_log_lock_safe();
+
 	logsoftc.sc_state &= ~(LOG_NBIO | LOG_ASYNC);
-	selwakeup(&logsoftc.sc_selp);
 	selthreadclear(&logsoftc.sc_selp);
-	log_open = 0;
-	LOG_UNLOCK();
+	log_open = false;
+
+	bsd_log_unlock();
 	return 0;
 }
-
 
 int
 oslogopen(__unused dev_t dev, __unused int flags, __unused int mode, struct proc *p)
 {
-	LOG_LOCK();
+	bsd_log_lock_safe();
 	if (oslog_open) {
-		LOG_UNLOCK();
+		bsd_log_unlock();
 		return EBUSY;
 	}
-	oslogsoftc.sc_pgid = p->p_pid;          /* signal process only */
-	oslog_open = 1;
+	oslogsoftc.sc_pgid = proc_getpid(p);          /* signal process only */
+	oslog_open = true;
 
-	LOG_UNLOCK();
+	bsd_log_unlock();
 	return 0;
 }
 
 int
 oslogclose(__unused dev_t dev, __unused int flag, __unused int devtype, __unused struct proc *p)
 {
-	LOG_LOCK();
+	bsd_log_lock_safe();
 	oslogsoftc.sc_state &= ~(LOG_NBIO | LOG_ASYNC);
-	selwakeup(&oslogsoftc.sc_selp);
 	selthreadclear(&oslogsoftc.sc_selp);
-	oslog_open = 0;
-	LOG_UNLOCK();
-	return 0;
-}
-
-int
-oslog_streamopen(__unused dev_t dev, __unused int flags, __unused int mode, struct proc *p)
-{
-	char *oslog_stream_msg_bufc = NULL;
-	oslog_stream_buf_entry_t entries = NULL;
-
-	stream_lock();
-	if (oslog_stream_open) {
-		stream_unlock();
-		return EBUSY;
-	}
-	stream_unlock();
-
-	// Allocate the stream buffer
-	oslog_stream_msg_bufc = kalloc(oslog_stream_buf_size);
-	if (!oslog_stream_msg_bufc) {
-		return ENOMEM;
-	}
-	/* Zeroing to avoid copying uninitialized struct padding to userspace. */
-	bzero(oslog_stream_msg_bufc, oslog_stream_buf_size);
-
-	/* entries to support kernel logging in stream mode */
-	size_t entries_size = oslog_stream_num_entries * sizeof(struct oslog_stream_buf_entry_s);
-	entries = kalloc(entries_size);
-	if (!entries) {
-		kfree(oslog_stream_msg_bufc, oslog_stream_buf_size);
-		return ENOMEM;
-	}
-	/* Zeroing to avoid copying uninitialized struct padding to userspace. */
-	bzero(entries, entries_size);
-
-	stream_lock();
-	if (oslog_stream_open) {
-		stream_unlock();
-		kfree(oslog_stream_msg_bufc, oslog_stream_buf_size);
-		kfree(entries, entries_size);
-		return EBUSY;
-	}
-
-	assert(oslog_streambufp->msg_bufc == NULL);
-	oslog_streambufp->msg_bufc = oslog_stream_msg_bufc;
-	oslog_streambufp->msg_size = oslog_stream_buf_size;
-
-	oslog_stream_buf_entries = entries;
-
-	STAILQ_INIT(&oslog_stream_free_head);
-	STAILQ_INIT(&oslog_stream_buf_head);
-
-	for (int i = 0; i < oslog_stream_num_entries; i++) {
-		oslog_stream_buf_entries[i].type = oslog_stream_link_type_log;
-		STAILQ_INSERT_TAIL(&oslog_stream_free_head, &oslog_stream_buf_entries[i], buf_entries);
-	}
-
-	/* there should be no pending entries in the stream */
-	assert(STAILQ_EMPTY(&oslog_stream_buf_head));
-	assert(oslog_streambufp->msg_bufx == 0);
-	assert(oslog_streambufp->msg_bufr == 0);
-
-	oslog_streambufp->msg_bufx = 0;
-	oslog_streambufp->msg_bufr = 0;
-	oslog_streamsoftc.sc_pgid = p->p_pid; /* signal process only */
-	oslog_stream_open = 1;
-	oslog_stream_buf_bytesavail = oslog_stream_buf_size;
-	stream_unlock();
-
-	return 0;
-}
-
-int
-oslog_streamclose(__unused dev_t dev, __unused int flag, __unused int devtype, __unused struct proc *p)
-{
-	oslog_stream_buf_entry_t next_entry = NULL;
-	char *oslog_stream_msg_bufc = NULL;
-	oslog_stream_buf_entry_t entries = NULL;
-
-	stream_lock();
-
-	if (oslog_stream_open == 0) {
-		stream_unlock();
-		return EBADF;
-	}
-
-	// Consume all log lines
-	while (!STAILQ_EMPTY(&oslog_stream_buf_head)) {
-		next_entry = STAILQ_FIRST(&oslog_stream_buf_head);
-		STAILQ_REMOVE_HEAD(&oslog_stream_buf_head, buf_entries);
-	}
-	oslog_streamwakeup_locked();
-	oslog_streamsoftc.sc_state &= ~(LOG_NBIO | LOG_ASYNC);
-	selwakeup(&oslog_streamsoftc.sc_selp);
-	selthreadclear(&oslog_streamsoftc.sc_selp);
-	oslog_stream_open = 0;
-	oslog_streambufp->msg_bufr = 0;
-	oslog_streambufp->msg_bufx = 0;
-	oslog_stream_msg_bufc = oslog_streambufp->msg_bufc;
-	oslog_streambufp->msg_bufc = NULL;
-	entries = oslog_stream_buf_entries;
-	oslog_stream_buf_entries = NULL;
-	oslog_streambufp->msg_size = 0;
-
-	stream_unlock();
-
-	// Free the stream buffer
-	kfree(oslog_stream_msg_bufc, oslog_stream_buf_size);
-	// Free the list entries
-	kfree(entries, oslog_stream_num_entries * sizeof(struct oslog_stream_buf_entry_s));
-
+	oslog_open = false;
+	bsd_log_unlock();
 	return 0;
 }
 
@@ -429,339 +238,164 @@ oslog_streamclose(__unused dev_t dev, __unused int flag, __unused int devtype, _
 int
 logread(__unused dev_t dev, struct uio *uio, int flag)
 {
-	int l;
-	int error = 0;
+	int error;
+	ssize_t resid;
+
+	bsd_log_lock_safe();
+
 	struct msgbuf *mbp = logsoftc.sc_mbp;
 
-	LOG_LOCK();
 	while (mbp->msg_bufr == mbp->msg_bufx) {
-		if (flag & IO_NDELAY) {
-			error = EWOULDBLOCK;
-			goto out;
-		}
-		if (logsoftc.sc_state & LOG_NBIO) {
-			error = EWOULDBLOCK;
-			goto out;
+		if ((flag & IO_NDELAY) || (logsoftc.sc_state & LOG_NBIO)) {
+			bsd_log_unlock();
+			return EWOULDBLOCK;
 		}
 		logsoftc.sc_state |= LOG_RDWAIT;
-		LOG_UNLOCK();
+		bsd_log_unlock();
 		/*
-		 * If the wakeup is missed
-		 * then wait for 5 sec and reevaluate
+		 * If the wakeup is missed then wait for 5 sec and reevaluate.
+		 * If it times out, carry on.
 		 */
-		if ((error = tsleep((caddr_t)mbp, LOG_RDPRI | PCATCH,
-		    "klog", 5 * hz)) != 0) {
-			/* if it times out; ignore */
-			if (error != EWOULDBLOCK) {
-				return error;
-			}
+		error = tsleep((caddr_t)mbp, (PZERO + 1) | PCATCH, "klog", 5 * hz);
+		if (error && error != EWOULDBLOCK) {
+			return error;
 		}
-		LOG_LOCK();
+		bsd_log_lock_safe();
 	}
 	logsoftc.sc_state &= ~LOG_RDWAIT;
 
-	while (uio_resid(uio) > 0) {
-		int readpos;
+	while ((resid = uio_resid(uio)) > 0) {
+		size_t l;
 
-		l = mbp->msg_bufx - mbp->msg_bufr;
-		if (l < 0) {
+		if (mbp->msg_bufx >= mbp->msg_bufr) {
+			l = mbp->msg_bufx - mbp->msg_bufr;
+		} else {
 			l = mbp->msg_size - mbp->msg_bufr;
 		}
-		l = min(l, uio_resid(uio));
-		if (l == 0) {
+		if ((l = MIN(l, (size_t)resid)) == 0) {
 			break;
 		}
 
-		readpos = mbp->msg_bufr;
-		LOG_UNLOCK();
-		error = uiomove((caddr_t)&mbp->msg_bufc[readpos], l, uio);
-		LOG_LOCK();
+		const size_t readpos = mbp->msg_bufr;
+
+		bsd_log_unlock();
+		error = uiomove((caddr_t)&mbp->msg_bufc[readpos], (int)l, uio);
 		if (error) {
-			break;
+			return error;
 		}
-		mbp->msg_bufr = readpos + l;
+		bsd_log_lock_safe();
+
+		mbp->msg_bufr = (int)(readpos + l);
 		if (mbp->msg_bufr >= mbp->msg_size) {
 			mbp->msg_bufr = 0;
 		}
 	}
-out:
-	LOG_UNLOCK();
-	return error;
-}
 
-/*ARGSUSED*/
-int
-oslog_streamread(__unused dev_t dev, struct uio *uio, int flag)
-{
-	int error = 0;
-	int copy_size = 0;
-	static char logline[FIREHOSE_CHUNK_SIZE];
-
-	stream_lock();
-
-	if (!oslog_stream_open) {
-		stream_unlock();
-		return EBADF;
-	}
-
-	while (STAILQ_EMPTY(&oslog_stream_buf_head)) {
-		assert(oslog_stream_buf_bytesavail == oslog_stream_buf_size);
-
-		if (flag & IO_NDELAY || oslog_streamsoftc.sc_state & LOG_NBIO) {
-			stream_unlock();
-			return EWOULDBLOCK;
-		}
-
-		oslog_streamsoftc.sc_state |= LOG_RDWAIT;
-		wait_result_t wr = assert_wait((event_t)oslog_streambufp,
-		    THREAD_INTERRUPTIBLE);
-		if (wr == THREAD_WAITING) {
-			stream_unlock();
-			wr = thread_block(THREAD_CONTINUE_NULL);
-			stream_lock();
-		}
-
-		switch (wr) {
-		case THREAD_AWAKENED:
-		case THREAD_TIMED_OUT:
-			break;
-		default:
-			stream_unlock();
-			return EINTR;
-		}
-	}
-
-	if (!oslog_stream_open) {
-		stream_unlock();
-		return EBADF;
-	}
-
-	int logpos = 0;
-	oslog_stream_buf_entry_t read_entry = NULL;
-	uint16_t rec_length;
-
-	read_entry = STAILQ_FIRST(&oslog_stream_buf_head);
-	assert(read_entry != NULL);
-	STAILQ_REMOVE_HEAD(&oslog_stream_buf_head, buf_entries);
-
-	// Copy the timestamp first
-	memcpy(logline + logpos, &read_entry->timestamp, sizeof(uint64_t));
-	logpos += sizeof(uint64_t);
-
-	switch (read_entry->type) {
-	/* Handle metadata messages */
-	case oslog_stream_link_type_metadata:
-	{
-		memcpy(logline + logpos,
-		    (read_entry->metadata), read_entry->size);
-		logpos += read_entry->size;
-
-		stream_unlock();
-
-		// Free the list entry
-		kfree(read_entry, (sizeof(struct oslog_stream_buf_entry_s) + read_entry->size));
-		break;
-	}
-	/* Handle log messages */
-	case oslog_stream_link_type_log:
-	{
-		/* ensure that the correct read entry was dequeued */
-		assert(read_entry->offset == oslog_streambufp->msg_bufr);
-		rec_length = read_entry->size;
-
-		// If the next log line is contiguous in the buffer, copy it out.
-		if (read_entry->offset + rec_length <= oslog_streambufp->msg_size) {
-			memcpy(logline + logpos,
-			    oslog_streambufp->msg_bufc + read_entry->offset, rec_length);
-
-			oslog_streambufp->msg_bufr += rec_length;
-			if (oslog_streambufp->msg_bufr == oslog_streambufp->msg_size) {
-				oslog_streambufp->msg_bufr = 0;
-			}
-			logpos += rec_length;
-		} else {
-			// Otherwise, copy until the end of the buffer, and
-			// copy the remaining bytes starting at index 0.
-			int bytes_left = oslog_streambufp->msg_size - read_entry->offset;
-			memcpy(logline + logpos,
-			    oslog_streambufp->msg_bufc + read_entry->offset, bytes_left);
-			logpos += bytes_left;
-			rec_length -= bytes_left;
-
-			memcpy(logline + logpos, (const void *)oslog_streambufp->msg_bufc,
-			    rec_length);
-			oslog_streambufp->msg_bufr = rec_length;
-			logpos += rec_length;
-		}
-
-		oslog_stream_buf_bytesavail += read_entry->size;
-		assert(oslog_stream_buf_bytesavail <= oslog_stream_buf_size);
-
-		assert(oslog_streambufp->msg_bufr < oslog_streambufp->msg_size);
-		STAILQ_INSERT_TAIL(&oslog_stream_free_head, read_entry, buf_entries);
-
-		stream_unlock();
-		break;
-	}
-	default:
-	{
-		panic("Got unexpected log entry type: %hhu\n", read_entry->type);
-	}
-	}
-
-	copy_size = min(logpos, uio_resid(uio));
-	if (copy_size != 0) {
-		error = uiomove((caddr_t)logline, copy_size, uio);
-	}
-	os_atomic_inc(&oslog_s_streamed_msgcount, relaxed);
-
-	return error;
+	bsd_log_unlock();
+	return 0;
 }
 
 /*ARGSUSED*/
 int
 logselect(__unused dev_t dev, int rw, void * wql, struct proc *p)
 {
-	const struct msgbuf *mbp = logsoftc.sc_mbp;
-
-	switch (rw) {
-	case FREAD:
-		LOG_LOCK();
-		if (mbp->msg_bufr != mbp->msg_bufx) {
-			LOG_UNLOCK();
-			return 1;
-		}
-		selrecord(p, &logsoftc.sc_selp, wql);
-		LOG_UNLOCK();
-		break;
+	if (rw != FREAD) {
+		return 0;
 	}
-	return 0;
+
+	bsd_log_lock_safe();
+	if (logsoftc.sc_mbp->msg_bufr == logsoftc.sc_mbp->msg_bufx) {
+		selrecord(p, &logsoftc.sc_selp, wql);
+		bsd_log_unlock();
+		return 0;
+	}
+	bsd_log_unlock();
+
+	return 1;
 }
 
 int
 oslogselect(__unused dev_t dev, int rw, void * wql, struct proc *p)
 {
-	switch (rw) {
-	case FREAD:
-		LOG_LOCK();
-		if (os_log_wakeup) {
-			LOG_UNLOCK();
-			return 1;
-		}
-		selrecord(p, &oslogsoftc.sc_selp, wql);
-		LOG_UNLOCK();
-		break;
+	if (rw != FREAD) {
+		return 0;
 	}
+
+	bsd_log_lock_safe();
+	if (os_log_wakeup) {
+		bsd_log_unlock();
+		return 1;
+	}
+	selrecord(p, &oslogsoftc.sc_selp, wql);
+	bsd_log_unlock();
+
 	return 0;
 }
 
-int
-oslog_streamselect(__unused dev_t dev, int rw, void * wql, struct proc *p)
-{
-	int ret = 0;
-
-	stream_lock();
-
-	switch (rw) {
-	case FREAD:
-		if (STAILQ_EMPTY(&oslog_stream_buf_head)) {
-			selrecord(p, &oslog_streamsoftc.sc_selp, wql);
-		} else {
-			ret = 1;
-		}
-		break;
-	}
-
-	stream_unlock();
-	return ret;
-}
-
 void
-logwakeup(struct msgbuf *mbp)
+logwakeup(void)
 {
-	/* cf. r24974766 & r25201228*/
-	if (oslog_is_safe() == FALSE) {
+	/*
+	 * Legacy logging is rarely enabled during a typical system run. Check
+	 * log_open without taking a lock as a shortcut.
+	 */
+	if (!log_open || !oslog_is_safe()) {
 		return;
 	}
 
-	LOG_LOCK();
+	bsd_log_lock_safe();
+
 	if (!log_open) {
-		LOG_UNLOCK();
+		bsd_log_unlock();
 		return;
 	}
-	if (NULL == mbp) {
-		mbp = logsoftc.sc_mbp;
-	}
-	if (mbp != logsoftc.sc_mbp) {
-		goto out;
-	}
+
 	selwakeup(&logsoftc.sc_selp);
 	if (logsoftc.sc_state & LOG_ASYNC) {
 		int pgid = logsoftc.sc_pgid;
-		LOG_UNLOCK();
+		bsd_log_unlock();
 		if (pgid < 0) {
 			gsignal(-pgid, SIGIO);
 		} else {
 			proc_signal(pgid, SIGIO);
 		}
-		LOG_LOCK();
+		bsd_log_lock_safe();
 	}
-	if (logsoftc.sc_state & LOG_RDWAIT) {
-		wakeup((caddr_t)mbp);
+
+	if (log_open && (logsoftc.sc_state & LOG_RDWAIT)) {
+		wakeup((caddr_t)logsoftc.sc_mbp);
 		logsoftc.sc_state &= ~LOG_RDWAIT;
 	}
-out:
-	LOG_UNLOCK();
+
+	bsd_log_unlock();
 }
 
 void
 oslogwakeup(void)
 {
-	LOG_LOCK();
+	if (!oslog_is_safe()) {
+		return;
+	}
+
+	bsd_log_lock_safe();
 	if (!oslog_open) {
-		LOG_UNLOCK();
+		bsd_log_unlock();
 		return;
 	}
 	selwakeup(&oslogsoftc.sc_selp);
-	os_log_wakeup = 1;
-	LOG_UNLOCK();
-}
-
-static void
-oslog_streamwakeup_locked(void)
-{
-	LCK_SPIN_ASSERT(&oslog_stream_lock, LCK_ASSERT_OWNED);
-	if (!oslog_stream_open) {
-		return;
-	}
-	selwakeup(&oslog_streamsoftc.sc_selp);
-	if (oslog_streamsoftc.sc_state & LOG_RDWAIT) {
-		wakeup((caddr_t)oslog_streambufp);
-		oslog_streamsoftc.sc_state &= ~LOG_RDWAIT;
-	}
-}
-
-void
-oslog_streamwakeup(void)
-{
-	/* cf. r24974766 & r25201228*/
-	if (oslog_is_safe() == FALSE) {
-		return;
-	}
-
-	stream_lock();
-	oslog_streamwakeup_locked();
-	stream_unlock();
+	os_log_wakeup = true;
+	bsd_log_unlock();
 }
 
 /*ARGSUSED*/
 int
 logioctl(__unused dev_t dev, u_long com, caddr_t data, __unused int flag, __unused struct proc *p)
 {
-	int l;
-	const struct msgbuf *mbp = logsoftc.sc_mbp;
+	bsd_log_lock_safe();
 
-	LOG_LOCK();
+	const struct msgbuf *mbp = logsoftc.sc_mbp;
+	int l;
+
 	switch (com) {
 	/* return number of characters immediately available */
 	case FIONREAD:
@@ -797,10 +431,11 @@ logioctl(__unused dev_t dev, u_long com, caddr_t data, __unused int flag, __unus
 		break;
 
 	default:
-		LOG_UNLOCK();
+		bsd_log_unlock();
 		return -1;
 	}
-	LOG_UNLOCK();
+
+	bsd_log_unlock();
 	return 0;
 }
 
@@ -814,6 +449,7 @@ oslogioctl(__unused dev_t dev, u_long com, caddr_t data, __unused int flag, __un
 	firehose_buffer_t kernel_firehose_buffer = NULL;
 	mach_vm_address_t user_addr = 0;
 	mach_port_t mem_entry_ptr = MACH_PORT_NULL;
+	bool has_more;
 
 	switch (com) {
 	/* return number of characters immediately available */
@@ -832,9 +468,7 @@ oslogioctl(__unused dev_t dev, u_long com, caddr_t data, __unused int flag, __un
 			    &user_addr,
 			    buffer_size,
 			    0,               /*  mask */
-			    VM_FLAGS_ANYWHERE,
-			    VM_MAP_KERNEL_FLAGS_NONE,
-			    VM_KERN_MEMORY_NONE,
+			    VM_MAP_KERNEL_FLAGS_ANYWHERE(),
 			    mem_entry_ptr,
 			    0,               /* offset */
 			    FALSE,               /* copy */
@@ -850,10 +484,14 @@ oslogioctl(__unused dev_t dev, u_long com, caddr_t data, __unused int flag, __un
 		}
 		break;
 	case LOGFLUSHED:
-		LOG_LOCK();
-		os_log_wakeup = 0;
-		LOG_UNLOCK();
 		__firehose_merge_updates(*(firehose_push_reply_t *)(data));
+		has_more = false;
+		bsd_log_lock_safe();
+		os_log_wakeup = has_more;
+		if (os_log_wakeup) {
+			selwakeup(&oslogsoftc.sc_selp);
+		}
+		bsd_log_unlock();
 		break;
 	default:
 		return -1;
@@ -861,48 +499,15 @@ oslogioctl(__unused dev_t dev, u_long com, caddr_t data, __unused int flag, __un
 	return 0;
 }
 
-/*ARGSUSED*/
-int
-oslog_streamioctl(__unused dev_t dev, u_long com, caddr_t data, __unused int flag, __unused struct proc *p)
+__startup_func
+static void
+oslog_init_firehose(void)
 {
-	int err = 0;
-
-	stream_lock();
-
-	switch (com) {
-	case FIONBIO:
-		if (data && *(int *)data) {
-			oslog_streamsoftc.sc_state |= LOG_NBIO;
-		} else {
-			oslog_streamsoftc.sc_state &= ~LOG_NBIO;
-		}
-		break;
-	case FIOASYNC:
-		if (data && *(int *)data) {
-			oslog_streamsoftc.sc_state |= LOG_ASYNC;
-		} else {
-			oslog_streamsoftc.sc_state &= ~LOG_ASYNC;
-		}
-		break;
-	default:
-		err = -1;
-		break;
+	if (os_log_disabled()) {
+		printf("Firehose disabled: Logging disabled by ATM\n");
+		return;
 	}
 
-	stream_unlock();
-	return err;
-}
-
-void
-bsd_log_init(void)
-{
-	/* After this point, we must be ready to accept characters */
-}
-
-void
-oslog_init(void)
-{
-	kern_return_t kr;
 	if (!PE_parse_boot_argn("firehose_chunk_count", &__firehose_buffer_kernel_chunk_count, sizeof(__firehose_buffer_kernel_chunk_count))) {
 		__firehose_buffer_kernel_chunk_count = FIREHOSE_BUFFER_KERNEL_DEFAULT_CHUNK_COUNT;
 	}
@@ -916,27 +521,24 @@ oslog_init(void)
 	}
 	vm_size_t size = __firehose_buffer_kernel_chunk_count * FIREHOSE_CHUNK_SIZE;
 
-	oslog_lock_init();
+	kmem_alloc(kernel_map, &kernel_firehose_addr, size + ptoa(2),
+	    KMA_NOFAIL | KMA_PERMANENT | KMA_GUARD_FIRST | KMA_GUARD_LAST |
+	    KMA_DATA | KMA_ZERO, VM_KERN_MEMORY_LOG);
 
-	kr = kmem_alloc_flags(kernel_map, &kernel_firehose_addr,
-	    size + (2 * PAGE_SIZE), VM_KERN_MEMORY_LOG,
-	    KMA_GUARD_FIRST | KMA_GUARD_LAST);
-	if (kr != KERN_SUCCESS) {
-		panic("Failed to allocate memory for firehose logging buffer");
-	}
 	kernel_firehose_addr += PAGE_SIZE;
-	bzero((void *)kernel_firehose_addr, size);
 	/* register buffer with firehose */
 	kernel_firehose_addr = (vm_offset_t)__firehose_buffer_create((size_t *) &size);
 
-	printf("oslog_init completed, %u chunks, %u io pages\n", __firehose_buffer_kernel_chunk_count, __firehose_num_kernel_io_pages);
+	printf("Firehose configured: %u chunks, %u io pages\n",
+	    __firehose_buffer_kernel_chunk_count, __firehose_num_kernel_io_pages);
 }
+STARTUP(OSLOG, STARTUP_RANK_SECOND, oslog_init_firehose);
 
 /*
  * log_putc_locked
  *
- * Decription:	Output a character to the log; assumes the LOG_LOCK() is held
- *		by the caller.
+ * Decription:	Output a character to the log; assumes the bsd_log_lock() or
+ *              bsd_log_lock_safe() is held by the caller.
  *
  * Parameters:	c				Character to output
  *
@@ -956,180 +558,11 @@ log_putc_locked(struct msgbuf *mbp, char c)
 	}
 }
 
-static oslog_stream_buf_entry_t
-oslog_stream_find_free_buf_entry_locked(void)
-{
-	struct msgbuf *mbp;
-	oslog_stream_buf_entry_t buf_entry = NULL;
-
-	LCK_SPIN_ASSERT(&oslog_stream_lock, LCK_ASSERT_OWNED);
-
-	mbp = oslog_streambufp;
-
-	buf_entry = STAILQ_FIRST(&oslog_stream_free_head);
-	if (buf_entry) {
-		STAILQ_REMOVE_HEAD(&oslog_stream_free_head, buf_entries);
-	} else {
-		// If no list elements are available in the free-list,
-		// consume the next log line so we can free up its list element
-		oslog_stream_buf_entry_t prev_entry = NULL;
-
-		buf_entry = STAILQ_FIRST(&oslog_stream_buf_head);
-		while (buf_entry->type == oslog_stream_link_type_metadata) {
-			prev_entry = buf_entry;
-			buf_entry = STAILQ_NEXT(buf_entry, buf_entries);
-		}
-
-		if (prev_entry == NULL) {
-			STAILQ_REMOVE_HEAD(&oslog_stream_buf_head, buf_entries);
-		} else {
-			STAILQ_REMOVE_AFTER(&oslog_stream_buf_head, prev_entry, buf_entries);
-		}
-
-		mbp->msg_bufr += buf_entry->size;
-		oslog_s_dropped_msgcount++;
-		if (mbp->msg_bufr >= mbp->msg_size) {
-			mbp->msg_bufr = (mbp->msg_bufr % mbp->msg_size);
-		}
-	}
-
-	return buf_entry;
-}
-
-void
-oslog_streamwrite_metadata_locked(oslog_stream_buf_entry_t m_entry)
-{
-	LCK_SPIN_ASSERT(&oslog_stream_lock, LCK_ASSERT_OWNED);
-	STAILQ_INSERT_TAIL(&oslog_stream_buf_head, m_entry, buf_entries);
-
-	return;
-}
-
-static void
-oslog_streamwrite_append_bytes(const char *buffer, int buflen)
-{
-	struct msgbuf *mbp;
-
-	LCK_SPIN_ASSERT(&oslog_stream_lock, LCK_ASSERT_OWNED);
-
-	assert(oslog_stream_buf_bytesavail >= buflen);
-	oslog_stream_buf_bytesavail -= buflen;
-	assert(oslog_stream_buf_bytesavail >= 0);
-
-	mbp = oslog_streambufp;
-	if (mbp->msg_bufx + buflen <= mbp->msg_size) {
-		/*
-		 * If this will fit without needing to be split across the end
-		 * of the buffer, copy it directly in one go.
-		 */
-		memcpy((void *)(mbp->msg_bufc + mbp->msg_bufx), buffer, buflen);
-
-		mbp->msg_bufx += buflen;
-		if (mbp->msg_bufx == mbp->msg_size) {
-			mbp->msg_bufx = 0;
-		}
-	} else {
-		/*
-		 * Copy up to the end of the stream buffer, and then put what remains
-		 * at the beginning.
-		 */
-		int bytes_left = mbp->msg_size - mbp->msg_bufx;
-		memcpy((void *)(mbp->msg_bufc + mbp->msg_bufx), buffer, bytes_left);
-
-		buflen -= bytes_left;
-		buffer += bytes_left;
-
-		// Copy the remainder of the data from the beginning of stream
-		memcpy((void *)mbp->msg_bufc, buffer, buflen);
-		mbp->msg_bufx = buflen;
-	}
-	return;
-}
-
-void
-oslog_streamwrite_locked(firehose_tracepoint_id_u ftid,
-    uint64_t stamp, const void *pubdata, size_t publen)
-{
-	struct msgbuf *mbp;
-	oslog_stream_buf_entry_t buf_entry = NULL;
-	oslog_stream_buf_entry_t next_entry = NULL;
-
-	uint16_t ft_size = offsetof(struct firehose_tracepoint_s, ft_data);
-	int ft_length = ft_size + publen;
-
-	LCK_SPIN_ASSERT(&oslog_stream_lock, LCK_ASSERT_OWNED);
-
-	mbp = oslog_streambufp;
-	if (ft_length > mbp->msg_size) {
-		os_atomic_inc(&oslog_s_error_count, relaxed);
-		return;
-	}
-
-	// Ensure that we have a list element for this record
-	buf_entry = oslog_stream_find_free_buf_entry_locked();
-
-	assert(buf_entry != NULL);
-
-	while (ft_length > oslog_stream_buf_bytesavail) {
-		oslog_stream_buf_entry_t prev_entry = NULL;
-
-		next_entry = STAILQ_FIRST(&oslog_stream_buf_head);
-		assert(next_entry != NULL);
-		while (next_entry->type == oslog_stream_link_type_metadata) {
-			prev_entry = next_entry;
-			next_entry = STAILQ_NEXT(next_entry, buf_entries);
-		}
-
-		if (prev_entry == NULL) {
-			STAILQ_REMOVE_HEAD(&oslog_stream_buf_head, buf_entries);
-		} else {
-			STAILQ_REMOVE_AFTER(&oslog_stream_buf_head, prev_entry, buf_entries);
-		}
-
-		mbp->msg_bufr += next_entry->size;
-		if (mbp->msg_bufr >= mbp->msg_size) {
-			mbp->msg_bufr = (mbp->msg_bufr % mbp->msg_size);
-		}
-
-		oslog_s_dropped_msgcount++;
-		oslog_stream_buf_bytesavail += next_entry->size;
-		assert(oslog_stream_buf_bytesavail <= oslog_stream_buf_size);
-
-		STAILQ_INSERT_TAIL(&oslog_stream_free_head, next_entry, buf_entries);
-	}
-
-	assert(ft_length <= oslog_stream_buf_bytesavail);
-
-	// Write the log line and update the list entry for this record
-	buf_entry->offset = mbp->msg_bufx;
-	buf_entry->size = ft_length;
-	buf_entry->timestamp = stamp;
-	buf_entry->type = oslog_stream_link_type_log;
-
-	// Construct a tracepoint
-	struct firehose_tracepoint_s fs = {
-		.ft_thread = thread_tid(current_thread()),
-		.ft_id.ftid_value = ftid.ftid_value,
-		.ft_length = publen
-	};
-
-	oslog_streamwrite_append_bytes((char *)&fs, sizeof(fs));
-	oslog_streamwrite_append_bytes(pubdata, publen);
-
-	assert(mbp->msg_bufr < mbp->msg_size);
-	// Insert the element to the buffer data list
-	STAILQ_INSERT_TAIL(&oslog_stream_buf_head, buf_entry, buf_entries);
-
-	return;
-}
-
-
-
 /*
  * log_putc
  *
- * Decription:	Output a character to the log; assumes the LOG_LOCK() is NOT
- *		held by the caller.
+ * Decription:	Output a character to the log; assumes the bsd_log_lock() or
+ *              bsd_log_lock_safe() is NOT held by the caller.
  *
  * Parameters:	c				Character to output
  *
@@ -1141,20 +574,23 @@ oslog_streamwrite_locked(firehose_tracepoint_id_u ftid,
 void
 log_putc(char c)
 {
-	int unread_count = 0;
-	LOG_LOCK();
+	if (!bsd_log_lock(oslog_is_safe())) {
+		os_atomic_inc(&oslog_msgbuf_dropped_charcount, relaxed);
+		return;
+	}
+
 	log_putc_locked(msgbufp, c);
-	unread_count = msgbufp->msg_bufx - msgbufp->msg_bufr;
-	LOG_UNLOCK();
+	int unread_count = msgbufp->msg_bufx - msgbufp->msg_bufr;
+
+	bsd_log_unlock();
 
 	if (unread_count < 0) {
 		unread_count = 0 - unread_count;
 	}
 	if (c == '\n' || unread_count >= (msgbufp->msg_size / 2)) {
-		logwakeup(msgbufp);
+		logwakeup();
 	}
 }
-
 
 /*
  * it is possible to increase the kernel log buffer size by adding
@@ -1165,40 +601,29 @@ log_putc(char c)
  * allocated statically and is CONFIG_MSG_BSIZE characters in size, otherwise
  * memory is dynamically allocated. Memory management must already be up.
  */
-int
-log_setsize(int size)
+static int
+log_setsize(size_t size)
 {
-	char *new_logdata;
-	int new_logsize, new_bufr, new_bufx;
-	char *old_logdata;
-	int old_logsize, old_bufr, old_bufx;
 	int i, count;
-	char *p, ch;
+	char *p;
 
-	if (size > MAX_MSG_BSIZE) {
+	if (size == 0 || size > MAX_MSG_BSIZE) {
 		return EINVAL;
 	}
 
-	if (size <= 0) {
-		return EINVAL;
-	}
-
-	new_logsize = size;
-	if (!(new_logdata = (char*)kalloc(size))) {
-		printf("log_setsize: unable to allocate memory\n");
+	int new_logsize = (int)size;
+	char *new_logdata = kalloc_data(size, Z_WAITOK | Z_ZERO);
+	if (!new_logdata) {
+		printf("Cannot resize system message buffer: Not enough memory\n");
 		return ENOMEM;
 	}
-	bzero(new_logdata, new_logsize);
 
-	LOG_LOCK();
+	bsd_log_lock_safe();
 
-	old_logsize = msgbufp->msg_size;
-	old_logdata = msgbufp->msg_bufc;
-	old_bufr = msgbufp->msg_bufr;
-	old_bufx = msgbufp->msg_bufx;
-
-	LOG_SETSIZE_DEBUG("log_setsize(%d): old_logdata %p old_logsize %d old_bufr %d old_bufx %d\n",
-	    size, old_logdata, old_logsize, old_bufr, old_bufx);
+	char *old_logdata = msgbufp->msg_bufc;
+	int old_logsize = msgbufp->msg_size;
+	int old_bufr = msgbufp->msg_bufr;
+	int old_bufx = msgbufp->msg_bufx;
 
 	/* start "new_logsize" bytes before the write pointer */
 	if (new_logsize <= old_bufx) {
@@ -1216,18 +641,16 @@ log_setsize(int size)
 		if (p >= old_logdata + old_logsize) {
 			p = old_logdata;
 		}
-
-		ch = *p++;
-		new_logdata[i] = ch;
+		new_logdata[i] = *p++;
 	}
 
-	new_bufx = i;
+	int new_bufx = i;
 	if (new_bufx >= new_logsize) {
 		new_bufx = 0;
 	}
 	msgbufp->msg_bufx = new_bufx;
 
-	new_bufr = old_bufx - old_bufr; /* how much were we trailing bufx by? */
+	int new_bufr = old_bufx - old_bufr; /* how much were we trailing bufx by? */
 	if (new_bufr < 0) {
 		new_bufr += old_logsize;
 	}
@@ -1240,39 +663,21 @@ log_setsize(int size)
 	msgbufp->msg_size = new_logsize;
 	msgbufp->msg_bufc = new_logdata;
 
-	LOG_SETSIZE_DEBUG("log_setsize(%d): new_logdata %p new_logsize %d new_bufr %d new_bufx %d\n",
-	    size, new_logdata, new_logsize, new_bufr, new_bufx);
+	bsd_log_unlock();
 
-	LOG_UNLOCK();
-
-	/* this memory is now dead - clear it so that it compresses better
-	 *  in case of suspend to disk etc. */
+	/*
+	 * This memory is now dead - clear it so that it compresses better
+	 * in case of suspend to disk etc.
+	 */
 	bzero(old_logdata, old_logsize);
 	if (old_logdata != smsg_bufc) {
 		/* dynamic memory that must be freed */
-		kfree(old_logdata, old_logsize);
+		kfree_data(old_logdata, old_logsize);
 	}
 
-	printf("set system log size to %d bytes\n", new_logsize);
+	printf("System message buffer configured: %lu bytes\n", size);
 
 	return 0;
-}
-
-void
-oslog_setsize(int size)
-{
-	uint16_t scale = 0;
-	// If the size is less than the default stream buffer
-	// do nothing
-	if (size <= OSLOG_STREAM_BUF_SIZE) {
-		return;
-	}
-
-	scale = (uint16_t) (size / OSLOG_STREAM_BUF_SIZE);
-
-	oslog_stream_buf_size = size;
-	oslog_stream_num_entries = scale * OSLOG_NUM_STREAM_ENTRIES;
-	printf("oslog_setsize: new buffer size = %d, new num entries= %d\n", oslog_stream_buf_size, oslog_stream_num_entries);
 }
 
 SYSCTL_PROC(_kern, OID_AUTO, msgbuf,
@@ -1286,13 +691,17 @@ sysctl_kern_msgbuf(struct sysctl_oid *oidp __unused,
 	int old_bufsize, bufsize;
 	int error;
 
-	LOG_LOCK();
+	bsd_log_lock_safe();
 	old_bufsize = bufsize = msgbufp->msg_size;
-	LOG_UNLOCK();
+	bsd_log_unlock();
 
 	error = sysctl_io_number(req, bufsize, sizeof(bufsize), &bufsize, NULL);
 	if (error) {
 		return error;
+	}
+
+	if (bufsize < 0) {
+		return EINVAL;
 	}
 
 	if (bufsize != old_bufsize) {
@@ -1302,13 +711,12 @@ sysctl_kern_msgbuf(struct sysctl_oid *oidp __unused,
 	return error;
 }
 
-
 /*
  * This should be called by /sbin/dmesg only via libproc.
  * It returns as much data still in the buffer as possible.
  */
 int
-log_dmesg(user_addr_t buffer, uint32_t buffersize, int32_t * retval)
+log_dmesg(user_addr_t buffer, uint32_t buffersize, int32_t *retval)
 {
 	uint32_t i;
 	uint32_t localbuff_size;
@@ -1316,18 +724,19 @@ log_dmesg(user_addr_t buffer, uint32_t buffersize, int32_t * retval)
 	char *localbuff, *p, *copystart, ch;
 	size_t copysize;
 
-	LOG_LOCK();
+	bsd_log_lock_safe();
 	localbuff_size = (msgbufp->msg_size + 2); /* + '\n' + '\0' */
-	LOG_UNLOCK();
+	bsd_log_unlock();
 
 	/* Allocate a temporary non-circular buffer for copyout */
-	if (!(localbuff = (char *)kalloc(localbuff_size))) {
+	localbuff = kalloc_data(localbuff_size, Z_WAITOK);
+	if (!localbuff) {
 		printf("log_dmesg: unable to allocate memory\n");
 		return ENOMEM;
 	}
 
 	/* in between here, the log could become bigger, but that's fine */
-	LOG_LOCK();
+	bsd_log_lock_safe();
 
 	/*
 	 * The message buffer is circular; start at the write pointer, and
@@ -1377,57 +786,63 @@ log_dmesg(user_addr_t buffer, uint32_t buffersize, int32_t * retval)
 		copysize = buffersize;
 	}
 
-	LOG_UNLOCK();
+	bsd_log_unlock();
 
 	error = copyout(copystart, buffer, copysize);
 	if (!error) {
-		*retval = copysize;
+		*retval = (int32_t)copysize;
 	}
 
-	kfree(localbuff, localbuff_size);
+	kfree_data(localbuff, localbuff_size);
 	return error;
 }
 
 #ifdef CONFIG_XNUPOST
 
-uint32_t find_pattern_in_buffer(char * pattern, uint32_t len, int expected_count);
+size_t find_pattern_in_buffer(const char *, size_t, size_t);
 
 /*
  * returns count of pattern found in systemlog buffer.
  * stops searching further if count reaches expected_count.
  */
-uint32_t
-find_pattern_in_buffer(char * pattern, uint32_t len, int expected_count)
+size_t
+find_pattern_in_buffer(const char *pattern, size_t len, size_t expected_count)
 {
-	int match_count = 0;
-	int i           = 0;
-	int j           = 0;
-	int no_match    = 0;
-	int pos         = 0;
-	char ch         = 0;
-
 	if (pattern == NULL || len == 0 || expected_count == 0) {
 		return 0;
 	}
 
-	for (i = 0; i < msgbufp->msg_size; i++) {
-		no_match = 0;
-		for (j = 0; j < (int)len; j++) {
-			pos = (msgbufp->msg_bufx + i + j) % msgbufp->msg_size;
-			ch  = msgbufp->msg_bufc[pos];
-			if (ch != pattern[j]) {
-				no_match = 1;
+	size_t msg_bufx = msgbufp->msg_bufx;
+	size_t msg_size = msgbufp->msg_size;
+	size_t match_count = 0;
+
+	for (size_t i = 0; i < msg_size; i++) {
+		boolean_t match = TRUE;
+		for (size_t j = 0; j < len; j++) {
+			size_t pos = (msg_bufx + i + j) % msg_size;
+			if (msgbufp->msg_bufc[pos] != pattern[j]) {
+				match = FALSE;
 				break;
 			}
 		}
-		if (no_match == 0) {
-			match_count++;
-			if (match_count >= expected_count) {
-				break;
-			}
+		if (match && ++match_count >= expected_count) {
+			break;
 		}
 	}
+
 	return match_count;
 }
+
+__startup_func
+static void
+oslog_init_msgbuf(void)
+{
+	size_t msgbuf_size = 0;
+
+	if (PE_parse_boot_argn("msgbuf", &msgbuf_size, sizeof(msgbuf_size))) {
+		(void) log_setsize(msgbuf_size);
+	}
+}
+STARTUP(OSLOG, STARTUP_RANK_SECOND, oslog_init_msgbuf);
 
 #endif

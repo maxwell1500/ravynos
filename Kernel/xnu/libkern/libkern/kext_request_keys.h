@@ -119,6 +119,36 @@ extern "C" {
  */
 #define kKextRequestPredicateGetAllLoadRequests    "Get All Load Requests"
 
+/* Predicate: Get Kexts in Collection
+ * Arguments: Name of the collection: All, Primary, System, Auxiliary
+ *            Boolean - RequestLoadedOnly
+ * Response:  An array of information about the kexts in the given collection
+ *            (see OSKextLib.h).
+ * Op result: OSReturn indicating any errors in processing (see OSKextLib.h)
+ *
+ * Retrieves an array of dictionaries whose properties describe every kext
+ * present in the given kext collection type
+ * loaded at the time of the call.
+ */
+#define kKextRequestPredicateGetKextsInCollection   "Get Kexts in Collection"
+
+/* Predicate: Get Dexts
+ * Arguments: (None)
+ * InfoKeysArguments: Group of dexts to retrive - kOSBundleDextActiveKey,
+ *                    kOSBundleDextLoadedKey, kOSBundleDextUnLoadedKey
+ *                    or kOSBundleDextPendingUpgradeKey.
+ * Response:  A dictionary of dext groups with information about the dexts in
+ *            that group.
+ *            If no group is requested it defaults to kOSBundleDextActiveKey and
+ *            kOSBundleDextPendingUpgradeKey.
+ *
+ * Op result: OSReturn indicating any errors in processing (see OSKextLib.h)
+ *
+ * Retrieves an array of dictionaries whose properties describe every dext
+ * present in the group requested.
+ */
+#define kKextRequestPredicateGetDexts   "Get Dexts"
+
 
 /*********************************************************************
  * Privileged requests from user -> kernel
@@ -150,6 +180,30 @@ extern "C" {
  */
 #define kKextRequestPredicateLoad                  "Load"
 
+/* Predicate: LoadFromKC
+ * Argument:  kKextRequestPredicateLoadFromKC
+ * Response:  None (yet, may become an array of log message strings)
+ * Op result: OSReturn indicating processing/load+start result (see OSKextLib.h)
+ *
+ * Load one kexts which already exists in the kernel's address space as part
+ * of a kext collection. By default, the kext will start and have all of its
+ * personalities sent to the IOCatalogue for matching.
+ */
+#define kKextRequestPredicateLoadFromKC            "LoadFromKC"
+
+/* Predicate: LoadCodelessKext
+ * Argument:  kKextRequestPredicateLoadCodeless
+ * Response:  None (yet, may become an array of log message strings)
+ * Op result: OSReturn indicating processing/load+start result (see OSKextLib.h)
+ *
+ * Load one codeless kext. The input to this request is a single kext
+ * Info.plist dictionary contained in the kKextRequestArgumentCodelessInfoKey
+ * key. The personalities will be sent to the IOCatalogue for matching.
+ *
+ * See kKextRequestArgumentCodelessInfoKey for more info.
+ */
+#define kKextRequestPredicateLoadCodeless          "LoadCodelessKext"
+
 /* Predicate: Start
  * Argument:  kKextRequestArgumentBundleIdentifierKey (CFBundleIdentifier)
  * Response:  None (yet, may become an array of log message strings)
@@ -180,6 +234,45 @@ extern "C" {
  * Does not attempt to stop dependents; that will return an error.
  */
 #define kKextRequestPredicateUnload                "Unload"
+
+/* Predicate: LoadFileSetKC
+ * Argument:  kKextRequestArgument
+ * Response:  None (yet, may become an array of log message strings)
+ * Op result: OSReturn indicating load result of kext collections
+ *
+ * Load Pageable and Aux kext collection.
+ */
+#define kKextRequestPredicateLoadFileSetKC        "loadfilesetkc"
+
+/* Predicate: MissingAuxKCBundles
+ * Argument:  kKextRequestArgumentMissingBundleIDs
+ * Response:  None
+ * Op result: OSReturn indicating success or failure
+ *
+ * Set the list of bundle IDs which may exist in the AuxKC, but
+ * which are missing from disk. This list represents kexts whose
+ * code exists in the AuxKC, but should not be loadable.
+ */
+#define kKextRequestPredicateMissingAuxKCBundles  "MissingAuxKCBundles"
+
+/* Predicate: AuxKCBundleAvailable
+ * Arguments: kKextRequestArgumentBundleIdentifierKey (CFBundleIdentifier)
+ *            Boolean - kKextRequestArgumentBundleAvailability (optional)
+ * Response:  None
+ * Op result: OSReturn indicating success or failure
+ *
+ * Set the availability of an individual kext in the AuxKC.
+ */
+#define kKextRequestPredicateAuxKCBundleAvailable  "AuxKCBundleAvailable"
+
+/* Predicate: DaemonReady
+ * Arguments: None
+ * Response:  None
+ * Op result: OSReturn indicating whether daemon has already checked in
+ *
+ * Check whether the daemon has previously checked into the kernel.
+ */
+#define kKextRequestPredicateDaemonReady "DaemonReady"
 
 #if PRAGMA_MARK
 /********************************************************************/
@@ -260,24 +353,44 @@ extern "C" {
  */
 #define kKextRequestPredicateRequestResource       "Kext Resource Request"
 
-/* Predicate: Kext Kextd Exit Request
+
+/* Predicate: IOKit Daemon Exit Request
  * Argument:  None
  * Response:  None
  * Op result: OSReturn indicating result (see OSKextLib.h)
  *
- * Requests kextd exit for system shutdown.
+ * Requests that the IOKit daemon (kernelmanagerd) exit for system shutdown.
  */
-#define kKextRequestPredicateRequestKextdExit    "Kextd Exit"
+#define kKextRequestPredicateRequestDaemonExit     "IOKit Daemon Exit"
+
+/* For source compatibility
+ */
+#define kKextRequestPredicateRequestKextdExit      kKextRequestPredicateRequestDaemonExit
+
 
 /* Predicate: Dext Daemon Launch
  * Argument: kKextRequestArgumentBundleIdentifierKey
- * Argument: IOUserServerName
+ * Argument: kKextRequestArgumentDriverExtensionServerName
+ * Argument: kKextRequestArgumentDriverExtensionServerTag
+ * Argument: kKextRequestArgumentDriverExtensionReslideSharedCache
+ * Argument: (optional) kKextRequestArgumentDriverUniqueIdentifier
  * Response: Asynchronous via a DriverKit daemon checking in
  * Op result: OSReturn indicating result (see OSKextLib.h)
  *
  * Requests kextd to launch a driver extension userspace daemon.
  */
 #define kKextRequestPredicateRequestDaemonLaunch "Dext Daemon Launch"
+
+/* Predicate: Dext Daemon Upgrade
+ * Argument: kKextRequestArgumentBundleIdentifierKey
+ * Argument: kKextRequestArgumentDriverUniqueIdentifier
+ * Response: None
+ * Op result: OSReturn indicating result (see OSKextLib.h)
+ *
+ * Informs kextd of an upgrade of driver extension userspace daemon.
+ */
+#define kKextRequestPredicateRequestDaemonUpgradeNotification "Dext Daemon Upgrade"
+
 
 #if PRAGMA_MARK
 /********************************************************************/
@@ -293,7 +406,7 @@ extern "C" {
  * be performed with its options. A kext load request is effectively a
  * nested series requests. Currently only one load request is embedded
  * in a user-space Load request, so the result is unambiguous. We might
- * change this, specifically for kextd, to allow all pending kernel
+ * change this, specifically for kernelmanagerd, to allow all pending kernel
  * load requests to be rolled up into one blob. Might not be much win
  * in that, however. The nested logic makes the code difficult to read.
  */
@@ -432,6 +545,30 @@ extern "C" {
  */
 #define kKextRequestArgumentPersonalityNamesKey        "Personality Names"
 
+/* Argument:  Codeless Kext Info
+ * Type:      Dictionary (Info.plist of codeless kext)
+ * Default:   <none> (required)
+ *
+ * When loading a codeless kext, this request argument's value should be set
+ * to the entire contents of the Info.plist of the codeless kext.
+ *
+ * NOTE: One additional key should be injected into the codeless kext's
+ * plist: kKextRequestArgumentCodelessInfoBundlePathKey
+ */
+#define kKextRequestArgumentCodelessInfoKey            "Codeless Kext Info"
+
+
+/* Argument: _CodelessKextBundlePath
+ * Type: String <path>
+ * Default: <none> (required)
+ *
+ * This argument is a plist key that must be injected into the dictionary sent
+ * as the kKextRequestArgumentCodelessInfoKey value. It specifies the
+ * filesystem path to the codeless kext bundle, and will be used in kext
+ * diagnostic information.
+ */
+#define kKextRequestArgumentCodelessInfoBundlePathKey   "_CodelessKextBundlePath"
+
 #if PRAGMA_MARK
 #pragma mark Unload Request Arguments
 #endif
@@ -470,6 +607,48 @@ extern "C" {
  */
 #define kKextRequestArgumentDriverExtensionServerName  "Driver Extension Server Name"
 
+/* Argument: DriverKit Reslide Shared Cache
+ * Type:     Boolean
+ * Default:  N/A
+ *
+ * Set this option to reslide the DriverKit shared cache. This helps prevent ASLR circumvention
+ * with brute-forcing attacks.
+ */
+#define kKextRequestArgumentDriverExtensionReslideSharedCache  "DriverKit Reslide Shared Cache"
+
+/* Argument: DriverKit dext unique identifier
+ * Type:     Data
+ * Default:  N/A
+ *
+ * A DriverKit daemon launch request can include the dext unique identifier
+ * This name is also used for the upgrade notifation.
+ */
+#define kKextRequestArgumentDriverUniqueIdentifier kOSBundleDextUniqueIdentifierKey
+
+#if PRAGMA_MARK
+#pragma mark Missing AuxKC Bundles Arguments
+#endif
+
+/* Argument: Missing Bundle IDs
+ * Type:     Array
+ * Default:  N/A
+ * Used by:  kKextRequestPredicateMissingAuxKCBundles
+ *
+ * This array of bundle IDs represents the list of kexts which have been
+ * removed from disk, but still exist in the AuxKC.
+ */
+#define kKextRequestArgumentMissingBundleIDs           "Missing Bundle IDs"
+
+/* Argument: Bundle Availability
+ * Type:     Boolean
+ * Default:  true
+ * Used by:  kKextRequestPredicateAuxKCBundleAvailable
+ *
+ * If present, this argument can indicate that the specified bundle ID
+ * is no longer available for loading from the AuxKC
+ */
+#define kKextRequestArgumentBundleAvailability         "Bundle Availability"
+
 #if PRAGMA_MARK
 #pragma mark Internal Tracking Properties
 #endif
@@ -507,6 +686,65 @@ extern "C" {
  * it, and deletes any callback record that has it.
  */
 #define kKextRequestStaleKey                           "Request Stale"
+
+/* Argument:  Check In Token
+ * Type:      Mach Send Right
+ * Used by:   DriverKit daemon launch
+ */
+#define kKextRequestArgumentCheckInToken               "Check In Token"
+
+#if PRAGMA_MARK
+#pragma mark fileset load request arguments
+#endif
+
+/* Argument:  PageableKCName
+ * Type:      String (path)
+ * Used by:   kKextRequestPredicateLoadFileSetKC
+ *
+ * Name of the Pageable fileset kext collection
+ */
+#define kKextRequestArgumentPageableKCFilename         "PageableKCName"
+
+/* Argument:  AuxKCName
+ * Type:      String (path)
+ * Used by:   kKextRequestPredicateLoadFileSetKC
+ *
+ * Name of the Aux fileset kext collection
+ */
+#define kKextRequestArgumentAuxKCFilename              "AuxKCName"
+
+/* Argument:  Codeless Personalities
+ * Type:      Array of Dictionaries
+ * Used by:   kKextRequestPredicateLoadFileSetKC
+ *
+ * Any array of DriverKit driver (and codeless kext) personalities
+ */
+#define kKextRequestArgumentCodelessPersonalities       "Codeless Personalities"
+
+#if PRAGMAA_MARK
+#pragma mark kext collection request arguments
+#endif
+
+/* Argument:  Collection
+ * Type:      String
+ * Used by:   kKextRequestPredicateGetKextsInCollection
+ *
+ * Contains a string describing the type of kext collection
+ */
+#define kKextRequestArgumentCollectionTypeKey         "Collection Type"
+
+/* Argument:  LoadedState
+ * Type:      String
+ * Values:    Any, Loaded, Unloaded
+ * Default:   Any
+ * Used by:   kKextRequestPredicateGetKextsInCollection
+ *
+ * If present, this argument limits the GetKextsInCollection output to:
+ *     Loaded   -- only kexts which have been loaded
+ *     Unloaded -- only kexts which have been unloaded
+ *     Any      -- return all kexts in a collection
+ */
+#define kKextRequestArgumentLoadedStateKey             "Loaded State"
 
 #ifdef __cplusplus
 };

@@ -27,15 +27,16 @@
  */
 /* OSSerialize.cpp created by rsulack on Wen 25-Nov-1998 */
 
-#include <sys/cdefs.h>
+#define IOKIT_ENABLE_SHARED_PTR
 
-__BEGIN_DECLS
-#include <vm/vm_kern.h>
-__END_DECLS
+#include <sys/cdefs.h>
+#include <vm/vm_kern_xnu.h>
+#include <os/hash.h>
 
 #include <libkern/c++/OSContainers.h>
 #include <libkern/c++/OSLib.h>
 #include <libkern/c++/OSDictionary.h>
+#include <libkern/c++/OSSharedPtr.h>
 #include <libkern/OSSerializeBinary.h>
 #include <libkern/Block.h>
 #include <IOKit/IOLib.h>
@@ -51,6 +52,16 @@ OSMetaClassDefineReservedUnused(OSSerialize, 4);
 OSMetaClassDefineReservedUnused(OSSerialize, 5);
 OSMetaClassDefineReservedUnused(OSSerialize, 6);
 OSMetaClassDefineReservedUnused(OSSerialize, 7);
+
+static inline kmem_guard_t
+OSSerialize_guard()
+{
+	kmem_guard_t guard = {
+		.kmg_tag     = IOMemoryTag(kernel_map),
+	};
+
+	return guard;
+}
 
 
 char *
@@ -189,6 +200,8 @@ OSSerialize::addString(const char *s)
 bool
 OSSerialize::initWithCapacity(unsigned int inCapacity)
 {
+	kmem_return_t kmr;
+
 	if (!super::init()) {
 		return false;
 	}
@@ -203,39 +216,37 @@ OSSerialize::initWithCapacity(unsigned int inCapacity)
 	if (!inCapacity) {
 		inCapacity = 1;
 	}
-	if (round_page_overflow(inCapacity, &capacity)) {
-		tags->release();
-		tags = NULL;
+	if (round_page_overflow(inCapacity, &inCapacity)) {
+		tags.reset();
 		return false;
 	}
 
-	capacityIncrement = capacity;
+	capacityIncrement = inCapacity;
 
 	// allocate from the kernel map so that we can safely map this data
 	// into user space (the primary use of the OSSerialize object)
 
-	kern_return_t rc = kmem_alloc(kernel_map, (vm_offset_t *)&data, capacity, IOMemoryTag(kernel_map));
-	if (rc) {
-		tags->release();
-		tags = NULL;
-		return false;
+	kmr = kmem_alloc_guard(kernel_map, inCapacity, /* mask */ 0,
+	    (kma_flags_t)(KMA_ZERO | KMA_DATA), OSSerialize_guard());
+
+	if (kmr.kmr_return == KERN_SUCCESS) {
+		data = (char *)kmr.kmr_ptr;
+		capacity = inCapacity;
+		OSCONTAINER_ACCUMSIZE(capacity);
+		return true;
 	}
-	bzero((void *)data, capacity);
 
-
-	OSCONTAINER_ACCUMSIZE(capacity);
-
-	return true;
+	capacity = 0;
+	return false;
 }
 
-OSSerialize *
+OSSharedPtr<OSSerialize>
 OSSerialize::withCapacity(unsigned int inCapacity)
 {
-	OSSerialize *me = new OSSerialize;
+	OSSharedPtr<OSSerialize> me = OSMakeShared<OSSerialize>();
 
 	if (me && !me->initWithCapacity(inCapacity)) {
-		me->release();
-		return NULL;
+		return nullptr;
 	}
 
 	return me;
@@ -266,7 +277,7 @@ OSSerialize::setCapacityIncrement(unsigned int increment)
 unsigned int
 OSSerialize::ensureCapacity(unsigned int newCapacity)
 {
-	char *newData;
+	kmem_return_t kmr;
 
 	if (newCapacity <= capacity) {
 		return capacity;
@@ -276,25 +287,18 @@ OSSerialize::ensureCapacity(unsigned int newCapacity)
 		return capacity;
 	}
 
-	kern_return_t rc = kmem_realloc(kernel_map,
-	    (vm_offset_t)data,
-	    capacity,
-	    (vm_offset_t *)&newData,
-	    newCapacity,
-	    VM_KERN_MEMORY_IOKIT);
-	if (!rc) {
-		OSCONTAINER_ACCUMSIZE(newCapacity);
+	kmr = kmem_realloc_guard(kernel_map, (vm_offset_t)data, capacity,
+	    newCapacity, (kmr_flags_t)(KMR_ZERO | KMR_DATA | KMR_FREEOLD),
+	    OSSerialize_guard());
 
-		// kmem realloc does not free the old address range
-		kmem_free(kernel_map, (vm_offset_t)data, capacity);
-		OSCONTAINER_ACCUMSIZE(-((size_t)capacity));
+	if (kmr.kmr_return == KERN_SUCCESS) {
+		size_t delta = 0;
 
-		// kmem realloc does not zero out the new memory
-		// and this could end up going to user land
-		bzero(&newData[capacity], newCapacity - capacity);
-
-		data = newData;
+		data     = (char *)kmr.kmr_ptr;
+		delta   -= capacity;
 		capacity = newCapacity;
+		delta   += capacity;
+		OSCONTAINER_ACCUMSIZE(delta);
 	}
 
 	return capacity;
@@ -303,12 +307,12 @@ OSSerialize::ensureCapacity(unsigned int newCapacity)
 void
 OSSerialize::free()
 {
-	OSSafeReleaseNULL(tags);
-	OSSafeReleaseNULL(indexData);
-
-	if (data) {
-		kmem_free(kernel_map, (vm_offset_t)data, capacity);
+	if (capacity) {
+		kmem_free_guard(kernel_map, (vm_offset_t)data, capacity,
+		    KMF_NONE, OSSerialize_guard());
 		OSCONTAINER_ACCUMSIZE( -((size_t)capacity));
+		data = nullptr;
+		capacity = 0;
 	}
 	super::free();
 }
@@ -316,15 +320,14 @@ OSSerialize::free()
 
 OSDefineMetaClassAndStructors(OSSerializer, OSObject)
 
-OSSerializer * OSSerializer::forTarget( void * target,
+OSSharedPtr<OSSerializer>
+OSSerializer::forTarget( void * target,
     OSSerializerCallback callback, void * ref )
 {
-	OSSerializer * thing;
+	OSSharedPtr<OSSerializer> thing = OSMakeShared<OSSerializer>();
 
-	thing = new OSSerializer;
 	if (thing && !thing->init()) {
-		thing->release();
-		thing = NULL;
+		thing.reset();
 	}
 
 	if (thing) {
@@ -342,11 +345,11 @@ OSSerializer::callbackToBlock(void * target __unused, void * ref,
 	return ((OSSerializerBlock)ref)(serializer);
 }
 
-OSSerializer *
+OSSharedPtr<OSSerializer>
 OSSerializer::withBlock(
 	OSSerializerBlock callback)
 {
-	OSSerializer * serializer;
+	OSSharedPtr<OSSerializer> serializer;
 	OSSerializerBlock block;
 
 	block = Block_copy(callback);

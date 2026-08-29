@@ -74,9 +74,7 @@
 #include <kern/debug.h>
 
 #if DEVELOPMENT || DEBUG
-bool send_sigsys = true;
-#else
-#define send_sigsys true
+TUNABLE(bool, no_sigsys, "-no_sigsys", false);
 #endif
 
 /*
@@ -187,22 +185,3 @@ nosys(__unused struct proc *p, __unused struct nosys_args *args, __unused int32_
 	}
 	return ENOSYS;
 }
-
-#if !CRYPTO
-#include <crypto/rc4/rc4.h>
-
-/* Stubs must be present in all configs for Unsupported KPI exports */
-
-void
-rc4_init(struct rc4_state *state __unused, const u_char *key __unused, int keylen __unused)
-{
-	panic("rc4_init: unsupported kernel configuration");
-}
-
-void
-rc4_crypt(struct rc4_state *state __unused,
-    const u_char *inbuf __unused, u_char *outbuf __unused, int buflen __unused)
-{
-	panic("rc4_crypt: unsupported kernel configuration");
-}
-#endif /* !CRYPTO */

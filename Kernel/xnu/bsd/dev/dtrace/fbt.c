@@ -44,10 +44,12 @@
 #include <sys/dtrace_glue.h>
 #include <san/kasan.h>
 
+#include <ptrauth.h>
+
 /* #include <machine/trap.h> */
 struct savearea_t; /* Used anonymously */
 
-#if defined(__arm__) || defined(__arm64__)
+#if defined(__arm64__)
 typedef kern_return_t (*perfCallback)(int, struct savearea_t *, __unused int, __unused int);
 extern perfCallback tempDTraceTrapHook;
 extern kern_return_t fbt_perfCallback(int, struct savearea_t *, __unused int, __unused int);
@@ -150,7 +152,7 @@ fbt_enable(void *arg, dtrace_id_t id, void *parg)
 			continue;
 		}
 
-		dtrace_casptr(&tempDTraceTrapHook, NULL, fbt_perfCallback);
+		dtrace_casptr(&tempDTraceTrapHook, NULL, ptrauth_nop_cast(void *, &fbt_perfCallback));
 		if (tempDTraceTrapHook != (perfCallback)fbt_perfCallback) {
 			if (fbt_verbose) {
 				cmn_err(CE_NOTE, "fbt_enable is failing for probe %s "
@@ -161,12 +163,12 @@ fbt_enable(void *arg, dtrace_id_t id, void *parg)
 		}
 
 		if (fbt->fbtp_currentval != fbt->fbtp_patchval) {
-#if KASAN
+#if KASAN_CLASSIC
 			/* Since dtrace probes can call into KASan and vice versa, things can get
 			 * very slow if we have a lot of probes. This call will disable the KASan
 			 * fakestack after a threshold of probes is reached. */
 			kasan_fakestack_suspend();
-#endif
+#endif /* KASAN_CLASSIC */
 
 			(void)ml_nofault_copy((vm_offset_t)&fbt->fbtp_patchval, (vm_offset_t)fbt->fbtp_patchpoint,
 			    sizeof(fbt->fbtp_patchval));
@@ -216,9 +218,9 @@ fbt_disable(void *arg, dtrace_id_t id, void *parg)
 			ASSERT(ctl->mod_nenabled > 0);
 			ctl->mod_nenabled--;
 
-#if KASAN
+#if KASAN && KASAN_CLASSIC
 			kasan_fakestack_resume();
-#endif
+#endif /* KASAN && KASAN_CLASSIC */
 		}
 	}
 	dtrace_membar_consumer();
@@ -272,7 +274,7 @@ fbt_resume(void *arg, dtrace_id_t id, void *parg)
 			continue;
 		}
 
-		dtrace_casptr(&tempDTraceTrapHook, NULL, fbt_perfCallback);
+		dtrace_casptr(&tempDTraceTrapHook, NULL, ptrauth_nop_cast(void *, &fbt_perfCallback));
 		if (tempDTraceTrapHook != (perfCallback)fbt_perfCallback) {
 			if (fbt_verbose) {
 				cmn_err(CE_NOTE, "fbt_resume is failing for probe %s "
@@ -375,13 +377,6 @@ fbt_provide_kernel_section(struct modctl *ctl, kernel_section_t *sect, kernel_nl
 			name += 1;
 		}
 
-#if defined(__arm__)
-		// Skip non-thumb functions on arm32
-		if (sym[i].n_sect == 1 && !(sym[i].n_desc & N_ARM_THUMB_DEF)) {
-			continue;
-		}
-#endif /* defined(__arm__) */
-
 		if (fbt_excluded(name)) {
 			continue;
 		}
@@ -390,7 +385,7 @@ fbt_provide_kernel_section(struct modctl *ctl, kernel_section_t *sect, kernel_nl
 		 * Find the function boundary by looking at either the
 		 * end of the section or the beginning of the next symbol
 		 */
-		if (i == nsyms - 1) {
+		if (i == nsyms - 1 || sym[i + 1].n_value > sect_end) {
 			limit = sect_end;
 		} else {
 			limit = sym[i + 1].n_value;
@@ -458,7 +453,7 @@ fbt_provide_module_kernel_syms(struct modctl *ctl)
 	for (seg = firstsegfromheader(mh); seg != NULL; seg = nextsegfromheader(mh, seg)) {
 		kernel_section_t *sect = firstsect(seg);
 
-		if (strcmp(seg->segname, "__KLD") == 0) {
+		if (strcmp(seg->segname, "__KLD") == 0 || strcmp(seg->segname, "__KLDDATA") == 0) {
 			continue;
 		}
 
@@ -477,6 +472,10 @@ fbt_provide_module(void *arg, struct modctl *ctl)
 	ASSERT(ctl != NULL);
 	ASSERT(dtrace_kernel_symbol_mode != DTRACE_KERNEL_SYMBOLS_NEVER);
 	LCK_MTX_ASSERT(&mod_lock, LCK_MTX_ASSERT_OWNED);
+
+	if (dtrace_fbt_probes_restricted()) {
+		return;
+	}
 
 	// Update the "ignore blacklist" bit
 	if (ignore_fbt_blacklist) {
@@ -577,27 +576,20 @@ _fbt_open(dev_t dev, int flags, int devtype, struct proc *p)
 
 #define FBT_MAJOR  -24 /* let the kernel pick the device number */
 
-
-/*
- * A struct describing which functions will get invoked for certain
- * actions.
- */
-static struct cdevsw fbt_cdevsw =
+static const struct cdevsw fbt_cdevsw =
 {
-	_fbt_open,              /* open */
-	eno_opcl,                       /* close */
-	eno_rdwrt,                      /* read */
-	eno_rdwrt,                      /* write */
-	eno_ioctl,                      /* ioctl */
-	(stop_fcn_t *)nulldev, /* stop */
-	(reset_fcn_t *)nulldev, /* reset */
-	NULL,                           /* tty's */
-	eno_select,                     /* select */
-	eno_mmap,                       /* mmap */
-	eno_strat,                      /* strategy */
-	eno_getc,                       /* getc */
-	eno_putc,                       /* putc */
-	0                                       /* type */
+	.d_open = _fbt_open,
+	.d_close = eno_opcl,
+	.d_read = eno_rdwrt,
+	.d_write = eno_rdwrt,
+	.d_ioctl = eno_ioctl,
+	.d_stop = eno_stop,
+	.d_reset = eno_reset,
+	.d_select = eno_select,
+	.d_mmap = eno_mmap,
+	.d_strategy = eno_strat,
+	.d_reserved_1 = eno_getc,
+	.d_reserved_2 = eno_putc,
 };
 
 #undef kmem_alloc /* from its binding to dt_kmem_alloc glue */

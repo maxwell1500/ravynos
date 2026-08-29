@@ -37,6 +37,7 @@
 #include "libproc_internal.h"
 
 int __proc_info(int callnum, int pid, int flavor, uint64_t arg, void * buffer, int buffersize);
+int __proc_info_extended_id(int32_t callnum, int32_t pid, uint32_t flavor, uint32_t flags, uint64_t ext_id, uint64_t arg, user_addr_t buffer, int32_t buffersize);
 __private_extern__ int proc_setthreadname(void * buffer, int buffersize);
 int __process_policy(int scope, int action, int policy, int policy_subtype, proc_policy_attribute_t * attrp, pid_t target_pid, uint64_t target_threadid);
 int proc_rlimit_control(pid_t pid, int flavor, void *arg);
@@ -197,6 +198,14 @@ proc_udata_info(int pid, int flavor, void *buffer, int buffersize)
 	return __proc_info(PROC_INFO_CALL_UDATA_INFO, pid, flavor, 0, buffer, buffersize);
 }
 
+/* only used by dyld which links with libsystem_kernel.a */
+__private_extern__ int
+proc_set_dyld_all_image_info(void *buffer, int buffersize)
+{
+	return __proc_info(PROC_INFO_CALL_SET_DYLD_IMAGES, getpid(), 0, 0, buffer, buffersize);
+}
+
+
 int
 proc_name(int pid, void * buffer, uint32_t buffersize)
 {
@@ -234,7 +243,7 @@ proc_regionfilename(int pid, uint64_t address, void * buffer, uint32_t buffersiz
 	}
 
 	retval = proc_pidinfo(pid, PROC_PIDREGIONPATH, (uint64_t)address, &path, sizeof(struct proc_regionpath));
-	if (retval != -1) {
+	if (retval != 0) {
 		return (int)(strlcpy(buffer, path.prpo_path, buffersize));
 	}
 	return 0;
@@ -273,6 +282,58 @@ proc_pidpath(int pid, void * buffer, uint32_t  buffersize)
 	return 0;
 }
 
+int
+proc_pidpath_audittoken(audit_token_t *audittoken, void * buffer, uint32_t buffersize)
+{
+	int retval, len;
+
+	if (buffersize < PROC_PIDPATHINFO_SIZE) {
+		errno = ENOMEM;
+		return 0;
+	}
+	if (buffersize > PROC_PIDPATHINFO_MAXSIZE) {
+		errno = EOVERFLOW;
+		return 0;
+	}
+
+	int pid = audittoken->val[5];
+	int idversion = audittoken->val[7];
+
+	retval = __proc_info_extended_id(PROC_INFO_CALL_PIDINFO, pid, PROC_PIDPATHINFO, PIF_COMPARE_IDVERSION, (uint64_t)idversion,
+	    (uint64_t)0, buffer, buffersize);
+	if (retval != -1) {
+		len = (int)strlen(buffer);
+		return len;
+	}
+	return 0;
+}
+
+int
+proc_current_thread_schedinfo(void *buffer, size_t buffersize)
+{
+	extern uint64_t __thread_selfid(void);
+
+	int retval;
+
+	if (buffersize < PROC_PIDTHREADSCHEDINFO_SIZE) {
+		errno = ENOMEM;
+		return errno;
+	}
+	if (buffersize > PROC_PIDTHREADSCHEDINFO_SIZE) {
+		errno = EOVERFLOW;
+		return errno;
+	}
+
+	pid_t pid = getpid();
+	uint64_t threadid = __thread_selfid();
+
+	retval = __proc_info(PROC_INFO_CALL_PIDINFO, pid, PROC_PIDTHREADSCHEDINFO, threadid, buffer, buffersize);
+
+	if (retval == -1) {
+		return errno;
+	}
+	return 0;
+}
 
 int
 proc_libversion(int *major, int * minor)
@@ -381,6 +442,90 @@ proc_terminate(pid_t pid, int *sig)
 	}
 
 	*sig = retval;
+
+	return 0;
+}
+
+int
+proc_signal_delegate(audit_token_t instigator, audit_token_t target, int sig)
+{
+	struct proc_delegated_signal_info args = {
+		.instigator = instigator,
+		.target = target,
+	};
+	int retval = __proc_info(PROC_INFO_CALL_DELEGATE_SIGNAL, 0, sig, 0, &args, sizeof(struct proc_delegated_signal_info));
+	if (retval == -1) {
+		return errno;
+	}
+
+	return 0;
+}
+
+int
+proc_terminate_delegate(audit_token_t instigator, audit_token_t target, int *sig)
+{
+	struct proc_delegated_signal_info args = {
+		.instigator = instigator,
+		.target = target,
+	};
+
+	if (!sig) {
+		return EINVAL;
+	}
+
+	int retval = __proc_info(PROC_INFO_CALL_DELEGATE_TERMINATE, 0, 0, 0, &args, sizeof(struct proc_delegated_signal_info));
+	if (retval == -1) {
+		return errno;
+	}
+
+	// Retval contains the type of signal that was sent, either SIGKILL or SIGTERM
+	*sig = retval;
+	return 0;
+}
+
+int
+proc_signal_with_audittoken(audit_token_t *audittoken, int sig)
+{
+	int retval = __proc_info(PROC_INFO_CALL_SIGNAL_AUDITTOKEN, 0, sig, 0, audittoken, sizeof(audit_token_t));
+	if (retval == -1) {
+		return errno;
+	}
+
+	return 0;
+}
+
+int
+proc_terminate_with_audittoken(audit_token_t *audittoken, int *sig)
+{
+	int retval;
+
+	if (!sig) {
+		return EINVAL;
+	}
+
+	retval = __proc_info(PROC_INFO_CALL_TERMINATE_AUDITTOKEN, 0, 0, 0, audittoken, sizeof(audit_token_t));
+	if (retval == -1) {
+		return errno;
+	}
+
+	*sig = retval;
+
+	return 0;
+}
+
+int
+proc_terminate_all_rsr(int sig)
+{
+	int retval = 0;
+
+	if (sig != SIGKILL && sig != SIGTERM) {
+		return EINVAL;
+	}
+
+	retval = __proc_info(PROC_INFO_CALL_TERMINATE_RSR, 0, 0, sig, NULL, 0);
+	if (retval == -1) {
+		return errno;
+	}
 
 	return 0;
 }
@@ -744,7 +889,7 @@ proc_can_use_foreground_hw(int pid, uint32_t *reason)
 
 /* Donate importance to adaptive processes from this process */
 int
-proc_donate_importance_boost()
+proc_donate_importance_boost(void)
 {
 	int rval;
 
@@ -1003,3 +1148,69 @@ proc_suppress(__unused pid_t pid, __unused uint64_t *generation)
 #endif /* !TARGET_OS_SIMULATOR */
 
 #endif /* !(TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR) */
+
+int
+proc_set_no_smt(void)
+{
+	if (__process_policy(PROC_POLICY_SCOPE_PROCESS, PROC_POLICY_ACTION_APPLY, PROC_POLICY_NO_SMT, 0, NULL, getpid(), (uint64_t)0) == -1) {
+		return errno;
+	}
+	return 0;
+}
+
+int
+proc_setthread_no_smt(void)
+{
+	extern uint64_t __thread_selfid(void);
+	if (__process_policy(PROC_POLICY_SCOPE_THREAD, PROC_POLICY_ACTION_APPLY, PROC_POLICY_NO_SMT, 0, NULL, 0, __thread_selfid()) == -1) {
+		return errno;
+	}
+	return 0;
+}
+
+int
+proc_set_csm(uint32_t flags)
+{
+	const uint32_t mask = PROC_CSM_ALL | PROC_CSM_TECS | PROC_CSM_NOSMT;
+	if ((flags & ~mask) != 0) {
+		return EINVAL;
+	}
+
+	if (flags & (PROC_CSM_NOSMT | PROC_CSM_ALL)) {
+		if (__process_policy(PROC_POLICY_SCOPE_PROCESS, PROC_POLICY_ACTION_APPLY, PROC_POLICY_NO_SMT, 0, NULL, getpid(), (uint64_t)0) == -1) {
+			return errno;
+		}
+	}
+
+	if (flags & (PROC_CSM_TECS | PROC_CSM_ALL)) {
+		if (__process_policy(PROC_POLICY_SCOPE_PROCESS, PROC_POLICY_ACTION_APPLY, PROC_POLICY_TECS, 0, NULL, getpid(), (uint64_t)0) == -1) {
+			return errno;
+		}
+	}
+
+	return 0;
+}
+
+int
+proc_setthread_csm(uint32_t flags)
+{
+	extern uint64_t __thread_selfid(void);
+	const uint32_t mask = PROC_CSM_ALL | PROC_CSM_TECS | PROC_CSM_NOSMT;
+	if ((flags & ~mask) != 0) {
+		return EINVAL;
+	}
+
+	if (flags & (PROC_CSM_NOSMT | PROC_CSM_ALL)) {
+		if (__process_policy(PROC_POLICY_SCOPE_THREAD, PROC_POLICY_ACTION_APPLY, PROC_POLICY_NO_SMT, 0, NULL, 0, __thread_selfid()) == -1) {
+			return errno;
+		}
+	}
+
+	if (flags & (PROC_CSM_TECS | PROC_CSM_ALL)) {
+		if (__process_policy(PROC_POLICY_SCOPE_THREAD, PROC_POLICY_ACTION_APPLY, PROC_POLICY_TECS, 0, NULL, 0, __thread_selfid()) == -1) {
+			return errno;
+		}
+	}
+
+	return 0;
+}

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2021 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -77,6 +77,7 @@
 #include <sys/kernel_types.h>
 #include <sys/namei.h>
 #endif
+#include <sys/_types/_graftdmg_un.h>
 #include <sys/queue.h>
 #include <sys/lock.h>
 #include <net/radix.h>
@@ -108,14 +109,14 @@ struct mount {
 	TAILQ_ENTRY(mount)      mnt_list;                   /* mount list */
 	int32_t                 mnt_count;                  /* reference on the mount */
 	lck_mtx_t               mnt_mlock;                  /* mutex that protects mount point */
-	const struct vfsops     *mnt_op;                    /* operations on fs */
-	struct vfstable         *mnt_vtable;                /* configuration info */
-	struct vnode            *mnt_vnodecovered;          /* vnode we mounted on */
+	const struct vfsops     * XNU_PTRAUTH_SIGNED_PTR("mount.vfsops") mnt_op;        /* operations on fs */
+	struct vfstable         * XNU_PTRAUTH_SIGNED_PTR("mount.mnt_vtable") mnt_vtable;        /* configuration info */
+	struct vnode            * XNU_PTRAUTH_SIGNED_PTR("mount.mnt_vnodecovered") mnt_vnodecovered;    /* vnode we mounted on */
 	struct vnodelst         mnt_vnodelist;              /* list of vnodes this mount */
 	struct vnodelst         mnt_workerqueue;            /* list of vnodes this mount */
 	struct vnodelst         mnt_newvnodes;              /* list of vnodes this mount */
 	uint32_t                mnt_flag;                   /* flags */
-	uint32_t                mnt_kern_flag;              /* kernel only flags */
+	uint32_t                mnt_kern_flag;              /* kernel only flags.  NOTE: See mnt_supl_kern_flags below! */
 	uint32_t                mnt_compound_ops;           /* Available compound operations */
 	uint32_t                mnt_lflag;                  /* mount life cycle flags */
 	uint32_t                mnt_maxsymlinklen;          /* max size of short symlink */
@@ -158,7 +159,6 @@ struct mount {
 	gid_t                   mnt_fsgroup;
 
 	struct label            *mnt_mntlabel;              /* MAC mount label */
-	struct label            *mnt_fslabel;               /* MAC default fs label */
 
 	/*
 	 * cache the rootvp of the last mount point
@@ -199,6 +199,9 @@ struct mount {
 	void                    *mnt_disk_conditioner_info;
 
 	lck_mtx_t               mnt_iter_lock;              /* mutex that protects iteration of vnodes */
+
+	uint64_t                mnt_mount_id;               /* system-wide unique mount ID */
+	uint32_t                mnt_supl_kern_flag;         /* Supplemental kernel-only mount flags */
 };
 
 /*
@@ -229,7 +232,7 @@ struct mount {
 #define MNT_IOSCALE(ioqueue_depth)      ((ioqueue_depth + (MNT_DEFAULT_IOQUEUE_DEPTH - 1)) / MNT_DEFAULT_IOQUEUE_DEPTH)
 
 /* mount point to which dead vps point to */
-extern struct mount * dead_mountp;
+extern struct mount * const dead_mountp;
 
 /*
  * Internal filesystem control flags stored in mnt_kern_flag.
@@ -242,17 +245,18 @@ extern struct mount * dead_mountp;
  *		because the bits here were broken out from the high bits
  *		of the mount flags.
  */
-#define MNTK_SYSTEM             0x00000040     /* Volume associated with system volume (do not allow unmount) */
-#define MNTK_NOSWAP             0x00000080  /* swap files cannot be used on this mount */
+#define MNTK_FSKIT              0x00000020      /* Volume is a FSKit mount */
+#define MNTK_SYSTEM             0x00000040      /* Volume associated with system volume (do not allow unmount) */
+#define MNTK_NOSWAP             0x00000080      /* swap files cannot be used on this mount */
 #define MNTK_SWAP_MOUNT         0x00000100      /* we are swapping to this mount */
-#define MNTK_DENY_READDIREXT 0x00000200 /* Deny Extended-style readdir's for this volume */
+#define MNTK_DENY_READDIREXT    0x00000200      /* Deny Extended-style readdir's for this volume */
 #define MNTK_PERMIT_UNMOUNT     0x00000400      /* Allow (non-forced) unmounts by UIDs other than the one that mounted the volume */
 #define MNTK_TYPENAME_OVERRIDE  0x00000800      /* override the fstypename for statfs() */
 #define MNTK_KERNEL_MOUNT       0x00001000      /* mount came from kernel side */
 #ifdef CONFIG_IMGSRC_ACCESS
 #define MNTK_HAS_MOVED          0x00002000
-#define MNTK_BACKS_ROOT         0x00004000
 #endif /* CONFIG_IMGSRC_ACCESS */
+#define MNTK_BACKS_ROOT         0x00004000      /* mount contains a disk image backing the root filesystem - therefore it mustn't be unmounted */
 #define MNTK_AUTH_CACHE_TTL     0x00008000      /* rights cache has TTL - TTL of 0 disables cache */
 #define MNTK_PATH_FROM_ID       0x00010000      /* mounted file system supports id-to-path lookups */
 #define MNTK_UNMOUNT_PREFLIGHT  0x00020000      /* mounted file system wants preflight check during unmount */
@@ -260,19 +264,30 @@ extern struct mount * dead_mountp;
 #define MNTK_EXTENDED_ATTRS     0x00080000      /* mounted file system supports Extended Attributes VNOPs */
 #define MNTK_LOCK_LOCAL         0x00100000      /* advisory locking is done above the VFS itself */
 #define MNTK_VIRTUALDEV         0x00200000      /* mounted on a virtual device i.e. a disk image */
-#define MNTK_ROOTDEV            0x00400000      /* this filesystem resides on the same device as the root */
+#define MNTK_ROOTDEV            0x00400000      /* this filesystem resides on the same device as the root - appears unused as of 2020 */
 #define MNTK_SSD                0x00800000      /* underlying device is of the solid state variety */
 #define MNTK_UNMOUNT            0x01000000      /* unmount in progress */
-#define MNTK_MWAIT              0x02000000      /* waiting for unmount to finish */
+#define MNTK_MWAIT              0x02000000      /* waiting for unmount to finish - appears unused as of 2020 */
 #define MNTK_WANTRDWR           0x04000000      /* upgrade to read/write requested */
-#if REV_ENDIAN_FS
-#define MNT_REVEND                              0x08000000      /* Reverse endian FS */
-#endif /* REV_ENDIAN_FS */
-#define MNTK_DIR_HARDLINKS              0x10000000      /* mounted file system supports directory hard links */
-#define MNTK_AUTH_OPAQUE        0x20000000  /* authorisation decisions are not made locally */
-#define MNTK_AUTH_OPAQUE_ACCESS 0x40000000  /* VNOP_ACCESS is reliable for remote auth */
+#define MNTK_SYSTEMDATA         0x08000000      /* volume is a Data volume tightly linked with System root volume. Firmlinks, etc */
+#define MNTK_DIR_HARDLINKS      0x10000000      /* mounted file system supports directory hard links */
+#define MNTK_AUTH_OPAQUE        0x20000000      /* authorisation decisions are not made locally */
+#define MNTK_AUTH_OPAQUE_ACCESS 0x40000000      /* VNOP_ACCESS is reliable for remote auth */
 #define MNTK_EXTENDED_SECURITY  0x80000000      /* extended security supported */
 
+
+/*
+ * Internal supplemental FS control flags stored in mnt_supl_kern_flag
+ *
+ * NOTE: The 32 bits in the above-mentioned 32bit flag word (mnt_kern_flag) have been
+ * exhausted, so this is intended as a supplement.
+ */
+#define MNTK_SUPL_BASESYSTEM    0x00000001
+#define MNTK_SUPL_USE_FULLSYNC  0x00000002
+
+/*
+ * Mount Lifecycle Flags (stored in mnt_lflag)
+ */
 #define MNT_LNOTRESP            0x00000001      /* mount not responding */
 #define MNT_LUNMOUNT            0x00000002      /* mount in unmount */
 #define MNT_LFORCE              0x00000004      /* mount in forced unmount */
@@ -280,25 +295,9 @@ extern struct mount * dead_mountp;
 #define MNT_LITER               0x00000010      /* mount in iteration */
 #define MNT_LNEWVN              0x00000020      /* mount has new vnodes created */
 #define MNT_LWAIT               0x00000040      /* wait for unmount op */
-#define MNT_LUNUSED             0x00000080      /* available flag bit, used to be MNT_LITERWAIT */
+#define MNT_LMOUNT              0x00000080      /* not finished mounting */
 #define MNT_LDEAD               0x00000100      /* mount already unmounted*/
 #define MNT_LNOSUB              0x00000200      /* submount - no recursion */
-
-
-/*
- * Generic file handle
- */
-#define NFS_MAX_FH_SIZE         NFSV4_MAX_FH_SIZE
-#define NFSV4_MAX_FH_SIZE       128
-#define NFSV3_MAX_FH_SIZE       64
-#define NFSV2_MAX_FH_SIZE       32
-struct fhandle {
-	unsigned int    fh_len;                         /* length of file handle */
-	unsigned char   fh_data[NFS_MAX_FH_SIZE];       /* file handle value */
-};
-typedef struct fhandle  fhandle_t;
-
-
 
 /*
  * Filesystem configuration information. One of these exists for each
@@ -307,17 +306,17 @@ typedef struct fhandle  fhandle_t;
  */
 struct vfstable {
 	const struct vfsops *vfc_vfsops;/* filesystem operations vector */
-	char    vfc_name[MFSNAMELEN];   /* filesystem type name */
-	int     vfc_typenum;            /* historic filesystem type number */
-	int     vfc_refcount;           /* number mounted of this type */
-	int     vfc_flags;              /* permanent flags */
-	int     (*vfc_mountroot)(mount_t, vnode_t, vfs_context_t);      /* if != NULL, routine to mount root */
-	struct  vfstable *vfc_next;     /* next in list */
-	int32_t vfc_reserved1;
-	int32_t vfc_reserved2;
-	int             vfc_vfsflags;   /* for optional types */
-	void *          vfc_descptr;    /* desc table allocated address */
-	int                     vfc_descsize;   /* size allocated for desc table */
+	char        vfc_name[MFSNAMELEN];   /* filesystem type name */
+	int         vfc_typenum;            /* historic filesystem type number */
+	int         vfc_refcount;           /* number mounted of this type */
+	int         vfc_flags;              /* permanent flags */
+	int         (*vfc_mountroot)(mount_t, vnode_t, vfs_context_t);      /* if != NULL, routine to mount root */
+	struct      vfstable *vfc_next;     /* next in list */
+	int32_t     vfc_reserved1;
+	int32_t     vfc_reserved2;
+	int         vfc_vfsflags;           /* for optional types */
+	void       *vfc_descptr;            /* desc table allocated address */
+	uint32_t    vfc_descsize;           /* number of elements in desc table */
 	struct sysctl_oid       *vfc_sysctl;    /* dynamically registered sysctl node */
 };
 
@@ -442,14 +441,26 @@ int  mount_refdrain(mount_t);
 /* vfs_rootmountalloc should be kept as a private api */
 errno_t vfs_rootmountalloc(const char *, const char *, mount_t *mpp);
 
-int vfs_mount_rosv_data(void);
-int vfs_mount_vm(void);
+int vfs_mount_recovery(void);
+
+typedef uint32_t vfs_switch_root_flags_t;
+#define VFSSR_VIRTUALDEV_PROHIBITED     0x01 /* Not allowed to pivot into virtual devices (disk images).
+	                                      * This is really just because we don't have a great way to find
+	                                      * the filesystem that backs the image in order to set
+	                                      * MNTK_BACKS_ROOT on it, which would prevent even forced-unmounts.
+	                                      * Also, lots of disk images are backed by userspace processes,
+	                                      * which also seems like a bad idea for the root filesystem. */
+
+int vfs_switch_root(const char *, const char *, vfs_switch_root_flags_t);
 
 int     vfs_mountroot(void);
-void    vfs_unmountall(void);
+void    vfs_unmountall(int only_non_system);
 int     safedounmount(struct mount *, int, vfs_context_t);
 int     dounmount(struct mount *, int, int, vfs_context_t);
 void    dounmount_submounts(struct mount *, int, vfs_context_t);
+int     vfs_setmounting(vnode_t);
+void    vfs_clearmounting(vnode_t);
+void    vfs_setmountedon(vnode_t);
 
 /* xnu internal api */
 void  mount_dropcrossref(mount_t, vnode_t, int);
@@ -471,16 +482,24 @@ void mount_iterreset(mount_t);
 #define KERNEL_MOUNT_SNAPSHOT           0x04 /* Mounting a snapshot */
 #define KERNEL_MOUNT_DATAVOL            0x08 /* mount the data volume */
 #define KERNEL_MOUNT_VMVOL              0x10 /* mount the VM volume */
+#define KERNEL_MOUNT_PREBOOTVOL         0x20 /* mount the Preboot volume */
+#define KERNEL_MOUNT_RECOVERYVOL        0x40 /* mount the Recovery volume */
+#define KERNEL_MOUNT_BASESYSTEMROOT     0x80 /* mount a base root volume "instead of" the full root volume (only used during bsd_init) */
+#define KERNEL_MOUNT_DEVFS             0x100 /* kernel startup mount of devfs */
+#define KERNEL_MOUNT_FMOUNT            0x200 /* is fmount() system call */
+#define KERNEL_MOUNT_KMOUNT            0x400 /* is kernel_mount() call */
 
+/* mask for checking if any of the "mount volume by role" flags are set */
+#define KERNEL_MOUNT_VOLBYROLE_MASK (KERNEL_MOUNT_DATAVOL | KERNEL_MOUNT_VMVOL | KERNEL_MOUNT_PREBOOTVOL | KERNEL_MOUNT_RECOVERYVOL)
 
-#if NFSCLIENT || DEVFS || ROUTEFS
+/* mask for sanitizing inputs to kernel_mount() */
+#define KERNEL_MOUNT_SANITIZE_MASK (~(KERNEL_MOUNT_FMOUNT))
+
 /*
  * NOTE: kernel_mount() does not force MNT_NOSUID, MNT_NOEXEC, or MNT_NODEC for non-privileged
  * mounting credentials, as the mount(2) system call does.
  */
-int kernel_mount(char *, vnode_t, vnode_t, const char *, void *, size_t, int, uint32_t, vfs_context_t);
-boolean_t vfs_iskernelmount(mount_t);
-#endif
+int kernel_mount(const char *, vnode_t, vnode_t, const char *, void *, size_t, int, uint32_t, vfs_context_t);
 
 /* Throttled I/O API.  KPI/SPI is in systm.h. */
 
@@ -495,9 +514,9 @@ void rethrottle_thread(uthread_t ut);
 extern int num_trailing_0(uint64_t n);
 
 /* sync lock */
-extern lck_mtx_t * sync_mtx_lck;
-
 extern int sync_timeout_seconds;
+
+KALLOC_TYPE_DECLARE(mount_zone);
 
 __END_DECLS
 

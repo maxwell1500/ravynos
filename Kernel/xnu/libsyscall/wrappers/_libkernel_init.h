@@ -29,6 +29,8 @@
 #ifndef __LIBKERNEL_INIT_H
 #define __LIBKERNEL_INIT_H
 
+#include <ptrauth.h>
+#include <stdbool.h>
 #include <sys/types.h>
 #include <mach/mach.h>
 #include <mach/message.h>
@@ -45,14 +47,25 @@ struct voucher_s;
 typedef struct voucher_s *voucher_t;
 #endif
 
+typedef unsigned long long malloc_type_id_t;
+
+#if __PTRAUTH_INTRINSICS__ && __has_builtin(__builtin_ptrauth_string_discriminator)
+#define LIBKERNEL_FUNCTION_PTRAUTH(f) \
+	__ptrauth(ptrauth_key_function_pointer,1, \
+	        __builtin_ptrauth_string_discriminator("libkernel_functions_" # f) \
+	) f
+#else
+#define LIBKERNEL_FUNCTION_PTRAUTH(f) f
+#endif
+
 typedef const struct _libkernel_functions {
 	/* The following functions are included in version 1 of this structure */
 	unsigned long version;
-	void* (*dlsym)(void*, const char*);
-	void* (*malloc)(size_t);
-	void  (*free)(void*);
-	void* (*realloc)(void*, size_t);
-	void  (*_pthread_exit_if_canceled)(int);
+	void* (*LIBKERNEL_FUNCTION_PTRAUTH(dlsym))(void*, const char*);
+	void* (*LIBKERNEL_FUNCTION_PTRAUTH(malloc))(size_t);
+	void(*LIBKERNEL_FUNCTION_PTRAUTH(free))(void*);
+	void* (*LIBKERNEL_FUNCTION_PTRAUTH(realloc))(void*, size_t);
+	void(*LIBKERNEL_FUNCTION_PTRAUTH(_pthread_exit_if_canceled))(int);
 
 	/* The following functions are included in version 2 of this structure */
 	void *reserved1;
@@ -62,10 +75,15 @@ typedef const struct _libkernel_functions {
 	void *reserved5;
 
 	/* The following functions are included in version 3 of this structure */
-	void (*pthread_clear_qos_tsd)(mach_port_t);
+	void(*LIBKERNEL_FUNCTION_PTRAUTH(pthread_clear_qos_tsd))(mach_port_t);
 
 	/* The following functions are included in version 4 of this structure */
-	int (*pthread_current_stack_contains_np)(const void *, size_t);
+	int(*LIBKERNEL_FUNCTION_PTRAUTH(pthread_current_stack_contains_np))(const void *, size_t);
+
+	/* The following functions are included in version 5 of this structure */
+	void* (*LIBKERNEL_FUNCTION_PTRAUTH(malloc_type_malloc))(size_t, malloc_type_id_t);
+	void(*LIBKERNEL_FUNCTION_PTRAUTH(malloc_type_free))(void *, malloc_type_id_t);
+	void* (*LIBKERNEL_FUNCTION_PTRAUTH(malloc_type_realloc))(void *, size_t, malloc_type_id_t);
 
 	/* Subsequent versions must only add pointers! */
 } *_libkernel_functions_t;
@@ -100,8 +118,26 @@ typedef const struct _libkernel_voucher_functions {
 	voucher_mach_msg_state_t (*voucher_mach_msg_adopt)(mach_msg_header_t*);
 	void (*voucher_mach_msg_revert)(voucher_mach_msg_state_t);
 
+	/* version 2 is skipped */
+
+	/* The following functions are included in version 3 of this structure */
+	mach_msg_size_t (*voucher_mach_msg_fill_aux)(mach_msg_aux_header_t*, mach_msg_size_t);
+
 	/* Subsequent versions must only add pointers! */
 } *_libkernel_voucher_functions_t;
+
+typedef struct _libkernel_late_init_config {
+	unsigned long version;
+
+	/* Version 1 fields */
+	bool enable_system_version_compat;
+
+	/* Version 2 fields */
+	bool enable_ios_version_compat;
+
+	/* Version 3 fields */
+	bool enable_posix_spawn_filtering;
+} *_libkernel_late_init_config_t;
 
 struct ProgramVars; /* forward reference */
 
@@ -111,5 +147,17 @@ void __libkernel_init(_libkernel_functions_t fns, const char *envp[],
 kern_return_t __libkernel_platform_init(_libkernel_string_functions_t fns);
 
 kern_return_t __libkernel_voucher_init(_libkernel_voucher_functions_t fns);
+
+void __libkernel_init_late(_libkernel_late_init_config_t config);
+
+typedef struct _libkernel_init_after_boot_tasks_config {
+	unsigned long version;
+
+	/* Version 1 fields */
+	bool enable_posix_spawn_filtering;
+} *_libkernel_init_after_boot_tasks_config_t;
+
+void __libkernel_init_after_boot_tasks(
+	_libkernel_init_after_boot_tasks_config_t config);
 
 #endif // __LIBKERNEL_INIT_H

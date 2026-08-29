@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -175,7 +175,7 @@
 #include <i386/cpu_data.h>
 #endif /* __x86_64__ */
 
-#if __arm__ || __arm64__
+#if __arm64__
 #include <arm/cpu_data_internal.h>
 #endif
 
@@ -266,6 +266,10 @@ __doprnt(
 		CHAR,
 	} numeric_type = INT;
 	int             nprinted = 0;
+
+	if (radix < 2 || radix > 36) {
+		radix = 10;
+	}
 
 	while ((c = *fmt) != '\0') {
 		if (c != '%') {
@@ -361,7 +365,17 @@ __doprnt(
 
 		if (c == 'z' || c == 'Z') {
 			c = *++fmt;
-			if (sizeof(size_t) == sizeof(unsigned long)) {
+			if (sizeof(size_t) == sizeof(unsigned long long)) {
+				long_long = 1;
+			}
+		} else if (c == 't') {
+			c = *++fmt;
+			if (sizeof(ptrdiff_t) == sizeof(unsigned long long)) {
+				long_long = 1;
+			}
+		} else if (c == 'j') {
+			c = *++fmt;
+			if (sizeof(intmax_t) == sizeof(unsigned long long)) {
 				long_long = 1;
 			}
 		}
@@ -443,7 +457,7 @@ __doprnt(
 		}
 
 		case 'c':
-			c = va_arg(argp, int);
+			c = (char)va_arg(argp, int);
 			(*putc)(c, arg);
 			nprinted++;
 			break;
@@ -503,6 +517,7 @@ __doprnt(
 
 		case 'o':
 			truncate = _doprnt_truncates;
+			OS_FALLTHROUGH;
 		case 'O':
 			base = 8;
 			goto print_unsigned;
@@ -532,13 +547,14 @@ __doprnt(
 		}
 
 		case 'd':
+		case 'i':
 			truncate = _doprnt_truncates;
 			base = 10;
 			goto print_signed;
 
 		case 'u':
 			truncate = _doprnt_truncates;
-		/* FALLTHROUGH */
+			OS_FALLTHROUGH;
 		case 'U':
 			base = 10;
 			goto print_unsigned;
@@ -548,7 +564,7 @@ __doprnt(
 			if (sizeof(int) < sizeof(void *)) {
 				long_long = 1;
 			}
-		/* FALLTHROUGH */
+			OS_FALLTHROUGH;
 		case 'x':
 			truncate = _doprnt_truncates;
 			base = 16;
@@ -561,14 +577,14 @@ __doprnt(
 
 		case 'r':
 			truncate = _doprnt_truncates;
-		/* FALLTHROUGH */
+			OS_FALLTHROUGH;
 		case 'R':
 			base = radix;
 			goto print_signed;
 
 		case 'n':
 			truncate = _doprnt_truncates;
-		/* FALLTHROUGH */
+			OS_FALLTHROUGH;
 		case 'N':
 			base = radix;
 			goto print_unsigned;
@@ -631,16 +647,16 @@ print_num:
 					const char str[] = "<ptr>";
 					const char* strp = str;
 					int strl = sizeof(str) - 1;
-
+					unsigned long long u_stripped = u;
 #ifdef HAS_APPLE_PAC
 					/**
 					 * Strip out the pointer authentication code before
 					 * checking whether the pointer is a kernel address.
 					 */
-					u = (unsigned long long)VM_KERNEL_STRIP_PTR(u);
+					u_stripped = (unsigned long long)VM_KERNEL_STRIP_PTR(u);
 #endif /* HAS_APPLE_PAC */
 
-					if (u >= VM_MIN_KERNEL_AND_KEXT_ADDRESS && u <= VM_MAX_KERNEL_ADDRESS) {
+					if (u_stripped >= VM_MIN_KERNEL_AND_KEXT_ADDRESS && u_stripped <= VM_MAX_KERNEL_ADDRESS) {
 						while (*strp != '\0') {
 							(*putc)(*strp, arg);
 							strp++;
@@ -740,7 +756,7 @@ dummy_putc(int ch, void *arg)
 	 * already panicing), so we'll just do nothing instead of crashing.
 	 */
 	if (real_putc) {
-		real_putc(ch);
+		real_putc((char)ch);
 	}
 }
 
@@ -770,110 +786,76 @@ _doprnt_log(
 boolean_t       new_printf_cpu_number = FALSE;
 #endif  /* MP_PRINTF */
 
-decl_simple_lock_data(, printf_lock);
-decl_simple_lock_data(, bsd_log_spinlock);
+LCK_GRP_DECLARE(log_lock_grp, "log_group");
 
-lck_grp_t oslog_stream_lock_grp;
-decl_lck_spin_data(, oslog_stream_lock);
-void oslog_lock_init(void);
+#if defined(__x86_64__)
+SIMPLE_LOCK_DECLARE(log_lock, 0);
+#else
+LCK_TICKET_DECLARE(log_lock, &log_lock_grp);
+#endif /* __x86_64__ */
 
-extern void bsd_log_init(void);
-void bsd_log_lock(void);
+bool bsd_log_lock(bool);
+void bsd_log_lock_safe(void);
 void bsd_log_unlock(void);
 
-void
-printf_init(void)
+/*
+ * Locks OS log lock and returns true if successful, false otherwise. Locking
+ * always succeeds in a safe context but may block. Locking in an unsafe context
+ * never blocks but fails if someone else is already holding the lock.
+ *
+ * A caller is responsible to decide whether the context is safe or not.
+ *
+ * As a rule of thumb following cases are *not* considered safe:
+ *   - Interrupts are disabled
+ *   - Pre-emption is disabled
+ *   - When in a debugger
+ *   - During a panic
+ */
+bool
+bsd_log_lock(bool safe)
 {
-	/*
-	 * Lock is only really needed after the first thread is created.
-	 */
-	simple_lock_init(&printf_lock, 0);
-	simple_lock_init(&bsd_log_spinlock, 0);
-	bsd_log_init();
+	if (!safe) {
+		assert(!oslog_is_safe());
+#if defined(__x86_64__)
+		return simple_lock_try(&log_lock, &log_lock_grp);
+#else
+		return lck_ticket_lock_try(&log_lock, &log_lock_grp);
+#endif /* __x86_64__ */
+	}
+#if defined(__x86_64__)
+	simple_lock(&log_lock, &log_lock_grp);
+#else
+	lck_ticket_lock(&log_lock, &log_lock_grp);
+#endif /* __x86_64__ */
+	return true;
 }
 
+/*
+ * Locks OS log lock assuming the context is safe. See bsd_log_lock() comment
+ * for details.
+ */
 void
-bsd_log_lock(void)
+bsd_log_lock_safe(void)
 {
-#if USLOCK_DEBUG
-	if(bsd_log_spinlock.lock_type != USLOCK_TAG)
-		simple_lock_init(&bsd_log_spinlock, 0);
-#endif
-	simple_lock(&bsd_log_spinlock, LCK_GRP_NULL);
+	(void) bsd_log_lock(true);
 }
 
 void
 bsd_log_unlock(void)
 {
-	simple_unlock(&bsd_log_spinlock);
+#if defined(__x86_64__)
+	simple_unlock(&log_lock);
+#else
+	lck_ticket_unlock(&log_lock);
+#endif /* __x86_64__ */
 }
 
 void
-oslog_lock_init(void)
+conslog_putc(char c)
 {
-	lck_grp_init(&oslog_stream_lock_grp, "oslog stream", LCK_GRP_ATTR_NULL);
-	lck_spin_init(&oslog_stream_lock, &oslog_stream_lock_grp, LCK_ATTR_NULL);
-}
+	console_write_char(c);
 
-/* derived from boot_gets */
-void
-safe_gets(
-	char    *str,
-	int     maxlen)
-{
-	char *lp;
-	int c;
-	char *strmax = str + maxlen - 1; /* allow space for trailing 0 */
-
-	lp = str;
-	for (;;) {
-		c = cngetc();
-		switch (c) {
-		case '\n':
-		case '\r':
-			printf("\n");
-			*lp++ = 0;
-			return;
-
-		case '\b':
-		case '#':
-		case '\177':
-			if (lp > str) {
-				printf("\b \b");
-				lp--;
-			}
-			continue;
-
-		case '@':
-		case 'u'&037:
-			lp = str;
-			printf("\n\r");
-			continue;
-
-		default:
-			if (c >= ' ' && c < '\177') {
-				if (lp < strmax) {
-					*lp++ = c;
-					printf("%c", c);
-				} else {
-					printf("%c", '\007'); /* beep */
-				}
-			}
-		}
-	}
-}
-
-extern int disableConsoleOutput;
-
-void
-conslog_putc(
-	char c)
-{
-	if (!disableConsoleOutput) {
-		cnputc(c);
-	}
-
-#ifdef  MACH_BSD
+#ifdef MACH_BSD
 	if (!kernel_debugger_entry_count) {
 		log_putc(c);
 	}
@@ -881,41 +863,31 @@ conslog_putc(
 }
 
 void
-cons_putc_locked(
-	char c)
+cons_putc_locked(char c)
 {
-	if (!disableConsoleOutput) {
-		cnputc(c);
-	}
+	console_write_char(c);
 }
 
+__printflike(1, 0)
 static int
 vprintf_internal(const char *fmt, va_list ap_in, void *caller)
 {
-	cpu_data_t * cpu_data_p;
 	if (fmt) {
 		struct console_printbuf_state info_data;
-		cpu_data_p = current_cpu_datap();
 
 		va_list ap;
 		va_copy(ap, ap_in);
-		/*
-		 * for early boot printf()s console may not be setup,
-		 * fallback to good old cnputc
-		 */
-		if (cpu_data_p->cpu_console_buf != NULL) {
-			console_printbuf_state_init(&info_data, TRUE, TRUE);
-			__doprnt(fmt, ap, console_printbuf_putc, &info_data, 16, TRUE);
-			console_printbuf_clear(&info_data);
-		} else {
-			disable_preemption();
-			_doprnt_log(fmt, &ap, cons_putc_locked, 16);
-			enable_preemption();
-		}
+
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wformat-nonliteral"
+		os_log_with_args(OS_LOG_DEFAULT, OS_LOG_TYPE_DEFAULT, fmt, ap_in, caller);
+#pragma clang diagnostic pop
+
+		console_printbuf_state_init(&info_data, TRUE, TRUE);
+		__doprnt(fmt, ap, console_printbuf_putc, &info_data, 16, TRUE);
+		console_printbuf_clear(&info_data);
 
 		va_end(ap);
-
-		os_log_with_args(OS_LOG_DEFAULT, OS_LOG_TYPE_DEFAULT, fmt, ap_in, caller);
 	}
 	return 0;
 }
@@ -944,9 +916,7 @@ vprintf(const char *fmt, va_list ap)
 void
 consdebug_putc(char c)
 {
-	if (!disableConsoleOutput) {
-		cnputc(c);
-	}
+	console_write_char(c);
 
 	debug_putc(c);
 
@@ -958,9 +928,7 @@ consdebug_putc(char c)
 void
 consdebug_putc_unbuffered(char c)
 {
-	if (!disableConsoleOutput) {
-		cnputc_unbuffered(c);
-	}
+	console_write_unbuffered(c);
 
 	debug_putc(c);
 
@@ -987,7 +955,7 @@ paniclog_append_noflush(const char *fmt, ...)
 	va_list listp;
 
 	va_start(listp, fmt);
-	_doprnt_log(fmt, &listp, consdebug_putc, 16);
+	_doprnt_log(fmt, &listp, consdebug_putc_unbuffered, 16);
 	va_end(listp);
 
 	return 0;
@@ -1002,7 +970,7 @@ kdb_printf(const char *fmt, ...)
 	_doprnt_log(fmt, &listp, consdebug_putc, 16);
 	va_end(listp);
 
-#if CONFIG_EMBEDDED
+#if defined(__arm64__)
 	paniclog_flush();
 #endif
 
@@ -1018,7 +986,7 @@ kdb_log(const char *fmt, ...)
 	_doprnt(fmt, &listp, consdebug_log, 16);
 	va_end(listp);
 
-#if CONFIG_EMBEDDED
+#if defined(__arm64__)
 	paniclog_flush();
 #endif
 
@@ -1034,15 +1002,14 @@ kdb_printf_unbuffered(const char *fmt, ...)
 	_doprnt(fmt, &listp, consdebug_putc_unbuffered, 16);
 	va_end(listp);
 
-#if CONFIG_EMBEDDED
+#if defined(__arm64__)
 	paniclog_flush();
 #endif
 
 	return 0;
 }
 
-#if !CONFIG_EMBEDDED
-
+#if CONFIG_VSPRINTF
 static void
 copybyte(int c, void *arg)
 {
@@ -1053,7 +1020,7 @@ copybyte(int c, void *arg)
 	 * the inside pointer.
 	 */
 	char** p = arg; /* cast outside pointer */
-	**p = c;        /* store character */
+	**p = (char)c;  /* store character */
 	(*p)++;         /* increment inside pointer */
 }
 
@@ -1074,4 +1041,4 @@ sprintf(char *buf, const char *fmt, ...)
 	*copybyte_str = '\0';
 	return (int)strlen(buf);
 }
-#endif /* !CONFIG_EMBEDDED */
+#endif /* CONFIG_VSPRINTF */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2022 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -93,7 +93,13 @@
 
 #ifndef _NETINET_ICMP6_H_
 #define _NETINET_ICMP6_H_
+#ifndef DRIVERKIT
+#include <netinet/in.h>
 #include <sys/appleapiopts.h>
+#include <sys/types.h>
+#else
+#include <sys/_types.h>
+#endif /* DRIVERKIT */
 
 #define ICMPV6_PLD_MAXLEN       1232    /* IPV6_MMTU - sizeof(struct ip6_hdr)
 	                                 *  - sizeof(struct icmp6_hdr) */
@@ -179,9 +185,10 @@ struct icmp6_hdr {
 #define ICMP6_TIME_EXCEED_TRANSIT       0       /* ttl==0 in transit */
 #define ICMP6_TIME_EXCEED_REASSEMBLY    1       /* ttl==0 in reass */
 
-#define ICMP6_PARAMPROB_HEADER          0       /* erroneous header field */
-#define ICMP6_PARAMPROB_NEXTHEADER      1       /* unrecognized next header */
-#define ICMP6_PARAMPROB_OPTION          2       /* unrecognized option */
+#define ICMP6_PARAMPROB_HEADER                   0       /* erroneous header field */
+#define ICMP6_PARAMPROB_NEXTHEADER               1       /* unrecognized next header */
+#define ICMP6_PARAMPROB_OPTION                   2       /* unrecognized option */
+#define ICMP6_PARAMPROB_FIRSTFRAG_INCOMP_HDR     3       /* first fragment has incomplete IPv6 Header Chain */
 
 #define ICMP6_INFOMSG_MASK              0x80    /* all informational messages */
 
@@ -263,10 +270,7 @@ struct nd_router_advert {       /* router advertisement */
 #define ND_RA_FLAG_OTHER        0x40
 #define ND_RA_FLAG_HA           0x20
 
-/*
- * Router preference values based on draft-draves-ipngwg-router-selection-01.
- * These are non-standard definitions.
- */
+/* Router preference values based on RFC 4191 */
 #define ND_RA_FLAG_RTPREF_MASK  0x18 /* 00011000 */
 
 #define ND_RA_FLAG_RTPREF_HIGH  0x08 /* 00001000 */
@@ -333,10 +337,12 @@ struct nd_opt_hdr {             /* Neighbor discovery option header */
 #define ND_OPT_REDIRECTED_HEADER        4
 #define ND_OPT_MTU                      5
 #define ND_OPT_NONCE                    14      /* RFC 3971 */
+#define ND_OPT_PVD                      21      /* RFC 8801 */
+#define ND_OPT_ROUTE_INFO               24      /* RFC 4191 */
 #define ND_OPT_RDNSS                    25      /* RFC 6106 */
 #define ND_OPT_DNSSL                    31      /* RFC 6106 */
-
-#define ND_OPT_ROUTE_INFO               200     /* draft-ietf-ipngwg-router-preference, not officially assigned yet */
+#define ND_OPT_CAPTIVE_PORTAL           37      /* RFC 7710 */
+#define ND_OPT_PREF64                   38      /* RFC 8781 */
 
 struct nd_opt_prefix_info {     /* prefix information */
 	u_int8_t        nd_opt_pi_type;
@@ -402,6 +408,48 @@ struct nd_opt_dnssl {   /* domain name search list */
 	u_int32_t           nd_opt_dnssl_lifetime;
 	u_int8_t            nd_opt_dnssl_domains[8];
 } __attribute__((__packed__));
+
+/*
+ * PREF64 (NAT64 prefix) RFC 8781
+ */
+struct nd_opt_pref64 {   /* NAT64 prefix */
+	u_int8_t            nd_opt_pref64_type;
+	u_int8_t            nd_opt_pref64_len;
+	u_int16_t           nd_opt_pref64_scaled_lifetime_plc;
+	u_int32_t           nd_opt_pref64_prefix[3];
+} __attribute__((__packed__));
+
+#define ND_OPT_PREF64_SCALED_LIFETIME_MASK      0xfff8
+#define ND_OPT_PREF64_PLC_MASK                  0x0007
+#define ND_OPT_PREF64_LIFETIME_MAX              65528
+#define ND_OPT_PREF64_PLC_32                    5
+#define ND_OPT_PREF64_PLC_40                    4
+#define ND_OPT_PREF64_PLC_48                    3
+#define ND_OPT_PREF64_PLC_56                    2
+#define ND_OPT_PREF64_PLC_64                    1
+#define ND_OPT_PREF64_PLC_96                    0
+
+/*
+ * PvD (Provisioning Domain) RFC 8801
+ */
+struct nd_opt_pvd {
+	u_int8_t        nd_opt_pvd_type;
+	u_int8_t        nd_opt_pvd_len;
+	/* http:		1 bit */
+	/* legacy:		1 bit */
+	/* ra:			1 bit */
+	/* reserved:	9 bits */
+	/* delay:		4 bits */
+	u_int8_t        nd_opt_flags_delay[2];
+	u_int16_t       nd_opt_pvd_seq;
+	u_int8_t        nd_opt_pvd_id[1];
+} __attribute__((__packed__));
+
+#define ND_OPT_PVD_MIN_LENGTH  offsetof(struct nd_opt_pvd, nd_opt_pvd_id)
+#define ND_OPT_PVD_FLAGS_HTTP          0x80
+#define ND_OPT_PVD_FLAGS_LEGACY        0x40
+#define ND_OPT_PVD_FLAGS_RA            0x20
+#define ND_OPT_PVD_DELAY_MASK          0x0f
 
 /*
  * icmp6 namelookup
@@ -572,31 +620,19 @@ struct icmp6_filter {
 	u_int32_t icmp6_filt[8];
 };
 
-#ifdef KERNEL
-#define ICMP6_FILTER_SETPASSALL(filterp) \
-do {                                                            \
-	int i; u_char *ptr;                                     \
-	ptr = (u_char *)filterp;                                        \
-	for (i = 0; i < sizeof(struct icmp6_filter); i++)       \
-	        ptr[i] = 0xff;                                  \
-} while (0)
-#define ICMP6_FILTER_SETBLOCKALL(filterp) \
-	bzero(filterp, sizeof(struct icmp6_filter))
-#else /* KERNEL */
 #define ICMP6_FILTER_SETPASSALL(filterp) \
 	memset(filterp, 0xff, sizeof(struct icmp6_filter))
 #define ICMP6_FILTER_SETBLOCKALL(filterp) \
 	memset(filterp, 0x00, sizeof(struct icmp6_filter))
-#endif /* KERNEL */
 
 #define ICMP6_FILTER_SETPASS(type, filterp) \
-	(((filterp)->icmp6_filt[(type) >> 5]) |= (1 << ((type) & 31)))
+	(((filterp)->icmp6_filt[(type) >> 5]) |= (1u << ((type) & 31)))
 #define ICMP6_FILTER_SETBLOCK(type, filterp) \
-	(((filterp)->icmp6_filt[(type) >> 5]) &= ~(1 << ((type) & 31)))
+	(((filterp)->icmp6_filt[(type) >> 5]) &= ~(1u << ((type) & 31)))
 #define ICMP6_FILTER_WILLPASS(type, filterp) \
-	((((filterp)->icmp6_filt[(type) >> 5]) & (1 << ((type) & 31))) != 0)
+	((((filterp)->icmp6_filt[(type) >> 5]) & (1u << ((type) & 31))) != 0)
 #define ICMP6_FILTER_WILLBLOCK(type, filterp) \
-	((((filterp)->icmp6_filt[(type) >> 5]) & (1 << ((type) & 31))) == 0)
+	((((filterp)->icmp6_filt[(type) >> 5]) & (1u << ((type) & 31))) == 0)
 
 /*
  * Variables related to this implementation
@@ -659,6 +695,7 @@ struct icmp6stat {
 	u_quad_t icp6s_badra;           /* bad router advertisement */
 	u_quad_t icp6s_badredirect;     /* bad redirect message */
 	u_quad_t icp6s_rfc6980_drop;    /* NDP packet dropped based on RFC 6980 */
+	u_quad_t icp6s_badpkttoobig;    /* bad packet too big */
 };
 
 /*
@@ -690,7 +727,8 @@ struct icmp6stat {
 #define ICMPV6CTL_ND6_MAXQLEN           24
 #define ICMPV6CTL_ND6_ACCEPT_6TO4       25
 #define ICMPV6CTL_ND6_OPTIMISTIC_DAD    26      /* RFC 4429 */
-#define ICMPV6CTL_MAXID                 27
+#define ICMPV6CTL_ERRPPSLIMIT_RANDOM_INCR 27
+#define ICMPV6CTL_MAXID                 28
 
 #ifdef BSD_KERNEL_PRIVATE
 #define ICMPV6CTL_NAMES { \
@@ -736,11 +774,10 @@ void    icmp6_error_flag(struct mbuf *, int, int, int, int);
 #define ICMP6_ERROR_RST_MRCVIF  0x1
 
 void    icmp6_error(struct mbuf *, int, int, int);
-void    icmp6_error2(struct mbuf *, int, int, int, struct ifnet *);
 int     icmp6_input(struct mbuf **, int *, int);
 void    icmp6_reflect(struct mbuf *, size_t);
 void    icmp6_prepare(struct mbuf *);
-void    icmp6_redirect_input(struct mbuf *, int);
+void    icmp6_redirect_input(struct mbuf *, int, int);
 void    icmp6_redirect_output(struct mbuf *, struct rtentry *);
 
 struct  ip6ctlparam;
@@ -807,6 +844,7 @@ extern lck_rw_t icmp6_ifs_rwlock;
 	}                                                       \
 } while (0)
 
+#define ICMP6_REDIRACCEPT_DEFAULT       1
 extern int      icmp6_rediraccept;      /* accept/process redirects */
 extern int      icmp6_redirtimeout;     /* cache time for redirect routes */
 

@@ -14,39 +14,62 @@
 #include <libkern/section_keywords.h>
 
 /* Globals */
-void            (*PE_kputc)(char c) = 0;
+typedef void (*PE_kputc_t)(char);
+SECURITY_READ_ONLY_LATE(PE_kputc_t) PE_kputc;
 
-SECURITY_READ_ONLY_LATE(unsigned int)    disable_serial_output = TRUE;
+// disable_serial_output disables kprintf() *and* unbuffered panic output.
+SECURITY_READ_ONLY_LATE(bool) disable_serial_output = true;
+// disable_kprintf_output only disables kprintf().
+SECURITY_READ_ONLY_LATE(bool) disable_kprintf_output = true;
+// disable_iolog_serial_output only disables IOLog, controlled by
+// SERIALMODE_NO_IOLOG.
+SECURITY_READ_ONLY_LATE(bool) disable_iolog_serial_output = false;
+SECURITY_READ_ONLY_LATE(bool) enable_dklog_serial_output = false;
 
-decl_simple_lock_data(static, kprintf_lock);
+static SIMPLE_LOCK_DECLARE(kprintf_lock, 0);
 
 static void serial_putc_crlf(char c);
 
-void
-PE_init_kprintf(boolean_t vm_initialized)
+__startup_func
+static void
+PE_init_kprintf_config(void)
 {
-	unsigned int    boot_arg;
-
 	if (PE_state.initialized == FALSE) {
 		panic("Platform Expert not initialized");
 	}
 
-	if (!vm_initialized) {
-		simple_lock_init(&kprintf_lock, 0);
+	if (debug_boot_arg & DB_KPRT) {
+		disable_serial_output = false;
+	}
 
-		if (PE_parse_boot_argn("debug", &boot_arg, sizeof(boot_arg))) {
-			if (boot_arg & DB_KPRT) {
-				disable_serial_output = FALSE;
-			}
-		}
+#if DEBUG
+	disable_kprintf_output = false;
+#elif DEVELOPMENT
+	bool enable_kprintf_spam = false;
+	if (PE_parse_boot_argn("-enable_kprintf_spam", &enable_kprintf_spam, sizeof(enable_kprintf_spam))) {
+		disable_kprintf_output = false;
+	}
+#endif
+}
+// Do this early, so other code can depend on whether kprintf is enabled.
+STARTUP(TUNABLES, STARTUP_RANK_LAST, PE_init_kprintf_config);
 
-		if (serial_init()) {
-			PE_kputc = serial_putc_crlf;
-		} else {
-			PE_kputc = cnputc;
-		}
+__startup_func
+static void
+PE_init_kprintf(void)
+{
+	if (serial_init()) {
+		PE_kputc = serial_putc_crlf;
+	} else {
+		/**
+		 * If serial failed to initialize then fall back to using the console,
+		 * and assume the console is using the video console (because clearly
+		 * serial doesn't work).
+		 */
+		PE_kputc = console_write_unbuffered;
 	}
 }
+STARTUP(KPRINTF, STARTUP_RANK_FIRST, PE_init_kprintf);
 
 #ifdef MP_DEBUG
 static void
@@ -79,7 +102,9 @@ kprintf(const char *fmt, ...)
 	boolean_t       state;
 	void           *caller = __builtin_return_address(0);
 
-	if (!disable_serial_output) {
+	if (!disable_serial_output && !disable_kprintf_output) {
+		va_start(listp, fmt);
+		va_copy(listp2, listp);
 		/*
 		 * Spin to get kprintf lock but re-enable interrupts while failing.
 		 * This allows interrupts to be handled while waiting but
@@ -96,14 +121,11 @@ kprintf(const char *fmt, ...)
 			cpu_last_locked = cpu_number();
 		}
 
-		va_start(listp, fmt);
-		va_copy(listp2, listp);
 		_doprnt_log(fmt, &listp, PE_kputc, 16);
-		va_end(listp);
 
 		simple_unlock(&kprintf_lock);
 
-#if INTERRUPT_MASKED_DEBUG
+#if SCHED_HYGIENE_DEBUG
 		/*
 		 * kprintf holds interrupts disabled for far too long
 		 * and would trip the spin-debugger.  If we are about to reenable
@@ -117,20 +139,18 @@ kprintf(const char *fmt, ...)
 		}
 #endif
 		ml_set_interrupts_enabled(state);
+		va_end(listp);
 
-		// If interrupts are enabled
-		if (ml_get_interrupts_enabled()) {
-			os_log_with_args(OS_LOG_DEFAULT, OS_LOG_TYPE_DEFAULT, fmt, listp2, caller);
-		}
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wformat-nonliteral"
+		os_log_with_args(OS_LOG_DEFAULT, OS_LOG_TYPE_DEFAULT, fmt, listp2, caller);
 		va_end(listp2);
 	} else {
-		// If interrupts are enabled
-		if (ml_get_interrupts_enabled()) {
-			va_start(listp, fmt);
-			os_log_with_args(OS_LOG_DEFAULT, OS_LOG_TYPE_DEFAULT, fmt, listp, caller);
-			va_end(listp);
-		}
+		va_start(listp, fmt);
+		os_log_with_args(OS_LOG_DEFAULT, OS_LOG_TYPE_DEFAULT, fmt, listp, caller);
+		va_end(listp);
 	}
+#pragma clang diagnostic pop
 }
 
 static void
@@ -140,6 +160,12 @@ serial_putc_crlf(char c)
 		uart_putc('\r');
 	}
 	uart_putc(c);
+}
+
+void
+serial_putc_options(char c, bool poll)
+{
+	uart_putc_options(c, poll);
 }
 
 void

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -65,6 +65,9 @@
 #define _NETINET_ICMP_VAR_H_
 #include <sys/appleapiopts.h>
 
+#include <netinet/ip_icmp.h>
+#include <sys/types.h>
+
 /*
  * Variables related to this implementation
  * of the internet control message protocol.
@@ -93,7 +96,8 @@ struct  icmpstat {
 #define ICMPCTL_STATS           2       /* statistics (read-only) */
 #define ICMPCTL_ICMPLIM         3
 #define ICMPCTL_TIMESTAMP       4       /* allow replies to time stamp requests */
-#define ICMPCTL_MAXID           5
+#define ICMPCTL_ICMPLIM_INCR    5
+#define ICMPCTL_MAXID           6
 
 #ifdef BSD_KERNEL_PRIVATE
 #define ICMPCTL_NAMES { \
@@ -105,17 +109,6 @@ struct  icmpstat {
 }
 
 SYSCTL_DECL(_net_inet_icmp);
-#ifdef ICMP_BANDLIM
-extern int badport_bandlim(int);
-#endif
-#define BANDLIM_UNLIMITED -1
-#define BANDLIM_ICMP_UNREACH 0
-#define BANDLIM_ICMP_ECHO 1
-#define BANDLIM_ICMP_TSTAMP 2
-#define BANDLIM_RST_CLOSEDPORT 3 /* No connection, and no listeners */
-#define BANDLIM_RST_OPENPORT 4   /* No connection, listener */
-#define BANDLIM_MAX 4
-
 extern struct   icmpstat icmpstat;
 #endif /* BSD_KERNEL_PRIVATE */
 #endif /* _NETINET_ICMP_VAR_H_ */

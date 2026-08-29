@@ -1,0 +1,45 @@
+/*
+ * Copyright (c) 2021 Apple Inc. All rights reserved.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ *
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ */
+
+#ifndef _IOKIT_UIOWORKGROUP_H
+#define _IOKIT_UIOWORKGROUP_H
+
+#include <DriverKit/OSObject.iig>
+#include <DriverKit/IOUserClient.iig>
+
+enum {
+    kIOWorkGroupMaxNameLength = 64,
+};
+
+class NATIVE KERNEL IOWorkGroup : public OSObject
+{
+public:
+    virtual bool init() override;
+    virtual void free() override;
+
+    static kern_return_t
+    Create(OSString * name, IOUserClient * userClient, IOWorkGroup ** workgroup) LOCAL;
+
+    virtual kern_return_t
+    SetWorkGroupPort(mach_port_t port PORTCOPYSEND) LOCAL;
+
+    size_t GetTokenSize() LOCALONLY;
+    kern_return_t Join(void * token) LOCALONLY;
+    kern_return_t Leave(void * token) LOCALONLY;
+    kern_return_t Invalidate() LOCALONLY;
+
+    virtual kern_return_t
+    InvalidateKernel(IOUserClient * client);
+};
+
+#endif /* ! _IOKIT_UIOWORKGROUP_H */

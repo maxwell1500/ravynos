@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2010-2021 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -60,28 +60,19 @@
  *      @(#)tcp_input.c 8.12 (Berkeley) 5/24/95
  * $FreeBSD: src/sys/netinet/tcp_input.c,v 1.107.2.16 2001/08/22 00:59:12 silby Exp $
  */
+
+#include "tcp_includes.h"
+
 #include <sys/param.h>
-#include <sys/systm.h>
 #include <sys/kernel.h>
-#include <sys/protosw.h>
 #include <sys/socketvar.h>
 
 #include <net/route.h>
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
 #include <netinet/ip.h>
-
-#if INET6
 #include <netinet/ip6.h>
-#endif
 #include <netinet/ip_var.h>
-#include <netinet/tcp.h>
-#include <netinet/tcp_fsm.h>
-#include <netinet/tcp_timer.h>
-#include <netinet/tcp_var.h>
-#include <netinet/tcpip.h>
-#include <netinet/tcp_cc.h>
-#include <libkern/OSAtomic.h>
 
 int tcp_newreno_init(struct tcpcb *tp);
 int tcp_newreno_cleanup(struct tcpcb *tp);
@@ -93,7 +84,7 @@ void tcp_newreno_post_fr(struct tcpcb *tp, struct tcphdr *th);
 void tcp_newreno_after_idle(struct tcpcb *tp);
 void tcp_newreno_after_timeout(struct tcpcb *tp);
 int tcp_newreno_delay_ack(struct tcpcb *tp, struct tcphdr *th);
-void tcp_newreno_switch_cc(struct tcpcb *tp, uint16_t old_index);
+void tcp_newreno_switch_cc(struct tcpcb *tp);
 
 struct tcp_cc_algo tcp_cc_newreno = {
 	.name = "newreno",
@@ -114,7 +105,7 @@ int
 tcp_newreno_init(struct tcpcb *tp)
 {
 #pragma unused(tp)
-	OSIncrementAtomic((volatile SInt32 *)&tcp_cc_newreno.num_sockets);
+	os_atomic_inc(&tcp_cc_newreno.num_sockets, relaxed);
 	return 0;
 }
 
@@ -122,7 +113,7 @@ int
 tcp_newreno_cleanup(struct tcpcb *tp)
 {
 #pragma unused(tp)
-	OSDecrementAtomic((volatile SInt32 *)&tcp_cc_newreno.num_sockets);
+	os_atomic_dec(&tcp_cc_newreno.num_sockets, relaxed);
 	return 0;
 }
 
@@ -180,47 +171,32 @@ tcp_newreno_ack_rcvd(struct tcpcb *tp, struct tcphdr *th)
 	 * greater than or equal to the congestion window.
 	 */
 
-	u_int cw = tp->snd_cwnd;
-	u_int incr = tp->t_maxseg;
-	int acked = 0;
+	uint32_t cw = tp->snd_cwnd;
+	uint32_t incr = tp->t_maxseg;
+	uint32_t acked = 0;
 
 	acked = BYTES_ACKED(th, tp);
-	if (tcp_do_rfc3465) {
-		if (cw >= tp->snd_ssthresh) {
-			tp->t_bytes_acked += acked;
-			if (tp->t_bytes_acked >= cw) {
-				/* Time to increase the window. */
-				tp->t_bytes_acked -= cw;
-			} else {
-				/* No need to increase yet. */
-				incr = 0;
-			}
+	if (cw >= tp->snd_ssthresh) {
+		tp->t_bytes_acked += acked;
+		if (tp->t_bytes_acked >= cw) {
+			/* Time to increase the window. */
+			tp->t_bytes_acked -= cw;
 		} else {
-			/*
-			 * If the user explicitly enables RFC3465
-			 * use 2*SMSS for the "L" param.  Otherwise
-			 * use the more conservative 1*SMSS.
-			 *
-			 * (See RFC 3465 2.3 Choosing the Limit)
-			 */
-			uint32_t abc_lim;
-			abc_lim = (tcp_do_rfc3465_lim2 &&
-			    tp->snd_nxt == tp->snd_max) ? incr * 2
-			    : incr;
-
-			incr = lmin(acked, abc_lim);
+			/* No need to increase yet. */
+			incr = 0;
 		}
 	} else {
 		/*
-		 * If the window gives us less than ssthresh packets
-		 * in flight, open exponentially (segsz per packet).
-		 * Otherwise open linearly: segsz per window
-		 * (segsz^2 / cwnd per packet).
+		 * If the user explicitly enables RFC3465
+		 * use 2*SMSS for the "L" param.  Otherwise
+		 * use the more conservative 1*SMSS.
+		 *
+		 * (See RFC 3465 2.3 Choosing the Limit)
 		 */
+		uint32_t abc_lim;
+		abc_lim = (tp->snd_nxt == tp->snd_max) ? incr * 2 : incr;
 
-		if (cw >= tp->snd_ssthresh) {
-			incr = max((incr * incr / cw), 1);
-		}
+		incr = ulmin(acked, abc_lim);
 	}
 	tp->snd_cwnd = min(cw + incr, TCP_MAXWIN << tp->snd_scale);
 }
@@ -244,7 +220,11 @@ tcp_newreno_post_fr(struct tcpcb *tp, struct tcphdr *th)
 {
 	int32_t ss;
 
-	ss = tp->snd_max - th->th_ack;
+	if (th) {
+		ss = tp->snd_max - th->th_ack;
+	} else {
+		ss = tp->snd_max - tp->snd_una;
+	}
 
 	/*
 	 * Complete ack.  Inflate the congestion window to
@@ -341,20 +321,18 @@ tcp_newreno_delay_ack(struct tcpcb *tp, struct tcphdr *th)
  * window and let newreno work from there.
  */
 void
-tcp_newreno_switch_cc(struct tcpcb *tp, uint16_t old_index)
+tcp_newreno_switch_cc(struct tcpcb *tp)
 {
-#pragma unused(old_index)
-
 	uint32_t cwnd = min(tp->snd_wnd, tp->snd_cwnd);
 	if (tp->snd_cwnd >= tp->snd_ssthresh) {
 		cwnd = cwnd / tp->t_maxseg;
 	} else {
 		cwnd = cwnd / 2 / tp->t_maxseg;
 	}
-	tp->snd_cwnd = max(TCP_CC_CWND_INIT_BYTES, cwnd * tp->t_maxseg);
+	tp->snd_cwnd = max(tcp_initial_cwnd(tp), cwnd * tp->t_maxseg);
 
 	/* Start counting bytes for RFC 3465 again */
 	tp->t_bytes_acked = 0;
 
-	OSIncrementAtomic((volatile SInt32 *)&tcp_cc_newreno.num_sockets);
+	os_atomic_inc(&tcp_cc_newreno.num_sockets, relaxed);
 }

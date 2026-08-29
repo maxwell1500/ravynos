@@ -184,7 +184,9 @@
 #define XFEM_OPMASK     XCR0_OPMASK
 #define XFEM_ZMM_HI256  XCR0_ZMM_HI256
 #define XFEM_HI16_ZMM   XCR0_HI16_ZMM
-#define XFEM_ZMM        (XFEM_ZMM_HI256 | XFEM_HI16_ZMM | XFEM_OPMASK)
+#define XFEM_ZMM_OPMASK (XFEM_ZMM_HI256 | XFEM_HI16_ZMM | XFEM_OPMASK)
+/* Legacy name for Hypervisor.  Remove once it has updated. rdar://85833887&85613709 */
+#define XFEM_ZMM        XFEM_ZMM_OPMASK
 #define XCR0 (0)
 
 #define PMAP_PCID_PRESERVE (1ULL << 63)
@@ -196,6 +198,8 @@
  * If thread groups are needed for x86, set this to 1
  */
 #define CONFIG_THREAD_GROUPS 0
+#define MAX_CPUS 64
+#define MAX_PSETS 64
 
 #ifndef ASSEMBLER
 
@@ -460,6 +464,26 @@ stac(void)
 	__asm__ volatile("rdpmc" : "=a" (lo), "=d" (hi) : "c" (counter))
 
 #ifdef XNU_KERNEL_PRIVATE
+
+#define X86_MAX_LBRS    32
+struct x86_lbr_record {
+	/*
+	 * Note that some CPUs convey extra info in the upper bits of the from/to fields,
+	 * whereas others convey that information in the LBR_INFO companion MSRs.
+	 * The proper info will be extracted based on the CPU family detected at runtime
+	 * when LBR thread state is requested.
+	 */
+	uint64_t        from_rip;
+	uint64_t        to_rip;
+	uint64_t        info;
+};
+
+typedef struct x86_lbrs {
+	uint64_t                lbr_tos;
+	struct x86_lbr_record   lbrs[X86_MAX_LBRS];
+} x86_lbrs_t;
+
+
 extern void do_mfence(void);
 #define mfence() do_mfence()
 #endif
@@ -492,6 +516,14 @@ rdtsc64(void)
 {
 	uint64_t lo, hi;
 	rdtsc(lo, hi);
+	return ((hi) << 32) | (lo);
+}
+
+static inline uint64_t
+rdtsc64_nofence(void)
+{
+	uint64_t lo, hi;
+	rdtsc_nofence(lo, hi);
 	return ((hi) << 32) | (lo);
 }
 
@@ -558,12 +590,21 @@ __END_DECLS
 #define         MSR_IA32_ARCH_CAPABILITIES_L1DF_NO      (1ULL << 3)
 #define         MSR_IA32_ARCH_CAPABILITIES_SSB_NO       (1ULL << 4)
 #define         MSR_IA32_ARCH_CAPABILITIES_MDS_NO       (1ULL << 5)
+#define         MSR_IA32_ARCH_CAPABILITIES_IFU_NO       (1ULL << 6)     /* This CPU is not susceptible to the instruction-fetch erratum */
+#define         MSR_IA32_ARCH_CAPABILITIES_TSX_CTRL     (1ULL << 7)     /* This CPU supports the TSX_CTRL MSR */
+#define         MSR_IA32_ARCH_CAPABILITIES_TAA_NO       (1ULL << 8)     /* This CPU is not susceptible to TAA */
 
 #define MSR_IA32_TSX_FORCE_ABORT                0x10f
 #define         MSR_IA32_TSXFA_RTM_FORCE_ABORT  (1ULL << 0)     /* Bit 0 */
 
 #define MSR_IA32_BBL_CR_CTL                     0x119
 
+#define MSR_IA32_TSX_CTRL                       0x122
+#define         MSR_IA32_TSXCTRL_RTM_DISABLE            (1ULL << 0)     /* Bit 0 */
+#define         MSR_IA32_TSXCTRL_TSX_CPU_CLEAR          (1ULL << 1)     /* Bit 1 */
+
+#define MSR_IA32_MCU_OPT_CTRL                   0x123
+#define         MSR_IA32_MCUOPTCTRL_RNGDS_MITG_DIS      (1ULL << 0)     /* Bit 0 */
 
 #define MSR_IA32_SYSENTER_CS                    0x174
 #define MSR_IA32_SYSENTER_ESP                   0x175
@@ -584,12 +625,33 @@ __END_DECLS
 #define MSR_IA32_CLOCK_MODULATION               0x19a
 
 #define MSR_IA32_MISC_ENABLE                    0x1a0
-
-
 #define MSR_IA32_PACKAGE_THERM_STATUS           0x1b1
 #define MSR_IA32_PACKAGE_THERM_INTERRUPT        0x1b2
 
+#define MSR_IA32_LBR_SELECT                     0x1c8
+#define         LBR_SELECT_CPL_EQ_0             (1ULL)          /* R/W When set, do not capture branches ending in ring 0 */
+#define         LBR_SELECT_CPL_NEQ_0            (1ULL << 1)     /* R/W When set, do not capture branches ending in ring >0 */
+#define         LBR_SELECT_JCC                  (1ULL << 2)     /* R/W When set, do not capture conditional branches */
+#define         LBR_SELECT_NEAR_REL_CALL        (1ULL << 3)     /* R/W When set, do not capture near relative calls */
+#define         LBR_SELECT_NEAR_IND_CALL        (1ULL << 4)     /* R/W When set, do not capture near indirect calls */
+#define         LBR_SELECT_NEAR_RET             (1ULL << 5)     /* R/W When set, do not capture near returns */
+#define         LBR_SELECT_NEAR_IND_JMP         (1ULL << 6)     /* R/W When set, do not capture near indirect jumps except near indirect calls and near returns */
+#define         LBR_SELECT_NEAR_REL_JMP         (1ULL << 7)     /* R/W When set, do not capture near relative jumps except near relative calls. */
+#define         LBR_SELECT_FAR_BRANCH           (1ULL << 8)     /* R/W When set, do not capture far branches */
+#define         LBR_SELECT_HSW_EN_CALLSTACK1    (1ULL << 9)     /* Enable LBR stack to use LIFO filtering to capture Call stack profile */
+
+#define MSR_IA32_LASTBRANCH_TOS                 0x1c9
+
+/* LBR INFO MSR fields (SKL and later) */
+/* Same fields can be used for HSW in the FROM_x LBR MSRs */
+#define MSR_IA32_LBRINFO_TSX_ABORT              (1ULL << 61)
+#define MSR_IA32_LBRINFO_IN_TSX                 (1ULL << 62)
+#define MSR_IA32_LBRINFO_MISPREDICT             (1ULL << 63)
+#define MSR_IA32_LBRINFO_CYCLECNT_MASK          (0xFFFFULL)
+
 #define MSR_IA32_DEBUGCTLMSR                    0x1d9
+#define         DEBUGCTL_LBR_ENA                (1U)
+
 #define MSR_IA32_LASTBRANCHFROMIP               0x1db
 #define MSR_IA32_LASTBRANCHTOIP                 0x1dc
 #define MSR_IA32_LASTINTFROMIP                  0x1dd
@@ -614,6 +676,28 @@ __END_DECLS
 #define MSR_IA32_MTRR_FIX4K_F8000               0x26f
 
 #define MSR_IA32_PERF_FIXED_CTR0                0x309
+
+#define MSR_IA32_PERF_CAPABILITIES              0x345
+#define         PERFCAP_LBR_FMT_MASK            (0x3f)
+#define PERFCAP_LBR_TYPE(msrval) ((msrval) & PERFCAP_LBR_FMT_MASK)
+#define PERFCAP_LBR_TYPE_MISPRED                3       /* NHM */
+#define PERFCAP_LBR_TYPE_TSXINFO                4       /* HSW/BDW */
+#define PERFCAP_LBR_TYPE_EIP_WITH_LBRINFO       5       /* SKL+ */
+/* Types 6 & 7 are for Goldmont and Goldmont Plus, respectively */
+
+#define LBR_TYPE_MISPRED_FROMRIP(from_rip)      (((from_rip) & 0xFFFFFFFFFFFFULL) | (((from_rip) & (1ULL << 47)) ? 0xFFFF000000000000ULL : 0))
+#define LBR_TYPE_MISPRED_MISPREDICT(from_rip)   (((from_rip) & MSR_IA32_LBRINFO_MISPREDICT) ? 1 : 0)
+
+#define LBR_TYPE_TSXINFO_FROMRIP(from_rip)      (LBR_TYPE_MISPRED_FROMRIP(from_rip))
+#define LBR_TYPE_TSXINFO_MISPREDICT(from_rip)   (((from_rip) & MSR_IA32_LBRINFO_MISPREDICT) ? 1 : 0)
+#define LBR_TYPE_TSXINFO_TSX_ABORT(from_rip)    (((from_rip) & MSR_IA32_LBRINFO_TSX_ABORT) ? 1 : 0)
+#define LBR_TYPE_TSXINFO_IN_TSX(from_rip)       (((from_rip) & MSR_IA32_LBRINFO_IN_TSX) ? 1 : 0)
+
+#define LBR_TYPE_EIP_WITH_LBRINFO_MISPREDICT(lbrinfo)   LBR_TYPE_TSXINFO_MISPREDICT(lbrinfo)
+#define LBR_TYPE_EIP_WITH_LBRINFO_TSX_ABORT(lbrinfo)    LBR_TYPE_TSXINFO_TSX_ABORT(lbrinfo)
+#define LBR_TYPE_EIP_WITH_LBRINFO_IN_TSX(lbrinfo)       LBR_TYPE_TSXINFO_IN_TSX(lbrinfo)
+#define LBR_TYPE_EIP_WITH_LBRINFO_CYC_COUNT(lbrinfo)    ((lbrinfo) & 0xFFFFULL)
+
 
 #define MSR_IA32_PERF_FIXED_CTR_CTRL            0x38D
 #define MSR_IA32_PERF_GLOBAL_STATUS             0x38E
@@ -697,9 +781,9 @@ __END_DECLS
 #define HV_VMX_EPTP_WALK_LENGTH(wl)             (0ULL | ((((wl) - 1) & 0x7) << 3))
 #define HV_VMX_EPTP_ENABLE_AD_FLAGS             (1ULL << 6)
 
-#define MSR_AMD_HARDWARE_CFG                    0xC0010015 /* Declares TSC at P0 freq */
-#define     MSR_AMD_HARDWARE_CFG_TSC_LOCK_AT_P0 0x00080000 /* Bit 21 */
+#define MSR_AMD_HARDWARE_CFG			0xC0010015 /* Declares TSC at P0 freq */
+#define     MSR_AMD_HARDWARE_CFG_TSC_LOCK_AT_P0	0x00080000 /* Bit 21 */
 
-#define MSR_AMD_PSTATE_P0                       0xC0010064 /* Other P-State MSRs are this until P0 + 0x7 (P-State 7) */
+#define MSR_AMD_PSTATE_P0			0xC0010064 /* Other P-State MSRs are this until P0 + 0x7 (P-State 7) */
 
 #endif  /* _I386_PROC_REG_H_ */

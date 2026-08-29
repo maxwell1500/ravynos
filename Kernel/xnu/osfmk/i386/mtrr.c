@@ -27,7 +27,7 @@
  */
 
 #include <mach/kern_return.h>
-#include <kern/kalloc.h>
+#include <kern/zalloc.h>
 #include <kern/cpu_number.h>
 #include <kern/cpu_data.h>
 #include <i386/cpuid.h>
@@ -63,10 +63,7 @@ decl_simple_lock_data(static, mtrr_lock);
 #define MTRR_LOCK()     simple_lock(&mtrr_lock, LCK_GRP_NULL);
 #define MTRR_UNLOCK()   simple_unlock(&mtrr_lock);
 
-#if DEBUG || DEVELOPMENT
-#define MTRR_DEBUG 1
-#endif
-
+//#define MTRR_DEBUG 1
 #if     MTRR_DEBUG
 #define DBG(x...)       kprintf(x)
 #else
@@ -291,8 +288,9 @@ mtrr_init(void)
 	/* allocate storage for variable ranges (can block?) */
 	if (mtrr_state.var_count) {
 		mtrr_state.var_range = (mtrr_var_range_t *)
-		    kalloc(sizeof(mtrr_var_range_t) *
-		    mtrr_state.var_count);
+		    zalloc_permanent_tag(sizeof(mtrr_var_range_t) *
+		    mtrr_state.var_count, ZALIGN(mtrr_var_range_t),
+		    VM_KERN_MEMORY_CPU);
 		if (mtrr_state.var_range == NULL) {
 			mtrr_state.var_count = 0;
 		}

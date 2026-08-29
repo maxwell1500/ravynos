@@ -36,8 +36,9 @@
 #include <sys/errno.h>
 #include <i386/proc_reg.h>
 #include <i386/cpuid.h>
-#include <vm/vm_kern.h>
-#include <i386/mp.h>                    // mp_cpus_call
+#include <vm/vm_kern_xnu.h>
+#include <i386/cpu_data.h> // mp_*_preemption
+#include <i386/mp.h> // mp_cpus_call
 #include <i386/commpage/commpage.h>
 #include <i386/fpu.h>
 #include <machine/cpu_number.h> // cpu_number
@@ -59,60 +60,8 @@ update_microcode(void)
 }
 
 /* locks */
-static lck_grp_attr_t *ucode_slock_grp_attr = NULL;
-static lck_grp_t *ucode_slock_grp = NULL;
-static lck_attr_t *ucode_slock_attr = NULL;
-static lck_spin_t *ucode_slock = NULL;
-
-static kern_return_t
-register_locks(void)
-{
-	/* already allocated? */
-	if (ucode_slock_grp_attr && ucode_slock_grp && ucode_slock_attr && ucode_slock) {
-		return KERN_SUCCESS;
-	}
-
-	/* allocate lock group attribute and group */
-	if (!(ucode_slock_grp_attr = lck_grp_attr_alloc_init())) {
-		goto nomem_out;
-	}
-
-	if (!(ucode_slock_grp = lck_grp_alloc_init("uccode_lock", ucode_slock_grp_attr))) {
-		goto nomem_out;
-	}
-
-	/* Allocate lock attribute */
-	if (!(ucode_slock_attr = lck_attr_alloc_init())) {
-		goto nomem_out;
-	}
-
-	/* Allocate the spin lock */
-	/* We keep one global spin-lock. We could have one per update
-	 * request... but srsly, why would you update microcode like that?
-	 */
-	if (!(ucode_slock = lck_spin_alloc_init(ucode_slock_grp, ucode_slock_attr))) {
-		goto nomem_out;
-	}
-
-	return KERN_SUCCESS;
-
-nomem_out:
-	/* clean up */
-	if (ucode_slock) {
-		lck_spin_free(ucode_slock, ucode_slock_grp);
-	}
-	if (ucode_slock_attr) {
-		lck_attr_free(ucode_slock_attr);
-	}
-	if (ucode_slock_grp) {
-		lck_grp_free(ucode_slock_grp);
-	}
-	if (ucode_slock_grp_attr) {
-		lck_grp_attr_free(ucode_slock_grp_attr);
-	}
-
-	return KERN_NO_SPACE;
-}
+static LCK_GRP_DECLARE(ucode_slock_grp, "uccode_lock");
+static LCK_SPIN_DECLARE(ucode_slock, &ucode_slock_grp);
 
 /* Copy in an update */
 static int
@@ -147,7 +96,8 @@ copyin_update(uint64_t inaddr)
 	 * It need only be aligned to 16-bytes, according to the SDM.
 	 * This also wires it down
 	 */
-	ret = kmem_alloc_kobject(kernel_map, (vm_offset_t *)&update, size, VM_KERN_MEMORY_OSFMK);
+	ret = kmem_alloc(kernel_map, (vm_offset_t *)&update, size,
+	    KMA_KOBJECT | KMA_DATA, VM_KERN_MEMORY_OSFMK);
 	if (ret != KERN_SUCCESS) {
 		return ENOMEM;
 	}
@@ -167,13 +117,13 @@ static void
 cpu_apply_microcode(void)
 {
 	/* grab the lock */
-	lck_spin_lock(ucode_slock);
+	lck_spin_lock(&ucode_slock);
 
 	/* execute the update */
 	update_microcode();
 
 	/* release the lock */
-	lck_spin_unlock(ucode_slock);
+	lck_spin_unlock(&ucode_slock);
 }
 
 static void
@@ -243,10 +193,6 @@ static void
 xcpu_update(void)
 {
 	cpumask_t dest_cpumask;
-
-	if (register_locks() != KERN_SUCCESS) {
-		return;
-	}
 
 	mp_disable_preemption();
 	dest_cpumask = CPUMASK_OTHERS;

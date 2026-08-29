@@ -7,35 +7,66 @@ include $(MakeInc_cmd)
 include $(MakeInc_def)
 
 KERNELFILES = \
+	atomic.h \
+	alloc_util.h \
 	base.h \
-	object.h \
+	cpp_util.h \
 	log.h \
-	trace.h \
+	object.h \
 	overflow.h \
-	smart_ptr.h \
-	cpp_util.h
+	trace.h
 
 PRIVATE_KERNELFILES = \
+	atomic_private.h	\
+	atomic_private_arch.h	\
+	atomic_private_impl.h	\
+	base_private.h \
+	firehose_buffer_private.h \
+	firehose.h \
 	hash.h \
-	object_private.h \
 	ptrtools.h \
 	reason_private.h \
 	refcnt.h \
-	refcnt_internal.h
+	refcnt_internal.h \
+	cxx_safe_buffers.h \
+	system_event_log.h
 
 DATAFILES = \
-	overflow.h
-
-DRIVERKIT_DATAFILES = \
+	atomic.h \
 	base.h \
 	overflow.h
 
+DRIVERKIT_DATAFILES = \
+	atomic.h \
+	base.h \
+	overflow.h
+
+EXCLAVEKIT_DATAFILES = \
+	base.h \
+	base_private.h \
+	cxx_safe_buffers.h
+
+EXCLAVECORE_DATAFILES = \
+	base.h \
+	base_private.h  \
+	cxx_safe_buffers.h
+
 PRIVATE_DATAFILES = \
-	reason_private.h
+	atomic_private.h	\
+	atomic_private_arch.h	\
+	atomic_private_impl.h	\
+	base_private.h \
+	reason_private.h \
+	cxx_safe_buffers.h \
+	system_event_log.h
 
 INSTALL_MI_LIST = ${DATAFILES}
 
 INSTALL_DRIVERKIT_MI_LIST = ${DRIVERKIT_DATAFILES}
+
+INSTALL_EXCLAVEKIT_MI_LIST = ${EXCLAVEKIT_DATAFILES}
+
+INSTALL_EXCLAVECORE_MI_LIST = ${EXCLAVECORE_DATAFILES}
 
 INSTALL_MI_DIR = os
 

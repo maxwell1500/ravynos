@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2024 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -33,10 +33,16 @@
 #include <kern/kalloc.h>
 #include <arm/vmparam.h>
 #include <arm/cpu_data_internal.h>
+#include <arm/misc_protos.h>
+#include <arm64/machine_machdep.h>
 #include <arm64/proc_reg.h>
+#include <sys/random.h>
 #if __has_feature(ptrauth_calls)
 #include <ptrauth.h>
 #endif
+
+#include <libkern/coreanalytics/coreanalytics.h>
+
 
 struct arm_vfpv2_state {
 	__uint32_t __r[32];
@@ -52,19 +58,22 @@ typedef struct arm_vfpv2_state arm_vfpv2_state_t;
  * Forward definitions
  */
 void thread_set_child(thread_t child, int pid);
-void thread_set_parent(thread_t parent, int pid);
+static void free_debug_state(thread_t thread);
+user_addr_t thread_get_sigreturn_token(thread_t thread);
+uint32_t thread_get_sigreturn_diversifier(thread_t thread);
 
 /*
  * Maps state flavor to number of words in the state:
  */
 /* __private_extern__ */
-unsigned int _MachineStateCount[] = {
+unsigned int _MachineStateCount[THREAD_STATE_FLAVORS] = {
 	[ARM_UNIFIED_THREAD_STATE] = ARM_UNIFIED_THREAD_STATE_COUNT,
 	[ARM_VFP_STATE] = ARM_VFP_STATE_COUNT,
 	[ARM_EXCEPTION_STATE] = ARM_EXCEPTION_STATE_COUNT,
 	[ARM_DEBUG_STATE] = ARM_DEBUG_STATE_COUNT,
 	[ARM_THREAD_STATE64] = ARM_THREAD_STATE64_COUNT,
 	[ARM_EXCEPTION_STATE64] = ARM_EXCEPTION_STATE64_COUNT,
+	[ARM_EXCEPTION_STATE64_V2] = ARM_EXCEPTION_STATE64_V2_COUNT,
 	[ARM_THREAD_STATE32] = ARM_THREAD_STATE32_COUNT,
 	[ARM_DEBUG_STATE32] = ARM_DEBUG_STATE32_COUNT,
 	[ARM_DEBUG_STATE64] = ARM_DEBUG_STATE64_COUNT,
@@ -98,7 +107,13 @@ saved_state_to_thread_state64(const arm_saved_state_t * saved_state,
 }
 
 /*
- * Copy values from ts64 to saved_state
+ * Copy values from ts64 to saved_state.
+ *
+ * For safety, CPSR is sanitized as follows:
+ *
+ * - ts64->cpsr.{N,Z,C,V} are copied as-is into saved_state->cpsr
+ * - ts64->cpsr.M is ignored, and saved_state->cpsr.M is reset to EL0
+ * - All other saved_state->cpsr bits are preserved as-is
  */
 void
 thread_state64_to_saved_state(const arm_thread_state64_t * ts64,
@@ -106,29 +121,48 @@ thread_state64_to_saved_state(const arm_thread_state64_t * ts64,
 {
 	uint32_t i;
 #if __has_feature(ptrauth_calls)
-	boolean_t intr = ml_set_interrupts_enabled(FALSE);
+	uint64_t intr = ml_pac_safe_interrupts_disable();
 #endif /* __has_feature(ptrauth_calls) */
 
 	assert(is_saved_state64(saved_state));
 
-	set_saved_state_cpsr(saved_state, (ts64->cpsr & ~PSR64_MODE_MASK) | PSR64_MODE_RW_64);
+	const uint32_t CPSR_COPY_MASK = PSR64_USER_MASK;
+	const uint32_t CPSR_ZERO_MASK = PSR64_MODE_MASK;
+	const uint32_t CPSR_PRESERVE_MASK = ~(CPSR_COPY_MASK | CPSR_ZERO_MASK);
 #if __has_feature(ptrauth_calls)
+	/* BEGIN IGNORE CODESTYLE */
+	MANIPULATE_SIGNED_USER_THREAD_STATE(saved_state,
+		"and	w2, w2, %w[preserve_mask]"	"\n"
+		"mov	w6, %w[cpsr]"			"\n"
+		"and	w6, w6, %w[copy_mask]"		"\n"
+		"orr	w2, w2, w6"			"\n"
+		"str	w2, [x0, %[SS64_CPSR]]"		"\n",
+		[cpsr] "r"(ts64->cpsr),
+		[preserve_mask] "i"(CPSR_PRESERVE_MASK),
+		[copy_mask] "i"(CPSR_COPY_MASK)
+	);
+	/* END IGNORE CODESTYLE */
 	/*
 	 * Make writes to ts64->cpsr visible first, since it's useful as a
 	 * canary to detect thread-state corruption.
 	 */
 	__builtin_arm_dmb(DMB_ST);
-#endif
+#else
+	uint32_t new_cpsr = get_saved_state_cpsr(saved_state);
+	new_cpsr &= CPSR_PRESERVE_MASK;
+	new_cpsr |= (ts64->cpsr & CPSR_COPY_MASK);
+	set_user_saved_state_cpsr(saved_state, new_cpsr);
+#endif /* __has_feature(ptrauth_calls) */
 	set_saved_state_fp(saved_state, ts64->fp);
-	set_saved_state_lr(saved_state, ts64->lr);
+	set_user_saved_state_lr(saved_state, ts64->lr);
 	set_saved_state_sp(saved_state, ts64->sp);
-	set_saved_state_pc(saved_state, ts64->pc);
+	set_user_saved_state_pc(saved_state, ts64->pc);
 	for (i = 0; i < 29; i++) {
-		set_saved_state_reg(saved_state, i, ts64->x[i]);
+		set_user_saved_state_reg(saved_state, i, ts64->x[i]);
 	}
 
 #if __has_feature(ptrauth_calls)
-	ml_set_interrupts_enabled(intr);
+	ml_pac_safe_interrupts_restore(intr);
 #endif /* __has_feature(ptrauth_calls) */
 }
 
@@ -266,6 +300,23 @@ handle_set_arm_thread_state(const thread_state_t   tstate,
 }
 
 
+#if __has_feature(ptrauth_calls)
+
+static inline uint32_t
+thread_generate_sigreturn_token(
+	void *ptr,
+	thread_t thread)
+{
+	user64_addr_t token = (user64_addr_t)ptr;
+	token ^= (user64_addr_t)thread_get_sigreturn_token(thread);
+	token = (user64_addr_t)pmap_sign_user_ptr((void*)token,
+	    ptrauth_key_process_independent_data, ptrauth_string_discriminator("nonce"),
+	    thread->machine.jop_pid);
+	token >>= 32;
+	return (uint32_t)token;
+}
+#endif //__has_feature(ptrauth_calls)
+
 /*
  * Translate thread state arguments to userspace representation
  */
@@ -275,10 +326,20 @@ machine_thread_state_convert_to_user(
 	thread_t thread,
 	thread_flavor_t flavor,
 	thread_state_t tstate,
-	mach_msg_type_number_t *count)
+	mach_msg_type_number_t *count,
+	thread_set_status_flags_t tssf_flags)
 {
 #if __has_feature(ptrauth_calls)
 	arm_thread_state64_t *ts64;
+	bool preserve_flags = !!(tssf_flags & TSSF_PRESERVE_FLAGS);
+	bool stash_sigreturn_token = !!(tssf_flags & TSSF_STASH_SIGRETURN_TOKEN);
+	bool random_div = !!(tssf_flags & TSSF_RANDOM_USER_DIV);
+	bool thread_div = !!(tssf_flags & TSSF_THREAD_USER_DIV);
+	bool task_div = !!(tssf_flags & TSSF_TASK_USER_DIV);
+	uint32_t old_flags;
+	bool kernel_signed_pc = true;
+	bool kernel_signed_lr = true;
+	uint32_t userland_diversifier = 0;
 
 	switch (flavor) {
 	case ARM_THREAD_STATE:
@@ -304,13 +365,15 @@ machine_thread_state_convert_to_user(
 	}
 
 	// Note that kernel threads never have disable_user_jop set
-	if (current_thread()->machine.disable_user_jop || !thread_is_64bit_addr(current_thread()) ||
-	    thread->machine.disable_user_jop || !thread_is_64bit_addr(thread) ||
-	    (BootArgs->bootFlags & kBootFlagsDisableUserThreadStateJOP)) {
+	if ((current_thread()->machine.arm_machine_flags & ARM_MACHINE_THREAD_DISABLE_USER_JOP) ||
+	    !thread_is_64bit_addr(current_thread()) ||
+	    (thread->machine.arm_machine_flags & ARM_MACHINE_THREAD_DISABLE_USER_JOP) || !thread_is_64bit_addr(thread)
+	    ) {
 		ts64->flags = __DARWIN_ARM_THREAD_STATE64_FLAGS_NO_PTRAUTH;
 		return KERN_SUCCESS;
 	}
 
+	old_flags = ts64->flags;
 	ts64->flags = 0;
 	if (ts64->lr) {
 		// lr might contain an IB-signed return address (strip is a no-op on unsigned addresses)
@@ -324,34 +387,184 @@ machine_thread_state_convert_to_user(
 		// will round-trip correctly even if IA-signed again below (and IA-authd later)
 	}
 
-	if (BootArgs->bootFlags & kBootFlagsDisableUserJOP) {
+	if (arm_user_jop_disabled()) {
 		return KERN_SUCCESS;
 	}
 
+	if (preserve_flags) {
+		assert(random_div == false);
+		assert(thread_div == false);
+
+		/* Restore the diversifier and other opaque flags */
+		ts64->flags |= (old_flags & __DARWIN_ARM_THREAD_STATE64_USER_DIVERSIFIER_MASK);
+		userland_diversifier = old_flags & __DARWIN_ARM_THREAD_STATE64_USER_DIVERSIFIER_MASK;
+		if (!(old_flags & __DARWIN_ARM_THREAD_STATE64_FLAGS_KERNEL_SIGNED_PC)) {
+			kernel_signed_pc = false;
+		}
+		if (!(old_flags & __DARWIN_ARM_THREAD_STATE64_FLAGS_KERNEL_SIGNED_LR)) {
+			kernel_signed_lr = false;
+		}
+	} else {
+		/* Set a non zero userland diversifier */
+		if (random_div || task_div) {
+			/* Still use random div in case of task_div to avoid leaking the secret key */
+			do {
+				read_random(&userland_diversifier, sizeof(userland_diversifier));
+				userland_diversifier &=
+				    __DARWIN_ARM_THREAD_STATE64_USER_DIVERSIFIER_MASK;
+			} while (userland_diversifier == 0);
+		} else if (thread_div) {
+			userland_diversifier = thread_get_sigreturn_diversifier(thread) &
+			    __DARWIN_ARM_THREAD_STATE64_USER_DIVERSIFIER_MASK;
+		}
+		ts64->flags |= userland_diversifier;
+	}
+
+	if (kernel_signed_pc) {
+		ts64->flags |= __DARWIN_ARM_THREAD_STATE64_FLAGS_KERNEL_SIGNED_PC;
+	}
+
+	if (kernel_signed_lr) {
+		ts64->flags |= __DARWIN_ARM_THREAD_STATE64_FLAGS_KERNEL_SIGNED_LR;
+	}
+
+
 	if (ts64->pc) {
+		uint64_t discriminator = ptrauth_string_discriminator("pc");
+		if (!kernel_signed_pc && userland_diversifier != 0) {
+			discriminator = ptrauth_blend_discriminator((void *)(long)userland_diversifier,
+			    ptrauth_string_discriminator("pc"));
+		}
+
 		ts64->pc = (uintptr_t)pmap_sign_user_ptr((void*)ts64->pc,
-		    ptrauth_key_process_independent_code, ptrauth_string_discriminator("pc"));
+		    ptrauth_key_process_independent_code, discriminator,
+		    thread->machine.jop_pid);
 	}
 	if (ts64->lr && !(ts64->flags & __DARWIN_ARM_THREAD_STATE64_FLAGS_IB_SIGNED_LR)) {
+		uint64_t discriminator = ptrauth_string_discriminator("lr");
+		if (!kernel_signed_lr && userland_diversifier != 0) {
+			discriminator = ptrauth_blend_discriminator((void *)(long)userland_diversifier,
+			    ptrauth_string_discriminator("lr"));
+		}
+
 		ts64->lr = (uintptr_t)pmap_sign_user_ptr((void*)ts64->lr,
-		    ptrauth_key_process_independent_code, ptrauth_string_discriminator("lr"));
+		    ptrauth_key_process_independent_code, discriminator,
+		    thread->machine.jop_pid);
 	}
 	if (ts64->sp) {
 		ts64->sp = (uintptr_t)pmap_sign_user_ptr((void*)ts64->sp,
-		    ptrauth_key_process_independent_data, ptrauth_string_discriminator("sp"));
+		    ptrauth_key_process_independent_data, ptrauth_string_discriminator("sp"),
+		    thread->machine.jop_pid);
 	}
 	if (ts64->fp) {
 		ts64->fp = (uintptr_t)pmap_sign_user_ptr((void*)ts64->fp,
-		    ptrauth_key_process_independent_data, ptrauth_string_discriminator("fp"));
+		    ptrauth_key_process_independent_data, ptrauth_string_discriminator("fp"),
+		    thread->machine.jop_pid);
+	}
+
+	/* Stash the sigreturn token */
+	if (stash_sigreturn_token) {
+		if (kernel_signed_pc) {
+			uint32_t token = thread_generate_sigreturn_token((void *)ts64->pc, thread);
+			__DARWIN_ARM_THREAD_STATE64_SET_SIGRETURN_TOKEN(ts64, token,
+			    __DARWIN_ARM_THREAD_STATE64_SIGRETURN_PC_MASK);
+		}
+
+		if (kernel_signed_lr) {
+			uint32_t token = thread_generate_sigreturn_token((void *)ts64->lr, thread);
+			__DARWIN_ARM_THREAD_STATE64_SET_SIGRETURN_TOKEN(ts64, token,
+			    __DARWIN_ARM_THREAD_STATE64_SIGRETURN_LR_MASK);
+		}
 	}
 
 	return KERN_SUCCESS;
 #else
 	// No conversion to userspace representation on this platform
-	(void)thread; (void)flavor; (void)tstate; (void)count;
+	(void)thread; (void)flavor; (void)tstate; (void)count; (void)tssf_flags;
 	return KERN_SUCCESS;
 #endif /* __has_feature(ptrauth_calls) */
 }
+
+#if __has_feature(ptrauth_calls)
+extern char *   proc_name_address(void *p);
+
+CA_EVENT(pac_thread_state_exception_event,
+    CA_STATIC_STRING(CA_PROCNAME_LEN), proc_name);
+
+static void
+machine_thread_state_check_pac_state(
+	arm_thread_state64_t *ts64,
+	arm_thread_state64_t *old_ts64)
+{
+	bool send_event = false;
+	task_t task = current_task();
+	void *proc = get_bsdtask_info(task);
+	char *proc_name = (char *) "unknown";
+
+	if (((ts64->flags & __DARWIN_ARM_THREAD_STATE64_FLAGS_KERNEL_SIGNED_PC) &&
+	    ts64->pc != old_ts64->pc) || (!(ts64->flags & __DARWIN_ARM_THREAD_STATE64_FLAGS_IB_SIGNED_LR) &&
+	    (ts64->flags & __DARWIN_ARM_THREAD_STATE64_FLAGS_KERNEL_SIGNED_LR) && (ts64->lr != old_ts64->lr ||
+	    (old_ts64->flags & __DARWIN_ARM_THREAD_STATE64_FLAGS_IB_SIGNED_LR)))) {
+		send_event = true;
+	}
+
+	if (!send_event) {
+		return;
+	}
+
+	proc_name = proc_name_address(proc);
+	ca_event_t ca_event = CA_EVENT_ALLOCATE(pac_thread_state_exception_event);
+	CA_EVENT_TYPE(pac_thread_state_exception_event) * pexc_event = ca_event->data;
+	strlcpy(pexc_event->proc_name, proc_name, CA_PROCNAME_LEN);
+	CA_EVENT_SEND(ca_event);
+}
+
+CA_EVENT(pac_thread_state_sigreturn_event,
+    CA_STATIC_STRING(CA_PROCNAME_LEN), proc_name);
+
+static bool
+machine_thread_state_check_sigreturn_token(
+	arm_thread_state64_t *ts64,
+	thread_t thread)
+{
+	task_t task = current_task();
+	void *proc = get_bsdtask_info(task);
+	char *proc_name = (char *) "unknown";
+	bool token_matched = true;
+	bool kernel_signed_pc = !!(ts64->flags & __DARWIN_ARM_THREAD_STATE64_FLAGS_KERNEL_SIGNED_PC);
+	bool kernel_signed_lr = !!(ts64->flags & __DARWIN_ARM_THREAD_STATE64_FLAGS_KERNEL_SIGNED_LR);
+
+	if (kernel_signed_pc) {
+		/* Compute the sigreturn token */
+		uint32_t token = thread_generate_sigreturn_token((void *)ts64->pc, thread);
+		if (!__DARWIN_ARM_THREAD_STATE64_CHECK_SIGRETURN_TOKEN(ts64, token,
+		    __DARWIN_ARM_THREAD_STATE64_SIGRETURN_PC_MASK)) {
+			token_matched = false;
+		}
+	}
+
+	if (kernel_signed_lr) {
+		/* Compute the sigreturn token */
+		uint32_t token = thread_generate_sigreturn_token((void *)ts64->lr, thread);
+		if (!__DARWIN_ARM_THREAD_STATE64_CHECK_SIGRETURN_TOKEN(ts64, token,
+		    __DARWIN_ARM_THREAD_STATE64_SIGRETURN_LR_MASK)) {
+			token_matched = false;
+		}
+	}
+
+	if (token_matched) {
+		return true;
+	}
+
+	proc_name = proc_name_address(proc);
+	ca_event_t ca_event = CA_EVENT_ALLOCATE(pac_thread_state_sigreturn_event);
+	CA_EVENT_TYPE(pac_thread_state_sigreturn_event) * psig_event = ca_event->data;
+	strlcpy(psig_event->proc_name, proc_name, CA_PROCNAME_LEN);
+	CA_EVENT_SEND(ca_event);
+	return false;
+}
+
+#endif
 
 /*
  * Translate thread state arguments from userspace representation
@@ -362,10 +575,14 @@ machine_thread_state_convert_from_user(
 	thread_t thread,
 	thread_flavor_t flavor,
 	thread_state_t tstate,
-	mach_msg_type_number_t count)
+	mach_msg_type_number_t count,
+	thread_state_t old_tstate,
+	mach_msg_type_number_t old_count,
+	thread_set_status_flags_t tssf_flags)
 {
-#if __has_feature(ptrauth_calls)
 	arm_thread_state64_t *ts64;
+	arm_thread_state64_t *old_ts64 = NULL;
+	bool only_set_pc = !!(tssf_flags & TSSF_ONLY_PC);
 
 	switch (flavor) {
 	case ARM_THREAD_STATE:
@@ -376,6 +593,11 @@ machine_thread_state_convert_from_user(
 			return KERN_SUCCESS;
 		}
 		ts64 = thread_state64(unified_state);
+
+		arm_unified_thread_state_t *old_unified_state = (arm_unified_thread_state_t *)old_tstate;
+		if (old_unified_state && old_count >= ARM_UNIFIED_THREAD_STATE_COUNT) {
+			old_ts64 = thread_state64(old_unified_state);
+		}
 		break;
 	}
 	case ARM_THREAD_STATE64:
@@ -384,15 +606,39 @@ machine_thread_state_convert_from_user(
 			return KERN_SUCCESS;
 		}
 		ts64 = (arm_thread_state64_t *)tstate;
+
+		if (old_count == ARM_THREAD_STATE64_COUNT) {
+			old_ts64 = (arm_thread_state64_t *)old_tstate;
+		}
 		break;
 	}
 	default:
 		return KERN_SUCCESS;
 	}
 
+	if (only_set_pc) {
+		uint64_t new_pc = ts64->pc;
+		uint64_t new_flags = ts64->flags;
+		/* Only allow pc to be modified in new_state */
+		memcpy(ts64, old_ts64, sizeof(arm_thread_state64_t));
+		ts64->pc = new_pc;
+		ts64->flags = new_flags;
+	}
+
+#if __has_feature(ptrauth_calls)
+
+	void *userland_diversifier = NULL;
+	bool kernel_signed_pc;
+	bool kernel_signed_lr;
+	bool random_div = !!(tssf_flags & TSSF_RANDOM_USER_DIV);
+	bool thread_div = !!(tssf_flags & TSSF_THREAD_USER_DIV);
+	bool task_div = !!(tssf_flags & TSSF_TASK_USER_DIV);
+
 	// Note that kernel threads never have disable_user_jop set
-	if (current_thread()->machine.disable_user_jop || !thread_is_64bit_addr(current_thread())) {
-		if (thread->machine.disable_user_jop || !thread_is_64bit_addr(thread)) {
+	if ((current_thread()->machine.arm_machine_flags & ARM_MACHINE_THREAD_DISABLE_USER_JOP) ||
+	    !thread_is_64bit_addr(current_thread())) {
+		if ((thread->machine.arm_machine_flags & ARM_MACHINE_THREAD_DISABLE_USER_JOP) ||
+		    !thread_is_64bit_addr(thread)) {
 			ts64->flags = __DARWIN_ARM_THREAD_STATE64_FLAGS_NO_PTRAUTH;
 			return KERN_SUCCESS;
 		}
@@ -401,8 +647,9 @@ machine_thread_state_convert_from_user(
 	}
 
 	if (ts64->flags & __DARWIN_ARM_THREAD_STATE64_FLAGS_NO_PTRAUTH) {
-		if (thread->machine.disable_user_jop || !thread_is_64bit_addr(thread) ||
-		    (BootArgs->bootFlags & kBootFlagsDisableUserThreadStateJOP)) {
+		if ((thread->machine.arm_machine_flags & ARM_MACHINE_THREAD_DISABLE_USER_JOP) ||
+		    !thread_is_64bit_addr(thread)
+		    ) {
 			return KERN_SUCCESS;
 		}
 		// Disallow setting unsigned thread state on JOP-enabled processes.
@@ -425,34 +672,116 @@ machine_thread_state_convert_from_user(
 		// correctly below.
 	}
 
-	if (BootArgs->bootFlags & kBootFlagsDisableUserJOP) {
+	if (arm_user_jop_disabled()) {
 		return KERN_SUCCESS;
 	}
 
+	kernel_signed_pc = !!(ts64->flags & __DARWIN_ARM_THREAD_STATE64_FLAGS_KERNEL_SIGNED_PC);
+	kernel_signed_lr = !!(ts64->flags & __DARWIN_ARM_THREAD_STATE64_FLAGS_KERNEL_SIGNED_LR);
+	/*
+	 * Replace pc/lr with old state if allow only
+	 * user ptr flag is passed and ptrs are marked
+	 * kernel signed.
+	 */
+	if ((tssf_flags & TSSF_CHECK_USER_FLAGS) &&
+	    (kernel_signed_pc || kernel_signed_lr)) {
+		if (old_ts64 && old_count == count) {
+			/* Send a CA event if the thread state does not match */
+			machine_thread_state_check_pac_state(ts64, old_ts64);
+
+			/* Check if user ptrs needs to be replaced */
+			if ((tssf_flags & TSSF_ALLOW_ONLY_USER_PTRS) &&
+			    kernel_signed_pc) {
+				ts64->pc = old_ts64->pc;
+			}
+
+			if ((tssf_flags & TSSF_ALLOW_ONLY_USER_PTRS) &&
+			    !(ts64->flags & __DARWIN_ARM_THREAD_STATE64_FLAGS_IB_SIGNED_LR) &&
+			    kernel_signed_lr) {
+				ts64->lr = old_ts64->lr;
+				if (old_ts64->flags & __DARWIN_ARM_THREAD_STATE64_FLAGS_IB_SIGNED_LR) {
+					ts64->flags |= __DARWIN_ARM_THREAD_STATE64_FLAGS_IB_SIGNED_LR;
+				} else {
+					ts64->flags &= ~__DARWIN_ARM_THREAD_STATE64_FLAGS_IB_SIGNED_LR;
+				}
+			}
+		}
+	}
+
+	/* Validate sigreturn token */
+	if (tssf_flags & TSSF_CHECK_SIGRETURN_TOKEN) {
+		bool token_matched = machine_thread_state_check_sigreturn_token(ts64, thread);
+		if ((tssf_flags & TSSF_ALLOW_ONLY_MATCHING_TOKEN) && !token_matched) {
+			return KERN_PROTECTION_FAILURE;
+		}
+	}
+
+	/* Get the userland diversifier */
+	if (random_div && old_ts64 && old_count == count) {
+		/* Get the random diversifier from the old thread state */
+		userland_diversifier = (void *)(long)(old_ts64->flags &
+		    __DARWIN_ARM_THREAD_STATE64_USER_DIVERSIFIER_MASK);
+	} else if (thread_div) {
+		userland_diversifier = (void *)(long)(thread_get_sigreturn_diversifier(thread) &
+		    __DARWIN_ARM_THREAD_STATE64_USER_DIVERSIFIER_MASK);
+	} else if (task_div) {
+		userland_diversifier =
+		    (void *)(long)((get_threadtask(thread)->hardened_exception_action.signed_pc_key) &
+		    __DARWIN_ARM_THREAD_STATE64_USER_DIVERSIFIER_MASK);
+	}
+
 	if (ts64->pc) {
+		uint64_t discriminator = ptrauth_string_discriminator("pc");
+		if (!kernel_signed_pc && userland_diversifier != 0) {
+			discriminator = ptrauth_blend_discriminator(userland_diversifier,
+			    ptrauth_string_discriminator("pc"));
+		}
 		ts64->pc = (uintptr_t)pmap_auth_user_ptr((void*)ts64->pc,
-		    ptrauth_key_process_independent_code, ptrauth_string_discriminator("pc"));
+		    ptrauth_key_process_independent_code, discriminator,
+		    thread->machine.jop_pid);
 	}
 	if (ts64->lr && !(ts64->flags & __DARWIN_ARM_THREAD_STATE64_FLAGS_IB_SIGNED_LR)) {
+		uint64_t discriminator = ptrauth_string_discriminator("lr");
+		if (!kernel_signed_lr && userland_diversifier != 0) {
+			discriminator = ptrauth_blend_discriminator(userland_diversifier,
+			    ptrauth_string_discriminator("lr"));
+		}
 		ts64->lr = (uintptr_t)pmap_auth_user_ptr((void*)ts64->lr,
-		    ptrauth_key_process_independent_code, ptrauth_string_discriminator("lr"));
+		    ptrauth_key_process_independent_code, discriminator,
+		    thread->machine.jop_pid);
 	}
 	if (ts64->sp) {
 		ts64->sp = (uintptr_t)pmap_auth_user_ptr((void*)ts64->sp,
-		    ptrauth_key_process_independent_data, ptrauth_string_discriminator("sp"));
+		    ptrauth_key_process_independent_data, ptrauth_string_discriminator("sp"),
+		    thread->machine.jop_pid);
 	}
 	if (ts64->fp) {
 		ts64->fp = (uintptr_t)pmap_auth_user_ptr((void*)ts64->fp,
-		    ptrauth_key_process_independent_data, ptrauth_string_discriminator("fp"));
+		    ptrauth_key_process_independent_data, ptrauth_string_discriminator("fp"),
+		    thread->machine.jop_pid);
 	}
 
 	return KERN_SUCCESS;
 #else
 	// No conversion from userspace representation on this platform
 	(void)thread; (void)flavor; (void)tstate; (void)count;
+	(void)old_tstate; (void)old_count; (void)tssf_flags;
 	return KERN_SUCCESS;
 #endif /* __has_feature(ptrauth_calls) */
 }
+
+#if __has_feature(ptrauth_calls)
+bool
+machine_thread_state_is_debug_flavor(int flavor)
+{
+	if (flavor == ARM_DEBUG_STATE ||
+	    flavor == ARM_DEBUG_STATE64 ||
+	    flavor == ARM_DEBUG_STATE32) {
+		return true;
+	}
+	return false;
+}
+#endif /* __has_feature(ptrauth_calls) */
 
 /*
  * Translate signal context data pointer to userspace representation
@@ -460,22 +789,24 @@ machine_thread_state_convert_from_user(
 
 kern_return_t
 machine_thread_siguctx_pointer_convert_to_user(
-	__assert_only thread_t thread,
+	thread_t thread,
 	user_addr_t *uctxp)
 {
 #if __has_feature(ptrauth_calls)
-	if (current_thread()->machine.disable_user_jop || !thread_is_64bit_addr(current_thread())) {
-		assert(thread->machine.disable_user_jop || !thread_is_64bit_addr(thread));
+	if ((current_thread()->machine.arm_machine_flags & ARM_MACHINE_THREAD_DISABLE_USER_JOP) ||
+	    !thread_is_64bit_addr(current_thread())) {
+		assert((thread->machine.arm_machine_flags & ARM_MACHINE_THREAD_DISABLE_USER_JOP) || !thread_is_64bit_addr(thread));
 		return KERN_SUCCESS;
 	}
 
-	if (BootArgs->bootFlags & kBootFlagsDisableUserJOP) {
+	if (arm_user_jop_disabled()) {
 		return KERN_SUCCESS;
 	}
 
 	if (*uctxp) {
 		*uctxp = (uintptr_t)pmap_sign_user_ptr((void*)*uctxp,
-		    ptrauth_key_process_independent_data, ptrauth_string_discriminator("uctx"));
+		    ptrauth_key_process_independent_data, ptrauth_string_discriminator("uctx"),
+		    thread->machine.jop_pid);
 	}
 
 	return KERN_SUCCESS;
@@ -492,24 +823,26 @@ machine_thread_siguctx_pointer_convert_to_user(
 
 kern_return_t
 machine_thread_function_pointers_convert_from_user(
-	__assert_only thread_t thread,
+	thread_t thread,
 	user_addr_t *fptrs,
 	uint32_t count)
 {
 #if __has_feature(ptrauth_calls)
-	if (current_thread()->machine.disable_user_jop || !thread_is_64bit_addr(current_thread())) {
-		assert(thread->machine.disable_user_jop || !thread_is_64bit_addr(thread));
+	if ((current_thread()->machine.arm_machine_flags & ARM_MACHINE_THREAD_DISABLE_USER_JOP) ||
+	    !thread_is_64bit_addr(current_thread())) {
+		assert((thread->machine.arm_machine_flags & ARM_MACHINE_THREAD_DISABLE_USER_JOP) ||
+		    !thread_is_64bit_addr(thread));
 		return KERN_SUCCESS;
 	}
 
-	if (BootArgs->bootFlags & kBootFlagsDisableUserJOP) {
+	if (arm_user_jop_disabled()) {
 		return KERN_SUCCESS;
 	}
 
 	while (count--) {
 		if (*fptrs) {
 			*fptrs = (uintptr_t)pmap_auth_user_ptr((void*)*fptrs,
-			    ptrauth_key_function_pointer, 0);
+			    ptrauth_key_function_pointer, 0, thread->machine.jop_pid);
 		}
 		fptrs++;
 	}
@@ -601,6 +934,7 @@ machine_thread_get_state(thread_t                 thread,
 		if (rn) {
 			return rn;
 		}
+
 		break;
 	}
 #endif
@@ -619,7 +953,7 @@ machine_thread_get_state(thread_t                 thread,
 		saved_state = saved_state32(thread->machine.upcb);
 
 		state->exception = saved_state->exception;
-		state->fsr = saved_state->esr;
+		state->fsr = (uint32_t) saved_state->esr;
 		state->far = saved_state->far;
 
 		*count = ARM_EXCEPTION_STATE_COUNT;
@@ -639,11 +973,31 @@ machine_thread_get_state(thread_t                 thread,
 		state = (struct arm_exception_state64 *) tstate;
 		saved_state = saved_state64(thread->machine.upcb);
 
-		state->exception = saved_state->exception;
+		state->exception = 0;
+		state->far = saved_state->far;
+		state->esr = (uint32_t) saved_state->esr;
+
+		*count = ARM_EXCEPTION_STATE64_COUNT;
+		break;
+	}
+	case ARM_EXCEPTION_STATE64_V2:{
+		struct arm_exception_state64_v2 *state;
+		struct arm_saved_state64 *saved_state;
+
+		if (*count < ARM_EXCEPTION_STATE64_V2_COUNT) {
+			return KERN_INVALID_ARGUMENT;
+		}
+		if (!thread_is_64bit_data(thread)) {
+			return KERN_INVALID_ARGUMENT;
+		}
+
+		state = (struct arm_exception_state64_v2 *) tstate;
+		saved_state = saved_state64(thread->machine.upcb);
+
 		state->far = saved_state->far;
 		state->esr = saved_state->esr;
 
-		*count = ARM_EXCEPTION_STATE64_COUNT;
+		*count = ARM_EXCEPTION_STATE64_V2_COUNT;
 		break;
 	}
 	case ARM_DEBUG_STATE:{
@@ -788,6 +1142,7 @@ machine_thread_get_state(thread_t                 thread,
 		assert(sizeof(*state) == sizeof(*thread_state));
 		bcopy(thread_state, state, sizeof(arm_neon_state64_t));
 
+
 		*count = ARM_NEON_STATE64_COUNT;
 		break;
 	}
@@ -868,7 +1223,7 @@ machine_thread_get_kern_state(thread_t                 thread,
 void
 machine_thread_switch_addrmode(thread_t thread)
 {
-	if (task_has_64Bit_data(thread->task)) {
+	if (task_has_64Bit_data(get_threadtask(thread))) {
 		thread->machine.upcb->ash.flavor = ARM_SAVED_STATE64;
 		thread->machine.upcb->ash.count = ARM_SAVED_STATE64_COUNT;
 		thread->machine.uNeon->nsh.flavor = ARM_NEON_SAVED_STATE64;
@@ -932,6 +1287,7 @@ machine_thread_set_state(thread_t               thread,
 			return KERN_INVALID_ARGUMENT;
 		}
 
+
 		rn = handle_set_arm64_thread_state(tstate, count, thread->machine.upcb);
 		if (rn) {
 			return rn;
@@ -950,6 +1306,16 @@ machine_thread_set_state(thread_t               thread,
 	}
 	case ARM_EXCEPTION_STATE64:{
 		if (count != ARM_EXCEPTION_STATE64_COUNT) {
+			return KERN_INVALID_ARGUMENT;
+		}
+		if (!thread_is_64bit_data(thread)) {
+			return KERN_INVALID_ARGUMENT;
+		}
+
+		break;
+	}
+	case ARM_EXCEPTION_STATE64_V2:{
+		if (count != ARM_EXCEPTION_STATE64_V2_COUNT) {
 			return KERN_INVALID_ARGUMENT;
 		}
 		if (!thread_is_64bit_data(thread)) {
@@ -988,22 +1354,13 @@ machine_thread_set_state(thread_t               thread,
 		}
 
 		if (!enabled) {
-			arm_debug_state32_t *thread_state = find_debug_state32(thread);
-			if (thread_state != NULL) {
-				void *pTmp = thread->machine.DebugData;
-				thread->machine.DebugData = NULL;
-				zfree(ads_zone, pTmp);
-			}
+			free_debug_state(thread);
 		} else {
-			arm_debug_state32_t *thread_state = find_debug_state32(thread);
+			arm_debug_state32_t *thread_state = find_or_allocate_debug_state32(thread);
+
 			if (thread_state == NULL) {
-				thread->machine.DebugData = zalloc(ads_zone);
-				bzero(thread->machine.DebugData, sizeof *(thread->machine.DebugData));
-				thread->machine.DebugData->dsh.flavor = ARM_DEBUG_STATE32;
-				thread->machine.DebugData->dsh.count = ARM_DEBUG_STATE32_COUNT;
-				thread_state = find_debug_state32(thread);
+				return KERN_FAILURE;
 			}
-			assert(NULL != thread_state);
 
 			for (i = 0; i < 16; i++) {
 				/* set appropriate privilege; mask out unknown bits */
@@ -1051,7 +1408,7 @@ machine_thread_set_state(thread_t               thread,
 
 		state = (arm_debug_state32_t *) tstate;
 
-		if (state->mdscr_el1 & 0x1) {
+		if (state->mdscr_el1 & MDSCR_SS) {
 			enabled = TRUE;
 		}
 
@@ -1070,27 +1427,18 @@ machine_thread_set_state(thread_t               thread,
 		}
 
 		if (!enabled) {
-			arm_debug_state32_t *thread_state = find_debug_state32(thread);
-			if (thread_state != NULL) {
-				void *pTmp = thread->machine.DebugData;
-				thread->machine.DebugData = NULL;
-				zfree(ads_zone, pTmp);
-			}
+			free_debug_state(thread);
 		} else {
-			arm_debug_state32_t *thread_state = find_debug_state32(thread);
-			if (thread_state == NULL) {
-				thread->machine.DebugData = zalloc(ads_zone);
-				bzero(thread->machine.DebugData, sizeof *(thread->machine.DebugData));
-				thread->machine.DebugData->dsh.flavor = ARM_DEBUG_STATE32;
-				thread->machine.DebugData->dsh.count = ARM_DEBUG_STATE32_COUNT;
-				thread_state = find_debug_state32(thread);
-			}
-			assert(NULL != thread_state);
+			arm_debug_state32_t * thread_state = find_or_allocate_debug_state32(thread);
 
-			if (state->mdscr_el1 & 0x1) {
-				thread_state->mdscr_el1 |= 0x1;
+			if (thread_state == NULL) {
+				return KERN_FAILURE;
+			}
+
+			if (state->mdscr_el1 & MDSCR_SS) {
+				thread_state->mdscr_el1 |= MDSCR_SS;
 			} else {
-				thread_state->mdscr_el1 &= ~0x1;
+				thread_state->mdscr_el1 &= ~MDSCR_SS;
 			}
 
 			for (i = 0; i < 16; i++) {
@@ -1137,7 +1485,7 @@ machine_thread_set_state(thread_t               thread,
 
 		state = (arm_debug_state64_t *) tstate;
 
-		if (state->mdscr_el1 & 0x1) {
+		if (state->mdscr_el1 & MDSCR_SS) {
 			enabled = TRUE;
 		}
 
@@ -1155,27 +1503,18 @@ machine_thread_set_state(thread_t               thread,
 		}
 
 		if (!enabled) {
-			arm_debug_state64_t *thread_state = find_debug_state64(thread);
-			if (thread_state != NULL) {
-				void *pTmp = thread->machine.DebugData;
-				thread->machine.DebugData = NULL;
-				zfree(ads_zone, pTmp);
-			}
+			free_debug_state(thread);
 		} else {
-			arm_debug_state64_t *thread_state = find_debug_state64(thread);
-			if (thread_state == NULL) {
-				thread->machine.DebugData = zalloc(ads_zone);
-				bzero(thread->machine.DebugData, sizeof *(thread->machine.DebugData));
-				thread->machine.DebugData->dsh.flavor = ARM_DEBUG_STATE64;
-				thread->machine.DebugData->dsh.count = ARM_DEBUG_STATE64_COUNT;
-				thread_state = find_debug_state64(thread);
-			}
-			assert(NULL != thread_state);
+			arm_debug_state64_t *thread_state = find_or_allocate_debug_state64(thread);
 
-			if (state->mdscr_el1 & 0x1) {
-				thread_state->mdscr_el1 |= 0x1;
+			if (thread_state == NULL) {
+				return KERN_FAILURE;
+			}
+
+			if (state->mdscr_el1 & MDSCR_SS) {
+				thread_state->mdscr_el1 |= MDSCR_SS;
 			} else {
-				thread_state->mdscr_el1 &= ~0x1;
+				thread_state->mdscr_el1 &= ~MDSCR_SS;
 			}
 
 			for (i = 0; i < 16; i++) {
@@ -1274,6 +1613,7 @@ machine_thread_set_state(thread_t               thread,
 		assert(sizeof(*state) == sizeof(*thread_state));
 		bcopy(state, thread_state, sizeof(arm_neon_state64_t));
 
+
 		thread->machine.uNeon->nsh.flavor = ARM_NEON_SAVED_STATE64;
 		thread->machine.uNeon->nsh.count = ARM_NEON_SAVED_STATE64_COUNT;
 		break;
@@ -1296,14 +1636,14 @@ machine_thread_pc(thread_t thread)
 void
 machine_thread_reset_pc(thread_t thread, mach_vm_address_t pc)
 {
-	set_saved_state_pc(get_user_regs(thread), (register_t)pc);
+	set_user_saved_state_pc(get_user_regs(thread), (register_t)pc);
 }
 
 /*
  * Routine: machine_thread_state_initialize
  *
  */
-kern_return_t
+void
 machine_thread_state_initialize(thread_t thread)
 {
 	arm_context_t *context = thread->machine.contextData;
@@ -1323,6 +1663,7 @@ machine_thread_state_initialize(thread_t thread)
 		} else {
 			context->ns.ns_32.fpcr = FPCR_DEFAULT_32;
 		}
+		context->ss.ss_64.cpsr = PSR64_USER64_DEFAULT;
 	}
 
 	thread->machine.DebugData = NULL;
@@ -1330,13 +1671,28 @@ machine_thread_state_initialize(thread_t thread)
 #if defined(HAS_APPLE_PAC)
 	/* Sign the initial user-space thread state */
 	if (thread->machine.upcb != NULL) {
-		boolean_t intr = ml_set_interrupts_enabled(FALSE);
-		ml_sign_thread_state(thread->machine.upcb, 0, 0, 0, 0, 0);
-		ml_set_interrupts_enabled(intr);
+		uint64_t intr = ml_pac_safe_interrupts_disable();
+		asm volatile (
+                        "mov	x0, %[iss]"             "\n"
+                        "mov	x1, #0"                 "\n"
+                        "mov	w2, %w[usr]"            "\n"
+                        "mov	x3, #0"                 "\n"
+                        "mov	x4, #0"                 "\n"
+                        "mov	x5, #0"                 "\n"
+                        "msr	SPSel, #1"              "\n"
+                        VERIFY_USER_THREAD_STATE_INSTR  "\n"
+                        "mov	x6, lr"                 "\n"
+                        "bl     _ml_sign_thread_state"  "\n"
+                        "msr	SPSel, #0"              "\n"
+                        "mov	lr, x6"                 "\n"
+                        :
+                        : [iss] "r"(thread->machine.upcb), [usr] "r"(thread->machine.upcb->ss_64.cpsr),
+                          VERIFY_USER_THREAD_STATE_INPUTS
+                        : "x0", "x1", "x2", "x3", "x4", "x5", "x6"
+                );
+		ml_pac_safe_interrupts_restore(intr);
 	}
 #endif /* defined(HAS_APPLE_PAC) */
-
-	return KERN_SUCCESS;
 }
 
 /*
@@ -1358,9 +1714,19 @@ machine_thread_dup(thread_t self,
 	bcopy(self_saved_state, target_saved_state, sizeof(struct arm_saved_state));
 #if defined(HAS_APPLE_PAC)
 	if (!is_corpse && is_saved_state64(self_saved_state)) {
-		check_and_sign_copied_thread_state(target_saved_state, self_saved_state);
+		check_and_sign_copied_user_thread_state(target_saved_state, self_saved_state);
 	}
 #endif /* defined(HAS_APPLE_PAC) */
+
+	arm_neon_saved_state_t *self_neon_state = self->machine.uNeon;
+	arm_neon_saved_state_t *target_neon_state = target->machine.uNeon;
+	bcopy(self_neon_state, target_neon_state, sizeof(*target_neon_state));
+
+#if HAVE_MACHINE_THREAD_MATRIX_STATE
+	if (self->machine.umatrix_hdr) {
+		machine_thread_matrix_state_dup(target);
+	}
+#endif
 
 	return KERN_SUCCESS;
 }
@@ -1428,6 +1794,78 @@ find_debug_state64(thread_t thread)
 	}
 }
 
+os_refgrp_decl(static, dbg_refgrp, "arm_debug_state", NULL);
+
+/**
+ *  Finds the debug state for the given 64 bit thread, allocating one if it
+ *  does not exist.
+ *
+ *  @param thread 64 bit thread to find or allocate debug state for
+ *
+ *  @returns A pointer to the given thread's 64 bit debug state or a null
+ *           pointer if the given thread is null or the allocation of a new
+ *           debug state fails.
+ */
+arm_debug_state64_t *
+find_or_allocate_debug_state64(thread_t thread)
+{
+	arm_debug_state64_t *thread_state = find_debug_state64(thread);
+	if (thread != NULL && thread_state == NULL) {
+		thread->machine.DebugData = zalloc_flags(ads_zone,
+		    Z_WAITOK | Z_NOFAIL);
+		bzero(thread->machine.DebugData, sizeof *(thread->machine.DebugData));
+		thread->machine.DebugData->dsh.flavor = ARM_DEBUG_STATE64;
+		thread->machine.DebugData->dsh.count = ARM_DEBUG_STATE64_COUNT;
+		os_ref_init(&thread->machine.DebugData->ref, &dbg_refgrp);
+		thread_state = find_debug_state64(thread);
+	}
+	return thread_state;
+}
+
+/**
+ *  Finds the debug state for the given 32 bit thread, allocating one if it
+ *  does not exist.
+ *
+ *  @param thread 32 bit thread to find or allocate debug state for
+ *
+ *  @returns A pointer to the given thread's 32 bit debug state or a null
+ *           pointer if the given thread is null or the allocation of a new
+ *           debug state fails.
+ */
+arm_debug_state32_t *
+find_or_allocate_debug_state32(thread_t thread)
+{
+	arm_debug_state32_t *thread_state = find_debug_state32(thread);
+	if (thread != NULL && thread_state == NULL) {
+		thread->machine.DebugData = zalloc_flags(ads_zone,
+		    Z_WAITOK | Z_NOFAIL);
+		bzero(thread->machine.DebugData, sizeof *(thread->machine.DebugData));
+		thread->machine.DebugData->dsh.flavor = ARM_DEBUG_STATE32;
+		thread->machine.DebugData->dsh.count = ARM_DEBUG_STATE32_COUNT;
+		os_ref_init(&thread->machine.DebugData->ref, &dbg_refgrp);
+		thread_state = find_debug_state32(thread);
+	}
+	return thread_state;
+}
+
+/**
+ *	Frees a thread's debug state if allocated. Otherwise does nothing.
+ *
+ *  @param thread thread to free the debug state of
+ */
+static inline void
+free_debug_state(thread_t thread)
+{
+	if (thread != NULL && thread->machine.DebugData != NULL) {
+		arm_debug_state_t *pTmp = thread->machine.DebugData;
+		thread->machine.DebugData = NULL;
+
+		if (os_ref_release(&pTmp->ref) == 0) {
+			zfree(ads_zone, pTmp);
+		}
+	}
+}
+
 /*
  * Routine: thread_userstack
  *
@@ -1459,7 +1897,8 @@ thread_userstack(__unused thread_t  thread,
 			break;
 		}
 
-	/* INTENTIONAL FALL THROUGH (see machine_thread_set_state) */
+		/* INTENTIONAL FALL THROUGH (see machine_thread_set_state) */
+		OS_FALLTHROUGH;
 	case ARM_THREAD_STATE32:
 		if (count != ARM_THREAD_STATE32_COUNT) {
 			return KERN_INVALID_ARGUMENT;
@@ -1541,7 +1980,7 @@ thread_setuserstack(thread_t          thread,
  * Routine: thread_adjuserstack
  *
  */
-uint64_t
+user_addr_t
 thread_adjuserstack(thread_t thread,
     int      adjust)
 {
@@ -1552,10 +1991,11 @@ thread_adjuserstack(thread_t thread,
 
 	sp = get_saved_state_sp(sv);
 	sp += adjust;
-	set_saved_state_sp(sv, sp);;
+	set_saved_state_sp(sv, sp);
 
 	return sp;
 }
+
 
 /*
  * Routine: thread_setentrypoint
@@ -1567,9 +2007,17 @@ thread_setentrypoint(thread_t         thread,
 {
 	struct arm_saved_state *sv;
 
+#if HAS_APPLE_PAC
+	uint64_t intr = ml_pac_safe_interrupts_disable();
+#endif
+
 	sv = get_user_regs(thread);
 
-	set_saved_state_pc(sv, entry);
+	set_user_saved_state_pc(sv, entry);
+
+#if HAS_APPLE_PAC
+	ml_pac_safe_interrupts_restore(intr);
+#endif
 
 	return;
 }
@@ -1649,25 +2097,8 @@ thread_set_child(thread_t child,
 
 	child_state = get_user_regs(child);
 
-	set_saved_state_reg(child_state, 0, pid);
-	set_saved_state_reg(child_state, 1, 1ULL);
-}
-
-
-/*
- * Routine: thread_set_parent
- *
- */
-void
-thread_set_parent(thread_t parent,
-    int      pid)
-{
-	struct arm_saved_state *parent_state;
-
-	parent_state = get_user_regs(parent);
-
-	set_saved_state_reg(parent_state, 0, pid);
-	set_saved_state_reg(parent_state, 1, 0);
+	set_user_saved_state_reg(child_state, 0, pid);
+	set_user_saved_state_reg(child_state, 1, 1ULL);
 }
 
 
@@ -1690,7 +2121,7 @@ act_thread_csave(void)
 	unsigned int    val;
 	thread_t thread = current_thread();
 
-	ic = (struct arm_act_context *) kalloc(sizeof(struct arm_act_context));
+	ic = kalloc_type(struct arm_act_context, Z_WAITOK);
 	if (ic == (struct arm_act_context *) NULL) {
 		return (void *) 0;
 	}
@@ -1698,7 +2129,7 @@ act_thread_csave(void)
 	val = ARM_UNIFIED_THREAD_STATE_COUNT;
 	kret = machine_thread_get_state(thread, ARM_THREAD_STATE, (thread_state_t)&ic->ss, &val);
 	if (kret != KERN_SUCCESS) {
-		kfree(ic, sizeof(struct arm_act_context));
+		kfree_type(struct arm_act_context, ic);
 		return (void *) 0;
 	}
 
@@ -1717,7 +2148,7 @@ act_thread_csave(void)
 		    &val);
 	}
 	if (kret != KERN_SUCCESS) {
-		kfree(ic, sizeof(struct arm_act_context));
+		kfree_type(struct arm_act_context, ic);
 		return (void *) 0;
 	}
 #endif
@@ -1762,7 +2193,7 @@ act_thread_catt(void * ctx)
 	}
 #endif
 out:
-	kfree(ic, sizeof(struct arm_act_context));
+	kfree_type(struct arm_act_context, ic);
 }
 
 /*
@@ -1772,7 +2203,7 @@ out:
 void
 act_thread_cfree(void *ctx)
 {
-	kfree(ctx, sizeof(struct arm_act_context));
+	kfree_type(struct arm_act_context, ctx);
 }
 
 kern_return_t
@@ -1840,7 +2271,7 @@ thread_set_wq_state64(thread_t       thread,
 	 * like sp.
 	 */
 	thread_state64_to_saved_state(state, saved_state);
-	set_saved_state_cpsr(saved_state, PSR64_USER64_DEFAULT);
+	set_user_saved_state_cpsr(saved_state, PSR64_USER64_DEFAULT);
 
 	if (curth != thread) {
 		thread_unlock(thread);

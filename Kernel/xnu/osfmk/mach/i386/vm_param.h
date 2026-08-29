@@ -90,10 +90,19 @@
 #ifndef _MACH_I386_VM_PARAM_H_
 #define _MACH_I386_VM_PARAM_H_
 
+#if defined (__i386__) || defined (__x86_64__)
+
+#if !defined(KERNEL) && !defined(__ASSEMBLER__)
+
+#include <mach/vm_page_size.h>
+#endif
+
 #define BYTE_SIZE               8               /* byte size in bits */
 
 #define I386_PGBYTES            4096            /* bytes per 80386 page */
 #define I386_PGSHIFT            12              /* bitshift for pages */
+
+#if defined(KERNEL)
 
 #define PAGE_SIZE               I386_PGBYTES
 #define PAGE_SHIFT              I386_PGSHIFT
@@ -131,13 +140,35 @@
 	                                ~(I386_PGBYTES-1))
 #define i386_trunc_page(x)      (((pmap_paddr_t)(x)) & ~(I386_PGBYTES-1))
 
+#else /* KERNEL */
 
+#if !defined(__MAC_OS_X_VERSION_MIN_REQUIRED) || (__MAC_OS_X_VERSION_MIN_REQUIRED < 101600)
+#define PAGE_SHIFT              I386_PGSHIFT
+#define PAGE_SIZE               I386_PGBYTES
+#define PAGE_MASK               (PAGE_SIZE-1)
+#else /* !defined(__MAC_OS_X_VERSION_MIN_REQUIRED) || (__MAC_OS_X_VERSION_MIN_REQUIRED < 101600) */
+#define PAGE_SHIFT              vm_page_shift
+#define PAGE_SIZE               vm_page_size
+#define PAGE_MASK               vm_page_mask
+#endif /* !defined(__MAC_OS_X_VERSION_MIN_REQUIRED) || (__MAC_OS_X_VERSION_MIN_REQUIRED < 101600) */
+
+#define PAGE_MAX_SHIFT          14
+#define PAGE_MAX_SIZE           (1 << PAGE_MAX_SHIFT)
+#define PAGE_MAX_MASK           (PAGE_MAX_SIZE-1)
+
+#define PAGE_MIN_SHIFT          12
+#define PAGE_MIN_SIZE           (1 << PAGE_MIN_SHIFT)
+#define PAGE_MIN_MASK           (PAGE_MIN_SIZE-1)
+
+#endif /* KERNEL */
 
 #define VM_MIN_ADDRESS64        ((user_addr_t) 0x0000000000000000ULL)
 /*
- * default top of user stack... it grows down from here
+ * Default top of user stack, grows down from here.
+ * Address chosen to be 1G (3rd level page table entry) below SHARED_REGION_BASE_X86_64
+ * minus additional 1Meg (1/2 1st level page table coverage) to allow a redzone after it.
  */
-#define VM_USRSTACK64           ((user_addr_t) 0x00007FFEEFC00000ULL)
+#define VM_USRSTACK64           ((user_addr_t) (0x00007FF7C0000000ull - (1024 * 1024)))
 
 /*
  * XXX TODO: Obsolete?
@@ -179,18 +210,17 @@
 /*
  * Maximum physical memory supported.
  */
-#define K32_MAXMEM      (32*GB)
-#define K64_MAXMEM      (1536*GB)
+#define K64_MAXMEM      (2048*GB)
 #define KERNEL_MAXMEM   K64_MAXMEM
 
 /*
- * XXX
- * The kernel max VM address is limited to 0xFF3FFFFF for now because
- * some data structures are explicitly allocated at 0xFF400000 without
- * VM's knowledge (see osfmk/i386/locore.s for the allocation of PTmap and co.).
- * We can't let VM allocate memory from there.
+ * +-----------------------+--------+--------+------------------------+
+ * | 0xffff_ffff_ffff_efff |  -4096 | ~512GB | VM_MAX_KERNEL_ADDRESS  |
+ * +-----------------------+--------+--------+------------------------+
+ * | 0xffff_ff80_0000_0000 | -512GB |    0GB | VM_MIN_KERNEL_ADDRESS  |
+ * |                       |        |        | PMAP_HEAP_RANGE_START  |
+ * +-----------------------+--------+--------+------------------------+
  */
-
 
 #define KERNEL_IMAGE_TO_PHYS(x) (x)
 #define VM_KERNEL_POINTER_SIGNIFICANT_BITS 39
@@ -199,14 +229,17 @@
 #define VM_MIN_KERNEL_AND_KEXT_ADDRESS  (VM_MIN_KERNEL_ADDRESS - 0x80000000ULL)
 #define VM_MAX_KERNEL_ADDRESS           ((vm_offset_t) 0xFFFFFFFFFFFFEFFFUL)
 #define VM_MAX_KERNEL_ADDRESS_EFI32     ((vm_offset_t) 0xFFFFFF80FFFFEFFFUL)
-#define KEXT_ALLOC_MAX_OFFSET (2 * 1024 * 1024 * 1024UL)
-#define KEXT_ALLOC_BASE(x)  ((x) - KEXT_ALLOC_MAX_OFFSET)
-#define KEXT_ALLOC_SIZE(x)  (KEXT_ALLOC_MAX_OFFSET - (x))
+#define KEXT_ALLOC_MAX_OFFSET           (2 * 1024 * 1024 * 1024UL)
+#define KEXT_ALLOC_BASE(x)              ((x) - KEXT_ALLOC_MAX_OFFSET)
+#define KEXT_ALLOC_SIZE(x)              (KEXT_ALLOC_MAX_OFFSET - (x))
 
+#define VM_USER_STRIP_PTR(_v) (_v)
 #define VM_KERNEL_STRIP_PTR(_v) (_v)
+#define VM_KERNEL_STRIP_UPTR(_v) (_v)
 
-#define VM_KERNEL_ADDRESS(va)   ((((vm_address_t)(va))>=VM_MIN_KERNEL_AND_KEXT_ADDRESS) && \
-	                        (((vm_address_t)(va))<=VM_MAX_KERNEL_ADDRESS))
+#define VM_KERNEL_ADDRESS(va) \
+	(((vm_address_t)(va) >= VM_MIN_KERNEL_AND_KEXT_ADDRESS) && \
+	((vm_address_t)(va)  <= VM_MAX_KERNEL_ADDRESS))
 
 #define VM_MAP_MIN_ADDRESS      MACH_VM_MIN_ADDRESS
 #define VM_MAP_MAX_ADDRESS      MACH_VM_MAX_ADDRESS
@@ -221,8 +254,16 @@
 # define INTSTACK_SIZE (I386_PGBYTES*4)
 # define KERNEL_STACK_SIZE (I386_PGBYTES*6)
 #else
+/*
+ * KERNEL_STACK_MULTIPLIER can be defined externally to get a larger
+ * kernel stack size. For example, adding "-DKERNEL_STACK_MULTIPLIER=2"
+ * helps avoid kernel stack overflows when compiling with "-O0".
+ */
+#ifndef KERNEL_STACK_MULTIPLIER
+#define KERNEL_STACK_MULTIPLIER (1)
+#endif /* KERNEL_STACK_MULTIPLIER */
 # define INTSTACK_SIZE (I386_PGBYTES*4)
-# define KERNEL_STACK_SIZE (I386_PGBYTES*4)
+# define KERNEL_STACK_SIZE (I386_PGBYTES*4*KERNEL_STACK_MULTIPLIER)
 #endif
 
 #ifdef  MACH_KERNEL_PRIVATE
@@ -244,8 +285,6 @@
  *
  * The common alignment for LP64 is for longs and pointers i.e. 8 bytes.
  */
-
-
 #define KALLOC_MINSIZE          16      /* minimum allocation size */
 #define KALLOC_LOG2_MINALIGN    4       /* log2 minimum alignment */
 
@@ -254,10 +293,6 @@
 #define VM_MIN_KERNEL_LOADED_ADDRESS    ((vm_offset_t) 0xFFFFFF8000000000UL)
 #define VM_MAX_KERNEL_LOADED_ADDRESS    ((vm_offset_t) 0xFFFFFF801FFFFFFFUL)
 
-#define NCOPY_WINDOWS 0
-
-
-
 /*
  *	Conversion between 80386 pages and VM pages
  */
@@ -265,7 +300,6 @@
 #define trunc_i386_to_vm(p)     (atop(trunc_page(i386_ptob(p))))
 #define round_i386_to_vm(p)     (atop(round_page(i386_ptob(p))))
 #define vm_to_i386(p)           (i386_btop(ptoa(p)))
-
 
 #define PMAP_SET_CACHE_ATTR(mem, object, cache_attr, batch_pmap_op)     \
 	MACRO_BEGIN                                                     \
@@ -287,5 +321,7 @@
 #endif  /* MACH_KERNEL_PRIVATE */
 
 #endif  /* KERNEL_PRIVATE */
+
+#endif /* defined (__i386__) || defined (__x86_64__) */
 
 #endif  /* _MACH_I386_VM_PARAM_H_ */

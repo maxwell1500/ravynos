@@ -4,7 +4,9 @@
 #include <string.h>
 #include <strings.h>
 
+#include <fcntl.h>
 #include <pthread.h>
+#include <net/network_agent.h>
 #include <sys/kern_control.h>
 #include <sys/kern_event.h>
 #include <sys/ioctl.h>
@@ -29,14 +31,6 @@ static int finished = 0;
 #define NETAGENT_MESSAGE_TYPE_UNREGISTER 2
 #endif
 
-struct netagent_message_header {
-	uint8_t message_type;
-	uint8_t message_flags;
-	uint32_t message_id;
-	uint32_t message_error;
-	uint32_t message_payload_length;
-};
-
 struct kev_msg {
 	uint32_t total_size;
 	uint32_t vendor_code;
@@ -44,20 +38,6 @@ struct kev_msg {
 	uint32_t kev_subclass;
 	uint32_t id;
 	uint32_t event_code;
-};
-
-struct kev_netagent_data {
-	uuid_t netagent_uuid;
-};
-
-struct netagent {
-	uuid_t netagent_uuid;
-	char netagent_domain[32];
-	char netagent_type[32];
-	char netagent_desc[128];
-	uint32_t netagent_flags;
-	uint32_t netagent_data_size;
-	uint8_t netagent_data[0];
 };
 
 static void *
@@ -114,6 +94,16 @@ unregister_racer(void *data)
 
 #define NITERS 200000
 
+static size_t
+data_available(int sock)
+{
+	int n = 0;
+	socklen_t nlen = sizeof(n);
+
+	getsockopt(sock, SOL_SOCKET, SO_NREAD, &n, &nlen);
+	return (size_t)n;
+}
+
 T_DECL(netagent_race_infodisc_56244905, "Netagent race between register and post event.")
 {
 	int s;
@@ -132,6 +122,8 @@ T_DECL(netagent_race_infodisc_56244905, "Netagent race between register and post
 		struct kev_netagent_data nd;
 	} ev;
 	int n;
+	int retry;
+	unsigned long leaked;
 
 	T_SETUPBEGIN;
 	/* set up the event socket so we can receive notifications: */
@@ -160,12 +152,24 @@ T_DECL(netagent_race_infodisc_56244905, "Netagent race between register and post
 	/* keep going until we're done: */
 	for (n = 0; n < NITERS; ++n) {
 		bzero(&ev, sizeof(ev));
-		T_ASSERT_POSIX_SUCCESS(recv(evsock, &ev, sizeof(ev), 0), NULL);
 
+		for (retry = 0; retry < 20; ++retry) {
+			if (data_available(evsock) >= sizeof(ev) &&
+			    sizeof(ev) == recv(evsock, &ev, sizeof(ev), 0)) {
+				goto check1;
+			}
+		}
+
+		continue;
+
+check1:
 		if (ev.nd.netagent_uuid[0] != 0) {
 			finished = 1;
-			T_ASSERT_FAIL("netagent register event leaked data: 0x%08lx", *(unsigned long *)ev.nd.netagent_uuid);
+			memcpy(&leaked, ev.nd.netagent_uuid, sizeof(leaked));
+			T_ASSERT_FAIL("netagent register event leaked data: 0x%08lx", leaked);
 		}
+
+		break;
 	}
 
 	finished = 1;
@@ -183,12 +187,24 @@ T_DECL(netagent_race_infodisc_56244905, "Netagent race between register and post
 	/* keep going until we're done: */
 	for (n = 0; n < NITERS; ++n) {
 		bzero(&ev, sizeof(ev));
-		T_ASSERT_POSIX_SUCCESS(recv(evsock, &ev, sizeof(ev), 0), NULL);
 
+		for (retry = 0; retry < 20; ++retry) {
+			if (data_available(evsock) >= sizeof(ev) &&
+			    sizeof(ev) == recv(evsock, &ev, sizeof(ev), 0)) {
+				goto check2;
+			}
+		}
+
+		continue;
+
+check2:
 		if (ev.nd.netagent_uuid[0] != 0) {
 			finished = 1;
-			T_ASSERT_FAIL("netagent register event leaked data: 0x%08lx", *(unsigned long *)ev.nd.netagent_uuid);
+			memcpy(&leaked, ev.nd.netagent_uuid, sizeof(leaked));
+			T_ASSERT_FAIL("netagent register event leaked data: 0x%08lx", leaked);
 		}
+
+		break;
 	}
 
 	finished = 1;

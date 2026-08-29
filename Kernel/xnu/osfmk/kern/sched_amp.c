@@ -48,7 +48,7 @@
 
 #include <sys/kdebug.h>
 
-#if __AMP__
+#if __AMP__ && !CONFIG_SCHED_EDGE
 
 static thread_t
 sched_amp_steal_thread(processor_set_t pset);
@@ -88,7 +88,7 @@ static void
 sched_amp_processor_init(processor_t processor);
 
 static thread_t
-sched_amp_choose_thread(processor_t processor, int priority, ast_t reason);
+sched_amp_choose_thread(processor_t processor, int priority, __unused thread_t prev, ast_t reason);
 
 static void
 sched_amp_processor_queue_shutdown(processor_t processor);
@@ -100,13 +100,19 @@ static processor_t
 sched_amp_choose_processor(processor_set_t pset, processor_t processor, thread_t thread);
 
 static bool
-sched_amp_thread_avoid_processor(processor_t processor, thread_t thread);
+sched_amp_thread_avoid_processor(processor_t processor, thread_t thread, __unused ast_t reason);
 
 static bool
 sched_amp_thread_should_yield(processor_t processor, thread_t thread);
 
 static void
 sched_amp_thread_group_recommendation_change(struct thread_group *tg, cluster_type_t new_recommendation);
+
+static bool
+sched_amp_thread_eligible_for_pset(thread_t thread, processor_set_t pset);
+
+static void
+sched_amp_cpu_init_completed(void);
 
 const struct sched_dispatch_table sched_amp_dispatch = {
 	.sched_name                                     = "amp",
@@ -119,6 +125,7 @@ const struct sched_dispatch_table sched_amp_dispatch = {
 	.steal_thread_enabled                           = sched_amp_steal_thread_enabled,
 	.steal_thread                                   = sched_amp_steal_thread,
 	.compute_timeshare_priority                     = sched_compute_timeshare_priority,
+	.choose_node                                    = sched_amp_choose_node,
 	.choose_processor                               = sched_amp_choose_processor,
 	.processor_enqueue                              = sched_amp_processor_enqueue,
 	.processor_queue_shutdown                       = sched_amp_processor_queue_shutdown,
@@ -138,16 +145,16 @@ const struct sched_dispatch_table sched_amp_dispatch = {
 	.processor_bound_count                          = sched_amp_processor_bound_count,
 	.thread_update_scan                             = sched_amp_thread_update_scan,
 	.multiple_psets_enabled                         = TRUE,
-	.sched_groups_enabled                           = FALSE,
 	.avoid_processor_enabled                        = TRUE,
 	.thread_avoid_processor                         = sched_amp_thread_avoid_processor,
 	.processor_balance                              = sched_amp_balance,
 
-	.rt_runq                                        = sched_amp_rt_runq,
-	.rt_init                                        = sched_amp_rt_init,
-	.rt_queue_shutdown                              = sched_amp_rt_queue_shutdown,
-	.rt_runq_scan                                   = sched_amp_rt_runq_scan,
-	.rt_runq_count_sum                              = sched_amp_rt_runq_count_sum,
+	.rt_runq                                        = sched_rtlocal_runq,
+	.rt_init                                        = sched_rtlocal_init,
+	.rt_queue_shutdown                              = sched_rtlocal_queue_shutdown,
+	.rt_runq_scan                                   = sched_rtlocal_runq_scan,
+	.rt_runq_count_sum                              = sched_rtlocal_runq_count_sum,
+	.rt_steal_thread                                = sched_rtlocal_steal_thread,
 
 	.qos_max_parallelism                            = sched_amp_qos_max_parallelism,
 	.check_spill                                    = sched_amp_check_spill,
@@ -158,6 +165,8 @@ const struct sched_dispatch_table sched_amp_dispatch = {
 	.update_thread_bucket                           = sched_update_thread_bucket,
 	.pset_made_schedulable                          = sched_pset_made_schedulable,
 	.thread_group_recommendation_change             = sched_amp_thread_group_recommendation_change,
+	.cpu_init_completed                             = sched_amp_cpu_init_completed,
+	.thread_eligible_for_pset                       = sched_amp_thread_eligible_for_pset,
 };
 
 extern processor_set_t ecore_set;
@@ -208,6 +217,14 @@ sched_amp_processor_init(processor_t processor)
 static void
 sched_amp_pset_init(processor_set_t pset)
 {
+	if (pset->pset_cluster_type == PSET_AMP_P) {
+		pset->pset_type = CLUSTER_TYPE_P;
+		pcore_set = pset;
+	} else {
+		assert(pset->pset_cluster_type == PSET_AMP_E);
+		pset->pset_type = CLUSTER_TYPE_E;
+		ecore_set = pset;
+	}
 	run_queue_init(&pset->pset_runq);
 }
 
@@ -215,6 +232,7 @@ static thread_t
 sched_amp_choose_thread(
 	processor_t      processor,
 	int              priority,
+	__unused thread_t         prev_thread,
 	__unused ast_t            reason)
 {
 	processor_set_t pset = processor->processor_set;
@@ -265,7 +283,7 @@ sched_amp_processor_enqueue(
 	boolean_t       result;
 
 	result = run_queue_enqueue(rq, thread, options);
-	thread->runq = processor;
+	thread_set_runq_locked(thread, processor);
 
 	return result;
 }
@@ -289,7 +307,7 @@ sched_amp_thread_should_yield(processor_t processor, thread_t thread)
 	}
 
 	if ((processor->processor_set->pset_cluster_type == PSET_AMP_E) && (recommended_pset_type(thread) == PSET_AMP_P)) {
-		return pcore_set->pset_runq.count > 0;
+		return pcore_set && pcore_set->pset_runq.count > 0;
 	}
 
 	return false;
@@ -437,25 +455,23 @@ sched_amp_processor_queue_remove(
 	processor_t processor,
 	thread_t    thread)
 {
-	run_queue_t             rq;
 	processor_set_t         pset = processor->processor_set;
 
 	pset_lock(pset);
 
-	rq = amp_runq_for_thread(processor, thread);
-
-	if (processor == thread->runq) {
+	if (processor == thread_get_runq_locked(thread)) {
 		/*
 		 * Thread is on a run queue and we have a lock on
 		 * that run queue.
 		 */
+		run_queue_t rq = amp_runq_for_thread(processor, thread);
 		run_queue_remove(rq, thread);
 	} else {
 		/*
 		 * The thread left the run queue before we could
 		 * lock the run queue.
 		 */
-		assert(thread->runq == PROCESSOR_NULL);
+		thread_assert_runq_null(thread);
 		processor = PROCESSOR_NULL;
 	}
 
@@ -482,11 +498,15 @@ sched_amp_steal_thread(processor_set_t pset)
 	bool spill_pending = bit_test(pset->pending_spill_cpu_mask, processor->cpu_id);
 	bit_clear(pset->pending_spill_cpu_mask, processor->cpu_id);
 
+	if (!pcore_set) {
+		return THREAD_NULL;
+	}
+
 	nset = pcore_set;
 
 	assert(nset != pset);
 
-	if (sched_get_pset_load_average(nset) >= sched_amp_steal_threshold(nset, spill_pending)) {
+	if (sched_get_pset_load_average(nset, 0) >= sched_amp_steal_threshold(nset, spill_pending)) {
 		pset_unlock(pset);
 
 		pset = nset;
@@ -494,12 +514,12 @@ sched_amp_steal_thread(processor_set_t pset)
 		pset_lock(pset);
 
 		/* Allow steal if load average still OK, no idle cores, and more threads on runq than active cores DISPATCHING */
-		if ((sched_get_pset_load_average(pset) >= sched_amp_steal_threshold(pset, spill_pending)) &&
+		if ((sched_get_pset_load_average(pset, 0) >= sched_amp_steal_threshold(pset, spill_pending)) &&
 		    (pset->pset_runq.count > bit_count(pset->cpu_state_map[PROCESSOR_DISPATCHING])) &&
 		    (bit_count(pset->recommended_bitmask & pset->cpu_state_map[PROCESSOR_IDLE]) == 0)) {
 			thread = run_queue_dequeue(&pset->pset_runq, SCHED_HEADQ);
 			KDBG(MACHDBG_CODE(DBG_MACH_SCHED, MACH_AMP_STEAL) | DBG_FUNC_NONE, spill_pending, 0, 0, 0);
-			sched_update_pset_load_average(pset);
+			sched_update_pset_load_average(pset, 0);
 		}
 	}
 
@@ -513,7 +533,7 @@ static void
 sched_amp_thread_update_scan(sched_update_scan_context_t scan_context)
 {
 	boolean_t               restart_needed = FALSE;
-	processor_t             processor = processor_list;
+	processor_t             processor;
 	processor_set_t         pset;
 	thread_t                thread;
 	spl_t                   s;
@@ -524,7 +544,12 @@ sched_amp_thread_update_scan(sched_update_scan_context_t scan_context)
 	 */
 
 	do {
-		do {
+		for (int i = 0; i < machine_info.logical_cpu_max; i++) {
+			processor = processor_array[i];
+			if (processor == NULL) {
+				continue;
+			}
+
 			pset = processor->processor_set;
 
 			s = splsched();
@@ -546,7 +571,7 @@ sched_amp_thread_update_scan(sched_update_scan_context_t scan_context)
 					break;
 				}
 			}
-		} while ((processor = processor->processor_list) != NULL);
+		}
 
 		/* Ok, we now have a collection of candidates -- fix them. */
 		thread_update_process_threads();
@@ -587,6 +612,10 @@ sched_amp_thread_update_scan(sched_update_scan_context_t scan_context)
 static bool
 pcores_recommended(thread_t thread)
 {
+	if (!pcore_set) {
+		return false;
+	}
+
 	if (pcore_set->online_processor_count == 0) {
 		/* No pcores available */
 		return false;
@@ -606,7 +635,7 @@ pcores_recommended(thread_t thread)
 
 /* Return true if this thread should not continue running on this processor */
 static bool
-sched_amp_thread_avoid_processor(processor_t processor, thread_t thread)
+sched_amp_thread_avoid_processor(processor_t processor, thread_t thread, __unused ast_t reason)
 {
 	if (processor->processor_set->pset_cluster_type == PSET_AMP_E) {
 		if (pcores_recommended(thread)) {
@@ -630,7 +659,7 @@ sched_amp_choose_processor(processor_set_t pset, processor_t processor, thread_t
 	processor_set_t nset = pset;
 	bool choose_pcores;
 
-again:
+
 	choose_pcores = pcores_recommended(thread);
 
 	if (choose_pcores && (pset->pset_cluster_type != PSET_AMP_P)) {
@@ -648,8 +677,8 @@ again:
 
 	/* Now that the chosen pset is definitely locked, make sure nothing important has changed */
 	if (!pset_is_recommended(nset)) {
-		pset = nset;
-		goto again;
+		pset_unlock(nset);
+		return PROCESSOR_NULL;
 	}
 
 	return choose_processor(nset, processor, thread);
@@ -667,102 +696,61 @@ sched_amp_thread_group_recommendation_change(struct thread_group *tg, cluster_ty
 	sched_amp_bounce_thread_group_from_ecores(ecore_set, tg);
 }
 
-#if DEVELOPMENT || DEBUG
-extern int32_t sysctl_get_bound_cpuid(void);
-int32_t
-sysctl_get_bound_cpuid(void)
+static bool
+sched_amp_thread_eligible_for_pset(thread_t thread, processor_set_t pset)
 {
-	int32_t cpuid = -1;
-	thread_t self = current_thread();
-
-	processor_t processor = self->bound_processor;
-	if (processor == NULL) {
-		cpuid = -1;
+	if (recommended_pset_type(thread) == PSET_AMP_P) {
+		/* P-recommended threads are eligible to execute on either E or P clusters */
+		return true;
 	} else {
-		cpuid = processor->cpu_id;
+		/* E-recommended threads are eligible to execute on E clusters only */
+		return pset->pset_cluster_type == PSET_AMP_E;
 	}
-
-	return cpuid;
 }
 
-extern void sysctl_thread_bind_cpuid(int32_t cpuid);
-void
-sysctl_thread_bind_cpuid(int32_t cpuid)
+static char *pct_name[] = {
+	"PSET_SMP",
+	"PSET_AMP_E",
+	"PSET_AMP_P"
+};
+
+static void
+sched_amp_cpu_init_completed(void)
 {
-	if (cpuid < 0 || cpuid >= MAX_SCHED_CPUS) {
+	if (PE_parse_boot_argn("cpus", NULL, 0) || PE_parse_boot_argn("cpumask", NULL, 0)) {
+		/* If number of cpus booted is restricted, these asserts may not be true */
 		return;
 	}
 
-	processor_t processor = processor_array[cpuid];
-	if (processor == PROCESSOR_NULL) {
-		return;
+	assert(pset_array[0] != NULL);
+	assert(pset_array[1] != NULL);
+
+	assert(ecore_set != NULL);
+	assert(pcore_set != NULL);
+
+	if (pset_array[0] == ecore_set) {
+		assert(pset_array[1] == pcore_set);
+	} else {
+		assert(pset_array[0] == pcore_set);
+		assert(pset_array[1] == ecore_set);
 	}
 
-	thread_bind(processor);
+	for (processor_t p = processor_list; p != NULL; p = p->processor_list) {
+		processor_set_t pset = p->processor_set;
+		kprintf("%s>cpu_id %02d in pset_id %02d type %s\n", __FUNCTION__, p->cpu_id, pset->pset_id,
+		    pct_name[pset->pset_cluster_type]);
 
-	thread_block(THREAD_CONTINUE_NULL);
-}
-
-extern char sysctl_get_bound_cluster_type(void);
-char
-sysctl_get_bound_cluster_type(void)
-{
-	thread_t self = current_thread();
-
-	if (self->sched_flags & TH_SFLAG_ECORE_ONLY) {
-		return 'E';
-	} else if (self->sched_flags & TH_SFLAG_PCORE_ONLY) {
-		return 'P';
+		assert(p == processor_array[p->cpu_id]);
+		assert(pset->pset_cluster_type != PSET_SMP);
+		if (pset->pset_cluster_type == PSET_AMP_E) {
+			assert(pset->pset_type == CLUSTER_TYPE_E);
+			assert(pset == ecore_set);
+		} else {
+			assert(pset->pset_cluster_type == PSET_AMP_P);
+			assert(pset->pset_type == CLUSTER_TYPE_P);
+			assert(pset == pcore_set);
+		}
 	}
-
-	return '0';
 }
 
-extern void sysctl_thread_bind_cluster_type(char cluster_type);
-void
-sysctl_thread_bind_cluster_type(char cluster_type)
-{
-	thread_bind_cluster_type(cluster_type);
-}
-
-extern char sysctl_get_task_cluster_type(void);
-char
-sysctl_get_task_cluster_type(void)
-{
-	thread_t thread = current_thread();
-	task_t task = thread->task;
-
-	if (task->pset_hint == ecore_set) {
-		return 'E';
-	} else if (task->pset_hint == pcore_set) {
-		return 'P';
-	}
-
-	return '0';
-}
-
-extern void sysctl_task_set_cluster_type(char cluster_type);
-void
-sysctl_task_set_cluster_type(char cluster_type)
-{
-	thread_t thread = current_thread();
-	task_t task = thread->task;
-
-	switch (cluster_type) {
-	case 'e':
-	case 'E':
-		task->pset_hint = ecore_set;
-		break;
-	case 'p':
-	case 'P':
-		task->pset_hint = pcore_set;
-		break;
-	default:
-		break;
-	}
-
-	thread_block(THREAD_CONTINUE_NULL);
-}
-#endif
-
-#endif
+#endif /* __AMP__ && !CONFIG_SCHED_EDGE */

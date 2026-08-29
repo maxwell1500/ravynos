@@ -382,6 +382,7 @@
 #define AUE_DARWIN_PIDFORTASK   359     /* Darwin-specific. */
 #define AUE_DARWIN_SYSCTL_NONADMIN      360
 #define AUE_DARWIN_COPYFILE     361     /* Darwin-specific. */
+#define AUE_TRACKERACTION       362
 
 /*
  * Audit event identifiers added as part of OpenBSM, generally corresponding
@@ -615,6 +616,9 @@
 #define AUE_FMOUNT              43213   /* Darwin. */
 #define AUE_FSGETPATH_EXTENDED  43214   /* Darwin. */
 #define AUE_DBGPORTFORPID       43215   /* Darwin-specific. */
+#define AUE_PREADV              43216   /* Darwin. */
+#define AUE_PWRITEV             43217   /* Darwin. */
+#define AUE_FREADLINK           43218
 
 #define AUE_SESSION_START       44901   /* Darwin. */
 #define AUE_SESSION_UPDATE      44902   /* Darwin. */
@@ -754,12 +758,10 @@
 #define AUE_MADVISE             AUE_NULL
 #define AUE_MINCORE             AUE_NULL
 #define AUE_MKCOMPLEX           AUE_NULL
-#define AUE_MODWATCH            AUE_NULL
 #define AUE_MSGCL               AUE_NULL
 #define AUE_MSYNC               AUE_NULL
 #define AUE_NECP                AUE_NULL
 #define AUE_NETAGENT    AUE_NULL
-#define AUE_PREADV              AUE_NULL
 #define AUE_PROCINFO            AUE_NULL
 #define AUE_PTHREADCANCELED     AUE_NULL
 #define AUE_PTHREADCHDIR        AUE_NULL
@@ -774,7 +776,6 @@
 #define AUE_PTHREADMUTEXINIT    AUE_NULL
 #define AUE_PTHREADMUTEXTRYLOCK AUE_NULL
 #define AUE_PTHREADMUTEXUNLOCK  AUE_NULL
-#define AUE_PWRITEV             AUE_NULL
 #define AUE_REMOVEXATTR         AUE_NULL
 #define AUE_SBRK                AUE_NULL
 #define AUE_SELECT              AUE_NULL
@@ -810,9 +811,7 @@
 #define AUE_SYSCALL             AUE_NULL
 #define AUE_TABLE               AUE_NULL
 #define AUE_VMPRESSUREMONITOR   AUE_NULL
-#define AUE_WAITEVENT           AUE_NULL
 #define AUE_WAITID              AUE_NULL
-#define AUE_WATCHEVENT          AUE_NULL
 #define AUE_WORKQOPEN           AUE_NULL
 #define AUE_WORKQOPS            AUE_NULL
 #define AUE_WORKLOOPCTL         AUE_NULL
@@ -821,5 +820,9 @@
 #define AUE_NEXUS               AUE_NULL
 #define AUE_CHANNEL             AUE_NULL
 #define AUE_NET                 AUE_NULL
+#define AUE_TASKREADFORPID      AUE_NULL
+#define AUE_TASKINSPECTFORPID   AUE_NULL
+#define AUE_DEBUG_SYSCALL_REJECT AUE_NULL
+#define AUE_DEBUG_SYSCALL_REJECT_CONFIG AUE_NULL
 
 #endif /* !_BSM_AUDIT_KEVENTS_H_ */

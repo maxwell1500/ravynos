@@ -129,7 +129,7 @@ struct ExpansionData {
 /*********************************************************************
 * Reserved vtable functions.
 *********************************************************************/
-#if SLOT_USED
+#if defined(__arm64__) || defined(__arm__)
 void
 OSMetaClassBase::_RESERVEDOSMetaClassBase0()
 {
@@ -150,7 +150,7 @@ OSMetaClassBase::_RESERVEDOSMetaClassBase3()
 {
 	panic("OSMetaClassBase::_RESERVEDOSMetaClassBase%d called.", 3);
 }
-#endif /* SLOT_USED */
+#endif /* defined(__arm64__) || defined(__arm__) */
 
 // As these slots are used move them up inside the #if above
 void
@@ -196,14 +196,13 @@ OSMetaClassBase::_RESERVEDOSMetaClassBase6()
  */
 
 OSMetaClassBase::_ptf_t
-#if defined(HAS_APPLE_PAC) && __has_feature(ptrauth_type_discriminator)
+#if defined(HAS_APPLE_PAC) && \
+        __has_feature(ptrauth_member_function_pointer_type_discrimination)
 OSMetaClassBase::_ptmf2ptf(const OSMetaClassBase *self __attribute__((unused)),
-    void (OSMetaClassBase::*func)(void), uintptr_t typeDisc)
+    void (OSMetaClassBase::*func)(void))
 #else
 OSMetaClassBase::_ptmf2ptf(const OSMetaClassBase *self,
-    void (OSMetaClassBase::*func)(void),
-    uintptr_t typeDisc
-    __attribute__((unused)))
+    void (OSMetaClassBase::*func)(void))
 #endif
 {
 	struct ptmf_t {
@@ -219,11 +218,18 @@ OSMetaClassBase::_ptmf2ptf(const OSMetaClassBase *self,
 	map.fIn = func;
 	pfn     = map.pTMF.fPFN;
 
-#if defined(HAS_APPLE_PAC) && __has_feature(ptrauth_type_discriminator)
+#if defined(HAS_APPLE_PAC) && \
+	__has_feature(ptrauth_member_function_pointer_type_discrimination)
 	// Authenticate 'pfn' using the member function pointer type discriminator
 	// and resign it as a C function pointer. 'pfn' can point to either a
 	// non-virtual function or a virtual member function thunk.
-	pfn = ptrauth_auth_function(pfn, ptrauth_key_function_pointer, typeDisc);
+	// It can also be NULL.
+	if (pfn) {
+		pfn = ptrauth_auth_and_resign(pfn, ptrauth_key_function_pointer,
+		    ptrauth_type_discriminator(__typeof__(func)),
+		    ptrauth_key_function_pointer,
+		    ptrauth_function_pointer_type_discriminator(_ptf_t));
+	}
 	return pfn;
 #else
 	if (map.pTMF.delta & 1) {
@@ -241,9 +247,14 @@ OSMetaClassBase::_ptmf2ptf(const OSMetaClassBase *self,
 		uint32_t entity_hash = ((uintptr_t)pfn) >> 32;
 		pfn = (_ptf_t)(((uintptr_t) pfn) & 0xFFFFFFFF);
 
+#if __has_builtin(__builtin_get_vtable_pointer)
+		const _ptf_t *vtablep =
+		    (const _ptf_t *)__builtin_get_vtable_pointer(u.fObj);
+#else
 		// Authenticate the vtable pointer.
-		_ptf_t *vtablep = ptrauth_auth_data(*u.vtablep,
+		const _ptf_t *vtablep = ptrauth_auth_data(*u.vtablep,
 		    ptrauth_key_cxx_vtable_pointer, 0);
+#endif
 		// Calculate the address of the vtable entry.
 		_ptf_t *vtentryp = (_ptf_t *)(((uintptr_t)vtablep) + (uintptr_t)pfn);
 		// Load the pointer from the vtable entry.
@@ -252,7 +263,8 @@ OSMetaClassBase::_ptmf2ptf(const OSMetaClassBase *self,
 		// Finally, resign the vtable entry as a function pointer.
 		uintptr_t auth_data = ptrauth_blend_discriminator(vtentryp, entity_hash);
 		pfn = ptrauth_auth_and_resign(pfn, ptrauth_key_function_pointer,
-		    auth_data, ptrauth_key_function_pointer, 0);
+		    auth_data, ptrauth_key_function_pointer,
+		    ptrauth_function_pointer_type_discriminator(_ptf_t));
 #else /* defined(HAS_APPLE_PAC) */
 		pfn = *(_ptf_t *)(((uintptr_t)*u.vtablep) + (uintptr_t)pfn);
 #endif /* !defined(HAS_APPLE_PAC) */
@@ -568,8 +580,7 @@ OSMetaClass::OSMetaClass(
 	classSize = inClassSize;
 	superClassLink = inSuperClass;
 
-	reserved = IONew(ExpansionData, 1);
-	bzero(reserved, sizeof(ExpansionData));
+	reserved = IOMallocType(ExpansionData);
 #if IOTRACKING
 	uint32_t numSiteQs = 0;
 	if ((this == &OSSymbol    ::gMetaClass)
@@ -606,24 +617,40 @@ OSMetaClass::OSMetaClass(
 		// Grow stalled array if neccessary
 		if (sStalled->count >= sStalled->capacity) {
 			OSMetaClass **oldStalled = sStalled->classes;
-			int oldSize = sStalled->capacity * sizeof(OSMetaClass *);
-			int newSize = oldSize
-			    + kKModCapacityIncrement * sizeof(OSMetaClass *);
+			int oldCount = sStalled->capacity;
+			int newCount = oldCount + kKModCapacityIncrement;
 
-			sStalled->classes = (OSMetaClass **)kalloc_tag(newSize, VM_KERN_MEMORY_OSKEXT);
+			sStalled->classes = kalloc_type_tag(OSMetaClass *, newCount,
+			    Z_WAITOK_ZERO, VM_KERN_MEMORY_OSKEXT);
 			if (!sStalled->classes) {
 				sStalled->classes = oldStalled;
 				sStalled->result = kOSMetaClassNoTempData;
 				return;
 			}
 
-			sStalled->capacity += kKModCapacityIncrement;
-			memmove(sStalled->classes, oldStalled, oldSize);
-			kfree(oldStalled, oldSize);
-			OSMETA_ACCUMSIZE(((size_t)newSize) - ((size_t)oldSize));
+			sStalled->capacity = newCount;
+			memmove(sStalled->classes, oldStalled,
+			    sizeof(OSMetaClass *) * oldCount);
+			kfree_type(OSMetaClass *, oldCount, oldStalled);
+			OSMETA_ACCUMSIZE(sizeof(OSMetaClass *) * (newCount - oldCount));
 		}
 
 		sStalled->classes[sStalled->count++] = this;
+	}
+}
+
+OSMetaClass::OSMetaClass(
+	const char        * inClassName,
+	const OSMetaClass * inSuperClass,
+	unsigned int        inClassSize,
+	zone_t            * inZone,
+	const char        * zone_name,
+	zone_create_flags_t zflags) : OSMetaClass(inClassName, inSuperClass,
+	    inClassSize)
+{
+	if (!(kIOTracking & gIOKitDebug)) {
+		*inZone  = zone_create(zone_name, inClassSize,
+		    (zone_create_flags_t) (ZC_ZFREE_CLEARMEM | zflags));
 	}
 }
 
@@ -631,7 +658,7 @@ OSMetaClass::OSMetaClass(
 *********************************************************************/
 OSMetaClass::~OSMetaClass()
 {
-	OSKext * myKext = reserved ? reserved->kext : NULL; // do not release
+	OSKext * myKext = reserved->kext; // do not release
 
 	/* Hack alert: 'className' is a C string during early C++ init, and
 	 * is converted to a real OSSymbol only when we record the OSKext in
@@ -686,7 +713,7 @@ OSMetaClass::~OSMetaClass()
 #if IOTRACKING
 	IOTrackingQueueFree(reserved->tracking);
 #endif
-	IODelete(reserved, ExpansionData, 1);
+	IOFreeType(reserved, ExpansionData);
 }
 
 /*********************************************************************
@@ -755,23 +782,21 @@ OSMetaClass::preModLoad(const char * kextIdentifier)
 	IOLockLock(sStalledClassesLock);
 
 	assert(sStalled == NULL);
-	sStalled = (StalledData *)kalloc_tag(sizeof(*sStalled), VM_KERN_MEMORY_OSKEXT);
-	if (sStalled) {
-		sStalled->classes = (OSMetaClass **)
-		    kalloc_tag(kKModCapacityIncrement * sizeof(OSMetaClass *), VM_KERN_MEMORY_OSKEXT);
-		if (!sStalled->classes) {
-			kfree(sStalled, sizeof(*sStalled));
-			return NULL;
-		}
-		OSMETA_ACCUMSIZE((kKModCapacityIncrement * sizeof(OSMetaClass *)) +
-		    sizeof(*sStalled));
+	sStalled = kalloc_type(StalledData, Z_WAITOK_ZERO_NOFAIL);
 
-		sStalled->result   = kOSReturnSuccess;
-		sStalled->capacity = kKModCapacityIncrement;
-		sStalled->count    = 0;
-		sStalled->kextIdentifier = kextIdentifier;
-		bzero(sStalled->classes, kKModCapacityIncrement * sizeof(OSMetaClass *));
+	sStalled->classes = kalloc_type_tag(OSMetaClass *,
+	    kKModCapacityIncrement, Z_WAITOK_ZERO, VM_KERN_MEMORY_OSKEXT);
+	if (!sStalled->classes) {
+		kfree_type(StalledData, sStalled);
+		return NULL;
 	}
+	OSMETA_ACCUMSIZE((kKModCapacityIncrement * sizeof(OSMetaClass *)) +
+	    sizeof(*sStalled));
+
+	sStalled->result   = kOSReturnSuccess;
+	sStalled->capacity = kKModCapacityIncrement;
+	sStalled->count    = 0;
+	sStalled->kextIdentifier = kextIdentifier;
 
 	// keep sStalledClassesLock locked until postModLoad
 
@@ -860,15 +885,15 @@ OSMetaClass::postModLoad(void * loadHandle)
 					/* Log this error here so we can include the class name.
 					 * xxx - we should look up the other kext that defines the class
 					 */
-#if CONFIG_EMBEDDED
-					panic(
-#else
+#if defined(XNU_TARGET_OS_OSX)
 					OSKextLog(myKext, kOSMetaClassLogSpec,
-#endif /* CONFIG_EMBEDDED */
-						"OSMetaClass: Kext %s class %s is a duplicate;"
-						"kext %s already has a class by that name.",
-						sStalled->kextIdentifier, (const char *)me->className,
-						((OSKext *)orig->reserved->kext)->getIdentifierCString());
+#else
+					panic(
+#endif /* defined(XNU_TARGET_OS_OSX) */
+					    "OSMetaClass: Kext %s class %s is a duplicate;"
+					    "kext %s already has a class by that name.",
+					    sStalled->kextIdentifier, (const char *)me->className,
+					    ((OSKext *)orig->reserved->kext)->getIdentifierCString());
 					result = kOSMetaClassDuplicateClass;
 					break;
 				}
@@ -943,8 +968,8 @@ finish:
 	if (sStalled) {
 	        OSMETA_ACCUMSIZE(-(sStalled->capacity * sizeof(OSMetaClass *) +
 	            sizeof(*sStalled)));
-	        kfree(sStalled->classes, sStalled->capacity * sizeof(OSMetaClass *));
-	        kfree(sStalled, sizeof(*sStalled));
+	        kfree_type(OSMetaClass *, sStalled->capacity, sStalled->classes);
+	        kfree_type(StalledData, sStalled);
 	        sStalled = NULL;
 	}
 
@@ -1080,7 +1105,7 @@ OSMetaClass::applyToInstances(OSOrderedSet * set,
 
         maxDepth = sDeepestClass;
         if (maxDepth > kLocalDepth) {
-                nextIndex = IONew(typeof(nextIndex[0]), maxDepth);
+                nextIndex = IONewData(typeof(nextIndex[0]), maxDepth);
                 sets      = IONew(typeof(sets[0]), maxDepth);
 	}
         done = false;
@@ -1112,7 +1137,7 @@ OSMetaClass::applyToInstances(OSOrderedSet * set,
 		}
 	}while (!done);
         if (maxDepth > kLocalDepth) {
-                IODelete(nextIndex, typeof(nextIndex[0]), maxDepth);
+                IODeleteData(nextIndex, typeof(nextIndex[0]), maxDepth);
                 IODelete(sets, typeof(sets[0]), maxDepth);
 	}
 }
@@ -1453,7 +1478,7 @@ OSMetaClass::printInstanceCounts()
 OSDictionary *
 OSMetaClass::getClassDictionary()
 {
-        panic("OSMetaClass::getClassDictionary() is obsoleted.\n");
+        panic("OSMetaClass::getClassDictionary() is obsoleted.");
         return NULL;
 }
 
@@ -1462,7 +1487,7 @@ OSMetaClass::getClassDictionary()
 bool
 OSMetaClass::serialize(__unused OSSerialize * s) const
 {
-        panic("OSMetaClass::serialize(): Obsoleted\n");
+        panic("OSMetaClass::serialize(): Obsoleted");
         return false;
 }
 
@@ -1520,12 +1545,15 @@ finish:
 
 #if IOTRACKING
 
+__typed_allocators_ignore_push
+
 void *
 OSMetaClass::trackedNew(size_t size)
 {
         IOTracking * mem;
 
-        mem = (typeof(mem))kalloc_tag_bt(size + sizeof(IOTracking), VM_KERN_MEMORY_LIBKERN);
+        mem = (typeof(mem))kheap_alloc(KHEAP_DEFAULT, size + sizeof(IOTracking),
+            Z_VM_TAG_BT(Z_WAITOK, VM_KERN_MEMORY_LIBKERN));
         assert(mem);
         if (!mem) {
                 return mem;
@@ -1544,9 +1572,11 @@ OSMetaClass::trackedDelete(void * instance, size_t size)
 {
         IOTracking * mem = (typeof(mem))instance; mem--;
 
-        kfree(mem, size + sizeof(IOTracking));
+        kheap_free(KHEAP_DEFAULT, mem, size + sizeof(IOTracking));
         OSIVAR_ACCUMSIZE(-size);
 }
+
+__typed_allocators_ignore_pop
 
 void
 OSMetaClass::trackedInstance(OSObject * instance) const

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -66,8 +66,12 @@
 #ifndef _MACH_VM_STATISTICS_H_
 #define _MACH_VM_STATISTICS_H_
 
-#include <mach/machine/vm_types.h>
+#include <sys/cdefs.h>
 
+#include <mach/machine/vm_types.h>
+#include <mach/machine/kern_return.h>
+
+__BEGIN_DECLS
 
 /*
  * vm_statistics
@@ -167,6 +171,8 @@ struct vm_statistics64 {
 typedef struct vm_statistics64  *vm_statistics64_t;
 typedef struct vm_statistics64  vm_statistics64_data_t;
 
+kern_return_t vm_stats(void *info, unsigned int *count);
+
 /*
  * VM_STATISTICS_TRUNCATE_TO_32_BIT
  *
@@ -225,44 +231,6 @@ typedef struct vm_purgeable_info        *vm_purgeable_info_t;
 #define VM_PAGE_QUERY_PAGE_CS_NX        0x400
 #define VM_PAGE_QUERY_PAGE_REUSABLE     0x800
 
-#ifdef  MACH_KERNEL_PRIVATE
-
-/*
- *	Each machine dependent implementation is expected to
- *	keep certain statistics.  They may do this anyway they
- *	so choose, but are expected to return the statistics
- *	in the following structure.
- */
-
-struct pmap_statistics {
-	integer_t       resident_count; /* # of pages mapped (total)*/
-	integer_t       resident_max;   /* # of pages mapped (peak) */
-	integer_t       wired_count;    /* # of pages wired */
-
-	integer_t       device;
-	integer_t       device_peak;
-	integer_t       internal;
-	integer_t       internal_peak;
-	integer_t       external;
-	integer_t       external_peak;
-	integer_t       reusable;
-	integer_t       reusable_peak;
-	uint64_t        compressed __attribute__((aligned(8)));
-	uint64_t        compressed_peak __attribute__((aligned(8)));
-	uint64_t        compressed_lifetime __attribute__((aligned(8)));
-};
-
-typedef struct pmap_statistics  *pmap_statistics_t;
-
-#define PMAP_STATS_PEAK(field)                  \
-	MACRO_BEGIN                             \
-	if (field > field##_peak) {             \
-	        field##_peak = field;           \
-	}                                       \
-	MACRO_END
-
-#endif  /* MACH_KERNEL_PRIVATE */
-
 /*
  * VM allocation flags:
  *
@@ -295,31 +263,61 @@ typedef struct pmap_statistics  *pmap_statistics_t;
  *	cached so that they will be stolen first if memory runs low.
  */
 
-#define VM_FLAGS_FIXED          0x0000
-#define VM_FLAGS_ANYWHERE       0x0001
-#define VM_FLAGS_PURGABLE       0x0002
-#define VM_FLAGS_4GB_CHUNK      0x0004
-#define VM_FLAGS_RANDOM_ADDR    0x0008
-#define VM_FLAGS_NO_CACHE       0x0010
-#define VM_FLAGS_RESILIENT_CODESIGN     0x0020
-#define VM_FLAGS_RESILIENT_MEDIA        0x0040
-#define VM_FLAGS_OVERWRITE      0x4000  /* delete any existing mappings first */
+#define VM_FLAGS_FIXED                  0x00000000
+#define VM_FLAGS_ANYWHERE               0x00000001
+#define VM_FLAGS_PURGABLE               0x00000002
+#define VM_FLAGS_4GB_CHUNK              0x00000004
+#define VM_FLAGS_RANDOM_ADDR            0x00000008
+#define VM_FLAGS_NO_CACHE               0x00000010
+#define VM_FLAGS_RESILIENT_CODESIGN     0x00000020
+#define VM_FLAGS_RESILIENT_MEDIA        0x00000040
+#define VM_FLAGS_PERMANENT              0x00000080
+#define VM_FLAGS_TPRO                   0x00001000
+#define VM_FLAGS_OVERWRITE              0x00004000  /* delete any existing mappings first */
 /*
  * VM_FLAGS_SUPERPAGE_MASK
  *	3 bits that specify whether large pages should be used instead of
  *	base pages (!=0), as well as the requested page size.
  */
-#define VM_FLAGS_SUPERPAGE_MASK 0x70000 /* bits 0x10000, 0x20000, 0x40000 */
-#define VM_FLAGS_RETURN_DATA_ADDR       0x100000 /* Return address of target data, rather than base of page */
-#define VM_FLAGS_RETURN_4K_DATA_ADDR    0x800000 /* Return 4K aligned address of target data */
-#define VM_FLAGS_ALIAS_MASK     0xFF000000
+#define VM_FLAGS_SUPERPAGE_MASK         0x00070000 /* bits 0x10000, 0x20000, 0x40000 */
+#define VM_FLAGS_RETURN_DATA_ADDR       0x00100000 /* Return address of target data, rather than base of page */
+#define VM_FLAGS_RETURN_4K_DATA_ADDR    0x00800000 /* Return 4K aligned address of target data */
+#define VM_FLAGS_ALIAS_MASK             0xFF000000
 #define VM_GET_FLAGS_ALIAS(flags, alias)                        \
-	        (alias) = ((flags) & VM_FLAGS_ALIAS_MASK) >> 24
+	        (alias) = (((flags) >> 24) & 0xff)
 #if !XNU_KERNEL_PRIVATE
 #define VM_SET_FLAGS_ALIAS(flags, alias)                        \
 	        (flags) = (((flags) & ~VM_FLAGS_ALIAS_MASK) |   \
 	        (((alias) & ~VM_FLAGS_ALIAS_MASK) << 24))
 #endif /* !XNU_KERNEL_PRIVATE */
+
+#if XNU_KERNEL_PRIVATE
+/*
+ * When making a new VM_FLAG_*:
+ * - add it to this mask
+ * - add a vmf_* field to vm_map_kernel_flags_t in the right spot
+ * - add a check in vm_map_kernel_flags_check_vmflags()
+ * - update tests vm_parameter_validation_[user|kern] and their expected
+ *     results; they deliberately call VM functions with invalid flag values
+ *     and you may be turning one of those invalid flags valid.
+ */
+#define VM_FLAGS_ANY_MASK       (VM_FLAGS_FIXED |               \
+	                         VM_FLAGS_ANYWHERE |            \
+	                         VM_FLAGS_PURGABLE |            \
+	                         VM_FLAGS_4GB_CHUNK |           \
+	                         VM_FLAGS_RANDOM_ADDR |         \
+	                         VM_FLAGS_NO_CACHE |            \
+	                         VM_FLAGS_RESILIENT_CODESIGN |  \
+	                         VM_FLAGS_RESILIENT_MEDIA |     \
+	                         VM_FLAGS_PERMANENT |           \
+	                         VM_FLAGS_TPRO |                \
+	                         VM_FLAGS_OVERWRITE |           \
+	                         VM_FLAGS_SUPERPAGE_MASK |      \
+	                         VM_FLAGS_RETURN_DATA_ADDR |    \
+	                         VM_FLAGS_RETURN_4K_DATA_ADDR | \
+	                         VM_FLAGS_ALIAS_MASK)
+#endif /* XNU_KERNEL_PRIVATE */
+#define VM_FLAGS_HW     (VM_FLAGS_TPRO)
 
 /* These are the flags that we accept from user-space */
 #define VM_FLAGS_USER_ALLOCATE  (VM_FLAGS_FIXED |               \
@@ -328,12 +326,16 @@ typedef struct pmap_statistics  *pmap_statistics_t;
 	                         VM_FLAGS_4GB_CHUNK |           \
 	                         VM_FLAGS_RANDOM_ADDR |         \
 	                         VM_FLAGS_NO_CACHE |            \
+	                         VM_FLAGS_PERMANENT |           \
 	                         VM_FLAGS_OVERWRITE |           \
 	                         VM_FLAGS_SUPERPAGE_MASK |      \
+	                         VM_FLAGS_HW |                  \
 	                         VM_FLAGS_ALIAS_MASK)
+
 #define VM_FLAGS_USER_MAP       (VM_FLAGS_USER_ALLOCATE |       \
 	                         VM_FLAGS_RETURN_4K_DATA_ADDR | \
 	                         VM_FLAGS_RETURN_DATA_ADDR)
+
 #define VM_FLAGS_USER_REMAP     (VM_FLAGS_FIXED |               \
 	                         VM_FLAGS_ANYWHERE |            \
 	                         VM_FLAGS_RANDOM_ADDR |         \
@@ -359,58 +361,188 @@ typedef struct pmap_statistics  *pmap_statistics_t;
 
 /* Reasons for exception for virtual memory */
 enum virtual_memory_guard_exception_codes {
-	kGUARD_EXC_DEALLOC_GAP  = 1u << 0
+	kGUARD_EXC_DEALLOC_GAP  = 1u << 0,
+	kGUARD_EXC_RECLAIM_COPYIO_FAILURE = 1u << 1,
+	kGUARD_EXC_RECLAIM_INDEX_FAILURE = 1u << 2,
+	kGUARD_EXC_RECLAIM_DEALLOCATE_FAILURE = 1u << 3,
 };
 
-#ifdef KERNEL_PRIVATE
-typedef struct {
-	unsigned int
-	    vmkf_atomic_entry:1,
-	    vmkf_permanent:1,
-	    vmkf_guard_after:1,
-	    vmkf_guard_before:1,
-	    vmkf_submap:1,
-	    vmkf_already:1,
-	    vmkf_beyond_max:1,
-	    vmkf_no_pmap_check:1,
-	    vmkf_map_jit:1,
-	    vmkf_iokit_acct:1,
-	    vmkf_keep_map_locked:1,
-	    vmkf_fourk:1,
-	    vmkf_overwrite_immutable:1,
-	    vmkf_remap_prot_copy:1,
-	    vmkf_cs_enforcement_override:1,
-	    vmkf_cs_enforcement:1,
-	    vmkf_nested_pmap:1,
-	    vmkf_no_copy_on_read:1,
-#if !defined(CONFIG_EMBEDDED)
-	    vmkf_32bit_map_va:1,
-	    __vmkf_unused:13;
-#else
-	    __vmkf_unused:14;
-#endif
+#ifdef XNU_KERNEL_PRIVATE
+
+/*!
+ * @enum vm_map_range_id_t
+ *
+ * @brief
+ * Enumerate a particular vm_map range.
+ *
+ * @discussion
+ * The kernel_map VA has been split into the following ranges. Userspace
+ * VA for any given process can also optionally be split by the following user
+ * ranges.
+ *
+ * @const KMEM_RANGE_ID_NONE
+ * This range is only used for early initialization.
+ *
+ * @const KMEM_RANGE_ID_PTR_*
+ * Range containing general purpose allocations from kalloc, etc that
+ * contain pointers.
+ *
+ * @const KMEM_RANGE_ID_SPRAYQTN
+ * The spray quarantine range contains allocations that have the following
+ * properties:
+ * - An attacker could control the size, lifetime and number of allocations
+ *   of this type (or from this callsite).
+ * - The pointer to the allocation is zeroed to ensure that it isn't left
+ *   dangling limiting the use of UaFs.
+ * - OOBs on the allocation is carefully considered and sufficiently
+ *   addressed.
+ *
+ * @const KMEM_RANGE_ID_DATA
+ * Range containing allocations that are bags of bytes and contain no
+ * pointers.
+ */
+__enum_decl(vm_map_range_id_t, uint8_t, {
+	KMEM_RANGE_ID_NONE,
+	KMEM_RANGE_ID_PTR_0,
+	KMEM_RANGE_ID_PTR_1,
+	KMEM_RANGE_ID_PTR_2,
+	KMEM_RANGE_ID_SPRAYQTN,
+	KMEM_RANGE_ID_DATA,
+
+	KMEM_RANGE_ID_FIRST   = KMEM_RANGE_ID_PTR_0,
+	KMEM_RANGE_ID_NUM_PTR = KMEM_RANGE_ID_PTR_2,
+	KMEM_RANGE_ID_MAX     = KMEM_RANGE_ID_DATA,
+
+	/* these UMEM_* correspond to the MACH_VM_RANGE_* tags and are ABI */
+	UMEM_RANGE_ID_DEFAULT = 0, /* same as MACH_VM_RANGE_DEFAULT */
+	UMEM_RANGE_ID_HEAP,        /* same as MACH_VM_RANGE_DATA    */
+	UMEM_RANGE_ID_FIXED,       /* same as MACH_VM_RANGE_FIXED   */
+	UMEM_RANGE_ID_LARGE_FILE,
+
+	/* these UMEM_* are XNU internal only range IDs, and aren't ABI */
+	UMEM_RANGE_ID_MAX     = UMEM_RANGE_ID_LARGE_FILE,
+
+#define KMEM_RANGE_COUNT        (KMEM_RANGE_ID_MAX + 1)
+});
+
+typedef vm_map_range_id_t       kmem_range_id_t;
+
+#define kmem_log2down(mask)     (31 - __builtin_clz(mask))
+#define KMEM_RANGE_MAX          (UMEM_RANGE_ID_MAX < KMEM_RANGE_ID_MAX \
+	                        ? KMEM_RANGE_ID_MAX : UMEM_RANGE_ID_MAX)
+#define KMEM_RANGE_BITS         kmem_log2down(2 * KMEM_RANGE_MAX - 1)
+
+typedef union {
+	struct {
+		unsigned long long
+		/*
+		 * VM_FLAG_* flags
+		 */
+		    vmf_fixed:1,
+		    vmf_purgeable:1,
+		    vmf_4gb_chunk:1,
+		    vmf_random_addr:1,
+		    vmf_no_cache:1,
+		    vmf_resilient_codesign:1,
+		    vmf_resilient_media:1,
+		    vmf_permanent:1,
+
+		    __unused_bit_8:1,
+		    __unused_bit_9:1,
+		    __unused_bit_10:1,
+		    __unused_bit_11:1,
+		    vmf_tpro:1,
+		__unused_bit_13:1,
+		vmf_overwrite:1,
+		    __unused_bit_15:1,
+
+		    vmf_superpage_size:3,
+		    __unused_bit_19:1,
+		    vmf_return_data_addr:1,
+		    __unused_bit_21:1,
+		    __unused_bit_22:1,
+		    vmf_return_4k_data_addr:1,
+
+		/*
+		 * VM tag (user or kernel)
+		 *
+		 * User tags are limited to 8 bits,
+		 * kernel tags can use up to 12 bits
+		 * with -zt or similar features.
+		 */
+		    vm_tag : 12, /* same as VME_ALIAS_BITS */
+
+		/*
+		 * General kernel flags
+		 */
+		    vmkf_already:1,             /* OK if same mapping already exists */
+		    vmkf_beyond_max:1,          /* map beyond the map's max offset */
+		    vmkf_no_pmap_check:1,       /* do not check that pmap is empty */
+		    vmkf_map_jit:1,             /* mark entry as JIT region */
+		    vmkf_iokit_acct:1,          /* IOKit accounting */
+		    vmkf_keep_map_locked:1,     /* keep map locked when returning from vm_map_enter() */
+		    vmkf_overwrite_immutable:1, /* can overwrite immutable mappings */
+		    vmkf_remap_prot_copy:1,     /* vm_remap for VM_PROT_COPY */
+		    vmkf_remap_legacy_mode:1,   /* vm_remap, not vm_remap_new */
+		    vmkf_cs_enforcement_override:1,     /* override CS_ENFORCEMENT */
+		    vmkf_cs_enforcement:1,      /* new value for CS_ENFORCEMENT */
+		    vmkf_nested_pmap:1,         /* use a nested pmap */
+		    vmkf_no_copy_on_read:1,     /* do not use copy_on_read */
+		    vmkf_copy_single_object:1,  /* vm_map_copy only 1 VM object */
+		    vmkf_copy_pageable:1,       /* vm_map_copy with pageable entries */
+		    vmkf_copy_same_map:1,       /* vm_map_copy to remap in original map */
+		    vmkf_translated_allow_execute:1,    /* allow execute in translated processes */
+		    vmkf_tpro_enforcement_override:1,   /* override TPRO propagation */
+
+		/*
+		 * Submap creation, altering vm_map_enter() only
+		 */
+		    vmkf_submap:1,              /* mapping a VM submap */
+		    vmkf_submap_atomic:1,       /* keep entry atomic (no splitting/coalescing) */
+		    vmkf_submap_adjust:1,       /* the submap needs to be adjusted */
+
+		/*
+		 * Flags altering the behavior of vm_map_locate_space_anywhere()
+		 */
+		    vmkf_32bit_map_va:1,        /* allocate in low 32-bits range */
+		    vmkf_guard_before:1,        /* guard page before the mapping */
+		    vmkf_last_free:1,           /* find space from the end */
+		    vmkf_range_id:KMEM_RANGE_BITS,      /* kmem range to allocate in */
+
+		    __vmkf_unused:1;
+	};
+
+	/*
+	 * do not access these directly,
+	 * use vm_map_kernel_flags_check_vmflags*()
+	 */
+	uint32_t __vm_flags : 24;
 } vm_map_kernel_flags_t;
-#define VM_MAP_KERNEL_FLAGS_NONE (vm_map_kernel_flags_t) {              \
-	.vmkf_atomic_entry = 0, /* keep entry atomic (no coalescing) */ \
-	.vmkf_permanent = 0,    /* mapping can NEVER be unmapped */     \
-	.vmkf_guard_after = 0,  /* guard page after the mapping */      \
-	.vmkf_guard_before = 0, /* guard page before the mapping */     \
-	.vmkf_submap = 0,       /* mapping a VM submap */               \
-	.vmkf_already = 0,      /* OK if same mapping already exists */ \
-	.vmkf_beyond_max = 0,   /* map beyond the map's max offset */   \
-	.vmkf_no_pmap_check = 0, /* do not check that pmap is empty */  \
-	.vmkf_map_jit = 0,      /* mark entry as JIT region */          \
-	.vmkf_iokit_acct = 0,   /* IOKit accounting */                  \
-	.vmkf_keep_map_locked = 0, /* keep map locked when returning from vm_map_enter() */ \
-	.vmkf_fourk = 0,        /* use fourk pager */                   \
-	.vmkf_overwrite_immutable = 0,  /* can overwrite immutable mappings */ \
-	.vmkf_remap_prot_copy = 0, /* vm_remap for VM_PROT_COPY */      \
-	.vmkf_cs_enforcement_override = 0, /* override CS_ENFORCEMENT */ \
-	.vmkf_cs_enforcement = 0,  /* new value for CS_ENFORCEMENT */   \
-	.vmkf_nested_pmap = 0, /* use a nested pmap */                  \
-	.vmkf_no_copy_on_read = 0, /* do not use copy_on_read */        \
-	.__vmkf_unused = 0                                              \
-}
+
+/*
+ * using this means that vmf_* flags can't be used
+ * until vm_map_kernel_flags_set_vmflags() is set,
+ * or some manual careful init is done.
+ *
+ * Prefer VM_MAP_KERNEL_FLAGS_(FIXED,ANYWHERE) instead.
+ */
+#define VM_MAP_KERNEL_FLAGS_NONE \
+	(vm_map_kernel_flags_t){ }
+
+#define VM_MAP_KERNEL_FLAGS_FIXED(...) \
+	(vm_map_kernel_flags_t){ .vmf_fixed = true, __VA_ARGS__ }
+
+#define VM_MAP_KERNEL_FLAGS_ANYWHERE(...) \
+	(vm_map_kernel_flags_t){ .vmf_fixed = false, __VA_ARGS__ }
+
+#define VM_MAP_KERNEL_FLAGS_FIXED_PERMANENT(...) \
+	VM_MAP_KERNEL_FLAGS_FIXED(.vmf_permanent = true, __VA_ARGS__)
+
+#define VM_MAP_KERNEL_FLAGS_ANYWHERE_PERMANENT(...) \
+	VM_MAP_KERNEL_FLAGS_ANYWHERE(.vmf_permanent = true, __VA_ARGS__)
+
+#define VM_MAP_KERNEL_FLAGS_DATA_ANYWHERE(...) \
+	VM_MAP_KERNEL_FLAGS_ANYWHERE(.vmkf_range_id = KMEM_RANGE_ID_DATA, __VA_ARGS__)
 
 typedef struct {
 	unsigned int
@@ -424,11 +556,17 @@ typedef struct {
 	.__vmnekf_unused = 0                                                   \
 }
 
-#endif /* KERNEL_PRIVATE */
+#endif /* XNU_KERNEL_PRIVATE */
 
 /* current accounting postmark */
 #define __VM_LEDGER_ACCOUNTING_POSTMARK 2019032600
 
+/*
+ *  When making a new VM_LEDGER_TAG_* or VM_LEDGER_FLAG_*, update tests
+ *  vm_parameter_validation_[user|kern] and their expected results; they
+ *  deliberately call VM functions with invalid ledger values and you may
+ *  be turning one of those invalid tags/flags valid.
+ */
 /* discrete values: */
 #define VM_LEDGER_TAG_NONE      0x00000000
 #define VM_LEDGER_TAG_DEFAULT   0x00000001
@@ -437,10 +575,15 @@ typedef struct {
 #define VM_LEDGER_TAG_GRAPHICS  0x00000004
 #define VM_LEDGER_TAG_NEURAL    0x00000005
 #define VM_LEDGER_TAG_MAX       0x00000005
-/* individual bits: */
-#define VM_LEDGER_FLAG_NO_FOOTPRINT     0x00000001
-#define VM_LEDGER_FLAGS (VM_LEDGER_FLAG_NO_FOOTPRINT)
+#define VM_LEDGER_TAG_UNCHANGED ((int)-1)
 
+/* individual bits: */
+#define VM_LEDGER_FLAG_NO_FOOTPRINT              (1 << 0)
+#define VM_LEDGER_FLAG_NO_FOOTPRINT_FOR_DEBUG    (1 << 1)
+#define VM_LEDGER_FLAG_FROM_KERNEL               (1 << 2)
+
+#define VM_LEDGER_FLAGS_USER (VM_LEDGER_FLAG_NO_FOOTPRINT | VM_LEDGER_FLAG_NO_FOOTPRINT_FOR_DEBUG)
+#define VM_LEDGER_FLAGS_ALL (VM_LEDGER_FLAGS_USER | VM_LEDGER_FLAG_FROM_KERNEL)
 
 #define VM_MEMORY_MALLOC 1
 #define VM_MEMORY_MALLOC_SMALL 2
@@ -456,6 +599,7 @@ typedef struct {
 
 #define VM_MEMORY_MALLOC_NANO 11
 #define VM_MEMORY_MALLOC_MEDIUM 12
+#define VM_MEMORY_MALLOC_PROB_GUARD 13
 
 #define VM_MEMORY_MACH_MSG 20
 #define VM_MEMORY_IOKIT 21
@@ -616,9 +760,36 @@ typedef struct {
 /* memory allocated by CoreMedia for global image registration of frames */
 #define VM_MEMORY_CM_REGWARP 101
 
+/* memory allocated by EmbeddedAcousticRecognition for speech decoder */
+#define VM_MEMORY_EAR_DECODER 102
+
+/* CoreUI cached image data */
+#define VM_MEMORY_COREUI_CACHED_IMAGE_DATA 103
+
+/* ColorSync is using mmap for read-only copies of ICC profile data */
+#define VM_MEMORY_COLORSYNC 104
+
+/* backtrace info for simulated crashes */
+#define VM_MEMORY_BTINFO 105
+
+/* memory allocated by CoreMedia */
+#define VM_MEMORY_CM_HLS 106
+
+/* Reserve 230-239 for Rosetta */
+#define VM_MEMORY_ROSETTA 230
+#define VM_MEMORY_ROSETTA_THREAD_CONTEXT 231
+#define VM_MEMORY_ROSETTA_INDIRECT_BRANCH_MAP 232
+#define VM_MEMORY_ROSETTA_RETURN_STACK 233
+#define VM_MEMORY_ROSETTA_EXECUTABLE_HEAP 234
+#define VM_MEMORY_ROSETTA_USER_LDT 235
+#define VM_MEMORY_ROSETTA_ARENA 236
+#define VM_MEMORY_ROSETTA_10 239
+
 /* Reserve 240-255 for application */
 #define VM_MEMORY_APPLICATION_SPECIFIC_1 240
 #define VM_MEMORY_APPLICATION_SPECIFIC_16 255
+
+#define VM_MEMORY_COUNT 256
 
 #if !XNU_KERNEL_PRIVATE
 #define VM_MAKE_TAG(tag) ((tag) << 24)
@@ -629,6 +800,11 @@ typedef struct {
 
 /* kernel map tags */
 /* please add new definition strings to zprint */
+/*
+ *  When making a new VM_KERN_MEMORY_*, update tests vm_parameter_validation_[user|kern]
+ *  and their expected results; they deliberately call VM functions with invalid
+ *  kernel tag values and you may be turning one of those invalid tags valid.
+ */
 
 #define VM_KERN_MEMORY_NONE             0
 
@@ -659,8 +835,17 @@ typedef struct {
 #define VM_KERN_MEMORY_REASON           25
 #define VM_KERN_MEMORY_SKYWALK          26
 #define VM_KERN_MEMORY_LTABLE           27
+#define VM_KERN_MEMORY_HV               28
+#define VM_KERN_MEMORY_KALLOC_DATA      29
+#define VM_KERN_MEMORY_RETIRED          30
+#define VM_KERN_MEMORY_KALLOC_TYPE      31
+#define VM_KERN_MEMORY_TRIAGE           32
+#define VM_KERN_MEMORY_RECOUNT          33
+#define VM_KERN_MEMORY_EXCLAVES         35
+#define VM_KERN_MEMORY_EXCLAVES_SHARED  36
+/* add new tags here and adjust first-dynamic value */
+#define VM_KERN_MEMORY_FIRST_DYNAMIC    37
 
-#define VM_KERN_MEMORY_FIRST_DYNAMIC    28
 /* out of tags: */
 #define VM_KERN_MEMORY_ANY              255
 #define VM_KERN_MEMORY_COUNT            256
@@ -677,6 +862,8 @@ typedef struct {
 #define VM_KERN_SITE_HIDE               0x00000200      /* no zprint */
 #define VM_KERN_SITE_NAMED              0x00000400
 #define VM_KERN_SITE_ZONE               0x00000800
+#define VM_KERN_SITE_ZONE_VIEW          0x00001000
+#define VM_KERN_SITE_KALLOC             0x00002000      /* zone field is size class */
 
 #define VM_KERN_COUNT_MANAGED           0
 #define VM_KERN_COUNT_RESERVED          1
@@ -692,8 +879,22 @@ typedef struct {
 
 #define VM_KERN_COUNT_BOOT_STOLEN       10
 
-#define VM_KERN_COUNTER_COUNT           11
+/* The number of bytes from the kernel cache that are wired in memory */
+#define VM_KERN_COUNT_WIRED_STATIC_KERNELCACHE 11
+
+#define VM_KERN_COUNT_MAP_KALLOC_LARGE  VM_KERN_COUNT_MAP_KALLOC
+#define VM_KERN_COUNT_MAP_KALLOC_LARGE_DATA     12
+#define VM_KERN_COUNT_MAP_KERNEL_DATA   13
+
+/* The size of the exclaves iboot carveout (exclaves memory not from XNU) in bytes. */
+#define VM_KERN_COUNT_EXCLAVES_CARVEOUT 14
+
+/* The number of VM_KERN_COUNT_ stats. New VM_KERN_COUNT_ entries should be less than this. */
+#define VM_KERN_COUNTER_COUNT           15
+
 
 #endif /* KERNEL_PRIVATE */
+
+__END_DECLS
 
 #endif  /* _MACH_VM_STATISTICS_H_ */

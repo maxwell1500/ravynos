@@ -1,19 +1,58 @@
 import lldb
+
 from xnu import *
 
-_UnionStructClass = [lldb.eTypeClassStruct, lldb.eTypeClassClass, lldb.eTypeClassUnion]
+_UnionStructClass = [ lldb.eTypeClassStruct, lldb.eTypeClassClass, lldb.eTypeClassUnion ]
 
-
-def _showStructPacking(O, symbol, begin_offset=0, symsize=0, typedef=None, outerSize=0, memberName=None):
-    """
-    Recursively parse the field members of a structure.
-
+def _get_offset_formatter(ctx, fmt_hex, fmt_dec):
+    """ Returns a formatter of struct member offsets and sizes.
+    
     params:
-        O: the output formatter (standard.py)
-        symbol (lldb.SBType): reference to symbol in binary
+        ctx - configuration context
+        fmt_hex - hexadecimal format
+        fmt_dec - decimal format
     returns:
-        string containing lines of output.
+        offset formatter
     """
+    O = ctx[0]
+    use_hex = ctx[1]
+    if use_hex:
+        fmt = fmt_hex
+    else:
+        fmt = fmt_dec
+    return lambda o, s: O.format(fmt, o, s)
+
+def _get_num_formatter(ctx, fmt_hex, fmt_dec):
+    """ Returns a number formatter.
+    
+    params:
+        ctx - configuration context
+        fmt_hex - hexadecimal format
+        fmt_dec - decimal format
+    returns:
+        number formatter
+    """
+    O = ctx[0]
+    use_hex = ctx[1]
+    if use_hex:
+        fmt = fmt_hex
+    else:
+        fmt = fmt_dec
+    return lambda n: O.format(fmt, n)
+
+def _showStructPacking(ctx, symbol, begin_offset=0, symsize=0, typedef=None, outerSize=0, memberName=None):
+    """ Recursively parse the field members of structure.
+        
+        params :
+            ctx - context containing configuration settings and the output formatter (standard.py) symbol (lldb.SBType) reference to symbol in binary
+        returns:
+            string containing lines of output.
+    """
+
+    O = ctx[0]
+    format_offset = _get_offset_formatter(ctx, "{:#06x},[{:#6x}]", "{:04d},[{:4d}]")
+    format_num = _get_num_formatter(ctx, "{:#04x}", "{:2d}")
+
     ctype = "unknown type"
     is_union = False
     is_class = False
@@ -24,21 +63,20 @@ def _showStructPacking(O, symbol, begin_offset=0, symsize=0, typedef=None, outer
         ctype = "union"
         is_union = True
         union_size = sym_size
-    elif symbol.GetTypeClass() == lldb.eTypeClassStruct:
+    if symbol.GetTypeClass() == lldb.eTypeClassStruct:
         ctype = "struct"
-    elif symbol.GetTypeClass() == lldb.eTypeClassClass:
+    if symbol.GetTypeClass() == lldb.eTypeClassClass:
         ctype = "class"
         is_class = True
 
     if not outerSize or outerSize == sym_size:
-        outstr = O.format("{:04d},[{:4d}]", begin_offset, sym_size)
-    elif outerSize < sym_size:  # happens with C++ inheritance
-        outstr = O.format("{:04d},[{:4d}]", begin_offset, outerSize)
+        outstr = format_offset(begin_offset, sym_size)
+    elif outerSize < sym_size: # happens with c++ inheritance
+        outstr = format_offset(begin_offset, outerSize)
     else:
-        outstr = O.format(
-            "{:04d},[{:4d}]{VT.DarkRed}{{{:+d}}}{VT.Default}",
-            begin_offset, sym_size, outerSize - sym_size
-        )
+        outstr = O.format("{:s}{VT.DarkRed}{{{:s}}}{VT.Default}",
+                format_offset(begin_offset, sym_size),
+                format_num(outerSize - sym_size))
 
     if typedef:
         outstr += O.format(" {0}", typedef)
@@ -74,12 +112,12 @@ def _showStructPacking(O, symbol, begin_offset=0, symsize=0, typedef=None, outer
                 m_offset = member.GetOffsetInBytes() + begin_offset
                 m_type = member.GetType()
                 m_name = member.GetName()
-                m_size = m_size_bits / 8
+                m_size = m_size_bits // 8
 
                 _previous_size = m_size
                 _packed_bit_offset = member.GetOffsetInBits() + m_size_bits
 
-                _showStructPacking(O, m_type, m_offset, str(m_type), outerSize=m_size, memberName=m_name)
+                _showStructPacking(ctx, m_type, m_offset, str(m_type), outerSize=m_size, memberName=m_name)
 
         for i in range(_nfields):
             member = symbol.GetFieldAtIndex(i)
@@ -98,77 +136,76 @@ def _showStructPacking(O, symbol, begin_offset=0, symsize=0, typedef=None, outer
                 m_size_bits = m_size * 8
 
             if not is_union and _packed_bit_offset < m_offset_bits:
-                m_previous_offset = begin_offset + _packed_bit_offset / 8
+                m_previous_offset = begin_offset + (_packed_bit_offset // 8)
                 m_hole_bits = m_offset_bits - _packed_bit_offset
                 if _packed_bit_offset % 8 == 0:
-                    print(O.format(
-                        "{:04d},[{:4d}] ({VT.DarkRed}*** padding ***{VT.Default})",
-                        int(m_previous_offset), int(m_hole_bits / 8)
-                    ))
+                    print(O.format("{:s} ({VT.DarkRed}*** padding ***{VT.Default})",
+                           format_offset(m_previous_offset, (m_hole_bits // 8))))
                 else:
-                    print(O.format(
-                        "{:04d},[{:4d}] ({VT.Brown}*** padding : {:d} ***{VT.Default})",
-                        int(m_previous_offset), int(_previous_size), int(m_hole_bits)
-                    ))
+                    print(O.format("{:s} ({VT.Brown}*** padding : {:s} ***{VT.Default})",
+                            format_offset(m_previous_offset, _previous_size),
+                            format_num(m_hole_bits)))
 
             _previous_size = m_size
             _packed_bit_offset = m_offset_bits + m_size_bits
 
             _type_class = m_type.GetTypeClass()
             _canonical_type = m_type.GetCanonicalType()
-            _canonical_type_class = _canonical_type.GetTypeClass()
+            _canonical_type_class = m_type.GetCanonicalType().GetTypeClass()
 
             if _type_class == lldb.eTypeClassTypedef and _canonical_type_class in _UnionStructClass:
-                _showStructPacking(O, _canonical_type, m_offset, str(m_type), outerSize=union_size, memberName=m_name)
+                _showStructPacking(ctx, _canonical_type, m_offset, str(m_type), outerSize=union_size, memberName=m_name)
             elif _type_class in _UnionStructClass:
-                _showStructPacking(O, m_type, m_offset, outerSize=union_size, memberName=m_name)
+                _showStructPacking(ctx, m_type, m_offset, outerSize=union_size, memberName=m_name)
             else:
-                outstr = O.format("{:04d},[{:4d}]", m_offset, m_size)
-                if is_union and union_size != m_size_bits / 8:
-                    outstr += O.format("{VT.DarkRed}{{{:+d}}}{VT.Default}",
-                                       union_size - m_size_bits / 8)
+                outstr = format_offset(m_offset, m_size)
+                if is_union and union_size != (m_size_bits // 8):
+                    outstr += O.format("{VT.DarkRed}{{{:s}}}{VT.Default}",
+                            format_num(union_size - (m_size_bits // 8)))
                 if m_is_bitfield:
-                    outstr += O.format(" ({VT.DarkGreen}{:s} : {:d}{VT.Default}) {:s}",
-                                       m_type.GetName(), m_size_bits, m_name)
+                    outstr += O.format(" ({VT.DarkGreen}{:s} : {:s}{VT.Default}) {:s}",
+                            m_type.GetName(),
+                            format_num(m_size_bits),
+                            m_name)
                 else:
                     outstr += O.format(" ({VT.DarkGreen}{:s}{VT.Default}) {:s}",
-                                       m_type.GetName(), m_name)
+                            m_type.GetName(), m_name)
                 print(outstr)
 
-        referenceSize = min(outerSize, sym_size) or sym_size
+        referenceSize = sym_size
+        if outerSize:
+            referenceSize = min(outerSize, sym_size)
+
         if not is_union and _packed_bit_offset < referenceSize * 8:
-            m_previous_offset = begin_offset + _packed_bit_offset / 8
+            m_previous_offset = begin_offset + (_packed_bit_offset // 8)
             m_hole_bits = referenceSize * 8 - _packed_bit_offset
             if _packed_bit_offset % 8 == 0:
-                print(O.format(
-                    "{:04d},[{:4d}] ({VT.DarkRed}*** padding ***{VT.Default})",
-                    int(m_previous_offset), int(m_hole_bits / 8)
-                ))
+                print(O.format("{:s} ({VT.DarkRed}*** padding ***{VT.Default})",
+                        format_offset(m_previous_offset, m_hole_bits // 8)))
             else:
-                print(O.format(
-                    "{:04d},[{:4d}] ({VT.Brown}padding : {:d}{VT.Default})",
-                    int(m_previous_offset), int(_previous_size), int(m_hole_bits)
-                ))
+                print(O.format("{:s} ({VT.Brown}padding : {:s}{VT.Default})\n",
+                        format_offset(m_previous_offset, _previous_size),
+                        format_num(m_hole_bits)))
 
     print("}")
 
+@lldb_command('showstructpacking', "X" , fancy=True)
+def showStructInfo(cmd_args=None, cmd_options={}, O=None):
+    """ Show how a structure is packed in the binary.
 
-@lldb_command('showstructpacking', fancy=True)
-def showStructInfo(cmd_args=None, cmd_options=None, O=None):
-    """Show how a structure is packed in the binary.
-
-    Format:
-       <offset>, [<size_of_member>] (<type>) <name>
-
-    Example:
-        (lldb) showstructpacking pollfd
-           0,[   8] struct pollfd {
-               0,[   4] (int) fd
-               4,[   2] (short) events
-               6,[   2] (short) revents
-        }
-
-    Syntax: showstructpacking <typename>
+        Usage: showstructpacking [-X] <type name>
+            -X : prints struct members offsets and sizes in a hexadecimal format (decimal is default)
+    
+        The format is:
+            <offset>, [<size_of_member>] (<type>) <name>
+        
+        Example:
+            (lldb) showstructpacking pollfd
+                0,[   8] struct pollfd {
+                    0,[   4] (int) fd
+                    4,[   2] (short) events
+                    6,[   2] (short) revents
+                }
     """
     if not cmd_args:
         raise ArgumentError("Please provide a type name.")
@@ -185,4 +222,8 @@ def showStructInfo(cmd_args=None, cmd_options=None, O=None):
     if sym.GetTypeClass() not in _UnionStructClass:
         return O.error("{0} is not a structure/union/class type", ty_name)
 
-    _showStructPacking(O, sym, 0)
+    ctx = (O, "-X" in cmd_options)
+
+    _showStructPacking(ctx, sym, 0)
+
+# EndMacro: showstructinto

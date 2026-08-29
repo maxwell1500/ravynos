@@ -116,9 +116,8 @@
 #include <kern/waitq.h>
 #include <libkern/section_keywords.h>
 
-static lck_grp_t        *tty_lck_grp;
-static lck_grp_attr_t   *tty_lck_grp_attr;
-static lck_attr_t      *tty_lck_attr;
+static LCK_GRP_DECLARE(tty_lck_grp, "tty");
+os_refgrp_decl(static, t_refgrp, "tty", NULL);
 
 __private_extern__ int ttnread(struct tty *tp);
 static void     ttyecho(int c, struct tty *tp);
@@ -135,8 +134,12 @@ static int      proc_compare(proc_t p1, proc_t p2);
 void ttyhold(struct tty *tp);
 static void     ttydeallocate(struct tty *tp);
 
-static int isctty(proc_t p, struct tty  *tp);
-static int isctty_sp(proc_t p, struct tty  *tp, struct session *sessp);
+static bool     isbackground(proc_t p, struct tty *tp);
+static bool     isctty(proc_t p, struct tty *tp);
+static bool     isctty_sp(proc_t p, struct tty *tp, struct session *sessp);
+
+__private_extern__ void termios32to64(struct termios32 *in, struct user_termios *out);
+__private_extern__ void termios64to32(struct user_termios *in, struct termios32 *out);
 
 /*
  * Table with character classes and parity. The 8th bit indicates parity,
@@ -226,7 +229,7 @@ static u_char const char_type[] = {
 #define I_HIGH_WATER    (TTYHOG - 2 * 256)      /* XXX */
 #define I_LOW_WATER     ((TTYHOG - 2 * 256) * 7 / 8)    /* XXX */
 
-static void
+__private_extern__ void
 termios32to64(struct termios32 *in, struct user_termios *out)
 {
 	out->c_iflag = (user_tcflag_t)in->c_iflag;
@@ -241,45 +244,19 @@ termios32to64(struct termios32 *in, struct user_termios *out)
 	out->c_ospeed = (user_speed_t)in->c_ospeed;
 }
 
-static void
+__private_extern__ void
 termios64to32(struct user_termios *in, struct termios32 *out)
 {
-	out->c_iflag = (tcflag_t)in->c_iflag;
-	out->c_oflag = (tcflag_t)in->c_oflag;
-	out->c_cflag = (tcflag_t)in->c_cflag;
-	out->c_lflag = (tcflag_t)in->c_lflag;
+	out->c_iflag = (uint32_t)in->c_iflag;
+	out->c_oflag = (uint32_t)in->c_oflag;
+	out->c_cflag = (uint32_t)in->c_cflag;
+	out->c_lflag = (uint32_t)in->c_lflag;
 
 	/* bcopy is OK, since this type is ILP32/LP64 size invariant */
 	bcopy(in->c_cc, out->c_cc, sizeof(in->c_cc));
 
-	out->c_ispeed = (speed_t)in->c_ispeed;
-	out->c_ospeed = (speed_t)in->c_ospeed;
-}
-
-
-/*
- * tty_init
- *
- * Initialize the tty line discipline subsystem.
- *
- * Parameters:	void
- *
- * Returns:	void
- *
- * Locks:	No ttys can be allocated and no tty locks can be used
- *		until after this function is called
- *
- * Notes:	The intent of this is to set up a log group attribute,
- *		lock group, and loc atribute for subsequent per-tty locks.
- *		This function is called early in bsd_init(), prior to the
- *		console device initialization.
- */
-void
-tty_init(void)
-{
-	tty_lck_grp_attr = lck_grp_attr_alloc_init();
-	tty_lck_grp = lck_grp_alloc_init("tty", tty_lck_grp_attr);
-	tty_lck_attr = lck_attr_alloc_init();
+	out->c_ispeed = (uint32_t)MIN(in->c_ispeed, UINT32_MAX);
+	out->c_ospeed = (uint32_t)MIN(in->c_ospeed, UINT32_MAX);
 }
 
 
@@ -298,7 +275,43 @@ void
 tty_lock(struct tty *tp)
 {
 	TTY_LOCK_NOTOWNED(tp);  /* debug assert */
+	ttyhold(tp);
 	lck_mtx_lock(&tp->t_lock);
+	os_atomic_store(&tp->t_locked_thread, current_thread(), relaxed);
+}
+
+/*
+ * tty_lock
+ *
+ * Try locking the requested tty structure.
+ *
+ * Parameters:	tp				The tty we want to lock
+ *
+ * Returns:	true if locked, false otherwise
+ *
+ */
+bool
+tty_trylock(struct tty *tp)
+{
+	TTY_LOCK_NOTOWNED(tp);  /* debug assert */
+	ttyhold(tp);
+	if (lck_mtx_try_lock(&tp->t_lock)) {
+		/* locked */
+		os_atomic_store(&tp->t_locked_thread, current_thread(), relaxed);
+		return true;
+	} else {
+		/* not locked */
+		ttyfree(tp);
+		return false;
+	}
+}
+
+
+bool
+tty_islocked(struct tty *tp)
+{
+	thread_t owner = os_atomic_load(&tp->t_locked_thread, relaxed);
+	return owner == current_thread();
 }
 
 
@@ -317,7 +330,9 @@ void
 tty_unlock(struct tty *tp)
 {
 	TTY_LOCK_OWNED(tp);     /* debug assert */
+	os_atomic_store(&tp->t_locked_thread, NULL, relaxed);
 	lck_mtx_unlock(&tp->t_lock);
+	ttyfree(tp);
 }
 
 /*
@@ -361,13 +376,26 @@ int
 ttyclose(struct tty *tp)
 {
 	struct pgrp * oldpg;
-	struct session * oldsessp;
-	struct knote *kn;
+	struct session *oldsessp;
+	struct tty *freetp = TTY_NULL;
+	struct tty *constty = TTY_NULL;
 
 	TTY_LOCK_OWNED(tp);     /* debug assert */
 
+	constty = copy_constty();
+
 	if (constty == tp) {
+		ttyfree_locked(constty);
 		constty = NULL;
+		freetp = set_constty(NULL);
+		if (freetp) {
+			if (freetp == tp) {
+				ttyfree_locked(freetp);
+			} else {
+				ttyfree(freetp);
+			}
+			freetp = NULL;
+		}
 
 
 		/*
@@ -378,37 +406,54 @@ ttyclose(struct tty *tp)
 		(tp->t_dev, KMIOCDISABLCONS, NULL, 0, current_proc());
 	}
 
+	if (constty != NULL) {
+		if (constty == tp) {
+			ttyfree_locked(constty);
+		} else {
+			ttyfree(constty);
+		}
+		constty = NULL;
+	}
+
 	ttyflush(tp, FREAD | FWRITE);
 
 	tp->t_gen++;
 	tp->t_line = TTYDISC;
+
 	proc_list_lock();
 	oldpg = tp->t_pgrp;
 	oldsessp = tp->t_session;
+	if (oldsessp != SESSION_NULL) {
+		session_lock(oldsessp);
+		freetp = session_clear_tty_locked(oldsessp);
+		session_unlock(oldsessp);
+	}
 	tp->t_pgrp = NULL;
 	tp->t_session = NULL;
-	if (oldsessp != SESSION_NULL) {
-		oldsessp->s_ttypgrpid = NO_PID;
-	}
 	proc_list_unlock();
-	/* drop the reference on prev session and pgrp */
-	/* SAFE: All callers drop the lock on return */
 	tty_unlock(tp);
-	if (oldsessp != SESSION_NULL) {
+
+	/* drop the reference on prev session and pgrp */
+	if (oldsessp) {
 		session_rele(oldsessp);
+		if (freetp) {
+			ttyfree(freetp);
+		}
 	}
-	if (oldpg != PGRP_NULL) {
-		pg_rele(oldpg);
-	}
+	pgrp_rele(oldpg);
+
+	/* SAFE: All callers drop the lock on return */
 	tty_lock(tp);
+
 	tp->t_state = 0;
-	SLIST_FOREACH(kn, &tp->t_wsel.si_note, kn_selnext) {
-		KNOTE_DETACH(&tp->t_wsel.si_note, kn);
-	}
+
+	/*
+	 * The tty is closed - mark knote as being revoked and autodetach it from the
+	 * tty
+	 */
+	knote(&tp->t_wsel.si_note, NOTE_REVOKE, true);
 	selthreadclear(&tp->t_wsel);
-	SLIST_FOREACH(kn, &tp->t_rsel.si_note, kn_selnext) {
-		KNOTE_DETACH(&tp->t_rsel.si_note, kn);
-	}
+	knote(&tp->t_rsel.si_note, NOTE_REVOKE, true);
 	selthreadclear(&tp->t_rsel);
 
 	return 0;
@@ -492,9 +537,7 @@ ttyinput(int c, struct tty *tp)
 			if (ISSET(iflag, BRKINT)) {
 				ttyflush(tp, FREAD | FWRITE);
 				/* SAFE: All callers drop the lock on return */
-				tty_unlock(tp);
-				tty_pgsignal(tp, SIGINT, 1);
-				tty_lock(tp);
+				tty_pgsignal_locked(tp, SIGINT, 1);
 				goto endcase;
 			}
 			if (ISSET(iflag, PARMRK)) {
@@ -588,10 +631,8 @@ parmrk:
 				 * SAFE: priority order rather than "last
 				 * SAFE: active thread" order (FEATURE).
 				 */
-				tty_unlock(tp);
-				tty_pgsignal(tp,
+				tty_pgsignal_locked(tp,
 				    CCEQ(cc[VINTR], c) ? SIGINT : SIGQUIT, 1);
-				tty_lock(tp);
 				goto endcase;
 			}
 			if (CCEQ(cc[VSUSP], c)) {
@@ -600,9 +641,7 @@ parmrk:
 				}
 				ttyecho(c, tp);
 				/* SAFE: All callers drop the lock on return */
-				tty_unlock(tp);
-				tty_pgsignal(tp, SIGTSTP, 1);
-				tty_lock(tp);
+				tty_pgsignal_locked(tp, SIGTSTP, 1);
 				goto endcase;
 			}
 		}
@@ -739,9 +778,7 @@ parmrk:
 		if (CCEQ(cc[VSTATUS], c) && ISSET(lflag, IEXTEN)) {
 			if (ISSET(lflag, ISIG)) {
 				/* SAFE: All callers drop the lock on return */
-				tty_unlock(tp);
-				tty_pgsignal(tp, SIGINFO, 1);
-				tty_lock(tp);
+				tty_pgsignal_locked(tp, SIGINFO, 1);
 			}
 			if (!ISSET(lflag, NOKERNINFO)) {
 				ttyinfo_locked(tp);
@@ -935,44 +972,6 @@ ttyoutput(int c, struct tty *tp)
 }
 
 /*
- * Sets the tty state to not allow any more changes of foreground process
- * group. This is required to be done so that a subsequent revoke on a vnode
- * is able to always successfully complete.
- *
- * Locks :   Assumes tty_lock held on entry
- */
-void
-ttysetpgrphup(struct tty *tp)
-{
-	TTY_LOCK_OWNED(tp);     /* debug assert */
-	SET(tp->t_state, TS_PGRPHUP);
-	/*
-	 * Also wake up sleeping readers which may or may not belong to the
-	 * current foreground process group.
-	 *
-	 * This forces any non-fg readers (which entered read when
-	 * that process group was in the fg) to return with EIO (if they're
-	 * catching SIGTTIN or with SIGTTIN). The ones which do belong to the fg
-	 * process group will promptly go back to sleep and get a SIGHUP shortly
-	 * This would normally happen as part of the close in revoke but if
-	 * there is a sleeping reader from a non-fg process group we never get
-	 * to the close because the sleeping reader holds an iocount on the
-	 * vnode of the terminal which is going to get revoked->reclaimed.
-	 */
-	wakeup(TSA_HUP_OR_INPUT(tp));
-}
-
-/*
- * Locks : Assumes tty lock held on entry
- */
-void
-ttyclrpgrphup(struct tty *tp)
-{
-	TTY_LOCK_OWNED(tp);     /* debug assert */
-	CLR(tp->t_state, TS_PGRPHUP);
-}
-
-/*
  * ttioctl
  *
  * Identical to ttioctl_locked, only the lock is not held
@@ -1067,43 +1066,43 @@ ttioctl_locked(struct tty *tp, u_long cmd, caddr_t data, int flag, proc_t p)
 	struct uthread *ut;
 	struct pgrp *pg, *oldpg;
 	struct session *sessp, *oldsessp;
-	struct tty *oldtp;
+	struct tty *oldtp, *freetp;
 
 	TTY_LOCK_OWNED(tp);     /* debug assert */
 
-	ut = (struct uthread *)get_bsdthread_info(current_thread());
+	ut = current_uthread();
 	/* If the ioctl involves modification, signal if in the background. */
 	switch (cmd) {
 	case TIOCIXON:
 	case TIOCIXOFF:
-	case  TIOCDRAIN:
-	case  TIOCFLUSH:
+	case TIOCDRAIN:
+	case TIOCFLUSH:
 	case TIOCSTOP:
 	case TIOCSTART:
-	case  TIOCSETA_32:
-	case  TIOCSETA_64:
-	case  TIOCSETD:
-	case  TIOCSETAF_32:
-	case  TIOCSETAF_64:
-	case  TIOCSETAW_32:
-	case  TIOCSETAW_64:
-	case  TIOCSPGRP:
-	case  TIOCSTAT:
-	case  TIOCSTI:
-	case  TIOCSWINSZ:
-	case  TIOCLBIC:
-	case  TIOCLBIS:
-	case  TIOCLSET:
-	case  TIOCSETC:
+	case TIOCSETA_32:
+	case TIOCSETA_64:
+	case TIOCSETD:
+	case TIOCSETAF_32:
+	case TIOCSETAF_64:
+	case TIOCSETAW_32:
+	case TIOCSETAW_64:
+	case TIOCSPGRP:
+	case TIOCSTAT:
+	case TIOCSTI:
+	case TIOCSWINSZ:
+	case TIOCLBIC:
+	case TIOCLBIS:
+	case TIOCLSET:
+	case TIOCSETC:
 	case OTIOCSETD:
-	case  TIOCSETN:
-	case  TIOCSETP:
-	case  TIOCSLTC:
+	case TIOCSETN:
+	case TIOCSETP:
+	case TIOCSLTC:
 		while (isbackground(p, tp) &&
 		    (p->p_lflag & P_LPPWAIT) == 0 &&
 		    (p->p_sigignore & sigmask(SIGTTOU)) == 0 &&
 		    (ut->uu_sigmask & sigmask(SIGTTOU)) == 0) {
-			pg = proc_pgrp(p);
+			pg = proc_pgrp(p, NULL);
 			if (pg == PGRP_NULL) {
 				error = EIO;
 				goto out;
@@ -1111,13 +1110,13 @@ ttioctl_locked(struct tty *tp, u_long cmd, caddr_t data, int flag, proc_t p)
 			/* SAFE: All callers drop the lock on return */
 			tty_unlock(tp);
 			if (pg->pg_jobc == 0) {
-				pg_rele(pg);
+				pgrp_rele(pg);
 				tty_lock(tp);
 				error = EIO;
 				goto out;
 			}
 			pgsignal(pg, SIGTTOU, 1);
-			pg_rele(pg);
+			pgrp_rele(pg);
 			tty_lock(tp);
 
 
@@ -1134,6 +1133,10 @@ ttioctl_locked(struct tty *tp, u_long cmd, caddr_t data, int flag, proc_t p)
 	}
 
 	switch (cmd) {                  /* Process the ioctl. */
+	/*
+	 * Note: FIOASYNC and FIONBIO (only) can be called on pty primaries
+	 * before the replica side is open.
+	 */
 	case FIOASYNC:                  /* set/clear async i/o */
 		if (*(int *)data) {
 			SET(tp->t_state, TS_ASYNC);
@@ -1163,21 +1166,59 @@ ttioctl_locked(struct tty *tp, u_long cmd, caddr_t data, int flag, proc_t p)
 	case TIOCSCONS: {
 		/* Set current console device to this line */
 		data = (caddr_t) &bogusData;
-
-		/* No break - Fall through to BSD code */
 	}
+		OS_FALLTHROUGH;
 	case TIOCCONS: {                        /* become virtual console */
+		struct tty *constty = NULL;
+		constty = copy_constty();
 		if (*(int *)data) {
 			if (constty && constty != tp &&
 			    ISSET(constty->t_state, TS_CONNECTED)) {
 				error = EBUSY;
+				// constty != tp, so constty is not locked
+				ttyfree(constty);
+				constty = NULL;
 				goto out;
 			}
 			if ((error = suser(kauth_cred_get(), &p->p_acflag))) {
+				if (constty) {
+					if (constty == tp) {
+						ttyfree_locked(constty);
+					} else {
+						ttyfree(constty);
+					}
+					constty = NULL;
+				}
 				goto out;
 			}
-			constty = tp;
+			if (tp != constty) {
+				freetp = set_constty(tp);
+				if (freetp != NULL) {
+					if (freetp == tp) {
+						ttyfree_locked(freetp);
+					} else {
+						ttyfree(freetp);
+					}
+					freetp = NULL;
+				}
+				if (constty != NULL) {
+					// constty != tp, so constty is not locked
+					ttyfree(constty);
+				}
+				constty = copy_constty();
+			}
 		} else if (tp == constty) {
+			freetp = set_constty(NULL);
+			if (freetp != NULL) {
+				if (freetp == tp) {
+					ttyfree_locked(freetp);
+				} else {
+					ttyfree(freetp);
+				}
+				freetp = NULL;
+			}
+			// constty == tp, so constty is locked
+			ttyfree_locked(constty);
 			constty = NULL;
 		}
 		if (constty) {
@@ -1186,6 +1227,13 @@ ttioctl_locked(struct tty *tp, u_long cmd, caddr_t data, int flag, proc_t p)
 		} else {
 			(*cdevsw[major(tp->t_dev)].d_ioctl)
 			(tp->t_dev, KMIOCDISABLCONS, NULL, 0, p);
+		}
+		if (constty != NULL) {
+			if (constty == tp) {
+				ttyfree_locked(constty);
+			} else {
+				ttyfree(constty);
+			}
 		}
 		break;
 	}
@@ -1405,8 +1453,8 @@ ttioctl_locked(struct tty *tp, u_long cmd, caddr_t data, int flag, proc_t p)
 		break;
 	case TIOCSCTTY:                 /* become controlling tty */
 		/* Session ctty vnode pointer set in vnode layer. */
-		sessp = proc_session(p);
-		if (sessp == SESSION_NULL) {
+		pg = proc_pgrp(p, &sessp);
+		if (pg == PGRP_NULL) {
 			error = EPERM;
 			goto out;
 		}
@@ -1417,7 +1465,7 @@ ttioctl_locked(struct tty *tp, u_long cmd, caddr_t data, int flag, proc_t p)
 		if (!SESS_LEADER(p, sessp)) {
 			/* SAFE: All callers drop the lock on return */
 			tty_unlock(tp);
-			session_rele(sessp);
+			pgrp_rele(pg);
 			tty_lock(tp);
 			error = EPERM;
 			goto out;
@@ -1429,112 +1477,100 @@ ttioctl_locked(struct tty *tp, u_long cmd, caddr_t data, int flag, proc_t p)
 		if (tp->t_session == sessp) {
 			/* SAFE: All callers drop the lock on return */
 			tty_unlock(tp);
-			session_rele(sessp);
+			pgrp_rele(pg);
 			tty_lock(tp);
 			error = 0;
 			goto out;
 		}
-		pg = proc_pgrp(p);
+
 		/*
 		 * Deny if the terminal is already attached to another session or
 		 * the session already has a terminal vnode.
 		 */
+		proc_list_lock();
 		session_lock(sessp);
 		if (sessp->s_ttyvp || tp->t_session) {
 			session_unlock(sessp);
+			proc_list_unlock();
 			/* SAFE: All callers drop the lock on return */
 			tty_unlock(tp);
-			if (pg != PGRP_NULL) {
-				pg_rele(pg);
-			}
-			session_rele(sessp);
+			pgrp_rele(pg);
 			tty_lock(tp);
 			error = EPERM;
 			goto out;
 		}
+
 		sessp->s_ttypgrpid = pg->pg_id;
-		oldtp = sessp->s_ttyp;
-		ttyhold(tp);
-		sessp->s_ttyp = tp;
-		session_unlock(sessp);
-		proc_list_lock();
-		oldsessp = tp->t_session;
+		oldtp = session_set_tty_locked(sessp, tp);
+
 		oldpg = tp->t_pgrp;
-		if (oldsessp != SESSION_NULL) {
-			oldsessp->s_ttypgrpid = NO_PID;
+		oldsessp = tp->t_session;
+		tp->t_pgrp = pg; /* donate pg ref */
+		tp->t_session = session_ref(sessp);
+		session_unlock(sessp);
+
+		if (oldsessp) {
+			session_lock(oldsessp);
+			freetp = session_clear_tty_locked(oldsessp);
+			session_unlock(oldsessp);
 		}
-		/* do not drop refs on sessp and pg as tp holds them */
-		tp->t_session = sessp;
-		tp->t_pgrp = pg;
+
+		os_atomic_or(&p->p_flag, P_CONTROLT, relaxed);
 		proc_list_unlock();
-		OSBitOrAtomic(P_CONTROLT, &p->p_flag);
-		/* SAFE: All callers drop the lock on return */
 		tty_unlock(tp);
-		/* drop the reference on prev session and pgrp */
-		if (oldsessp != SESSION_NULL) {
+
+		if (oldsessp) {
 			session_rele(oldsessp);
+			if (freetp) {
+				ttyfree(freetp);
+			}
 		}
-		if (oldpg != PGRP_NULL) {
-			pg_rele(oldpg);
-		}
+		pgrp_rele(oldpg);
 		if (NULL != oldtp) {
 			ttyfree(oldtp);
 		}
+
+		/* SAFE: All callers drop the lock on return */
 		tty_lock(tp);
 		break;
 
 	case TIOCSPGRP: {               /* set pgrp of tty */
 		struct pgrp *pgrp = PGRP_NULL;
 
-		sessp = proc_session(p);
+		pg = proc_pgrp(p, &sessp);
 		if (!isctty_sp(p, tp, sessp)) {
-			if (sessp != SESSION_NULL) {
-				session_rele(sessp);
-			}
+			pgrp_rele(pg);
 			error = ENOTTY;
 			goto out;
-		} else if ((pgrp = pgfind(*(int *)data)) == PGRP_NULL) {
-			if (sessp != SESSION_NULL) {
-				session_rele(sessp);
-			}
+		} else if ((pgrp = pgrp_find(*(int *)data)) == PGRP_NULL) {
+			pgrp_rele(pg);
 			error = EINVAL;
 			goto out;
 		} else if (pgrp->pg_session != sessp) {
 			/* SAFE: All callers drop the lock on return */
 			tty_unlock(tp);
-			if (sessp != SESSION_NULL) {
-				session_rele(sessp);
-			}
-			pg_rele(pgrp);
+			pgrp_rele(pg);
+			pgrp_rele(pgrp);
 			tty_lock(tp);
 			error = EPERM;
 			goto out;
 		}
-		/*
-		 * The session leader is going away and is possibly going to revoke
-		 * the terminal, we can't change the process group when that is the
-		 * case.
-		 */
-		if (ISSET(tp->t_state, TS_PGRPHUP)) {
-			if (sessp != SESSION_NULL) {
-				session_rele(sessp);
-			}
-			pg_rele(pgrp);
-			error = EPERM;
-			goto out;
-		}
+
 		proc_list_lock();
 		oldpg = tp->t_pgrp;
 		tp->t_pgrp = pgrp;
-		sessp->s_ttypgrpid = pgrp->pg_id;
 		proc_list_unlock();
+
+		session_lock(sessp);
+		sessp->s_ttypgrpid = pgrp->pg_id;
+		session_unlock(sessp);
 
 		/*
 		 * Wakeup readers to recheck if they are still the foreground
 		 * process group.
 		 *
 		 * ttwakeup() isn't called because the readers aren't getting
-		 * woken up becuse there is something to read but to force
+		 * woken up because there is something to read but to force
 		 * the re-evaluation of their foreground process group status.
 		 *
 		 * Ordinarily leaving these readers waiting wouldn't be an issue
@@ -1547,12 +1583,8 @@ ttioctl_locked(struct tty *tp, u_long cmd, caddr_t data, int flag, proc_t p)
 
 		/* SAFE: All callers drop the lock on return */
 		tty_unlock(tp);
-		if (oldpg != PGRP_NULL) {
-			pg_rele(oldpg);
-		}
-		if (sessp != SESSION_NULL) {
-			session_rele(sessp);
-		}
+		pgrp_rele(oldpg);
+		pgrp_rele(pg);
 		tty_lock(tp);
 		break;
 	}
@@ -1564,9 +1596,7 @@ ttioctl_locked(struct tty *tp, u_long cmd, caddr_t data, int flag, proc_t p)
 		    sizeof(struct winsize))) {
 			tp->t_winsize = *(struct winsize *)data;
 			/* SAFE: All callers drop the lock on return */
-			tty_unlock(tp);
-			tty_pgsignal(tp, SIGWINCH, 1);
-			tty_lock(tp);
+			tty_pgsignal_locked(tp, SIGWINCH, 1);
 		}
 		break;
 	case TIOCSDRAINWAIT:
@@ -1582,10 +1612,17 @@ ttioctl_locked(struct tty *tp, u_long cmd, caddr_t data, int flag, proc_t p)
 		*(int *)data = tp->t_timeout / hz;
 		break;
 	case TIOCREVOKE:
-		if (ISSET(tp->t_state, TS_PGRPHUP)) {
-			tp->t_gen++;
-			wakeup(TSA_HUP_OR_INPUT(tp));
-		}
+		SET(tp->t_state, TS_REVOKE);
+		tp->t_gen++;
+		/*
+		 * At this time, only this wait channel is woken up as only
+		 * ttread has been problematic. It is possible we may need
+		 * to add wake up other tty wait addresses as well.
+		 */
+		wakeup(TSA_HUP_OR_INPUT(tp));
+		break;
+	case TIOCREVOKECLEAR:
+		CLR(tp->t_state, TS_REVOKE);
 		break;
 	default:
 		error = ttcompat(tp, cmd, data, flag, p);
@@ -2075,7 +2112,7 @@ ttread(struct tty *tp, struct uio *uio, int flag)
 
 	TTY_LOCK_OWNED(tp);     /* debug assert */
 
-	ut = (struct uthread *)get_bsdthread_info(current_thread());
+	ut = current_uthread();
 
 loop:
 	lflag = tp->t_lflag;
@@ -2088,16 +2125,17 @@ loop:
 	}
 
 	/*
-	 * Signal the process if it's in the background.
+	 * Signal the process if it's in the background. If the terminal is
+	 * getting revoked, everybody is in the background.
 	 */
-	if (isbackground(p, tp)) {
+	if (isbackground(p, tp) || ISSET(tp->t_state, TS_REVOKE)) {
 		if ((p->p_sigignore & sigmask(SIGTTIN)) ||
 		    (ut->uu_sigmask & sigmask(SIGTTIN)) ||
 		    p->p_lflag & P_LPPWAIT) {
 			error = EIO;
 			goto err;
 		}
-		pg = proc_pgrp(p);
+		pg = proc_pgrp(p, NULL);
 		if (pg == PGRP_NULL) {
 			error = EIO;
 			goto err;
@@ -2105,7 +2143,7 @@ loop:
 		if (pg->pg_jobc == 0) {
 			/* SAFE: All callers drop the lock on return */
 			tty_unlock(tp);
-			pg_rele(pg);
+			pgrp_rele(pg);
 			tty_lock(tp);
 			error = EIO;
 			goto err;
@@ -2113,7 +2151,7 @@ loop:
 		/* SAFE: All callers drop the lock on return */
 		tty_unlock(tp);
 		pgsignal(pg, SIGTTIN, 1);
-		pg_rele(pg);
+		pgrp_rele(pg);
 		tty_lock(tp);
 
 		/*
@@ -2185,20 +2223,13 @@ loop:
 				goto read;
 			}
 			microuptime(&timecopy);
-			if (!has_etime) {
-				/* first character, start timer */
+			if (!has_etime || qp->c_cc > last_cc) {
+				/* first character or got a character, start timer */
 				has_etime = 1;
 
 				etime.tv_sec = t / 1000000;
-				etime.tv_usec = (t - (etime.tv_sec * 1000000));
-				timeradd(&etime, &timecopy, &etime);
-
-				slp = t;
-			} else if (qp->c_cc > last_cc) {
-				/* got a character, restart timer */
-
-				etime.tv_sec = t / 1000000;
-				etime.tv_usec = (t - (etime.tv_sec * 1000000));
+				etime.tv_usec =
+				    (__darwin_suseconds_t)(t - (etime.tv_sec * 1000000));
 				timeradd(&etime, &timecopy, &etime);
 
 				slp = t;
@@ -2220,7 +2251,8 @@ loop:
 				has_etime = 1;
 
 				etime.tv_sec = t / 1000000;
-				etime.tv_usec = (t - (etime.tv_sec * 1000000));
+				etime.tv_usec =
+				    (__darwin_suseconds_t)(t - (etime.tv_sec * 1000000));
 				timeradd(&etime, &timecopy, &etime);
 
 				slp = t;
@@ -2279,8 +2311,13 @@ read:
 	for (;;) {
 		char ibuf[IBUFSIZ];
 		int icc;
+		ssize_t size = uio_resid(uio);
+		if (size < 0) {
+			error = ERANGE;
+			break;
+		}
 
-		icc = MIN(uio_resid(uio), IBUFSIZ);
+		icc = (int)MIN(size, IBUFSIZ);
 		icc = q_to_b(qp, (u_char *)ibuf, icc);
 		if (icc <= 0) {
 			if (first) {
@@ -2321,9 +2358,7 @@ slowcase:
 			 * SAFE: current thread will not change out from
 			 * SAFE: under us in the "goto loop" case.
 			 */
-			tty_unlock(tp);
-			tty_pgsignal(tp, SIGTSTP, 1);
-			tty_lock(tp);
+			tty_pgsignal_locked(tp, SIGTSTP, 1);
 			if (first) {
 				error = ttysleep(tp, &ttread, TTIPRI | PCATCH,
 				    "ttybg3", hz);
@@ -2396,7 +2431,7 @@ ttycheckoutq(struct tty *tp, int wait)
 
 	TTY_LOCK_OWNED(tp);     /* debug assert */
 
-	ut = (struct uthread *)get_bsdthread_info(current_thread());
+	ut = current_uthread();
 
 	hiwat = tp->t_hiwat;
 	oldsig = wait ? ut->uu_siglist : 0;
@@ -2438,7 +2473,7 @@ ttwrite(struct tty *tp, struct uio *uio, int flag)
 
 	TTY_LOCK_OWNED(tp);     /* debug assert */
 
-	ut = (struct uthread *)get_bsdthread_info(current_thread());
+	ut = current_uthread();
 	hiwat = tp->t_hiwat;
 	count = uio_resid(uio);
 	error = 0;
@@ -2470,7 +2505,7 @@ loop:
 	    ISSET(tp->t_lflag, TOSTOP) && (p->p_lflag & P_LPPWAIT) == 0 &&
 	    (p->p_sigignore & sigmask(SIGTTOU)) == 0 &&
 	    (ut->uu_sigmask & sigmask(SIGTTOU)) == 0) {
-		pg = proc_pgrp(p);
+		pg = proc_pgrp(p, NULL);
 		if (pg == PGRP_NULL) {
 			error = EIO;
 			goto out;
@@ -2478,7 +2513,7 @@ loop:
 		if (pg->pg_jobc == 0) {
 			/* SAFE: All callers drop the lock on return */
 			tty_unlock(tp);
-			pg_rele(pg);
+			pgrp_rele(pg);
 			tty_lock(tp);
 			error = EIO;
 			goto out;
@@ -2486,7 +2521,7 @@ loop:
 		/* SAFE: All callers drop the lock on return */
 		tty_unlock(tp);
 		pgsignal(pg, SIGTTOU, 1);
-		pg_rele(pg);
+		pgrp_rele(pg);
 		tty_lock(tp);
 		/*
 		 * We signalled ourself, so we need to act as if we
@@ -2515,7 +2550,12 @@ loop:
 		 * leftover from last time.
 		 */
 		if (cc == 0) {
-			cc = MIN(uio_resid(uio), OBUFSIZ);
+			ssize_t size = uio_resid(uio);
+			if (size < 0) {
+				error = ERANGE;
+				break;
+			}
+			cc = (int)MIN((size_t)size, OBUFSIZ);
 			cp = obuf;
 			error = uiomove(cp, cc, uio);
 			if (error) {
@@ -2536,8 +2576,8 @@ loop:
 			if (!ISSET(tp->t_oflag, OPOST)) {
 				ce = cc;
 			} else {
-				ce = cc - scanc((u_int)cc, (u_char *)cp,
-				    char_type, CCLASSMASK);
+				ce = (int)((size_t)cc - scanc((size_t)cc,
+				    (u_char *)cp, char_type, CCLASSMASK));
 				/*
 				 * If ce is zero, then we're processing
 				 * a special character through ttyoutput.
@@ -2844,9 +2884,7 @@ ttwakeup(struct tty *tp)
 		 * XXX: process group, and will wake up because of the
 		 * XXX: signal anyway.
 		 */
-		tty_unlock(tp);
-		tty_pgsignal(tp, SIGIO, 1);
-		tty_lock(tp);
+		tty_pgsignal_locked(tp, SIGIO, 1);
 	}
 	wakeup(TSA_HUP_OR_INPUT(tp));
 }
@@ -2911,7 +2949,7 @@ ttspeedtab(int speed, struct speedtab *table)
 void
 ttsetwater(struct tty *tp)
 {
-	int cps;
+	speed_t cps;
 	unsigned int x;
 
 	TTY_LOCK_OWNED(tp);     /* debug assert */
@@ -2919,7 +2957,9 @@ ttsetwater(struct tty *tp)
 #define CLAMP(x, h, l)  ((x) > h ? h : ((x) < l) ? l : (x))
 
 	cps = tp->t_ospeed / 10;
-	tp->t_lowat = x = CLAMP(cps / 2, TTMAXLOWAT, TTMINLOWAT);
+	static_assert(TTMAXLOWAT <= UINT_MAX, "max low water fits in unsigned int");
+	static_assert(TTMINLOWAT <= UINT_MAX, "min low water fits in unsigned int");
+	tp->t_lowat = x = (unsigned int)CLAMP(cps / 2, TTMAXLOWAT, TTMINLOWAT);
 	x += cps;
 	x = CLAMP(x, TTMAXHIWAT, TTMINHIWAT);
 	tp->t_hiwat = roundup(x, CBSIZE);
@@ -2945,7 +2985,6 @@ void
 ttyinfo_locked(struct tty *tp)
 {
 	int             load;
-	thread_t        thread;
 	uthread_t       uthread;
 	proc_t          p;
 	proc_t          pick;
@@ -2981,49 +3020,44 @@ ttyinfo_locked(struct tty *tp)
 		tp->t_rocount = 0;
 		return;
 	}
-	/* first process in process group */
-	/* XXX is there a need for pgrp lock ? */
-	if ((p = tp->t_pgrp->pg_members.lh_first) == NULL) {
-		ttyprintf(tp, "empty foreground process group\n");
-		tp->t_rocount = 0;
-		return;
-	}
 
-	/*
-	 * Pick the most interesting process and copy some of its
-	 * state for printing later.
-	 */
-	pg = proc_pgrp(p);
+	/* get a reference on the process group before locking it */
+	pg = tty_pgrp_locked(tp);
+
 	pgrp_lock(pg);
 	/* the proc_compare is non blocking fn, no need to use iterator */
-	for (pick = NULL; p != NULL; p = p->p_pglist.le_next) {
+	pick = NULL;
+	LIST_FOREACH(p, &pg->pg_members, p_pglist) {
 		if (proc_compare(pick, p)) {
 			pick = p;
-			pickpid = p->p_pid;
+			pickpid = proc_getpid(p);
 		} else {
-			pickpid = pick->p_pid;
+			pickpid = proc_getpid(pick);
 		}
 	}
 	pgrp_unlock(pg);
 	/* SAFE: All callers drop the lock on return */
 	tty_unlock(tp);
-	pg_rele(pg);
-	tty_lock(tp);
+	pgrp_rele(pg);
 
 	pick = proc_find(pickpid);
 	if (pick == PROC_NULL) {
+		tty_lock(tp);
 		return;
 	}
 
+	tty_lock(tp);
+	proc_lock(pick);
 	if (TAILQ_EMPTY(&pick->p_uthlist) ||
 	    (uthread = TAILQ_FIRST(&pick->p_uthlist)) == NULL ||
-	    (thread = vfs_context_thread(&uthread->uu_context)) == NULL ||
-	    (thread_info_internal(thread, THREAD_BASIC_INFO, (thread_info_t)&basic_info, &mmtn) != KERN_SUCCESS)) {
+	    (thread_info_internal(get_machthread(uthread), THREAD_BASIC_INFO, (thread_info_t)&basic_info, &mmtn) != KERN_SUCCESS)) {
+		proc_unlock(pick);
 		ttyprintf(tp, "foreground process without thread\n");
 		tp->t_rocount = 0;
 		proc_rele(pick);
 		return;
 	}
+	proc_unlock(pick);
 
 	switch (basic_info.run_state) {
 	case TH_STATE_RUNNING:
@@ -3050,7 +3084,7 @@ ttyinfo_locked(struct tty *tp)
 	/* Print command, pid, state, utime, and stime */
 	ttyprintf(tp, " cmd: %s %d %s %ld.%02du %ld.%02ds\n",
 	    pick->p_comm,
-	    pick->p_pid,
+	    proc_getpid(pick),
 	    state,
 	    (long)utime.tv_sec, utime.tv_usec / 10000,
 	    (long)stime.tv_sec, stime.tv_usec / 10000);
@@ -3112,7 +3146,7 @@ proc_compare(proc_t p1, proc_t p2)
 			return 0;
 		}
 #endif /* _PROC_HAS_SCHEDINFO_ */
-		return p2->p_pid > p1->p_pid; /* tie - return highest pid */
+		return proc_getpid(p2) > proc_getpid(p1); /* tie - return highest pid */
 	}
 	/*
 	 * weed out zombies
@@ -3123,7 +3157,7 @@ proc_compare(proc_t p1, proc_t p2)
 	case ONLYB:
 		return 0;
 	case BOTH:
-		return p2->p_pid > p1->p_pid; /* tie - return highest pid */
+		return proc_getpid(p2) > proc_getpid(p1); /* tie - return highest pid */
 	}
 	/*
 	 * pick the one with the smallest sleep time
@@ -3137,7 +3171,7 @@ proc_compare(proc_t p1, proc_t p2)
 		return 1;
 	}
 #endif /* _PROC_HAS_SCHEDINFO_ */
-	return p2->p_pid > p1->p_pid;         /* tie - return highest pid */
+	return proc_getpid(p2) > proc_getpid(p1);         /* tie - return highest pid */
 }
 
 
@@ -3202,6 +3236,10 @@ ttysleep(struct tty *tp, void *chan, int pri, const char *wmesg, int timo)
 
 	TTY_LOCK_OWNED(tp);
 
+	if (tp->t_state & TS_REVOKE) {
+		return ERESTART;
+	}
+
 	gen = tp->t_gen;
 	/* Use of msleep0() avoids conversion timo/timespec/timo */
 	error = msleep0(chan, &tp->t_lock, pri, wmesg, timo, (int (*)(int))0);
@@ -3228,18 +3266,16 @@ ttymalloc(void)
 {
 	struct tty *tp;
 
-	MALLOC(tp, struct tty *, sizeof(struct tty), M_TTYS, M_WAITOK | M_ZERO);
-	if (tp != NULL) {
-		/* XXX: default to TTYCLSIZE(1024) chars for now */
-		clalloc(&tp->t_rawq, TTYCLSIZE, 1);
-		clalloc(&tp->t_canq, TTYCLSIZE, 1);
-		/* output queue doesn't need quoting */
-		clalloc(&tp->t_outq, TTYCLSIZE, 0);
-		lck_mtx_init(&tp->t_lock, tty_lck_grp, tty_lck_attr);
-		klist_init(&tp->t_rsel.si_note);
-		klist_init(&tp->t_wsel.si_note);
-		tp->t_refcnt = 1;
-	}
+	tp = kalloc_type(struct tty, Z_WAITOK | Z_ZERO | Z_NOFAIL);
+	/* XXX: default to TTYCLSIZE(1024) chars for now */
+	clalloc(&tp->t_rawq, TTYCLSIZE, 1);
+	clalloc(&tp->t_canq, TTYCLSIZE, 1);
+	/* output queue doesn't need quoting */
+	clalloc(&tp->t_outq, TTYCLSIZE, 0);
+	lck_mtx_init(&tp->t_lock, &tty_lck_grp, LCK_ATTR_NULL);
+	klist_init(&tp->t_rsel.si_note);
+	klist_init(&tp->t_wsel.si_note);
+	os_ref_init_raw(&tp->t_refcnt, &t_refgrp);
 	return tp;
 }
 
@@ -3249,8 +3285,8 @@ ttymalloc(void)
 void
 ttyhold(struct tty *tp)
 {
-	TTY_LOCK_OWNED(tp);
-	tp->t_refcnt++;
+	assert(tp != NULL);
+	os_ref_retain_raw(&tp->t_refcnt, &t_refgrp);
 }
 
 /*
@@ -3260,17 +3296,24 @@ ttyhold(struct tty *tp)
 void
 ttyfree(struct tty *tp)
 {
+	assert(tp != NULL);
 	TTY_LOCK_NOTOWNED(tp);
 
-	tty_lock(tp);
-	if (--tp->t_refcnt == 0) {
-		tty_unlock(tp);
+	if (os_ref_release_raw(&tp->t_refcnt, &t_refgrp) == 0) {
 		ttydeallocate(tp);
-	} else if (tp->t_refcnt < 0) {
-		panic("%s: freeing free tty %p", __func__, tp);
-	} else {
-		tty_unlock(tp);
 	}
+}
+
+/*
+ * Drops a reference count on a tty structure while holding the tty lock.
+ * Panics if the last reference is dropped.
+ */
+void
+ttyfree_locked(struct tty *tp)
+{
+	assert(tp != NULL);
+	TTY_LOCK_OWNED(tp);
+	os_ref_release_live_raw(&tp->t_refcnt, &t_refgrp);
 }
 
 /*
@@ -3286,45 +3329,60 @@ ttydeallocate(struct tty *tp)
 
 #if DEBUG
 	if (!(SLIST_EMPTY(&tp->t_rsel.si_note) && SLIST_EMPTY(&tp->t_wsel.si_note))) {
-		panic("knotes hooked into a tty when the tty is freed.\n");
+		panic("knotes hooked into a tty when the tty is freed.");
 	}
 #endif /* DEBUG */
 
 	clfree(&tp->t_rawq);
 	clfree(&tp->t_canq);
 	clfree(&tp->t_outq);
-	lck_mtx_destroy(&tp->t_lock, tty_lck_grp);
-	FREE(tp, M_TTYS);
+	lck_mtx_destroy(&tp->t_lock, &tty_lck_grp);
+	kfree_type(struct tty, tp);
 }
 
 
 /*
  * Locks:	Assumes tty_lock() is held prior to calling.
  */
-int
-isbackground(proc_t p, struct tty  *tp)
+static bool
+isbackground(proc_t p, struct tty *tp)
 {
 	TTY_LOCK_OWNED(tp);
 
-	return tp->t_session != NULL && p->p_pgrp != NULL && (p->p_pgrp != tp->t_pgrp) && isctty_sp(p, tp, p->p_pgrp->pg_session);
+	if (tp->t_pgrp == NULL ||
+	    (uintptr_t)tp->t_pgrp == smr_unsafe_load(&p->p_pgrp)) {
+		return false;
+	}
+
+	if (tp->t_session == SESSION_NULL) {
+		return false;
+	}
+
+	/*
+	 * same as isctty_sp(p, tp, p->p_pgrp->pg_session)
+	 * without dereferencing p->p_pgrp
+	 */
+	return tp->t_session->s_sid == proc_sessionid(p) && (p->p_flag & P_CONTROLT);
 }
 
-static int
+static bool
 isctty(proc_t p, struct tty  *tp)
 {
-	int retval;
-	struct session * sessp;
+	struct session *sessp;
+	struct pgrp *pg;
+	bool retval = false;
 
-	sessp = proc_session(p);
-	retval = (sessp == tp->t_session && p->p_flag & P_CONTROLT);
-	session_rele(sessp);
+	pg = proc_pgrp(p, &sessp);
+	retval = isctty_sp(p, tp, sessp);
+	pgrp_rele(pg);
+
 	return retval;
 }
 
-static int
-isctty_sp(proc_t p, struct tty  *tp, struct session *sessp)
+static bool
+isctty_sp(proc_t p, struct tty *tp, struct session *sessp)
 {
-	return sessp == tp->t_session && p->p_flag & P_CONTROLT;
+	return sessp == tp->t_session && (p->p_flag & P_CONTROLT);
 }
 
 
@@ -3405,159 +3463,42 @@ filt_tty_common(struct knote *kn, struct kevent_qos_s *kev, struct tty *tp)
 static struct tty *
 tty_from_waitq(struct waitq *wq, int seltype)
 {
-	struct selinfo *si;
-	struct tty *tp = NULL;
-
 	/*
-	 * The waitq is part of the selinfo structure managed by the driver. For
-	 * certain drivers, we want to hook the knote into the selinfo
+	 * The waitq is part of the selinfo structure managed by the driver.
+	 * For certain drivers, we want to hook the knote into the selinfo
 	 * structure's si_note field so selwakeup can call KNOTE.
 	 *
-	 * While 'wq' is not really a queue element, this macro only uses the
-	 * pointer to calculate the offset into a structure given an element
-	 * name.
-	 */
-	si = qe_element(wq, struct selinfo, si_waitq);
-
-	/*
 	 * For TTY drivers, the selinfo structure is somewhere in the struct
 	 * tty. There are two different selinfo structures, and the one used
 	 * corresponds to the type of filter requested.
-	 *
-	 * While 'si' is not really a queue element, this macro only uses the
-	 * pointer to calculate the offset into a structure given an element
-	 * name.
 	 */
 	switch (seltype) {
 	case FREAD:
-		tp = qe_element(si, struct tty, t_rsel);
-		break;
+		return __container_of(wq, struct tty, t_rsel.si_waitq);
 	case FWRITE:
-		tp = qe_element(si, struct tty, t_wsel);
-		break;
+		return __container_of(wq, struct tty, t_wsel.si_waitq);
+	default:
+		return NULL;
 	}
-
-	return tp;
 }
 
 static struct tty *
 tty_from_knote(struct knote *kn)
 {
-	return (struct tty *)kn->kn_hook;
-}
-
-/*
- * Set the knote's struct tty to the kn_hook field.
- *
- * The idea is to fake a call to select with our own waitq set.  If the driver
- * calls selrecord, we'll get a link to their waitq and access to the tty
- * structure.
- *
- * Returns -1 on failure, with the error set in the knote, or selres on success.
- */
-static int
-tty_set_knote_hook(struct knote *kn)
-{
-	uthread_t uth;
-	vfs_context_t ctx;
-	vnode_t vp;
-	kern_return_t kr;
-	struct waitq *wq = NULL;
-	struct waitq_set *old_wqs;
-	struct waitq_set tmp_wqs;
-	uint64_t rsvd, rsvd_arg;
-	uint64_t *rlptr = NULL;
-	int selres = -1;
-	struct tty *tp;
-
-	uth = get_bsdthread_info(current_thread());
-
-	ctx = vfs_context_current();
-	vp = (vnode_t)kn->kn_fp->f_fglob->fg_data;
-
-	/*
-	 * Reserve a link element to avoid potential allocation under
-	 * a spinlock.
-	 */
-	rsvd = rsvd_arg = waitq_link_reserve(NULL);
-	rlptr = (void *)&rsvd_arg;
-
-	/*
-	 * Trick selrecord into hooking a known waitq set into the device's selinfo
-	 * waitq.  Once the link is in place, we can get back into the selinfo from
-	 * the waitq and subsequently the tty (see tty_from_waitq).
-	 *
-	 * We can't use a real waitq set (such as the kqueue's) because wakeups
-	 * might happen before we can unlink it.
-	 */
-	kr = waitq_set_init(&tmp_wqs, SYNC_POLICY_FIFO | SYNC_POLICY_PREPOST, NULL,
-	    NULL);
-	assert(kr == KERN_SUCCESS);
-
-	/*
-	 * Lazy allocate the waitqset to avoid potential allocation under
-	 * a spinlock;
-	 */
-	waitq_set_lazy_init_link(&tmp_wqs);
-
-	old_wqs = uth->uu_wqset;
-	uth->uu_wqset = &tmp_wqs;
-	/*
-	 * FMARK forces selects to always call selrecord, even if data is
-	 * available.  See ttselect, ptsselect, ptcselect.
-	 *
-	 * selres also contains the data currently available in the tty.
-	 */
-	selres = VNOP_SELECT(vp, knote_get_seltype(kn) | FMARK, 0, rlptr, ctx);
-	uth->uu_wqset = old_wqs;
-
-	/*
-	 * Make sure to cleanup the reserved link - this guards against
-	 * drivers that may not actually call selrecord().
-	 */
-	waitq_link_release(rsvd);
-	if (rsvd == rsvd_arg) {
-		/*
-		 * The driver didn't call selrecord -- there's no tty hooked up so we
-		 * can't attach.
-		 */
-		knote_set_error(kn, ENOTTY);
-		selres = -1;
-		goto out;
-	}
-
-	/* rlptr may not point to a properly aligned pointer */
-	memcpy(&wq, rlptr, sizeof(void *));
-
-	tp = tty_from_waitq(wq, knote_get_seltype(kn));
-	assert(tp != NULL);
-
-	/*
-	 * Take a reference and stash the tty in the knote.
-	 */
-	tty_lock(tp);
-	ttyhold(tp);
-	kn->kn_hook = tp;
-	tty_unlock(tp);
-
-out:
-	/*
-	 * Cleaning up the wqset will unlink its waitq and clean up any preposts
-	 * that occurred as a result of data coming in while the tty was attached.
-	 */
-	waitq_set_deinit(&tmp_wqs);
-
-	return selres;
+	return (struct tty *)knote_kn_hook_get_raw(kn);
 }
 
 static int
 filt_ttyattach(struct knote *kn, __unused struct kevent_qos_s *kev)
 {
-	int selres = 0;
-	struct tty *tp;
+	uthread_t uth = current_uthread();
+	vfs_context_t ctx = vfs_context_current();
+	vnode_t vp = (vnode_t)fp_get_data(kn->kn_fp);
+	struct select_set *old_wqs;
+	int selres;
 
 	/*
-	 * This function should be called from filt_specattach (spec_vnops.c),
+	 * This function should be called from spec_kqfilter (spec_vnops.c),
 	 * so most of the knote data structure should already be initialized.
 	 */
 
@@ -3570,30 +3511,37 @@ filt_ttyattach(struct knote *kn, __unused struct kevent_qos_s *kev)
 	/*
 	 * Connect the struct tty to the knote through the selinfo structure
 	 * referenced by the waitq within the selinfo.
+	 *
+	 * FMARK forces selects to always call selrecord, even if data is
+	 * available.  See ttselect, ptsselect, ptcselect.
+	 *
+	 * selres also contains the data currently available in the tty.
 	 */
-	selres = tty_set_knote_hook(kn);
-	if (selres < 0) {
+	selspec_record_hook_t block = ^(struct selinfo *si){
+		struct tty *tp;
+
+		tp = tty_from_waitq(&si->si_waitq, knote_get_seltype(kn));
+		TTY_LOCK_OWNED(tp);
+
+		/* Attach the knote to selinfo's klist and take a ref */
+		ttyhold(tp);
+		knote_kn_hook_set_raw(kn, tp);
+		KNOTE_ATTACH(&si->si_note, kn);
+	};
+
+	old_wqs = uth->uu_selset;
+	uth->uu_selset = SELSPEC_RECORD_MARKER;
+	selres = VNOP_SELECT(vp, knote_get_seltype(kn) | FMARK, 0, block, ctx);
+	uth->uu_selset = old_wqs;
+
+	if (knote_kn_hook_get_raw(kn) == NULL) {
+		/*
+		 * The driver didn't call selrecord --
+		 * there's no tty hooked up so we can't attach.
+		 */
+		knote_set_error(kn, ENOTTY);
 		return 0;
 	}
-
-	/*
-	 * Attach the knote to selinfo's klist.
-	 */
-	tp = tty_from_knote(kn);
-	tty_lock(tp);
-
-	switch (kn->kn_filter) {
-	case EVFILT_READ:
-		KNOTE_ATTACH(&tp->t_rsel.si_note, kn);
-		break;
-	case EVFILT_WRITE:
-		KNOTE_ATTACH(&tp->t_wsel.si_note, kn);
-		break;
-	default:
-		panic("invalid knote %p attach, filter: %d", kn, kn->kn_filter);
-	}
-
-	tty_unlock(tp);
 
 	return selres;
 }
@@ -3605,17 +3553,22 @@ filt_ttydetach(struct knote *kn)
 
 	tty_lock(tp);
 
-	switch (kn->kn_filter) {
-	case EVFILT_READ:
-		KNOTE_DETACH(&tp->t_rsel.si_note, kn);
-		break;
-	case EVFILT_WRITE:
-		KNOTE_DETACH(&tp->t_wsel.si_note, kn);
-		break;
-	default:
-		panic("invalid knote %p detach, filter: %d", kn, kn->kn_filter);
-		break;
+	if (!KNOTE_IS_AUTODETACHED(kn)) {
+		switch (kn->kn_filter) {
+		case EVFILT_READ:
+			KNOTE_DETACH(&tp->t_rsel.si_note, kn);
+			break;
+		case EVFILT_WRITE:
+			KNOTE_DETACH(&tp->t_wsel.si_note, kn);
+			break;
+		default:
+			panic("invalid knote %p detach, filter: %d", kn, kn->kn_filter);
+			break;
+		}
 	}
+
+	// Remove dangling reference
+	knote_kn_hook_set_raw(kn, NULL);
 
 	tty_unlock(tp);
 	ttyfree(tp);

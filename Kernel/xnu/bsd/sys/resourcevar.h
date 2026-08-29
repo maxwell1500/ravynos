@@ -66,6 +66,11 @@
 
 #include <sys/appleapiopts.h>
 #include <sys/resource.h>
+#include <sys/_types/_caddr_t.h>
+#ifdef XNU_KERNEL_PRIVATE
+#include <kern/smr_types.h>
+#include <os/refcnt.h>
+#endif
 
 /*
  * Kernel per-process accounting / statistics
@@ -86,7 +91,7 @@ struct pstats {
 	} p_prof;
 
 	uint64_t ps_start;              /* starting time ; compat only */
-#ifdef KERNEL
+#ifdef XNU_KERNEL_PRIVATE
 	struct  rusage_info_child ri_child;     /* (PL) sum of additional stats for reaped children (proc_pid_rusage) */
 	struct user_uprof {                         /* profile arguments */
 		struct user_uprof *pr_next;  /* multiple prof buffers allowed */
@@ -97,39 +102,42 @@ struct pstats {
 		user_ulong_t    pr_addr;        /* temp storage for addr until AST */
 		user_ulong_t    pr_ticks;       /* temp storage for ticks until AST */
 	} user_p_prof;
-#endif // KERNEL
+#endif // XNU_KERNEL_PRIVATE
 };
 
+#ifdef XNU_KERNEL_PRIVATE
+#pragma GCC visibility push(hidden)
 /*
- * Kernel shareable process resource limits.  Because this structure
- * is moderately large but changes infrequently, it is normally
- * shared copy-on-write after forks.  If a group of processes
- * ("threads") share modifications, the PL_SHAREMOD flag is set,
- * and a copy must be made for the child of a new fork that isn't
- * sharing modifications to the limits.
- */
-/*
- * Modifications are done with the list lock held (p_limit as well)and access indv
- * limits can be done without limit as we keep the old copy in p_olimit. Which is
- * dropped in proc_exit. This way all access will have a valid kernel address
+ * Kernel shareable process resource limits:
+ * Because this structure is moderately large but changed infrequently, it is normally
+ * shared copy-on-write after a fork. The pl_refcnt variable records the number of
+ * "processes" (NOT threads) currently sharing the plimit. A plimit is freed when the
+ * last referencing process exits the system. The refcnt of the plimit is a race-free
+ * _Atomic variable. We allocate new plimits in proc_limitupdate and free them
+ * in proc_limitdrop/proc_limitupdate.
  */
 struct plimit {
-	struct  rlimit pl_rlimit[RLIM_NLIMITS];
-	int     pl_refcnt;              /* number of references */
+	struct smr_node  pl_node;
+	struct rlimit    pl_rlimit[RLIM_NLIMITS];
+	os_refcnt_t      pl_refcnt;
 };
+struct proc;
 
-#ifdef KERNEL
-void     calcru(struct proc *p, struct timeval *up, struct timeval *sp,
-    struct timeval *ip);
-void     ruadd(struct rusage *ru, struct rusage *ru2);
-void     update_rusage_info_child(struct rusage_info_child *ru, rusage_info_current *ru_current);
-void proc_limitget(proc_t p, int whichi, struct rlimit * limp);
-void proc_limitdrop(proc_t p, int exiting);
-void proc_limitfork(proc_t parent, proc_t child);
-int proc_limitreplace(proc_t p);
-void proc_limitblock(proc_t);
-void proc_limitunblock(proc_t);
-#endif /* KERNEL */
+void calcru(struct proc *p, struct timeval *up, struct timeval *sp, struct timeval *ip);
+void ruadd(struct rusage *ru, struct rusage *ru2);
+void update_rusage_info_child(struct rusage_info_child *ru, rusage_info_current *ru_current);
+struct rlimit proc_limitget(struct proc *p, int which);
+void proc_limitfork(struct proc *parent, struct proc *child);
+void proc_limitdrop(struct proc *p);
+rlim_t proc_limitgetcur(struct proc *p, int which);
+void proc_limitsetcur_fsize(struct proc *p, rlim_t value);
+int proc_limitgetcur_nofile(struct proc *p);
 
+void gather_rusage_info(struct proc *p, rusage_info_current *ru, int flavor);
+int proc_get_rusage(struct proc *proc, int flavor, user_addr_t buffer, int is_zombie);
+int iopolicysys_vfs_materialize_dataless_files(struct proc *p, int cmd, int scope,
+    int policy, struct _iopol_param_t *iop_param);
 
+#pragma GCC visibility pop
+#endif /* XNU_KERNEL_PRIVATE */
 #endif  /* !_SYS_RESOURCEVAR_H_ */

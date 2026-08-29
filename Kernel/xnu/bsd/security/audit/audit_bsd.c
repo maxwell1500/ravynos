@@ -50,6 +50,7 @@
 #include <mach/host_priv.h>
 #include <mach/host_special_ports.h>
 #include <mach/audit_triggers_server.h>
+#include <mach/audit_triggers_types.h>
 
 #include <os/overflow.h>
 
@@ -66,195 +67,9 @@ struct mhdr {
 /*
  * The lock group for the audit subsystem.
  */
-static lck_grp_t *audit_lck_grp = NULL;
+static LCK_GRP_DECLARE(audit_lck_grp, "Audit");
 
 #define AUDIT_MHMAGIC   0x4D656C53
-
-#if AUDIT_MALLOC_DEBUG
-#define AU_MAX_SHORTDESC        20
-#define AU_MAX_LASTCALLER       20
-struct au_malloc_debug_info {
-	SInt64          md_size;
-	SInt64          md_maxsize;
-	SInt32          md_inuse;
-	SInt32          md_maxused;
-	unsigned        md_type;
-	unsigned        md_magic;
-	char            md_shortdesc[AU_MAX_SHORTDESC];
-	char            md_lastcaller[AU_MAX_LASTCALLER];
-};
-typedef struct au_malloc_debug_info   au_malloc_debug_info_t;
-
-au_malloc_type_t        *audit_malloc_types[NUM_MALLOC_TYPES];
-
-static int audit_sysctl_malloc_debug(struct sysctl_oid *oidp, void *arg1,
-    int arg2, struct sysctl_req *req);
-
-SYSCTL_PROC(_kern, OID_AUTO, audit_malloc_debug, CTLFLAG_RD, NULL, 0,
-    audit_sysctl_malloc_debug, "S,audit_malloc_debug",
-    "Current malloc debug info for auditing.");
-
-#define AU_MALLOC_DBINFO_SZ \
-    (NUM_MALLOC_TYPES * sizeof(au_malloc_debug_info_t))
-
-/*
- * Copy out the malloc debug info via the sysctl interface.  The userland code
- * is something like the following:
- *
- *  error = sysctlbyname("kern.audit_malloc_debug", buffer_ptr, &buffer_len,
- *             NULL, 0);
- */
-static int
-audit_sysctl_malloc_debug(__unused struct sysctl_oid *oidp, __unused void *arg1,
-    __unused int arg2, struct sysctl_req *req)
-{
-	int i;
-	size_t sz;
-	au_malloc_debug_info_t *amdi_ptr, *nxt_ptr;
-	int err;
-
-	/*
-	 * This provides a read-only node.
-	 */
-	if (req->newptr != USER_ADDR_NULL) {
-		return EPERM;
-	}
-
-	/*
-	 * If just querying then return the space required.
-	 */
-	if (req->oldptr == USER_ADDR_NULL) {
-		req->oldidx = AU_MALLOC_DBINFO_SZ;
-		return 0;
-	}
-
-	/*
-	 *  Alloc a temporary buffer.
-	 */
-	if (req->oldlen < AU_MALLOC_DBINFO_SZ) {
-		return ENOMEM;
-	}
-	amdi_ptr = (au_malloc_debug_info_t *)kalloc(AU_MALLOC_DBINFO_SZ);
-	if (amdi_ptr == NULL) {
-		return ENOMEM;
-	}
-	bzero(amdi_ptr, AU_MALLOC_DBINFO_SZ);
-
-	/*
-	 * Build the record array.
-	 */
-	sz = 0;
-	nxt_ptr = amdi_ptr;
-	for (i = 0; i < NUM_MALLOC_TYPES; i++) {
-		if (audit_malloc_types[i] == NULL) {
-			continue;
-		}
-		if (audit_malloc_types[i]->mt_magic != M_MAGIC) {
-			nxt_ptr->md_magic = audit_malloc_types[i]->mt_magic;
-			continue;
-		}
-		nxt_ptr->md_magic = audit_malloc_types[i]->mt_magic;
-		nxt_ptr->md_size = audit_malloc_types[i]->mt_size;
-		nxt_ptr->md_maxsize = audit_malloc_types[i]->mt_maxsize;
-		nxt_ptr->md_inuse = (int)audit_malloc_types[i]->mt_inuse;
-		nxt_ptr->md_maxused = (int)audit_malloc_types[i]->mt_maxused;
-		strlcpy(nxt_ptr->md_shortdesc,
-		    audit_malloc_types[i]->mt_shortdesc, AU_MAX_SHORTDESC - 1);
-		strlcpy(nxt_ptr->md_lastcaller,
-		    audit_malloc_types[i]->mt_lastcaller, AU_MAX_LASTCALLER - 1);
-		sz += sizeof(au_malloc_debug_info_t);
-		nxt_ptr++;
-	}
-
-	req->oldlen = sz;
-	err = SYSCTL_OUT(req, amdi_ptr, sz);
-	kfree(amdi_ptr, AU_MALLOC_DBINFO_SZ);
-
-	return err;
-}
-#endif /* AUDIT_MALLOC_DEBUG */
-
-/*
- * BSD malloc()
- *
- * If the M_NOWAIT flag is set then it may not block and return NULL.
- * If the M_ZERO flag is set then zero out the buffer.
- */
-void *
-#if AUDIT_MALLOC_DEBUG
-_audit_malloc(size_t size, au_malloc_type_t *type, int flags, const char *fn)
-#else
-_audit_malloc(size_t size, au_malloc_type_t * type, int flags)
-#endif
-{
-	struct mhdr     *hdr;
-	size_t  memsize;
-	if (os_add_overflow(sizeof(*hdr), size, &memsize)) {
-		return NULL;
-	}
-
-	if (size == 0) {
-		return NULL;
-	}
-	if (flags & M_NOWAIT) {
-		hdr = (void *)kalloc_noblock(memsize);
-	} else {
-		hdr = (void *)kalloc(memsize);
-		if (hdr == NULL) {
-			panic("_audit_malloc: kernel memory exhausted");
-		}
-	}
-	if (hdr == NULL) {
-		return NULL;
-	}
-	hdr->mh_size = memsize;
-	hdr->mh_type = type;
-	hdr->mh_magic = AUDIT_MHMAGIC;
-	if (flags & M_ZERO) {
-		memset(hdr->mh_data, 0, size);
-	}
-#if AUDIT_MALLOC_DEBUG
-	if (type != NULL && type->mt_type < NUM_MALLOC_TYPES) {
-		OSAddAtomic64(memsize, &type->mt_size);
-		type->mt_maxsize = max(type->mt_size, type->mt_maxsize);
-		OSAddAtomic(1, &type->mt_inuse);
-		type->mt_maxused = max(type->mt_inuse, type->mt_maxused);
-		type->mt_lastcaller = fn;
-		audit_malloc_types[type->mt_type] = type;
-	}
-#endif /* AUDIT_MALLOC_DEBUG */
-	return hdr->mh_data;
-}
-
-/*
- * BSD free()
- */
-void
-#if AUDIT_MALLOC_DEBUG
-_audit_free(void *addr, au_malloc_type_t *type)
-#else
-_audit_free(void *addr, __unused au_malloc_type_t *type)
-#endif
-{
-	struct mhdr *hdr;
-
-	if (addr == NULL) {
-		return;
-	}
-	hdr = addr; hdr--;
-
-	if (hdr->mh_magic != AUDIT_MHMAGIC) {
-		panic("_audit_free(): hdr->mh_magic (%lx) != AUDIT_MHMAGIC", hdr->mh_magic);
-	}
-
-#if AUDIT_MALLOC_DEBUG
-	if (type != NULL) {
-		OSAddAtomic64(-hdr->mh_size, &type->mt_size);
-		OSAddAtomic(-1, &type->mt_inuse);
-	}
-#endif /* AUDIT_MALLOC_DEBUG */
-	kfree(hdr, hdr->mh_size);
-}
 
 /*
  * Initialize a condition variable.  Must be called before use.
@@ -339,7 +154,7 @@ _audit_mtx_init(struct mtx *mp, const char *lckname)
 _audit_mtx_init(struct mtx *mp, __unused const char *lckname)
 #endif
 {
-	mp->mtx_lock = lck_mtx_alloc_init(audit_lck_grp, LCK_ATTR_NULL);
+	mp->mtx_lock = lck_mtx_alloc_init(&audit_lck_grp, LCK_ATTR_NULL);
 	KASSERT(mp->mtx_lock != NULL,
 	    ("_audit_mtx_init: Could not allocate a mutex."));
 #if DIAGNOSTIC
@@ -351,7 +166,7 @@ void
 _audit_mtx_destroy(struct mtx *mp)
 {
 	if (mp->mtx_lock) {
-		lck_mtx_free(mp->mtx_lock, audit_lck_grp);
+		lck_mtx_free(mp->mtx_lock, &audit_lck_grp);
 		mp->mtx_lock = NULL;
 	}
 }
@@ -366,7 +181,7 @@ _audit_rw_init(struct rwlock *lp, const char *lckname)
 _audit_rw_init(struct rwlock *lp, __unused const char *lckname)
 #endif
 {
-	lp->rw_lock = lck_rw_alloc_init(audit_lck_grp, LCK_ATTR_NULL);
+	lp->rw_lock = lck_rw_alloc_init(&audit_lck_grp, LCK_ATTR_NULL);
 	KASSERT(lp->rw_lock != NULL,
 	    ("_audit_rw_init: Could not allocate a rw lock."));
 #if DIAGNOSTIC
@@ -378,7 +193,7 @@ void
 _audit_rw_destroy(struct rwlock *lp)
 {
 	if (lp->rw_lock) {
-		lck_rw_free(lp->rw_lock, audit_lck_grp);
+		lck_rw_free(lp->rw_lock, &audit_lck_grp);
 		lp->rw_lock = NULL;
 	}
 }
@@ -414,7 +229,7 @@ _audit_rlck_init(struct rlck *lp, const char *lckname)
 _audit_rlck_init(struct rlck *lp, __unused const char *lckname)
 #endif
 {
-	lp->rl_mtx = lck_mtx_alloc_init(audit_lck_grp, LCK_ATTR_NULL);
+	lp->rl_mtx = lck_mtx_alloc_init(&audit_lck_grp, LCK_ATTR_NULL);
 	KASSERT(lp->rl_mtx != NULL,
 	    ("_audit_rlck_init: Could not allocate a recursive lock."));
 #if DIAGNOSTIC
@@ -461,7 +276,7 @@ void
 _audit_rlck_destroy(struct rlck *lp)
 {
 	if (lp->rl_mtx) {
-		lck_mtx_free(lp->rl_mtx, audit_lck_grp);
+		lck_mtx_free(lp->rl_mtx, &audit_lck_grp);
 		lp->rl_mtx = NULL;
 	}
 }
@@ -494,7 +309,7 @@ _audit_slck_init(struct slck *lp, const char *lckname)
 _audit_slck_init(struct slck *lp, __unused const char *lckname)
 #endif
 {
-	lp->sl_mtx = lck_mtx_alloc_init(audit_lck_grp, LCK_ATTR_NULL);
+	lp->sl_mtx = lck_mtx_alloc_init(&audit_lck_grp, LCK_ATTR_NULL);
 	KASSERT(lp->sl_mtx != NULL,
 	    ("_audit_slck_init: Could not allocate a sleep lock."));
 #if DIAGNOSTIC
@@ -580,7 +395,7 @@ void
 _audit_slck_destroy(struct slck *lp)
 {
 	if (lp->sl_mtx) {
-		lck_mtx_free(lp->sl_mtx, audit_lck_grp);
+		lck_mtx_free(lp->sl_mtx, &audit_lck_grp);
 		lp->sl_mtx = NULL;
 	}
 }
@@ -641,18 +456,6 @@ _audit_ppsratecheck(struct timeval *lasttime, int *curpps, int maxpps)
 	return rv;
 }
 
-/*
- * Initialize lock group for audit related locks/mutexes.
- */
-void
-_audit_lck_grp_init(void)
-{
-	audit_lck_grp = lck_grp_alloc_init("Audit", LCK_GRP_ATTR_NULL);
-
-	KASSERT(audit_lck_grp != NULL,
-	    ("audit_get_lck_grp: Could not allocate the audit lock group."));
-}
-
 int
 audit_send_trigger(unsigned int trigger)
 {
@@ -669,4 +472,22 @@ audit_send_trigger(unsigned int trigger)
 		return error;
 	}
 }
+
+int
+audit_send_analytics(char* signing_id, char* process_name)
+{
+	mach_port_t audit_port;
+	int error;
+
+	error = host_get_audit_control_port(host_priv_self(), &audit_port);
+	if (error == KERN_SUCCESS && audit_port != MACH_PORT_NULL) {
+		(void)audit_analytics(audit_port, signing_id, process_name);
+		ipc_port_release_send(audit_port);
+		return 0;
+	} else {
+		printf("Cannot get audit control port for analytics \n");
+		return error;
+	}
+}
+
 #endif /* CONFIG_AUDIT */

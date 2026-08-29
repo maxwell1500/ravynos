@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2017, 2022-2023 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -89,28 +89,24 @@
 #include <netinet/tcp.h>
 #include <netinet/in_tclass.h>
 
-#if INET6
 #include <netinet/ip6.h>
 #include <netinet6/ip6_var.h>
 #include <netinet/icmp6.h>
-#endif
 
 #include <netinet6/ipsec.h>
-#if INET6
 #include <netinet6/ipsec6.h>
-#endif
 #include <netinet6/ah.h>
-#if INET6
 #include <netinet6/ah6.h>
-#endif
 #include <netinet6/esp.h>
-#if INET6
 #include <netinet6/esp6.h>
-#endif
 #include <netkey/key.h>
 #include <netkey/keydb.h>
 
 #include <net/net_osdep.h>
+
+#if SKYWALK
+#include <skywalk/os_skywalk_private.h>
+#endif // SKYWALK
 
 #include <sys/kdebug.h>
 #define DBG_LAYER_BEG           NETDBG_CODE(DBG_NETIPSEC, 1)
@@ -124,8 +120,6 @@ static int esp_output(struct mbuf *, u_char *, struct mbuf *,
 extern int      esp_udp_encap_port;
 extern u_int64_t natt_now;
 
-extern lck_mtx_t *sadb_mutex;
-
 /*
  * compute ESP header size.
  */
@@ -135,7 +129,7 @@ esp_hdrsiz(__unused struct ipsecrequest *isr)
 #if 0
 	/* sanity check */
 	if (isr == NULL) {
-		panic("esp_hdrsiz: NULL was passed.\n");
+		panic("esp_hdrsiz: NULL was passed.");
 	}
 
 
@@ -257,7 +251,7 @@ esp_output(
 	struct tcphdr th = {};
 	u_int32_t spi;
 	u_int32_t seq;
-	u_int32_t inner_payload_len = 0;
+	size_t inner_payload_len = 0;
 	u_int8_t inner_protocol = 0;
 	u_int8_t nxt = 0;
 	size_t plen;    /*payload length to be encrypted*/
@@ -274,18 +268,14 @@ esp_output(
 
 	KERNEL_DEBUG(DBG_FNC_ESPOUT | DBG_FUNC_START, sav->ivlen, 0, 0, 0, 0);
 	switch (af) {
-#if INET
 	case AF_INET:
 		afnumber = 4;
 		stat = &ipsecstat;
 		break;
-#endif
-#if INET6
 	case AF_INET6:
 		afnumber = 6;
 		stat = &ipsec6stat;
 		break;
-#endif
 	default:
 		ipseclog((LOG_ERR, "esp_output: unsupported af %d\n", af));
 		KERNEL_DEBUG(DBG_FNC_ESPOUT | DBG_FUNC_END, 1, 0, 0, 0, 0);
@@ -297,22 +287,18 @@ esp_output(
 	    SADB_X_EXT_SA2_SEQ_PER_TRAFFIC_CLASS) {
 		u_int8_t dscp = 0;
 		switch (af) {
-#if INET
 		case AF_INET:
 		{
 			struct ip *ip = mtod(m, struct ip *);
 			dscp = ip->ip_tos >> IPTOS_DSCP_SHIFT;
 			break;
 		}
-#endif /*INET*/
-#if INET6
 		case AF_INET6:
 		{
 			struct ip6_hdr *ip6 = mtod(m, struct ip6_hdr *);
 			dscp = (ntohl(ip6->ip6_flow) & IP6FLOW_DSCP_MASK) >> IP6FLOW_DSCP_SHIFT;
 			break;
 		}
-#endif /*INET6*/
 		default:
 			panic("esp_output: should not reach here");
 		}
@@ -322,7 +308,6 @@ esp_output(
 	/* some sanity check */
 	if ((sav->flags & SADB_X_EXT_OLD) == 0 && sav->replay[traffic_class] == NULL) {
 		switch (af) {
-#if INET
 		case AF_INET:
 		{
 			struct ip *ip;
@@ -336,15 +321,12 @@ esp_output(
 			IPSEC_STAT_INCREMENT(ipsecstat.out_inval);
 			break;
 		}
-#endif /*INET*/
-#if INET6
 		case AF_INET6:
 			ipseclog((LOG_DEBUG, "esp6_output: internal error: "
 			    "sav->replay is null: SPI=%u\n",
 			    (u_int32_t)ntohl(sav->spi)));
 			IPSEC_STAT_INCREMENT(ipsec6stat.out_inval);
 			break;
-#endif /*INET6*/
 		default:
 			panic("esp_output: should not reach here");
 		}
@@ -375,12 +357,8 @@ esp_output(
 		 * chase the header chain.
 		 * XXX sequential number
 		 */
-#if INET
 		struct ip *ip = NULL;
-#endif
-#if INET6
 		struct ip6_hdr *ip6 = NULL;
-#endif
 		size_t esplen; /* sizeof(struct esp/newesp) */
 		size_t hlen = 0; /* ip header len */
 
@@ -414,7 +392,6 @@ esp_output(
 		}
 
 		switch (af) {
-#if INET
 		case AF_INET:
 			ip = mtod(m, struct ip *);
 #ifdef _IP_VHL
@@ -423,13 +400,10 @@ esp_output(
 			hlen = ip->ip_hl << 2;
 #endif
 			break;
-#endif
-#if INET6
 		case AF_INET6:
 			ip6 = mtod(m, struct ip6_hdr *);
 			hlen = sizeof(*ip6);
 			break;
-#endif
 		}
 
 		/* grab info for packet logging */
@@ -450,7 +424,7 @@ esp_output(
 						iphlen = inner_ip->ip_hl << 2;
 #endif
 						inner_protocol = inner_ip->ip_p;
-					} else if (IP_VHL_V(inner_ip->ip_vhl) == IPV6_VERSION) {
+					} else if (IP_VHL_V(inner_ip->ip_vhl) == 6) {
 						struct ip6_hdr *inner_ip6 = mtod(md, struct ip6_hdr *);
 						iphlen = sizeof(struct ip6_hdr);
 						inner_protocol = inner_ip6->ip6_nxt;
@@ -459,7 +433,7 @@ esp_output(
 					if (inner_protocol == IPPROTO_TCP) {
 						if ((int)(iphlen + sizeof(th)) <=
 						    (m->m_pkthdr.len - m->m_len)) {
-							m_copydata(md, iphlen, sizeof(th), (u_int8_t *)&th);
+							m_copydata(md, (int)iphlen, sizeof(th), (u_int8_t *)&th);
 						}
 
 						inner_payload_len = m->m_pkthdr.len - m->m_len - iphlen - (th.th_off << 2);
@@ -475,7 +449,7 @@ esp_output(
 					if (inner_protocol == IPPROTO_TCP) {
 						if ((int)(iphlen + sizeof(th)) <=
 						    m->m_pkthdr.len) {
-							m_copydata(m, iphlen, sizeof(th), (u_int8_t *)&th);
+							m_copydata(m, (int)iphlen, sizeof(th), (u_int8_t *)&th);
 						}
 
 						inner_payload_len = m->m_pkthdr.len - iphlen - (th.th_off << 2);
@@ -549,7 +523,8 @@ esp_output(
 				error = ENOBUFS;
 				goto fail;
 			}
-			n->m_len = esphlen;
+			VERIFY(esphlen <= INT32_MAX);
+			n->m_len = (int)esphlen;
 			mprev->m_next = n;
 			n->m_next = md;
 			m->m_pkthdr.len += esphlen;
@@ -573,10 +548,9 @@ esp_output(
 		}
 
 		switch (af) {
-#if INET
 		case AF_INET:
 			if (esphlen < (IP_MAXPACKET - ntohs(ip->ip_len))) {
-				ip->ip_len = htons(ntohs(ip->ip_len) + esphlen);
+				ip->ip_len = htons(ntohs(ip->ip_len) + (u_short)esphlen);
 			} else {
 				ipseclog((LOG_ERR,
 				    "IPv4 ESP output: size exceeds limit\n"));
@@ -586,12 +560,9 @@ esp_output(
 				goto fail;
 			}
 			break;
-#endif
-#if INET6
 		case AF_INET6:
 			/* total packet length will be computed in ip6_output() */
 			break;
-#endif
 		}
 	}
 
@@ -600,7 +571,7 @@ esp_output(
 	if ((sav->flags & SADB_X_EXT_OLD) == 0) {
 		struct newesp *nesp;
 		nesp = (struct newesp *)esp;
-		if (sav->replay[traffic_class]->count == sav->replay[traffic_class]->lastseq) {
+		if (sav->replay[traffic_class]->seq == sav->replay[traffic_class]->lastseq) {
 			if ((sav->flags & SADB_X_EXT_CYCSEQ) == 0) {
 				/* XXX Is it noisy ? */
 				ipseclog((LOG_WARNING,
@@ -614,22 +585,21 @@ esp_output(
 		}
 		lck_mtx_lock(sadb_mutex);
 		sav->replay[traffic_class]->count++;
+		sav->replay[traffic_class]->seq++;
 		lck_mtx_unlock(sadb_mutex);
 		/*
 		 * XXX sequence number must not be cycled, if the SA is
 		 * installed by IKE daemon.
 		 */
-		nesp->esp_seq = htonl(sav->replay[traffic_class]->count);
-		seq = sav->replay[traffic_class]->count;
+		nesp->esp_seq = htonl(sav->replay[traffic_class]->seq);
+		seq = sav->replay[traffic_class]->seq;
 	}
 
 	{
 		/*
 		 * find the last mbuf. make some room for ESP trailer.
 		 */
-#if INET
 		struct ip *ip = NULL;
-#endif
 		size_t padbound;
 		u_char *extend;
 		int i;
@@ -652,16 +622,12 @@ esp_output(
 
 		/* random padding */
 		switch (af) {
-#if INET
 		case AF_INET:
 			randpadmax = ip4_esp_randpad;
 			break;
-#endif
-#if INET6
 		case AF_INET6:
 			randpadmax = ip6_esp_randpad;
 			break;
-#endif
 		default:
 			randpadmax = -1;
 			break;
@@ -669,10 +635,10 @@ esp_output(
 		if (randpadmax < 0 || plen + extendsiz >= randpadmax) {
 			;
 		} else {
-			int pad;
+			size_t pad;
 
 			/* round */
-			randpadmax = (randpadmax / padbound) * padbound;
+			randpadmax = (int)((randpadmax / padbound) * padbound);
 			pad = (randpadmax - plen + extendsiz) / padbound;
 
 			if (pad > 0) {
@@ -695,12 +661,6 @@ esp_output(
 			}
 		}
 
-#if DIAGNOSTIC
-		if (extendsiz > MLEN || extendsiz >= 256) {
-			panic("extendsiz too big in esp_output");
-		}
-#endif
-
 		n = m;
 		while (n->m_next) {
 			n = n->m_next;
@@ -713,7 +673,7 @@ esp_output(
 		 */
 		if (!(n->m_flags & M_EXT) && extendsiz < M_TRAILINGSPACE(n)) {
 			extend = mtod(n, u_char *) + n->m_len;
-			n->m_len += extendsiz;
+			n->m_len += (int)extendsiz;
 			m->m_pkthdr.len += extendsiz;
 		} else {
 			struct mbuf *nn;
@@ -727,7 +687,8 @@ esp_output(
 				goto fail;
 			}
 			extend = mtod(nn, u_char *);
-			nn->m_len = extendsiz;
+			VERIFY(extendsiz <= INT_MAX);
+			nn->m_len = (int)extendsiz;
 			nn->m_next = NULL;
 			n->m_next = nn;
 			n = nn;
@@ -771,15 +732,15 @@ esp_output(
 		esptail = (struct esptail *)
 		    (mtod(n, u_int8_t *) + n->m_len - sizeof(struct esptail));
 		esptail->esp_nxt = nxt;
-		esptail->esp_padlen = extendsiz - 2;
+		VERIFY((extendsiz - 2) <= UINT8_MAX);
+		esptail->esp_padlen = (u_int8_t)(extendsiz - 2);
 
 		/* modify IP header (for ESP header part only) */
 		switch (af) {
-#if INET
 		case AF_INET:
 			ip = mtod(m, struct ip *);
 			if (extendsiz < (IP_MAXPACKET - ntohs(ip->ip_len))) {
-				ip->ip_len = htons(ntohs(ip->ip_len) + extendsiz);
+				ip->ip_len = htons(ntohs(ip->ip_len) + (u_short)extendsiz);
 			} else {
 				ipseclog((LOG_ERR,
 				    "IPv4 ESP output: size exceeds limit\n"));
@@ -789,12 +750,9 @@ esp_output(
 				goto fail;
 			}
 			break;
-#endif
-#if INET6
 		case AF_INET6:
 			/* total packet length will be computed in ip6_output() */
 			break;
-#endif
 		}
 	}
 
@@ -900,7 +858,7 @@ fill_icv:
 				error = ENOBUFS;
 				goto fail;
 			}
-			nn->m_len = siz;
+			nn->m_len = (int)siz;
 			nn->m_next = NULL;
 			n->m_next = nn;
 			n = nn;
@@ -911,11 +869,10 @@ fill_icv:
 
 		/* modify IP header (for ESP header part only) */
 		switch (af) {
-	#if INET
 		case AF_INET:
 			ip = mtod(m, struct ip *);
 			if (siz < (IP_MAXPACKET - ntohs(ip->ip_len))) {
-				ip->ip_len = htons(ntohs(ip->ip_len) + siz);
+				ip->ip_len = htons(ntohs(ip->ip_len) + (u_short)siz);
 			} else {
 				ipseclog((LOG_ERR,
 				    "IPv4 ESP output: size exceeds limit\n"));
@@ -925,12 +882,9 @@ fill_icv:
 				goto fail;
 			}
 			break;
-	#endif
-	#if INET6
 		case AF_INET6:
 			/* total packet length will be computed in ip6_output() */
 			break;
-	#endif
 		}
 	}
 
@@ -941,11 +895,12 @@ fill_icv:
 		switch (af) {
 		case AF_INET:
 			ip = mtod(m, struct ip *);
-			udp->uh_ulen = htons(ntohs(ip->ip_len) - (IP_VHL_HL(ip->ip_vhl) << 2));
+			udp->uh_ulen = htons((u_int16_t)(ntohs(ip->ip_len) - (IP_VHL_HL(ip->ip_vhl) << 2)));
 			break;
 		case AF_INET6:
 			ip6 = mtod(m, struct ip6_hdr *);
-			udp->uh_ulen = htons(plen + siz + extendsiz + esphlen);
+			VERIFY((plen + siz + extendsiz + esphlen) <= UINT16_MAX);
+			udp->uh_ulen = htons((u_int16_t)(plen + siz + extendsiz + esphlen));
 			udp->uh_sum = in6_pseudo(&ip6->ip6_src, &ip6->ip6_dst, htonl(ntohs(udp->uh_ulen) + IPPROTO_UDP));
 			m->m_pkthdr.csum_flags = (CSUM_UDPIPV6 | CSUM_ZERO_INVERT);
 			m->m_pkthdr.csum_data = offsetof(struct udphdr, uh_sum);
@@ -962,7 +917,7 @@ noantireplay:
 		    ntohl(spi), seq,
 		    ntohs(th.th_sport), ntohs(th.th_dport),
 		    ntohl(th.th_seq), ntohl(th.th_ack),
-		    th.th_flags, inner_payload_len);
+		    inner_payload_len, th.th_flags);
 	}
 
 	lck_mtx_lock(sadb_mutex);
@@ -970,24 +925,19 @@ noantireplay:
 		ipseclog((LOG_ERR,
 		    "NULL mbuf after encryption in esp%d_output", afnumber));
 	} else {
-		stat->out_success++;
+		IPSEC_STAT_INCREMENT(stat->out_success);
 	}
-	stat->out_esphist[sav->alg_enc]++;
+	IPSEC_STAT_INCREMENT(stat->out_esphist[sav->alg_enc]);
 	lck_mtx_unlock(sadb_mutex);
-	key_sa_recordxfer(sav, m);
+	key_sa_recordxfer(sav, m->m_pkthdr.len);
 	KERNEL_DEBUG(DBG_FNC_ESPOUT | DBG_FUNC_END, 6, 0, 0, 0, 0);
 	return 0;
 
 fail:
-#if 1
 	KERNEL_DEBUG(DBG_FNC_ESPOUT | DBG_FUNC_END, 7, error, 0, 0, 0);
 	return error;
-#else
-	panic("something bad in esp_output");
-#endif
 }
 
-#if INET
 int
 esp4_output(
 	struct mbuf *m,
@@ -1003,9 +953,7 @@ esp4_output(
 	/* XXX assumes that m->m_next points to payload */
 	return esp_output(m, &ip->ip_p, m->m_next, AF_INET, sav);
 }
-#endif /*INET*/
 
-#if INET6
 int
 esp6_output(
 	struct mbuf *m,
@@ -1020,4 +968,293 @@ esp6_output(
 	}
 	return esp_output(m, nexthdrp, md, AF_INET6, sav);
 }
-#endif /*INET6*/
+
+int
+esp_kpipe_output(struct secasvar *sav, kern_packet_t sph, kern_packet_t dph)
+{
+	struct newesp *esp = NULL;
+	struct esptail *esptail = NULL;
+	struct ipsecstat *stat = NULL;
+	uint8_t *sbaddr = NULL, *dbaddr = NULL;
+	uint8_t *src_payload = NULL, *dst_payload = NULL;
+	uint8_t *iv = NULL;
+	uint8_t *auth_buf = NULL;
+	const struct esp_algorithm *e_algo = NULL;
+	const struct ah_algorithm *a_algo = NULL;
+	mbuf_traffic_class_t traffic_class = 0;
+	size_t iphlen = 0, esphlen = 0, padbound = 0, extendsiz = 0, plen = 0;
+	size_t auth_size = 0, add_ip_len = 0;
+	int af = 0, ivlen = 0;
+	uint32_t slim = 0, slen = 0;
+	uint32_t dlim = 0, dlen = 0;
+	uint8_t dscp = 0, nxt_proto = 0;
+	int err = 0;
+
+	KERNEL_DEBUG(DBG_FNC_ESPOUT | DBG_FUNC_START, sav->ivlen, 0, 0, 0, 0);
+
+	VERIFY(sav->sah->saidx.mode == IPSEC_MODE_TRANSPORT);
+	VERIFY((sav->flags & (SADB_X_EXT_OLD | SADB_X_EXT_DERIV |
+	    SADB_X_EXT_NATT | SADB_X_EXT_NATT_MULTIPLEUSERS |
+	    SADB_X_EXT_CYCSEQ | SADB_X_EXT_PMASK)) == 0);
+
+	kern_buflet_t __single sbuf = __packet_get_next_buflet(sph, NULL);
+	VERIFY(sbuf != NULL);
+	slen = __buflet_get_data_length(sbuf);
+	sbaddr = ipsec_kern_buflet_to_buffer(sbuf);
+	slim = __buflet_get_data_limit(sbuf);
+	slim -= __buflet_get_data_offset(sbuf);
+
+	kern_buflet_t __single dbuf = __packet_get_next_buflet(dph, NULL);
+	VERIFY(dbuf != NULL);
+	dlen = __buflet_get_data_length(dbuf);
+	dbaddr = ipsec_kern_buflet_to_buffer(dbuf);
+	dlim = __buflet_get_data_limit(dbuf);
+	dlim -= __buflet_get_data_offset(dbuf);
+
+	struct ip *ip_hdr = (struct ip *)(void *)sbaddr;
+	ASSERT(IP_HDR_ALIGNED_P(ip_hdr));
+
+	u_int ip_vers = IP_VHL_V(ip_hdr->ip_vhl);
+	switch (ip_vers) {
+	case IPVERSION: {
+#ifdef _IP_VHL
+		iphlen = IP_VHL_HL(ip_hdr->ip_vhl) << 2;
+#else /* _IP_VHL */
+		iphlen = ip_hdr->ip_hl << 2;
+#endif /* _IP_VHL */
+		dscp = ip_hdr->ip_tos >> IPTOS_DSCP_SHIFT;
+		nxt_proto = ip_hdr->ip_p;
+		stat = &ipsecstat;
+		af = AF_INET;
+		break;
+	}
+	case 6: {
+		struct ip6_hdr *ip6 = (struct ip6_hdr *)sbaddr;
+		iphlen = sizeof(struct ip6_hdr);
+		dscp = (ntohl(ip6->ip6_flow) & IP6FLOW_DSCP_MASK) >> IP6FLOW_DSCP_SHIFT;
+		nxt_proto = ip6->ip6_nxt;
+		stat = &ipsec6stat;
+		af = AF_INET6;
+		break;
+	}
+	default:
+		panic("esp kpipe output, ipversion %u, SPI=%x",
+		    ip_vers, ntohl(sav->spi));
+		/* NOTREACHED */
+		__builtin_unreachable();
+	}
+
+	if (__improbable(slen <= iphlen)) {
+		esp_log_info("esp kpipe output, slen(%u) <= iphlen(%zu) "
+		    "SPI=%x\n", slen, iphlen, ntohl(sav->spi));
+		IPSEC_STAT_INCREMENT(stat->out_inval);
+		KERNEL_DEBUG(DBG_FNC_ESPOUT | DBG_FUNC_END, 1, EINVAL, 0, 0, 0);
+		return EINVAL;
+	}
+
+	if ((sav->flags2 & SADB_X_EXT_SA2_SEQ_PER_TRAFFIC_CLASS) ==
+	    SADB_X_EXT_SA2_SEQ_PER_TRAFFIC_CLASS) {
+		traffic_class = rfc4594_dscp_to_tc(dscp);
+	}
+	if (__improbable(sav->replay[traffic_class] == NULL)) {
+		esp_log_info("esp kpipe output, missing "
+		    "replay window, SPI=%x\n", ntohl(sav->spi));
+		IPSEC_STAT_INCREMENT(stat->out_inval);
+		KERNEL_DEBUG(DBG_FNC_ESPOUT | DBG_FUNC_END, 2, EINVAL, 0, 0, 0);
+		return EINVAL;
+	}
+
+	e_algo = esp_algorithm_lookup(sav->alg_enc);
+	if (__improbable(e_algo == NULL)) {
+		esp_log_info("esp kpipe output: unsupported algorithm, SPI=%x\n",
+		    ntohl(sav->spi));
+		IPSEC_STAT_INCREMENT(stat->out_inval);
+		KERNEL_DEBUG(DBG_FNC_ESPOUT | DBG_FUNC_END, 3, EINVAL, 0, 0, 0);
+		return EINVAL;
+	}
+
+	if ((sav->flags & SADB_X_EXT_IIV) == 0) {
+		ivlen = sav->ivlen;
+		if (__improbable(ivlen < 0)) {
+			panic("invalid ivlen(%d) SPI=%x", ivlen, ntohl(sav->spi));
+			/* NOTREACHED */
+			__builtin_unreachable();
+		}
+
+		iv = dbaddr + iphlen + sizeof(struct newesp);
+	}
+
+	esphlen = sizeof(struct newesp) + ivlen;
+	if (e_algo->padbound) {
+		padbound = e_algo->padbound;
+		/*ESP packet, including nxthdr field, must be length of 4n */
+		if (padbound < 4) {
+			padbound = 4;
+		}
+	} else {
+		padbound = 4;
+	}
+	plen = slen - iphlen;
+	extendsiz = padbound - (plen % padbound);
+	if (extendsiz == 1) {
+		extendsiz = padbound + 1;
+	}
+	VERIFY(extendsiz <= UINT8_MAX);
+	if (e_algo->finalizeencrypt) {
+		auth_size = e_algo->icvlen;
+	} else {
+		a_algo = ah_algorithm_lookup(sav->alg_auth);
+		if (a_algo != NULL) {
+			auth_size = ((a_algo->sumsiz)(sav) + 3) & ~(4 - 1);
+			if (__improbable(auth_size > AH_MAXSUMSIZE)) {
+				panic("auth size %zu greater than AH_MAXSUMSIZE",
+				    auth_size);
+				/* NOTREACHED */
+				__builtin_unreachable();
+			}
+		}
+	}
+
+	/*
+	 * Validate destination buffer has sufficient space -
+	 * {IP header + ESP header + Payload + Padding + ESP trailer + ESP Auth}
+	 */
+	size_t total_len = iphlen + esphlen + plen + extendsiz + auth_size;
+	if (__improbable(total_len > dlim)) {
+		esp_log_info("esp kpipe output: destination buffer too short");
+		IPSEC_STAT_INCREMENT(stat->out_nomem);
+		KERNEL_DEBUG(DBG_FNC_ESPOUT | DBG_FUNC_END, 4, EMSGSIZE, 0, 0, 0);
+		return EMSGSIZE;
+	}
+
+	/*
+	 * Validate source buffer has sufficient space to including padding and
+	 * ESP trailer. This is done so that source buffer can be passed as
+	 * input to encrypt cipher.
+	 */
+	if (__improbable((slen + extendsiz) > slim)) {
+		esp_log_info("esp kpipe output: source buffer too short");
+		IPSEC_STAT_INCREMENT(stat->out_nomem);
+		KERNEL_DEBUG(DBG_FNC_ESPOUT | DBG_FUNC_END, 5, EMSGSIZE, 0, 0, 0);
+		return EMSGSIZE;
+	}
+
+	/*
+	 * Increment IP payload length to include ESP header length +
+	 * Padding + ESP trailer + ESP Auth
+	 */
+	add_ip_len = esphlen + extendsiz + auth_size;
+	switch (af) {
+	case AF_INET: {
+		struct ip *ip = (struct ip *)(void *)dbaddr;
+		ASSERT(IP_HDR_ALIGNED_P(ip));
+		if (__probable(ntohs(ip->ip_len) + add_ip_len <= IP_MAXPACKET)) {
+			ip->ip_len = htons(ntohs(ip->ip_len) + (u_short)add_ip_len);
+			ip->ip_p = IPPROTO_ESP;
+			ip->ip_sum = 0; // Recalculate checksum
+			ip->ip_sum = in_cksum_hdr_opt(ip);
+		} else {
+			esp_log_info("esp kpipe output: ipv4 packet "
+			    "size exceeded, ip payload len %u, SPI=%x\n",
+			    ntohs(ip->ip_len), ntohl(sav->spi));
+			IPSEC_STAT_INCREMENT(stat->out_nomem);
+			KERNEL_DEBUG(DBG_FNC_ESPOUT | DBG_FUNC_END, 6, EMSGSIZE, 0, 0, 0);
+			return EMSGSIZE;
+		}
+		break;
+	}
+	case AF_INET6: {
+		struct ip6_hdr *ip6 = (struct ip6_hdr *)dbaddr;
+		if (__probable(ntohs(ip6->ip6_plen) + add_ip_len <= IP_MAXPACKET)) {
+			ip6->ip6_plen = htons(ntohs(ip6->ip6_plen) + (u_short)add_ip_len);
+			ip6->ip6_nxt = IPPROTO_ESP;
+		} else {
+			esp_log_info("esp kpipe output: ipv6 packet "
+			    "size exceeded, ip payload len %u, SPI=%x\n",
+			    ntohs(ip6->ip6_plen), ntohl(sav->spi));
+			IPSEC_STAT_INCREMENT(stat->out_nomem);
+			KERNEL_DEBUG(DBG_FNC_ESPOUT | DBG_FUNC_END, 7, EMSGSIZE, 0, 0, 0);
+			return EMSGSIZE;
+		}
+		break;
+	}
+	}
+
+	if (__improbable(sav->replay[traffic_class]->seq >=
+	    sav->replay[traffic_class]->lastseq)) {
+		esp_log_info("replay counter overflowed, SPI=%x\n", ntohl(sav->spi));
+		IPSEC_STAT_INCREMENT(stat->out_inval);
+		KERNEL_DEBUG(DBG_FNC_ESPOUT | DBG_FUNC_END, 8, EINVAL, 0, 0, 0);
+		return EINVAL;
+	}
+
+	os_atomic_inc(&sav->replay[traffic_class]->count, relaxed);
+
+	esp = (struct newesp *)(void *)(dbaddr + iphlen);
+	ASSERT(IS_P2ALIGNED(esp, sizeof(uint32_t)));
+	esp->esp_spi = sav->spi;
+	esp->esp_seq = htonl(os_atomic_inc(&sav->replay[traffic_class]->seq, relaxed));
+
+	esptail = (struct esptail *)(sbaddr + slen + extendsiz - sizeof(struct esptail));
+	esptail->esp_nxt = nxt_proto;
+	esptail->esp_padlen = (u_int8_t)(extendsiz - 2);
+
+	/*
+	 * pre-compute and cache intermediate key
+	 */
+	err = esp_schedule(e_algo, sav);
+	if (__improbable(err != 0)) {
+		esp_log_info("esp schedule failed %d, SPI=%x\n", err, ntohl(sav->spi));
+		IPSEC_STAT_INCREMENT(stat->out_inval);
+		KERNEL_DEBUG(DBG_FNC_ESPOUT | DBG_FUNC_END, 9, err, 0, 0, 0);
+		return err;
+	}
+
+	if (__improbable(!e_algo->encrypt_pkt)) {
+		panic("esp kpipe output: missing algo encrypt pkt");
+		/* NOTREACHED */
+		__builtin_unreachable();
+	}
+
+	KERNEL_DEBUG(DBG_FNC_ENCRYPT | DBG_FUNC_START, 0, 0, 0, 0, 0);
+	src_payload = sbaddr + iphlen;
+	dst_payload = dbaddr + iphlen + esphlen;
+	if (__improbable((err = (*e_algo->encrypt_pkt)(sav, src_payload, plen + extendsiz,
+	    esp, iv, ivlen, dst_payload, plen + extendsiz)) != 0)) {
+		esp_log_info("esp encrypt failed %d, SPI=%x\n", err, ntohl(sav->spi));
+		IPSEC_STAT_INCREMENT(stat->out_inval);
+		KERNEL_DEBUG(DBG_FNC_ENCRYPT | DBG_FUNC_END, 1, err, 0, 0, 0);
+		KERNEL_DEBUG(DBG_FNC_ESPOUT | DBG_FUNC_END, 10, err, 0, 0, 0);
+		return err;
+	}
+	KERNEL_DEBUG(DBG_FNC_ENCRYPT | DBG_FUNC_END, 2, 0, 0, 0, 0);
+
+	auth_buf = dst_payload + plen + extendsiz;
+	if (e_algo->finalizeencrypt) {
+		if (__improbable((err = (*e_algo->finalizeencrypt)(sav, auth_buf,
+		    auth_size)) != 0)) {
+			esp_log_info("esp finalize encrypt failed %d, SPI=%x\n",
+			    err, ntohl(sav->spi));
+			IPSEC_STAT_INCREMENT(stat->out_inval);
+			KERNEL_DEBUG(DBG_FNC_ESPOUT | DBG_FUNC_END, 11, err, 0, 0, 0);
+			return err;
+		}
+	} else if (sav->key_auth != NULL && auth_size > 0) {
+		if (__improbable((err = esp_auth_data(sav, (uint8_t *)esp,
+		    esphlen + plen + extendsiz, auth_buf, auth_size)) != 0)) {
+			esp_log_info("esp auth data failed %d, SPI=%x\n",
+			    err, ntohl(sav->spi));
+			IPSEC_STAT_INCREMENT(stat->out_inval);
+			KERNEL_DEBUG(DBG_FNC_ESPOUT | DBG_FUNC_END, 12, err, 0, 0, 0);
+			return err;
+		}
+	}
+
+	__buflet_set_data_length(dbuf, (uint16_t)total_len);
+
+	IPSEC_STAT_INCREMENT(stat->out_success);
+	IPSEC_STAT_INCREMENT(stat->out_esphist[sav->alg_enc]);
+	key_sa_recordxfer(sav, total_len);
+	KERNEL_DEBUG(DBG_FNC_ESPOUT | DBG_FUNC_END, 13, 0, 0, 0, 0);
+	return 0;
+}

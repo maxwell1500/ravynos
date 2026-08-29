@@ -37,6 +37,7 @@
 
 #include <IOKit/IORegistryEntry.h>
 #include <libkern/c++/OSData.h>
+#include <libkern/c++/OSPtr.h>
 
 class IODeviceMemory;
 class IOService;
@@ -48,11 +49,15 @@ extern const OSSymbol *         gIODTPHandleKey;
 extern const OSSymbol *         gIODTCompatibleKey;
 extern const OSSymbol *         gIODTTypeKey;
 extern const OSSymbol *         gIODTModelKey;
+extern const OSSymbol *         gIODTBridgeModelKey;
 extern const OSSymbol *         gIODTTargetTypeKey;
 
 extern const OSSymbol *         gIODTAAPLInterruptsKey;
 extern const OSSymbol *         gIODTDefaultInterruptController;
 extern const OSSymbol *         gIODTNWInterruptMappingKey;
+
+extern const OSData *           gIODTAssociatedServiceKey;
+#define kIODTAssociatedServiceKey       "associated-service"
 
 LIBKERN_RETURNS_NOT_RETAINED IORegistryEntry * IODeviceTreeAlloc( void * dtTop );
 
@@ -63,13 +68,16 @@ bool IODTMatchNubWithKeys( IORegistryEntry * nub,
 bool IODTCompareNubName( const IORegistryEntry * regEntry,
     OSString * name,
     LIBKERN_RETURNS_RETAINED_ON_NONZERO OSString ** matchingName );
+bool IODTCompareNubName( const IORegistryEntry * regEntry,
+    OSString * name,
+    OSSharedPtr<OSString>& matchingName );
 
 enum {
-	kIODTRecursive      = 0x00000001,
-	kIODTExclusive      = 0x00000002
+	kIODTRecursive       = 0x00000001,
+	kIODTExclusive       = 0x00000002,
 };
 
-OSCollectionIterator * IODTFindMatchingEntries( IORegistryEntry * from,
+LIBKERN_RETURNS_RETAINED OSCollectionIterator * IODTFindMatchingEntries( IORegistryEntry * from,
     IOOptionBits options, const char * keys );
 
 #if !defined(__arm64__)

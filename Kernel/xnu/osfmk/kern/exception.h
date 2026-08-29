@@ -43,15 +43,23 @@
  * There are arrays of these maintained at the activation, task, and host.
  */
 struct exception_action {
-	struct ipc_port         *port;          /* exception port */
+	struct ipc_port         * XNU_PTRAUTH_SIGNED_PTR("exception_action.port") port; /* exception port */
 	thread_state_flavor_t   flavor;         /* state flavor to send */
 	exception_behavior_t    behavior;       /* exception type to raise */
 	boolean_t               privileged;     /* survives ipc_task_reset */
+	boolean_t               hardened;       /* associated with the task's hardened_exception_action */
 	struct label            *label;         /* MAC label associated with action */
+};
+struct hardened_exception_action {
+	struct exception_action ea;
+	uint32_t                signed_pc_key;
+	exception_mask_t        exception;
 };
 
 /* Initialize global state needed for exceptions. */
 extern void exception_init(void);
+
+extern ipc_port_t exception_port_copy_send(ipc_port_t port);
 
 /* Make an up-call to a thread's exception server */
 extern kern_return_t exception_triage(
@@ -65,11 +73,17 @@ extern kern_return_t exception_triage_thread(
 	mach_msg_type_number_t  codeCnt,
 	thread_t                thread);
 
+#define BT_EXC_PORTS_COUNT 3
+extern void exception_deliver_backtrace(
+	kcdata_object_t bt_object,
+	ipc_port_t      exc_ports[static BT_EXC_PORTS_COUNT],
+	exception_type_t exception);
+
 /* Notify system performance monitor */
 extern kern_return_t sys_perf_notify(thread_t thread, int pid);
 
 /* Notify crash reporter */
 extern kern_return_t task_exception_notify(exception_type_t exception,
-    mach_exception_data_type_t code, mach_exception_data_type_t subcode);
+    mach_exception_data_type_t code, mach_exception_data_type_t subcode, const bool fatal);
 
 #endif  /* _KERN_EXCEPTION_H_ */

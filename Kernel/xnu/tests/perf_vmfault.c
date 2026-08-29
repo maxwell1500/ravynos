@@ -8,8 +8,13 @@
 #include <TargetConditionals.h>
 #include <perfcheck_keys.h>
 
+#include "benchmark/helpers.h"
+#include "test_utils.h"
+
 T_GLOBAL_META(
 	T_META_NAMESPACE("xnu.vm.perf"),
+	T_META_RADAR_COMPONENT_NAME("xnu"),
+	T_META_RADAR_COMPONENT_VERSION("VM"),
 	T_META_CHECK_LEAKS(false),
 	T_META_TAG_PERF
 	);
@@ -74,7 +79,6 @@ static void execute_threads(void);
 static void *thread_setup(void *arg);
 static void run_test(int fault_type, int mapping_variant, size_t memsize);
 static void setup_and_run_test(int test, int threads);
-static int get_ncpu(void);
 
 /* Allocates memory using the default mmap behavior. Each VM region created is capped at 128 MB. */
 static void
@@ -161,9 +165,8 @@ map_mem_regions_multiple(int fault_type, size_t memsize)
 		}
 		region_len *= pgsize;
 
-		int flags = VM_MAKE_TAG((i % 2)? VM_TAG1 : VM_TAG2) | MAP_ANON | MAP_PRIVATE;
-
-		memblock = (char *)mmap(NULL, region_len, PROT_READ | PROT_WRITE, flags, -1, 0);
+		int fd = VM_MAKE_TAG((i % 2)? VM_TAG1 : VM_TAG2);
+		memblock = (char *)mmap(NULL, region_len, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, fd, 0);
 		T_QUIET; T_ASSERT_NE((void *)memblock, MAP_FAILED, "mmap");
 		memregion_config_per_thread[i].region_addr = memblock;
 		memregion_config_per_thread[i].shared_region_addr = 0;
@@ -411,25 +414,14 @@ setup_and_run_test(int fault_type, int threads)
 	T_END;
 }
 
-static int
-get_ncpu(void)
-{
-	int ncpu;
-	size_t length = sizeof(ncpu);
-
-	T_QUIET; T_ASSERT_POSIX_SUCCESS(sysctlbyname("hw.ncpu", &ncpu, &length, NULL, 0),
-	    "failed to query hw.ncpu");
-	return ncpu;
-}
-
 T_DECL(read_soft_fault,
-    "Read soft faults (single thread)")
+    "Read soft faults (single thread)", T_META_TAG_VM_NOT_ELIGIBLE)
 {
 	setup_and_run_test(SOFT_FAULT, 1);
 }
 
 T_DECL(read_soft_fault_multithreaded,
-    "Read soft faults (multi-threaded)")
+    "Read soft faults (multi-threaded)", T_META_TAG_VM_NOT_ELIGIBLE)
 {
 	char *e;
 	int nthreads;
@@ -447,13 +439,14 @@ T_DECL(read_soft_fault_multithreaded,
 }
 
 T_DECL(zero_fill_fault,
-    "Zero fill faults (single thread)")
+    "Zero fill faults (single thread)", T_META_TAG_VM_NOT_ELIGIBLE)
 {
 	setup_and_run_test(ZERO_FILL, 1);
 }
 
 T_DECL(zero_fill_fault_multithreaded,
-    "Zero fill faults (multi-threaded)")
+    "Zero fill faults (multi-threaded)",
+    XNU_T_META_SOC_SPECIFIC, T_META_TAG_VM_NOT_ELIGIBLE)
 {
 	char *e;
 	int nthreads;

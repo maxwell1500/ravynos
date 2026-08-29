@@ -94,15 +94,15 @@ union q_util {
 	uint64_t q;
 };
 
-extern uint32_t os_cpu_in_cksum(const void *, uint32_t, uint32_t);
+extern uint32_t os_cpu_in_cksum(const void *__sized_by(len), uint32_t len, uint32_t);
 
 /*
  * Perform 16-bit 1's complement sum on a contiguous span.
  */
 uint16_t
-b_sum16(const void *buf, int len)
+b_sum16(const void *__sized_by(len) buf, int len)
 {
-	return os_cpu_in_cksum(buf, len, 0);
+	return (uint16_t)os_cpu_in_cksum(buf, len, 0);
 }
 
 uint16_t inet_cksum_simple(struct mbuf *, int);
@@ -121,7 +121,7 @@ in_addword(uint16_t a, uint16_t b)
 	uint64_t sum = a + b;
 
 	ADDCARRY(sum);
-	return sum;
+	return (uint16_t)sum;
 }
 
 uint16_t
@@ -133,7 +133,7 @@ in_pseudo(uint32_t a, uint32_t b, uint32_t c)
 
 	sum = (uint64_t)a + b + c;
 	REDUCE16;
-	return sum;
+	return (uint16_t)sum;
 }
 
 uint16_t
@@ -145,7 +145,7 @@ in_pseudo64(uint64_t a, uint64_t b, uint64_t c)
 
 	sum = a + b + c;
 	REDUCE16;
-	return sum;
+	return (uint16_t)sum;
 }
 
 /*
@@ -154,7 +154,12 @@ in_pseudo64(uint64_t a, uint64_t b, uint64_t c)
 uint16_t
 in_cksum_hdr_opt(const struct ip *ip)
 {
-	return ~b_sum16(ip, (IP_VHL_HL(ip->ip_vhl) << 2)) & 0xffff;
+	int hdrlen;
+	const uint8_t *hdr;
+
+	hdrlen = IP_VHL_HL(ip->ip_vhl) << 2;
+	hdr = __unsafe_forge_bidi_indexable(const uint8_t *, ip, hdrlen);
+	return ~b_sum16(hdr, hdrlen) & 0xffff;
 }
 
 /*
@@ -184,7 +189,7 @@ ip_cksum_hdr_dir(struct mbuf *m, uint32_t hlen, int out)
 }
 
 uint16_t
-ip_cksum_hdr_dir_buffer(const void *buffer, uint32_t hlen, uint32_t len,
+ip_cksum_hdr_dir_buffer(const void *__sized_by(len) buffer, uint32_t hlen, uint32_t len,
     int out)
 {
 	const struct ip *ip = buffer;
@@ -247,7 +252,7 @@ inet_cksum(struct mbuf *m, uint32_t nxt, uint32_t off, uint32_t len)
 			m_copydata(m, 0, sizeof(*ip), (caddr_t)buf);
 			ip = (struct ip *)(void *)buf;
 		} else {
-			ip = (struct ip *)(void *)(m->m_data);
+			ip = (struct ip *)(void *)(m_mtod_current(m));
 		}
 
 		/* add pseudo header checksum */
@@ -268,7 +273,7 @@ inet_cksum(struct mbuf *m, uint32_t nxt, uint32_t off, uint32_t len)
  * len is a total length of a transport segment (e.g. TCP header + TCP payload)
  */
 uint16_t
-inet_cksum_buffer(const void *buffer, uint32_t nxt, uint32_t off,
+inet_cksum_buffer(const void *__sized_by(len) buffer, uint32_t nxt, uint32_t off,
     uint32_t len)
 {
 	uint32_t sum;

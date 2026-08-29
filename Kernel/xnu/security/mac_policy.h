@@ -85,6 +85,7 @@
 #endif
 
 #include <security/_label.h>
+#include <kern/cs_blobs.h>
 
 struct attrlist;
 struct auditinfo;
@@ -97,7 +98,6 @@ struct ifnet;
 struct inpcb;
 struct ipq;
 struct label;
-struct mac_module_data;
 struct mac_policy_conf;
 struct mbuf;
 struct mount;
@@ -117,9 +117,16 @@ struct tty;
 struct ucred;
 struct vfs_attr;
 struct vnode;
+struct sockaddr;
 /** @struct dummy */
 
 
+/*
+ * proc_ident_t support, see: rdar://problem/58928152
+ * Should be removed once all dependent parties adopt
+ * proc_ident_t.
+ */
+#define MAC_PROC_IDENT_SUPPORT
 
 #ifndef _KAUTH_CRED_T
 #define _KAUTH_CRED_T
@@ -239,61 +246,6 @@ typedef int mpo_audit_check_preselect_t(
 	kauth_cred_t cred,
 	unsigned short syscode,
 	void *args
-	);
-/**
- *  @brief Initialize BPF descriptor label
- *  @param label New label to initialize
- *
- *  Initialize the label for a newly instantiated BPF descriptor.
- *  Sleeping is permitted.
- */
-typedef void mpo_bpfdesc_label_init_t(
-	struct label *label
-	);
-/**
- *  @brief Destroy BPF descriptor label
- *  @param label The label to be destroyed
- *
- *  Destroy a BPF descriptor label.  Since the BPF descriptor
- *  is going out of scope, policy modules should free any internal
- *  storage associated with the label so that it may be destroyed.
- */
-typedef void mpo_bpfdesc_label_destroy_t(
-	struct label *label
-	);
-/**
- *  @brief Associate a BPF descriptor with a label
- *  @param cred User credential creating the BPF descriptor
- *  @param bpf_d The BPF descriptor
- *  @param bpflabel The new label
- *
- *  Set the label on a newly created BPF descriptor from the passed
- *  subject credential. This call will be made when a BPF device node
- *  is opened by a process with the passed subject credential.
- */
-typedef void mpo_bpfdesc_label_associate_t(
-	kauth_cred_t cred,
-	struct bpf_d *bpf_d,
-	struct label *bpflabel
-	);
-/**
- *  @brief Check whether BPF can read from a network interface
- *  @param bpf_d Subject; the BPF descriptor
- *  @param bpflabel Policy label for bpf_d
- *  @param ifp Object; the network interface
- *  @param ifnetlabel Policy label for ifp
- *
- *  Determine whether the MAC framework should permit datagrams from
- *  the passed network interface to be delivered to the buffers of
- *  the passed BPF descriptor.  Return (0) for success, or an errno
- *  value for failure.  Suggested failure: EACCES for label mismatches,
- *  EPERM for lack of privilege.
- */
-typedef int mpo_bpfdesc_check_receive_t(
-	struct bpf_d *bpf_d,
-	struct label *bpflabel,
-	struct ifnet *ifp,
-	struct label *ifnetlabel
 	);
 /**
  *  @brief Indicate desire to change the process label at exec time
@@ -603,6 +555,32 @@ typedef void mpo_cred_label_update_t(
 	struct label *newlabel
 	);
 /**
+ *  @brief Access control for launching a process with constraints
+ *  @param curr_p The new process
+ *  @param original_parent_id The pid of the original parent that spawned this process
+ *  @param responsible_pid  The pid of the responsible process that spawned this process
+ *  @param macpolicyattr MAC policy-specific spawn attribute data
+ *  @param macpolicyattrlen Length of policy-specific spawn attribute data
+ *  @param fatal_failure_desc Description of fatal failure
+ *  @param fatal_failure_desc_len Failure description len, failure is fatal if non-0
+ *
+ *  Detemine whether the process being spawned adheres to the launch
+ *  constraints (e.g. whether the process is spawned by launchd) and should
+ *  be allowed to execute. This call occurs during execve or posix_spawn.
+ *
+ *  @return Return 0 if process can be created, otherwise an appropriate value for
+ *  errno should be returned.
+ */
+typedef int mpo_proc_check_launch_constraints_t(
+	proc_t curr_p,
+	pid_t original_parent_id,
+	pid_t responsible_pid,
+	void *macpolicyattr,
+	size_t macpolicyattrlen,
+	launch_constraint_data_t lcd,
+	char **fatal_failure_desc, size_t *fatal_failure_desc_len
+	);
+/**
  *  @brief Create a new devfs device
  *  @param dev Major and minor numbers of special file
  *  @param de "inode" of new device file
@@ -868,7 +846,7 @@ typedef int mpo_file_check_get_t(
 	kauth_cred_t cred,
 	struct fileglob *fg,
 	char *elements,
-	int len
+	size_t len
 	);
 /**
  *  @brief Access control for getting the offset of a file descriptor
@@ -926,7 +904,7 @@ typedef int mpo_file_check_ioctl_t(
 	kauth_cred_t cred,
 	struct fileglob *fg,
 	struct label *label,
-	unsigned int cmd
+	unsigned long cmd
 	);
 /**
  *  @brief Access control check for file locking
@@ -951,18 +929,18 @@ typedef int mpo_file_check_lock_t(
 	struct flock *fl
 	);
 /**
- *  @brief Check with library validation if a macho slice is allowed to be combined into a proc.
+ *  @brief Check with library validation if a Mach-O slice is allowed to be combined into a proc.
  *  @param p Subject process
  *  @param fg Fileglob structure
  *  @param slice_offset offset of the code slice
  *  @param error_message error message returned to user-space in case of error (userspace pointer)
  *  @param error_message_size error message size
  *
- *  Its a little odd that the MAC/kext writes into userspace since this
+ *  It's a little odd that the MAC/kext writes into userspace since this
  *  implies there is only one MAC module that implements this, however
- *  the alterantive is to allocate memory in xnu, on the hope that
- *  the MAC module will use it, or allocated in the MAC module and then
- *  free it in xnu. Either of these are very appeling, so lets go with
+ *  the alternative is to allocate memory in xnu, in the hope that
+ *  the MAC module will use it, or allocate in the MAC module and then
+ *  free it in xnu. Neither of these is very appealing, so let's go with
  *  the slightly more hacky way.
  *
  *  @return Return 0 if access is granted, otherwise an appropriate value for
@@ -1054,7 +1032,23 @@ typedef int mpo_file_check_set_t(
 	kauth_cred_t cred,
 	struct fileglob *fg,
 	char *elements,
-	int len
+	size_t len
+	);
+/**
+ *  @brief Inform MAC policies that file is being closed
+ *  @param cred Subject credential
+ *  @param fg Fileglob structure
+ *  @param label Policy label for fg
+ *  @param modified Boolean; 1 if file was modified, 0 otherwise
+ *
+ *  Called when an open file is being closed, as a result of a call to
+ *  close(2), the process exiting, or exec(2) w/O_CLOEXEC set.
+ */
+typedef void mpo_file_notify_close_t(
+	kauth_cred_t cred,
+	struct fileglob *fg,
+	struct label *label,
+	int modified
 	);
 /**
  *  @brief Create file label
@@ -1086,276 +1080,6 @@ typedef void mpo_file_label_init_t(
 	struct label *label
 	);
 /**
- *  @brief Access control check for relabeling network interfaces
- *  @param cred Subject credential
- *  @param ifp network interface being relabeled
- *  @param ifnetlabel Current label of the network interfaces
- *  @param newlabel New label to apply to the network interfaces
- *  @see mpo_ifnet_label_update_t
- *
- *  Determine whether the subject identified by the credential can
- *  relabel the network interface represented by ifp to the supplied
- *  new label (newlabel).
- *
- *  @return Return 0 if access is granted, otherwise an appropriate value for
- *  errno should be returned.
- */
-typedef int mpo_ifnet_check_label_update_t(
-	kauth_cred_t cred,
-	struct ifnet *ifp,
-	struct label *ifnetlabel,
-	struct label *newlabel
-	);
-/**
- *  @brief Access control check for relabeling network interfaces
- *  @param ifp Network interface mbuf will be transmitted through
- *  @param ifnetlabel Label of the network interfaces
- *  @param m The mbuf to be transmitted
- *  @param mbuflabel Label of the mbuf to be transmitted
- *  @param family Address Family, AF_*
- *  @param type Type of socket, SOCK_{STREAM,DGRAM,RAW}
- *
- *  Determine whether the mbuf with label mbuflabel may be transmitted
- *  through the network interface represented by ifp that has the
- *  label ifnetlabel.
- *
- *  @return Return 0 if access is granted, otherwise an appropriate value for
- *  errno should be returned.
- */
-typedef int mpo_ifnet_check_transmit_t(
-	struct ifnet *ifp,
-	struct label *ifnetlabel,
-	struct mbuf *m,
-	struct label *mbuflabel,
-	int family,
-	int type
-	);
-/**
- *  @brief Create a network interface label
- *  @param ifp Network interface labeled
- *  @param ifnetlabel Label for the network interface
- *
- *  Set the label of a newly created network interface, most likely
- *  using the information in the supplied network interface struct.
- */
-typedef void mpo_ifnet_label_associate_t(
-	struct ifnet *ifp,
-	struct label *ifnetlabel
-	);
-/**
- *  @brief Copy an ifnet label
- *  @param src Source ifnet label
- *  @param dest Destination ifnet label
- *
- *  Copy the label information from src to dest.
- */
-typedef void mpo_ifnet_label_copy_t(
-	struct label *src,
-	struct label *dest
-	);
-/**
- *  @brief Destroy ifnet label
- *  @param label The label to be destroyed
- *
- *  Destroy the label on an ifnet label.  In this entry point, a
- *  policy module should free any internal storage associated with
- *  label so that it may be destroyed.
- */
-typedef void mpo_ifnet_label_destroy_t(
-	struct label *label
-	);
-/**
- *  @brief Externalize an ifnet label
- *  @param label Label to be externalized
- *  @param element_name Name of the label namespace for which labels should be
- *  externalized
- *  @param sb String buffer to be filled with a text representation of the label
- *
- *  Produce an external representation of the label on an interface.
- *  An externalized label consists of a text representation of the
- *  label contents that can be used with user applications.
- *  Policy-agnostic user space tools will display this externalized
- *  version.
- *
- *  @return 0 on success, return non-zero if an error occurs while
- *  externalizing the label data.
- *
- */
-typedef int mpo_ifnet_label_externalize_t(
-	struct label *label,
-	char *element_name,
-	struct sbuf *sb
-	);
-/**
- *  @brief Initialize ifnet label
- *  @param label New label to initialize
- */
-typedef void mpo_ifnet_label_init_t(
-	struct label *label
-	);
-/**
- *  @brief Internalize an interface label
- *  @param label Label to be internalized
- *  @param element_name Name of the label namespace for which the label should
- *  be internalized
- *  @param element_data Text data to be internalized
- *
- *  Produce an interface label from an external representation.  An
- *  externalized label consists of a text representation of the label
- *  contents that can be used with user applications.  Policy-agnostic
- *  user space tools will forward text version to the kernel for
- *  processing by individual policy modules.
- *
- *  The policy's internalize entry points will be called only if the
- *  policy has registered interest in the label namespace.
- *
- *  @return 0 on success, Otherwise, return non-zero if an error occurs
- *  while internalizing the label data.
- *
- */
-typedef int mpo_ifnet_label_internalize_t(
-	struct label *label,
-	char *element_name,
-	char *element_data
-	);
-/**
- *  @brief Recycle up a network interface label
- *  @param label The label to be recycled
- *
- *  Recycle a network interface label.  Darwin caches the struct ifnet
- *  of detached ifnets in a "free pool".  Before ifnets are returned
- *  to the "free pool", policies can cleanup or overwrite any information
- *  present in the label.
- */
-typedef void mpo_ifnet_label_recycle_t(
-	struct label *label
-	);
-/**
- *  @brief Update a network interface label
- *  @param cred Subject credential
- *  @param ifp The network interface to be relabeled
- *  @param ifnetlabel The current label of the network interface
- *  @param newlabel A new label to apply to the network interface
- *  @see mpo_ifnet_check_label_update_t
- *
- *  Update the label on a network interface, using the supplied new label.
- */
-typedef void mpo_ifnet_label_update_t(
-	kauth_cred_t cred,
-	struct ifnet *ifp,
-	struct label *ifnetlabel,
-	struct label *newlabel
-	);
-/**
- *  @brief Access control check for delivering a packet to a socket
- *  @param inp inpcb the socket is associated with
- *  @param inplabel Label of the inpcb
- *  @param m The mbuf being received
- *  @param mbuflabel Label of the mbuf being received
- *  @param family Address family, AF_*
- *  @param type Type of socket, SOCK_{STREAM,DGRAM,RAW}
- *
- *  Determine whether the mbuf with label mbuflabel may be received
- *  by the socket associated with inpcb that has the label inplabel.
- *
- *  @return Return 0 if access is granted, otherwise an appropriate value for
- *  errno should be returned.
- */
-typedef int mpo_inpcb_check_deliver_t(
-	struct inpcb *inp,
-	struct label *inplabel,
-	struct mbuf *m,
-	struct label *mbuflabel,
-	int family,
-	int type
-	);
-/**
- *  @brief Create an inpcb label
- *  @param so Socket containing the inpcb to be labeled
- *  @param solabel Label of the socket
- *  @param inp inpcb to be labeled
- *  @param inplabel Label for the inpcb
- *
- *  Set the label of a newly created inpcb, most likely
- *  using the information in the socket and/or socket label.
- */
-typedef void mpo_inpcb_label_associate_t(
-	struct socket *so,
-	struct label *solabel,
-	struct inpcb *inp,
-	struct label *inplabel
-	);
-/**
- *  @brief Destroy inpcb label
- *  @param label The label to be destroyed
- *
- *  Destroy the label on an inpcb label.  In this entry point, a
- *  policy module should free any internal storage associated with
- *  label so that it may be destroyed.
- */
-typedef void mpo_inpcb_label_destroy_t(
-	struct label *label
-	);
-/**
- *  @brief Initialize inpcb label
- *  @param label New label to initialize
- *  @param flag M_WAITOK or M_NOWAIT
- */
-typedef int mpo_inpcb_label_init_t(
-	struct label *label,
-	int flag
-	);
-/**
- *  @brief Recycle up an inpcb label
- *  @param label The label to be recycled
- *
- *  Recycle an inpcb label.  Darwin allocates the inpcb as part of
- *  the socket structure in some cases.  For this case we must recycle
- *  rather than destroy the inpcb as it will be reused later.
- */
-typedef void mpo_inpcb_label_recycle_t(
-	struct label *label
-	);
-/**
- *  @brief Update an inpcb label from a socket label
- *  @param so Socket containing the inpcb to be relabeled
- *  @param solabel New label of the socket
- *  @param inp inpcb to be labeled
- *  @param inplabel Label for the inpcb
- *
- *  Set the label of a newly created inpcb due to a change in the
- *  underlying socket label.
- */
-typedef void mpo_inpcb_label_update_t(
-	struct socket *so,
-	struct label *solabel,
-	struct inpcb *inp,
-	struct label *inplabel
-	);
-/**
- *  @brief Device hardware access control
- *  @param devtype Type of device connected
- *
- *  This is the MAC Framework device access control, which is called by the I/O
- *  Kit when a new device is connected to the system to determine whether that
- *  device should be trusted.  A list of properties associated with the device
- *  is passed as an XML-formatted string.  The routine should examine these
- *  properties to determine the trustworthiness of the device.  A return value
- *  of EPERM forces the device to be claimed by a special device driver that
- *  will prevent its operation.
- *
- *  @warning This is an experimental interface and may change in the future.
- *
- *  @return Return EPERM to indicate that the device is untrusted and should
- *  not be allowed to operate.  Return zero to indicate that the device is
- *  trusted and should be allowed to operate normally.
- *
- */
-typedef int mpo_iokit_check_device_t(
-	char *devtype,
-	struct mac_module_data *mdata
-	);
-/**
  *  @brief Access control check for opening an I/O Kit device
  *  @param cred Subject credential
  *  @param user_client User client instance
@@ -1363,7 +1087,8 @@ typedef int mpo_iokit_check_device_t(
  *
  *  Determine whether the subject identified by the credential can open an
  *  I/O Kit device at the passed path of the passed user client class and
- *  type.
+ *  type.  This check is performed after instantiating the user client.
+ *  See also mpo_iokit_check_open_service_t.
  *
  *  @return Return 0 if access is granted, or an appropriate value for
  *  errno should be returned.
@@ -1371,6 +1096,25 @@ typedef int mpo_iokit_check_device_t(
 typedef int mpo_iokit_check_open_t(
 	kauth_cred_t cred,
 	io_object_t user_client,
+	unsigned int user_client_type
+	);
+/**
+ *  @brief Access control check for opening an I/O Kit device
+ *  @param cred Subject credential
+ *  @param service Service instance
+ *  @param user_client_type User client type
+ *
+ *  Determine whether the subject identified by the credential can open a
+ *  I/O Kit user client of the passed service and user client type.
+ *  This check is performed before instantiating the user client.  See also
+ *  mpo_iokit_check_open_t.
+ *
+ *  @return Return 0 if access is granted, or an appropriate value for
+ *  errno should be returned.
+ */
+typedef int mpo_iokit_check_open_service_t(
+	kauth_cred_t cred,
+	io_object_t service,
 	unsigned int user_client_type
 	);
 /**
@@ -1449,276 +1193,6 @@ typedef int mpo_iokit_check_hid_control_t(
 	kauth_cred_t cred
 	);
 /**
- *  @brief Create an IP reassembly queue label
- *  @param fragment First received IP fragment
- *  @param fragmentlabel Policy label for fragment
- *  @param ipq IP reassembly queue to be labeled
- *  @param ipqlabel Policy label to be filled in for ipq
- *
- *  Set the label on a newly created IP reassembly queue from
- *  the mbuf header of the first received fragment.
- */
-typedef void mpo_ipq_label_associate_t(
-	struct mbuf *fragment,
-	struct label *fragmentlabel,
-	struct ipq *ipq,
-	struct label *ipqlabel
-	);
-/**
- *  @brief Compare an mbuf header label to an ipq label
- *  @param fragment IP datagram fragment
- *  @param fragmentlabel Policy label for fragment
- *  @param ipq IP fragment reassembly queue
- *  @param ipqlabel Policy label for ipq
- *
- *  Compare the label of the mbuf header containing an IP datagram
- *  (fragment) fragment with the label of the passed IP fragment
- *  reassembly queue (ipq). Return (1) for a successful match, or (0)
- *  for no match. This call is made when the IP stack attempts to
- *  find an existing fragment reassembly queue for a newly received
- *  fragment; if this fails, a new fragment reassembly queue may be
- *  instantiated for the fragment. Policies may use this entry point
- *  to prevent the reassembly of otherwise matching IP fragments if
- *  policy does not permit them to be reassembled based on the label
- *  or other information.
- */
-typedef int mpo_ipq_label_compare_t(
-	struct mbuf *fragment,
-	struct label *fragmentlabel,
-	struct ipq *ipq,
-	struct label *ipqlabel
-	);
-/**
- *  @brief Destroy IP reassembly queue label
- *  @param label The label to be destroyed
- *
- *  Destroy the label on an IP fragment queue.  In this entry point, a
- *  policy module should free any internal storage associated with
- *  label so that it may be destroyed.
- */
-typedef void mpo_ipq_label_destroy_t(
-	struct label *label
-	);
-/**
- *  @brief Initialize IP reassembly queue label
- *  @param label New label to initialize
- *  @param flag M_WAITOK or M_NOWAIT
- *
- *  Initialize the label on a newly instantiated IP fragment reassembly
- *  queue.  The flag field may be one of M_WAITOK and M_NOWAIT, and
- *  should be employed to avoid performing a sleeping malloc(9) during
- *  this initialization call. IP fragment reassembly queue allocation
- *  frequently occurs in performance sensitive environments, and the
- *  implementation should be careful to avoid sleeping or long-lived
- *  operations. This entry point is permitted to fail resulting in
- *  the failure to allocate the IP fragment reassembly queue.
- */
-typedef int mpo_ipq_label_init_t(
-	struct label *label,
-	int flag
-	);
-/**
- *  @brief Update the label on an IP fragment reassembly queue
- *  @param fragment IP fragment
- *  @param fragmentlabel Policy label for fragment
- *  @param ipq IP fragment reassembly queue
- *  @param ipqlabel Policy label to be updated for ipq
- *
- *  Update the label on an IP fragment reassembly queue (ipq) based
- *  on the acceptance of the passed IP fragment mbuf header (fragment).
- */
-typedef void mpo_ipq_label_update_t(
-	struct mbuf *fragment,
-	struct label *fragmentlabel,
-	struct ipq *ipq,
-	struct label *ipqlabel
-	);
-/**
- *  @brief Assign a label to a new mbuf
- *  @param bpf_d BPF descriptor
- *  @param b_label Policy label for bpf_d
- *  @param m Object; mbuf
- *  @param m_label Policy label to fill in for m
- *
- *  Set the label on the mbuf header of a newly created datagram
- *  generated using the passed BPF descriptor. This call is made when
- *  a write is performed to the BPF device associated with the passed
- *  BPF descriptor.
- */
-typedef void mpo_mbuf_label_associate_bpfdesc_t(
-	struct bpf_d *bpf_d,
-	struct label *b_label,
-	struct mbuf *m,
-	struct label *m_label
-	);
-/**
- *  @brief Assign a label to a new mbuf
- *  @param ifp Interface descriptor
- *  @param i_label Existing label of ifp
- *  @param m Object; mbuf
- *  @param m_label Policy label to fill in for m
- *
- *  Label an mbuf based on the interface from which it was received.
- */
-typedef void mpo_mbuf_label_associate_ifnet_t(
-	struct ifnet *ifp,
-	struct label *i_label,
-	struct mbuf *m,
-	struct label *m_label
-	);
-/**
- *  @brief Assign a label to a new mbuf
- *  @param inp inpcb structure
- *  @param i_label Existing label of inp
- *  @param m Object; mbuf
- *  @param m_label Policy label to fill in for m
- *
- *  Label an mbuf based on the inpcb from which it was derived.
- */
-typedef void mpo_mbuf_label_associate_inpcb_t(
-	struct inpcb *inp,
-	struct label *i_label,
-	struct mbuf *m,
-	struct label *m_label
-	);
-/**
- *  @brief Set the label on a newly reassembled IP datagram
- *  @param ipq IP fragment reassembly queue
- *  @param ipqlabel Policy label for ipq
- *  @param mbuf IP datagram to be labeled
- *  @param mbuflabel Policy label to be filled in for mbuf
- *
- *  Set the label on a newly reassembled IP datagram (mbuf) from the IP
- *  fragment reassembly queue (ipq) from which it was generated.
- */
-typedef void mpo_mbuf_label_associate_ipq_t(
-	struct ipq *ipq,
-	struct label *ipqlabel,
-	struct mbuf *mbuf,
-	struct label *mbuflabel
-	);
-/**
- *  @brief Assign a label to a new mbuf
- *  @param ifp Subject; network interface
- *  @param i_label Existing label of ifp
- *  @param m Object; mbuf
- *  @param m_label Policy label to fill in for m
- *
- *  Set the label on the mbuf header of a newly created datagram
- *  generated for the purposes of a link layer response for the passed
- *  interface. This call may be made in a number of situations, including
- *  for ARP or ND6 responses in the IPv4 and IPv6 stacks.
- */
-typedef void mpo_mbuf_label_associate_linklayer_t(
-	struct ifnet *ifp,
-	struct label *i_label,
-	struct mbuf *m,
-	struct label *m_label
-	);
-/**
- *  @brief Assign a label to a new mbuf
- *  @param oldmbuf mbuf headerder for existing datagram for existing datagram
- *  @param oldmbuflabel Policy label for oldmbuf
- *  @param ifp Network interface
- *  @param ifplabel Policy label for ifp
- *  @param newmbuf mbuf header to be labeled for new datagram
- *  @param newmbuflabel Policy label for newmbuf
- *
- *  Set the label on the mbuf header of a newly created datagram
- *  generated from the existing passed datagram when it is processed
- *  by the passed multicast encapsulation interface. This call is made
- *  when an mbuf is to be delivered using the virtual interface.
- */
-typedef void mpo_mbuf_label_associate_multicast_encap_t(
-	struct mbuf *oldmbuf,
-	struct label *oldmbuflabel,
-	struct ifnet *ifp,
-	struct label *ifplabel,
-	struct mbuf *newmbuf,
-	struct label *newmbuflabel
-	);
-/**
- *  @brief Assign a label to a new mbuf
- *  @param oldmbuf Received datagram
- *  @param oldmbuflabel Policy label for oldmbuf
- *  @param newmbuf Newly created datagram
- *  @param newmbuflabel Policy label for newmbuf
- *
- *  Set the label on the mbuf header of a newly created datagram generated
- *  by the IP stack in response to an existing received datagram (oldmbuf).
- *  This call may be made in a number of situations, including when responding
- *  to ICMP request datagrams.
- */
-typedef void mpo_mbuf_label_associate_netlayer_t(
-	struct mbuf *oldmbuf,
-	struct label *oldmbuflabel,
-	struct mbuf *newmbuf,
-	struct label *newmbuflabel
-	);
-/**
- *  @brief Assign a label to a new mbuf
- *  @param so Socket to label
- *  @param so_label Policy label for socket
- *  @param m Object; mbuf
- *  @param m_label Policy label to fill in for m
- *
- *  An mbuf structure is used to store network traffic in transit.
- *  When an application sends data to a socket or a pipe, it is wrapped
- *  in an mbuf first.  This function sets the label on a newly created mbuf header
- *  based on the socket sending the data.  The contents of the label should be
- *  suitable for performing an access check on the receiving side of the
- *  communication.
- *
- *  Only labeled MBUFs will be presented to the policy via this entrypoint.
- */
-typedef void mpo_mbuf_label_associate_socket_t(
-	socket_t so,
-	struct label *so_label,
-	struct mbuf *m,
-	struct label *m_label
-	);
-/**
- *  @brief Copy a mbuf label
- *  @param src Source label
- *  @param dest Destination label
- *
- *  Copy the mbuf label information in src into dest.
- *
- *  Only called when both source and destination mbufs have labels.
- */
-typedef void mpo_mbuf_label_copy_t(
-	struct label *src,
-	struct label *dest
-	);
-/**
- *  @brief Destroy mbuf label
- *  @param label The label to be destroyed
- *
- *  Destroy a mbuf label.  Since the
- *  object is going out of scope, policy modules should free any
- *  internal storage associated with the label so that it may be
- *  destroyed.
- */
-typedef void mpo_mbuf_label_destroy_t(
-	struct label *label
-	);
-/**
- *  @brief Initialize mbuf label
- *  @param label New label to initialize
- *  @param flag Malloc flags
- *
- *  Initialize the label for a newly instantiated mbuf.
- *
- *  @warning Since it is possible for the flags to be set to
- *  M_NOWAIT, the malloc operation may fail.
- *
- *  @return On success, 0, otherwise, an appropriate errno return value.
- */
-typedef int mpo_mbuf_label_init_t(
-	struct label *label,
-	int flag
-	);
-/**
  *  @brief Access control check for fsctl
  *  @param cred Subject credential
  *  @param mp The mount point
@@ -1740,7 +1214,7 @@ typedef int mpo_mount_check_fsctl_t(
 	kauth_cred_t cred,
 	struct mount *mp,
 	struct label *label,
-	unsigned int cmd
+	unsigned long cmd
 	);
 /**
  *  @brief Access control check for the retrieval of file system attributes
@@ -1819,6 +1293,25 @@ typedef int mpo_mount_check_mount_t(
 typedef int mpo_mount_check_mount_late_t(
 	kauth_cred_t cred,
 	struct mount *mp
+	);
+
+/**
+ *  @brief Access control check for quotactl
+ *  @param cred Subject credential
+ *  @param cmd The quotactl command and subcommand; see quotactl(2)
+ *  @param id The user or group ID on which cmd will operate
+ *
+ *  Determine whether the subject identified by the credential can perform
+ *  the quotactl operation indicated by cmd.
+ *
+ *  @return Return 0 if access is granted, otherwise an appropriate value for
+ *  errno should be returned.
+ */
+typedef int mpo_mount_check_quotactl_t(
+	kauth_cred_t cred,
+	struct mount *mp,
+	int cmd,
+	int id
 	);
 /**
  *  @brief Access control check for fs_snapshot_create
@@ -1903,6 +1396,7 @@ typedef int mpo_mount_check_snapshot_revert_t(
  *  @param cred Subject credential
  *  @param mp The mount point
  *  @param mlabel Label currently associated with the mount point
+ *  @param flags Requested updated flags
  *
  *  Determine whether the subject identified by the credential can perform
  *  the remount operation on the target vnode.
@@ -1910,10 +1404,12 @@ typedef int mpo_mount_check_snapshot_revert_t(
  *  @return Return 0 if access is granted, otherwise an appropriate value for
  *  errno should be returned.
  */
+#define NEEDS_RDAR_103115865 1 // Required until both EndpointSecurity & Sandbox are updated
 typedef int mpo_mount_check_remount_t(
 	kauth_cred_t cred,
 	struct mount *mp,
-	struct label *mlabel
+	struct label *mlabel,
+	uint64_t flags
 	);
 /**
  *  @brief Access control check for the settting of file system attributes
@@ -2065,45 +1561,38 @@ typedef int mpo_mount_label_internalize_t(
 	char *element_data
 	);
 /**
- *  @brief Set the label on an IPv4 datagram fragment
- *  @param datagram Datagram being fragmented
- *  @param datagramlabel Policy label for datagram
- *  @param fragment New fragment
- *  @param fragmentlabel Policy label for fragment
+ *  @brief Access control check for opening an NECP file descriptor
+ *  @param cred Subject credential
+ *  @param flags Open flags
  *
- *  Called when an IPv4 datagram is fragmented into several smaller datagrams.
- *  Policies implementing mbuf labels will typically copy the label from the
- *  source datagram to the new fragment.
+ *  Determine whether the subject identified by the credential can open
+ *  an NECP file descriptor.
+ *
+ *  @return Return 0 if access is granted, otherwise an appropriate value for
+ *  errno should be returned.
+ *
  */
-typedef void mpo_netinet_fragment_t(
-	struct mbuf *datagram,
-	struct label *datagramlabel,
-	struct mbuf *fragment,
-	struct label *fragmentlabel
+typedef int mpo_necp_check_open_t(
+	kauth_cred_t cred,
+	int flags
 	);
 /**
- *  @brief Set the label on an ICMP reply
- *  @param m mbuf containing the ICMP reply
- *  @param mlabel Policy label for m
+ *  @brief Access control check for necp_client_action(2)
+ *  @param cred Subject credential
+ *  @param fg NECP fileglob
+ *  @param action NECP client action
  *
- *  A policy may wish to update the label of an mbuf that refers to
- *  an ICMP packet being sent in response to an IP packet.  This may
- *  be called in response to a bad packet or an ICMP request.
- */
-typedef void mpo_netinet_icmp_reply_t(
-	struct mbuf *m,
-	struct label *mlabel
-	);
-/**
- *  @brief Set the label on a TCP reply
- *  @param m mbuf containing the TCP reply
- *  @param mlabel Policy label for m
+ *  Determine whether the subject identified by the credential can open
+ *  an NECP socket.
  *
- *  Called for outgoing TCP packets not associated with an actual socket.
+ *  @return Return 0 if access is granted, otherwise an appropriate value for
+ *  errno should be returned.
+ *
  */
-typedef void mpo_netinet_tcp_reply_t(
-	struct mbuf *m,
-	struct label *mlabel
+typedef int mpo_necp_check_client_action_t(
+	kauth_cred_t cred,
+	struct fileglob *fg,
+	uint32_t action
 	);
 /**
  *  @brief Access control check for pipe ioctl
@@ -2127,7 +1616,7 @@ typedef int mpo_pipe_check_ioctl_t(
 	kauth_cred_t cred,
 	struct pipe *cpipe,
 	struct label *pipelabel,
-	unsigned int cmd
+	unsigned long cmd
 	);
 /**
  *  @brief Access control check for pipe kqfilter
@@ -2147,27 +1636,6 @@ typedef int mpo_pipe_check_kqfilter_t(
 	struct knote *kn,
 	struct pipe *cpipe,
 	struct label *pipelabel
-	);
-/**
- *  @brief Access control check for pipe relabel
- *  @param cred Subject credential
- *  @param cpipe Object to be accessed
- *  @param pipelabel The current label on the pipe
- *  @param newlabel The new label to be used
- *
- *  Determine whether the subject identified by the credential can
- *  perform a relabel operation on the passed pipe.  The cred object holds
- *  the credentials of the subject performing the operation.
- *
- *  @return Return 0 if access is granted, otherwise an appropriate value for
- *  errno should be returned.
- *
- */
-typedef int mpo_pipe_check_label_update_t(
-	kauth_cred_t cred,
-	struct pipe *cpipe,
-	struct label *pipelabel,
-	struct label *newlabel
 	);
 /**
  *  @brief Access control check for pipe read
@@ -2254,27 +1722,13 @@ typedef int mpo_pipe_check_write_t(
  *  @param pipelabel Label for the pipe object
  *
  *  Create a label for the pipe object being created by the supplied
- *  user credential. This call is made when the pipe is being created
- *  XXXPIPE(for one or both sides of the pipe?).
- *
+ *  user credential. This call is made when a pipe pair is being created.
+ *  The label is shared by both ends of the pipe.
  */
 typedef void mpo_pipe_label_associate_t(
 	kauth_cred_t cred,
 	struct pipe *cpipe,
 	struct label *pipelabel
-	);
-/**
- *  @brief Copy a pipe label
- *  @param src Source pipe label
- *  @param dest Destination pipe label
- *
- *  Copy the pipe label associated with src to dest.
- *  XXXPIPE Describe when this is used: most likely during pipe creation to
- *         copy from rpipe to wpipe.
- */
-typedef void mpo_pipe_label_copy_t(
-	struct label *src,
-	struct label *dest
 	);
 /**
  *  @brief Destroy pipe label
@@ -2288,31 +1742,6 @@ typedef void mpo_pipe_label_destroy_t(
 	struct label *label
 	);
 /**
- *  @brief Externalize a pipe label
- *  @param label Label to be externalized
- *  @param element_name Name of the label namespace for which labels should be
- *  externalized
- *  @param sb String buffer to be filled with a text representation of the label
- *
- *  Produce an external representation of the label on a pipe.
- *  An externalized label consists of a text representation
- *  of the label contents that can be used with user applications.
- *  Policy-agnostic user space tools will display this externalized
- *  version.
- *
- *  The policy's externalize entry points will be called only if the
- *  policy has registered interest in the label namespace.
- *
- *  @return 0 on success, return non-zero if an error occurs while
- *  externalizing the label data.
- *
- */
-typedef int mpo_pipe_label_externalize_t(
-	struct label *label,
-	char *element_name,
-	struct sbuf *sb
-	);
-/**
  *  @brief Initialize pipe label
  *  @param label New label to initialize
  *
@@ -2321,51 +1750,6 @@ typedef int mpo_pipe_label_externalize_t(
  */
 typedef void mpo_pipe_label_init_t(
 	struct label *label
-	);
-/**
- *  @brief Internalize a pipe label
- *  @param label Label to be internalized
- *  @param element_name Name of the label namespace for which the label should
- *  be internalized
- *  @param element_data Text data to be internalized
- *
- *  Produce a pipe label from an external representation.  An
- *  externalized label consists of a text representation of the label
- *  contents that can be used with user applications.  Policy-agnostic
- *  user space tools will forward text version to the kernel for
- *  processing by individual policy modules.
- *
- *  The policy's internalize entry points will be called only if the
- *  policy has registered interest in the label namespace.
- *
- *  @return 0 on success, Otherwise, return non-zero if an error occurs
- *  while internalizing the label data.
- *
- */
-typedef int mpo_pipe_label_internalize_t(
-	struct label *label,
-	char *element_name,
-	char *element_data
-	);
-/**
- *  @brief Update a pipe label
- *  @param cred Subject credential
- *  @param cpipe Object to be labeled
- *  @param oldlabel Existing pipe label
- *  @param newlabel New label to replace existing label
- *  @see mpo_pipe_check_label_update_t
- *
- *  The subject identified by the credential has previously requested
- *  and was authorized to relabel the pipe; this entry point allows
- *  policies to perform the actual relabel operation.  Policies should
- *  update oldlabel using the label stored in the newlabel parameter.
- *
- */
-typedef void mpo_pipe_label_update_t(
-	kauth_cred_t cred,
-	struct pipe *cpipe,
-	struct label *oldlabel,
-	struct label *newlabel
 	);
 /**
  *  @brief Policy unload event
@@ -2791,9 +2175,33 @@ typedef int mpo_proc_check_dump_core_t(
 	struct proc *proc
 	);
 /**
- *  @brief Access control check for debugging process
+ *  @brief Access control over remote thread creation
  *  @param cred Subject credential
  *  @param proc Object process
+ *  @param flavor Flavor of thread state passed in new_state, or -1
+ *  @param new_state Thread state to be set on the created thread, or NULL
+ *  @param new_state_count Size of thread state, in natural_t units, or 0
+ *
+ *  Determine whether the subject can create a thread in the object process
+ *  by calling the thread_create or thread_create_running MIG routines on
+ *  another process' task port.  For thread_create_running, the flavor,
+ *  new_state and new_state_count arguments are passed here before they are
+ *  converted and checked by machine-dependent code.
+ *
+ *  @return Return 0 if access is granted, otherwise an appropriate value for
+ *  errno should be returned.
+ */
+typedef int mpo_proc_check_remote_thread_create_t(
+	kauth_cred_t cred,
+	struct proc *proc,
+	int flavor,
+	thread_state_t new_state,
+	mach_msg_type_number_t new_state_count
+	);
+/**
+ *  @brief Access control check for debugging process
+ *  @param cred Subject credential
+ *  @param pident Object unique process identifier
  *
  *  Determine whether the subject identified by the credential can debug
  *  the passed process. This call may be made in a number of situations,
@@ -2806,7 +2214,7 @@ typedef int mpo_proc_check_dump_core_t(
  */
 typedef int mpo_proc_check_debug_t(
 	kauth_cred_t cred,
-	struct proc *proc
+	struct proc_ident *pident
 	);
 /**
  *  @brief Access control over fork
@@ -2849,13 +2257,101 @@ typedef int mpo_proc_check_set_host_exception_port_t(
 	unsigned int exception
 	);
 /**
- *  @brief Access control over pid_suspend and pid_resume
+ *  @brief Access control check for getting task special ports.
  *  @param cred Subject credential
- *  @param proc Subject process trying to run pid_suspend or pid_resume
- *  @param sr Call is suspend (0) or resume (1)
+ *  @param pident Object unique process identifier, NULL if target is a corpse task
+ *  @param which The task special port to get
  *
- *  Determine whether the subject identified is allowed to suspend or resume
- *  other processes.
+ *  @return Return 0 if access is granted, otherwise an appropriate value for
+ *  errno should be returned.
+ */
+typedef int mpo_proc_check_get_task_special_port_t(
+	kauth_cred_t cred,
+	struct proc_ident *pident,
+	int which
+	);
+/**
+ *  @brief Access control check for setting task special ports.
+ *  @param cred Subject credential
+ *  @param pident Object unique process identifier
+ *  @param which The task special port to set
+ *  @param port The new value to set for the special port
+ *
+ *  @return Return 0 if access is granted, otherwise an appropriate value for
+ *  errno should be returned.
+ */
+typedef int mpo_proc_check_set_task_special_port_t(
+	kauth_cred_t cred,
+	struct proc_ident *pident,
+	int which,
+	struct ipc_port *port
+	);
+/**
+ *  @brief Access control check for setting task exception ports for current task.
+ *  @param cred Subject credential
+ *  @param pident Object unique process identifier
+ *  @param exception Exception port to set
+ *  @param new_behavior exception_behavior_t value
+ *
+ *  @return Return 0 if access is granted, otherwise an appropriate value for
+ *  errno should be returned.
+ */
+typedef int mpo_proc_check_set_task_exception_port_t(
+	kauth_cred_t cred,
+	struct proc_ident *pident,
+	unsigned int exception,
+	int new_behavior
+	);
+/**
+ *  @brief Access control check for setting thread exception ports.
+ *  @param cred Subject credential
+ *  @param pident Object unique process identifier
+ *  @param exception Exception port to set
+ *  @param new_behavior exception_behavior_t value
+ *
+ *  @return Return 0 if access is granted, otherwise an appropriate value for
+ *  errno should be returned.
+ */
+typedef int mpo_proc_check_set_thread_exception_port_t(
+	kauth_cred_t cred,
+	struct proc_ident *pident,
+	unsigned int exception,
+	int new_behavior
+	);
+/**
+ *  @brief Access control check for getting movable task/thread control port for current task.
+ *  @param cred Subject credential
+ *
+ *  @return Return 0 if access is granted, otherwise an appropriate value for
+ *  errno should be returned.
+ */
+typedef int mpo_proc_check_get_movable_control_port_t(
+	kauth_cred_t cred
+	);
+/**
+ *  @brief Access control check for calling task_dyld_process_info_notify_register
+ *  and task_dyld_process_info_notify_deregister.
+ *  @param cred Subject credential
+ *
+ *  @return Return 0 if access is granted, otherwise an appropriate value for
+ *  errno should be returned.
+ */
+typedef int mpo_proc_check_dyld_process_info_notify_register_t(
+	kauth_cred_t cred
+	);
+/**
+ *  @brief Access control over pid_suspend, pid_resume and family
+ *  @param cred Subject credential
+ *  @param proc Object process
+ *  @param sr Type of call; one of MAC_PROC_CHECK_SUSPEND,
+ *  MAC_PROC_CHECK_RESUME, MAC_PROC_CHECK_HIBERNATE,
+ *  MAC_PROC_CHECK_SHUTDOWN_SOCKETS or MAC_PROC_CHECK_PIDBIND.
+ *
+ *  Determine whether the subject identified is allowed to call pid_suspend,
+ *  pid_resume, pid_hibernate, pid_shutdown_sockets,
+ *  process_policy(PROC_POLICY_APP_LIFECYCLE, PROC_POLICY_APPLIFE_DEVSTATUS) or
+ *  process_policy(PROC_POLICY_APP_LIFECYCLE, PROC_POLICY_APPLIFE_PIDBIND) on
+ *  the object process.
  *
  *  @return Return 0 if access is granted, otherwise an appropriate value for
  *  errno should be returned.
@@ -2892,25 +2388,6 @@ typedef int mpo_proc_check_getaudit_t(
  */
 typedef int mpo_proc_check_getauid_t(
 	kauth_cred_t cred
-	);
-/**
- *  @brief Access control check for retrieving Login Context ID
- *  @param p0 Calling process
- *  @param p Effected process
- *  @param pid syscall PID argument
- *
- *  Determine if getlcid(2) system call is permitted.
- *
- *  Information returned by this system call is similar to that returned via
- *  process listings etc.
- *
- *  @return Return 0 if access is granted, otherwise an appropriate value for
- *  errno should be returned.
- */
-typedef int mpo_proc_check_getlcid_t(
-	struct proc *p0,
-	struct proc *p,
-	pid_t pid
 	);
 /**
  *  @brief Access control check for retrieving ledger information
@@ -3014,6 +2491,23 @@ typedef int mpo_proc_check_map_anon_t(
 	int *maxprot
 	);
 /**
+ *  @brief Access control check for memorystatus_control(2)
+ *  @param cred Subject credential
+ *  @param command Memory status control command
+ *  @param pid Target process id, or 0
+ *
+ *  Determine whether the subject identified by the credential should
+ *  be allowed to issue the specified memorystatus control command.
+ *
+ *  @return Return 0 if access is granted, otherwise an appropriate value for
+ *  errno should be returned.
+ */
+typedef int mpo_proc_check_memorystatus_control_t(
+	kauth_cred_t cred,
+	int32_t command,
+	pid_t pid
+	);
+/**
  *  @brief Access control check for setting memory protections
  *  @param cred Subject credential
  *  @param proc User process requesting the change
@@ -3084,29 +2578,6 @@ typedef int mpo_proc_check_setauid_t(
 	uid_t auid
 	);
 /**
- *  @brief Access control check for setting the Login Context
- *  @param p0 Calling process
- *  @param p Effected process
- *  @param pid syscall PID argument
- *  @param lcid syscall LCID argument
- *
- *  Determine if setlcid(2) system call is permitted.
- *
- *  See xnu/bsd/kern/kern_prot.c:setlcid() implementation for example of
- *  decoding syscall arguments to determine action desired by caller.
- *
- *  Five distinct actions are possible: CREATE JOIN LEAVE ADOPT ORPHAN
- *
- *  @return Return 0 if access is granted, otherwise an appropriate value for
- *  errno should be returned.
- */
-typedef int mpo_proc_check_setlcid_t(
-	struct proc *p0,
-	struct proc *p,
-	pid_t pid,
-	pid_t lcid
-	);
-/**
  *  @brief Access control check for delivering signal
  *  @param cred Subject credential
  *  @param proc Object process
@@ -3127,6 +2598,52 @@ typedef int mpo_proc_check_signal_t(
 	kauth_cred_t cred,
 	struct proc *proc,
 	int signum
+	);
+/**
+ *  @brief Access control check for delivering a delegated signal
+ *  @param caller Caller credential
+ *  @param instigator Instigator process audit token
+ *  @param target Target process audit token
+ *  @param signum Signal number; see kill(2)
+ *
+ *  Determine whether the caller and instigator combination identified by
+ *  the provided credentials can deliver the specified signal to the target process.
+ *
+ *  @note Caller will always be current_proc(). But the instigator may not be
+ *  the current proc, and may no longer be running.
+ *
+ *  @warning Policy implementations must avoid obtaining proc refs of
+ *  two different processes simultaneously.
+ *
+ *  @warning Programs typically expect to be able to send and receive
+ *  signals as part or their normal process lifecycle; caution should be
+ *  exercised when implementing access controls over signal events.
+ *
+ *  @return Return 0 if access is granted, otherwise an appropriate value for
+ *  errno should be returned. Suggested failure: EACCES for label mismatch,
+ *  EPERM for lack of privilege, or ESRCH to limit visibility.
+ */
+typedef int mpo_proc_check_delegated_signal_t(
+	kauth_cred_t caller,
+	audit_token_t instigator,
+	audit_token_t target,
+	int signum
+	);
+/**
+ *  @brief Access control check for MAC syscalls.
+ *  @param proc Subject process
+ *  @param policy MAC policy name
+ *  @param callnum MAC policy-specific syscall number
+ *
+ *  Determine whether the subject process can perform the passed MAC syscall.
+ *
+ *  @return Return 0 if access is granted, otherwise an appropriate value for
+ *  errno should be returned. Suggested failure: EPERM for lack of privilege.
+ */
+typedef int mpo_proc_check_syscall_mac_t(
+	struct proc *proc,
+	const char *policy,
+	int callnum
 	);
 /**
  *  @brief Access control check for Unix syscalls.
@@ -3317,51 +2834,6 @@ typedef int mpo_socket_check_create_t(
 	int protocol
 	);
 /**
- *  @brief Access control check for delivering data to a user's receieve queue
- *  @param so The socket data is being delivered to
- *  @param so_label The label of so
- *  @param m The mbuf whose data will be deposited into the receive queue
- *  @param m_label The label of the sender of the data.
- *
- *  A socket has a queue for receiving incoming data.  When a packet arrives
- *  on the wire, it eventually gets deposited into this queue, which the
- *  owner of the socket drains when they read from the socket's file descriptor.
- *
- *  This function determines whether the socket can receive data from
- *  the sender specified by m_label.
- *
- *  @warning There is an outstanding design issue surrounding the placement
- *  of this function.  The check must be placed either before or after the
- *  TCP sequence and ACK counters are updated.  Placing the check before
- *  the counters are updated causes the incoming packet to be resent by
- *  the remote if the check rejects it.  Placing the check after the counters
- *  are updated results in a completely silent drop.  As far as each TCP stack
- *  is concerned the packet was received, however, the data will not be in the
- *  socket's receive queue.  Another consideration is that the current design
- *  requires using the "failed label" occasionally.  In that case, on rejection,
- *  we want the remote TCP to resend the data.  Because of this, we chose to
- *  place this check before the counters are updated, so rejected packets will be
- *  resent by the remote host.
- *
- *  If a policy keeps rejecting the same packet, eventually the connection will
- *  be dropped.  Policies have several options if this design causes problems.
- *  For example, one options is to sanitize the mbuf such that it is acceptable,
- *  then accept it.  That may require negotiation between policies as the
- *  Framework will not know to re-check the packet.
- *
- *  The policy must handle NULL MBUF labels.  This will likely be the case
- *  for non-local TCP sockets for example.
- *
- *  @return Return 0 if access if granted, otherwise an appropriate
- *  value for errno should be returned.
- */
-typedef int mpo_socket_check_deliver_t(
-	socket_t so,
-	struct label *so_label,
-	struct mbuf *m,
-	struct label *m_label
-	);
-/**
  *  @brief Access control check for socket ioctl.
  *  @param cred Subject credential
  *  @param so Object socket
@@ -3382,46 +2854,8 @@ typedef int mpo_socket_check_deliver_t(
 typedef int mpo_socket_check_ioctl_t(
 	kauth_cred_t cred,
 	socket_t so,
-	unsigned int cmd,
+	unsigned long cmd,
 	struct label *socklabel
-	);
-/**
- *  @brief Access control check for socket kqfilter
- *  @param cred Subject credential
- *  @param kn Object knote
- *  @param so Object socket
- *  @param socklabel Policy label for socket
- *
- *  Determine whether the subject identified by the credential can
- *  receive the knote on the passed socket.
- *
- *  @return Return 0 if access if granted, otherwise an appropriate
- *  value for errno should be returned.
- */
-typedef int mpo_socket_check_kqfilter_t(
-	kauth_cred_t cred,
-	struct knote *kn,
-	socket_t so,
-	struct label *socklabel
-	);
-/**
- *  @brief Access control check for socket relabel
- *  @param cred Subject credential
- *  @param so Object socket
- *  @param so_label The current label of so
- *  @param newlabel The label to be assigned to so
- *
- *  Determine whether the subject identified by the credential can
- *  change the label on the socket.
- *
- *  @return Return 0 if access if granted, otherwise an appropriate
- *  value for errno should be returned.
- */
-typedef int mpo_socket_check_label_update_t(
-	kauth_cred_t cred,
-	socket_t so,
-	struct label *so_label,
-	struct label *newlabel
 	);
 /**
  *  @brief Access control check for socket listen
@@ -3478,26 +2912,6 @@ typedef int mpo_socket_check_received_t(
 	struct sockaddr *saddr
 	);
 
-
-/**
- *  @brief Access control check for socket select
- *  @param cred Subject credential
- *  @param so Object socket
- *  @param socklabel Policy label for socket
- *  @param which The operation selected on: FREAD or FWRITE
- *
- *  Determine whether the subject identified by the credential can use the
- *  socket in a call to select().
- *
- *  @return Return 0 if access if granted, otherwise an appropriate
- *  value for errno should be returned.
- */
-typedef int mpo_socket_check_select_t(
-	kauth_cred_t cred,
-	socket_t so,
-	struct label *socklabel,
-	int which
-	);
 /**
  *  @brief Access control check for socket send
  *  @param cred Subject credential
@@ -3571,246 +2985,6 @@ typedef int mpo_socket_check_getsockopt_t(
 	socket_t so,
 	struct label *socklabel,
 	struct sockopt *sopt
-	);
-/**
- *  @brief Label a socket
- *  @param oldsock Listening socket
- *  @param oldlabel Policy label associated with oldsock
- *  @param newsock New socket
- *  @param newlabel Policy label associated with newsock
- *
- *  A new socket is created when a connection is accept(2)ed.  This
- *  function labels the new socket based on the existing listen(2)ing
- *  socket.
- */
-typedef void mpo_socket_label_associate_accept_t(
-	socket_t oldsock,
-	struct label *oldlabel,
-	socket_t newsock,
-	struct label *newlabel
-	);
-/**
- *  @brief Assign a label to a new socket
- *  @param cred Credential of the owning process
- *  @param so The socket being labeled
- *  @param solabel The label
- *  @warning cred can be NULL
- *
- *  Set the label on a newly created socket from the passed subject
- *  credential.  This call is made when a socket is created.  The
- *  credentials may be null if the socket is being created by the
- *  kernel.
- */
-typedef void mpo_socket_label_associate_t(
-	kauth_cred_t cred,
-	socket_t so,
-	struct label *solabel
-	);
-/**
- *  @brief Copy a socket label
- *  @param src Source label
- *  @param dest Destination label
- *
- *  Copy the socket label information in src into dest.
- */
-typedef void mpo_socket_label_copy_t(
-	struct label *src,
-	struct label *dest
-	);
-/**
- *  @brief Destroy socket label
- *  @param label The label to be destroyed
- *
- *  Destroy a socket label.  Since the object is going out of
- *  scope, policy modules should free any internal storage associated
- *  with the label so that it may be destroyed.
- */
-typedef void mpo_socket_label_destroy_t(
-	struct label *label
-	);
-/**
- *  @brief Externalize a socket label
- *  @param label Label to be externalized
- *  @param element_name Name of the label namespace for which labels should be
- *  externalized
- *  @param sb String buffer to be filled with a text representation of label
- *
- *  Produce an externalized socket label based on the label structure passed.
- *  An externalized label consists of a text representation of the label
- *  contents that can be used with userland applications and read by the
- *  user.  If element_name does not match a namespace managed by the policy,
- *  simply return 0. Only return nonzero if an error occurs while externalizing
- *  the label data.
- *
- *  @return In the event of an error, an appropriate value for errno
- *  should be returned, otherwise return 0 upon success.
- */
-typedef int mpo_socket_label_externalize_t(
-	struct label *label,
-	char *element_name,
-	struct sbuf *sb
-	);
-/**
- *  @brief Initialize socket label
- *  @param label New label to initialize
- *  @param waitok Malloc flags
- *
- *  Initialize the label of a newly instantiated socket.  The waitok
- *  field may be one of M_WAITOK and M_NOWAIT, and should be employed to
- *  avoid performing a sleeping malloc(9) during this initialization
- *  call.  It it not always safe to sleep during this entry point.
- *
- *  @warning Since it is possible for the waitok flags to be set to
- *  M_NOWAIT, the malloc operation may fail.
- *
- *  @return In the event of an error, an appropriate value for errno
- *  should be returned, otherwise return 0 upon success.
- */
-typedef int mpo_socket_label_init_t(
-	struct label *label,
-	int waitok
-	);
-/**
- *  @brief Internalize a socket label
- *  @param label Label to be filled in
- *  @param element_name Name of the label namespace for which the label should
- *  be internalized
- *  @param element_data Text data to be internalized
- *
- *  Produce an internal socket label structure based on externalized label
- *  data in text format.
- *
- *  The policy's internalize entry points will be called only if the
- *  policy has registered interest in the label namespace.
- *
- *  @return In the event of an error, an appropriate value for errno
- *  should be returned, otherwise return 0 upon success.
- */
-typedef int mpo_socket_label_internalize_t(
-	struct label *label,
-	char *element_name,
-	char *element_data
-	);
-/**
- *  @brief Relabel socket
- *  @param cred Subject credential
- *  @param so Object; socket
- *  @param so_label Current label of the socket
- *  @param newlabel The label to be assigned to so
- *
- *  The subject identified by the credential has previously requested
- *  and was authorized to relabel the socket; this entry point allows
- *  policies to perform the actual label update operation.
- *
- *  @warning XXX This entry point will likely change in future versions.
- */
-typedef void mpo_socket_label_update_t(
-	kauth_cred_t cred,
-	socket_t so,
-	struct label *so_label,
-	struct label *newlabel
-	);
-/**
- *  @brief Set the peer label on a socket from mbuf
- *  @param m Mbuf chain received on socket so
- *  @param m_label Label for m
- *  @param so Current label for the socket
- *  @param so_label Policy label to be filled out for the socket
- *
- *  Set the peer label of a socket based on the label of the sender of the
- *  mbuf.
- *
- *  This is called for every TCP/IP packet received.  The first call for a given
- *  socket operates on a newly initialized label, and subsequent calls operate
- *  on existing label data.
- *
- *  @warning Because this can affect performance significantly, it has
- *  different sematics than other 'set' operations.  Typically, 'set' operations
- *  operate on newly initialzed labels and policies do not need to worry about
- *  clobbering existing values.  In this case, it is too inefficient to
- *  initialize and destroy a label every time data is received for the socket.
- *  Instead, it is up to the policies to determine how to replace the label data.
- *  Most policies should be able to replace the data inline.
- */
-typedef void mpo_socketpeer_label_associate_mbuf_t(
-	struct mbuf *m,
-	struct label *m_label,
-	socket_t so,
-	struct label *so_label
-	);
-/**
- *  @brief Set the peer label on a socket from socket
- *  @param source Local socket
- *  @param sourcelabel Policy label for source
- *  @param target Peer socket
- *  @param targetlabel Policy label to fill in for target
- *
- *  Set the peer label on a stream UNIX domain socket from the passed
- *  remote socket endpoint. This call will be made when the socket pair
- *  is connected, and will be made for both endpoints.
- *
- *  Note that this call is only made on connection; it is currently not updated
- *  during communication.
- */
-typedef void mpo_socketpeer_label_associate_socket_t(
-	socket_t source,
-	struct label *sourcelabel,
-	socket_t target,
-	struct label *targetlabel
-	);
-/**
- *  @brief Destroy socket peer label
- *  @param label The peer label to be destroyed
- *
- *  Destroy a socket peer label.  Since the object is going out of
- *  scope, policy modules should free any internal storage associated
- *  with the label so that it may be destroyed.
- */
-typedef void mpo_socketpeer_label_destroy_t(
-	struct label *label
-	);
-/**
- *  @brief Externalize a socket peer label
- *  @param label Label to be externalized
- *  @param element_name Name of the label namespace for which labels should be
- *  externalized
- *  @param sb String buffer to be filled with a text representation of label
- *
- *  Produce an externalized socket peer label based on the label structure
- *  passed. An externalized label consists of a text representation of the
- *  label contents that can be used with userland applications and read by the
- *  user.  If element_name does not match a namespace managed by the policy,
- *  simply return 0. Only return nonzero if an error occurs while externalizing
- *  the label data.
- *
- *  @return In the event of an error, an appropriate value for errno
- *  should be returned, otherwise return 0 upon success.
- */
-typedef int mpo_socketpeer_label_externalize_t(
-	struct label *label,
-	char *element_name,
-	struct sbuf *sb
-	);
-/**
- *  @brief Initialize socket peer label
- *  @param label New label to initialize
- *  @param waitok Malloc flags
- *
- *  Initialize the peer label of a newly instantiated socket.  The
- *  waitok field may be one of M_WAITOK and M_NOWAIT, and should be
- *  employed to avoid performing a sleeping malloc(9) during this
- *  initialization call.  It it not always safe to sleep during this
- *  entry point.
- *
- *  @warning Since it is possible for the waitok flags to be set to
- *  M_NOWAIT, the malloc operation may fail.
- *
- *  @return In the event of an error, an appropriate value for errno
- *  should be returned, otherwise return 0 upon success.
- */
-typedef int mpo_socketpeer_label_init_t(
-	struct label *label,
-	int waitok
 	);
 /**
  *  @brief Access control check for enabling accounting
@@ -4015,7 +3189,7 @@ typedef int mpo_system_check_sysctlbyname_t(
 	kauth_cred_t cred,
 	const char *namestring,
 	int *name,
-	u_int namelen,
+	size_t namelen,
 	user_addr_t old,        /* NULLOK */
 	size_t oldlen,
 	user_addr_t newvalue,   /* NULLOK */
@@ -4132,7 +3306,7 @@ typedef int mpo_sysvmsq_check_msgrcv_t(
  *  @param msglabel The message's label
  *
  *  System V message queues are removed using the msgctl() system call.
- *  The system will iterate over each messsage in the queue, calling this
+ *  The system will iterate over each message in the queue, calling this
  *  function for each, to determine whether the caller has the appropriate
  *  credentials.
  *
@@ -4493,48 +3667,35 @@ typedef void mpo_sysvshm_label_init_t(
 typedef void mpo_sysvshm_label_recycle_t(
 	struct label *shmlabel
 	);
+
 /**
- *  @brief Access control check for getting a process's task name
+ *  @brief Access control check for getting a process's task ports of different flavors
  *  @param cred Subject credential
- *  @param p Object process
+ *  @param pident Object unique process identifier
+ *  @param flavor Requested task port flavor
  *
  *  Determine whether the subject identified by the credential can get
- *  the passed process's task name port.
- *  This call is used by the task_name_for_pid(2) API.
+ *  the passed process's task port of given flavor.
+ *  This call is used by the task_{,read,inspect,name}_for_pid(2) API.
  *
  *  @return Return 0 if access is granted, otherwise an appropriate value for
  *  errno should be returned. Suggested failure: EACCES for label mismatch,
  *  EPERM for lack of privilege, or ESRCH to hide visibility of the target.
  */
-typedef int mpo_proc_check_get_task_name_t(
+typedef int mpo_proc_check_get_task_with_flavor_t(
 	kauth_cred_t cred,
-	struct proc *p
-	);
-/**
- *  @brief Access control check for getting a process's task port
- *  @param cred Subject credential
- *  @param p Object process
- *
- *  Determine whether the subject identified by the credential can get
- *  the passed process's task control port.
- *  This call is used by the task_for_pid(2) API.
- *
- *  @return Return 0 if access is granted, otherwise an appropriate value for
- *  errno should be returned. Suggested failure: EACCES for label mismatch,
- *  EPERM for lack of privilege, or ESRCH to hide visibility of the target.
- */
-typedef int mpo_proc_check_get_task_t(
-	kauth_cred_t cred,
-	struct proc *p
+	struct proc_ident *pident,
+	mach_task_flavor_t flavor
 	);
 
 /**
- *  @brief Access control check for exposing a process's task port
+ *  @brief Access control check for exposing a process's task ports of different flavors
  *  @param cred Subject credential
- *  @param p Object process
+ *  @param pident Object unique process identifier
+ *  @param flavor Requested task port flavor
  *
  *  Determine whether the subject identified by the credential can expose
- *  the passed process's task control port.
+ *  the passed process's task port of given flavor.
  *  This call is used by the accessor APIs like processor_set_tasks() and
  *  processor_set_threads().
  *
@@ -4542,9 +3703,30 @@ typedef int mpo_proc_check_get_task_t(
  *  errno should be returned. Suggested failure: EACCES for label mismatch,
  *  EPERM for lack of privilege, or ESRCH to hide visibility of the target.
  */
-typedef int mpo_proc_check_expose_task_t(
+typedef int mpo_proc_check_expose_task_with_flavor_t(
 	kauth_cred_t cred,
-	struct proc *p
+	struct proc_ident *pident,
+	mach_task_flavor_t flavor
+	);
+
+/**
+ *  @brief Access control check for upgrading to task port with a task identity token
+ *  @param cred Subject credential
+ *  @param pident Object unique process identifier, NULL if token represents a corpse task
+ *  @param flavor Requested task port flavor
+ *
+ *  Determine whether the subject identified by the credential can upgrade to task port
+ *  of given flavor with a task identity token of the passed process.
+ *  This call is used by task_identity_token_get_task_port().
+ *
+ *  @return Return 0 if access is granted, otherwise an appropriate value for
+ *  errno should be returned. Suggested failure: EACCES for label mismatch,
+ *  EPERM for lack of privilege, or ESRCH to hide visibility of the target.
+ */
+typedef int mpo_proc_check_task_id_token_get_task_t(
+	kauth_cred_t cred,
+	struct proc_ident *pident, /* Nullable */
+	mach_task_flavor_t flavor
 	);
 
 /**
@@ -4583,6 +3765,26 @@ typedef int mpo_proc_check_run_cs_invalid_t(
 	);
 
 /**
+ * @brief Notification a process was invalidated
+ * @param p Object process
+ *
+ * Notifies that the CS_VALID bit was removed from a process' csflags.  This
+ * either indicates that a validly code-signed process has encountered an
+ * invalidly code-signed page for the first time, or that it was explicitly
+ * marked invalid via a csops(CS_OPS_MARKINVALID) syscall.
+ *
+ * @warning This hook can be called from the page fault handler; it should not
+ * perform any operations that may result in paging, and stack space is extremely
+ * limited.  Furthermore, the hook is called with proc lock held, and if called
+ * from the fault handler, with vm object lock held.  Consumers reacting to this
+ * hook being called are expected to defer processing to a userret, possibly
+ * after suspending the task.
+ */
+typedef void mpo_proc_notify_cs_invalidated_t(
+	struct proc *p
+	);
+
+/**
  *  @brief Notification a process is finished with exec and will jump to userspace
  *  @param p Object process
  *
@@ -4593,6 +3795,171 @@ typedef int mpo_proc_check_run_cs_invalid_t(
  */
 typedef void mpo_proc_notify_exec_complete_t(
 	struct proc *p
+	);
+
+/**
+ *  @brief Access control check for setting user ID
+ *  @param cred Subject credential
+ *  @param uid Requested user ID
+ *
+ *  Determine whether the subject identified by the credential can set the
+ *  real and effective user ID and the saved set-user-ID of the current
+ *  process, using the setuid() system call.
+ *
+ *  @return Return 0 if access is granted, otherwise an appropriate value for
+ *  errno should be returned.
+ */
+typedef int mpo_proc_check_setuid_t(
+	kauth_cred_t cred,
+	uid_t uid
+	);
+
+/**
+ *  @brief Access control check for setting effective user ID
+ *  @param cred Subject credential
+ *  @param euid Requested effective user ID
+ *
+ *  Determine whether the subject identified by the credential can set the
+ *  effective user ID of the current process, using the seteuid() system call.
+ *
+ *  @return Return 0 if access is granted, otherwise an appropriate value for
+ *  errno should be returned.
+ */
+typedef int mpo_proc_check_seteuid_t(
+	kauth_cred_t cred,
+	uid_t euid
+	);
+
+/**
+ *  @brief Access control check for setting real and effective user ID
+ *  @param cred Subject credential
+ *  @param ruid Requested real user ID
+ *  @param euid Requested effective user ID
+ *
+ *  Determine whether the subject identified by the credential can set the
+ *  real and effective user ID of the current process, using the setreuid()
+ *  system call.
+ *
+ *  @return Return 0 if access is granted, otherwise an appropriate value for
+ *  errno should be returned.
+ */
+typedef int mpo_proc_check_setreuid_t(
+	kauth_cred_t cred,
+	uid_t ruid,
+	uid_t euid
+	);
+
+/**
+ *  @brief Access control check for setting group ID
+ *  @param cred Subject credential
+ *  @param gid Requested group ID
+ *
+ *  Determine whether the subject identified by the credential can set the
+ *  real and effective group IDs and the saved set-group-ID of the current
+ *  process, using the setgid() system call.
+ *
+ *  @return Return 0 if access is granted, otherwise an appropriate value for
+ *  errno should be returned.
+ */
+typedef int mpo_proc_check_setgid_t(
+	kauth_cred_t cred,
+	gid_t gid
+	);
+
+/**
+ *  @brief Access control check for setting effective group ID
+ *  @param cred Subject credential
+ *  @param egid Requested effective group ID
+ *
+ *  Determine whether the subject identified by the credential can set the
+ *  effective group ID of the current process, using the setegid() system call.
+ *
+ *  @return Return 0 if access is granted, otherwise an appropriate value for
+ *  errno should be returned.
+ */
+typedef int mpo_proc_check_setegid_t(
+	kauth_cred_t cred,
+	gid_t egid
+	);
+
+/**
+ *  @brief Access control check for setting real and effective group ID
+ *  @param cred Subject credential
+ *  @param rgid Requested real group ID or KAUTH_UID_NONE for none
+ *  @param egid Requested effective group ID or KAUTH_GID_NONE for none
+ *
+ *  Determine whether the subject identified by the credential can set the
+ *  real and effective group ID of the current process, using the setregid()
+ *  system call.
+ *
+ *  @return Return 0 if access is granted, otherwise an appropriate value for
+ *  errno should be returned.
+ */
+typedef int mpo_proc_check_setregid_t(
+	kauth_cred_t cred,
+	gid_t rgid,
+	gid_t egid
+	);
+
+/**
+ *  @brief Access control check for setting thread assumed identity
+ *  @param pcred Subject process credential
+ *  @param tcred Subject thread credential
+ *  @param uid Requested user ID or KAUTH_UID_NONE for none
+ *  @param gid Requested group ID or KAUTH_GID_NONE for none
+ *
+ *  Determine whether the subject identified by the credential can set the
+ *  user and group ID of the current thread, using the settid() or
+ *  settid_with_pid() system call.
+ *
+ *  @return Return 0 if access is granted, otherwise an appropriate value for
+ *  errno should be returned.
+ */
+typedef int mpo_proc_check_settid_t(
+	kauth_cred_t pcred,
+	kauth_cred_t tcred,
+	uid_t uid,
+	gid_t gid
+	);
+
+/**
+ *  @brief Notification of connection port derivation from service port
+ *  @param cred Subject process credential
+ *  @param sp_info Service port info
+ *
+ *  Called when a process derives a connection port from a service port.
+ *
+ *  Notes:
+ *  - Port derivation is only mandatory if the receiving end of the
+ *    connection performs validation of that fact.
+ *  - MAC policies should not perform upcalls or expensive operations in
+ *    this hook.
+ *  - Only called on macOS.
+ */
+typedef void mpo_proc_notify_service_port_derive_t(
+	kauth_cred_t cred,
+	struct mach_service_port_info *sp_info
+	);
+
+/**
+ *  @brief Perform MAC-related analysis of telemetry data.
+ *  @param thread The Mach thread that was sampled.
+ *
+ *  Notifies MAC policies that telemetry data was just collected from a
+ *  process's user thread and that it is ready to be analyzed. The analysis is
+ *  performed shortly before a thread is about to return to userspace via a
+ *  syscall or mach trap.
+ *
+ *  Note that sometimes the scheduled telemetry can fail. In the case of
+ *  failure, the function will be called with a non-zero `err` value, in which
+ *  case it is expected that the client will cleanup any necessary state
+ *  recorded back when the telemetry was first scheduled.
+ */
+typedef void mpo_thread_telemetry_t(
+	struct thread *thread,
+	int err,
+	const void *data,
+	size_t length
 	);
 
 /**
@@ -4846,11 +4213,12 @@ typedef int mpo_vnode_check_getattr_t(
  *  @param vp Object vnode
  *  @param vlabel Policy label for vp
  *  @param alist List of attributes to retrieve
+ *  @param options Option flags for alist
  *
  *  Determine whether the subject identified by the credential can read
  *  various attributes of the specified vnode, or the filesystem or volume on
  *  which that vnode resides. See <sys/attr.h> for definitions of the
- *  attributes.
+ *  attributes and flags.
  *
  *  @return Return 0 if access is granted, otherwise an appropriate value for
  *  errno should be returned. Suggested failure: EACCES for label mismatch or
@@ -4862,7 +4230,32 @@ typedef int mpo_vnode_check_getattrlist_t(
 	kauth_cred_t cred,
 	struct vnode *vp,
 	struct label *vlabel,
-	struct attrlist *alist
+	struct attrlist *alist,
+	uint64_t options
+	);
+/**
+ *  @brief Access control check for retrieving file attributes for multiple directory entries
+ *  @param cred Subject credential
+ *  @param dvp Directory vnode
+ *  @param alist List of attributes to retrieve
+ *  @param options Option flags for alist
+ *
+ *  Determine whether the subject identified by the credential can read
+ *  various attributes of the specified vnode, or the filesystem or volume on
+ *  which that vnode resides. See <sys/attr.h> for definitions of the
+ *  attributes and flags.
+ *
+ *  @return Return 0 if access is granted, otherwise an appropriate value for
+ *  errno should be returned. Suggested failure: EACCES for label mismatch or
+ *  EPERM for lack of privilege. Access control covers all attributes requested
+ *  with this call; the security policy is not permitted to change the set of
+ *  attributes requested.
+ */
+typedef int mpo_vnode_check_getattrlistbulk_t(
+	kauth_cred_t cred,
+	struct vnode *dvp,
+	struct attrlist *alist,
+	uint64_t options
 	);
 /**
  *  @brief Access control check for retrieving an extended attribute
@@ -4910,7 +4303,7 @@ typedef int mpo_vnode_check_ioctl_t(
 	kauth_cred_t cred,
 	struct vnode *vp,
 	struct label *label,
-	unsigned int cmd
+	unsigned long cmd
 	);
 /**
  *  @brief Access control check for vnode kqfilter
@@ -5124,11 +4517,11 @@ typedef int mpo_vnode_check_readlink_t(
 /**
  *  @brief Access control check for rename
  *  @param cred Subject credential
- *  @param dvp Directory vnode
- *  @param dlabel Policy label associated with dvp
- *  @param vp vnode to be renamed
- *  @param label Policy label associated with vp
- *  @param cnp Component name for vp
+ *  @param fdvp Directory vnode
+ *  @param fdlabel Policy label associated with dvp
+ *  @param fvp vnode to be renamed
+ *  @param flabel Policy label associated with vp
+ *  @param fcnp Component name for vp
  *  @param tdvp Destination directory vnode
  *  @param tdlabel Policy label associated with tdvp
  *  @param tvp Overwritten vnode
@@ -5143,11 +4536,11 @@ typedef int mpo_vnode_check_readlink_t(
  */
 typedef int mpo_vnode_check_rename_t(
 	kauth_cred_t cred,
-	struct vnode *dvp,
-	struct label *dlabel,
-	struct vnode *vp,
-	struct label *label,
-	struct componentname *cnp,
+	struct vnode *fdvp,
+	struct label *fdlabel,
+	struct vnode *fvp,
+	struct label *flabel,
+	struct componentname *fcnp,
 	struct vnode *tdvp,
 	struct label *tdlabel,
 	struct vnode *tvp,
@@ -5243,7 +4636,8 @@ typedef int mpo_vnode_check_revoke_t(
  *  @param cred Subject credential
  *  @param vp Object vnode
  *  @param vlabel Policy label for vp
- *  @param alist List of attributes used as search criteria
+ *  @param returnattrs List of attributes to be returned
+ *  @param searchattrs List of attributes used as search criteria
  *
  *  Determine whether the subject identified by the credential can search the
  *  vnode using the searchfs system call.
@@ -5255,7 +4649,8 @@ typedef int mpo_vnode_check_searchfs_t(
 	kauth_cred_t cred,
 	struct vnode *vp,
 	struct label *vlabel,
-	struct attrlist *alist
+	struct attrlist *returnattrs,
+	struct attrlist *searchattrs
 	);
 /**
  *  @brief Access control check for select
@@ -5441,6 +4836,7 @@ typedef int mpo_vnode_check_setutimes_t(
  *  @param cs_flags update code signing flags if needed
  *  @param signer_type output parameter for the code signature's signer type
  *  @param flags operational flag to mpo_vnode_check_signature
+ *  @param platform platform of the signature being checked
  *  @param fatal_failure_desc description of fatal failure
  *  @param fatal_failure_desc_len failure description len, failure is fatal if non-0
  *
@@ -5455,6 +4851,7 @@ typedef int mpo_vnode_check_signature_t(
 	unsigned int *cs_flags,
 	unsigned int *signer_type,
 	int flags,
+	unsigned int platform,
 	char **fatal_failure_desc, size_t *fatal_failure_desc_len
 	);
 /**
@@ -5479,6 +4876,45 @@ typedef int mpo_vnode_check_stat_t(
 	struct ucred *file_cred,        /* NULLOK */
 	struct vnode *vp,
 	struct label *label
+	);
+/**
+ *  @brief Access control check for supplemental signature attachement
+ *  @param vp the vnode to which the signature will be attached
+ *  @param label label associated with the vnode
+ *  @param cs_blob the code signature to check
+ *  @param linked_vp vnode to which this new vp is related
+ *  @param linked_cs_blob the code signature of the linked vnode
+ *  @param signer_type output parameter for the signer type of the code signature being checked.
+ *
+ *  @return Return 0 if access is granted, otherwise an appropriate value for
+ *  errno should be returned.
+ */
+typedef int mpo_vnode_check_supplemental_signature_t(
+	struct vnode *vp,
+	struct label *label,
+	struct cs_blob *cs_blob,
+	struct vnode *linked_vp,
+	struct cs_blob *linked_cs_blob,
+	unsigned int *signer_type
+	);
+/**
+ *  @brief Access control check for atomically swapping two vnodes.
+ *  @param cred User credential for the swapping process
+ *  @param v1 vnode 1 to swap
+ *  @param vl1 Policy label for v1
+ *  @param v2 vnode 2 to swap
+ *  @param vl2 Policy label for v2
+ *
+ *  @return Return 0 if access is granted, otherwise an appropriate value for
+ *  errno should be returned. Suggested failure: EACCES for label mismatch or
+ *  EPERM for lack of privilege.
+ */
+typedef int mpo_vnode_check_swap_t(
+	kauth_cred_t cred,
+	struct vnode *v1,
+	struct label *vl1,
+	struct vnode *v2,
+	struct label *vl2
 	);
 /**
  *  @brief Access control check for vnode trigger resolution
@@ -5618,6 +5054,38 @@ typedef int mpo_vnode_check_write_t(
 	kauth_cred_t file_cred, /* NULLOK */
 	struct vnode *vp,
 	struct label *label
+	);
+/**
+ *  @brief Access control check for copyfile
+ *  @param cred Subject credential
+ *  @param dvp Vnode of directory to create the copy in
+ *  @param dlabel Policy label associated with dvp
+ *  @param tvp Vnode of the file at the target path that will be unlinked to
+ *         make room for the copy being created, if file exists
+ *  @param tlabel Policy label associated with tvp
+ *  @param fvp Vnode of the file to copy from
+ *  @param flabel Policy label associated with fvp
+ *  @param cnp Component name for the copy being created
+ *  @param mode Corresponds to mode argument to the copyfile syscall
+ *  @param flags Corresponds to flags argument to the copyfile syscall
+ *
+ *  Determine whether the subject identified by the credential should be
+ *  allowed to create a copy of the vnode fvp with the name specified by cnp.
+ *
+ *  @return Return 0 if access is granted, otherwise an appropriate value for
+ *  errno should be returned.
+ */
+typedef int mpo_vnode_check_copyfile_t(
+	kauth_cred_t cred,
+	struct vnode *dvp,
+	struct label *dlabel,
+	struct vnode *tvp,      /* NULLOK */
+	struct label *tlabel,   /* NULLOK */
+	struct vnode *fvp,
+	struct label *flabel,
+	struct componentname *cnp,
+	mode_t mode,
+	int flags
 	);
 /**
  *  @brief Associate a vnode with a devfs entry
@@ -5983,7 +5451,7 @@ typedef void mpo_vnode_label_update_t(
  *  @brief Find deatched signatures for a shared library
  *  @param p file trying to find the signature
  *  @param vp The vnode to relabel
- *  @param offset offset in the macho that the signature is requested for (for fat binaries)
+ *  @param offset offset in the Mach-O that the signature is requested for (for fat binaries)
  *  @param label Existing vnode label
  *
  */
@@ -6059,6 +5527,27 @@ typedef void mpo_vnode_notify_rename_t(
 	struct vnode *dvp,
 	struct label *dlabel,
 	struct componentname *cnp
+	);
+
+/**
+ *  @brief Inform MAC policies that two vnodes were atomically swapped.
+ *  @param cred User credential for the renaming process
+ *  @param v1 vnode 1 to swap
+ *  @param vl1 Policy label for v1
+ *  @param v2 vnode 2 to swap
+ *  @param vl2 Policy label for v2
+ *
+ *  Inform MAC policies that two vnodes were atomically swapped.
+ *  NOTE: If a policy implements this notify hook, then this hook will be
+ *  called instead of two calls to the vnode_notify_rename hook (one for each
+ *  member of the swap).
+ */
+typedef void mpo_vnode_notify_swap_t(
+	kauth_cred_t cred,
+	struct vnode *v1,
+	struct label *vl1,
+	struct vnode *v2,
+	struct label *vl2
 	);
 
 /**
@@ -6311,6 +5800,37 @@ typedef int mpo_kext_check_query_t(
 	kauth_cred_t cred
 	);
 
+/**
+ *  @brief Inform MAC policies that a vnode is being reclaimed
+ *  @param vp Object vnode
+ *
+ *  Any external accounting tracking this vnode must consider it to be no longer valid.
+ */
+typedef void mpo_vnode_notify_reclaim_t(
+	struct vnode *vp
+	);
+
+/**
+ *  @brief Inform MAC policies that a vnode has been deleted
+ *  @param cred Subject credential
+ *  @param dvp Parent directory vnode
+ *  @param dlabel Policy label for dvp
+ *  @param vp Object vnode to delete
+ *  @param label Policy label for vp
+ *  @param cnp Component name for vp
+ *
+ *  Inform Mac policies that a vnode have been successfully deleted
+ *  (passing all MAC polices and DAC).
+ */
+typedef void mpo_vnode_notify_unlink_t(
+	kauth_cred_t cred,
+	struct vnode *dvp,
+	struct label *dlabel,
+	struct vnode *vp,
+	struct label *label,
+	struct componentname *cnp
+	);
+
 /*
  * Placeholder for future events that may need mac hooks.
  */
@@ -6322,15 +5842,15 @@ typedef void mpo_reserved_hook_t(void);
  * Please note that this should be kept in sync with the check assumptions
  * policy in bsd/kern/policy_check.c (policy_ops struct).
  */
-#define MAC_POLICY_OPS_VERSION 62 /* inc when new reserved slots are taken */
+#define MAC_POLICY_OPS_VERSION 86 /* inc when new reserved slots are taken */
 struct mac_policy_ops {
 	mpo_audit_check_postselect_t            *mpo_audit_check_postselect;
 	mpo_audit_check_preselect_t             *mpo_audit_check_preselect;
 
-	mpo_bpfdesc_label_associate_t           *mpo_bpfdesc_label_associate;
-	mpo_bpfdesc_label_destroy_t             *mpo_bpfdesc_label_destroy;
-	mpo_bpfdesc_label_init_t                *mpo_bpfdesc_label_init;
-	mpo_bpfdesc_check_receive_t             *mpo_bpfdesc_check_receive;
+	mpo_reserved_hook_t                     *mpo_reserved01;
+	mpo_reserved_hook_t                     *mpo_reserved02;
+	mpo_reserved_hook_t                     *mpo_reserved03;
+	mpo_reserved_hook_t                     *mpo_reserved04;
 
 	mpo_cred_check_label_update_execve_t    *mpo_cred_check_label_update_execve;
 	mpo_cred_check_label_update_t           *mpo_cred_check_label_update;
@@ -6367,37 +5887,37 @@ struct mac_policy_ops {
 	mpo_file_check_mmap_t                   *mpo_file_check_mmap;
 	mpo_file_check_receive_t                *mpo_file_check_receive;
 	mpo_file_check_set_t                    *mpo_file_check_set;
-	mpo_file_label_init_t                   *mpo_file_label_init;
-	mpo_file_label_destroy_t                *mpo_file_label_destroy;
-	mpo_file_label_associate_t              *mpo_file_label_associate;
+	mpo_file_label_init_t                   *mpo_file_label_init;       /* deprecated not called anymore */
+	mpo_file_label_destroy_t                *mpo_file_label_destroy;    /* deprecated not called anymore */
+	mpo_file_label_associate_t              *mpo_file_label_associate;  /* deprecated not called anymore */
+	mpo_file_notify_close_t                 *mpo_file_notify_close;
 
-	mpo_ifnet_check_label_update_t          *mpo_ifnet_check_label_update;
-	mpo_ifnet_check_transmit_t              *mpo_ifnet_check_transmit;
-	mpo_ifnet_label_associate_t             *mpo_ifnet_label_associate;
-	mpo_ifnet_label_copy_t                  *mpo_ifnet_label_copy;
-	mpo_ifnet_label_destroy_t               *mpo_ifnet_label_destroy;
-	mpo_ifnet_label_externalize_t           *mpo_ifnet_label_externalize;
-	mpo_ifnet_label_init_t                  *mpo_ifnet_label_init;
-	mpo_ifnet_label_internalize_t           *mpo_ifnet_label_internalize;
-	mpo_ifnet_label_update_t                *mpo_ifnet_label_update;
-	mpo_ifnet_label_recycle_t               *mpo_ifnet_label_recycle;
+	mpo_proc_check_launch_constraints_t     *mpo_proc_check_launch_constraints;
+	mpo_proc_notify_service_port_derive_t   *mpo_proc_notify_service_port_derive;
+	mpo_proc_check_set_task_exception_port_t *mpo_proc_check_set_task_exception_port;
+	mpo_proc_check_set_thread_exception_port_t *mpo_proc_check_set_thread_exception_port;
+	mpo_proc_check_delegated_signal_t       *mpo_proc_check_delegated_signal;
 
-	mpo_inpcb_check_deliver_t               *mpo_inpcb_check_deliver;
-	mpo_inpcb_label_associate_t             *mpo_inpcb_label_associate;
-	mpo_inpcb_label_destroy_t               *mpo_inpcb_label_destroy;
-	mpo_inpcb_label_init_t                  *mpo_inpcb_label_init;
-	mpo_inpcb_label_recycle_t               *mpo_inpcb_label_recycle;
-	mpo_inpcb_label_update_t                *mpo_inpcb_label_update;
+	mpo_reserved_hook_t                     *mpo_reserved08;
+	mpo_reserved_hook_t                     *mpo_reserved09;
+	mpo_reserved_hook_t                     *mpo_reserved10;
+	mpo_reserved_hook_t                     *mpo_reserved11;
+	mpo_reserved_hook_t                     *mpo_reserved12;
+	mpo_reserved_hook_t                     *mpo_reserved13;
+	mpo_reserved_hook_t                     *mpo_reserved14;
+	mpo_reserved_hook_t                     *mpo_reserved15;
+	mpo_reserved_hook_t                     *mpo_reserved16;
+	mpo_reserved_hook_t                     *mpo_reserved17;
+	mpo_reserved_hook_t                     *mpo_reserved18;
+	mpo_reserved_hook_t                     *mpo_reserved19;
+	mpo_reserved_hook_t                     *mpo_reserved20;
+	mpo_reserved_hook_t                     *mpo_reserved21;
 
-	mpo_iokit_check_device_t                *mpo_iokit_check_device;
-
-	mpo_ipq_label_associate_t               *mpo_ipq_label_associate;
-	mpo_ipq_label_compare_t                 *mpo_ipq_label_compare;
-	mpo_ipq_label_destroy_t                 *mpo_ipq_label_destroy;
-	mpo_ipq_label_init_t                    *mpo_ipq_label_init;
-	mpo_ipq_label_update_t                  *mpo_ipq_label_update;
+	mpo_necp_check_open_t                   *mpo_necp_check_open;
+	mpo_necp_check_client_action_t          *mpo_necp_check_client_action;
 
 	mpo_file_check_library_validation_t     *mpo_file_check_library_validation;
+
 	mpo_vnode_notify_setacl_t               *mpo_vnode_notify_setacl;
 	mpo_vnode_notify_setattrlist_t          *mpo_vnode_notify_setattrlist;
 	mpo_vnode_notify_setextattr_t           *mpo_vnode_notify_setextattr;
@@ -6406,19 +5926,20 @@ struct mac_policy_ops {
 	mpo_vnode_notify_setowner_t             *mpo_vnode_notify_setowner;
 	mpo_vnode_notify_setutimes_t            *mpo_vnode_notify_setutimes;
 	mpo_vnode_notify_truncate_t             *mpo_vnode_notify_truncate;
+	mpo_vnode_check_getattrlistbulk_t       *mpo_vnode_check_getattrlistbulk;
 
-	mpo_mbuf_label_associate_bpfdesc_t      *mpo_mbuf_label_associate_bpfdesc;
-	mpo_mbuf_label_associate_ifnet_t        *mpo_mbuf_label_associate_ifnet;
-	mpo_mbuf_label_associate_inpcb_t        *mpo_mbuf_label_associate_inpcb;
-	mpo_mbuf_label_associate_ipq_t          *mpo_mbuf_label_associate_ipq;
-	mpo_mbuf_label_associate_linklayer_t    *mpo_mbuf_label_associate_linklayer;
-	mpo_mbuf_label_associate_multicast_encap_t *mpo_mbuf_label_associate_multicast_encap;
-	mpo_mbuf_label_associate_netlayer_t     *mpo_mbuf_label_associate_netlayer;
-	mpo_mbuf_label_associate_socket_t       *mpo_mbuf_label_associate_socket;
-	mpo_mbuf_label_copy_t                   *mpo_mbuf_label_copy;
-	mpo_mbuf_label_destroy_t                *mpo_mbuf_label_destroy;
-	mpo_mbuf_label_init_t                   *mpo_mbuf_label_init;
+	mpo_proc_check_get_task_special_port_t  *mpo_proc_check_get_task_special_port;
+	mpo_proc_check_set_task_special_port_t  *mpo_proc_check_set_task_special_port;
 
+	mpo_vnode_notify_swap_t                 *mpo_vnode_notify_swap;
+	mpo_vnode_notify_unlink_t               *mpo_vnode_notify_unlink;
+	mpo_vnode_check_swap_t                  *mpo_vnode_check_swap;
+	mpo_reserved_hook_t                     *mpo_reserved33;
+	mpo_reserved_hook_t                     *mpo_reserved34;
+	mpo_reserved_hook_t                     *mpo_reserved35;
+	mpo_vnode_check_copyfile_t              *mpo_vnode_check_copyfile;
+
+	mpo_mount_check_quotactl_t              *mpo_mount_check_quotactl;
 	mpo_mount_check_fsctl_t                 *mpo_mount_check_fsctl;
 	mpo_mount_check_getattr_t               *mpo_mount_check_getattr;
 	mpo_mount_check_label_update_t          *mpo_mount_check_label_update;
@@ -6433,24 +5954,24 @@ struct mac_policy_ops {
 	mpo_mount_label_init_t                  *mpo_mount_label_init;
 	mpo_mount_label_internalize_t           *mpo_mount_label_internalize;
 
-	mpo_netinet_fragment_t                  *mpo_netinet_fragment;
-	mpo_netinet_icmp_reply_t                *mpo_netinet_icmp_reply;
-	mpo_netinet_tcp_reply_t                 *mpo_netinet_tcp_reply;
+	mpo_proc_check_expose_task_with_flavor_t *mpo_proc_check_expose_task_with_flavor;
+	mpo_proc_check_get_task_with_flavor_t   *mpo_proc_check_get_task_with_flavor;
+	mpo_proc_check_task_id_token_get_task_t *mpo_proc_check_task_id_token_get_task;
 
 	mpo_pipe_check_ioctl_t                  *mpo_pipe_check_ioctl;
 	mpo_pipe_check_kqfilter_t               *mpo_pipe_check_kqfilter;
-	mpo_pipe_check_label_update_t           *mpo_pipe_check_label_update;
+	mpo_reserved_hook_t                     *mpo_reserved41;
 	mpo_pipe_check_read_t                   *mpo_pipe_check_read;
 	mpo_pipe_check_select_t                 *mpo_pipe_check_select;
 	mpo_pipe_check_stat_t                   *mpo_pipe_check_stat;
 	mpo_pipe_check_write_t                  *mpo_pipe_check_write;
 	mpo_pipe_label_associate_t              *mpo_pipe_label_associate;
-	mpo_pipe_label_copy_t                   *mpo_pipe_label_copy;
+	mpo_reserved_hook_t                     *mpo_reserved42;
 	mpo_pipe_label_destroy_t                *mpo_pipe_label_destroy;
-	mpo_pipe_label_externalize_t            *mpo_pipe_label_externalize;
+	mpo_reserved_hook_t                     *mpo_reserved43;
 	mpo_pipe_label_init_t                   *mpo_pipe_label_init;
-	mpo_pipe_label_internalize_t            *mpo_pipe_label_internalize;
-	mpo_pipe_label_update_t                 *mpo_pipe_label_update;
+	mpo_reserved_hook_t                     *mpo_reserved44;
+	mpo_proc_check_syscall_mac_t            *mpo_proc_check_syscall_mac;
 
 	mpo_policy_destroy_t                    *mpo_policy_destroy;
 	mpo_policy_init_t                       *mpo_policy_init;
@@ -6462,9 +5983,9 @@ struct mac_policy_ops {
 	mpo_vnode_check_rename_t                *mpo_vnode_check_rename;
 	mpo_kext_check_query_t                  *mpo_kext_check_query;
 	mpo_proc_notify_exec_complete_t         *mpo_proc_notify_exec_complete;
-	mpo_reserved_hook_t                     *mpo_reserved4;
+	mpo_proc_notify_cs_invalidated_t        *mpo_proc_notify_cs_invalidated;
 	mpo_proc_check_syscall_unix_t           *mpo_proc_check_syscall_unix;
-	mpo_proc_check_expose_task_t            *mpo_proc_check_expose_task;
+	mpo_reserved_hook_t                     *mpo_reserved45;
 	mpo_proc_check_set_host_special_port_t  *mpo_proc_check_set_host_special_port;
 	mpo_proc_check_set_host_exception_port_t *mpo_proc_check_set_host_exception_port;
 	mpo_exc_action_check_exception_send_t   *mpo_exc_action_check_exception_send;
@@ -6477,7 +5998,7 @@ struct mac_policy_ops {
 	mpo_vnode_check_trigger_resolve_t       *mpo_vnode_check_trigger_resolve;
 	mpo_mount_check_mount_late_t            *mpo_mount_check_mount_late;
 	mpo_mount_check_snapshot_mount_t        *mpo_mount_check_snapshot_mount;
-	mpo_reserved_hook_t                     *mpo_reserved2;
+	mpo_vnode_notify_reclaim_t              *mpo_vnode_notify_reclaim;
 	mpo_skywalk_flow_check_connect_t        *mpo_skywalk_flow_check_connect;
 	mpo_skywalk_flow_check_listen_t         *mpo_skywalk_flow_check_listen;
 
@@ -6501,51 +6022,53 @@ struct mac_policy_ops {
 
 	mpo_proc_check_debug_t                  *mpo_proc_check_debug;
 	mpo_proc_check_fork_t                   *mpo_proc_check_fork;
-	mpo_proc_check_get_task_name_t          *mpo_proc_check_get_task_name;
-	mpo_proc_check_get_task_t               *mpo_proc_check_get_task;
+	mpo_reserved_hook_t                     *mpo_reserved61;
+	mpo_reserved_hook_t                     *mpo_reserved62;
 	mpo_proc_check_getaudit_t               *mpo_proc_check_getaudit;
 	mpo_proc_check_getauid_t                *mpo_proc_check_getauid;
-	mpo_proc_check_getlcid_t                *mpo_proc_check_getlcid;
+	mpo_reserved_hook_t                     *mpo_reserved63;
 	mpo_proc_check_mprotect_t               *mpo_proc_check_mprotect;
 	mpo_proc_check_sched_t                  *mpo_proc_check_sched;
 	mpo_proc_check_setaudit_t               *mpo_proc_check_setaudit;
 	mpo_proc_check_setauid_t                *mpo_proc_check_setauid;
-	mpo_proc_check_setlcid_t                *mpo_proc_check_setlcid;
+	mpo_reserved_hook_t                     *mpo_reserved64;
 	mpo_proc_check_signal_t                 *mpo_proc_check_signal;
 	mpo_proc_check_wait_t                   *mpo_proc_check_wait;
 	mpo_proc_check_dump_core_t              *mpo_proc_check_dump_core;
-	mpo_reserved_hook_t                     *mpo_reserved5;
+	mpo_proc_check_remote_thread_create_t   *mpo_proc_check_remote_thread_create;
 
 	mpo_socket_check_accept_t               *mpo_socket_check_accept;
 	mpo_socket_check_accepted_t             *mpo_socket_check_accepted;
 	mpo_socket_check_bind_t                 *mpo_socket_check_bind;
 	mpo_socket_check_connect_t              *mpo_socket_check_connect;
 	mpo_socket_check_create_t               *mpo_socket_check_create;
-	mpo_socket_check_deliver_t              *mpo_socket_check_deliver;
-	mpo_socket_check_kqfilter_t             *mpo_socket_check_kqfilter;
-	mpo_socket_check_label_update_t         *mpo_socket_check_label_update;
+	mpo_reserved_hook_t                     *mpo_reserved46;
+	mpo_reserved_hook_t                     *mpo_reserved47;
+	mpo_reserved_hook_t                     *mpo_reserved48;
 	mpo_socket_check_listen_t               *mpo_socket_check_listen;
 	mpo_socket_check_receive_t              *mpo_socket_check_receive;
 	mpo_socket_check_received_t             *mpo_socket_check_received;
-	mpo_socket_check_select_t               *mpo_socket_check_select;
+	mpo_reserved_hook_t                     *mpo_reserved49;
 	mpo_socket_check_send_t                 *mpo_socket_check_send;
 	mpo_socket_check_stat_t                 *mpo_socket_check_stat;
 	mpo_socket_check_setsockopt_t           *mpo_socket_check_setsockopt;
 	mpo_socket_check_getsockopt_t           *mpo_socket_check_getsockopt;
-	mpo_socket_label_associate_accept_t     *mpo_socket_label_associate_accept;
-	mpo_socket_label_associate_t            *mpo_socket_label_associate;
-	mpo_socket_label_copy_t                 *mpo_socket_label_copy;
-	mpo_socket_label_destroy_t              *mpo_socket_label_destroy;
-	mpo_socket_label_externalize_t          *mpo_socket_label_externalize;
-	mpo_socket_label_init_t                 *mpo_socket_label_init;
-	mpo_socket_label_internalize_t          *mpo_socket_label_internalize;
-	mpo_socket_label_update_t               *mpo_socket_label_update;
 
-	mpo_socketpeer_label_associate_mbuf_t   *mpo_socketpeer_label_associate_mbuf;
-	mpo_socketpeer_label_associate_socket_t *mpo_socketpeer_label_associate_socket;
-	mpo_socketpeer_label_destroy_t          *mpo_socketpeer_label_destroy;
-	mpo_socketpeer_label_externalize_t      *mpo_socketpeer_label_externalize;
-	mpo_socketpeer_label_init_t             *mpo_socketpeer_label_init;
+	mpo_proc_check_get_movable_control_port_t *mpo_proc_check_get_movable_control_port;
+	mpo_proc_check_dyld_process_info_notify_register_t *mpo_proc_check_dyld_process_info_notify_register;
+	mpo_proc_check_setuid_t                 *mpo_proc_check_setuid;
+	mpo_proc_check_seteuid_t                *mpo_proc_check_seteuid;
+	mpo_proc_check_setreuid_t               *mpo_proc_check_setreuid;
+	mpo_proc_check_setgid_t                 *mpo_proc_check_setgid;
+	mpo_proc_check_setegid_t                *mpo_proc_check_setegid;
+	mpo_proc_check_setregid_t               *mpo_proc_check_setregid;
+	mpo_proc_check_settid_t                 *mpo_proc_check_settid;
+	mpo_proc_check_memorystatus_control_t   *mpo_proc_check_memorystatus_control;
+	mpo_reserved_hook_t                     *mpo_reserved60;
+
+	mpo_thread_telemetry_t                  *mpo_thread_telemetry;
+
+	mpo_iokit_check_open_service_t          *mpo_iokit_check_open_service;
 
 	mpo_system_check_acct_t                 *mpo_system_check_acct;
 	mpo_system_check_audit_t                *mpo_system_check_audit;
@@ -6664,7 +6187,7 @@ struct mac_policy_ops {
 
 	mpo_iokit_check_set_properties_t        *mpo_iokit_check_set_properties;
 
-	mpo_reserved_hook_t                     *mpo_reserved3;
+	mpo_vnode_check_supplemental_signature_t *mpo_vnode_check_supplemental_signature;
 
 	mpo_vnode_check_searchfs_t              *mpo_vnode_check_searchfs;
 
@@ -6738,7 +6261,7 @@ typedef unsigned int mac_policy_handle_t;
  *  The mpc_list field is used by the Framework and should not be
  *  modified by policies.
  */
-/* XXX - reorder these for better aligment on 64bit platforms */
+/* XXX - reorder these for better alignment on 64bit platforms */
 struct mac_policy_conf {
 	const char              *mpc_name;              /** policy name */
 	const char              *mpc_fullname;          /** full name */
@@ -6765,7 +6288,7 @@ int     mac_policy_register(struct mac_policy_conf *mpc,
 /**
  *  @brief MAC policy module de-registration routine
  *
- *  This function is called to de-register a policy with theD
+ *  This function is called to de-register a policy with the
  *  MAC framework.  A policy module will typically call this from the
  *  Darwin KEXT de-registration routine.
  */
@@ -6795,7 +6318,9 @@ int     mac_vnop_removexattr(struct vnode *, const char *);
  *
  *  Caller must hold an iocount on the vnode represented by the fileglob.
  */
+#ifdef KERNEL_PRIVATE
 int     mac_file_setxattr(struct fileglob *fg, const char *name, char *buf, size_t len);
+#endif
 
 /**
  *       @brief Get an extended attribute from a vnode-based fileglob.
@@ -6809,8 +6334,10 @@ int     mac_file_setxattr(struct fileglob *fg, const char *name, char *buf, size
  *
  *       Caller must hold an iocount on the vnode represented by the fileglob.
  */
+#ifdef KERNEL_PRIVATE
 int     mac_file_getxattr(struct fileglob *fg, const char *name, char *buf, size_t len,
     size_t *attrlen);
+#endif
 
 /**
  *       @brief Remove an extended attribute from a vnode-based fileglob.
@@ -6821,8 +6348,9 @@ int     mac_file_getxattr(struct fileglob *fg, const char *name, char *buf, size
  *
  *       Caller must hold an iocount on the vnode represented by the fileglob.
  */
+#ifdef KERNEL_PRIVATE
 int     mac_file_removexattr(struct fileglob *fg, const char *name);
-
+#endif
 
 /*
  * Arbitrary limit on how much data will be logged by the audit
@@ -6946,18 +6474,29 @@ int     mac_file_removexattr(struct fileglob *fg, const char *name);
 	kmod_stop_func_t *_antimain = kmod_stop;                        \
 	int _kext_apple_cc = __APPLE_CC__
 
-
-#define LABEL_TO_SLOT(l, s)     (l)->l_perpolicy[s]
-
 /*
  * Policy interface to map a struct label pointer to per-policy data.
  * Typically, policies wrap this in their own accessor macro that casts an
  * intptr_t to a policy-specific data type.
  */
+#ifdef KERNEL_PRIVATE
+struct label *  mac_label_verify(struct label **labelp);
 intptr_t        mac_label_get(struct label *l, int slot);
+/*
+ * Sets a label slot to the given pointer value, `v`.  `v` cannot be `~0ULL`.
+ */
 void            mac_label_set(struct label *l, int slot, intptr_t v);
+struct label *  mac_labelzone_alloc(int flags);
+struct label *  mac_labelzone_alloc_for_owner(struct label **labelp, int flags,
+    void (^extra_setup)(struct label *));
+struct label *  mac_labelzone_alloc_owned(struct label **labelp, int flags,
+    void (^extra_setup)(struct label *));
+void            mac_labelzone_free(struct label *l);
+void            mac_labelzone_free_owned(struct label **labelp,
+    void (^extra_deinit)(struct label *));
 intptr_t        mac_vnode_label_get(struct vnode *vp, int slot, intptr_t sentinel);
 void            mac_vnode_label_set(struct vnode *vp, int slot, intptr_t v);
+#endif
 
 #define mac_get_mpc(h)          (mac_policy_list.entries[h].mpc)
 

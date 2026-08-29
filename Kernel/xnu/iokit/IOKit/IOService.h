@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 1998-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -54,6 +54,13 @@
 #include <IOKit/IOServicePM.h>
 #include <IOKit/IOReportTypes.h>
 #include <DriverKit/IOService.h>
+#include <libkern/c++/OSPtr.h>
+
+#if __cplusplus >= 201703L
+extern "C++" {
+#include <libkern/c++/OSSharedPtr.h>
+}
+#endif
 
 extern "C" {
 #include <kern/thread_call.h>
@@ -75,7 +82,11 @@ enum {
 	kIOServiceRegisteredState   = 0x00000002,
 	kIOServiceMatchedState  = 0x00000004,
 	kIOServiceFirstPublishState = 0x00000008,
-	kIOServiceFirstMatchState   = 0x00000010
+	kIOServiceFirstMatchState   = 0x00000010,
+	kIOServiceReservedMatchState   = 0x80000000,
+#if XNU_KERNEL_PRIVATE
+	kIOServiceUserInvisibleMatchState = kIOServiceReservedMatchState,
+#endif /* XNU_KERNEL_PRIVATE */
 };
 
 enum {
@@ -86,11 +97,13 @@ enum {
 	kIOServiceRequired      = 0x00000001,
 	kIOServiceTerminate     = 0x00000004,
 	kIOServiceTerminateWithRematch = 0x00000010,
+	kIOServiceTerminateWithRematchCurrentDext = 0x00000020,
 
 	// options for registerService() & terminate()
 	kIOServiceSynchronous   = 0x00000002,
 	// options for registerService()
-	kIOServiceAsynchronous  = 0x00000008
+	kIOServiceAsynchronous  = 0x00000008,
+	kIOServiceDextRequirePowerForMatching = 0x00000010,
 };
 
 // options for open()
@@ -133,11 +146,13 @@ extern const OSSymbol *     gIODEXTMatchCountKey;
 extern const OSSymbol *     gIOUserClientClassKey;
 
 extern const OSSymbol *     gIOUserClassKey;
+extern const OSSymbol *     gIOUserClassesKey;
 extern const OSSymbol *     gIOUserServerClassKey;
 extern const OSSymbol *     gIOUserServerNameKey;
 extern const OSSymbol *     gIOUserServerTagKey;
-extern const OSSymbol *     gIOUserServerCDHashKey;
 extern const OSSymbol *     gIOUserUserClientKey;
+extern const OSSymbol *     gIOAssociatedServicesKey;
+extern const OSSymbol *     gIOUserServerPreserveUserspaceRebootKey;
 
 extern const OSSymbol *     gIOKitDebugKey;
 extern const OSSymbol *     gIOServiceKey;
@@ -164,6 +179,9 @@ extern const OSSymbol *     gIOInterruptSpecifiersKey;
 
 extern const OSSymbol *     gIOSupportedPropertiesKey;
 extern const OSSymbol *     gIOUserServicePropertiesKey;
+extern const OSSymbol *     gIOCompatibilityMatchKey;
+extern const OSSymbol *     gIOCompatibilityPropertiesKey;
+extern const OSSymbol *     gIOPathKey;
 
 extern const OSSymbol *     gIOBSDKey;
 extern const OSSymbol *     gIOBSDNameKey;
@@ -171,11 +189,39 @@ extern const OSSymbol *     gIOBSDMajorKey;
 extern const OSSymbol *     gIOBSDMinorKey;
 extern const OSSymbol *     gIOBSDUnitKey;
 
+extern const OSSymbol *     gIOUserClientEntitlementsKey;
 extern const OSSymbol *     gIODriverKitEntitlementKey;
 extern const OSSymbol *     gIOServiceDEXTEntitlementsKey;
 extern const OSSymbol *     gIODriverKitUserClientEntitlementsKey;
 extern const OSSymbol *     gIODriverKitUserClientEntitlementAllowAnyKey;
+extern const OSSymbol *     gIODriverKitRequiredEntitlementsKey;
+extern const OSSymbol *     gIODriverKitTestDriverEntitlementKey;
+extern const OSSymbol *     gIODriverKitUserClientEntitlementCommunicatesWithDriversKey;
+extern const OSSymbol *     gIODriverKitUserClientEntitlementAllowThirdPartyUserClientsKey;
 extern const OSSymbol *     gIOMatchDeferKey;
+extern const OSSymbol *     gIOExclaveAssignedKey;
+
+extern const OSSymbol *     gIOAllCPUInitializedKey;
+
+#if XNU_KERNEL_PRIVATE && !defined(IOServiceTrace)
+
+#include <IOKit/IOTimeStamp.h>
+#if (KDEBUG_LEVEL >= KDEBUG_LEVEL_STANDARD)
+#define IOServiceTrace(csc, a, b, c, d) do {                            \
+    if(kIOTraceIOService & gIOKitTrace) {                               \
+	KERNEL_DEBUG_CONSTANT(IODBG_IOSERVICE(csc), a, b, c, d, 0);     \
+    }                                                                   \
+} while(0)
+#else /* (KDEBUG_LEVEL >= KDEBUG_LEVEL_STANDARD) */
+#define IOServiceTrace(csc, a, b, c, d) do {    \
+  (void)a;                                      \
+  (void)b;                                      \
+  (void)c;                                      \
+  (void)d;                                      \
+} while (0)
+#endif /* (KDEBUG_LEVEL >= KDEBUG_LEVEL_STANDARD) */
+
+#endif // XNU_KERNEL_PRIVATE && !IOServiceTrace
 
 extern SInt32 IOServiceOrdering( const OSMetaClassBase * inObj1, const OSMetaClassBase * inObj2, void * ref );
 
@@ -184,7 +230,15 @@ typedef void (*IOInterruptAction)( OSObject * target, void * refCon,
 
 #ifdef __BLOCKS__
 typedef void (^IOInterruptActionBlock)(IOService * nub, int source);
+typedef kern_return_t (^IOStateNotificationHandler)(void);
+#ifdef KERNEL_PRIVATE
+typedef bool (^ANEUpcallSetPowerStateHandler)(uint32_t desiredState);
+typedef bool (^ANEUpcallWorkHandler)(uint64_t arg0, uint64_t arg1, uint64_t arg2);
+#endif
 #endif /* __BLOCKS__ */
+
+typedef void * IOStateNotificationListenerRef;
+class IOStateNotificationItem;
 
 /*! @typedef IOServiceNotificationHandler
  *   @param target Reference supplied when the notification was registered.
@@ -223,9 +277,16 @@ typedef IOReturn (^IOServiceInterestHandlerBlock)( uint32_t messageType, IOServi
 
 typedef void (*IOServiceApplierFunction)(IOService * service, void * context);
 typedef void (*OSObjectApplierFunction)(OSObject * object, void * context);
+#ifdef __BLOCKS__
+typedef void (^IOServiceApplierBlock)(IOService * service);
+typedef void (^OSObjectApplierBlock)(OSObject * object);
+#endif /* __BLOCKS__ */
+
 
 class IOUserClient;
 class IOPlatformExpert;
+class IOUserServerCheckInToken;
+class IOInterruptEventSource;
 
 /*! @class IOService
  *   @abstract The base class for most I/O Kit families, devices, and drivers.
@@ -337,6 +398,8 @@ class IOPlatformExpert;
 struct IOInterruptAccountingData;
 struct IOInterruptAccountingReporter;
 struct OSObjectUserVars;
+struct IOServiceStateChangeVars;
+struct IOInterruptSourcePrivate;
 
 class IOService : public IORegistryEntry
 {
@@ -350,6 +413,7 @@ protected:
 /*! @struct ExpansionData
  *   @discussion This structure will be used to expand the capablilties of this class in the future.
  */
+#if XNU_KERNEL_PRIVATE
 	struct ExpansionData {
 		uint64_t authorizationID;
 		/*
@@ -359,12 +423,18 @@ protected:
 		 * is necessary as IOReporting will not update reports in a manner that is
 		 * synchonized with the service (i.e, on a workloop).
 		 */
-		IOLock * interruptStatisticsLock;
+		IOLock interruptStatisticsLock;
 		IOInterruptAccountingReporter * interruptStatisticsArray;
 		int interruptStatisticsArrayCount;
 
 		OSObjectUserVars * uvars;
+		IOServiceStateChangeVars * svars;
+
+		IOInterruptSourcePrivate * interruptSourcesPrivate;
 	};
+#else
+	struct ExpansionData;
+#endif
 
 /*! @var reserved
  *   Reserved for future use.  (Internal use only)  */
@@ -375,6 +445,9 @@ protected:
 private:
 	IOService *     __provider;
 	SInt32      __providerGeneration;
+#if XNU_KERNEL_PRIVATE
+	uint32_t         __resv1;
+#endif
 	IOService *     __owner;
 	IOOptionBits    __state[2];
 	uint64_t        __timeBusy;
@@ -384,6 +457,10 @@ private:
 protected:
 // TRUE once PMinit has been called
 	bool            initialized;
+#if XNU_KERNEL_PRIVATE
+	bool            __machPortHoldDestroy;
+	uint8_t         __resv2[6];
+#endif /* XNU_KERNEL_PRIVATE */
 
 public:
 // DEPRECATED
@@ -480,10 +557,22 @@ public:
 	    void                     *result,
 	    void                     *destination);
 
+protected:
+
+	/* these are helper methods for DriverKit */
+	IOReturn _ConfigureReport(IOReportChannelList   *channels,
+	    IOReportConfigureAction action,
+	    void                  *result,
+	    void                  *destination);
+	IOReturn _UpdateReport(IOReportChannelList      *channels,
+	    IOReportUpdateAction      action,
+	    void                     *result,
+	    void                     *destination);
+
 private:
 #if __LP64__
-	OSMetaClassDeclareReservedUsed(IOService, 0);
-	OSMetaClassDeclareReservedUsed(IOService, 1);
+	OSMetaClassDeclareReservedUsedX86(IOService, 0);
+	OSMetaClassDeclareReservedUsedX86(IOService, 1);
 	OSMetaClassDeclareReservedUnused(IOService, 2);
 	OSMetaClassDeclareReservedUnused(IOService, 3);
 	OSMetaClassDeclareReservedUnused(IOService, 4);
@@ -491,14 +580,14 @@ private:
 	OSMetaClassDeclareReservedUnused(IOService, 6);
 	OSMetaClassDeclareReservedUnused(IOService, 7);
 #else
-	OSMetaClassDeclareReservedUsed(IOService, 0);
-	OSMetaClassDeclareReservedUsed(IOService, 1);
-	OSMetaClassDeclareReservedUsed(IOService, 2);
-	OSMetaClassDeclareReservedUsed(IOService, 3);
-	OSMetaClassDeclareReservedUsed(IOService, 4);
-	OSMetaClassDeclareReservedUsed(IOService, 5);
-	OSMetaClassDeclareReservedUsed(IOService, 6);
-	OSMetaClassDeclareReservedUsed(IOService, 7);
+	OSMetaClassDeclareReservedUsedX86(IOService, 0);
+	OSMetaClassDeclareReservedUsedX86(IOService, 1);
+	OSMetaClassDeclareReservedUsedX86(IOService, 2);
+	OSMetaClassDeclareReservedUsedX86(IOService, 3);
+	OSMetaClassDeclareReservedUsedX86(IOService, 4);
+	OSMetaClassDeclareReservedUsedX86(IOService, 5);
+	OSMetaClassDeclareReservedUsedX86(IOService, 6);
+	OSMetaClassDeclareReservedUsedX86(IOService, 7);
 #endif
 
 	OSMetaClassDeclareReservedUnused(IOService, 8);
@@ -693,6 +782,8 @@ public:
 
 #ifdef XNU_KERNEL_PRIVATE
 	static uint32_t isLockedForArbitration(IOService * service);
+	void setMachPortHoldDestroy(bool holdDestroy);
+	bool machPortHoldDestroy();
 #endif /* XNU_KERNEL_PRIVATE */
 
 
@@ -720,6 +811,17 @@ public:
  *   @param delta The delta to be applied to the IOService object's <code>busyState</code>. */
 
 	virtual void adjustBusy( SInt32 delta );
+
+#ifdef XNU_KERNEL_PRIVATE
+/*! @function waitQuietWithOptions
+ *   @abstract Waits for an IOService object's <code>busyState</code> to be zero.
+ *   @discussion Blocks the caller until an IOService object is non busy.
+ *   @param timeout The maximum time to wait in nanoseconds. Default is to wait forever.
+ *   @param options Options to configure behavior of this call
+ *   @result Returns an error code if Mach synchronization primitives fail, <code>kIOReturnTimeout</code>, or <code>kIOReturnSuccess</code>. */
+
+	IOReturn waitQuietWithOptions(uint64_t timeout = UINT64_MAX, IOOptionBits options = 0);
+#endif /* XNU_KERNEL_PRIVATE */
 
 	APPLE_KEXT_COMPATIBILITY_VIRTUAL
 	IOReturn waitQuiet(mach_timespec_t * timeout)
@@ -794,7 +896,7 @@ public:
  *   @param priority A constant ordering all notifications of a each type.
  *   @result An instance of an IONotifier object that can be used to control or destroy the notification request. */
 
-	static IONotifier * addNotification(
+	static OSPtr<IONotifier>  addNotification(
 		const OSSymbol * type, OSDictionary * matching,
 		IOServiceNotificationHandler handler,
 		void * target, void * ref = NULL,
@@ -850,8 +952,13 @@ public:
  *   @param timeout The maximum time to wait in nanoseconds. Default is to wait forever.
  *   @result A published IOService object matching the supplied dictionary. waitForMatchingService returns a reference to the IOService which should be released by the caller. (Differs from waitForService() which does not retain the returned object.) */
 
-	static IOService * waitForMatchingService( OSDictionary * matching,
+	static OSPtr<IOService>  waitForMatchingService( OSDictionary * matching,
 	    uint64_t timeout = UINT64_MAX);
+
+#ifdef XNU_KERNEL_PRIVATE
+	static IOService * waitForMatchingServiceWithToken( OSDictionary * matching,
+	    uint64_t timeout, IOUserServerCheckInToken * token );
+#endif
 
 /*! @function getMatchingServices
  *   @abstract Finds the set of current published IOService objects matching a matching dictionary.
@@ -859,7 +966,7 @@ public:
  *   @param matching The matching dictionary describing the desired IOService objects.
  *   @result An instance of an iterator over a set of IOService objects. To be released by the caller. */
 
-	static OSIterator * getMatchingServices( OSDictionary * matching );
+	static OSPtr<OSIterator> getMatchingServices( OSDictionary * matching );
 
 /*! @function copyMatchingService
  *   @abstract Finds one of the current published IOService objects matching a matching dictionary.
@@ -867,7 +974,7 @@ public:
  *   @param matching The matching dictionary describing the desired IOService object.
  *   @result The IOService object or NULL. To be released by the caller. */
 
-	static IOService * copyMatchingService( OSDictionary * matching );
+	static OSPtr<IOService>  copyMatchingService( OSDictionary * matching );
 
 public:
 /* Helpers to make matching dictionaries for simple cases,
@@ -880,8 +987,20 @@ public:
  *   @param table If zero, <code>serviceMatching</code> creates a matching dictionary and returns a reference to it, otherwise the matching properties are added to the specified dictionary.
  *   @result The matching dictionary created, or passed in, is returned on success, or zero on failure. */
 
-	static OSDictionary * serviceMatching( const char * className,
+	static OSPtr<OSDictionary>  serviceMatching( const char * className,
 	    OSDictionary * table = NULL );
+
+#if __cplusplus >= 201703L
+/*! @function serviceMatching
+ *   @abstract Creates a matching dictionary, or adds matching properties to an existing dictionary, that specify an IOService class match.
+ *   @discussion A very common matching criteria for IOService object is based on its class. <code>serviceMatching</code> creates a matching dictionary that specifies any IOService object of a class, or its subclasses. The class is specified by name, and an existing dictionary may be passed in, in which case the matching properties will be added to that dictionary rather than creating a new one.
+ *   @param className The class name, as a const C string. Class matching is successful on IOService objects of this class or any subclass.
+ *   @param table If zero, <code>serviceMatching</code> creates a matching dictionary and returns a reference to it, otherwise the matching properties are added to the specified dictionary.
+ *   @result The matching dictionary created, or passed in, is returned on success, or zero on failure. */
+
+	static OSSharedPtr<OSDictionary> serviceMatching( const char * className,
+	    OSSharedPtr<OSDictionary> table);
+#endif
 
 /*! @function serviceMatching
  *   @abstract Creates a matching dictionary, or adds matching properties to an existing dictionary, that specify an IOService class match.
@@ -890,8 +1009,20 @@ public:
  *   @param table If zero, <code>serviceMatching</code> creates a matching dictionary and returns a reference to it, otherwise the matching properties are added to the specified dictionary.
  *   @result The matching dictionary created, or passed in, is returned on success, or zero on failure. */
 
-	static OSDictionary * serviceMatching( const OSString * className,
+	static OSPtr<OSDictionary>  serviceMatching( const OSString * className,
 	    OSDictionary * table = NULL );
+
+#if __cplusplus >= 201703L
+/*! @function serviceMatching
+ *   @abstract Creates a matching dictionary, or adds matching properties to an existing dictionary, that specify an IOService class match.
+ *   @discussion A very common matching criteria for IOService object is based on its class. <code>serviceMatching</code> creates a matching dictionary that specifies any IOService of a class, or its subclasses. The class is specified by name, and an existing dictionary may be passed in, in which case the matching properties will be added to that dictionary rather than creating a new one.
+ *   @param className The class name, as an OSString (which includes OSSymbol). Class matching is successful on IOService objects of this class or any subclass.
+ *   @param table If zero, <code>serviceMatching</code> creates a matching dictionary and returns a reference to it, otherwise the matching properties are added to the specified dictionary.
+ *   @result The matching dictionary created, or passed in, is returned on success, or zero on failure. */
+
+	static OSSharedPtr<OSDictionary> serviceMatching( const OSString * className,
+	    OSSharedPtr<OSDictionary> table);
+#endif
 
 /*! @function nameMatching
  *   @abstract Creates a matching dictionary, or adds matching properties to an existing dictionary, that specify an IOService name match.
@@ -900,8 +1031,20 @@ public:
  *   @param table If zero, <code>nameMatching</code> creates a matching dictionary and returns a reference to it, otherwise the matching properties are added to the specified dictionary.
  *   @result The matching dictionary created, or passed in, is returned on success, or zero on failure. */
 
-	static OSDictionary * nameMatching( const char * name,
+	static OSPtr<OSDictionary>  nameMatching( const char * name,
 	    OSDictionary * table = NULL );
+
+#if __cplusplus >= 201703L
+/*! @function nameMatching
+ *   @abstract Creates a matching dictionary, or adds matching properties to an existing dictionary, that specify an IOService name match.
+ *   @discussion A very common matching criteria for IOService object is based on its name. <code>nameMatching</code> creates a matching dictionary that specifies any IOService object which responds successfully to the @link //apple_ref/cpp/instm/IORegistryEntry/compareName/virtualbool/(OSString*,OSString**) IORegistryEntry::compareName@/link method. An existing dictionary may be passed in, in which case the matching properties will be added to that dictionary rather than creating a new one.
+ *   @param name The service's name, as a const C string. Name matching is successful on IOService objects that respond successfully to the <code>IORegistryEntry::compareName</code> method.
+ *   @param table If zero, <code>nameMatching</code> creates a matching dictionary and returns a reference to it, otherwise the matching properties are added to the specified dictionary.
+ *   @result The matching dictionary created, or passed in, is returned on success, or zero on failure. */
+
+	static OSSharedPtr<OSDictionary> nameMatching( const char * name,
+	    OSSharedPtr<OSDictionary> table);
+#endif
 
 /*! @function nameMatching
  *   @abstract Creates a matching dictionary, or adds matching properties to an existing dictionary, that specify an IOService name match.
@@ -910,8 +1053,20 @@ public:
  *   @param table If zero, <code>nameMatching</code> creates a matching dictionary and returns a reference to it, otherwise the matching properties are added to the specified dictionary.
  *   @result The matching dictionary created, or passed in, is returned on success, or zero on failure. */
 
-	static OSDictionary * nameMatching( const OSString* name,
+	static OSPtr<OSDictionary>  nameMatching( const OSString* name,
 	    OSDictionary * table = NULL );
+
+#if __cplusplus >= 201703L
+/*! @function nameMatching
+ *   @abstract Creates a matching dictionary, or adds matching properties to an existing dictionary, that specify an IOService name match.
+ *   @discussion A very common matching criteria for IOService object is based on its name. <code>nameMatching</code> creates a matching dictionary that specifies any IOService object which responds successfully to the @link //apple_ref/cpp/instm/IORegistryEntry/compareName/virtualbool/(OSString*,OSString**) IORegistryEntry::compareName@/link method. An existing dictionary may be passed in, in which case the matching properties will be added to that dictionary rather than creating a new one.
+ *   @param name The service's name, as an OSString (which includes OSSymbol). Name matching is successful on IOService objects that respond successfully to the <code>IORegistryEntry::compareName</code> method.
+ *   @param table If zero, <code>nameMatching</code> creates a matching dictionary and returns a reference to it, otherwise the matching properties are added to the specified dictionary.
+ *   @result The matching dictionary created, or passed in, is returned on success, or zero on failure. */
+
+	static OSSharedPtr<OSDictionary> nameMatching( const OSString* name,
+	    OSSharedPtr<OSDictionary> table);
+#endif
 
 /*! @function resourceMatching
  *   @abstract Creates a matching dictionary, or adds matching properties to an existing dictionary, that specify a resource service match.
@@ -920,8 +1075,20 @@ public:
  *   @param table If zero, <code>resourceMatching</code> creates a matching dictionary and returns a reference to it, otherwise the matching properties are added to the specified dictionary.
  *   @result The matching dictionary created, or passed in, is returned on success, or zero on failure. */
 
-	static OSDictionary * resourceMatching( const char * name,
+	static OSPtr<OSDictionary>  resourceMatching( const char * name,
 	    OSDictionary * table = NULL );
+
+#if __cplusplus >= 201703L
+/*! @function resourceMatching
+ *   @abstract Creates a matching dictionary, or adds matching properties to an existing dictionary, that specify a resource service match.
+ *   @discussion IOService maintains a resource service IOResources that allows objects to be published and found globally in the I/O Kit based on a name, using the standard IOService matching and notification calls.
+ *   @param name The resource name, as a const C string. Resource matching is successful when an object by that name has been published with the <code>publishResource</code> method.
+ *   @param table If zero, <code>resourceMatching</code> creates a matching dictionary and returns a reference to it, otherwise the matching properties are added to the specified dictionary.
+ *   @result The matching dictionary created, or passed in, is returned on success, or zero on failure. */
+
+	static OSSharedPtr<OSDictionary> resourceMatching( const char * name,
+	    OSSharedPtr<OSDictionary> table);
+#endif
 
 /*! @function resourceMatching
  *   @abstract Creates a matching dictionary, or adds matching properties to an existing dictionary, that specify a resource service match.
@@ -930,8 +1097,20 @@ public:
  *   @param table If zero, <code>resourceMatching</code> creates a matching dictionary and returns a reference to it, otherwise the matching properties are added to the specified dictionary.
  *   @result The matching dictionary created, or passed in, is returned on success, or zero on failure. */
 
-	static OSDictionary * resourceMatching( const OSString * name,
+	static OSPtr<OSDictionary>  resourceMatching( const OSString * name,
 	    OSDictionary * table = NULL );
+
+#if __cplusplus >= 201703L
+/*! @function resourceMatching
+ *   @abstract Creates a matching dictionary, or adds matching properties to an existing dictionary, that specify a resource service match.
+ *   @discussion IOService maintains a resource service IOResources that allows objects to be published and found globally in the I/O Kit based on a name, using the standard IOService matching and notification calls.
+ *   @param name The resource name, as an OSString (which includes OSSymbol). Resource matching is successful when an object by that name has been published with the <code>publishResource</code> method.
+ *   @param table If zero, <code>resourceMatching</code> creates a matching dictionary and returns a reference to it, otherwise the matching properties are added to the specified dictionary.
+ *   @result The matching dictionary created, or passed in, is returned on success, or zero on failure. */
+
+	static OSSharedPtr<OSDictionary> resourceMatching( const OSString * name,
+	    OSSharedPtr<OSDictionary> table);
+#endif
 
 
 /*! @function propertyMatching
@@ -942,8 +1121,21 @@ public:
  *   @param table If zero, nameMatching will create a matching dictionary and return a reference to it, otherwise the matching properties are added to the specified dictionary.
  *   @result The matching dictionary created, or passed in, is returned on success, or zero on failure. */
 
-	static OSDictionary * propertyMatching( const OSSymbol * key, const OSObject * value,
+	static OSPtr<OSDictionary>  propertyMatching( const OSSymbol * key, const OSObject * value,
 	    OSDictionary * table = NULL );
+
+#if __cplusplus >= 201703L
+/*! @function propertyMatching
+ *   @abstract Creates a matching dictionary, or adds matching properties to an existing dictionary, that specify an IOService phandle match.
+ *   @discussion TODO A very common matching criteria for IOService is based on its name. nameMatching will create a matching dictionary that specifies any IOService which respond successfully to the IORegistryEntry method compareName. An existing dictionary may be passed in, in which case the matching properties will be added to that dictionary rather than creating a new one.
+ *   @param key The service's phandle, as a const UInt32. PHandle matching is successful on IOService objects that respond successfully to the IORegistryEntry method compareName.
+ *   @param value The service's phandle, as a const UInt32. PHandle matching is successful on IOService's which respond successfully to the IORegistryEntry method compareName.
+ *   @param table If zero, nameMatching will create a matching dictionary and return a reference to it, otherwise the matching properties are added to the specified dictionary.
+ *   @result The matching dictionary created, or passed in, is returned on success, or zero on failure. */
+
+	static OSSharedPtr<OSDictionary>  propertyMatching( const OSSymbol * key, const OSObject * value,
+	    OSSharedPtr<OSDictionary> table);
+#endif
 
 /*! @function registryEntryIDMatching
  *   @abstract Creates a matching dictionary, or adds matching properties to an existing dictionary, that specify a IORegistryEntryID match.
@@ -955,6 +1147,18 @@ public:
 	static OSDictionary * registryEntryIDMatching( uint64_t entryID,
 	    OSDictionary * table = NULL );
 
+#if __cplusplus >= 201703L
+/*! @function registryEntryIDMatching
+ *   @abstract Creates a matching dictionary, or adds matching properties to an existing dictionary, that specify a IORegistryEntryID match.
+ *   @discussion <code>registryEntryIDMatching</code> creates a matching dictionary that specifies the IOService object with the assigned registry entry ID (returned by <code>IORegistryEntry::getRegistryEntryID()</code>). An existing dictionary may be passed in, in which case the matching properties will be added to that dictionary rather than creating a new one.
+ *   @param entryID The service's ID. Matching is successful on the IOService object that return that ID from the <code>IORegistryEntry::getRegistryEntryID()</code> method.
+ *   @param table If zero, <code>registryEntryIDMatching</code> creates a matching dictionary and returns a reference to it, otherwise the matching properties are added to the specified dictionary.
+ *   @result The matching dictionary created, or passed in, is returned on success, or zero on failure. */
+
+	static OSSharedPtr<OSDictionary> registryEntryIDMatching( uint64_t entryID,
+	    OSSharedPtr<OSDictionary> table);
+#endif
+
 
 /*! @function addLocation
  *   @abstract Adds a location matching property to an existing dictionary.
@@ -962,7 +1166,7 @@ public:
  *   @param table The matching properties are added to the specified dictionary, which must be non-zero.
  *   @result The location matching dictionary created is returned on success, or zero on failure. */
 
-	static OSDictionary * addLocation( OSDictionary * table );
+	static OSPtr<OSDictionary>  addLocation( OSDictionary * table );
 
 /* Helpers for matching dictionaries. */
 
@@ -1031,14 +1235,14 @@ public:
  *   @discussion For those few IOService objects that obtain service from multiple providers, this method supplies an iterator over a client's providers.
  *   @result An iterator over the providers of the client, or zero if there is a resource failure. The iterator must be released when the iteration is finished. All objects returned by the iteration are retained while the iterator is valid, though they may no longer be attached during the iteration. */
 
-	virtual OSIterator * getProviderIterator( void ) const;
+	virtual OSPtr<OSIterator> getProviderIterator( void ) const;
 
 /*! @function getOpenProviderIterator
  *   @abstract Returns an iterator over an client's providers that are currently opened by the client.
  *   @discussion For those few IOService objects that obtain service from multiple providers, this method supplies an iterator over a client's providers, locking each in turn with @link lockForArbitration lockForArbitration@/link and returning those that have been opened by the client.
  *   @result An iterator over the providers the client has open, or zero if there is a resource failure. The iterator must be released when the iteration is finished. All objects returned by the iteration are retained while the iterator is valid, and the current entry in the iteration is locked with <code>lockForArbitration</code>, protecting it from state changes. */
 
-	virtual OSIterator * getOpenProviderIterator( void ) const;
+	virtual OSPtr<OSIterator> getOpenProviderIterator( void ) const;
 
 /*! @function getClient
  *   @abstract Returns an IOService object's primary client.
@@ -1052,14 +1256,14 @@ public:
  *   @discussion For IOService objects that may have multiple clients, this method supplies an iterator over a provider's clients.
  *   @result An iterator over the clients of the provider, or zero if there is a resource failure. The iterator must be released when the iteration is finished. All objects returned by the iteration are retained while the iterator is valid, though they may no longer be attached during the iteration. */
 
-	virtual OSIterator * getClientIterator( void ) const;
+	virtual OSPtr<OSIterator> getClientIterator( void ) const;
 
 /*! @function getOpenClientIterator
  *   @abstract Returns an iterator over a provider's clients that currently have opened the provider.
  *   @discussion For IOService objects that may have multiple clients, this method supplies an iterator over a provider's clients, locking each in turn with @link lockForArbitration lockForArbitration@/link and returning those that have opened the provider.
  *   @result An iterator over the clients that have opened the provider, or zero if there is a resource failure. The iterator must be released when the iteration is finished. All objects returned by the iteration are retained while the iterator is valid, and the current entry in the iteration is locked with <code>lockForArbitration</code>, protecting it from state changes. */
 
-	virtual OSIterator * getOpenClientIterator( void ) const;
+	virtual OSPtr<OSIterator> getOpenClientIterator( void ) const;
 
 /*! @function callPlatformFunction
  *   @abstract Calls the platform function with the given name.
@@ -1108,6 +1312,8 @@ public:
  *   @result A pointer to the IOResources instance. It should not be released by the caller. */
 
 	static IOService * getResourceService( void );
+
+	static IOService * getSystemStateNotificationService(void);
 
 /* Allocate resources for a matched service */
 
@@ -1283,12 +1489,12 @@ public:
 	virtual IOReturn messageClients( UInt32 type,
 	    void * argument = NULL, vm_size_t argSize = 0 );
 
-	virtual IONotifier * registerInterest( const OSSymbol * typeOfInterest,
+	virtual OSPtr<IONotifier> registerInterest( const OSSymbol * typeOfInterest,
 	    IOServiceInterestHandler handler,
 	    void * target, void * ref = NULL );
 
 #ifdef __BLOCKS__
-	IONotifier * registerInterest(const OSSymbol * typeOfInterest,
+	OSPtr<IONotifier>  registerInterest(const OSSymbol * typeOfInterest,
 	    IOServiceInterestHandlerBlock handler);
 #endif /* __BLOCKS__ */
 
@@ -1297,6 +1503,11 @@ public:
 
 	virtual void applyToClients( IOServiceApplierFunction applier,
 	    void * context );
+
+#ifdef __BLOCKS__
+	void applyToProviders(IOServiceApplierBlock applier);
+	void applyToClients(IOServiceApplierBlock applier);
+#endif /* __BLOCKS__ */
 
 	virtual void applyToInterested( const OSSymbol * typeOfInterest,
 	    OSObjectApplierFunction applier,
@@ -1325,6 +1536,14 @@ public:
 	    UInt32 type,
 	    LIBKERN_RETURNS_RETAINED IOUserClient ** handler );
 
+	IOReturn newUserClient( task_t owningTask, void * securityID,
+	    UInt32 type, OSDictionary * properties,
+	    OSSharedPtr<IOUserClient>& handler );
+
+	IOReturn newUserClient( task_t owningTask, void * securityID,
+	    UInt32 type,
+	    OSSharedPtr<IOUserClient>& handler );
+
 /* Return code utilities */
 
 /*! @function stringFromReturn
@@ -1344,6 +1563,79 @@ public:
 	virtual int errnoFromReturn( IOReturn rtn );
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+#ifdef KERNEL_PRIVATE
+	struct IOExclaveProxyState;
+
+	bool
+	exclaveStart(IOService * provider, IOExclaveProxyState ** state);
+
+	// value for tb_endpoint_create_with_value(TB_TRANSPORT_TYPE_XNU, ...)
+	uint64_t
+	exclaveEndpoint(IOExclaveProxyState * pRef);
+
+	/*! @function exclaveAsyncNotificationRegister
+	 *   @abstract Register an asynchronous notification to be signaled from the exclave driver
+	 *   @discussion This function uses the default IOService workloop for locking the internal data structure to keep track of registered asynchronous notifications.
+	 *   @param pRef Exclave proxy state
+	 *   @param notification IOInterruptEventSource notification to register. This should be created with a `NULL` provider and index `0` and should be added to a workloop.
+	 *   @param notificationID Out parameter for the notification ID. This is used by the exclave driver to signal the registered notification. It is the driver's responsibility to pass this ID to the exclave driver.
+	 *   @result kIOReturnSuccess on success. See IOReturn.h for error codes. */
+	kern_return_t exclaveAsyncNotificationRegister(IOExclaveProxyState * pRef, IOInterruptEventSource *notification, uint32_t *notificationID);
+
+#ifdef __BLOCKS__
+	/* ANE specific upcall registration */
+
+	/*! @function exclaveRegisterUpcallSetPowerState
+	 *   @abstract Register a handler for ANE exclave's setPowerState upcall
+	 *   @param pRef Exclave proxy state
+	 *   @param handler Upcall handler
+	 *   @result kIOReturnSuccess on success. See IOReturn.h for error codes. */
+	kern_return_t exclaveRegisterANEUpcallSetPowerState(IOExclaveProxyState * pRef, ANEUpcallSetPowerStateHandler handler);
+
+	/*! @function exclaveRegisterUpcallWorkSubmit
+	 *   @abstract Register a handler for ANE exclave's WorkSubmit upcall
+	 *   @param pRef Exclave proxy state
+	 *   @param handler Upcall handler
+	 *   @result kIOReturnSuccess on success. See IOReturn.h for error codes. */
+	kern_return_t exclaveRegisterANEUpcallWorkSubmit(IOExclaveProxyState * pRef, ANEUpcallWorkHandler handler);
+	kern_return_t exclaveRegisterANEUpcallWorkBegin(IOExclaveProxyState * pRef, ANEUpcallWorkHandler handler);
+	kern_return_t exclaveRegisterANEUpcallWorkEnd(IOExclaveProxyState * pRef, ANEUpcallWorkHandler handler);
+#endif /* __BLOCKS__ */
+
+#ifdef XNU_KERNEL_PRIVATE
+	// Interrupts
+	bool
+	exclaveRegisterInterrupt(IOExclaveProxyState * pRef, int index, bool noProvider);
+	bool
+	exclaveRemoveInterrupt(IOExclaveProxyState * pRef, int index);
+	bool
+	exclaveEnableInterrupt(IOExclaveProxyState * pRef, int index, bool enable);
+
+	// Timers
+	bool
+	exclaveRegisterTimer(IOExclaveProxyState * pRef, uint32_t *timer_id);
+	bool
+	exclaveRemoveTimer(IOExclaveProxyState * pRef, uint32_t timer_id);
+	bool
+	exclaveEnableTimer(IOExclaveProxyState * pRef, uint32_t timer_id, bool enable);
+	bool
+	exclaveTimerCancelTimeout(IOExclaveProxyState * pRef, uint32_t timer_id);
+	bool
+	exclaveTimerSetTimeout(IOExclaveProxyState * pRef, uint32_t timer_id, uint32_t options, AbsoluteTime interval, AbsoluteTime leeway, kern_return_t *kr);
+
+	/* Internal downcalls to EDK */
+	void
+	exclaveInterruptOccurred(IOInterruptEventSource *eventSource, int count);
+	void
+	exclaveTimerFired(IOTimerEventSource *eventSource);
+
+	kern_return_t exclaveAsyncNotificationSignal(IOExclaveProxyState * pRef, uint32_t notificationID);
+#endif /* XNU_KERNEL_PRIVATE */
+
+#endif /* KERNEL_PRIVATE */
+
+/* * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 /* * * * * * * * * * end of IOService API  * * * * * * * */
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
@@ -1355,13 +1647,8 @@ public:
 /* overrides */
 	virtual bool serializeProperties( OSSerialize * s ) const APPLE_KEXT_OVERRIDE;
 
-#ifdef KERNEL_PRIVATE
-/* Apple only SPI to control CPU low power modes */
-	void   setCPUSnoopDelay(UInt32 ns);
-	UInt32 getCPUSnoopDelay();
-#endif
-	void   requireMaxBusStall(UInt32 ns);
-	void   requireMaxInterruptDelay(uint32_t ns);
+	IOReturn   requireMaxBusStall(UInt32 ns);
+	IOReturn   requireMaxInterruptDelay(uint32_t ns);
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 /* * * * * * * * * * * * Internals * * * * * * * * * * * */
@@ -1373,9 +1660,11 @@ public:
 	static void initialize( void );
 	static void setPlatform( IOPlatformExpert * platform);
 	static void setPMRootDomain( class IOPMrootDomain * rootDomain );
+	static void publishPMRootDomain( void );
 	static IOReturn catalogNewDrivers( OSOrderedSet * newTables );
 	uint64_t getAccumulatedBusyTime( void );
-	static void updateConsoleUsers(OSArray * consoleUsers, IOMessage systemMessage);
+	static void updateConsoleUsers(OSArray * consoleUsers, IOMessage systemMessage,
+	    bool afterUserspaceReboot = false);
 	static void consoleLockTimer(thread_call_param_t p0, thread_call_param_t p1);
 	void setTerminateDefer(IOService * provider, bool defer);
 	uint64_t getAuthorizationID( void );
@@ -1384,18 +1673,30 @@ public:
 	void scheduleFinalize(bool now);
 	static void willShutdown();
 	static void startDeferredMatches();
-	static void kextdLaunched();
+	static void iokitDaemonLaunched();
+	void resetRematchProperties();
+	bool hasUserServer() const;
+	IOReturn UserSetProperties(OSDictionary * props);
+	static void userSpaceWillReboot();
+	static void userSpaceDidReboot();
+	kern_return_t CopyProperties_Local(OSDictionary ** properties);
+
+	IOStateNotificationItem * stateNotificationItemCopy(OSString * itemName, OSDictionary * schema);
+	kern_return_t stateNotificationListenerAdd(OSArray * items,
+	    IOStateNotificationListenerRef * outRef,
+	    IOStateNotificationHandler handler);
+	kern_return_t stateNotificationListenerRemove(IOStateNotificationListenerRef ref);
 
 private:
 	static IOReturn waitMatchIdle( UInt32 ms );
-	static IONotifier * installNotification(
+	static OSPtr<IONotifier>  installNotification(
 		const OSSymbol * type, OSDictionary * matching,
 		IOServiceMatchingNotificationHandler handler,
 		void * target, void * ref,
 		SInt32 priority,
-		LIBKERN_RETURNS_RETAINED OSIterator ** existing );
+		LIBKERN_RETURNS_RETAINED OSIterator ** existing);
 #if !defined(__LP64__)
-	static IONotifier * installNotification(
+	static OSPtr<IONotifier>  installNotification(
 		const OSSymbol * type, OSDictionary * matching,
 		IOServiceNotificationHandler handler,
 		void * target, void * ref,
@@ -1411,7 +1712,7 @@ private:
 	bool checkResource( OSObject * matching );
 
 	APPLE_KEXT_COMPATIBILITY_VIRTUAL
-	void probeCandidates( OSOrderedSet * matches );
+	void probeCandidates( LIBKERN_CONSUMED OSOrderedSet * matches );
 	APPLE_KEXT_COMPATIBILITY_VIRTUAL
 	bool startCandidate( IOService * candidate );
 
@@ -1436,22 +1737,30 @@ private:
 	APPLE_KEXT_COMPATIBILITY_VIRTUAL
 	void doServiceTerminate( IOOptionBits options );
 
+	bool hasParent(IOService * root);
+	static void setRootMedia(IOService * root);
+	static void publishHiddenMedia(IOService * parent);
+	static bool publishHiddenMediaApplier(const OSObject * entry, void * context);
+	bool canTerminateForReplacement(IOService * client);
+	void unregisterAllInterrupts(void);
+
 private:
 
 	bool matchPassive(OSDictionary * table, uint32_t options);
 	bool matchInternal(OSDictionary * table, uint32_t options, unsigned int * did);
 	static bool instanceMatch(const OSObject * entry, void * context);
+	OSDictionary * _copyPropertiesForMatching(void);
 
-	static OSObject * copyExistingServices( OSDictionary * matching,
+	static OSPtr<OSObject>  copyExistingServices( OSDictionary * matching,
 	    IOOptionBits inState, IOOptionBits options = 0 );
 
-	static IONotifier * setNotification(
+	static OSPtr<IONotifier>  setNotification(
 		const OSSymbol * type, OSDictionary * matching,
 		IOServiceMatchingNotificationHandler handler,
 		void * target, void * ref,
 		SInt32 priority = 0 );
 
-	static IONotifier * doInstallNotification(
+	static OSPtr<IONotifier>  doInstallNotification(
 		const OSSymbol * type, OSDictionary * matching,
 		IOServiceMatchingNotificationHandler handler,
 		void * target, void * ref,
@@ -1460,11 +1769,15 @@ private:
 	static bool syncNotificationHandler( void * target, void * ref,
 	    IOService * newService, IONotifier * notifier  );
 
+	static void userServerCheckInTokenCancellationHandler(
+		IOUserServerCheckInToken * token,
+		void * ref);
+
 	APPLE_KEXT_COMPATIBILITY_VIRTUAL
 	void deliverNotification( const OSSymbol * type,
 	    IOOptionBits orNewState, IOOptionBits andNewState );
 
-	OSArray * copyNotifiers(const OSSymbol * type,
+	OSPtr<OSArray>  copyNotifiers(const OSSymbol * type,
 	    IOOptionBits orNewState, IOOptionBits andNewState);
 
 	bool invokeNotifiers(OSArray * willSend[]);
@@ -1479,7 +1792,8 @@ private:
 
 	IOReturn waitForState( UInt32 mask, UInt32 value, uint64_t timeout );
 
-	UInt32 _adjustBusy( SInt32 delta );
+	UInt32 _adjustBusy(SInt32 delta);
+	UInt32 _adjustBusy(SInt32 delta, bool unlock);
 
 	bool terminatePhase1( IOOptionBits options = 0 );
 	void scheduleTerminatePhase2( IOOptionBits options = 0 );
@@ -1921,13 +2235,16 @@ public:
 	bool assertPMDriverCall( IOPMDriverCallEntry * callEntry, IOOptionBits method, const IOPMinformee * inform = NULL, IOOptionBits options = 0 );
 	void deassertPMDriverCall( IOPMDriverCallEntry * callEntry );
 	IOReturn changePowerStateWithOverrideTo( IOPMPowerStateIndex ordinal, IOPMRequestTag tag );
+	IOReturn changePowerStateWithTagToPriv( IOPMPowerStateIndex ordinal, IOPMRequestTag tag );
+	IOReturn changePowerStateWithTagTo( IOPMPowerStateIndex ordinal, IOPMRequestTag tag );
 	IOReturn changePowerStateForRootDomain( IOPMPowerStateIndex ordinal );
 	IOReturn setIgnoreIdleTimer( bool ignore );
 	IOReturn quiescePowerTree( void * target, IOPMCompletionAction action, void * param );
-	uint32_t getPowerStateForClient( const OSSymbol * client );
+	IOPMPowerStateIndex getPowerStateForClient( const OSSymbol * client );
 	static const char * getIOMessageString( uint32_t msg );
 	static void setAdvisoryTickleEnable( bool enable );
 	void reset_watchdog_timer(IOService *obj, int timeout);
+	void reset_watchdog_timer(int timeout = 0);
 	void start_watchdog_timer( void );
 	void stop_watchdog_timer( void );
 	void start_watchdog_timer(uint64_t deadline);
@@ -1937,6 +2254,7 @@ public:
 	static IOWorkLoop * getIOPMWorkloop( void );
 	bool getBlockingDriverCall(thread_t *thread, const void **callMethod);
 	void cancelIdlePowerDown(IOService * service);
+	void cancelIdlePowerDownSync( void );
 
 protected:
 	bool tellClientsWithResponse( int messageType );
@@ -1951,6 +2269,7 @@ private:
 	IOReturn powerDomainWillChangeTo( IOPMPowerFlags, IOPowerConnection * );
 	IOReturn powerDomainDidChangeTo( IOPMPowerFlags, IOPowerConnection * );
 #endif
+	static void allocPMInitLock( void );
 	void PMfree( void );
 	bool tellChangeDown1( unsigned long );
 	bool tellChangeDown2( unsigned long );
@@ -1995,10 +2314,13 @@ private:
 	void stop_spindump_timer( void );
 	bool checkForDone( void );
 	bool responseValid( uint32_t x, int pid );
+	void updateClientResponses( void );
 	void computeDesiredState( unsigned long tempDesire, bool computeOnly );
 	void trackSystemSleepPreventers( IOPMPowerStateIndex, IOPMPowerStateIndex, IOPMPowerChangeFlags );
 	void tellSystemCapabilityChange( uint32_t nextMS );
 	void restartIdleTimer( void );
+	void startDriverCalloutTimer( void );
+	void stopDriverCalloutTimer( void );
 
 	static void ack_timer_expired( thread_call_param_t, thread_call_param_t );
 	static void watchdog_timer_expired( thread_call_param_t arg0, thread_call_param_t arg1 );
@@ -2009,7 +2331,8 @@ private:
 	static IOReturn actionDriverCalloutDone(OSObject *, void *, void *, void *, void * );
 	static IOPMRequest * acquirePMRequest( IOService * target, IOOptionBits type, IOPMRequest * active = NULL );
 	static void releasePMRequest( IOPMRequest * request );
-	static void pmDriverCallout( IOService * from );
+	static void pmDriverCallout( IOService * from, thread_call_param_t );
+	static void pmDriverCalloutTimer( thread_call_param_t, thread_call_param_t );
 	static void pmTellAppWithResponse( OSObject * object, void * context );
 	static void pmTellClientWithResponse( OSObject * object, void * context );
 	static void pmTellCapabilityAppWithResponse( OSObject * object, void * arg );
@@ -2020,14 +2343,18 @@ private:
 	void addPowerChild1( IOPMRequest * request );
 	void addPowerChild2( IOPMRequest * request );
 	void addPowerChild3( IOPMRequest * request );
-	void adjustPowerState( uint32_t clamp = 0 );
+	void adjustPowerState( IOPMPowerStateIndex clamp = 0 );
 	void handlePMstop( IOPMRequest * request );
 	void handleRegisterPowerDriver( IOPMRequest * request );
 	bool handleAcknowledgePowerChange( IOPMRequest * request );
+	bool handleAcknowledgeSetPowerState( IOPMRequest * request );
+	bool handleCancelIdlePowerDown( void );
 	void handlePowerDomainWillChangeTo( IOPMRequest * request );
 	void handlePowerDomainDidChangeTo( IOPMRequest * request );
 	void handleRequestPowerState( IOPMRequest * request );
 	void handlePowerOverrideChanged( IOPMRequest * request );
+	bool _activityTickle( unsigned long type, unsigned long stateNumber );
+	void handleDeferredActivityTickle( IOPMRequest * request );
 	void handleActivityTickle( IOPMRequest * request );
 	void handleInterestChanged( IOPMRequest * request );
 	void handleSynchronizePowerTree( IOPMRequest * request );
@@ -2036,13 +2363,15 @@ private:
 	bool actionPMWorkQueueRetire( IOPMRequest * request, IOPMWorkQueue * queue );
 	bool actionPMRequestQueue( IOPMRequest * request, IOPMRequestQueue * queue );
 	bool actionPMReplyQueue( IOPMRequest * request, IOPMRequestQueue * queue );
-	bool actionPMCompletionQueue( IOPMRequest * request, IOPMCompletionQueue * queue );
+	bool actionPMCompletionQueue( LIBKERN_CONSUMED IOPMRequest * request, IOPMCompletionQueue * queue );
 	bool notifyInterestedDrivers( void );
 	void notifyInterestedDriversDone( void );
 	bool notifyControllingDriver( void );
 	void notifyControllingDriverDone( void );
 	void driverSetPowerState( void );
 	void driverInformPowerChange( void );
+	unsigned long driverMaxCapabilityForDomainState( IOPMPowerFlags domainState );
+	unsigned long driverInitialPowerStateForDomainState( IOPMPowerFlags domainState );
 	bool isPMBlocked( IOPMRequest * request, int count );
 	void notifyChildren( void );
 	void notifyChildrenOrdered( void );
@@ -2050,16 +2379,27 @@ private:
 	void notifyRootDomain( void );
 	void notifyRootDomainDone( void );
 	void cleanClientResponses( bool logErrors );
-	void updatePowerClient( const OSSymbol * client, uint32_t powerState );
+	void updatePowerClient( const OSSymbol * client, IOPMPowerStateIndex powerState );
 	void removePowerClient( const OSSymbol * client );
-	IOReturn requestPowerState( const OSSymbol * client, uint32_t state );
+	IOReturn requestPowerState( const OSSymbol * client, IOPMPowerStateIndex state, IOPMRequestTag tag = 0 );
 	IOReturn requestDomainPower( IOPMPowerStateIndex ourPowerState, IOOptionBits options = 0 );
 	IOReturn configurePowerStatesReport( IOReportConfigureAction action, void *result );
 	IOReturn updatePowerStatesReport( IOReportConfigureAction action, void *result, void *destination );
 	IOReturn configureSimplePowerReport(IOReportConfigureAction action, void *result );
 	IOReturn updateSimplePowerReport( IOReportConfigureAction action, void *result, void *destination );
 	void waitForPMDriverCall( IOService * target = NULL );
+
+	friend class IOUserServer;
 #endif /* XNU_KERNEL_PRIVATE */
 };
+
+#ifdef PRIVATE
+
+class IOServiceCompatibility : public IOService
+{
+	OSDeclareDefaultStructors(IOServiceCompatibility);
+};
+
+#endif /* PRIVATE */
 
 #endif /* ! _IOKIT_IOSERVICE_H */

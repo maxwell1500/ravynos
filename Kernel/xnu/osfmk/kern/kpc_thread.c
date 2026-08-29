@@ -43,8 +43,6 @@
 
 #if defined (__arm64__)
 #include <arm/cpu_data_internal.h>
-#elif defined (__arm__)
-#include <arm/cpu_data_internal.h>
 #endif
 
 /* global for whether to read PMCs on context switch */
@@ -57,17 +55,8 @@ boolean_t kpc_off_cpu_active = FALSE;
 static uint32_t kpc_thread_classes = 0;
 static uint32_t kpc_thread_classes_count = 0;
 
-static lck_grp_attr_t *kpc_thread_lckgrp_attr = NULL;
-static lck_grp_t      *kpc_thread_lckgrp = NULL;
-static lck_mtx_t       kpc_thread_lock;
-
-void
-kpc_thread_init(void)
-{
-	kpc_thread_lckgrp_attr = lck_grp_attr_alloc_init();
-	kpc_thread_lckgrp = lck_grp_alloc_init("kpc", kpc_thread_lckgrp_attr);
-	lck_mtx_init(&kpc_thread_lock, kpc_thread_lckgrp, LCK_ATTR_NULL);
-}
+static LCK_GRP_DECLARE(kpc_thread_lckgrp, "kpc thread");
+static LCK_MTX_DECLARE(kpc_thread_lock, &kpc_thread_lckgrp);
 
 uint32_t
 kpc_get_thread_counting(void)

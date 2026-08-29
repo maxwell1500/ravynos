@@ -643,7 +643,7 @@ enum {
 #define kIOPMPSAdapterDetailsAmperageKey            "Current"
 #define kIOPMPSAdapterDetailsDescriptionKey         "Description"
 #define kIOPMPSAdapterDetailsPMUConfigurationKey    "PMUConfiguration"
-#define kIOPMPSAdapterDetailsVoltage                "Voltage"
+#define kIOPMPSAdapterDetailsVoltage                "AdapterVoltage"
 #define kIOPMPSAdapterDetailsSourceIDKey            "Source"
 #define kIOPMPSAdapterDetailsErrorFlagsKey          "ErrorFlags"
 #define kIOPMPSAdapterDetailsSharedSourceKey        "SharedSource"
@@ -671,6 +671,10 @@ enum {
 	kIOPSFamilyCodeExternal3     = iokit_family_err(sub_iokit_pmu, 3),
 	kIOPSFamilyCodeExternal4     = iokit_family_err(sub_iokit_pmu, 4),
 	kIOPSFamilyCodeExternal5     = iokit_family_err(sub_iokit_pmu, 5),
+	kIOPSFamilyCodeExternal6     = iokit_family_err(sub_iokit_pmu, 6),
+	kIOPSFamilyCodeExternal7     = iokit_family_err(sub_iokit_pmu, 7),
+	kIOPSFamilyCodeExternal8     = iokit_family_err(sub_iokit_pmu, 8),
+	kIOPSFamilyCodeUnsupportedRegion = iokit_family_err(sub_iokit_pmu, 9),
 };
 
 // values for kIOPMPSAdapterDetailsErrorFlagsKey

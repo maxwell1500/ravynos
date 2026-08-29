@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2017-2021 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -28,12 +28,12 @@
 #ifndef MACHINE_MONOTONIC_H
 #define MACHINE_MONOTONIC_H
 
+#if CONFIG_CPU_COUNTERS
+
 #if defined(__x86_64__)
 #include <x86_64/monotonic.h>
 #elif defined(__arm64__)
 #include <arm64/monotonic.h>
-#elif defined(__arm__)
-#include <arm/monotonic.h>
 #else
 #error unsupported architecture
 #endif
@@ -41,8 +41,6 @@
 #include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
-
-extern bool mt_core_supported;
 
 struct mt_cpu {
 	uint64_t mtc_snaps[MT_CORE_NFIXED];
@@ -53,15 +51,6 @@ struct mt_cpu {
 	 * Whether this CPU should be using PMCs.
 	 */
 	bool mtc_active;
-};
-
-struct mt_thread {
-	_Atomic uint64_t mth_gen;
-	uint64_t mth_counts[MT_CORE_NFIXED];
-};
-
-struct mt_task {
-	uint64_t mtk_counts[MT_CORE_NFIXED];
 };
 
 struct mt_cpu *mt_cur_cpu(void);
@@ -81,5 +70,7 @@ extern mt_pmi_fn mt_microstackshot_pmi_handler;
 extern void *mt_microstackshot_ctx;
 extern uint64_t mt_core_reset_values[MT_CORE_NFIXED];
 int mt_microstackshot_start_arch(uint64_t period);
+
+#endif /* CONFIG_CPU_COUNTERS */
 
 #endif /* !defined(MACHINE_MONOTONIC_H) */

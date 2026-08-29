@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999-2020 Apple Inc. All rights reserved.
+ * Copyright (c) 1999-2024 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -57,6 +57,10 @@
 
 #include <kern/thread.h>
 
+#include <net/sockaddr_utils.h>
+
+extern const int copysize_limit_panic;
+
 struct kctl {
 	TAILQ_ENTRY(kctl)       next;           /* controller chain */
 	kern_ctl_ref            kctlref;
@@ -72,6 +76,7 @@ struct kctl {
 	u_int32_t               sendbufsize;    /* request more than the default buffer size */
 
 	/* Dispatch functions */
+	ctl_setup_func          setup;          /* Setup contact */
 	ctl_bind_func           bind;           /* Prepare contact */
 	ctl_connect_func        connect;        /* Make contact */
 	ctl_disconnect_func     disconnect;     /* Break contact */
@@ -95,14 +100,14 @@ enum ctl_status {
 
 struct ctl_cb {
 	TAILQ_ENTRY(ctl_cb)     next;           /* controller chain */
-	lck_mtx_t               *mtx;
+	lck_mtx_t               mtx;
 	struct socket           *so;            /* controlling socket */
 	struct kctl             *kctl;          /* back pointer to controller */
 	void                    *userdata;
 	struct sockaddr_ctl     sac;
-	u_int32_t               usecount;
-	u_int32_t               kcb_usecount;
-	u_int32_t               require_clearing_count;
+	uint32_t                usecount;
+	uint32_t                kcb_usecount;
+	uint32_t                require_clearing_count;
 #if DEVELOPMENT || DEBUG
 	enum ctl_status         status;
 #endif /* DEVELOPMENT || DEBUG */
@@ -127,14 +132,13 @@ struct ctl_cb {
  * Definitions and vars for we support
  */
 
-static u_int32_t        ctl_maxunit = 65536;
-static lck_grp_attr_t   *ctl_lck_grp_attr = 0;
-static lck_attr_t       *ctl_lck_attr = 0;
-static lck_grp_t        *ctl_lck_grp = 0;
-static lck_mtx_t        *ctl_mtx;
+const u_int32_t         ctl_maxunit = 65536;
+static LCK_ATTR_DECLARE(ctl_lck_attr, 0, 0);
+static LCK_GRP_DECLARE(ctl_lck_grp, "Kernel Control Protocol");
+static LCK_MTX_DECLARE_ATTR(ctl_mtx, &ctl_lck_grp, &ctl_lck_attr);
 
 /* all the controllers are chained */
-TAILQ_HEAD(kctl_list, kctl)     ctl_head;
+TAILQ_HEAD(kctl_list, kctl) ctl_head = TAILQ_HEAD_INITIALIZER(ctl_head);
 
 static int ctl_attach(struct socket *, int, struct proc *);
 static int ctl_detach(struct socket *);
@@ -142,17 +146,17 @@ static int ctl_sofreelastref(struct socket *so);
 static int ctl_bind(struct socket *, struct sockaddr *, struct proc *);
 static int ctl_connect(struct socket *, struct sockaddr *, struct proc *);
 static int ctl_disconnect(struct socket *);
-static int ctl_ioctl(struct socket *so, u_long cmd, caddr_t data,
+static int ctl_ioctl(struct socket *so, u_long cmd,
+    caddr_t __sized_by(IOCPARM_LEN(cmd)) data,
     struct ifnet *ifp, struct proc *p);
 static int ctl_send(struct socket *, int, struct mbuf *,
     struct sockaddr *, struct mbuf *, struct proc *);
-static int ctl_send_list(struct socket *, int, struct mbuf *,
-    struct sockaddr *, struct mbuf *, struct proc *);
+static int ctl_send_list(struct socket *, struct mbuf *, u_int *, int);
 static int ctl_ctloutput(struct socket *, struct sockopt *);
 static int ctl_peeraddr(struct socket *so, struct sockaddr **nam);
 static int ctl_usr_rcvd(struct socket *so, int flags);
 
-static struct kctl *ctl_find_by_name(const char *);
+static struct kctl *ctl_find_by_name(const char *__null_terminated);
 static struct kctl *ctl_find_by_id_unit(u_int32_t id, u_int32_t unit);
 
 static struct socket *kcb_find_socket(kern_ctl_ref kctlref, u_int32_t unit,
@@ -178,7 +182,6 @@ static struct pr_usrreqs ctl_usrreqs = {
 	.pru_sosend =           sosend,
 	.pru_sosend_list =      sosend_list,
 	.pru_soreceive =        soreceive,
-	.pru_soreceive_list =   soreceive_list,
 };
 
 static struct protosw kctlsw[] = {
@@ -243,13 +246,16 @@ SYSCTL_INT(_net_systm_kctl, OID_AUTO, panicdebug,
     CTLFLAG_RW | CTLFLAG_LOCKED, &ctl_panic_debug, 0, "");
 #endif /* DEVELOPMENT || DEBUG */
 
+SYSCTL_UINT(_net_systm_kctl, OID_AUTO, pcbcount, CTLFLAG_RD | CTLFLAG_LOCKED,
+    (unsigned int *)&kctlstat.kcs_pcbcount, 0, "");
+
 #define KCTL_TBL_INC 16
 
 static uintptr_t kctl_tbl_size = 0;
 static u_int32_t kctl_tbl_growing = 0;
 static u_int32_t kctl_tbl_growing_waiting = 0;
 static uintptr_t kctl_tbl_count = 0;
-static struct kctl **kctl_table = NULL;
+static struct kctl **__counted_by_or_null(kctl_tbl_size) kctl_table = NULL;
 static uintptr_t kctl_ref_gencnt = 0;
 
 static void kctl_tbl_grow(void);
@@ -270,32 +276,6 @@ kern_control_init(struct domain *dp)
 	VERIFY(!(dp->dom_flags & DOM_INITIALIZED));
 	VERIFY(dp == systemdomain);
 
-	ctl_lck_grp_attr = lck_grp_attr_alloc_init();
-	if (ctl_lck_grp_attr == NULL) {
-		panic("%s: lck_grp_attr_alloc_init failed\n", __func__);
-		/* NOTREACHED */
-	}
-
-	ctl_lck_grp = lck_grp_alloc_init("Kernel Control Protocol",
-	    ctl_lck_grp_attr);
-	if (ctl_lck_grp == NULL) {
-		panic("%s: lck_grp_alloc_init failed\n", __func__);
-		/* NOTREACHED */
-	}
-
-	ctl_lck_attr = lck_attr_alloc_init();
-	if (ctl_lck_attr == NULL) {
-		panic("%s: lck_attr_alloc_init failed\n", __func__);
-		/* NOTREACHED */
-	}
-
-	ctl_mtx = lck_mtx_alloc_init(ctl_lck_grp, ctl_lck_attr);
-	if (ctl_mtx == NULL) {
-		panic("%s: lck_mtx_alloc_init failed\n", __func__);
-		/* NOTREACHED */
-	}
-	TAILQ_INIT(&ctl_head);
-
 	for (i = 0, pr = &kctlsw[0]; i < kctl_proto_count; i++, pr++) {
 		net_add_proto(pr, dp, 1);
 	}
@@ -305,10 +285,8 @@ static void
 kcb_delete(struct ctl_cb *kcb)
 {
 	if (kcb != 0) {
-		if (kcb->mtx != 0) {
-			lck_mtx_free(kcb->mtx, ctl_lck_grp);
-		}
-		FREE(kcb, M_TEMP);
+		lck_mtx_destroy(&kcb->mtx, &ctl_lck_grp);
+		kfree_type(struct ctl_cb, kcb);
 	}
 }
 
@@ -322,47 +300,41 @@ static int
 ctl_attach(struct socket *so, int proto, struct proc *p)
 {
 #pragma unused(proto, p)
-	int error = 0;
-	struct ctl_cb                   *kcb = 0;
+	struct ctl_cb *__single kcb = 0;
 
-	MALLOC(kcb, struct ctl_cb *, sizeof(struct ctl_cb), M_TEMP, M_WAITOK);
-	if (kcb == NULL) {
-		error = ENOMEM;
-		goto quit;
-	}
-	bzero(kcb, sizeof(struct ctl_cb));
+	kcb = kalloc_type(struct ctl_cb, Z_WAITOK | Z_ZERO | Z_NOFAIL);
 
-	kcb->mtx = lck_mtx_alloc_init(ctl_lck_grp, ctl_lck_attr);
-	if (kcb->mtx == NULL) {
-		error = ENOMEM;
-		goto quit;
-	}
+	lck_mtx_init(&kcb->mtx, &ctl_lck_grp, &ctl_lck_attr);
 	kcb->so = so;
 	so->so_pcb = (caddr_t)kcb;
 
-quit:
-	if (error != 0) {
-		kcb_delete(kcb);
-		kcb = 0;
+	/*
+	 * For datagram, use character count for sbspace as its value
+	 * may be use for packetization and we do not want to
+	 * drop packets based on the sbspace hint that was just provided
+	 */
+	if (SOCK_CHECK_TYPE(so, SOCK_DGRAM)) {
+		so->so_rcv.sb_flags |= SB_KCTL;
+		so->so_snd.sb_flags |= SB_KCTL;
 	}
-	return error;
+	return 0;
 }
 
 static int
 ctl_sofreelastref(struct socket *so)
 {
-	struct ctl_cb   *kcb = (struct ctl_cb *)so->so_pcb;
+	struct ctl_cb *__single kcb = (struct ctl_cb *)so->so_pcb;
 
 	so->so_pcb = 0;
 
 	if (kcb != 0) {
-		struct kctl             *kctl;
+		struct kctl *__single kctl;
 		if ((kctl = kcb->kctl) != 0) {
-			lck_mtx_lock(ctl_mtx);
+			lck_mtx_lock(&ctl_mtx);
 			TAILQ_REMOVE(&kctl->kcb_head, kcb, next);
 			kctlstat.kcs_pcbcount--;
 			kctlstat.kcs_gencnt++;
-			lck_mtx_unlock(ctl_mtx);
+			lck_mtx_unlock(&ctl_mtx);
 		}
 		kcb_delete(kcb);
 	}
@@ -409,13 +381,15 @@ ctl_kcb_decrement_use_count(struct ctl_cb *kcb)
 {
 	assert(kcb->kcb_usecount != 0);
 	kcb->kcb_usecount--;
-	wakeup((caddr_t)&kcb->kcb_usecount);
+	if (kcb->require_clearing_count != 0) {
+		wakeup((caddr_t)&kcb->kcb_usecount);
+	}
 }
 
 static int
 ctl_detach(struct socket *so)
 {
-	struct ctl_cb   *kcb = (struct ctl_cb *)so->so_pcb;
+	struct ctl_cb *__single kcb = (struct ctl_cb *)so->so_pcb;
 
 	if (kcb == 0) {
 		return 0;
@@ -450,16 +424,14 @@ ctl_detach(struct socket *so)
 static int
 ctl_setup_kctl(struct socket *so, struct sockaddr *nam, struct proc *p)
 {
-	struct kctl *kctl = NULL;
+	struct kctl *__single kctl = NULL;
 	int error = 0;
-	struct sockaddr_ctl     sa;
-	struct ctl_cb *kcb = (struct ctl_cb *)so->so_pcb;
-	struct ctl_cb *kcb_next = NULL;
-	u_quad_t sbmaxsize;
-	u_int32_t recvbufsize, sendbufsize;
+	struct sockaddr_ctl sa;
+	struct ctl_cb *__single kcb = (struct ctl_cb *)so->so_pcb;
+	struct ctl_cb *__single kcb_next = NULL;
 
 	if (kcb == 0) {
-		panic("ctl_setup_kctl so_pcb null\n");
+		panic("ctl_setup_kctl so_pcb null");
 	}
 
 	if (kcb->kctl != NULL) {
@@ -471,12 +443,12 @@ ctl_setup_kctl(struct socket *so, struct sockaddr *nam, struct proc *p)
 		return EINVAL;
 	}
 
-	bcopy(nam, &sa, sizeof(struct sockaddr_ctl));
+	SOCKADDR_COPY(nam, &sa, sizeof(struct sockaddr_ctl));
 
-	lck_mtx_lock(ctl_mtx);
+	lck_mtx_lock(&ctl_mtx);
 	kctl = ctl_find_by_id_unit(sa.sc_id, sa.sc_unit);
 	if (kctl == NULL) {
-		lck_mtx_unlock(ctl_mtx);
+		lck_mtx_unlock(&ctl_mtx);
 		return ENOENT;
 	}
 
@@ -484,24 +456,30 @@ ctl_setup_kctl(struct socket *so, struct sockaddr *nam, struct proc *p)
 	    (so->so_type != SOCK_STREAM)) ||
 	    (!(kctl->flags & CTL_FLAG_REG_SOCK_STREAM) &&
 	    (so->so_type != SOCK_DGRAM))) {
-		lck_mtx_unlock(ctl_mtx);
+		lck_mtx_unlock(&ctl_mtx);
 		return EPROTOTYPE;
 	}
 
 	if (kctl->flags & CTL_FLAG_PRIVILEGED) {
 		if (p == 0) {
-			lck_mtx_unlock(ctl_mtx);
+			lck_mtx_unlock(&ctl_mtx);
 			return EINVAL;
 		}
 		if (kauth_cred_issuser(kauth_cred_get()) == 0) {
-			lck_mtx_unlock(ctl_mtx);
+			lck_mtx_unlock(&ctl_mtx);
 			return EPERM;
 		}
 	}
 
-	if ((kctl->flags & CTL_FLAG_REG_ID_UNIT) || sa.sc_unit != 0) {
+	if (kctl->setup != NULL) {
+		error = (*kctl->setup)(&sa.sc_unit, &kcb->userdata);
+		if (error != 0) {
+			lck_mtx_unlock(&ctl_mtx);
+			return error;
+		}
+	} else if ((kctl->flags & CTL_FLAG_REG_ID_UNIT) || sa.sc_unit != 0) {
 		if (kcb_find(kctl, sa.sc_unit) != NULL) {
-			lck_mtx_unlock(ctl_mtx);
+			lck_mtx_unlock(&ctl_mtx);
 			return EBUSY;
 		}
 	} else {
@@ -520,7 +498,7 @@ ctl_setup_kctl(struct socket *so, struct sockaddr *nam, struct proc *p)
 		}
 
 		if (unit == ctl_maxunit) {
-			lck_mtx_unlock(ctl_mtx);
+			lck_mtx_unlock(&ctl_mtx);
 			return EBUSY;
 		}
 
@@ -537,33 +515,17 @@ ctl_setup_kctl(struct socket *so, struct sockaddr *nam, struct proc *p)
 	kctlstat.kcs_pcbcount++;
 	kctlstat.kcs_gencnt++;
 	kctlstat.kcs_connections++;
-	lck_mtx_unlock(ctl_mtx);
+	lck_mtx_unlock(&ctl_mtx);
 
-	/*
-	 * rdar://15526688: Limit the send and receive sizes to sb_max
-	 * by using the same scaling as sbreserve()
-	 */
-	sbmaxsize = (u_quad_t)sb_max * MCLBYTES / (MSIZE + MCLBYTES);
-
-	if (kctl->sendbufsize > sbmaxsize) {
-		sendbufsize = sbmaxsize;
-	} else {
-		sendbufsize = kctl->sendbufsize;
-	}
-
-	if (kctl->recvbufsize > sbmaxsize) {
-		recvbufsize = sbmaxsize;
-	} else {
-		recvbufsize = kctl->recvbufsize;
-	}
-
-	error = soreserve(so, sendbufsize, recvbufsize);
+	error = soreserve(so, kctl->sendbufsize, kctl->recvbufsize);
 	if (error) {
+#if (DEBUG || DEVELOPMENT)
 		if (ctl_debug) {
-			printf("%s - soreserve(%llx, %u, %u) error %d\n",
-			    __func__, (uint64_t)VM_KERNEL_ADDRPERM(so),
-			    sendbufsize, recvbufsize, error);
+			printf("%s - soreserve(%llu, %u, %u) error %d\n",
+			    __func__, so->so_gencnt,
+			    kctl->sendbufsize, kctl->recvbufsize, error);
 		}
+#endif /* (DEBUG || DEVELOPMENT) */
 		goto done;
 	}
 
@@ -573,14 +535,14 @@ done:
 #if DEVELOPMENT || DEBUG
 		kcb->status = KCTL_DISCONNECTED;
 #endif /* DEVELOPMENT || DEBUG */
-		lck_mtx_lock(ctl_mtx);
+		lck_mtx_lock(&ctl_mtx);
 		TAILQ_REMOVE(&kctl->kcb_head, kcb, next);
 		kcb->kctl = NULL;
 		kcb->sac.sc_unit = 0;
 		kctlstat.kcs_pcbcount--;
 		kctlstat.kcs_gencnt++;
 		kctlstat.kcs_conn_fail++;
-		lck_mtx_unlock(ctl_mtx);
+		lck_mtx_unlock(&ctl_mtx);
 	}
 	return error;
 }
@@ -589,10 +551,10 @@ static int
 ctl_bind(struct socket *so, struct sockaddr *nam, struct proc *p)
 {
 	int error = 0;
-	struct ctl_cb *kcb = (struct ctl_cb *)so->so_pcb;
+	struct ctl_cb *__single kcb = (struct ctl_cb *)so->so_pcb;
 
 	if (kcb == NULL) {
-		panic("ctl_bind so_pcb null\n");
+		panic("ctl_bind so_pcb null");
 	}
 
 	lck_mtx_t *mtx_held = socket_getlock(so, PR_F_WILLUNLOCK);
@@ -605,7 +567,7 @@ ctl_bind(struct socket *so, struct sockaddr *nam, struct proc *p)
 	}
 
 	if (kcb->kctl == NULL) {
-		panic("ctl_bind kctl null\n");
+		panic("ctl_bind kctl null");
 	}
 
 	if (kcb->kctl->bind == NULL) {
@@ -627,10 +589,10 @@ static int
 ctl_connect(struct socket *so, struct sockaddr *nam, struct proc *p)
 {
 	int error = 0;
-	struct ctl_cb *kcb = (struct ctl_cb *)so->so_pcb;
+	struct ctl_cb *__single kcb = (struct ctl_cb *)so->so_pcb;
 
 	if (kcb == NULL) {
-		panic("ctl_connect so_pcb null\n");
+		panic("ctl_connect so_pcb null");
 	}
 
 	lck_mtx_t *mtx_held = socket_getlock(so, PR_F_WILLUNLOCK);
@@ -650,7 +612,7 @@ ctl_connect(struct socket *so, struct sockaddr *nam, struct proc *p)
 	}
 
 	if (kcb->kctl == NULL) {
-		panic("ctl_connect kctl null\n");
+		panic("ctl_connect kctl null");
 	}
 
 	soisconnecting(so);
@@ -685,14 +647,14 @@ end:
 #if DEVELOPMENT || DEBUG
 		kcb->status = KCTL_DISCONNECTED;
 #endif /* DEVELOPMENT || DEBUG */
-		lck_mtx_lock(ctl_mtx);
+		lck_mtx_lock(&ctl_mtx);
 		TAILQ_REMOVE(&kcb->kctl->kcb_head, kcb, next);
 		kcb->kctl = NULL;
 		kcb->sac.sc_unit = 0;
 		kctlstat.kcs_pcbcount--;
 		kctlstat.kcs_gencnt++;
 		kctlstat.kcs_conn_fail++;
-		lck_mtx_unlock(ctl_mtx);
+		lck_mtx_unlock(&ctl_mtx);
 	}
 out:
 	ctl_kcb_done_clearing(kcb);
@@ -703,13 +665,13 @@ out:
 static int
 ctl_disconnect(struct socket *so)
 {
-	struct ctl_cb   *kcb = (struct ctl_cb *)so->so_pcb;
+	struct ctl_cb *__single kcb = (struct ctl_cb *)so->so_pcb;
 
 	if ((kcb = (struct ctl_cb *)so->so_pcb)) {
-		lck_mtx_t *mtx_held = socket_getlock(so, PR_F_WILLUNLOCK);
+		lck_mtx_t *__single mtx_held = socket_getlock(so, PR_F_WILLUNLOCK);
 		ctl_kcb_increment_use_count(kcb, mtx_held);
 		ctl_kcb_require_clearing(kcb, mtx_held);
-		struct kctl             *kctl = kcb->kctl;
+		struct kctl *__single kctl = kcb->kctl;
 
 		if (kctl && kctl->disconnect) {
 			socket_unlock(so, 0);
@@ -724,16 +686,21 @@ ctl_disconnect(struct socket *so)
 #endif /* DEVELOPMENT || DEBUG */
 
 		socket_unlock(so, 0);
-		lck_mtx_lock(ctl_mtx);
+		lck_mtx_lock(&ctl_mtx);
 		kcb->kctl = 0;
 		kcb->sac.sc_unit = 0;
 		while (kcb->usecount != 0) {
-			msleep(&kcb->usecount, ctl_mtx, 0, "kcb->usecount", 0);
+			msleep(&kcb->usecount, &ctl_mtx, 0, "kcb->usecount", 0);
 		}
-		TAILQ_REMOVE(&kctl->kcb_head, kcb, next);
+
+		/* Check for NULL here for the case where ctl_disconnect is racing with itself
+		 * and the first thread has already cleaned up the structure */
+		if (kctl) {
+			TAILQ_REMOVE(&kctl->kcb_head, kcb, next);
+		}
 		kctlstat.kcs_pcbcount--;
 		kctlstat.kcs_gencnt++;
-		lck_mtx_unlock(ctl_mtx);
+		lck_mtx_unlock(&ctl_mtx);
 		socket_lock(so, 0);
 		ctl_kcb_done_clearing(kcb);
 		ctl_kcb_decrement_use_count(kcb);
@@ -744,8 +711,8 @@ ctl_disconnect(struct socket *so)
 static int
 ctl_peeraddr(struct socket *so, struct sockaddr **nam)
 {
-	struct ctl_cb           *kcb = (struct ctl_cb *)so->so_pcb;
-	struct kctl                     *kctl;
+	struct ctl_cb *__single kcb = (struct ctl_cb *)so->so_pcb;
+	struct kctl *__single kctl;
 	struct sockaddr_ctl     sc;
 
 	if (kcb == NULL) {      /* sanity check */
@@ -771,7 +738,7 @@ ctl_peeraddr(struct socket *so, struct sockaddr **nam)
 static void
 ctl_sbrcv_trim(struct socket *so)
 {
-	struct sockbuf *sb = &so->so_rcv;
+	struct sockbuf *__single sb = &so->so_rcv;
 
 	if (sb->sb_hiwat > sb->sb_idealsize) {
 		u_int32_t diff;
@@ -847,7 +814,8 @@ ctl_send(struct socket *so, int flags, struct mbuf *m,
 	}
 
 	if (kcb == NULL) {      /* sanity check */
-		error = ENOTCONN;
+		m_freem(m);
+		return ENOTCONN;
 	}
 
 	lck_mtx_t *mtx_held = socket_getlock(so, PR_F_WILLUNLOCK);
@@ -858,7 +826,7 @@ ctl_send(struct socket *so, int flags, struct mbuf *m,
 	}
 
 	if (error == 0 && kctl->send) {
-		so_tc_update_stats(m, so, m_get_service_class(m));
+		so_update_tx_data_stats(so, 1, m->m_pkthdr.len);
 		socket_unlock(so, 0);
 		error = (*kctl->send)(kctl->kctlref, kcb->sac.sc_unit, kcb->userdata,
 		    m, flags);
@@ -878,61 +846,66 @@ ctl_send(struct socket *so, int flags, struct mbuf *m,
 }
 
 static int
-ctl_send_list(struct socket *so, int flags, struct mbuf *m,
-    __unused struct sockaddr *addr, struct mbuf *control,
-    __unused struct proc *p)
+ctl_send_list(struct socket *so, struct mbuf *m, u_int *pktcnt, int flags)
 {
 	int             error = 0;
 	struct ctl_cb   *kcb = (struct ctl_cb *)so->so_pcb;
 	struct kctl     *kctl;
 
-	if (control) {
-		m_freem_list(control);
-	}
-
 	if (kcb == NULL) {      /* sanity check */
-		error = ENOTCONN;
+		m_freem_list(m);
+		return ENOTCONN;
 	}
 
 	lck_mtx_t *mtx_held = socket_getlock(so, PR_F_WILLUNLOCK);
 	ctl_kcb_increment_use_count(kcb, mtx_held);
 
-	if (error == 0 && (kctl = kcb->kctl) == NULL) {
+	if ((kctl = kcb->kctl) == NULL) {
 		error = EINVAL;
+		goto done;
 	}
 
-	if (error == 0 && kctl->send_list) {
+	*pktcnt = 0;
+	if (kctl->send_list != NULL) {
 		struct mbuf *nxt;
+		int space = 0;
 
 		for (nxt = m; nxt != NULL; nxt = nxt->m_nextpkt) {
-			so_tc_update_stats(nxt, so, m_get_service_class(nxt));
+			space += nxt->m_pkthdr.len;
+			*pktcnt += 1;
 		}
+		so_update_tx_data_stats(so, *pktcnt, space);
 
 		socket_unlock(so, 0);
 		error = (*kctl->send_list)(kctl->kctlref, kcb->sac.sc_unit,
 		    kcb->userdata, m, flags);
 		socket_lock(so, 0);
-	} else if (error == 0 && kctl->send) {
+	} else {
+		int space = 0;
+
 		while (m != NULL && error == 0) {
 			struct mbuf *nextpkt = m->m_nextpkt;
 
 			m->m_nextpkt = NULL;
-			so_tc_update_stats(m, so, m_get_service_class(m));
+
+			space += m->m_pkthdr.len;
+
 			socket_unlock(so, 0);
 			error = (*kctl->send)(kctl->kctlref, kcb->sac.sc_unit,
 			    kcb->userdata, m, flags);
 			socket_lock(so, 0);
 			m = nextpkt;
+			if (error == 0) {
+				*pktcnt += 1;
+			}
 		}
+		so_update_tx_data_stats(so, *pktcnt, space);
+
 		if (m != NULL) {
 			m_freem_list(m);
 		}
-	} else {
-		m_freem_list(m);
-		if (error == 0) {
-			error = ENOTSUP;
-		}
 	}
+done:
 	if (error != 0) {
 		OSIncrementAtomic64((SInt64 *)&kctlstat.kcs_send_list_fail);
 	}
@@ -942,10 +915,10 @@ ctl_send_list(struct socket *so, int flags, struct mbuf *m,
 }
 
 static errno_t
-ctl_rcvbspace(struct socket *so, u_int32_t datasize,
+ctl_rcvbspace(struct socket *so, size_t datasize,
     u_int32_t kctlflags, u_int32_t flags)
 {
-	struct sockbuf *sb = &so->so_rcv;
+	struct sockbuf *__single sb = &so->so_rcv;
 	u_int32_t space = sbspace(sb);
 	errno_t error;
 
@@ -966,7 +939,7 @@ ctl_rcvbspace(struct socket *so, u_int32_t datasize,
 			error = 0;
 		}
 	} else {
-		u_int32_t autorcvbuf_max;
+		size_t autorcvbuf_max;
 
 		/*
 		 * Allow overcommit of 25%
@@ -976,15 +949,14 @@ ctl_rcvbspace(struct socket *so, u_int32_t datasize,
 
 		if ((u_int32_t) space >= datasize) {
 			error = 0;
-		} else if (tcp_cansbgrow(sb) &&
-		    sb->sb_hiwat < autorcvbuf_max) {
+		} else if (sb->sb_hiwat < autorcvbuf_max) {
 			/*
 			 * Grow with a little bit of leeway
 			 */
-			u_int32_t grow = datasize - space + MSIZE;
+			size_t grow = datasize - space + _MSIZE;
+			u_int32_t cc = (u_int32_t)MIN(MIN((sb->sb_hiwat + grow), autorcvbuf_max), UINT32_MAX);
 
-			if (sbreserve(sb,
-			    min((sb->sb_hiwat + grow), autorcvbuf_max)) == 1) {
+			if (sbreserve(sb, cc) == 1) {
 				if (sb->sb_hiwat > ctl_autorcvbuf_high) {
 					ctl_autorcvbuf_high = sb->sb_hiwat;
 				}
@@ -1016,7 +988,7 @@ errno_t
 ctl_enqueuembuf(kern_ctl_ref kctlref, u_int32_t unit, struct mbuf *m,
     u_int32_t flags)
 {
-	struct socket   *so;
+	struct socket   *__single so;
 	errno_t         error = 0;
 	int             len = m->m_pkthdr.len;
 	u_int32_t       kctlflags;
@@ -1066,7 +1038,7 @@ static int
 m_space(struct mbuf *m)
 {
 	int space = 0;
-	struct mbuf *nxt;
+	mbuf_ref_t nxt;
 
 	for (nxt = m; nxt != NULL; nxt = nxt->m_next) {
 		space += nxt->m_len;
@@ -1079,9 +1051,9 @@ errno_t
 ctl_enqueuembuf_list(void *kctlref, u_int32_t unit, struct mbuf *m_list,
     u_int32_t flags, struct mbuf **m_remain)
 {
-	struct socket *so = NULL;
+	struct socket *__single so = NULL;
 	errno_t error = 0;
-	struct mbuf *m, *nextpkt;
+	mbuf_ref_t m, nextpkt;
 	int needwakeup = 0;
 	int len = 0;
 	u_int32_t kctlflags;
@@ -1113,8 +1085,12 @@ ctl_enqueuembuf_list(void *kctlref, u_int32_t unit, struct mbuf *m_list,
 		nextpkt = m->m_nextpkt;
 
 		if (m->m_pkthdr.len == 0 && ctl_debug) {
-			printf("%s: %llx m_pkthdr.len is 0",
-			    __func__, (uint64_t)VM_KERNEL_ADDRPERM(m));
+			struct ctl_cb *kcb = (struct ctl_cb *)so->so_pcb;
+			struct kctl *kctl = kcb == NULL ? NULL : kcb->kctl;
+			uint32_t id = kctl == NULL ? -1 : kctl->id;
+
+			printf("%s: %u:%u m_pkthdr.len is 0",
+			    __func__, id, unit);
 		}
 
 		/*
@@ -1165,9 +1141,10 @@ done:
 	if (m_remain) {
 		*m_remain = m;
 
+#if (DEBUG || DEVELOPMENT)
 		if (m != NULL && socket_debug && so != NULL &&
 		    (so->so_options & SO_DEBUG)) {
-			struct mbuf *n;
+			mbuf_ref_t n;
 
 			printf("%s m_list %llx\n", __func__,
 			    (uint64_t) VM_KERNEL_ADDRPERM(m_list));
@@ -1177,6 +1154,7 @@ done:
 				    (uint64_t) VM_KERNEL_ADDRPERM(n->m_next));
 			}
 		}
+#endif /* (DEBUG || DEVELOPMENT) */
 	} else {
 		if (m != NULL) {
 			m_freem_list(m);
@@ -1189,14 +1167,13 @@ done:
 }
 
 errno_t
-ctl_enqueuedata(void *kctlref, u_int32_t unit, void *data, size_t len,
-    u_int32_t flags)
+ctl_enqueuedata(void *kctlref, u_int32_t unit, void *__sized_by(len) data,
+    size_t len, u_int32_t flags)
 {
-	struct socket   *so;
-	struct mbuf     *m;
+	struct socket   *__single so;
+	mbuf_ref_t      m, n;
 	errno_t         error = 0;
 	unsigned int    num_needed;
-	struct mbuf     *n;
 	size_t          curlen = 0;
 	u_int32_t       kctlflags;
 
@@ -1229,8 +1206,8 @@ ctl_enqueuedata(void *kctlref, u_int32_t unit, void *data, size_t len,
 		if (mlen + curlen > len) {
 			mlen = len - curlen;
 		}
-		n->m_len = mlen;
-		bcopy((char *)data + curlen, n->m_data, mlen);
+		n->m_len = (int32_t)mlen;
+		bcopy((char *)data + curlen, m_mtod_current(n), mlen);
 		curlen += mlen;
 	}
 	mbuf_pkthdr_setlen(m, curlen);
@@ -1270,9 +1247,9 @@ bye:
 errno_t
 ctl_getenqueuepacketcount(kern_ctl_ref kctlref, u_int32_t unit, u_int32_t *pcnt)
 {
-	struct socket   *so;
+	struct socket *__single so;
 	u_int32_t cnt;
-	struct mbuf *m1;
+	struct mbuf *__single m1;
 
 	if (pcnt == NULL) {
 		return EINVAL;
@@ -1286,9 +1263,7 @@ ctl_getenqueuepacketcount(kern_ctl_ref kctlref, u_int32_t unit, u_int32_t *pcnt)
 	cnt = 0;
 	m1 = so->so_rcv.sb_mb;
 	while (m1 != NULL) {
-		if (m1->m_type == MT_DATA ||
-		    m1->m_type == MT_HEADER ||
-		    m1->m_type == MT_OOBDATA) {
+		if (m_has_mtype(m1, MTF_DATA | MTF_HEADER | MTF_OOBDATA)) {
 			cnt += 1;
 		}
 		m1 = m1->m_nextpkt;
@@ -1303,7 +1278,7 @@ ctl_getenqueuepacketcount(kern_ctl_ref kctlref, u_int32_t unit, u_int32_t *pcnt)
 errno_t
 ctl_getenqueuespace(kern_ctl_ref kctlref, u_int32_t unit, size_t *space)
 {
-	struct socket   *so;
+	struct socket *__single so;
 	long avail;
 
 	if (space == NULL) {
@@ -1326,7 +1301,7 @@ errno_t
 ctl_getenqueuereadable(kern_ctl_ref kctlref, u_int32_t unit,
     u_int32_t *difference)
 {
-	struct socket   *so;
+	struct socket *__single so;
 
 	if (difference == NULL) {
 		return EINVAL;
@@ -1350,17 +1325,18 @@ ctl_getenqueuereadable(kern_ctl_ref kctlref, u_int32_t unit,
 static int
 ctl_ctloutput(struct socket *so, struct sockopt *sopt)
 {
-	struct ctl_cb   *kcb = (struct ctl_cb *)so->so_pcb;
-	struct kctl     *kctl;
+	struct ctl_cb *__single kcb = (struct ctl_cb *)so->so_pcb;
+	struct kctl *__single kctl;
 	int     error = 0;
 	void    *data = NULL;
+	size_t  data_len = 0;
 	size_t  len;
 
 	if (sopt->sopt_level != SYSPROTO_CONTROL) {
 		return EINVAL;
 	}
 
-	if (kcb == NULL) {      /* sanity check */
+	if (kcb == NULL) {         /* sanity check */
 		return ENOTCONN;
 	}
 
@@ -1378,9 +1354,15 @@ ctl_ctloutput(struct socket *so, struct sockopt *sopt)
 			goto out;
 		}
 		if (sopt->sopt_valsize != 0) {
-			MALLOC(data, void *, sopt->sopt_valsize, M_TEMP,
-			    M_WAITOK | M_ZERO);
+			data_len = sopt->sopt_valsize;
+			if (__improbable(data_len > copysize_limit_panic)) {
+				error = EINVAL;
+				goto out;
+			}
+
+			data = kalloc_data(data_len, Z_WAITOK | Z_ZERO);
 			if (data == NULL) {
+				data_len = 0;
 				error = ENOMEM;
 				goto out;
 			}
@@ -1395,9 +1377,7 @@ ctl_ctloutput(struct socket *so, struct sockopt *sopt)
 			socket_lock(so, 0);
 		}
 
-		if (data != NULL) {
-			FREE(data, M_TEMP);
-		}
+		kfree_data(data, data_len);
 		break;
 
 	case SOPT_GET:
@@ -1407,9 +1387,15 @@ ctl_ctloutput(struct socket *so, struct sockopt *sopt)
 		}
 
 		if (sopt->sopt_valsize && sopt->sopt_val) {
-			MALLOC(data, void *, sopt->sopt_valsize, M_TEMP,
-			    M_WAITOK | M_ZERO);
+			data_len = sopt->sopt_valsize;
+			if (__improbable(data_len > copysize_limit_panic)) {
+				error = EINVAL;
+				goto out;
+			}
+
+			data = kalloc_data(data_len, Z_WAITOK | Z_ZERO);
 			if (data == NULL) {
+				data_len = 0;
 				error = ENOMEM;
 				goto out;
 			}
@@ -1442,9 +1428,8 @@ ctl_ctloutput(struct socket *so, struct sockopt *sopt)
 				}
 			}
 		}
-		if (data != NULL) {
-			FREE(data, M_TEMP);
-		}
+
+		kfree_data(data, data_len);
 		break;
 	}
 
@@ -1454,7 +1439,8 @@ out:
 }
 
 static int
-ctl_ioctl(struct socket *so, u_long cmd, caddr_t data,
+ctl_ioctl(struct socket *so, u_long cmd,
+    caddr_t __sized_by(IOCPARM_LEN(cmd)) data,
     struct ifnet *ifp, struct proc *p)
 {
 #pragma unused(so, ifp, p)
@@ -1463,13 +1449,13 @@ ctl_ioctl(struct socket *so, u_long cmd, caddr_t data,
 	switch (cmd) {
 	/* get the number of controllers */
 	case CTLIOCGCOUNT: {
-		struct kctl     *kctl;
+		struct kctl *__single kctl;
 		u_int32_t n = 0;
 
-		lck_mtx_lock(ctl_mtx);
+		lck_mtx_lock(&ctl_mtx);
 		TAILQ_FOREACH(kctl, &ctl_head, next)
 		n++;
-		lck_mtx_unlock(ctl_mtx);
+		lck_mtx_unlock(&ctl_mtx);
 
 		bcopy(&n, data, sizeof(n));
 		error = 0;
@@ -1477,7 +1463,7 @@ ctl_ioctl(struct socket *so, u_long cmd, caddr_t data,
 	}
 	case CTLIOCGINFO: {
 		struct ctl_info ctl_info;
-		struct kctl     *kctl = 0;
+		struct kctl *__single kctl = 0;
 		size_t name_len;
 
 		bcopy(data, &ctl_info, sizeof(ctl_info));
@@ -1487,9 +1473,9 @@ ctl_ioctl(struct socket *so, u_long cmd, caddr_t data,
 			error = EINVAL;
 			break;
 		}
-		lck_mtx_lock(ctl_mtx);
-		kctl = ctl_find_by_name(ctl_info.ctl_name);
-		lck_mtx_unlock(ctl_mtx);
+		lck_mtx_lock(&ctl_mtx);
+		kctl = ctl_find_by_name(__unsafe_null_terminated_from_indexable(ctl_info.ctl_name));
+		lck_mtx_unlock(&ctl_mtx);
 		if (kctl == 0) {
 			error = ENOENT;
 			break;
@@ -1507,19 +1493,19 @@ ctl_ioctl(struct socket *so, u_long cmd, caddr_t data,
 }
 
 static void
-kctl_tbl_grow()
+kctl_tbl_grow(void)
 {
-	struct kctl **new_table;
+	struct kctl *__single *new_table;
 	uintptr_t new_size;
 
-	lck_mtx_assert(ctl_mtx, LCK_MTX_ASSERT_OWNED);
+	lck_mtx_assert(&ctl_mtx, LCK_MTX_ASSERT_OWNED);
 
 	if (kctl_tbl_growing) {
 		/* Another thread is allocating */
 		kctl_tbl_growing_waiting++;
 
 		do {
-			(void) msleep((caddr_t) &kctl_tbl_growing, ctl_mtx,
+			(void) msleep((caddr_t) &kctl_tbl_growing, &ctl_mtx,
 			    PSOCK | PCATCH, "kctl_tbl_growing", 0);
 		} while (kctl_tbl_growing);
 		kctl_tbl_growing_waiting--;
@@ -1542,17 +1528,15 @@ kctl_tbl_grow()
 
 	new_size = kctl_tbl_size + KCTL_TBL_INC;
 
-	lck_mtx_unlock(ctl_mtx);
-	new_table = _MALLOC(sizeof(struct kctl *) * new_size,
-	    M_TEMP, M_WAIT | M_ZERO);
-	lck_mtx_lock(ctl_mtx);
+	lck_mtx_unlock(&ctl_mtx);
+	new_table = kalloc_type(struct kctl *, new_size, Z_WAITOK | Z_ZERO);
+	lck_mtx_lock(&ctl_mtx);
 
 	if (new_table != NULL) {
 		if (kctl_table != NULL) {
-			bcopy(kctl_table, new_table,
-			    kctl_tbl_size * sizeof(struct kctl *));
+			bcopy(kctl_table, new_table, kctl_tbl_size * sizeof(struct kctl *));
 
-			_FREE(kctl_table, M_TEMP);
+			kfree_type_counted_by(struct kctl *, kctl_tbl_size, kctl_table);
 		}
 		kctl_table = new_table;
 		kctl_tbl_size = new_size;
@@ -1574,7 +1558,7 @@ kctl_make_ref(struct kctl *kctl)
 {
 	uintptr_t i;
 
-	lck_mtx_assert(ctl_mtx, LCK_MTX_ASSERT_OWNED);
+	lck_mtx_assert(&ctl_mtx, LCK_MTX_ASSERT_OWNED);
 
 	if (kctl_tbl_count >= kctl_tbl_size) {
 		kctl_tbl_grow();
@@ -1598,7 +1582,7 @@ kctl_make_ref(struct kctl *kctl)
 			    KCTLREF_GENCNT_MASK) +
 			    ((i + 1) & KCTLREF_INDEX_MASK);
 
-			kctl->kctlref = (void *)(ref);
+			kctl->kctlref = __unsafe_forge_single(void *, ref);
 			kctl_table[i] = kctl;
 			kctl_tbl_count++;
 			break;
@@ -1625,10 +1609,10 @@ kctl_delete_ref(kern_ctl_ref kctlref)
 	 */
 	uintptr_t i = (((uintptr_t)kctlref) & KCTLREF_INDEX_MASK) - 1;
 
-	lck_mtx_assert(ctl_mtx, LCK_MTX_ASSERT_OWNED);
+	lck_mtx_assert(&ctl_mtx, LCK_MTX_ASSERT_OWNED);
 
 	if (i < kctl_tbl_size) {
-		struct kctl *kctl = kctl_table[i];
+		struct kctl *__single kctl = kctl_table[i];
 
 		if (kctl->kctlref == kctlref) {
 			kctl_table[i] = NULL;
@@ -1648,9 +1632,9 @@ kctl_from_ref(kern_ctl_ref kctlref)
 	 * Reference is index plus one
 	 */
 	uintptr_t i = (((uintptr_t)kctlref) & KCTLREF_INDEX_MASK) - 1;
-	struct kctl *kctl = NULL;
+	struct kctl *__single kctl = NULL;
 
-	lck_mtx_assert(ctl_mtx, LCK_MTX_ASSERT_OWNED);
+	lck_mtx_assert(&ctl_mtx, LCK_MTX_ASSERT_OWNED);
 
 	if (i >= kctl_tbl_size) {
 		kctlstat.kcs_bad_kctlref++;
@@ -1670,34 +1654,31 @@ kctl_from_ref(kern_ctl_ref kctlref)
 errno_t
 ctl_register(struct kern_ctl_reg *userkctl, kern_ctl_ref *kctlref)
 {
-	struct kctl     *kctl = NULL;
-	struct kctl     *kctl_next = NULL;
+	struct kctl     *__single kctl = NULL;
+	struct kctl     *__single kctl_next = NULL;
 	u_int32_t       id = 1;
 	size_t          name_len;
 	int             is_extended = 0;
+	int             is_setup = 0;
 
-	if (userkctl == NULL) { /* sanity check */
+	if (userkctl == NULL) {         /* sanity check */
 		return EINVAL;
 	}
 	if (userkctl->ctl_connect == NULL) {
 		return EINVAL;
 	}
-	name_len = strlen(userkctl->ctl_name);
+	name_len = strnlen(userkctl->ctl_name, sizeof(userkctl->ctl_name));
 	if (name_len == 0 || name_len + 1 > MAX_KCTL_NAME) {
 		return EINVAL;
 	}
 
-	MALLOC(kctl, struct kctl *, sizeof(*kctl), M_TEMP, M_WAITOK);
-	if (kctl == NULL) {
-		return ENOMEM;
-	}
-	bzero((char *)kctl, sizeof(*kctl));
+	kctl = kalloc_type(struct kctl, Z_WAITOK | Z_ZERO | Z_NOFAIL);
 
-	lck_mtx_lock(ctl_mtx);
+	lck_mtx_lock(&ctl_mtx);
 
 	if (kctl_make_ref(kctl) == NULL) {
-		lck_mtx_unlock(ctl_mtx);
-		FREE(kctl, M_TEMP);
+		lck_mtx_unlock(&ctl_mtx);
+		kfree_type(struct kctl, kctl);
 		return ENOMEM;
 	}
 
@@ -1716,10 +1697,10 @@ ctl_register(struct kern_ctl_reg *userkctl, kern_ctl_ref *kctlref)
 		/* Must dynamically assign an unused ID */
 
 		/* Verify the same name isn't already registered */
-		if (ctl_find_by_name(userkctl->ctl_name) != NULL) {
+		if (ctl_find_by_name(__unsafe_null_terminated_from_indexable(userkctl->ctl_name)) != NULL) {
 			kctl_delete_ref(kctl->kctlref);
-			lck_mtx_unlock(ctl_mtx);
-			FREE(kctl, M_TEMP);
+			lck_mtx_unlock(&ctl_mtx);
+			kfree_type(struct kctl, kctl);
 			return EEXIST;
 		}
 
@@ -1763,8 +1744,8 @@ ctl_register(struct kern_ctl_reg *userkctl, kern_ctl_ref *kctlref)
 
 		if (ctl_find_by_id_unit(userkctl->ctl_id, userkctl->ctl_unit)) {
 			kctl_delete_ref(kctl->kctlref);
-			lck_mtx_unlock(ctl_mtx);
-			FREE(kctl, M_TEMP);
+			lck_mtx_unlock(&ctl_mtx);
+			kfree_type(struct kctl, kctl);
 			return EEXIST;
 		}
 		kctl->id = userkctl->ctl_id;
@@ -1772,8 +1753,9 @@ ctl_register(struct kern_ctl_reg *userkctl, kern_ctl_ref *kctlref)
 	}
 
 	is_extended = (userkctl->ctl_flags & CTL_FLAG_REG_EXTENDED);
+	is_setup = (userkctl->ctl_flags & CTL_FLAG_REG_SETUP);
 
-	strlcpy(kctl->name, userkctl->ctl_name, MAX_KCTL_NAME);
+	strbufcpy(kctl->name, userkctl->ctl_name);
 	kctl->flags = userkctl->ctl_flags;
 
 	/*
@@ -1792,6 +1774,9 @@ ctl_register(struct kern_ctl_reg *userkctl, kern_ctl_ref *kctlref)
 		kctl->recvbufsize = userkctl->ctl_recvsize;
 	}
 
+	if (is_setup) {
+		kctl->setup = userkctl->ctl_setup;
+	}
 	kctl->bind = userkctl->ctl_bind;
 	kctl->connect = userkctl->ctl_connect;
 	kctl->disconnect = userkctl->ctl_disconnect;
@@ -1814,7 +1799,7 @@ ctl_register(struct kern_ctl_reg *userkctl, kern_ctl_ref *kctlref)
 	kctlstat.kcs_reg_count++;
 	kctlstat.kcs_gencnt++;
 
-	lck_mtx_unlock(ctl_mtx);
+	lck_mtx_unlock(&ctl_mtx);
 
 	*kctlref = kctl->kctlref;
 
@@ -1825,12 +1810,12 @@ ctl_register(struct kern_ctl_reg *userkctl, kern_ctl_ref *kctlref)
 errno_t
 ctl_deregister(void *kctlref)
 {
-	struct kctl             *kctl;
+	struct kctl *__single kctl;
 
-	lck_mtx_lock(ctl_mtx);
+	lck_mtx_lock(&ctl_mtx);
 	if ((kctl = kctl_from_ref(kctlref)) == NULL) {
 		kctlstat.kcs_bad_kctlref++;
-		lck_mtx_unlock(ctl_mtx);
+		lck_mtx_unlock(&ctl_mtx);
 		if (ctl_debug != 0) {
 			printf("%s invalid kctlref %p\n",
 			    __func__, kctlref);
@@ -1839,7 +1824,7 @@ ctl_deregister(void *kctlref)
 	}
 
 	if (!TAILQ_EMPTY(&kctl->kcb_head)) {
-		lck_mtx_unlock(ctl_mtx);
+		lck_mtx_unlock(&ctl_mtx);
 		return EBUSY;
 	}
 
@@ -1849,25 +1834,25 @@ ctl_deregister(void *kctlref)
 	kctlstat.kcs_gencnt++;
 
 	kctl_delete_ref(kctl->kctlref);
-	lck_mtx_unlock(ctl_mtx);
+	lck_mtx_unlock(&ctl_mtx);
 
 	ctl_post_msg(KEV_CTL_DEREGISTERED, kctl->id);
-	FREE(kctl, M_TEMP);
+	kfree_type(struct kctl, kctl);
 	return 0;
 }
 
 /*
- * Must be called with global ctl_mtx lock taked
+ * Must be called with global ctl_mtx lock taken
  */
 static struct kctl *
-ctl_find_by_name(const char *name)
+ctl_find_by_name(const char *__null_terminated name)
 {
-	struct kctl     *kctl;
+	struct kctl *__single kctl;
 
-	lck_mtx_assert(ctl_mtx, LCK_MTX_ASSERT_OWNED);
+	lck_mtx_assert(&ctl_mtx, LCK_MTX_ASSERT_OWNED);
 
 	TAILQ_FOREACH(kctl, &ctl_head, next)
-	if (strncmp(kctl->name, name, sizeof(kctl->name)) == 0) {
+	if (strlcmp(kctl->name, name, sizeof(kctl->name)) == 0) {
 		return kctl;
 	}
 
@@ -1877,26 +1862,26 @@ ctl_find_by_name(const char *name)
 u_int32_t
 ctl_id_by_name(const char *name)
 {
-	u_int32_t       ctl_id = 0;
-	struct kctl     *kctl;
+	u_int32_t ctl_id = 0;
+	struct kctl *__single kctl;
 
-	lck_mtx_lock(ctl_mtx);
+	lck_mtx_lock(&ctl_mtx);
 	kctl = ctl_find_by_name(name);
 	if (kctl) {
 		ctl_id = kctl->id;
 	}
-	lck_mtx_unlock(ctl_mtx);
+	lck_mtx_unlock(&ctl_mtx);
 
 	return ctl_id;
 }
 
 errno_t
-ctl_name_by_id(u_int32_t id, char *out_name, size_t maxsize)
+ctl_name_by_id(u_int32_t id, char *__counted_by(maxsize) out_name, size_t maxsize)
 {
-	int             found = 0;
-	struct kctl *kctl;
+	int    found = 0;
+	struct kctl *__single kctl;
 
-	lck_mtx_lock(ctl_mtx);
+	lck_mtx_lock(&ctl_mtx);
 	TAILQ_FOREACH(kctl, &ctl_head, next) {
 		if (kctl->id == id) {
 			break;
@@ -1904,13 +1889,14 @@ ctl_name_by_id(u_int32_t id, char *out_name, size_t maxsize)
 	}
 
 	if (kctl) {
+		size_t count = maxsize;
 		if (maxsize > MAX_KCTL_NAME) {
-			maxsize = MAX_KCTL_NAME;
+			count = MAX_KCTL_NAME;
 		}
-		strlcpy(out_name, kctl->name, maxsize);
+		strbufcpy(out_name, count, kctl->name, sizeof(kctl->name));
 		found = 1;
 	}
-	lck_mtx_unlock(ctl_mtx);
+	lck_mtx_unlock(&ctl_mtx);
 
 	return found ? 0 : ENOENT;
 }
@@ -1922,9 +1908,9 @@ ctl_name_by_id(u_int32_t id, char *out_name, size_t maxsize)
 static struct kctl *
 ctl_find_by_id_unit(u_int32_t id, u_int32_t unit)
 {
-	struct kctl     *kctl;
+	struct kctl *__single kctl;
 
-	lck_mtx_assert(ctl_mtx, LCK_MTX_ASSERT_OWNED);
+	lck_mtx_assert(&ctl_mtx, LCK_MTX_ASSERT_OWNED);
 
 	TAILQ_FOREACH(kctl, &ctl_head, next) {
 		if (kctl->id == id && (kctl->flags & CTL_FLAG_REG_ID_UNIT) == 0) {
@@ -1942,9 +1928,9 @@ ctl_find_by_id_unit(u_int32_t id, u_int32_t unit)
 static struct ctl_cb *
 kcb_find(struct kctl *kctl, u_int32_t unit)
 {
-	struct ctl_cb   *kcb;
+	struct ctl_cb *__single kcb;
 
-	lck_mtx_assert(ctl_mtx, LCK_MTX_ASSERT_OWNED);
+	lck_mtx_assert(&ctl_mtx, LCK_MTX_ASSERT_OWNED);
 
 	TAILQ_FOREACH(kcb, &kctl->kcb_head, next)
 	if (kcb->sac.sc_unit == unit) {
@@ -1957,21 +1943,21 @@ kcb_find(struct kctl *kctl, u_int32_t unit)
 static struct socket *
 kcb_find_socket(kern_ctl_ref kctlref, u_int32_t unit, u_int32_t *kctlflags)
 {
-	struct socket *so = NULL;
-	struct ctl_cb   *kcb;
-	void *lr_saved;
-	struct kctl *kctl;
+	struct socket *__single so = NULL;
+	struct ctl_cb *__single kcb;
+	void *__single lr_saved;
+	struct kctl *__single kctl;
 	int i;
 
-	lr_saved = __builtin_return_address(0);
+	lr_saved = __unsafe_forge_single(void *, __builtin_return_address(0));
 
-	lck_mtx_lock(ctl_mtx);
+	lck_mtx_lock(&ctl_mtx);
 	/*
 	 * First validate the kctlref
 	 */
 	if ((kctl = kctl_from_ref(kctlref)) == NULL) {
 		kctlstat.kcs_bad_kctlref++;
-		lck_mtx_unlock(ctl_mtx);
+		lck_mtx_unlock(&ctl_mtx);
 		if (ctl_debug != 0) {
 			printf("%s invalid kctlref %p\n",
 			    __func__, kctlref);
@@ -1981,7 +1967,7 @@ kcb_find_socket(kern_ctl_ref kctlref, u_int32_t unit, u_int32_t *kctlflags)
 
 	kcb = kcb_find(kctl, unit);
 	if (kcb == NULL || kcb->kctl != kctl || (so = kcb->so) == NULL) {
-		lck_mtx_unlock(ctl_mtx);
+		lck_mtx_unlock(&ctl_mtx);
 		return NULL;
 	}
 	/*
@@ -1991,7 +1977,7 @@ kcb_find_socket(kern_ctl_ref kctlref, u_int32_t unit, u_int32_t *kctlflags)
 	/*
 	 * Respect lock ordering: socket before ctl_mtx
 	 */
-	lck_mtx_unlock(ctl_mtx);
+	lck_mtx_unlock(&ctl_mtx);
 
 	socket_lock(so, 1);
 	/*
@@ -2001,23 +1987,23 @@ kcb_find_socket(kern_ctl_ref kctlref, u_int32_t unit, u_int32_t *kctlflags)
 	i = (so->next_lock_lr + SO_LCKDBG_MAX - 1) % SO_LCKDBG_MAX;
 	so->lock_lr[i] = lr_saved;
 
-	lck_mtx_lock(ctl_mtx);
+	lck_mtx_lock(&ctl_mtx);
 
 	if ((kctl = kctl_from_ref(kctlref)) == NULL || kcb->kctl == NULL) {
-		lck_mtx_unlock(ctl_mtx);
+		lck_mtx_unlock(&ctl_mtx);
 		socket_unlock(so, 1);
 		so = NULL;
-		lck_mtx_lock(ctl_mtx);
+		lck_mtx_lock(&ctl_mtx);
 	} else if (kctlflags != NULL) {
 		*kctlflags = kctl->flags;
 	}
 
 	kcb->usecount--;
-	if (kcb->usecount == 0) {
+	if (kcb->usecount == 0 && kcb->require_clearing_count != 0) {
 		wakeup((event_t)&kcb->usecount);
 	}
 
-	lck_mtx_unlock(ctl_mtx);
+	lck_mtx_unlock(&ctl_mtx);
 
 	return so;
 }
@@ -2026,9 +2012,9 @@ static void
 ctl_post_msg(u_int32_t event_code, u_int32_t id)
 {
 	struct ctl_event_data   ctl_ev_data;
-	struct kev_msg                  ev_msg;
+	struct kev_msg          ev_msg;
 
-	lck_mtx_assert(ctl_mtx, LCK_MTX_ASSERT_NOTOWNED);
+	lck_mtx_assert(&ctl_mtx, LCK_MTX_ASSERT_NOTOWNED);
 
 	bzero(&ev_msg, sizeof(struct kev_msg));
 	ev_msg.vendor_code = KEV_VENDOR_APPLE;
@@ -2051,24 +2037,24 @@ ctl_post_msg(u_int32_t event_code, u_int32_t id)
 static int
 ctl_lock(struct socket *so, int refcount, void *lr)
 {
-	void *lr_saved;
+	void *__single lr_saved;
 
 	if (lr == NULL) {
-		lr_saved = __builtin_return_address(0);
+		lr_saved = __unsafe_forge_single(void *, __builtin_return_address(0));
 	} else {
 		lr_saved = lr;
 	}
 
 	if (so->so_pcb != NULL) {
-		lck_mtx_lock(((struct ctl_cb *)so->so_pcb)->mtx);
+		lck_mtx_lock(&((struct ctl_cb *)so->so_pcb)->mtx);
 	} else {
-		panic("ctl_lock: so=%p NO PCB! lr=%p lrh= %s\n",
+		panic("ctl_lock: so=%p NO PCB! lr=%p lrh= %s",
 		    so, lr_saved, solockhistory_nr(so));
 		/* NOTREACHED */
 	}
 
 	if (so->so_usecount < 0) {
-		panic("ctl_lock: so=%p so_pcb=%p lr=%p ref=%x lrh= %s\n",
+		panic("ctl_lock: so=%p so_pcb=%p lr=%p ref=%x lrh= %s",
 		    so, so->so_pcb, lr_saved, so->so_usecount,
 		    solockhistory_nr(so));
 		/* NOTREACHED */
@@ -2086,11 +2072,11 @@ ctl_lock(struct socket *so, int refcount, void *lr)
 static int
 ctl_unlock(struct socket *so, int refcount, void *lr)
 {
-	void *lr_saved;
-	lck_mtx_t *mutex_held;
+	void *__single lr_saved;
+	lck_mtx_t *__single mutex_held;
 
 	if (lr == NULL) {
-		lr_saved = __builtin_return_address(0);
+		lr_saved = __unsafe_forge_single(void *, __builtin_return_address(0));
 	} else {
 		lr_saved = lr;
 	}
@@ -2099,7 +2085,7 @@ ctl_unlock(struct socket *so, int refcount, void *lr)
 	printf("ctl_unlock: so=%llx sopcb=%x lock=%llx ref=%u lr=%llx\n",
 	    (uint64_t)VM_KERNEL_ADDRPERM(so),
 	    (uint64_t)VM_KERNEL_ADDRPERM(so->so_pcb,
-	    (uint64_t)VM_KERNEL_ADDRPERM(((struct ctl_cb *)so->so_pcb)->mtx),
+	    (uint64_t)VM_KERNEL_ADDRPERM(&((struct ctl_cb *)so->so_pcb)->mtx),
 	    so->so_usecount, (uint64_t)VM_KERNEL_ADDRPERM(lr_saved));
 #endif /* (MORE_KCTLLOCK_DEBUG && (DEVELOPMENT || DEBUG)) */
 	if (refcount) {
@@ -2107,17 +2093,17 @@ ctl_unlock(struct socket *so, int refcount, void *lr)
 	}
 
 	if (so->so_usecount < 0) {
-		panic("ctl_unlock: so=%p usecount=%x lrh= %s\n",
+		panic("ctl_unlock: so=%p usecount=%x lrh= %s",
 		    so, so->so_usecount, solockhistory_nr(so));
 		/* NOTREACHED */
 	}
 	if (so->so_pcb == NULL) {
-		panic("ctl_unlock: so=%p NO PCB usecount=%x lr=%p lrh= %s\n",
+		panic("ctl_unlock: so=%p NO PCB usecount=%x lr=%p lrh= %s",
 		    so, so->so_usecount, (void *)lr_saved,
 		    solockhistory_nr(so));
 		/* NOTREACHED */
 	}
-	mutex_held = ((struct ctl_cb *)so->so_pcb)->mtx;
+	mutex_held = &((struct ctl_cb *)so->so_pcb)->mtx;
 
 	    lck_mtx_assert(mutex_held, LCK_MTX_ASSERT_OWNED);
 	    so->unlock_lr[so->next_unlock_lr] = lr_saved;
@@ -2135,16 +2121,16 @@ static lck_mtx_t *
 ctl_getlock(struct socket *so, int flags)
 {
 #pragma unused(flags)
-        struct ctl_cb *kcb = (struct ctl_cb *)so->so_pcb;
+        struct ctl_cb *__single kcb = (struct ctl_cb *)so->so_pcb;
 
         if (so->so_pcb) {
                 if (so->so_usecount < 0) {
-                        panic("ctl_getlock: so=%p usecount=%x lrh= %s\n",
+                        panic("ctl_getlock: so=%p usecount=%x lrh= %s",
                             so, so->so_usecount, solockhistory_nr(so));
 		}
-                return kcb->mtx;
+                return &kcb->mtx;
 	} else {
-                panic("ctl_getlock: so=%p NULL NO so_pcb %s\n",
+                panic("ctl_getlock: so=%p NULL NO so_pcb %s",
                     so, solockhistory_nr(so));
                 return so->so_proto->pr_domain->dom_mtx;
 	}
@@ -2155,23 +2141,20 @@ kctl_reg_list SYSCTL_HANDLER_ARGS
 {
 #pragma unused(oidp, arg1, arg2)
         int error = 0;
-        int n, i;
+        u_int64_t i, n;
         struct xsystmgen xsg;
         void *buf = NULL;
-        struct kctl *kctl;
+        struct kctl *__single kctl;
         size_t item_size = ROUNDUP64(sizeof(struct xkctl_reg));
 
-        buf = _MALLOC(item_size, M_TEMP, M_WAITOK | M_ZERO);
-        if (buf == NULL) {
-                return ENOMEM;
-	}
+        buf = kalloc_data(item_size, Z_WAITOK | Z_ZERO | Z_NOFAIL);
 
-        lck_mtx_lock(ctl_mtx);
+        lck_mtx_lock(&ctl_mtx);
 
         n = kctlstat.kcs_reg_count;
 
         if (req->oldptr == USER_ADDR_NULL) {
-                req->oldidx = (n + n / 8) * sizeof(struct xkctl_reg);
+                req->oldidx = (size_t)(n + n / 8) * sizeof(struct xkctl_reg);
                 goto done;
 	}
         if (req->newptr != USER_ADDR_NULL) {
@@ -2194,12 +2177,11 @@ kctl_reg_list SYSCTL_HANDLER_ARGS
                 goto done;
 	}
 
-        i = 0;
         for (i = 0, kctl = TAILQ_FIRST(&ctl_head);
             i < n && kctl != NULL;
             i++, kctl = TAILQ_NEXT(kctl, next)) {
-                struct xkctl_reg *xkr = (struct xkctl_reg *)buf;
-                struct ctl_cb *kcb;
+                struct xkctl_reg *__single xkr = (struct xkctl_reg *)buf;
+                struct ctl_cb *__single kcb;
                 u_int32_t pcbcount = 0;
 
                 TAILQ_FOREACH(kcb, &kctl->kcb_head, next)
@@ -2226,7 +2208,7 @@ kctl_reg_list SYSCTL_HANDLER_ARGS
                 xkr->xkr_setopt = (uint64_t)VM_KERNEL_UNSLIDE(kctl->setopt);
                 xkr->xkr_getopt = (uint64_t)VM_KERNEL_UNSLIDE(kctl->getopt);
                 xkr->xkr_rcvd = (uint64_t)VM_KERNEL_UNSLIDE(kctl->rcvd);
-                strlcpy(xkr->xkr_name, kctl->name, sizeof(xkr->xkr_name));
+                strbufcpy(xkr->xkr_name, kctl->name);
 
                 error = SYSCTL_OUT(req, buf, item_size);
 	}
@@ -2251,11 +2233,9 @@ kctl_reg_list SYSCTL_HANDLER_ARGS
 	}
 
 done:
-        lck_mtx_unlock(ctl_mtx);
+        lck_mtx_unlock(&ctl_mtx);
 
-        if (buf != NULL) {
-                FREE(buf, M_TEMP);
-	}
+        kfree_data(buf, item_size);
 
         return error;
 }
@@ -2265,26 +2245,23 @@ kctl_pcblist SYSCTL_HANDLER_ARGS
 {
 #pragma unused(oidp, arg1, arg2)
         int error = 0;
-        int n, i;
+        u_int64_t n, i;
         struct xsystmgen xsg;
         void *buf = NULL;
-        struct kctl *kctl;
+        struct kctl *__single kctl;
         size_t item_size = ROUNDUP64(sizeof(struct xkctlpcb)) +
             ROUNDUP64(sizeof(struct xsocket_n)) +
             2 * ROUNDUP64(sizeof(struct xsockbuf_n)) +
             ROUNDUP64(sizeof(struct xsockstat_n));
 
-        buf = _MALLOC(item_size, M_TEMP, M_WAITOK | M_ZERO);
-        if (buf == NULL) {
-                return ENOMEM;
-	}
+        buf = kalloc_data(item_size, Z_WAITOK_ZERO_NOFAIL);
 
-        lck_mtx_lock(ctl_mtx);
+        lck_mtx_lock(&ctl_mtx);
 
         n = kctlstat.kcs_pcbcount;
 
         if (req->oldptr == USER_ADDR_NULL) {
-                req->oldidx = (n + n / 8) * item_size;
+                req->oldidx = (size_t)(n + n / 8) * item_size;
                 goto done;
 	}
         if (req->newptr != USER_ADDR_NULL) {
@@ -2307,11 +2284,10 @@ kctl_pcblist SYSCTL_HANDLER_ARGS
                 goto done;
 	}
 
-        i = 0;
         for (i = 0, kctl = TAILQ_FIRST(&ctl_head);
             i < n && kctl != NULL;
             kctl = TAILQ_NEXT(kctl, next)) {
-                struct ctl_cb *kcb;
+                struct ctl_cb *__single kcb;
 
                 for (kcb = TAILQ_FIRST(&kctl->kcb_head);
                     i < n && kcb != NULL;
@@ -2331,11 +2307,10 @@ kctl_pcblist SYSCTL_HANDLER_ARGS
                         xk->xkp_len = sizeof(struct xkctlpcb);
                         xk->xkp_kind = XSO_KCB;
                         xk->xkp_unit = kcb->sac.sc_unit;
-                        xk->xkp_kctpcb = (uint64_t)VM_KERNEL_ADDRPERM(kcb);
-                        xk->xkp_kctlref = (uint64_t)VM_KERNEL_ADDRPERM(kctl);
+                        xk->xkp_kctpcb = (uint64_t)VM_KERNEL_ADDRHASH(kcb);
+                        xk->xkp_kctlref = (uint64_t)VM_KERNEL_ADDRHASH(kctl);
                         xk->xkp_kctlid = kctl->id;
-                        strlcpy(xk->xkp_kctlname, kctl->name,
-                            sizeof(xk->xkp_kctlname));
+                        strbufcpy(xk->xkp_kctlname, kctl->name);
 
                         sotoxsocket_n(kcb->so, xso);
                         sbtoxsockbuf_n(kcb->so ?
@@ -2368,8 +2343,9 @@ kctl_pcblist SYSCTL_HANDLER_ARGS
 	}
 
 done:
-        lck_mtx_unlock(ctl_mtx);
+        lck_mtx_unlock(&ctl_mtx);
 
+        kfree_data(buf, item_size);
         return error;
 }
 
@@ -2379,7 +2355,7 @@ kctl_getstat SYSCTL_HANDLER_ARGS
 #pragma unused(oidp, arg1, arg2)
         int error = 0;
 
-        lck_mtx_lock(ctl_mtx);
+        lck_mtx_lock(&ctl_mtx);
 
         if (req->newptr != USER_ADDR_NULL) {
                 error = EPERM;
@@ -2393,17 +2369,17 @@ kctl_getstat SYSCTL_HANDLER_ARGS
         error = SYSCTL_OUT(req, &kctlstat,
             MIN(sizeof(struct kctlstat), req->oldlen));
 done:
-        lck_mtx_unlock(ctl_mtx);
+        lck_mtx_unlock(&ctl_mtx);
         return error;
 }
 
 void
 kctl_fill_socketinfo(struct socket *so, struct socket_info *si)
 {
-        struct ctl_cb *kcb = (struct ctl_cb *)so->so_pcb;
-        struct kern_ctl_info *kcsi =
+        struct ctl_cb *__single kcb = (struct ctl_cb *)so->so_pcb;
+        struct kern_ctl_info *__single kcsi =
             &si->soi_proto.pri_kern_ctl;
-        struct kctl *kctl = kcb->kctl;
+        struct kctl *__single kctl = kcb->kctl;
 
         si->soi_kind = SOCKINFO_KERN_CTL;
 
@@ -2417,5 +2393,5 @@ kctl_fill_socketinfo(struct socket *so, struct socket_info *si)
         kcsi->kcsi_recvbufsize = kctl->recvbufsize;
         kcsi->kcsi_sendbufsize = kctl->sendbufsize;
         kcsi->kcsi_unit = kcb->sac.sc_unit;
-        strlcpy(kcsi->kcsi_name, kctl->name, MAX_KCTL_NAME);
+        strbufcpy(kcsi->kcsi_name, kctl->name);
 }

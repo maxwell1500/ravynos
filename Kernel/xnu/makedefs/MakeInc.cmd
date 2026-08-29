@@ -1,6 +1,6 @@
 # -*- mode: makefile;-*-
 #
-# Copyright (C) 1999-2016 Apple Inc. All rights reserved.
+# Copyright (C) 1999-2020 Apple Inc. All rights reserved.
 #
 # MakeInc.cmd contains command paths for use during
 # the build, as well as make fragments and text
@@ -11,9 +11,9 @@
 # Commands for the build environment
 #
 
-##
-# Verbosity
-##
+#
+# Build Logging and Verbosity
+#
 
 ifeq ($(RC_XBS),YES)
 	VERBOSE = YES
@@ -21,32 +21,101 @@ else
 	VERBOSE = NO
 endif
 
+BASH = bash
+
 ECHO = echo
 
-LOG = echo
-makelog = $(info $1)
 ERR = $(ECHO) > /dev/stderr
+PRINTF = printf
 
 QUIET ?= 0
 ifneq ($(QUIET),0)
-	LOG = :
-	makelog =
+	PRINTF = printf > /dev/null
 	ifeq ($(VERBOSE),YES)
 		override VERBOSE = NO
 	endif
 endif
 
+# Helper functions for logging operations.
+LOG_PFX_LEN = 15
+LOG_PFX_LEN_ADJ = $(LOG_PFX_LEN)
+LOG = $(PRINTF) "$2%$4s$(Color0) $3%s$(Color0)\n" "$1"
+
+CONCISE ?= 0
+ifneq ($(CONCISE),0)
+	# Concise logging puts all logs on the same line (CSI K to clear and
+	# carriage return).
+	LOG = $(PRINTF) "$2%$4s$(Color0) $3%s$(Color0)\033[K\r" "$1"
+endif
+
+_LOG_COMP = $(call LOG,$1,$(ColorC),$(ColorF),$(LOG_PFX_LEN_ADJ))
+_LOG_HOST = $(call LOG,$1,$(ColorH),$(ColorF),$(LOG_PFX_LEN))
+_LOG_HOST_LINK = $(call LOG,$1,$(ColorH),$(ColorLF),$(LOG_PFX_LEN))
+
+# Special operations.
+LOG_LDFILELIST = $(call LOG,LDFILELIST,$(ColorL),$(ColorLF),$(LOG_PFX_LEN_ADJ))
+LOG_MIG = $(call LOG,MIG,$(ColorM),$(ColorF),$(LOG_PFX_LEN_ADJ))
+LOG_LD = $(call LOG,LD,$(ColorL),$(ColorF),$(LOG_PFX_LEN_ADJ))
+LOG_ALIGN = $(call LOG,--------->,$(Color0),$(Color0),$(LOG_PFX_LEN))
+
+# Compiling/machine-specific operations.
+LOG_CC = $(call _LOG_COMP,CC)
+LOG_CXX = $(call _LOG_COMP,C++)
+LOG_AS = $(call _LOG_COMP,AS)
+LOG_LTO = $(call _LOG_COMP,LTO)
+LOG_SYMBOLSET = $(call _LOG_COMP,SYMSET)
+LOG_SYMBOLSETPLIST = $(call _LOG_COMP,SYMSETPLIST)
+LOG_VERIFIER = $(call _LOG_COMP,VERIFIER)
+
+# Host-side operations.
+LOG_TIGHTBEAMC = $(call _LOG_HOST,TIGHTBEAMC)
+LOG_IIG = $(call _LOG_HOST,IIG)
+LOG_HOST_CC = $(call _LOG_HOST,CC)
+LOG_HOST_LD = $(call _LOG_HOST,LD)
+LOG_HOST_CODESIGN = $(call _LOG_HOST,CODESIGN)
+LOG_HOST_BISON = $(call _LOG_HOST,BISON)
+LOG_HOST_FLEX = $(call _LOG_HOST,FLEX)
+LOG_INSTALL = $(call _LOG_HOST,INSTALL)
+LOG_INSTALLVARIANT = $(call _LOG_HOST,INSTALLVARIANT)
+LOG_INSTALLSYM = $(call _LOG_HOST,INSTALLSYM)
+LOG_INSTALLHDR = $(call _LOG_HOST,INSTALLHDR)
+LOG_INSTALLMACROS = $(call _LOG_HOST,INSTALLMACROS)
+LOG_INSTALLPY = $(call _LOG_HOST,INSTALLPY)
+LOG_MAN = $(call _LOG_HOST,MAN)
+LOG_MANLINK = $(call _LOG_HOST,MANLINK)
+LOG_ALIAS = $(call _LOG_HOST,ALIAS)
+LOG_STRIP = $(call _LOG_HOST,STRIP)
+LOG_DSYMUTIL = $(call _LOG_HOST,DSYMUTIL)
+LOG_LIBTOOL = $(call _LOG_HOST,LIBTOOL)
+LOG_FILEPREP = $(call _LOG_HOST,FILEPREP)
+
+# Host-side linking operations.
+LOG_GENASSYM = $(call _LOG_HOST_LINK,GENASSYM)
+LOG_GENERATE= $(call _LOG_HOST_LINK,GENERATE)
+LOG_CTFCONVERT = $(call _LOG_HOST_LINK,CTFCONVERT)
+LOG_CTFMERGE = $(call _LOG_HOST_LINK,CTFMERGE)
+LOG_CTFINSERT = $(call _LOG_HOST_LINK,CTFINSERT)
+LOG_DSYMUTIL = $(call _LOG_HOST_LINK,DSYMUTIL)
+LOG_SUPPORTED_KPI = $(call _LOG_HOST_LINK,SUPPORTED_KPI)
+
+
 ifeq ($(VERBOSE),YES)
 	_v =
 	_vstdout =
-	XCRUN = $(shell echo $$XCRUN) -verbose
+	_vstderr =
+	XCRUN = /usr/bin/xcrun -verbose
 else
 	_v = @
 	_vstdout = > /dev/null
-	XCRUN = $(shell echo $$XCRUN)
+	_vstderr = 2> /dev/null
+	XCRUN = /usr/bin/xcrun
 endif
 
 VERBOSE_GENERATED_MAKE_FRAGMENTS = NO
+
+#
+# Defaults
+#
 
 SDKROOT ?= macosx
 HOST_SDKROOT ?= macosx
@@ -54,7 +123,7 @@ HOST_SDKROOT ?= macosx
 # SDKROOT may be passed as a shorthand like "iphoneos.internal". We
 # must resolve these to a full path and override SDKROOT.
 
-ifeq ($(SDKROOT_RESOLVED),)
+ifeq ($(origin SDKROOT_RESOLVED),undefined)
 export SDKROOT_RESOLVED := $(shell $(XCRUN) -sdk $(SDKROOT) -show-sdk-path)
 ifeq ($(strip $(SDKROOT)_$(SDKROOT_RESOLVED)),/_)
 export SDKROOT_RESOLVED := /
@@ -62,7 +131,7 @@ endif
 endif
 override SDKROOT = $(SDKROOT_RESOLVED)
 
-ifeq ($(HOST_SDKROOT_RESOLVED),)
+ifeq ($(origin HOST_SDKROOT_RESOLVED),undefined)
 export HOST_SDKROOT_RESOLVED := $(shell $(XCRUN) -sdk $(HOST_SDKROOT) -show-sdk-path)
 ifeq ($(strip $(HOST_SDKROOT_RESOLVED)),)
 export HOST_SDKROOT_RESOLVED := /
@@ -70,9 +139,13 @@ endif
 endif
 override HOST_SDKROOT = $(HOST_SDKROOT_RESOLVED)
 
-ifeq ($(PLATFORM),)
+ifeq ($(origin SDKVERSION),undefined)
+     export SDKVERSION := $(shell $(XCRUN) -sdk $(SDKROOT) -show-sdk-version)
+endif
+
+ifeq ($(origin PLATFORM),undefined)
 	export PLATFORMPATH := $(shell $(XCRUN) -sdk $(SDKROOT) -show-sdk-platform-path)
-	export PLATFORM := $(shell echo $(PLATFORMPATH) | sed 's,^.*/\([^/]*\)\.platform$$,\1,')
+	export PLATFORM := $(shell echo $(PLATFORMPATH) | sed 's,^.*/\([^/]*\)\.platform$$,\1,' | sed 's,\.[^.]*$$,,')
 	ifeq ($(PLATFORM),)
 		export PLATFORM := MacOSX
 	else ifeq ($(shell echo $(PLATFORM) | tr A-Z a-z),watchos)
@@ -80,8 +153,27 @@ ifeq ($(PLATFORM),)
 	endif
 endif
 
+ifeq ($(PLATFORM),DriverKit)
+	ifeq ($(origin COHORT_SDKROOT_RESOLVED),undefined)
+		SDK_NAME = $(notdir $(SDKROOT))
+		export COHORT_NAME := $(shell echo $(SDK_NAME) | sed -e 's|DriverKit.\([a-zA-Z]*\)$(SDKVERSION)\([.Internal]*\).sdk|\1\2|g' | tr A-Z a-z)
+		export COHORT_SDKROOT_RESOLVED := $(shell $(XCRUN) -sdk $(COHORT_NAME) -show-sdk-path)
+		ifeq ($(strip $(COHORT_SDKROOT_RESOLVED)),)
+		export COHORT_SDKROOT_RESOLVED := $(SDKROOT_RESOLVED)
+		endif
+	endif
+	override COHORT_SDKROOT = $(COHORT_SDKROOT_RESOLVED)
+	export PLATFORMPATH = $(shell $(XCRUN) -sdk $(COHORT_SDKROOT) -show-sdk-platform-path)
+	export PLATFORM := DriverKit
+	export DRIVERKIT ?= 1
+	export DRIVERKITROOT ?= /System/DriverKit
+	export DRIVERKITRUNTIMEROOT = $(DRIVERKITROOT)/Runtime
+else
+	override COHORT_SDKROOT = $(SDKROOT)
+endif
+
 ifeq ($(PLATFORM),MacOSX)
-	ifeq (DriverKit,$(shell echo $(SDKROOT_RESOLVED) | sed 's,^.*/\([^/1-9]*\)[1-9][^/]*\.sdk$$,\1,'))
+	ifeq (DriverKit,$(shell echo $(SDKROOT_RESOLVED) | sed 's|^.*/\([^./1-9]*\)\(\.[^./1-9]*\)\{0,1\}[1-9][^/]*\.sdk$$|\1|'))
 		export PLATFORM := DriverKit
 		export DRIVERKIT ?= 1
 		export DRIVERKITROOT ?= /System/DriverKit
@@ -89,8 +181,36 @@ ifeq ($(PLATFORM),MacOSX)
 	endif
 endif
 
-ifeq ($(SDKVERSION),)
-     export SDKVERSION := $(shell $(XCRUN) -sdk $(SDKROOT) -show-sdk-version)
+ifeq ($(PLATFORM),ExclaveKit)
+	ifeq ($(origin COHORT_SDKROOT_RESOLVED),undefined)
+		SDK_NAME = $(notdir $(SDKROOT))
+		export COHORT_NAME := $(shell echo $(SDK_NAME) | sed -e 's|ExclaveKit.\([a-zA-Z]*\)$(SDKVERSION)\([.Internal]*\).sdk|\1\2|g' | tr A-Z a-z)
+		export COHORT_SDKROOT_RESOLVED := $(shell $(XCRUN) -sdk $(COHORT_NAME) -show-sdk-path)
+		ifeq ($(strip $(COHORT_SDKROOT_RESOLVED)),)
+		export COHORT_SDKROOT_RESOLVED := $(SDKROOT_RESOLVED)
+		endif
+	endif
+	override COHORT_SDKROOT = $(COHORT_SDKROOT_RESOLVED)
+	export PLATFORMPATH = $(shell $(XCRUN) -sdk $(COHORT_SDKROOT) -show-sdk-platform-path)
+	export PLATFORM := ExclaveKit
+	export EXCLAVEKIT ?= 1
+	export EXCLAVEKITROOT ?= /System/ExclaveKit
+endif
+
+ifeq ($(PLATFORM),ExclaveCore)
+	ifeq ($(origin COHORT_SDKROOT_RESOLVED),undefined)
+		SDK_NAME = $(notdir $(SDKROOT))
+		export COHORT_NAME := $(shell echo $(SDK_NAME) | sed -e 's|ExclaveCore.\([a-zA-Z]*\)$(SDKVERSION)\([.Internal]*\).sdk|\1\2|g' | tr A-Z a-z)
+		export COHORT_SDKROOT_RESOLVED := $(shell $(XCRUN) -sdk $(COHORT_NAME) -show-sdk-path)
+		ifeq ($(strip $(COHORT_SDKROOT_RESOLVED)),)
+		export COHORT_SDKROOT_RESOLVED := $(SDKROOT_RESOLVED)
+		endif
+	endif
+	override COHORT_SDKROOT = $(COHORT_SDKROOT_RESOLVED)
+	export PLATFORMPATH = $(shell $(XCRUN) -sdk $(COHORT_SDKROOT) -show-sdk-platform-path)
+	export PLATFORM := ExclaveCore
+	export EXCLAVECORE ?= 1
+	export EXCLAVECOREROOT ?= /System/ExclaveCore
 endif
 
 # CC/CXX get defined by make(1) by default, so we can't check them
@@ -101,47 +221,71 @@ endif
 ifeq ($(origin CXX),default)
 	export CXX := $(shell $(XCRUN) -sdk $(SDKROOT) -find clang++)
 endif
-ifeq ($(MIG),)
+ifeq ($(origin MIG),undefined)
 	export MIG := $(shell $(XCRUN) -sdk $(SDKROOT) -find mig)
 endif
-ifeq ($(MIGCOM),)
+ifeq ($(origin MIGCOM),undefined)
 	export MIGCOM := $(shell $(XCRUN) -sdk $(SDKROOT) -find migcom)
 endif
-ifeq ($(MIGCC),)
+ifeq ($(origin MIGCC),undefined)
 	export MIGCC := $(CC)
 endif
-ifeq ($(IIG),)
+ifeq ($(origin IIG),undefined)
 	export IIG := $(shell $(XCRUN) -sdk $(SDKROOT) -find iig)
 endif
-ifeq ($(STRIP),)
+ifeq ($(origin STRIP),undefined)
 	export STRIP := $(shell $(XCRUN) -sdk $(SDKROOT) -find strip)
 endif
-ifeq ($(LIPO),)
+ifeq ($(origin LIPO),undefined)
 	export LIPO := $(shell $(XCRUN) -sdk $(SDKROOT) -find lipo)
 endif
-ifeq ($(LIBTOOL),)
+ifeq ($(origin LIBTOOL),undefined)
 	export LIBTOOL := $(shell $(XCRUN) -sdk $(SDKROOT) -find libtool)
 endif
-ifeq ($(NM),)
+ifeq ($(origin OTOOL),undefined)
+	export OTOOL := $(shell $(XCRUN) -sdk $(SDKROOT) -find otool)
+endif
+ifeq ($(origin NM),undefined)
 	export NM := $(shell $(XCRUN) -sdk $(SDKROOT) -find nm)
 endif
-ifeq ($(UNIFDEF),)
+ifeq ($(origin UNIFDEF),undefined)
 	export UNIFDEF := $(shell $(XCRUN) -sdk $(SDKROOT) -find unifdef)
 endif
-ifeq ($(DSYMUTIL),)
+ifeq ($(origin DSYMUTIL),undefined)
 	export DSYMUTIL := $(shell $(XCRUN) -sdk $(SDKROOT) -find dsymutil)
 endif
-ifeq ($(CTFCONVERT),)
-	export CTFCONVERT := $(shell $(XCRUN) -sdk $(SDKROOT) -find ctfconvert)
-endif
-ifeq ($(CTFMERGE),)
-	export CTFMERGE :=  $(shell $(XCRUN) -sdk $(SDKROOT) -find ctfmerge)
-endif
-ifeq ($(CTFINSERT),)
-	export CTFINSERT := $(shell $(XCRUN) -sdk $(SDKROOT) -find ctf_insert)
-endif
-ifeq ($(NMEDIT),)
+ifeq ($(origin NMEDIT),undefined)
 	export NMEDIT := $(shell $(XCRUN) -sdk $(SDKROOT) -find nmedit)
+endif
+ifeq ($(origin GIT),undefined)
+	export GIT := $(shell $(XCRUN) -sdk $(SDKROOT) -find git)
+endif
+ifeq ($(origin SCAN_BUILD),undefined)
+	export SCAN_BUILD := $(shell $(XCRUN) -sdk $(SDKROOT) -find scan-build 2> /dev/null)
+endif
+ifeq ($(origin CTFINSERT),undefined)
+	export CTFINSERT := $(shell $(XCRUN) -sdk $(SDKROOT) -find ctf_insert 2> /dev/null)
+endif
+ifeq ($(origin CTFCONVERT),undefined)
+	export CTFCONVERT := $(shell $(XCRUN) -sdk $(SDKROOT) -find ctfconvert 2> /dev/null)
+endif
+ifeq ($(origin CTFMERGE),undefined)
+	export CTFMERGE := $(shell $(XCRUN) -sdk $(SDKROOT) -find ctfmerge 2> /dev/null)
+	ifeq (,$(wildcard $(CTFMERGE)))
+		export DO_CTFMERGE := 0
+	endif
+endif
+ifeq ($(origin CTFDUMP),undefined)
+	export CTFDUMP := $(shell $(XCRUN) -sdk $(SDKROOT) -find ctfdump 2> /dev/null)
+endif
+ifeq ($(origin DOCC),undefined)
+	export DOCC := $(shell $(XCRUN) -sdk $(SDKROOT) -find docc 2> /dev/null)
+endif
+ifeq ($(origin PYTHON),undefined)
+	export PYTHON := $(shell $(XCRUN) -sdk $(SDKROOT) -find python3 2> /dev/null)
+endif
+ifeq ($(origin OBJDUMP),undefined)
+	export OBJDUMP := $(shell $(XCRUN) -sdk $(SDKROOT) -find objdump 2> /dev/null)
 endif
 
 #
@@ -149,15 +293,12 @@ endif
 #
 SUPPORTED_EMBEDDED_PLATFORMS := iPhoneOS iPhoneOSNano tvOS AppleTVOS WatchOS BridgeOS
 SUPPORTED_SIMULATOR_PLATFORMS := iPhoneSimulator iPhoneNanoSimulator tvSimulator AppleTVSimulator WatchSimulator
-SUPPORTED_PLATFORMS := MacOSX DriverKit $(SUPPORTED_SIMULATOR_PLATFORMS) $(SUPPORTED_EMBEDDED_PLATFORMS)
+
+
+SUPPORTED_PLATFORMS := MacOSX DriverKit ExclaveKit ExclaveCore $(SUPPORTED_SIMULATOR_PLATFORMS) $(SUPPORTED_EMBEDDED_PLATFORMS)
 
 # Platform-specific tools
-ifneq ($(filter $(SUPPORTED_EMBEDDED_PLATFORMS),$(PLATFORM)),)
-ifeq ($(EMBEDDED_DEVICE_MAP),)
-	export EMBEDDED_DEVICE_MAP := $(shell $(XCRUN) -sdk $(SDKROOT) -find embedded_device_map)
-endif
 EDM_DBPATH ?= $(PLATFORMPATH)/usr/local/standalone/firmware/device_map.db
-endif
 
 # Scripts or tools we build ourselves
 #
@@ -167,7 +308,9 @@ endif
 # installfile - Atomically copy files, esp. when multiple architectures
 #               are trying to install the same target header
 # replacecontents - Write contents to a file and update modtime *only* if
-#               contents differ
+#                   contents differ
+# vm_sanitize_enforcement - Reject MIG files that use types that do not enforce
+#                           sanitization for VM inputs
 #
 SEG_HACK = $(OBJROOT)/SETUP/setsegname/setsegname
 KEXT_CREATE_SYMBOL_SET = $(OBJROOT)/SETUP/kextsymboltool/kextsymboltool
@@ -175,7 +318,7 @@ DECOMMENT = $(OBJROOT)/SETUP/decomment/decomment
 NEWVERS = $(SRCROOT)/config/newvers.pl
 INSTALL = $(OBJROOT)/SETUP/installfile/installfile
 REPLACECONTENTS = $(OBJROOT)/SETUP/replacecontents/replacecontents
-JSONCOMPILATIONDB = $(OBJROOT)/SETUP/json_compilation_db/json_compilation_db
+VM_SANITIZE_ADOPTION_CHECK = $(SRCROOT)/tools/vm_sanitize_enforcement.py
 
 # Standard BSD tools
 RM = /bin/rm -f
@@ -197,34 +340,32 @@ SLEEP = /bin/sleep
 AWK = /usr/bin/awk
 SED = /usr/bin/sed
 PLUTIL = /usr/bin/plutil
+PATCH = /usr/bin/patch
+GREP = /usr/bin/grep
 
 #
 # Command to generate host binaries. Intentionally not
 # $(CC), which controls the target compiler
 #
-ifeq ($(HOST_OS_VERSION),)
+ifeq ($(origin HOST_OS_VERSION),undefined)
 	export HOST_OS_VERSION	:= $(shell sw_vers -productVersion)
 endif
-ifeq ($(HOST_CC),)
+ifeq ($(origin HOST_CC),undefined)
 	export HOST_CC		:= $(shell $(XCRUN) -sdk $(HOST_SDKROOT) -find clang)
 endif
-ifeq ($(HOST_FLEX),)
+ifeq ($(origin HOST_FLEX),undefined)
 	export HOST_FLEX	:= $(shell $(XCRUN) -sdk $(HOST_SDKROOT) -find flex)
 endif
-ifeq ($(HOST_BISON),)
+ifeq ($(origin HOST_BISON),undefined)
 	export HOST_BISON	:= $(shell $(XCRUN) -sdk $(HOST_SDKROOT) -find bison)
 endif
-ifeq ($(HOST_GM4),)
-	ifeq ($(shell uname -s),Linux)
-		export HOST_GM4 := /usr/bin/m4
-	else
-		export HOST_GM4		:= $(shell $(XCRUN) -sdk $(HOST_SDKROOT) -find gm4)
-	endif
+ifeq ($(origin HOST_GM4),undefined)
+	export HOST_GM4		:= $(shell $(XCRUN) -sdk $(HOST_SDKROOT) -find gm4)
 endif
-ifeq ($(HOST_CODESIGN),)
+ifeq ($(origin HOST_CODESIGN),undefined)
 	export HOST_CODESIGN	:= /usr/bin/codesign
 endif
-ifeq ($(HOST_CODESIGN_ALLOCATE),)
+ifeq ($(origin HOST_CODESIGN_ALLOCATE),undefined)
 	export HOST_CODESIGN_ALLOCATE	:= $(shell $(XCRUN) -sdk $(HOST_SDKROOT) -find codesign_allocate)
 endif
 
@@ -330,6 +471,33 @@ function_convert_build_config_to_objdir = $(call function_convert_target_config_
 function_extract_kernel_config_from_build_config  = $(word 1,$(subst ^, ,$(1)))
 function_extract_arch_config_from_build_config    = $(word 2,$(subst ^, ,$(1)))
 function_extract_machine_config_from_build_config = $(word 3,$(subst ^, ,$(1)))
+
+#
+# Returns build config if both architecture and kernel configuration match.
+#
+#   $(1) - list of build configs
+#   $(1) - architecture
+#   $(2) - kernel configuration
+
+function_match_build_config_for_architecture_and_kernel_config = $(strip \
+			    $(foreach build_config, $(1), \
+			      $(if \
+				$(and \
+				  $(filter $(2), $(call function_extract_arch_config_from_build_config, $(build_config))), \
+				  $(filter $(3), $(call function_extract_kernel_config_from_build_config, $(build_config)))), \
+			      $(build_config), )))
+
+#
+# Returns build config if kernel configuration matches.
+#
+#   $(1) - list of build configs
+#   $(2) - kernel configuration
+
+function_match_build_config_for_kernel_config = $(strip \
+			    $(foreach build_config, $(1), \
+			      $(if \
+				  $(filter $(2), $(call function_extract_kernel_config_from_build_config, $(build_config))), \
+			      $(build_config), )))
 
 # $(1) is an input word
 # $(2) is a list of colon-separate potential substitutions like "FOO:BAR BAZ:QUX"

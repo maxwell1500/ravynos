@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -76,19 +76,24 @@
 #include <i386/cpuid.h>
 #include <mach/thread_status.h>
 #include <pexpert/i386/efi.h>
+#include <pexpert/pexpert.h>
 #include <i386/i386_lowmem.h>
 #include <i386/misc_protos.h>
 #include <x86_64/lowglobals.h>
 #include <i386/pal_routines.h>
+#include <vm/vm_page_internal.h>
 
 #include <mach-o/loader.h>
 #include <libkern/kernel_mach_header.h>
 
+#define P2ROUNDUP(x, align)             (-(-(x) & -(align)))
 
 vm_size_t       mem_size = 0;
 pmap_paddr_t    first_avail = 0;/* first after page tables */
 
-uint64_t        max_mem;        /* Size of physical memory (bytes), adjusted by maxmem */
+uint64_t        max_mem;        /* Size of physical memory minus carveouts (bytes), adjusted by maxmem */
+uint64_t        max_mem_actual; /* Actual size of physical memory (bytes) adjusted by
+                                 * the maxmem boot-arg */
 uint64_t        mem_actual;
 uint64_t        sane_size = 0;  /* Memory size for defaults calculations */
 
@@ -270,53 +275,20 @@ i386_vm_init(uint64_t   maxmem,
 
 	PE_parse_boot_argn("memmap", &memmap, sizeof(memmap));
 
+	extern void pal_serial_putc(char);
+	const char *vm1 = "    i386_vm_init: checking KASLR...\r\n";
+	while (*vm1) { pal_serial_putc(*vm1++); }
+
 	/*
 	 * Establish the KASLR parameters.
 	 */
 	static_base_address = ml_static_ptovirt(KERNEL_BASE_OFFSET);
 	base_address        = ml_static_ptovirt(args->kaddr);
 	vm_kernel_slide     = base_address - static_base_address;
-	if (args->kslide) {
-		kprintf("KASLR slide: 0x%016lx dynamic\n", vm_kernel_slide);
-		if (vm_kernel_slide != ((vm_offset_t)args->kslide)) {
-			panic("Kernel base inconsistent with slide - rebased?");
-		}
-	} else {
-		/* No slide relative to on-disk symbols */
-		kprintf("KASLR slide: 0x%016lx static and ignored\n",
-		    vm_kernel_slide);
-		vm_kernel_slide = 0;
-	}
 
-	/*
-	 * Zero out local relocations to avoid confusing kxld.
-	 * TODO: might be better to move this code to OSKext::initialize
-	 */
-	if (_mh_execute_header.flags & MH_PIE) {
-		struct load_command *loadcmd;
-		uint32_t cmd;
+	const char *vm2 = "    i386_vm_init: reading Mach-O headers...\r\n";
+	while (*vm2) { pal_serial_putc(*vm2++); }
 
-		loadcmd = (struct load_command *)((uintptr_t)&_mh_execute_header +
-		    sizeof(_mh_execute_header));
-
-		for (cmd = 0; cmd < _mh_execute_header.ncmds; cmd++) {
-			if (loadcmd->cmd == LC_DYSYMTAB) {
-				struct dysymtab_command *dysymtab;
-
-				dysymtab = (struct dysymtab_command *)loadcmd;
-				dysymtab->nlocrel = 0;
-				dysymtab->locreloff = 0;
-				kprintf("Hiding local relocations\n");
-				break;
-			}
-			loadcmd = (struct load_command *)((uintptr_t)loadcmd + loadcmd->cmdsize);
-		}
-	}
-
-	/*
-	 * Now retrieve addresses for end, edata, and etext
-	 * from MACH-O headers.
-	 */
 	segTEXTB = (vm_offset_t) getsegdatafromheader(&_mh_execute_header,
 	    "__TEXT", &segSizeTEXT);
 	segDATAB = (vm_offset_t) getsegdatafromheader(&_mh_execute_header,
@@ -351,17 +323,18 @@ i386_vm_init(uint64_t   maxmem,
 	/* Zero-padded from etext to sdata if text is 2M-aligned */
 	sdata = segDATAB;
 	edata = segDATAB + segSizeDATA;
-
-	sconst = segCONST->vmaddr;
-	segSizeConst = segCONST->vmsize;
+	sconst = segCONST ? segCONST->vmaddr : 0;
+	segSizeConst = segCONST ? segCONST->vmsize : 0;
 	econst = sconst + segSizeConst;
 
-	assert(((sconst | econst) & PAGE_MASK) == 0);
+	kc_format_t kc_format = KCFormatUnknown;
+	PE_get_primary_kc_format(&kc_format);
 
-	DPRINTF("segTEXTB    = %p\n", (void *) segTEXTB);
-	DPRINTF("segDATAB    = %p\n", (void *) segDATAB);
-	DPRINTF("segLINKB    = %p\n", (void *) segLINKB);
-	DPRINTF("segHIBB     = %p\n", (void *) segHIBB);
+	const char *vm3 = "    i386_vm_init: rounding constants and segment bounds...\r\n";
+	while (*vm3) { pal_serial_putc(*vm3++); }
+
+	econst = P2ROUNDUP(econst, PAGE_SIZE);
+	edata = P2ROUNDUP(edata, PAGE_SIZE);
 	DPRINTF("segPRELINKTEXTB = %p\n", (void *) segPRELINKTEXTB);
 	DPRINTF("segPRELINKINFOB = %p\n", (void *) segPRELINKINFOB);
 	DPRINTF("sHIB        = %p\n", (void *) sHIB);
@@ -384,10 +357,43 @@ i386_vm_init(uint64_t   maxmem,
 	vm_prelink_einfo = segPRELINKINFOB + segSizePRELINKINFO;
 	vm_slinkedit = segLINKB;
 	vm_elinkedit = segLINKB + segSizeLINK;
+
+	/*
+	 * In the fileset world, we want to be able to (un)slide addresses from
+	 * the kernel or any of the kexts (e.g., for kernel logging metadata
+	 * passed between the kernel and logd in userspace). VM_KERNEL_UNSLIDE
+	 * (via VM_KERNEL_IS_SLID) should apply to the addresses in the range
+	 * from the first basement address to the last boot kc address.
+	 *
+	 *                     ^
+	 *                     :
+	 *                     |
+	 *  vm_kernel_slid_top - ---------------------------------------------
+	 *                     |
+	 *                     :
+	 *                     : Boot kc (kexts in the boot kc here)
+	 *                     : - - - - - - - - - - - - - - - - - - - - - - -
+	 *                     :
+	 *                     :
+	 *                     | Boot kc (kernel here)
+	 *                     - ---------------------------------------------
+	 *                     |
+	 *                     :
+	 *                     | Basement (kexts in pageable and aux kcs here)
+	 * vm_kernel_slid_base - ---------------------------------------------
+	 *                     0
+	 */
+
 	vm_kernel_slid_base = vm_kext_base + vm_kernel_slide;
-	vm_kernel_slid_top = vm_prelink_einfo;
+	vm_kernel_slid_top = (kc_format == KCFormatFileset) ?
+	    vm_slinkedit : vm_prelink_einfo;
+
+	vm_page_kernelcache_count = (unsigned int) (atop_64(vm_kernel_top - vm_kernel_base));
 
 	vm_set_page_size();
+
+	const char *vm4 = "    i386_vm_init: vm_set_page_size done! Parsing MemoryMap...\r\n";
+	while (*vm4) { pal_serial_putc(*vm4++); }
 
 	/*
 	 * Compute the memory size.
@@ -403,10 +409,15 @@ i386_vm_init(uint64_t   maxmem,
 	maddr = ml_static_ptovirt((vm_offset_t)args->MemoryMap);
 	mptr = (EfiMemoryRange *)maddr;
 	if (args->MemoryMapDescriptorSize == 0) {
+		const char *vmerr = "    i386_vm_init: Invalid memory map descriptor size!\r\n";
+		while (*vmerr) { pal_serial_putc(*vmerr++); }
 		panic("Invalid memory map descriptor size");
 	}
 	msize = args->MemoryMapDescriptorSize;
 	mcount = args->MemoryMapSize / msize;
+
+	const char *vm5 = "    i386_vm_init: MemoryMap size verified! Iterating ranges...\r\n";
+	while (*vm5) { pal_serial_putc(*vm5++); }
 
 #define FOURGIG 0x0000000100000000ULL
 #define ONEGIG  0x0000000040000000ULL
@@ -550,7 +561,7 @@ i386_vm_init(uint64_t   maxmem,
 
 			if (mptr->Attribute & EFI_MEMORY_KERN_RESERVED) {
 				if (++pmap_reserved_ranges > PMAP_MAX_RESERVED_RANGES) {
-					panic("Too many reserved ranges %u\n", pmap_reserved_ranges);
+					panic("Too many reserved ranges %u", pmap_reserved_ranges);
 				}
 			}
 
@@ -655,6 +666,9 @@ i386_vm_init(uint64_t   maxmem,
 		}
 	}
 
+	const char *vm6 = "    i386_vm_init: MemoryMap iteration complete! Setting sane_size...\r\n";
+	while (*vm6) { pal_serial_putc(*vm6++); }
+
 	if (memmap) {
 		kprint_memmap(maddr, msize, mcount);
 	}
@@ -669,23 +683,16 @@ i386_vm_init(uint64_t   maxmem,
 	 * we now use the memory size reported by EFI/Booter.
 	 */
 	sane_size = (sane_size + 128 * MB - 1) & ~((uint64_t)(128 * MB - 1));
-	if (sane_size != mem_actual) {
-		printf("mem_actual: 0x%llx\n legacy sane_size: 0x%llx\n",
-		    mem_actual, sane_size);
-	}
 	sane_size = mem_actual;
 
 	/*
-	 * We cap at KERNEL_MAXMEM bytes (currently 32GB for K32, 96GB for K64).
+	 * We cap at KERNEL_MAXMEM bytes (see vm_param.h).
 	 * Unless overriden by the maxmem= boot-arg
 	 * -- which is a non-zero maxmem argument to this function.
 	 */
 	if (maxmem == 0 && sane_size > KERNEL_MAXMEM) {
 		maxmem = KERNEL_MAXMEM;
-		printf("Physical memory %lld bytes capped at %dGB\n",
-		    sane_size, (uint32_t) (KERNEL_MAXMEM / GB));
 	}
-
 	/*
 	 * if user set maxmem, reduce memory sizes
 	 */
@@ -738,6 +745,7 @@ i386_vm_init(uint64_t   maxmem,
 		mem_size = (vm_size_t)sane_size;
 	}
 	max_mem = sane_size;
+	max_mem_actual = sane_size;
 
 	kprintf("Physical memory %llu MB\n", sane_size / MB);
 
@@ -788,11 +796,14 @@ i386_vm_init(uint64_t   maxmem,
 	 *	Initialize kernel physical map.
 	 *	Kernel virtual address starts at VM_KERNEL_MIN_ADDRESS.
 	 */
-	kprintf("avail_remaining = 0x%lx\n", (unsigned long)avail_remaining);
+	const char *vm7 = "    i386_vm_init: calling pmap_bootstrap...\r\n";
+	while (*vm7) { pal_serial_putc(*vm7++); }
+
 	pmap_bootstrap(0, IA32e);
+
+	const char *vm8 = "    i386_vm_init: pmap_bootstrap completed successfully!\r\n";
+	while (*vm8) { pal_serial_putc(*vm8++); }
 }
-
-
 unsigned int
 pmap_free_pages(void)
 {
@@ -1033,4 +1044,13 @@ pmap_valid_page(
 		}
 	}
 	return FALSE;
+}
+
+/*
+ * Returns true if the address lies in the kernel __TEXT segment range.
+ */
+bool
+kernel_text_contains(vm_offset_t addr)
+{
+	return vm_kernel_stext <= addr && addr < vm_kernel_etext;
 }

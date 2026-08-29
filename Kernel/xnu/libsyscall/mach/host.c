@@ -37,8 +37,7 @@ kern_return_t
 host_get_atm_diagnostic_flag(host_t host __unused,
     uint32_t *diagnostic_flag)
 {
-	volatile uint32_t *diagnostic_flag_address = (volatile uint32_t *)(uintptr_t)(_COMM_PAGE_ATM_DIAGNOSTIC_CONFIG);
-	*diagnostic_flag = *diagnostic_flag_address;
+	*diagnostic_flag = COMM_PAGE_READ(uint32_t, ATM_DIAGNOSTIC_CONFIG);
 	return KERN_SUCCESS;
 }
 
@@ -47,8 +46,7 @@ host_get_multiuser_config_flags(host_t host __unused,
     uint32_t *multiuser_flags)
 {
 #if (TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR)
-	volatile uint32_t *multiuser_flag_address = (volatile uint32_t *)(uintptr_t)(_COMM_PAGE_MULTIUSER_CONFIG);
-	*multiuser_flags = *multiuser_flag_address;
+	*multiuser_flags = COMM_PAGE_READ(uint32_t, MULTIUSER_CONFIG);
 	return KERN_SUCCESS;
 #else
 	(void)multiuser_flags;
@@ -109,4 +107,18 @@ host_create_mach_voucher(mach_port_name_t host,
 	}
 
 	return rv;
+}
+
+/* compatibility symbol for IOKit_sim */
+extern kern_return_t
+host_get_io_master(
+	host_t host,
+	io_main_t *io_main);
+
+kern_return_t
+host_get_io_master(
+	host_t host,
+	io_main_t *io_main)
+{
+	return host_get_io_main(host, io_main);
 }

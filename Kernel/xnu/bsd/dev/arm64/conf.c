@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  */
 /*
  * Copyright (c) 1997 by Apple Computer, Inc., all rights reserved
@@ -104,7 +104,7 @@ extern d_select_t cttyselect;
 extern d_read_t mmread;
 extern d_write_t mmwrite;
 extern d_ioctl_t mmioctl;
-#define mmselect        (select_fcn_t *)seltrue
+#define mmselect        (select_fcn_t *)(void (*)(void))seltrue
 #define mmmmap          eno_mmap
 
 #include <pty.h>
@@ -154,14 +154,16 @@ extern d_close_t oslogclose;
 extern d_ioctl_t oslogioctl;
 extern d_select_t oslogselect;
 
-#define nullopen        (d_open_t *)&nulldev
-#define nullclose       (d_close_t *)&nulldev
-#define nullread        (d_read_t *)&nulldev
-#define nullwrite       (d_write_t *)&nulldev
-#define nullioctl       (d_ioctl_t *)&nulldev
-#define nullselect      (d_select_t *)&nulldev
-#define nullstop        (d_stop_t *)&nulldev
-#define nullreset       (d_reset_t *)&nulldev
+#define nulldevfp        (void (*)(void))&nulldev
+
+#define nullopen        (d_open_t *)nulldevfp
+#define nullclose       (d_close_t *)nulldevfp
+#define nullread        (d_read_t *)nulldevfp
+#define nullwrite       (d_write_t *)nulldevfp
+#define nullioctl       (d_ioctl_t *)nulldevfp
+#define nullselect      (d_select_t *)nulldevfp
+#define nullstop        (d_stop_t *)nulldevfp
+#define nullreset       (d_reset_t *)nulldevfp
 
 struct cdevsw cdevsw[] = {
 	/*
@@ -215,7 +217,7 @@ struct cdevsw cdevsw[] = {
 		kmioctl, nullstop, nullreset, km_tty, ttselect,
 		eno_mmap, eno_strat, eno_getc, eno_putc, 0
 	},
-	[13 ... 42] = NO_CDEVICE,
+	[13 ... 63] = NO_CDEVICE,
 };
 const int nchrdev = sizeof(cdevsw) / sizeof(cdevsw[0]);
 
@@ -236,7 +238,7 @@ isdisk(dev_t dev, int type)
 		if (maj == NODEV) {
 			break;
 		}
-	/* FALL THROUGH */
+		OS_FALLTHROUGH;
 	case VBLK:
 		if (bdevsw[maj].d_type == D_DISK) {
 			return 1;

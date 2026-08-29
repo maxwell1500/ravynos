@@ -153,6 +153,7 @@ _mach_absolute_time:
 #elif defined(__arm__)
 
 #include <mach/arm/syscall_sw.h>
+#include <mach/arm/traps.h>
 
 /*
  * If userspace access to the timebase is supported (indicated through the commpage),
@@ -180,7 +181,7 @@ _mach_absolute_time:
 	ldrb	r0, [ip, #((_COMM_PAGE_USER_TIMEBASE) - (_COMM_PAGE_TIMEBASE_OFFSET))]
 	cmp	r0, #USER_TIMEBASE_NONE		// Are userspace reads supported?
 	beq	_mach_absolute_time_kernel	// If not, go to the kernel
-	isb					// Prevent speculation on CNTPCT across calls
+	isb					// Prevent speculation on CNTVCT across calls
 						// (see ARMV7C.b section B8.1.2, ARMv8 section D6.1.2)
 	push	{r4, r5, r7, lr}		// Push a frame
 	add	r7, sp, #8
@@ -206,7 +207,7 @@ L_mach_absolute_time_user:
 	.align 2
 	.globl _mach_absolute_time_kernel
 _mach_absolute_time_kernel:
-	mov	r12, #-3			// Load the magic MAT number
+	mov	r12, #MACH_ARM_TRAP_ABSTIME	// Load the magic MAT number
 	swi	#SWI_SYSCALL
 	bx	lr
 
@@ -214,13 +215,24 @@ _mach_absolute_time_kernel:
 	.align 2
 	.globl _mach_continuous_time_kernel
 _mach_continuous_time_kernel:
-	mov	r12, #-4			// Load the magic MCT number
+	mov	r12, #MACH_ARM_TRAP_CONTTIME	// Load the magic MCT number
 	swi	#SWI_SYSCALL
 	bx	lr
 
 #elif defined(__arm64__)
 
 #include <mach/arm/syscall_sw.h>
+#include <mach/arm/traps.h>
+
+.macro CALC_MACH_ABSOLUTE_TIME reg
+1:
+	ldr	x1, [x3]			// Load the offset
+	mrs	x0, \reg			// Read the timebase
+	ldr	x2, [x3]			// Load the offset
+	cmp	x1, x2				// Compare our offset values...
+	b.ne	1b				// If they changed, try again
+	add	x0, x0, x1			// Construct mach_absolute_time
+.endm
 
 /*
  * If userspace access to the timebase is supported (indicated through the commpage),
@@ -242,26 +254,35 @@ _mach_absolute_time:
 	movk	x3, #(((_COMM_PAGE_TIMEBASE_OFFSET) >> 16) & 0x000000000000FFFF), lsl #16
 	movk	x3, #((_COMM_PAGE_TIMEBASE_OFFSET) & 0x000000000000FFFF)
 	ldrb	w2, [x3, #((_COMM_PAGE_USER_TIMEBASE) - (_COMM_PAGE_TIMEBASE_OFFSET))]
+
 	cmp	x2, #USER_TIMEBASE_NONE		// Are userspace reads supported?
 	b.eq	_mach_absolute_time_kernel	// If not, go to the kernel
-	isb					// Prevent speculation on CNTPCT across calls
-						// (see ARMV7C.b section B8.1.2, ARMv8 section D6.1.2)
-L_mach_absolute_time_user:
-	ldr	x1, [x3]			// Load the offset
-	mrs	x0, CNTPCT_EL0			// Read the timebase
-	ldr	x2, [x3]			// Load the offset
-	cmp	x1, x2				// Compare our offset values...
-	b.ne	L_mach_absolute_time_user	// If they changed, try again
-	add	x0, x0, x1			// Construct mach_absolute_time
+	cmp	x2, #USER_TIMEBASE_NOSPEC
+	b.eq	L_mach_absolute_time_user_nospec
+	cmp	x2, #USER_TIMEBASE_NOSPEC_APPLE
+	b.eq	L_mach_absolute_time_user_nospec_apple
+	// Fallthrough to USER_TIMEBASE_SPEC case below
+
+	isb					// Prevent speculation on CNTVCT across calls
+	CALC_MACH_ABSOLUTE_TIME	CNTVCT_EL0	// (see ARMV7C.b section B8.1.2, ARMv8 section D6.1.2)
 	ret
 
+L_mach_absolute_time_user_nospec:
+#define CNTVCTSS_EL0    S3_3_c14_c0_6
+	CALC_MACH_ABSOLUTE_TIME	CNTVCTSS_EL0
+	ret
+
+L_mach_absolute_time_user_nospec_apple:
+#define ACNTVCT_EL0     S3_4_c15_c10_6
+	CALC_MACH_ABSOLUTE_TIME	ACNTVCT_EL0
+	ret
 
 
 	.text
 	.align 2
 	.globl _mach_absolute_time_kernel
 _mach_absolute_time_kernel:
-	mov	w16, #-3			// Load the magic MAT number
+	mov	w16, #MACH_ARM_TRAP_ABSTIME	// Load the magic MAT number
 	svc	#SWI_SYSCALL
 	ret
 
@@ -269,7 +290,7 @@ _mach_absolute_time_kernel:
 	.align 2
 	.globl _mach_continuous_time_kernel
 _mach_continuous_time_kernel:
-	mov	w16, #-4			// Load the magic MCT number
+	mov	w16, #MACH_ARM_TRAP_CONTTIME	// Load the magic MCT number
 	svc	#SWI_SYSCALL
 	ret
 

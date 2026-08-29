@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2024 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -64,13 +64,19 @@
 #ifndef _VNODE_H_
 #define _VNODE_H_
 
+#include <stdint.h>
 #include <sys/appleapiopts.h>
 #include <sys/cdefs.h>
 #ifdef KERNEL
 #include <sys/kernel_types.h>
 #include <sys/param.h>
 #include <sys/signal.h>
-#endif
+#ifdef KERNEL_PRIVATE
+#include <mach/mach_types.h>
+#endif /* KERNEL_PRIVATE */
+#else
+#include <stdint.h>
+#endif /* KERNEL */
 
 /*
  * The vnode is the focus of all file activity in UNIX.  There is a
@@ -110,8 +116,8 @@ enum vtagtype   {
 	VT_HFS, VT_ZFS, VT_DEVFS, VT_WEBDAV, VT_UDF,
 	/* 21 - 25 */
 	VT_AFP, VT_CDDA, VT_CIFS, VT_OTHER, VT_APFS,
-	/* 26 */
-	VT_LOCKERFS,
+	/* 26 - 27*/
+	VT_LOCKERFS, VT_BINDFS,
 };
 
 #define HAVE_VT_LOCKERFS 1
@@ -122,6 +128,7 @@ enum vtagtype   {
 #define VNODE_READ      0x01
 #define VNODE_WRITE     0x02
 #define VNODE_BLOCKMAP_NO_TRACK 0x04 // APFS Fusion: Do not track this request
+#define VNODE_CLUSTER_VERIFY 0x08 // Verification will be performed in the cluster layer
 
 
 /* flags for VNOP_ALLOCATE */
@@ -129,8 +136,7 @@ enum vtagtype   {
 #define ALLOCATECONTIG  0x00000002      /* allocate contigious space */
 #define ALLOCATEALL             0x00000004      /* allocate all requested space */
 /* or no space at all */
-#define FREEREMAINDER   0x00000008      /* deallocate allocated but */
-/* unfilled blocks */
+#define ALLOCATEPERSIST         0x00000008      /* do not deallocate allocated but unfilled blocks at close(2) */
 #define ALLOCATEFROMPEOF        0x00000010      /* allocate from the physical eof */
 #define ALLOCATEFROMVOL         0x00000020      /* allocate from the volume offset */
 
@@ -174,6 +180,8 @@ enum vtagtype   {
 #define IO_SWAP_DISPATCH                0x200000        /* I/O was originated from the swap layer */
 #define IO_SKIP_ENCRYPTION              0x400000        /* Skips en(de)cryption on the IO. Must be initiated from kernel */
 #define IO_EVTONLY                      0x800000        /* the i/o is being done on an fd that's marked O_EVTONLY */
+#define IO_NOCACHE_SYSSPACE             0x1000000       /* same as IO_NOCACHE but also for UIO_SYSSPACE */
+#define IO_NOCACHE_SWRITE               0x2000000       /* same as IO_NOCACHE but also lossens retrictions for nocache writes */
 
 /*
  * Component Name: this structure describes the pathname
@@ -561,6 +569,9 @@ struct vnode_trigger_param {
 #define VNODE_ATTR_va_private_size      (1LL<<43)       /* 80000000000 */
 #define VNODE_ATTR_va_clone_id          (1LL<<44)       /* 100000000000 */
 #define VNODE_ATTR_va_extflags          (1LL<<45)       /* 200000000000 */
+#define VNODE_ATTR_va_recursive_gencount (1LL<<46)      /* 400000000000 */
+#define VNODE_ATTR_va_attribution_tag    (1LL<<47)      /* 800000000000 */
+#define VNODE_ATTR_va_clone_refcnt       (1LL<<48)      /* 1000000000000 */
 
 #define VNODE_ATTR_BIT(n)       (VNODE_ATTR_ ## n)
 
@@ -612,7 +623,11 @@ struct vnode_trigger_param {
 	                        VNODE_ATTR_BIT(va_write_gencount) |     \
 	                        VNODE_ATTR_BIT(va_private_size) |       \
 	                        VNODE_ATTR_BIT(va_clone_id) |           \
-	                        VNODE_ATTR_BIT(va_extflags))
+	                        VNODE_ATTR_BIT(va_extflags) |           \
+	                        VNODE_ATTR_BIT(va_recursive_gencount) | \
+	                        VNODE_ATTR_BIT(va_attribution_tag) |    \
+	                        VNODE_ATTR_BIT(va_clone_refcnt))
+
 
 /*
  * Read-only attributes.
@@ -644,7 +659,10 @@ struct vnode_trigger_param {
 	                        VNODE_ATTR_BIT(va_write_gencount) |     \
 	                        VNODE_ATTR_BIT(va_private_size) |       \
 	                        VNODE_ATTR_BIT(va_clone_id) |           \
-	                        VNODE_ATTR_BIT(va_extflags))
+	                        VNODE_ATTR_BIT(va_extflags) |           \
+	                        VNODE_ATTR_BIT(va_recursive_gencount) | \
+	                        VNODE_ATTR_BIT(va_attribution_tag) |    \
+	                        VNODE_ATTR_BIT(va_clone_refcnt))
 
 /*
  * Attributes that can be applied to a new file object.
@@ -751,6 +769,9 @@ struct vnode_attr {
 	uint64_t va_private_size; /* If the file were deleted, how many bytes would be freed immediately */
 	uint64_t va_clone_id;     /* If a file is cloned this is a unique id shared by all "perfect" clones */
 	uint64_t va_extflags;     /* extended file/directory flags */
+	uint64_t va_recursive_gencount; /* for dir-stats enabled directories */
+	uint64_t va_attribution_tag;    /* a 64 bit hash of the bundle name associated with this file */
+	uint32_t va_clone_refcnt;       /* the number of "perfect" clones sharing the same clone_id */
 
 	/* add new fields here only */
 };
@@ -761,6 +782,7 @@ struct vnode_attr {
  */
 #define VA_DP_RAWENCRYPTED   0x0001
 #define VA_DP_RAWUNENCRYPTED 0x0002
+#define VA_DP_AUTHENTICATE   0x0004
 
 #endif
 
@@ -774,6 +796,7 @@ struct vnode_attr {
 #define VA_64BITOBJIDS          0x100000        /* fileid/linkid/parentid are 64 bit */
 #define VA_REALFSID             0x200000        /* Return real fsid */
 #define VA_USEFSID              0x400000        /* Use fsid from filesystem  */
+#define VA_FILESEC_ACL          0x800000        /* ACL is interior to filesec */
 
 /*
  *  Modes.  Some values same as Ixxx entries from inode.h for now.
@@ -816,6 +839,10 @@ extern int              vttoif_tab[];
 #define VNODE_REMOVE_SKIP_NAMESPACE_EVENT       0x0002 /* Do not upcall to userland handlers */
 #define VNODE_REMOVE_NO_AUDIT_PATH              0x0004 /* Do not audit the path */
 #define VNODE_REMOVE_DATALESS_DIR               0x0008 /* Special handling for removing a dataless directory without materialization */
+#ifdef BSD_KERNEL_PRIVATE
+#define VNODE_REMOVE_NOFOLLOW_ANY               0x0010
+#endif
+#define VNODE_REMOVE_SYSTEM_DISCARDED           0x0020 /* Update speculative telemetry with SYSTEM_DISCARDED use state (Default USER_DISCARDED use state) */
 
 /* VNOP_READDIR flags: */
 #define VNODE_READDIR_EXTENDED    0x0001   /* use extended directory entries */
@@ -836,6 +863,7 @@ struct vnodeop_desc;
 
 extern  int desiredvnodes;              /* number of vnodes desired */
 
+extern struct smr apfs_smr; /* SMR domain for apfs kext, equivalent to _vfs_smr */
 
 /*
  * This structure is used to configure the new vnodeops vector.
@@ -883,6 +911,44 @@ __BEGIN_DECLS
 errno_t vnode_create(uint32_t flavor, uint32_t size, void  *data, vnode_t *vpp);
 
 #ifdef KERNEL_PRIVATE
+
+__options_decl(vnode_create_options_t, uint32_t, {
+	VNODE_CREATE_DEFAULT = 0,
+	VNODE_CREATE_EMPTY   = 1,
+	VNODE_CREATE_NODEALLOC  = 2
+});
+
+#define VNODE_CREATE_DEFAULT VNODE_CREATE_DEFAULT
+
+/*!
+ *  @function vnode_create_ext
+ *  @abstract Create and initialize a vnode.
+ *  @discussion Returns wth an iocount held on the vnode which must eventually be dropped with vnode_put().
+ *  @param flavor Should be VNCREATE_FLAVOR.
+ *  @param size  Size of the struct vnode_fsparam in "data".
+ *  @param data  Pointer to a struct vnode_fsparam containing initialization information.
+ *  @param vpp  Pointer to a vnode pointer, to be filled in with newly created vnode.
+ *  @param vc_options  options for vnode creation, by default a vnode that can be deallocated is created,
+ *  use VNODE_CREATE_NODEALLOC to override the default behavior.
+ *  @return 0 for success, error code otherwise.
+ */
+errno_t vnode_create_ext(uint32_t flavor, uint32_t size, void  *data, vnode_t *vpp, vnode_create_options_t vc_options);
+
+/*
+ * vnode create options (vc_options)
+ *
+ * VNODE_CREATE_EMPTY:
+ * An "empty" vnode( i.e. a vnode not initialized with filesystem information) is returned
+ * This results in the flavor, size and data arguments to vnode_create_ext getting ignored.
+ *
+ * VNODE_CREATE_NODEALLOC:
+ * The filesystem does not support vnodes that can be deallocated. By default, vnodes
+ * that are created by using vnode_create_ext can be deallocated and the calling filesytem
+ * uses vnode_hold and vnode_drop approrpiately. This flag should be be used to override
+ * the default behavior.
+ *
+ */
+
 /*!
  *  @function vnode_create_empty
  *  @abstract Create an empty, uninitialized vnode.
@@ -1196,6 +1262,15 @@ void    vnode_clearmountedon(vnode_t vp);
 int     vnode_isrecycled(vnode_t vp);
 
 /*!
+ *  @function vnode_willberecycled
+ *  @abstract Check if a vnode is marked for recycling when the last reference to it is released.
+ *  @discussion This is only a snapshot: a vnode may start to be recycled, or go from dead to in use, at any time.
+ *  @param vp The vnode to test.
+ *  @return Nonzero if vnode is marked for recycling, 0 otherwise.
+ */
+int     vnode_willberecycled(vnode_t vp);
+
+/*!
  *  @function vnode_isnocache
  *  @abstract Check if a vnode is set to not have its data cached in memory  (i.e. we write-through to disk and always read from disk).
  *  @param vp The vnode to test.
@@ -1441,6 +1516,18 @@ kauth_cred_t    vfs_context_ucred(vfs_context_t ctx);
  */
 int     vfs_context_pid(vfs_context_t ctx);
 
+#ifdef KERNEL_PRIVATE
+/*!
+ *  @function vfs_context_copy_audit_token
+ *  @abstract Copy the audit token of the BSD process associated with a vfs_context_t.
+ *  @param ctx Context whose associated process to find.
+ *  @param token Pointer to audit token buffer which will receive a copy of the audit token
+ *  @return 0 on success, non-zero if there was a problem obtaining the token
+ */
+int     vfs_context_copy_audit_token(vfs_context_t ctx, audit_token_t *token);
+
+#endif /* KERNEL_PRIVATE */
+
 /*!
  *  @function vfs_context_issignal
  *  @abstract Get a bitfield of pending signals for the BSD process associated with a vfs_context_t.
@@ -1475,6 +1562,17 @@ int     vfs_context_is64bit(vfs_context_t ctx);
  */
 vfs_context_t vfs_context_create(vfs_context_t ctx);
 
+#ifdef KERNEL_PRIVATE
+/*!
+ *  @function vfs_context_create_with_proc
+ *  @abstract Create a new vfs_context_t with appropriate references held, using the specified proc as a template.
+ *  discussion The context must be released with vfs_context_rele() when no longer in use.
+ *  @param proc Process to use as a template for the new context.
+ *  @return The new context, or NULL in the event of failure.
+ */
+vfs_context_t vfs_context_create_with_proc(proc_t proc);
+#endif /* KERNEL_PRIVATE */
+
 /*!
  *  @function vfs_context_rele
  *  @abstract Release references on components of a context and deallocate it.
@@ -1490,7 +1588,7 @@ int vfs_context_rele(vfs_context_t ctx);
  *  @discussion Kexts should not use this function--it is preferred to use vfs_context_create(NULL) and vfs_context_rele(), which ensure proper reference counting of underlying structures.
  *  @return Context for current thread, or kernel context if thread context is unavailable.
  */
-vfs_context_t vfs_context_current(void);
+vfs_context_t vfs_context_current(void) __pure2;
 #ifdef KERNEL_PRIVATE
 int     vfs_context_bind(vfs_context_t);
 
@@ -1508,6 +1606,30 @@ int     vfs_context_bind(vfs_context_t);
 int     vfs_ctx_skipatime(vfs_context_t ctx);
 
 #endif
+
+/* Supported filesystem tags for vfs_[set|get]_thread_fs_private */
+#define FS_PRIVATE_TAG_APFS (1)
+
+/*!
+ *  @function vfs_set_thread_fs_private
+ *  @abstract Set the per-thread filesystem private data field.
+ *  @discussion Allows a filesystem to store an implementation specific value in the thread struct.
+ *  Note that this field is common to all filesystems thus re-entrancy should be taken into consideration.
+ *  @param tag Filesystem identification tag.
+ *  @param fs_private The value to be set.
+ *  @return 0 for success, ENOTSUP if the filesystem tag is not supported.
+ */
+int vfs_set_thread_fs_private(uint8_t tag, uint64_t fs_private);
+
+/*!
+ *  @function vfs_get_thread_fs_private
+ *  @abstract Return the per-thread filesystem private data field.
+ *  @discussion Returns the per-thread value that was set by vfs_set_thread_fs_private().
+ *  @param tag Filesystem identification tag.
+ *  @param fs_private The stored per-thread value.
+ *  @return 0 for success, ENOTSUP if the filesystem tag is not supported.
+ */
+int vfs_get_thread_fs_private(uint8_t tag, uint64_t *fs_private);
 
 /*!
  *  @function vflush
@@ -1581,6 +1703,18 @@ int vnode_getwithvid_drainok(vnode_t, uint32_t);
  */
 int     vnode_getwithref(vnode_t vp);
 
+#ifdef KERNEL_PRIVATE
+/*!
+ *  @function vnode_getwithref_noblock
+ *  @abstract Increase the iocount on a vnode on which a usecount (persistent reference) is held.
+ *  @discussion Similar to vnode_getwithref() but returns ENOENT instead of
+ *  blocking when the vnode is being reclaimed.
+ *  @return 0 for success, ENOENT if the vnode is dead, in the process of being
+ *  reclaimed, or has been recycled and reused.
+ */
+int vnode_getwithref_noblock(vnode_t vp);
+#endif /* KERNEL_PRIVATE */
+
 /*!
  *  @function vnode_put
  *  @abstract Decrement the iocount on a vnode.
@@ -1629,6 +1763,31 @@ void    vnode_rele(vnode_t vp);
 int     vnode_isinuse(vnode_t vp, int refcnt);
 
 /*!
+ *  @function vnode_hold
+ *  @abstract Increase the holdcount on a vnode.
+ *  @discussion the resulting hold must be dropped with vnode_drop().
+ *  This function always succeeds and does not block but it can only be used in a context which already has a iocount or a usecount
+ *  or under a synchronization primitive which can block the reclaim (for example a filesystem hash table lock which is also taken in the
+ *  VNOP_RECLAIM implementation for that filesystem.)
+ *  A holdcount only prevents the vnode from being freed and provides no other guarantees. It allows safe access to vnode pointer
+ *  when the vnode access is no longer protected by an iocount, usecount or other sysnchronization primitive.
+ *  @param vp The vnode whose holdcount has to be incremented.
+ *
+ */
+void     vnode_hold(vnode_t vp);
+
+/*!
+ *  @function vnode_drop
+ *  @abstract decrease the holdcount on vnode.
+ *  @discussion If the holdcount goes to zero and the vnode has been reclaimed, the vnode may also be freed.
+ *  Any access to the vnode after calling vnode_drop is unsafe unless it is a under a iocount or a usecount which has
+ *  been acquired prior to calling vnode_drop.
+ *  @param vp The vnode whose holdcount has to be decremented.
+ *  @return vnode passed and NULLVP if the vnode was freed.
+ */
+vnode_t  vnode_drop(vnode_t vp);
+
+/*!
  *  @function vnode_recycle
  *  @abstract Cause a vnode to be reclaimed and prepared for reuse.
  *  @discussion Like all vnode KPIs, must be called with an iocount on the target vnode.
@@ -1657,7 +1816,7 @@ int     vnode_recycle(vnode_t vp);
 	                                VNODE_ATTR_BIT(va_fileid)| \
 	                                VNODE_ATTR_BIT(va_mode)  | \
 	                                VNODE_ATTR_BIT(va_uid)   | \
-	                                VNODE_ATTR_BIT(va_gid)   | \
+	                                VNODE_ATTR_BIT(va_document_id)   | \
 	                                VNODE_ATTR_BIT(va_dirlinkcount) | \
 	                                VNODE_ATTR_BIT(va_nlink))
 
@@ -1767,7 +1926,8 @@ int     vn_getpath_fsenter_with_parent(struct vnode *dvp, struct vnode *vp, char
  *  @param flags flags for controlling behavior.
  *  @return 0 for success or an error.
  */
-int     vn_getpath_ext(struct vnode *vp, struct vnode *dvp, char *pathbuf, int *len, int flags);
+#define VN_GETPATH_NEW 0x0
+int     vn_getpath_ext(struct vnode *vp, struct vnode *dvp, char *pathbuf, size_t *len, int flags);
 
 /*!
  *  @function vn_getpath_ext_with_mntlen
@@ -1792,6 +1952,7 @@ int     vn_getpath_ext_with_mntlen(struct vnode *vp, struct vnode *dvp, char *pa
 #define VN_GETPATH_NO_FIRMLINK          0x0002
 #define VN_GETPATH_VOLUME_RELATIVE      0x0004 /* also implies VN_GETPATH_NO_FIRMLINK */
 #define VN_GETPATH_NO_PROCROOT          0x0008 /* Give the non chrooted path for a process */
+#define VN_GETPATH_CHECK_MOVED          0x0010 /* Return EAGAIN if the parent hierarchy is modified */
 
 #endif /* KERNEL_PRIVATE */
 
@@ -1952,6 +2113,7 @@ int     vfs_get_notify_attributes(struct vnode_attr *vap);
 #define VNODE_LOOKUP_NOFOLLOW           0x01
 #define VNODE_LOOKUP_NOCROSSMOUNT       0x02
 #define VNODE_LOOKUP_CROSSMOUNTNOWAIT   0x04
+#define VNODE_LOOKUP_NOFOLLOW_ANY       0x08
 /*!
  *  @function vnode_lookup
  *  @abstract Convert a path into a vnode.
@@ -1959,6 +2121,7 @@ int     vfs_get_notify_attributes(struct vnode_attr *vap);
  *  it returns with an iocount held on the resulting vnode which must be dropped with vnode_put().
  *  @param path Path to look up.
  *  @param flags VNODE_LOOKUP_NOFOLLOW: do not follow symbolic links.  VNODE_LOOKUP_NOCROSSMOUNT: do not cross mount points.
+ *  VNODE_LOOKUP_NOFOLLOW_ANY: no symlinks allowed in path
  *  @return Results 0 for success or an error code.
  */
 errno_t vnode_lookup(const char *path, int flags, vnode_t *vpp, vfs_context_t ctx);
@@ -1971,6 +2134,7 @@ errno_t vnode_lookup(const char *path, int flags, vnode_t *vpp, vfs_context_t ct
  *  it returns with an iocount held on the resulting vnode which must be dropped with vnode_put().
  *  @param path Path to look up.
  *  @param flags VNODE_LOOKUP_NOFOLLOW: do not follow symbolic links.  VNODE_LOOKUP_NOCROSSMOUNT: do not cross mount points.
+ *  VNODE_LOOKUP_NOFOLLOW_ANY: no symlinks allowed in path
  *  @param start_dvp vnode of directory to start lookup from. This parameter is ignored if path is absolute. start_dvp should
  *         have an iocount on it.
  *  @return Results 0 for success or an error code.
@@ -2036,6 +2200,8 @@ int     vnode_iterate(struct mount *mp, int flags, int (*callout)(struct vnode *
 #ifdef BSD_KERNEL_PRIVATE
 #define VNODE_ALWAYS            0x400
 #define VNODE_DRAINO            0x800
+#define VNODE_PAGER             0x1000
+#define VNODE_NOBLOCK           0x2000
 #endif /* BSD_KERNEL_PRIVATE */
 
 /*
@@ -2070,7 +2236,7 @@ int     vn_revoke(vnode_t vp, int flags, vfs_context_t ctx);
  *  @param vpp Destination for vnode pointer.
  *  @param cnp Various data about lookup, e.g. filename and intended operation.
  *  @return ENOENT: the filesystem has previously added a negative entry with cache_enter() to indicate that there is no
- *  file of the given name in "dp."  -1: successfully found a cached vnode (vpp is set).  0: No data in the cache, or operation is CRETE/RENAME.
+ *  file of the given name in "dp."  -1: successfully found a cached vnode (vpp is set).  0: No data in the cache, or operation is CREATE/RENAME.
  */
 int     cache_lookup(vnode_t dvp, vnode_t *vpp, struct componentname *cnp);
 
@@ -2181,6 +2347,39 @@ int vn_searchfs_inappropriate_name(const char *name, int len);
 int     vn_rdwr(enum uio_rw rw, struct vnode *vp, caddr_t base, int len, off_t offset, enum uio_seg segflg, int ioflg, kauth_cred_t cred, int *aresid, proc_t p);
 
 /*!
+ *  @function vn_rdwr_64
+ *  @abstract Read from or write to a file.
+ *  @discussion vn_rdwr_64() abstracts the details of constructing a uio and picking a vnode operation to allow
+ *  simple in-kernel file I/O.
+ *  @param rw UIO_READ for a read, UIO_WRITE for a write.
+ *  @param vp The vnode on which to perform I/O.
+ *  @param base Start of buffer into which to read or from which to write data.
+ *  @param len Length of buffer.
+ *  @param offset Offset within the file at which to start I/O.
+ *  @param segflg What kind of address "base" is.   See uio_seg definition in sys/uio.h.  UIO_SYSSPACE for kernelspace, UIO_USERSPACE for userspace.
+ *  UIO_USERSPACE32 and UIO_USERSPACE64 are in general preferred, but vn_rdwr will make sure that has the correct address sizes.
+ *  @param ioflg Defined in vnode.h, e.g. IO_NOAUTH, IO_NOCACHE.
+ *  @param cred Credential to pass down to filesystem for authentication.
+ *  @param aresid Destination for amount of requested I/O which was not completed, as with uio_resid().
+ *  @param p Process requesting I/O.
+ *  @return 0 for success; errors from filesystem, and EIO if did not perform all requested I/O and the "aresid" parameter is NULL.
+ */
+int     vn_rdwr_64(enum uio_rw rw, struct vnode *vp, uint64_t base, int64_t len, off_t offset, enum uio_seg segflg, int ioflg, kauth_cred_t cred, int64_t *aresid, struct proc *p);
+
+#ifdef KERNEL_PRIVATE
+/*!
+ *  @function vnode_radvise
+ *  @abstract perform an advisory read on the vnode.
+ *  @param vp vnode on which to perform I/O. Caller should have acquired an iocount prior to calling this function.
+ *  @param offset offset to begin reading from.
+ *  @param len number of bytes to read.
+ *  @param ctx Context against which to validate operation.
+ *  @return 0 for success; errors from filesystem, and EINVAL if offset or len is not valid.
+ */
+errno_t vnode_rdadvise(vnode_t vp, off_t offset, int len, vfs_context_t ctx);
+#endif
+
+/*!
  *  @function vnode_getname
  *  @abstract Get the name of a vnode from the VFS namecache.
  *  @discussion Not all vnodes have names, and vnode names can change (notably, hardlinks).  Use this routine at your own risk.
@@ -2250,6 +2449,14 @@ int     vnode_isdirty(vnode_t vp);
 int vnode_lookup_continue_needed(vnode_t vp, struct componentname *cnp);
 
 /*!
+ *  @function vnode_isonssd
+ *  @abstract Return whether or not the storage device backing a vnode is a solid state drive
+ *  @param vp The vnode whose backing store properties are to be queried
+ *  @return TRUE if storage device is an SSD, FALSE if otherwise.
+ */
+boolean_t vnode_isonssd(vnode_t vp);
+
+/*!
  *  @function vnode_istty
  *  @abstract Determine if the given vnode represents a tty device.
  *  @param vp Vnode to examine.
@@ -2271,6 +2478,50 @@ int bdevvp(dev_t dev, struct vnode **vpp);
  */
 int vnode_getfromfd(vfs_context_t ctx, int fd, vnode_t *vpp);
 
+/*
+ * @function vnode_parent
+ * @abstract Get the parent of a vnode.
+ * @param vp The vnode whose parent to grab.
+ * @return Parent if available, else NULL.
+ */
+vnode_t vnode_parent(vnode_t vp);
+
+/*
+ * @function vnode_getparent_and_name
+ * @abstract Get an iocount on the parent of a vnode and the name of a vnode from the VFS namecache.
+ * @discussion Combined version of vnode_getparent() and vnode_getname() to acquire both vnode name and parent
+ * without releasing the name cache lock in interim. The parent is returned with an iocount which must
+ * subsequently be dropped with vnode_put(). callers must call vnode_putname() to release the name reference.
+ * @param vp The vnode whose parent and name to grab.
+ * @param out_pvp A pointer to the output vnode parent.
+ * @param out_name A pointer to the output vnode name.
+ */
+void vnode_getparent_and_name(vnode_t vp, vnode_t *out_pvp, const char **out_name);
+
+/*
+ * @function vfs_context_thread
+ * @abstract Return the Mach thread associated with a vfs_context_t.
+ * @param ctx The context to use.
+ * @return The thread for this context, or NULL, if there is not one.
+ */
+thread_t vfs_context_thread(vfs_context_t ctx);
+
+/*
+ * @function vfs_context_task
+ * @abstract Return the Mach task associated with a vfs_context_t.
+ * @param ctx The context to use.
+ * @return The task for this context, or NULL, if there is not one.
+ */
+task_t vfs_context_task(vfs_context_t ctx);
+
+/*!
+ *  @function vnode_isauthfs
+ *  @abstract Determine if the given vnode is on an authenticated volume.
+ *  @param vp Vnode to examine.
+ *  @result Non-zero to indicate that the vnode is on an authenticated volume. Zero otherwise.
+ */
+int vnode_isauthfs(vnode_t vp);
+
 #endif /* KERNEL_PRIVATE */
 
 #ifdef BSD_KERNEL_PRIVATE
@@ -2285,7 +2536,6 @@ int     vaccess(mode_t file_mode, uid_t uid, gid_t gid,
 int     check_mountedon(dev_t dev, enum vtype type, int  *errorp);
 int vn_getcdhash(struct vnode *vp, off_t offset, unsigned char *cdhash);
 void    vnode_reclaim(vnode_t);
-vnode_t current_rootdir(void);
 vnode_t current_workingdir(void);
 void    *vnode_vfsfsprivate(vnode_t);
 struct vfsstatfs *vnode_vfsstatfs(vnode_t);
@@ -2305,11 +2555,8 @@ boolean_t vnode_on_reliable_media(vnode_t);
  * VNOP_LOOKUP on this vnode.  Volfs will always ask for it's parent
  * object ID (instead of using the v_parent pointer).
  */
-vnode_t vnode_parent(vnode_t);
 void vnode_setparent(vnode_t, vnode_t);
 void vnode_setname(vnode_t, char *);
-/* XXX temporary until we can arrive at a KPI for NFS, Seatbelt */
-thread_t vfs_context_thread(vfs_context_t);
 #if CONFIG_IOSCHED
 vnode_t vnode_mountdevvp(vnode_t);
 #endif
@@ -2393,6 +2640,9 @@ errno_t vfs_attr_pack_ext(mount_t mp, vnode_t vp, uio_t uio, struct attrlist *al
 
 #ifdef KERNEL_PRIVATE
 
+/* vnode manipulations for devices */
+int vnode_cmp_chrtoblk(vnode_t vp, vnode_t blk_vp);
+
 // Returns a value suitable, safe and consistent for tracing and logging
 vm_offset_t kdebug_vnode(vnode_t vp);
 int vn_pathconf(vnode_t, int, int32_t *, vfs_context_t);
@@ -2403,17 +2653,21 @@ uint64_t vfs_idle_time(mount_t mp);
 #ifndef vnode_usecount
 int vnode_usecount(vnode_t vp);
 #endif
+int vnode_writecount(vnode_t vp);
 int vnode_iocount(vnode_t vp);
 void vnode_rele_ext(vnode_t, int, int);
 int is_package_name(const char *name, int len);
-int     vfs_context_issuser(vfs_context_t);
+int vfs_context_issuser(vfs_context_t);
 int vfs_context_iskernel(vfs_context_t);
-vfs_context_t vfs_context_kernel(void);         /* get from 1st kernel thread */
+vfs_context_t vfs_context_kernel(void) __pure2;         /* get from 1st kernel thread */
 vnode_t vfs_context_cwd(vfs_context_t);
 vnode_t vfs_context_get_cwd(vfs_context_t); /* get cwd with iocount */
 int vnode_isnoflush(vnode_t);
 void vnode_setnoflush(vnode_t);
 void vnode_clearnoflush(vnode_t);
+#if CONFIG_IO_COMPRESSION_STATS
+void vnode_iocs_record_and_free(vnode_t);
+#endif /* CONFIG_IO_COMPRESSION_STATS */
 
 #define BUILDPATH_NO_FS_ENTER     0x1 /* Use cache values, do not enter file system */
 #define BUILDPATH_CHECKACCESS     0x2 /* Check if parents have search rights */
@@ -2422,14 +2676,63 @@ void vnode_clearnoflush(vnode_t);
 #define BUILDPATH_NO_FIRMLINK     0x10 /* Return non-firmlinked path */
 #define BUILDPATH_NO_PROCROOT     0x20 /* Return path relative to system root, not the process root */
 
-int     build_path(vnode_t first_vp, char *buff, int buflen, int *outlen, int flags, vfs_context_t ctx);
-
 int vnode_issubdir(vnode_t vp, vnode_t dvp, int *is_subdir, vfs_context_t ctx);
 
+struct vniodesc;
+typedef struct vniodesc *vniodesc_t;
+
+#define VNIO_SUPPORT_PRESENT
+errno_t vnio_openfd(int fd, vniodesc_t *vniop);
+errno_t vnio_close(vniodesc_t);
+errno_t vnio_read(vniodesc_t, uio_t);
+vnode_t vnio_vnode(vniodesc_t);
+
+int     cache_lookup_ext(vnode_t dvp, vnode_t *vpp, struct componentname *cnp,
+    int flags);
+#define CACHE_LOOKUP_ALLHITS    0x01    /* report all hits, even negatives for CREATE or RENAME */
+
 #endif // KERNEL_PRIVATE
+
+#ifdef XNU_KERNEL_PRIVATE
+int     build_path(vnode_t first_vp, char *buff, int buflen, int *outlen, int flags, vfs_context_t ctx);
+#endif
 
 __END_DECLS
 
 #endif /* KERNEL */
+
+/*
+ * Structure for vnode level IO compression stats
+ */
+
+#define IOCS_BUFFER_NUM_SIZE_BUCKETS         10
+#define IOCS_BUFFER_MAX_BUCKET               9
+#define IOCS_BUFFER_NUM_COMPRESSION_BUCKETS  7
+#define IOCS_BLOCK_NUM_SIZE_BUCKETS          16
+
+struct io_compression_stats {
+	uint64_t uncompressed_size;
+	uint64_t compressed_size;
+	uint32_t buffer_size_compression_dist[IOCS_BUFFER_NUM_SIZE_BUCKETS][IOCS_BUFFER_NUM_COMPRESSION_BUCKETS];
+	uint32_t block_compressed_size_dist[IOCS_BLOCK_NUM_SIZE_BUCKETS];
+};
+typedef struct io_compression_stats *io_compression_stats_t;
+
+#define IOCS_SBE_PATH_LEN             128
+#define IOCS_PATH_START_BYTES_TO_COPY 108
+#define IOCS_PATH_END_BYTES_TO_COPY   20 /* Includes null termination */
+
+#define IOCS_SYSCTL_LIVE                  0x00000001
+#define IOCS_SYSCTL_STORE_BUFFER_RD_ONLY  0x00000002
+#define IOCS_SYSCTL_STORE_BUFFER_MARK     0x00000004
+
+struct iocs_store_buffer_entry {
+	char     path_name[IOCS_SBE_PATH_LEN];
+	struct io_compression_stats iocs;
+};
+
+#ifdef KERNEL_PRIVATE
+boolean_t vnode_is_rsr(vnode_t);
+#endif
 
 #endif /* !_VNODE_H_ */

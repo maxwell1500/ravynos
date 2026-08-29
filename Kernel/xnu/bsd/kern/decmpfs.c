@@ -71,6 +71,11 @@ UNUSED_SYMBOL(decmpfs_validate_compressed_file)
 #include <sys/uio_internal.h>
 #include <libkern/OSByteOrder.h>
 #include <libkern/section_keywords.h>
+#include <sys/fsctl.h>
+
+#include <sys/kdebug_triage.h>
+
+#include <ptrauth.h>
 
 #pragma mark --- debugging ---
 
@@ -78,22 +83,7 @@ UNUSED_SYMBOL(decmpfs_validate_compressed_file)
 #define COMPRESSION_DEBUG_VERBOSE 0
 #define MALLOC_DEBUG 0
 
-static const char *
-baseName(const char *path)
-{
-	if (!path) {
-		return NULL;
-	}
-	const char *ret = path;
-	int i;
-	for (i = 0; path[i] != 0; i++) {
-		if (path[i] == '/') {
-			ret = &path[i + 1];
-		}
-	}
-	return ret;
-}
-
+#if COMPRESSION_DEBUG
 static char*
 vnpath(vnode_t vp, char *path, int len)
 {
@@ -103,9 +93,24 @@ vnpath(vnode_t vp, char *path, int len)
 	path[origlen - 1] = 0;
 	return path;
 }
+#endif
 
-#define ErrorLog(x, args...) printf("%s:%d:%s: " x, baseName(__FILE__), __LINE__, __FUNCTION__, ## args)
-#define ErrorLogWithPath(x, args...) do { char *path; MALLOC(path, char *, PATH_MAX, M_TEMP, M_WAITOK); printf("%s:%d:%s: %s: " x, baseName(__FILE__), __LINE__, __FUNCTION__, vnpath(vp, path, PATH_MAX), ## args); FREE(path, M_TEMP); } while(0)
+#define ErrorLog(x, args...) \
+	printf("%s:%d:%s: " x, __FILE_NAME__, __LINE__, __FUNCTION__, ## args)
+#if COMPRESSION_DEBUG
+#define ErrorLogWithPath(x, args...) do { \
+	char *path = zalloc(ZV_NAMEI); \
+	printf("%s:%d:%s: %s: " x, __FILE_NAME__, __LINE__, __FUNCTION__, \
+	    vnpath(vp, path, PATH_MAX), ## args); \
+	zfree(ZV_NAMEI, path); \
+} while(0)
+#else
+#define ErrorLogWithPath(x, args...) do { \
+	(void*)vp; \
+	printf("%s:%d:%s: %s: " x, __FILE_NAME__, __LINE__, __FUNCTION__, \
+	    "<private>", ## args); \
+} while(0)
+#endif
 
 #if COMPRESSION_DEBUG
 #define DebugLog ErrorLog
@@ -123,103 +128,52 @@ vnpath(vnode_t vp, char *path, int len)
 #define VerboseLogWithPath(x...) do { } while(0)
 #endif
 
-#if MALLOC_DEBUG
+#define decmpfs_ktriage_record(code, arg) ktriage_record(thread_tid(current_thread()), KDBG_TRIAGE_EVENTID(KDBG_TRIAGE_SUBSYS_DECMPFS, KDBG_TRIAGE_RESERVED, code), arg);
 
-static SInt32 totalAlloc;
+enum ktriage_decmpfs_error_codes {
+	KTRIAGE_DECMPFS_PREFIX = 0,
+	KTRIAGE_DECMPFS_IVALID_OFFSET,
+	KTRIAGE_DECMPFS_COMPRESSOR_NOT_REGISTERED,
+	KTRIAGE_DECMPFS_FETCH_CALLBACK_FAILED,
+	KTRIAGE_DECMPFS_FETCH_HEADER_FAILED,
+	KTRIAGE_DECMPFS_UBC_UPL_MAP_FAILED,
+	KTRIAGE_DECMPFS_FETCH_UNCOMPRESSED_DATA_FAILED,
 
-typedef struct {
-	uint32_t allocSz;
-	uint32_t magic;
-	const char *file;
-	int line;
-} allocated;
+	KTRIAGE_DECMPFS_MAX
+};
 
-static void *
-_malloc(uint32_t sz, __unused int type, __unused int flags, const char *file, int line)
-{
-	uint32_t allocSz = sz + 2 * sizeof(allocated);
+const char *ktriage_decmpfs_strings[] = {
+	[KTRIAGE_DECMPFS_PREFIX] = "decmpfs - ",
+	[KTRIAGE_DECMPFS_IVALID_OFFSET] = "pagein offset is invalid\n",
+	[KTRIAGE_DECMPFS_COMPRESSOR_NOT_REGISTERED] = "compressor is not registered\n",
+	[KTRIAGE_DECMPFS_FETCH_CALLBACK_FAILED] = "fetch callback failed\n",
+	[KTRIAGE_DECMPFS_FETCH_HEADER_FAILED] = "fetch decmpfs xattr failed\n",
+	[KTRIAGE_DECMPFS_UBC_UPL_MAP_FAILED] = "failed to map a UBC UPL\n",
+	[KTRIAGE_DECMPFS_FETCH_UNCOMPRESSED_DATA_FAILED] = "failed to fetch uncompressed data\n",
+};
 
-	allocated *alloc = NULL;
-	MALLOC(alloc, allocated *, allocSz, type, flags);
-	if (!alloc) {
-		ErrorLog("malloc failed\n");
-		return NULL;
-	}
-
-	char *ret = (char*)&alloc[1];
-	allocated *alloc2 = (allocated*)(ret + sz);
-
-	alloc->allocSz = allocSz;
-	alloc->magic = 0xdadadada;
-	alloc->file = file;
-	alloc->line = line;
-
-	*alloc2 = *alloc;
-
-	int s = OSAddAtomic(sz, &totalAlloc);
-	ErrorLog("malloc(%d) -> %p, total allocations %d\n", sz, ret, s + sz);
-
-	return ret;
-}
-
-static void
-_free(char *ret, __unused int type, const char *file, int line)
-{
-	if (!ret) {
-		ErrorLog("freeing null\n");
-		return;
-	}
-	allocated *alloc = (allocated*)ret;
-	alloc--;
-	uint32_t sz = alloc->allocSz - 2 * sizeof(allocated);
-	allocated *alloc2 = (allocated*)(ret + sz);
-
-	if (alloc->magic != 0xdadadada) {
-		panic("freeing bad pointer");
-	}
-
-	if (memcmp(alloc, alloc2, sizeof(*alloc)) != 0) {
-		panic("clobbered data");
-	}
-
-	memset(ret, 0xce, sz);
-	alloc2->file = file;
-	alloc2->line = line;
-	FREE(alloc, type);
-	int s = OSAddAtomic(-sz, &totalAlloc);
-	ErrorLog("free(%p,%d) -> total allocations %d\n", ret, sz, s - sz);
-}
-
-#undef MALLOC
-#undef FREE
-#define MALLOC(space, cast, size, type, flags) (space) = (cast)_malloc(size, type, flags, __FILE__, __LINE__)
-#define FREE(addr, type) _free((void *)addr, type, __FILE__, __LINE__)
-
-#endif /* MALLOC_DEBUG */
+ktriage_strings_t ktriage_decmpfs_subsystem_strings = {KTRIAGE_DECMPFS_MAX, ktriage_decmpfs_strings};
 
 #pragma mark --- globals ---
 
-static lck_grp_t *decmpfs_lockgrp;
+static LCK_GRP_DECLARE(decmpfs_lockgrp, "VFSCOMP");
+static LCK_RW_DECLARE(decompressorsLock, &decmpfs_lockgrp);
+static LCK_MTX_DECLARE(decompress_channel_mtx, &decmpfs_lockgrp);
 
-SECURITY_READ_ONLY_EARLY(static decmpfs_registration *) decompressors[CMP_MAX]; /* the registered compressors */
-static lck_rw_t * decompressorsLock;
+static const decmpfs_registration *decompressors[CMP_MAX]; /* the registered compressors */
 static int decompress_channel; /* channel used by decompress_file to wake up waiters */
-static lck_mtx_t *decompress_channel_mtx;
 
 vfs_context_t decmpfs_ctx;
 
 #pragma mark --- decmp_get_func ---
 
-#define offsetof_func(func) ((uintptr_t)(&(((decmpfs_registration*)NULL)->func)))
+#define offsetof_func(func) ((uintptr_t)offsetof(decmpfs_registration, func))
 
 static void *
-_func_from_offset(uint32_t type, uintptr_t offset)
+_func_from_offset(uint32_t type, uintptr_t offset, uint32_t discriminator)
 {
 	/* get the function at the given offset in the registration for the given type */
 	const decmpfs_registration *reg = decompressors[type];
-	const char *regChar = (const char*)reg;
-	const char *func = &regChar[offset];
-	void * const * funcPtr = (void * const *) func;
 
 	switch (reg->decmpfs_registration) {
 	case DECMPFS_REGISTRATION_VERSION_V1:
@@ -236,7 +190,12 @@ _func_from_offset(uint32_t type, uintptr_t offset)
 		return NULL;
 	}
 
-	return funcPtr[0];
+	void *ptr = *(void * const *)((uintptr_t)reg + offset);
+	if (ptr != NULL) {
+		/* Resign as a function-in-void* */
+		ptr = ptrauth_auth_and_resign(ptr, ptrauth_key_asia, discriminator, ptrauth_key_asia, 0);
+	}
+	return ptr;
 }
 
 extern void IOServicePublishResource( const char * property, boolean_t value );
@@ -244,7 +203,7 @@ extern boolean_t IOServiceWaitForMatchingResource( const char * property, uint64
 extern boolean_t IOCatalogueMatchingDriversPresent( const char * property );
 
 static void *
-_decmp_get_func(vnode_t vp, uint32_t type, uintptr_t offset)
+_decmp_get_func(vnode_t vp, uint32_t type, uintptr_t offset, uint32_t discriminator)
 {
 	/*
 	 *  this function should be called while holding a shared lock to decompressorsLock,
@@ -257,7 +216,7 @@ _decmp_get_func(vnode_t vp, uint32_t type, uintptr_t offset)
 
 	if (decompressors[type] != NULL) {
 		// the compressor has already registered but the function might be null
-		return _func_from_offset(type, offset);
+		return _func_from_offset(type, offset, discriminator);
 	}
 
 	// does IOKit know about a kext that is supposed to provide this type?
@@ -270,20 +229,20 @@ _decmp_get_func(vnode_t vp, uint32_t type, uintptr_t offset)
 		snprintf(resourceName, sizeof(resourceName), "com.apple.AppleFSCompression.Type%u", type);
 		ErrorLogWithPath("waiting for %s\n", resourceName);
 		while (decompressors[type] == NULL) {
-			lck_rw_unlock_shared(decompressorsLock); // we have to unlock to allow the kext to register
+			lck_rw_unlock_shared(&decompressorsLock); // we have to unlock to allow the kext to register
 			if (IOServiceWaitForMatchingResource(resourceName, delay)) {
-				lck_rw_lock_shared(decompressorsLock);
+				lck_rw_lock_shared(&decompressorsLock);
 				break;
 			}
 			if (!IOCatalogueMatchingDriversPresent(providesName)) {
 				//
 				ErrorLogWithPath("the kext with %s is no longer present\n", providesName);
-				lck_rw_lock_shared(decompressorsLock);
+				lck_rw_lock_shared(&decompressorsLock);
 				break;
 			}
 			ErrorLogWithPath("still waiting for %s\n", resourceName);
 			delay *= 2;
-			lck_rw_lock_shared(decompressorsLock);
+			lck_rw_lock_shared(&decompressorsLock);
 		}
 		// IOKit says the kext is loaded, so it should be registered too!
 		if (decompressors[type] == NULL) {
@@ -291,7 +250,7 @@ _decmp_get_func(vnode_t vp, uint32_t type, uintptr_t offset)
 			return NULL;
 		}
 		// it's now registered, so let's return the function
-		return _func_from_offset(type, offset);
+		return _func_from_offset(type, offset, discriminator);
 	}
 
 	// the compressor hasn't registered, so it never will unless someone manually kextloads it
@@ -299,7 +258,7 @@ _decmp_get_func(vnode_t vp, uint32_t type, uintptr_t offset)
 	return NULL;
 }
 
-#define decmp_get_func(vp, type, func) ((typeof(((decmpfs_registration*)NULL)->func))_decmp_get_func(vp, type, offsetof_func(func)))
+#define decmp_get_func(vp, type, func) (typeof(decompressors[0]->func))_decmp_get_func(vp, type, offsetof_func(func), ptrauth_function_pointer_type_discriminator(typeof(decompressors[0]->func)))
 
 #pragma mark --- utilities ---
 
@@ -322,31 +281,32 @@ vnsize(vnode_t vp, uint64_t *size)
 
 #pragma mark --- cnode routines ---
 
+ZONE_DEFINE(decmpfs_cnode_zone, "decmpfs_cnode",
+    sizeof(struct decmpfs_cnode), ZC_NONE);
+
 decmpfs_cnode *
 decmpfs_cnode_alloc(void)
 {
-	decmpfs_cnode *dp;
-	MALLOC_ZONE(dp, decmpfs_cnode *, sizeof(decmpfs_cnode), M_DECMPFS_CNODE, M_WAITOK);
-	return dp;
+	return zalloc(decmpfs_cnode_zone);
 }
 
 void
 decmpfs_cnode_free(decmpfs_cnode *dp)
 {
-	FREE_ZONE(dp, sizeof(*dp), M_DECMPFS_CNODE);
+	zfree(decmpfs_cnode_zone, dp);
 }
 
 void
 decmpfs_cnode_init(decmpfs_cnode *cp)
 {
 	memset(cp, 0, sizeof(*cp));
-	lck_rw_init(&cp->compressed_data_lock, decmpfs_lockgrp, NULL);
+	lck_rw_init(&cp->compressed_data_lock, &decmpfs_lockgrp, NULL);
 }
 
 void
 decmpfs_cnode_destroy(decmpfs_cnode *cp)
 {
-	lck_rw_destroy(&cp->compressed_data_lock, decmpfs_lockgrp);
+	lck_rw_destroy(&cp->compressed_data_lock, &decmpfs_lockgrp);
 }
 
 bool
@@ -419,7 +379,7 @@ decmpfs_cnode_set_vnode_state(decmpfs_cnode *cp, uint32_t state, int skiplock)
 	if (!skiplock) {
 		decmpfs_lock_compressed_data(cp, 1);
 	}
-	cp->cmp_state = state;
+	cp->cmp_state = (uint8_t)state;
 	if (state == FILE_TYPE_UNKNOWN) {
 		/* clear out the compression type too */
 		cp->cmp_type = 0;
@@ -447,7 +407,7 @@ decmpfs_cnode_set_vnode_minimal_xattr(decmpfs_cnode *cp, int minimal_xattr, int 
 	if (!skiplock) {
 		decmpfs_lock_compressed_data(cp, 1);
 	}
-	cp->cmp_minimal_xattr = minimal_xattr;
+	cp->cmp_minimal_xattr = !!minimal_xattr;
 	if (!skiplock) {
 		decmpfs_unlock_compressed_data(cp, 1);
 	}
@@ -538,7 +498,7 @@ decmpfs_cnode_cmp_type(decmpfs_cnode *cp)
 #pragma mark --- decmpfs state routines ---
 
 static int
-decmpfs_fetch_compressed_header(vnode_t vp, decmpfs_cnode *cp, decmpfs_header **hdrOut, int returnInvalid)
+decmpfs_fetch_compressed_header(vnode_t vp, decmpfs_cnode *cp, decmpfs_header **hdrOut, int returnInvalid, size_t *hdr_size)
 {
 	/*
 	 *  fetches vp's compression xattr, converting it into a decmpfs_header; returns 0 or errno
@@ -548,13 +508,14 @@ decmpfs_fetch_compressed_header(vnode_t vp, decmpfs_cnode *cp, decmpfs_header **
 
 	size_t read_size             = 0;
 	size_t attr_size             = 0;
+	size_t alloc_size            = 0;
 	uio_t attr_uio               = NULL;
 	int err                      = 0;
 	char *data                   = NULL;
 	const bool no_additional_data = ((cp != NULL)
 	    && (cp->cmp_type != 0)
 	    && (cp->cmp_minimal_xattr != 0));
-	char uio_buf[UIO_SIZEOF(1)];
+	UIO_STACKBUF(uio_buf, 1);
 	decmpfs_header *hdr = NULL;
 
 	/*
@@ -570,11 +531,8 @@ decmpfs_fetch_compressed_header(vnode_t vp, decmpfs_cnode *cp, decmpfs_header **
 	if (no_additional_data) {
 		/* this file's xattr didn't have any extra data when we fetched it, so we can synthesize a header from the data in the cnode */
 
-		MALLOC(data, char *, sizeof(decmpfs_header), M_TEMP, M_WAITOK);
-		if (!data) {
-			err = ENOMEM;
-			goto out;
-		}
+		alloc_size = sizeof(decmpfs_header);
+		data = kalloc_data(sizeof(decmpfs_header), Z_WAITOK | Z_NOFAIL);
 		hdr = (decmpfs_header*)data;
 		hdr->attr_size = sizeof(decmpfs_disk_header);
 		hdr->compression_magic = DECMPFS_MAGIC;
@@ -598,6 +556,7 @@ decmpfs_fetch_compressed_header(vnode_t vp, decmpfs_cnode *cp, decmpfs_header **
 		if (err != 0) {
 			goto out;
 		}
+		alloc_size = attr_size + sizeof(hdr->attr_size);
 
 		if (attr_size < sizeof(decmpfs_disk_header) || attr_size > MAX_DECMPFS_XATTR_SIZE) {
 			err = EINVAL;
@@ -605,11 +564,17 @@ decmpfs_fetch_compressed_header(vnode_t vp, decmpfs_cnode *cp, decmpfs_header **
 		}
 
 		/* allocation includes space for the extra attr_size field of a compressed_header */
-		MALLOC(data, char *, attr_size + sizeof(hdr->attr_size), M_TEMP, M_WAITOK);
-		if (!data) {
-			err = ENOMEM;
-			goto out;
-		}
+		data = (char *)kalloc_data(alloc_size, Z_WAITOK);
+		/*
+		 * we know the decmpfs sizes tend to be "small", and
+		 * vm_page_alloc_list() will actually wait for memory
+		 * for asks of less than 1/4th of the physical memory.
+		 *
+		 * This is important because decmpfs failures result
+		 * in pageins failing spuriously and eventually SIGBUS
+		 * errors for example when faulting in TEXT.
+		 */
+		assert(data);
 
 		/* read the xattr into our buffer, skipping over the attr_size field at the beginning */
 		attr_uio = uio_createwithbuffer(1, 0, UIO_SYSSPACE, UIO_READ, &uio_buf[0], sizeof(uio_buf));
@@ -624,7 +589,7 @@ decmpfs_fetch_compressed_header(vnode_t vp, decmpfs_cnode *cp, decmpfs_header **
 			goto out;
 		}
 		hdr = (decmpfs_header*)data;
-		hdr->attr_size = attr_size;
+		hdr->attr_size = (uint32_t)attr_size;
 		/* swap the fields to native endian */
 		hdr->compression_magic = OSSwapLittleToHostInt32(hdr->compression_magic);
 		hdr->compression_type  = OSSwapLittleToHostInt32(hdr->compression_type);
@@ -658,12 +623,11 @@ decmpfs_fetch_compressed_header(vnode_t vp, decmpfs_cnode *cp, decmpfs_header **
 out:
 	if (err && (err != ERANGE)) {
 		DebugLogWithPath("err %d\n", err);
-		if (data) {
-			FREE(data, M_TEMP);
-		}
+		kfree_data(data, alloc_size);
 		*hdrOut = NULL;
 	} else {
 		*hdrOut = hdr;
+		*hdr_size = alloc_size;
 	}
 	/*
 	 * Trace the following parameters on return with event-id 0x03120004.
@@ -733,9 +697,10 @@ errno_t
 decmpfs_validate_compressed_file(vnode_t vp, decmpfs_cnode *cp)
 {
 	/* give a compressor a chance to indicate that a compressed file is invalid */
-
 	decmpfs_header *hdr = NULL;
-	errno_t err = decmpfs_fetch_compressed_header(vp, cp, &hdr, 0);
+	size_t alloc_size = 0;
+	errno_t err = decmpfs_fetch_compressed_header(vp, cp, &hdr, 0, &alloc_size);
+
 	if (err) {
 		/* we couldn't get the header */
 		if (decmpfs_fast_get_state(cp) == FILE_IS_NOT_COMPRESSED) {
@@ -746,7 +711,7 @@ decmpfs_validate_compressed_file(vnode_t vp, decmpfs_cnode *cp)
 	}
 
 	if (!decmpfs_type_is_dataless(hdr->compression_type)) {
-		lck_rw_lock_shared(decompressorsLock);
+		lck_rw_lock_shared(&decompressorsLock);
 		decmpfs_validate_compressed_file_func validate = decmp_get_func(vp, hdr->compression_type, validate);
 		if (validate) { /* make sure this validation function is valid */
 			/* is the data okay? */
@@ -758,11 +723,11 @@ decmpfs_validate_compressed_file(vnode_t vp, decmpfs_cnode *cp)
 			/* no validate registered, so nothing to do */
 			err = 0;
 		}
-		lck_rw_unlock_shared(decompressorsLock);
+		lck_rw_unlock_shared(&decompressorsLock);
 	}
 out:
-	if (hdr) {
-		FREE(hdr, M_TEMP);
+	if (hdr != NULL) {
+		kfree_data(hdr, alloc_size);
 	}
 #if COMPRESSION_DEBUG
 	if (err) {
@@ -788,6 +753,7 @@ decmpfs_file_is_compressed(vnode_t vp, decmpfs_cnode *cp)
 	uint32_t cmp_state;
 	struct vnode_attr va_fetch;
 	decmpfs_header *hdr = NULL;
+	size_t alloc_size = 0;
 	mount_t mp = NULL;
 	int cnode_locked = 0;
 	int saveInvalid = 0; // save the header data even though the type was out of range
@@ -871,7 +837,7 @@ decmpfs_file_is_compressed(vnode_t vp, decmpfs_cnode *cp)
 	}
 	if (va_fetch.va_flags & UF_COMPRESSED) {
 		/* UF_COMPRESSED is on, make sure the file has the DECMPFS_XATTR_NAME xattr */
-		error = decmpfs_fetch_compressed_header(vp, cp, &hdr, 1);
+		error = decmpfs_fetch_compressed_header(vp, cp, &hdr, 1, &alloc_size);
 		if ((hdr != NULL) && (error == ERANGE)) {
 			saveInvalid = 1;
 		}
@@ -931,12 +897,12 @@ done:
 			ubc_setsize(vp, hdr->uncompressed_size);
 
 			/* update the decompression flags in the decmpfs cnode */
-			lck_rw_lock_shared(decompressorsLock);
+			lck_rw_lock_shared(&decompressorsLock);
 			decmpfs_get_decompression_flags_func get_flags = decmp_get_func(vp, hdr->compression_type, get_flags);
 			if (get_flags) {
 				decompression_flags = get_flags(vp, decmpfs_ctx, hdr);
 			}
-			lck_rw_unlock_shared(decompressorsLock);
+			lck_rw_unlock_shared(&decompressorsLock);
 			decmpfs_cnode_set_decompression_flags(cp, decompression_flags);
 		}
 	} else {
@@ -948,9 +914,10 @@ done:
 		decmpfs_unlock_compressed_data(cp, 1);
 	}
 
-	if (hdr) {
-		FREE(hdr, M_TEMP);
+	if (hdr != NULL) {
+		kfree_data(hdr, alloc_size);
 	}
+
 	/*
 	 * Trace the following parameters on return with event-id 0x03120014.
 	 *
@@ -1010,7 +977,8 @@ decmpfs_update_attributes(vnode_t vp, struct vnode_attr *vap)
 				}
 
 				decmpfs_header *hdr = NULL;
-				error = decmpfs_fetch_compressed_header(vp, NULL, &hdr, 1);
+				size_t alloc_size = 0;
+				error = decmpfs_fetch_compressed_header(vp, NULL, &hdr, 1, &alloc_size);
 				if (error == 0) {
 					/*
 					 * Allow the flag to be set since the decmpfs attribute
@@ -1032,8 +1000,8 @@ decmpfs_update_attributes(vnode_t vp, struct vnode_attr *vap)
 					/* no DECMPFS_XATTR_NAME attribute, so deny the update */
 					vap->va_flags &= ~UF_COMPRESSED;
 				}
-				if (hdr) {
-					FREE(hdr, M_TEMP);
+				if (hdr != NULL) {
+					kfree_data(hdr, alloc_size);
 				}
 			}
 		}
@@ -1046,15 +1014,15 @@ static int
 wait_for_decompress(decmpfs_cnode *cp)
 {
 	int state;
-	lck_mtx_lock(decompress_channel_mtx);
+	lck_mtx_lock(&decompress_channel_mtx);
 	do {
 		state = decmpfs_fast_get_state(cp);
 		if (state != FILE_IS_CONVERTING) {
 			/* file is not decompressing */
-			lck_mtx_unlock(decompress_channel_mtx);
+			lck_mtx_unlock(&decompress_channel_mtx);
 			return state;
 		}
-		msleep((caddr_t)&decompress_channel, decompress_channel_mtx, PINOD, "wait_for_decompress", NULL);
+		msleep((caddr_t)&decompress_channel, &decompress_channel_mtx, PINOD, "wait_for_decompress", NULL);
 	} while (1);
 }
 
@@ -1134,7 +1102,7 @@ register_decmpfs_decompressor(uint32_t compression_type, const decmpfs_registrat
 		goto out;
 	}
 
-	lck_rw_lock_exclusive(decompressorsLock); locked = 1;
+	lck_rw_lock_exclusive(&decompressorsLock); locked = 1;
 
 	/* make sure the registration for this type is zero */
 	if (decompressors[compression_type] != NULL) {
@@ -1147,7 +1115,7 @@ register_decmpfs_decompressor(uint32_t compression_type, const decmpfs_registrat
 
 out:
 	if (locked) {
-		lck_rw_unlock_exclusive(decompressorsLock);
+		lck_rw_unlock_exclusive(&decompressorsLock);
 	}
 	return ret;
 }
@@ -1166,7 +1134,7 @@ unregister_decmpfs_decompressor(uint32_t compression_type, decmpfs_registration 
 		goto out;
 	}
 
-	lck_rw_lock_exclusive(decompressorsLock); locked = 1;
+	lck_rw_lock_exclusive(&decompressorsLock); locked = 1;
 	if (decompressors[compression_type] != registration) {
 		ret = EEXIST;
 		goto out;
@@ -1177,7 +1145,7 @@ unregister_decmpfs_decompressor(uint32_t compression_type, decmpfs_registration 
 
 out:
 	if (locked) {
-		lck_rw_unlock_exclusive(decompressorsLock);
+		lck_rw_unlock_exclusive(&decompressorsLock);
 	}
 	return ret;
 }
@@ -1189,11 +1157,11 @@ compression_type_valid(vnode_t vp, decmpfs_header *hdr)
 	int ret = 0;
 
 	/* every compressor must have at least a fetch function */
-	lck_rw_lock_shared(decompressorsLock);
+	lck_rw_lock_shared(&decompressorsLock);
 	if (decmp_get_func(vp, hdr->compression_type, fetch) != NULL) {
 		ret = 1;
 	}
-	lck_rw_unlock_shared(decompressorsLock);
+	lck_rw_unlock_shared(&decompressorsLock);
 
 	return ret;
 }
@@ -1209,7 +1177,7 @@ decmpfs_fetch_uncompressed_data(vnode_t vp, decmpfs_cnode *cp, decmpfs_header *h
 
 	*bytes_read = 0;
 
-	if ((uint64_t)offset >= hdr->uncompressed_size) {
+	if (offset >= (off_t)hdr->uncompressed_size) {
 		/* reading past end of file; nothing to do */
 		err = 0;
 		goto out;
@@ -1219,9 +1187,9 @@ decmpfs_fetch_uncompressed_data(vnode_t vp, decmpfs_cnode *cp, decmpfs_header *h
 		err = EINVAL;
 		goto out;
 	}
-	if ((uint64_t)(offset + size) > hdr->uncompressed_size) {
+	if (hdr->uncompressed_size - offset < size) {
 		/* adjust size so we don't read past the end of the file */
-		size = hdr->uncompressed_size - offset;
+		size = (user_ssize_t)(hdr->uncompressed_size - offset);
 	}
 	if (size == 0) {
 		/* nothing to read */
@@ -1242,25 +1210,29 @@ decmpfs_fetch_uncompressed_data(vnode_t vp, decmpfs_cnode *cp, decmpfs_header *h
 	 */
 	DECMPFS_EMIT_TRACE_ENTRY(DECMPDBG_FETCH_UNCOMPRESSED_DATA, vp->v_id,
 	    hdr->compression_type, (int)offset, (int)size);
-	lck_rw_lock_shared(decompressorsLock);
+	lck_rw_lock_shared(&decompressorsLock);
 	decmpfs_fetch_uncompressed_data_func fetch = decmp_get_func(vp, hdr->compression_type, fetch);
 	if (fetch) {
 		err = fetch(vp, decmpfs_ctx, hdr, offset, size, nvec, vec, bytes_read);
-		lck_rw_unlock_shared(decompressorsLock);
+		lck_rw_unlock_shared(&decompressorsLock);
 		if (err == 0) {
 			uint64_t decompression_flags = decmpfs_cnode_get_decompression_flags(cp);
 			if (decompression_flags & DECMPFS_FLAGS_FORCE_FLUSH_ON_DECOMPRESS) {
 #if     !defined(__i386__) && !defined(__x86_64__)
 				int i;
 				for (i = 0; i < nvec; i++) {
-					flush_dcache64((addr64_t)(uintptr_t)vec[i].buf, vec[i].size, FALSE);
+					assert(vec[i].size >= 0 && vec[i].size <= UINT_MAX);
+					flush_dcache64((addr64_t)(uintptr_t)vec[i].buf, (unsigned int)vec[i].size, FALSE);
 				}
 #endif
 			}
+		} else {
+			decmpfs_ktriage_record(KTRIAGE_DECMPFS_FETCH_CALLBACK_FAILED, err);
 		}
 	} else {
+		decmpfs_ktriage_record(KTRIAGE_DECMPFS_COMPRESSOR_NOT_REGISTERED, hdr->compression_type);
 		err = ENOTSUP;
-		lck_rw_unlock_shared(decompressorsLock);
+		lck_rw_unlock_shared(&decompressorsLock);
 	}
 	/*
 	 * Trace the following parameters on return with event-id 0x03120008.
@@ -1289,13 +1261,13 @@ commit_upl(upl_t upl, upl_offset_t pl_offset, size_t uplSize, int flags, int abo
 	/* commit the upl pages */
 	if (abort) {
 		VerboseLog("aborting upl, flags 0x%08x\n", flags);
-		kr = ubc_upl_abort_range(upl, pl_offset, uplSize, flags);
+		kr = ubc_upl_abort_range(upl, pl_offset, (upl_size_t)uplSize, flags);
 		if (kr != KERN_SUCCESS) {
 			ErrorLog("ubc_upl_abort_range error %d\n", (int)kr);
 		}
 	} else {
 		VerboseLog("committing upl, flags 0x%08x\n", flags | UPL_COMMIT_CLEAR_DIRTY);
-		kr = ubc_upl_commit_range(upl, pl_offset, uplSize, flags | UPL_COMMIT_CLEAR_DIRTY | UPL_COMMIT_WRITTEN_BY_KERNEL);
+		kr = ubc_upl_commit_range(upl, pl_offset, (upl_size_t)uplSize, flags | UPL_COMMIT_CLEAR_DIRTY | UPL_COMMIT_WRITTEN_BY_KERNEL);
 		if (kr != KERN_SUCCESS) {
 			ErrorLog("ubc_upl_commit_range error %d\n", (int)kr);
 		}
@@ -1318,10 +1290,17 @@ decmpfs_pagein_compressed(struct vnop_pagein_args *ap, int *is_compressed, decmp
 	int flags                    = ap->a_flags;
 	off_t uplPos                 = 0;
 	user_ssize_t uplSize         = 0;
+	user_ssize_t rounded_uplSize = 0;
+	size_t verify_block_size     = 0;
 	void *data                   = NULL;
 	decmpfs_header *hdr = NULL;
+	size_t alloc_size            = 0;
 	uint64_t cachedSize          = 0;
+	uint32_t fs_bsize            = 0;
 	int cmpdata_locked           = 0;
+	int  num_valid_pages         = 0;
+	int  num_invalid_pages       = 0;
+	bool file_tail_page_valid    = false;
 
 	if (!decmpfs_trylock_compressed_data(cp, 0)) {
 		return EAGAIN;
@@ -1333,8 +1312,9 @@ decmpfs_pagein_compressed(struct vnop_pagein_args *ap, int *is_compressed, decmp
 		DebugLogWithPath("pagein: unknown flags 0x%08x\n", (flags & ~(UPL_IOSYNC | UPL_NOCOMMIT | UPL_NORDAHEAD)));
 	}
 
-	err = decmpfs_fetch_compressed_header(vp, cp, &hdr, 0);
+	err = decmpfs_fetch_compressed_header(vp, cp, &hdr, 0, &alloc_size);
 	if (err != 0) {
+		decmpfs_ktriage_record(KTRIAGE_DECMPFS_FETCH_HEADER_FAILED, err);
 		goto out;
 	}
 
@@ -1342,8 +1322,63 @@ decmpfs_pagein_compressed(struct vnop_pagein_args *ap, int *is_compressed, decmp
 
 	if (!compression_type_valid(vp, hdr)) {
 		/* compressor not registered */
+		decmpfs_ktriage_record(KTRIAGE_DECMPFS_COMPRESSOR_NOT_REGISTERED, hdr->compression_type);
 		err = ENOTSUP;
 		goto out;
+	}
+
+	/*
+	 * can't page-in from a negative offset
+	 * or if we're starting beyond the EOF
+	 * or if the file offset isn't page aligned
+	 * or the size requested isn't a multiple of PAGE_SIZE
+	 */
+	if (f_offset < 0 || f_offset >= cachedSize ||
+	    (f_offset & PAGE_MASK_64) || (size & PAGE_MASK) || (pl_offset & PAGE_MASK)) {
+		decmpfs_ktriage_record(KTRIAGE_DECMPFS_IVALID_OFFSET, 0);
+		err = EINVAL;
+		goto out;
+	}
+
+	/*
+	 * If the verify block size is larger than the page size, the UPL needs
+	 * to be aligned to it, Since the UPL has been created by the filesystem,
+	 * we will only check if the passed in UPL length conforms to the
+	 * alignment requirements.
+	 */
+	err = VNOP_VERIFY(vp, f_offset, NULL, 0, &verify_block_size, NULL,
+	    VNODE_VERIFY_DEFAULT, NULL);
+	if (err) {
+		ErrorLogWithPath("VNOP_VERIFY returned error = %d\n", err);
+		goto out;
+	} else if (verify_block_size) {
+		if (vp->v_mount->mnt_vfsstat.f_bsize > PAGE_SIZE) {
+			fs_bsize = vp->v_mount->mnt_vfsstat.f_bsize;
+		}
+		if (verify_block_size & (verify_block_size - 1)) {
+			ErrorLogWithPath("verify block size (%zu) is not power of 2, no verification will be done\n", verify_block_size);
+			err = EINVAL;
+		} else if (size % verify_block_size) {
+			ErrorLogWithPath("upl size (%zu) is not a multiple of verify block size (%zu)\n", (size_t)size, verify_block_size);
+			err = EINVAL;
+		} else if (fs_bsize) {
+			/*
+			 * Filesystems requesting verification have to provide
+			 * values for block sizes which are powers of 2.
+			 */
+			if (fs_bsize & (fs_bsize - 1)) {
+				ErrorLogWithPath("FS block size (%u) is greater than PAGE_SIZE (%d) and is not power of 2, no verification will be done\n",
+				    fs_bsize, PAGE_SIZE);
+				err = EINVAL;
+			} else if (fs_bsize > verify_block_size) {
+				ErrorLogWithPath("FS block size (%u) is greater than verify block size (%zu), no verification will be done\n",
+				    fs_bsize, verify_block_size);
+				err = EINVAL;
+			}
+		}
+		if (err) {
+			goto out;
+		}
 	}
 
 #if CONFIG_IOSCHED
@@ -1354,6 +1389,7 @@ decmpfs_pagein_compressed(struct vnop_pagein_args *ap, int *is_compressed, decmp
 	/* map the upl so we can fetch into it */
 	kern_return_t kr = ubc_upl_map(pl, (vm_offset_t*)&data);
 	if ((kr != KERN_SUCCESS) || (data == NULL)) {
+		decmpfs_ktriage_record(KTRIAGE_DECMPFS_UBC_UPL_MAP_FAILED, kr);
 		err = ENOSPC;
 		data = NULL;
 #if CONFIG_IOSCHED
@@ -1363,12 +1399,21 @@ decmpfs_pagein_compressed(struct vnop_pagein_args *ap, int *is_compressed, decmp
 	}
 
 	uplPos = f_offset;
-	uplSize = size;
+	off_t max_size = cachedSize - f_offset;
 
-	/* clip the size to the size of the file */
-	if ((uint64_t)uplPos + uplSize > cachedSize) {
-		/* truncate the read to the size of the file */
-		uplSize = cachedSize - uplPos;
+	if (size < max_size) {
+		rounded_uplSize = uplSize = size;
+		file_tail_page_valid = true;
+	} else {
+		uplSize = (user_ssize_t)max_size;
+		if (fs_bsize) {
+			/* First round up to fs_bsize */
+			rounded_uplSize = (uplSize + (fs_bsize - 1)) & ~(fs_bsize - 1);
+			/* then to PAGE_SIZE */
+			rounded_uplSize = MIN(size, round_page((vm_offset_t)rounded_uplSize));
+		} else {
+			rounded_uplSize = round_page((vm_offset_t)uplSize);
+		}
 	}
 
 	/* do the fetch */
@@ -1376,8 +1421,10 @@ decmpfs_pagein_compressed(struct vnop_pagein_args *ap, int *is_compressed, decmp
 
 decompress:
 	/* the mapped data pointer points to the first page of the page list, so we want to start filling in at an offset of pl_offset */
-	vec.buf = (char*)data + pl_offset;
-	vec.size = size;
+	vec = (decmpfs_vector) {
+		.buf = (char*)data + pl_offset,
+		.size = size,
+	};
 
 	uint64_t did_read = 0;
 	if (decmpfs_fast_get_state(cp) == FILE_IS_CONVERTING) {
@@ -1387,11 +1434,148 @@ decompress:
 		 *  pretend that it succeeded but don't do anything since we're just going to write over the pages anyway
 		 */
 		err = 0;
-		did_read = 0;
 	} else {
-		err = decmpfs_fetch_uncompressed_data(vp, cp, hdr, uplPos, uplSize, 1, &vec, &did_read);
+		if (verify_block_size <= PAGE_SIZE) {
+			err = decmpfs_fetch_uncompressed_data(vp, cp, hdr, uplPos, uplSize, 1, &vec, &did_read);
+			/* zero out whatever wasn't read */
+			if (did_read < rounded_uplSize) {
+				memset((char*)vec.buf + did_read, 0, (size_t)(rounded_uplSize - did_read));
+			}
+		} else {
+			off_t l_uplPos = uplPos;
+			off_t l_pl_offset = pl_offset;
+			user_ssize_t l_uplSize = uplSize;
+			upl_page_info_t *pl_info = ubc_upl_pageinfo(pl);
+
+			err = 0;
+			/*
+			 * When the system page size is less than the "verify block size",
+			 * the UPL passed may not consist solely of absent pages.
+			 * We have to detect the "absent" pages and only decompress
+			 * into those absent/invalid page ranges.
+			 *
+			 * Things that will change in each iteration of the loop :
+			 *
+			 * l_pl_offset = where we are inside the UPL [0, caller_upl_created_size)
+			 * l_uplPos = the file offset the l_pl_offset corresponds to.
+			 * l_uplSize = the size of the upl still unprocessed;
+			 *
+			 * In this picture, we have to do the transfer on 2 ranges
+			 * (One 2 page range and one 3 page range) and the loop
+			 * below will skip the first two pages and then identify
+			 * the next two as invalid and fill those in and
+			 * then skip the next one and then do the last pages.
+			 *
+			 *                          uplPos(file_offset)
+			 *                            |   uplSize
+			 * 0                          V<-------------->    file_size
+			 * |--------------------------------------------------->
+			 *                        | | |V|V|I|I|V|I|I|I|
+			 *                            ^
+			 *                            |    upl
+			 *                        <------------------->
+			 *                            |
+			 *                          pl_offset
+			 *
+			 * uplSize will be clipped in case the UPL range exceeds
+			 * the file size.
+			 *
+			 */
+			while (l_uplSize) {
+				uint64_t l_did_read = 0;
+				int pl_offset_pg = (int)(l_pl_offset / PAGE_SIZE);
+				int pages_left_in_upl;
+				int start_pg;
+				int last_pg;
+
+				/*
+				 * l_uplSize may start off less than the size of the upl,
+				 * we have to round it up to PAGE_SIZE to calculate
+				 * how many more pages are left.
+				 */
+				pages_left_in_upl = (int)(round_page((vm_offset_t)l_uplSize) / PAGE_SIZE);
+
+				/*
+				 * scan from the beginning of the upl looking for the first
+				 * non-valid page.... this will become the first page in
+				 * the request we're going to make to
+				 * 'decmpfs_fetch_uncompressed_data'... if all
+				 * of the pages are valid, we won't call through
+				 * to 'decmpfs_fetch_uncompressed_data'
+				 */
+				for (start_pg = 0; start_pg < pages_left_in_upl; start_pg++) {
+					if (!upl_valid_page(pl_info, pl_offset_pg + start_pg)) {
+						break;
+					}
+				}
+
+				num_valid_pages += start_pg;
+
+				/*
+				 * scan from the starting invalid page looking for
+				 * a valid page before the end of the upl is
+				 * reached, if we find one, then it will be the
+				 * last page of the request to 'decmpfs_fetch_uncompressed_data'
+				 */
+				for (last_pg = start_pg; last_pg < pages_left_in_upl; last_pg++) {
+					if (upl_valid_page(pl_info, pl_offset_pg + last_pg)) {
+						break;
+					}
+				}
+
+				if (start_pg < last_pg) {
+					off_t inval_offset = start_pg * PAGE_SIZE;
+					int inval_pages = last_pg - start_pg;
+					int inval_size = inval_pages * PAGE_SIZE;
+					decmpfs_vector l_vec;
+
+					num_invalid_pages += inval_pages;
+					if (inval_offset) {
+						did_read += inval_offset;
+						l_pl_offset += inval_offset;
+						l_uplPos += inval_offset;
+						l_uplSize -= inval_offset;
+					}
+
+					l_vec = (decmpfs_vector) {
+						.buf = (char*)data + l_pl_offset,
+						.size = inval_size,
+					};
+
+					err = decmpfs_fetch_uncompressed_data(vp, cp, hdr, l_uplPos,
+					    MIN(l_uplSize, inval_size), 1, &l_vec, &l_did_read);
+
+					if (!err && (l_did_read != inval_size) && (l_uplSize > inval_size)) {
+						ErrorLogWithPath("Unexpected size fetch of decompressed data, l_uplSize = %d, l_did_read = %d, inval_size = %d\n",
+						    (int)l_uplSize, (int)l_did_read, (int)inval_size);
+						err = EINVAL;
+					}
+				} else {
+					/* no invalid pages left */
+					l_did_read = l_uplSize;
+					if (!file_tail_page_valid) {
+						file_tail_page_valid = true;
+					}
+				}
+
+				if (err) {
+					break;
+				}
+
+				did_read += l_did_read;
+				l_pl_offset += l_did_read;
+				l_uplPos += l_did_read;
+				l_uplSize -= l_did_read;
+			}
+
+			/* Zero out the region after EOF in the last page (if needed) */
+			if (!err && !file_tail_page_valid && (uplSize < rounded_uplSize)) {
+				memset((char*)vec.buf + uplSize, 0, (size_t)(rounded_uplSize - uplSize));
+			}
+		}
 	}
 	if (err) {
+		decmpfs_ktriage_record(KTRIAGE_DECMPFS_FETCH_UNCOMPRESSED_DATA_FAILED, err)
 		DebugLogWithPath("decmpfs_fetch_uncompressed_data err %d\n", err);
 		int cmp_state = decmpfs_fast_get_state(cp);
 		if (cmp_state == FILE_IS_CONVERTING) {
@@ -1410,10 +1594,14 @@ decompress:
 		}
 	}
 
-	/* zero out whatever we didn't read, and zero out the end of the last page(s) */
-	uint64_t total_size = (size + (PAGE_SIZE - 1)) & ~(PAGE_SIZE - 1);
-	if (did_read < total_size) {
-		memset((char*)vec.buf + did_read, 0, total_size - did_read);
+	if (!err && verify_block_size) {
+		size_t cur_verify_block_size = verify_block_size;
+
+		if ((err = VNOP_VERIFY(vp, uplPos, vec.buf, rounded_uplSize, &cur_verify_block_size, NULL, 0, NULL))) {
+			ErrorLogWithPath("Verification failed with error %d, uplPos = %lld, uplSize = %d, did_read = %d, valid_pages = %d, invalid_pages = %d, tail_page_valid = %d\n",
+			    err, (long long)uplPos, (int)rounded_uplSize, (int)did_read, num_valid_pages, num_invalid_pages, file_tail_page_valid);
+		}
+		/* XXX : If the verify block size changes, redo the read */
 	}
 
 #if CONFIG_IOSCHED
@@ -1426,7 +1614,12 @@ decompress:
 	} else {
 		if (!err) {
 			/* commit our pages */
-			kr = commit_upl(pl, pl_offset, total_size, UPL_COMMIT_FREE_ON_EMPTY, 0);
+			kr = commit_upl(pl, pl_offset, (size_t)rounded_uplSize, UPL_COMMIT_FREE_ON_EMPTY, 0 /* commit */);
+			/* If there were any pages after the page containing EOF, abort them. */
+			if (rounded_uplSize < size) {
+				kr = commit_upl(pl, (upl_offset_t)(pl_offset + rounded_uplSize), (size_t)(size - rounded_uplSize),
+				    UPL_ABORT_FREE_ON_EMPTY | UPL_ABORT_ERROR, 1 /* abort */);
+			}
 		}
 	}
 
@@ -1434,8 +1627,8 @@ out:
 	if (data) {
 		ubc_upl_unmap(pl);
 	}
-	if (hdr) {
-		FREE(hdr, M_TEMP);
+	if (hdr != NULL) {
+		kfree_data(hdr, alloc_size);
 	}
 	if (cmpdata_locked) {
 		decmpfs_unlock_compressed_data(cp, 0);
@@ -1443,10 +1636,9 @@ out:
 	if (err) {
 #if 0
 		if (err != ENXIO && err != ENOSPC) {
-			char *path;
-			MALLOC(path, char *, PATH_MAX, M_TEMP, M_WAITOK);
+			char *path = zalloc(ZV_NAMEI);
 			panic("%s: decmpfs_pagein_compressed: err %d", vnpath(vp, path, PATH_MAX), err);
-			FREE(path, M_TEMP);
+			zfree(ZV_NAMEI, path);
 		}
 #endif /* 0 */
 		ErrorLogWithPath("err %d\n", err);
@@ -1475,9 +1667,12 @@ decmpfs_read_compressed(struct vnop_read_args *ap, int *is_compressed, decmpfs_c
 	upl_t upl                    = NULL;
 	upl_page_info_t *pli         = NULL;
 	decmpfs_header *hdr          = NULL;
+	size_t alloc_size            = 0;
 	uint64_t cachedSize          = 0;
 	off_t uioPos                 = 0;
 	user_ssize_t uioRemaining    = 0;
+	size_t verify_block_size     = 0;
+	size_t alignment_size        = PAGE_SIZE;
 	int cmpdata_locked           = 0;
 
 	decmpfs_lock_compressed_data(cp, 0); cmpdata_locked = 1;
@@ -1490,11 +1685,11 @@ decmpfs_read_compressed(struct vnop_read_args *ap, int *is_compressed, decmpfs_c
 
 	if ((uint64_t)uplPos + uplSize > cachedSize) {
 		/* truncate the read to the size of the file */
-		uplSize = cachedSize - uplPos;
+		uplSize = (user_ssize_t)(cachedSize - uplPos);
 	}
 
 	/* give the cluster layer a chance to fill in whatever it already has */
-	countInt = (uplSize > INT_MAX) ? INT_MAX : uplSize;
+	countInt = (uplSize > INT_MAX) ? INT_MAX : (int)uplSize;
 	err = cluster_copy_ubc_data(vp, uio, &countInt, 0);
 	if (err != 0) {
 		goto out;
@@ -1505,7 +1700,7 @@ decmpfs_read_compressed(struct vnop_read_args *ap, int *is_compressed, decmpfs_c
 	uioRemaining = uio_resid(uio);
 	if ((uint64_t)uioPos + uioRemaining > cachedSize) {
 		/* truncate the read to the size of the file */
-		uioRemaining = cachedSize - uioPos;
+		uioRemaining = (user_ssize_t)(cachedSize - uioPos);
 	}
 
 	if (uioRemaining <= 0) {
@@ -1513,7 +1708,7 @@ decmpfs_read_compressed(struct vnop_read_args *ap, int *is_compressed, decmpfs_c
 		goto out;
 	}
 
-	err = decmpfs_fetch_compressed_header(vp, cp, &hdr, 0);
+	err = decmpfs_fetch_compressed_header(vp, cp, &hdr, 0, &alloc_size);
 	if (err != 0) {
 		goto out;
 	}
@@ -1528,19 +1723,19 @@ decmpfs_read_compressed(struct vnop_read_args *ap, int *is_compressed, decmpfs_c
 	DebugLogWithPath("uplPos %lld uplSize %lld\n", (uint64_t)uplPos, (uint64_t)uplSize);
 #endif
 
-	lck_rw_lock_shared(decompressorsLock);
+	lck_rw_lock_shared(&decompressorsLock);
 	decmpfs_adjust_fetch_region_func adjust_fetch = decmp_get_func(vp, hdr->compression_type, adjust_fetch);
 	if (adjust_fetch) {
 		/* give the compressor a chance to adjust the portion of the file that we read */
 		adjust_fetch(vp, decmpfs_ctx, hdr, &uplPos, &uplSize);
 		VerboseLogWithPath("adjusted uplPos %lld uplSize %lld\n", (uint64_t)uplPos, (uint64_t)uplSize);
 	}
-	lck_rw_unlock_shared(decompressorsLock);
+	lck_rw_unlock_shared(&decompressorsLock);
 
 	/* clip the adjusted size to the size of the file */
 	if ((uint64_t)uplPos + uplSize > cachedSize) {
 		/* truncate the read to the size of the file */
-		uplSize = cachedSize - uplPos;
+		uplSize = (user_ssize_t)(cachedSize - uplPos);
 	}
 
 	if (uplSize <= 0) {
@@ -1553,13 +1748,27 @@ decmpfs_read_compressed(struct vnop_read_args *ap, int *is_compressed, decmpfs_c
 	 *  make sure we're on page boundaries
 	 */
 
-	if (uplPos & (PAGE_SIZE - 1)) {
-		/* round position down to page boundary */
-		uplSize += (uplPos & (PAGE_SIZE - 1));
-		uplPos &= ~(PAGE_SIZE - 1);
+	/* If the verify block size is larger than the page size, the UPL needs to aligned to it */
+	err = VNOP_VERIFY(vp, uplPos, NULL, 0, &verify_block_size, NULL, VNODE_VERIFY_DEFAULT, NULL);
+	if (err) {
+		goto out;
+	} else if (verify_block_size) {
+		if (verify_block_size & (verify_block_size - 1)) {
+			ErrorLogWithPath("verify block size is not power of 2, no verification will be done\n");
+			verify_block_size = 0;
+		} else if (verify_block_size > PAGE_SIZE) {
+			alignment_size = verify_block_size;
+		}
 	}
-	/* round size up to page multiple */
-	uplSize = (uplSize + (PAGE_SIZE - 1)) & ~(PAGE_SIZE - 1);
+
+	if (uplPos & (alignment_size - 1)) {
+		/* round position down to page boundary */
+		uplSize += (uplPos & (alignment_size - 1));
+		uplPos &= ~(alignment_size - 1);
+	}
+
+	/* round size up to alignement_size multiple */
+	uplSize = (uplSize + (alignment_size - 1)) & ~(alignment_size - 1);
 
 	VerboseLogWithPath("new uplPos %lld uplSize %lld\n", (uint64_t)uplPos, (uint64_t)uplSize);
 
@@ -1578,7 +1787,7 @@ decmpfs_read_compressed(struct vnop_read_args *ap, int *is_compressed, decmpfs_c
 		}
 
 		/* create the upl */
-		kr = ubc_create_upl_kernel(vp, curUplPos, curUplSize, &upl, &pli, UPL_SET_LITE, VM_KERN_MEMORY_FILE);
+		kr = ubc_create_upl_kernel(vp, curUplPos, (int)curUplSize, &upl, &pli, UPL_SET_LITE, VM_KERN_MEMORY_FILE);
 		if (kr != KERN_SUCCESS) {
 			ErrorLogWithPath("ubc_create_upl error %d\n", (int)kr);
 			err = EINVAL;
@@ -1596,10 +1805,9 @@ decmpfs_read_compressed(struct vnop_read_args *ap, int *is_compressed, decmpfs_c
 		if (kr != KERN_SUCCESS) {
 			commit_upl(upl, 0, curUplSize, UPL_ABORT_FREE_ON_EMPTY, 1);
 #if 0
-			char *path;
-			MALLOC(path, char *, PATH_MAX, M_TEMP, M_WAITOK);
+			char *path = zalloc(ZV_NAMEI);
 			panic("%s: decmpfs_read_compressed: ubc_upl_map error %d", vnpath(vp, path, PATH_MAX), (int)kr);
-			FREE(path, M_TEMP);
+			zfree(ZV_NAMEI, path);
 #else /* 0 */
 			ErrorLogWithPath("ubc_upl_map kr=0x%x\n", (int)kr);
 #endif /* 0 */
@@ -1638,52 +1846,69 @@ decompress:
 			if (cmp_state == FILE_IS_NOT_COMPRESSED) {
 				ErrorLogWithPath("cmp_state == FILE_IS_NOT_COMPRESSED\n");
 				/* the file was decompressed after we started reading it */
-				abort_read = 1; /* we're not going to commit our data */
 				*is_compressed = 0; /* instruct caller to fall back to its normal path */
 			}
 			kr = KERN_FAILURE;
+			abort_read = 1; /* we're not going to commit our data */
 			did_read = 0;
 		}
+
 		/* zero out the remainder of the last page */
-		memset((char*)data + did_read, 0, curUplSize - did_read);
+		memset((char*)data + did_read, 0, (size_t)(curUplSize - did_read));
+		if (!err && verify_block_size) {
+			size_t cur_verify_block_size = verify_block_size;
+
+			if ((err = VNOP_VERIFY(vp, curUplPos, data, curUplSize, &cur_verify_block_size, NULL, 0, NULL))) {
+				ErrorLogWithPath("Verification failed with error %d\n", err);
+				abort_read = 1;
+			}
+			/* XXX : If the verify block size changes, redo the read */
+		}
+
 		kr = ubc_upl_unmap(upl);
-		if (kr == KERN_SUCCESS) {
-			if (abort_read) {
-				kr = commit_upl(upl, 0, curUplSize, UPL_ABORT_FREE_ON_EMPTY, 1);
-			} else {
-				VerboseLogWithPath("uioPos %lld uioRemaining %lld\n", (uint64_t)uioPos, (uint64_t)uioRemaining);
-				if (uioRemaining) {
-					off_t uplOff = uioPos - curUplPos;
-					if (uplOff < 0) {
-						ErrorLogWithPath("uplOff %lld should never be negative\n", (int64_t)uplOff);
-						err = EINVAL;
+		if (kr != KERN_SUCCESS) {
+			/* A failure to unmap here will eventually cause a panic anyway */
+			panic("ubc_upl_unmap returned error %d (kern_return_t)", (int)kr);
+		}
+
+		if (abort_read) {
+			kr = commit_upl(upl, 0, curUplSize, UPL_ABORT_FREE_ON_EMPTY, 1);
+		} else {
+			VerboseLogWithPath("uioPos %lld uioRemaining %lld\n", (uint64_t)uioPos, (uint64_t)uioRemaining);
+			if (uioRemaining) {
+				off_t uplOff = uioPos - curUplPos;
+				if (uplOff < 0) {
+					ErrorLogWithPath("uplOff %lld should never be negative\n", (int64_t)uplOff);
+					err = EINVAL;
+				} else if (uplOff > INT_MAX) {
+					ErrorLogWithPath("uplOff %lld too large\n", (int64_t)uplOff);
+					err = EINVAL;
+				} else {
+					off_t count = curUplPos + curUplSize - uioPos;
+					if (count < 0) {
+						/* this upl is entirely before the uio */
 					} else {
-						off_t count = curUplPos + curUplSize - uioPos;
-						if (count < 0) {
-							/* this upl is entirely before the uio */
-						} else {
-							if (count > uioRemaining) {
-								count = uioRemaining;
-							}
-							int io_resid = count;
-							err = cluster_copy_upl_data(uio, upl, uplOff, &io_resid);
-							int copied = count - io_resid;
-							VerboseLogWithPath("uplOff %lld count %lld copied %lld\n", (uint64_t)uplOff, (uint64_t)count, (uint64_t)copied);
-							if (err) {
-								ErrorLogWithPath("cluster_copy_upl_data err %d\n", err);
-							}
-							uioPos += copied;
-							uioRemaining -= copied;
+						if (count > uioRemaining) {
+							count = uioRemaining;
 						}
+						int icount = (count > INT_MAX) ? INT_MAX : (int)count;
+						int io_resid = icount;
+						err = cluster_copy_upl_data(uio, upl, (int)uplOff, &io_resid);
+						int copied = icount - io_resid;
+						VerboseLogWithPath("uplOff %lld count %lld copied %lld\n", (uint64_t)uplOff, (uint64_t)count, (uint64_t)copied);
+						if (err) {
+							ErrorLogWithPath("cluster_copy_upl_data err %d\n", err);
+						}
+						uioPos += copied;
+						uioRemaining -= copied;
 					}
 				}
-				kr = commit_upl(upl, 0, curUplSize, UPL_COMMIT_FREE_ON_EMPTY | UPL_COMMIT_INACTIVATE, 0);
-				if (err) {
-					goto out;
-				}
 			}
-		} else {
-			ErrorLogWithPath("ubc_upl_unmap error %d\n", (int)kr);
+			kr = commit_upl(upl, 0, curUplSize, UPL_COMMIT_FREE_ON_EMPTY | UPL_COMMIT_INACTIVATE, 0);
+		}
+
+		if (err) {
+			goto out;
 		}
 
 		uplRemaining -= curUplSize;
@@ -1691,8 +1916,8 @@ decompress:
 
 out:
 
-	if (hdr) {
-		FREE(hdr, M_TEMP);
+	if (hdr != NULL) {
+		kfree_data(hdr, alloc_size);
 	}
 	if (cmpdata_locked) {
 		decmpfs_unlock_compressed_data(cp, 0);
@@ -1719,6 +1944,7 @@ decmpfs_free_compressed_data(vnode_t vp, decmpfs_cnode *cp)
 	 *  then delete the file's compression xattr
 	 */
 	decmpfs_header *hdr = NULL;
+	size_t alloc_size = 0;
 
 	/*
 	 * Trace the following parameters on entry with event-id 0x03120010.
@@ -1727,11 +1953,11 @@ decmpfs_free_compressed_data(vnode_t vp, decmpfs_cnode *cp)
 	 */
 	DECMPFS_EMIT_TRACE_ENTRY(DECMPDBG_FREE_COMPRESSED_DATA, vp->v_id);
 
-	int err = decmpfs_fetch_compressed_header(vp, cp, &hdr, 0);
+	int err = decmpfs_fetch_compressed_header(vp, cp, &hdr, 0, &alloc_size);
 	if (err) {
 		ErrorLogWithPath("decmpfs_fetch_compressed_header err %d\n", err);
 	} else {
-		lck_rw_lock_shared(decompressorsLock);
+		lck_rw_lock_shared(&decompressorsLock);
 		decmpfs_free_compressed_data_func free_data = decmp_get_func(vp, hdr->compression_type, free_data);
 		if (free_data) {
 			err = free_data(vp, decmpfs_ctx, hdr);
@@ -1739,7 +1965,7 @@ decmpfs_free_compressed_data(vnode_t vp, decmpfs_cnode *cp)
 			/* nothing to do, so no error */
 			err = 0;
 		}
-		lck_rw_unlock_shared(decompressorsLock);
+		lck_rw_unlock_shared(&decompressorsLock);
 
 		if (err != 0) {
 			ErrorLogWithPath("decompressor err %d\n", err);
@@ -1755,13 +1981,9 @@ decmpfs_free_compressed_data(vnode_t vp, decmpfs_cnode *cp)
 
 	/* delete the xattr */
 	err = vn_removexattr(vp, DECMPFS_XATTR_NAME, 0, decmpfs_ctx);
-	if (err != 0) {
-		goto out;
-	}
 
-out:
-	if (hdr) {
-		FREE(hdr, M_TEMP);
+	if (hdr != NULL) {
+		kfree_data(hdr, alloc_size);
 	}
 	return err;
 }
@@ -1773,24 +1995,48 @@ unset_compressed_flag(vnode_t vp)
 {
 	int err = 0;
 	struct vnode_attr va;
-	int new_bsdflags = 0;
+	struct fsioc_cas_bsdflags cas;
+	int i;
 
-	VATTR_INIT(&va);
-	VATTR_WANTED(&va, va_flags);
-	err = vnode_getattr(vp, &va, decmpfs_ctx);
-
-	if (err != 0) {
-		ErrorLogWithPath("vnode_getattr err %d\n", err);
-	} else {
-		new_bsdflags = va.va_flags & ~UF_COMPRESSED;
-
+# define MAX_CAS_BSDFLAGS_LOOPS 4
+	/* UF_COMPRESSED should be manipulated only with FSIOC_CAS_BSDFLAGS */
+	for (i = 0; i < MAX_CAS_BSDFLAGS_LOOPS; i++) {
 		VATTR_INIT(&va);
-		VATTR_SET(&va, va_flags, new_bsdflags);
+		VATTR_WANTED(&va, va_flags);
+		err = vnode_getattr(vp, &va, decmpfs_ctx);
+		if (err != 0) {
+			ErrorLogWithPath("vnode_getattr err %d, num retries %d\n", err, i);
+			goto out;
+		}
+
+		cas.expected_flags = va.va_flags;
+		cas.new_flags = va.va_flags & ~UF_COMPRESSED;
+		err = VNOP_IOCTL(vp, FSIOC_CAS_BSDFLAGS, (caddr_t)&cas, FWRITE, decmpfs_ctx);
+
+		if ((err == 0) && (va.va_flags == cas.actual_flags)) {
+			goto out;
+		}
+
+		if ((err != 0) && (err != EAGAIN)) {
+			break;
+		}
+	}
+
+	/* fallback to regular chflags if FSIOC_CAS_BSDFLAGS is not supported */
+	if (err == ENOTTY) {
+		VATTR_INIT(&va);
+		VATTR_SET(&va, va_flags, cas.new_flags);
 		err = vnode_setattr(vp, &va, decmpfs_ctx);
 		if (err != 0) {
 			ErrorLogWithPath("vnode_setattr err %d\n", err);
 		}
+	} else if (va.va_flags != cas.actual_flags) {
+		ErrorLogWithPath("FSIOC_CAS_BSDFLAGS err: flags mismatc. actual (%x) expected (%x), num retries %d\n", cas.actual_flags, va.va_flags, i);
+	} else if (err != 0) {
+		ErrorLogWithPath("FSIOC_CAS_BSDFLAGS err %d, num retries %d\n", err, i);
 	}
+
+out:
 	return err;
 }
 
@@ -1806,8 +2052,9 @@ decmpfs_decompress_file(vnode_t vp, decmpfs_cnode *cp, off_t toSize, int truncat
 	uint32_t old_state           = 0;
 	uint32_t new_state           = 0;
 	int update_file_state        = 0;
-	int allocSize                = 0;
+	size_t allocSize             = 0;
 	decmpfs_header *hdr          = NULL;
+	size_t hdr_size              = 0;
 	int cmpdata_locked           = 0;
 	off_t remaining              = 0;
 	uint64_t uncompressed_size   = 0;
@@ -1867,7 +2114,7 @@ decompress:
 	}
 	}
 
-	err = decmpfs_fetch_compressed_header(vp, cp, &hdr, 0);
+	err = decmpfs_fetch_compressed_header(vp, cp, &hdr, 0, &hdr_size);
 	if (err != 0) {
 		goto out;
 	}
@@ -1885,8 +2132,8 @@ decompress:
 		toSize = hdr->uncompressed_size;
 	}
 
-	allocSize = MIN(64 * 1024, toSize);
-	MALLOC(data, char *, allocSize, M_TEMP, M_WAITOK);
+	allocSize = MIN(64 * 1024, (size_t)toSize);
+	data = (char *)kalloc_data(allocSize, Z_WAITOK);
 	if (!data) {
 		err = ENOMEM;
 		goto out;
@@ -1911,7 +2158,7 @@ decompress:
 		/* loop decompressing data from the file and writing it into the data fork */
 
 		uint64_t bytes_read = 0;
-		decmpfs_vector vec = { .buf = data, .size = MIN(allocSize, remaining) };
+		decmpfs_vector vec = { .buf = data, .size = (user_ssize_t)MIN(allocSize, remaining) };
 		err = decmpfs_fetch_uncompressed_data(vp, cp, hdr, offset, vec.size, 1, &vec, &bytes_read);
 		if (err != 0) {
 			ErrorLogWithPath("decmpfs_fetch_uncompressed_data err %d\n", err);
@@ -1924,7 +2171,7 @@ decompress:
 		}
 
 		uio_reset(uio_w, offset, UIO_SYSSPACE, UIO_WRITE);
-		err = uio_addiov(uio_w, CAST_USER_ADDR_T(data), bytes_read);
+		err = uio_addiov(uio_w, CAST_USER_ADDR_T(data), (user_size_t)bytes_read);
 		if (err != 0) {
 			ErrorLogWithPath("uio_addiov err %d\n", err);
 			err = ENOMEM;
@@ -2000,12 +2247,11 @@ nodecmp:
 #endif
 
 out:
-	if (hdr) {
-		FREE(hdr, M_TEMP);
+	if (hdr != NULL) {
+		kfree_data(hdr, hdr_size);
 	}
-	if (data) {
-		FREE(data, M_TEMP);
-	}
+	kfree_data(data, allocSize);
+
 	if (uio_w) {
 		uio_free(uio_w);
 	}
@@ -2021,10 +2267,10 @@ out:
 	}
 
 	if (update_file_state) {
-		lck_mtx_lock(decompress_channel_mtx);
+		lck_mtx_lock(&decompress_channel_mtx);
 		decmpfs_cnode_set_vnode_state(cp, new_state, 1);
 		wakeup((caddr_t)&decompress_channel); /* wake up anyone who might have been waiting for decompression */
-		lck_mtx_unlock(decompress_channel_mtx);
+		lck_mtx_unlock(&decompress_channel_mtx);
 	}
 
 	if (cmpdata_locked) {
@@ -2108,7 +2354,7 @@ SECURITY_READ_ONLY_EARLY(static decmpfs_registration) Type1Reg =
 #pragma mark --- decmpfs initialization ---
 
 void
-decmpfs_init()
+decmpfs_init(void)
 {
 	static int done = 0;
 	if (done) {
@@ -2117,13 +2363,9 @@ decmpfs_init()
 
 	decmpfs_ctx = vfs_context_create(vfs_context_kernel());
 
-	lck_grp_attr_t *attr = lck_grp_attr_alloc_init();
-	decmpfs_lockgrp = lck_grp_alloc_init("VFSCOMP", attr);
-	lck_grp_attr_free(attr);
-	decompressorsLock = lck_rw_alloc_init(decmpfs_lockgrp, NULL);
-	decompress_channel_mtx = lck_mtx_alloc_init(decmpfs_lockgrp, NULL);
-
 	register_decmpfs_decompressor(CMP_Type1, &Type1Reg);
+
+	ktriage_register_subsystem_strings(KDBG_TRIAGE_SUBSYS_DECMPFS, &ktriage_decmpfs_subsystem_strings);
 
 	done = 1;
 }
