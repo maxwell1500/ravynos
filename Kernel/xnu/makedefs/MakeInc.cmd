@@ -353,6 +353,12 @@ endif
 ifeq ($(origin HOST_CC),undefined)
 	export HOST_CC		:= $(shell $(XCRUN) -sdk $(HOST_SDKROOT) -find clang)
 endif
+ifeq ($(HOST_CC),)
+	export HOST_CC		:= $(shell $(XCRUN) -sdk $(HOST_SDKROOT) -find clang)
+endif
+ifeq ($(HOST_CC),)
+	export HOST_CC		:= /Library/Developer/CommandLineTools/usr/bin/clang
+endif
 ifeq ($(origin HOST_FLEX),undefined)
 	export HOST_FLEX	:= $(shell $(XCRUN) -sdk $(HOST_SDKROOT) -find flex)
 endif

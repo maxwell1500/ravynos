@@ -28,6 +28,9 @@ ${.OBJDIR}/tapi/Version.inc: ${.CURDIR}/llvm/tapi/include/tapi/Version.inc.in
 SUBDIR = gmake mig unifdef cctools/libstuff cctools/libmacho xar rpcgen \
 	 dtrace_ctf/libctf dtrace_ctf/libelf dtrace_ctf/libdwarf llvm \
 	 cctools dtrace_ctf/tools plktool xcbuild lzvndecode iig
+.if "${.MAKE.OS}" == "Darwin"
+SUBDIR := ${SUBDIR:Ndtrace_ctf/tools}
+.endif
 
 .include <bsd.subdir.mk>
 

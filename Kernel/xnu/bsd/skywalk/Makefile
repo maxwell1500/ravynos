@@ -25,6 +25,10 @@ KERNELFILES= \
 # Installs header file for Apple internal use in user level -
 #	  $(DSTROOT)/System/Library/Frameworks/System.framework/PrivateHeaders
 PRIVATE_DATAFILES = \
+	os_channel.h os_channel_event.h os_channel_private.h	\
+	os_nexus.h os_nexus_private.h os_packet.h	\
+	os_packet_private.h packet_common.h skywalk_common.h	\
+	nexus_common.h nexus_ioctl.h	\
 	os_skywalk.h os_skywalk_private.h os_stats_private.h	\
 	os_sysctls_private.h
 

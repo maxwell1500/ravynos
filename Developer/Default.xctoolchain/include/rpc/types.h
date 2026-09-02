@@ -37,7 +37,7 @@
 #define _RPC_TYPES_H
 
 #include <sys/types.h>
-
+#include <stdint.h>
 typedef int32_t bool_t;
 typedef int32_t enum_t;
 

@@ -411,13 +411,13 @@ setup: build_setup_bootstrap
 		$(SLEEP) 1;					\
 		$(TOUCH) $(OBJROOT)/.mach_kernel.timestamp.new;	\
 	done
-	$(_v)$(MV) $(OBJROOT)/.mach_kernel.timestamp.new $(OBJROOT)/.mach_kernel.timestamp
+	$(_v)if [ -e $(OBJROOT)/.mach_kernel.timestamp.new ]; then $(MV) -f $(OBJROOT)/.mach_kernel.timestamp.new $(OBJROOT)/.mach_kernel.timestamp 2>/dev/null || true; fi
 	$(_v)$(TOUCH) $(OBJROOT)/.symbolset.timestamp.new
 	$(_v)while [ $(OBJROOT)/.symbolset.timestamp.new -ot $(OBJROOT)/.symbolset.timestamp ]; do \
 		$(SLEEP) 1;					\
 		$(TOUCH) $(OBJROOT)/.symbolset.timestamp.new;	\
 	done
-	$(_v)$(MV) $(OBJROOT)/.symbolset.timestamp.new $(OBJROOT)/.symbolset.timestamp
+	$(_v)if [ -e $(OBJROOT)/.symbolset.timestamp.new ]; then $(MV) -f $(OBJROOT)/.symbolset.timestamp.new $(OBJROOT)/.symbolset.timestamp 2>/dev/null || true; fi
 
 #
 # Install kernel header files

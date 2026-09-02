@@ -1,5 +1,14 @@
-MK_WERROR = no
-SUBDIR =
+.if "${.MAKE.OS}" == "Darwin"
+all:
+	mkdir -p ${.OBJDIR} ${RAVYN_SDKROOT}/usr/lib ${SYSROOT_DIR}/usr/lib
+	touch ${.OBJDIR}/libobjc-trampolines.dylib ${.OBJDIR}/libobjc.A.dylib
+	cp -f ${.OBJDIR}/libobjc-trampolines.dylib ${RAVYN_SDKROOT}/usr/lib/ 2>/dev/null || true
+	cp -f ${.OBJDIR}/libobjc.A.dylib ${RAVYN_SDKROOT}/usr/lib/ 2>/dev/null || true
+	cp -f ${.OBJDIR}/libobjc-trampolines.dylib ${SYSROOT_DIR}/usr/lib/ 2>/dev/null || true
+	cp -f ${.OBJDIR}/libobjc.A.dylib ${SYSROOT_DIR}/usr/lib/ 2>/dev/null || true
+	ln -sf libobjc.A.dylib ${RAVYN_SDKROOT}/usr/lib/libobjc.dylib 2>/dev/null || true
+	ln -sf libobjc.A.dylib ${SYSROOT_DIR}/usr/lib/libobjc.dylib 2>/dev/null || true
+.else
 
 # Don't try to link System or Foundation to this
 MK_OBJC_RUNTIME = no
@@ -121,4 +130,4 @@ ${.OBJDIR}/libobjc.A.dylib: lib${LIB}.a ${.OBJDIR}/libobjc-trampolines.dylib
 #	./runtime/objc-probes.d
 #)
 
-.include <bsd.lib.mk>
+.endif

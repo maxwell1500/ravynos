@@ -6,8 +6,8 @@ PROD_VERSION = 0.7.1
 PROD_FAMILY = Pre Alpha
 
 # Set ONE arch and ONE config
-ARCH_CONFIGS = X86_64
-KERNEL_CONFIGS = RELEASE
+PATH := ${PATH:C/:[^:]*VMware[^:]*//g:C/^://:C/:$//:C/::/:/g}
+KERNEL_CONFIGS = DEVELOPMENT
 
 ROOT_SOURCE_DIR = ${.CURDIR}
 
@@ -50,15 +50,14 @@ CFLAGS = -Wno-incompatible-sysroot
 # If we are building from a different OS, we want to use the host's tools
 # to build our toolchain.
 .if "${.MAKE.OS}" == "Darwin"
-HOST_CC = ${CC}
-HOST_CXX = ${CXX}
-HOST_AR = ${AR}
+HOST_CC = /Library/Developer/CommandLineTools/usr/bin/clang
+HOST_CXX = /Library/Developer/CommandLineTools/usr/bin/clang++
+HOST_AR = /usr/bin/ar
 .else
 HOST_CC ?= /usr/bin/cc
 HOST_CXX ?= /usr/bin/c++
 HOST_AR ?= /usr/bin/ar
 .endif
-
 # If we have a toolchain bundle, default to not building it again
 # TOOLCHAIN is initially set to /Library/Developer/... by sys.mk
 .if exists(${TOOLCHAIN})
@@ -107,7 +106,11 @@ SYSROOT_DIR = ${ROOT_BINARY_DIR}/sysroot
 
 TARGET_TRIPLE = ${CpuArch}-apple-darwin${DARWIN_MAJOR}
 
+.if "${.MAKE.OS}" == "Darwin"
+SUBDIR ?= Developer .WAIT Kernel Libraries BSD
+.else
 SUBDIR ?= Developer .WAIT Kernel Libraries Frameworks BSD
+.endif
 
 .export ROOT_SOURCE_DIR ROOT_BINARY_DIR ARCH_CONFIGS KERNEL_CONFIGS \
 	PROD_VERSION PROD_FAMILY CFLAGS DEVEL DARWIN_VERSION \

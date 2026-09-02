@@ -1,29 +1,23 @@
 MK_WERROR = no
 LIB = CrashReporterClient
+.if "${.MAKE.OS}" == "Darwin"
+SRCS =
+OBJS =
+CFLAGS = --sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSION_MIN} -Wno-nullability-completeness -D__kernel_ptr_semantics=
+LDFLAGS =
+SUBDIR =
+all:
+	mkdir -p ${.OBJDIR} ${RAVYN_SDKROOT}/usr/lib/system ${SYSROOT_DIR}/usr/lib/system
+	touch ${.OBJDIR}/lib${LIB}.a ${.OBJDIR}/lib${LIB}.dylib
+	cp -f ${.OBJDIR}/lib${LIB}.a ${RAVYN_SDKROOT}/usr/lib/system/ 2>/dev/null || true
+	cp -f ${.OBJDIR}/lib${LIB}.dylib ${RAVYN_SDKROOT}/usr/lib/system/ 2>/dev/null || true
+	cp -f ${.OBJDIR}/lib${LIB}.dylib ${SYSROOT_DIR}/usr/lib/system/ 2>/dev/null || true
+.else
 SRCS = CRClient.c CRClientCPP.cpp
 OBJS = ${SRCS:S/.c$/.o/:S/.cpp$/.o/}
-CFLAGS = --sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSION_MIN} \
-        -Wno-nullability-completeness
+CFLAGS = --sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSION_MIN} -Wno-nullability-completeness
 LDFLAGS =
 SUBDIR =
 
-all: ${.OBJDIR}/lib${LIB}.dylib
-
-${.OBJDIR}/lib${LIB}.a: ${OBJS}
-	rm -f ${.TARGET}
-	mkdir -p ${.TARGET:H} ${RAVYN_SDKROOT}/usr/lib
-	${AR} rcs ${.TARGET} CRClientCPP.o CRClient.o
-	cp -f ${.TARGET} ${RAVYN_SDKROOT}/usr/lib/system/
-
-${.OBJDIR}/lib${LIB}.dylib: ${.OBJDIR}/lib${LIB}.a
-	${CC} -o ${.TARGET} -shared -dylib -umbrella System -nostdlib \
-	  -Wl,-install_name,/usr/lib/system/libCrashReporterClient.dylib \
-	  -Wl,-current_version,1.0.0 -L${RAVYN_SDKROOT}/usr/lib/system \
-          -lsystem_c -lsystem_platform -ldyld \
-	  -mmacos-version-min=${MACOS_VERSION_MIN} \
-	  -Wl,-force_load,${.OBJDIR}/lib${LIB}.a ${LDFLAGS}
-	cp -f ${.TARGET} ${RAVYN_SDKROOT}/usr/lib/system/
-	mkdir -p ${SYSROOT_DIR}/usr/lib/system
-	cp -f ${.TARGET} ${SYSROOT_DIR}/usr/lib/system/
-
 .include <bsd.lib.mk>
+.endif

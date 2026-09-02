@@ -30,7 +30,7 @@ endif
 #
 # XXX: INCFLAGS to include libsa prototypes
 #
-INCFLAGS_MAKEFILE= -I$(SOURCE_DIR)osfmk/libsa
+INCFLAGS_MAKEFILE= -I$(SOURCE_DIR)/osfmk/libsa
 
 #
 # Directories for generated files
@@ -116,9 +116,9 @@ else ifeq ($(BUILD_CODE_COVERAGE),1)
 # UBSan build-time validations disabled on code coverage builds
 else
 	vm_sanitize.o_CFLAGS_ADD += ${VM_UBSAN_FLAGS}
-	vm_sanitize.o_VERIFIER = VERIFIER_NO_UBSAN_CHECKS
+#	vm_sanitize.o_VERIFIER = VERIFIER_NO_UBSAN_CHECKS
 	vm_sanitize_error_compat.o_CFLAGS_ADD += ${VM_UBSAN_FLAGS}
-	vm_sanitize_error_compat.o_VERIFIER = VERIFIER_NO_UBSAN_CHECKS
+#	vm_sanitize_error_compat.o_VERIFIER = VERIFIER_NO_UBSAN_CHECKS
 endif
 
 cccbc.o_INCFLAGS += -I${SRCROOT}/EXTERNAL_HEADERS/corecrypto

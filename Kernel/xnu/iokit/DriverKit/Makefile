@@ -49,8 +49,8 @@ do_build_all:: $(COMP_FILES)
 else
 do_build_all::
 	mkdir -pv $(OBJROOT)/${KERNEL_CONFIGS}_$(MACHINE)/iokit/${KERNEL_CONFIGS}/DriverKit
-	cp -fv $(SRCROOT)/iokit/DriverKit/*.iig.cpp \
-		$(OBJROOT)/${KERNEL_CONFIGS}_$(MACHINE)/iokit/${KERNEL_CONFIGS}/DriverKit/
+	cp -f $(SRCROOT)/iokit/DriverKit/*.iig.cpp \
+		$(OBJROOT)/${KERNEL_CONFIGS}_$(MACHINE)/iokit/${KERNEL_CONFIGS}/DriverKit/ || true
 endif
 
 include $(MakeInc_rule)

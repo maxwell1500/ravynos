@@ -9,7 +9,7 @@ SUBDIR =
 
 DEFINES = -DKERNEL=1 -DDISPATCH_USE_DTRACE=0 \
 	  -DOS_ATOMIC_CONFIG_MEMORY_ORDER_DEPENDENCY=1 \
-	  -DOS_ATOMIC_CONFIG_STARVATION_FREE_ONLY=0
+	  -DOS_ATOMIC_CONFIG_STARVATION_FREE_ONLY=0 -Duser_ssize_t=__darwin_ssize_t
 
 INCLUDES = -I${ROOT_SOURCE_DIR}/Kernel/xnu/osfmk \
 	  -I${ROOT_SOURCE_DIR}/Kernel/xnu/libkern \
@@ -32,12 +32,7 @@ all: ${RAVYN_SDKROOT}/usr/local/lib/kernel/${LIB}.a
 
 ${RAVYN_SDKROOT}/usr/local/lib/kernel/${LIB}.a: ${OBJS}
 	mkdir -p ${RAVYN_SDKROOT}/usr/local/lib/kernel
-	${TOOLS}/libtool -static \
-	  -o ${.TARGET} -no_warning_for_no_symbols ${OBJS} \
-	  -L${RAVYN_SDKROOT}/usr/local/lib/dyld -lplatform \
-	  -L${RAVYN_SDKROOT}/usr/local/lib/kernel -lkernel \
-	  -L${RAVYN_SDKROOT}/usr/lib -L${RAVYN_SDKROOT}/usr/lib/system \
-	  -lc++ -lc++abi ${RAVYN_SDKROOT}/usr/lib/libclang_rt.osx.a
+	${TOOLS}/libtool -static -o ${.TARGET} -no_warning_for_no_symbols ${OBJS}
 
 .include <bsd.lib.mk>
 

@@ -36,6 +36,9 @@
 #include <mach/machine/vm_types.h>
 
 #include <stdint.h>
+#ifndef __kernel_ptr_semantics
+#define __kernel_ptr_semantics
+#endif
 
 typedef vm_offset_t             pointer_t;
 typedef vm_offset_t             vm_address_t;

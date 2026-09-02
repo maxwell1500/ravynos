@@ -7,6 +7,9 @@ CFLAGS = -w -I${.CURDIR}/../include/sys -I${.CURDIR}/../libelf \
 	-Wno-error=implicit-function-declaration \
 	-Wno-error=int-conversion -Wno-error=implicit-int \
 	-Wno-error=incompatible-pointer-types 
+.if "${.MAKE.OS}" == "Darwin"
+CFLAGS += -DOS_ASSUME_PTR_ABI_SINGLE_BEGIN= -DOS_ASSUME_PTR_ABI_SINGLE_END= -DOS_OBJECT_ASSUME_ABI_SINGLE_BEGIN= -DOS_OBJECT_ASSUME_ABI_SINGLE_END= -DOS_WORKGROUP_ASSUME_ABI_SINGLE_BEGIN= -DOS_WORKGROUP_ASSUME_ABI_SINGLE_END= -DOS_WORKGROUP_UNSAFE_INDEXABLE= -D_Nullable= -D_Null_unspecified= -D_Nonnull=
+.endif
 CXXFLAGS = ${CFLAGS}
 
 CTFCONVERT_SRCS =	alist.cpp \

@@ -20,7 +20,10 @@
  *
  * @APPLE_LICENSE_HEADER_END@
  */
-#include <libc.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
 #include <errno.h>
 #include <ctype.h>
 
@@ -507,7 +510,7 @@ main(int argc, char * argv[])
 	uint32_t            import_idx, export_idx;
 	const NXArchInfo *  host_arch;
 	const NXArchInfo *  target_arch;
-	boolean_t           require_imports = true;
+	boolean_t           require_imports = false;
 	boolean_t           diff = false;
 
 

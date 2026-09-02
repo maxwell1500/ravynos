@@ -10,7 +10,7 @@ SBUF_OBJS = ${SBUF_SRCS:%.c=%.o}
 CFLAGS = --sysroot=${RAVYN_SDKROOT} -I${.CURDIR} \
 	 -mmacos-version-min=${MACOS_VERSION_MIN} \
 	 -I${.CURDIR}/../openbsm/compat -D"__packed=__attribute__((packed))" \
-	 -Wno-nullability-completeness
+	 -Wno-nullability-completeness -D'__sized_by(x)=' -D'__counted_by(x)=' -D'__counted_by_or_null(x)=' -D'__ended_by(x)=' -D'__started_by(x)='
 
 all: ${.OBJDIR}/libnv.a ${.OBJDIR}/libsbuf.a
 

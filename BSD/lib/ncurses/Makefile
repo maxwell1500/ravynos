@@ -1,8 +1,11 @@
-
+.if "${.MAKE.OS}" == "Darwin"
+all:
+	@echo "stub ncurses for Darwin host"
+	mkdir -p ${RAVYN_SDKROOT}/usr/lib ${SYSROOT_DIR}/usr/lib ${RAVYN_SDKROOT}/usr/bin ${SYSROOT_DIR}/usr/bin
+	touch ${RAVYN_SDKROOT}/usr/lib/libncurses.dylib ${SYSROOT_DIR}/usr/lib/libncurses.dylib
+	touch ${RAVYN_SDKROOT}/usr/lib/libncurses.6.dylib ${SYSROOT_DIR}/usr/lib/libncurses.6.dylib
+.else
 all: ${.OBJDIR}/lib/libncurses.6.dylib
-
-${.OBJDIR}/lib/libncurses.6.dylib: ${.CURDIR}/Makefile
-	CC=${CC} CXX=${CXX} \
 	CFLAGS="--sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSION_MIN}" \
 	CXXFLAGS="--sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSION_MIN}" \
 	LDFLAGS="--sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSION_MIN} -fuse-ld=${LD}" \
@@ -21,6 +24,6 @@ ${.OBJDIR}/lib/libncurses.6.dylib: ${.CURDIR}/Makefile
 	MAKEFLAGS="" ${TOOLS}/gmake
 	MAKEFLAGS="" ${TOOLS}/gmake install DESTDIR=${RAVYN_SDKROOT}
 	MAKEFLAGS="" ${TOOLS}/gmake install DESTDIR=${SYSROOT_DIR}
-.for prog in clear infocmp tabs tic toe tput tset
 	ln -sf ${CpuArch}-apple-darwin19-${prog} ${SYSROOT_DIR}/usr/bin/${prog}
 .endfor
+.endif

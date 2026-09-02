@@ -13,8 +13,10 @@ SRCS =	ctf_create.c \
 	ctf_subr.c \
 	ctf_types.c \
 	ctf_util.c \
-	fls.c \
-	qsort.c
+	fls.c
+.if "${.MAKE.OS}" != "Darwin"
+SRCS +=	qsort.c
+.endif
 OBJS = ${SRCS:%.c=%.o}
 
 all: ${TOOLCHAIN}/usr/lib/libctf.a

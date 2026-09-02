@@ -72,6 +72,9 @@
 #include <i386/_types.h>
 #include <mach/i386/vm_param.h>
 #include <stdint.h>
+#ifndef __kernel_ptr_semantics
+#define __kernel_ptr_semantics
+#endif
 
 /*
  * natural_t and integer_t are Mach's legacy types for machine-

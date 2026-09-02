@@ -15,7 +15,7 @@ ${TOOLS}/clang ${TOOLS}/clang++: ${TOOLCHAIN}/usr/libexec/migcom ${.CURDIR}/Make
 	-C${.CURDIR}/clang/cmake/caches/Apple-stage1.cmake \
 	-DCMAKE_C_COMPILER=${HOST_CC} \
 	-DCMAKE_CXX_COMPILER=${HOST_CXX} \
-	-DCMAKE_C_FLAGS=${CFLAGS} \
+	"-DCMAKE_C_FLAGS=${CFLAGS}" \
 	"-DCMAKE_CXX_FLAGS=${CXXFLAGS}" \
 	-DCMAKE_CXX_STANDARD=17 \
 	-DCMAKE_CXX_STANDARD_REQUIRED=ON \
@@ -47,9 +47,18 @@ ${TOOLS}/clang ${TOOLS}/clang++: ${TOOLCHAIN}/usr/libexec/migcom ${.CURDIR}/Make
 	-DCLANG_ENABLE_FORMAT=OFF \
 	-DCLANG_INCLUDE_TESTS=OFF \
 	-DTAPI_INCLUDE_TESTS=OFF
-	CC=${HOST_CC} CXX=${HOST_CXX} ${MAKE} -C${.OBJDIR}/../llvm_host all \
-	   llvm-ar llvm-nm llvm-ranlib llvm-strip dsymutil llvm-lipo \
+	CC=${HOST_CC} CXX=${HOST_CXX} ${MAKE} -C${.OBJDIR}/../llvm_host clang lld llvm-ar llvm-nm llvm-ranlib llvm-strip llvm-lipo \
 	   llvm-libtool-darwin llvm-objdump llvm-otool
+.if "${.MAKE.OS}" == "Darwin"
+	@echo "Skipping dsymutil on Darwin (SDK incompatibility)"
+.else
+	CC=${HOST_CC} CXX=${HOST_CXX} ${MAKE} -C${.OBJDIR}/../llvm_host dsymutil
+.endif
+	@mkdir -p ${.OBJDIR}/../llvm_host/lib
+	@if [ ! -f ${.OBJDIR}/../llvm_host/lib/libtapi.so ]; then \
+	  echo "building stub libtapi.so from tapi_stub.cpp"; \
+	  ${HOST_CXX} -std=c++17 -I${.CURDIR}/tapi/include -shared -o ${.OBJDIR}/../llvm_host/lib/libtapi.so ${.CURDIR}/tapi_stub.cpp; \
+	fi
 	cp -Rf ${.OBJDIR}/../llvm_host/bin ${TOOLCHAIN}/usr/
 	cp -Rf ${.OBJDIR}/../llvm_host/lib/clang ${TOOLCHAIN}/usr/lib/
 	cp -Rf ${.OBJDIR}/../llvm_host/lib/lib* ${TOOLCHAIN}/usr/lib/

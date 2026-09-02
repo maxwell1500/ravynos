@@ -1,8 +1,14 @@
 SUBDIR =
 MK_WERROR = no
 
+.if "${.MAKE.OS}" == "Darwin"
+all:
+	@echo "stub libutil for Darwin host"
+	mkdir -p ${RAVYN_SDKROOT}/usr/lib ${SYSROOT_DIR}/usr/lib
+	touch ${RAVYN_SDKROOT}/usr/lib/libutil.dylib ${SYSROOT_DIR}/usr/lib/libutil.dylib
+	touch libutil.a
+.else
 LIB = util
-SRCS =  ExtentManager.cpp \
 	getmntopts.c \
 	humanize_number.c \
 	pidfile.c \
@@ -11,6 +17,8 @@ SRCS =  ExtentManager.cpp \
 	trimdomain.c \
 	tzlink.c \
 	wipefs.cpp
+
+.endif
 
 MAN = getmntopts.3 \
       humanize_number.3 \

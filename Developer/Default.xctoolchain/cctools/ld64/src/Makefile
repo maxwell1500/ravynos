@@ -16,6 +16,7 @@ FLAGS += -D__DARWIN_UNIX03 -D_DARWIN_C_SOURCE -Wno-\#warnings \
 	 -I${.CURDIR}/../../include -I${.CURDIR}/../../include/foreign \
 	 -I${ROOT_BINARY_DIR}${ROOT_SOURCE_DIR}/Developer/Default.xctoolchain \
 	 -I${ROOT_SOURCE_DIR}/Kernel/xnu/libkern
+FLAGS += -include ${.CURDIR}/fix_darwin.h
 
 LDFLAGS += -L${TOOLCHAIN}/usr/lib -ltapi -lxar -lstuff \
 	   '-Wl,${RPATH_ORIGIN}/../lib'
@@ -28,6 +29,7 @@ FLAGS += -Du_int8_t=__uint8_t -Du_int32_t=__uint32_t \
 LDFLAGS += -lacl -latomic -lBlocksRuntime -luuid -lmd -lz -lssl -lcrypto -lxml2 -lbsd
 .else
 RPATH_ORIGIN = -rpath,@executable_path
+LDFLAGS += -lxml2 -lz -lcrypto -lssl
 .endif
 
 CFLAGS += ${FLAGS}
@@ -100,8 +102,7 @@ PASSES_SRCS =	ld/passes/branch_island.cpp \
 PASSES_OBJS = ${PASSES_SRCS:%.cpp=%.o}
 TARGET_DIRS = ${.OBJDIR}/ld/parsers ${.OBJDIR}/ld/code-sign-blobs \
 	      ${.OBJDIR}/ld/passes/stubs
-DEPENDS = ${TARGET_DIRS} ${TOOLCHAIN}/usr/lib/libxar.a \
-	  ${.OBJDIR}/../../../llvm_host/lib/libtapi.so
+DEPENDS = ${TARGET_DIRS} ${TOOLCHAIN}/usr/lib/libxar.a
 
 all: ${TOOLS}/ld64
 

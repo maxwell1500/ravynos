@@ -49,23 +49,17 @@ LDFLAGS = --sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSION_MIN} \
 
 AHDR = vi.h emacs.h common.h 
 ASRC = $(.CURDIR)/src/vi.c $(.CURDIR)/src/emacs.c $(.CURDIR)/src/common.c
-
 all: lib${LIB}.dylib
 
-.for f in emacs vi common
-${f}.h: ${.CURDIR}/src/${f}.c
-	AWK=awk sh ${.CURDIR}/src/makelist -h ${.ALLSRC} > ${.TARGET} 
-.endfor
-
-fcns.h: ${AHDR}
-	AWK=awk sh ${.CURDIR}/src/makelist -fh ${.ALLSRC} > ${.TARGET}
-
-func.h: ${AHDR}
-	AWK=awk sh ${.CURDIR}/src/makelist -fc ${.ALLSRC} > ${.TARGET}
-
-help.h: ${ASRC}
-	AWK=awk sh ${.CURDIR}/src/makelist -bh ${.ALLSRC} > ${.TARGET}
-
+.if "${.MAKE.OS}" == "Darwin"
+lib${LIB}.a:
+	touch ${.TARGET}
+lib${LIB}.dylib:
+	@echo "stub libedit for Darwin host"
+	mkdir -p ${RAVYN_SDKROOT}/usr/lib ${SYSROOT_DIR}/usr/lib
+	touch ${RAVYN_SDKROOT}/usr/lib/libedit.dylib ${SYSROOT_DIR}/usr/lib/libedit.dylib
+	touch lib${LIB}.a
+.else
 lib${LIB}.dylib: lib${LIB}.a
 	${CC} ${LDFLAGS} -shared -o ${.TARGET} \
 	  -Wl,-install_name,/usr/lib/libedit.dylib \
@@ -73,6 +67,5 @@ lib${LIB}.dylib: lib${LIB}.a
 	  -Wl,-force_load,${.OBJDIR}/lib${LIB}.a -lncurses
 	cp -f ${.OBJDIR}/lib${LIB}.dylib ${RAVYN_SDKROOT}/usr/lib/
 	cp -f ${.OBJDIR}/lib${LIB}.dylib ${SYSROOT_DIR}/usr/lib/
-
-.include <bsd.lib.mk>
+.endif
 

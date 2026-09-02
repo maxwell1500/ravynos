@@ -534,3 +534,9 @@ LDFLAGS += -framework Foundation
 CFLAGS+= ${CFLAGS_LAST}
 CXXFLAGS+= ${CXXFLAGS_LAST}
 LDFLAGS+= ${LDFLAGS_LAST}
+
+.if "${.MAKE.OS}" == "Darwin"
+CFLAGS += -D'__sized_by(x)=' -D'__counted_by(x)=' -D'__counted_by_or_null(x)=' -D'__ended_by(x)=' -D'__started_by(x)=' -D__kernel_ptr_semantics=
+CXXFLAGS += -D'__sized_by(x)=' -D'__counted_by(x)=' -D'__counted_by_or_null(x)=' -D'__ended_by(x)=' -D'__started_by(x)=' -D__kernel_ptr_semantics=
+LDFLAGS += -lSystem -Wl,-undefined,dynamic_lookup
+.endif

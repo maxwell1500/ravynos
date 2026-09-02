@@ -22,7 +22,7 @@ SFLAGS+= -include meta_features.h
 #
 # INCFLAGS to include security prototypes
 #
-INCFLAGS_MAKEFILE= -I$(SOURCE)/..
+INCFLAGS_MAKEFILE= -I$(SOURCE_DIR)
 
 #
 # Directories for mig generated files

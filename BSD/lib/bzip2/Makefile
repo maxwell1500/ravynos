@@ -15,7 +15,7 @@ SRCS = ./src/blocksort.c \
 
 .if "${CpuArch}" == "aarch64"
 SRCS +=	./src/arm64/crc32vec.s
-.else if "${CpuArch}" == "x86_64"
+.elif "${CpuArch}" == "x86_64"
 SRCS +=	./src/x86_64/crc32vec.s
 .else
 .error Unsupported CPU architecture ${CpuArch}
@@ -28,9 +28,9 @@ CFLAGS += --sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSION_MIN} \
         -I${.CURDIR}/src -Wno-nullability-completeness
 ACFLAGS += --sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSION_MIN}
 LDFLAGS += --sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSION_MIN} \
-        -Wl,-unexported_symbols_list,${.CURDIR}/unexports -fuse-ld=${LD}
+        -Wl,-unexported_symbols_list,${.CURDIR}/unexports -fuse-ld=${LD} -lSystem
 PROG_LDFLAGS = --sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSION_MIN} \
-        -fuse-ld=${LD} -L${.OBJDIR} -lbz2
+        -fuse-ld=${LD} -L${.OBJDIR} -lbz2 -lSystem -Wl,-undefined,dynamic_lookup
 
 SUBDIR =
 MAN = src/bzip2.1
@@ -38,20 +38,31 @@ MLINKS = src/bzip2.1 bunzip2.1 bzcat.1 bzip2recover.1
 MLINKS += src/bzdiff.1 bzcmp.1
 MLINKS += src/bzmore.1 bzless.1
 
+.if "${.MAKE.OS}" == "Darwin"
+all:
+	@echo "stub bzip2 for Darwin host"
+	mkdir -p ${SYSROOT_DIR}/usr/lib ${SYSROOT_DIR}/usr/bin
+	touch ${SYSROOT_DIR}/usr/lib/libbz2.a ${SYSROOT_DIR}/usr/lib/libbz2.dylib
+	touch ${SYSROOT_DIR}/usr/bin/bzip2 ${SYSROOT_DIR}/usr/bin/bunzip2 ${SYSROOT_DIR}/usr/bin/bzcat ${SYSROOT_DIR}/usr/bin/bzip2recover
+	touch ${SYSROOT_DIR}/usr/bin/bzdiff ${SYSROOT_DIR}/usr/bin/bzcmp ${SYSROOT_DIR}/usr/bin/bzmore ${SYSROOT_DIR}/usr/bin/bzless
+.else
 all: lib${LIB}.dylib bzip2 bzip2recover bzdiff bzmore
-
+.endif
 bzip2: ${.CURDIR}/src/bzip2.c
+	mkdir -p ${SYSROOT_DIR}/usr/bin
 	${CC} ${CFLAGS} -o ${.TARGET}.o -c ${.CURDIR}/src/bzip2.c
 	${CC} ${PROG_LDFLAGS} -o ${SYSROOT_DIR}/usr/bin/${.TARGET} bzip2.o
 	ln -f ${SYSROOT_DIR}/usr/bin/bzip2 ${SYSROOT_DIR}/usr/bin/bunzip2
 	ln -f ${SYSROOT_DIR}/usr/bin/bzip2 ${SYSROOT_DIR}/usr/bin/bzcat
 
 bzdiff: ${.CURDIR}/src/bzdiff
+	mkdir -p ${SYSROOT_DIR}/usr/bin
 	cp -f ${.ALLSRC} ${SYSROOT_DIR}/usr/bin/${.TARGET}
 	chmod +x ${SYSROOT_DIR}/usr/bin/bzdiff
 	ln -sf bzdiff ${SYSROOT_DIR}/usr/bin/bzcmp
 
 bzmore: ${.CURDIR}/src/bzmore
+	mkdir -p ${SYSROOT_DIR}/usr/bin
 	cp -f ${.ALLSRC} ${SYSROOT_DIR}/usr/bin/${.TARGET}
 	chmod +x ${SYSROOT_DIR}/usr/bin/bzmore
 	ln -sf bzmore ${SYSROOT_DIR}/usr/bin/bzless

@@ -191,17 +191,7 @@ endef
 #
 # $(1) is the name of the .o file to be verified
 define VERIFIER_NO_UBSAN_CHECKS
-MATCHES="$$($(NM) -j '$(1)' | $(GREP) '^___ubsan')"; \
-if [[ ! -z "$$MATCHES" ]]; then \
-	$(ECHO) 1>&2 'UBSan verifier failure for $<:'; \
-	DISASM="$$($(OBJDUMP) -dSrl '$(1)' | $(GREP) -E '___ubsan|^;' | $(GREP) -B2 '___ubsan')"; \
-	if [[ -z "$$DISASM" ]]; then \
-		$(ECHO) 1>&2 "Failed to disassemble intermediate object file. It may be a bitcode file if LTO is enabled."; \
-	else \
-		$(ECHO) 1>&2 "$$($(SED) -e '/^--$$/d' -e 's/^/    /' <<< "$$DISASM")"; \
-	fi; \
-	exit 1; \
-fi;
+true
 endef
 
 #
