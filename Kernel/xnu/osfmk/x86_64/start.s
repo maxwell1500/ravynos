@@ -139,10 +139,107 @@ EXT(mc_task_stack_end):
 	.globl	EXT(pstart)
 LEXT(_start)
 LEXT(pstart)
-	/* POSTCODE trace marker 1: _pstart entry */
-movl	$0x3f8, %edx
-	movl	$'1', %eax
+	/* Save all 32-bit registers immediately at entry */
+	pushal
+
+	/* Helper to print a single hex nibble in %al to COM1 (0x3f8) */
+	/* Preserves other registers except uses dx=0x3f8 */
+	jmp	1f
+L_print_nibble:
+	andb	$0x0f, %al
+	cmpb	$9, %al
+	jbe	2f
+	addb	$('A' - 10), %al
+	jmp	3f
+2:	addb	$'0', %al
+3:	movw	$0x3f8, %dx
 	outb	%al, %dx
+	ret
+
+L_print_hex32:
+	pushl	%ecx
+	pushl	%ebx
+	movl	%eax, %ebx
+	movl	$28, %ecx
+4:	movl	%ebx, %eax
+	shrl	%cl, %eax
+	call	L_print_nibble
+	subl	$4, %ecx
+	jns	4b
+	popl	%ebx
+	popl	%ecx
+	ret
+
+L_print_char:
+	movw	$0x3f8, %dx
+	outb	%al, %dx
+	ret
+
+1:
+	/* Print header "\r\n[pstart regs]\r\n" */
+	movb	$'\r', %al; call L_print_char
+	movb	$'\n', %al; call L_print_char
+	movb	$'E', %al; call L_print_char
+	movb	$'A', %al; call L_print_char
+	movb	$'X', %al; call L_print_char
+	movb	$'=', %al; call L_print_char
+	movl	28(%esp), %eax		/* eax on stack from pushal */
+	call	L_print_hex32
+
+	movb	$' ', %al; call L_print_char
+	movb	$'E', %al; call L_print_char
+	movb	$'B', %al; call L_print_char
+	movb	$'X', %al; call L_print_char
+	movb	$'=', %al; call L_print_char
+	movl	16(%esp), %eax		/* ebx on stack */
+	call	L_print_hex32
+
+	movb	$' ', %al; call L_print_char
+	movb	$'E', %al; call L_print_char
+	movb	$'C', %al; call L_print_char
+	movb	$'X', %al; call L_print_char
+	movb	$'=', %al; call L_print_char
+	movl	24(%esp), %eax		/* ecx on stack */
+	call	L_print_hex32
+
+	movb	$' ', %al; call L_print_char
+	movb	$'E', %al; call L_print_char
+	movb	$'D', %al; call L_print_char
+	movb	$'X', %al; call L_print_char
+	movb	$'=', %al; call L_print_char
+	movl	20(%esp), %eax		/* edx on stack */
+	call	L_print_hex32
+
+	movb	$' ', %al; call L_print_char
+	movb	$'E', %al; call L_print_char
+	movb	$'S', %al; call L_print_char
+	movb	$'I', %al; call L_print_char
+	movb	$'=', %al; call L_print_char
+	movl	4(%esp), %eax		/* esi on stack */
+	call	L_print_hex32
+
+	movb	$' ', %al; call L_print_char
+	movb	$'E', %al; call L_print_char
+	movb	$'D', %al; call L_print_char
+	movb	$'I', %al; call L_print_char
+	movb	$'=', %al; call L_print_char
+	movl	0(%esp), %eax		/* edi on stack */
+	call	L_print_hex32
+
+	movb	$' ', %al; call L_print_char
+	movb	$'E', %al; call L_print_char
+	movb	$'S', %al; call L_print_char
+	movb	$'P', %al; call L_print_char
+	movb	$'=', %al; call L_print_char
+	movl	12(%esp), %eax		/* esp on stack */
+	call	L_print_hex32
+
+	movb	$'\r', %al; call L_print_char
+	movb	$'\n', %al; call L_print_char
+
+	/* Restore original registers */
+	popal
+	movl	%eax, %edi	/* save kernbootstruct BEFORE clobbering %eax! */
 
 /*
  * Here we do the minimal setup to switch from 32 bit mode to 64 bit long mode.
@@ -163,9 +260,7 @@ movl	$0x3f8, %edx
  *	|			|
  *	------------------------- 0
  *
- */	
-	mov	%eax, %edi	/* save kernbootstruct */
-
+ */
 	/* Use low 32-bits of address as 32-bit stack */
 	movl	$EXT(low_eintstack), %esp
 	
@@ -176,11 +271,6 @@ movl	$0x3f8, %edx
 	 */
 	movl	$EXT(protected_mode_gdtr), %eax
 	lgdtl	(%eax)
-	/* POSTCODE trace marker 2: GDT loaded */
-movl	$0x3f8, %edx
-	movl	$'2', %eax
-	outb	%al, %dx
-
 	/*
 	 * Rebase Boot page tables to kernel base address.
 	 */
@@ -198,10 +288,6 @@ movl	$0x3f8, %edx
 
 /* the following code is shared by the BSP CPU and all AP CPUs */
 L_pstart_common:
-	/* POSTCODE trace marker 3: 64-bit long mode */
-movl	$0x3f8, %edx
-	movl	$'3', %eax
-	outb	%al, %dx
 	/*
 	 * switch to 64 bit mode
 	 */
@@ -230,10 +316,6 @@ Lstore_random_guard:
 	movq	%rax, ___stack_chk_guard(%rip)
 	/* %edi = boot_args_start if BSP */
 Lvstartshim:	
-movl	$0x3f8, %edx
-	movl	$'4', %eax
-	outb	%al, %dx
-
 	POSTCODE(PSTART_VSTART)
 
 	/* %edi = boot_args_start */
@@ -244,7 +326,7 @@ movl	$0x3f8, %edx
 	or	%rcx, %rax
 	andq	$0xfffffffffffffff0, %rsp	/* align stack */
 	xorq	%rbp, %rbp			/* zero frame pointer */
-	leaq	_physmap_max(%rip), %rdi
+	movl	%edi, %edi			/* zero-extend %rdi */
 	callq	*%rax
 
 Lnon_rdrand:

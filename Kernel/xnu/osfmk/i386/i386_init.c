@@ -179,6 +179,14 @@ void idt64_remap(void);
 TUNABLE(bool, restore_boot, "-restore", false);
 
 
+static inline void early_uart_puthex(uint64_t val) {
+    for (int i = 15; i >= 0; i--) {
+        uint8_t n = (val >> (i * 4)) & 0xf;
+        outb(0x3fc, 0x0b);
+        outb(0x3f8, (n < 10) ? ('0' + n) : ('a' + n - 10));
+    }
+}
+
 /*
  * Note: ALLOCPAGES() can only be used safely within Idle_PTs_init()
  * due to the mutation of physfree.
@@ -720,8 +728,27 @@ vstart(vm_offset_t boot_args_start)
 		/*
 		 * Get startup parameters.
 		 */
-		kernelBootArgs = (boot_args *)boot_args_start;
+	kernelBootArgs = (boot_args *)ml_static_ptovirt(boot_args_start);
+		early_uart_puthex((uint64_t)boot_args_start);
+		outb(0x3f8, '\n');
+		early_uart_puthex((uint64_t)kernelBootArgs->Version);
+		outb(0x3f8, '\n');
+		early_uart_puthex((uint64_t)kernelBootArgs->Revision);
+		outb(0x3f8, '\n');
+		early_uart_puthex((uint64_t)kernelBootArgs->kaddr);
+		outb(0x3f8, '\n');
+		early_uart_puthex((uint64_t)kernelBootArgs->ksize);
+		outb(0x3f8, '\n');
+		early_uart_puthex((uint64_t)kernelBootArgs->PhysicalMemorySize);
+		outb(0x3f8, '\n');
+		early_uart_puthex((uint64_t)kernelBootArgs->topOfKernelData);
+		outb(0x3f8, '\n');
 		lphysfree = kernelBootArgs->kaddr + kernelBootArgs->ksize;
+		physfree = (void *)(uintptr_t)((lphysfree + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1));
+		early_uart_puthex((uint64_t)lphysfree);
+		outb(0x3f8, '\n');
+		early_uart_puthex((uint64_t)physfree);
+		outb(0x3f8, '\n');
 
 		if (kernelBootArgs->Version >= 2 && kernelBootArgs->Revision >= 1 &&
 		    kernelBootArgs->KC_hdrs_vaddr != 0) {
@@ -745,19 +772,20 @@ vstart(vm_offset_t boot_args_start)
 
 		kprintf("MARK: before PE_init_platform\n");
 		/* Direct serial test - bypass kprintf */
-		__asm__ volatile("movb $0x41, %%al\n\toutb\n" : : : "al", "memory");
-		__asm__ volatile("movb $0x42, %%al\n\toutb\n" : : : "al", "memory");
+		__asm__ volatile("movb $0x41, %%al\n\toutb %%al, %%dx\n" : : "d"(0x3f8) : "al", "memory");
+		__asm__ volatile("movb $0x42, %%al\n\toutb %%al, %%dx\n" : : "d"(0x3f8) : "al", "memory");
 		PE_init_platform(FALSE, kernelBootArgs);
 		postcode(PE_INIT_PLATFORM_D);
 		kprintf("MARK: after PE_init_platform\n");
-		__asm__ volatile("movb $0x43, %%al\n\toutb\n" : : : "al", "memory");
-		__asm__ volatile("movb $0x44, %%al\n\toutb\n" : : : "al", "memory");
+		__asm__ volatile("movb $0x43, %%al\n\toutb %%al, %%dx\n" : : "d"(0x3f8) : "al", "memory");
+		__asm__ volatile("movb $0x44, %%al\n\toutb %%al, %%dx\n" : : "d"(0x3f8) : "al", "memory");
 
 
 		Idle_PTs_init();
+		__asm__ volatile("movb $0x45, %%al\n\toutb %%al, %%dx\n" : : "d"(0x3f8) : "al", "memory");
 		postcode(VSTART_IDLE_PTS_INIT);
 		kprintf("MARK: after Idle_PTs_init\n");
-
+		PE_init_platform(TRUE, kernelBootArgs);
 #if KASAN
 		/* Init kasan and map whatever was stolen from physfree */
 		kasan_init();
@@ -769,18 +797,23 @@ vstart(vm_offset_t boot_args_start)
 #endif /* CONFIG_CPU_COUNTERS */
 
 		first_avail = (vm_offset_t)ID_MAP_VTOP(physfree);
+		__asm__ volatile("movb $0x46, %%al\n\toutb %%al, %%dx\n" : : "d"(0x3f8) : "al", "memory");
 
 		cpu_data_alloc(TRUE);
+		__asm__ volatile("movb $0x47, %%al\n\toutb %%al, %%dx\n" : : "d"(0x3f8) : "al", "memory");
 		kprintf("MARK: after cpu_data_alloc\n");
 
 
 		cpu_desc_init(cpu_datap(0));
+		__asm__ volatile("movb $0x48, %%al\n\toutb %%al, %%dx\n" : : "d"(0x3f8) : "al", "memory");
 		postcode(VSTART_CPU_DESC_INIT);
 		cpu_desc_load(cpu_datap(0));
+		__asm__ volatile("movb $0x49, %%al\n\toutb %%al, %%dx\n" : : "d"(0x3f8) : "al", "memory");
 		kprintf("MARK: after cpu_desc_init/load\n");
 
 		postcode(VSTART_CPU_MODE_INIT);
 		cpu_syscall_init(cpu_datap(0));
+		__asm__ volatile("movb $0x4a, %%al\n\toutb %%al, %%dx\n" : : "d"(0x3f8) : "al", "memory");
 		kprintf("MARK: after cpu_syscall_init\n");
 		cpu = 0;
 	} else {
@@ -813,6 +846,7 @@ vstart(vm_offset_t boot_args_start)
 
 	uintptr_t target_fn = is_boot_cpu ? (uintptr_t) i386_init : (uintptr_t) i386_init_slave;
 	uintptr_t target_stack = cpu_datap(cpu)->cpu_int_stack_top;
+	__asm__ volatile("movb $0x4b, %%al\n\toutb %%al, %%dx\n" : : "d"(0x3f8) : "al", "memory");
 	x86_init_wrapper(target_fn, target_stack);
 }
 
@@ -829,6 +863,7 @@ pstate_trace(void)
 void
 i386_init(void)
 {
+	__asm__ volatile("movb $0x4c, %%al\n\toutb %%al, %%dx\n" : : "d"(0x3f8) : "al", "memory");
 	unsigned int    maxmem;
 	uint64_t        maxmemtouse;
 	unsigned int    cpus = 0;
@@ -845,12 +880,14 @@ i386_init(void)
 	/* Initialize machine-check handling */
 	mca_cpu_init();
 #endif
-
 	master_cpu = 0;
+
+	extern void pal_serial_putc(char);
+	const char *ib1 = "MARK: calling kernel_startup_bootstrap...\r\n";
+	while (*ib1) pal_serial_putc(*ib1++);
 
 	kernel_startup_bootstrap();
 	kprintf("MARK: after kernel_startup_bootstrap\n");
-
 
 	timer_call_init();
 

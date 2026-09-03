@@ -149,16 +149,23 @@ amd_get_pstate_divisor_x8(uint64_t field)
 static uint64_t
 EFI_get_frequency(const char *prop)
 {
+	extern void pal_serial_putc(char);
+	const char *ef1 = "    EFI_get_frequency: calling SecureDTLookupEntry...\r\n";
+	while (*ef1) { pal_serial_putc(*ef1++); }
+
 	uint64_t        frequency = 0;
 	DTEntry         entry;
 	void const      *value;
 	unsigned int    size;
 
 	if (SecureDTLookupEntry(0, "/efi/platform", &entry) != kSuccess) {
+		const char *ef2 = "    EFI_get_frequency: SecureDTLookupEntry failed\r\n";
+		while (*ef2) { pal_serial_putc(*ef2++); }
 		kprintf("EFI_get_frequency: didn't find /efi/platform\n");
 		return 0;
 	}
-
+	const char *ef3 = "    EFI_get_frequency: SecureDTLookupEntry succeeded\r\n";
+	while (*ef3) { pal_serial_putc(*ef3++); }
 	/*
 	 * While we're here, see if EFI published an initial TSC value.
 	 */
@@ -214,15 +221,17 @@ pit_measure_tsc_freq(void)
 void
 tsc_init(void)
 {
+	extern void pal_serial_putc(char);
+	const char *ts0 = "    tsc_init: entered...\r\n";
+	while (*ts0) { pal_serial_putc(*ts0++); }
+
 	boolean_t       N_by_2_bus_ratio = FALSE;
 
 	if (cpuid_vmm_present()) {
-		kprintf("VMM vendor %s TSC frequency %u KHz bus frequency %u KHz\n",
-		    cpuid_vmm_family_string(),
-		    cpuid_vmm_info()->cpuid_vmm_tsc_frequency,
-		    cpuid_vmm_info()->cpuid_vmm_bus_frequency);
-
-		if (cpuid_vmm_info()->cpuid_vmm_tsc_frequency &&
+		const char *tsv = "    tsc_init: cpuid_vmm_present TRUE\r\n";
+		while (*tsv) { pal_serial_putc(*tsv++); }
+		if (cpuid_vmm_info() &&
+		    cpuid_vmm_info()->cpuid_vmm_tsc_frequency &&
 		    cpuid_vmm_info()->cpuid_vmm_bus_frequency) {
 			busFreq = (uint64_t)cpuid_vmm_info()->cpuid_vmm_bus_frequency * kilo;
 			busFCvtt2n = ((1 * Giga) << 32) / busFreq;
@@ -236,15 +245,25 @@ tsc_init(void)
 
 			bus2tsc = tmrCvt(busFCvtt2n, tscFCvtn2t);
 
+			const char *tsv_done = "    tsc_init: vmm init done!\r\n";
+			while (*tsv_done) { pal_serial_putc(*tsv_done++); }
 			return;
+		} else {
+			const char *tsv_fail = "    tsc_init: vmm frequencies zero or cpuid_vmm_info NULL\r\n";
+			while (*tsv_fail) { pal_serial_putc(*tsv_fail++); }
 		}
 	}
+
+	const char *ts_sw = "    tsc_init: switch cpuid_cpufamily\r\n";
+	while (*ts_sw) { pal_serial_putc(*ts_sw++); }
 
 	switch (cpuid_cpufamily()) {
 	case CPUFAMILY_INTEL_KABYLAKE:
 	case CPUFAMILY_INTEL_ICELAKE:
 	case CPUFAMILY_INTEL_COMETLAKE:
 	case CPUFAMILY_INTEL_SKYLAKE: {
+		const char *ts_sky = "    tsc_init: Skylake/Kabylake ART\r\n";
+		while (*ts_sky) { pal_serial_putc(*ts_sky++); }
 		/*
 		 * SkyLake and later has an Always Running Timer (ART) providing
 		 * the reference frequency. CPUID leaf 0x15 determines the
@@ -258,6 +277,9 @@ tsc_init(void)
 		uint64_t         N = (uint64_t) tsc_leafp->numerator;
 		uint64_t         M = (uint64_t) tsc_leafp->denominator;
 		uint64_t         refFreq;
+
+		const char *ts_callefi = "    tsc_init: calling EFI_get_frequency\r\n";
+		while (*ts_callefi) { pal_serial_putc(*ts_callefi++); }
 
 		refFreq = EFI_get_frequency("ARTFrequency");
 		if (refFreq == 0) {
@@ -277,26 +299,37 @@ tsc_init(void)
 				refFreq = BASE_ART_CLOCK_SOURCE;
 			}
 		}
-
-		assert(N != 0);
-		assert(M != 1);
+		if (N == 0 || M == 0) {
+			N = 1;
+			M = 1;
+		}
+		if (refFreq == 0) {
+			refFreq = 2400000000ULL;
+		}
 		tscFreq = refFreq * N / M;
 		busFreq = tscFreq;              /* bus is APIC frequency */
-
-		kprintf(" ART: Frequency = %6d.%06dMHz, N/M = %lld/%llu\n",
-		    (uint32_t)(refFreq / Mega),
-		    (uint32_t)(refFreq % Mega),
-		    N, M);
-
 		break;
 	}
 	default: {
-		uint64_t msr_flex_ratio;
-		uint64_t msr_platform_info;
+		const char *ts_def = "    tsc_init: default case\r\n";
+		while (*ts_def) { pal_serial_putc(*ts_def++); }
+
+		uint64_t msr_flex_ratio = 0;
+		uint64_t msr_platform_info = 0;
+		uint32_t lo = 0, hi = 0;
+
+		const char *ts_rdmsr = "    tsc_init: rdmsr flex_ratio\r\n";
+		while (*ts_rdmsr) { pal_serial_putc(*ts_rdmsr++); }
 
 		/* See if FLEX_RATIO is being used */
-		msr_flex_ratio = rdmsr64(MSR_FLEX_RATIO);
-		msr_platform_info = rdmsr64(MSR_PLATFORM_INFO);
+		if (rdmsr_carefully(MSR_FLEX_RATIO, &lo, &hi) == 0) {
+			msr_flex_ratio = ((uint64_t)hi << 32) | lo;
+		}
+		lo = hi = 0;
+		if (rdmsr_carefully(MSR_PLATFORM_INFO, &lo, &hi) == 0) {
+			msr_platform_info = ((uint64_t)hi << 32) | lo;
+		}
+
 		flex_ratio_min = (uint32_t)bitfield(msr_platform_info, 47, 40);
 		flex_ratio_max = (uint32_t)bitfield(msr_platform_info, 15, 8);
 		/* No BIOS-programed flex ratio. Use hardware max as default */
@@ -304,9 +337,13 @@ tsc_init(void)
 		if (msr_flex_ratio & bit(16)) {
 			/* Flex Enabled: Use this MSR if less than max */
 			flex_ratio = (uint32_t)bitfield(msr_flex_ratio, 15, 8);
-			if (flex_ratio < flex_ratio_max) {
+			if (flex_ratio < flex_ratio_max && flex_ratio > 0) {
 				tscGranularity = flex_ratio;
 			}
+		}
+		if (tscGranularity == 0) {
+			/* Fallback for QEMU / hypervisors without MSR_PLATFORM_INFO: default to 20x multiplier (2.0 GHz) */
+			tscGranularity = 20;
 		}
 
 		busFreq = EFI_get_frequency("FSBFrequency");
@@ -320,13 +357,22 @@ tsc_init(void)
 		break;
 	}
 	case CPUFAMILY_INTEL_PENRYN: {
-		uint64_t        prfsts;
+		uint64_t        prfsts = 0;
+		uint32_t        lo = 0, hi = 0;
 
-		prfsts = rdmsr64(IA32_PERF_STS);
+		if (rdmsr_carefully(IA32_PERF_STS, &lo, &hi) == 0) {
+			prfsts = ((uint64_t)hi << 32) | lo;
+		}
 		tscGranularity = (uint32_t)bitfield(prfsts, 44, 40);
+		if (tscGranularity == 0) {
+			tscGranularity = 20;
+		}
 		N_by_2_bus_ratio = (prfsts & bit(46)) != 0;
 
 		busFreq = EFI_get_frequency("FSBFrequency");
+		if (busFreq == 0) {
+			busFreq = BASE_NHM_CLOCK_SOURCE;
+		}
 	}
 	}
 
@@ -336,13 +382,6 @@ tsc_init(void)
 	} else {
 		panic("tsc_init: EFI not supported!");
 	}
-
-	kprintf(" BUS: Frequency = %6d.%06dMHz, "
-	    "cvtt2n = %08X.%08X, cvtn2t = %08X.%08X\n",
-	    (uint32_t)(busFreq / Mega),
-	    (uint32_t)(busFreq % Mega),
-	    (uint32_t)(busFCvtt2n >> 32), (uint32_t)busFCvtt2n,
-	    (uint32_t)(busFCvtn2t >> 32), (uint32_t)busFCvtn2t);
 
 	if (tscFreq == busFreq) {
 		bus2tsc = 1;
@@ -374,13 +413,8 @@ tsc_init(void)
 		bus2tsc = tmrCvt(busFCvtt2n, tscFCvtn2t);
 	}
 
-	kprintf(" TSC: Frequency = %6d.%06dMHz, "
-	    "cvtt2n = %08X.%08X, cvtn2t = %08X.%08X, gran = %lld%s\n",
-	    (uint32_t)(tscFreq / Mega),
-	    (uint32_t)(tscFreq % Mega),
-	    (uint32_t)(tscFCvtt2n >> 32), (uint32_t)tscFCvtt2n,
-	    (uint32_t)(tscFCvtn2t >> 32), (uint32_t)tscFCvtn2t,
-	    tscGranularity, N_by_2_bus_ratio ? " (N/2)" : "");
+	const char *ts_done = "    tsc_init: finished\r\n";
+	while (*ts_done) { pal_serial_putc(*ts_done++); }
 }
 
 void

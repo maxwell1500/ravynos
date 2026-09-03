@@ -206,12 +206,23 @@ PE_init_platform(boolean_t vm_initialized, void * _args)
 {
 	boot_args *args = (boot_args *)_args;
 
+	kprintf("PE_init_platform(vm_initialized=%d, args=%p)\n", vm_initialized, args);
+	if (args) {
+		kprintf("  args->deviceTreeP = 0x%x\n", args->deviceTreeP);
+		kprintf("  args->deviceTreeLength = 0x%x\n", args->deviceTreeLength);
+	}
+	kprintf("  PE_state.deviceTreeHead (before) = %p\n", PE_state.deviceTreeHead);
+
 	if (PE_state.initialized == FALSE) {
 		PE_state.initialized        = TRUE;
 
 		// New EFI-style
 		PE_state.bootArgs           = _args;
-		PE_state.deviceTreeHead     = (void *) ml_static_ptovirt(args->deviceTreeP);
+		if (vm_initialized) {
+			PE_state.deviceTreeHead = (void *) ml_static_ptovirt(args->deviceTreeP);
+		} else {
+			PE_state.deviceTreeHead = (void *)(uintptr_t)args->deviceTreeP;
+		}
 		PE_state.deviceTreeSize     = args->deviceTreeLength;
 		if (args->Video.v_baseAddr) {
 			PE_state.video.v_baseAddr   = args->Video.v_baseAddr;// remains physical address
@@ -263,9 +274,14 @@ PE_init_platform(boolean_t vm_initialized, void * _args)
 
 		pe_identify_machine(args);
 		pe_init_debug();
+	} else {
+		PE_state.deviceTreeHead = (void *) ml_static_ptovirt(args->deviceTreeP);
+		if (PE_state.deviceTreeHead) {
+			SecureDTInit(PE_state.deviceTreeHead, PE_state.deviceTreeSize);
+		}
 	}
+	kprintf("  PE_state.deviceTreeHead (after) = %p\n", PE_state.deviceTreeHead);
 }
-
 void
 PE_create_console( void )
 {

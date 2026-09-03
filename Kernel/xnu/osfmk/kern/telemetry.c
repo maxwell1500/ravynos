@@ -259,8 +259,12 @@ static void telemetry_flush_ca_events(thread_call_param_t, thread_call_param_t);
 void
 telemetry_init(void)
 {
+	printf("telemetry_init: skipping for early boot\n");
+	return;
 	kern_return_t ret;
 	uint32_t          telemetry_notification_leeway;
+
+	printf("telemetry_init: ENTER size=%u\n", telemetry_buffer.size);
 
 	if (!PE_parse_boot_argn("telemetry_buffer_size",
 	    &telemetry_buffer.size, sizeof(telemetry_buffer.size))) {
@@ -271,8 +275,10 @@ telemetry_init(void)
 		telemetry_buffer.size = TELEMETRY_MAX_BUFFER_SIZE;
 	}
 
+	printf("telemetry_init: before kmem_alloc\n");
 	ret = kmem_alloc(kernel_map, &telemetry_buffer.buffer, telemetry_buffer.size,
 	    KMA_DATA | KMA_ZERO | KMA_PERMANENT, VM_KERN_MEMORY_DIAG);
+	printf("telemetry_init: after kmem_alloc ret=%d\n", ret);
 	if (ret != KERN_SUCCESS) {
 		kprintf("Telemetry: Allocation failed: %d\n", ret);
 		return;
@@ -297,9 +303,11 @@ telemetry_init(void)
 		telemetry_sample_rate = TELEMETRY_DEFAULT_SAMPLE_RATE;
 	}
 
+	printf("telemetry_init: before thread_call_allocate\n");
 	telemetry_ca_send_callout = thread_call_allocate_with_options(
 		telemetry_flush_ca_events, NULL, THREAD_CALL_PRIORITY_KERNEL,
 		THREAD_CALL_OPTIONS_ONCE);
+	printf("telemetry_init: after thread_call_allocate callout=%p\n", telemetry_ca_send_callout);
 
 	assert(telemetry_ca_send_callout != NULL);
 }

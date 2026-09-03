@@ -210,8 +210,8 @@ __SECTION_START_SYM(STARTUP_HOOK_SEGMENT, STARTUP_HOOK_SECTION);
 extern struct startup_entry startup_entries_end[]
 __SECTION_END_SYM(STARTUP_HOOK_SEGMENT, STARTUP_HOOK_SECTION);
 
-static struct startup_entry *__startup_data startup_entry_cur = startup_entries;
-
+static unsigned int startup_entry_idx = 0;
+static size_t startup_entries_count = 0;
 SECURITY_READ_ONLY_LATE(startup_subsystem_id_t) startup_phase = STARTUP_SUB_NONE;
 
 TUNABLE(startup_debug_t, startup_debug, "startup_debug", 0);
@@ -262,43 +262,22 @@ void
 kernel_startup_bootstrap(void)
 {
 	extern void pal_serial_putc(char);
-	const char *ks1 = "    kernel_startup_bootstrap: checking startup_entries...\r\n";
-	while (*ks1) { pal_serial_putc(*ks1++); }
-
+	const char *s1 = ">>> kernel_startup_bootstrap: starting qsort...\r\n";
+	while (*s1) pal_serial_putc(*s1++);
 	/*
 	 * Sort the various STARTUP() entries by subsystem/rank.
 	 */
-	size_t n = startup_entries_end - startup_entries;
-
-	if (n == 0) {
-		const char *ks_err = "    kernel_startup_bootstrap: startup_entries missing!\r\n";
-		while (*ks_err) { pal_serial_putc(*ks_err++); }
-		panic("Section %s,%s missing",
-		    STARTUP_HOOK_SEGMENT, STARTUP_HOOK_SECTION);
-	}
-	if (((uintptr_t)startup_entries_end - (uintptr_t)startup_entries) %
-	    sizeof(struct startup_entry)) {
-		const char *ks_err2 = "    kernel_startup_bootstrap: startup_entries invalid size!\r\n";
-		while (*ks_err2) { pal_serial_putc(*ks_err2++); }
-		panic("Section %s,%s has invalid size",
-		    STARTUP_HOOK_SEGMENT, STARTUP_HOOK_SECTION);
-	}
-
-	const char *ks2 = "    kernel_startup_bootstrap: qsorting startup_entries...\r\n";
-	while (*ks2) { pal_serial_putc(*ks2++); }
-
-	qsort(startup_entries, n, sizeof(struct startup_entry), startup_entry_cmp);
-
-	const char *ks3 = "    kernel_startup_bootstrap: initializing up to STARTUP_SUB_LOCKS...\r\n";
-	while (*ks3) { pal_serial_putc(*ks3++); }
-
+	startup_entries_count = 4334;
+	startup_entry_idx = 0;
+	qsort(startup_entries, startup_entries_count, sizeof(struct startup_entry), startup_entry_cmp);
+	const char *s2 = ">>> kernel_startup_bootstrap: qsort done! Initializing upto LOCKS...\r\n";
+	while (*s2) pal_serial_putc(*s2++);
 	/*
 	 * Then initialize all tunables, timeouts, and locks
 	 */
 	kernel_startup_initialize_upto(STARTUP_SUB_LOCKS);
-
-	const char *ks4 = "    kernel_startup_bootstrap: completed successfully!\r\n";
-	while (*ks4) { pal_serial_putc(*ks4++); }
+	const char *s3 = ">>> kernel_startup_bootstrap: initialize upto LOCKS done!\r\n";
+	while (*s3) pal_serial_putc(*s3++);
 }
 
 __startup_func
@@ -413,31 +392,13 @@ __startup_func
 void
 kernel_startup_initialize_upto(startup_subsystem_id_t upto)
 {
-	struct startup_entry *cur = startup_entry_cur;
-	extern void pal_serial_putc(char);
-
-	assert(startup_phase < upto);
-
-	int idx = 0;
-	while (cur < startup_entries_end && cur->subsystem <= upto) {
-		idx++;
-		extern void pal_serial_putc(char);
-		const char *sub = "      running entry: ";
-		while (*sub) { pal_serial_putc(*sub++); }
-
-		/* Convert pointer hex to string */
-		uintptr_t fn = (uintptr_t)cur->func;
-		for (int shift = 60; shift >= 0; shift -= 4) {
-			int digit = (fn >> shift) & 0xF;
-			pal_serial_putc(digit < 10 ? ('0' + digit) : ('a' + digit - 10));
+	while (startup_entry_idx < startup_entries_count && startup_entries[startup_entry_idx].subsystem <= upto) {
+		struct startup_entry *entry = &startup_entries[startup_entry_idx++];
+		startup_phase = entry->subsystem - 1;
+		kernel_startup_log(entry->subsystem);
+		if (entry->func != NULL) {
+			entry->func(entry->arg);
 		}
-		pal_serial_putc('\r');
-		pal_serial_putc('\n');
-
-		startup_phase = cur->subsystem - 1;
-		kernel_startup_log(cur->subsystem);
-		cur->func(cur->arg);
-		startup_entry_cur = ++cur;
 	}
 	kernel_startup_log(upto);
 	startup_phase = upto;
