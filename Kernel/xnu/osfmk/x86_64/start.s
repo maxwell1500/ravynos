@@ -139,6 +139,10 @@ EXT(mc_task_stack_end):
 	.globl	EXT(pstart)
 LEXT(_start)
 LEXT(pstart)
+	/* POSTCODE trace marker 1: _pstart entry */
+movl	$0x3f8, %edx
+	movl	$'1', %eax
+	outb	%al, %dx
 
 /*
  * Here we do the minimal setup to switch from 32 bit mode to 64 bit long mode.
@@ -172,6 +176,10 @@ LEXT(pstart)
 	 */
 	movl	$EXT(protected_mode_gdtr), %eax
 	lgdtl	(%eax)
+	/* POSTCODE trace marker 2: GDT loaded */
+movl	$0x3f8, %edx
+	movl	$'2', %eax
+	outb	%al, %dx
 
 	/*
 	 * Rebase Boot page tables to kernel base address.
@@ -190,6 +198,10 @@ LEXT(pstart)
 
 /* the following code is shared by the BSP CPU and all AP CPUs */
 L_pstart_common:
+	/* POSTCODE trace marker 3: 64-bit long mode */
+movl	$0x3f8, %edx
+	movl	$'3', %eax
+	outb	%al, %dx
 	/*
 	 * switch to 64 bit mode
 	 */
@@ -218,6 +230,9 @@ Lstore_random_guard:
 	movq	%rax, ___stack_chk_guard(%rip)
 	/* %edi = boot_args_start if BSP */
 Lvstartshim:	
+movl	$0x3f8, %edx
+	movl	$'4', %eax
+	outb	%al, %dx
 
 	POSTCODE(PSTART_VSTART)
 
@@ -229,6 +244,7 @@ Lvstartshim:
 	or	%rcx, %rax
 	andq	$0xfffffffffffffff0, %rsp	/* align stack */
 	xorq	%rbp, %rbp			/* zero frame pointer */
+	leaq	_physmap_max(%rip), %rdi
 	callq	*%rax
 
 Lnon_rdrand:
