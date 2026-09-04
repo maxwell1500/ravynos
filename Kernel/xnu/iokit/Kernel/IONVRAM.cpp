@@ -809,11 +809,14 @@ error:
 
 #include <IOKit/IOHibernatePrivate.h>
 #include <IOKit/pwr_mgt/RootDomain.h>
-static const OSSharedPtr<const OSSymbol> gIOHibernateStateKey = OSSymbol::withCString(kIOHibernateStateKey);
+static OSSharedPtr<const OSSymbol> gIOHibernateStateKey;
 
 static uint32_t
 hibernateState(void)
 {
+	if (!gIOHibernateStateKey) {
+		gIOHibernateStateKey = OSSymbol::withCString(kIOHibernateStateKey);
+	}
 	OSSharedPtr<OSData> data = OSDynamicPtrCast<OSData>(IOService::getPMRootDomain()->copyProperty(gIOHibernateStateKey.get()->getCStringNoCopy()));
 	uint32_t hibernateState = 0;
 	if ((data != NULL) && (data->getLength() == sizeof(hibernateState))) {

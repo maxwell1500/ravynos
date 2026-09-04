@@ -267,7 +267,8 @@ kernel_startup_bootstrap(void)
 	/*
 	 * Sort the various STARTUP() entries by subsystem/rank.
 	 */
-	startup_entries_count = 4334;
+	startup_entries_count =
+	    (size_t)(startup_entries_end - startup_entries);
 	startup_entry_idx = 0;
 	qsort(startup_entries, startup_entries_count, sizeof(struct startup_entry), startup_entry_cmp);
 	const char *s2 = ">>> kernel_startup_bootstrap: qsort done! Initializing upto LOCKS...\r\n";

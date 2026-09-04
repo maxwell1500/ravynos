@@ -382,7 +382,7 @@ enum {
 	kCpuNumDelayTypes
 };
 
-static OSData          *sCpuDelayData = OSData::withCapacity(8 * sizeof(CpuDelayEntry));
+static OSData          *sCpuDelayData = nullptr;
 static IORecursiveLock *sCpuDelayLock = IORecursiveLockAlloc();
 static OSArray         *sCpuLatencyHandlers[kCpuNumDelayTypes];
 const OSSymbol         *sCPULatencyFunctionName[kCpuNumDelayTypes];
@@ -8412,6 +8412,10 @@ requireMaxCpuDelay(IOService * service, UInt32 ns, UInt32 delayType)
 
 	IORecursiveLockLock(sCpuDelayLock);
 
+	if (!sCpuDelayData) {
+		sCpuDelayData = OSData::withCapacity(8 * sizeof(CpuDelayEntry));
+	}
+
 	UInt count = sCpuDelayData->getLength() / sizeof(CpuDelayEntry);
 	__typed_allocators_ignore_push
 	CpuDelayEntry *entries = (CpuDelayEntry *) sCpuDelayData->getBytesNoCopy();
@@ -8523,6 +8527,9 @@ setLatencyHandler(UInt32 delayType, IOService * target, bool enable)
 		array = sCpuLatencyHandlers[delayType];
 		if (!array) {
 			break;
+		}
+		if (!sCpuDelayData) {
+			sCpuDelayData = OSData::withCapacity(8 * sizeof(CpuDelayEntry));
 		}
 		idx = array->getNextIndexOfObject(target, 0);
 		if (!enable) {

@@ -951,6 +951,34 @@ kalloc_type_view_copy(
 }
 
 __startup_func
+static void
+kalloc_type_view_copy_own(
+	const kalloc_type_variant_t   type,
+	uint64_t                     *cur_count)
+{
+	/*
+	 * Resolve the kernel's own views section dynamically from the mach
+	 * header.  The header's section addresses already describe the slid
+	 * (runtime) layout, so use them directly without adding
+	 * vm_kernel_slide (doing so double-slides).  View contents are
+	 * already valid, so no per-view slide is needed.
+	 */
+	kernel_section_t *sect = getsectbynamefromheader(&_mh_execute_header,
+	    KALLOC_TYPE_SEGMENT, KALLOC_TYPE_SECTION(type));
+	if (sect != NULL && sect->size != 0) {
+		kalloc_type_view_copy(type, sect->addr,
+		    sect->addr + sect->size, cur_count,
+		    false, NULL);
+		return;
+	}
+	/* Fall back to the link-time section bounds. */
+	kalloc_type_view_copy(type,
+	    kalloc_type_var(type, sec_start),
+	    kalloc_type_var(type, sec_end),
+	    cur_count, false, NULL);
+}
+
+__startup_func
 static uint64_t
 kalloc_type_view_parse(const kalloc_type_variant_t type)
 {
@@ -966,10 +994,7 @@ kalloc_type_view_parse(const kalloc_type_variant_t type)
 		 * If kc is static or KCGEN, __kalloc_type sections from kexts and
 		 * xnu are coalesced.
 		 */
-		kalloc_type_view_copy(type,
-		    kalloc_type_var(type, sec_start),
-		    kalloc_type_var(type, sec_end),
-		    &cur_count, false, NULL);
+		kalloc_type_view_copy_own(type, &cur_count);
 	} else if (kc_format == KCFormatFileset) {
 		/*
 		 * If kc uses filesets, traverse __kalloc_type section for each
@@ -1006,9 +1031,7 @@ kalloc_type_view_parse(const kalloc_type_variant_t type)
 		/*
 		 * Parse __kalloc_type section from xnu
 		 */
-		kalloc_type_view_copy(type,
-		    kalloc_type_var(type, sec_start),
-		    kalloc_type_var(type, sec_end), &cur_count, false, NULL);
+		kalloc_type_view_copy_own(type, &cur_count);
 
 		/*
 		 * Parse __kalloc_type section for kexts
@@ -1107,10 +1130,7 @@ kalloc_type_view_parse(const kalloc_type_variant_t type)
 		 * For KCFormatDynamic or KCFormatUnknown, copy the kernel's own
 		 * static __kalloc_type section.
 		 */
-		kalloc_type_view_copy(type,
-		    kalloc_type_var(type, sec_start),
-		    kalloc_type_var(type, sec_end),
-		    &cur_count, false, NULL);
+		kalloc_type_view_copy_own(type, &cur_count);
 	}
 	return cur_count;
 }

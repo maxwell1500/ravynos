@@ -30,6 +30,7 @@
 #include <kern/cpu_number.h>
 #include <libkern/section_keywords.h>
 #include <libkern/crypto/sha2.h>
+#include <libkern/crypto/rand.h>
 #include <machine/machine_cpu.h>
 #include <machine/machine_routines.h>
 #include <pexpert/pexpert.h>
@@ -487,7 +488,9 @@ random_cpu_init(int cpu)
 	assert3s(cpu, !=, master_cpu);
 
 	if (!prng_ready) {
-		panic("random_cpu_init: kernel prng has not been installed");
+		/* No cckprng provider (monolithic boot): CPUs share the
+		 * corecrypto provider RNG via cc_rand_generate(). */
+		return;
 	}
 
 	prng_funcs.initgen(prng_ctx, cpu);
@@ -497,6 +500,12 @@ random_cpu_init(int cpu)
 void
 read_random(void * buffer, u_int numbytes)
 {
+	if (!prng_ready) {
+		/* No cckprng provider (monolithic boot): use the
+		 * corecrypto provider RNG directly. */
+		cc_rand_generate(buffer, numbytes);
+		return;
+	}
 	prng_funcs.refresh(prng_ctx);
 	read_random_generate(buffer, numbytes);
 }

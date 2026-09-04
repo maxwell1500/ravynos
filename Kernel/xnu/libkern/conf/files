@@ -100,6 +100,7 @@ libkern/crypto/corecrypto_des.c			optional crypto
 libkern/crypto/corecrypto_aes.c			optional crypto
 libkern/crypto/corecrypto_aesxts.c		optional crypto
 libkern/crypto/corecrypto_rand.c		optional crypto
+libkern/crypto/corecrypto_provider.c	optional crypto
 libkern/crypto/corecrypto_rsa.c		    optional crypto
 libkern/crypto/corecrypto_chacha20poly1305.c	optional	crypto
 
