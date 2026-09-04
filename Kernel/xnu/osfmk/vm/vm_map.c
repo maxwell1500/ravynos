@@ -1318,11 +1318,30 @@ vm_map_init(void)
 	    ZC_NOENCRYPT, ZONE_ID_VM_MAP_COPY, NULL);
 
 	/*
+	 * Fallback: if vm_map_steal_memory startup didn't run (observed 0 maps),
+	 * steal now. This happens when STARTUP(PMAP_STEAL) ordering is broken
+	 * by KASLR slide/size mismatch (n=4334 fix).
+	 */
+	if (map_data == 0) {
+		extern void pal_serial_putc(char);
+		const char *s="      vm_map_init: map_data==0, stealing fallback\r\n"; while(*s) pal_serial_putc(*s++);
+		map_data_size = zone_get_early_alloc_size(VM_MAP_ZONE_NAME, sizeof(struct _vm_map), VM_MAP_ZFLAGS, VM_MAP_EARLY_COUNT_MAX);
+		kentry_data_size = zone_get_early_alloc_size(VM_MAP_ENTRY_ZONE_NAME, sizeof(struct vm_map_entry), VM_MAP_ENTRY_ZFLAGS, 8 * VM_MAP_EARLY_COUNT_MAX);
+		map_holes_data_size = zone_get_early_alloc_size(VM_MAP_HOLES_ZONE_NAME, sizeof(struct vm_map_links), VM_MAP_HOLES_ZFLAGS, 8 * VM_MAP_EARLY_COUNT_MAX);
+		map_data = zone_early_mem_init(map_data_size + kentry_data_size + map_holes_data_size);
+		kentry_data = map_data + map_data_size;
+		map_holes_data = kentry_data + kentry_data_size;
+		const char *s2="      vm_map_init: fallback steal done\r\n"; while(*s2) pal_serial_putc(*s2++);
+	}
+	/*
 	 * Add the stolen memory to zones, adjust zone size and stolen counts.
 	 */
 	zone_cram_early(vm_map_zone, map_data, map_data_size);
 	zone_cram_early(vm_map_entry_zone, kentry_data, kentry_data_size);
 	zone_cram_early(vm_map_holes_zone, map_holes_data, map_holes_data_size);
+	{
+		const char *s3="      vm_map_init: after cram\r\n"; while(*s3) pal_serial_putc(*s3++);
+	}
 	printf("VM boostrap: %d maps, %d entries and %d holes available\n",
 	    zone_count_free(vm_map_zone),
 	    zone_count_free(vm_map_entry_zone),
@@ -1397,9 +1416,10 @@ __startup_func
 static void
 vm_map_steal_memory(void)
 {
+	extern void pal_serial_putc(char);
+	const char *s="      vm_map_steal_memory: entered\r\n"; while(*s) pal_serial_putc(*s++);
 	/*
 	 * We need to reserve enough memory to support boostraping VM maps
-	 * and the zone subsystem.
 	 *
 	 * The VM Maps that need to function before zones can support them
 	 * are the ones registered with vm_map_will_allocate_early_map(),
@@ -1440,6 +1460,7 @@ vm_map_steal_memory(void)
 	    map_holes_data_size);
 	kentry_data    = map_data + map_data_size;
 	map_holes_data = kentry_data + kentry_data_size;
+	const char *e="      vm_map_steal_memory: done\r\n"; while(*e) pal_serial_putc(*e++);
 }
 STARTUP(PMAP_STEAL, STARTUP_RANK_FIRST, vm_map_steal_memory);
 
@@ -1632,6 +1653,8 @@ vm_map_create_options(
 	vm_map_offset_t         max,
 	vm_map_create_options_t options)
 {
+	extern void pal_serial_putc(char);
+	const char *v1="      vm_map_create_options: entered min/max\r\n"; while(*v1) pal_serial_putc(*v1++);
 	vm_map_t result;
 
 #if DEBUG || DEVELOPMENT
@@ -1649,6 +1672,7 @@ vm_map_create_options(
 #endif /* DEBUG || DEVELOPMENT */
 
 	result = zalloc_id(ZONE_ID_VM_MAP, Z_WAITOK | Z_NOFAIL | Z_ZERO);
+	const char *v2="      vm_map_create_options: zalloc vm_map done\r\n"; while(*v2) pal_serial_putc(*v2++);
 
 	vm_map_store_init(&result->hdr);
 	result->hdr.entries_pageable = (bool)(options & VM_MAP_CREATE_PAGEABLE);
@@ -1673,10 +1697,11 @@ vm_map_create_options(
 	if (options & VM_MAP_CREATE_CORPSE_FOOTPRINT) {
 		result->has_corpse_footprint = true;
 	} else if (!(options & VM_MAP_CREATE_DISABLE_HOLELIST)) {
+		const char *v3="      vm_map_create_options: allocating hole_entry...\r\n"; while(*v3) pal_serial_putc(*v3++);
 		struct vm_map_links *hole_entry;
 
 		hole_entry = zalloc_id(ZONE_ID_VM_MAP_HOLES, Z_WAITOK | Z_NOFAIL);
-		hole_entry->start = min;
+		const char *v4="      vm_map_create_options: hole_entry allocated\r\n"; while(*v4) pal_serial_putc(*v4++);
 		/*
 		 * Holes can be used to track ranges all the way up to
 		 * MACH_VM_MAX_ADDRESS or more (e.g. kernel map).
@@ -1685,9 +1710,12 @@ vm_map_create_options(
 		result->holes_list = result->hole_hint = hole_entry;
 		hole_entry->prev = hole_entry->next = CAST_TO_VM_MAP_ENTRY(hole_entry);
 		result->holelistenabled = true;
+		const char *v5="      vm_map_create_options: holelist setup done\r\n"; while(*v5) pal_serial_putc(*v5++);
 	}
 
+	const char *v6="      vm_map_create_options: calling vm_map_lock_init...\r\n"; while(*v6) pal_serial_putc(*v6++);
 	vm_map_lock_init(result);
+	const char *v7="      vm_map_create_options: returning\r\n"; while(*v7) pal_serial_putc(*v7++);
 
 	return result;
 }
@@ -2105,6 +2133,12 @@ vm_map_get_range(
 	if (map == kernel_map) {
 		effective_range = kmem_ranges[range_id];
 
+		if (range_id == KMEM_RANGE_ID_DATA) {
+			printf("vm_map_get_range: range_id=%d size=%lu min=0x%llx max=0x%llx\n",
+			    range_id, (unsigned long)size,
+			    (unsigned long long)effective_range.min_address,
+			    (unsigned long long)effective_range.max_address);
+		}
 		if (startup_phase >= STARTUP_SUB_KMEM) {
 			/*
 			 * Hint provided by caller is zeroed as the range is restricted to a
@@ -2259,6 +2293,8 @@ again:
 			hint = effective_range.max_address;
 		}
 		if (hint <= effective_range.min_address) {
+			printf("vm_map_locate_space_anywhere: KERN_NO_SPACE (last_free hint <= min: hint=0x%llx min=0x%llx)\n",
+			    (unsigned long long)hint, (unsigned long long)effective_range.min_address);
 			return KERN_NO_SPACE;
 		}
 		limit = effective_range.min_address;
@@ -2295,6 +2331,8 @@ again:
 			hint = effective_range.min_address;
 		}
 		if (effective_range.max_address <= hint) {
+			printf("vm_map_locate_space_anywhere: KERN_NO_SPACE (max <= hint: max=0x%llx hint=0x%llx min=0x%llx)\n",
+			    (unsigned long long)effective_range.max_address, (unsigned long long)hint, (unsigned long long)effective_range.min_address);
 			return KERN_NO_SPACE;
 		}
 
@@ -2315,8 +2353,9 @@ again:
 			vm_map_lock(map);
 			goto again;
 		}
+		printf("vm_map_locate_space_anywhere: KERN_NO_SPACE (vm_map_store_find_space returned NULL: hint=0x%llx limit=0x%llx min=0x%llx max=0x%llx size=%lu)\n",
+		    (unsigned long long)hint, (unsigned long long)limit, (unsigned long long)effective_range.min_address, (unsigned long long)effective_range.max_address, (unsigned long)size);
 		return KERN_NO_SPACE;
-	}
 
 	if (entry_out) {
 		*entry_out = entry;
@@ -2540,6 +2579,8 @@ vm_map_find_space(
 	kr = vm_map_locate_space_anywhere(map, size, mask, vmk_flags,
 	    &hint_address, &entry);
 	if (kr != KERN_SUCCESS) {
+		printf("vm_map_find_space failed: kr=%d map=%p (is_kmap=%d) size=%lu hint=0x%llx range_id=%d\n",
+		    kr, map, (map == kernel_map), (unsigned long)size, (unsigned long long)hint_address, vmk_flags.vmkf_range_id);
 		vm_map_unlock(map);
 		vm_map_entry_dispose(new_entry);
 		return kr;

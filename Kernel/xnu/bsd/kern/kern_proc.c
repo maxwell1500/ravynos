@@ -272,10 +272,25 @@ get_current_unique_pid(void)
 static void
 procinit(void)
 {
+	extern void pal_serial_putc(char);
+	const char *s = "  procinit: starting...\r\n";
+	while (*s) { pal_serial_putc(*s++); }
+
 	smr_hash_init(&pid_hash, maxproc / 4);
+	const char *s1 = "  procinit: pid_hash done!\r\n";
+	while (*s1) { pal_serial_putc(*s1++); }
+
 	smr_hash_init(&pgrp_hash, maxproc / 4);
+	const char *s2 = "  procinit: pgrp_hash done!\r\n";
+	while (*s2) { pal_serial_putc(*s2++); }
+
 	sesshashtbl = hashinit(maxproc / 4, M_PROC, &sesshash);
+	const char *s3 = "  procinit: sesshash done!\r\n";
+	while (*s3) { pal_serial_putc(*s3++); }
+
 	uihashtbl = hashinit(maxproc / 16, M_PROC, &uihash);
+	const char *s4 = "  procinit: uihash done!\r\n";
+	while (*s4) { pal_serial_putc(*s4++); }
 }
 STARTUP(EARLY_BOOT, STARTUP_RANK_FIRST, procinit);
 

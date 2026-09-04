@@ -204,7 +204,6 @@ bcmp_impl(const void *pa, const void *pb, size_t len)
 #endif /* __arch_bcmp */
 
 #ifndef __arch_memcmp
-MARK_AS_HIBERNATE_TEXT
 int
 memcmp_impl(const void *s1, const void *s2, size_t n)
 {

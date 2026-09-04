@@ -409,12 +409,23 @@ i386_vm_init(uint64_t   maxmem,
 	maddr = ml_static_ptovirt((vm_offset_t)args->MemoryMap);
 	mptr = (EfiMemoryRange *)maddr;
 	if (args->MemoryMapDescriptorSize == 0) {
-		const char *vmerr = "    i386_vm_init: Invalid memory map descriptor size!\r\n";
+		const char *vmerr = "    i386_vm_init: Invalid memory map descriptor size! Creating fallback map...\r\n";
 		while (*vmerr) { pal_serial_putc(*vmerr++); }
-		panic("Invalid memory map descriptor size");
+		/* Create a fallback memory map: one region, 0x0 to 0x100000000 (4GB) */
+		static EfiMemoryRange fallback_map[1];
+		fallback_map[0].Type = kEfiConventionalMemory; /* 7 */
+		fallback_map[0].Pad = 0;
+		fallback_map[0].PhysicalStart = 0;
+		fallback_map[0].VirtualStart = 0;
+		fallback_map[0].NumberOfPages = 0x100000000 >> 12; /* 4GB in pages */
+		fallback_map[0].Attribute = 0;
+		msize = sizeof(EfiMemoryRange);
+		mcount = 1;
+		mptr = fallback_map;
+	} else {
+		msize = args->MemoryMapDescriptorSize;
+		mcount = args->MemoryMapSize / msize;
 	}
-	msize = args->MemoryMapDescriptorSize;
-	mcount = args->MemoryMapSize / msize;
 
 	const char *vm5 = "    i386_vm_init: MemoryMap size verified! Iterating ranges...\r\n";
 	while (*vm5) { pal_serial_putc(*vm5++); }

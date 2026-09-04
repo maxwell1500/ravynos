@@ -31,7 +31,7 @@
 
 #include <DriverKit/OSObject.iig>
 #include <DriverKit/OSAction.iig>
-#include <DriverKit/IOService.iig>
+#include <DriverKit/IOUserClient.iig>
 
 
 /*!
@@ -40,7 +40,7 @@
 @iig end
 */
 
-class KERNEL IOUserServer : public IOService
+class KERNEL IOUserServer : public IOUserClient2022
 {
 public:
 	static kern_return_t
@@ -61,6 +61,18 @@ public:
 
 	virtual kern_return_t
 	LoadModule(const char path[1024]) LOCAL;
+
+	virtual IOReturn
+	externalMethod(uint32_t selector, IOExternalMethodArgumentsOpaque * args) LOCAL;
+
+	virtual void
+	systemPower(bool powerOff, bool hibernate) LOCAL;
+
+	virtual IOReturn
+	consumeObjects(IORPCMessageMach *mach, IORPCMessage * message, size_t messageSize) LOCAL;
+
+	virtual IOReturn
+	server(ipc_kmsg_t requestkmsg, IORPCMessage * message, ipc_kmsg_t * preply) LOCAL;
 };
 
 #endif /* ! _IOKIT_UIOUSERSERVER_H */

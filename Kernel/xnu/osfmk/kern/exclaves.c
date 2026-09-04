@@ -2562,6 +2562,7 @@ __startup_func
 static void
 initialize_exclaves_ranges(void)
 {
+#if !defined(__x86_64__)
 	exclaves_enter_range_start = VM_KERNEL_UNSLIDE(&exclaves_enter_start_label);
 	assert3u(exclaves_enter_range_start, !=, 0);
 	exclaves_enter_range_end = VM_KERNEL_UNSLIDE(&exclaves_enter_end_label);
@@ -2571,6 +2572,7 @@ initialize_exclaves_ranges(void)
 	assert3u(exclaves_scheduler_request_range_start, !=, 0);
 	exclaves_scheduler_request_range_end = VM_KERNEL_UNSLIDE(&exclaves_scheduler_request_end_label);
 	assert3u(exclaves_scheduler_request_range_end, !=, 0);
+#endif
 }
 STARTUP(EARLY_BOOT, STARTUP_RANK_MIDDLE, initialize_exclaves_ranges);
 

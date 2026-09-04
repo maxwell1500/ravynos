@@ -34,7 +34,7 @@
 
 #include <DriverKit/OSObject.h>  /* .iig include */
 #include <DriverKit/OSAction.h>  /* .iig include */
-#include <DriverKit/IOService.h>  /* .iig include */
+#include <DriverKit/IOUserClient.h>  /* .iig include */
 
 
 /* source class IOUserServer IOUserServer.iig:37-63 */
@@ -45,7 +45,7 @@
 /*!
 */
 
-class KERNEL IOUserServer : public IOService
+class KERNEL IOUserServer : public IOUserClient2022
 {
 public:
 	static kern_return_t
@@ -66,6 +66,18 @@ public:
 
 	virtual kern_return_t
 	LoadModule(const char path[1024]) LOCAL;
+	virtual IOReturn
+	externalMethod(uint32_t selector, IOExternalMethodArgumentsOpaque * args);
+
+	virtual void
+	systemPower(bool powerOff, bool hibernate);
+
+	virtual IOReturn
+	consumeObjects(IORPCMessageMach *mach, IORPCMessage * message, size_t messageSize);
+
+	virtual IOReturn
+	server(ipc_kmsg_t requestkmsg, IORPCMessage * message, ipc_kmsg_t * preply);
+
 };
 
 #undef KERNEL
@@ -199,7 +211,7 @@ public:
 struct IOUserServer_IVars;
 struct IOUserServer_LocalIVars;
 
-class IOUserServer : public IOService, public IOUserServerInterface
+class IOUserServer : public IOUserClient2022, public IOUserServerInterface
 {
 #if !KERNEL
     friend class IOUserServerMetaClass;

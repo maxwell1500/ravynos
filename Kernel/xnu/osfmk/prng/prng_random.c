@@ -349,13 +349,11 @@ early_random(void)
 {
 	uint64_t result = 0;
 #if defined(__x86_64__)
-	/* Use direct RDRAND / RDTSC for reliable early-boot random before memory subsystem is initialized */
-	unsigned char ok = 0;
-	__asm__ volatile ("rdrand %0; setc %1" : "=r" (result), "=qm" (ok));
-	if (!ok || result == 0) {
-		uint32_t lo, hi;
-		__asm__ volatile ("rdtsc" : "=a" (lo), "=d" (hi));
-		result = ((uint64_t)hi << 32) | lo;
+	uint32_t lo, hi;
+	__asm__ volatile ("rdtsc" : "=a" (lo), "=d" (hi));
+	result = ((uint64_t)hi << 32) | lo;
+	if (result == 0) {
+		result = 0x123456789abcdef0ULL;
 	}
 	return result;
 #else

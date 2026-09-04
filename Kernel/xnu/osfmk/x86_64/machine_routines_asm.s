@@ -204,10 +204,12 @@ Entry(call_continuation)
 	movq	%r13,%rdi			/* continuation param */
 	movq	%r14,%rsi			/* wait result */
 
+	testq	%rcx,%rcx
+	jz	2f
 	call	*%rcx				/* call continuation */
+2:
 	movq	%gs:CPU_ACTIVE_THREAD,%rdi
 	call	EXT(thread_terminate)
-
 
 Entry(x86_init_wrapper)
 	xor	%rbp, %rbp

@@ -7175,6 +7175,8 @@ static const char * init_programs[] = {
 	"/usr/appleinternal/sbin/launchd.development",
 #endif
 	"/sbin/launchd",
+	"/bin/sh",
+	"/bin/cat",
 };
 
 /*

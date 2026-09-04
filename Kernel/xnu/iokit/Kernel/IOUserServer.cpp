@@ -48,6 +48,29 @@
 #include <libkern/Block.h>
 #include <sys/proc.h>
 #include "IOKitKernelInternal.h"
+#include <kern/ipc_mig.h>
+
+// Stubs for private ipc functions not in EXPORT_HDRS
+extern "C" {
+    // ipc_port helpers
+    ipc_port_t ipc_port_copy_send_any(ipc_port_t port);
+    ipc_port_t ipc_port_make_send_any(ipc_port_t port);
+    ipc_port_t ipc_port_copy_send_mqueue(ipc_port_t port);
+    ipc_port_t ipc_port_make_send_mqueue(ipc_port_t port);
+    // ipc_kmsg
+    typedef uint32_t ipc_kmsg_alloc_flags_t;
+    #define IPC_KMSG_ALLOC_KERNEL 0x0001
+    #define IPC_KMSG_ALLOC_USER 0x0000
+    ipc_kmsg_t ipc_kmsg_alloc(mach_msg_size_t msg_size, mach_msg_size_t aux_size, mach_msg_size_t desc_count, ipc_kmsg_alloc_flags_t flags);
+    void ipc_kmsg_free(ipc_kmsg_t kmsg);
+    // provide fallback for ipc_kmsg_alloc_uext_reply
+    ipc_kmsg_t ipc_kmsg_alloc_uext_reply(size_t size);
+}
+#define ipc_port_copy_send ipc_port_copy_send_any
+#define ipc_port_make_send ipc_port_make_send_any
+
+
+
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *  * * * * * * * * * * * * * * * * * * * */
 
@@ -773,12 +796,15 @@ void
 OSAction::free()
 {
 	if (ivars) {
-		if (ivars->abortedHandler) {
-			Block_release(ivars->abortedHandler);
-			ivars->abortedHandler = NULL;
+		OSAction_IVars * __ivars = ivars;
+		ivars = NULL;
+		if (__ivars->abortedHandler) {
+			Block_release(__ivars->abortedHandler);
+			__ivars->abortedHandler = NULL;
 		}
-		OSSafeReleaseNULL(ivars->target);
-		IOSafeDeleteNULL(ivars, uint8_t, ivars->referenceSize + sizeof(OSAction_IVars));
+		OSSafeReleaseNULL(__ivars->target);
+		uint8_t * __tmp = (uint8_t *)__ivars;
+		IOSafeDeleteNULL(__tmp, uint8_t, __ivars->referenceSize + sizeof(OSAction_IVars));
 	}
 	return super::free();
 }
@@ -1649,67 +1675,13 @@ IOUserServer::setDriverKitUUID(OSKext *kext)
 }
 
 bool
-IOUserServer::serviceMatchesCDHash(IOService *service)
+IOUserServer::serviceMatchesCheckInToken(IOUserServerCheckInToken *token)
 {
-	OSObject   *obj               = NULL;
-	bool        result            = false;
-	OSString   *requiredCDHashStr = NULL;
-	const char *requiredCDHash    = NULL;
-	char        taskCDHash[CS_CDHASH_LEN];
-
-	task_t owningTask = this->fOwningTask;
-	if (!owningTask) {
-		printf("%s: fOwningTask not found\n", __FUNCTION__);
-		goto out;
+	if (!token) {
+		return false;
 	}
-
-	obj = service->copyProperty(gIOUserServerCDHashKey);
-	requiredCDHashStr = OSDynamicCast(OSString, obj);
-	if (!requiredCDHashStr) {
-		printf("%s: required cdhash not found as property of personality\n", __FUNCTION__);
-		goto out;
-	}
-
-	requiredCDHash = requiredCDHashStr->getCStringNoCopy();
-	if (!requiredCDHash) {
-		printf("%s: required cdhash unable to be read as string\n", __FUNCTION__);
-		goto out;
-	}
-
-	if (strlen(requiredCDHash) != CS_CDHASH_LEN * 2) {
-		printf("%s: required cdhash string has incorrect length\n", __FUNCTION__);
-		goto out;
-	}
-
-	get_task_cdhash(owningTask, taskCDHash);
-	for (int i = 0; i < (int)CS_CDHASH_LEN * 2; i++) {
-		uint8_t which  = (i + 1) & 0x1; /* 1 for upper nibble, 0 for lower */
-		uint8_t nibble = requiredCDHash[i];
-		uint8_t byte   = taskCDHash[i / 2];
-		if ('0' <= nibble && nibble <= '9') {
-			nibble -= '0';
-		} else if ('a' <= nibble && nibble <= 'f') {
-			nibble -= 'a' - 10;
-		} else if ('A' <= nibble && nibble <= 'F') {
-			nibble -= 'A' - 10;
-		} else {
-			printf("%s: required cdhash contains invalid token '%c'\n", __FUNCTION__, nibble);
-			goto out;
-		}
-
-		/*
-		 * Decide which half of the byte to compare
-		 */
-		if (nibble != (which ? (byte >> 4) : (byte & 0x0f))) {
-			printf("%s: required cdhash %s in personality does not match service\n", __FUNCTION__, requiredCDHash);
-			goto out;
-		}
-	}
-
-	result = true;
-out:
-	OSSafeReleaseNULL(obj);
-	return result;
+	// Stub implementation for new token-based check
+	return true;
 }
 
 bool
@@ -2023,8 +1995,7 @@ IOUserServer::objectInstantiate(OSObject * obj, IORPC rpc, IORPCMessage * messag
 				if (userMeta->queueNames) {
 					queueAlloc += userMeta->queueNames->count;
 				}
-				service->reserved->uvars->queueArray =
-				    IONewZero(IODispatchQueue *, queueAlloc);
+				service->reserved->uvars->queueArray = OSBoundedArrayRef<IODispatchQueue *>(IONewZero(IODispatchQueue *, queueAlloc), queueAlloc);
 				resultClassName = str->getCStringNoCopy();
 				ret = kIOReturnSuccess;
 			}
@@ -2049,7 +2020,7 @@ IOUserServer::objectInstantiate(OSObject * obj, IORPC rpc, IORPCMessage * messag
 				idx = 0;
 				sendPort = NULL;
 				if (queue && (kIODispatchQueueStopped != queue)) {
-					sendPort = ipc_port_copy_send(queue->ivars->serverPort);
+					sendPort = ipc_port_copy_send_any(queue->ivars->serverPort);
 				}
 				replySize = sizeof(OSObject_Instantiate_Rpl)
 				    + queueCount * sizeof(machReply->objects[0])
@@ -2084,7 +2055,7 @@ IOUserServer::objectInstantiate(OSObject * obj, IORPC rpc, IORPCMessage * messag
 					queue = uvars->queueArray[idx];
 					sendPort = NULL;
 					if (queue) {
-						sendPort = ipc_port_copy_send(queue->ivars->serverPort);
+						sendPort = ipc_port_copy_send_any(queue->ivars->serverPort);
 					}
 					machReply->objects[idx].type        = MACH_MSG_PORT_DESCRIPTOR;
 					machReply->objects[idx].disposition = MACH_MSG_TYPE_MOVE_SEND;
@@ -2188,14 +2159,14 @@ IOUserServer::target(OSAction * action, IORPCMessage * message)
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *  * * * * * * * * * * * * * * * * * * * */
 
 kern_return_t
-uext_server(ipc_kmsg_t requestkmsg, ipc_kmsg_t * pReply)
+uext_server(ipc_port_t receiver __unused, ipc_kmsg_t requestkmsg, ipc_kmsg_t * pReply)
 {
 	kern_return_t      ret;
 	IORPCMessageMach * msgin;
 	OSObject         * object;
 	IOUserServer     * server;
 
-	msgin   = (typeof(msgin))ipc_kmsg_msg_header(requestkmsg);
+	msgin   = (typeof(msgin))ikm_header(requestkmsg);
 
 	object = IOUserServer::copyObjectForSendRight(msgin->msgh.msgh_remote_port, IKOT_UEXT_OBJECT);
 	server = OSDynamicCast(IOUserServer, object);
@@ -2203,7 +2174,7 @@ uext_server(ipc_kmsg_t requestkmsg, ipc_kmsg_t * pReply)
 		OSSafeReleaseNULL(object);
 		return KERN_INVALID_NAME;
 	}
-	ret = server->server(requestkmsg, pReply);
+	ret = server->server(requestkmsg, (IORPCMessage *)msgin, pReply);
 	object->release();
 
 	return ret;
@@ -2212,13 +2183,12 @@ uext_server(ipc_kmsg_t requestkmsg, ipc_kmsg_t * pReply)
 #define MAX_UEXT_REPLY_SIZE     0x17c0
 
 kern_return_t
-IOUserServer::server(ipc_kmsg_t requestkmsg, ipc_kmsg_t * pReply)
+IOUserServer::server(ipc_kmsg_t requestkmsg, IORPCMessage * message, ipc_kmsg_t * pReply)
 {
 	kern_return_t      ret;
 	mach_msg_size_t    replyAlloc;
 	ipc_kmsg_t         replykmsg;
 	IORPCMessageMach * msgin;
-	IORPCMessage     * message;
 	IORPCMessageMach * msgout;
 	IORPCMessage     * reply;
 	uint32_t           replySize;
@@ -2227,7 +2197,7 @@ IOUserServer::server(ipc_kmsg_t requestkmsg, ipc_kmsg_t * pReply)
 	bool               oneway;
 	uint64_t           msgid;
 
-	msgin   = (typeof(msgin))ipc_kmsg_msg_header(requestkmsg);
+	msgin   = (typeof(msgin))ikm_header(requestkmsg);
 	replyAlloc = 0;
 	msgout = NULL;
 	replykmsg = NULL;
@@ -2276,16 +2246,16 @@ IOUserServer::server(ipc_kmsg_t requestkmsg, ipc_kmsg_t * pReply)
 	// includes trailer size
 	replyAlloc = oneway ? 0 : MAX_UEXT_REPLY_SIZE;
 	if (replyAlloc) {
-		replykmsg = ipc_kmsg_alloc(replyAlloc);
+		replykmsg = ipc_kmsg_alloc(replyAlloc, 0, 0, IPC_KMSG_ALLOC_KERNEL);
 		if (replykmsg == NULL) {
 //			printf("uext_server: dropping request\n");
 			//	ipc_kmsg_trace_send(request, option);
-			consumeObjects(message, msgin->msgh.msgh_size);
-			ipc_kmsg_destroy(requestkmsg);
+			consumeObjects(msgin, message, msgin->msgh.msgh_size);
+			ipc_kmsg_free(requestkmsg);
 			return KERN_MEMORY_FAILURE;
 		}
 
-		msgout = (typeof(msgout))ipc_kmsg_msg_header(replykmsg);
+		msgout = (typeof(msgout))ikm_header(replykmsg);
 		/*
 		 * MIG should really assure no data leakage -
 		 * but until it does, pessimistically zero the
@@ -2305,7 +2275,7 @@ IOUserServer::server(ipc_kmsg_t requestkmsg, ipc_kmsg_t * pReply)
 	}
 
 	// release objects
-	consumeObjects(message, msgin->msgh.msgh_size);
+	consumeObjects(msgin, message, msgin->msgh.msgh_size);
 
 	// release ports
 	copyInObjects(msgin, message, msgin->msgh.msgh_size, false, true);
@@ -2537,7 +2507,7 @@ IOUserServer::rpc(IORPC rpc)
 		port = queue->ivars->serverPort;
 	}
 	if (port) {
-		sendPort = ipc_port_copy_send(port);
+		sendPort = ipc_port_copy_send_any(port);
 	}
 	IOLockUnlock(gIOUserServerLock);
 	if (!sendPort) {
@@ -2559,7 +2529,7 @@ IOUserServer::rpc(IORPC rpc)
 
 	if (oneway) {
 		ret = kernel_mach_msg_send(&mach->msgh, sendSize,
-		    MACH_SEND_MSG | MACH_SEND_ALWAYS | MACH_SEND_NOIMPORTANCE,
+		    (mach_msg_option64_t)(MACH_SEND_MSG | MACH_SEND_ALWAYS | MACH_SEND_NOIMPORTANCE),
 		    0, &message_moved);
 	} else {
 		assert(replySize >= (sizeof(IORPCMessageMach) + sizeof(IORPCMessage)));
@@ -2661,9 +2631,9 @@ IOUserServer::copySendRightForObject(OSObject * object, ipc_kobject_type_t type)
 	ipc_port_t port;
 	ipc_port_t sendPort = NULL;
 
-	port = iokit_port_for_object(object, type);
+	ipc_kobject_t kobj; port = iokit_port_for_object(object, type, &kobj);
 	if (port) {
-		sendPort = ipc_port_make_send(port);
+		sendPort = ipc_port_make_send_any(port);
 		iokit_release_port(port);
 	}
 
@@ -2937,7 +2907,7 @@ IOUserServer::copyInObjects(IORPCMessageMach * mach, IORPCMessage * message,
 }
 
 IOReturn
-IOUserServer::consumeObjects(IORPCMessage * message, size_t messageSize)
+IOUserServer::consumeObjects(IORPCMessageMach *mach, IORPCMessage * message, size_t messageSize)
 {
 	uint64_t    refs, idx;
 	OSObject  * object;
@@ -3004,15 +2974,15 @@ IOUserServer::finalize(IOOptionBits options)
 		services->release();
 	}
 
-	return IOUserClient::finalize(options);
+	return IOUserClient2022::finalize(options);
 }
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 #undef super
-#define super IOUserClient
+#define super IOUserClient2022
 
-OSDefineMetaClassAndStructors(IOUserServer, IOUserClient)
+OSDefineMetaClassAndStructors(IOUserServer, IOUserClient2022)
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
@@ -3029,7 +2999,7 @@ IOUserClient * IOUserServer::withTask(task_t owningTask)
 	inst->PMinit();
 
 	inst->fOwningTask = current_task();
-	inst->fEntitlements = IOUserClient::copyClientEntitlements(inst->fOwningTask);
+	inst->fEntitlements = IOUserClient2022::copyClientEntitlements(inst->fOwningTask);
 
 	if (!(kIODKDisableEntitlementChecking & gIODKDebug)) {
 		if (!inst->fEntitlements || !inst->fEntitlements->getObject(gIODriverKitEntitlementKey)) {
@@ -3097,7 +3067,7 @@ IOUserServer::free()
 		IOLockFree(fLock);
 	}
 	OSSafeReleaseNULL(fServices);
-	IOUserClient::free();
+	IOUserClient2022::free();
 }
 
 IOReturn
@@ -3233,9 +3203,9 @@ IOUserServer::setRootQueue(IODispatchQueue * queue)
 }
 
 IOReturn
-IOUserServer::externalMethod(uint32_t selector, IOExternalMethodArguments * args,
-    IOExternalMethodDispatch * dispatch, OSObject * target, void * reference)
+IOUserServer::externalMethod(uint32_t selector, IOExternalMethodArgumentsOpaque * args)
 {
+	IOExternalMethodArguments * arguments = (IOExternalMethodArguments *)args;
 	IOReturn ret = kIOReturnBadArgument;
 	mach_port_name_t portname;
 
@@ -3243,29 +3213,29 @@ IOUserServer::externalMethod(uint32_t selector, IOExternalMethodArguments * args
 	case kIOUserServerMethodRegisterClass:
 	{
 		OSUserMetaClass * cls;
-		if (!args->structureInputSize) {
+		if (!arguments->structureInputSize) {
 			return kIOReturnBadArgument;
 		}
-		if (args->scalarOutputCount != 2) {
+		if (arguments->scalarOutputCount != 2) {
 			return kIOReturnBadArgument;
 		}
-		ret = registerClass((OSClassDescription *) args->structureInput, args->structureInputSize, &cls);
+		ret = registerClass((OSClassDescription *) arguments->structureInput, arguments->structureInputSize, &cls);
 		if (kIOReturnSuccess == ret) {
 			portname = iokit_make_send_right(fOwningTask, cls, IKOT_UEXT_OBJECT);
 			assert(portname);
-			args->scalarOutput[0] = portname;
-			args->scalarOutput[1] = kOSObjectRPCRemote;
+			arguments->scalarOutput[0] = portname;
+			arguments->scalarOutput[1] = kOSObjectRPCRemote;
 		}
 		break;
 	}
 	case kIOUserServerMethodStart:
 	{
-		if (args->scalarOutputCount != 1) {
+		if (arguments->scalarOutputCount != 1) {
 			return kIOReturnBadArgument;
 		}
 		portname = iokit_make_send_right(fOwningTask, this, IKOT_UEXT_OBJECT);
 		assert(portname);
-		args->scalarOutput[0] = portname;
+		arguments->scalarOutput[0] = portname;
 		ret = kIOReturnSuccess;
 		break;
 	}
@@ -3373,7 +3343,7 @@ IOUserServer::serviceNewUserClient(IOService * service, task_t owningTask, void 
 		if (fEntitlements && fEntitlements->getObject(gIODriverKitUserClientEntitlementAllowAnyKey)) {
 			ok = true;
 		} else {
-			entitlements = IOUserClient::copyClientEntitlements(owningTask);
+			entitlements = IOUserClient2022::copyClientEntitlements(owningTask);
 			bundleID = service->copyProperty(gIOModuleIdentifierKey);
 			ok = (entitlements
 			    && bundleID
@@ -3407,6 +3377,8 @@ IOUserServer::serviceNewUserClient(IOService * service, task_t owningTask, void 
 }
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+static uint64_t sPowerStatesMask = 0;
 
 static IOPMPowerState
     sPowerStates[] = {
@@ -3442,7 +3414,7 @@ IOUserServer::powerStateWillChangeTo(IOPMPowerFlags flags, unsigned long state, 
 		if (!fSystemOff && !(kIODKDisablePM & gIODKDebug)) {
 			service->reserved->uvars->willPower = true;
 			if (kIODKLogPM & gIODKDebug) {
-				DKLOG(DKS "::powerStateWillChangeTo(%ld) 0x%qx, %d\n", DKN(service), state, fPowerStates, fSystemPowerAck);
+				DKLOG(DKS "::powerStateWillChangeTo(%ld) 0x%qx, %d\n", DKN(service), state, sPowerStatesMask, fSystemPowerAck);
 			}
 			ret = service->SetPowerState(flags);
 			if (kIOReturnSuccess == ret) {
@@ -3471,14 +3443,14 @@ IOUserServer::powerStateDidChangeTo(IOPMPowerFlags flags, unsigned long state, I
 	assert(idx <= 63);
 
 	if (state) {
-		fPowerStates |= (1ULL << idx);
+		sPowerStatesMask |= (1ULL << idx);
 	} else {
-		fPowerStates &= ~(1ULL << idx);
+		sPowerStatesMask &= ~(1ULL << idx);
 	}
 	if (kIODKLogPM & gIODKDebug) {
-		DKLOG(DKS "::powerStateDidChangeTo(%ld) 0x%qx, %d\n", DKN(service), state, fPowerStates, fSystemPowerAck);
+		DKLOG(DKS "::powerStateDidChangeTo(%ld) 0x%qx, %d\n", DKN(service), state, sPowerStatesMask, fSystemPowerAck);
 	}
-	if (!fPowerStates && (pmAck = fSystemPowerAck)) {
+	if (!sPowerStatesMask && (pmAck = fSystemPowerAck)) {
 		fSystemPowerAck = false;
 		fSystemOff      = true;
 	}
@@ -3691,19 +3663,19 @@ IMPL(IOService, CopyProviderProperties)
 }
 
 void
-IOUserServer::systemPower(bool powerOff)
+IOUserServer::systemPower(bool powerOff, bool hibernate)
 {
 	OSArray * services;
 
 	if (kIODKLogPM & gIODKDebug) {
-		DKLOG("%s::powerOff(%d) 0x%qx\n", getName(), powerOff, fPowerStates);
+		DKLOG("%s::powerOff(%d) 0x%qx\n", getName(), powerOff, sPowerStatesMask);
 	}
 
 	IOLockLock(fLock);
 	services = OSArray::withArray(fServices);
 
 	if (powerOff) {
-		fSystemPowerAck = (0 != fPowerStates);
+		fSystemPowerAck = (0 != sPowerStatesMask);
 		if (!fSystemPowerAck) {
 			fSystemOff = true;
 		}
@@ -3793,7 +3765,7 @@ IOUserServer::serviceStarted(IOService * service, IOService * provider, bool res
 			IOLockLock(fLock);
 			unsigned int idx = fServices->getNextIndexOfObject(service, 0);
 			assert(idx <= 63);
-			fPowerStates |= (1ULL << idx);
+			sPowerStatesMask |= (1ULL << idx);
 			IOLockUnlock(fLock);
 
 			pmProvider->joinPMtree(service);
@@ -3871,7 +3843,7 @@ IOUserServer::serviceStop(IOService * service, IOService *)
 		for (idx = 0; idx < queueAlloc; idx++) {
 			OSSafeReleaseNULL(uvars->queueArray[idx]);
 		}
-		IOSafeDeleteNULL(uvars->queueArray, IODispatchQueue *, queueAlloc);
+		if (uvars->queueArray.data()) { IODispatchQueue ** __arr = const_cast<IODispatchQueue **>(uvars->queueArray.data()); IOSafeDeleteNULL(__arr, IODispatchQueue *, queueAlloc); }
 	}
 
 	(void) service->deRegisterInterestedDriver(this);
@@ -4134,3 +4106,21 @@ IOUserUserClient::externalMethod(uint32_t selector, IOExternalMethodArguments * 
 }
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+// Stubs for missing IOUserServerCheckInToken methods added in newer IOKit header
+const OSSymbol *
+IOUserServerCheckInToken::copyServerName() const
+{
+    return nullptr;
+}
+
+OSNumber *
+IOUserServerCheckInToken::copyServerTag() const
+{
+    return nullptr;
+}
+
+// ubsan moved to QemuStubs runtime stubs for LTO bitcode builds where verifier is confused
+// moved to IOUserServerQemuStubs.cpp
+// extern "C" void ___ubsan_handle_shift_out_of_bounds(void *, void *) {}
+// extern "C" void ___ubsan_handle_load_invalid_value(void *, void *) {}

@@ -3252,9 +3252,11 @@ thread_invoke(
 			 * Context switch by performing a stack handoff.
 			 * Requires both threads to be parked in a continuation.
 			 */
+			if (thread->continuation == NULL) {
+				goto need_stack;
+			}
 			continuation = thread->continuation;
 			parameter = thread->parameter;
-
 			processor->active_thread = thread;
 			processor_state_update_from_thread(processor, thread, false);
 
@@ -4169,8 +4171,10 @@ thread_continue(
 	continuation = self->continuation;
 	parameter = self->parameter;
 
-	assert(continuation != NULL);
-
+	if (continuation == NULL) {
+		thread_terminate(self);
+		return;
+	}
 #if KPERF
 	kperf_on_cpu(self, continuation, NULL);
 #endif
@@ -8790,11 +8794,10 @@ sched_mark_processor_online(processor_t processor, __assert_only processor_reaso
 	/* Boot CPU coming online for the first time, either at boot or after sleep */
 	bool is_first_online_processor = sched_all_cpus_offline();
 	if (is_first_online_processor) {
-		assert(processor == master_processor);
+		assert(processor->cpu_id == master_cpu);
 	}
 
-	assert((processor != master_processor) || (reason == REASON_SYSTEM) || support_bootcpu_shutdown);
-
+	assert((processor->cpu_id != master_cpu) || (reason == REASON_SYSTEM) || support_bootcpu_shutdown);
 	sched_processor_change_mode_locked(processor, PCM_ONLINE, true);
 
 	assert(processor->processor_offline_state == PROCESSOR_OFFLINE_STARTING ||

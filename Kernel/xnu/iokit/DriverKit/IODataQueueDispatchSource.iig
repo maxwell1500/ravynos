@@ -182,6 +182,15 @@ public:
 	void
 	SendDataAvailable(void) LOCALONLY;
 
+	static kern_return_t
+	CanEnqueueData(uint32_t callerDataSize) LOCALONLY;
+
+	static kern_return_t
+	CanEnqueueData(uint32_t callerDataSize, uint32_t dataCount) LOCALONLY;
+
+	static size_t
+	GetDataQueueEntryHeaderSize() LOCALONLY;
+
 private:
 	virtual kern_return_t
 	CopyMemory(

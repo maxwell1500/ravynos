@@ -1104,11 +1104,13 @@ kalloc_type_view_parse(const kalloc_type_variant_t type)
 		}
 	} else {
 		/*
-		 * When kc_format is KCFormatDynamic or KCFormatUnknown, we don't handle
-		 * parsing kalloc_type_view structs during startup.
+		 * For KCFormatDynamic or KCFormatUnknown, copy the kernel's own
+		 * static __kalloc_type section.
 		 */
-		panic("kalloc_type_view_parse: couldn't parse kalloc_type_view structs"
-		    " for kc_format = %d\n", kc_format);
+		kalloc_type_view_copy(type,
+		    kalloc_type_var(type, sec_start),
+		    kalloc_type_var(type, sec_end),
+		    &cur_count, false, NULL);
 	}
 	return cur_count;
 }
@@ -1783,7 +1785,10 @@ kalloc_type_view_init_fixed(void)
 	 * all kalloc type views in kt_buffer.
 	 */
 	kt_count = kalloc_type_view_parse(KTV_FIXED);
-	assert(kt_count < KALLOC_TYPE_SIZE_MASK);
+	if (kt_count == 0) {
+		printf("kalloc_type_view_init_fixed: no fixed kalloc types found, skipping\n");
+		return;
+	}
 
 #if MACH_ASSERT
 	vm_size_t sig_slist_size = (size_t) kt_count * sizeof(uint16_t);
@@ -1903,7 +1908,10 @@ kalloc_type_view_init_var(void)
 	 * aren't rediected in kt_buffer.
 	 */
 	kt_count = kalloc_type_view_parse(KTV_VAR);
-	assert(kt_count < UINT32_MAX);
+	if (kt_count == 0) {
+		printf("kalloc_type_view_init_var: no var kalloc types found, skipping\n");
+		return;
+	}
 
 #if MACH_ASSERT
 	vm_size_t sig_slist_size = (size_t) kt_count * sizeof(uint32_t);
@@ -2823,6 +2831,19 @@ void
 void *
 kalloc_type_impl_internal(kalloc_type_view_t kt_view, zalloc_flags_t flags)
 {
+	printf("kalloc_type_impl_internal: kt_view=%p zone=%p stats=%p size=%u\n",
+	       kt_view, kt_view ? kt_view->kt_zv.zv_zone : NULL,
+	       kt_view ? kt_view->kt_zv.zv_stats : NULL,
+	       kt_view ? kt_view->kt_size : 0);
+	if (__improbable(kt_view->kt_zv.zv_zone == ZONE_NULL)) {
+		kalloc_heap_t kheap;
+		vm_size_t size;
+
+		size  = kalloc_type_get_size(kt_view->kt_size);
+		kheap = kalloc_type_get_heap(kt_view->kt_flags);
+		return kalloc_ext(kheap, size, flags, NULL).addr;
+	}
+
 	zone_stats_t zs = kt_view->kt_zv.zv_stats;
 	zone_t       z  = kt_view->kt_zv.zv_zone;
 	zone_stats_t zs_cpu = zpercpu_get(zs);

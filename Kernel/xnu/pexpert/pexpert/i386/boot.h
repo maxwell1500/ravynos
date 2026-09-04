@@ -214,8 +214,10 @@ typedef struct boot_args {
 	uint64_t    bsARVManifestStart;/* Physical address of base system manifest file */
 	uint64_t    bsARVManifestSize;
 
+	uint64_t    topOfKernelData;
+
 	/* Reserved */
-	uint32_t    __reserved4[692];
+	uint32_t    __reserved4[690];
 } boot_args;
 
 extern char assert_boot_args_size_is_4096[sizeof(boot_args) == 4096 ? 1 : -1];

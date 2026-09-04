@@ -585,10 +585,12 @@ __startup_func
 static void
 initialize_exclaves_upcall_range(void)
 {
+#if !defined(__x86_64__)
 	exclaves_upcall_range_start = VM_KERNEL_UNSLIDE(&exclaves_upcall_start_label);
 	assert3u(exclaves_upcall_range_start, !=, 0);
 	exclaves_upcall_range_end = VM_KERNEL_UNSLIDE(&exclaves_upcall_end_label);
 	assert3u(exclaves_upcall_range_end, !=, 0);
+#endif
 }
 STARTUP(EARLY_BOOT, STARTUP_RANK_MIDDLE, initialize_exclaves_upcall_range);
 

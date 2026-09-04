@@ -148,6 +148,10 @@ get_thread_ro(thread_t th)
 {
 	thread_ro_t tro = th->t_tro;
 
+	if (__improbable(tro == NULL)) {
+		return NULL;
+	}
+
 	zone_require_ro(ZONE_ID_THREAD_RO, sizeof(struct thread_ro), tro);
 	if (tro->tro_owner != th) {
 		__thread_ro_circularity_panic(th, tro);
@@ -848,7 +852,11 @@ set_task_loadTag(task_t task, uint32_t loadTag)
 task_t
 get_threadtask(thread_t th)
 {
-	return get_thread_ro(th)->tro_task;
+	if (__improbable(th == THREAD_NULL || th->t_tro == NULL)) {
+		return TASK_NULL;
+	}
+	thread_ro_t tro = get_thread_ro(th);
+	return tro ? tro->tro_task : TASK_NULL;
 }
 
 task_t

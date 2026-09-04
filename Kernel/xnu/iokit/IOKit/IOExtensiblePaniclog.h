@@ -29,76 +29,10 @@
 #ifndef _IOKIT_IOEXTENSIBLEPANICLOG_H
 #define _IOKIT_IOEXTENSIBLEPANICLOG_H
 
-#include <libkern/c++/OSObject.h>
-#include <libkern/c++/OSPtr.h>
-#include <IOKit/IOLib.h>
 #include <DriverKit/IOExtensiblePaniclog.h>
 #include <IOKit/IOBufferMemoryDescriptor.h>
 
 struct ext_paniclog_handle;
 typedef struct ext_paniclog_handle ext_paniclog_handle_t;
-
-class IOExtensiblePaniclog : public OSObject
-{
-	OSDeclareDefaultStructorsWithDispatch(IOExtensiblePaniclog);
-
-private:
-	ext_paniclog_handle_t *extPaniclogHandle;
-
-	IOBufferMemoryDescriptor *iomd;
-
-protected:
-	bool init() APPLE_KEXT_OVERRIDE;
-
-	void free(void) APPLE_KEXT_OVERRIDE;
-
-public:
-
-	/*!
-	 * @brief      Set a handle active in the extensible paniclog
-	 * @return     kIOReturnSuccess on success, or other IOReturn error
-	 */
-	virtual kern_return_t
-	SetActive();
-
-	/*!
-	 * @brief      Set a handle inactive in the extensible paniclog
-	 * @return     kIOReturnSuccess on success, or other IOReturn error
-	 */
-	virtual kern_return_t
-	SetInactive();
-
-	/*!
-	 * @brief      Insert data into the extensible paniclog
-	 * @param      data The data to insert
-	 * @return     kIOReturnSuccess on success, or other IOReturn error
-	 */
-	virtual kern_return_t
-	InsertData(OSData *data);
-
-	/*!
-	 * @brief      Append data into the extensible paniclog
-	 * @param      data The data to append
-	 * @return     kIOReturnSuccess on success, or other IOReturn error
-	 */
-	virtual kern_return_t
-	AppendData(OSData *data);
-
-	/*!
-	 * @brief      Copy the memory descriptor associated with the paniclog data buffer
-	 * @param      mem  The returned memory descriptor
-	 * @return     kIOReturnSuccess on success, or other IOReturn error
-	 */
-	virtual kern_return_t
-	CopyMemoryDescriptor(IOBufferMemoryDescriptor **mem);
-
-	/*!
-	 * @brief      Set the used length of the buffer associated with the paniclog handle
-	 * @param      used_len The used length of the buffer
-	 * @return     kIOReturnSuccess on success, or other IOReturn error
-	 */
-	virtual kern_return_t
-	SetUsedLen(uint32_t used_len);
-};
 
 #endif /* _IOKIT_IOEXTENSIBLEPANICLOG_H */

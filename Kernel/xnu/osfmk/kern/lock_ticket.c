@@ -182,7 +182,7 @@ lck_ticket_verify(lck_ticket_t *tlock)
 #define LCK_TICKET_UNLOCK_VERIFY(l)    ((void)0)
 #endif /* DEVELOPMENT || DEBUG */
 
-MARK_AS_HIBERNATE_TEXT void
+void
 hw_lck_ticket_init(hw_lck_ticket_t *lck, lck_grp_t *grp)
 {
 	assert(((uintptr_t)lck & 3) == 0);
@@ -224,7 +224,7 @@ hw_lck_ticket_init_locked(hw_lck_ticket_t *lck, lck_grp_t *grp)
 #endif /* LCK_GRP_USE_ARG */
 }
 
-MARK_AS_HIBERNATE_TEXT void
+void
 lck_ticket_init(lck_ticket_t *tlock, __unused lck_grp_t *grp)
 {
 	*tlock = (lck_ticket_t){

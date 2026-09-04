@@ -298,6 +298,7 @@ __startup_func
 static void
 oslog_init(void)
 {
+	printf("oslog_init: entering...\n");
 	/*
 	 * Disable kernel logging if ATM_TRACE_DISABLE set. ATM_TRACE_DISABLE
 	 * bit is not supposed to change during a system run but nothing really
@@ -305,9 +306,12 @@ oslog_init(void)
 	 * value in a dedicated variable for a later reference, just in case.
 	 */
 	oslog_disabled = atm_get_diagnostic_config() & ATM_TRACE_DISABLE;
+	printf("oslog_init: entering, oslog_disabled=%d\n", oslog_disabled);
 
 	if (!oslog_disabled) {
+		printf("oslog_init: calling smr_hash_init\n");
 		smr_hash_init(&os_log_cache, OS_LOG_SUBSYSTEM_MAX_CNT / 4);
+		printf("oslog_init: smr_hash_init returned\n");
 	}
 }
 STARTUP(OSLOG, STARTUP_RANK_FIRST, oslog_init);
@@ -316,6 +320,7 @@ __startup_func
 static void
 oslog_init_logmem(void)
 {
+	printf("oslog_init_logmem: entering\n");
 	if (os_log_disabled()) {
 		printf("Long logs support disabled: Logging disabled by ATM\n");
 		return;
@@ -324,11 +329,13 @@ oslog_init_logmem(void)
 	const size_t logmem_size = logmem_required_size(OS_LOGMEM_BUF_ORDER, OS_LOGMEM_MIN_LOG_ORDER);
 	vm_offset_t addr;
 
+	printf("oslog_init_logmem: calling kmem_alloc\n");
 	if (kmem_alloc(kernel_map, &addr, logmem_size + ptoa(2),
 	    KMA_KOBJECT | KMA_PERMANENT | KMA_ZERO | KMA_GUARD_FIRST | KMA_GUARD_LAST,
 	    VM_KERN_MEMORY_LOG) == KERN_SUCCESS) {
 		logmem_init(&os_log_mem, (void *)(addr + PAGE_SIZE), logmem_size,
 		    OS_LOGMEM_BUF_ORDER, OS_LOGMEM_MIN_LOG_ORDER, OS_LOGMEM_MAX_LOG_ORDER);
+		printf("oslog_init_logmem: logmem_init returned\n");
 		printf("Long logs support configured: size: %u\n", os_log_mem.lm_cnt_free);
 	} else {
 		printf("Long logs support disabled: Not enough memory\n");

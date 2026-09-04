@@ -196,27 +196,31 @@ initTopoParms(void)
 	/*
 	 * Compute the number of threads (logical CPUs) per core.
 	 */
-	DIVISOR_GUARD(cpuinfo->core_count);
-	topoParms.nLThreadsPerCore = cpuinfo->thread_count / cpuinfo->core_count;
-	DIVISOR_GUARD(cpuinfo->cpuid_cores_per_package);
-	topoParms.nPThreadsPerCore = cpuinfo->cpuid_logical_per_package / cpuinfo->cpuid_cores_per_package;
+	uint32_t cc = cpuinfo->core_count ? cpuinfo->core_count : 1;
+	uint32_t cpp = cpuinfo->cpuid_cores_per_package ? cpuinfo->cpuid_cores_per_package : 1;
+	topoParms.nLThreadsPerCore = cpuinfo->thread_count ? (cpuinfo->thread_count / cc) : 1;
+	if (topoParms.nLThreadsPerCore == 0) topoParms.nLThreadsPerCore = 1;
+	topoParms.nPThreadsPerCore = cpuinfo->cpuid_logical_per_package ? (cpuinfo->cpuid_logical_per_package / cpp) : 1;
+	if (topoParms.nPThreadsPerCore == 0) topoParms.nPThreadsPerCore = 1;
 
 	/*
 	 * Compute the number of dies per package.
 	 */
-	DIVISOR_GUARD(topoParms.nCoresSharingLLC);
-	topoParms.nLDiesPerPackage = cpuinfo->core_count / topoParms.nCoresSharingLLC;
-	DIVISOR_GUARD(topoParms.nPThreadsPerCore);
-	DIVISOR_GUARD(topoParms.maxSharingLLC / topoParms.nPThreadsPerCore);
-	topoParms.nPDiesPerPackage = cpuinfo->cpuid_cores_per_package / (topoParms.maxSharingLLC / topoParms.nPThreadsPerCore);
+	uint32_t csllc = topoParms.nCoresSharingLLC ? topoParms.nCoresSharingLLC : 1;
+	topoParms.nLDiesPerPackage = cpuinfo->core_count ? (cpuinfo->core_count / csllc) : 1;
+	if (topoParms.nLDiesPerPackage == 0) topoParms.nLDiesPerPackage = 1;
 
+	uint32_t divisor = (topoParms.maxSharingLLC && topoParms.nPThreadsPerCore) ?
+	    (topoParms.maxSharingLLC / topoParms.nPThreadsPerCore) : 1;
+	if (divisor == 0) divisor = 1;
+	topoParms.nPDiesPerPackage = cpp / divisor;
+	if (topoParms.nPDiesPerPackage == 0) topoParms.nPDiesPerPackage = 1;
 
 	/*
 	 * Compute the number of cores per die.
 	 */
-	topoParms.nLCoresPerDie = topoParms.nCoresSharingLLC;
-	topoParms.nPCoresPerDie = (topoParms.maxSharingLLC / topoParms.nPThreadsPerCore);
-
+	topoParms.nLCoresPerDie = csllc;
+	topoParms.nPCoresPerDie = divisor;
 	/*
 	 * Compute the number of threads per die.
 	 */

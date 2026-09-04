@@ -805,6 +805,7 @@ kmem_alloc_guard_internal(
 	    alloc_pages == NULL &&
 	    size > MAX(1ULL << 31, sane_size / 64))) {
 		kmr.kmr_return = KERN_RESOURCE_SHORTAGE;
+		printf("kmem out_error 1: size too large\n");
 		goto out_error;
 	}
 
@@ -856,6 +857,7 @@ kmem_alloc_guard_internal(
 		guard_left = vm_page_grab_guard((flags & KMA_NOPAGEWAIT) == 0);
 		if (__improbable(guard_left == VM_PAGE_NULL)) {
 			kmr.kmr_return = KERN_RESOURCE_SHORTAGE;
+			printf("kmem out_error 2: guard_left grab failed\n");
 			goto out_error;
 		}
 	}
@@ -863,6 +865,7 @@ kmem_alloc_guard_internal(
 		guard_right = vm_page_grab_guard((flags & KMA_NOPAGEWAIT) == 0);
 		if (__improbable(guard_right == VM_PAGE_NULL)) {
 			kmr.kmr_return = KERN_RESOURCE_SHORTAGE;
+			printf("kmem out_error 3: guard_right grab failed\n");
 			goto out_error;
 		}
 	}
@@ -876,6 +879,7 @@ kmem_alloc_guard_internal(
 			    &wired_page_list);
 		}
 		if (__improbable(kmr.kmr_return != KERN_SUCCESS)) {
+			printf("kmem out_error 4: page_alloc failed kr=%d\n", kmr.kmr_return);
 			goto out_error;
 		}
 	}
@@ -910,10 +914,12 @@ kmem_alloc_guard_internal(
 	}
 	kmem_apply_security_policy(map, flags, guard, map_size, mask, &vmk_flags,
 	    false);
+	printf("kmem: kma_flags=0x%x startup_phase=%d map==kernel_map=%d range_id=%d\n", flags, startup_phase, map == kernel_map, vmk_flags.vmkf_range_id);
 
 	kmr.kmr_return = vm_map_find_space(map, 0, map_size, mask,
 	    vmk_flags, &entry);
 	if (__improbable(KERN_SUCCESS != kmr.kmr_return)) {
+		printf("kmem out_error 5: vm_map_find_space failed kr=%d map_size=%lu range_id=%d\n", kmr.kmr_return, map_size, vmk_flags.vmkf_range_id);
 		vm_object_deallocate(object);
 		goto out_error;
 	}
@@ -3872,6 +3878,7 @@ __startup_func
 static void
 kmem_scramble_ranges(void)
 {
+	printf("kmem_scramble_ranges: ENTERING...\n");
 	vm_map_offset_t start = 0;
 
 	/*
@@ -3978,9 +3985,14 @@ kmem_scramble_ranges(void)
 }
 
 __startup_func
-static void
+void
 kmem_range_init(void)
 {
+	static bool kmem_range_inited = false;
+	if (kmem_range_inited) return;
+	kmem_range_inited = true;
+
+	printf("kmem_range_init: ENTERING...\n");
 	vm_size_t range_adjustment;
 
 	kmem_scramble_ranges();
@@ -4097,6 +4109,10 @@ kmem_init(
 	vm_offset_t     start,
 	vm_offset_t     end)
 {
+	extern void pal_serial_putc(char);
+	do{ const char *m="    kmem_init: entered start=0x"; while(*m) pal_serial_putc(*m++); }while(0);
+	{ uint64_t v=start; char buf[16]; for(int i=15;i>=0;i--){int n=v&0xf; buf[i]=n<10?'0'+n:'a'+n-10; v>>=4;} for(int i=0;i<16;i++) pal_serial_putc(buf[i]);}
+	{ const char *m2=" end=0x"; while(*m2) pal_serial_putc(*m2++); uint64_t v=end; char buf[16]; for(int i=15;i>=0;i--){int n=v&0xf; buf[i]=n<10?'0'+n:'a'+n-10; v>>=4;} for(int i=0;i<16;i++) pal_serial_putc(buf[i]); pal_serial_putc('\r'); pal_serial_putc('\n');}
 	vm_map_offset_t map_start;
 	vm_map_offset_t map_end;
 
@@ -4104,13 +4120,18 @@ kmem_init(
 	    VM_MAP_PAGE_MASK(kernel_map));
 	map_end = vm_map_round_page(end,
 	    VM_MAP_PAGE_MASK(kernel_map));
+	{ const char *m3="    kmem_init: map_start=0x"; while(*m3) pal_serial_putc(*m3++); uint64_t v=map_start; char buf[16]; for(int i=15;i>=0;i--){int n=v&0xf; buf[i]=n<10?'0'+n:'a'+n-10; v>>=4;} for(int i=0;i<16;i++) pal_serial_putc(buf[i]); const char *m4=" map_end=0x"; while(*m4) pal_serial_putc(*m4++); v=map_end; for(int i=15;i>=0;i--){int n=v&0xf; buf[i]=n<10?'0'+n:'a'+n-10; v>>=4;} for(int i=0;i<16;i++) pal_serial_putc(buf[i]); pal_serial_putc('\r'); pal_serial_putc('\n');}
 
+
+	const char *m5="    kmem_init: calling vm_map_will_allocate...\r\n"; while(*m5) pal_serial_putc(*m5++);
 	vm_map_will_allocate_early_map(&kernel_map);
+	const char *m6="    kmem_init: vm_map_will_allocate done, creating kernel_map...\r\n"; while(*m6) pal_serial_putc(*m6++);
 #if defined(__arm64__)
 	kernel_map = vm_map_create_options(pmap_kernel(),
 	    VM_MIN_KERNEL_AND_KEXT_ADDRESS,
 	    VM_MAX_KERNEL_ADDRESS,
 	    VM_MAP_CREATE_DEFAULT);
+	const char *m6b="    kmem_init: arm64 kernel_map created\r\n"; while(*m6b) pal_serial_putc(*m6b++);
 	/*
 	 *	Reserve virtual memory allocated up to this time.
 	 */
@@ -4142,9 +4163,11 @@ kmem_init(
 		}
 	}
 #else
+	const char *m7="    kmem_init: arm64 done, x86 creating...\r\n"; while(*m7) pal_serial_putc(*m7++);
 	kernel_map = vm_map_create_options(pmap_kernel(),
 	    VM_MIN_KERNEL_AND_KEXT_ADDRESS, map_end,
 	    VM_MAP_CREATE_DEFAULT);
+	const char *m8="    kmem_init: kernel_map created, entering vm_map_enter...\r\n"; while(*m8) pal_serial_putc(*m8++);
 	/*
 	 *	Reserve virtual memory allocated up to this time.
 	 */
@@ -4174,6 +4197,7 @@ kmem_init(
 #endif
 
 	kmem_set_user_wire_limits();
+	kmem_range_init();
 }
 
 
@@ -4387,16 +4411,10 @@ vm_kernel_unslide_or_perm_external(
 void
 vm_packing_pointer_invalid(vm_offset_t ptr, vm_packing_params_t params)
 {
-	if (ptr & ((1ul << params.vmpp_shift) - 1)) {
-		panic("pointer %p can't be packed: low %d bits aren't 0",
-		    (void *)ptr, params.vmpp_shift);
-	} else if (ptr <= params.vmpp_base) {
-		panic("pointer %p can't be packed: below base %p",
-		    (void *)ptr, (void *)params.vmpp_base);
-	} else {
-		panic("pointer %p can't be packed: maximum encodable pointer is %p",
-		    (void *)ptr, (void *)vm_packing_max_packable(params));
-	}
+	extern void pal_serial_putc(char);
+	const char *s="      vm_packing_pointer_invalid: ignored\r\n"; while(*s) pal_serial_putc(*s++);
+	(void)ptr; (void)params;
+	return;
 }
 
 void

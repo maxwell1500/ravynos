@@ -1207,7 +1207,15 @@ panic_trap_to_debugger(const char *panic_format_str, va_list *panic_args, unsign
 	/* call machine-layer panic handler */
 	ml_panic_trap_to_debugger(panic_format_str, panic_args, reason, ctx, panic_options_mask, panic_caller, panic_initiator);
 
-	/* track depth of debugger/panic entry */
+	extern void pal_serial_putc(char);
+	const char *pp = "\r\n!!! PANIC TRAP TO DEBUGGER: ";
+	while (*pp) pal_serial_putc(*pp++);
+	if (panic_format_str) {
+		const char *ps = panic_format_str;
+		while (*ps) pal_serial_putc(*ps++);
+	}
+	pal_serial_putc('\r');
+	pal_serial_putc('\n');
 	CPUDEBUGGERCOUNT++;
 
 	/* emit a tracepoint as early as possible in case of hang */

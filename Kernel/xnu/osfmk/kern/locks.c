@@ -336,7 +336,7 @@ out:
  *
  *	Initialize a hardware lock.
  */
-MARK_AS_HIBERNATE_TEXT void
+void
 hw_lock_init(hw_lock_t lock)
 {
 	ordered_store_hw(lock, 0);

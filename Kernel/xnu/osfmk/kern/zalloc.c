@@ -45,7 +45,6 @@
  *
  * Carnegie Mellon requests users of this software to return to
  *
- *  Software Distribution Coordinator  or  Software.Distribution@CS.CMU.EDU
  *  School of Computer Science
  *  Carnegie Mellon University
  *  Pittsburgh PA 15213-3890
@@ -912,15 +911,14 @@ zone_pva_is_equal(zone_pva_t pva1, zone_pva_t pva2)
 __header_always_inline zone_pva_t *
 zone_pageq_base(void)
 {
-	extern zone_pva_t data_seg_start[] __SEGMENT_START_SYM("__DATA");
+	extern vm_offset_t segDATAB;
 
 	/*
 	 * `-1` so that if the first __DATA variable is a page queue,
 	 * it gets a non 0 index
 	 */
-	return data_seg_start - 1;
+	return (zone_pva_t *)segDATAB - 1;
 }
-
 __header_always_inline void
 zone_queue_set_head(zone_t z, zone_pva_t queue, zone_pva_t oldv,
     struct zone_page_metadata *meta)
@@ -1113,7 +1111,11 @@ zone_meta_populate(vm_offset_t base, vm_size_t size)
 	struct zone_page_metadata *to   = from + atop(size);
 	vm_offset_t page_addr = trunc_page(from);
 
+	printf("zone_meta_populate: ENTER base=%p size=0x%lx from=%p to=%p page_addr=%p\n",
+	       (void *)base, size, (void *)from, (void *)to, (void *)page_addr);
+
 	for (; page_addr < (vm_offset_t)to; page_addr += PAGE_SIZE) {
+		printf("zone_meta_populate: loop page_addr=%p phys=0x%llx\n", (void *)page_addr, (uint64_t)pmap_find_phys(kernel_pmap, page_addr));
 #if !KASAN
 		/*
 		 * This can race with another thread doing a populate on the same metadata
@@ -1140,7 +1142,7 @@ zone_meta_populate(vm_offset_t base, vm_size_t size)
 				    VM_KERN_MEMORY_OSFMK);
 			}
 			zone_meta_unlock();
-
+			printf("zone_meta_populate: page_addr=%p ret=%d\n", (void *)page_addr, ret);
 			if (ret == KERN_SUCCESS) {
 				break;
 			}
@@ -6384,7 +6386,6 @@ kfree_type_impl_internal(
 	if (NULL == ptr) {
 		return;
 	}
-
 	meta = zone_meta_from_addr((vm_offset_t) ptr);
 	zidx_meta = meta->zm_index;
 	zsflags_meta = zone_security_array[zidx_meta];
@@ -9256,9 +9257,16 @@ zone_raise_reserve(union zone_or_view zov, uint16_t min_elements)
 	zone_t zone = zov.zov_zone;
 
 	if (zone < zone_array || zone > &zone_array[MAX_ZONES]) {
+		if (zov.zov_view == NULL) {
+			return;
+		}
 		zone = zov.zov_view->zv_zone;
 	} else {
 		zone = zov.zov_zone;
+	}
+
+	if (zone == NULL) {
+		return;
 	}
 
 	os_atomic_max(&zone->z_elems_rsv, min_elements, relaxed);
@@ -10276,7 +10284,17 @@ zone_metadata_init(void)
 	/* this needs to sign extend */
 	uint32_t pva_delta = (uint32_t)((intptr_t)reloc_delta >> PAGE_SHIFT);
 
+	printf("zone_metadata_init: reloc_base=%p early_min=%p reloc_delta=%p pva_delta=0x%x\n",
+	       (void *)reloc_base, (void *)early_r.min_address, (void *)reloc_delta, pva_delta);
+	for (uint32_t i = 0; i < atop(early_sz); i++) {
+	    printf("early_meta[%u]: zm_index=%u next=0x%x (is_q=%d) prev=0x%x (is_q=%d)\n",
+	           i, early_meta[i].zm_index,
+	           early_meta[i].zm_page_next.packed_address, zone_pva_is_queue(early_meta[i].zm_page_next),
+	           early_meta[i].zm_page_prev.packed_address, zone_pva_is_queue(early_meta[i].zm_page_prev));
+	}
 	zone_meta_populate(reloc_base, early_sz);
+	printf("zone_meta_populate: returned, now copying early_meta to new_meta=%p sz=%lu\n",
+	       (void *)new_meta, atop(early_sz) * sizeof(struct zone_page_metadata));
 	memcpy(new_meta, early_meta,
 	    atop(early_sz) * sizeof(struct zone_page_metadata));
 	for (uint32_t i = 0; i < atop(early_sz); i++) {
@@ -10309,11 +10327,11 @@ zone_metadata_init(void)
 
 	kernel_memory_populate(reloc_base, early_sz, flags,
 	    VM_KERN_MEMORY_OSFMK);
+	printf("zone_metadata_init: kernel_memory_populate returned for reloc_base=%p sz=%lu\n", (void *)reloc_base, (unsigned long)early_sz);
 
 	vm_memtag_disable_checking();
 	__nosan_memcpy((void *)reloc_base, (void *)early_r.min_address, early_sz);
 	vm_memtag_enable_checking();
-
 #if ZSECURITY_CONFIG(ZONE_TAGGING)
 	vm_memtag_relocate_tags(reloc_base, early_r.min_address, early_sz);
 #endif /* ZSECURITY_CONFIG_ZONE_TAGGING */
@@ -10766,7 +10784,7 @@ zone_leaks(const char * zoneName, uint32_t nameLen, leak_site_proc proc)
 		proc(nobtcount, elemSize, BTREF_NULL);
 	}
 
-	kfree_type(vm_offset_t, maxElems, array);
+	kmem_free(kernel_map, (vm_offset_t)array, maxElems * sizeof(vm_offset_t));
 	return KERN_SUCCESS;
 }
 

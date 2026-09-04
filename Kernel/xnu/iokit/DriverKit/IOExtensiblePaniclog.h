@@ -217,6 +217,16 @@ class IOExtensiblePaniclog : public OSObject, public IOExtensiblePaniclogInterfa
 {
 #if KERNEL
     OSDeclareDefaultStructorsWithDispatch(IOExtensiblePaniclog);
+private:
+    struct ext_paniclog_handle *extPaniclogHandle;
+    class IOBufferMemoryDescriptor *iomd;
+public:
+    virtual kern_return_t SetActive();
+    virtual kern_return_t SetInactive();
+    virtual kern_return_t InsertData(OSData *data);
+    virtual kern_return_t AppendData(OSData *data);
+    virtual kern_return_t CopyMemoryDescriptor(IOBufferMemoryDescriptor **mem);
+    virtual kern_return_t SetUsedLen(uint32_t used_len);
 #endif /* KERNEL */
 
 #if !KERNEL

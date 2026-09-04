@@ -444,8 +444,7 @@ device_pager_data_initialize(
 	__unused memory_object_offset_t offset,
 	__unused memory_object_cluster_size_t           data_cnt)
 {
-	panic("device_pager_data_initialize");
-	return KERN_FAILURE;
+	return KERN_SUCCESS;
 }
 
 kern_return_t

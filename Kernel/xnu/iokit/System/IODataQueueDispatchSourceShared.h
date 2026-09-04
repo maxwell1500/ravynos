@@ -614,12 +614,15 @@ IODataQueueDispatchSource::EnqueueWithCoalesce(uint32_t callerDataSize,
 	return retVal;
 }
 
+#if 0
 kern_return_t
 IODataQueueDispatchSource::CanEnqueueData(uint32_t callerDataSize)
 {
 	return CanEnqueueData(callerDataSize, 1);
 }
+#endif
 
+#if 0
 kern_return_t
 IODataQueueDispatchSource::CanEnqueueData(uint32_t callerDataSize, uint32_t dataCount)
 {
@@ -673,9 +676,12 @@ IODataQueueDispatchSource::CanEnqueueData(uint32_t callerDataSize, uint32_t data
 
 	return kIOReturnSuccess;
 }
+#endif
 
+#if 0
 size_t
 IODataQueueDispatchSource::GetDataQueueEntryHeaderSize()
 {
 	return DATA_QUEUE_ENTRY_HEADER_SIZE;
 }
+#endif

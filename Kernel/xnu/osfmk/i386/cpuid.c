@@ -38,6 +38,8 @@
 int force_tecs_at_idle;
 int tecs_mode_supported;
 
+extern int rdmsr_carefully(uint32_t msr, uint32_t *lo, uint32_t *hi);
+extern int wrmsr_carefully(uint32_t msr, uint32_t lo, uint32_t hi);
 static  boolean_t       cpuid_dbg
 #if DEBUG
         = TRUE;
@@ -672,10 +674,14 @@ cpuid_set_generic_info(i386_cpu_info_t *info_p)
 	 * and bracket this with the approved procedure for reading the
 	 * the microcode version number a.k.a. signature a.k.a. BIOS ID
 	 */
-	if (info_p->cpuid_ven == CPUID_VEN_INTEL) { wrmsr64(MSR_IA32_BIOS_SIGN_ID, 0); }
+	uint32_t m_lo = 0, m_hi = 0;
+	if (info_p->cpuid_ven == CPUID_VEN_INTEL) { (void)wrmsr_carefully(MSR_IA32_BIOS_SIGN_ID, 0, 0); }
 	cpuid_fn(1, reg);
-	info_p->cpuid_microcode_version =
-	    (uint32_t) (rdmsr64(MSR_IA32_BIOS_SIGN_ID) >> 32);
+	if (rdmsr_carefully(MSR_IA32_BIOS_SIGN_ID, &m_lo, &m_hi) == 0) {
+		info_p->cpuid_microcode_version = m_hi;
+	} else {
+		info_p->cpuid_microcode_version = 0;
+	}
 	info_p->cpuid_signature = reg[eax];
 	info_p->cpuid_stepping  = bitfield32(reg[eax], 3, 0);
 	info_p->cpuid_model     = bitfield32(reg[eax], 7, 4);
@@ -687,8 +693,11 @@ cpuid_set_generic_info(i386_cpu_info_t *info_p)
 	info_p->cpuid_features  = quad(reg[ecx], reg[edx]);
 
 	/* Get "processor flag"; necessary for microcode update matching */
-	info_p->cpuid_processor_flag = info_p->cpuid_ven == CPUID_VEN_INTEL ? (rdmsr64(MSR_IA32_PLATFORM_ID) >> 50) & 0x7 : 1;
-
+	if (info_p->cpuid_ven == CPUID_VEN_INTEL && rdmsr_carefully(MSR_IA32_PLATFORM_ID, &m_lo, &m_hi) == 0) {
+		info_p->cpuid_processor_flag = (m_hi >> 18) & 0x7;
+	} else {
+		info_p->cpuid_processor_flag = 1;
+	}
 	/* Fold extensions into family/model */
 	if (info_p->cpuid_family == 0x0f || info_p->cpuid_family == 0x06) {
 		info_p->cpuid_model += (info_p->cpuid_extmodel << 4);
@@ -1096,13 +1105,23 @@ out:
 void
 cpuid_set_info(void)
 {
+	extern void pal_serial_putc(char);
+	const char *ci0 = "      cpuid_set_info: entered...\r\n";
+	while (*ci0) { pal_serial_putc(*ci0++); }
+
 	i386_cpu_info_t         *info_p = &cpuid_cpu_info;
 	boolean_t               enable_x86_64h = TRUE;
 
 	/* Perform pre-cpuid workarounds (since their effects impact values returned via cpuid) */
 	cpuid_do_precpuid_was();
 
+	const char *ci1 = "      cpuid_set_info: cpuid_do_precpuid_was done!\r\n";
+	while (*ci1) { pal_serial_putc(*ci1++); }
+
 	cpuid_set_generic_info(info_p);
+
+	const char *ci2 = "      cpuid_set_info: cpuid_set_generic_info done!\r\n";
+	while (*ci2) { pal_serial_putc(*ci2++); }
 
 	cpuid_determine_vendor(info_p);
 	if (cpuid_set_cpufamily(info_p) == CPUFAMILY_UNKNOWN) {
@@ -1160,7 +1179,11 @@ cpuid_set_info(void)
 			 * invalid data in the top 12 bits. Hence, we use only bits [19..16]
 			 * rather than [31..16] for core count - which actually can't exceed 8.
 			 */
-			uint64_t msr = rdmsr64(MSR_CORE_THREAD_COUNT);
+			uint32_t lo = 0, hi = 0;
+			uint64_t msr = 0;
+			if (rdmsr_carefully(MSR_CORE_THREAD_COUNT, &lo, &hi) == 0) {
+				msr = ((uint64_t)hi << 32) | lo;
+			}
 			if (0 == msr) {
 				/* Provide a non-zero default for some VMMs */
 				msr = (1 << 16) | 1;
@@ -1171,7 +1194,11 @@ cpuid_set_info(void)
 			break;
 		}
 		default: {
-			uint64_t msr = rdmsr64(MSR_CORE_THREAD_COUNT);
+			uint32_t lo = 0, hi = 0;
+			uint64_t msr = 0;
+			if (rdmsr_carefully(MSR_CORE_THREAD_COUNT, &lo, &hi) == 0) {
+				msr = ((uint64_t)hi << 32) | lo;
+			}
 			if (0 == msr) {
 				/* Provide a non-zero default for some VMMs */
 				msr = (1 << 16) | 1;
@@ -1183,7 +1210,6 @@ cpuid_set_info(void)
 		}
 		}
 	}
-
 	DBG("cpuid_set_info():\n");
 	DBG("  core_count   : %d\n", info_p->core_count);
 	DBG("  thread_count : %d\n", info_p->thread_count);
@@ -1796,8 +1822,12 @@ cpuid_do_precpuid_was(void)
 	/* Note the TSX disablement, we do not support force-on since it depends on MSRs being present */
 	if (cpuid_wa_required(CPU_INTEL_TSXDA) == CWA_ON) {
 		/* This must be executed on all logical processors */
-		wrmsr64(MSR_IA32_TSX_CTRL, MSR_IA32_TSXCTRL_TSX_CPU_CLEAR | MSR_IA32_TSXCTRL_RTM_DISABLE);
-		cpuid_tsx_disabled = true;
+		extern int wrmsr_carefully(uint32_t msr, uint32_t lo, uint32_t hi);
+		uint32_t val_lo = (uint32_t)(MSR_IA32_TSXCTRL_TSX_CPU_CLEAR | MSR_IA32_TSXCTRL_RTM_DISABLE);
+		uint32_t val_hi = 0;
+		if (wrmsr_carefully(MSR_IA32_TSX_CTRL, val_lo, val_hi) == 0) {
+			cpuid_tsx_disabled = true;
+		}
 	}
 }
 

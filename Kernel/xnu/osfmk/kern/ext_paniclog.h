@@ -105,6 +105,9 @@ typedef struct ext_paniclog_header {
 	ext_paniclog_flags_t flags;
 } ext_paniclog_header_t;
 
+#ifdef __cplusplus
+extern "C" {
+#endif
 void ext_paniclog_init(void);
 int ext_paniclog_handle_set_active(ext_paniclog_handle_t *handle);
 int ext_paniclog_handle_set_inactive(ext_paniclog_handle_t *handle);
@@ -128,6 +131,9 @@ __abortlike __printflike(5, 6)
 void panic_with_data(uuid_t uuid, void *addr, uint32_t len, uint64_t debugger_options_mask, const char *format, ...);
 int ext_paniclog_test_hook(uint32_t option);
 void ext_paniclog_panic_with_data(uuid_t uuid, void *addr, uint32_t len);
+#ifdef __cplusplus
+}
+#endif
 #endif // KERNEL_PRIVATE
 
 #endif // _KERN_EXT_PANICLOG_H_

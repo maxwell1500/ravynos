@@ -495,7 +495,7 @@ bsd_init(void)
 	platform_stall_panic_or_spin(PLATFORM_STALL_XNU_LOCATION_BSD_INIT);
 #endif
 
-#define DEBUG_BSDINIT 0
+#define DEBUG_BSDINIT 1
 
 #if DEBUG_BSDINIT
 #define bsd_init_kprintf(x, ...) kprintf("bsd_init: " x, ## __VA_ARGS__)

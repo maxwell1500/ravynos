@@ -592,48 +592,14 @@ static struct pe_serial_functions pcie_mmio_uart_serial_functions = {
 int
 serial_init( void )
 {
-	unsigned new_uart_baud_rate = 0;
-
-	if (PE_parse_boot_argn("serialbaud", &new_uart_baud_rate, sizeof(new_uart_baud_rate))) {
-		/* Valid divisor? */
-		if (!((LEGACY_UART_CLOCK / 16) % new_uart_baud_rate)) {
-			uart_baud_rate = new_uart_baud_rate;
-		}
-	}
-
-	if (mmio_uart_probe()) {
-		gPESF = &mmio_uart_serial_functions;
-		gPESF->uart_init();
-		lpss_uart_supported = 1;
-		lpss_uart_enabled = 1;
-		return 1;
-	} else if (legacy_uart_probe()) {
-		gPESF = &legacy_uart_serial_functions;
-		gPESF->uart_init();
-		legacy_uart_enabled = 1;
-		return 1;
-	} else if (pcie_mmio_uart_probe()) {
-		gPESF = &pcie_mmio_uart_serial_functions;
-		gPESF->uart_init();
-		pcie_uart_enabled = 1;
-		return 1;
-	} else {
-		return 0;
-	}
+	outb(0x3f8 + 4, 0x0B); /* MCR: DTR | RTS | OUT2 */
+	return 1;
 }
 
 static void
 uart_putc(char c)
 {
-	if (uart_initted && (legacy_uart_enabled || lpss_uart_enabled || pcie_uart_enabled)) {
-		while (!gPESF->tr0()) {
-			;       /* Wait until THR is empty. */
-		}
-		gPESF->td0(c);
-	} else {
-		/* Fallback to direct legacy COM1 outb for hypervisors/emulators */
-		outb(0x3f8, (unsigned char)c);
-	}
+	outb(0x3f8, (unsigned char)c);
 }
 
 static int

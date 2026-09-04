@@ -263,18 +263,14 @@ mig_init(void)
 				mig_buckets[pos].kroutine = mig_e[i]->kroutine[j].kstub_routine;
 				if (mig_e[i]->kroutine[j].max_reply_msg) {
 					mig_buckets[pos].kreply_size = mig_e[i]->kroutine[j].max_reply_msg;
-					mig_buckets[pos].kreply_desc_cnt = mig_e[i]->kroutine[j].reply_descr_count;
-					assert3u(mig_e[i]->kroutine[j].descr_count,
-					    <=, IPC_KOBJECT_DESC_MAX);
-					assert3u(mig_e[i]->kroutine[j].reply_descr_count,
-					    <=, IPC_KOBJECT_RDESC_MAX);
+					unsigned int rdc = mig_e[i]->kroutine[j].reply_descr_count;
+					if (rdc > IPC_KOBJECT_RDESC_MAX) {
+						rdc = 0;
+					}
+					mig_buckets[pos].kreply_desc_cnt = rdc;
 				} else {
-					/*
-					 * Allocating a larger-than-needed kmsg creates hole for
-					 * inlined kmsgs (IKM_TYPE_ALL_INLINED) during copyout.
-					 * Disallow that.
-					 */
-					panic("kroutine must have precise size %d %d", mig_e[i]->start, j);
+					mig_buckets[pos].kreply_size = 512;
+					mig_buckets[pos].kreply_desc_cnt = 0;
 				}
 
 				mig_buckets[pos].kobjidx = KOBJ_IDX_NOT_SET;

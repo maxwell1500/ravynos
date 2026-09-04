@@ -511,8 +511,11 @@ fork_create_child(task_t parent_task,
 	 *
 	 * The new thread is waiting on the event triggered by 'task_clear_return_wait'
 	 */
+	extern void bsdinit_task(void);
+	thread_continue_t init_continuation = (clone_flags & CLONEPROC_INITPROC) ?
+	    (thread_continue_t)bsdinit_task : (thread_continue_t)task_wait_to_return;
 	result = main_thread_create_waiting(child_task,
-	    (thread_continue_t)task_wait_to_return,
+	    init_continuation,
 	    task_get_return_wait_event(child_task),
 	    &child_thread);
 

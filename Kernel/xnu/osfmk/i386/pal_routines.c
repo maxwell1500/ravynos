@@ -91,7 +91,6 @@ pal_serial_putc(char c)
 		serial_putc('\r');
 	}
 }
-
 int
 pal_serial_getc(void)
 {

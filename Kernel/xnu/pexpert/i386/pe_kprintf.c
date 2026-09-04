@@ -76,22 +76,8 @@ PE_init_kprintf(void)
 		panic("Platform Expert not initialized");
 	}
 
-	bool new_disable_serial_output = true;
-
-	if (debug_boot_arg & DB_KPRT) {
-		new_disable_serial_output = false;
-	}
-
-	/* If we are newly enabling serial, make sure we only
-	 * call pal_serial_init() if our previous state was
-	 * not enabled */
-	if (!new_disable_serial_output && (!disable_serial_output || pal_serial_init())) {
-		PE_kputc = pal_serial_putc;
-	} else {
-		PE_kputc = console_write_unbuffered;
-	}
-
-	disable_serial_output = new_disable_serial_output;
+	PE_kputc = pal_serial_putc;
+	disable_serial_output = false;
 }
 STARTUP(KPRINTF, STARTUP_RANK_FIRST, PE_init_kprintf);
 

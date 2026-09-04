@@ -4366,7 +4366,9 @@ vm_fault_internal(
 	fault_type = (change_wiring ? VM_PROT_NONE : caller_prot);
 
 	counter_inc(&vm_statistics_faults);
-	counter_inc(&current_task()->faults);
+	if (current_task() != TASK_NULL) {
+		counter_inc(&current_task()->faults);
+	}
 	original_fault_type = fault_type;
 
 	need_copy = FALSE;
@@ -6989,7 +6991,7 @@ vm_fault_wire_fast(
 
 	counter_inc(&vm_statistics_faults);
 
-	if (thread != THREAD_NULL) {
+	if (thread != THREAD_NULL && get_threadtask(thread) != TASK_NULL) {
 		counter_inc(&get_threadtask(thread)->faults);
 	}
 

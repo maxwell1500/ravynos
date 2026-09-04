@@ -192,7 +192,7 @@
 #define PMAP_PCID_PRESERVE (1ULL << 63)
 #define PMAP_PCID_MASK (0xFFF)
 
-#define EARLY_GSBASE_MAGIC 0xffffdeadbeefee00
+#define EARLY_GSBASE_MAGIC 0xffffff80deadbeefULL
 
 /*
  * If thread groups are needed for x86, set this to 1
