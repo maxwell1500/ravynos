@@ -2320,7 +2320,38 @@ IOPlatformDevice::getResources( void )
 }
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+/*********************************************************************
+* IOStandardPlatform class
+*
+* Fallback platform expert for monolithic boots without a platform kext.
+*********************************************************************/
 
+class IOStandardPlatform : public IOPlatformExpert {
+	OSDeclareDefaultStructors(IOStandardPlatform);
+
+public:
+	virtual bool start(IOService * provider) APPLE_KEXT_OVERRIDE;
+};
+
+OSDefineMetaClassAndStructors(IOStandardPlatform, IOPlatformExpert);
+
+bool
+IOStandardPlatform::start(IOService * provider)
+{
+	extern void ml_set_max_cpus(unsigned int max_cpus);
+
+	if (!super::start(provider)) {
+		return false;
+	}
+	IOMapper::setMapperRequired(false);
+
+	ml_set_max_cpus(1);
+	publishResource("IORTC");
+	publishResource("IONVRAM");
+	registerService();
+
+	return true;
+}
 /*********************************************************************
 * IOPanicPlatform class
 *

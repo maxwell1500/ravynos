@@ -388,4 +388,20 @@ typedef integer_t       cpu_threadtype_t;
 #define CPUFAMILY_INTEL_6_26    CPUFAMILY_INTEL_NEHALEM
 
 
+
+/* --- SOURCED FROM IN-TREE XNU (see LIBSYSTEM-KERNEL-BUILD-NOTES.md sec. 13)
+ *
+ * Kernel/xnu/libsyscall references these but the SDK mach tree -- the
+ * coherent generation that this build uses wholesale -- does not define
+ * them. Each line below is copied VERBATIM from the in-tree xnu header
+ * named beside it. Sourced, not invented; nothing here is a guessed
+ * value or a synthesised struct layout.
+ *
+ * The gap is 15 constants across 7 headers, measured by intersecting the
+ * identifier sets of the two mach trees with what libsyscall references --
+ * not by compiling until the next error. Bounded and complete.
+ */
+
+/* Kernel/xnu/osfmk/mach/machine.h:189 */
+#define CPU_SUBTYPE_ANY         ((cpu_subtype_t) -1)
 #endif  /* _MACH_MACHINE_H_ */

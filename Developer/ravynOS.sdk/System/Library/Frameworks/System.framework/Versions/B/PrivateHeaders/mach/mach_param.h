@@ -73,4 +73,9 @@
 /* Number of watchport for task */
 #define TASK_MAX_WATCHPORT_COUNT 32
 
+
+/* SOURCED FROM IN-TREE XNU -- see LIBSYSTEM-KERNEL-BUILD-NOTES.md sec. 13.
+ * Verbatim copies; not invented. */
+/* Kernel/xnu/osfmk/mach/mach_param.h:86 */
+#define MAXCONCLAVENAME    128
 #endif  /* _MACH_MACH_PARAM_H_ */

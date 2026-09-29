@@ -275,3 +275,46 @@ int DNSServiceRefSockFD(DNSServiceRef sdRef)
     (void)sdRef;
     return -1;
 }
+
+// ---------------------------------------------------------------------------
+//                     __chkstk_darwin
+// ---------------------------------------------------------------------------
+// A bootstrap dylinker must carry no external imports on the pre-rebase path.
+// That is not a style preference, it is the design: Apple's own /usr/lib/dyld
+// has ZERO imports, ZERO LC_LOAD_DYLIB and ZERO __stubs, and reaches the kernel
+// the same way this function does -- by DEFINING what it needs.  Measured on
+// this host: nm shows Apple's ___chkstk_darwin as a LOCAL text symbol ('t') at
+// 0x10cb0, next to a local ___chkstk_darwin_llvm_probe at 0x10cd0 whose body is
+// the page-touching loop reproduced below.  An import is precisely what a stub
+// exists to service, so zero imports means zero stubs, which means there is
+// nothing for rebaseDyld's (correctly empty) bindTargets to resolve.
+//
+// Without this, the compiler emits a call through __stubs, the linker records a
+// chained BIND in __got for it, and rebaseDyld -- which is handed an empty
+// bindTargets and must be, see dyldInitialization.cpp:144 -- leaves that slot as
+// a raw bind descriptor.  A __stub then jumps through it into a
+// non-canonical address.  Defining it locally removes the import, the stub, and
+// the bind together.
+//
+// The algorithm is the documented contract of a stack probe -- touch one byte
+// per page, walking down from the current frame -- and was checked against the
+// real implementation on this host rather than guessed:
+//     cmpq $0x1000, %rax ; leaq 0x18(%rsp), %rcx ; jb <done>
+//     subq $0x1000, %rcx ; testb %cl, (%rcx) ; subq $0x1000, %rax ; ja <loop>
+// Note it is a downward walk from %rsp in 0x1000-byte steps, which is what
+// makes it correct for a guard-page fault: the probe must touch each page on the
+// way DOWN, not allocate.
+//
+// This is a genuine local definition, not a stub that pretends to work: it
+// performs the probe it is named for.  It is NOT a fabrication of an Apple
+// structure or signature -- chkstk takes a size and touches stack, and that is
+// the whole of its contract.
+void ___chkstk_darwin(uintptr_t size)
+{
+    if (size == 0)
+        return;
+    volatile char* probe = (volatile char*)__builtin_frame_address(0);
+    uintptr_t pages = (size + 0xFFF) >> 12;
+    for (uintptr_t i = 1; i <= pages; ++i)
+        probe[-(ptrdiff_t)(i << 12)] = 0;   // touch, one byte per page
+}

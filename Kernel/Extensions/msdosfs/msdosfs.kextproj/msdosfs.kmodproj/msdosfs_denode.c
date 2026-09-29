@@ -131,8 +131,13 @@ void msdosfs_hash_init(void)
 
 void msdosfs_hash_uninit(void)
 {
-	if (dehashtbl)
+	if (dehashtbl) {
+#ifdef XNU_KERNEL_PRIVATE
+		hashdestroy(dehashtbl, M_TEMP, dehash);
+#else
 		FREE(dehashtbl, M_TEMP);
+#endif
+	}
 	if (msdosfs_node_tag)
 		OSMalloc_Tagfree(msdosfs_node_tag);
 	if (msdosfs_hash_lock)

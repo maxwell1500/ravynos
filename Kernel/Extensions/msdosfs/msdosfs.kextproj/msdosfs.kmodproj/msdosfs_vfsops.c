@@ -105,6 +105,10 @@
 #include "fat.h"
 #include "msdosfs_kdebug.h"
 
+#ifndef DEBUG
+#define DEBUG 0
+#endif
+
 /*
  * By default, don't try to auto unload the KEXT on embedded systems, since
  * that isn't currently supported.  You can always explicitly set
@@ -230,9 +234,16 @@ int msdosfs_vfs_mount(struct mount *mp, vnode_t devvp, user_addr_t data, vfs_con
 	OSKextRetainKextWithLoadTag(OSKextGetCurrentLoadTag());
 #endif
 	
-	error = copyin(data, &args, sizeof(struct msdosfs_args));
-	if (error)
-		goto error_exit;
+	if (data == 0) {
+		memset(&args, 0, sizeof(args));
+		args.magic = MSDOSFS_ARGSMAGIC;
+		args.mask = 0755;
+		args.flags = 0;
+	} else {
+		error = copyin(data, &args, sizeof(struct msdosfs_args));
+		if (error)
+			goto error_exit;
+	}
 	if (args.magic != MSDOSFS_ARGSMAGIC)
 		args.flags = 0;
 
@@ -297,37 +308,25 @@ error_exit:
 }
 
 /*
- * Create a version 3 UUID from unique data in the SHA1 "name space".
- * Version 3 UUIDs are derived using MD5 checksum.  Here, the unique
- * data is the 4-byte volume ID and the number of sectors (normalized
- * to a 4-byte little endian value).
+ * Synthesize a stable version-3-style UUID directly from the 4-byte volume
+ * ID and total sector count.  Avoids MD5, whose corecrypto provider may not
+ * be registered yet during early root mount.
  */
 static void msdosfs_generate_volume_uuid(uuid_t result_uuid, uint8_t volumeID[4], uint32_t totalSectors)
 {
-    MD5_CTX c;
-    uint8_t sectorsLittleEndian[4];
-    
-    UUID_DEFINE( kFSUUIDNamespaceSHA1, 0xB3, 0xE2, 0x0F, 0x39, 0xF2, 0x92, 0x11, 0xD6, 0x97, 0xA4, 0x00, 0x30, 0x65, 0x43, 0xEC, 0xAC );
-
-    /*
-     * Normalize totalSectors to a little endian value so that this returns the
-     * same UUID regardless of endianness.
-     */
-    putuint32(sectorsLittleEndian, totalSectors);
-    
-    /*
-     * Generate an MD5 hash of our "name space", and our unique bits of data
-     * (the volume ID and total sectors).
-     */
-    MD5Init(&c);
-    MD5Update(&c, kFSUUIDNamespaceSHA1, sizeof(uuid_t));
-    MD5Update(&c, volumeID, 4);
-    MD5Update(&c, sectorsLittleEndian, sizeof(sectorsLittleEndian));
-    MD5Final(result_uuid, &c);
-    
-    /* Force the resulting UUID to be a version 3 UUID. */
-    result_uuid[6] = (result_uuid[6] & 0x0F) | 0x30;
-    result_uuid[8] = (result_uuid[8] & 0x3F) | 0x80;
+    memset(result_uuid, 0, sizeof(uuid_t));
+    result_uuid[0] = volumeID[0];
+    result_uuid[1] = volumeID[1];
+    result_uuid[2] = volumeID[2];
+    result_uuid[3] = volumeID[3];
+    result_uuid[4] = (uint8_t)totalSectors;
+    result_uuid[5] = (uint8_t)(totalSectors >> 8);
+    result_uuid[6] = 0x30 | ((uint8_t)(totalSectors >> 16) & 0x0F); /* version 3 */
+    result_uuid[7] = (uint8_t)(totalSectors >> 24);
+    result_uuid[8] = 0x80; /* RFC 4122 variant */
+    result_uuid[9] = 0x42;
+    result_uuid[10] = 0x53;
+    result_uuid[11] = 0x44;
 }
 
 int msdosfs_mount(vnode_t devvp, struct mount *mp, vfs_context_t context)
@@ -405,7 +404,11 @@ int msdosfs_mount(vnode_t devvp, struct mount *mp, vfs_context_t context)
 		goto error_exit;
 	}
 
+#ifdef XNU_KERNEL_PRIVATE
+	pmp = kalloc_type(struct msdosfsmount, Z_WAITOK | Z_ZERO);
+#else
 	MALLOC(pmp, struct msdosfsmount *, sizeof(*pmp), M_TEMP, M_WAITOK);
+#endif
 	bzero((caddr_t)pmp, sizeof *pmp);
 	pmp->pm_mountp = mp;
 	pmp->pm_fat_lock = lck_mtx_alloc_init(msdosfs_lck_grp, msdosfs_lck_attr);
@@ -925,7 +928,11 @@ error_exit:
 		lck_mtx_free(pmp->pm_fat_lock, msdosfs_lck_grp);
 		lck_mtx_free(pmp->pm_rename_lock, msdosfs_lck_grp);
 		
-		FREE(pmp, M_TEMP);
+#ifdef XNU_KERNEL_PRIVATE
+	kfree_type(struct msdosfsmount, pmp);
+#else
+	FREE(pmp, M_TEMP);
+#endif
 
 		vfs_setfsprivate(mp, (void *)NULL);
 	}
@@ -1018,7 +1025,11 @@ int msdosfs_vfs_unmount(struct mount *mp, int mntflags, vfs_context_t context)
 	lck_mtx_free(pmp->pm_fat_lock, msdosfs_lck_grp);
 	lck_mtx_free(pmp->pm_rename_lock, msdosfs_lck_grp);
 	
+#ifdef XNU_KERNEL_PRIVATE
+	kfree_type(struct msdosfsmount, pmp);
+#else
 	FREE(pmp, M_TEMP);
+#endif
 
 	vfs_setfsprivate(mp, (void *)NULL);
 
@@ -1581,7 +1592,7 @@ int msdosfs_module_start(kmod_info_t *ki, void *data)
 	vfe.vfe_vopcnt = 2;		/* We just have vnode operations for regular files and directories, and the FAT */
 	vfe.vfe_opvdescs = msdosfs_vnodeop_opv_desc_list;
 	strlcpy(vfe.vfe_fsname, "msdos", sizeof(vfe.vfe_fsname));
-	vfe.vfe_flags = VFS_TBLTHREADSAFE | VFS_TBLNOTYPENUM | VFS_TBLLOCALVOL | VFS_TBL64BITREADY | VFS_TBLREADDIR_EXTENDED;
+	vfe.vfe_flags = VFS_TBLTHREADSAFE | VFS_TBLNOTYPENUM | VFS_TBLLOCALVOL | VFS_TBL64BITREADY | VFS_TBLREADDIR_EXTENDED | VFS_TBLCANMOUNTROOT;
 	vfe.vfe_reserv[0] = 0;
 	vfe.vfe_reserv[1] = 0;
 	

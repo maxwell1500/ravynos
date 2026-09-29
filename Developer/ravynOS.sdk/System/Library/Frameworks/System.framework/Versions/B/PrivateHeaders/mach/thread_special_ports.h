@@ -80,4 +80,13 @@
 #define thread_set_kernel_port(thread, port)    \
 	        (thread_set_special_port((thread), THREAD_KERNEL_PORT, (port)))
 
+
+/* SOURCED FROM IN-TREE XNU -- see LIBSYSTEM-KERNEL-BUILD-NOTES.md sec. 13.
+ * Verbatim copies; not invented. */
+/* Kernel/xnu/osfmk/mach/thread_special_ports.h:72 */
+#define THREAD_INSPECT_PORT     2       /* The inspect port for thread. */
+/* Kernel/xnu/osfmk/mach/thread_special_ports.h:76 */
+#define THREAD_MAX_SPECIAL_PORT THREAD_READ_PORT
+/* Kernel/xnu/osfmk/mach/thread_special_ports.h:74 */
+#define THREAD_READ_PORT        3       /* The read port for thread. */
 #endif  /* _MACH_THREAD_SPECIAL_PORTS_H_ */

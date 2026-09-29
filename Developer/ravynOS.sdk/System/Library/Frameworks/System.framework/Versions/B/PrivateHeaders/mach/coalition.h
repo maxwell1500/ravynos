@@ -177,4 +177,31 @@ struct procinfo_coalinfo {
 
 
 
+
+/* SOURCED FROM IN-TREE XNU -- see LIBSYSTEM-KERNEL-BUILD-NOTES.md sec. 13.
+ * Verbatim copies; not invented. */
+/* Kernel/xnu/osfmk/mach/coalition.h:169 */
+#define COALITION_INFO_GET_DEBUG_INFO 4
+
+/* SOURCED FROM IN-TREE XNU: Kernel/xnu/osfmk/mach/coalition.h:171
+ *
+ * The SDK mach tree -- the coherent generation this build uses wholesale --
+ * does not define struct coalinfo_debuginfo AT ALL, so it is an incomplete
+ * type in every userspace TU. wrappers/coalition.c then fails with
+ *   "conflicting types for coalition_info_debug_info"
+ * even though the declaration and the definition are BYTE-IDENTICAL:
+ *   int coalition_info_debug_info(uint64_t, struct coalinfo_debuginfo *, size_t)
+ * The divergence is the incomplete type, not the text. Verbatim copy from a
+ * real header in this repository; not invented. See
+ * tools/bootlab/LIBSYSTEM-KERNEL-BUILD-NOTES.md sec. 16.
+ */
+struct coalinfo_debuginfo {
+	uint64_t thread_group_id;
+	uint32_t thread_group_recommendation;
+	uint32_t thread_group_flags;
+	uint32_t focal_task_count;
+	uint32_t nonfocal_task_count;
+	uint32_t game_task_count;
+	uint32_t carplay_task_count;
+};
 #endif /* _MACH_COALITION_H_ */

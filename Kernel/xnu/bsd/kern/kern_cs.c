@@ -510,7 +510,7 @@ csblob_invalidate_flags(struct cs_blob *csblob)
 		csblob->csb_flags = updated_flags;
 	}
 
-	if (csblob->csb_entitlements != NULL) {
+	if (csblob->csb_entitlements != NULL && amfi != NULL) {
 		amfi->OSEntitlements_invalidate(csblob->csb_entitlements);
 	}
 
@@ -737,7 +737,7 @@ csblob_entitlements_dictionary_copy(struct cs_blob *csblob)
 		return NULL;
 	}
 	if (!amfi) {
-		panic("CoreEntitlements: missing AMFI bridge\n");
+		return NULL;
 	}
 	return amfi->OSEntitlements_asdict(csblob->csb_entitlements);
 }

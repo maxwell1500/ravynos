@@ -97,6 +97,7 @@ EXT(idt64_hndl_table0):
 #define	TBL0_OFF_PTR_KERNEL_STACK_MASK	0x30
 /* 0x30 */	.quad 0 /* &kernel_stack_mask */
 
+.globl EXT(idt64_hndl_table1)
 EXT(idt64_hndl_table1):
 	.quad	EXT(hndl_allintrs)
 	.quad	EXT(hndl_alltraps)
@@ -704,6 +705,10 @@ L_dispatch_from_user_no_push_rax:
 #endif
 
 L_dispatch_kgsb:
+	/* RAX is not guaranteed to hold table0[2] on the DEVELOPMENT
+	 * #PF-stash inbound edge, so reload it. */
+	leaq	EXT(idt64_hndl_table0)(%rip), %rax
+	mov	16(%rax), %rax	/* Offset of per-CPU shadow */
 	mov	%gs:CPU_SHADOWTASK_CR3(%rax), %rax
 	mov	%rax, %cr3
 #if	DEBUG

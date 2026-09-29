@@ -15,6 +15,20 @@ SRCS = bsd.c \
 	variant.c
 
 SLF = /System/Library/Frameworks
+# OS_CRASH_ENABLE_EXPERIMENTAL_LIBTRACE is REQUIRED here, not optional.
+# h/stdlib.h gates os_malloc, os_calloc and os_strdup behind it with a
+# _Pragma("GCC error ...") in the #else (lines 170, 206, 242), and this
+# component's own stdlib.c and mach.c call those three. Removing it fixes
+# nothing: it only uncovers the real defect, which is the -I stanza below
+# resolving <os/log_private.h> to xnu's kernel header, which defines NONE of
+# the five symbols the libtrace branch needs. See tools/bootlab/BOOT-PLAN.md
+# sec. 7.4. internal.h also sets this define, for all nine .c files.
+#
+# NB comment syntax: "# prose" is REJECTED by this toolchain in a C header
+# (verified against a stock Apple clang -- even "# hello world" is an invalid
+# preprocessing directive). It is fine in a Makefile, where bmake consumes the
+# "#" before the compiler sees the line, which is exactly why the mistake looks
+# invisible until the same text is copied into a .h file.
 CFLAGS = --sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSION_MIN} \
 	-DTARGET_OS_BRIDGE=0 -D__DARWIN_UNIX03 -Dguardid_t=uint64_t \
 	-D_LIBC_NO_FEATURE_VERIFICATION -DDARWIN_BUILDING_LIBSYSTEM_DARWIN \

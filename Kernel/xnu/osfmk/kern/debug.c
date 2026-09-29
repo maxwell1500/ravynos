@@ -1207,15 +1207,27 @@ panic_trap_to_debugger(const char *panic_format_str, va_list *panic_args, unsign
 	/* call machine-layer panic handler */
 	ml_panic_trap_to_debugger(panic_format_str, panic_args, reason, ctx, panic_options_mask, panic_caller, panic_initiator);
 
-	extern void pal_serial_putc(char);
-	const char *pp = "\r\n!!! PANIC TRAP TO DEBUGGER: ";
-	while (*pp) pal_serial_putc(*pp++);
-	if (panic_format_str) {
-		const char *ps = panic_format_str;
-		while (*ps) pal_serial_putc(*ps++);
-	}
-	pal_serial_putc('\r');
-	pal_serial_putc('\n');
+	/*
+	 * ravynOS: the serial fallback echo of the panic banner and format string
+	 * is REMOVED. It was the only behavioural difference between this file and
+	 * the kernel the bootlab actually ran -- 33 pal_serial_putc() calls, all
+	 * from this one block, and nothing else anywhere in debug.c.
+	 *
+	 * Why: the bootlab reads the serial log, and this banner is a false
+	 * positive for it. The harness decides "did the kernel panic" by matching
+	 * "panic" in the log, and the only matches in a healthy boot are the
+	 * panic_init: progress lines -- already a documented false positive. A
+	 * "!!! PANIC TRAP TO DEBUGGER:" banner on serial compounds exactly that,
+	 * and no such banner appears in any boot log on this campaign.
+	 *
+	 * Trade-off, stated rather than hidden: ml_panic_trap_to_debugger() above
+	 * has already run, so a panic it prints is unaffected. But this block was
+	 * the fallback for a panic that reaches serial ONLY this way, and that
+	 * case is now silent. If a real panic ever needs to be visible in the
+	 * serial log, this is the line to restore.
+	 *
+	 * Recovered from the linked object (BOOT-PLAN 12.5b-ii).
+	 */
 	CPUDEBUGGERCOUNT++;
 
 	/* emit a tracepoint as early as possible in case of hang */

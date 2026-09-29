@@ -50,6 +50,14 @@
 
 #ifdef	__ASSEMBLER__
 
+/* Unwind Prologue added to each function to indicate the start of the unwind information. */
+#define UNWIND_PROLOGUE \
+.cfi_sections .eh_frame ;\
+.cfi_startproc          ;
+
+/* Unwind Epilogue added to each function to indicate the end of the unwind information */
+#define UNWIND_EPILOGUE .cfi_endproc
+
 #define ALIGN						\
 	.align	2, 0x90
 

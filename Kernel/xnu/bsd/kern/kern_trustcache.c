@@ -516,14 +516,11 @@ trust_cache_runtime_init(void)
 #endif
 
 	/* Image4 interface needs to be available */
-	if (img4if == NULL) {
-		panic("image4 interface not available");
+	if (img4if == NULL || amfi == NULL) {
+		printf("trust_cache_runtime_init: image4 or amfi interface not available, skipping trust cache\n");
+		return;
 	}
-
-	/* AMFI interface needs to be available */
-	if (amfi == NULL) {
-		panic("amfi interface not available");
-	} else if (amfi->TrustCache.version < 2) {
+	if (amfi->TrustCache.version < 2) {
 		panic("amfi interface is stale: %u", amfi->TrustCache.version);
 	}
 
@@ -1075,7 +1072,7 @@ load_static_trust_cache(void)
 	trust_cache_static_init = true;
 
 	/* Nothing to do when the runtime isn't set */
-	if (trust_cache_rt == NULL) {
+	if (trust_cache_rt == NULL || amfi == NULL || img4if == NULL) {
 		return;
 	}
 

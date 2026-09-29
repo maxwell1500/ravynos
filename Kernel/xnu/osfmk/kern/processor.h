@@ -334,6 +334,8 @@ decl_lck_mtx_data(extern, tasks_corpse_lock);
 extern queue_head_t terminated_tasks;
 
 extern queue_head_t terminated_threads;
+extern queue_head_t *get_terminated_threads_queue(void);
+extern queue_head_t *get_threads_queue(void);
 
 /*
  * Valid state transitions:

@@ -129,4 +129,11 @@ typedef int     task_special_port_t;
 	        (task_set_special_port((task), TASK_DEBUG_CONTROL_PORT, (port)))
 
 
+
+/* SOURCED FROM IN-TREE XNU -- see LIBSYSTEM-KERNEL-BUILD-NOTES.md sec. 13.
+ * Verbatim copies; not invented. */
+/* Kernel/xnu/osfmk/mach/task_special_ports.h:80 */
+#define TASK_INSPECT_PORT       5       /* The inspect port for task. */
+/* Kernel/xnu/osfmk/mach/task_special_ports.h:82 */
+#define TASK_READ_PORT          6       /* The read port for task. */
 #endif  /* _MACH_TASK_SPECIAL_PORTS_H_ */

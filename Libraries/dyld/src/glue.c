@@ -364,18 +364,83 @@ void _ZSt20__throw_length_errorPKc()
 	_ZN4dyld4haltEPKc("_throw_length_error()");
 }
 
+// The C++ runtime symbols below are DEFINED here, not merely declared, and the
+// original comment on this block said otherwise. It read:
+//
+//   "The aligned version of new isn't in libc++abi-static.a but might be
+//    called by __libcpp_allocate unless it is optimized perfectly"
+//
+// i.e. it took for granted that libc++ owns the UNALIGNED _Znwm/_ZdlPv and
+// that dyld only has to cover the aligned variants. That assumption died with
+// the removal of -lc++ (see Libraries/dyld/Makefile, the -lc++ A/B block).
+// A declaration is not a definition: with libc++ gone, nothing supplied the
+// unaligned pair, and the installed libdyld.dylib carried __Znwm, __ZdlPv and
+// __ZNSt3__122__libcpp_verbose_abortEPKcz as "undefined, dynamically looked
+// up" with NO provider anywhere in the load graph. The link still succeeded --
+// the failure was deferred to load time, where nothing reports it.
+//
+// So dyld supplies them, for the same reason it already defines std::terminate,
+// std::unexpected and __cxa_bad_typeid above: a bootstrap linker must not
+// depend on a C++ runtime that will not be present, and must not abort through
+// one either. Every failure path here ends in dyld::halt().
+//
+// operator new / operator delete route to malloc/free. This is not an
+// invented bootstrap allocator: malloc is already a hard, non-weak load-time
+// dependency of this dylib (libsystem_malloc, and _malloc/_free/_calloc are
+// already undefined here and already bound), so this adds no new edge to the
+// load graph. It also matches what the rest of dyld does -- ImageLoader.cpp
+// and dyld2.cpp allocate with `new char[]`, and dyld2.cpp:6319 carries the
+// upstream note "maybe use static buffer to avoid calling malloc so early".
+// If dyld ever needs allocation that is safe before the platform allocator is,
+// that is a separate design decision; this reuses the allocator dyld has.
+//
+// operator new's contract is to throw std::bad_alloc on failure. dyld builds
+// -fno-exceptions and must not throw, and __throw_bad_alloc() is already
+// defined above to halt() -- so that is the failure path, reused rather than
+// invented.
+void* _Znwm(size_t size)
+{
+	void* p = malloc(size);
+	if ( p == NULL )
+		_ZSt17__throw_bad_allocv();
+	return p;
+}
+
 // The aligned version of new isn't in libc++abi-static.a but might be called
 // by __libcpp_allocate unless it is optimized perfectly
-extern void* _Znwm(unsigned long size);
 void* _ZnwmSt11align_val_t(unsigned long size, size_t align) {
     return _Znwm(size);
 }
 
+// operator delete. free(NULL) is defined to be a no-op, so deleting a null
+// pointer needs no test of its own.
+void _ZdlPv(void* ptr)
+{
+	free(ptr);
+}
+
 // The aligned version of new isn't in libc++abi-static.a but might be called
 // by __libcpp_deallocate unless it is optimized perfectly
-extern void _ZdlPv(void* ptr);
 void _ZdlPvSt11align_val_t(void* ptr, size_t align) {
     _ZdlPv(ptr);
+}
+
+// std::__1::__libcpp_verbose_abort(const char* msg, ...) -- libc++'s last
+// resort when an allocation it cannot satisfy fails. Same category as the
+// terminate/unexpected handlers above: a runtime reporting that it is out of
+// options, which for a bootstrap linker means halting with the message intact.
+// The message is passed through as a string, never as a format, so the
+// varargs are dropped rather than trusted.
+// NB the single leading underscore, as everywhere else in this file. The C++
+// mangled name is _ZNSt3__122__libcpp_verbose_abortEPKcz and the Mach-O symbol
+// adds one more, giving the __ZNSt3__1... spelling that the artifact imports.
+// Spelling the C identifier with two leading underscores -- which looks right
+// if you are reading nm output, which already shows the Mach-O form -- defines
+// ___ZNSt3__1..., a different symbol that binds to nothing. Verified by
+// comparing the import and the definition byte-exact after the first build.
+void _ZNSt3__122__libcpp_verbose_abortEPKcz(const char* msg, ...)
+{
+	_ZN4dyld4haltEPKc(msg);
 }
 
 // the libc.a version of this drags in ASL

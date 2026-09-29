@@ -1010,6 +1010,13 @@ IOSystemShutdownNotification(int howto, int stage)
 
 	assert(kIOSystemShutdownNotificationStageProcessExit == stage);
 
+	/* ravynOS bringup: IOPMrootDomain may never have started on this
+	 * platform, leaving gHaltLogLock NULL. There is nothing to log or
+	 * notify, so return instead of faulting in IOLockLock(NULL). */
+	if (gHaltLogLock == NULL) {
+		return;
+	}
+
 	IOLockLock(gHaltLogLock);
 	if (!gHaltLog) {
 		gHaltLog = IONewData(char, (vm_size_t)kHaltLogSize);

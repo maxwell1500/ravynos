@@ -1,0 +1,904 @@
+IOUserServer.cpo: \
+  /Users/max/Projects/ravynos/Kernel/xnu/iokit/Kernel/IOUserServer.cpp \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/RELEASE_X86_64/iokit/RELEASE/meta_features.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/RELEASE_X86_64/iokit/RELEASE/iokitcpp.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/RELEASE_X86_64/iokit/RELEASE/kdebug.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/RELEASE_X86_64/iokit/RELEASE/networking.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/RELEASE_X86_64/iokit/RELEASE/hibernation.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/RELEASE_X86_64/iokit/RELEASE/crypto.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/RELEASE_X86_64/iokit/RELEASE/config_dtrace.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/RELEASE_X86_64/iokit/RELEASE/mach_assert.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IORPC.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/EXTERNAL_HEADERS/stdint.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/EXTERNAL_HEADERS/stddef.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/cdefs.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/EXTERNAL_HEADERS/ptrcheck.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/message.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/machine/limits.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/i386/limits.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/i386/_limits.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/machine/types.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/i386/types.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/i386/_types.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_int8_t.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_int16_t.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_int32_t.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_int64_t.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_u_int8_t.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_u_int16_t.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_u_int32_t.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_u_int64_t.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_intptr_t.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/machine/_types.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_uintptr_t.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/port.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/boolean.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/machine/boolean.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/i386/boolean.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/machine/vm_types.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/i386/vm_types.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/EXTERNAL_HEADERS/ptrauth.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/kern_return.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/machine/kern_return.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/i386/kern_return.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/appleapiopts.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/EXTERNAL_HEADERS/Availability.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/EXTERNAL_HEADERS/AvailabilityInternal.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/os/base.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/os/overflow.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/EXTERNAL_HEADERS/stdbool.h \
+  /Library/Developer/CommandLineTools/usr/lib/clang/21/include/stdbool.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/debug.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/kcdata.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/string.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/types.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_offsetof.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/machine/endian.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/i386/endian.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_endian.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/machine/_endian.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/i386/_endian.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/__endian.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/_OSByteOrder.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/i386/_OSByteOrder.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_u_char.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_u_short.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_u_int.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_caddr_t.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_dev_t.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_blkcnt_t.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_blksize_t.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_gid_t.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_in_addr_t.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_in_port_t.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_ino_t.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_ino64_t.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_key_t.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_mode_t.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_nlink_t.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_id_t.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_pid_t.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_off_t.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_uid_t.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_clock_t.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_size_t.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_ssize_t.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_time_t.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_useconds_t.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_suseconds_t.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_rsize_t.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_errno_t.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_fd_def.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_fd_setsize.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_fd_set.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_fd_clr.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_fd_zero.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_fd_isset.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_fd_copy.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_fsblkcnt_t.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_fsfilcnt_t.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/machine/trap.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/i386/trap.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/san/san/memintrinsics.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/uuid/uuid.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_uuid_t.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/EXTERNAL_HEADERS/stdarg.h \
+  /Library/Developer/CommandLineTools/usr/lib/clang/21/include/stdarg.h \
+  /Library/Developer/CommandLineTools/usr/lib/clang/21/include/__stdarg_header_macro.h \
+  /Library/Developer/CommandLineTools/usr/lib/clang/21/include/__stdarg___gnuc_va_list.h \
+  /Library/Developer/CommandLineTools/usr/lib/clang/21/include/__stdarg_va_list.h \
+  /Library/Developer/CommandLineTools/usr/lib/clang/21/include/__stdarg_va_arg.h \
+  /Library/Developer/CommandLineTools/usr/lib/clang/21/include/__stdarg___va_copy.h \
+  /Library/Developer/CommandLineTools/usr/lib/clang/21/include/__stdarg_va_copy.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/vm_types.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IOKitServer.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IOTypes.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/system.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/thread.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/mach_types.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/host_info.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/vm_statistics.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/machine.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/time_value.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/host_notify.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/host_special_ports.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/memory_object_types.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/vm_prot.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/vm_sync.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/os/refcnt.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/EXTERNAL_HEADERS/stdatomic.h \
+  /Library/Developer/CommandLineTools/usr/lib/clang/21/include/stdatomic.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/os/refcnt_internal.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/exception_types.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/machine/exception.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/i386/exception.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/thread_status.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/machine/thread_status.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/i386/thread_status.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/machine/_structs.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/i386/_structs.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/machine/thread_state.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/i386/thread_state.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/i386/fp_reg.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/i386/eflags.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/i386/proc_reg.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach_debug/ipc_info.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/mach_voucher_types.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/std_types.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/processor_info.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/machine/processor_info.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/i386/processor_info.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/task_info.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/policy.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/task_inspect.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/task_policy.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/task_policy_private.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/task_special_ports.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/thread_info.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/thread_policy.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/thread_policy_private.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/thread_special_ports.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/clock_types.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/vm_attributes.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/vm_inherit.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/vm_purgable.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/vm_behavior.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/vm_region.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/machine/vm_param.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/i386/vm_param.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/kmod.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/dyld_kernel.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_fsid_t.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_fsobj_id_t.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/vm_types_unsafe.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/vm_param.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/vm/vm_memtag.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/assert.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/macro_help.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/mach_param.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/kern_types.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/vm/vm_kern.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/locks.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/machine/locks.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/i386/locks.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/lock_types.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/lock_attr.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/lock_group.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/queue.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/startup.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/section_keywords.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/lock_mtx.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/lock_rw.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/ticket_lock.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/counter.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/zalloc.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach_debug/zone_info.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/os/alloc_util.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/os/cpp_util.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/os/atomic.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/cpu_number.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/machine/cpu_number.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/i386/cpu_number.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/percpu.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/priority_queue.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/assert.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/task.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/task_ref.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/btlog.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/kern_cdata.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/zlib.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/zconf.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/sfi_class.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/cs_blobs.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/recount.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/kern_sysctl.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/sched_prim.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/clock.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/mach_time.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/mach_time_private.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/block_hint.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/ipc_mig.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/mig.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/kdebug.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/kdebug_private.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/kdebug_kernel.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/libkern/libkern.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/crc.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/libkern/copyio.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/kalloc.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/mach_interface.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/clock.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/ndr.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/OSByteOrder.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/i386/OSByteOrder.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_os_inline.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/notify.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/mig_errors.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/mig_strncpy_zerofill_support.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/clock_priv.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/clock_reply_server.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/exc_server.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/host_priv.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach_debug/mach_debug_types.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach_debug/vm_info.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach_debug/page_info.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach_debug/hash_info.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach_debug/lockgroup_info.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/host_security.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/mach_exc_server.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/mach_host.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/mach_port.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/notify_server.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/processor.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/processor_set.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/semaphore.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/sync_policy.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/task.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/thread_act.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/vm_map.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/upl.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/vm/pmap.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/trustcache.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/EXTERNAL_HEADERS/CoreEntitlements/CoreEntitlements.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/EXTERNAL_HEADERS/CoreEntitlements/Errors.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/EXTERNAL_HEADERS/CoreEntitlements/Result.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/EXTERNAL_HEADERS/CoreEntitlements/Runtime.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/EXTERNAL_HEADERS/CoreEntitlements/Entitlements.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/EXTERNAL_HEADERS/CoreEntitlements/QueryHelpers.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/EXTERNAL_HEADERS/CoreEntitlements/Serialization.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/EXTERNAL_HEADERS/CoreEntitlements/Index.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/vm/vm_map.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/sdt.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/machine/sdt.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/machine/sdt_isa.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/i386/sdt_isa.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/vm/vm_protos.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/vm/vm_options.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IOReturn.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/error.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/OSTypes.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/OSBase.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/device/device_types.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IOMapTypes.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IOKitKeys.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/OSMessageNotification.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/ipc_kobject.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IOKitKeysPrivate.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IOUserClient.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IOService.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IORegistryEntry.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/c++/OSContainers.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/c++/OSObject.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/c++/OSMetaClass.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/OSReturn.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/c++/OSPtr.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/iokit/DriverKit/OSObject.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/c++/OSBoolean.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/c++/OSString.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/c++/OSSymbol.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/smr_types.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/c++/OSData.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/c++/OSNumber.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/c++/OSArray.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/c++/OSCollection.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/c++/OSSet.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/c++/OSOrderedSet.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/c++/OSCollectionIterator.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/c++/OSIterator.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/c++/OSDictionary.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/c++/OSValueObject.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IOLib.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IOLocks.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/machine/machine_routines.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/i386/machine_routines.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/pexpert/pexpert/pexpert.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IOInterrupts.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/kernel_mach_header.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/EXTERNAL_HEADERS/mach-o/loader.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/EXTERNAL_HEADERS/architecture/byte_order.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/EXTERNAL_HEADERS/mach-o/nlist.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/EXTERNAL_HEADERS/mach-o/reloc.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/pexpert/pexpert/boot.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/pexpert/pexpert/machine/boot.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/pexpert/pexpert/i386/boot.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/locks.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/OSAtomic.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/thread_call.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/c++/OSSerialize.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/c++/OSUnserialize.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IODeviceMemory.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IOMemoryDescriptor.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/iokit/DriverKit/IOMemoryDescriptor.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/iokit/DriverKit/IOMemoryMap.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IOKitDebug.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IONotifier.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/pwr_mgt/IOPMpowerState.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/pwr_mgt/IOPM.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IOMessage.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IOServicePM.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IOReportTypes.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/iokit/DriverKit/IOService.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/c++/OSSharedPtr.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/c++/intrusive_shared_ptr.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IOTimeStamp.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/iokit/DriverKit/IOUserClient.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/iokit/DriverKit/OSAction.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IOStatisticsPrivate.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/queue.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/tree.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/tree.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/c++/OSKext.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/OSKextLibPrivate.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/kxld.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/kxld_types.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/OSKextLib.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/OSDebug.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IOStatistics.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IOCatalogue.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IOBufferMemoryDescriptor.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/iokit/DriverKit/IOBufferMemoryDescriptor.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IOMapper.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IODMACommand.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IOCommand.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/iokit/DriverKit/IODMACommand.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IOBSD.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IOUserServer.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/iokit/DriverKit/IOUserServer.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/c++/OSBoundedArray.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/c++/bounded_array.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/c++/bounded_ptr.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/c++/OSBoundedPtr.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/c++/OSBoundedPtrFwd.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/c++/bounded_ptr_fwd.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/c++/OSBoundedArrayRef.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/c++/bounded_array_ref.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/reason.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IOInterruptEventSource.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IOEventSource.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IOWorkLoop.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IOTimerEventSource.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/pwr_mgt/RootDomain.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/vnode.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/kernel_types.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/constrained_ctypes.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_mount_t.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_vnode_t.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_guid_t.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/param.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_null.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/syslimits.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/machine/param.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/i386/param.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/i386/_param.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/errno.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/time.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_timespec.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_timeval.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_timeval64.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_user_timespec.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_user32_timespec.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_user64_timespec.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_user_timeval.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_user32_timeval.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_user64_timeval.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_user32_itimerval.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_user64_itimerval.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/resource.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/resource_private.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/ucred.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/bsm/audit.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/uio.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_iovec_t.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/signal.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/machine/signal.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/i386/signal.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/machine/_mcontext.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/i386/_mcontext.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_sigaltstack.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_ucontext.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_sigset_t.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/vnode_if.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/buf.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/pwr_mgt/IOPMPrivate.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/Block.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/proc.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/select.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/waitq.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/event.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/event_private.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/pthread/priority_private.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/fcntl.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_o_sync.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_o_dsync.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_seek_set.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_s_ifmt.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/lock.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/coalition.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/codesign.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/iokit/Kernel/IOKitKernelInternal.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/vm/vm_pageout.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/bits.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/device/device_port.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/vm/memory_types.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/machine/memory_types.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/i386/memory_types.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/socd_client.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/socd_client_kern.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/iokit/DriverKit/IODispatchQueue.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/iokit/DriverKit/IODispatchSource.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/iokit/DriverKit/IOInterruptDispatchSource.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/iokit/DriverKit/IODataQueueDispatchSource.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/iokit/DriverKit/IOServiceNotificationDispatchSource.h \
+  /Users/max/Projects/ravynos/Kernel/xnu/iokit/System/IODataQueueDispatchSourceShared.h
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/RELEASE_X86_64/iokit/RELEASE/meta_features.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/RELEASE_X86_64/iokit/RELEASE/iokitcpp.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/RELEASE_X86_64/iokit/RELEASE/kdebug.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/RELEASE_X86_64/iokit/RELEASE/networking.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/RELEASE_X86_64/iokit/RELEASE/hibernation.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/RELEASE_X86_64/iokit/RELEASE/crypto.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/RELEASE_X86_64/iokit/RELEASE/config_dtrace.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/RELEASE_X86_64/iokit/RELEASE/mach_assert.h:
+/Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IORPC.h:
+/Users/max/Projects/ravynos/Kernel/xnu/EXTERNAL_HEADERS/stdint.h:
+/Users/max/Projects/ravynos/Kernel/xnu/EXTERNAL_HEADERS/stddef.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/cdefs.h:
+/Users/max/Projects/ravynos/Kernel/xnu/EXTERNAL_HEADERS/ptrcheck.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/message.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/machine/limits.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/i386/limits.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/i386/_limits.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/machine/types.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/i386/types.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/i386/_types.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_int8_t.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_int16_t.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_int32_t.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_int64_t.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_u_int8_t.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_u_int16_t.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_u_int32_t.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_u_int64_t.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_intptr_t.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/machine/_types.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_uintptr_t.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/port.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/boolean.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/machine/boolean.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/i386/boolean.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/machine/vm_types.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/i386/vm_types.h:
+/Users/max/Projects/ravynos/Kernel/xnu/EXTERNAL_HEADERS/ptrauth.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/kern_return.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/machine/kern_return.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/i386/kern_return.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/appleapiopts.h:
+/Users/max/Projects/ravynos/Kernel/xnu/EXTERNAL_HEADERS/Availability.h:
+/Users/max/Projects/ravynos/Kernel/xnu/EXTERNAL_HEADERS/AvailabilityInternal.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/os/base.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/os/overflow.h:
+/Users/max/Projects/ravynos/Kernel/xnu/EXTERNAL_HEADERS/stdbool.h:
+/Library/Developer/CommandLineTools/usr/lib/clang/21/include/stdbool.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/debug.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/kcdata.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/string.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/types.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_offsetof.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/machine/endian.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/i386/endian.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_endian.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/machine/_endian.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/i386/_endian.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/__endian.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/_OSByteOrder.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/i386/_OSByteOrder.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_u_char.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_u_short.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_u_int.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_caddr_t.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_dev_t.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_blkcnt_t.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_blksize_t.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_gid_t.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_in_addr_t.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_in_port_t.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_ino_t.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_ino64_t.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_key_t.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_mode_t.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_nlink_t.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_id_t.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_pid_t.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_off_t.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_uid_t.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_clock_t.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_size_t.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_ssize_t.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_time_t.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_useconds_t.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_suseconds_t.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_rsize_t.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_errno_t.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_fd_def.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_fd_setsize.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_fd_set.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_fd_clr.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_fd_zero.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_fd_isset.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_fd_copy.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_fsblkcnt_t.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_fsfilcnt_t.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/machine/trap.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/i386/trap.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/san/san/memintrinsics.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/uuid/uuid.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_uuid_t.h:
+/Users/max/Projects/ravynos/Kernel/xnu/EXTERNAL_HEADERS/stdarg.h:
+/Library/Developer/CommandLineTools/usr/lib/clang/21/include/stdarg.h:
+/Library/Developer/CommandLineTools/usr/lib/clang/21/include/__stdarg_header_macro.h:
+/Library/Developer/CommandLineTools/usr/lib/clang/21/include/__stdarg___gnuc_va_list.h:
+/Library/Developer/CommandLineTools/usr/lib/clang/21/include/__stdarg_va_list.h:
+/Library/Developer/CommandLineTools/usr/lib/clang/21/include/__stdarg_va_arg.h:
+/Library/Developer/CommandLineTools/usr/lib/clang/21/include/__stdarg___va_copy.h:
+/Library/Developer/CommandLineTools/usr/lib/clang/21/include/__stdarg_va_copy.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/vm_types.h:
+/Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IOKitServer.h:
+/Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IOTypes.h:
+/Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/system.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/thread.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/mach_types.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/host_info.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/vm_statistics.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/machine.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/time_value.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/host_notify.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/host_special_ports.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/memory_object_types.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/vm_prot.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/vm_sync.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/os/refcnt.h:
+/Users/max/Projects/ravynos/Kernel/xnu/EXTERNAL_HEADERS/stdatomic.h:
+/Library/Developer/CommandLineTools/usr/lib/clang/21/include/stdatomic.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/os/refcnt_internal.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/exception_types.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/machine/exception.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/i386/exception.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/thread_status.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/machine/thread_status.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/i386/thread_status.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/machine/_structs.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/i386/_structs.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/machine/thread_state.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/i386/thread_state.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/i386/fp_reg.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/i386/eflags.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/i386/proc_reg.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach_debug/ipc_info.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/mach_voucher_types.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/std_types.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/processor_info.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/machine/processor_info.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/i386/processor_info.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/task_info.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/policy.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/task_inspect.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/task_policy.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/task_policy_private.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/task_special_ports.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/thread_info.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/thread_policy.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/thread_policy_private.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/thread_special_ports.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/clock_types.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/vm_attributes.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/vm_inherit.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/vm_purgable.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/vm_behavior.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/vm_region.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/machine/vm_param.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/i386/vm_param.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/kmod.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/dyld_kernel.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_fsid_t.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_fsobj_id_t.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/vm_types_unsafe.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/vm_param.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/vm/vm_memtag.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/assert.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/macro_help.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/mach_param.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/kern_types.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/vm/vm_kern.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/locks.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/machine/locks.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/i386/locks.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/lock_types.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/lock_attr.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/lock_group.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/queue.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/startup.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/section_keywords.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/lock_mtx.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/lock_rw.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/ticket_lock.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/counter.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/zalloc.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach_debug/zone_info.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/os/alloc_util.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/os/cpp_util.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/os/atomic.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/cpu_number.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/machine/cpu_number.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/i386/cpu_number.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/percpu.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/priority_queue.h:
+/Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/assert.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/task.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/task_ref.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/btlog.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/kern_cdata.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/zlib.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/zconf.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/sfi_class.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/cs_blobs.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/recount.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/kern_sysctl.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/sched_prim.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/clock.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/mach_time.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/mach_time_private.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/block_hint.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/ipc_mig.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/mig.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/kdebug.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/kdebug_private.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/kdebug_kernel.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/libkern/libkern.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/crc.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/libkern/copyio.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/kalloc.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/mach_interface.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/clock.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/ndr.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/OSByteOrder.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/i386/OSByteOrder.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_os_inline.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/notify.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/mig_errors.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/mig_strncpy_zerofill_support.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/clock_priv.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/clock_reply_server.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/exc_server.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/host_priv.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach_debug/mach_debug_types.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach_debug/vm_info.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach_debug/page_info.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach_debug/hash_info.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach_debug/lockgroup_info.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/host_security.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/mach_exc_server.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/mach_host.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/mach_port.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/notify_server.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/processor.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/processor_set.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/semaphore.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/sync_policy.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/task.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/thread_act.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/vm_map.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/upl.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/vm/pmap.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/trustcache.h:
+/Users/max/Projects/ravynos/Kernel/xnu/EXTERNAL_HEADERS/CoreEntitlements/CoreEntitlements.h:
+/Users/max/Projects/ravynos/Kernel/xnu/EXTERNAL_HEADERS/CoreEntitlements/Errors.h:
+/Users/max/Projects/ravynos/Kernel/xnu/EXTERNAL_HEADERS/CoreEntitlements/Result.h:
+/Users/max/Projects/ravynos/Kernel/xnu/EXTERNAL_HEADERS/CoreEntitlements/Runtime.h:
+/Users/max/Projects/ravynos/Kernel/xnu/EXTERNAL_HEADERS/CoreEntitlements/Entitlements.h:
+/Users/max/Projects/ravynos/Kernel/xnu/EXTERNAL_HEADERS/CoreEntitlements/QueryHelpers.h:
+/Users/max/Projects/ravynos/Kernel/xnu/EXTERNAL_HEADERS/CoreEntitlements/Serialization.h:
+/Users/max/Projects/ravynos/Kernel/xnu/EXTERNAL_HEADERS/CoreEntitlements/Index.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/vm/vm_map.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/sdt.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/machine/sdt.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/machine/sdt_isa.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/i386/sdt_isa.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/vm/vm_protos.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/vm/vm_options.h:
+/Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IOReturn.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/error.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/OSTypes.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/OSBase.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/device/device_types.h:
+/Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IOMapTypes.h:
+/Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IOKitKeys.h:
+/Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/OSMessageNotification.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/ipc_kobject.h:
+/Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IOKitKeysPrivate.h:
+/Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IOUserClient.h:
+/Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IOService.h:
+/Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IORegistryEntry.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/c++/OSContainers.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/c++/OSObject.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/c++/OSMetaClass.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/OSReturn.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/c++/OSPtr.h:
+/Users/max/Projects/ravynos/Kernel/xnu/iokit/DriverKit/OSObject.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/c++/OSBoolean.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/c++/OSString.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/c++/OSSymbol.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/smr_types.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/c++/OSData.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/c++/OSNumber.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/c++/OSArray.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/c++/OSCollection.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/c++/OSSet.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/c++/OSOrderedSet.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/c++/OSCollectionIterator.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/c++/OSIterator.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/c++/OSDictionary.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/c++/OSValueObject.h:
+/Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IOLib.h:
+/Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IOLocks.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/machine/machine_routines.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/i386/machine_routines.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/pexpert/pexpert/pexpert.h:
+/Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IOInterrupts.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/kernel_mach_header.h:
+/Users/max/Projects/ravynos/Kernel/xnu/EXTERNAL_HEADERS/mach-o/loader.h:
+/Users/max/Projects/ravynos/Kernel/xnu/EXTERNAL_HEADERS/architecture/byte_order.h:
+/Users/max/Projects/ravynos/Kernel/xnu/EXTERNAL_HEADERS/mach-o/nlist.h:
+/Users/max/Projects/ravynos/Kernel/xnu/EXTERNAL_HEADERS/mach-o/reloc.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/pexpert/pexpert/boot.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/pexpert/pexpert/machine/boot.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/pexpert/pexpert/i386/boot.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/locks.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/OSAtomic.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/thread_call.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/c++/OSSerialize.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/c++/OSUnserialize.h:
+/Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IODeviceMemory.h:
+/Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IOMemoryDescriptor.h:
+/Users/max/Projects/ravynos/Kernel/xnu/iokit/DriverKit/IOMemoryDescriptor.h:
+/Users/max/Projects/ravynos/Kernel/xnu/iokit/DriverKit/IOMemoryMap.h:
+/Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IOKitDebug.h:
+/Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IONotifier.h:
+/Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/pwr_mgt/IOPMpowerState.h:
+/Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/pwr_mgt/IOPM.h:
+/Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IOMessage.h:
+/Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IOServicePM.h:
+/Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IOReportTypes.h:
+/Users/max/Projects/ravynos/Kernel/xnu/iokit/DriverKit/IOService.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/c++/OSSharedPtr.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/c++/intrusive_shared_ptr.h:
+/Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IOTimeStamp.h:
+/Users/max/Projects/ravynos/Kernel/xnu/iokit/DriverKit/IOUserClient.h:
+/Users/max/Projects/ravynos/Kernel/xnu/iokit/DriverKit/OSAction.h:
+/Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IOStatisticsPrivate.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/queue.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/tree.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/tree.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/c++/OSKext.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/OSKextLibPrivate.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/kxld.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/kxld_types.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/OSKextLib.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/OSDebug.h:
+/Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IOStatistics.h:
+/Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IOCatalogue.h:
+/Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IOBufferMemoryDescriptor.h:
+/Users/max/Projects/ravynos/Kernel/xnu/iokit/DriverKit/IOBufferMemoryDescriptor.h:
+/Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IOMapper.h:
+/Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IODMACommand.h:
+/Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IOCommand.h:
+/Users/max/Projects/ravynos/Kernel/xnu/iokit/DriverKit/IODMACommand.h:
+/Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IOBSD.h:
+/Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IOUserServer.h:
+/Users/max/Projects/ravynos/Kernel/xnu/iokit/DriverKit/IOUserServer.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/c++/OSBoundedArray.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/c++/bounded_array.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/c++/bounded_ptr.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/c++/OSBoundedPtr.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/c++/OSBoundedPtrFwd.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/c++/bounded_ptr_fwd.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/c++/OSBoundedArrayRef.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/c++/bounded_array_ref.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/reason.h:
+/Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IOInterruptEventSource.h:
+/Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IOEventSource.h:
+/Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IOWorkLoop.h:
+/Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/IOTimerEventSource.h:
+/Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/pwr_mgt/RootDomain.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/vnode.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/kernel_types.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/constrained_ctypes.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_mount_t.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_vnode_t.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_guid_t.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/param.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_null.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/syslimits.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/machine/param.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/i386/param.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/i386/_param.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/errno.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/time.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_timespec.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_timeval.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_timeval64.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_user_timespec.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_user32_timespec.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_user64_timespec.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_user_timeval.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_user32_timeval.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_user64_timeval.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_user32_itimerval.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_user64_itimerval.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/resource.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/resource_private.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/ucred.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/bsm/audit.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/uio.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_iovec_t.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/signal.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/machine/signal.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/i386/signal.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/machine/_mcontext.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/i386/_mcontext.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_sigaltstack.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_ucontext.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_sigset_t.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/vnode_if.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/buf.h:
+/Users/max/Projects/ravynos/Kernel/xnu/iokit/IOKit/pwr_mgt/IOPMPrivate.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/libkern/libkern/Block.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/proc.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/select.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/waitq.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/event.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/event_private.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/pthread/priority_private.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/fcntl.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_o_sync.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_o_dsync.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_seek_set.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/_types/_s_ifmt.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/lock.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/coalition.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/bsd/sys/codesign.h:
+/Users/max/Projects/ravynos/Kernel/xnu/iokit/Kernel/IOKitKernelInternal.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/vm/vm_pageout.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/bits.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/device/device_port.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/vm/memory_types.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/machine/memory_types.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/i386/memory_types.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/socd_client.h:
+/Users/max/Projects/ravynos/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/kern/socd_client_kern.h:
+/Users/max/Projects/ravynos/Kernel/xnu/iokit/DriverKit/IODispatchQueue.h:
+/Users/max/Projects/ravynos/Kernel/xnu/iokit/DriverKit/IODispatchSource.h:
+/Users/max/Projects/ravynos/Kernel/xnu/iokit/DriverKit/IOInterruptDispatchSource.h:
+/Users/max/Projects/ravynos/Kernel/xnu/iokit/DriverKit/IODataQueueDispatchSource.h:
+/Users/max/Projects/ravynos/Kernel/xnu/iokit/DriverKit/IOServiceNotificationDispatchSource.h:
+/Users/max/Projects/ravynos/Kernel/xnu/iokit/System/IODataQueueDispatchSourceShared.h:

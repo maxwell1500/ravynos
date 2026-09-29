@@ -697,6 +697,13 @@ bsd_init(void)
 	/* Initialize the file systems. */
 	bsd_init_kprintf("calling vfsinit\n");
 	vfsinit();
+	extern int msdosfs_module_start(void *, void *);
+	extern int ahci_init(void);
+
+	bsd_init_kprintf("calling msdosfs_module_start\n");
+	msdosfs_module_start(NULL, NULL);
+	bsd_init_kprintf("calling ahci_init\n");
+	ahci_init();
 
 #if CONFIG_PROC_UUID_POLICY
 	/* Initial proc_uuid_policy subsystem */
@@ -1126,6 +1133,16 @@ bsd_autoconf(void)
 static void
 setconf(void)
 {
+	extern dev_t ahci_get_rootdev(void);
+	dev_t ahci_root = ahci_get_rootdev();
+	if (ahci_root != NODEV) {
+		rootdev = ahci_root;
+		strlcpy(rootdevice, "disk0s1", sizeof(rootdevice));
+		mountroot = NULL;
+		printf("setconf: using AHCI rootdev disk0s1 (major %d, minor %d)\n",
+		    major(rootdev), minor(rootdev));
+		return;
+	}
 	u_int32_t       flags;
 	kern_return_t   err;
 

@@ -388,4 +388,9 @@ typedef integer_t       cpu_threadtype_t;
 #define CPUFAMILY_INTEL_6_26    CPUFAMILY_INTEL_NEHALEM
 
 
+
+/* SOURCED FROM IN-TREE XNU -- see LIBSYSTEM-KERNEL-BUILD-NOTES.md sec. 13.
+ * Verbatim copies; not invented. */
+/* Kernel/xnu/osfmk/mach/machine.h:189 */
+#define CPU_SUBTYPE_ANY         ((cpu_subtype_t) -1)
 #endif  /* _MACH_MACHINE_H_ */

@@ -36,6 +36,7 @@
 #include "cc_internal.h"
 #include "ccdrbg.h"
 #include "ccdrbg_internal.h"
+#include <pexpert/pexpert.h>
 
 bool
 ccdrbg_must_reseed(const struct ccdrbg_info *info,
@@ -77,29 +78,43 @@ ccdrbg_generate(const struct ccdrbg_info *info,
     size_t additionalLength, const void *additional)
 {
 	extern void pal_serial_putc(char);
-	const char *cg1 = "            ccdrbg_generate: entering, checking info pointer...\r\n";
-	while (*cg1) { pal_serial_putc(*cg1++); }
+	static int quiet_boot = -1;
+	if (quiet_boot < 0) {
+		quiet_boot = PE_parse_boot_argn("quiet_boot", NULL, 0);
+	}
+	if (!quiet_boot) {
+		const char *cg1 = "            ccdrbg_generate: entering, checking info pointer...\r\n";
+		while (*cg1) { pal_serial_putc(*cg1++); }
+	}
 
 	if (info == NULL) {
-		const char *cgn = "            ccdrbg_generate: info is NULL!\r\n";
-		while (*cgn) { pal_serial_putc(*cgn++); }
+		if (!quiet_boot) {
+			const char *cgn = "            ccdrbg_generate: info is NULL!\r\n";
+			while (*cgn) { pal_serial_putc(*cgn++); }
+		}
 		return -1;
 	}
 
 	if (info->generate == NULL) {
-		const char *cggn = "            ccdrbg_generate: info->generate is NULL!\r\n";
-		while (*cggn) { pal_serial_putc(*cggn++); }
+		if (!quiet_boot) {
+			const char *cggn = "            ccdrbg_generate: info->generate is NULL!\r\n";
+			while (*cggn) { pal_serial_putc(*cggn++); }
+		}
 		return -1;
 	}
 
-	const char *cg2 = "            ccdrbg_generate: jumping to info->generate...\r\n";
-	while (*cg2) { pal_serial_putc(*cg2++); }
+	if (!quiet_boot) {
+		const char *cg2 = "            ccdrbg_generate: jumping to info->generate...\r\n";
+		while (*cg2) { pal_serial_putc(*cg2++); }
+	}
 
 	int (*gen_fn)(struct ccdrbg_state *, size_t, void *, size_t, const void *) = info->generate;
 	int ret = gen_fn(drbg, dataOutLength, dataOut, additionalLength, additional);
 
-	const char *cg3 = "            ccdrbg_generate: info->generate returned to ccdrbg_generate!\r\n";
-	while (*cg3) { pal_serial_putc(*cg3++); }
+	if (!quiet_boot) {
+		const char *cg3 = "            ccdrbg_generate: info->generate returned to ccdrbg_generate!\r\n";
+		while (*cg3) { pal_serial_putc(*cg3++); }
+	}
 
 	return ret;
 }

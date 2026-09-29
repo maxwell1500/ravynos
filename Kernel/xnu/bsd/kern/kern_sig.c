@@ -1984,7 +1984,46 @@ build_signal_reason(int signum, const char *procname)
 	reason_buffer_size_estimate = kcdata_estimate_required_buffer_size(2, sizeof(sender_proc->p_name) +
 	    sizeof(pid_t));
 
-	ret = os_reason_alloc_buffer_noblock(signal_reason, reason_buffer_size_estimate);
+	/*
+	 * This allocation is deliberately BLOCKING, not Z_NOWAIT.
+	 *
+	 * A Z_NOWAIT zone allocation may only *schedule* a zone expand
+	 * (zalloc_item -> zone_expand_async_schedule_if_allowed); it never
+	 * performs one. So if the 192-byte kalloc data-buffer zone happens to be
+	 * empty at this instant, Z_NOWAIT returns NULL and the crash report is
+	 * permanently degraded -- no PID, no process name, "description none" --
+	 * for every userspace crash the system will ever produce. The refusal
+	 * condition in zalloc_item() is literally `z_elems_free == 0` and is
+	 * independent of z_elems_rsv, so no zone reserve or limit can prevent
+	 * it; only allowing the expand to happen can.
+	 *
+	 * Blocking is safe and appropriate here:
+	 *  - this runs in thread context, not interrupt context (zalloc_ext
+	 *    asserts against that case separately);
+	 *  - proc_lock, held at two of the three call sites, is a sleepable
+	 *    lck_mtx (bsd/kern/kern_fork.c: proc_lock -> lck_mtx_lock(&p->p_mlock));
+	 *  - this very function ALREADY blocks on a zone allocation two lines
+	 *    above, because os_reason_create() does zalloc_flags(..., Z_WAITOK).
+	 *    A "must not block here" rationale cannot justify the noblock call
+	 *    when the function blocks unconditionally before reaching it.
+	 *
+	 * ⚠️ THE COUPLING IS LOAD-BEARING AND IT IS NOT LOCAL TO THIS FILE. The
+	 * argument above rests entirely on os_reason_create() (bsd/kern/
+	 * sys_reason.c) doing a Z_WAITOK zalloc. If anyone ever changes THAT to
+	 * Z_NOWAIT -- to make reason creation non-blocking, say -- this
+	 * justification disappears, and the correct response is NOT to restore
+	 * the noblock below but to work out afresh whether a crash-reporting
+	 * path may block while holding proc_lock. Do not change one of these two
+	 * allocations without re-deciding the other.
+	 *
+	 * For contrast, the sibling below uses the blocking variant and is
+	 * called from abort_with_payload_internal (bsd/kern/kern_exit.c) with NO
+	 * proc_lock held -- so the blocking/non-blocking split in this file does
+	 * track the lock context, and the noblock that was here was not
+	 * arbitrary. It is overridden here only because this function blocks
+	 * regardless. See BOOT-PLAN.md "§32 build_signal_reason".
+	 */
+	ret = os_reason_alloc_buffer(signal_reason, reason_buffer_size_estimate);
 	if (ret != 0) {
 		printf("build_signal_reason: unable to allocate signal reason buffer.\n");
 		return signal_reason;

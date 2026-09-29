@@ -1654,7 +1654,13 @@ vm_map_create_options(
 	vm_map_create_options_t options)
 {
 	extern void pal_serial_putc(char);
-	const char *v1="      vm_map_create_options: entered min/max\r\n"; while(*v1) pal_serial_putc(*v1++);
+	static int quiet_boot = -1;
+	if (quiet_boot < 0) {
+		quiet_boot = PE_parse_boot_argn("quiet_boot", NULL, 0);
+	}
+	if (!quiet_boot) {
+		const char *v1="      vm_map_create_options: entered min/max\r\n"; while(*v1) pal_serial_putc(*v1++);
+	}
 	vm_map_t result;
 
 #if DEBUG || DEVELOPMENT
@@ -1672,7 +1678,9 @@ vm_map_create_options(
 #endif /* DEBUG || DEVELOPMENT */
 
 	result = zalloc_id(ZONE_ID_VM_MAP, Z_WAITOK | Z_NOFAIL | Z_ZERO);
-	const char *v2="      vm_map_create_options: zalloc vm_map done\r\n"; while(*v2) pal_serial_putc(*v2++);
+	if (!quiet_boot) {
+		const char *v2="      vm_map_create_options: zalloc vm_map done\r\n"; while(*v2) pal_serial_putc(*v2++);
+	}
 
 	vm_map_store_init(&result->hdr);
 	result->hdr.entries_pageable = (bool)(options & VM_MAP_CREATE_PAGEABLE);
@@ -1697,11 +1705,15 @@ vm_map_create_options(
 	if (options & VM_MAP_CREATE_CORPSE_FOOTPRINT) {
 		result->has_corpse_footprint = true;
 	} else if (!(options & VM_MAP_CREATE_DISABLE_HOLELIST)) {
-		const char *v3="      vm_map_create_options: allocating hole_entry...\r\n"; while(*v3) pal_serial_putc(*v3++);
+		if (!quiet_boot) {
+			const char *v3="      vm_map_create_options: allocating hole_entry...\r\n"; while(*v3) pal_serial_putc(*v3++);
+		}
 		struct vm_map_links *hole_entry;
 
 		hole_entry = zalloc_id(ZONE_ID_VM_MAP_HOLES, Z_WAITOK | Z_NOFAIL);
-		const char *v4="      vm_map_create_options: hole_entry allocated\r\n"; while(*v4) pal_serial_putc(*v4++);
+		if (!quiet_boot) {
+			const char *v4="      vm_map_create_options: hole_entry allocated\r\n"; while(*v4) pal_serial_putc(*v4++);
+		}
 		/*
 		 * Holes can be used to track ranges all the way up to
 		 * MACH_VM_MAX_ADDRESS or more (e.g. kernel map).
@@ -1710,12 +1722,18 @@ vm_map_create_options(
 		result->holes_list = result->hole_hint = hole_entry;
 		hole_entry->prev = hole_entry->next = CAST_TO_VM_MAP_ENTRY(hole_entry);
 		result->holelistenabled = true;
-		const char *v5="      vm_map_create_options: holelist setup done\r\n"; while(*v5) pal_serial_putc(*v5++);
+		if (!quiet_boot) {
+			const char *v5="      vm_map_create_options: holelist setup done\r\n"; while(*v5) pal_serial_putc(*v5++);
+		}
 	}
 
-	const char *v6="      vm_map_create_options: calling vm_map_lock_init...\r\n"; while(*v6) pal_serial_putc(*v6++);
+	if (!quiet_boot) {
+		const char *v6="      vm_map_create_options: calling vm_map_lock_init...\r\n"; while(*v6) pal_serial_putc(*v6++);
+	}
 	vm_map_lock_init(result);
-	const char *v7="      vm_map_create_options: returning\r\n"; while(*v7) pal_serial_putc(*v7++);
+	if (!quiet_boot) {
+		const char *v7="      vm_map_create_options: returning\r\n"; while(*v7) pal_serial_putc(*v7++);
+	}
 
 	return result;
 }
@@ -2356,6 +2374,7 @@ again:
 		printf("vm_map_locate_space_anywhere: KERN_NO_SPACE (vm_map_store_find_space returned NULL: hint=0x%llx limit=0x%llx min=0x%llx max=0x%llx size=%lu)\n",
 		    (unsigned long long)hint, (unsigned long long)limit, (unsigned long long)effective_range.min_address, (unsigned long long)effective_range.max_address, (unsigned long)size);
 		return KERN_NO_SPACE;
+	}
 
 	if (entry_out) {
 		*entry_out = entry;

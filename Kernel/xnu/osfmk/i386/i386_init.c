@@ -1003,6 +1003,13 @@ i386_init(void)
 
 	i386_vm_init(maxmemtouse, IA32e, kernelBootArgs);
 	kprintf("MARK: after i386_vm_init\n");
+	/* Re-program LSTAR/SYSENTER_EIP now that slide_got() has slid the GOT:
+	 * the early cpu_syscall_init() ran pre-slide, so its GOT-loaded
+	 * DBLMAP() inputs fell through to kernel VAs (correct under
+	 * no_shared_cr3, fatal under split tables). Idempotent in both modes:
+	 * post-slide DBLMAP yields the alias, which is mapped under ucr3 and
+	 * also present in the shared tables. */
+	cpu_syscall_init(cpu_datap(0));
 
 
 	/* create the console for verbose or pretty mode */
@@ -1154,6 +1161,7 @@ pt_entry_t *dblmapL3;
 unsigned int dblallocs;
 uint64_t dblmap_dist;
 extern uint64_t idt64_hndl_table0[];
+extern uint64_t idt64_hndl_table1[];
 
 
 void
@@ -1209,6 +1217,21 @@ doublemap_init(uint8_t randL3)
 
 	dblmap_base = KVADDR(KERNEL_DBLMAP_PML4_INDEX, randL3, 0, 0);
 	dblmap_max = dblmap_base + hdescszr;
+	/* Static .quad pointers in __HIB,__desc have link-time addresses
+	 * (reloff 0, nreloc 0): slide them before computing DBLMAP targets.
+	 */
+	if (vm_kernel_slide != 0) {
+		idt64_hndl_table0[0] += vm_kernel_slide;
+		idt64_hndl_table0[1] += vm_kernel_slide;
+		idt64_hndl_table0[3] += vm_kernel_slide;
+		idt64_hndl_table0[4] += vm_kernel_slide;
+		idt64_hndl_table0[5] += vm_kernel_slide;
+
+		for (int i = 0; i < 9; i++) {
+			idt64_hndl_table1[i] += vm_kernel_slide;
+		}
+	}
+
 	/* Calculate the double-map distance, which accounts for the current
 	 * KASLR slide
 	 */
@@ -1217,16 +1240,6 @@ doublemap_init(uint8_t randL3)
 	idt64_hndl_table0[1] = DBLMAP(idt64_hndl_table0[1]);    /* 64-bit exit trampoline */
 	idt64_hndl_table0[3] = DBLMAP(idt64_hndl_table0[3]);    /* 32-bit exit trampoline */
 	idt64_hndl_table0[6] = (uint64_t)(uintptr_t)&kernel_stack_mask;
-
-	extern cpu_data_t cpshadows[], scdatas[];
-	uintptr_t cd1 = (uintptr_t) &cpshadows[0];
-	uintptr_t cd2 = (uintptr_t) &scdatas[0];
-/* Record the displacement from the kernel's per-CPU data pointer, eventually
- * programmed into GSBASE, to the "shadows" in the doublemapped
- * region. These are not aliases, but separate physical allocations
- * containing data required in the doublemapped trampolines.
- */
-	idt64_hndl_table0[2] = dblmap_dist + cd1 - cd2;
 
 	DBG("Double map base: 0x%qx\n", dblmap_base);
 	DBG("double map idlepml4[%d]: 0x%llx\n", KERNEL_DBLMAP_PML4_INDEX, IdlePML4[KERNEL_DBLMAP_PML4_INDEX]);

@@ -245,6 +245,53 @@ kprint_memmap(vm_offset_t maddr, unsigned int msize, unsigned int mcount)
 
 #define DPRINTF(x...)
 #endif /* DEBUG */
+/*
+ * Slide every kernel pointer in __DATA_CONST,__got by vm_kernel_slide.
+ *
+ * The static linker emits these GOT slots with link-time addresses and no
+ * rebasing info (reloff/nreloc == 0), and nothing else slides them: any
+ * code that loads a kernel address through the GOT (e.g. _pf_main_anchor
+ * via _pf_status-adjacent tables, cdevsw/bdevsw accessors) would touch an
+ * unslid address and page-fault. NOTE: boot.efi already slid the Mach-O
+ * section headers when loading the kernel, so got->addr is the slid
+ * runtime address and must NOT gain vm_kernel_slide again; only the
+ * pointer *contents* (still link-time) get slid. Must run while
+ * __DATA_CONST is still writable, i.e. before machine_lockdown() marks it
+ * read-only, and after vm_kernel_slide is computed above.
+ */
+static void
+slide_got(void)
+{
+	kernel_section_t *got;
+
+	if (!vm_kernel_slide) {
+		return;
+	}
+	got = getsectbynamefromheader(&_mh_execute_header, "__DATA_CONST", "__got");
+	if (got == NULL || got->size == 0) {
+		return;
+	}
+
+	uintptr_t *p = (uintptr_t *)got->addr;
+	uintptr_t *end = (uintptr_t *)((uintptr_t)p + got->size);
+
+	kprintf("slide_got: sliding %lu GOT entries at %p\n",
+	    (unsigned long)(got->size / sizeof(uintptr_t)), (void *)p);
+	{
+		extern void pal_serial_putc(char);
+		const char *m = "    i386_vm_init: sliding GOT...\r\n";
+		while (*m) {
+			pal_serial_putc(*m++);
+		}
+	}
+
+	for (; p < end; p++) {
+		if (*p >= 0xffffff8000000000ULL && *p < 0xffffff8004000000ULL) {
+			*p += vm_kernel_slide;
+		}
+	}
+}
+
 
 /*
  * Basic VM initialization.
@@ -307,6 +354,8 @@ i386_vm_init(uint64_t   maxmem,
 	    "__DATA");
 	segCONST = getsegbynamefromheader(&_mh_execute_header,
 	    "__DATA_CONST");
+	/* Slide __DATA_CONST,__got while it is still writable. */
+	slide_got();
 	cursectTEXT = lastsectTEXT = firstsect(segTEXT);
 	/* Discover the last TEXT section within the TEXT segment */
 	while ((cursectTEXT = nextsect(segTEXT, cursectTEXT)) != NULL) {
@@ -814,6 +863,16 @@ i386_vm_init(uint64_t   maxmem,
 
 	const char *vm8 = "    i386_vm_init: pmap_bootstrap completed successfully!\r\n";
 	while (*vm8) { pal_serial_putc(*vm8++); }
+	/* table0[2] is consumed as gsbase + table0[2] + CPU_xxx while still on
+	 * the USER tables (ucr3), so it must yield the double-mapped ALIAS of
+	 * the per-CPU shadow, not its kernel VA: gsbase is the slid primary,
+	 * and dblmap_dist folds the KASLR slide into the alias distance. The
+	 * dist and both refs are post-slide here, so the sum is exact under
+	 * any loader/codegen combination. (A bare cpshadows-scdatas difference
+	 * faults under split tables; it only works under no_shared_cr3.) */
+	extern uint64_t idt64_hndl_table0[];
+	extern cpu_data_t cpshadows[], scdatas[];
+	idt64_hndl_table0[2] = dblmap_dist + (uintptr_t)&cpshadows[0] - (uintptr_t)&scdatas[0];
 }
 unsigned int
 pmap_free_pages(void)

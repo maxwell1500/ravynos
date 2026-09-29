@@ -1,0 +1,713 @@
+#!/bin/sh
+# Compiler wrapper for building ravynOS userland on a Darwin host.
+#
+# Three jobs:
+#
+#  1. --sysroot -> -isysroot. Apple clang ignores a custom SDK passed via
+#     `--sysroot` when resolving `#include <...>`: it keeps searching the macOS
+#     CommandLineTools SDK, so headers that only exist in the ravynOS SDK are
+#     not found. Passing the same path as `-isysroot` makes clang honor it, so
+#     the upstream per-project Makefiles can keep using `--sysroot` unchanged.
+#
+#  2. Availability.h disambiguation. Kernel/xnu/EXTERNAL_HEADERS carries a
+#     stale generation of the Availability* header family; the ravynOS SDK
+#     carries the current one. Both use the same `#ifndef __AVAILABILITY__`
+#     guard, so whichever is reached first defines the macros and the other is
+#     skipped -- pairing an old Availability.h with a new
+#     AvailabilityInternal.h (or vice versa) and mis-expanding every
+#     availability attribute. See overlay_availability() below.
+#
+#  3. Link-flag hygiene. The libSystem sub-dylibs are built here as
+#     *standalone* dylibs, not as members of a dyld shared cache, so
+#     -umbrella System and -lSystem both re-introduce the placeholder
+#     libSystem.B.dylib the real libSystem is assembled from.
+#
+# Usage:  REAL_CC=/usr/bin/cc CC=<repo>/tools/bootlab/isysroot-cc bmake
+#
+# The real compiler is taken from $REAL_CC (default /usr/bin/cc), never from
+# $CC, so this wrapper cannot recurse into itself.
+
+REAL_CC="${REAL_CC:-/usr/bin/cc}"
+# Directory holding this wrapper. NOT previously defined, so the compat-header
+# paths built from it resolved to /ravynos-*.h, the -f test failed silently and
+# no shim was ever force-included.
+HERE="$(cd "$(dirname "$0")" && pwd)"
+
+# ---------------------------------------------------------------------------
+# 2. Availability.h disambiguation
+# ---------------------------------------------------------------------------
+#
+# Why the xnu copy is the wrong one for this tree:
+#
+#   Kernel/xnu/EXTERNAL_HEADERS/Availability.h        420 lines
+#       #define __API_AVAILABLE_GET_MACRO(_1,_2,_3,_4,NAME,...) NAME
+#       (4 fixed slots)  and it #includes only AvailabilityInternal.h
+#   Developer/ravynOS.sdk/usr/include/Availability.h  658 lines
+#       #define __API_AVAILABLE_GET_MACRO_93585900(_0.._15,NAME,...) NAME
+#       (16 fixed slots) and it #includes AvailabilityVersions.h,
+#       AvailabilityInternal.h *and* AvailabilityInternalLegacy.h
+#
+# The 4-slot dispatcher cannot even compile xnu's own header: the ravynOS tree's
+# Kernel/xnu/bsd/sys/unistd.h:192 declares
+#
+#   ssize_t freadlink(int, char *, size_t)
+#       __API_AVAILABLE(macos(13.0), ios(16.0), tvos(16.0), watchos(9.0), bridgeos(7.0));
+#
+# -- five platform arguments. With the 4-slot GET_MACRO, NAME binds to the
+# fifth *argument*, and the preprocessor emits
+#
+#   ssize_t freadlink(int, char * restrict, size_t)
+#       bridgeos(7.0)(macos(13.0), ios(16.0), tvos(16.0), watchos(9.0), bridgeos(7.0));
+#
+# which clang reports as "expected function body after function declarator".
+# The mirror image is dyld: xnu's Availability.h:198 defines
+# __OSX_AVAILABLE_STARTING(_osx,_ios) as __AVAILABILITY_INTERNAL##_osx, but
+# the SDK's AvailabilityInternal.h has no __AVAILABILITY_INTERNAL__* macros at
+# all (they live in its AvailabilityInternalLegacy.h), so the token survives
+# unexpanded.
+#
+# So the SDK generation is correct and EXTERNAL_HEADERS must not shadow it.
+# We cannot edit Kernel/xnu, so instead of touching that tree we point -I at a
+# symlink overlay of EXTERNAL_HEADERS with the Availability* family removed.
+# Everything else in EXTERNAL_HEADERS (mach-o/, stdarg.h, TargetConditionals.h,
+# AssertMacros.h, ...) is still wanted and is passed through unchanged.
+#
+# The overlay lives outside the source tree and is cheap to keep current: the
+# source directory has 27 top-level entries, and a stamp file makes the scan
+# run once per wrapper invocation at most.
+
+
+overlay_for() {
+    src="$1"
+    [ -d "$src" ] || return 1
+    # Normalize: the Makefiles spell this as
+    # .../Libraries/Libsystem/libsystem_c/../private, not .../Libsystem/private.
+    src="$(cd "$src" && pwd -P)" || return 1
+    case "$src" in
+        */Kernel/xnu/EXTERNAL_HEADERS|\
+        */Libraries/Libsystem/private|\
+        */Kernel.framework/Versions/A/PrivateHeaders|\
+        */Kernel.framework/Versions/A/Headers|\
+        */libsystem_kernel/mig_hdr/include|\
+        */Libraries/openbsm) ;;
+        *) return 1 ;;
+    esac
+
+    ov="${ROOT_BINARY_DIR:-/tmp}/Tools/inc-$(printf '%s' "$src" | cksum | cut -d' ' -f1)"
+    stamp="$ov/.stamp"
+    # Rebuild when the overlay is missing, the source tree is newer, OR THIS
+    # SCRIPT is newer than the stamp.
+    #
+    # The third condition is the one that was missing, and it is a silent trap:
+    # the strip list below lives in this file's body, not in $src, so editing
+    # which headers are excluded changed the overlay's correct contents without
+    # invalidating anything. The next build then reused the stale overlay and
+    # reported success. A cache keyed only on the data it derives from cannot
+    # notice a change to the code doing the deriving; key it on that too.
+    if [ ! -f "$stamp" ] || [ "$0" -nt "$stamp" ] || \
+       [ -n "$(find "$src" -newer "$stamp" -print -quit 2>/dev/null)" ]; then
+        rm -rf "$ov" || return 1
+        mkdir -p "$ov" || return 1
+        # Mirror the tree rather than symlinking only the top level: both of
+        # these directories have headers the build needs one level down
+        # (private/os/internal/internal_shared.h, private/platform/string.h),
+        # and dropping those subdirectories broke libsystem_malloc,
+        # libsystem_pthread and libsystem_platform with
+        # "fatal error: 'platform/string.h' file not found".
+        ( cd "$src" && find . -type d -print ) | while read -r rel; do
+            mkdir -p "$ov/$rel" || exit 1
+        done
+        ( cd "$src" && find . -type f -print ) | while read -r rel; do
+            b="${rel##*/}"
+            case "$src" in
+            */Kernel/xnu/EXTERNAL_HEADERS)
+                # The Availability* family must come from the SDK, not here.
+                case "$b" in Availability*) continue ;; esac
+                # Drop the whole mach-o/ directory, for the same reason and by
+                # the same precedent as Availability* above: the SDK's copy is
+                # the right generation, and this tree is a generation AHEAD of
+                # the code in this repo that reads it.
+                #
+                #   dyld3/APIs.cpp:338:14: error: use of undeclared identifier
+                #       'PLATFORM_IOSMAC'
+                #
+                # Per the "undeclared identifier" rule, that error is evidence
+                # mach-o/loader.h RESOLVED -- to this tree. Measured on the
+                # real emitted argv with clang -H: exactly ONE mach-o/loader.h
+                # is ever opened,
+                #   # 1 ".../Tools/inc-*/mach-o/loader.h" 1 3 4
+                # which is the overlay's symlink to
+                #   Kernel/xnu/EXTERNAL_HEADERS/./mach-o/loader.h
+                # reached via -I${ROOT_SOURCE_DIR}/Kernel/xnu/EXTERNAL_HEADERS.
+                # The SDK's own usr/include/mach-o/loader.h is NEVER READ.
+                #
+                # The generation gap, quoted:
+                #   EXTERNAL_HEADERS (wins)         SDK (loses)
+                #   #define PLATFORM_MACCATALYST 6   #define PLATFORM_IOSMAC 6
+                #   #define PLATFORM_MAX ...         (absent)
+                # Same value 6, different spelling: a RENAME across loader.h
+                # generations. dyld's sources reference PLATFORM_IOSMAC x6 and
+                # PLATFORM_MACCATALYST x0, so this tree is the newer generation
+                # and dyld is written against the older one. This is the mirror
+                # of LIBSYSTEM-KERNEL-BUILD-NOTES.md sec. 11, where the in-tree
+                # mach_types.h was OLDER despite being LARGER -- file size is
+                # not a proxy for generation in either direction.
+                #
+                # THE WHOLE DIRECTORY, not just loader.h. fat.h,
+                # fixup-chains.h, stab.h and loader.h all differ between the two
+                # generations, and fixing one file and meeting the next next
+                # round costs a round. Measured before stripping:
+                #
+                #   * files in EXTERNAL_HEADERS/mach-o absent from the SDK:
+                #     Makefile, arm/ -- neither is a header, so nothing that is
+                #     actually included is lost. nlist.h and reloc.h are
+                #     byte-identical in both.
+                #   * every mach-o/ header any carrier includes is present in
+                #     the SDK: libsystem_c uses dyld.h, dyld_priv.h, fat.h,
+                #     getsect.h, ldsyms.h, loader.h, nlist.h -- all 7 present,
+                #     and 5 of the 7 are NOT in EXTERNAL_HEADERS at all, so
+                #     today they already resolve via the sysroot.
+                #   * no source in dyld or libsystem_c references any macro
+                #     that exists only in the EXTERNAL_HEADERS generation of
+                #     the divergent files. The only three hits (N_BINCL,
+                #     N_EINCL, N_EXCL) come from libsystem_c's OWN stab.h --
+                #     the libc being built -- not from mach-o/stab.h.
+                #
+                # Carriers of this -I: dyld, libsystem_c/libBase,
+                # libsystem_c/libFreeBSD, Libsystem/Makefile, corecrypto. All
+                # five were checked against the SDK tree before this strip; the
+                # caches self-invalidate, so this takes effect immediately and a
+                # wrong strip would be a real regression rather than a no-op.
+                case "$rel" in ./mach-o/*) continue ;; esac
+                ;;
+            */Kernel.framework/Versions/A/PrivateHeaders|\
+            */Kernel.framework/Versions/A/Headers)
+                # This is the *kernel-internal* mach generation. libxpc,
+                # libsystem_asl and libsystem_dnssd put it on the include path
+                # ahead of the SDK's own mach/, and it declares io_main_t and
+                # ipc_space_read_t, which exist only under KERNEL:
+                #   mach/mach_host.h:149:2: error: unknown type name 'io_main_t'
+                #   mach/mach_port.h:228:2: error: unknown type name
+                #       'ipc_space_read_t'; did you mean 'ipc_space_port_t'?
+                # Drop its mach/ subdir so <mach/...> resolves to the SDK's
+                # usr/include/mach (reachable via -isysroot). Everything else
+                # in the tree is left alone.
+                case "$rel" in ./mach/*) continue ;; esac
+                ;;
+            */libsystem_kernel/mig_hdr/include)
+                # libsystem_kernel's Makefile generates its mach/ headers with
+                # mig, and libsystem_malloc puts this directory on its include
+                # path. libsystem_kernel does not finish its own build, so the
+                # tree it leaves behind is partial and malloc reads that
+                # instead of the SDK's complete mach/:
+                #   mig_hdr/include/mach/processor_set.h:216:2: error: unknown
+                #       type name 'mach_task_flavor_t'
+                # Drop mach/ so the SDK's usr/include/mach wins, and leave the
+                # rest (the servers/ headers this dir is for) in place.
+                case "$rel" in ./mach/*) continue ;; esac
+                ;;
+            */Libraries/Libsystem/private)
+                # Libraries/Libsystem/private/os/atomic_private.h is a
+                # one-line placeholder whose whole content is
+                #   #warning atomic_private.h is a stub!
+                # and this -I directory is searched *before*
+                # -I Kernel/xnu/libkern, so it shadows the real 874-line
+                # Kernel/xnu/libkern/os/atomic_private.h that defines
+                # os_atomic. Anything reaching it died with
+                #   firehose/tracepoint_private.h:54:2: error: type name
+                #       requires a specifier or qualifier
+                # Drop such placeholders from the overlay so the real header
+                # is found. The source file itself is left untouched.
+                head -1 "$src/$rel" 2>/dev/null |
+                    grep -q '^#warning .* is a stub!' && continue
+                ;;
+            */Libraries/openbsm)
+                # Libraries/openbsm/version is a 19-byte ASCII DATA file whose
+                # entire content is the single line OPENBSM_1_2_alpha5. It is
+                # not a header and can never be one. libc++ includes <version>
+                # for its C++20 feature-test macros (bitset, ranges, ostream,
+                # strstream, forward_list all do), and with the openbsm ROOT
+                # on the include path it wins that include, producing
+                #   "unknown type name 'OPENBSM_1_2_alpha5'"
+                # That is why a6e2c35015 removed the whole
+                # -I .../Libraries/openbsm. But that -I is the ONLY way to
+                # reach Libraries/openbsm/sys/bsm/audit.h, which dyld needs:
+                #   liblaunch/vproc_priv.h:31:10: fatal error:
+                #       'sys/bsm/audit.h' file not found
+                # So removing the directory wholesale took the real headers
+                # along with the one data file. Drop ONLY the data file here
+                # and keep every header. Same idiom as the Availability*
+                # exclusion above: one bad entry, the rest of the tree intact.
+                # Case matters here and getting it wrong is silent. The file
+                # on disk is `VERSION` (uppercase); libc++ includes <version>
+                # (lowercase); the volume is case-insensitive so they are the
+                # same inode and the include matches. But `find` reports the
+                # on-disk spelling, so a `case "$b" in version)` test never
+                # matches and the file is mirrored anyway. That is why the
+                # first attempt at this exclusion put 273 files in the overlay
+                # and 273 came out, with `version` still present. This is the
+                # same "differs in case from file name on disk" condition
+                # clang reports as -Wnonportable-include-path. Match both
+                # spellings explicitly rather than relying on $nocasematch,
+                # which /bin/sh does not have.
+                case "$b" in [Vv][Ee][Rr][Ss][Ii][Oo][Nn]) continue ;; esac
+                ;;
+            esac
+            ln -sfn "$src/$rel" "$ov/$rel" || exit 1
+        done
+        : > "$stamp" || return 1
+    fi
+    printf '%s' "$ov"
+}
+
+# ---------------------------------------------------------------------------
+# Classify the invocation before touching the argument list.
+# ---------------------------------------------------------------------------
+# Note: a bare -Wl,-dylib is a link too (copyfile/removefile spell it that way),
+# and -c means "compile only" -- the link flags below must never be injected
+# into a compile, or the driver reads the flag's value as a second input file
+# and dies with "cannot specify -o when generating multiple output files".
+# Libraries/dyld/Makefile puts -dylib in COMMONFLAGS, which is also CFLAGS.
+dylib=no
+compile_only=no
+assembler=no
+for a in "$@"; do
+    case "$a" in
+        # -dylinker is a THIRD spelling of the same link mode, and it was
+        # missing here. The dyld LOADER links with -Wl,-dylinker, so this
+        # branch never fired for it and the loader got none of the link
+        # hygiene below -- in particular not -Wl,-not_for_dyld_shared_cache,
+        # which is the documented remedy for the very link failure that
+        # stopped it ("Shared cache eligible dylibs cannot use '-undefined
+        # dynamic_lookup'"). One component of 192+ was silently escaping the
+        # wrapper: the one binary whose job is to load all the others. A gate
+        # is only as good as its enumeration, and a missing case is
+        # indistinguishable from the gate not existing.
+        -dylib|-dynamiclib|-dylinker|-Wl,-dylib|-Wl,-dynamiclib|-Wl,-dylinker) dylib=yes ;;
+        -c) compile_only=yes ;;
+        # "-x assembler-with-cpp" arrives as two separate arguments; match on
+        # the language word itself so that two-token form is caught too.
+        -x) : ;;
+        assembler|assembler-with-cpp) assembler=yes ;;
+    esac
+done
+
+[ "$dylib" = yes ] && [ "$compile_only" = yes ] && dylib=no
+if [ "$dylib" = yes ]; then
+    inject=yes
+else
+    inject=no
+fi
+
+# ---------------------------------------------------------------------------
+# 1./2./3. Single pass over the argument list.
+#
+# This must be ONE pass. The previous version built the output list twice --
+# once to rewrite --sysroot and again to strip -umbrella System / -lSystem --
+# so the second pass appended a duplicate of every surviving argument and
+# never actually removed anything. The result was that -umbrella System and
+# -lSystem still reached ld64, which then tried to resolve the whole System
+# umbrella and failed with e.g. "ld: library 'system_pthread' not found".
+# ---------------------------------------------------------------------------
+out=""
+seen_sysroot=0
+sdk_roots=""
+mach_roots=""
+skip_next=no
+for a in "$@"; do
+    if [ "$skip_next" = yes ]; then skip_next=no; continue; fi
+    case "$a" in
+        --sysroot=*)
+            # unquoted on purpose: consumed by a `for s in $sdk_roots` below
+            sdk_roots="$sdk_roots ${a#--sysroot=}"
+            [ "$seen_sysroot" = 1 ] || { out="$out -isysroot '${a#--sysroot=}'"; seen_sysroot=1; }
+            ;;
+        -I*)
+            dir="${a#-I}"
+            # unquoted on purpose: consumed by `for d in $mach_roots` below
+            mach_roots="$mach_roots $dir"
+            case "$dir" in
+            */usr/include/c++/v1)
+                # A C++ standard library must be a *system* include dir. As a
+                # plain -I it outranks the SDK, so mach/clock_priv.h's
+                # `#include <string.h>` picks up libc++'s string.h instead of
+                # the SDK's; libc++'s chain never loads Availability.h, and
+                # libsystem_c/include/string.h then hits
+                #   string.h:145:62: error: expected function body after
+                #       function declarator
+                # -isystem puts it back after every -I, which is the order the
+                # SDK expects.
+                out="$out '-isystem$dir'"
+                continue
+                ;;
+            esac
+            ov="$(overlay_for "$dir")" || ov=""
+            if [ -n "$ov" ]; then
+                out="$out '-I$ov'"
+                # The overlay carries Libraries/Libsystem/private/os/log.h and
+                # os/assumes.h, which end in #include_next <os/log.h> and
+                # #include_next <os/assumes.h>. Those need a LATER directory
+                # that actually has an os/log.h. Components that only reach
+                # ../private (libsystem_blocks) had none, and died with
+                #   inc-*/os/log.h:53: fatal error: 'os/log.h' file not found
+            else
+                out="$out '$a'"
+            fi
+            ;;
+        -umbrella)  if [ "$inject" = yes ]; then skip_next=yes; else out="$out '$a'"; fi ;;
+        -lSystem)   if [ "$inject" = yes ]; then :; else out="$out '$a'"; fi ;;
+        *) out="$out '$a'" ;;
+    esac
+done
+
+# Kernel/xnu/bsd/sys/cdefs.h defines the __DARWIN_ONLY_* feature macros only
+# inside `#ifdef XNU_PLATFORM_<name>` blocks. Nothing in the userspace build
+# defines one, so they stay undefined and the generated libc-features.h
+# rejects the build with "Feature mismatch". Injecting here covers every
+# sub-make, since they rebuild CFLAGS but all funnel through this wrapper.
+for d in ${EXTRA_DEFINES:-}; do
+    out="$out '$d'"
+done
+
+# EXTRA_INCLUDES: an include-path passthrough, for A/B MEASUREMENT ONLY.
+#
+# It exists so a mach-generation or header-overlay experiment can be run
+# against the real build harness without editing a committed Makefile, and so
+# the experiment is repeatable rather than a one-off. It is deliberately NOT
+# load-bearing: no component sets it, and the build does not depend on it.
+#
+# INERT WHEN UNSET, BY CONSTRUCTION. If EXTRA_INCLUDES is empty or absent the
+# loop body never executes and $out is not touched, so the emitted command line
+# is byte-identical to the one this script produced before the block existed.
+# Verified by diffing the emitted command line with the variable set and unset.
+# Keep it that way: if you ever make this conditional, merging, or
+# reordering, you have converted a measurement tool into a behaviour change.
+
+# Some -I arguments point at a tree that already provides the xnu-generation
+# mach headers. The clearest case is the doubled-path Makefile bug
+# (-I${ROOT_BINARY_DIR}${ROOT_SOURCE_DIR}/...), which resolves to
+# $ROOT_BINARY_DIR/Users/max/Projects/ravynos/Kernel/xnu/EXPORT_HDRS/osfmk --
+# a real directory whose mach/message.h:629 does define mach_msg_aux_header_t.
+# Force-including the shim there produced
+#   ravynos-mach-compat.h:58:36: error: typedef redefinition with different types
+# so let the shim step aside whenever a reachable mach tree already has it.
+mach_has_aux=no
+for d in $mach_roots; do
+    if [ -f "$d/mach/message.h" ] &&
+       grep -q mach_msg_aux_header_t "$d/mach/message.h" 2>/dev/null; then
+        mach_has_aux=yes
+        break
+    fi
+done
+
+# Force-include the mach compat shim when build-libraries.sh has verified the
+# SDK's mach/message.h is missing mach_msg_aux_header_t (it is one xnu
+# generation older than Kernel/xnu/libsyscall expects). Gated by an env flag
+# rather than a preprocessor guard because it declares a struct, and a struct
+# cannot be conditionally removed if some other mach tree did define it.
+#
+# Not for assembler runs: the shim pulls in <stdint.h> and
+# <mach/mach_types.h>, and under -x assembler-with-cpp the C declarations in
+# sys/_types/_int8_t.h are not valid assembly. Doing so broke every .s file in
+# libsystem_platform with
+#   Kernel/xnu/bsd/sys/_types/_int8_t.h:30:16: error: unexpected token in
+#       argument list
+if [ "$assembler" = no ] && [ "$mach_has_aux" = no ] &&
+   [ -n "${RAVYN_COMPAT_MAC_AUX:-}" ] && [ -f "$RAVYN_COMPAT_MAC_AUX" ]; then
+    out="$out '-include' '$RAVYN_COMPAT_MAC_AUX'"
+fi
+
+# libc++'s <stdint.h> shim must be opened before any C <stdint.h>, or libc++'s
+# own cstdint aborts with
+#   cstdint:149:5: error: <cstdint> tried including <stdint.h> but didn't find
+#   libc++'s <stdint.h> header.
+# The mechanism, confirmed with clang -H on dyld's first failing TU: some
+# earlier header in the chain (sys/param.h, machine/*) opens the C
+# <stdint.h> first; cstdint's own `#include <stdint.h>` is then a no-op under
+# that header's guard, so _LIBCPP_STDINT_H is never defined and the #error
+# fires. Ordering flags cannot fix it -- the C header is already open. The
+# shim has to be force-included ahead of everything, which is the only
+# placement that works. Verified by compiling dyld3/Tracing.cpp: the cstdint
+# error disappears entirely and the -H trace shows the SDK's
+# c++/v1/stdint.h as the first stdint.h opened.
+# NOT applied to assembler inputs. A .s file carries no preprocessor of its own
+# unless -x assembler-with-cpp is given, so force-including a C header there
+# makes the assembler read C text and fail with "invalid register name" and
+# "expected an op-mask register" -- which is what happened on the first attempt.
+asminput=no
+for a in "$@"; do
+    case "$a" in
+        *.s|*.S) asminput=yes ;;
+    esac
+done
+
+# Gated to non-assembler runs, mirroring the guard the stdint.h/stddef.h
+# force-includes above already use. Without the gate this fires on
+# '-x assembler-with-cpp' and breaks the build with
+#   clang: error: cannot specify -o when generating multiple output files
+# which is a harness failure and tells you nothing about whatever you were
+# measuring. That is the whole reason the gate exists.
+if [ "$assembler" = no ] && [ "$asminput" = no ]; then
+    for i in ${EXTRA_INCLUDES:-}; do
+        out="$out '$i'"
+    done
+fi
+# ONLY when libc++ is actually in use. Unconditionally forcing this broke
+# liblaunch and libsystem_info, whose builds do not put the SDK's c++/v1 on the
+# include path, so libc++'s own stdint.h could not find __config:
+#   <SDK>/usr/include/c++/v1/stdint.h:106:10: error: '__config' file not found
+#         with <angled> include; use "quotes"
+# A component that never includes a libc++ header must not be given one.
+#
+# The shim FAMILY, not just stdint.h, and for the same reason stdint.h needed
+# force-including. libc++'s c++/v1/<name>.h is a shim that forwards to the C
+# header and only then defines _LIBCPP_<NAME>_H. It declines to define that
+# guard whenever the C header was already opened, because its first branch is
+#   #if defined(__need_ptrdiff_t) || defined(__need_size_t) || ...
+#   #  include_next <stddef.h>
+#   #elif !defined(_LIBCPP_STDDEF_H)
+# so when any earlier header pulled in the C <stddef.h> first -- which sys/
+# param.h and the machine/* headers do -- the guard is never set, and
+# cstddef's own `#include <stddef.h>` is a no-op under the C header's guard.
+# cstddef then fires:
+#   cstddef:46:5: error: <cstddef> tried including <stddef.h> but didn't find
+#       libc++'s <stddef.h> header.
+# Force-including the shim ahead of everything makes the #elif branch run
+# first, so the guard is set before any C header can pre-empt it.
+#
+# MEASURED, each step on the real command bmake echoes (dyld, 2026-09-27).
+# Tracing.cpp is the TU that exposed the class, Closure.cpp the next one:
+#
+#   shims force-included                 Tracing.cpp   Closure.cpp
+#   stdint.h only (the previous state)        20            n/a
+#   + stddef.h                                7            n/a
+#   the 8 obvious ones                       0           fails at cstdio
+#   all 21 libc++ shims, alphabetical         -            20  (worse)
+#   17 derived shims, alphabetical            -             5  (worse)
+#   17 derived shims, stddef/stdint FIRST     -            0   Mach-O produced
+#
+# Two conclusions, both of which cost a round to learn and should not be
+# re-derived: the SET must not be a hand list (that is how stdio.h was missed),
+# and the ORDER must put stddef.h and stdint.h first.
+#
+# Reordering c++/v1 ahead of the shadowing -I was tried FIRST and does NOT work:
+# it drops 20 -> 7 but cstddef:46 still fires, because the failure is this
+# guard collision, not the search order. Do not spend that again.
+# The shim list. stddef.h and stdint.h are named explicitly and come FIRST;
+# every other shim is DISCOVERED from libc++'s own cxxx wrappers rather than
+# hand-listed, because a hand list is how stdio.h got missed and the build then
+# failed on the very next header (cstdio:104).
+#
+# The order is load-bearing and was measured, not guessed: emitting the same
+# 17 shims in plain alphabetical order FAILS, because ctype.h, float.h and
+# math.h sort ahead of stddef.h and drag the C headers in behind them before
+# stddef.h has been opened. On dyld3/Closure.cpp:
+#
+#   17 derived shims, stddef/stdint FIRST   0 errors, Mach-O produced
+#   17 derived shims, alphabetical          5 errors (cstddef, cstdint)
+#   all 21 libc++ shims, alphabetical      20 errors (worse than either)
+#
+# The 21-shim set is a superset and makes things WORSE, which is why this list
+# is the shims libc++'s cxxx wrappers reference and not "every *.h that
+# mentions include_next". stdatomic.h in particular is known to collide with
+# Kernel/xnu/libkern/os/atomic.h over the identifier atomic_store_explicit.
+#
+# Cached under $ROOT_BINARY_DIR/Tools keyed on the c++/v1 path, so the scan runs
+# once per SDK rather than once per translation unit. The cache is keyed on the
+# cxxx wrappers' mtimes, NOT on this file: editing this list will not
+# invalidate it, exactly like overlay_for's stamp. See the cache note in
+# LIBSYSTEM-KERNEL-BUILD-NOTES.md before changing the shim logic.
+libcxx_shim_list() {
+    v1="$1"
+    tools="${ROOT_BINARY_DIR:-/tmp}/Tools"
+    cache="$tools/libcxx-shims-$(printf '%s' "$v1" | cksum | cut -d' ' -f1)"
+    stamp="$cache.stamp"
+    # Same self-invalidation as overlay_for: this script newer than the stamp,
+    # so a change to the shim logic below cannot be silently ignored by a cache
+    # keyed only on libc++'s own files.
+    if [ ! -f "$stamp" ] || [ "$0" -nt "$stamp" ] || \
+       [ -n "$(find "$v1" -maxdepth 1 -name 'c*' -newer "$stamp" -print -quit 2>/dev/null)" ]; then
+        mkdir -p "$tools" || return 1
+        rm -f "$cache" || return 1
+        {
+            printf '%s\n' stddef.h stdint.h
+            ( cd "$v1" && grep -hoE '#include <[a-z0-9_]+\.h>' c* 2>/dev/null ) |
+                sed 's/#include <//; s/>//' | sort -u |
+                while read -r h; do
+                    case "$h" in stddef.h|stdint.h) continue ;; esac
+                    [ -f "$v1/$h" ] || continue
+                    grep -q include_next "$v1/$h" 2>/dev/null || continue
+                    printf '%s\n' "$h"
+                done
+        } > "$cache" || return 1
+        : > "$stamp" || return 1
+    fi
+    cat "$cache" 2>/dev/null
+}
+
+# PER-COMPONENT OPT-IN, and this is the whole reason it is a -D on the
+# component's own compile line rather than an environment variable or an
+# unconditional rule.
+#
+# MEASURED (dyld vs libdispatch, both on real builds, both counting ERROR
+# SIGNATURES and not error counts -- see BOOT-PLAN.md sec. 6.6 for why a
+# matching count is not agreement):
+#
+#   component   with shim family   without
+#   dyld        16 objects         8 objects
+#   libdispatch 19 libc++ errors   0 libc++ errors (fails on a different,
+#                                  pre-existing stdint.h fault)
+#
+# No subset of the family separates them. stddef.h is REQUIRED by dyld and
+# HARMFUL to libdispatch on its own; the family is load-bearing as a set.
+# So the two components need opposite settings and a global rule cannot
+# serve both. Hence: the component asks, by name, on its own command line.
+#
+# Why -D and not an env var: EXTRA_DEFINES does not survive build-libraries.sh
+# into the bmake sub-makes, and the whole failure mode here is a flag that
+# looks set but never reaches the compiler. A -D written in the component's
+# CFLAGS travels ON THE COMPILER COMMAND LINE, which is the one channel
+# demonstrated to reach the sub-makes. It is also self-documenting at the
+# point of use: a reader of Libraries/dyld/Makefile sees why dyld needs this
+# next to the code that needs it.
+#
+# Default is OFF, so a component that has not asked is byte-identical to a
+# wrapper with no shim logic at all. That is the safe direction for a script
+# on every component's path.
+shim_optin=no
+for a in "$@"; do
+    case "$a" in
+        -DRAVYN_LIBCXX_SHIM_FORCE_INCLUDE=1) shim_optin=yes ;;
+    esac
+done
+
+if [ "$asminput" = no ] && [ "$assembler" = no ] && [ "$shim_optin" = yes ]; then
+    # The __cplusplus gate is deliberately UNCHANGED and still tight. It
+    # matches the language word after -x, not a bare -x, so:
+    #   -x objective-c          -> no   (byte-identical argv)
+    #   -x assembler-with-cpp   -> no   (also excluded by $assembler above)
+    #   -x c++                  -> yes
+    # A bare -x must not trigger it. That bug was found and fixed once; this
+    # comment and the inertness test below are what keep it fixed.
+    uses_cxx=no
+    for a in "$@"; do
+        case "$a" in
+            *.cpp|*.cxx|*.CC|*.mm) uses_cxx=yes ;;
+            -x) _xmode=yes ;;
+            c++|c++-header|objective-c++) uses_cxx=yes ;;
+        esac
+    done
+    if [ "$uses_cxx" = yes ]; then
+        for s_root in $sdk_roots; do
+            if [ -d "$s_root/usr/include/c++/v1" ] && \
+               [ -f "$s_root/usr/include/c++/v1/stdint.h" ]; then
+                # This trigger condition is also UNCHANGED (c++/v1 present
+                # AND stdint.h present), so a component that opts in but has
+                # no libc++ emits nothing at all.
+                for shim in $(libcxx_shim_list "$s_root/usr/include/c++/v1"); do
+                    [ -f "$s_root/usr/include/c++/v1/$shim" ] || continue
+                    out="$out '-include' '$s_root/usr/include/c++/v1/$shim'"
+                done
+                break
+            fi
+        done
+    fi
+fi
+
+# eventlink_port_pair_t is gated SEPARATELY and unconditionally. The shim above
+# is skipped whenever some reachable mach tree already supplies
+# mach_msg_aux_header_t -- and libsystem_kernel has such a tree on its CFLAGS
+# (Kernel/xnu/BUILD/dst/.../PrivateHeaders/mach declares it). Gating the
+# eventlink typedef on the same flag silently disabled it.
+EVENTLINK_COMPAT="${RAVYN_COMPAT_EVENTLINK:-$HERE/ravynos-eventlink-compat.h}"
+if [ "$assembler" = no ] && [ -f "$EVENTLINK_COMPAT" ]; then
+    out="$out '-include' '$EVENTLINK_COMPAT'"
+fi
+
+# The SDK's kernel headers live in usr/local/include/kernel, but the
+# per-project Makefiles only ever add usr/local/include. That breaks the
+# `#include_next <os/object.h>` at the bottom of
+# Kernel/xnu/libkern/os/object.h, which has to land on the *libdispatch*
+# version of that header:
+#   Kernel/xnu/libkern/os/object.h:209:15: fatal error: 'os/object.h' file not
+#       found
+# libsystem_asl, libxpc and libsystem_notify carry the right -I by hand; add it
+# for everything, derived from whichever sysroot this invocation names.
+for s in $sdk_roots; do
+    [ -d "$s/usr/local/include/kernel" ] && out="$out '-I$s/usr/local/include/kernel'"
+done
+
+# Unconditional, and last. The private overlay carries os/log.h and
+# os/assumes.h, which end in #include_next <os/log.h> and
+# #include_next <os/assumes.h>; those need a LATER directory that actually has
+# one, or they die with
+#   inc-*/os/log.h:53: fatal error: 'os/log.h' file not found
+# (seen in libsystem_blocks and libsystem_asl). This is the same fix applied
+# by hand to libsystem_c's libFortifySource and vInode32 Makefiles,
+# generalised to every consumer of the overlay.
+#
+# Deliberately unconditional and deliberately derived from a value the wrapper
+# can trust rather than from an exported variable that may be empty in a
+# sub-make: the $HERE incident, where a path silently resolved to nothing and
+# an include was silently not added, is exactly this failure mode. A guard
+# that cannot be proven active is the same as no guard.
+LIBKERN_INC="${ROOT_SOURCE_DIR:-$HERE/../..}/Kernel/xnu/libkern"
+if [ -d "$LIBKERN_INC" ]; then
+    out="$out '-I$LIBKERN_INC'"
+fi
+
+
+# The C++ standard library is deliberately NOT reordered here. Tried and
+# reverted: adding -nostdinc++ and re-adding the directory as -isystem stops
+# libc++'s string.h shadowing the C one, but libc++ then hard-errors from
+# c++/v1/cstring:66 --
+#   <cstring> tried including <string.h> but didn't find libc++'s <string.h>
+#       header. This usually means that your header search paths are not
+#       configured properly.
+# The C++ headers must precede the C library by libc++'s own contract, so
+# this is not a flag-ordering problem. dyld's remaining failure (in .cpp TUs,
+# libsystem_c/include/string.h reached via libc++'s #include_next without
+# Availability.h in scope) needs a decision in Libraries/dyld's Makefile or in
+# the SDK's own header ordering -- not something the wrapper can impose.
+
+if [ "$inject" = yes ]; then
+    # clang implicitly adds -lSystem to every Darwin dylib link, which resolves
+    # to the placeholder libSystem.B.dylib in the SDK and deadlocks the build
+    # (the real libSystem is assembled *from* these very libraries).
+    # -nodefaultlibs suppresses that; the top-level Libsystem Makefile already
+    # relies on it for the same reason. ld64 additionally refuses
+    # -undefined dynamic_lookup for shared-cache-eligible dylibs.
+    out="$out '-nodefaultlibs'"
+    out="$out '-undefined' 'dynamic_lookup'"
+    out="$out '-Wl,-not_for_dyld_shared_cache'"
+fi
+
+# shellcheck disable=SC2086
+eval "set -- $out"
+
+# RAVYN_CC_TRACE: append the FINAL argument list -- the one exec is about to
+# run, after `set -- $out` has rebuilt it -- to the named file. Inert unless the
+# variable names a writable path.
+#
+# Why this exists at all, and why it is here rather than in a logging shim:
+# the mach-generation probe's treatment arm has twice come out identical to its
+# control because the treatment flag never reached the compiler -- once because
+# EXTRA_INCLUDES did not survive build-libraries.sh, once because the probe TU
+# included no mach header at all. A wrapper-level unit test cannot see either,
+# because it calls the wrapper directly. The only trustworthy evidence is the
+# real invocation, out of a real build.
+#
+# It has to be logged HERE, not by substituting a logging compiler in front of
+# this script: a shim placed at $CC *replaces* isysroot-cc, so it never runs
+# overlay_for(), never converts --sysroot, and never injects the force-includes
+# -- what it logs is not what the build does. See
+# LIBSYSTEM-KERNEL-BUILD-NOTES.md sec. 19 ("do not instrument by
+# substitution").
+if [ -n "${RAVYN_CC_TRACE:-}" ]; then
+    {
+        printf '=== invocation ===\n'
+        for t in "$@"; do printf '%s\n' "$t"; done
+    } >> "$RAVYN_CC_TRACE" 2>/dev/null || :
+fi
+
+exec "$REAL_CC" "$@"

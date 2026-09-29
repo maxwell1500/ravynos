@@ -303,21 +303,8 @@ PE_current_console( PE_Video * info )
 void
 PE_display_icon( __unused unsigned int flags, __unused const char * name )
 {
-	if (norootIcon_lzss && norootClut_lzss) {
-		uint32_t width  = norootIcon_lzss->width;
-		uint32_t height = norootIcon_lzss->height;
-		uint32_t x = ((PE_state.video.v_width  - width) / 2);
-		uint32_t y = ((PE_state.video.v_height - height) / 2) + norootIcon_lzss->y_offset_from_center;
-
-		vc_display_lzss_icon(x, y, width, height,
-		    &norootIcon_lzss->data[0],
-		    norootIcon_lzss->data_size,
-		    norootClut_lzss);
-	} else if (default_noroot_data) {
-		vc_display_icon( &default_noroot, default_noroot_data );
-	} else {
-		printf("ERROR: No data found for noroot icon!\n");
-	}
+	/* No-op: in serial/headless mode or unmapped framebuffer, avoid blitting */
+	return;
 }
 
 boolean_t

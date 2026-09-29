@@ -45,6 +45,7 @@
 #include <kern/syscall_sw.h>
 #include <ipc/ipc_port.h>
 #include <vm/vm_kern.h>
+#include <vm/vm_map_xnu.h>
 #include <vm/pmap.h>
 
 #include <i386/cpu_number.h>
@@ -264,7 +265,25 @@ thread_set_child(thread_t child, int pid)
 
 		iss64 = USER_REGS64(child);
 
-		iss64->rax = pid;
+		/*
+		 * ravynOS: returns 0, not `pid`. Upstream writes the child's own
+		 * pid into the return register; the kernel this project has been
+		 * booting writes a literal 0 in both the 64-bit and 32-bit paths
+		 * (`movl $0x0, 0x3c(%rax)` and `movq $0x0, 0x88(%rax)`), i.e. the
+		 * `pid` argument is discarded entirely.
+		 *
+		 * Proven, not inferred: recompiling this file with only these two
+		 * lines changed makes every other function in bsd_i386.o match
+		 * the stale object byte-for-byte, leaving differences confined to
+		 * the two syscall mungers (a separate, still-unreconstructed
+		 * change - see BOOT-PLAN 12.5a-ii).
+		 *
+		 * A child reaching this path therefore observes 0, as after a
+		 * successful fork(), rather than its pid. That is what the
+		 * exec-shadow proc machinery needs; the original rationale was not
+		 * recorded in the tree and was recovered from the linked object.
+		 */
+		iss64->rax = 0;
 		iss64->rdx = 1;
 		iss64->isf.rflags &= ~EFL_CF;
 	} else {
@@ -272,7 +291,7 @@ thread_set_child(thread_t child, int pid)
 
 		iss32 = USER_REGS32(child);
 
-		iss32->eax = pid;
+		iss32->eax = 0;	/* see the ravynOS note above */
 		iss32->edx = 1;
 		iss32->efl &= ~EFL_CF;
 	}
@@ -809,6 +828,17 @@ thread_setentrypoint(thread_t thread, mach_vm_address_t entry)
 		iss32 = USER_REGS32(thread);
 
 		iss32->eip = CAST_DOWN_EXPLICIT(unsigned int, entry);
+	}
+	if (no_shared_cr3) {
+		/* The return trampoline loads cpu_ucr3, which no context
+		 * switch may have refreshed for this task (exec morphs the
+		 * current thread in place). Point it at the full pmap so
+		 * user-mode entry points stay mapped.
+		 */
+		pmap_t pmap = thread->map->pmap;
+		int my_cpu = cpu_number();
+		cpu_datap(my_cpu)->cpu_ucr3 = pmap->pm_cr3;
+		cpu_shadowp(my_cpu)->cpu_ucr3 = pmap->pm_cr3;
 	}
 }
 

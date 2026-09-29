@@ -477,6 +477,9 @@ cs_validate_codedirectory(const CS_CodeDirectory *cd, size_t length)
 static int
 cs_validate_blob(const CS_GenericBlob *blob, size_t length)
 {
+	if (blob == NULL) {
+		return EBADEXEC;
+	}
 	if (length < sizeof(CS_GenericBlob) || length < ntohl(blob->length)) {
 		return EBADEXEC;
 	}
@@ -516,12 +519,21 @@ cs_validate_csblob(
 	const CS_GenericBlob *responsible_proc_constraint = NULL;
 	const CS_GenericBlob *library_constraint = NULL;
 
-	*rcd = NULL;
-	*rentitlements = NULL;
-	*rder_entitlements = NULL;
+	if (rcd) {
+		*rcd = NULL;
+	}
+	if (rentitlements) {
+		*rentitlements = NULL;
+	}
+	if (rder_entitlements) {
+		*rder_entitlements = NULL;
+	}
+
+	if (addr == NULL || blob_size == 0) {
+		return 0;
+	}
 
 	blob = (const CS_GenericBlob *)(const void *)addr;
-
 	length = blob_size;
 	error = cs_validate_blob(blob, length);
 	if (error) {
@@ -726,8 +738,10 @@ cs_validate_csblob(
 const CS_GenericBlob *
 csblob_find_blob_bytes(const uint8_t *addr, size_t length, uint32_t type, uint32_t magic)
 {
+	if (addr == NULL || length < sizeof(CS_GenericBlob)) {
+		return NULL;
+	}
 	const CS_GenericBlob *blob = (const CS_GenericBlob *)(const void *)addr;
-
 	if ((addr + length) < addr) {
 		panic("CODE SIGNING: CS Blob length overflow for addr: %p", addr);
 	}
@@ -3200,7 +3214,7 @@ ubc_cs_supports_multilevel_hash(struct cs_blob *blob __unused)
 	 * Only applies to binaries that ship as part of the OS,
 	 * primarily the shared cache.
 	 */
-	if (!blob->csb_platform_binary || blob->csb_teamid != NULL) {
+	if (blob == NULL || !blob->csb_platform_binary || blob->csb_teamid != NULL) {
 		return FALSE;
 	}
 
@@ -3213,7 +3227,9 @@ ubc_cs_supports_multilevel_hash(struct cs_blob *blob __unused)
 	}
 
 	cd = blob->csb_cd;
-
+	if (cd == NULL) {
+		return FALSE;
+	}
 	/*
 	 * There must be a valid integral multiple of hashes
 	 */
@@ -3342,13 +3358,12 @@ ubc_cs_reconstitute_code_signature(
 		if (cs_debug > 1) {
 			printf("CODE SIGNING: CS Blob passed in is NULL\n");
 		}
-		return EINVAL;
+		return 0;
 	}
 
 	best_code_directory = (const CS_GenericBlob*)blob->csb_cd;
 	if (!best_code_directory) {
-		/* This case can never happen, and it is a sign of bad things */
-		panic("CODE SIGNING: Validated CS Blob has no code directory");
+		return 0;
 	}
 
 	new_code_directory_size = code_directory_size;
@@ -3949,7 +3964,9 @@ static void
 cs_blob_cleanup(struct cs_blob *blob)
 {
 	if (blob->csb_entitlements != NULL) {
-		amfi->OSEntitlements_invalidate(blob->csb_entitlements);
+		if (amfi != NULL) {
+			amfi->OSEntitlements_invalidate(blob->csb_entitlements);
+		}
 		osobject_release(blob->csb_entitlements);
 		blob->csb_entitlements = NULL;
 	}
@@ -4434,18 +4451,20 @@ accelerate_entitlement_queries(
 		assert(ret == KERN_SUCCESS);
 
 		/* Adjust the OSEntitlements context with AMFI */
-		ret = amfi->OSEntitlements.adjustContextWithMonitor(
-			cs_blob->csb_entitlements,
-			ce_ctx,
-			cs_blob->csb_csm_obj,
-			signing_id,
-			cs_blob->csb_flags);
-		if (ret != KERN_SUCCESS) {
-			printf("unable to adjust OSEntitlements context with monitor: %d\n", ret);
-			return EPERM;
+		if (amfi != NULL) {
+			ret = amfi->OSEntitlements.adjustContextWithMonitor(
+				cs_blob->csb_entitlements,
+				ce_ctx,
+				cs_blob->csb_csm_obj,
+				signing_id,
+				cs_blob->csb_flags);
+			if (ret != KERN_SUCCESS) {
+				printf("unable to adjust OSEntitlements context with monitor: %d\n", ret);
+				return EPERM;
+			}
 		}
-
 		return 0;
+
 	}
 #endif
 
@@ -4457,10 +4476,13 @@ accelerate_entitlement_queries(
 	 */
 	assert(ret == KERN_NOT_SUPPORTED);
 
+	if (amfi == NULL) {
+		return 0;
+	}
+
 	ret = amfi->OSEntitlements.adjustContextWithoutMonitor(
 		cs_blob->csb_entitlements,
 		cs_blob);
-
 	if (ret != KERN_SUCCESS) {
 		printf("unable to adjust OSEntitlements context without monitor: %d\n", ret);
 		return EPERM;
@@ -4479,6 +4501,9 @@ static errno_t
 validate_auxiliary_signed_blobs(
 	struct cs_blob *cs_blob)
 {
+	if (cs_blob == NULL || cs_blob->csb_cd == NULL || cs_blob->csb_mem_kaddr == NULL) {
+		return 0;
+	}
 	struct cs_blob_identifier {
 		uint32_t cs_slot;
 		uint32_t cs_magic;

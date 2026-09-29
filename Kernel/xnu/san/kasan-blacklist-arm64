@@ -1,0 +1,130 @@
+# This file declares the list of source files that should be exempt from
+# AddressSanitizer instrumentation. Usually, this is because a file is used by
+# the AddressSanitizer runtime itself, or because the code executes before
+# the runtime has been initialized.
+
+[.*]
+
+# Blanket ignore non-sanitized functions
+fun:__nosan_*
+
+# Try really hard to avoid panicing while debugging
+src:/Users/max/Projects/ravynos/Kernel/xnu/osfmk/kdp/*
+src:/Users/max/Projects/ravynos/Kernel/xnu/osfmk/kern/debug.c
+
+[kernel-hwaddress|address]
+
+# Exclude linker sets
+type:struct linker_set_entry
+type:linker_set_entry
+type:struct startup_entry
+type:startup_entry
+type:struct kalloc_type_view
+type:struct kernel_brk_descriptor
+type:kernel_brk_descriptor
+
+# Exclude per-cpu data structures the assembly accesses
+type:vm_statistics64
+type:struct vm_statistics64
+type:vm_statistics64_data_t
+type:struct processor
+type:processor
+
+# Exclude KASan itself
+src:/Users/max/Projects/ravynos/Kernel/xnu/san/memory/kasan.c
+src:/Users/max/Projects/ravynos/Kernel/xnu/san/memory/kasan-fakestack.c
+src:/Users/max/Projects/ravynos/Kernel/xnu/san/memory/kasan-x86_64.c
+src:/Users/max/Projects/ravynos/Kernel/xnu/san/memory/kasan-memintrinsics.c
+src:/Users/max/Projects/ravynos/Kernel/xnu/san/memory/kasan_dynamic_blacklist.c
+src:/Users/max/Projects/ravynos/Kernel/xnu/san/memory/kasan-classic.c
+src:/Users/max/Projects/ravynos/Kernel/xnu/san/memory/kasan-tbi.c
+src:/Users/max/Projects/ravynos/Kernel/xnu/san/memory/kasan-helper.c
+src:/Users/max/Projects/ravynos/Kernel/xnu/san/memory/kasan-report.c
+
+# Exclude other sanitizers
+src:/Users/max/Projects/ravynos/Kernel/xnu/san/coverage/kcov.c
+src:/Users/max/Projects/ravynos/Kernel/xnu/san/coverage/kcov_ksancov.c
+src:/Users/max/Projects/ravynos/Kernel/xnu/san/coverage/kcov_stksz.c
+
+# Exclude dtrace function that does weird stack manipulations
+fun:fbt_perfCallback
+
+# Exclude leak detection code that reads all memory
+fun:_ZL18IOTrackingLeakScanPv
+
+# Exclude KASAN dependencies
+src:/Users/max/Projects/ravynos/Kernel/xnu/osfmk/kern/btlog.c
+# XXX: could this be relaxed since fakestack is reentrant?
+src:/Users/max/Projects/ravynos/Kernel/xnu/osfmk/kern/zalloc.c
+[.*]
+src:/Users/max/Projects/ravynos/Kernel/xnu/san/memory/ubsan.c
+src:/Users/max/Projects/ravynos/Kernel/xnu/san/memory/ubsan_log.c
+
+[bounds]
+src:/Users/max/Projects/ravynos/Kernel/xnu/osfmk/corecrypto/*
+
+[alignment]
+
+src:/Users/max/Projects/ravynos/Kernel/xnu/libsa/bootstrap.cpp
+src:/Users/max/Projects/ravynos/Kernel/xnu/bsd/net/necp_client.c
+src:/Users/max/Projects/ravynos/Kernel/xnu/pexpert/arm/pe_identify_machine.c
+
+[object-size]
+src:/Users/max/Projects/ravynos/Kernel/xnu/osfmk/i386/locks_i386.c
+
+
+[signed-integer-overflow]
+
+# rdar://77997115&rdar://78024928
+src:/Users/max/Projects/ravynos/Kernel/xnu/osfmk/console/video_console.c
+
+# rdar://77999724
+src:/Users/max/Projects/ravynos/Kernel/xnu/osfmk/kern/ledger.c
+
+# rdar://78030612
+fun:memorystatus_cmd_get_memlimit_excess_np
+
+# rdar://79501524
+src:/Users/max/Projects/ravynos/Kernel/xnu/osfmk/kern/clock.c
+
+# rdar://80254468
+fun:wait4_nocancel
+
+# rdar://79446799 (only the biggest offender, tcp_xmit_timer)
+fun:tcp_xmit_timer
+# ARM64 specific blacklist
+
+[kernel-hwaddress|address]
+
+# Exclude KASan runtime
+src:/Users/max/Projects/ravynos/Kernel/xnu/san/memory/kasan-arm64.c
+src:/Users/max/Projects/ravynos/Kernel/xnu/san/memory/kasan-tbi.c
+src:/Users/max/Projects/ravynos/Kernel/xnu/san/memory/kasan-classic.c
+src:/Users/max/Projects/ravynos/Kernel/xnu/san/memory/kasan-helper.c
+src:/Users/max/Projects/ravynos/Kernel/xnu/osfmk/arm/machine_routines_common.c
+
+# These use a local variable to work out which stack we're on, but can end up with
+# a fakestack allocation.
+fun:ml_at_interrupt_context
+fun:ml_stack_remaining
+fun:ml_stack_base
+fun:ml_stack_size
+
+# These are required to fixup the kernelcache, which needs to happen before KASAN
+# initialization on SPTM systems.
+fun:arm_slide_rebase_and_sign_image
+fun:kernel_collection_adjust_fileset_entry_addrs
+fun:kernel_collection_adjust_mh_addrs
+fun:PE_set_kc_header
+fun:phystokv
+
+# C function that initializes KASAN on SPTM systems.
+fun:arm_init_kasan
+
+[kernel-hwaddress]
+# TBI specific
+src:/Users/max/Projects/ravynos/Kernel/xnu/osfmk/arm/model_dep.c
+src:/Users/max/Projects/ravynos/Kernel/xnu/osfmk/kern/backtrace.c
+src:/Users/max/Projects/ravynos/Kernel/xnu/osfmk/arm64/cpu.c
+src:/Users/max/Projects/ravynos/Kernel/xnu/osfmk/kern/ast.c
+src:/Users/max/Projects/ravynos/Kernel/xnu/osfmk/arm64/pcb.c

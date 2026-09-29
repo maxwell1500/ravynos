@@ -96,6 +96,7 @@
 #include <os/hash.h>
 #include <kern/zalloc_internal.h>
 #include <libkern/crypto/rand.h>
+#include <pexpert/pexpert.h>
 
 /*
  *	Variables exported by this module.
@@ -914,7 +915,13 @@ kmem_alloc_guard_internal(
 	}
 	kmem_apply_security_policy(map, flags, guard, map_size, mask, &vmk_flags,
 	    false);
-	printf("kmem: kma_flags=0x%x startup_phase=%d map==kernel_map=%d range_id=%d\n", flags, startup_phase, map == kernel_map, vmk_flags.vmkf_range_id);
+	static int quiet_boot = -1;
+	if (quiet_boot < 0) {
+		quiet_boot = PE_parse_boot_argn("quiet_boot", NULL, 0);
+	}
+	if (!quiet_boot) {
+		printf("kmem: kma_flags=0x%x startup_phase=%d map==kernel_map=%d range_id=%d\n", flags, startup_phase, map == kernel_map, vmk_flags.vmkf_range_id);
+	}
 
 	kmr.kmr_return = vm_map_find_space(map, 0, map_size, mask,
 	    vmk_flags, &entry);
@@ -4197,7 +4204,6 @@ kmem_init(
 #endif
 
 	kmem_set_user_wire_limits();
-	kmem_range_init();
 }
 
 

@@ -81,6 +81,30 @@ int
 main(int argc, char *argv[])
 {
 	int ch;
+	if (getpid() == 1) {
+		int cfd = open("/dev/console", O_WRONLY | O_NOCTTY);
+		if (cfd < 0) {
+			cfd = open("/dev/console", O_RDWR | O_NOCTTY);
+		}
+		if (cfd >= 0) {
+			dup2(cfd, 1);
+			dup2(cfd, 2);
+		}
+		int rfd = open("/hello.txt", O_RDONLY);
+		if (rfd >= 0) {
+			char buf[512];
+			ssize_t n;
+			while ((n = read(rfd, buf, sizeof(buf))) > 0) {
+				write(1, buf, (size_t)n);
+			}
+			close(rfd);
+		} else {
+			const char *msg = "cat: open /hello.txt failed\n";
+			write(1, msg, strlen(msg));
+		}
+		fsync(1);
+		exit(0);
+	}
 
 	setlocale(LC_CTYPE, "");
 

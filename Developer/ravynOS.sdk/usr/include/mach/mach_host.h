@@ -151,6 +151,39 @@ kern_return_t host_get_io_master
 	io_master_t *io_master
 );
 
+/* Routine host_get_io_main
+ *
+ * SOURCED verbatim from the mach_host.h that this build's own mig run
+ * generates from Kernel/xnu/osfmk/mach/mach_host.defs, i.e.
+ * Libraries/Libsystem/libsystem_kernel/mig_hdr/include/mach/mach_host.h:140-150.
+ * ADDITIVE: host_get_io_master above is left exactly as it was.
+ *
+ * This is the SAME Mach trap under the newer name, not a second routine, and
+ * that is measured rather than assumed. Three independent artifacts agree:
+ *   this header          { "host_get_io_master", 205 }        (line 1267)
+ *   generated impl       __DeclareSendRpc(205, "host_get_io_main")
+ *                        (mach_hostUser.c:1093, Routine comment at :1025)
+ * and the two message types are identical apart from the field name:
+ *   __Request__host_get_io_master_t  { mach_msg_header_t Head; }
+ *   __Request__host_get_io_main_t    { mach_msg_header_t Head; }
+ *   __Reply__host_get_io_master_t    { Head; msgh_body;
+ *                                      mach_msg_port_descriptor_t io_master; }
+ *   __Reply__host_get_io_main_t      { Head; msgh_body;
+ *                                      mach_msg_port_descriptor_t io_main;   }
+ * So this declaration cannot route anywhere the existing one does not already
+ * route. See tools/bootlab/LIBSYSTEM-KERNEL-BUILD-NOTES.md sec. 22.
+ */
+#ifdef	mig_external
+mig_external
+#else
+extern
+#endif	/* mig_external */
+kern_return_t host_get_io_main
+(
+	host_t host,
+	io_main_t *io_main
+);
+
 /* Routine host_get_clock_service */
 #ifdef	mig_external
 mig_external

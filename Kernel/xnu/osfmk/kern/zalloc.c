@@ -1110,12 +1110,20 @@ zone_meta_populate(vm_offset_t base, vm_size_t size)
 	struct zone_page_metadata *from = zone_meta_from_addr(base);
 	struct zone_page_metadata *to   = from + atop(size);
 	vm_offset_t page_addr = trunc_page(from);
+	static int quiet_boot = -1;
+	if (quiet_boot < 0) {
+		quiet_boot = PE_parse_boot_argn("quiet_boot", NULL, 0);
+	}
 
-	printf("zone_meta_populate: ENTER base=%p size=0x%lx from=%p to=%p page_addr=%p\n",
-	       (void *)base, size, (void *)from, (void *)to, (void *)page_addr);
+	if (!quiet_boot) {
+		printf("zone_meta_populate: ENTER base=%p size=0x%lx from=%p to=%p page_addr=%p\n",
+		       (void *)base, size, (void *)from, (void *)to, (void *)page_addr);
+	}
 
 	for (; page_addr < (vm_offset_t)to; page_addr += PAGE_SIZE) {
-		printf("zone_meta_populate: loop page_addr=%p phys=0x%llx\n", (void *)page_addr, (uint64_t)pmap_find_phys(kernel_pmap, page_addr));
+		if (!quiet_boot) {
+			printf("zone_meta_populate: loop page_addr=%p phys=0x%llx\n", (void *)page_addr, (uint64_t)pmap_find_phys(kernel_pmap, page_addr));
+		}
 #if !KASAN
 		/*
 		 * This can race with another thread doing a populate on the same metadata
@@ -1142,7 +1150,9 @@ zone_meta_populate(vm_offset_t base, vm_size_t size)
 				    VM_KERN_MEMORY_OSFMK);
 			}
 			zone_meta_unlock();
-			printf("zone_meta_populate: page_addr=%p ret=%d\n", (void *)page_addr, ret);
+			if (!quiet_boot) {
+				printf("zone_meta_populate: page_addr=%p ret=%d\n", (void *)page_addr, ret);
+			}
 			if (ret == KERN_SUCCESS) {
 				break;
 			}
@@ -1468,6 +1478,10 @@ zone_id_require_panic(zone_id_t zid, void *addr)
 void
 zone_require(zone_t zone, void *addr)
 {
+	if (__improbable(zone == ZONE_NULL || addr == NULL)) {
+		return;
+	}
+
 	vm_size_t esize = zone_elem_inner_size(zone);
 
 	if (from_zone_map(addr, esize) &&

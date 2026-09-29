@@ -1,0 +1,4 @@
+#define TAPI_VERSION 
+#define TAPI_VERSION_MAJOR 
+#define TAPI_VERSION_MINOR 
+#define TAPI_VERSION_PATCH 

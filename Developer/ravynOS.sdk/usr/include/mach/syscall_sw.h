@@ -185,5 +185,5 @@ kernel_trap(debug_control_port_for_pid,-96,3)
  * N.B: Trap #-100 is in use by IOTrap.s in the IOKit Framework
  * (iokit_user_client_trap)
  */
-#endif	/* _MACH_SYSCALL_SW_H_ */
 
+#endif	/* _MACH_SYSCALL_SW_H_ */

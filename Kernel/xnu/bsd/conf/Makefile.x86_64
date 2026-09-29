@@ -6,6 +6,8 @@
 fbt_x86.o_CFLAGS_ADD += $(CFLAGS_NOLTO_FLAG)
 # Taking the address of labels doesn't work with LTO (9524055)
 dtrace.o_CFLAGS_ADD += $(CFLAGS_NOLTO_FLAG)
+# Needs <i386/*> machine headers from osfmk
+ahci_block.o_CFLAGS_ADD += -I$(SRCROOT)/osfmk
 
 ######################################################################
 #END    Machine dependent Makefile fragment for x86_64

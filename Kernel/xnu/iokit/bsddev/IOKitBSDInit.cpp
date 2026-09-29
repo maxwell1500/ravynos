@@ -1564,7 +1564,7 @@ IOTaskHasStringEntitlement(task_t task, const char *entitlement, const char *val
 	}
 
 	/* Validate input arguments */
-	if (task == kernel_task || entitlement == NULL || value == NULL) {
+	if (task == kernel_task || entitlement == NULL || value == NULL || amfi == NULL) {
 		return false;
 	}
 	proc_t proc = (proc_t)get_bsdtask_info(task);
@@ -1595,7 +1595,7 @@ IOTaskHasEntitlement(task_t task, const char *entitlement)
 	}
 
 	/* Validate input arguments */
-	if (task == kernel_task || entitlement == NULL) {
+	if (task == kernel_task || entitlement == NULL || amfi == NULL) {
 		return false;
 	}
 	proc_t proc = (proc_t)get_bsdtask_info(task);
@@ -1628,7 +1628,7 @@ IOTaskGetEntitlement(task_t task, const char *entitlement)
 	}
 
 	/* Validate input arguments */
-	if (task == kernel_task || entitlement == NULL) {
+	if (task == kernel_task || entitlement == NULL || amfi == NULL) {
 		return NULL;
 	}
 	proc_t proc = (proc_t)get_bsdtask_info(task);
@@ -1658,6 +1658,9 @@ IOTaskGetEntitlement(task_t task, const char *entitlement)
 extern "C" boolean_t
 IOVnodeHasEntitlement(vnode_t vnode, int64_t off, const char *entitlement)
 {
+	if (amfi == NULL) {
+		return false;
+	}
 	OSObject * obj;
 	off_t offset = (off_t)off;
 
@@ -1672,6 +1675,9 @@ IOVnodeHasEntitlement(vnode_t vnode, int64_t off, const char *entitlement)
 extern "C" char *
 IOVnodeGetEntitlement(vnode_t vnode, int64_t off, const char *entitlement)
 {
+	if (amfi == NULL) {
+		return NULL;
+	}
 	OSObject *obj = NULL;
 	OSString *str = NULL;
 	size_t len;

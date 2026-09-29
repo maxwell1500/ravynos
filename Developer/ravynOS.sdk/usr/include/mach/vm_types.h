@@ -101,4 +101,40 @@ typedef struct {
 	uint64_t rtfupid; // process identifier
 	uint64_t rtftype; // fault type
 } vm_rtfault_record_t;
+
+/* SOURCED from Kernel/xnu/osfmk/mach/vm_types.h:106, verbatim, SPLIT.
+ *
+ * In tree that line is one multi-name typedef:
+ *     typedef mach_port_t  vm_map_t, vm_map_read_t, vm_map_inspect_t;
+ * and mach_types.defs:248 agrees: `type vm_map_read_t = mach_port_t`.
+ * Only vm_map_t is present in the SDK, so the other two names are added here
+ * under their own typedefs. Splitting a comma list into separate typedefs of
+ * the same underlying type is not a change of meaning -- the three names remain
+ * the same type, which is what mach_types.defs asserts independently.
+ *
+ * Needed by the mig-generated vm_map_internal.h and mach_vm_internal.h.
+ * See tools/bootlab/LIBSYSTEM-KERNEL-BUILD-NOTES.md sec. 33.
+ */
+typedef mach_port_t             vm_map_read_t;
+typedef mach_port_t             vm_map_inspect_t;
+
+
+/* SOURCED verbatim from Kernel/xnu/osfmk/mach/vm_types.h:156-159 and :216.
+ * Both are needed by the mig-generated mach_vm_internal.h.
+ *
+ * Layout cross-checked against the .defs that actually drives the MIG message
+ * on the wire, so neither is a guess that merely compiles:
+ *   vm_types.h:156   __enum_decl(mach_vm_range_flavor_t, uint32_t, {...})
+ *   mach_types.defs:584  type mach_vm_range_flavor_t = uint32_t;      AGREE
+ *   vm_types.h:216   typedef uint8_t *mach_vm_range_recipes_raw_t;
+ *   mach_types.defs:585  type mach_vm_range_recipes_raw_t = array[*:1024] of uint8_t;
+ * See tools/bootlab/LIBSYSTEM-KERNEL-BUILD-NOTES.md sec. 33.
+ */
+__enum_decl(mach_vm_range_flavor_t, uint32_t, {
+	MACH_VM_RANGE_FLAVOR_INVALID,
+	MACH_VM_RANGE_FLAVOR_V1,
+});
+
+typedef uint8_t                *mach_vm_range_recipes_raw_t;
+
 #endif  /* _MACH_VM_TYPES_H_ */

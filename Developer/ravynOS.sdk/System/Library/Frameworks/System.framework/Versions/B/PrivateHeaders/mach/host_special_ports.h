@@ -108,9 +108,35 @@
 #define HOST_SYSPOLICYD_PORT            (22 + HOST_MAX_SPECIAL_KERNEL_PORT)
 #define HOST_FILECOORDINATIOND_PORT     (23 + HOST_MAX_SPECIAL_KERNEL_PORT)
 #define HOST_FAIRPLAYD_PORT             (24 + HOST_MAX_SPECIAL_KERNEL_PORT)
+#define HOST_IOCOMPRESSIONSTATS_PORT    (25 + HOST_MAX_SPECIAL_KERNEL_PORT)
+#define HOST_MEMORY_ERROR_PORT          (26 + HOST_MAX_SPECIAL_KERNEL_PORT)
+#define HOST_MANAGEDAPPDISTD_PORT       (27 + HOST_MAX_SPECIAL_KERNEL_PORT)
+#define HOST_DOUBLEAGENTD_PORT          (28 + HOST_MAX_SPECIAL_KERNEL_PORT)
 
-#define HOST_MAX_SPECIAL_PORT           HOST_FAIRPLAYD_PORT
-/* MAX = last since rdar://35861175 */
+#define HOST_MAX_SPECIAL_PORT           HOST_DOUBLEAGENTD_PORT
+/* MAX = last since rdar://59872249 */
+
+/*
+ * SOURCED from Kernel/xnu/osfmk/mach/host_special_ports.h:111,112,113,114,116
+ * -- verbatim, not invented, and not a cross-generation bridge. This project
+ * builds and runs its own kernel, from Kernel/xnu at 394fe3eac3 "Transplant
+ * Darwin 24.0 (xnu-11215) kernel"; the banner in the built kernel is "Darwin
+ * Kernel Version 24.3.0". The in-tree header IS the ABI that kernel
+ * implements, so userspace agreeing with it is userspace matching its own
+ * kernel.
+ *
+ * Verified in the built kernel rather than argued from the source.
+ * kernel.development.unstripped, _host_set_special_port (0xffffff800024cd10):
+ *   ffffffff80024cd24  leal  -0x24(%r15), %ecx    ; ecx = id - 36
+ *   ffffffff80024cd28  cmpl  $-0x1c, %ecx        ; unsigned compare vs -28
+ *   ffffffff80024cd2b  setb  %cl
+ * accepts exactly id in [8, 35] -- 8 is HOST_MAX_SPECIAL_KERNEL_PORT + 1 and
+ * 35 is 28 + HOST_MAX_SPECIAL_KERNEL_PORT == HOST_DOUBLEAGENTD_PORT, the bound
+ * the IN-TREE header names. The value this file used to carry
+ * (HOST_FAIRPLAYD_PORT == 31) would have left userspace unable to name four
+ * ports the running kernel accepts, and a wrong bound does not fail to
+ * compile.
+ */
 
 /* obsolete name */
 #define HOST_CHUD_PORT HOST_LAUNCHCTL_PORT
@@ -278,4 +304,12 @@
  *  All lookups go through send_resource_violation()
  */
 
+
+/* SOURCED FROM IN-TREE XNU -- LIBSYSTEM-KERNEL-BUILD-NOTES.md sec. 13,
+ * amended in sec. 22. Of those 15 constants, 12 now sit in the numbered block
+ * above in their in-tree order, so only HOST_IO_MAIN_PORT remains here: it is
+ * not a host special PORT but a plain value kernel and userspace must agree on
+ * independently. */
+/* Kernel/xnu/osfmk/mach/host_special_ports.h:79 */
+#define HOST_IO_MAIN_PORT                3
 #endif  /* _MACH_HOST_SPECIAL_PORTS_H_ */

@@ -1,0 +1,4 @@
+# Build artifacts — regenerate with ./run.sh
+work/
+__pycache__/
+*.pyc

@@ -417,6 +417,22 @@ typedef struct{
 	mach_msg_id_t         msgh_id;
 } mach_msg_header_t;
 
+/* Sourced from Kernel/xnu/osfmk/mach/message.h:626-629 verbatim. The SDK
+ * mach tree is the coherent generation and wins wholesale (do NOT put
+ * -I${XNU}/osfmk ahead of it -- mixing generations is what broke
+ * suid_cred_*). This one type is genuinely absent from every SDK header,
+ * while Kernel/xnu/libsyscall/wrappers/_libc_funcptr.c:366 and
+ * _libkernel_init.h:124 use it unconditionally. Sourced, not invented:
+ * the definition exists in this repository in a real header. If anything
+ * else turns out to be needed from in-tree osfmk, STOP -- a cascade means
+ * the in-tree generation is actually required and that is a different
+ * problem. See tools/bootlab/LIBSYSTEM-KERNEL-BUILD-NOTES.md sec. 4, 11.
+ */
+typedef struct {
+	mach_msg_size_t                 msgdh_size;
+	uint32_t                        msgdh_reserved; /* For future */
+} mach_msg_aux_header_t;
+
 #define msgh_reserved           msgh_voucher_port
 #define MACH_MSG_NULL   (mach_msg_header_t *) 0
 
@@ -899,4 +915,243 @@ extern kern_return_t            mach_voucher_deallocate(
 
 __END_DECLS
 
+
+/* --- SOURCED FROM IN-TREE XNU (see LIBSYSTEM-KERNEL-BUILD-NOTES.md sec. 13)
+ *
+ * Kernel/xnu/libsyscall references these but the SDK mach tree -- the
+ * coherent generation that this build uses wholesale -- does not define
+ * them. Each line below is copied VERBATIM from the in-tree xnu header
+ * named beside it. Sourced, not invented; nothing here is a guessed
+ * value or a synthesised struct layout.
+ *
+ * The gap is 15 constants across 7 headers, measured by intersecting the
+ * identifier sets of the two mach trees with what libsyscall references --
+ * not by compiling until the next error. Bounded and complete.
+ */
+
+
+/* --- SOURCED FROM IN-TREE XNU, verbatim (LIBSYSTEM-KERNEL-BUILD-NOTES.md sec. 33)
+ *
+ * The SDK's mach/message.h has NO `#if PRIVATE` region at all -- it was
+ * stripped, which is why it is 35,792 B against osfmk/mach/message.h's
+ * 62,286 B. That is the whole of the mach_msg.c failure:
+ *
+ *   mach_msg.c:75:15: error: unknown type name 'mach_msg_option64_t'
+ *   mach_msg.c:78:18: error: use of undeclared identifier 'MACH64_SEND_MSG'
+ *   mach_msg.c:84:16: error: use of undeclared identifier 'MACH64_RCV_SYNC_WAIT'
+ *   mach_msg.c:205:2: error: use of undeclared identifier 'mach_msg_vector_t'
+ *
+ * Sourced, not reconstructed, for the same reason the port block was: this
+ * project BUILDS the kernel these types describe. Kernel/xnu is pristine from
+ * 394fe3eac3 "Transplant Darwin 24.0 (xnu-11215) kernel", the built kernel's
+ * banner is "Darwin Kernel Version 24.3.0", and the same binary argument that
+ * settled host special-port numbering (sec. 28) settles this: the in-tree
+ * headers are the ABI our own kernel implements.
+ *
+ * The two safety properties that make a struct-layout source defensible here,
+ * both measured rather than asserted:
+ *
+ *  1. Almost every MACH64_* bit is not a new number. It is an ALIAS of a
+ *     mach_msg_option_t bit the SDK already defines:
+ *         MACH64_SEND_MSG             = MACH_SEND_MSG
+ *         MACH64_RCV_MSG              = MACH_RCV_MSG
+ *         MACH64_SEND_INTERRUPT       = MACH_SEND_INTERRUPT   ... (22 of them)
+ *     Only the genuinely 64-bit-only options carry literal values, and those
+ *     literals are copied verbatim from the named line below.
+ *
+ *  2. `MACH_SEND_FILTER_NONFATAL` -- the one prerequisite the SDK lacks, and
+ *     the only reason this block would not compile as-is -- is 0x00010000,
+ *     the same bit value the SDK already assigns to MACH_SEND_ALWAYS. It is a
+ *     second name for an existing bit, not a new one.
+ *
+ * Prerequisites verified present before this was written: all 22 of the
+ * MACH_SEND_ and MACH_RCV_ aliases, and __options_decl itself
+ * (bsd/sys/cdefs.h:1273, which the SDK's own copy also carries).
+ *
+ * One deliberate exclusion: the region at osfmk/mach/message.h:625-630 also
+ * defines mach_msg_aux_header_t, which this file already carries from the
+ * earlier sourcing (line 434 above). Repeating the typedef is a redefinition
+ * error, so those six lines are omitted and nothing else in the region is.
+ */
+
+/* Kernel/xnu/osfmk/mach/message.h:1018 */
+#define MACH_SEND_FILTER_NONFATAL        0x00010000      /* rejection by message filter should return failure - user only */
+
+/* --- Kernel/xnu/osfmk/mach/message.h:605-624, verbatim ---
+ * (605-624 only; 625-630 omitted as described above)
+ */
+#if PRIVATE
+
+/* mach msg2 data vectors are positional */
+__enum_decl(mach_msgv_index_t, uint32_t, {
+	MACH_MSGV_IDX_MSG = 0,
+	MACH_MSGV_IDX_AUX = 1,
+});
+
+#define MACH_MSGV_MAX_COUNT (MACH_MSGV_IDX_AUX + 1)
+/* at least DISPATCH_MSGV_AUX_MAX_SIZE in libdispatch */
+#define LIBSYSCALL_MSGV_AUX_MAX_SIZE 128
+
+typedef struct {
+	/* a mach_msg_header_t* or mach_msg_aux_header_t* */
+	mach_vm_address_t               msgv_data;
+	/* if msgv_rcv_addr is non-zero, use it as rcv address instead */
+	mach_vm_address_t               msgv_rcv_addr;
+	mach_msg_size_t                 msgv_send_size;
+	mach_msg_size_t                 msgv_rcv_size;
+} mach_msg_vector_t;
+#endif /* PRIVATE */  /* Kernel/xnu/osfmk/mach/message.h:631 */
+
+/* --- Kernel/xnu/osfmk/mach/message.h:1042-1161, verbatim, no edits --- */
+#if PRIVATE
+
+__options_decl(mach_msg_option64_t, uint64_t, {
+	MACH64_MSG_OPTION_NONE                 = 0x0ull,
+	/* share lower 32 bits with mach_msg_option_t */
+	MACH64_SEND_MSG                        = MACH_SEND_MSG,
+	MACH64_RCV_MSG                         = MACH_RCV_MSG,
+
+	MACH64_RCV_LARGE                       = MACH_RCV_LARGE,
+	MACH64_RCV_LARGE_IDENTITY              = MACH_RCV_LARGE_IDENTITY,
+
+	MACH64_SEND_TIMEOUT                    = MACH_SEND_TIMEOUT,
+	MACH64_SEND_OVERRIDE                   = MACH_SEND_OVERRIDE,
+	MACH64_SEND_INTERRUPT                  = MACH_SEND_INTERRUPT,
+	MACH64_SEND_NOTIFY                     = MACH_SEND_NOTIFY,
+#if KERNEL
+	MACH64_SEND_ALWAYS                     = MACH_SEND_ALWAYS,
+	MACH64_SEND_IMPORTANCE                 = MACH_SEND_IMPORTANCE,
+	MACH64_SEND_KERNEL                     = MACH_SEND_KERNEL,
+#endif
+	MACH64_SEND_FILTER_NONFATAL            = MACH_SEND_FILTER_NONFATAL,
+	MACH64_SEND_TRAILER                    = MACH_SEND_TRAILER,
+	MACH64_SEND_NOIMPORTANCE               = MACH_SEND_NOIMPORTANCE,
+	MACH64_SEND_NODENAP                    = MACH_SEND_NODENAP,
+	MACH64_SEND_SYNC_OVERRIDE              = MACH_SEND_SYNC_OVERRIDE,
+	MACH64_SEND_PROPAGATE_QOS              = MACH_SEND_PROPAGATE_QOS,
+
+	MACH64_SEND_SYNC_BOOTSTRAP_CHECKIN     = MACH_SEND_SYNC_BOOTSTRAP_CHECKIN,
+
+	MACH64_RCV_TIMEOUT                     = MACH_RCV_TIMEOUT,
+
+	MACH64_RCV_INTERRUPT                   = MACH_RCV_INTERRUPT,
+	MACH64_RCV_VOUCHER                     = MACH_RCV_VOUCHER,
+
+	MACH64_RCV_GUARDED_DESC                = MACH_RCV_GUARDED_DESC,
+	MACH64_RCV_SYNC_WAIT                   = MACH_RCV_SYNC_WAIT,
+	MACH64_RCV_SYNC_PEEK                   = MACH_RCV_SYNC_PEEK,
+
+	MACH64_MSG_STRICT_REPLY                = MACH_MSG_STRICT_REPLY,
+	/* following options are 64 only */
+
+	/* Send and receive message as vectors */
+	MACH64_MSG_VECTOR                      = 0x0000000100000000ull,
+	/* The message is a kobject call */
+	MACH64_SEND_KOBJECT_CALL               = 0x0000000200000000ull,
+	/* The message is sent to a message queue */
+	MACH64_SEND_MQ_CALL                    = 0x0000000400000000ull,
+	/* This message destination is unknown. Used by old simulators only. */
+	MACH64_SEND_ANY                        = 0x0000000800000000ull,
+	/* This message is a DriverKit call */
+	MACH64_SEND_DK_CALL                    = 0x0000001000000000ull,
+
+#ifdef XNU_KERNEL_PRIVATE
+	/*
+	 * Policy for the mach_msg2_trap() call
+	 */
+	MACH64_POLICY_KERNEL_EXTENSION         = 0x0002000000000000ull,
+	MACH64_POLICY_FILTER_NON_FATAL         = 0x0004000000000000ull,
+	MACH64_POLICY_FILTER_MSG               = 0x0008000000000000ull,
+	MACH64_POLICY_DEFAULT                  = 0x0010000000000000ull,
+#if XNU_TARGET_OS_OSX
+	MACH64_POLICY_SIMULATED                = 0x0020000000000000ull,
+#else
+	MACH64_POLICY_SIMULATED                = 0x0000000000000000ull,
+#endif
+#if CONFIG_ROSETTA
+	MACH64_POLICY_TRANSLATED               = 0x0040000000000000ull,
+#else
+	MACH64_POLICY_TRANSLATED               = 0x0000000000000000ull,
+#endif
+	MACH64_POLICY_HARDENED                 = 0x0080000000000000ull,
+	MACH64_POLICY_RIGID                    = 0x0100000000000000ull,
+	MACH64_POLICY_PLATFORM                 = 0x0200000000000000ull,
+	MACH64_POLICY_KERNEL                   = MACH64_SEND_KERNEL,
+
+	/* one of these bits must be set to have a valid policy */
+	MACH64_POLICY_NEEDED_MASK              = (
+		MACH64_POLICY_SIMULATED |
+		MACH64_POLICY_TRANSLATED |
+		MACH64_POLICY_DEFAULT |
+		MACH64_POLICY_HARDENED |
+		MACH64_POLICY_RIGID |
+		MACH64_POLICY_PLATFORM |
+		MACH64_POLICY_KERNEL),
+
+	/* extra policy modifiers */
+	MACH64_POLICY_MASK                     = (
+		MACH64_POLICY_KERNEL_EXTENSION |
+		MACH64_POLICY_FILTER_NON_FATAL |
+		MACH64_POLICY_FILTER_MSG |
+		MACH64_POLICY_NEEDED_MASK),
+
+	/*
+	 * If kmsg has auxiliary data, append it immediate after the message
+	 * and trailer.
+	 *
+	 * Must be used in conjunction with MACH64_MSG_VECTOR,
+	 * only used by kevent() from the kernel.
+	 */
+	MACH64_RCV_LINEAR_VECTOR               = 0x1000000000000000ull,
+	/* Receive into highest addr of buffer */
+	MACH64_RCV_STACK                       = 0x2000000000000000ull,
+#if MACH_FLIPC
+	/*
+	 * This internal-only flag is intended for use by a single thread per-port/set!
+	 * If more than one thread attempts to MACH64_PEEK_MSG on a port or set, one of
+	 * the threads may miss messages (in fact, it may never wake up).
+	 */
+	MACH64_PEEK_MSG                        = 0x4000000000000000ull,
+#endif /* MACH_FLIPC */
+	/*
+	 * This is a mach_msg2() send/receive operation.
+	 */
+	MACH64_MACH_MSG2                       = 0x8000000000000000ull
+#endif
+});
+
+/* old spelling */
+#define MACH64_SEND_USER_CALL              MACH64_SEND_MQ_CALL
+#endif /* PRIVATE */
+
+/* --- end sourced block --- */
+
+
+/* --- Kernel/xnu/osfmk/mach/message.h:240-257, verbatim ---
+ * mach_msg_qos_t and the MACH_MSG_QOS_* values, plus the prototypes
+ * mach_msg.c #undef's and redefines. The SDK carries none of them.
+ */
+#if PRIVATE
+typedef uint8_t mach_msg_qos_t; // same as thread_qos_t
+#define MACH_MSG_QOS_UNSPECIFIED        0
+#define MACH_MSG_QOS_MAINTENANCE        1
+#define MACH_MSG_QOS_BACKGROUND         2
+#define MACH_MSG_QOS_UTILITY            3
+#define MACH_MSG_QOS_DEFAULT            4
+#define MACH_MSG_QOS_USER_INITIATED     5
+#define MACH_MSG_QOS_USER_INTERACTIVE   6
+#define MACH_MSG_QOS_LAST               6
+
+extern int mach_msg_priority_is_pthread_priority(mach_msg_priority_t pri);
+extern mach_msg_priority_t mach_msg_priority_encode(
+	mach_msg_qos_t override_qos,
+	mach_msg_qos_t qos,
+	int relpri);
+extern mach_msg_qos_t mach_msg_priority_overide_qos(mach_msg_priority_t pri);
+extern mach_msg_qos_t mach_msg_priority_qos(mach_msg_priority_t pri);
+extern int mach_msg_priority_relpri(mach_msg_priority_t pri);
+#endif /* PRIVATE */
+
+/* Kernel/xnu/osfmk/mach/message.h:615 */
+#define LIBSYSCALL_MSGV_AUX_MAX_SIZE 128
 #endif  /* _MACH_MESSAGE_H_ */

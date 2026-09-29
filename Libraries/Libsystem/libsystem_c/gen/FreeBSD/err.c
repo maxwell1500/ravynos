@@ -47,6 +47,37 @@ __FBSDID("$FreeBSD: src/lib/libc/gen/err.c,v 1.15 2008/04/03 20:36:44 imp Exp $"
 #include <Block.h>
 #endif /* __BLOCKS__ */
 #include "libc_private.h"
+#ifdef __has_include
+#if __has_include(<os/tsd.h>)
+/*
+ * The per-thread errno accessor.  <sys/errno.h> declares
+ *
+ *	extern int * __error(void);
+ *	#define errno (*__error())
+ *
+ * so EVERY use of errno in the entire userspace -- including dyld's, in
+ * src/glue.c -- is a call to this one function.  libsystem_pthread owns the
+ * storage: struct _pthread has an `errno_t err_no`, and both of its thread-init
+ * paths (pthread.c:905 and :1629) publish the address of that field into TSD
+ * slot __TSD_ERRNO.  Nothing reads the field directly, so this slot is the only
+ * accessor path, and returning it is the whole contract.
+ *
+ * The storage is deliberately in the pthread struct and NOT in a __thread
+ * variable.  That is not an accident of style: dyld calls __error() before the
+ * pthread runtime has populated any TSD slot, so an implementation that
+ * depended on runtime initialisation -- or on dynamic TLS being set up by the
+ * loader at that moment -- would fail in the one component that has to work
+ * first.  Do not "simplify" this into a __thread.
+ *
+ * _os_tsd_get_direct() is the x86_64 Darwin mechanism and is NOT written here:
+ * it comes from <os/tsd.h>, which resolves to a %gs-relative read of the TSD
+ * base (%gs:0).  On this target it compiles to a single
+ *
+ *	movq %gs:__error(,%rax,8), %rax
+ */
+#include <os/tsd.h>
+#endif /* __has_include(<os/tsd.h>) */
+#endif /* __has_include */
 
 #define ERR_EXIT_UNDEF	0
 #ifdef __BLOCKS__
@@ -325,4 +356,21 @@ vwarnx(const char *fmt, va_list ap)
 	if (fmt != NULL)
 		_e_visprintf(_e_err_file, fmt, ap);
 	fprintf(_e_err_file, "\n");
+}
+
+/*
+ * __error -- see the block comment near the top of this file for why this
+ * lives in the pthread TSD rather than in TLS, and why it must not move.
+ *
+ * Returns a pointer to the CALLING THREAD's errno.  Callers store through it
+ * (errno = X), so the pointee must be per-thread storage, not a shared global.
+ */
+int *
+__error(void)
+{
+#if defined(__has_include) && __has_include(<os/tsd.h>)
+	return (int *)_os_tsd_get_direct(__TSD_ERRNO);
+#else
+#error "no per-thread errno storage: refusing to define __error() as a global"
+#endif
 }

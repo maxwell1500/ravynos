@@ -72,18 +72,6 @@ SECURITY_READ_ONLY_LATE(static IOPlatformExpertDevice*) gRootNub;
 void
 IOKitInitializeTime( void )
 {
-	mach_timespec_t         t;
-
-	t.tv_sec = 30;
-	t.tv_nsec = 0;
-
-	IOService::waitForService(
-		IOService::resourceMatching("IORTC"), &t );
-#if defined(__i386__) || defined(__x86_64__)
-	IOService::waitForService(
-		IOService::resourceMatching("IONVRAM"), &t );
-#endif
-
 	clock_initialize_calendar();
 }
 

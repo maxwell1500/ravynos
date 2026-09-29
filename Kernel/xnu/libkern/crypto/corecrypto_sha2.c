@@ -38,7 +38,10 @@ void
 SHA256_Init(SHA256_CTX *ctx)
 {
 	const struct ccdigest_info *di;
-	di = g_crypto_funcs->ccsha256_di;
+	if (!g_crypto_funcs || !(di = g_crypto_funcs->ccsha256_di)) {
+		if (ctx) memset(ctx, 0, sizeof(*ctx));
+		return;
+	}
 
 	/* Make sure the context size for the digest info fits in the one we have */
 	if (ccdigest_di_size(di) > sizeof(SHA256_CTX)) {
@@ -52,7 +55,9 @@ void
 SHA256_Update(SHA256_CTX *ctx, const void *data, size_t len)
 {
 	const struct ccdigest_info *di;
-	di = g_crypto_funcs->ccsha256_di;
+	if (!g_crypto_funcs || !(di = g_crypto_funcs->ccsha256_di)) {
+		return;
+	}
 
 	g_crypto_funcs->ccdigest_update_fn(di, ctx->ctx, len, data);
 }
@@ -61,7 +66,10 @@ void
 SHA256_Final(void *digest, SHA256_CTX *ctx)
 {
 	const struct ccdigest_info *di;
-	di = g_crypto_funcs->ccsha256_di;
+	if (!g_crypto_funcs || !(di = g_crypto_funcs->ccsha256_di)) {
+		if (digest) memset(digest, 0, SHA256_DIGEST_LENGTH);
+		return;
+	}
 
 	ccdigest_final(di, ctx->ctx, digest);
 }
@@ -70,7 +78,10 @@ void
 SHA384_Init(SHA384_CTX *ctx)
 {
 	const struct ccdigest_info *di;
-	di = g_crypto_funcs->ccsha384_di;
+	if (!g_crypto_funcs || !(di = g_crypto_funcs->ccsha384_di)) {
+		if (ctx) memset(ctx, 0, sizeof(*ctx));
+		return;
+	}
 
 	/* Make sure the context size for the digest info fits in the one we have */
 	if (ccdigest_di_size(di) > sizeof(SHA384_CTX)) {
@@ -84,7 +95,9 @@ void
 SHA384_Update(SHA384_CTX *ctx, const void *data, size_t len)
 {
 	const struct ccdigest_info *di;
-	di = g_crypto_funcs->ccsha384_di;
+	if (!g_crypto_funcs || !(di = g_crypto_funcs->ccsha384_di)) {
+		return;
+	}
 
 	g_crypto_funcs->ccdigest_update_fn(di, ctx->ctx, len, data);
 }
@@ -94,7 +107,10 @@ void
 SHA384_Final(void *digest, SHA384_CTX *ctx)
 {
 	const struct ccdigest_info *di;
-	di = g_crypto_funcs->ccsha384_di;
+	if (!g_crypto_funcs || !(di = g_crypto_funcs->ccsha384_di)) {
+		if (digest) memset(digest, 0, SHA384_DIGEST_LENGTH);
+		return;
+	}
 
 	ccdigest_final(di, ctx->ctx, digest);
 }
@@ -103,7 +119,10 @@ void
 SHA512_Init(SHA512_CTX *ctx)
 {
 	const struct ccdigest_info *di;
-	di = g_crypto_funcs->ccsha512_di;
+	if (!g_crypto_funcs || !(di = g_crypto_funcs->ccsha512_di)) {
+		if (ctx) memset(ctx, 0, sizeof(*ctx));
+		return;
+	}
 
 	/* Make sure the context size for the digest info fits in the one we have */
 	if (ccdigest_di_size(di) > sizeof(SHA512_CTX)) {
@@ -117,7 +136,9 @@ void
 SHA512_Update(SHA512_CTX *ctx, const void *data, size_t len)
 {
 	const struct ccdigest_info *di;
-	di = g_crypto_funcs->ccsha512_di;
+	if (!g_crypto_funcs || !(di = g_crypto_funcs->ccsha512_di)) {
+		return;
+	}
 
 	g_crypto_funcs->ccdigest_update_fn(di, ctx->ctx, len, data);
 }
@@ -126,7 +147,10 @@ void
 SHA512_Final(void *digest, SHA512_CTX *ctx)
 {
 	const struct ccdigest_info *di;
-	di = g_crypto_funcs->ccsha512_di;
+	if (!g_crypto_funcs || !(di = g_crypto_funcs->ccsha512_di)) {
+		if (digest) memset(digest, 0, SHA512_DIGEST_LENGTH);
+		return;
+	}
 
 	ccdigest_final(di, ctx->ctx, digest);
 }

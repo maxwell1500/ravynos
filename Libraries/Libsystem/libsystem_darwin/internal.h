@@ -60,6 +60,18 @@
 #include <sys/proc_info.h>
 #include <crt_externs.h>
 
+// OS_CRASH_ENABLE_EXPERIMENTAL_LIBTRACE is REQUIRED here, not optional: the
+// h/stdlib.h wrappers os_malloc, os_calloc and os_strdup are gated behind it
+// with a _Pragma("GCC error ...") in the #else, and this component calls all
+// three. The defect it was blamed on is not the define; it is that
+// <os/log_private.h> resolves to xnu's kernel header, which defines none of
+// the five symbols the libtrace branch needs. See tools/bootlab/BOOT-PLAN.md
+// sec. 7.4. The same define is also set in this directory's Makefile.
+//
+// NOTE comment syntax: this toolchain REJECTS "# prose" in a C header -- even
+// "# hello world" is an invalid preprocessing directive, verified against a
+// stock Apple clang with a two-line file. Use // in headers. It is fine in
+// Makefiles, where bmake consumes the "#" before the compiler ever sees it.
 #define OS_CRASH_ENABLE_EXPERIMENTAL_LIBTRACE 1
 #include <os/assumes.h>
 // #include <os/transaction_private.h>

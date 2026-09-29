@@ -1,0 +1,29 @@
+#!/bin/sh
+# ar wrapper for building ravynOS on a Darwin host.
+#
+# The ravynOS mk files archive objects with `ar -crsD`. On macOS, ar already
+# writes deterministic archives by default and rejects -D as an illegal
+# option, so the flag is dropped here. Dropping it is a no-op semantically.
+REAL_AR="${REAL_AR:-/usr/bin/ar}"
+
+out=""
+for a in "$@"; do
+    case "$a" in
+        # A single-letter cluster such as -crsD: drop the D, keep the rest.
+        -[a-zA-Z]*)
+            a="${a#-}"       # drop the leading '-'; the rest are flag letters
+            rest=""
+            while [ -n "$a" ]; do
+                c="${a%"${a#?}"}"
+                a="${a#?}"
+                [ "$c" = "D" ] || rest="$rest$c"
+            done
+            out="$out '-$rest'"
+            ;;
+        *) out="$out '$a'" ;;
+    esac
+done
+
+# shellcheck disable=SC2086
+eval "set -- $out"
+exec "$REAL_AR" "$@"

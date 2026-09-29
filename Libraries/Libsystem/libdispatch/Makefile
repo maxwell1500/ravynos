@@ -45,10 +45,20 @@ SRCS += libdispatch_internal_protocolServer.c \
 	firehoseReplyUser.c
 LOBJS = ${SRCS:S/.cpp$/.o/:S/.m$/.o/:%.c=%.o}
 
+# -DOS_ATOMIC_USES_CXX=0 forces <os/atomic.h>'s C11 branch in C++ TUs.
+# See tools/bootlab/BOOT-PLAN.md sec. 7.1: os_atomic_std(op) expands to std::op
+# and `op` is unstressed, so the argument is macro-expanded FIRST --
+# atomic_store_explicit becomes __c11_atomic_store, yielding
+# std::__c11_atomic_store, which does not exist. libdispatch is a C11 component
+# by construction (src/shims/atomic.h:30 #errors without <stdatomic.h>), so
+# selecting the C11 branch aligns the two headers instead of leaving them to
+# fight over one identifier. Scoped to this Makefile: no other component and
+# no kernel build is affected.
 CFLAGS = -fvisibility=hidden -DTARGET_OS_BRIDGE=0 -DHAVE_CONFIG_H -DHAVE_MACH \
 	-DUSE_MACH_SEM -DUSE_OBJC -DOS_FIREHOSE_SPI -DDISPATCH_DEBUG \
 	-DHAVE_PTHREAD_WORKQUEUE_QOS -DVOUCHER_USE_MACH_VOUCHER -D__BLOCKS__ \
 	-DPRIVATE -DDISPATCH_COCOA_COMPAT -DDISPATCH_USE_KEVENT_WORKLOOP \
+	-DOS_ATOMIC_USES_CXX=0 \
 	--sysroot=${RAVYN_SDKROOT} -w -Wno-elaborated-enum-base \
 	-fno-exceptions -fblocks -fdollars-in-identifiers \
 	-momit-leaf-frame-pointer -mmacos-version-min=${MACOS_VERSION_MIN} \

@@ -311,9 +311,15 @@ psynch_wait_wakeup(uintptr_t kwq, struct ksyn_waitq_element *kwe,
 
 /* kernel (core) to kext shims */
 
+extern void pthread_builtin_register(void);
+
 void
 pthread_init(void)
 {
+	if (!pthread_functions) {
+		kprintf("pthread_init: initializing built-in pthread facility\n");
+		pthread_builtin_register();
+	}
 	if (!pthread_functions) {
 		panic("pthread kernel extension not loaded (function table is NULL).");
 	}

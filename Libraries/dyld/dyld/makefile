@@ -41,7 +41,21 @@ MAN = ../doc/man/man1/dyld.1.gz \
 	../doc/man/man1/dyld_usage.1.gz \
 	../doc/man/man1/update_dyld_shared_cache.1.gz
 
-
+# Two entries below are load-bearing and were absent until 2026-09-27; bmake
+# does not allow comments inside a backslash-continued assignment, so they are
+# recorded here.
+#
+# -D__RAVYNOS__  gates the ravynOS branch of ../src/dyldSyscallInterface.h,
+#   which declares amfi_check_dyld_policy_self itself rather than taking it
+#   from <libamfi.h> (which does not carry that newer symbol). The stub
+#   implementation already exists at ../src/missing_symbol_stubs.c:212.
+#   Without it the header silently takes the Apple path and the symbol is
+#   undeclared.
+#
+# -I${ROOT_SOURCE_DIR}/Kernel/xnu/bsd  is where __kernel_data_semantics is
+#   defined (bsd/sys/cdefs.h:1320). Without it the SDK's sys/cdefs.h wins, the
+#   macro vanishes, and `uintptr_t thread __kernel_data_semantics;' in the
+#   SDK's kdebug_private.h becomes a syntax error.
 COMMONFLAGS = --target=${CpuArch}-apple-darwin \
 		--sysroot=${RAVYN_SDKROOT} \
 		-mmacos-version-min=${MACOS_VERSION_MIN} \
@@ -51,6 +65,7 @@ COMMONFLAGS = --target=${CpuArch}-apple-darwin \
 		-DTARGET_OS_BRIDGE=0 -DBROKEN_VECTOR_BASE \
 		-DSUPPORT_ZERO_COST_EXCEPTIONS -DSUPPORT_ACCELERATE_TABLES \
 		-D__MAC_OS_X_VERSION_MIN_REQUIRED=101300 \
+		-D__RAVYNOS__ \
 		-D'VIS_HIDDEN=__attribute__((visibility("hidden")))' \
 		-D_LIBCPP_BEGIN_NAMESPACE_STD="" \
 		-D_LIBCPP_END_NAMESPACE_STD="" \
@@ -67,6 +82,7 @@ COMMONFLAGS = --target=${CpuArch}-apple-darwin \
 		-I${.CURDIR}/../src \
 		-I${.CURDIR}/.. \
 		-I${ROOT_SOURCE_DIR}/Kernel/xnu/libsyscall/wrappers/libproc \
+		-I${ROOT_SOURCE_DIR}/Kernel/xnu/bsd \
 		-I${ROOT_SOURCE_DIR}/Kernel/Extensions/corecrypto/include \
 		-I${RAVYN_SDKROOT}/usr/local/include/kernel \
 		-isystem${RAVYN_SDKROOT}/usr/include \

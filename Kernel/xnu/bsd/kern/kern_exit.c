@@ -2200,6 +2200,17 @@ proc_exit(proc_t p)
 	proc_refdrain(p);
 	/* We now have unique ref to the proc */
 
+	/*
+	 * ravynOS: OPEN QUESTION -- this call is ABSENT from the kernel that the
+	 * bootlab actually ran. The linked object has no reference to
+	 * _task_clear_cpuusage at all, so the running kernel skipped it.
+	 *
+	 * It is deliberately left in place here: without it a process exit
+	 * would not clear pending CPU-limit accounting. Deciding this needs
+	 * someone with the history of *why* the bootlab kernel drops it -- it
+	 * is not a mechanical fix, which is why it has not been removed or
+	 * reinstated here. See BOOT-PLAN.md 12.5a-i.
+	 */
 	/* if any pending cpu limits action, clear it */
 	task_clear_cpuusage(proc_task(p), TRUE);
 
@@ -2217,6 +2228,16 @@ proc_exit(proc_t p)
 	 */
 	fdt_invalidate(p);
 
+	/*
+	 * ravynOS: OPEN QUESTION -- this call is ABSENT from the kernel that the
+	 * bootlab actually ran. The linked object has no reference to _workq_exit
+	 * at all, so the running kernel skipped workqueue teardown on exit.
+	 *
+	 * Left in place for the same reason as the task_clear_cpuusage() note
+	 * above: the behaviour is wanted (not re-breaking PID-1 reaping is the
+	 * constraint), but the reason for the removal was never recorded and
+	 * cannot be recovered from the object. See BOOT-PLAN.md 12.5a-i.
+	 */
 	/*
 	 * Once all the knotes, kqueues & workloops are destroyed, get rid of the
 	 * workqueue.
@@ -2544,9 +2565,20 @@ proc_exit(proc_t p)
 	 */
 	pp = proc_parent(p);
 	if (proc_is_shadow(p)) {
-		/* kernel can reap this one, no need to move it to launchd */
+		/*
+		 * kernel can reap this one, no need to move it to launchd
+		 *
+		 * ravynOS: an exec-shadow proc is replaced in place by a new
+		 * proc for the same parent, but the parent's wait4() may already
+		 * be asleep in msleep0() on this (now dead) proc. Marking
+		 * P_LIST_DEADPARENT alone does not wake it, so the parent never
+		 * re-scans and the replacement proc is never reaped -- PID 1
+		 * stops reaping and the boot appears to hang just after userland
+		 * starts. Wake the parent here so wait4 re-scans its children.
+		 */
 		proc_list_lock();
 		p->p_listflag |= P_LIST_DEADPARENT;
+		wakeup(pp);
 		proc_list_unlock();
 	} else if (pp->p_flag & P_NOCLDWAIT) {
 		if (p->p_ru != NULL) {
@@ -2850,9 +2882,20 @@ wait1continue(int result)
 	struct wait4_nocancel_args *uap;
 	int *retval;
 
-	if (result) {
-		return result;
-	}
+	/*
+	 * ravynOS: deliberately does NOT short-circuit on a non-zero `result`.
+	 * `result` is msleep0()'s return, non-zero when the wait was interrupted.
+	 * Upstream returns that error to userspace; here we fall through and
+	 * re-enter wait4_nocancel() so a restarted wait4() re-scans instead of
+	 * failing. This is what the bootlab kernel was measured doing.
+	 *
+	 * Note the asymmetry with waitidcontinue() below, which KEEPS its
+	 * identical guard. That difference is intentional, not an oversight --
+	 * the linked object has the guard in waitidcontinue() and not here.
+	 *
+	 * The original rationale was not recorded anywhere in the tree; it was
+	 * recovered from the linked object (BOOT-PLAN 12.5a-i).
+	 */
 
 	p = current_proc();
 	thread = current_thread();
@@ -3099,6 +3142,11 @@ waitidcontinue(int result)
 	struct waitid_nocancel_args *uap;
 	int *retval;
 
+	/*
+	 * ravynOS: this guard is KEPT, unlike the identical one in
+	 * wait1continue() above, which was removed. The asymmetry is
+	 * intentional and is present in the linked object, not an oversight.
+	 */
 	if (result) {
 		return result;
 	}

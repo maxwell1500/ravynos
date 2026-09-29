@@ -1,0 +1,173 @@
+ravynOS Libsystem — where the build stands, and where libsystem_kernel is blocked
+=================================================================================
+Written at the close of a long session. Everything needed to resume is in THIS
+directory. Nothing here depends on /tmp (which has lost work repeatedly).
+
+WHAT IS DONE AND VERIFIED
+---------------------------------------------------------------------------------
+libsystem_c.dylib — the libc, the largest artifact this project produces.
+    1,255,496 bytes | 1,342 exports | 272 undefined | 17 dylib dependencies
+    Rebuilds deterministically from clean: 693 objects, 16 archives, 0 errors.
+    Verified with clang -H that ravynos-mach-compat.h is genuinely entered in
+    the real build, not merely present on disk.
+
+Tally: 22 of 25 libSystem.B reexport targets satisfied.
+Unsatisfied: system_kernel, dyld, system_trace.
+
+Commits (local, never pushed, no remote operations):
+    1f0e802  build wrappers and compat headers  — the rollback point
+    4a37c54  derived SDK artifact gate, with honest verification status
+    3a27bba  derived mach_port_t typedef shim for libsystem_kernel
+tools/bootlab/isysroot-cc and build-libraries.sh are byte-identical to 1f0e802.
+No wrapper change was needed at any point in this work.
+
+THE BLOCKER
+---------------------------------------------------------------------------------
+Load closure. libsystem_c.dylib LINKS but cannot LOAD: of its 272 undefined
+symbols, 139 are resolvable against installed dylibs and 133 are not. 126 of
+those 133 come from libsystem_kernel, which is an 8,064-byte stub.
+
+libsystem_kernel is blocked TWICE over.
+
+(1) ITS SYSCALL HALF — 454 stubs generate cleanly, but cannot be assembled.
+
+    Inputs are correct and complete:
+        Kernel/xnu/bsd/kern/syscalls.master            58,794 B  present
+        Kernel/xnu/libsyscall/xcodescripts/create-syscalls.pl
+        Kernel/xnu/libsyscall/xcodescripts/compile-syscalls.pl
+    create-syscalls.pl produces 454 .s files, stubs.list, and SYS.h (16,519 B).
+    compile-syscalls.pl then fails on EVERY stub, identically:
+
+        ___accept.s:9:354: error: invalid instruction mnemonic 'unwind_epilogue'
+
+    THE KEY FACT, AND WHY IT MATTERS: the string "unwind_epilogue" appears in
+    NO file in this project. It is absent from Kernel/xnu/libsyscall/, from the
+    generated sys/ tree (including the emitted SYS.h), and from Kernel/xnu/bsd/.
+    Repo-wide count: 0. Yet the assembler reports it at a specific line and
+    column. The assembler is therefore being handed text that does not exist
+    in any file on disk.
+
+    Reproducing command (from syscalltest/clean/):
+        xcrun clang -arch x86_64 -c -isysroot$SDK -I$SDK/usr/include \
+            -I$T/sys ___accept.s -o out.o
+        -> rc=1, no object, the error above.
+
+    Already tried and ruled out, so they are not retried:
+      - stale artefacts: reproduces in a pristine empty directory
+      - stray header on the include path: persists under -nostdinc -nostdinc++
+      - preprocessor not running on lowercase .s: persists with
+        -x assembler-with-cpp
+      - wrong assembler path: clang -v shows the integrated assembler
+        (clang -cc1 21.0.0, x86_64-apple-macosx26.0.0), and -fno-integrated-as
+        gives the same error
+      - preprocessed output: unwind_epilogue is NOT in the -E output either
+        (0 occurrences), and the -E file is not line-aligned with the source,
+        which is why a line:column from the assembler cannot be looked up in it
+
+(2) ITS MACH HALF -- a SIGNATURE question, not a missing declaration.
+
+    CORRECTION to an earlier version of this handoff, which said
+    mach_service_port_info_data_t was in "no generated header anywhere".
+    THAT WAS WRONG AND IT OVERSTATED THE BLOCKER. The accurate position:
+
+        $SDK/usr/include/mach/port.h                     0 occurrences
+        Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach/port.h   5 occurrences
+
+    The SDK's generated header lacks it; the in-tree header this repo's own
+    xnu build produced carries it, at port.h:451-461, in full:
+
+        #define MACH_SERVICE_PORT_INFO_STRING_NAME_MAX_BUF_LEN  255
+        typedef struct mach_service_port_info {
+            char      mspi_string_name[...MAX_BUF_LEN];
+            uint8_t   mspi_domain_type;
+        } mach_service_port_info_data_t;
+        #define MACH_SERVICE_PORT_INFO_COUNT (...)
+        typedef struct mach_service_port_info * mach_service_port_info_t;
+
+    That, plus 12 more types of the same family, is now CLOSED in
+    tools/bootlab/ravynos-eventlink-compat.h (commits 3a27bba and f435475).
+    Declaration-not-header, because the in-tree headers carry #if KERNEL
+    material that must not reach userspace. Verified 0 errors.
+
+    What remains is NOT a missing type. The failing TU is
+        obj/mach_vmUser.c:8 -> internal_hdr/include/mach/mach_vm_internal.h:137
+            kern_return_t _kernelrpc_mach_vm_read(
+                vm_map_read_t target_task,
+    i.e. the userspace build is being handed a KERNEL-BRANCH function
+    signature. The open question is which signature those generated internal
+    headers should present to a userspace consumer -- a provenance question
+    about how they are generated or selected. Shimming a kernel-rpc signature
+    into userspace would be wrong, and no declaration has been invented for it.
+
+    Regenerating the SDK's mach headers from its .defs remains blocked at
+    std_types.defs:65, an SDK file, not edited. But that route is no longer
+    on the critical path for these 13 types: they are sourced.
+
+NEXT STEP, IN ONE COMMAND
+---------------------------------------------------------------------------------
+Read what the assembler is actually consuming. The error names a line and
+column of a buffer that contains none of the project's text, so the useful
+question is not "which file emits it" but "what does clang hand the assembler
+for a lowercase .s on this host". Concretely:
+
+    xcrun clang -arch x86_64 -### -c -isysroot$SDK -I$SDK/usr/include \
+        -I$T/sys ___accept.s
+
+That prints the full driver pipeline including the exact assembler input path,
+which distinguishes "clang is invoking something that substitutes content" from
+"the source really does contain it somewhere unsearched". Do not re-run the
+five ruled-out probes above.
+
+An alternative worth weighing before more debugging: the .defs-based mach header
+generation, and the syscall stub assembly, both smell like a HOST TOOLCHAIN
+mismatch -- xnu-11215 stubs assembled by clang 21 on macOS 26. If that is the
+cause, no edit inside this repo will fix it and the answer is a toolchain that
+matches the target. That is a hypothesis, not a finding.
+
+THE LESSON, WHICH IS THE MOST VALUABLE OUTPUT OF THIS SESSION
+---------------------------------------------------------------------------------
+Most of the stalls in this project were MODE problems, not content problems.
+The source was correct and the INVOCATION was wrong -- five separate times.
+Twice, the confident answer pointed at the source when the fault was in how the
+tool was being called.
+
+Supporting rules, all learned the hard way here:
+  - Read what the tool produced, not what you intended to produce. When a tool
+    reports a line and column, establish which artefact that numbering refers
+    to before grepping anything: -E output and -c input are not line-aligned.
+  - Never treat "no match" as "no data". A grep returning zero is "no match",
+    not proof of absence. Here the assembler and the grep contradicted each
+    other, and the assembler was closer to the truth.
+  - Check that the instrument can fail the way you need it to fail, before
+    trusting it to pass. A C preprocessor was used to test a mig grammar
+    question; it would have reported success on a statement it does not parse.
+  - Verify the inputs a tool will actually use, including supporting headers,
+    not just the ones you counted. stubs.list had 456 lines and SYS.h was
+    never checked.
+  - A hypothesis that is half right is the most dangerous kind, because the
+    half that is right lends false confidence to the half that is wrong.
+  - When two observations conflict, do not settle on the most plausible one.
+    Carry it as a hypothesis and go get the measurement that decides it.
+  - A derived list only beats a hard-coded one if the derivation is right; a
+    wrong derivation is worse than an honest list, because it reports with
+    confidence.
+  - Never interpret output from a process that has not exited.
+  - A gate earns the right to be committed by demonstrating a clean run, not by
+    being written. The derived gate here has produced false reds and is
+    correct on a full run, but its NEGATIVE direction is still unverified --
+    treat a red from it as "investigate the gate first".
+
+FILES IN THIS DIRECTORY
+---------------------------------------------------------------------------------
+  HANDOFF-libsystem_kernel.txt   this file
+  probe.sh, probe_dbg.sh         working clang -H probes for the libsystem_c work
+  isysroot-cc-dbg                instrumented COPY of the wrapper (never the original)
+  rawcmd.sh                      unmodified captured compile line (4941 B)
+  err.txt, dbg_err.txt, out.txt  -H traces and outputs from those probes
+  AT.log                         the FAILING libsystem_c build (3,621,187 B)
+  fresh.log                      the CLEAN libsystem_c rebuild (rc=0)
+  kern.log, kern2.log, kern3.log  the three libsystem_kernel attempts
+  gate2.log                      derived gate run
+  syscalltest/sys/               454 generated stubs + SYS.h + stubs.list
+  syscalltest/accept.i           preprocessed ___accept.s (2136 B, 0 unwind_epilogue)
+  clean/                         pristine reproduction: ___accept.s, e.txt, o.txt

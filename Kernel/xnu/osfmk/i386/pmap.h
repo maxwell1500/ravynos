@@ -650,12 +650,19 @@ set_dirbase(pmap_t tpmap, thread_t thread, int my_cpu)
 {
 	int ccpu = my_cpu;
 	uint64_t pcr3 = tpmap->pm_cr3, ucr3 = tpmap->pm_ucr3;
+	if (no_shared_cr3) {
+		/* Degenerate user tables: run user mode on the full pmap so
+		 * syscall/IDT entry points need no double-map alias. Used for
+		 * bringup (e.g. TCG) where the Meltdown split is unnecessary.
+		 */
+		ucr3 = pcr3;
+	}
+
 	cpu_datap(ccpu)->cpu_task_cr3 = pcr3;
 	cpu_shadowp(ccpu)->cpu_shadowtask_cr3 = pcr3;
 
 	cpu_datap(ccpu)->cpu_ucr3 = ucr3;
 	cpu_shadowp(ccpu)->cpu_ucr3 = ucr3;
-
 	cpu_datap(ccpu)->cpu_task_map = cpu_shadowp(ccpu)->cpu_task_map =
 	    tpmap->pm_task_map;
 

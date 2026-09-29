@@ -393,6 +393,15 @@ void
 mpsc_daemon_enqueue(mpsc_daemon_queue_t dq, mpsc_queue_chain_t elm,
     mpsc_queue_options_t options)
 {
+	/*
+	 * Drop events sent to never-initialized queues (e.g. telemetry
+	 * before its daemon exists): their tail is NULL, and the first
+	 * enqueue would fault writing prev->mpqc_next through it.
+	 */
+	if (dq == NULL || dq->mpd_queue.mpqh_tail == NULL) {
+		return;
+	}
+
 	if (options & MPSC_QUEUE_DISABLE_PREEMPTION) {
 		disable_preemption();
 	}

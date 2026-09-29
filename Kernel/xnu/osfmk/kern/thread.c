@@ -853,7 +853,7 @@ thread_deallocate_complete(
 
 	lck_mtx_lock(&tasks_threads_lock);
 	assert(terminated_threads_count > 0);
-	queue_remove(&terminated_threads, thread, thread_t, threads);
+	queue_remove(get_terminated_threads_queue(), thread, thread_t, threads);
 	terminated_threads_count--;
 	lck_mtx_unlock(&tasks_threads_lock);
 
@@ -1086,9 +1086,9 @@ thread_terminate_queue_invoke(mpsc_queue_chain_t e,
 	task_unlock(task);
 
 	lck_mtx_lock(&tasks_threads_lock);
-	queue_remove(&threads, thread, thread_t, threads);
+	queue_remove(get_threads_queue(), thread, thread_t, threads);
 	threads_count--;
-	queue_enter(&terminated_threads, thread, thread_t, threads);
+	queue_enter(get_terminated_threads_queue(), thread, thread_t, threads);
 	terminated_threads_count++;
 	lck_mtx_unlock(&tasks_threads_lock);
 
@@ -1555,7 +1555,7 @@ thread_create_internal(
 	/* So terminating threads don't need to take the task lock to decrement */
 	os_atomic_inc(&parent_task->active_thread_count, relaxed);
 
-	queue_enter(&threads, new_thread, thread_t, threads);
+	queue_enter(get_threads_queue(), new_thread, thread_t, threads);
 	threads_count++;
 
 	new_thread->active = TRUE;

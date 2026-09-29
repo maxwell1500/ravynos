@@ -1,0 +1,540 @@
+#!/bin/bash
+# Build the ravynOS userland libraries (Libsystem, dyld, ...) on a Darwin host.
+#
+# Why this wrapper exists:
+#   * These Makefiles are FreeBSD bmake scripts, not GNU make.
+#   * Apple clang's `cc` shim ignores a custom SDK passed as --sysroot when
+#     resolving #include <...>; isysroot-cc rewrites it to -isysroot.
+#   * Several Makefiles read environment variables that nothing in the repo
+#     exports, and each one is a hard build failure (see below).
+#
+# Usage: tools/bootlab/build-libraries.sh [subdir ...]
+set -uo pipefail
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$HERE/../.." && pwd)"
+BUILD="${RAVYN_BUILD_DIR:-/Users/max/Projects/build}"
+SDK="$BUILD/Developer/Platforms/ravynOS.platform/Developer/SDKs/ravynOS.sdk"
+BMAKE="${BMAKE:-/usr/local/bin/bmake}"
+REAL_CC="${REAL_CC:-$(xcrun -f clang)}"
+
+[ -d "$SDK" ] || { echo "missing SDK: $SDK" >&2; exit 1; }
+[ -x "$BMAKE" ] || { echo "missing bmake: $BMAKE (brew install bmake)" >&2; exit 1; }
+
+unset DEVELOPER_DIR   # must stay the stock Xcode/CLI one for the xcrun shims
+
+# Several Makefiles interpolate ${PATH} into an *unquoted* recipe prefix
+# (`PATH=${TOOLS}:${PATH} ... mach_install_mig.sh`). A PATH entry containing a
+# space -- on this host "/Applications/VMware Fusion.app/Contents/Public" --
+# makes /bin/sh field-split the assignment and try to exec the tail of the
+# PATH as a command:
+#   line 1: Fusion.app/Contents/Public:/usr/local/bin: No such file or directory
+# Drop space-bearing entries before bmake ever sees PATH.
+export PATH="$(echo "$PATH" | tr ':' '\n' | grep -v ' ' | paste -sd: -)"
+
+export RAVYN_SDKROOT="$SDK" SYSROOT_DIR="$SDK"
+export ROOT_SOURCE_DIR="$ROOT" ROOT_BINARY_DIR="$BUILD"
+export CpuArch="${CpuArch:-x86_64}" MACOS_VERSION_MIN="${MACOS_VERSION_MIN:-15.0}"
+
+# bmake ships its own copy of the FreeBSD mk files, and its bundled
+# bsd.subdir.mk predates ravynOS's (different SUBDIR target names), which
+# silently disables subdirectory recursion. -m forces the ravynOS versions.
+MKMODULES="$ROOT/BSD/share/mk"
+# cdefs.h only defines the __DARWIN_ONLY_* feature macros under an
+# XNU_PLATFORM_* guard, which userspace never sets. Injected centrally by
+# isysroot-cc so every sub-make inherits it.
+export EXTRA_DEFINES="-DXNU_PLATFORM_MacOSX"
+# EXTRA_INCLUDES is the include-path passthrough isysroot-cc honours (see the
+# block in that script). It has to be RE-EXPORTED here, not merely inherited:
+# bmake re-exports this script's own environment to the sub-makes, and a
+# variable set in the caller's environment does not survive into them. That is
+# the whole reason the mach-generation probe's treatment arm once came out
+# byte-identical to its control (LIBSYSTEM-KERNEL-BUILD-NOTES.md sec. 19) --
+# the flag reached the wrapper in a direct test and never reached it in the
+# real build path.
+# Forwarded verbatim and split on whitespace exactly as isysroot-cc consumes
+# it (`for i in ${EXTRA_INCLUDES:-}`). Unset or empty adds nothing.
+export EXTRA_INCLUDES="${EXTRA_INCLUDES:-}"
+export CC="$HERE/isysroot-cc"   # wrapper: --sysroot -> -isysroot
+
+# ---------------------------------------------------------------------------
+# Environment variables the per-project Makefiles read but that nothing in the
+# repo exports. Each one was a hard build failure.
+# ---------------------------------------------------------------------------
+#   DEVEL           -> Libraries/Libsystem/libmacho/Makefile uses it in .PATH;
+#                      unset it resolved to "/Default.xctoolchain/...", and
+#                      `cp: /Default.xctoolchain/include/stuff: No such file
+#                      or directory` killed the libmacho dylib.
+#   SDK_SOURCE_DIR  -> Libraries/dyld/Makefile and libsystem_c/libBase use it
+#                      for -I/-include; unset it became "-I/usr/include", i.e.
+#                      the *host* macOS headers, and
+#                      "<built-in>:1:10: fatal error: '/usr/include/
+#                      AvailabilityInternal.h' file not found" killed dyld.
+#   TOOLS           -> prefix of the unquoted PATH= recipe prefix above.
+#   PROD_VERSION    -> libsystem_info's link flags end in
+#                      "-Wl,-current_version,${PROD_VERSION}", so empty gave
+#                      "ld: -current_version: malformed version number
+#                      '-compatibility_version' cannot fit in 32-bit xxxx.yy.zz".
+export DEVEL="$ROOT/Developer"
+export SDK_SOURCE_DIR="$SDK"
+# TOOLS must be a *directory*, not a PATH-style list. libc_static's rule is
+#     ${TOOLS}/llvm-libtool-darwin -o ${.OBJDIR}/libc.a -static ...
+# so a colon list produced
+#     /usr/bin:/bin:/usr/sbin:/sbin/llvm-libtool-darwin
+# which is not a path, and libc_static died with "*** Error code 1" after all
+# 14 subprojects had already compiled. It is also used as the prefix of the
+# unquoted `PATH=${TOOLS}:${PATH}` recipe prefix, which a single directory
+# satisfies just as well as a list.
+# The peer-built llvm-libtool-darwin (7,338,024 B, LLVM 17.0.6) lives under the
+# ravynOS platform toolchain; the host CLT does not ship it at all, so
+# xcrun -f cannot find it.
+PLATFORM_TOOLCHAIN_BIN="$BUILD/Developer/Platforms/ravynOS.platform/Developer/Toolchains/Default.xctoolchain/usr/bin"
+# Assemble one directory holding every tool a recipe may name, so that the
+# unquoted `PATH=${TOOLS}:${PATH}` prefix puts *our* xcrun ahead of the system
+# one. libsystem_kernel's mach_install_mig.sh does `xcrun -sdk $SDKROOT -find
+# mig` and the system xcrun cannot answer that here: it is a shim that dlopens
+# libxcsdk.dylib out of $DEVELOPER_DIR/usr/lib, and that library ships only with
+# a full Xcode. Symptom: "Reason: tried: '$ORIGIN/../lib/libxcsdk.dylib' (no such
+# file)" then "*** Error code 134" with MIG= empty, before anything is generated.
+TOOLS_DIR="$BUILD/Tools/bin"
+mkdir -p "$TOOLS_DIR"
+[ -x "$PLATFORM_TOOLCHAIN_BIN/llvm-libtool-darwin" ] &&
+    ln -sf "$PLATFORM_TOOLCHAIN_BIN/llvm-libtool-darwin" "$TOOLS_DIR/llvm-libtool-darwin"
+[ -x "$BUILD/Developer/usr/bin/xcrun" ] &&
+    ln -sf "$BUILD/Developer/usr/bin/xcrun" "$TOOLS_DIR/xcrun"
+export TOOLS="$TOOLS_DIR"
+export PROD_VERSION="${PROD_VERSION:-1229.100.1}"
+
+# ---------------------------------------------------------------------------
+# Toolchain resolution
+# ---------------------------------------------------------------------------
+# bsd.*.mk resolves tool names off ${TOOLCHAIN}, and BSD/share/mk/sys.mk:113
+# hardcodes `/Library/Developer/Toolchains/Default.xctoolchain` -- a full-Xcode
+# path that does not exist on a Command-Line-Tools-only host. Everything
+# derived from it then points at nothing:
+#   /Library/Developer/Toolchains/Default.xctoolchain/usr/bin/mig: No such file
+#     (liblaunch, libsystem_notify, libsystem_info, libdispatch)
+#   /Library/Developer/Toolchains/Default.xctoolchain/usr/bin/clang++: No such
+#     file (MIGCC, which libdispatch/Makefile .exports as ${CC})
+# Build a coherent mini-Developer tree under $BUILD so the hardcoded path
+# resolves from both sides: point TOOLCHAIN at it, and put real tools where
+# xcrun searches.
+TOOLCHAIN_DIR="$BUILD/Developer/Toolchains/Default.xctoolchain"
+DEVBIN="$BUILD/Developer/usr/bin"
+mkdir -p "$TOOLCHAIN_DIR/usr/bin" "$DEVBIN"
+export TOOLCHAIN="$TOOLCHAIN_DIR"
+
+# The system xcrun refuses to start when DEVELOPER_DIR does not contain an
+# xcrun of its own ("invalid DEVELOPER_DIR path (...), missing xcrun at:
+# .../usr/bin/xcrun"), and libsystem_kernel's mach_install_mig.sh recipe sets
+# DEVELOPER_DIR=${ROOT_BINARY_DIR}/Developer before calling
+# `xcrun -sdk $SDKROOT -find mig`. Shim it, clearing DEVELOPER_DIR so we
+# forward to the stock xcrun instead of recursing into this file.
+cat > "$DEVBIN/xcrun" <<EOF
+#!/bin/sh
+# Shim installed by tools/bootlab/build-libraries.sh. See that script.
+#
+# "xcrun -sdk <sdk> -find <tool>" is answered locally for the tools this tree
+# owns. Delegating is not an option: the real xcrun is itself a shim that
+# dlopens libxcsdk.dylib out of \$DEVELOPER_DIR/usr/lib, and that library ships
+# only with a full Xcode. On a Command-Line-Tools-only host it is absent, so
+# forwarding produced
+#   Reason: tried: '\$ORIGIN/../lib/libxcsdk.dylib' (no such file)
+# and mach_install_mig.sh aborted with 134 before generating anything. We
+# already know where mig/cc/c++ live, so answer -find directly and only
+# delegate for anything else.
+for t in mig cc c++; do
+    if [ -x "$TOOLCHAIN_DIR/usr/bin/\$t" ] || [ -x "\$DEVBIN/\$t" ]; then
+        for a in "\$@"; do
+            if [ "\$a" = "-find" ]; then found=1; fi
+            if [ -n "\${found:-}" ] && [ "\$a" = "\$t" ]; then
+                if [ -x "\$DEVBIN/\$t" ]; then echo "\$DEVBIN/\$t"; else
+                    echo "$TOOLCHAIN_DIR/usr/bin/\$t"; fi
+                exit 0
+            fi
+        done
+    fi
+done
+unset DEVELOPER_DIR
+exec $(command -v xcrun) "\$@"
+EOF
+chmod +x "$DEVBIN/xcrun"
+
+# Tools `xcrun -find` has to resolve. Prefer a real built tool when the tree
+# already has one (Libraries/ builds mig into $TOOLCHAIN_DIR), else the host
+# Command Line Tools, which ships a working mig.
+#
+# migcom is not optional: the CLT mig re-invokes itself through it, as
+#   M=${MIGCOM-$(realpath "${scriptRoot}/../libexec/migcom")}
+#   ... | "$M" "${migflags[@]}"
+# Symlinking mig alone into $TOOLCHAIN_DIR/usr/bin moves scriptRoot, so
+# ../libexec/migcom no longer resolves and every run dies with
+#   mig: line 183: : command not found
+#   cc: error: unable to execute command: Broken pipe: 13
+# Lay the toolchain out the way mig expects, with libexec alongside.
+for t in mig cc c++; do
+    [ -x "$TOOLCHAIN_DIR/usr/bin/$t" ] && continue
+    p="$(xcrun -f "$t" 2>/dev/null)"
+    [ -x "$p" ] && ln -sf "$p" "$TOOLCHAIN_DIR/usr/bin/$t"
+done
+if [ ! -x "$TOOLCHAIN_DIR/usr/libexec/migcom" ]; then
+    for p in "$(xcrun -f migcom 2>/dev/null)" \
+             "$(dirname "$(xcrun -f mig 2>/dev/null)")/../libexec/migcom" \
+             /Library/Developer/CommandLineTools/usr/libexec/migcom \
+             /Applications/Xcode.app/Contents/Developer/usr/libexec/migcom; do
+        if [ -n "$p" ] && [ -x "$p" ]; then
+            mkdir -p "$TOOLCHAIN_DIR/usr/libexec"
+            ln -sf "$p" "$TOOLCHAIN_DIR/usr/libexec/migcom"
+            break
+        fi
+    done
+fi
+[ -e "$DEVBIN/mig" ] || ln -sf "$TOOLCHAIN_DIR/usr/bin/mig" "$DEVBIN/mig"
+[ -e "$DEVBIN/cc" ]  || ln -sf "$TOOLCHAIN_DIR/usr/bin/cc"  "$DEVBIN/cc"
+
+export MIG="$TOOLCHAIN_DIR/usr/bin/mig"
+export MIGCC="$TOOLCHAIN_DIR/usr/bin/cc"
+export MIGCOM="$TOOLCHAIN_DIR/usr/libexec/migcom"
+# CXX must be the *wrapper*, not a bare compiler. bsd.*.mk resolves CXX from
+# ${TOOLCHAIN}, which does not exist, so it has to be pointed somewhere; but
+# pointing it at $TOOLCHAIN_DIR/usr/bin/c++ routes every C++ translation unit
+# around isysroot-cc, and --sysroot then stays --sysroot, so clang falls back
+# to the host Command Line Tools SDK and its headers leak in ahead of ours.
+# That is exactly the chain Libraries/objc4 hit, because its Makefile compiles
+# .mm files with ${CXX} directly:
+#   /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/_stdlib.h:70
+#   -> Kernel/xnu/bsd/sys/wait.h:110
+#   -> Kernel/xnu/bsd/sys/resource.h:209: error: unknown type name 'uint8_t'
+# The wrapper is clang++-compatible, so C++ and Objective-C++ work through it.
+export CXX="$HERE/isysroot-cc"
+
+# Developer/Default.xctoolchain in the source tree is a source layout with no
+# built tools, so bsd.*.mk resolves ar/nm/strip/etc. to nonexistent paths. Point
+# them at the host Command Line Tools. LD is left alone: it is passed to
+# clang as -fuse-ld=<name>, not used as a path.
+export REAL_AR="/usr/bin/ar"
+for t in ranlib nm otool strip libtool dsymutil; do
+    p="$(xcrun -f "$t" 2>/dev/null)"
+    [ -x "$p" ] || p="/usr/bin/$t"
+    [ -x "$p" ] && export "$(echo "$t" | tr a-z A-Z)=$p"
+done
+export AR="$HERE/macar"        # drops the -D that Darwin ar rejects
+export LD="ld"
+
+# ---------------------------------------------------------------------------
+# SDK header synchronization
+# ---------------------------------------------------------------------------
+# The build SDK is missing AvailabilityInternalPrivate.h, which
+# Kernel/xnu/bsd/sys/resource_private.h and mach/exclaves.h include
+# unconditionally for userspace. Install ours if absent.
+for h in AvailabilityInternalPrivate.h; do
+    [ -f "$ROOT/Developer/ravynOS.sdk/usr/include/$h" ] || continue
+    [ -f "$SDK/usr/include/$h" ] || cp -f "$ROOT/Developer/ravynOS.sdk/usr/include/$h" "$SDK/usr/include/$h"
+done
+
+# mach/message.h is the header the SDK has the most of and the least of. The
+# SDK copy is 35,792 B against osfmk/mach/message.h's 62,286 B, and it has NO
+# `#if PRIVATE` region at all -- the whole private block was stripped. That is
+# the entire mach_msg.c failure:
+#   mach_msg.c:75:15:  error: unknown type name 'mach_msg_option64_t'
+#   mach_msg.c:78:18:  error: use of undeclared identifier 'MACH64_SEND_MSG'
+#   mach_msg.c:205:2:   error: use of undeclared identifier 'mach_msg_vector_t'
+#
+# SOURCED verbatim from osfmk/mach/message.h in three pieces, each with its
+# source line named beside it in the file:
+#   :1018       MACH_SEND_FILTER_NONFATAL (the one prerequisite the SDK lacks)
+#   :605-624    mach_msgv_index_t, MACH_MSGV_MAX_COUNT,
+#               LIBSYSCALL_MSGV_AUX_MAX_SIZE, mach_msg_vector_t
+#   :1042-1161  __options_decl(mach_msg_option64_t, ...) and every MACH64_* bit
+# :625-630 is deliberately omitted: it redefines mach_msg_aux_header_t, which
+# this file already carries from the original sourcing further down.
+#
+# Same source as the port block, and for the same reason --
+# LIBSYSTEM-KERNEL-BUILD-NOTES.md sec. 28 and 33. This project builds the
+# kernel these types describe; Kernel/xnu is pristine from 394fe3eac3
+# "Transplant Darwin 24.0 (xnu-11215) kernel" and the built kernel's banner is
+# "Darwin Kernel Version 24.3.0". A wrong struct layout would corrupt
+# silently, so the block is copied rather than reconstructed -- and 22 of the
+# 23 MACH64_* values are aliases of mach_msg_option_t bits the SDK already
+# defines, with MACH_SEND_FILTER_NONFATAL (0x00010000) being the same bit the
+# SDK already assigns to MACH_SEND_ALWAYS.
+#
+# The census (LIBSYSTEM-KERNEL-BUILD-NOTES.md sec. 13) found 15 constants,
+# across 7 headers, that Kernel/xnu/libsyscall references and the SDK mach
+# tree does not define. They are SOURCED verbatim from in-tree xnu in the
+# source SDK and synced here with cp -f, so a regenerated SDK keeps them.
+for h in coalition.h machine.h host_special_ports.h message.h mach_param.h \
+         port.h task_special_ports.h thread_special_ports.h; do
+    [ -f "$ROOT/Developer/ravynOS.sdk/usr/include/mach/$h" ] || continue
+    mkdir -p "$SDK/usr/include/mach"
+    cp -f "$ROOT/Developer/ravynOS.sdk/usr/include/mach/$h" "$SDK/usr/include/mach/$h"
+done
+
+for h in usr/include/mach/message.h \
+         System/Library/Frameworks/System.framework/Versions/B/PrivateHeaders/mach/message.h; do
+    [ -f "$ROOT/Developer/ravynOS.sdk/$h" ] || continue
+    mkdir -p "$SDK/$(dirname "$h")"
+    cp -f "$ROOT/Developer/ravynOS.sdk/$h" "$SDK/$h"
+done
+
+# architecture/i386/asm_help.h had UNWIND_PROLOGUE and UNWIND_EPILOGUE stripped
+# out of its #ifdef __ASSEMBLER__ block, in the SOURCE SDK as well as the
+# generated one. SYS.h expands UNWIND_EPILOGUE, so every generated syscall
+# stub died with
+#   error: invalid instruction mnemonic 'unwind_epilogue'
+# (the assembler lowercases the token in its diagnostic, which is why the
+# string could not be found by searching for what the error said).
+# The source copy is the ravynOS x86_64 port, not Apple's, so it must be
+# refreshed IN PLACE rather than replaced from Apple's header.
+# Synced unconditionally: -f, so a stale generated copy is overwritten rather
+# than skipped by the -f "only if absent" logic above.
+for h in architecture/i386/asm_help.h architecture/i386/reg_help.h \
+         architecture/arm/asm_help.h architecture/arm64/asm_help.h; do
+    [ -f "$ROOT/Developer/ravynOS.sdk/usr/include/$h" ] || continue
+    mkdir -p "$SDK/usr/include/$(dirname "$h")"
+    cp -f "$ROOT/Developer/ravynOS.sdk/usr/include/$h" "$SDK/usr/include/$h"
+done
+
+# IOKit.framework in the SDK is structurally incomplete: it has
+# Versions/A/{Headers,PrivateHeaders} and nothing else -- no Versions/Current
+# and no top-level Headers symlink. clang's framework-style include lookup
+# needs those two, so every `#include <IOKit/...>` failed with
+#   Kernel/xnu/libsyscall/mach/err_iokit.sub:31:10: fatal error:
+#       'IOKit/IOReturn.h' file not found
+#   note: did not find header 'IOReturn.h' in framework 'IOKit'
+# even though IOReturn.h is present and correct. The header CONTENT is not the
+# problem: `diff -rq` between the SDK's IOKit.framework/Versions/A/Headers and
+# Kernel/xnu/BUILD/dst/System/Library/Frameworks/IOKit.framework/Versions/A/
+# Headers reports no differences at all, so the SDK already carries the right
+# generation. Only the two symlinks are missing.
+#
+# The symlink form is copied from System.framework, which resolves correctly:
+#   Versions/Current -> A          (System.framework has -> B)
+#   Headers         -> Versions/Current/Headers
+# Idempotent, and it repairs structure rather than inventing content.
+IOK="$SDK/System/Library/Frameworks/IOKit.framework"
+if [ -d "$IOK/Versions/A" ]; then
+    [ -e "$IOK/Versions/Current" ] || ln -s A "$IOK/Versions/Current"
+    [ -e "$IOK/Headers" ] || ln -s Versions/Current/Headers "$IOK/Headers"
+    [ -e "$IOK/PrivateHeaders" ] ||
+        ln -s Versions/Current/PrivateHeaders "$IOK/PrivateHeaders"
+fi
+
+# System.framework has the same structural gap as IOKit had, and it is the one
+# that blocks the dyld loader. Versions/B/PrivateHeaders/ is present and
+# complete (186 headers under sys/, 18,015 B event.h among them), and
+# Versions/Current -> B plus top-level PrivateHeaders/Resources/System
+# symlinks all exist -- but there is no Headers directory and no top-level
+# Headers symlink. clang's framework-style include lookup resolves
+# `#include <System/sys/event.h>` through Headers/, so every <System/...>
+# include in dyld failed with:
+#   fatal error: 'System/sys/event.h' file not found
+# even though the header is present and correct. Header CONTENT was never the
+# problem; the same is true here.
+#
+# Repaired structurally, in the SDK rather than in dyld's makefile, so that
+# every consumer of <System/...> is repaired rather than each one adding its
+# own -I. Two links are needed, and the form is the one already used for
+# IOKit above: Versions/B/Headers points at the real PrivateHeaders tree, and
+# the top-level Headers points through Versions/Current. Idempotent, and it
+# repairs structure rather than inventing content.
+SYSF="$SDK/System/Library/Frameworks/System.framework"
+if [ -d "$SYSF/Versions/B/PrivateHeaders" ]; then
+    [ -e "$SYSF/Versions/B/Headers" ] || ln -s PrivateHeaders "$SYSF/Versions/B/Headers"
+    [ -e "$SYSF/Headers" ] || ln -s Versions/Current/Headers "$SYSF/Headers"
+fi
+
+# libCrashReporterClient.a -- the dyld LOADER cannot use the .dylib.
+# ld64 in -dylinker mode searches -L but will not accept a dylib, so with only
+# usr/lib/system/libCrashReporterClient.dylib present the loader link dies with
+#   ld: library 'CrashReporterClient' not found
+# even though the dylib is present, valid, x86_64, and named on an -L path
+# that is in the final argument list. This is not a broken library: putting a
+# real .a on the same -L changes the error to "symbol(s) not found", i.e. the
+# library is then located. It is also not a defect -- a dylinker is a
+# self-contained image and is meant to link archives, which is why
+# libunwind.a, libkernel.a, libc.a, libpthread.a, libplatform.a, libc++.a and
+# libc++abi.a are ALL already present as .a in this SDK. This one archive was
+# built and simply never installed.
+if [ -f "$ROOT/Libraries/CrashReporterClient/libCrashReporterClient.a" ]; then
+    mkdir -p "$SDK/usr/lib/system"
+    cp -f "$ROOT/Libraries/CrashReporterClient/libCrashReporterClient.a" \
+          "$SDK/usr/lib/system/libCrashReporterClient.a"
+fi
+
+# IOKitLib.h is NOT in the SDK, and not in xnu either -- xnu does not ship the
+# IOKit userspace library, so the IOKit.framework copy above is complete for
+# xnu's purposes and still short of what libsyscall's err_iokit.sub reaches:
+#   Frameworks/IOKit/firewire/IOFireWireLib.h:224 -> <IOKit/IOCFPlugIn.h>
+#   Frameworks/IOKit/IOCFPlugIn.h:37            -> <IOKit/IOKitLib.h>
+# We own a genuine Apple copy of it, twice and byte-identical:
+#   Kernel/IOKitUser/IOKitLib.h                    76,961 B
+#   Kernel/kext_tools/FILES/3rd/IOKit/IOKitLib.h   76,961 B
+# Copied from the former, not invented and not taken from the host macOS SDK.
+# Checked for a generation clash before installing: the 21 k*-symbols
+# IOKitLib.h names that come from IOKitKeys.h/IOTypes.h/IOReturn.h are all
+# present in the SDK's IOKit headers. The four that are not (kIOMasterPortDefault,
+# kIORegistryIterateParents, kIORegistryIterateRecursively,
+# kIOServiceInteractionAllowed) are declared inside IOKitLib.h itself, so their
+# absence elsewhere is expected rather than a gap.
+IOKLIB_SRC="$ROOT/Kernel/IOKitUser/IOKitLib.h"
+if [ -f "$IOKLIB_SRC" ] && [ -d "$IOK/Versions/A/Headers" ]; then
+    cmp -s "$IOKLIB_SRC" "$IOK/Versions/A/Headers/IOKitLib.h" 2>/dev/null ||
+        cp -f "$IOKLIB_SRC" "$IOK/Versions/A/Headers/IOKitLib.h"
+fi
+
+
+# The SDK carries several mach/ header trees, and whichever comes first on the
+# include path wins -- they share an include guard, so only the first is ever
+# read. Refresh them all. Copy-only, so headers that exist solely in the build
+# SDK are left alone.
+sync_mach() {
+    [ -d "$1" ] && [ -d "$2" ] || return 0
+    ( cd "$1" && find . -name '*.h' -exec sh -c \
+        'for f do cmp -s "$f" "$0/$f" 2>/dev/null || cp -f "$f" "$0/$f"; done' \
+        "$2" {} + ) 2>/dev/null
+    return 0
+}
+
+# Source of truth for mach/: Developer/ravynOS.sdk, i.e. this project's own SDK
+# tree. It is internally consistent (mach_types.h and task.h both carry the
+# suid_cred_* family) and it is what produced the 154 libsystem_platform and
+# 212 libsystem_info objects.
+#
+# Do NOT substitute the in-tree xnu mach trees here, even though they are a
+# different generation. Measured, both ways:
+#   - Kernel/xnu/BUILD/dst/.../PrivateHeaders/mach (114 files) supplies
+#     mach_msg_aux_header_t (message.h:629) and LIBSYSCALL_MSGV_AUX_MAX_SIZE
+#     (:615), which the SDK's 902-line message.h lacks -- but its mach_types.h
+#     has no suid_cred_*, so mach/task.h:846 dies with
+#     "unknown type name 'suid_cred_path_t'".
+#   - Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk/mach (107 files, has task.h)
+#     replaces both consistently, and then
+#     "libsyscall/mach/mach/mach_init.h:79:18: error: conflicting types for
+#     'mach_task_is_self'" -- the xnu's own mach.h and the SDK's disagree.
+# Both substitutions are strictly worse than the one missing type, which
+# isysroot-cc supplies directly (see the compat header it force-includes).
+#
+# Note this cannot fix libxpc / libsystem_asl / libsystem_dnssd either: they
+# also put ${SLF}/Kernel.framework/Versions/A/{,Private}Headers on the include
+# path, and that tree is the *kernel-internal* mach generation -- it declares
+# io_main_t and ipc_space_read_t, which exist only under KERNEL, so it fails
+# with "unknown type name 'io_main_t'". Developer/ravynOS.sdk has no
+# Kernel.framework at all, so there is nothing to refresh it from.
+SRV="$ROOT/Developer/ravynOS.sdk"
+sync_mach "$SRV/usr/include/mach" "$SDK/usr/include/mach"
+sync_mach "$SRV/System/Library/Frameworks/System.framework/Versions/B/PrivateHeaders/mach" \
+          "$SDK/System/Library/Frameworks/System.framework/Versions/B/PrivateHeaders/mach"
+
+# sys/cdefs.h is the other split-brain header. The SDK's copy (1,010 lines) is
+# missing 60 macros that Kernel/xnu/bsd/sys/cdefs.h defines, two of which were
+# hard build failures because headers in both trees use them unconditionally:
+#   Kernel/xnu/bsd/sys/cdefs.h:167  __stateful_pure
+#       used by the SDK's own Kernel.framework/.../PrivateHeaders/string.h:276
+#         string.h:276:21: error: unknown type name '__stateful_pure'
+#   Kernel/xnu/bsd/sys/cdefs.h:451  __osloglike
+#       used by Kernel/xnu/libkern/os/log.h:69
+#         os/log.h:69:1: error: expected function body after function declarator
+#
+# Add those two, and ONLY those two, rather than overwriting the SDK's copy.
+# Copying xnu's cdefs wholesale is a regression: it is a different generation
+# that does not carry the libc variant macros, and libsystem_pthread (which has
+# no -I for libsystem_c/include and so reads the SDK's cdefs) then compiled both
+# variants/*.c to the same symbol:
+#   ld: duplicate symbol '_pthread_cond_wait$NOCANCEL' in:
+#       libsystem_pthread.a(pthread_cancelable.o)
+#       libsystem_pthread.a(pthread_cancelable_cancel.o)
+# Each is #ifndef-guarded, so this is idempotent and cannot affect a tree that
+# already has them.
+CDEFS_TAIL='
+/* --- appended by tools/bootlab/build-libraries.sh; see that script --- */
+#ifndef __stateful_pure
+#define __stateful_pure __attribute__((__pure__))
+#endif
+#ifndef __osloglike
+#define __osloglike(fmtarg, firstvararg) \
+	__attribute__((__format__ (__os_log__, fmtarg, firstvararg)))
+#endif
+/* --- end tools/bootlab/build-libraries.sh --- */
+'
+sync_cdefs() {
+    for d in "$SDK/usr/include/sys" \
+             "$SDK/System/Library/Frameworks/System.framework/Versions/B/PrivateHeaders/sys"; do
+        f="$d/cdefs.h"
+        [ -f "$f" ] || continue
+        grep -q 'appended by tools/bootlab/build-libraries.sh' "$f" && continue
+        printf '%s' "$CDEFS_TAIL" >> "$f"
+    done
+    return 0
+}
+sync_cdefs
+
+# mach_msg_aux_header_t / LIBSYSCALL_MSGV_AUX_MAX_SIZE live in this xnu's
+# osfmk/mach/message.h but in no header the SDK ships, and
+# Kernel/xnu/libsyscall uses both unconditionally. Detect that once here and
+# let isysroot-cc force-include the shim -- a whole-tree mach swap is not an
+# option, see the note above sync_mach.
+MACH_COMPAT="$HERE/ravynos-mach-compat.h"
+if [ -f "$MACH_COMPAT" ] && \
+   ! grep -q mach_msg_aux_header_t "$SDK/usr/include/mach/message.h" 2>/dev/null; then
+    export RAVYN_COMPAT_MAC_AUX="$MACH_COMPAT"
+    echo "note: mach/message.h lacks mach_msg_aux_header_t; force-including $(basename "$MACH_COMPAT")" >&2
+else
+    unset RAVYN_COMPAT_MAC_AUX
+fi
+
+
+# Pre-generate mig output for any .defs in the component being built.
+#
+# The per-project Makefiles declare the mig rules, but the static-archive
+# targets do not depend on them: libsystem_asl's .a lists asl_ipcUser.c in
+# SRCS but only the *dylib* target names asl_ipcUser.c, so building the
+# archive compiles asl.c against a header that was never generated:
+#   asl.c:60:10: fatal error: 'asl_ipc.h' file not found
+# Generate here so the static targets are self-sufficient. Existing outputs are
+# left alone.
+DEFS_ROOTS=""
+for r in "$ROOT/Kernel/xnu/BUILD/dst/usr/include" \
+         "$ROOT/Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfmk" \
+         "$ROOT/Kernel/xnu/osfmk/mach" \
+         "$ROOT/Kernel/xnu/libsyscall/mach"; do
+    [ -d "$r" ] && DEFS_ROOTS="$DEFS_ROOTS -I$r"
+done
+
+generate_mig() {
+    dir="$1"
+    [ -n "${MIG:-}" ] && [ -x "${MIG}" ] || return 0
+    for defs in "$dir"/*.defs; do
+        [ -f "$defs" ] || continue
+        base="${defs%.defs}"
+        b="${base##*/}"
+        [ -f "$base.h" ] && continue
+        # Some components also need the server-side header (-sheader), e.g.
+        # liblaunch's helper.defs -> helper.h + helperServer.h, and libvproc.c
+        # includes both:
+        #   libvproc.c:61: #include "helper.h"
+        #   libvproc.c:62: #include "helperServer.h"
+        if [ "$b" = helper ]; then
+            shhdr="-sheader ${b}Server.h"
+        else
+            shhdr=""
+        fi
+        # shellcheck disable=SC2086
+        ( cd "$dir" && "$MIG" -arch "$CpuArch" -cc "$MIGCC" $DEFS_ROOTS \
+              -header "$b.h" $shhdr "$b.defs" ) >/dev/null 2>&1 \
+            && echo "  mig: generated $b.h / ${b}User.c / ${b}Server.c" >&2
+    done
+    return 0
+}
+
+DIRS=("$@")
+[ ${#DIRS[@]} -eq 0 ] && DIRS=(MiscLibs libfirehose_kernel objc4 dyld Libsystem)
+
+rc=0
+for d in "${DIRS[@]}"; do
+    [ -d "$ROOT/Libraries/$d" ] || { echo "no such subdir: $d" >&2; rc=1; continue; }
+    generate_mig "$ROOT/Libraries/$d"
+    echo "=== building Libraries/$d ==="
+    ( cd "$ROOT/Libraries/$d" && "$BMAKE" -m "$MKMODULES" "${BMAKE_TARGET:-all}" ) || rc=1
+done
+exit $rc

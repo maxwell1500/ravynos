@@ -1,0 +1,50 @@
+# Blanket ignore non-sanitized functions
+fun:ksancov_*
+fun:kcov_*
+fun:dtrace_*
+
+# Exclude KSANCOV itself
+src:/Users/max/Projects/ravynos/Kernel/xnu/san/coverage/kcov.c
+src:/Users/max/Projects/ravynos/Kernel/xnu/san/coverage/kcov_ksancov.c
+src:/Users/max/Projects/ravynos/Kernel/xnu/san/coverage/kcov_stksz.c
+
+# Exclude KASan runtime
+src:/Users/max/Projects/ravynos/Kernel/xnu/san/memory/*
+
+src:/Users/max/Projects/ravynos/Kernel/xnu/osfmk/kern/debug.c
+
+# Calls from sanitizer hook back to kernel.
+fun:_disable_preemption
+fun:_enable_preemption
+fun:current_thread
+fun:ml_at_interrupt_context
+fun:get_interrupt_level
+fun:get_active_thread
+fun:cpu_datap
+fun:cpu_number
+fun:get_cpu_number
+fun:pmap_in_ppl
+fun:get_preemption_level
+
+# Closure of VM_KERNEL_UNSLIDE
+fun:vm_memtag_add_ptr_tag
+fun:ml_static_unslide
+fun:vm_is_addr_slid
+# ARM64 specific blacklist
+
+# Exclude KASan runtime
+src:/Users/max/Projects/ravynos/Kernel/xnu/osfmk/arm/machine_routines_common.c
+
+# These use a local variable to work out which stack we're on, but can end up with
+# a fakestack allocation.
+fun:ml_at_interrupt_context
+fun:ml_stack_remaining
+fun:ml_stack_base
+fun:ml_stack_size
+fun:kernel_preempt_check
+
+# Closure of pmap_in_ppl
+fun:pmap_interrupts_disable
+fun:pmap_get_cpu_data
+fun:ml_get_ppl_cpu_data
+fun:pmap_interrupts_restore

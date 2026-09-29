@@ -43,6 +43,10 @@ extern "C" {
 #include "MachOFile.h"
 #include "MachOLoaded.h"
 #include "CodeSigningTypes.h"
+// For _simple_dprintf(), the allocation-free print used to report an unbindable
+// chained-fixup bind.  Same include Loading.h:32 uses; Libsystem/private is
+// already on this target's include path.
+#include <_simple.h>
 
 
 
@@ -1109,11 +1113,42 @@ bool MachOLoaded::ChainedFixupPointerOnDisk::isBind(uint16_t pointerFormat, uint
 }
 
 #if BUILDING_DYLD || BUILDING_LIBDYLD
+// Report a bind this pass cannot resolve, WITHOUT allocating.
+//
+// diag.error() formats its message through _simple_salloc().  On the loader's
+// own pre-bind bootstrap path that allocation goes through the __stubs that
+// this very walk is trying to fix: __stubs[1] still holds the raw
+// dyld_chained_ptr_64_bind descriptor, the CPU jumps to a non-canonical
+// address, and the process dies with a #GP -- taking the diagnosis with it.
+// That is how a fixup pass could fail 13 times and say nothing.
+//
+// _simple_dprintf() formats into a stack buffer and write(2)s the result, so
+// it needs no heap.  DYLD-LOAD-BASE prints from this same binary at the same
+// early moment, which is the proof that this path works before any binding.
+//
+// Conversions are deliberately plain.  _simple_sprintf has no flag handling:
+// string_io.c:332 switches on ONE character after '%', '0' is a width digit,
+// and the default arm prints the character literally -- so "%#x" renders as
+// the literal text "#x" rather than a hex number.  Do not add a '#' here.
+static void reportUnbindableBind(uint64_t ordinal, uint64_t targetCount, uint64_t fixupsSeen)
+{
+    _simple_dprintf(2, "dyld: UNBINDABLE chained fixup: bind ordinal %u is out of range, "
+                       "bindTargets.count() is %u, fixups walked so far %u. The slot is left "
+                       "as a raw bind descriptor and the __stubs through it will NOT resolve.\n",
+                    (unsigned)ordinal, (unsigned)targetCount, (unsigned)fixupsSeen);
+}
+
 void MachOLoaded::fixupAllChainedFixups(Diagnostics& diag, const dyld_chained_starts_in_image* starts, uintptr_t slide,
                                         Array<const void*> bindTargets, void (^logFixup)(void* loc, void* newValue)) const
 {
+    __block uint64_t fixupsSeen = 0;
     forEachFixupInAllChains(diag, starts, true, ^(ChainedFixupPointerOnDisk* fixupLoc, const dyld_chained_starts_in_segment* segInfo, bool& stop) {
-        void* newValue;
+        ++fixupsSeen;
+        // Initialised because every error path below used to fall through to
+        // "fixupLoc->raw64 = (uintptr_t)newValue" with newValue never assigned,
+        // storing an indeterminate value into a __got slot.  See the comment on
+        // the "stop = true" arms.
+        void* newValue = nullptr;
         switch (segInfo->pointer_format) {
 #if __LP64__
   #if  __has_feature(ptrauth_calls)
@@ -1204,9 +1239,14 @@ void MachOLoaded::fixupAllChainedFixups(Diagnostics& diag, const dyld_chained_st
             case DYLD_CHAINED_PTR_64:
                 if ( fixupLoc->generic64.bind.bind ) {
                     if ( fixupLoc->generic64.bind.ordinal >= bindTargets.count() ) {
+                        // fixupsSeen was already incremented for THIS fixup at the
+                        // top of the block; incrementing again here over-reported
+                        // the walk position by one.  Corrected after a boot printed
+                        // "4" where the __got shows two rebases then this bind.
+                        reportUnbindableBind(fixupLoc->generic64.bind.ordinal, bindTargets.count(), fixupsSeen);
                         diag.error("out of range bind ordinal %d (max %lu)", fixupLoc->generic64.bind.ordinal, bindTargets.count());
                         stop = true;
-                        break;
+                        return;   // not "break": that exits only the switch, and the write below would still run
                     }
                     else {
                         newValue = (void*)((long)bindTargets[fixupLoc->generic64.bind.ordinal] + fixupLoc->generic64.signExtendedAddend());
@@ -1222,9 +1262,12 @@ void MachOLoaded::fixupAllChainedFixups(Diagnostics& diag, const dyld_chained_st
             case DYLD_CHAINED_PTR_64_OFFSET:
                 if ( fixupLoc->generic64.bind.bind ) {
                     if ( fixupLoc->generic64.bind.ordinal >= bindTargets.count() ) {
+                        // already counted at the top of the block; see the note on the
+                        // DYLD_CHAINED_PTR_64 arm above.
+                        reportUnbindableBind(fixupLoc->generic64.bind.ordinal, bindTargets.count(), fixupsSeen);
                         diag.error("out of range bind ordinal %d (max %lu)", fixupLoc->generic64.bind.ordinal, bindTargets.count());
                         stop = true;
-                        break;
+                        return;   // not "break": that exits only the switch, and the write below would still run
                     }
                     else {
                         newValue = (void*)((long)bindTargets[fixupLoc->generic64.bind.ordinal] + fixupLoc->generic64.signExtendedAddend());
@@ -1243,7 +1286,7 @@ void MachOLoaded::fixupAllChainedFixups(Diagnostics& diag, const dyld_chained_st
                     if ( fixupLoc->generic32.bind.ordinal >= bindTargets.count() ) {
                         diag.error("out of range bind ordinal %d (max %lu)", fixupLoc->generic32.bind.ordinal, bindTargets.count());
                         stop = true;
-                        break;
+                        return;   // not "break": that exits only the switch, and the write below would still run
                     }
                     else {
                         newValue = (void*)((long)bindTargets[fixupLoc->generic32.bind.ordinal] + fixupLoc->generic32.bind.addend);
@@ -1267,7 +1310,7 @@ void MachOLoaded::fixupAllChainedFixups(Diagnostics& diag, const dyld_chained_st
             default:
                 diag.error("unsupported pointer chain format: 0x%04X", segInfo->pointer_format);
                 stop = true;
-                break;
+                return;       // not "break": that exits only the switch, and the write below would still run
         }
     });
 }
@@ -1339,7 +1382,10 @@ void MachOLoaded::forEachFixupInAllChains(Diagnostics& diag, const dyld_chained_
                 // 32-bit chains which may need multiple starts per page
                 uint32_t overflowIndex = offsetInPage & ~DYLD_CHAINED_PTR_START_MULTI;
                 bool chainEnd = false;
-                while (!stopped && !chainEnd) {
+                // BOUNDED BY THE HEADER, which the loop below was not.  See the
+                // long note under "WHY THE overflowIndex BOUND" below before
+                // removing it.
+                while (!stopped && !chainEnd && overflowIndex < segInfo->page_count) {
                     chainEnd = (segInfo->page_start[overflowIndex] & DYLD_CHAINED_PTR_START_LAST);
                     offsetInPage = (segInfo->page_start[overflowIndex] & ~DYLD_CHAINED_PTR_START_LAST);
                     if ( walkChain(diag, segInfo, pageIndex, offsetInPage, notifyNonPointers, handler) )
@@ -1347,6 +1393,59 @@ void MachOLoaded::forEachFixupInAllChains(Diagnostics& diag, const dyld_chained_
                     ++overflowIndex;
                 }
             }
+
+// ---------------------------------------------------------------------------
+// WHY THE overflowIndex BOUND
+// ---------------------------------------------------------------------------
+// This loop's ONLY exit was finding a DYLD_CHAINED_PTR_START_LAST sentinel in
+// page_start[overflowIndex], while overflowIndex was incremented every
+// iteration with no check that it was still inside the array.  The two loops
+// around it are both correctly bounded -- the segment loop by starts->seg_count
+// and the page loop by segInfo->page_count -- which makes the missing check
+// here easy to miss, because the function looks bounded at a glance.
+//
+// WHY IT MATTERS, and the evidence is behavioural rather than theoretical: the
+// fault this project spent twenty-five boots on was localised to _put_c+0x47 by
+// symbol-table lookup and disassembly, and that localisation did not survive a
+// recompile.  Adding ONE debug print to put_c, relinking, and booting moved the
+// failure from inside the loader to a kernel panic before the loader's first
+// diagnostic.  A walk whose extent past its intended end is set by whatever
+// bytes follow page_start[] in memory produces exactly that: the bytes are the
+// loader's own relocated data, so they change with every link, and the fault
+// lands somewhere new each time.  A RIP inside a function is evidence about a
+// binary, not about a fault.
+//
+// The bound is page_count, because page_count is how many page_start entries
+// the header declares -- the overflow entries live in the same array and are
+// counted there.  This makes the loop terminate on the header rather than on a
+// sentinel that may never appear.
+//
+// VERIFIED BEHAVIOURALLY, by two controls run after this change.  The claim
+// under test was that the fault SITE depended on where things landed in the
+// image.  Before this bound, four changes in twenty-five boots moved it; after,
+// two deliberate layout shifts did not:
+//
+//   BASELINE-CLEAN     674 lines   no bound, no perturbation
+//   WALK-BOUNDED       673 lines   bound only
+//   CONTROL-PERTURB    673 lines   bound + layout shift #1 (missing_symbol_stubs.c,
+//                                  md5 275464e1.. -> 97b5b997..)
+//   CONTROL-PERTURB2   673 lines   bound + layout shift #2 (BootArgs.cpp, a
+//                                  different TU and a different size,
+//                                  md5 97b5b997.. -> 1f386ba0..)
+//
+// Both controls changed no logic, called nothing, and read nothing the walk
+// touches.  Both left the log length and the UNBINDABLE line unchanged.  That
+// is the behavioural claim established: the walk no longer reads past
+// page_start[] into whatever the image happens to place next.
+//
+// WHAT IS NOT CLAIMED.  The boot is not fixed -- UNBINDABLE is byte-identical
+// for a ninth consecutive boot, 4 of 6 __got slots are unbindable binds, and
+// /bin/echo still does not execute.  This removed the INSTABILITY; the
+// unbindable binds are a separate and still-open problem, and the walk may
+// have been masking them.  The put_c print (696 lines, both diagnostics
+// absent, kernel panic before the first print) altered behaviour rather than
+// only addresses, nothing tested it, and it stays unexplained rather than
+// folded into this story.
             else {
                 // one chain per page
                 walkChain(diag, segInfo, pageIndex, offsetInPage, notifyNonPointers, handler);

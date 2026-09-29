@@ -80,12 +80,12 @@ protected:
 #endif
 	bool fIsSystem;
 
-	static void setMapperRequired(bool hasMapper);
 	static void waitForSystemMapper();
 
 	virtual bool initHardware(IOService *provider) = 0;
 
 public:
+	static void setMapperRequired(bool hasMapper);
 	virtual bool start(IOService *provider) APPLE_KEXT_OVERRIDE;
 	virtual void free() APPLE_KEXT_OVERRIDE;
 

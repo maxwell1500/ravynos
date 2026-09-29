@@ -377,17 +377,16 @@ cpu_desc_init(cpu_data_t *cdp)
 		 * KTSS with I/G/LDT and sysenter stack data.
 		 */
 		cdi->cdi_ktssu = (void *)DBLMAP(&master_ktss64);
-		cdi->cdi_ktssb = (void *)&master_ktss64;
+		cdi->cdi_ktssb = (void *)((uintptr_t)&master_ktss64 + vm_kernel_slide);
 		cdi->cdi_sstku = (vm_offset_t) DBLMAP(&master_sstk.top);
-		cdi->cdi_sstkb = (vm_offset_t) &master_sstk.top;
+		cdi->cdi_sstkb = (vm_offset_t) &master_sstk.top + vm_kernel_slide;
 
 		cdi->cdi_gdtu.ptr = (void *)DBLMAP((uintptr_t) &master_gdt);
-		cdi->cdi_gdtb.ptr = (void *)&master_gdt;
+		cdi->cdi_gdtb.ptr = (void *)((uintptr_t)&master_gdt + vm_kernel_slide);
 		cdi->cdi_idtu.ptr  = (void *)DBLMAP((uintptr_t) &master_idt64);
-		cdi->cdi_idtb.ptr  = (void *)((uintptr_t) &master_idt64);
+		cdi->cdi_idtb.ptr  = (void *)((uintptr_t)&master_idt64 + vm_kernel_slide);
 		cdi->cdi_ldtu  = (struct real_descriptor *)DBLMAP((uintptr_t)&master_ldt[0]);
-		cdi->cdi_ldtb  = &master_ldt[0];
-
+		cdi->cdi_ldtb  = (struct real_descriptor *)((uintptr_t)&master_ldt[0] + vm_kernel_slide);
 		/* Replace the expanded LDTs and TSS slots in the GDT */
 		kernel_ldt_desc64.offset64 = (uintptr_t) cdi->cdi_ldtu;
 		*(struct fake_descriptor64 *) &master_gdt[sel_idx(KERNEL_LDT)] =
@@ -595,7 +594,10 @@ cpu_data_alloc(boolean_t is_boot_cpu)
 
 	if (is_boot_cpu) {
 		assert(real_ncpus == 1);
-		cdp = cpu_datap(0);
+		cdp = &scdatas[0];
+		cpu_data_ptr[0] = cdp;
+		cdp->cpu_this = cdp;
+		cdp->cd_shadow = &cpshadows[0];
 		if (cdp->cpu_processor == NULL) {
 			simple_lock_init(&ncpus_lock, 0);
 			cdp->cpu_processor = PERCPU_GET_MASTER(processor);
@@ -810,6 +812,7 @@ cpu_data_realloc(void)
 	assert(cpu_number() == 0);
 	bcopy((void *) cpu_data_ptr[0], (void*) cdp, sizeof(cpu_data_t));
 	cdp->cpu_this = cdp;
+	cdp->cd_shadow = &cpshadows[0];
 	cdp->cpu_int_stack_top = istk;
 	timer_call_queue_init(&cdp->rtclock_timer.queue);
 	cdp->cpu_desc_tablep = (struct cpu_desc_table *) &scdtables[0];

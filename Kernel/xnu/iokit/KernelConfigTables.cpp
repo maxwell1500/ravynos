@@ -35,6 +35,11 @@
 const char * gIOKernelConfigTables =
     "("
     "   {"
+    "     'IOClass'         = IOStandardPlatform;"
+    "     'IOProviderClass' = IOPlatformExpertDevice;"
+    "     'IOProbeScore'    = 1000:32;"
+    "   },"
+    "   {"
     "     'IOClass'         = IOPanicPlatform;"
     "     'IOProviderClass' = IOPlatformExpertDevice;"
     "     'IOProbeScore'    = 0:32;"

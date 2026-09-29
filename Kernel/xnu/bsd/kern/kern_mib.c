@@ -509,7 +509,12 @@ sysctl_hw_generic(__unused struct sysctl_oid *oidp, void *arg1,
 	case HW_TARGET:
 		bzero(dummy, sizeof(dummy));
 		if (!PEGetTargetName(dummy, 64)) {
-			return EINVAL;
+			/* ravynOS bringup: no target in the device tree (and the
+			 * base IOPlatformExpert has none either). Report the legacy
+			 * x86 platform instead of EINVAL: dyld's ignition treats any
+			 * error other than ENOENT/EPERM as fatal and reboots. This
+			 * matches dyld's own default for kernels without hw.target. */
+			strlcpy(dummy, "x86legacyap", sizeof(dummy));
 		}
 		dummy[64] = 0;
 		return SYSCTL_OUT(req, dummy, strlen(dummy) + 1);
@@ -742,12 +747,7 @@ sysctl_osenvironment
 #if defined(__x86_64__)
 #if (DEVELOPMENT || DEBUG)
 	if (os_atomic_load(&osenvironment_initialized, relaxed) == 0) {
-		assert_wait((event_t) &osenvironment_initialized, THREAD_UNINT);
-		if (os_atomic_load(&osenvironment_initialized, relaxed) != 0) {
-			clear_wait(current_thread(), THREAD_AWAKENED);
-		} else {
-			(void) thread_block(THREAD_CONTINUE_NULL);
-		}
+		return EINVAL;
 	}
 #endif
 #endif
@@ -756,6 +756,38 @@ sysctl_osenvironment
 	} else {
 		return EINVAL;
 	}
+}
+
+SYSCTL_DECL(_security_mac);
+SYSCTL_DECL(_security_mac_img4);
+
+/*
+ * ravynOS bringup: sink for dyld's ignition Boot/Restore-Action failure
+ * blob (security.mac.img4.ignition_failure_blob). dyld writes its fatal
+ * ignition message here just before rebooting, without printing it to the
+ * console, so log it to the serial console for diagnosis.
+ */
+static int
+sysctl_ignition_failure_blob(__unused struct sysctl_oid *oidp, __unused void *arg1, __unused int arg2, struct sysctl_req *req)
+{
+	char buf[512];
+	size_t len;
+	int error;
+
+	if (req->newptr == NULL) {
+		return 0;
+	}
+	len = req->newlen;
+	if (len > sizeof(buf) - 1) {
+		len = sizeof(buf) - 1;
+	}
+	error = SYSCTL_IN(req, buf, len);
+	if (error != 0) {
+		return error;
+	}
+	buf[len] = '\0';
+	printf("ignition BRA failure blob: %s\n", buf);
+	return 0;
 }
 
 static int
@@ -933,6 +965,8 @@ SYSCTL_INT(_hw, OID_AUTO, packages, CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, 
 SYSCTL_UINT(_hw, OID_AUTO, chiprole, CTLFLAG_RD | CTLFLAG_NOAUTO | CTLFLAG_KERN | CTLFLAG_LOCKED, &gPlatformChipRole, 1, "");
 #endif /* not XNU_TARGET_OS_XR */
 SYSCTL_PROC(_hw, OID_AUTO, osenvironment, CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, 0, 0, sysctl_osenvironment, "A", "");
+SYSCTL_NODE(_security_mac, OID_AUTO, img4, CTLFLAG_RD, 0, "img4 failure blobs");
+SYSCTL_PROC(_security_mac_img4, OID_AUTO, ignition_failure_blob, CTLTYPE_OPAQUE | CTLFLAG_RW | CTLFLAG_ANYBODY | CTLFLAG_LOCKED, 0, 0, sysctl_ignition_failure_blob, "-", "dyld ignition failure blob sink");
 SYSCTL_PROC(_hw, OID_AUTO, ephemeral_storage, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, 0, 0, sysctl_ephemeral_storage, "I", "");
 SYSCTL_PROC(_hw, OID_AUTO, use_recovery_securityd, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, 0, 0, sysctl_use_recovery_securityd, "I", "");
 SYSCTL_PROC(_hw, OID_AUTO, use_kernelmanagerd, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, 0, 0, sysctl_use_kernelmanagerd, "I", "");

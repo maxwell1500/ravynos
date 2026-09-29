@@ -57,8 +57,25 @@ chomp @sources;
 
 undef $f;
 
-# compiler options
-chomp(my $CC = `xcrun -sdk "$ENV{'SDKROOT'}" -find cc`);
+# Compiler options.
+#
+# Honour $CC from the environment if the caller set one. Previously this was
+# hardcoded to `xcrun -sdk $SDKROOT -find cc`, which made the ~454 generated
+# syscall stubs the ONLY translation units in the whole Libsystem build that
+# did not go through the build's compiler wrapper (tools/bootlab/isysroot-cc).
+# Every other component got --isysroot instead of --sysroot, the injected
+# __DARWIN_* platform defines, and the wrapper's other corrections; the stubs
+# got none of them, and failed with
+#   sys/___accept.s:9:354: error: invalid instruction mnemonic 'unwind_epilogue'
+# (a token that appears in no source file, no SDK header, and no preprocessed
+# output -- the wrapper simply was not in the path).
+#
+# Honouring $CC is the conventional escape hatch and is correct on a machine
+# where `xcrun` is right too, which is why this prefers $CC over rewriting
+# xcrun. SDKROOT is still required and is used below for the -I paths.
+chomp(my $CC = $ENV{'CC'} && length $ENV{'CC'}
+      ? $ENV{'CC'}
+      : `xcrun -sdk "$ENV{'SDKROOT'}" -find cc`);
 my @CFLAGS = (
 	"-x assembler-with-cpp",
 	"-c",
@@ -68,7 +85,9 @@ my @CFLAGS = (
 	"-I".$ENV{"SDKROOT"}."/".$ENV{"SDK_INSTALL_HEADERS_ROOT"}."/System/Library/Frameworks/System.framework/PrivateHeaders",
 );
 
-chomp(my $LIBTOOL = `xcrun -sdk "$ENV{'SDKROOT'}" -find libtool`);
+chomp(my $LIBTOOL = $ENV{'LIBTOOL'} && length $ENV{'LIBTOOL'}
+      ? $ENV{'LIBTOOL'}
+      : `xcrun -sdk "$ENV{'SDKROOT'}" -find libtool`);
 my @LIBTOOLFLAGS = (
 	"-static",
 );

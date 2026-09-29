@@ -2319,6 +2319,9 @@ vc_display_lzss_icon(uint32_t dst_x, uint32_t dst_y,
     uint32_t       compressed_size,
     const uint8_t *clut)
 {
+	if (!vinfo.v_baseaddr || !vinfo.v_depth) {
+		return 0;
+	}
 	uint32_t* image_start;
 	uint32_t bytes_per_pixel = 4;
 	uint32_t bytes_per_row = vinfo.v_rowbytes;

@@ -126,6 +126,18 @@ queue_head_t            threads;
 queue_head_t            terminated_threads;
 int                     threads_count;
 int                     terminated_threads_count;
+queue_head_t *
+get_terminated_threads_queue(void)
+{
+	return &terminated_threads;
+}
+queue_head_t *
+get_threads_queue(void)
+{
+	return &threads;
+}
+
+
 LCK_GRP_DECLARE(task_lck_grp, "task");
 LCK_ATTR_DECLARE(task_lck_attr, 0, 0);
 LCK_MTX_DECLARE_ATTR(tasks_threads_lock, &task_lck_grp, &task_lck_attr);

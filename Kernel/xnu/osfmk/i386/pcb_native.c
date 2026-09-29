@@ -577,7 +577,11 @@ act_machine_switch_pcb(thread_t old, thread_t new)
 	 */
 	*current_sstk64() = pcb_stack_top;
 
-	cdp->cd_estack = cpu_shadowp(cdp->cpu_number)->cd_estack = cdp->cpu_desc_index.cdi_sstku;
+	cpu_data_t *shadow = cpu_shadowp(cdp->cpu_number);
+	cdp->cd_estack = cdp->cpu_desc_index.cdi_sstku;
+	if (shadow != NULL && (uintptr_t)shadow > VM_MIN_KERNEL_AND_KEXT_ADDRESS) {
+		shadow->cd_estack = cdp->cpu_desc_index.cdi_sstku;
+	}
 
 	if (is_saved_state64(pcb->iss)) {
 		cdp->cpu_task_map = new->map->pmap->pm_task_map;

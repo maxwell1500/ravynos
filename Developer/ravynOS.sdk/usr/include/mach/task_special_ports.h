@@ -129,4 +129,22 @@ typedef int     task_special_port_t;
 	        (task_set_special_port((task), TASK_DEBUG_CONTROL_PORT, (port)))
 
 
+
+/* --- SOURCED FROM IN-TREE XNU (see LIBSYSTEM-KERNEL-BUILD-NOTES.md sec. 13)
+ *
+ * Kernel/xnu/libsyscall references these but the SDK mach tree -- the
+ * coherent generation that this build uses wholesale -- does not define
+ * them. Each line below is copied VERBATIM from the in-tree xnu header
+ * named beside it. Sourced, not invented; nothing here is a guessed
+ * value or a synthesised struct layout.
+ *
+ * The gap is 15 constants across 7 headers, measured by intersecting the
+ * identifier sets of the two mach trees with what libsyscall references --
+ * not by compiling until the next error. Bounded and complete.
+ */
+
+/* Kernel/xnu/osfmk/mach/task_special_ports.h:80 */
+#define TASK_INSPECT_PORT       5       /* The inspect port for task. */
+/* Kernel/xnu/osfmk/mach/task_special_ports.h:82 */
+#define TASK_READ_PORT          6       /* The read port for task. */
 #endif  /* _MACH_TASK_SPECIAL_PORTS_H_ */

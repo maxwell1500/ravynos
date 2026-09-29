@@ -4,3 +4,40 @@ ravynOS.xcodeproj
 /build
 .DS_Store
 /.vscode
+/Kernel/xnu/BUILD/
+/Kernel/xnu/DEVELOPMENT_X86_64/
+/Kernel/xnu/cscope.genhdrs/
+/Kernel/xnu/.mach_kernel.timestamp
+/Kernel/xnu/.symbolset.timestamp
+/Kernel/xnu/xnuVersion
+/memory/
+/*.cpo.json
+/Kernel/xnu/*.cpo.json
+/Kernel/xnu/iokit/Kernel/*.cpo.json
+
+# Build products, not source. Libraries/dyld/dyld/dyld is a linked dyld built
+# from this tree; it was checked in by mistake and carries absolute host paths
+# (/Users/max/Projects/build/...) in its debug strings. It is ours, not Apple's,
+# but it is a build artifact and must never be committed. The Apple-derived
+# payload that genuinely must not be published is policed separately, in
+# tools/bootlab/assets/.gitignore.
+#
+# NOTE: deliberately no blanket *.o / *.d rule. 1363 .o files are tracked in
+# this repository, including unit-test fixtures under
+# Libraries/dyld/unit-tests/test-cases/, so a global object-file ignore would
+# hide real fixtures.
+/Libraries/dyld/dyld/dyld
+
+# The bootlab asset tree. Every file under it except this directory's own
+# .gitignore is an Apple product binary, a third-party EFI binary, or a
+# regenerable build artifact of this project. Measured 2026-09-28: 45 Apple
+# product binaries totalling 11,626,528 bytes. The detailed, per-file
+# provenance record is in tools/bootlab/assets/.gitignore, which IS tracked.
+#
+# The files stay on disk. boot.efi in particular is load-bearing: the boot
+# path is host OVMF -> UEFI Shell -> the typed command
+# fs0:\System\Library\CoreServices\boot.efi. Ignoring a path does not remove
+# it from the working tree, so the lab keeps working while nothing is
+# committed.
+/tools/bootlab/assets/*
+!/tools/bootlab/assets/.gitignore

@@ -126,12 +126,22 @@ STARTUP_ARG(EARLY_BOOT, STARTUP_RANK_MIDDLE, telemetry_init, NULL);
 void
 core_analytics_send_event(ca_event_t event)
 {
+	if (core_analytics_event_queue.mpd_queue.mpqh_tail == NULL) {
+		/* Telemetry daemon never started: drop the event. */
+		CA_EVENT_DEALLOCATE(event);
+		return;
+	}
 	mpsc_daemon_enqueue(&core_analytics_event_queue, &event->link, MPSC_QUEUE_DISABLE_PREEMPTION);
 }
 
 void
 core_analytics_send_event_preemption_disabled(ca_event_t event)
 {
+	if (core_analytics_event_queue.mpd_queue.mpqh_tail == NULL) {
+		/* Telemetry daemon never started: drop the event. */
+		CA_EVENT_DEALLOCATE(event);
+		return;
+	}
 	mpsc_daemon_enqueue(&core_analytics_event_queue, &event->link, MPSC_QUEUE_NONE);
 }
 

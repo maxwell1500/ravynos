@@ -40,6 +40,10 @@ MD5ToDi(const struct ccdigest_info *di, MD5_CTX *md5_ctx, struct ccdigest_ctx *d
 void
 MD5Init(MD5_CTX *ctx)
 {
+	if (!g_crypto_funcs || !g_crypto_funcs->ccmd5_di) {
+		if (ctx) memset(ctx, 0, sizeof(*ctx));
+		return;
+	}
 	const struct ccdigest_info *di = g_crypto_funcs->ccmd5_di;
 	ccdigest_di_decl(di, di_ctx);
 
@@ -51,6 +55,9 @@ MD5Init(MD5_CTX *ctx)
 void
 MD5Update(MD5_CTX *ctx, const void *data, unsigned int len)
 {
+	if (!g_crypto_funcs || !g_crypto_funcs->ccmd5_di) {
+		return;
+	}
 	const struct ccdigest_info *di = g_crypto_funcs->ccmd5_di;
 	ccdigest_di_decl(di, di_ctx);
 
@@ -62,6 +69,10 @@ MD5Update(MD5_CTX *ctx, const void *data, unsigned int len)
 void
 MD5Final(unsigned char digest[MD5_DIGEST_LENGTH], MD5_CTX *ctx)
 {
+	if (!g_crypto_funcs || !g_crypto_funcs->ccmd5_di) {
+		if (digest) memset(digest, 0, MD5_DIGEST_LENGTH);
+		return;
+	}
 	const struct ccdigest_info *di = g_crypto_funcs->ccmd5_di;
 	ccdigest_di_decl(di, di_ctx);
 

@@ -1,15 +1,13 @@
 SUBDIR =
 MK_WERROR = no
 
-.if "${.MAKE.OS}" == "Darwin"
-all:
-	@echo "stub libutil for Darwin host"
-	mkdir -p ${RAVYN_SDKROOT}/usr/lib ${SYSROOT_DIR}/usr/lib
-	touch ${RAVYN_SDKROOT}/usr/lib/libutil.dylib ${SYSROOT_DIR}/usr/lib/libutil.dylib
-	touch libutil.a
-.else
+# The old Darwin branch ran `touch` on the SDK dylib and on libutil.a, which
+# produced two 0-byte files. That is the same defect that destroyed
+# libCrashReporterClient: a 0-byte archive is rejected by ld64 outright, and a
+# 0-byte dylib loads and does nothing. This branch now BUILDS. It must never
+# touch.
 LIB = util
-	getmntopts.c \
+SRCS =	getmntopts.c \
 	humanize_number.c \
 	pidfile.c \
 	realhostname.c \
@@ -18,7 +16,6 @@ LIB = util
 	tzlink.c \
 	wipefs.cpp
 
-.endif
 
 MAN = getmntopts.3 \
       humanize_number.3 \
@@ -39,10 +36,29 @@ CXXFLAGS = -ObjC++ --sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSIO
 LDFLAGS = --sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSION_MIN} \
         -fuse-ld=${LD}
 
+# ${RAVYN_SDKROOT}/usr/include/os/object.h does not exist in this SDK; the
+# kernel flavour lives under usr/local/include/kernel/os/. Pointed at the real
+# file rather than forcing one in blindly.
 CFLAGS.tzlink.o = -I${ROOT_SOURCE_DIR}/Libraries/Libsystem/liblaunch \
-        -include${RAVYN_SDKROOT}/usr/include/os/object.h
+        -include${RAVYN_SDKROOT}/usr/local/include/kernel/os/object.h
 
 #SUBDIR = tzlinkd
 
 .include <bsd.lib.mk>
 .include <bsd.subdir.mk>
+
+# Install the built library. bsd.lib.mk produces lib${LIB}.a; the dylib is the
+# standalone form the SDK expects, built with the established recipe.
+all: ${.OBJDIR}/lib${LIB}.a ${.OBJDIR}/lib${LIB}.dylib
+
+${.OBJDIR}/lib${LIB}.dylib: ${.OBJDIR}/lib${LIB}.a
+	${CC} -shared -dylib -o ${.TARGET} \
+	  -Wl,-force_load,${.OBJDIR}/lib${LIB}.a -nodefaultlibs \
+	  -undefined dynamic_lookup -Wl,-not_for_dyld_shared_cache \
+	  -Wl,-install_name,/usr/lib/system/lib${LIB}.dylib \
+	  -Wl,-current_version,1 -Wl,-compatibility_version,1.0.0 \
+	  -L${RAVYN_SDKROOT}/usr/lib/system -L${RAVYN_SDKROOT}/usr/lib
+	mkdir -p ${RAVYN_SDKROOT}/usr/lib/system ${SYSROOT_DIR}/usr/lib/system
+	cp -f ${.TARGET} ${RAVYN_SDKROOT}/usr/lib/system/
+	cp -f ${.TARGET} ${RAVYN_SDKROOT}/usr/lib/
+	cp -f ${.TARGET} ${SYSROOT_DIR}/usr/lib/system/

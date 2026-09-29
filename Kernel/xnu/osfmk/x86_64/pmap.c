@@ -541,6 +541,11 @@ pmap_bootstrap(
 	    &no_shared_cr3, sizeof(no_shared_cr3));
 	if (no_shared_cr3) {
 		kprintf("Kernel not sharing user map\n");
+		/* Degenerate the kernel's own user tables too, so any stale
+		 * cpu_ucr3 (no pre-return switch for exec-morphed threads)
+		 * still maps all of kernel text. pm_cr3 is final here.
+		 */
+		kernel_pmap->pm_ucr3 = kernel_pmap->pm_cr3;
 	}
 
 #ifdef  PMAP_TRACES
@@ -1610,6 +1615,12 @@ pmap_create_options(
 		p->pm_eptp = 0;
 		p->pm_cr3 = (pmap_paddr_t)kvtophys((vm_offset_t)p->pm_pml4);
 		p->pm_ucr3 = (pmap_paddr_t)kvtophys((vm_offset_t)p->pm_upml4);
+		if (no_shared_cr3) {
+			/* Run user mode on the full pmap so syscall/IDT entry
+			 * points need no double-map alias (bringup).
+			 */
+			p->pm_ucr3 = p->pm_cr3;
+		}
 	}
 
 	/* allocate the vm_objs to hold the pdpt, pde and pte pages */

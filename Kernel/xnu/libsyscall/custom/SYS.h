@@ -102,6 +102,33 @@ LEAF(_##name, 0)					;\
 	BRANCH_EXTERN(tramp_cerror_nocancel) 		;\
 2:
 
+/*
+ * NO UNWIND INFORMATION IN THESE STUBS -- do not "fix" this by adding a
+ * UNWIND_PROLOGUE. See tools/bootlab/LIBSYSTEM-KERNEL-BUILD-NOTES.md sec. 7.
+ *
+ * These macros used to end with a bare UNWIND_EPILOGUE and no matching
+ * UNWIND_PROLOGUE, so every generated stub expanded to a .cfi_endproc with
+ * no .cfi_startproc before it. The assembler rejected that:
+ *   error: this directive must appear between .cfi_startproc and .cfi_endproc
+ *
+ * Removing the dangling epilogue is correct; adding a prologue is not.
+ *
+ *  1. Nothing opens a CFI region. LEAF_FUNCTION_PROLOGUE in
+ *     architecture/i386/asm_help.h emits .set __framesize, CALL_MCOUNT and
+ *     the optional pushl/movl -- never .cfi_startproc. There was never a
+ *     region for the epilogue to close.
+ *
+ *  2. These are userspace syscall stubs marked LEAF. They touch no stack
+ *     beyond the return address, so there is nothing to unwind: no exception
+ *     crosses a userspace syscall boundary, and no consumer walks these
+ *     tables.
+ *
+ *  3. Half a CFI region cannot be deliberate. This is a leftover from a
+ *     kernel-side prologue that does not exist on this path.
+ *
+ * Deleting the epilogue emits no instruction and changes no code; adding a
+ * prologue would change the emitted code. Hence this direction.
+ */
 #define PSEUDO(pseudo, name, nargs, cerror)	\
 LEAF(pseudo, 0)					;\
 	UNIX_SYSCALL_NONAME(name, nargs, cerror)
@@ -156,13 +183,11 @@ LEAF(pseudo, 0)					;\
 
 #define __SYSCALL2(pseudo, name, nargs, cerror) \
 	PSEUDO(pseudo, name, nargs, cerror)			;\
-	ret											;\
-	UNWIND_EPILOGUE
+	ret
 
 #define __SYSCALL(pseudo, name, nargs)			\
 	PSEUDO(pseudo, name, nargs, cerror)			;\
-	ret											;\
-	UNWIND_EPILOGUE
+	ret
 
 #elif defined(__arm__)
 

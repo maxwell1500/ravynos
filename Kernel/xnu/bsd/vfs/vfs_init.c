@@ -206,8 +206,7 @@ vfs_opv_init(void)
 			 * list of supported operations.
 			 */
 			if (opve_descp->opve_op->vdesc_offset == 0 &&
-			    opve_descp->opve_op !=
-			    VDESC(vnop_default)) {
+			    strcmp(opve_descp->opve_op->vdesc_name, "default") != 0) {
 				printf("operation %s not listed in %s.\n",
 				    opve_descp->opve_op->vdesc_name,
 				    "vfs_op_descs");

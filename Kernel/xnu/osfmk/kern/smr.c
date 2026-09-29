@@ -2042,6 +2042,15 @@ smr_cpu_init(struct processor *processor)
 	smrw = PERCPU_GET_MASTER(smr_worker);
 	smrw->processor = processor;
 
+	printf("smr_cpu_init: smrw=%p waitq=%p\n", smrw, &smrw->waitq);
+	{
+		char buf[128];
+		extern int snprintf(char *, unsigned long, const char *, ...);
+		snprintf(buf, sizeof(buf), "    smr_cpu_init: smrw=%p waitq=%p\r\n", smrw, &smrw->waitq);
+		const char *p = buf;
+		while (*p) { pal_serial_putc(*p++); }
+	}
+
 	const char *s3 = "    smr_cpu_init: waitq_init...\r\n";
 	while (*s3) { pal_serial_putc(*s3++); }
 
@@ -2073,12 +2082,21 @@ STARTUP_ARG(THREAD_CALL, STARTUP_RANK_LAST,
  * @discussion
  * Called at splsched() under the sched_available_cores_lock.
  */
+static inline struct smr_worker *
+smr_get_worker(struct processor *processor)
+{
+	if (processor->cpu_id == master_cpu) {
+		return PERCPU_GET_MASTER(smr_worker);
+	}
+	return PERCPU_GET_WITH_BASE(other_percpu_base(processor->cpu_id), smr_worker);
+}
+
 void
 smr_cpu_up(struct processor *processor, smr_cpu_reason_t reason)
 {
 	struct smr_worker *smrw;
 
-	smrw = PERCPU_GET_RELATIVE(smr_worker, processor, processor);
+	smrw = smr_get_worker(processor);
 
 	__smrw_lock(smrw);
 	if (reason != SMR_CPU_REASON_IGNORED) {
@@ -2145,7 +2163,7 @@ smr_cpu_down(struct processor *processor, smr_cpu_reason_t reason)
 {
 	struct smr_worker *smrw;
 
-	smrw = PERCPU_GET_RELATIVE(smr_worker, processor, processor);
+	smrw = smr_get_worker(processor);
 
 	__smrw_lock(smrw);
 	__smr_cpu_down_and_unlock(processor, smrw, reason);
@@ -2167,7 +2185,7 @@ smr_cpu_join(struct processor *processor, uint64_t ctime __unused)
 #if CONFIG_QUIESCE_COUNTER
 	struct smr_worker *smrw;
 
-	smrw = PERCPU_GET_RELATIVE(smr_worker, processor, processor);
+	smrw = smr_get_worker(processor);
 	cpu_quiescent_join(smrw);
 #else
 	(void)processor;
@@ -2219,7 +2237,7 @@ smr_cpu_leave(struct processor *processor, uint64_t ctime)
 {
 	struct smr_worker *smrw;
 
-	smrw = PERCPU_GET_RELATIVE(smr_worker, processor, processor);
+	smrw = smr_get_worker(processor);
 
 	/*
 	 * if a bound thread was woken up on a derecommended core,

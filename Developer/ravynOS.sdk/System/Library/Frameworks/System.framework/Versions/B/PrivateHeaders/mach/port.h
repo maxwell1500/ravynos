@@ -419,4 +419,38 @@ typedef mach_port_name_t        *port_name_array_t;
 
 #endif  /* !__DARWIN_UNIX03 && !_NO_PORT_T_FROM_MACH */
 
+
+/* --- Kernel/xnu/osfmk/mach/port.h:449-456, verbatim ---
+ * mach_port.c and the mig-generated mach_port_internal.h need
+ * mach_service_port_info_data_t; no SDK mach header declares it.
+ *
+ * The layout is cross-checked by TWO independent in-tree sources agreeing on
+ * 256 bytes:
+ *   osfmk/mach/port.h:450-455        char[255] + uint8_t  = 256
+ *   osfmk/mach/mach_types.defs:523   struct[256] of char   = 256
+ * The .defs is the stronger of the two, because it is what actually drives the
+ * MIG message layout on the wire. Both say 256, so the array length below is
+ * not a guess that happens to compile.
+ *
+ * Placed INSIDE the include guard deliberately. An earlier attempt appended
+ * sourced blocks AFTER the guard's #endif, which meant every re-inclusion of
+ * the file re-processed them -- that produced a wall of "redefinition of
+ * enumerator" errors that looked like a preprocessor bug and was not. See
+ * tools/bootlab/LIBSYSTEM-KERNEL-BUILD-NOTES.md sec. 33.
+ */
+#define MACH_SERVICE_PORT_INFO_STRING_NAME_MAX_BUF_LEN  255    /* Maximum length of the port string name buffer */
+
+typedef struct mach_service_port_info {
+	char                    mspi_string_name[MACH_SERVICE_PORT_INFO_STRING_NAME_MAX_BUF_LEN]; /* Service port's string name */
+	uint8_t                 mspi_domain_type;          /* Service port domain */
+} mach_service_port_info_data_t;
+
+#define MACH_SERVICE_PORT_INFO_COUNT ((char) \
+	(sizeof(mach_service_port_info_data_t)/sizeof(char)))
+
+
+/* SOURCED FROM IN-TREE XNU -- see LIBSYSTEM-KERNEL-BUILD-NOTES.md sec. 13.
+ * Verbatim copies; not invented. */
+/* Kernel/xnu/osfmk/mach/port.h:481 */
+#define MPO_REPLY_PORT                     0x1000  /* Designate port as a reply port. */
 #endif  /* _MACH_PORT_H_ */

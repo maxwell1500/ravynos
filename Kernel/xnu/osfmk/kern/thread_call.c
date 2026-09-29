@@ -45,6 +45,7 @@
 #include <kern/timer_call.h>
 
 #include <libkern/OSAtomic.h>
+#include <pexpert/pexpert.h>
 #include <kern/timer_queue.h>
 
 #include <sys/kdebug.h>
@@ -560,8 +561,12 @@ thread_call_setup_with_options(
 {
 	extern void pal_serial_putc(char);
 	static int tcsw_depth = 0;
+	static int quiet_boot = -1;
+	if (quiet_boot < 0) {
+		quiet_boot = PE_parse_boot_argn("quiet_boot", NULL, 0);
+	}
 	tcsw_depth++;
-	if (tcsw_depth == 1) {
+	if (tcsw_depth == 1 && !quiet_boot) {
 		const char *tct = "    thread_call_setup: ENTER func=%p call=%p\r\n";
 		while (*tct) { pal_serial_putc(*tct++); }
 	}
@@ -572,7 +577,7 @@ thread_call_setup_with_options(
 
 	bzero(call, sizeof(*call));
 
-	if (tcsw_depth == 1) {
+	if (tcsw_depth == 1 && !quiet_boot) {
 		const char *tct2 = "    thread_call_setup: after bzero\r\n";
 		while (*tct2) { pal_serial_putc(*tct2++); }
 	}
@@ -583,7 +588,7 @@ thread_call_setup_with_options(
 		.tc_flags = THREAD_CALL_INITIALIZED,
 	};
 
-	if (tcsw_depth == 1) {
+	if (tcsw_depth == 1 && !quiet_boot) {
 		const char *tct3 = "    thread_call_setup: after compound assign\r\n";
 		while (*tct3) { pal_serial_putc(*tct3++); }
 	}

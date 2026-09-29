@@ -1,3 +1,4 @@
+bsd/dev/i386/ahci_block.c	standard
 bsd/dev/i386/conf.c		standard
 bsd/dev/i386/cons.c		standard
 bsd/dev/i386/km.c		standard

@@ -381,37 +381,52 @@ static void
 read_erandom_generate(void * buf, size_t nbytes)
 {
 	extern void pal_serial_putc(char);
-	const char *re1 = "          read_erandom_generate: entering...\r\n";
-	while (*re1) { pal_serial_putc(*re1++); }
+	static int quiet_boot = -1;
+	if (quiet_boot < 0) {
+		quiet_boot = PE_parse_boot_argn("quiet_boot", NULL, 0);
+	}
+	if (!quiet_boot) {
+		const char *re1 = "          read_erandom_generate: entering...\r\n";
+		while (*re1) { pal_serial_putc(*re1++); }
+	}
 
 	uint8_t * buffer_bytes = buf;
 	size_t n;
 	int rc;
 
 	if (buf == NULL || nbytes == 0) {
-		const char *reb = "          read_erandom_generate: buf is null or nbytes is 0!\r\n";
-		while (*reb) { pal_serial_putc(*reb++); }
+		if (!quiet_boot) {
+			const char *reb = "          read_erandom_generate: buf is null or nbytes is 0!\r\n";
+			while (*reb) { pal_serial_putc(*reb++); }
+		}
 		return;
 	}
-
 	while (nbytes > 0) {
 		n = MIN(nbytes, PAGE_SIZE);
-		const char *reg1 = "          read_erandom_generate: preparing ccdrbg_generate...\r\n";
-		while (*reg1) { pal_serial_putc(*reg1++); }
+		if (!quiet_boot) {
+			const char *reg1 = "          read_erandom_generate: preparing ccdrbg_generate...\r\n";
+			while (*reg1) { pal_serial_putc(*reg1++); }
+		}
 
 		if (erandom.drbg_info.generate == NULL) {
-			const char *rgn = "          read_erandom_generate: erandom.drbg_info.generate IS NULL! Calling early_random_init again!\r\n";
-			while (*rgn) { pal_serial_putc(*rgn++); }
+			if (!quiet_boot) {
+				const char *rgn = "          read_erandom_generate: erandom.drbg_info.generate IS NULL! Calling early_random_init again!\r\n";
+				while (*rgn) { pal_serial_putc(*rgn++); }
+			}
 			early_random_init();
 		}
 
-		const char *reg1b = "          read_erandom_generate: calling erandom.drbg_info.generate directly...\r\n";
-		while (*reg1b) { pal_serial_putc(*reg1b++); }
+		if (!quiet_boot) {
+			const char *reg1b = "          read_erandom_generate: calling erandom.drbg_info.generate directly...\r\n";
+			while (*reg1b) { pal_serial_putc(*reg1b++); }
+		}
 
 		rc = erandom.drbg_info.generate((struct ccdrbg_state *)erandom.drbg_state, n, buffer_bytes, 0, NULL);
 
-		const char *reg2 = "          read_erandom_generate: erandom.drbg_info.generate returned successfully!\r\n";
-		while (*reg2) { pal_serial_putc(*reg2++); }
+		if (!quiet_boot) {
+			const char *reg2 = "          read_erandom_generate: erandom.drbg_info.generate returned successfully!\r\n";
+			while (*reg2) { pal_serial_putc(*reg2++); }
+		}
 
 		if (rc != CCDRBG_STATUS_OK) {
 			panic("read_erandom ccdrbg error %d", rc);
@@ -420,31 +435,45 @@ read_erandom_generate(void * buf, size_t nbytes)
 		nbytes -= n;
 	}
 
-	const char *re2 = "          read_erandom_generate: done!\r\n";
-	while (*re2) { pal_serial_putc(*re2++); }
+	if (!quiet_boot) {
+		const char *re2 = "          read_erandom_generate: done!\r\n";
+		while (*re2) { pal_serial_putc(*re2++); }
+	}
 }
 
 static void
 read_erandom(void * buf, size_t nbytes)
 {
 	extern void pal_serial_putc(char);
-	const char *r_top = "      read_erandom: top of function!\r\n";
-	while (*r_top) { pal_serial_putc(*r_top++); }
+	static int quiet_boot_er = -1;
+	if (quiet_boot_er < 0) {
+		quiet_boot_er = PE_parse_boot_argn("quiet_boot", NULL, 0);
+	}
+	if (!quiet_boot_er) {
+		const char *r_top = "      read_erandom: top of function!\r\n";
+		while (*r_top) { pal_serial_putc(*r_top++); }
+	}
 	static int init = 0;
 	if (__improbable(init == 0)) {
-		const char *rei1 = "        read_erandom: calling early_random_init...\r\n";
-		while (*rei1) { pal_serial_putc(*rei1++); }
+		if (!quiet_boot_er) {
+			const char *rei1 = "        read_erandom: calling early_random_init...\r\n";
+			while (*rei1) { pal_serial_putc(*rei1++); }
+		}
 
 		early_random_init();
 
-		const char *rei2 = "        read_erandom: early_random_init returned!\r\n";
-		while (*rei2) { pal_serial_putc(*rei2++); }
+		if (!quiet_boot_er) {
+			const char *rei2 = "        read_erandom: early_random_init returned!\r\n";
+			while (*rei2) { pal_serial_putc(*rei2++); }
+		}
 
 		init = 1;
 	}
 
-	const char *reig = "        read_erandom: calling read_erandom_generate...\r\n";
-	while (*reig) { pal_serial_putc(*reig++); }
+	if (!quiet_boot_er) {
+		const char *reig = "        read_erandom: calling read_erandom_generate...\r\n";
+		while (*reig) { pal_serial_putc(*reig++); }
+	}
 
 	read_erandom_generate(buf, nbytes);
 }
@@ -452,13 +481,22 @@ read_erandom(void * buf, size_t nbytes)
 void
 read_frandom(void * buffer, u_int numBytes)
 {
-	const char *rf1 = "      read_frandom: entered!\r\n";
-	while (*rf1) { pal_serial_putc(*rf1++); }
+	extern void pal_serial_putc(char);
+	static int quiet_boot_f = -1;
+	if (quiet_boot_f < 0) {
+		quiet_boot_f = PE_parse_boot_argn("quiet_boot", NULL, 0);
+	}
+	if (!quiet_boot_f) {
+		const char *rf1 = "      read_frandom: entered!\r\n";
+		while (*rf1) { pal_serial_putc(*rf1++); }
+	}
 
 	read_erandom(buffer, numBytes);
 
-	const char *rf2 = "      read_frandom: done!\r\n";
-	while (*rf2) { pal_serial_putc(*rf2++); }
+	if (!quiet_boot_f) {
+		const char *rf2 = "      read_frandom: done!\r\n";
+		while (*rf2) { pal_serial_putc(*rf2++); }
+	}
 }
 
 void
@@ -577,20 +615,30 @@ void
 random_bool_init(struct bool_gen * bg)
 {
 	extern void pal_serial_putc(char);
-	const char *rb1 = "        random_bool_init: calling read_frandom...\r\n";
-	while (*rb1) { pal_serial_putc(*rb1++); }
+	static int quiet_boot_b = -1;
+	if (quiet_boot_b < 0) {
+		quiet_boot_b = PE_parse_boot_argn("quiet_boot", NULL, 0);
+	}
+	if (!quiet_boot_b) {
+		const char *rb1 = "        random_bool_init: calling read_frandom...\r\n";
+		while (*rb1) { pal_serial_putc(*rb1++); }
+	}
 
 	/* Seed the random boolean generator */
 	read_frandom(bg->seed, sizeof(bg->seed));
 
-	const char *rb2 = "        random_bool_init: simple_lock_init...\r\n";
-	while (*rb2) { pal_serial_putc(*rb2++); }
+	if (!quiet_boot_b) {
+		const char *rb2 = "        random_bool_init: simple_lock_init...\r\n";
+		while (*rb2) { pal_serial_putc(*rb2++); }
+	}
 
 	bg->state = 0;
 	simple_lock_init(&bg->lock, 0);
 
-	const char *rb3 = "        random_bool_init: done!\r\n";
-	while (*rb3) { pal_serial_putc(*rb3++); }
+	if (!quiet_boot_b) {
+		const char *rb3 = "        random_bool_init: done!\r\n";
+		while (*rb3) { pal_serial_putc(*rb3++); }
+	}
 }
 
 /* Generate random bits and add them to an entropy pool. */

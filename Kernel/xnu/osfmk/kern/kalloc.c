@@ -2851,10 +2851,6 @@ void
 void *
 kalloc_type_impl_internal(kalloc_type_view_t kt_view, zalloc_flags_t flags)
 {
-	printf("kalloc_type_impl_internal: kt_view=%p zone=%p stats=%p size=%u\n",
-	       kt_view, kt_view ? kt_view->kt_zv.zv_zone : NULL,
-	       kt_view ? kt_view->kt_zv.zv_stats : NULL,
-	       kt_view ? kt_view->kt_size : 0);
 	if (__improbable(kt_view->kt_zv.zv_zone == ZONE_NULL)) {
 		kalloc_heap_t kheap;
 		vm_size_t size;

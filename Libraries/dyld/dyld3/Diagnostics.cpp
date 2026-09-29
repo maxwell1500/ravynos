@@ -90,6 +90,25 @@ void Diagnostics::error(const char* format, va_list list)
     _buffer = _simple_salloc();
     _simple_vsprintf(_buffer, format, list);
 
+    /*
+     * REPORT IT.  The fprintf() used to live inside `#if BUILDING_CACHE_BUILDER`,
+     * so in the dyld TOOL build -- the one that actually runs -- every
+     * diag.error() recorded into _buffer and printed NOTHING.
+     *
+     * That is a diagnostic compiled out in the configuration that needs it, the
+     * same class as an empty export trie or rc=0 by default, and it is how this
+     * loader could fail a chained-fixup bind thirteen times and say nothing about
+     * it.  A missing message on the console is not evidence the code did not run,
+     * and reasoning from that silence cost a round (BOOT-PLAN section 45.2).
+     *
+     * _simple_dprintf() rather than fprintf(stderr, ...): it formats into a
+     * stack buffer and write(2)s the result, so it needs no heap and no stdio
+     * state.  That matters because the errors that matter most happen during
+     * rebaseDyld, before either is available -- DYLD-LOAD-BASE prints from this
+     * same binary at that moment by exactly this route.
+     */
+    _simple_dprintf(2, "dyld error: %s\n", _simple_string(_buffer));
+
 #if BUILDING_CACHE_BUILDER
     if ( !_verbose )
         return;

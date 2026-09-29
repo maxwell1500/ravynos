@@ -396,6 +396,8 @@ commpage_init_cpu_capabilities( void )
 /* initialize the approx_time_supported flag and set the approx time to 0.
  * Called during initial commpage population.
  */
+static bool commpage_approx_time_ready = false;
+
 static void
 commpage_mach_approximate_time_init(void)
 {
@@ -418,6 +420,7 @@ commpage_mach_approximate_time_init(void)
 		*(boolean_t *)cp = supported;
 	}
 	commpage_update_mach_approximate_time(0);
+	commpage_approx_time_ready = true;
 }
 
 static void
@@ -514,7 +517,6 @@ commpage_populate_one(
 
 	next = 0;
 	commPagePtr = (char *)commpage_allocate( submap, (vm_size_t) area_used, uperm );
-	*kernAddressPtr = commPagePtr;                          // save address either in commPagePtr32 or 64
 	commPageBaseOffset = base_offset;
 
 	*time_data = commpage_addr_of( _COMM_PAGE_TIME_DATA_START );
@@ -561,6 +563,7 @@ commpage_populate_one(
 	if (next > _COMM_PAGE_END) {
 		panic("commpage overflow: next = 0x%08x, commPagePtr = 0x%p", next, commPagePtr);
 	}
+	*kernAddressPtr = commPagePtr;
 }
 
 
@@ -958,6 +961,9 @@ commpage_update_dyld_flags(uint64_t value)
 void
 commpage_update_mach_approximate_time(uint64_t abstime)
 {
+	if (!commpage_approx_time_ready) {
+		return;
+	}
 #ifdef CONFIG_MACH_APPROXIMATE_TIME
 	uint64_t saved_data;
 	char *cp;

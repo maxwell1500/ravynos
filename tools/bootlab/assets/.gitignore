@@ -1,0 +1,250 @@
+# Apple-derived binaries in the bootlab assets tree.
+#
+# WHY THESE ARE IGNORED, AND WHY THAT IS DELIBERATE
+#
+# Every file matched below is Apple's compiled product, extracted from a macOS
+# dyld shared cache (or a byte-for-byte copy of one off the host disk). The
+# project has a standing commitment that no Apple-derived binary is ever
+# published to a remote.
+#
+# They are untracked, deliberately. An earlier version of this file justified
+# that with the premise that the binaries "were never pushed to any remote, so
+# a rewrite protected nobody". THAT PREMISE WAS WRONG, and it is recorded here
+# because the correction is the reason the posture below is what it is.
+#
+# Measured 2026-09-28 over `git rev-list --objects origin/darwin..HEAD`:
+#   - 45 Apple product binaries totalling 11,626,528 bytes were in the push
+#     queue -- Apple efiboot, 40 dylibs (39 under usr/lib/system/ plus
+#     libSystem.B.dylib) and the extracted dyld, all from the macOS 26.6
+#     shared cache, plus byte-identical copies of the host's /bin/cat,
+#     /bin/echo and /bin/ls. That is 1 + 40 + 1 + 3 = 45.
+#
+#     A WORD ON TWO DIFFERENT NUMBERS, because they are constantly conflated:
+#     "45" counts BLOBS IN GIT (what a push would transfer). "46 dylibs",
+#     further down, counts FILES ON DISK. The disk holds more than git ever
+#     did, because the working copies (.orig, dyld.PRE-*, and the project's
+#     own rebuilds that overwrote some extracts) were never staged. When
+#     checking either number, say which one you mean.
+#   - Untracking them from the tip tree did NOT unpublish them. Every one was
+#     still reachable from the tip through the commit that added them, so
+#     `git push` would have transferred all of it. "Untracked" and "never
+#     pushed" are different properties, and only the first had been achieved.
+#   - Separately, 5 copies of a project-built dyld (8,665,504 bytes) sat at
+#     Libraries/dyld/dyld/dyld -- not Apple, but a build artifact, and equally
+#     reachable. They have since been removed from the tree and ignored.
+#
+# The range has now been squashed onto origin/darwin, so nothing under
+# tools/bootlab/assets/ is reachable from the published history at all. The
+# rules below are what keep it that way: if a file is untracked here it
+# cannot be pushed, and they stop the next `git add -A` from re-tracking it.
+#
+# THE FILES STAY ON DISK ON PURPOSE. assets/usr/lib/dyld is the only extracted
+# dyld, and libsystem_kernel.dylib does not build, so there is no source-built
+# substitute. Deleting it ends the QEMU interop test. This is an interop lab
+# keeping binaries locally and unpushed -- a materially different posture from a
+# repository that ships them.
+#
+# This is fully reversible: `git add -f` any of these paths restores tracking.
+#
+# ---------------------------------------------------------------------------
+# WHAT IS OURS AND WHAT IS APPLE'S -- READ THIS BEFORE EDITING
+#
+# The previous version of this file listed
+#     bin/{ls,echo,cat,sh}   ours (the gold binaries being replaced)
+# That was FALSE, and it is the root cause of the exposure: it carved out the
+# one directory that needed policing while claiming to police it. The truth:
+#
+#   bin/cat, bin/echo, bin/ls   APPLE PRODUCT BINARIES, on disk (they were
+#       never tracked by git). Byte-for-byte identical to this host's
+#       /bin/cat, /bin/echo and /bin/ls -- same size, same sha256, and each
+#       SLICE's LC_UUID matches the host's slice for that architecture:
+#         x86_64  8D210E93-E55B-38AD-BCCC-02E19CF504B3
+#         arm64e  10F65E66-48D8-348B-BCF1-2A29606094C1
+#       Note the two slices have DIFFERENT UUIDs from each other; that is
+#       normal for a universal binary and is not a discrepancy. Checked with
+#       `lipo -thin <arch> ... | dwarfdump --uuid` on both sides.
+#
+#   bin/sh                     OURS. 4,280 bytes, single-architecture x86_64,
+#       LC_UNIXTHREAD with no LC_LOAD_DYLIB at all -- a freestanding static
+#       image this project built. Nothing like the host's /bin/sh (101,040
+#       bytes, universal x86_64+arm64e). It is NOT tracked: it was
+#       untracked with the rest of bin/ on 2026-09-28. Verified:
+#       `git ls-files --error-unmatch tools/bootlab/assets/bin/sh` exits 1.
+#
+#   usr/lib/**                 46 dylibs under usr/lib/system/ (counted
+#       2026-09-28: `ls tools/bootlab/assets/usr/lib/system/*.dylib | wc -l`)
+#       plus libSystem.B.dylib, plus the extracted dyld and its .orig /
+#       dyld.PRE-* experiment snapshots. All Apple. NOTE: an earlier version
+#       of this file said "48 dylibs"; the measured count is 46.
+#   System/Library/**          2 framework binaries -- CoreFoundation.framework
+#       and PrivateFrameworks/XPCSupport.framework -- extracted from the same
+#       shared cache. Apple.
+#
+# Anything else that lands in this tree is either ours or must be added here
+# before it is staged.
+#
+# ---------------------------------------------------------------------------
+# SCOPE: CATEGORY RULES, NOT A LIST OF FILENAMES
+#
+# Before this rewrite only three exact-name patterns existed
+# (/usr/lib/dyld, /usr/lib/*.dylib, /usr/lib/system/*.dylib). Apple binaries
+# sat outside them ON DISK -- the three bin/ tools, 18 dyld working copies,
+# libSystem.B.dylib.orig, libobjc.A.dylib and the two System/ frameworks.
+# An earlier version of this paragraph called that "twelve" (3+6+1+2); that
+# figure matched no real state and is withdrawn.
+#
+# IMPORTANT: those files were never IN GIT either. `git log --all
+# --diff-filter=A -- 'tools/bootlab/assets/usr/lib/dyld*'` returns exactly
+# one commit and one path, usr/lib/dyld. The .orig and .PRE-* variants were
+# never tracked, so the exposure was always "on disk and unignored", not
+# "already committed". The rules below are written per category so that a
+# newly extracted dylib, a differently named snapshot, or the next host tool
+# dropped into bin/ is covered by default rather than by remembering a line.
+#
+# NONE of these remain tracked. Everything below is now excluded from the
+# published tree, and every line the previous version of this block asserted
+# about them was wrong or unverified. Corrected against measurement:
+#
+#   boot.efi          APPLE PROPRIETARY. 723,512 bytes. PE/COFF EFI x86-64.
+#                     Carries BUILD-INFO ProjectName "efiboot", ProductName
+#                     "boot.efi", Apple Inc., SdkBuild 25G74, target x86_64.
+#                     It is a 3-byte-patched copy of this host's
+#                     /System/Library/CoreServices/boot.efi: identical length,
+#                     differing at exactly 3 offsets (0-based 59899-59901),
+#                     where the function prologue `push rbp; mov rbp,rsp`
+#                     (55 48 89 e5) had its FIRST THREE BYTES (55 48 89)
+#                     replaced with `xor eax,eax; ret` (31 c0 c3). The host's
+#                     4th prologue byte (e5) is untouched, which is why the
+#                     file differs in exactly 3 byte positions.
+#                     NOT EDK2, NOT OVMF, NOT open source.
+#                     It is load-bearing: the only boot path is host OVMF ->
+#                     UEFI Shell -> the typed command
+#                     fs0:\System\Library\CoreServices\boot.efi -v serial=1
+#                     so it stays on disk and is simply never committed.
+#
+#   BOOTX64.EFI       THIRD-PARTY, not Apple and not EDK2. Clover revision
+#                     5161 (commit 015206b64), with an embedded OpenCore
+#                     payload. 1,565,376 bytes. Its blob is ALREADY PUBLIC on
+#                     origin at clover_extracted/CloverV2/EFI/BOOT/BOOTX64.efi,
+#                     so keeping a copy here publishes nothing new.
+#
+#   vars.fd           UNVERIFIED. 540,672 bytes. An OVMF-style variable store,
+#                     but this host has no stock x86_64 OVMF var file to
+#                     compare against. /usr/local/share/qemu ships
+#                     edk2-{arm,i386,loongarch64,riscv}-vars.fd (and an
+#                     edk2-aarch64-CODE.fd, but no aarch64 vars), and no
+#                     edk2-x86_64-vars.fd at all, so the earlier claim that it
+#                     is "QEMU-generated" could not be substantiated and is
+#                     withdrawn. It is regenerated per run by copying a fresh
+#                     var store, which is why a stale one faults at handoff.
+#
+#   kernel.development   OURS, but a build artifact, not source. 19,023,960
+#                     bytes, built from the xnu tree in Kernel/xnu (already
+#                     public under the Apple Public Source License 2.0).
+#                     Stamped "Darwin Kernel Version 24.3.0: Mon Aug 31
+#                     05:02:35 PDT 2026; max:build/DEVELOPMENT_X86_64".
+#                     Regenerable by tools/bootlab/kernel_build.py.
+#
+#   template_head.bin / template_tail.bin
+#                     OURS -- a golden FAT32 image head and tail, captured so
+#                     mkimage.py can produce a byte-reproducible disk.
+#                     template_head.bin is a DOS/MBR boot sector with a GPT
+#                     protective partition (ID=0xee).
+#
+#   com.apple.Boot.plist, etc/rc, hello.txt
+#                     OURS -- plain text config/fixtures. Retained on disk,
+#                     not committed, so that no asset subtree is ever wholly
+#                     absent and the lab's inputs stay self-describing.
+#
+#   bin/sh            OURS. 4,280 bytes, single-architecture x86_64,
+#                     LC_UNIXTHREAD, no LC_LOAD_DYLIB -- a freestanding
+#                     static image this project built. NOT the host's /bin/sh
+#                     (101,040 bytes, universal x86_64+arm64e). It was
+#                     tracked until 2026-09-28 and is now untracked with the
+#                     rest of bin/, for consistency rather than necessity.
+#
+# ---------------------------------------------------------------------------
+# PATTERNS BELOW ARE RELATIVE TO THIS FILE's directory (tools/bootlab/assets/),
+# which is git's rule for a .gitignore pattern with a leading slash. Writing
+# repo-root-relative patterns here resolves them to
+#   tools/bootlab/assets/tools/bootlab/assets/... which matches nothing.
+# An earlier version of this file made exactly that mistake, and `git rm
+# --cached` alone did not reveal it: the index stopped listing the files while
+# the ignore rules were inert, so the next `git add` would have restored them.
+# Verify any edit here with `git check-ignore -v <path>` from the repo root.
+
+# (1) bin/ -- the guest userland the boot lab executes. Everything in here is
+# an Apple product binary except our own sh.
+#
+# READ THIS BEFORE EDITING: THE `!/bin/sh` LINE BELOW IS CURRENTLY INERT,
+# AND IT IS NOT THE PROTECTION YOU MIGHT ASSUME.
+#
+# The root .gitignore rule `/tools/bootlab/assets/*` matches the bin
+# DIRECTORY itself, and git never descends into an ignored directory. So the
+# four category rules in this file -- this one, the two under usr/lib/, and
+# /System/ -- are not what is keeping these files out of the index today.
+# The root rule is. Measured:
+#   $ git check-ignore -v tools/bootlab/assets/bin
+#   .gitignore:42:/tools/bootlab/assets/*   tools/bootlab/assets/bin
+#   $ git check-ignore -v tools/bootlab/assets/bin/sh
+#   .gitignore:42:/tools/bootlab/assets/*   tools/bootlab/assets/bin/sh
+# Note what those report: the ROOT rule, not anything in this file. And the
+# no-`-v` form exits 0 (ignored) for bin/sh too, not 1 -- an earlier version
+# of this comment claimed otherwise and was wrong.
+#
+# These category rules are kept as DOCUMENTATION OF INTENT and as defence in
+# depth IF the root rule is ever narrowed or removed. Do not delete the root
+# rule believing this file protects the tree. Do not delete these rules
+# believing they are load-bearing today, either.
+/bin/*
+!/bin/sh
+
+# (2) usr/lib/ -- the dyld shared-cache extraction staging tree: 46 dylibs and
+# the extracted dyld plus its working copies. The trailing globs deliberately
+# cover the working copies (.orig, .PRE-*) as well as the canonical names, so an
+# experiment snapshot is never accidentally committable.
+/usr/lib/dyld*
+/usr/lib/*.dylib*
+/usr/lib/system/*.dylib*
+
+# (3) System/ -- framework and private-framework binaries out of the same
+# shared cache. Nothing of ours is staged here.
+/System/
+
+# ---------------------------------------------------------------------------
+# NOT IN THIS DIRECTORY, BUT IT WILL COME UP: `git add -A` AND Libraries/Libsystem
+#
+# Ignored is not the same as absent. Measured 2026-09-28,
+# `git add -A --dry-run` proposes ~3,700 untracked paths, of which 2,950 are
+# .o objects, 454 generated .s, and 61 are linked products worth naming:
+# 17 .dylib and 44 .a under Libraries/Libsystem/, about 46.5 MB.
+#
+# Those 61 are THIS PROJECT'S OWN BUILD OUTPUT. They are not Apple binaries:
+#   - zero "Apple Inc." stamps in any of them;
+#   - their LC_ID_DYLIB is the project install path it targets
+#     (/usr/lib/system/libxpc.dylib etc.), not evidence of provenance;
+#   - none is byte-identical to any Apple blob that was ever in git.
+#
+# Two of them LOOK alarming and are not, so record it here rather than
+# re-deriving it under pressure:
+#   Libraries/Libsystem/libxpc/libxpc.dylib            132,672 bytes
+#   Libraries/Libsystem/libsystem_m/libsystem_m.dylib   39,512 bytes
+# These are byte-identical to their staged copies under
+# tools/bootlab/assets/usr/lib/system/ because staging copied FROM the build
+# tree. The Apple originals they replaced were much larger -- 559,470 and
+# 535,784 bytes respectively -- so the size difference is itself the proof
+# that the staged copies were overwritten by our own builds and are no longer
+# Apple's. (libsystem_blocks and libsystem_pthread are in the same state.)
+#
+# And the `com.apple.*` strings inside five of these -- com.apple.quarantine,
+# com.apple.ResourceFork, com.apple.metadata and friends -- are NOT evidence
+# of Apple provenance. They are source literals: copyfile.c:88 defines
+#   #define XATTR_ROOT_INSTALLED_NAME "com.apple.root.installed"
+# and the neighbouring xattr names are the on-disk formats the library must
+# read and write. A grep for "com.apple" will always hit this code.
+#
+# The root .gitignore deliberately has no blanket *.o / *.a rule, because
+# 1,363 .o files ARE tracked fixtures under Libraries/dyld/unit-tests/. If you
+# decide these should not be committed, add a scoped rule -- e.g. ignore
+# /Libraries/Libsystem/**/*.a and the built dylibs -- rather than a global one.
+# Until then, `git add -A` remains an informed choice, not a safe default.

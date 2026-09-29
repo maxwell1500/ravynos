@@ -96,7 +96,6 @@ LEAF(___getpid, 0)
 	cmpxchgl	%edx, (%rcx)
 	movl		%edx, %eax
 	ret
-	UNWIND_EPILOGUE
 
 #elif defined(__arm__)
 
@@ -172,3 +171,9 @@ L_done:
 #else
 #error Unsupported architecture
 #endif
+
+/* No unwind information: this stub is a leaf that never opens a CFI region,
+ * so the old UNWIND_EPILOGUE below expanded to a .cfi_endproc with no
+ * matching .cfi_startproc and the assembler rejected it. Same fix as
+ * SYS.h, same reasoning -- see tools/bootlab/LIBSYSTEM-KERNEL-BUILD-NOTES.md
+ * sec. 7. Do NOT "fix" this by adding a UNWIND_PROLOGUE. */

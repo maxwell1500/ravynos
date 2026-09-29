@@ -457,8 +457,19 @@ SRCS =  compat-43/FreeBSD/gethostid.c \
 
 .if "${CpuArch}" == "x86_64"
 SRCS += gdtoa/FreeBSD/gdtoa-strtopx.c gdtoa/FreeBSD/machdep_ldisx.c
-.else if "${CpuArch}" == "arm64"
-SRCS += gdtoa/FreeBSD/machdep_ldisd.c
+.else
+# ".else if <cond>" is NetBSD/FreeBSD make syntax. bmake rejects it outright
+# -- "The .else directive does not take arguments" -- which is a FATAL parse
+# error, so it aborts libsystem_c SUBDIR traversal before a single object
+# compiles, gating all 14 subprojects and all 688 sources. bmake has no
+# compatibility flag; the conditional must be a nested .if. Semantics
+# unchanged: x86_64 gets strtopx+ldisx, arm64 gets ldisd, else neither.
+#
+# NOTE: this has been reverted once. A failure at ~line 460 with
+# "The .else directive does not take arguments" means re-apply it.
+.if "${CpuArch}" == "arm64"
+	SRCS += gdtoa/FreeBSD/machdep_ldisd.c
+.endif
 .endif
 
 SLF = /System/Library/Frameworks
