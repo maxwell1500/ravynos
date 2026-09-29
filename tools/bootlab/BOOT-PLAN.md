@@ -598,23 +598,46 @@ whole-image scan for `jmp`-to-own-address traps in the linked shell now reports
 `work/shell_fortify_fixed.img.digests`, shell SHA-256
 `f18212b682e48c8d...`, built from `manifest_shell_fortify_fixed.json`).
 
-What is still broken is narrower and is now the only open item: **the shell
-prints the prompt but does not respond to input.** Sending `echo hi` terminated
-by `\r` and by `\n` both produced zero bytes back. `pgetc` only completes a
-line on `'\n'` (`input.c:220`, `:237`), so `\r` was expected to fail, but
-neither worked. The shell is not spinning -- with the VM held at the prompt,
-no CPL=3 register sample was taken in 30 attempts, i.e. it is blocked in a
-syscall rather than burning CPU. That is consistent with the shell waiting on
-a `read` whose input never arrives, i.e. tty input delivery, not child reaping.
+What is still broken is narrower, and it is now isolated by experiment: **the
+shell prints the prompt but does not respond to input.** Sending `echo hi`
+terminated by `\r` and by `\n` both produced zero bytes back. `pgetc` only
+completes a line on `'\n'` (`input.c:220`, `:237`), so `\r` was expected to
+fail, but neither worked.
 
-No external `echo`/`cat`, pipeline, or redirection has been observed running,
-and no `wait4` evidence exists yet -- the shell never executes a command, so
-the child-wait path is still untested. Next: establish whether the shell's
-`read(2)` on the controlling tty ever sees bytes, using the recorded
-`init: TIOCSCTTY ok` controlling terminal as the starting point.
+The shell is not spinning. With the VM held at the prompt, no CPL=3 register
+sample was taken in 30 attempts, so it is blocked in a syscall rather than
+burning CPU.
 
-Do not interpret `serial_D2.log`'s `exit reason namespace 2 subcode 0x6` as
-a `wait4` result: the matching `sh.fix6` stack above establishes a startup
-abort before the shell reached its command loop.
+**Where the input is lost: below the shell, in the console receive path.**
+`tools/bootlab/init/tty_rx_probe.c` is a freestanding `LC_UNIXTHREAD` PID 1,
+built exactly like `init_shell.c` (0 undefined symbols, 0 `LC_LOAD_DYLIB`), that
+opens `/dev/console`, makes it the controlling terminal, and then loops
+`write "RX> " ; read(0, buf, 4)`. Staged as `/sbin/launchd` in
+`work/tty_rx.img` (`manifest_tty_rx.json`), it reaches the loop and
+`read(2)` **never returns**: four lines of `hi\n` written to the one serial
+client produced no `read =`, no `GOT`, and no `INPUT DELIVERED`.
 
-`Kernel/xnu` still needs nothing for this bug.
+Nothing echoed either, and that is the part that locates the fault. In
+canonical mode the tty line discipline echoes on **receipt**, before any
+process reads. So a byte that reaches the kernel would be echoed even with no
+reader attached. Silence therefore means the byte never reaches the tty at
+all -- the failure is upstream of `read(2)`, in the kernel's console/serial
+receive path. It is not the shell, not libedit line editing, and not `wait4`.
+
+This supersedes the earlier assumption that the missing `wait4` fix was the
+remaining blocker. The child-wait path still has no evidence either way,
+because the shell has never executed a command.
+
+No external `echo`/`cat`, pipeline, or redirection has been observed running.
+
+`Kernel/xnu` DOES need work for this one, and it is a different workstream from
+the userland bring-up above. `Kernel/xnu/pexpert/i386/pe_serial.c` already
+carries an uncommitted fix (bind `gPESF` to the legacy 16550 table and call
+`serial_init()` on first `uart_putc`, because `uart_getc()` gates on
+`uart_initted`/`legacy_uart_enabled`/`gPESF` and none was ever set on x86).
+That source is timestamped 05:49 and the booted kernel 05:57, so the fix
+should be in the image, yet input still does not arrive. Whether the booted
+kernel actually contains that change is **unverified** -- the image is
+stripped, `legacy_uart_probe` is static and absent from the symbol table, and
+`strings` finds no marker. Rebuilding the kernel from current source and
+repeating `work/tty_rx.img` is the next experiment, and it settles it.
