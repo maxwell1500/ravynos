@@ -555,19 +555,63 @@ static-safe initializer instead. Rebuilt `/tmp/ravyn-sh-build/sh` has zero
 undefined symbols, zero `LC_LOAD_DYLIB`, and contains `___ravyn_static_libc_init`
 but not `___libc_init`.
 
-This fixes the evidenced fix6 abort, **not the prompt**. The rebuilt shell was
-staged in a fresh image (`work/shell_static_safe.img`, image manifest digest
-file `work/shell_static_safe.img.digests`, shell SHA-256
-`a821239fa95f8d478d4c01ee52495079cb955fb8a83918cb34f86de7cf33fed9`). QEMU
-booted through `init: execve /bin/sh`, then emitted allocation traces, but no
-prompt or exit reason before the 60-second wait timed out. No commands were
-sent. The exact post-exec shell state is therefore still open.
+That fix removed the abort but did **not** restore the prompt, so the next
+blocker had to be measured rather than assumed. Holding the guest at the
+post-`execve` point and sampling `info registers` through the QEMU gdbstub gave
+a single user-space RIP in 9 of 9 samples: `0x1000203c0`.
 
-There is still no `wait4` evidence: the child-wait path has not been exercised
-after the prompt. External `echo`/`cat`, pipelines, and redirections remain
-unverified. Next: capture a useful process/core state for the rebuilt
-static-safe shell, recover prompt execution, then test one external command and
-its return-to-prompt transition before changing `dowait()` or kernel reaping.
+It is a **self-referential jump**, not a hang in shell code:
+
+```
+___vsnprintf_chk:                ; work/sh.static-safe, +0x10
+    cmpq %rsi, %rcx
+    jb   ___chk_fail_overflow
+    jmp  .                        ; <- RIP pinned here, spinning forever
+```
+
+The function's *normal* path is an infinite loop, so any `vsnprintf` call never
+returns. The shell hit one during startup and burned a core on `jmp .`; that is
+why the prompt never appeared and why `wait4` was never reached.
+
+The cause is a **build artifact, not a source defect**. `secure/vsnprintf_chk.c`
+and its 15 siblings are always correct; recompiling `vsnprintf_chk.c` with the
+current flags (`-D_FORTIFY_SOURCE=0`, with and without `-fno-builtin`) produces
+a normal prologue and a real call in every case. The bad members came from a
+10:11 incremental build made during the earlier `-I${.CURDIR:H}` include-path
+experiment, and they had an unresolved `callq` relocation:
+
+```
+broken  libc_static.a/vsnprintf_chk.o   : jmp .        (self-loop)
+correct libFortifySource.a/vsnprintf_chk.o: normal prologue
+```
+
+Identical source, two archives, opposite results -- that comparison is what
+makes this the cause rather than a coincidence. Rebuilding all 16 fortify
+members with the `libFortifySource/Makefile:23` flag set, re-archiving
+`libc_static.a`, re-merging `libc.a` and relinking the shell removed it: a
+whole-image scan for `jmp`-to-own-address traps in the linked shell now reports
+**0**, where the previous binary had them. No source change was needed or made;
+`libc_static/Makefile` is byte-identical to its committed state.
+
+**Result: the prompt is back.** `work/shell_fortify_fixed.img` reaches `# `
+(`serial_test_ext.log` line 639, image digests in
+`work/shell_fortify_fixed.img.digests`, shell SHA-256
+`f18212b682e48c8d...`, built from `manifest_shell_fortify_fixed.json`).
+
+What is still broken is narrower and is now the only open item: **the shell
+prints the prompt but does not respond to input.** Sending `echo hi` terminated
+by `\r` and by `\n` both produced zero bytes back. `pgetc` only completes a
+line on `'\n'` (`input.c:220`, `:237`), so `\r` was expected to fail, but
+neither worked. The shell is not spinning -- with the VM held at the prompt,
+no CPL=3 register sample was taken in 30 attempts, i.e. it is blocked in a
+syscall rather than burning CPU. That is consistent with the shell waiting on
+a `read` whose input never arrives, i.e. tty input delivery, not child reaping.
+
+No external `echo`/`cat`, pipeline, or redirection has been observed running,
+and no `wait4` evidence exists yet -- the shell never executes a command, so
+the child-wait path is still untested. Next: establish whether the shell's
+`read(2)` on the controlling tty ever sees bytes, using the recorded
+`init: TIOCSCTTY ok` controlling terminal as the starting point.
 
 Do not interpret `serial_D2.log`'s `exit reason namespace 2 subcode 0x6` as
 a `wait4` result: the matching `sh.fix6` stack above establishes a startup
