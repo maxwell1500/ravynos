@@ -631,13 +631,38 @@ because the shell has never executed a command.
 No external `echo`/`cat`, pipeline, or redirection has been observed running.
 
 `Kernel/xnu` DOES need work for this one, and it is a different workstream from
-the userland bring-up above. `Kernel/xnu/pexpert/i386/pe_serial.c` already
-carries an uncommitted fix (bind `gPESF` to the legacy 16550 table and call
-`serial_init()` on first `uart_putc`, because `uart_getc()` gates on
-`uart_initted`/`legacy_uart_enabled`/`gPESF` and none was ever set on x86).
-That source is timestamped 05:49 and the booted kernel 05:57, so the fix
-should be in the image, yet input still does not arrive. Whether the booted
-kernel actually contains that change is **unverified** -- the image is
-stripped, `legacy_uart_probe` is static and absent from the symbol table, and
-`strings` finds no marker. Rebuilding the kernel from current source and
-repeating `work/tty_rx.img` is the next experiment, and it settles it.
+the userland bring-up above.
+
+**The experiment above has now been run, and the answer is: the pe_serial fix
+is necessary but NOT sufficient.**
+
+`Kernel/xnu/pexpert/i386/pe_serial.c` carries an uncommitted fix (bind `gPESF`
+to the legacy 16550 table and call `serial_init()` on first `uart_putc`,
+because `uart_getc()` gates on `uart_initted`/`legacy_uart_enabled`/`gPESF` and
+none was ever set on x86). Whether the booted image carried it was previously
+unverifiable: the image is stripped, `legacy_uart_probe` is static, and
+`strings` finds no marker.
+
+`kernel_build.py` was re-run from current source. The rebuilt kernel is a
+**different binary** -- `dafedea66e67ab36a…`, where every earlier image
+carried `dcf028fce3f9670c…` -- so the earlier images did **not** contain the
+change, and `pe_serial.o` in the build tree now carries `_legacy_uart_enabled`.
+
+Rebuilt images on that kernel (`work/tty_rx2.img`, `work/shell_kx.img`):
+
+- The probe still prints `RX> ` once and its `read(2)` still never returns
+  after four `hi\n` lines; the harness confirms it sent them
+  (`RX PROMPT OK -- sending b'hi'`). No echo, no `read =`, no `GOT`.
+- The shell still reaches `# `, and `echo hi` still produces no CPL=3 sample
+  and no response.
+
+So the fault is confirmed to sit in the kernel console receive path, and the
+existing pe_serial fix does not close it. What remains open on the kernel side
+is whether the tty is actually attached to the serial driver that
+`uart_getc()` reads from, and whether the receive path is polled at all on this
+path. That is the next thing to instrument, and it is kernel work -- it needs
+its own authorisation, since `Kernel/xnu` has not been touched beyond the
+already-present local `pe_serial.c` edit.
+
+Until input is delivered, external `echo`/`cat`, pipelines, redirection and
+`wait4` all remain unverified: the shell has never executed a command.
