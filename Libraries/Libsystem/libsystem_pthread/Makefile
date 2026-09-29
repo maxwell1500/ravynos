@@ -12,7 +12,11 @@ LDFLAGS = --sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSION_MIN} \
 	-Wl,-alias_list,${.CURDIR}/xcodescripts/pthread.aliases
 ACFLAGS = ${CFLAGS}
 
-SUBDIR = dyld
+# `static` builds libpthread_static.a, the -DVARIANT_STATIC archive for
+# dyld-free executables. It is a SUBDIR, not a flag on this Makefile: this
+# directory's CFLAGS produce the shared dylib, and VARIANT_STATIC would
+# change what that dylib defines. See static/Makefile.
+SUBDIR = dyld static
 
 all: lib${LIB}.dylib
 lib${LIB}.dylib: ${.OBJDIR}/lib${LIB}.dylib

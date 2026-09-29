@@ -1001,6 +1001,7 @@ forkshell(struct job *jp, union node *n, int mode)
 }
 
 
+#ifndef NO_VFORK
 pid_t
 vforkexecshell(struct job *jp, char **argv, char **envp, const char *path, int idx, int pip[2])
 {
@@ -1050,6 +1051,7 @@ vforkexecshell(struct job *jp, char **argv, char **envp, const char *path, int i
 	TRACE(("In parent shell:  child = %d\n", (int)pid));
 	return pid;
 }
+#endif /* !NO_VFORK */
 
 
 /*

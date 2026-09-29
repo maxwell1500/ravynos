@@ -22,6 +22,25 @@ CFLAGS = --sysroot=${RAVYN_SDKROOT} -w \
 	-D__DARWIN_UNIX03 \
 	-include${.OBJDIR}/config.${CpuArch}.normal.h
 
+# The order of the -reexport- flags below is load-bearing, and putting
+# libsystem_pwdgrp ahead of libsystem_info is the whole point of it.
+#
+# A re-export dylib from this ld64 carries no per-symbol attribution at
+# all. Measured, not assumed: dyld_info -exports on the resulting
+# libSystem.B lists no re-exported name whatsoever -- not _getpwnam, and
+# not _printf either, which is certainly re-exported from libsystem_c.
+# Ownership is therefore decided at load time, by the first
+# LC_REEXPORT_DYLIB in the list that exports the symbol.
+#
+# libsystem_info.dylib still exports getpwnam/getpwuid/...; it has always
+# carried its own implementation, and that is the component
+# MISSING_DEPS.md records as blocked. A libSystem.B that lists it first
+# therefore keeps serving the passwd database from the blocked component,
+# and this wiring would look complete while changing nothing at all.
+# Listing libsystem_pwdgrp first makes it the owner. libsystem_info is
+# still re-exported, for getaddrinfo, gethostbyname and the rest of its
+# non-passwd surface.
+
 LDFLAGS = -mmacos-version-min=${MACOS_VERSION_MIN} \
 	--sysroot=${RAVYN_SDKROOT} \
 	-Wl,-syslibroot,${RAVYN_SDKROOT}/usr/lib \
@@ -40,14 +59,17 @@ LDFLAGS = -mmacos-version-min=${MACOS_VERSION_MIN} \
 	-Wl,-reexport-lunwind -Wl,-reexport-lxpc -Wl,-reexport-ldyld \
 	-Wl,-reexport-llaunch -Wl,-reexport-ldispatch \
 	-Wl,-reexport-lsystem_m -Wl,-reexport-lsystem_coreservices \
-	-Wl,-reexport-lsystem_notify -Wl,-reexport-lsystem_info \
+	-Wl,-reexport-lsystem_notify \
+	-Wl,-reexport-lsystem_pwdgrp -Wl,-reexport-lsystem_info \
+	-Wl,-reexport-lsystem_termcap \
 	-Wl,-reexport-lcopyfile -Wl,-reexport-lmacho \
 	-Wl,-reexport-lremovefile -Wl,-reexport-lsystem_trace \
 	-Wl,-reexport-lsystem_dnssd -Wl,-reexport-lcorecrypto \
 	-lcompiler_rt -ldyld -lsystem_c -lc++ -lCrashReporterClient\
 	-lsystem_platform -lsystem_kernel -lsystem_blocks -lsystem_malloc \
 	-lsystem_info -lsystem_notify -lsystem_trace -lsystem_asl \
-	-lsystem_blocks -lsystem_pthread -ldispatch -lxpc -llaunch -lsystem_m
+	-lsystem_blocks -lsystem_pthread -ldispatch -lxpc -llaunch -lsystem_m \
+	-lsystem_pwdgrp -lsystem_termcap
 
 all: lib${LIB}.dylib
 
@@ -98,7 +120,40 @@ SUBDIR = copyfile removefile libdispatch libsystem_blocks libsystem_kernel \
 	libsystem_platform libsystem_malloc libsystem_pthread libsystem_notify \
 	libsystem_info libsystem_c libsystem_asl libsystem_trace \
 	libsystem_dnssd libxpc liblaunch libsystem_m libsystem_darwin \
-	libsystem_coreservices libmacho #CommonCrypto
+	libsystem_coreservices libmacho libsystem_pwdgrp libsystem_termcap \
+	#CommonCrypto
+
+# Why libsystem_termcap is wired the same way libsystem_pwdgrp is, and the one
+# way it is not.
+#
+# The same: both are components this tree has to own because the archive that
+# used to export the symbols is not reachable. pwdgrp's libinfo.o is
+# self-referential onto a framework with no build target (see
+# libsystem_info/MISSING_DEPS.md); termcap simply did not exist in ravynOS at
+# all -- no <termcap.h> in the SDK and no tget* in any Libsystem archive --
+# and BSD/lib/libedit/src/terminal.c calls all six entry points
+# unconditionally from terminal_set(), so nothing that uses line editing could
+# build without it.
+#
+# NOT the same, and deliberately: the -reexport flag's POSITION is not
+# load-bearing for termcap. It is for pwdgrp, because libsystem_info.dylib
+# still exports getpwnam and friends and the first LC_REEXPORT_DYLIB that has
+# a symbol owns it (see the long note above). Nothing else in this tree
+# exports tgetent/tgetflag/tgetnum/tgetstr/tgoto/tputs, so there is no
+# competitor to order against. The flag sits next to pwdgrp's for
+# readability, not because a symbol resolves differently either way.
+#
+# One thing this component does that no other does: its Makefile installs
+# <termcap.h> into the SDK's usr/include. That is not an extra, it is the half
+# that makes the component usable. libedit's src/sys.h includes config.h into
+# every translation unit and config.h has HAVE_TERMCAP_H 1, so
+# src/terminal.c:57 does `#include <termcap.h>' -- and terminal.c declares the
+# six prototypes itself only under `#if defined(__sun)' (src/terminal.c:71-78),
+# so without the header the ravynOS build takes an IMPLICIT `int tgetstr()'
+# and truncates the returned pointer to 32 bits on x86_64. That is not a
+# warning; it is a wrong library.
+#
+# See libsystem_termcap/README.md.
 
 # Library versions within libsystem were taken from Monterey System.tbd
 # libcache.dylib 83

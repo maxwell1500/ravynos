@@ -374,6 +374,10 @@ letcmd(int argc, char **argv)
 
 	i = arith(p);
 
-	out1fmt(ARITH_FORMAT_STR "\n", i);
+	/* `let' communicates only through its exit status: zero when the
+	 * expression is non-zero, non-zero when it is zero. Printing the
+	 * result corrupts every script that uses it, including the common
+	 * `if let x = 1; then ...' form, which would emit the value into the
+	 * script's own output. */
 	return !i;
 }

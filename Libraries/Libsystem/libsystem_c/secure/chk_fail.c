@@ -26,9 +26,29 @@
 #include <TargetConditionals.h>
 #include "crt_externs.h"
 
+/*
+ * ravynOS: a static link has no dyld, so the version probe is meaningless.
+ * See the long comment below. Keyed on VARIANT_STATIC (which
+ * libc_static/Makefile always defines) rather than on a -D, because adding
+ * a flag to that Makefile's CFLAGS invalidates every .o in the archive and
+ * forces a rebuild that unrelated breakage in secure/*_chk.c then blocks.
+ */
+#if !defined(PR_13085474_CHECK) && defined(VARIANT_STATIC)
+#define PR_13085474_CHECK 0
+#endif
+
 #ifndef PR_13085474_CHECK
 #define PR_13085474_CHECK TARGET_OS_OSX
 #endif
+
+/*
+ * ravynOS static builds define PR_13085474_CHECK=0 (see libc_static/Makefile),
+ * which compiles out the whole dyld probe. That is the correct branch, not a
+ * stub for it: the probe's only effect is `__chk_assert_no_overlap = 0', and
+ * that variable is already initialised to 0 below. A static binary has no
+ * dyld and therefore no "linked before 10.9" case to detect, so the probe
+ * could only ever clear a flag that is already clear.
+ */
 
 #if PR_13085474_CHECK
 /* Some shipped applications fail this check and were tested against

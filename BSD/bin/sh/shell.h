@@ -52,6 +52,17 @@
 /* #define DEBUG 1 */
 
 /*
+ * ravynOS has no vfork(). Kernel/xnu/bsd/kern/syscalls.master:120-124 gates
+ * syscall 66 on CONFIG_VFORK, and CONFIG_VFORK is defined nowhere in this
+ * tree, so the call is routed to nosys and the kernel exports only the
+ * internal helpers (proc_lvfork, psignal_vfork). vforkexecshell() in jobs.c
+ * is a pure optimisation -- the caller in eval.c falls through to the
+ * ordinary forkshell() -- so it is skipped rather than stubbed out with a
+ * fake vfork() that would silently change its semantics.
+ */
+#define	NO_VFORK 1
+
+/*
  * Type of used arithmetic. SUSv3 requires us to have at least signed long.
  */
 typedef intmax_t arith_t;

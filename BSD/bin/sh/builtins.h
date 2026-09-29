@@ -25,26 +25,23 @@
 #define HISTCMD 19
 #define JOBIDCMD 20
 #define JOBSCMD 21
-#define KILLCMD 22
-#define LOCALCMD 23
-#define PRINTFCMD 24
-#define PWDCMD 25
-#define READCMD 26
-#define RETURNCMD 27
-#define SETCMD 28
-#define SETVARCMD 29
-#define SHIFTCMD 30
-#define TESTCMD 31
-#define TIMESCMD 32
-#define TRAPCMD 33
-#define TRUECMD 34
-#define TYPECMD 35
-#define ULIMITCMD 36
-#define UMASKCMD 37
-#define UNALIASCMD 38
-#define UNSETCMD 39
-#define WAITCMD 40
-#define WORDEXPCMD 41
+#define LOCALCMD 22
+#define PWDCMD 23
+#define READCMD 24
+#define RETURNCMD 25
+#define SETCMD 26
+#define SETVARCMD 27
+#define SHIFTCMD 28
+#define TIMESCMD 29
+#define TRAPCMD 30
+#define TRUECMD 31
+#define TYPECMD 32
+#define ULIMITCMD 33
+#define UMASKCMD 34
+#define UNALIASCMD 35
+#define UNSETCMD 36
+#define WAITCMD 37
+#define WORDEXPCMD 38
 
 #define BUILTIN_SPECIAL 0x80
 
@@ -73,16 +70,13 @@ int hashcmd(int, char **);
 int histcmd(int, char **);
 int jobidcmd(int, char **);
 int jobscmd(int, char **);
-int killcmd(int, char **);
 int localcmd(int, char **);
-int printfcmd(int, char **);
 int pwdcmd(int, char **);
 int readcmd(int, char **);
 int returncmd(int, char **);
 int setcmd(int, char **);
 int setvarcmd(int, char **);
 int shiftcmd(int, char **);
-int testcmd(int, char **);
 int timescmd(int, char **);
 int trapcmd(int, char **);
 int truecmd(int, char **);
@@ -103,10 +97,7 @@ safe_builtin_always(int idx)
 	    idx == FALSECMD || 
 	    idx == JOBIDCMD || 
 	    idx == JOBSCMD || 
-	    idx == KILLCMD || 
-	    idx == PRINTFCMD || 
 	    idx == PWDCMD || 
-	    idx == TESTCMD || 
 	    idx == TIMESCMD || 
 	    idx == TRUECMD || 
 	    idx == TYPECMD)

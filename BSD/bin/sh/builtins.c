@@ -29,16 +29,13 @@ int (*const builtinfunc[])(int, char **) = {
 	histcmd,
 	jobidcmd,
 	jobscmd,
-	killcmd,
 	localcmd,
-	printfcmd,
 	pwdcmd,
 	readcmd,
 	returncmd,
 	setcmd,
 	setvarcmd,
 	shiftcmd,
-	testcmd,
 	timescmd,
 	trapcmd,
 	truecmd,
@@ -77,26 +74,22 @@ const unsigned char builtincmd[] = {
 	"\002\023fc"
 	"\005\024jobid"
 	"\004\025jobs"
-	"\004\026kill"
-	"\005\027local"
-	"\006\030printf"
-	"\003\031pwd"
-	"\004\032read"
-	"\006\233return"
-	"\003\234set"
-	"\006\035setvar"
-	"\005\236shift"
-	"\004\037test"
-	"\001\037["
-	"\005\240times"
-	"\004\241trap"
-	"\001\242:"
-	"\004\042true"
-	"\004\043type"
-	"\006\044ulimit"
-	"\005\045umask"
-	"\007\046unalias"
-	"\005\247unset"
-	"\004\050wait"
-	"\007\051wordexp"
+	"\005\026local"
+	"\003\027pwd"
+	"\004\030read"
+	"\006\231return"
+	"\003\232set"
+	"\006\033setvar"
+	"\005\234shift"
+	"\005\235times"
+	"\004\236trap"
+	"\001\237:"
+	"\004\037true"
+	"\004\040type"
+	"\006\041ulimit"
+	"\005\042umask"
+	"\007\043unalias"
+	"\005\244unset"
+	"\004\045wait"
+	"\007\046wordexp"
 };

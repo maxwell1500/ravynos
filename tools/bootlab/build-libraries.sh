@@ -9,7 +9,15 @@
 #     exports, and each one is a hard build failure (see below).
 #
 # Usage: tools/bootlab/build-libraries.sh [subdir ...]
-set -uo pipefail
+#
+#   --static-pthread-only
+#         Build ONLY Libraries/Libsystem/libsystem_pthread/static, the
+#         -DVARIANT_STATIC pthread archive that statically-linked userspace
+#         binaries link (see Libraries/Libsystem/static/README.md). This
+#         exists because the top-level `Libsystem` target also requires
+#         libsystem_trace, which does not build, so a caller that only
+#         needs the static archive cannot get it through the normal entry
+#         point. Invoked by tools/bootlab/link-static.sh.
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
@@ -455,6 +463,80 @@ CDEFS_TAIL='
 #define __osloglike(fmtarg, firstvararg) \
 	__attribute__((__format__ (__os_log__, fmtarg, firstvararg)))
 #endif
+
+/*
+ * The ABI-neutral pointer attributes. The cdefs.h in this SDK is an older
+ * generation that predates them, but the headers in that same SDK use them
+ * unconditionally -- there is no repository-side socket.h/sysctl.h/if.h
+ * to fix, these only exist in the generated tree:
+ *   usr/include/sys/socket.h:561,565   void *__sized_by(msg_namelen) msg_name;
+ *   usr/include/sys/sysctl.h:795-799   __sized_by / __counted_by
+ *   usr/include/net/if.h:75,367        __counted_by
+ *   usr/include/kern/kcdata.h:1468      __sized_by
+ * so a bare include of sys/socket.h could not compile:
+ *   sys/socket.h:561:30: error: a parameter list without types is only
+ *                             allowed in a function definition
+ *   sys/socket.h:561:42: error: expected ; at end of declaration list
+ * Two command lines were masking this. Both paper over the gap rather
+ * than close it, and neither reaches a consumer outside them:
+ *   BSD/share/mk/bsd.sys.mk:539  -D__sized_by(x)= -- function-like, so it
+ *       does not even match the __sized_by(msg_namelen) use site
+ *   BSD/bin/sh/build-ravynos.sh:71  PTRATTR, added by a worker who
+ *       correctly refused to fix it at source and worked around it here
+ *
+ * The block is the one from the sys/cdefs.h of the host SDK, verbatim:
+ * every macro in it is defined to nothing or to an identity cast precisely
+ * because it must not change the ABI. __indexable and __bidi_indexable
+ * are deliberately absent -- they are an ABI break, and omitting them
+ * leaves the diagnostic in place instead of silently degrading it.
+ * __ASSUME_PTR_ABI_SINGLE_BEGIN/END and __unsafe_forge_single are included
+ * because the headers in that same SDK use them (os/base.h, sys/queue.h and
+ * friends); dropping them would just move the same failure one header on.
+ *
+ * Guarded per-macro with #ifndef, exactly as the two macros above are, so
+ * this is idempotent and cannot affect a tree that already has them -- for
+ * instance the System.framework PrivateHeaders copy, which is a newer xnu
+ * generation and already carries the block at its own :1126-1135.
+ */
+#ifndef __has_ptrcheck
+#define __has_ptrcheck 0
+#define __single
+#define __unsafe_indexable
+#define __counted_by(N)
+#define __counted_by_or_null(N)
+#define __sized_by(N)
+#define __sized_by_or_null(N)
+#define __ended_by(E)
+#define __terminated_by(T)
+#define __null_terminated
+/* __unsafe_forge intrinsics are ordinary C casts. */
+#define __unsafe_forge_bidi_indexable(T, P, S) ((T)(P))
+#define __unsafe_forge_single(T, P) ((T)(P))
+#define __unsafe_forge_terminated_by(T, P, E) ((T)(P))
+#define __unsafe_forge_null_terminated(T, P) ((T)(P))
+#define __terminated_by_to_indexable(P) (P)
+#define __unsafe_terminated_by_to_indexable(P) (P)
+#define __null_terminated_to_indexable(P) (P)
+#define __unsafe_null_terminated_to_indexable(P) (P)
+#define __unsafe_terminated_by_from_indexable(T, P, ...) (P)
+#define __unsafe_null_terminated_from_indexable(P, ...) (P)
+/* No pointer checking, so decay is already normal and write-once is moot. */
+#define __array_decay_dicards_count_in_parameters
+#define __unsafe_late_const
+#define __ptrcheck_unavailable
+#define __ptrcheck_unavailable_r(REPLACEMENT)
+#define __ptrcheck_abi_assume_single()
+#define __ptrcheck_abi_assume_unsafe_indexable()
+#define __ASSUME_PTR_ABI_SINGLE_BEGIN       __ptrcheck_abi_assume_single()
+#define __ASSUME_PTR_ABI_SINGLE_END         __ptrcheck_abi_assume_unsafe_indexable()
+#if __has_ptrcheck
+#define __header_indexable                  __indexable
+#define __header_bidi_indexable             __bidi_indexable
+#else
+#define __header_indexable
+#define __header_bidi_indexable
+#endif
+#endif /* !__has_ptrcheck */
 /* --- end tools/bootlab/build-libraries.sh --- */
 '
 sync_cdefs() {
@@ -526,6 +608,38 @@ generate_mig() {
     done
     return 0
 }
+
+# --static-pthread-only: build just the static-variant pthread archive.
+# The path is spelled out rather than reusing DIRS because the target is
+# a SUBDIR of libsystem_pthread, not a top-level Libraries/ entry, and
+# because the top-level Libsystem target would drag in libsystem_trace.
+if [ "${1:-}" = "--static-pthread-only" ]; then
+    echo "=== building Libraries/Libsystem/libsystem_pthread/static ==="
+    ( cd "$ROOT/Libraries/Libsystem/libsystem_pthread/static" && \
+      "$BMAKE" -m "$MKMODULES" "${BMAKE_TARGET:-all}" )
+    exit $?
+fi
+
+# --pwdgrp-only: build just Libraries/Libsystem/libsystem_pwdgrp, which
+# produces both libsystem_pwdgrp.dylib and libsystem_pwdgrp_static.a.
+#
+# Same reasoning as --static-pthread-only above: the top-level Libsystem
+# target cannot be used to build it, because Libraries/Libsystem/Makefile
+# generates config.${CpuArch}.normal.h through xcodescripts/linker_arguments.sh,
+# and that script refuses to run while any name in `requiredlibs' is missing
+# from the SDK's usr/lib/system. `system_pwdgrp' is in requiredlibs (it has to
+# be, or the generated re-export list omits the passwd database and the
+# dynamic linker keeps serving getpwnam from libsystem_info), so on a tree
+# where libsystem_pwdgrp.dylib has not been installed yet the Libsystem build
+# aborts before it ever descends into the SUBDIR that would install it.
+# Building the component first breaks that cycle for this component, exactly
+# as --static-pthread-only does for pthread.
+if [ "${1:-}" = "--pwdgrp-only" ]; then
+    echo "=== building Libraries/Libsystem/libsystem_pwdgrp ==="
+    ( cd "$ROOT/Libraries/Libsystem/libsystem_pwdgrp" && \
+      "$BMAKE" -m "$MKMODULES" "${BMAKE_TARGET:-all}" )
+    exit $?
+fi
 
 DIRS=("$@")
 [ ${#DIRS[@]} -eq 0 ] && DIRS=(MiscLibs libfirehose_kernel objc4 dyld Libsystem)

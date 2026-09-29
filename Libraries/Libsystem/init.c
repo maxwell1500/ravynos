@@ -159,6 +159,17 @@ enum init_func {
 #define _libSystem_ktrace_init_func(what) \
 	_libSystem_ktrace1(ARIADNE_LIFECYCLE_libsystem_init | DBG_FUNC_NONE, INIT_##what)
 
+static const struct _libc_functions libc_funcs = {
+	.version = 1,
+	.atfork_prepare = libSystem_atfork_prepare,
+	.atfork_parent = libSystem_atfork_parent,
+	.atfork_child = libSystem_atfork_child,
+#if defined(HAVE_SYSTEM_CORESERVICES)
+	.dirhelper = _dirhelper,
+#endif
+};
+
+
 // libsyscall_initializer() initializes all of libSystem.dylib
 // <rdar://problem/4892197>
 __attribute__((constructor))
@@ -193,15 +204,7 @@ libSystem_initializer(int argc,
 		.free = free,
 	};
 
-	static const struct _libc_functions libc_funcs = {
-		.version = 1,
-		.atfork_prepare = libSystem_atfork_prepare,
-		.atfork_parent = libSystem_atfork_parent,
-		.atfork_child = libSystem_atfork_child,
-#if defined(HAVE_SYSTEM_CORESERVICES)
-		.dirhelper = _dirhelper,
-#endif
-	};
+
 	
 	static const struct _malloc_functions malloc_funcs = {
 		.version = 1,

@@ -10,7 +10,7 @@
 
 typedef int (*fn_t)(const void *, const void *, void *);
 
-char * strchrnul(char * s, char ch);
+char * strchrnul(const char * s, int ch);
 int eaccess(const char * p, int mode);
 void * reallocarray(void * p, size_t n, size_t size);
 int qsort_s(void * base, size_t nmemb, size_t size, fn_t * compar, void * thunk);

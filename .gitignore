@@ -41,3 +41,32 @@ ravynOS.xcodeproj
 # committed.
 /tools/bootlab/assets/*
 !/tools/bootlab/assets/.gitignore
+
+# bootlab staging output and the per-experiment manifests that select a probe
+# as PID 1. Both are regenerable: staged/ is produced by link-static.sh and the
+# manifests by make_shell_manifest.py. They are build products, and the
+# manifests in particular are one per diagnostic run, so tracking them would
+# add noise without adding provenance -- the findings they selected are
+# recorded in tools/bootlab/BOOT-PLAN.md instead.
+/tools/bootlab/staged/
+/tools/bootlab/manifest_*.json
+
+# bmake -j dependency sidecars. The .o files they name are build products; the
+# sidecars are the by-product of the parallel make that produced them.
+.depend.*.o
+*.o.tmp
+
+# In-tree build products from the BSD bmake builds of Libsystem and dyld.
+# These trees are built in place (no OBJROOT), so the .o files land beside
+# their sources. Scoped to the two build trees on purpose: the repo already
+# documents that 1363 tracked .o files exist as unit-test fixtures under
+# Libraries/dyld/unit-tests/, and a blanket *.o rule would hide new fixtures.
+/Libraries/Libsystem/*.o
+/Libraries/Libsystem/**/*.o
+/Libraries/dyld/**/*.o
+
+Scratch from a standalone host compile, not part of any build system.
+/t.c
+/block.o
+/lchflags.o
+/llvm_target/

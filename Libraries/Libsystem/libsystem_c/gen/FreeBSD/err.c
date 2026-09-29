@@ -365,6 +365,7 @@ vwarnx(const char *fmt, va_list ap)
  * Returns a pointer to the CALLING THREAD's errno.  Callers store through it
  * (errno = X), so the pointee must be per-thread storage, not a shared global.
  */
+__attribute__((weak))
 int *
 __error(void)
 {

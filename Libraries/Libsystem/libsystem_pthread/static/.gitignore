@@ -1,0 +1,4 @@
+# Build products of this Makefile, same as the parent directory's.
+*.o
+*.a
+*.tmp

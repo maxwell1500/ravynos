@@ -18,7 +18,8 @@ SRCS = secure/chk_fail.c \
 	secure/strncpy_chk.c \
 	secure/vsnprintf_chk.c \
 	secure/vsprintf_chk.c \
-	secure/memccpy_chk.c
+	secure/memccpy_chk.c \
+	../sys/_libc_init_static.c
 
 .if "${CpuArch}" == "x86_64"
 SRCS += x86_64/gen/mcount.s

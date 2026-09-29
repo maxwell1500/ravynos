@@ -5,7 +5,26 @@
 /* #undef CLOSEDIR_VOID */
 
 /* Define to 1 if you have the <curses.h> header file. */
-#define HAVE_CURSES_H 1
+/*
+ * ravynOS: NO. This file is configure's output from a machine that had
+ * curses, and src/sys.h includes it into every translation unit
+ * unconditionally, so src/terminal.c:60 reached
+ *
+ *     BSD/lib/libedit/src/terminal.c:61:10: fatal error: 'curses.h' file not found
+ *
+ * before this component existed. ravynOS has no curses and no ncurses --
+ * there is no <curses.h> or <ncurses.h> anywhere in the ravynOS SDK, and
+ * BSD/lib/ncurses is not built -- so saying otherwise here buys nothing and
+ * costs the whole build. These are the only two macros in this file that
+ * terminal.c consults for headers, and it takes the first of them that is
+ * defined (src/terminal.c:60-63).
+ *
+ * HAVE_TERMCAP_H below is left at 1, and that one is now TRUE:
+ * Libraries/Libsystem/libsystem_termcap installs <termcap.h> into the ravynOS
+ * SDK. Before that component, termcap.h was missing too, so this file was
+ * describing a host that this target is not.
+ */
+#undef HAVE_CURSES_H
 
 /* Define to 1 if you have the <dirent.h> header file, and it defines 'DIR'.
    */
@@ -68,7 +87,10 @@
 /* #undef HAVE_MINIX_CONFIG_H */
 
 /* Define to 1 if you have the <ncurses.h> header file. */
-#define HAVE_NCURSES_H 1
+/* ravynOS: NO -- see the HAVE_CURSES_H note above. This is the fallback
+   terminal.c:62 reaches when HAVE_CURSES_H is undefined, so it has to be
+   undefined too or the build just moves one line down. */
+#undef HAVE_NCURSES_H
 
 /* Define to 1 if you have the <ndir.h> header file, and it defines 'DIR'. */
 /* #undef HAVE_NDIR_H */

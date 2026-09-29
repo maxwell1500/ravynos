@@ -62,6 +62,13 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("out", nargs="?", default=os.path.join(HERE, "work", "boot.img"))
     ap.add_argument("--kernel", help="explicit kernel payload path")
+    ap.add_argument("--gpt-conform", action="store_true",
+                    help="rewrite the golden GPT header to be UEFI-spec "
+                         "conformant. DEFAULT OFF: as of 2026-09-28 this "
+                         "BREAKS the Apple boot.efi path -- with a "
+                         "conformant GPT the UEFI shell no longer maps fs0: "
+                         "and the kernel never starts. See "
+                         "gpt_conform.py and the report before enabling.")
     ap.add_argument("--manifest",
                     help="manifest file, relative to tools/bootlab or absolute "
                          "(default manifest.json)")
@@ -79,9 +86,56 @@ def main():
     print("kernel payload: %s (%d bytes)" % (kern, os.path.getsize(kern)))
     print("init  payload:  %s (%d bytes)" % (init, os.path.getsize(init)))
 
-    b = ImageBuilder(os.path.join(HERE, "assets", "template_head.bin"),
-                     os.path.join(HERE, "assets", "template_tail.bin"),
-                     args.out, man.get("volume", "RAVYNOS"))
+    # ------------------------------------------------------------------
+    # GPT CONFORMANCE.
+    #
+    # The golden head/tail templates carry a GPT header that does not match
+    # the UEFI spec: NumberOfPartitionEntries and SizeOfPartitionEntry are
+    # written as UINT32 at 0x50/0x54 where the spec has UINT64 at 0x50 and
+    # UINT32 at 0x58, and partition 0 is typed "Microsoft Basic Data" instead
+    # of "EFI System Partition".  An EDK2 PartitionDxe reads a UINT64 at 0x50,
+    # sees 0x0000008000000080 = 549,755,814,016 entries, rejects the layout
+    # and never creates a partition handle -- so FatDxe never binds and
+    # EFI_SIMPLE_FILE_SYSTEM_PROTOCOL is never installed, while the UEFI
+    # shell still shows FS0 because it enumerates the volume its own way.
+    # That is why a HandleProtocol sweep of all 1976 handles found zero
+    # volumes: HandleProtocol was reporting the truth the whole time.
+    #
+    # The committed templates are NOT modified.  The repair is applied to a
+    # copy in work/, so it is additive and reversible, and it applies to
+    # every image the harness builds from now on.  gpt_conform.check() then
+    # asserts the result on EVERY build, so this cannot regress silently.
+    # ------------------------------------------------------------------
+    if args.gpt_conform:
+      sys.path.insert(0, HERE)
+      import gpt_conform
+      os.makedirs(os.path.join(HERE, "work"), exist_ok=True)
+      fixed_head = os.path.join(HERE, "work", "template_head.gptfix.bin")
+      fixed_tail = os.path.join(HERE, "work", "template_tail.gptfix.bin")
+      head = bytearray(open(os.path.join(HERE, "assets", "template_head.bin"), "rb").read())
+      tail = bytearray(open(os.path.join(HERE, "assets", "template_tail.bin"), "rb").read())
+      HEAD_ENTRY_OFF = 1024                        # primary entry array, LBA 2
+      tail_hdr = tail.find(b"EFI PART")
+      if tail_hdr < 0:
+          sys.exit("no backup GPT header in template_tail.bin")
+      # Backup layout: the last 32 sectors are the backup entry array and the
+      # final sector is the backup header, so the array is at tail offset 0.
+      TAIL_ENTRY_OFF = 0
+      for buf, arr, name in ((head, HEAD_ENTRY_OFF, "head"),
+                             (tail, TAIL_ENTRY_OFF, "tail")):
+          gpt_conform.set_esp_type_guid(buf, arr)
+          gpt_conform.conform_gpt(buf, [arr], name)
+          info = gpt_conform.check(buf, name, arr)
+          print("GPT %-4s: npart=%d psz=%d hdrsz=%d crc=0x%08x  ESP type set"
+                % (name, info["npart"], info["psz"], info["hsize"], info["header_crc"]))
+      open(fixed_head, "wb").write(bytes(head))
+      open(fixed_tail, "wb").write(bytes(tail))
+      b = ImageBuilder(fixed_head, fixed_tail, args.out,
+                       man.get("volume", "RAVYNOS"))
+    else:
+      b = ImageBuilder(os.path.join(HERE, "assets", "template_head.bin"),
+                       os.path.join(HERE, "assets", "template_tail.bin"),
+                       args.out, man.get("volume", "RAVYNOS"))
 
     def mkdirs(path):
         node = b.root
@@ -134,6 +188,16 @@ def main():
             add(ent["path"], open(init, "rb").read())
         elif "init_exec" in ent:
             add(ent["path"], open(init, "rb").read())
+        elif "file" in ent:
+            # Additive: stage a file from anywhere (used by the ravynOS EFI
+            # loader, which is a build product outside assets/).  No existing
+            # manifest uses this key, so today's behaviour is unchanged.
+            p = ent["file"]
+            if not os.path.isabs(p):
+                p = os.path.join(HERE, p)
+            if not os.path.isfile(p):
+                sys.exit("missing file source: %s" % p)
+            add(ent["path"], open(p, "rb").read())
         elif "text" in ent:
             add(ent["path"], ent["text"].encode("utf-8"))
         else:

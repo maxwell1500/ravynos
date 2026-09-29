@@ -1007,4 +1007,45 @@
 	        typedef _type _name; enum __VA_ARGS__ __enum_closed __enum_options
 #endif
 
+/*
+ * Pointer attribute macros.
+ *
+ * These are used by this SDK's OWN headers -- sys/socket.h:561,565 declare
+ * msg_name/msg_control as __sized_by(...) -- so they must be defined here.
+ * They used to arrive transitively from Kernel/xnu/bsd/sys/cdefs.h, which
+ * carries them, and stopped arriving when this file became the generation that
+ * gets installed. The symptom was not a link error but a wall of parse
+ * errors in every translation unit that reaches <sys/ioctl.h>:
+ *   sys/socket.h:561:30: error: a parameter list without types is only
+ *   allowed in a function definition
+ * with the offending token being the bare __sized_by.
+ *
+ * #ifndef throughout, so a real definition from any earlier header wins and
+ * this can never mask one. That is what makes copying xnu's cdefs wholesale
+ * the wrong fix: see tools/bootlab/build-libraries.sh, where wholesale
+ * copying was tried and reverted because the generations disagree on the
+ * libc variant macros.
+ */
+#ifndef __has_ptrcheck
+#define __has_ptrcheck 0
+#define __single
+#define __unsafe_indexable
+#endif
+
+#ifndef __counted_by
+#define __counted_by(N)
+#define __counted_by_or_null(N)
+#endif
+
+#ifndef __sized_by
+#define __sized_by(N)
+#define __sized_by_or_null(N)
+#endif
+
+#ifndef __ended_by
+#define __ended_by(E)
+#define __terminated_by(T)
+#define __null_terminated
+#endif
+
 #endif /* !_CDEFS_H_ */

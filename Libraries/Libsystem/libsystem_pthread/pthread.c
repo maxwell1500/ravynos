@@ -169,6 +169,29 @@ struct _pthread _main_thread __attribute__((aligned(64))) = { };
 struct _pthread *_main_thread_ptr;
 #endif // VARIANT_DYLD
 
+#if VARIANT_STATIC
+// The main thread's pthread_t, for a statically linked ravynOS program.
+//
+// The ravynOS SDK ships no crt1.o, so a static program supplies its own
+// entry point and there is no __libc_init -> __pthread_init, and nothing
+// calls _pthread_set_self() for the thread that is already running. The
+// kernel does not establish a user GS base by itself either: it initialises
+// pcb->cthread_self to 0 (osfmk/i386/pcb_native.c, machine_thread_init) and
+// only machine_thread_set_tsd_base() ever sets it, which is reached from
+// userspace only through the thread_fast_set_cthread_self64 machdep trap.
+// So the first %gs-relative TSD read in the program faults, and in a shell
+// that is os_unfair_lock_lock()'s owner lookup, i.e. _os_tsd_get_direct(
+// __TSD_MACH_THREAD_SELF) -- the first %gs read it ever executes.
+//
+// __pthread_static_init() below, called from tools/bootlab/static-start.c
+// before main(), is what installs it. The object is libpthread's own rather
+// than one allocated by the entry point, and main_thread() is
+// _main_thread_ptr in this variant, so this is also what keeps main_thread()
+// naming the same struct whose tsd[] is the TSD block, instead of leaving
+// the two able to drift apart.
+struct _pthread _main_thread_static __attribute__((aligned(64))) = { };
+#endif // VARIANT_STATIC
+
 #if PTHREAD_DEBUG_LOG
 #include <fcntl.h>
 int _pthread_debuglog;
@@ -1631,6 +1654,61 @@ _pthread_set_self_dyld(void)
 }
 #endif // VARIANT_DYLD
 
+#if VARIANT_STATIC
+// Minimal main-thread bring-up for a statically linked ravynOS program.
+// Called by tools/bootlab/static-start.c before main(); see the comment on
+// _main_thread_static for why something like this has to exist.
+//
+// Deliberately the same shape as _pthread_set_self_dyld() plus the one
+// thing that function leaves to __pthread_init: slot 0 is the pthread_t and
+// slot 1 is where errno lives, both of which every later pthread_getspecific
+// and every errno access depends on, and _thread_set_tsd_base() is what
+// makes &p->tsd[0] the thread's GS base. _pthread_set_self() is called
+// rather than open-coding that, so this cannot drift from the path every
+// secondary thread takes.
+//
+// Slot 3, __TSD_MACH_THREAD_SELF, is set with mach_thread_self() (the
+// thread_self_trap mach trap) exactly as _pthread_main_thread_init() sets
+// it, because that is the value os_unfair_lock_lock() names its owner with.
+// Leaving it zero would not fault -- an uncontended lock reads as unowned
+// and takes the fast path -- but it would make every later contention
+// resolve against owner 0 instead of this thread.
+//
+// Everything else in the struct stays zero, which is the correct "unset"
+// value for every remaining field: p->lock is already OS_UNFAIR_LOCK_INIT
+// (both are {0}), max_tsd_key is 0 so no keys are handed out yet, and the
+// signature is self-derived, so the zero munge token does not matter.
+// Default visibility, deliberately, unlike the other internals here.
+// libpthread_static.a is a static archive, and ld64 only pulls a member in
+// response to a symbol in that archive's index; a hidden symbol is not
+// reliably in it. With visibility("hidden") here the member loaded fine
+// under -all_load but stayed invisible to the normal lazy pull, and the
+// link of a static program that called this failed with an undefined
+// __pthread_static_init. No dylib is built from this translation unit under
+// VARIANT_STATIC, so a default-visibility symbol here exports nothing.
+void
+__pthread_static_init(void)
+{
+	pthread_t p = &_main_thread_static;
+
+	// main_thread() is _main_thread_ptr in this variant, so this is what
+	// makes it name the same struct whose tsd[] is about to become the
+	// TSD block.
+	_main_thread_ptr = p;
+	_pthread_init_signature(p);
+
+	p->tsd[_PTHREAD_TSD_SLOT_PTHREAD_SELF] = p;
+	p->tsd[_PTHREAD_TSD_SLOT_ERRNO] = &p->err_no;
+	_pthread_set_kernel_thread(p, mach_thread_self());
+
+	// Stores thread_id from __thread_selfid() and installs &p->tsd[0] as
+	// the thread's GS base -- i.e. the machdep trap
+	// (SYSCALL_CONSTRUCT_MDEP(3), thread_fast_set_cthread_self64) that
+	// this whole path exists to issue.
+	_pthread_set_self(p);
+}
+#endif // VARIANT_STATIC
+
 PTHREAD_ALWAYS_INLINE
 static inline void
 _pthread_set_self_internal(pthread_t p)
@@ -2650,13 +2728,49 @@ _pthread_introspection_thread_destroy(pthread_t t)
 #include <platform/string.h>
 
 // pthread_setup initializes large structures to 0,
+//
 // which the compiler turns into a library call to memset.
 //
 // To avoid linking against Libc, provide a simple wrapper
 // that calls through to the libplatform primitives
+//
+/*
+ * The three shims below exist ONLY to keep Libc off pthread's link line:
+ * pthread_setup zeroes large structures, which the compiler turns into
+ * library calls, and Libc is not loaded into the processes that link
+ * libsystem_pthread directly (dyld, launchd). For those the shims are the
+ * only definition and must be strong.
+ *
+ * A statically-linked ravynOS executable is the opposite case: it links
+ * libc.a and libsystem_platform.a, which define these three names
+ * themselves, and pthread.o's strong copies then collide with them --
+ * 5 duplicate symbols in all, counting the malloc/free pair above, which
+ * VARIANT_STATIC already removes.
+ *
+ * So in a static link the shims must LOSE. They are marked weak and the
+ * real implementations in libsystem_platform win.
+ *
+ * This is deliberately not a linker flag. -U / -allow_multiple_definitions
+ * would pick a definition by link order, and the two candidates are not
+ * interchangeable: pthread's own malloc (pthread.c, above) returns NULL
+ * until pthread_init() has run, and a static binary has no crt1.o to call
+ * __libc_init -> pthread_init. Letting it win makes every malloc() in the
+ * program fail silently. Weak is the only marking that expresses "use the
+ * real one if it exists", which is the actual requirement.
+ *
+ * PTHREAD_LIBC_SHIM expands to nothing in every build that does not define
+ * VARIANT_STATIC, so the shared dylib's pthread.o is unchanged -- see
+ * Libraries/Libsystem/static/README.md.
+ */
+#if defined(VARIANT_STATIC)
+#define PTHREAD_LIBC_SHIM __attribute__((weak))
+#else
+#define PTHREAD_LIBC_SHIM
+#endif
+
 
 #undef memset
-PTHREAD_NOEXPORT
+PTHREAD_NOEXPORT PTHREAD_LIBC_SHIM
 void *
 memset(void *b, int c, size_t len)
 {
@@ -2664,7 +2778,7 @@ memset(void *b, int c, size_t len)
 }
 
 #undef bzero
-PTHREAD_NOEXPORT
+PTHREAD_NOEXPORT PTHREAD_LIBC_SHIM
 void
 bzero(void *s, size_t n)
 {
@@ -2672,7 +2786,7 @@ bzero(void *s, size_t n)
 }
 
 #undef memcpy
-PTHREAD_NOEXPORT
+PTHREAD_NOEXPORT PTHREAD_LIBC_SHIM
 void *
 memcpy(void* a, const void* b, unsigned long s)
 {

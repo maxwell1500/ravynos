@@ -983,6 +983,14 @@ evalcommand(union node *cmd, int flags, struct backcmd *backcmd)
 			if (pipe(pip) < 0)
 				error("Pipe call failed: %s", strerror(errno));
 		}
+#ifndef NO_VFORK
+		/*
+		 * ravynOS has no vfork() -- see the NO_VFORK comment in
+		 * shell.h. vforkexecshell() is a pure optimisation: everything
+		 * it does, forkshell() on the next line also does. The whole
+		 * block is compiled out rather than stubbed with a fake vfork()
+		 * whose shared-address-space semantics would be a lie.
+		 */
 		if (cmdentry.cmdtype == CMDNORMAL &&
 		    cmd->ncmd.redirect == NULL &&
 		    varlist.count == 0 &&
@@ -992,6 +1000,7 @@ evalcommand(union node *cmd, int flags, struct backcmd *backcmd)
 			    cmdentry.u.index, flags & EV_BACKCMD ? pip : NULL);
 			goto parent;
 		}
+#endif
 		if (forkshell(jp, cmd, mode) != 0)
 			goto parent;	/* at end of routine */
 		if (flags & EV_BACKCMD) {
