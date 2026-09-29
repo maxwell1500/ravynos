@@ -637,9 +637,9 @@ ravyn_static_startup(int argc, char **argv, char **envp)
  * See the block comment at the call site for why the dynamic __libc_init
  * is the wrong entry point here.
  */
-extern void __ravyn_static_libc_init(const struct ProgramVars *vars,
-    void (*atfork_prepare)(void), void (*atfork_parent)(void),
-    void (*atfork_child)(void), const char *apple[]);
+extern void __ravyn_static_libc_init(const struct ravyn_program_vars *vars,
+	void (*atfork_prepare)(void), void (*atfork_parent)(void),
+	void (*atfork_child)(void), const char *apple[]);
 
 	/*
 	 * Libc's own initializer, at last reachable.
@@ -683,7 +683,7 @@ extern void __ravyn_static_libc_init(const struct ProgramVars *vars,
 	 * __guard_setup does `for (p = apple; p && *p; p++)`, which
 	 * short-circuits on NULL, and a static binary has no apple= vector.
 	 */
-	__libc_init(&ravyn_vars, _pthread_atfork_prepare,
+	__ravyn_static_libc_init(&ravyn_vars, _pthread_atfork_prepare,
 	    _pthread_atfork_parent, _pthread_atfork_child, 0);
 
 	/* The atfork table, before anything can fork. See the block comment on

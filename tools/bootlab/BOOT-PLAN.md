@@ -528,37 +528,49 @@ None of the next steps is in `Kernel/xnu`:
 4. Then fix `__os_once` re-entrancy.
 5. Then run `/tmp/sterm.py` for the terminal demonstration.
 
-### 2026-09-29 update: shell startup and archive rebuild
+### 2026-09-29 update: static initializer regression and prompt blocker
 
-The external-command/wait4 investigation is **not currently testable**: the
-latest scripted boots stop after `init: execve /bin/sh` and never produce the
-shell prompt. There is no panic or exit-reason line in the captured
-`/tmp/serial_test_ext.log`; the last non-`vm_map_get_range` output is the
-`execve` marker. A pre-change `work/fix6.img` shows the same stop, so this
-observation does not identify a regression from today's edits. The earlier
-reported working `work/shell_fix5.img` was overwritten during image rebuilds;
-that boot has not been reproduced from a preserved image.
+The older `serial_SHELL-FIX5.log` records the static shell reaching `# ` at
+line 638. Its manifest selected `work/sh.fix5` (SHA-256
+`4a3adea4ca563167731c91b5a638ebe4dd1b5de24da2da818dfa622ae019347a`) and
+the launchd stub `work/init_shell`. The image itself was overwritten, so this
+is log evidence, not a recoverable disk image; the archived shell binary and
+the matching input image recipe remain in `work/` and `manifest_shell_fix5.json`.
 
-Two other findings from this session:
+The subsequent `serial_D2.log` did **not** run that shell. Its manifest was
+`manifest_fix6.json`, whose `/bin/sh` is `work/sh.fix6` (SHA-256
+`6e0d01d1f16d46ce91eae7557da9d00bfcdf9d1fb0c62552e83d037bf53bf8be`).
+Symbolicating its exit registers against that exact binary gives:
 
-- The static shell link succeeds with zero undefined symbols and zero
-  `dyld_get_active_platform` / `dyld_sdk_at_least` stub symbols. The previous
-  constant-return stubs were removed. `Libraries/Libsystem/libsystem_c/secure/chk_fail.c`
-  now defaults `PR_13085474_CHECK` to 0 only for `VARIANT_STATIC`; dynamic
-  builds keep the original `TARGET_OS_OSX` default.
-- The generated SDK's `sys/socket.h` uses `__sized_by`, but its `sys/cdefs.h`
-  did not define that macro. Adding the no-op pointer-attribute macros to the
-  source SDK cdefs made the shell compile again. A full `libc_static` rebuild
-  still fails in `secure/memmove_chk.c` (`memmove` undeclared), so the archive
-  was manually re-merged from existing sub-archives after replacing
-  `chk_fail.o`. That archive and its runtime behavior are **not yet validated**.
-  Do not treat the resulting shell link as a bootable result.
+```
+__pthread_kill -> abort -> _init_clock_port -> _libc_initializer
+-> __libc_init -> ravyn_static_startup
+```
 
-The next useful work is recovery and controlled comparison: preserve current
-logs/images, recover a known-good shell and `libc.a` artifact if available,
-then capture the shell's exact state immediately after `execve`. Do not resume
-the `wait4` fix until the shell demonstrably reaches the prompt and the
-external-child wait path is exercised again. No external command, pipeline, or
-redirection passes in this update.
+The regression was the static startup's call to dynamic `__libc_init`, which
+invokes the unavailable `host_get_clock_service` and aborts. The source already
+had `__ravyn_static_libc_init` in `Libraries/Libsystem/libsystem_c/sys/_libc_init_static.c`
+to omit only `_init_clock_port`; `tools/bootlab/static-start.c` now calls that
+static-safe initializer instead. Rebuilt `/tmp/ravyn-sh-build/sh` has zero
+undefined symbols, zero `LC_LOAD_DYLIB`, and contains `___ravyn_static_libc_init`
+but not `___libc_init`.
+
+This fixes the evidenced fix6 abort, **not the prompt**. The rebuilt shell was
+staged in a fresh image (`work/shell_static_safe.img`, image manifest digest
+file `work/shell_static_safe.img.digests`, shell SHA-256
+`a821239fa95f8d478d4c01ee52495079cb955fb8a83918cb34f86de7cf33fed9`). QEMU
+booted through `init: execve /bin/sh`, then emitted allocation traces, but no
+prompt or exit reason before the 60-second wait timed out. No commands were
+sent. The exact post-exec shell state is therefore still open.
+
+There is still no `wait4` evidence: the child-wait path has not been exercised
+after the prompt. External `echo`/`cat`, pipelines, and redirections remain
+unverified. Next: capture a useful process/core state for the rebuilt
+static-safe shell, recover prompt execution, then test one external command and
+its return-to-prompt transition before changing `dowait()` or kernel reaping.
+
+Do not interpret `serial_D2.log`'s `exit reason namespace 2 subcode 0x6` as
+a `wait4` result: the matching `sh.fix6` stack above establishes a startup
+abort before the shell reached its command loop.
 
 `Kernel/xnu` still needs nothing for this bug.
