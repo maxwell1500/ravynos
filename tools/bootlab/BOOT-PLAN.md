@@ -656,13 +656,86 @@ Rebuilt images on that kernel (`work/tty_rx2.img`, `work/shell_kx.img`):
 - The shell still reaches `# `, and `echo hi` still produces no CPL=3 sample
   and no response.
 
-So the fault is confirmed to sit in the kernel console receive path, and the
-existing pe_serial fix does not close it. What remains open on the kernel side
-is whether the tty is actually attached to the serial driver that
-`uart_getc()` reads from, and whether the receive path is polled at all on this
-path. That is the next thing to instrument, and it is kernel work -- it needs
-its own authorisation, since `Kernel/xnu` has not been touched beyond the
-already-present local `pe_serial.c` edit.
+**Both of those open questions were wrong, and the kernel was not at fault in
+the way the evidence suggested. Two independent causes, both in how the system
+is configured and built.**
 
-Until input is delivered, external `echo`/`cat`, pipelines, redirection and
-`wait4` all remain unverified: the shell has never executed a command.
+### Cause 1: the boot argument, not the receive path
+
+`serialmode` is parsed as a hex boot argument (`osfmk/i386/i386_init.c:928`).
+`serial=1` is `SERIALMODE_OUTPUT` only; `SERIALMODE_INPUT` is `0x02`
+(`osfmk/console/serial_protos.h:52-55`). Every image in this investigation was
+booted with `serial=1`, and the log confirms it: `Serial mode specified:
+00000001`.
+
+`serial_keyboard_init()` returns immediately unless that bit is set
+(`osfmk/console/serial_general.c:57-59`), so the poller thread that is the
+*only* consumer of `serial_getc()` was never created. Nothing in the kernel
+ever called `uart_getc()` during normal operation -- output used
+`pal_serial_putc` only -- which is why the missing input looked like a kernel
+defect. `serial=3` is OUTPUT|INPUT; the log then shows `Serial keyboard
+started`, and the RX probe reports `INPUT DELIVERED` with `read = 3` and the
+bytes it typed.
+
+The path is polled, not interrupt-driven: `serial_keyboard_poll` ->
+`_serial_getc` -> `serial_getc` -> `uart_getc` -> `cons_cinput` -> the km tty
+line discipline -> `ttyinput` -> `t_rawq`/`t_canq` -> a waiting `read(2)`.
+`boot.py` and `README.md` hardcoded `serial=1` and now use `serial=3`.
+
+### Cause 2: a stale `kern_exit.o` in the build tree
+
+With input working, builtins returned to the prompt but the first *forked*
+command produced correct output and then hung the shell forever. The child ran
+fine; the parent never reaped it.
+
+`kernel_build.py` recompiles an explicit allowlist of objects that carry ravynOS
+fixes, and `bsd/DEVELOPMENT/kern_exit.o.json` was **not** in it. So the
+exec-shadow parent-wakeup fix that is already in the source
+(`bsd/kern/kern_exit.c:2571-2582`) was never compiled into the kernel -- the
+build tree kept an older object, and every relink produced a "successful"
+kernel with the fix missing. This is the same failure class as the stale
+`libc_static` fortify objects, and exactly the trap the allowlist comment
+describes: a green build that changed nothing.
+
+Adding `kern_exit.o` to the allowlist fixed it. Temporary `RVDBG` tracing
+confirmed the intended sequence end to end, and was then removed:
+
+```
+RVDBG wait4 enter q=1 want=-1
+RVDBG wait4 child=2 stat=2 waiting=0
+RVDBG wait4 SLEEP on parent q=1 nfound=1
+RVDBG exit pid=2 pp=1 shadow=1 inum=2     <- exec shadow
+RVDBG exit pid=2 pp=1 shadow=0 inum=2     <- real proc exiting
+RVDBG exit MARK ZOMBIE pid=2 pp=1
+RVDBG exit WAKE parent pp=1
+RVDBG wait4 child=2 stat=5 waiting=0      <- SZOMB
+RVDBG wait4 REAP zombie child=2
+RVDBG wait4 no children -> ECHILD (q=1)
+```
+
+### Verified working
+
+On the clean, uninstrumented kernel (`work/shell_final.img`, kernel
+`babb292ce3ffbcf4…`), 4/4 commands returned to the prompt, and an earlier run
+gave 6/6 and 7/7:
+
+- builtins (`echo`) -- output plus prompt
+- external commands (`/bin/ls /`, `cat /hello.txt`) -- correct output plus prompt
+- single-stage pipeline (`echo x | cat`) -- `x` plus prompt
+- redirections (`echo x > /f1`) -- the open is attempted and the failure is
+  reported (`Read-only file system`), then the prompt returns
+- the shell survives a child dying of SIGILL or SIGSEGV and keeps accepting
+  input
+
+### Still broken (unrelated to the shell)
+
+- The root filesystem is mounted read-only, so a redirect cannot create a file.
+  The redirection *mechanism* is proven -- `sh` opens for write and surfaces
+  EROFS -- but proving a real write needs a writable mount, which is filesystem
+  work, not shell work.
+- `mkdir` does not create the requested directory.
+- A two-stage pipeline (`echo a | cat | cat`) dies with SIGILL.
+
+The intermittent `random_init: failed to allocate a major number` panic at cold
+boot is still present and unrelated; several runs had to be repeated because of
+it.

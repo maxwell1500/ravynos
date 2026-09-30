@@ -25,7 +25,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 QEMU = "qemu-system-x86_64"
 OVMF_CODE = "/usr/local/share/qemu/edk2-x86_64-code.fd"
 
-BOOT_BASE = ("fs0:\\System\\Library\\CoreServices\\boot.efi -v serial=1 "
+BOOT_BASE = ("fs0:\\System\\Library\\CoreServices\\boot.efi -v serial=3 "
              "debug=0x14e keepsyms=1 slide=0 kcsuffix=development "
              "rd=disk0s1 rootdev=disk0s1 npci=0x2000 dart=0 "
              "-no_compat_check cpus=1 quiet_boot=1")

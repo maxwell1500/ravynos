@@ -113,7 +113,10 @@ for rel in ["iokit/DEVELOPMENT/IOPlatformExpert.cpo.json",
             # edit to that file silently produced an unchanged kernel -- a
             # green build that changed nothing, which is the exact failure
             # verify_provenance.py exists to catch.
-            "bsd/DEVELOPMENT/kern_sig.o.json"]:
+            "bsd/DEVELOPMENT/kern_sig.o.json",
+            # wait4/proc_exit live in kern_exit.c. Without this an edit there
+            # silently produced an unchanged kernel.
+            "bsd/DEVELOPMENT/kern_exit.o.json"]:
     cmd = load_json(os.path.join(BUILD_DIR, rel))
     print("Compiling %s..." % os.path.basename(rel).rsplit(".", 3)[0], flush=True)
     run(cmd["arguments"], cmd["directory"])
