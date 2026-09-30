@@ -825,12 +825,60 @@ returning to the prompt with zero child faults:
 - `echo t3 > /g1` then `cat /g1` -> `t3`
 - `ls /` shows `g1`, and it is still there on the next boot
 
-### Still broken (unrelated to the shell)
+### `random_init` cold-boot panic — root-caused to a small kernel slide (2026-09-29)
 
-- The intermittent `random_init: failed to allocate a major number` panic at
-  cold boot is still present and unrelated; several runs had to be repeated
-  because of it. UEFI also intermittently reports `Can't find image
-  information`.
+The intermittent `random_init: failed to allocate a major number` panic is
+**not** a BSD bug, and it is not the `cdevsw` free-slot scan. It is a symptom of
+the kernel image's writable data not being loaded.
+
+Reproduced at roughly 1 boot in 12. The cheap detector is one line earlier in
+the same boot:
+
+```
+AHCI: Port 0 ready, bdevsw registered at major -1     <- bad boot
+AHCI: Port 0 ready, bdevsw registered at major 1      <- good boot
+```
+
+In a bad boot both `bdevsw_add` and `cdevsw_add` fail, and they are adjacent in
+`__DATA` (`_bdevsw` is 0x540 bytes at 0xffffff8000e990d0, `_cdevsw` is 0x1c00
+immediately after it) — a contiguous ~8.5 KB, i.e. two or more pages. The
+reproduction loop only had to run to the `ahci_init` line, not to the panic,
+which cut the cycle roughly in half.
+
+Instrumenting `cdevsw_isfree` showed every slot holding the same foreign data
+(`d_open = d_ttys = 0x3000000000000`, `d_type = -1`) while `nocdev` itself was
+perfectly initialised. A canary added at four points in `bsd_init` then proved
+the decisive part: in a bad boot `cdevsw` is *already* wrong at the very first
+canary, immediately after `printf(copyright)`, and never changes. In a good
+boot it holds valid `__TEXT` pointers from that point on. So the static
+initialisers were never applied; the memory is holding stale physical
+contents, and the values look like leftover 32-bit firmware code
+(`0x8007_0742`, `0x8007_06bf`) — the classic 0xffffff80... kernel pointers are
+simply absent.
+
+The correlation with the kernel slide is exact:
+
+| boot | slide | `cdevsw` |
+| --- | --- | --- |
+| good | 0x7400000 ... 0x1fe00000 (116–510 MB) | valid |
+| bad | 0x2200000, 0x2400000, 0x2e00000 (34–46 MB) | corrupt |
+
+`vm_kernel_slide` is not chosen by the kernel: `i386_vm_init` computes
+`base_address = ml_static_ptovirt(args->kaddr)` and
+`vm_kernel_slide = base_address - static_base_address`, and `args->kaddr`
+comes from the EFI loader (`tools/bootlab/assets/boot.efi`), which randomises
+it. Note the boot args request `slide=0` and a slide is applied anyway.
+
+So: a low `kaddr` leaves the `__DATA` pages for these two tables unmapped or
+overlaid. The fix belongs in the EFI loader's KASLR — it should not emit an
+`args->kaddr` that low — not in BSD. The loader is a prebuilt binary here, so
+this is not yet fixed. The fastest way to confirm a candidate fix is the
+`bdevsw registered at major -1` detector above.
+
+### Still broken
+
+- UEFI intermittently reports `Can't find image information`. This is a
+  separate firmware-level failure; those runs never reach `bsd_init`.
 
 `kernel_build.py` now emits `work/kernel_link.map`. The panic backtrace
 symboliser mislabelled the faulting frame, and the map is what made the real
