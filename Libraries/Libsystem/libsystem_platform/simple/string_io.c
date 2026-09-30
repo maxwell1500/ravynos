@@ -226,6 +226,7 @@ oct(BUF *b, _esc_func esc, unsigned long long n, int width, int zero)
 static const char _h[] = "0123456789abcdef";
 static const char _H[] = "0123456789ABCDEF";
 static const char _0x[] = "0x";
+static const char _0X[] = "0X";
 
 static void
 hex(BUF *b, _esc_func esc, unsigned long long n, int width, int zero, int upper, int p)
@@ -233,6 +234,7 @@ hex(BUF *b, _esc_func esc, unsigned long long n, int width, int zero, int upper,
 	char buf[32];
 	char *cp = buf + sizeof(buf);
 	const char *h = upper ? _H : _h;
+	const char *pre = upper ? _0X : _0x;
 
 	*--cp = 0;
 	if(n) {
@@ -245,7 +247,7 @@ hex(BUF *b, _esc_func esc, unsigned long long n, int width, int zero, int upper,
 	if(p) {
 		width -= 2;
 		if(zero) {
-			put_s(b, esc, _0x);
+			put_s(b, esc, pre);
 			p = 0;
 		}
 	}
@@ -254,7 +256,7 @@ hex(BUF *b, _esc_func esc, unsigned long long n, int width, int zero, int upper,
 	while(width-- > 0)
 		put_c(b, esc, zero);
 	if(p)
-		put_s(b, esc, _0x);
+		put_s(b, esc, pre);
 	put_s(b, esc, cp);
 }
 
@@ -314,7 +316,7 @@ static void
 __simple_bprintf(BUF *b, _esc_func esc, const char *fmt, va_list ap)
 {
 	while(*fmt) {
-		int lflag, zero, width;
+		int lflag, zero, width, sharp;
 		char *cp;
 		if(!(cp = strchr(fmt, '%'))) {
 			put_s(b, esc, fmt);
@@ -327,7 +329,7 @@ __simple_bprintf(BUF *b, _esc_func esc, const char *fmt, va_list ap)
 			fmt++;
 			continue;
 		}
-		lflag = zero = width = 0;
+		lflag = zero = width = sharp = 0;
 		for(;;) {
 			switch(*fmt) {
 			case '0':
@@ -338,6 +340,13 @@ __simple_bprintf(BUF *b, _esc_func esc, const char *fmt, va_list ap)
 			case '6': case '7': case '8': case '9':
 				while(*fmt >= '0' && *fmt <= '9')
 					width = 10 * width + (*fmt++ - '0');
+				continue;
+			case '#':
+				/* Alternate form.  Only meaningful for the integer
+				 * conversions; C99 prefixes a NONZERO x/X result
+				 * with 0x, and leaves a zero result as plain "0". */
+				sharp = 1;
+				fmt++;
 				continue;
 			case 'c':
 				zero = zero ? '0' : ' ';
@@ -401,22 +410,22 @@ __simple_bprintf(BUF *b, _esc_func esc, const char *fmt, va_list ap)
 					break;
 				}
 				break;
-			case 'X': case 'x':
+			case 'X': case 'x': {
+				unsigned long long v;
 				switch(lflag) {
 				case 0:
-					hex(b, esc, va_arg(ap, unsigned int), width, zero,
-						*fmt == 'X', 0);
+					v = va_arg(ap, unsigned int);
 					break;
 				case 1:
-					hex(b, esc, va_arg(ap, unsigned long), width, zero,
-						*fmt == 'X', 0);
+					v = va_arg(ap, unsigned long);
 					break;
 				default:
-					hex(b, esc, va_arg(ap, unsigned long long), width, zero,
-						*fmt == 'X', 0);
+					v = va_arg(ap, unsigned long long);
 					break;
 				}
+				hex(b, esc, v, width, zero, *fmt == 'X', sharp && v);
 				break;
+			}
 			case 'y':
 				switch(lflag) {
 				case 0:
@@ -441,13 +450,18 @@ __simple_bprintf(BUF *b, _esc_func esc, const char *fmt, va_list ap)
 				 * read as a value.  (The same shape as the otool __framesize
 				 * placeholder, BOOT-PLAN section 36.3.)
 				 *
-				 * There are no flag handlers in this switch at all -- '0' is a
-				 * width digit and nothing consumes '#', '+', ' ', '-', '.' or
-				 * '*'.  So emit a marker that cannot be mistaken for output, and
-				 * consume no argument, so the rest of the format still lines up.
+				 * '#' IS handled now (alternate form, x/X only -- it
+				 * was what made the CHAINPROBE diagnostic print
+				 * "off0=<UNSUPPORTED-CONVERSION>x" instead of the
+				 * offsets it was asking for).  Nothing else is: '0' is
+				 * a width digit and '+', ' ', '-', '.' and '*' are not
+				 * consumed.  So emit a marker that cannot be mistaken
+				 * for output, and consume no argument, so the rest of
+				 * the format still lines up.
 				 *
-				 * Supported conversions: %c %d %i %o %p %s %u %x %X %y, with %l
-				 * as a length modifier.  Everything else lands here.
+				 * Supported conversions: %c %d %i %o %p %s %u %x %X %y,
+				 * with %l as a length modifier and %# as a flag on
+				 * x/X.  Everything else lands here.
 				 */
 				put_s(b, esc, "<UNSUPPORTED-CONVERSION>");
 				break;
