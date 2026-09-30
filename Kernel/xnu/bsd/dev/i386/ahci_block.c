@@ -15,6 +15,8 @@
 #include <i386/machine_routines.h>
 #include <i386/pmap.h>
 #include <machine/string.h>
+#include <kern/locks.h>
+
 /*
  * ml_io_map() / kvtophys() are declared in <i386/machine_routines.h> and
  * <i386/pmap.h> only under MACH_KERNEL_PRIVATE, which BSD files are not
@@ -33,6 +35,23 @@ static uint8_t __attribute__((aligned(1024))) ahci_clb[1024];
 static uint8_t __attribute__((aligned(256))) ahci_fb[256];
 static uint8_t __attribute__((aligned(128))) ahci_ct[512];
 static uint64_t ahci_clb_phys = 0, ahci_fb_phys = 0, ahci_ct_phys = 0;
+/*
+ * The AHCI port is programmed through a single command list (ahci_clb), a
+ * single command table entry (ahci_ct) and a single bounce buffer
+ * (ahci_bounce).  Those are global, and ahci_transfer_sectors() busy-waits
+ * on the port's PxCI/TFD registers, so two threads issuing I/O at the same
+ * time overwrite each other's FIS, PRDT and data and then race on PxCI.
+ * The result is silently corrupted data rather than an I/O error.
+ *
+ * That was not visible while the root filesystem was mounted read-only, but
+ * once msdosfs actually writes, the buf cache, msdosfs and the sync threads
+ * overlap and forked children intermittently die of SIGSEGV loading a
+ * corrupted image.  Serialise whole transfers; the lock deliberately does not
+ * cover buf_biodone(), which can re-enter the I/O path.
+ */
+static LCK_GRP_DECLARE(ahci_mtx_grp, "ahci I/O");
+static LCK_MTX_DECLARE(ahci_io_lock, &ahci_mtx_grp);
+
 
 static int ahci_transfer_sectors(uint64_t lba, uint32_t sec_count, void *buf, int is_write);
 static void ahci_strategy(struct buf *bp);
@@ -329,7 +348,9 @@ ahci_strategy(struct buf *bp)
 	}
 
 	is_write = (buf_flags(bp) & B_READ) ? 0 : 1;
+	lck_mtx_lock(&ahci_io_lock);
 	err = ahci_transfer_sectors(lba, sec_count, (void *)vaddr, is_write);
+	lck_mtx_unlock(&ahci_io_lock);
 	buf_unmap(bp);
 
 	if (err) {

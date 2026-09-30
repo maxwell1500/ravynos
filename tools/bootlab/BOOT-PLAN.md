@@ -792,9 +792,41 @@ Cross-boot persistence was then confirmed by re-booting the *same* image without
 rebuilding it: `cat /f1` returned the previously written `A` / `B`, and `d1`
 was still present.
 
+### Unsynchronised AHCI I/O (2026-09-29)
+
+The intermittent child crash is fixed, and it was never really a shell or
+pipeline problem. What looked like a pipeline bug -- `echo a | cat | cat`
+dying, children dying of SIGSEGV, sometimes plain `cat /f1` dying, and
+sometimes a run where everything worked -- was corrupted disk reads.
+
+`bsd/dev/i386/ahci_block.c` programs the port through a single command list
+(`ahci_clb`), a single command table entry (`ahci_ct`) and a single 64 KB
+bounce buffer (`ahci_bounce`). All three are file-scope globals, and
+`ahci_transfer_sectors()` busy-waits on the port's PxCI/TFD registers. With
+no lock anywhere in the path, two threads doing I/O concurrently overwrite each
+other's FIS, PRDT and data and then race on PxCI. The failure mode is silently
+wrong data, not an I/O error, so a corrupted read surfaces much later as a
+child that dies loading a mangled image.
+
+This was invisible while the root was read-only. Making it writable changed the
+I/O pattern completely -- `msdosfs_markvoldirty()` at mount, real writes, and
+FAT syncing -- so the buf cache, msdosfs and the sync threads started to
+overlap. That is why the crash appeared only after the read-only fix.
+
+`ahci_strategy()` now holds an `LCK_MTX_DECLARE`d mutex around
+`ahci_transfer_sectors()`. The lock deliberately does not cover
+`buf_biodone()`, which can re-enter the I/O path.
+
+Verified on two consecutive boots of the same image, 6/6 and 5/5 commands
+returning to the prompt with zero child faults:
+
+- `echo t1 | cat | cat` -> `t1` (two-stage)
+- `echo t2 | cat | cat | cat` -> `t2` (three-stage)
+- `echo t3 > /g1` then `cat /g1` -> `t3`
+- `ls /` shows `g1`, and it is still there on the next boot
+
 ### Still broken (unrelated to the shell)
 
-- A two-stage pipeline (`echo a | cat | cat`) dies with SIGILL.
 - The intermittent `random_init: failed to allocate a major number` panic at
   cold boot is still present and unrelated; several runs had to be repeated
   because of it. UEFI also intermittently reports `Can't find image
