@@ -301,25 +301,47 @@ CXXFLAGS = ${COMMONFLAGS} -std=c++20 ${C_INCS} ${CFLAGS.${.TARGET:T}}
 # -- so nothing can be upward of it, and LC_LOAD_UPWARD_DYLIB on a dyld is a
 # contradiction. Removing them is correct on its own terms.
 #
-# WHAT IS STILL MISSING, and why -dylinker is not simply switched on:
-# the image must become MH_DYLINKER with an LC_UNIXTHREAD entry point, or the
-# kernel keeps rejecting it with the panic above. Switching -dylib to -dylinker
-# (plus -Wl,-e,_start) was tried and does NOT link:
+# WHAT IS STILL MISSING, and why -dylinker is not simply switched on.
 #
-#   ld: library 'system_malloc' not found
+# The image must become MH_DYLINKER with an LC_UNIXTHREAD entry point, or the
+# kernel keeps rejecting it with the panic above. Switching -dylib to
+# -Wl,-dylinker plus -Wl,-e,_start (src/start_glue.s defines _start) was
+# tried, and ld64 refuses it in BOTH directions, which is why this is not a
+# one-line change:
 #
-# ...even though -L${RAVYN_SDKROOT}/usr/lib/system is passed and
-# libsystem_malloc.dylib is present there. That is ld64 behaviour, not a
-# mistake in the -L: an MH_DYLINKER image does not resolve its dependencies
-# from -L search paths the way a dylib does. Verified by linking one trivial
-# object both ways with identical flags -- with -dylib the link reaches symbol
-# resolution ("symbol(s) not found"), with -dylinker it never finds the library
-# at all. So the dependency search domain for a dylinker image has to be worked
-# out before this flag can be turned on; it is not a one-line change.
+#   -Wl,-dylinker, without -not_for_dyld_shared_cache:
+#       ld: Shared cache eligible dylibs cannot use '-undefined dynamic_lookup'
+#           or '-U' for fixed...
 #
-# isysroot-cc already recognises -dylinker (link-hygiene case list), so the
-# -umbrella System / -lSystem stripping would still fire when this is finished.
+#   -Wl,-dylinker, WITH -not_for_dyld_shared_cache (isysroot-cc injects this
+#   on every dylib link, see its inject block):
+#       ld: library 'system_malloc' not found
 #
+# ld64 treats an MH_DYLINKER image as shared-cache eligible, and the two
+# requirements are mutually exclusive: keep it cache-eligible and it rejects
+# the -undefined dynamic_lookup this build needs; mark it not-cache-eligible
+# and it then refuses to resolve the dependency from -L at all, even though
+# -L${RAVYN_SDKROOT}/usr/lib/system is passed and libsystem_malloc.dylib is
+# present there. Verified by linking one trivial object both ways with
+# otherwise identical flags: as -dylib the link reaches symbol resolution
+# ("symbol(s) not found"), as -Wl,-dylinker it never finds the library.
+#
+# Absolute paths are not a way out either -- ld64 reports "ignoring unexpected
+# dylib" and drops them.
+#
+# A real dyld links against the SDK's shared-cache stubs, and this SDK has none:
+# `find $SDK/usr/lib -name "*.tbd"' returns 0 files. So the dependency search
+# domain a dylinker image needs cannot come from the current SDK layout.
+# Fixing this means giving the SDK proper stub libraries, or determining
+# ld64's expected dylinker dependency domain -- not adjusting a flag here.
+# Left switched off deliberately so it is not naively re-enabled later.
+#
+# Also worth knowing before trusting the flag: bare "-dylinker" (without
+# -Wl,) is silently dropped by clang and still yields filetype DYLIB. Only
+# -Wl,-dylinker takes effect.
+#
+# isysroot-cc already lists -dylinker in its link-hygiene case list, so the
+# -umbrella System / -lSystem stripping will still fire when this is finished.
 LDFLAGS = --target=${CpuArch}-apple-darwin --sysroot=${RAVYN_SDKROOT} \
 	-L${RAVYN_SDKROOT}/usr/lib/system -L${RAVYN_SDKROOT}/usr/lib \
 	-Wl,-no_inits -Wl,-no_warn_unused_dylibs -fuse-ld=${LD} -shared -dylib \
