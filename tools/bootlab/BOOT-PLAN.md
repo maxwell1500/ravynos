@@ -883,3 +883,145 @@ this is not yet fixed. The fastest way to confirm a candidate fix is the
 `kernel_build.py` now emits `work/kernel_link.map`. The panic backtrace
 symboliser mislabelled the faulting frame, and the map is what made the real
 function recoverable; it is worth keeping for future kernel debugging.
+
+---
+
+## 12. Apple-free boot path — the loader now reaches the kernel (2026-09-30)
+
+`tools/efiloader/src/loader.c` (our own EFI loader, staged by
+`manifest_applefree.json` as `System/Library/CoreServices/BOOT.EFI`) previously
+could not load the kernel at all. Seven real defects were found and fixed, each
+confirmed by the boot log. With all of them in, the kernel boots from power-on
+through `i386_vm_init`, `pmap_bootstrap`, `kernel_bootstrap`,
+`vm_page_bootstrap`, `zone_bootstrap`, `kmem_init` and into `efi_init`.
+
+### The fixes, in the order the boot exposed them
+
+1. **The SimpleFS protocol GUID was wrong.** `GUID_SIMPLE_FS` used
+   `...-11D2-8E3F-...`; the real
+   `EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID` is
+   `964E5B22-6459-11D2-8E39-00A0C969723B`. `0x3F` is the *LoadedImage* GUID's
+   tail, copied in by mistake. Every `HandleProtocol`/`LocateHandle` for
+   SimpleFS therefore failed, and the loader's long "this firmware is broken"
+   fallback chain was a misdiagnosis of one wrong byte. Fixing it produced
+   `HP(SimpleFS)=0` and made the whole chain dead code (deleted). The same
+   byte was wrong in `mini.c` and `hostsim.py`, which is why the host
+   simulator agreed with the bug.
+
+2. **`EFI_FILE_PROTOCOL.Open` was called with `OpenMode = 0`.** UEFI requires
+   `EFI_FILE_MODE_READ`; `0` is not a valid mode, EDK2 rejects it, and
+   `root->Open` always failed.
+
+3. **`EFI_BUFFER_TOO_SMALL` was defined as `ERR(4)`.** It is status code **5**
+   (`ERR(4)` is `EFI_BAD_BUFFER_SIZE`), so the `GetMemoryMap(size)` success
+   path was unreachable.
+
+4. **EFI status values were truncated to `int`.** `int st2` lost the top half
+   of every 64-bit `EFI_STATUS`, so `(u64)st2 != EFI_BUFFER_TOO_SMALL` could
+   never be true and `return (u64)st2` returned nonsense.
+
+5. **The memory map was strided by `sizeof(EFI_MEMORY_DESCRIPTOR)`.** The spec
+   forbids assuming the firmware's `DescriptorSize` equals the struct size, and
+   OVMF reports **48** against our 40. `find_block`, the `ram_top` scan and
+   `A->MemoryMapDescriptorSize` now use the reported stride.
+
+6. **The 64-bit -> 32-bit handoff never worked.** The old design wrote its
+   far-return frame *on top of* its own 32-bit stub and far-returned to a
+   hard-coded `0x20080`, valid only when the handoff page is `0x20000` — the
+   gate's fixed page, never the real one. The gate's probe had never printed
+   anything, i.e. it had never once run. The handoff now follows Apple
+   boot.efi's sequence byte for byte
+   (`tools/efiloader/ref/apple-boot32-modeswitch.S`): `lgdt`, flat data
+   selectors, clear `CR0.PG`, clear `EFER.LME`, then a **near jump** with
+   `eax = boot_args`. No far return, no CS reload. The GDT base moved to
+   `g_hoff_page + 0x10` so data is selector `0x10`, as in Apple's table. The
+   kernel's first instruction is 32-bit `pushal` into a COM1 routine printing
+   `EAX=<boot_args>`; the log now shows `EAX=01781000` then
+   `i386_init(0x1781000)`.
+
+7. **Two things the kernel needs in LOW memory, plus a real device tree.**
+   - `PE_state.deviceTreeHead = ml_static_ptovirt(args->deviceTreeP)`, and
+     `ml_static_ptovirt(0)` is the **physmap base**, not NULL. Passing
+     `deviceTreeP = 0` made the kernel `SecureDTInit()` a bogus tree at
+     `0xffffff8000000000`, and the first `SecureDTLookupEntry` walked garbage
+     (`#PF`, `#DF`, triple fault).
+   - `i386_vm_init` reads `args->MemoryMap` through the kernel's early
+     **static** physmap window, which does not reach the loader's own `.bss` at
+     ~2 GiB (`#PF` at `0xffffff807de14d28` = static base + the loader's
+     `g_memmap`).
+
+   The loader now builds a real device tree in its low handoff block and copies
+   the memory map there too. The tree is
+   `root{name="device-tree"} -> /chosen{name, random-seed(256 bytes)}`.
+   `random-seed` is required: `bootseed_init()` panics without it, and
+   `PE_get_random_seed` must return at least `SEED_SIZE` (192) bytes. Note
+   `skipProperties()` returns NULL for a node with **no** properties, so the
+   root must carry one.
+
+### Still broken
+
+- **The last blocker is the EFI runtime region, and it is now fully
+  characterised.** `efi_init` maps every `EFI_MEMORY_RUNTIME` range at
+  `VirtualStart | VM_MIN_KERNEL_ADDRESS`, and `pmap_map_bd` panics unless that
+  VA's page table entry already exists. The kernel preallocates nothing for
+  these ranges — the window is exactly `[0, physfree)`, where
+  `physfree = kaddr + ksize`, and **`ksize` is ours to set**. That is the load-
+  bearing discovery, and it is now exploited: the loader gives the five ranges
+  `VirtualStart` 0x2000000, 0x3000000, 0x4000000, 0x5000000, 0x6000000 and
+  extends `ksize` to a 128 MiB floor, so all five map and the kernel reaches
+  `Boot args version 2 revision 0 mode 64`.
+
+  The window is narrow, and all four edges are now measured — not guessed:
+
+  | `physfree` | result |
+  | --- | --- |
+  | 24 MiB (old) | `percpu: max_cpus_from_firmware not yet initialized`, before `efi_init` |
+  | **128 MiB** | **all five ranges map; reaches `Boot args version 2 revision 0 mode 64`** |
+  | 2 GiB | dies in `vm_page_bootstrap` ("Allocating hash buckets...") |
+  | 4 GiB | dies in `Idle_PTs_init` |
+
+  Two ways of covering the system table were tried and **both fail**, so neither
+  is in the tree:
+
+  - *Identity `VirtualStart`s.* The obvious choice, because
+    `efi_set_tables_64()` reads the system table through `ml_static_ptovirt()` —
+    `0xffffff8000000000 + physical` — and the runtime service pointers inside
+    that table are absolute physical addresses too. It drags `physfree` out to
+    the ranges' own addresses near 2 GiB, which is exactly the 2 GiB row above.
+    Clearing `EFI_MEMORY_RUNTIME` above a 2 GiB limit was also tried; the
+    remaining ranges still sit too high, so it does not help either.
+  - *Retargeting `A->efiSystemTable`* at the range's new VA. **Regressed** the
+    boot to the same earlier `percpu` panic, so it is out.
+
+  So the last blocker is one page: the system table's range (phys
+  `0x7f8ed000`) is now at `0xffffff8003000000`, but the kernel reads the table
+  at `0xffffff807f9ec018`, which is unmapped, and `#PF`s there.
+
+  The architecturally right fix is `EFI_RUNTIME_SERVICES.SetVirtualAddressMap`
+  before `ExitBootServices`, as Apple's loader does — the firmware moves the
+  runtime code to low VAs and fixes up the pointers inside the system table
+  together, which is the part we cannot do by hand. **It was implemented and
+  tried, and it hangs the firmware**: EDK2 dumps its registers and the guest
+  never returns, with no `SetVirtualAddressMap ->` status line ever printed.
+  So EDK2 rejects the map we hand it — most likely because it validates the
+  argument against its own live map, and we pass our *copy* with `VirtualStart`
+  already rewritten, at a `MemoryMapSize`/`DescriptorSize` taken from the
+  earlier query. Reverted; the tree is back at the `765d33a9` build.
+
+  Doing this properly means: take the runtime-services pointer as `efi_main`'s
+  third argument (it is not reachable from `ST`), re-fetch the map immediately
+  before the call so the key is current, pass the firmware's own expectations
+  for the `VirtualStart` values, and only then copy the system table into the
+  low handoff block — the system table is not runtime code, so the firmware
+  leaves it at its high physical address and `ml_static_ptovirt` still cannot
+  reach it.
+- The UEFI `Can't find image information` failure is unchanged and separate.
+
+### Corrections to earlier sections
+
+- `fatread.c`'s claim that the UEFI spec puts `NumberOfPartitionEntries` at
+  0x50 as a UINT64 is wrong: it is a UINT32 at 0x50 and `SizeOfPartitionEntry`
+  a UINT32 at 0x54, which is exactly what the image stores.
+- `work/kernel_link.map` describes `work/stripped_kernel.development`
+  (2026-09-29), **not** `assets/kernel.development` (2026-09-28). They are
+  different builds, so the map is stale for that asset.

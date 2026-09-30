@@ -1,0 +1,9 @@
+# Build artifacts.
+__pycache__/
+*.pyc
+
+# GENERATED from Apple's boot.efi by ref/apple_modeswitch.py: a byte-for-byte
+# disassembly listing of Apple's loader.  The generator is ours and is tracked;
+# its output is an Apple-derived artifact and stays out of the repository.
+# Regenerate locally with:  python3 ref/apple_modeswitch.py --regen
+ref/apple-boot32-modeswitch.S
