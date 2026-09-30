@@ -164,6 +164,62 @@ _os_log_internal_driverKit(void* dso, os_log_t log, os_log_type_t type, const ch
  *         if buffer is NULL, buffer_size is too small, or an error
  *         occurred in serialization.
  */
+/*
+ * ======================= PROVISIONAL, ravynOS-INTERNAL =======================
+ *
+ * The encoder. NOT Apple's: Apple's is in the closed-source half of
+ * libsystem_trace and its on-buffer layout is not available to this project.
+ * See the PROVISIONAL note in Libraries/Libsystem/private/os/log.h, which
+ * this function's buffer type comes from, for why the exact layout is safe
+ * today: this is the only writer and the only reader of these bytes, and
+ * os_log_encode()'s result is only ever handed to abort_with_payload() as an
+ * opaque crash-reason blob. Nothing in this tree decodes it.
+ *
+ * The layout written here is therefore this file's own choice:
+ *
+ *     [ struct os_log_buffer_s header ][ composed NUL-terminated text ]
+ *
+ * and ctx->content_off records where the text starts, which is the one field
+ * os_log_encode() reads back at log.c:193 to compute the returned length.
+ * That is the whole contract: header + composed text, in that order.
+ *
+ * If a log archive/logd reader is ever added, this and the buffer struct both
+ * must be replaced by the real os/log_private.h encoder, because by then the
+ * bytes would escape this process and the layout would be observable.
+ * ============================================================================
+ */
+bool
+_os_log_encode(const char *format, va_list args, int saved_errno,
+    os_log_buffer_context_t ctx)
+{
+	(void)saved_errno; /* no errno item is emitted; see the layout note above */
+
+	if (ctx == NULL || ctx->buffer == NULL || format == NULL ||
+	    ctx->comp == NULL || ctx->comp_sz == 0) {
+		return false;
+	}
+
+	int n = vsnprintf(ctx->comp, ctx->comp_sz, format, args);
+	if (n < 0) {
+		return false;
+	}
+
+	/* vsnprintf reports what WOULD have been written; clamp to what fits. */
+	size_t textlen = ((size_t)n < ctx->comp_sz) ? (size_t)n : ctx->comp_sz - 1;
+
+	ctx->content_off = sizeof(struct os_log_buffer_s);
+	if (ctx->content_off + textlen + 1 > ctx->content_sz) {
+		return false;
+	}
+
+	uint8_t *out = (uint8_t *)ctx->buffer;
+	memset(out, 0, ctx->content_off);
+	memcpy(out + ctx->content_off, ctx->comp, textlen);
+	out[ctx->content_off + textlen] = '\0';
+
+	return true;
+}
+
 size_t os_log_encode(void* buffer,
     size_t buffer_size,
     const char* format,

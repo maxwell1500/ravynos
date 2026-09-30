@@ -92,6 +92,15 @@ libunwind.dylib: ${.OBJDIR}/../llvm_target/libunwind/lib/libunwind.a
 	  -mmacosx-version-min=${MACOS_VERSION_MIN} ${.ALLSRC} \
 	  -lsystem_c -lsystem_pthread -lsystem_platform -lcompiler_rt \
 	  -lsystem_malloc -ldyld
+	# cp returns 1 when source and destination are the same file, and
+	# SYSROOT_DIR and RAVYN_SDKROOT can resolve to the same tree (they are
+	# both environment-supplied). That turned this "copy" into a hard build
+	# failure with only "cp: ... are identical (not copied)" to show for it,
+	# after the real work had already succeeded. Skip the copy when the files
+	# already match; cmp also fails when the destination is missing, so a
+	# genuine first copy still happens.
+	@cmp -s ${RAVYN_SDKROOT}/usr/lib/system/libunwind.dylib \
+	    ${SYSROOT_DIR}/usr/lib/system/libunwind.dylib 2>/dev/null || \
 	cp -f ${RAVYN_SDKROOT}/usr/lib/system/libunwind.dylib \
 		${SYSROOT_DIR}/usr/lib/system/
 

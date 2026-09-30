@@ -4,10 +4,19 @@ LIB = system_trace
 SRCS = log.c signpost.c init.c
 
 SLF = /System/Library/Frameworks
+# -I private MUST precede Kernel/xnu/libkern below. That tree's os/log.h and
+# os/log_encode_types.h are the KERNEL spellings; this component is
+# libsystem_trace and uses the user-space ones, whose only source in this
+# project is Libraries/Libsystem/private/os/log.h -- see the PROVISIONAL note
+# in that header. Without this -I the component resolves os/log.h to xnu's
+# kernel header and fails with "no member named 'content_sz' in 'struct
+# os_log_context_s'", and via log_encode_types.h -> log_mem.h with "unknown
+# type name 'lck_spin_t'" (there is no lck.h anywhere in this tree).
 CFLAGS = -mmacos-version-min=${MACOS_VERSION_MIN} --sysroot=${RAVYN_SDKROOT} \
 	-ObjC -x objective-c -fblocks \
 	-DNUL=\'\0\' -Wno-nullability-completeness \
 	-I${RAVYN_SDKROOT}/usr/local/include/kernel \
+	-I${.CURDIR:H}/private \
 	-I${ROOT_SOURCE_DIR}/Kernel/xnu/libkern \
 	-I${ROOT_SOURCE_DIR}/Frameworks \
 	-I${RAVYN_SDKROOT}/usr/include \

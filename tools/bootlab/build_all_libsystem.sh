@@ -78,7 +78,7 @@ mkdir -p "$LOGDIR"
 #                    PID 1 that execve()s the dylib-linked /bin/echo. It is a
 #                    separate instrument from `run.sh full`, which cannot
 #                    reach this path at all.
-KNOWN_BLOCKERS="libsystem_kernel libsystem_trace libSystem.B dyld dynamic_userland"
+KNOWN_BLOCKERS="libsystem_kernel dyld dynamic_userland"
 
 pass=0; fail=0; skipped=0; blocked=0
 declare -a FAILED=()
@@ -179,6 +179,11 @@ for c in libsystem_m libsystem_malloc libsystem_platform libsystem_pthread \
         *)                  stage "$c" "Libsystem/$c"         "${c}.a" ;;
     esac
 done
+
+# libsystem_trace used to be a known blocker and had no stage at all, so its
+# frontier was only ever measured when someone remembered to build it by hand
+# -- which is how it went unmeasured for so long. Staged now that it builds.
+stage libsystem_trace  Libsystem/libsystem_trace "all"
 
 # ---------------------------------------------------------------------------
 # Stage 4 -- the reexport shim itself.
