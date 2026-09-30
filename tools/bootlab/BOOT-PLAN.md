@@ -1097,3 +1097,82 @@ PID 1 (`/bin/echo`) reaches dyld, which reports:
 `dyld: UNBINDABLE chained fixup: bind ordinal 0 is out of range,
 bindTargets.count() is 0`. That is the staged-userland dyld work, not the
 loader or the kernel.
+
+## 14. The random_init panic is gone — verified over 4 cold boots (2026-09-30)
+
+This item had been blocked for the whole session, because it could not be
+tested until the kernel reached `bsd_init`. It can now. Harness:
+
+    RAVYN_KERNEL=work/stripped_kernel.development ./run_applefree.sh full 150
+
+`work/boot.img` is NOT the image for this harness — `run.sh full` drives a
+different manifest and its loader reports `sweep found 0 volumes` /
+`RL: no SimpleFS`. Do not read that as a kernel regression; use
+`run_applefree.sh`, which is the path that reaches the kernel.
+
+Rebuild the image first: `python3 mkimage.py` (verified 61 files,
+`all content hashes match`, kernel sha256
+`e8895819a27f1be0175531ac60e0c57e1fc22c3c8ff4bfe7d6797663c4a876cd`).
+
+Four consecutive cold boots, counting markers in each run's own serial log:
+
+| run | early_random_init: done | bsd_init: done | random_init major-number panic | execve /bin/echo | dyld UNBINDABLE |
+|-----|------------------------|----------------|-------------------------------|------------------|-----------------|
+| 1   | yes | yes | **0** | yes | yes |
+| 2   | yes | yes | **0** | yes | yes |
+| 3   | yes | yes | **0** | yes | yes |
+| 4   | yes | yes | **0** | yes | yes |
+
+The failure that used to end these boots —
+
+    panic(cpu 0 caller ...): random_init: failed to allocate a major number!
+        @randomdev.c:106
+
+— does not occur in any of them. That was the intermittent cold-boot panic
+fixed in 466017b4b4 (small kernel slide); it is confirmed gone, not merely
+absent from one lucky run.
+
+### What is now the first failure
+
+Each boot runs to completion and then dies in userspace:
+
+    bsd_init: done
+    bsd_init: bsd_do_post - doneload_init_program: /usr/appleinternal/sbin/launchd.development
+    load_init_program: attempting to load /sbin/launchd
+    === RAVYNOS DYNAMIC-USERLAND GATE: execve /bin/echo ===
+    DYLD-LOAD-BASE: 0x114fd1000
+    dyld: UNBINDABLE chained fixup: bind ordinal 0 is out of range,
+          bindTargets.count() is 0, fixups walked so far 3
+    panic(...): initproc failed to start -- exit reason namespace 2 subcode 0xb
+
+So the ordering has changed, and it matters when reading older logs: the
+kernel is healthy well past `random_init`, and this is now a pure
+staged-userland/dyld defect. Note the panic text is `initproc failed to
+start`, NOT `random_init` — do not grep for the old signature and conclude
+the fix regressed.
+
+The dyld defect is deterministic (4/4), not intermittent, so it is safe to
+iterate on. `/bin/echo`'s chained-fixups blob validates on the host
+(imports_count=10, imports_format=1, seg_info_offset[4] = [0,0,0x18,0],
+page_size=0x4000, pointer_format=0x0c DYLD_CHAINED_PTR_64_CACHE on
+__DATA_CONST, __got size 0x50 = 10 pointers), so the Mach-O on disk is not
+malformed — dyld is not finding bind targets for it at all.
+
+### Why this cannot be fixed by rebuilding dyld here
+
+Relinking dyld from source needs `libSystem.B`, and `libSystem.B` needs
+`libsystem_trace`, which needs a userspace `<os/log.h>` + `<os/log_mem.h>`
+that this tree does not have:
+
+- `log.c` uses `os_log_buffer_s`, `os_log_buffer_context_t`, and
+  `os_log_context_s.log` / `.buffer`. None of those exist in
+  `Libraries/Libsystem/private/os/log.h`, whose provisional layout has five
+  fields and no buffer at all.
+- `Kernel/xnu/libkern/os/log_mem.h:36` needs `lck_spin_t`, and there is no
+  `lck.h` anywhere in the tree (upstream xnu has `libkern/lck.h`; this copy
+  does not). `lck_spin_t` is only defined in kernel-only osfmk headers.
+
+That is a reconstruction of Apple's logging subsystem — buffers, contexts,
+queues, signposts — not a header import, and inventing its layout would
+repeat exactly the ABI risk that file's header comment warns about. It is
+left undone deliberately, not overlooked.
