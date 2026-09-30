@@ -394,7 +394,10 @@ efi_set_tables_64(EFI_SYSTEM_TABLE_64 * system_table)
 		}
 		DPRINTF("RuntimeServices table at 0x%qx\n", system_table->RuntimeServices);
 		// 64-bit virtual address is OK for 64-bit EFI and 64/32-bit kernel.
-		runtime = (EFI_RUNTIME_SERVICES_64 *) (uintptr_t)system_table->RuntimeServices;
+		/* The pointer stored in the system table is a physical address
+		 * into firmware data, so it needs the same physmap translation
+		 * the system table itself needed. */
+		runtime = (EFI_RUNTIME_SERVICES_64 *) PHYSMAP_PTOV(system_table->RuntimeServices);
 		DPRINTF("Checking runtime services table %p\n", runtime);
 		if (runtime->Hdr.Signature != EFI_RUNTIME_SERVICES_SIGNATURE) {
 			kprintf("Bad EFI runtime table signature\n");
@@ -474,7 +477,23 @@ efi_init(void)
 
 		DPRINTF("Boot args version %d revision %d mode %d\n", args->Version, args->Revision, args->efiMode);
 		if (args->efiMode == kBootArgsEfiMode64) {
-			efi_set_tables_64((EFI_SYSTEM_TABLE_64 *) ml_static_ptovirt(args->efiSystemTable));
+			/*
+			 * The system table is firmware data, not an
+			 * EFI_MEMORY_RUNTIME range, so efi_init() above never
+			 * shadow-maps it and it is NOT covered by the static
+			 * identity window that ml_static_ptovirt() addresses.
+			 * That window is capped at NKPT * PTE_PER_PAGE pages
+			 * (1 GB) and costs 1:1 real RAM, because physfree is
+			 * also first_avail -- so a firmware that places the
+			 * table high, as OVMF does at ~2 GB, is unreachable
+			 * through it on any machine.
+			 *
+			 * The physmap is the window built to reach arbitrary
+			 * physical memory: physmap_init() sizes it from
+			 * PhysicalMemorySize + 4 GB, so it covers the table
+			 * regardless of how much RAM is installed.
+			 */
+			efi_set_tables_64((EFI_SYSTEM_TABLE_64 *) PHYSMAP_PTOV(args->efiSystemTable));
 		} else {
 			panic("Unsupported 32-bit EFI system table!");
 		}
@@ -567,7 +586,10 @@ hibernate_newruntime_map(void * map, vm_size_t map_size, uint32_t system_table_o
 
 		kprintf("Boot args version %d revision %d mode %d\n", args->Version, args->Revision, args->efiMode);
 		if (args->efiMode == kBootArgsEfiMode64) {
-			efi_set_tables_64((EFI_SYSTEM_TABLE_64 *) ml_static_ptovirt(args->efiSystemTable));
+			/* Same reason as efi_init(): the system table is firmware
+			 * data outside the NKPT-capped static window, and the
+			 * physmap covers it at any RAM size. */
+			efi_set_tables_64((EFI_SYSTEM_TABLE_64 *) PHYSMAP_PTOV(args->efiSystemTable));
 		} else {
 			panic("Unsupported 32-bit EFI system table!");
 		}

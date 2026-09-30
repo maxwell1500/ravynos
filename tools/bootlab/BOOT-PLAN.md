@@ -1025,3 +1025,75 @@ through `i386_vm_init`, `pmap_bootstrap`, `kernel_bootstrap`,
 - `work/kernel_link.map` describes `work/stripped_kernel.development`
   (2026-09-29), **not** `assets/kernel.development` (2026-09-28). They are
   different builds, so the map is stale for that asset.
+
+## 13. The system table blocker is resolved (2026-09-30)
+
+The kernel now boots from the apple-free loader all the way to
+`bsd_init: done`, mounts the root filesystem, and execs `/bin/echo` as PID 1.
+Log: `work/serial_applefree.full.log`, kernel sha256 `e5f59b2b…`.
+
+### The fix: the physmap, not the static window
+
+`efi_set_tables_64()` reached the EFI system table with `ml_static_ptovirt()`,
+which is `paddr | VM_MIN_KERNEL_ADDRESS` and can only produce an address in the
+early identity window. OVMF places the table at physical `0x7f9ec018`
+(~2041 MiB), so it faulted.
+
+That window cannot be grown to reach it, and the reasons are structural:
+
+- It is hard-capped at `NKPT (500) * PTE_PER_PAGE (512) * 4096` = **1000 MiB**
+  of preallocated level-1 tables. The target is 2.04x that. `fillkpt()`
+  (`i386_init.c:410`) has **no clamp**, so an oversized `ksize` silently
+  overwrites `IdlePTD`/`IdlePDPT`/`IdlePML4`. `Idle_PTs_release()`
+  (`i386_init.c:480-482`) clamps the same limit, so the cap is deliberate.
+- It costs 1:1 real RAM: `physfree` -> `first_avail` (`i386_init.c:799`) ->
+  `avail_start` (`i386_vm_init.c:736`).
+- `i386_vm_init.c:707` adds `pmptr->end - pmptr->base` into `avail_remaining`
+  unconditionally, including the branch at 628-659 that just marked the range
+  fully allocated. `pmap_free_pages()` therefore over-reports, the hash-bucket
+  array is oversized (`vm_resident.c:1098-1104`), and `pmap_steal_memory()`
+  exhausts `pmap_next_page_hi()` and panics. This is the real 2 GiB failure.
+
+The physmap is the window built for exactly this. `physmap_init()` sizes it
+from `PhysicalMemorySize + 4 GB`, and `PHYSMAP_PTOV(x)` is `x + physmap_base`
+with a bounds check. It scales with installed RAM, so this is the correct
+primitive on a >4 GB machine and the 128 MiB `ksize` floor is no longer needed
+for the system table (dropping it is still to be verified).
+
+Three sites changed in `osfmk/i386/AT386/model_dep.c`:
+- `efi_init()`: `PHYSMAP_PTOV(args->efiSystemTable)`.
+- `hibernate_newruntime_map()`: same. There are two copies of this code and the
+  second one is the one that actually faulted.
+- `efi_set_tables_64()`: `PHYSMAP_PTOV(system_table->RuntimeServices)`. That
+  field is a *physical* pointer into firmware data, so it needs the same
+  translation; without it the fault just moved one line down.
+
+### Dead end: SetVirtualAddressMap on OVMF
+
+Apple's loader calls it, so it was implemented in full (third `efi_main`
+argument, runtime-services struct, low `VirtualStart` values). It **double-faults
+inside OVMF** (`check_exception old: 0xffffffff new: 0xd`, IP in firmware,
+CR3 = firmware tables) regardless of whether the map is the firmware's own or a
+freshly re-fetched one with a current key. Reverted; it is also now unnecessary.
+
+### Three harness bugs that invalidated boots in this session
+
+1. `model_dep.o` was not on the `kernel_build.py` rebuild allowlist, so edits to
+   it produced an unchanged kernel. Added, with a comment matching the existing
+   entries.
+2. `run_applefree.sh` pins `KERNEL` to `assets/kernel.development` and only
+   falls back to `work/stripped_kernel.development` if that file is *missing*.
+   Every "full" boot silently used the 2026-09-28 asset, so three kernel fixes
+   appeared to do nothing. The pin is deliberate ("so a rebuild by another
+   worker cannot change what this run is a test OF") and is kept, but it now
+   warns loudly when the asset is older than the local build. Use
+   `RAVYN_KERNEL=work/stripped_kernel.development` to test a local build.
+3. `python3 kernel_build.py | grep ... | head -5` SIGPIPE-killed the build
+   before it reached `model_dep` and the link. Do not page a build pipeline.
+
+### Next blocker (userspace)
+
+PID 1 (`/bin/echo`) reaches dyld, which reports:
+`dyld: UNBINDABLE chained fixup: bind ordinal 0 is out of range,
+bindTargets.count() is 0`. That is the staged-userland dyld work, not the
+loader or the kernel.

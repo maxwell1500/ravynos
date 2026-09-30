@@ -41,6 +41,17 @@ echo "[1/4] loader  : work/efi/BOOTX64.EFI (from $VARIANT)"
 echo "      sha256  : $LSHA"
 echo "[2/4] kernel  : $KERNEL"
 echo "      sha256  : $KSHA"
+
+# The pin above is deliberate, but its failure mode is silent and expensive:
+# edit a .c file, rebuild, run, and boot the OLD asset instead.  Three
+# separate kernel fixes in this repo were "tested" that way before this check
+# existed.  If the committed asset is older than a local build, say so loudly.
+if [ -z "${RAVYN_KERNEL:-}" ] && [ -f work/stripped_kernel.development ] \
+   && [ work/stripped_kernel.development -nt assets/kernel.development ]; then
+    echo "WARNING: assets/kernel.development is OLDER than work/stripped_kernel.development" >&2
+    echo "WARNING: this run boots the OLD asset, not the kernel you built." >&2
+    echo "WARNING: re-run with RAVYN_KERNEL=work/stripped_kernel.development" >&2
+fi
 echo "[3/4] mkimage -> $IMG"
 python3 mkimage.py "$IMG" --manifest manifest_applefree.json --kernel "$KERNEL" || exit 1
 

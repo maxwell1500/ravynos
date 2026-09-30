@@ -116,7 +116,10 @@ for rel in ["iokit/DEVELOPMENT/IOPlatformExpert.cpo.json",
             "bsd/DEVELOPMENT/kern_sig.o.json",
             # wait4/proc_exit live in kern_exit.c. Without this an edit there
             # silently produced an unchanged kernel.
-            "bsd/DEVELOPMENT/kern_exit.o.json"]:
+            "bsd/DEVELOPMENT/kern_exit.o.json",
+            # model_dep.c holds efi_init()/efi_set_tables_64(). Without this
+            # an edit there silently produced an unchanged kernel.
+            "osfmk/DEVELOPMENT/model_dep.o.json"]:
     cmd = load_json(os.path.join(BUILD_DIR, rel))
     print("Compiling %s..." % os.path.basename(rel).rsplit(".", 3)[0], flush=True)
     run(cmd["arguments"], cmd["directory"])
