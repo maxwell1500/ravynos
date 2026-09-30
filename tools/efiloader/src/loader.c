@@ -766,6 +766,7 @@ efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *ST)
 	u64 key = 0, dsz = 0, dver = 0, size, n, used = 0, ram_top = 0;
 	boot_args *A;
 	u64 base, top;
+	u64 rt_end = 0;            /* one past the highest runtime VA assigned */
 	u32 i;
 	u64 st2;
 
@@ -1055,23 +1056,36 @@ efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *ST)
 		 * 0x7ee3b000 both panic; physfree 0x8100000 (ksize 128 MiB) ->
 		 * VAs 0x2000000..0x6000000 all map.
 		 *
-		 * Give the ranges distinct low VAs.  Identity VAs (the obvious
-		 * choice, because efi_set_tables_64() reads the system table through
-		 * ml_static_ptovirt() = 0xffffff8000000000 + physical) cannot work:
-		 * it would drag physfree out to the runtime ranges' own physical
-		 * addresses near 2 GiB, and 2 GiB of physfree dies in
-		 * vm_page_bootstrap.  So that stays as the known gap below.
+		 * Give the ranges distinct low VAs, packed just above the
+		 * kernel image.  Identity VAs (the obvious choice) would drag
+		 * physfree out to the runtime ranges' own physical addresses
+		 * near 2 GiB, and physfree is also first_avail, so 2 GiB of it
+		 * costs 2 GiB of real RAM and dies in pmap_steal_memory() --
+		 * see BOOT-PLAN.md section 13.  It also cannot work: the static
+		 * window is capped at NKPT * PTE_PER_PAGE = 1000 MiB.
+		 *
+		 * Packing them tight keeps physfree proportional to the
+		 * runtime ranges' own sizes (~9 MiB here) instead of to
+		 * installed RAM, which is what makes this scale past 4 GB.
 		 */
-		{
-			u64 slot = 0x2000000;              /* 32 MiB, clear of both */
-			for (u64 k = 0; k < used / dsz; k++) {
-				u8 *e = dst + k * dsz;
-				if (*(u64 *)(e + 32) & EFI_MEMORY_RUNTIME) {
-					*(u64 *)(e + 16) = slot;
-					slot += 0x1000000;      /* 16 MiB per range */
-				}
+	{
+		const u64 A2M = 0x200000ULL;
+		u64 lo = g_hoff_page + (BLK_PAGES << 12);   /* past our block */
+		u64 slot = (lo > top ? lo : top);
+		slot = (slot + A2M - 1) & ~(A2M - 1);
+
+		for (u64 k = 0; k < used / dsz; k++) {
+			u8 *e = dst + k * dsz;
+			if (*(u64 *)(e + 32) & EFI_MEMORY_RUNTIME) {
+				u64 pages = *(u64 *)(e + 24);
+				u64 sz = (pages + 1) << 12;      /* 4K, 64-bit len */
+				*(u64 *)(e + 16) = slot;
+				slot += (sz + A2M - 1) & ~(A2M - 1);
+				rt_end = slot;
 			}
 		}
+		s_puts("RL: runtime VA top=0x"); s_hex32((u32)rt_end); s_puts("\r\n");
+	}
 	}
 	{
 		u8 *ba = (u8 *)(u64)(g_hoff_page + BLK_OFF_BOOTARGS);
@@ -1085,21 +1099,21 @@ efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *ST)
 		A->debugMode = 0;
 		A->flags = 0;
 		A->kaddr = (u32)base;
-		/* physfree = PAGE_ROUND(kaddr + ksize).  Extend it over our block so
-		 * the kernel's allocator can never hand those pages out, and to a
-		 * 128 MiB floor because the kernel's boot page tables only cover
-		 * [0, physfree) and pmap_map_bd() panics on a VA with no entry.
-		 * This window is narrow and measured, not a guess:
-		 *   24 MiB -> "percpu: max_cpus_from_firmware not yet initialized"
-		 *  128 MiB -> all five runtime ranges map; reaches efi_init
-		 *    2 GiB -> dies in vm_page_bootstrap ("Allocating hash buckets")
-		 *    4 GiB -> dies in Idle_PTs_init
-		 * Do not raise it, and do not lower it. */
+		/* physfree = PAGE_ROUND(kaddr + ksize).  It must cover our handoff
+		 * block, the kernel image, and every runtime VA we just assigned,
+		 * because pmap_map_bd() panics on a VA whose page table entry does
+		 * not already exist and the window is exactly [0, physfree).
+		 *
+		 * physfree is also first_avail, so every byte here is RAM the VM
+		 * subsystem will never hand out.  The previous 128 MiB floor was
+		 * paid on every boot and on every machine; deriving the bound
+		 * from the actual runtime VAs costs ~9 MiB and is independent of
+		 * installed memory.  Do not raise it to a fixed number. */
 		{
 			u64 end = g_hoff_page + (BLK_PAGES << 12) > top
 			    ? g_hoff_page + (BLK_PAGES << 12) : top;
-			if (end < base + 0x8000000ULL) {
-				end = base + 0x8000000ULL;      /* 128 MiB */
+			if (end < rt_end) {
+				end = rt_end;
 			}
 			A->ksize = (u32)(end - base);
 		}
