@@ -727,15 +727,79 @@ gave 6/6 and 7/7:
 - the shell survives a child dying of SIGILL or SIGSEGV and keeps accepting
   input
 
+### Writable root filesystem (2026-09-29)
+
+The read-only root is fixed. Three separate defects were involved.
+
+**1. Root mounts are seeded read-only and msdosfs never clears the flag.**
+`vfs_rootmountalloc_internal()` sets `mp->mnt_flag = MNT_RDONLY | MNT_ROOTFS`
+(`bsd/vfs/vfs_subr.c:1146`) as a default, expecting the filesystem to clear it
+if the device is writable. msdosfs derived `MSDOSFSMNT_RONLY` from that bit
+alone and never queried the device, so the root was permanently read-only and
+every write failed with `EROFS`.
+
+The block layer is genuinely writable, so this was safe to fix rather than a
+mask: `ahci_block.c` is the built-in q35 AHCI bdevsw driver, its `ahci_strategy`
+calls `ahci_transfer_sectors()`, which issues real ATA `WRITE DMA EXT` (0x35)
+through the PRDT with a W-bit command header, and `ahci_ioctl()` answers
+`DKIOCISWRITABLE` with 1. `msdosfs_vfs_mount()` now queries `DKIOCISWRITABLE` and
+clears `MNT_RDONLY` via `vfs_clearflags()` for the root mount only, so an
+explicitly read-only mount elsewhere is still honoured.
+
+**2. A fatal fortify trap on every file creation.** With the root writable, the
+create path panicked in `msdosfs_createde`. The backtrace was symbolised
+misleadingly as `msdosfs_chainalloc` (that function was never entered), so the
+real owner was resolved with a linker map plus DWARF: it is
+`msdosfs_createde.cold.2`, and the trap is `__xnu_fortify_trap_write()` --
+`ml_fatal_trap(0xbffe)`, i.e. `XNU_HARD_TRAP_STRING_CHK` from
+`osfmk/libsa/string.h`.
+
+`string.h` selects `__XNU_FORTIFY_SOURCE=2` when `XNU_KERNEL_PRIVATE` is
+defined, and level 2 turns a fortified object-size check into a *fatal* trap.
+`msdosfs_compile.sh` clones the *kernel's* flags, which include
+`-D XNU_KERNEL_PRIVATE`, onto a *kext*. msdosfs is a kext and should build at
+level 1, so the script now passes `-D_FORTIFY_SOURCE=0`. This is the same family
+as the earlier `libc_static` fortify self-loop.
+
+**3. Correction: the `pe_serial` change is required, not optional.** The earlier
+conclusion in this document -- that `serial=3` alone was the whole fix and the
+local `pe_serial.c` edit was unnecessary -- was wrong. It rested on seeing
+"Serial keyboard started" in the log, which only proves the poller thread was
+created. Instrumenting `uart_getc()` showed the guard failing on every poll with
+`initted=0 legacy=0 lpss=0 pcie=0 gPESF=0`: nothing in the pristine file binds
+`gPESF`, so `uart_getc()` always returned -1. Output worked only because
+`uart_putc()` writes the transmit register directly. `serial_init()` is not
+reached on this path either (`pal_serial_init()` has no live caller), so the fix
+binds the legacy 16550 function table on first use inside `uart_getc()`. No
+register programming is needed: the firmware already set the UART up, which is
+why output worked with no kernel init at all.
+
+Both the boot argument and this binding are required; neither alone delivers
+input.
+
+### Verified writable
+
+On a clean kernel, 7/7 commands returned to the prompt and the host-side image
+changed, so writes reach the FAT rather than a buffer cache:
+
+- `echo A > /f1` then `cat /f1` -> `A`
+- `echo B >> /f1` then `cat /f1` -> `A` / `B`
+- `/bin/mkdir /d1` -> succeeds, and `ls /` shows `d1`
+- `ls /` also shows `f1` and `.sh_history`
+- `echo pipe-ok | cat` -> still works
+
+Cross-boot persistence was then confirmed by re-booting the *same* image without
+rebuilding it: `cat /f1` returned the previously written `A` / `B`, and `d1`
+was still present.
+
 ### Still broken (unrelated to the shell)
 
-- The root filesystem is mounted read-only, so a redirect cannot create a file.
-  The redirection *mechanism* is proven -- `sh` opens for write and surfaces
-  EROFS -- but proving a real write needs a writable mount, which is filesystem
-  work, not shell work.
-- `mkdir` does not create the requested directory.
 - A two-stage pipeline (`echo a | cat | cat`) dies with SIGILL.
+- The intermittent `random_init: failed to allocate a major number` panic at
+  cold boot is still present and unrelated; several runs had to be repeated
+  because of it. UEFI also intermittently reports `Can't find image
+  information`.
 
-The intermittent `random_init: failed to allocate a major number` panic at cold
-boot is still present and unrelated; several runs had to be repeated because of
-it.
+`kernel_build.py` now emits `work/kernel_link.map`. The panic backtrace
+symboliser mislabelled the faulting frame, and the map is what made the real
+function recoverable; it is worth keeping for future kernel debugging.

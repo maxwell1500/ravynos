@@ -1,6 +1,15 @@
 #!/bin/bash
 # Compile msdosfs sources for in-kernel linking.
 # Flags cloned from bsd/DEVELOPMENT/bsd_stubs.o.json (kernel DEVELOPMENT build).
+#
+# _FORTIFY_SOURCE=0 is required because the kernel flags below define
+# XNU_KERNEL_PRIVATE, and osfmk/libsa/string.h selects
+# __XNU_FORTIFY_SOURCE=2 for that case. Level 2 emits __xnu_fortify_trap_write(),
+# a FATAL trap (ml_fatal_trap, XNU_HARD_TRAP_STRING_CHK 0xbffe) when a
+# fortified string write appears to exceed its object. msdosfs trips that check
+# in msdosfs_createde() (bptoep/buf_dataptr path), which panicked the kernel on
+# every file creation. msdosfs is a kext, not kernel-internal code, so it should
+# be built at level 1 (compile-time diagnostics) like any other kext.
 set -e
 cd /Users/max/Projects/build/DEVELOPMENT_X86_64/bsd/DEVELOPMENT
 CC=/Library/Developer/CommandLineTools/usr/bin/clang
@@ -37,6 +46,8 @@ BASEFLAGS=(
   -D
   KERNEL_BASE_OFFSET=0x100000
   -O2
+  -D
+  _FORTIFY_SOURCE=0
   -mmacos-version-min=15.0
   -D
   XNU_TARGET_OS_OSX

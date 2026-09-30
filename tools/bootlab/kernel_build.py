@@ -159,6 +159,8 @@ msdosfs_objs = sorted(glob.glob(os.path.join(WORK, "msdosfs_objs", "msdosfs_*.o"
 if not msdosfs_objs:
     sys.exit("no msdosfs objects")
 
+link_map = os.path.join(WORK, "kernel_link.map")
+
 full_cmd = ldflags.split() + [
     "-filelist", os.path.join(BUILD_DIR, "link.filelist"),
     os.path.join(BUILD_DIR, "version.o"),
@@ -168,8 +170,7 @@ full_cmd = ldflags.split() + [
     os.path.join(BUILD_DIR, "ubsan_stubs.o"),
     os.path.join(bsd_dev, "pthread_builtin.o"),
     os.path.join(bsd_dev, "ahci_block.o"),
-] + msdosfs_objs + ["-o", out_kernel]
-
+] + msdosfs_objs + ["-Wl,-map," + link_map, "-o", out_kernel]
 print("Linking %s..." % out_kernel, flush=True)
 run(full_cmd, BUILD_DIR)
 

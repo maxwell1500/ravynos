@@ -218,6 +218,24 @@ int msdosfs_update_mp(struct mount *mp, struct msdosfs_args *argp)
 
 
 /*
+ * Ask the block device whether its medium accepts writes.
+ *
+ * msdosfs derives MSDOSFSMNT_RONLY from the mount's MNT_RDONLY alone, so
+ * without this query a perfectly writable device under a root mount still
+ * ends up read-only and every write fails with EROFS.
+ */
+static int
+msdosfs_dev_writable(vnode_t devvp, vfs_context_t context)
+{
+	uint32_t writable = 0;
+
+	if (VNOP_IOCTL(devvp, DKIOCISWRITABLE, (caddr_t)&writable, 0, context))
+		return 0;
+
+	return writable != 0;
+}
+
+/*
  * mp - path - addr in user space of mount point (ie /usr or whatever)
  * data - addr in user space of mount params including the name of the block
  * special file to treat as a filesystem.
@@ -279,6 +297,22 @@ int msdosfs_vfs_mount(struct mount *mp, vnode_t devvp, user_addr_t data, vfs_con
 				goto error_exit;
 			}
 		}
+	}
+
+	/*
+	 * vfs_rootmountalloc_internal() seeds a root mount MNT_RDONLY as a
+	 * default. A root filesystem left read-only cannot be written to at
+	 * all, so when this is the root mount and the block device reports
+	 * itself writable, clear the seeded flag before msdosfs_mount() turns
+	 * it into MSDOSFSMNT_RONLY.
+	 *
+	 * Only the root mount is adjusted. A mount the user explicitly asked
+	 * to be read-only is not the root mount, so it keeps MNT_RDONLY and
+	 * is honoured as before.
+	 */
+	if ((vfs_flags(mp) & MNT_ROOTFS) && !vfs_isupdate(mp) &&
+	    msdosfs_dev_writable(devvp, context)) {
+		vfs_clearflags(mp, MNT_RDONLY);
 	}
 
 	if ( !vfs_isupdate(mp)) {

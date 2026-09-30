@@ -605,6 +605,24 @@ uart_putc(char c)
 static int
 uart_getc(void)
 {
+	/*
+	 * serial_init() is not reached on this platform (pal_serial_init() has
+	 * no caller on the x86 boot path we use), so nothing ever binds gPESF
+	 * or sets the enable flags. The uart_getc() guard then fails on every
+	 * poll, the serial keyboard poller never sees a byte, and the console
+	 * never delivers input even though output works.
+	 *
+	 * Bind the legacy 16550 function table on first use. The UART registers
+	 * themselves are already programmed by the firmware (that is why
+	 * serial output works without any kernel init), so only the dispatch
+	 * table and the enable flags are needed here.
+	 */
+	if (gPESF == NULL) {
+		gPESF = &legacy_uart_serial_functions;
+		legacy_uart_enabled = 1;
+		uart_initted = 1;
+	}
+
 	if (uart_initted && (legacy_uart_enabled || lpss_uart_enabled || pcie_uart_enabled)) {
 		if (!gPESF->rr0()) {
 			return -1;
