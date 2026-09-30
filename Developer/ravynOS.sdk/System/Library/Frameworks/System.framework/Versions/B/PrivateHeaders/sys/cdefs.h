@@ -874,6 +874,37 @@
 	        typedef _type _name; enum __VA_ARGS__ __enum_open __enum_options
 #define __options_closed_decl(_name, _type, ...) \
 	        typedef _type _name; enum __VA_ARGS__ __enum_closed __enum_options
+
+/*
+ * This is a FOURTH sys/cdefs.h tree, and it is the one <sys/kdebug_private.h>
+ * in this same directory resolves to -- a framework's PrivateHeaders dir
+ * precedes usr/include on the search path, so the copy in usr/include/sys
+ * (which build-libraries.sh does shim) is never read for these headers.
+ * Undefined, the macros below are parsed as identifiers:
+ *   kdebug_private.h:476  uintptr_t thread __kernel_data_semantics;
+ *     -> "expected ';' at end of declaration list"   (libdispatch)
+ *   generated <string.h>  int bcmp(...) __stateful_pure;
+ *     -> "unknown type name '__stateful_pure'"       (libxpc)
+ * Definitions match Kernel/xnu/bsd/sys/cdefs.h.  Userspace has no
+ * xnu_usage_semantics attribute, so the empty form is the correct one here;
+ * what matters is that the macro EXISTS.
+ */
+#ifndef __kernel_ptr_semantics
+#define __kernel_ptr_semantics
+#endif
+#ifndef __kernel_data_semantics
+#define __kernel_data_semantics
+#endif
+#ifndef __kernel_dual_semantics
+#define __kernel_dual_semantics
+#endif
+
+#ifndef __stateful_pure
+#if __has_attribute(pure)
+#define __stateful_pure __attribute__((__pure__))
+#else
+#define __stateful_pure
+#endif
 #endif
 
 #endif /* !_CDEFS_H_ */

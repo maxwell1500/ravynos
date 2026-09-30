@@ -455,13 +455,43 @@ sync_mach "$SRV/System/Library/Frameworks/System.framework/Versions/B/PrivateHea
 # Each is #ifndef-guarded, so this is idempotent and cannot affect a tree that
 # already has them.
 CDEFS_TAIL='
-/* --- appended by tools/bootlab/build-libraries.sh; see that script --- */
+/* --- BEGIN ravynOS cdefs shim (tools/bootlab/build-libraries.sh) --- */
 #ifndef __stateful_pure
 #define __stateful_pure __attribute__((__pure__))
 #endif
 #ifndef __osloglike
 #define __osloglike(fmtarg, firstvararg) \
 	__attribute__((__format__ (__os_log__, fmtarg, firstvararg)))
+#endif
+
+/*
+ * Three more macros that the cdefs.h in this SDK predates and that headers
+ * in the SAME tree use unconditionally, each with the same failure: undefined,
+ * they are parsed as identifiers.
+ *
+ *   System.framework/.../PrivateHeaders/sys/kdebug_private.h:476
+ *       uintptr_t thread __kernel_data_semantics;
+ *     -> error: expected semicolon at end of declaration list  (libdispatch)
+ *   generated <string.h>:864  __kpi_deprecated_arm64_macos_unavailable
+ *     -> error: unknown type name                              (libxpc, asl, dnssd)
+ *
+ * Definitions are the userspace ones from Kernel/xnu/bsd/sys/cdefs.h: the
+ * kalloc-type annotations expand to nothing outside the kernel, which has no
+ * xnu_usage_semantics attribute, and __kpi_deprecated_arm64_macos_unavailable
+ * is empty for "!KERNEL || !XNU_PLATFORM_MacOSX" (cdefs.h:258,260). All are
+ * ABI-neutral, so nothing here can change a symbol.
+ */
+#ifndef __kernel_ptr_semantics
+#define __kernel_ptr_semantics
+#endif
+#ifndef __kernel_data_semantics
+#define __kernel_data_semantics
+#endif
+#ifndef __kernel_dual_semantics
+#define __kernel_dual_semantics
+#endif
+#ifndef __kpi_deprecated_arm64_macos_unavailable
+#define __kpi_deprecated_arm64_macos_unavailable
 #endif
 
 /*
@@ -537,16 +567,57 @@ CDEFS_TAIL='
 #define __header_bidi_indexable
 #endif
 #endif /* !__has_ptrcheck */
-/* --- end tools/bootlab/build-libraries.sh --- */
+/* --- END ravynOS cdefs shim --- */
 '
 sync_cdefs() {
+    # The SDK headers arrive mode 0444, as everything under a CommandLineTools
+    # or platform SDK does. ">> file" needs write permission on the file
+    # itself and fails with "Permission denied" -- and it kept failing, once
+    # per stage, with the error buried at the top of each stage log where
+    # nobody reads it. The System.framework copy is the one that matters:
+    # <sys/kdebug_private.h> lives beside it and includes <sys/cdefs.h>, and a
+    # framework's PrivateHeaders precedes usr/include on the search path, so
+    # the copy this function DOES patch is never the one that gets read.
+    # That is why libdispatch died on
+    #   kdebug_private.h:476:18: error: expected ';' at end of declaration list
+    # while usr/include/sys/cdefs.h sat next to it already carrying the shim.
+    #
+    # Build the new content beside the file and cp -f it into place. cp -f
+    # unlinks a destination it cannot open for writing, and the directory is
+    # writable, so this works where the append did not. Every other SDK
+    # refresh in this script already uses cp -f for the same reason.
+    local f tmp patched=0 failed=0
+    tmp="$(mktemp "${TMPDIR:-/tmp}/cdefs.XXXXXX")" || return 1
+    printf '%s' "$CDEFS_TAIL" > "$tmp"
     for d in "$SDK/usr/include/sys" \
              "$SDK/System/Library/Frameworks/System.framework/Versions/B/PrivateHeaders/sys"; do
         f="$d/cdefs.h"
         [ -f "$f" ] || continue
-        grep -q 'appended by tools/bootlab/build-libraries.sh' "$f" && continue
-        printf '%s' "$CDEFS_TAIL" >> "$f"
+        # Strip any previous shim block, then append the current one, so a
+        # header refreshed here gains macros added since it was last patched.
+        # The old guard was a single grep for the marker and `continue`d, so
+        # once a tree was patched it was NEVER patched again -- which is how
+        # four macros added later were silently not applied and libdispatch,
+        # libxpc, libsystem_asl and libsystem_dnssd kept failing with the very
+        # errors the shim was extended to fix.
+        if sed -e '/^\/\* --- BEGIN ravynOS cdefs shim/,/^\/\* --- END ravynOS cdefs shim/d' \
+               "$f" > "$tmp.stripped" 2>/dev/null \
+           && cat "$tmp.stripped" "$tmp" > "$tmp.new" 2>/dev/null \
+           && cmp -s "$f" "$tmp.new"; then
+            continue                      # already identical, nothing to do
+        elif cat "$tmp.stripped" "$tmp" > "$tmp.new" 2>/dev/null \
+             && cp -f "$tmp.new" "$f" 2>/dev/null; then
+            patched=$((patched+1))
+            echo "note: patched $(basename "$d")/cdefs.h with the build-libraries.sh shim" >&2
+        else
+            failed=$((failed+1))
+            echo "ERROR: could not patch $f -- headers will fail to compile." >&2
+            echo "ERROR:   (mode $(stat -f '%Sp' "$f" 2>/dev/null), dir writable: $([ -w "$d" ] && echo yes || echo no))" >&2
+        fi
     done
+    rm -f "$tmp" "$tmp.new" "$tmp.stripped"
+    # Never fail the build over this, but do not let it pass unnoticed either.
+    [ "$failed" -eq 0 ] || echo "WARNING: $failed cdefs.h shim(s) failed" >&2
     return 0
 }
 sync_cdefs

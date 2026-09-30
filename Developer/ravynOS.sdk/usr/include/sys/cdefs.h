@@ -1048,4 +1048,40 @@
 #define __null_terminated
 #endif
 
+
+/*
+ * Apple SDK headers annotate pure functions with __stateful_pure, which the
+ * kernel's bsd/sys/cdefs.h defines as __attribute__((__pure__)).  A generated
+ * <string.h> in the build SDK uses it (bcmp/memcmp/...) without including this
+ * file first, so undeclared it becomes an unknown type name and the function
+ * definitions below it fail to parse -- which is how libxpc stopped building.
+ * Same shape as the __kernel_*_semantics block above: the macro must exist.
+ */
+#ifndef __stateful_pure
+#if __has_attribute(pure)
+#define __stateful_pure __attribute__((__pure__))
+#else
+#define __stateful_pure
+#endif
+#endif
+/*
+ * Type-segregation annotations used by the kernel's kalloc-type checker.
+ * The kernel's own bsd/sys/cdefs.h defines these under
+ *   defined(KERNEL) && __has_attribute(xnu_usage_semantics)
+ * and empty otherwise.  Userspace never has that attribute, so the correct
+ * userspace definition is the empty one -- but the macros must still EXIST,
+ * because SDK headers such as <sys/kdebug_private.h> use them in declarations
+ * without including this file first.  Undefined, they are parsed as an
+ * identifier and the declaration dies with "expected ';' after top level
+ * declarator", which is how libdispatch stopped building.
+ */
+#ifndef __kernel_ptr_semantics
+#define __kernel_ptr_semantics
+#endif
+#ifndef __kernel_data_semantics
+#define __kernel_data_semantics
+#endif
+#ifndef __kernel_dual_semantics
+#define __kernel_dual_semantics
+#endif
 #endif /* !_CDEFS_H_ */
