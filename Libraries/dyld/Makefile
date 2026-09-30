@@ -278,6 +278,48 @@ CXXFLAGS = ${COMMONFLAGS} -std=c++20 ${C_INCS} ${CFLAGS.${.TARGET:T}}
 # one had an empty trie too, then by measuring the flag here. Do not remove it
 # on the grounds that the link succeeds.
 
+# WHY THE -Wl,-upward-* FLAGS ARE GONE, AND WHY THIS IS STILL NOT A DYLINKER
+#
+# Linking this as an ordinary dylib produces an image the kernel refuses to use
+# as a dynamic linker, and the refusal is only visible at execve:
+#
+#   filetype DYLIB  ->  filetype DYLINKER
+#   LC_ID_DYLIB    ->  LC_ID_DYLINKER
+#   (no entry)     ->  LC_UNIXTHREAD, via -Wl,-e,_start (src/start_glue.s)
+#   9 x LC_LOAD_UPWARD_DYLIB -> none
+#
+# Symptom: bsd/kern/kern_exec.c:1359 load_machfile() returns LOAD_BADMACHO,
+# which becomes OS_REASON_EXEC / EXEC_EXIT_REASON_BAD_MACHO
+# (bsd/sys/reason.h:276, value 1). Because that SIGKILLs initproc,
+# bsd/kern/kern_sig.c:2117 turns it into the boot-ending panic
+#
+#   panic(cpu 0 ...): unexpected SIGKILL of launchd with reason --
+#   namespace 9 code 0x1 description none
+#
+# The upward links were a real error on their own and are now removed: dyld is
+# the BOTTOM of the dependency graph -- it loads before everything it pulls in
+# -- so nothing can be upward of it, and LC_LOAD_UPWARD_DYLIB on a dyld is a
+# contradiction. Removing them is correct on its own terms.
+#
+# WHAT IS STILL MISSING, and why -dylinker is not simply switched on:
+# the image must become MH_DYLINKER with an LC_UNIXTHREAD entry point, or the
+# kernel keeps rejecting it with the panic above. Switching -dylib to -dylinker
+# (plus -Wl,-e,_start) was tried and does NOT link:
+#
+#   ld: library 'system_malloc' not found
+#
+# ...even though -L${RAVYN_SDKROOT}/usr/lib/system is passed and
+# libsystem_malloc.dylib is present there. That is ld64 behaviour, not a
+# mistake in the -L: an MH_DYLINKER image does not resolve its dependencies
+# from -L search paths the way a dylib does. Verified by linking one trivial
+# object both ways with identical flags -- with -dylib the link reaches symbol
+# resolution ("symbol(s) not found"), with -dylinker it never finds the library
+# at all. So the dependency search domain for a dylinker image has to be worked
+# out before this flag can be turned on; it is not a one-line change.
+#
+# isysroot-cc already recognises -dylinker (link-hygiene case list), so the
+# -umbrella System / -lSystem stripping would still fire when this is finished.
+#
 LDFLAGS = --target=${CpuArch}-apple-darwin --sysroot=${RAVYN_SDKROOT} \
 	-L${RAVYN_SDKROOT}/usr/lib/system -L${RAVYN_SDKROOT}/usr/lib \
 	-Wl,-no_inits -Wl,-no_warn_unused_dylibs -fuse-ld=${LD} -shared -dylib \
@@ -286,12 +328,7 @@ LDFLAGS = --target=${CpuArch}-apple-darwin --sysroot=${RAVYN_SDKROOT} \
 	-mmacos-version-min=${MACOS_VERSION_MIN} \
 	-Wl,-install_name,/usr/lib/system/libdyld.dylib \
 	-Wl,-current_version,732.2 \
-	-lsystem_malloc -lsystem_pthread -lsystem_platform -lsystem_kernel \
-	-Wl,-upward-lsystem_platform -Wl,-upward-lsystem_malloc \
-	-Wl,-upward-lsystem_c -Wl,-upward-lsystem_pthread \
-	-Wl,-upward-lxpc \
-	-Wl,-upward-lsystem_blocks -Wl,-upward-lsystem_kernel \
-	-Wl,-upward-ldispatch -Wl,-upward-lcompiler_rt 
+	-lsystem_malloc -lsystem_pthread -lsystem_platform -lsystem_kernel
 
 all: lib${LIB}.dylib
 
