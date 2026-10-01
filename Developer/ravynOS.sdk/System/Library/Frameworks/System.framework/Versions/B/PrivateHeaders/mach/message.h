@@ -1110,6 +1110,76 @@ __options_decl(mach_msg_option64_t, uint64_t, {
 
 /* --- end sourced block --- */
 
+/* --- Kernel/xnu/osfmk/mach/message.h:1477-1530, verbatim ---
+ * mach_msg2_internal() and the mach_msg2() packing inline. libsyscall's
+ * mach_msg.c calls mach_msg2() at :302 (vector) and :305 (scalar) but
+ * defines it nowhere; this SDK copy carried no #if PRIVATE region for it at
+ * all, so the LP64 prototype and the whole descriptor-count rule were absent
+ * and _mach_msg2 stayed an unresolved import of the MH_DYLINKER.
+ *
+ * Copied, not reconstructed. The low half of desc_count_and_rcv_name is NOT
+ * unconditionally zero: it is base->body.msgh_descriptor_count when sending
+ * a MACH_MSGH_BITS_COMPLEX message and zero otherwise, and `base` must be
+ * read through the vector's msgv_data whenever MACH64_MSG_VECTOR is set --
+ * which is exactly why the vector call site hands mach_msg2() the vecs array
+ * rather than the header. A plausible-looking guess at those two rules
+ * truncates the descriptor count on every complex MIG send.
+ */
+#if PRIVATE
+#if defined(__LP64__) || defined(__arm64__)
+__API_AVAILABLE(macos(13.0), ios(16.0), tvos(16.0), watchos(9.0))
+__IOS_PROHIBITED __WATCHOS_PROHIBITED __TVOS_PROHIBITED
+extern mach_msg_return_t mach_msg2_internal(
+	void *data,
+	mach_msg_option64_t option64,
+	uint64_t msgh_bits_and_send_size,
+	uint64_t msgh_remote_and_local_port,
+	uint64_t msgh_voucher_and_id,
+	uint64_t desc_count_and_rcv_name,
+	uint64_t rcv_size_and_priority,
+	uint64_t timeout);
+
+__API_AVAILABLE(macos(13.0), ios(16.0), tvos(16.0), watchos(9.0))
+__IOS_PROHIBITED __WATCHOS_PROHIBITED __TVOS_PROHIBITED
+static inline mach_msg_return_t
+mach_msg2(
+	void *data,
+	mach_msg_option64_t option64,
+	mach_msg_header_t header,
+	mach_msg_size_t send_size,
+	mach_msg_size_t rcv_size,
+	mach_port_t rcv_name,
+	uint64_t timeout,
+	uint32_t priority)
+{
+	mach_msg_base_t *base;
+	mach_msg_size_t descriptors;
+
+	if (option64 & MACH64_MSG_VECTOR) {
+		base = (mach_msg_base_t *)((mach_msg_vector_t *)data)->msgv_data;
+	} else {
+		base = (mach_msg_base_t *)data;
+	}
+
+	if ((option64 & MACH64_SEND_MSG) &&
+	    (base->header.msgh_bits & MACH_MSGH_BITS_COMPLEX)) {
+		descriptors = base->body.msgh_descriptor_count;
+	} else {
+		descriptors = 0;
+	}
+
+#define MACH_MSG2_SHIFT_ARGS(lo, hi) ((uint64_t)hi << 32 | (uint32_t)lo)
+	return mach_msg2_internal(data, option64,
+	           MACH_MSG2_SHIFT_ARGS(header.msgh_bits, send_size),
+	           MACH_MSG2_SHIFT_ARGS(header.msgh_remote_port, header.msgh_local_port),
+	           MACH_MSG2_SHIFT_ARGS(header.msgh_voucher_port, header.msgh_id),
+	           MACH_MSG2_SHIFT_ARGS(descriptors, rcv_name),
+	           MACH_MSG2_SHIFT_ARGS(rcv_size, priority), timeout);
+#undef MACH_MSG2_SHIFT_ARGS
+}
+#endif
+#endif /* PRIVATE */
+
 
 /* --- Kernel/xnu/osfmk/mach/message.h:240-257, verbatim ---
  * mach_msg_qos_t and the MACH_MSG_QOS_* values, plus the prototypes

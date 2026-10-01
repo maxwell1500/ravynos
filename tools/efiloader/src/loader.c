@@ -351,7 +351,7 @@ static u8 *dt_str(u8 *p, const char *name, const char *val)
 }
 
 static const char DEFAULT_CMDLINE[] =
-	"-v serial=1 debug=0x14e keepsyms=1 slide=0 kcsuffix=development "
+	"-v serial=3 debug=0x14e keepsyms=1 slide=0 kcsuffix=development "
 	"rd=disk0s1 rootdev=disk0s1 npci=0x2000 dart=0 -no_compat_check "
 	"cpus=1 quiet_boot=1";
 

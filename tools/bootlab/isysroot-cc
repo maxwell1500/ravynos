@@ -269,6 +269,7 @@ overlay_for() {
 # and dies with "cannot specify -o when generating multiple output files".
 # Libraries/dyld/Makefile puts -dylib in COMMONFLAGS, which is also CFLAGS.
 dylib=no
+dylinker=no
 compile_only=no
 assembler=no
 for a in "$@"; do
@@ -283,7 +284,22 @@ for a in "$@"; do
         # wrapper: the one binary whose job is to load all the others. A gate
         # is only as good as its enumeration, and a missing case is
         # indistinguishable from the gate not existing.
-        -dylib|-dynamiclib|-dylinker|-Wl,-dylib|-Wl,-dynamiclib|-Wl,-dylinker) dylib=yes ;;
+        #
+        # It is tracked SEPARATELY from dylib because an MH_DYLINKER must not
+        # receive -undefined dynamic_lookup, and must not receive it silently:
+        # with it, ld64 links successfully and produces a loader that is allowed
+        # to leave symbols unresolved -- which is precisely the defect being
+        # fixed.  dyld maps before anything is bound, so every symbol it
+        # references must be resolved AT LINK TIME; the whole point of
+        # dyldInitialization.cpp's zero-import invariant is that an unresolved
+        # symbol is a hard link error, not a runtime bind.
+        #
+        # Without the separation this link fails outright with
+        #   ld: Shared cache eligible dylibs cannot use '-undefined dynamic_lookup'
+        # and the one component that must never defer a symbol to runtime is the
+        # one component forced to.
+        -dylib|-dynamiclib|-Wl,-dylib|-Wl,-dynamiclib) dylib=yes ;;
+        -dylinker|-Wl,-dylinker) dylib=yes; dylinker=yes ;;
         -c) compile_only=yes ;;
         # "-x assembler-with-cpp" arrives as two separate arguments; match on
         # the language word itself so that two-token form is caught too.
@@ -678,8 +694,18 @@ if [ "$inject" = yes ]; then
     # relies on it for the same reason. ld64 additionally refuses
     # -undefined dynamic_lookup for shared-cache-eligible dylibs.
     out="$out '-nodefaultlibs'"
-    out="$out '-undefined' 'dynamic_lookup'"
-    out="$out '-Wl,-not_for_dyld_shared_cache'"
+    # An MH_DYLINKER is the one image that must NOT defer any symbol: the kernel
+    # maps it before anything is bound, so an unresolved reference cannot be
+    # fixed later.  Giving it -undefined dynamic_lookup both trips ld64
+    # ("Shared cache eligible dylibs cannot use '-undefined dynamic_lookup'")
+    # and, if it were accepted, would mask exactly the missing providers this
+    # build is trying to surface as hard errors.
+    if [ "$dylinker" = yes ]; then
+        out="$out '-Wl,-not_for_dyld_shared_cache'"
+    else
+        out="$out '-undefined' 'dynamic_lookup'"
+        out="$out '-Wl,-not_for_dyld_shared_cache'"
+    fi
 fi
 
 # shellcheck disable=SC2086

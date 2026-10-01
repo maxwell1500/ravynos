@@ -88,10 +88,34 @@ COMMONFLAGS = --target=${CpuArch}-apple-darwin \
 		-isystem${RAVYN_SDKROOT}/usr/include \
 		-iframework${RAVYN_SDKROOT}/System/Library/Frameworks
 
-CXXFLAGS = ${COMMONFLAGS} -std=c++17 -fno-threadsafe-statics \
+CXXFLAGS = ${COMMONFLAGS} ${EXTRA_DEFINES} -std=c++17 -fno-threadsafe-statics \
 		${CFLAGS.${.TARGET:T}}
-CFLAGS = ${COMMONFLAGS} ${CFLAGS.${.TARGET:T}}
-ACFLAGS = ${COMMONFLAGS}
+CFLAGS = ${COMMONFLAGS} ${EXTRA_DEFINES} ${CFLAGS.${.TARGET:T}}
+ACFLAGS = ${COMMONFLAGS} ${EXTRA_DEFINES}
+
+# EXTRA_DEFINES must be threaded through CFLAGS/CXXFLAGS/ACFLAGS explicitly
+# here, and it was NOT reaching this component at all.  The build sets
+# EXTRA_DEFINES="-DXNU_PLATFORM_MacOSX" (build-libraries.sh) and bsd.sys.mk
+# folds it into CFLAGS -- but the assignments above REBUILD CFLAGS from
+# ${COMMONFLAGS}, discarding whatever bsd.sys.mk had computed.  Verified by
+# `bmake -n src/glue.o`: the emitted command contained 0 occurrences of
+# XNU_PLATFORM_MacOSX.
+#
+# The consequence was concrete and silent.  This component compiles with
+# -I${ROOT_SOURCE_DIR}/Kernel/xnu/bsd ahead of the SDK, so <sys/cdefs.h>
+# resolves to the KERNEL's cdefs.h.  That header selects its per-product
+# values from XNU_PLATFORM_* (Kernel/xnu/bsd/sys/cdefs.h:731-746): the
+# MacOSX+x86_64 arm defines __DARWIN_ONLY_UNIX_CONFORMANCE 1, which makes
+# __DARWIN_SUF_UNIX03 empty.  With the macro missing, no XNU_PLATFORM_*
+# block matched, __DARWIN_ONLY_UNIX_CONFORMANCE stayed undefined, and
+# `#if __DARWIN_ONLY_UNIX_CONFORMANCE` evaluated to 0 -- so
+# __DARWIN_ALIAS_C() emitted the "$UNIX2003" symbol suffix.
+#
+# That is why the MH_DYLINKER referenced _close$UNIX2003, _open$UNIX2003,
+# _mmap$UNIX2003, _fcntl$UNIX2003, _mprotect$UNIX2003, _munmap$UNIX2003 and
+# _pread$UNIX2003: seven imports that no archive in the SDK defines (the
+# providers are the unsuffixed _close, _open, ...).  These were being masked
+# at link time by isysroot-cc's -undefined dynamic_lookup.
 
 .for file in Diagnostics.pieo \
 	    dyldInitialization.pieo \

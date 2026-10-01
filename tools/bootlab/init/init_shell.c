@@ -99,8 +99,6 @@ static void puterr(const char *what, i64 e) {
 }
 
 void start(void) {
-	puts_("\n=== RAVYNOS SHELL PID 1 ===\n");
-
 	/*
 	 * O_NOCTTY here: the open must not silently grab a controlling
 	 * terminal, because the explicit setsid()+TIOCSCTTY sequence below is
@@ -124,6 +122,21 @@ void start(void) {
 			sys1(SYS_close, (u64)cfd);
 		puts_("init: console on fd 0/1/2\n");
 	}
+
+	/*
+	 * The banner is emitted HERE, after the dup2 above, not first thing in
+	 * start(). Same call, same string, same unconditional execution -- only
+	 * the position moved.
+	 *
+	 * It used to be the first statement, which wrote it to the fds PID 1
+	 * inherits from the kernel. Those are not the console: a measured boot
+	 * of this very program lost the banner entirely while every line printed
+	 * after the dup2 (console on fd 0/1/2, setsid, TIOCSCTTY, execve) arrived
+	 * on the serial port. The A-F driver gates on "banner then prompt", so a
+	 * banner that goes to the wrong descriptor reads as "PID 1 never came
+	 * up" when PID 1 is in fact up and has already exec'd the shell.
+	 */
+	puts_("\n=== RAVYNOS SHELL PID 1 ===\n");
 
 	i64 sid = (i64)sys1(SYS_setsid, 0);
 	if (sid < 0)

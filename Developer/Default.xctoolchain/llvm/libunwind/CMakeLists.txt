@@ -4,6 +4,39 @@
 
 cmake_minimum_required(VERSION 3.20.0)
 
+# ASM must be an enabled language, or the assembler sources below are silently
+# dropped rather than reported as missing.  There is no project() call in this
+# tree, so C/CXX are enabled implicitly by CMake while ASM is not, and
+# LIBUNWIND_ASM_SOURCES (src/CMakeLists.txt:24-26) never reaches the build.
+#
+# This is not cosmetic.  On x86_64 non-SJLJ, the two assembly files are the ONLY
+# definition of two symbols the library's own C++/C members reference:
+#
+#   src/UnwindRegistersSave.S:76     DEFINE_LIBUNWIND_FUNCTION(__unw_getcontext)
+#   src/UnwindRegistersRestore.S:71  DEFINE_LIBUNWIND_FUNCTION(__libunwind_Registers_x86_64_jumpto)
+#
+# libunwind.cpp.o and UnwindLevel1{,-gcc-ext}.c.o carry `U` (undefined) references
+# to exactly those two.  With the assembler sources dropped, libunwind.a is
+# therefore internally inconsistent: it references symbols nothing defines.
+#
+# That inconsistency propagates to any consumer, and it is fatal for one in
+# particular.  The MH_DYLINKER (Libraries/dyld/dyld/makefile) links -lunwind and
+# must carry ZERO imports, because rebaseDyld() rebases it with an empty
+# bindTargets array by design -- the kernel maps a bootstrap dylinker before
+# anything is bound, so it cannot resolve its own binds.  Two unresolved imports
+# become two chained BIND fixups in the loader image, and the first one reached
+# aborts the walk:
+#
+#   dyld: UNBINDABLE chained fixup: bind ordinal 0 is out of range,
+#         bindTargets.count() is 0, fixups walked so far 3
+#
+# (3 = two rebases at __got[0] and __got[1], then the first bind at __got[2];
+# confirmed with dyld_info -fixups against the built image.)
+#
+# enable_language() must appear at the top level, before any add_library() that
+# consumes the sources.
+enable_language(ASM)
+
 set(LLVM_COMMON_CMAKE_UTILS "${CMAKE_CURRENT_SOURCE_DIR}/../cmake")
 
 # Add path for custom modules

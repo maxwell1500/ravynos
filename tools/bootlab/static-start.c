@@ -173,15 +173,6 @@ struct ravyn_program_vars {
 };
 
 /*
- * Weak because sys/crt_externs.c only compiles _program_vars_init in its
- * __DYNAMIC__ branch, which is how the shipped Libsystem happens to be built.
- * If that ever changes this must fail to link rather than silently stop
- * publishing, so the NULL check here is a guard, not a supported path.
- */
-extern void _program_vars_init(const struct ravyn_program_vars *vars)
-	__attribute__((weak));
-
-/*
  * The cached task self port.
  * ---------------------------
  * mach/mach_init.h:76-78 declares
@@ -393,8 +384,9 @@ extern void mach_init(void);
 /*
  * The Libc atfork handler table.
  * ------------------------------
- * The seventh instance of the startup class, and the first where the
- * unpublished thing is a FUNCTION POINTER rather than a port or a size.
+ * This is atfork table initialization, not another publication from this
+ * file: the table is written by Libc's own _libc_fork_init() and the struct
+ * it writes from is built inside __ravyn_static_libc_init().
  *
  * _fork() dispatches through three globals:
  *
@@ -403,112 +395,47 @@ extern void mach_init(void);
  *     00000001000247f5  callq *__libSystem_atfork_child(%rip)
  *     0000000100024804  callq *__libSystem_atfork_parent(%rip)
  *
- * and all three are BSS with no initialiser. Their publisher is
- * Libraries/Libsystem/init.c:196-201, which builds
+ * and all three are BSS with no initialiser of their own. _libc_fork_init()
+ * is what writes them: it takes a `struct _libc_functions` and copies
+ * funcs->atfork_prepare, funcs->atfork_parent and funcs->atfork_child into
+ * those three globals.
  *
- *     static const struct _libc_functions libc_funcs = {
- *             .version = 1,
- *             .atfork_prepare = libSystem_atfork_prepare,
- *             .atfork_parent  = libSystem_atfork_parent,
- *             .atfork_child   = libSystem_atfork_child,
- *     };
+ * The struct is versioned and it is Libc's, so it is not built here. A static
+ * binary has no __libc_init to call and no init.c to be linked from, so this
+ * file calls __ravyn_static_libc_init() instead. That is Libsystem's own
+ * static-build initializer (libsystem_c/sys/_libc_init_static.c, compiled
+ * into libc_static.a); it builds the versioned struct from the handlers it
+ * is passed and calls _libc_fork_init() with it, exactly where
+ * _libc_initializer() does in the dynamic build. This file therefore passes
+ * the three ravyn_atfork_* wrappers below as plain function pointers and the
+ * table is installed exactly once. It differs from the dynamic list in one
+ * entry only: _init_clock_port() is omitted, because host_get_clock_service
+ * is implemented and declared in the kernel but has no mach trap, so the
+ * call aborts. See the comment at the initializer below.
  *
- * and hands it to _libc_initializer(&libc_funcs, envp, apple, vars) at
- * init.c:225 -- which runs only from __libc_init. A static binary has no
- * __libc_init, so the table stays NULL and fork() calls through it.
- *
- * NOT __libkernel_init: that was my first guess and it is wrong. init.c:216
- * passes a `struct _libkernel_functions` whose fields are dlsym, malloc,
- * free, realloc, _pthread_exit_if_canceled, pthread_clear_qos_tsd and
- * pthread_current_stack_contains_np. It carries no atfork slot at all, so
- * calling it would not publish these and would be the wrong function.
+ * The wrappers exist because the raw handlers are not a complete answer on
+ * their own. ravyn_atfork_child() re-acquires the Mach task port and the MIG
+ * reply port for the new task BEFORE the pthread and malloc handlers, and
+ * that ordering is not optional: libsystem_pthread/pthread_atfork.c:153-163
+ * shows _pthread_atfork_child() reinitialises only pthread state and never
+ * writes mach_task_self_ or the reply-port TSD slot, and
+ * libsystem_kernel/static/mach_init.c:135-136 shows those two are written
+ * only by mach_init_doit(). The dynamic path pairs them for the same reason
+ * (Libraries/Libsystem/init.c:350 calls _mach_fork_child() first). The
+ * handlers this file only sometimes has -- the malloc fork hooks, the
+ * pthread handler-iteration hooks and _mach_fork_child -- are weak, because
+ * which of them exist depends on what the static link actually pulled in;
+ * the three _pthread_atfork_* entry points are required and declared
+ * unconditionally, since libpthread_static.a is always on the link line.
  */
 extern void _pthread_atfork_prepare(void);
 extern void _pthread_atfork_parent(void);
 extern void _pthread_atfork_child(void);
 
-
-/*
- * The Libc locale TSD key.
- * ---------------------------
- * The sixth instance of the startup class, and the second where the
- * unpublished value is a KEY rather than a port.
- *
- * Libc reaches the current locale through a pthread key. The fast path is
- *
- *     movq __locale_key(%rip), %rax
- *     movq %gs:(,%rax,8), %rax          <- the key IS the %gs index
- *
- * and the slow path is pthread_getspecific(__locale_key). So the key is
- * used directly as a thread-specific index, and it is created by
- * pthread_key_create() during Libc startup -- which a static binary never
- * runs.
- *
- * Measured, not assumed. Reading the raw bytes of the global out of the
- * linked image:
- *
- *     __locale_key    @ 0x1001466a8  bytes ffffffffffffffff  -> (pthread_key_t)-1
- *     __global_locale @ 0x1001460e0  bytes 0000000000000000  -> NULL
- *
- * and a census of the whole image finds ZERO writes to either:
- *
- *     writes to __locale_key    : 0
- *     writes to __global_locale : 0
- *     _pthread_key_create reachable from _start : NO
- *
- * With the key at (pthread_key_t)-1 the fast path indexes %gs:-8, i.e. it
- * reads memory BELOW the TSD block, and whatever is there becomes the
- * locale pointer. On the shell that read produced 0x99, and _querylocale
- * then dereferenced it at +0x518, faulting at address 0x5B1. The panic
- * register dump shows RAX = 0x99 -- a small integer used as a pointer.
- *
- * The fix is publication, not tolerance: create the key so the slot reads
- * as unset (0), which sends the existing code down its OWN documented
- * fallback to &__global_locale. No locale value is invented here, and
- * setlocale/_querylocale are not modified.
- */
-extern unsigned int __locale_key;
-extern int pthread_key_create(unsigned int *key, void (*destructor)(void *));
-
-/*
- * The Libc fork handlers.
- * -----------------------
- * The seventh instance of the startup class.
- *
- * Libsystem's fork() wrapper (libsystem_c/sys/fork.c) calls three function
- * pointers: _libSystem_atfork_prepare, _libSystem_atfork_parent, and
- * _libSystem_atfork_child. In a dynamic binary, libSystem_initializer()
- * populates them via _libc_initializer() -> _libc_fork_init().
- * In a static binary, _libc_fork_init() is never called, leaving the three
- * function pointers at NULL in BSS. The very first instruction of fork():
- *
- *     callq *__libSystem_atfork_prepare(%rip)
- *
- * dereferences NULL and jumps to address 0x0. The fork syscall is never
- * reached.
- *
- * The fix is publication: provide real static atfork handlers and register
- * them via _libc_fork_init(). In the child, the Mach task self port and reply
- * port must also be re-acquired for the new task.
- */
-struct ravyn_libc_functions {
-	unsigned long version;
-	void (*atfork_prepare)(void);
-	void (*atfork_parent)(void);
-	void (*atfork_child)(void);
-	char *(*dirhelper)(int, char *, unsigned long);
-};
-
-extern void _libc_fork_init(const struct ravyn_libc_functions *funcs)
-	__attribute__((weak));
-
 extern void _malloc_fork_prepare(void) __attribute__((weak));
 extern void _malloc_fork_parent(void) __attribute__((weak));
 extern void _malloc_fork_child(void) __attribute__((weak));
 
-extern void _pthread_atfork_prepare(void) __attribute__((weak));
-extern void _pthread_atfork_parent(void) __attribute__((weak));
-extern void _pthread_atfork_child(void) __attribute__((weak));
 extern void _pthread_atfork_prepare_handlers(void) __attribute__((weak));
 extern void _pthread_atfork_parent_handlers(void) __attribute__((weak));
 extern void _pthread_atfork_child_handlers(void) __attribute__((weak));
@@ -542,15 +469,6 @@ ravyn_atfork_child(void)
 	if (_malloc_fork_child) _malloc_fork_child();
 	if (_pthread_atfork_child_handlers) _pthread_atfork_child_handlers();
 }
-
-static const struct ravyn_libc_functions ravyn_libc_fork_funcs = {
-	.version = 1,
-	.atfork_prepare = ravyn_atfork_prepare,
-	.atfork_parent = ravyn_atfork_parent,
-	.atfork_child = ravyn_atfork_child,
-	.dirhelper = 0,
-};
-
 
 
 /*
@@ -683,49 +601,17 @@ extern void __ravyn_static_libc_init(const struct ravyn_program_vars *vars,
 	 * __guard_setup does `for (p = apple; p && *p; p++)`, which
 	 * short-circuits on NULL, and a static binary has no apple= vector.
 	 */
-	__ravyn_static_libc_init(&ravyn_vars, _pthread_atfork_prepare,
-	    _pthread_atfork_parent, _pthread_atfork_child, 0);
-
-	/* The atfork table, before anything can fork. See the block comment on
-	 * the declaration: fork() calls through these three pointers, they are
-	 * BSS, and their only publisher is __libc_init, which a static binary
-	 * never runs. Publishing them from Libsystem's own handlers is the
-	 * seventh instance of the startup class, same shape as the six above. */
-
-	/* The Libc locale TSD key, created the way Libc startup would. Must
-	 * follow __pthread_static_init, which installs the %gs base that
-	 * pthread_key_create needs, and it must precede main() because the
-	 * shell's very first setlocale reads the key. See the block comment on
-	 * the declaration: with the key left at its (pthread_key_t)-1
-	 * sentinel the code indexes %gs:-8 and dereferences garbage.
-	 *
-	 * The library route to this key was considered and rejected on COST.
-	 * __xlocale_init (libBase.a:locale/xlocale.o) is the real initializer
-	 * and would genuinely replace this call, but xlocale.o arrives with 25
-	 * undefined symbols (nm -u): ___collate_load_tables,
-	 * ___messages_load_locale, ___monetary_load_locale,
-	 * ___numeric_load_locale, ___time_load_locale, ___detect_path_locale,
-	 * ___get_locale_env, ___error, __setrunelocale, __DefaultRuneXLocale,
-	 * _pthread_key_init_np and the standard C set. That is the entire
-	 * locale-database loader. ravynOS has no locale data for it to load,
-	 * so linking the code that loads locale tables in order to obtain one
-	 * thread key is a poor trade. */
-	pthread_key_create(&__locale_key, 0);
-
-	/* Initialize Libc fork handlers so fork() does not jump through NULL. */
-	if (_libc_fork_init != 0)
-		_libc_fork_init(&ravyn_libc_fork_funcs);
-
-	/* Publish the crt externs BEFORE the allocator, not after. It used to
-	 * be last, and that was survivable only because nothing reachable
-	 * from __malloc_init consulted them. That is not a safe assumption
-	 * to leave standing: __malloc_initialize calls getenv (through
-	 * _set_flags_from_environment) and __malloc_init can reach
-	 * __malloc_initialize, via __malloc_init_from_bootargs' malloc_report
-	 * on a malformed bootarg. Publishing first costs five pointer stores
-	 * and removes the ordering hazard entirely. */
-	if (_program_vars_init != 0)
-		_program_vars_init(&ravyn_vars);
+	__ravyn_static_libc_init(&ravyn_vars, ravyn_atfork_prepare,
+	    ravyn_atfork_parent, ravyn_atfork_child, 0);
+	/* The atfork table, before anything can fork. fork() calls through
+	 * the three pointers _libc_fork_init publishes; they are BSS, and on a
+	 * static binary their only publisher is the call above. The versioned
+	 * struct is Libc's and is built inside __ravyn_static_libc_init, so the
+	 * handlers are passed as plain function pointers and the table is
+	 * installed exactly once. The locale key is likewise __xlocale_init's:
+	 * it installs the RESERVED key and the __xlocale_release destructor,
+	 * and creating the key here instead would overwrite that and drop the
+	 * destructor. */
 
 	/* The allocator. Last of the startup steps, and for the same reason the
 	 * two above are ordered this way: __malloc_init is the first thing in
@@ -749,8 +635,8 @@ __asm__(
 	/* Park argc/argv in callee-saved registers BEFORE the call below.
 	 * %rdi and %rsi are caller-saved and the callee is entitled to
 	 * clobber both -- and this one does, because ravyn_static_startup
-	 * now calls mach_init, pthread_key_create, __program_vars_init and
-	 * __malloc_init. Setting them once here and then calling _main
+	 * now calls mach_init, __ravyn_static_libc_init and __malloc_init.
+	 * Setting them once here and then calling _main
 	 * without reloading handed main() whatever the startup happened to
 	 * leave behind. It reached the shell as argc == 0, and ash's
 	 * procargs() reads argptr[0] BEFORE its argc guard: options.c:85 is

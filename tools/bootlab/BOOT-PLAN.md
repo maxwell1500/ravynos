@@ -777,6 +777,31 @@ why output worked with no kernel init at all.
 Both the boot argument and this binding are required; neither alone delivers
 input.
 
+### 2026-09-30 correction: A–F shell acceptance passed
+
+The `_init_clock_port` failure was a stale-binary selection, not the current
+static-shell initializer path. The failed run used `tools/bootlab/staged/bin/sh`
+(SHA prefix `82d3b51e`) from `manifest_shellpid1.json`; it called
+`___libc_init` and reached `_init_clock_port`. The successful A–F run used
+`work/sh.static_init` (SHA-256
+`a954602d55653555754562089ece49eb4888d0607120ced5980921254268dbf3`), which
+calls `__ravyn_static_libc_init`.
+
+The serial RX probe separately received `PING1234` with the `serial=3` loader
+(`work/serial_RX_full_35347_1790823100539190000.log` and
+`work/input_RX_full_35347_1790823100539190000.log`). The shell PID-1 banner was
+moved until after console descriptors were duplicated, making it visible on
+the serial console.
+
+One-QEMU A–F verification passed with `-smp 2` and kernel `cpus=1`:
+`work/KEEP_af_run2_ALL-PASS_report.txt` and
+`work/KEEP_af_run2_ALL-PASS_serial.log` record A, banner plus initial prompt;
+B, builtin `echo hello` → `hello`; C, external `/bin/echo external-ok` →
+`external-ok`; D, `echo hi | /bin/cat` → `hi`; E1, redirection to `/tmp/f`
+returned to prompt without error; E2, `/bin/cat /tmp/f` →
+`redirected-content`; and F, `echo second-still-alive` →
+`second-still-alive`, with prompt return. No kernel edits were made.
+
 ### Verified writable
 
 On a clean kernel, 7/7 commands returned to the prompt and the host-side image
@@ -1176,3 +1201,637 @@ That is a reconstruction of Apple's logging subsystem — buffers, contexts,
 queues, signposts — not a header import, and inventing its layout would
 repeat exactly the ABI risk that file's header comment warns about. It is
 left undone deliberately, not overlooked.
+
+---
+
+## 15. Correcting the dyld attribution, and what actually blocks the loader (2026-10-01)
+
+### The attribution in section 13/14 is wrong
+
+Section 13 ends by naming
+
+    dyld: UNBINDABLE chained fixup: bind ordinal 0 is out of range,
+    bindTargets.count() is 0
+
+as "staged-userland dyld work", and commit c2c18857cc goes further: "the
+UNBINDABLE ... defect belonged to the Apple-derived dyld specifically".
+Both are wrong. That error is emitted by **our own** MH_DYLINKER, and it is a
+true positive rather than a probe artifact. Three measurements:
+
+1. `reportUnbindableBind()` (dyld3/MachOLoaded.cpp:1133) is called from exactly
+   two lines, both inside `fixupAllChainedFixups`. Three call sites exist:
+   dyldInitialization.cpp:144 passes an EMPTY `Array<const void*>()`;
+   Loading.cpp:735 and ImageLoaderMachOCompressed.cpp:1019 pass a FILLED
+   `targetAddrs`. Only the first can print `count() is 0`.
+2. That site walks `dyldsMachHeader` -- dyld's own image -- before `dyld::_main`,
+   so no client image has been loaded yet.
+3. Resolving each `## symbol stub for:` site to its enclosing function shows all
+   six are ordinary non-probe code: `mapCacheSystemWide`,
+   `UnwindCursor<...>::jumpto`, `__Unwind_RaiseException`, `__Unwind_Resume`,
+   `_mach_msg_overwrite`.
+
+Probe interference was tested and refuted. The empty `bindTargets` is correct
+design: a bootstrap dylinker is mapped before anything is bound, so it must
+carry ZERO imports (Apple's /usr/lib/dyld has zero imports, zero
+LC_LOAD_DYLIB, zero __stubs). `git show 6e14ace62a` confirms the empty array
+predates the CHAINPROBE instrumentation, so there is no production path to
+restore. Deleting the probe would remove the diagnostic and leave the same
+slots unresolvable.
+
+### The real blocker: the dylinker had 4 imports where it must have 0
+
+`dyld_info -imports` on the built image listed 4, and `dyld_info -fixups`
+showed the 3rd fixup walked is the first bind -- exactly the log's "fixups
+walked so far 3". `__stubs` was 0x18 bytes = 4 stubs, one per import.
+
+Two are now fixed and verified:
+
+- **`__unw_getcontext` and `__libunwind_Registers_x86_64_jumpto`.** One cause:
+  `Developer/Default.xctoolchain/llvm/libunwind/CMakeLists.txt` has no
+  `project()` call, so CMake enables C/CXX implicitly but not ASM, and the
+  assembler sources listed at `src/CMakeLists.txt:24-26` are SILENTLY DROPPED.
+  Measured: `grep -c UnwindRegisters build.ninja` = 0, and no `.S.o` existed.
+  Those two files are the only definitions (`UnwindRegistersSave.S:76`,
+  `UnwindRegistersRestore.S:71`). Fixed with `enable_language(ASM)` plus
+  `-DCMAKE_ASM_COMPILER` in `Libraries/Makefile`. A link test in the exact
+  MH_DYLINKER filetype reproduces the defect against the old archive (both
+  symbols undefined) and clears it against the new one (zero undefined).
+
+- **`__shared_region_map_and_slide_np`.** No provider exists: syscall 438 is
+  `{ int nosys(void); }` at `bsd/kern/syscalls.master:664`, and only the
+  differently-shaped `__shared_region_map_and_slide_2_np` is implemented. No
+  manifest stages a `dyld_shared_cache`. `mapCacheSystemWide` is now compiled
+  out under `__RAVYNOS__` with an explicit "unsupported" error, rather than
+  stubbed. `mapCachePrivate` (no syscall) is untouched, so a per-process cache
+  would still load. Note `__shared_region_check_np` (syscall 294) IS
+  implemented and already resolves from `libkernel.a`, so it correctly stays.
+
+### isysroot-cc was hiding the rest of the problem
+
+`isysroot-cc` classified `-dylinker` as a dylib and injected
+`-undefined dynamic_lookup` into the loader link. That both trips ld64
+("Shared cache eligible dylibs cannot use '-undefined dynamic_lookup'") and,
+where accepted, allows the one image that must defer nothing to defer it. It is
+now tracked separately (`dylinker=yes`) and gets the link hygiene WITHOUT
+`-undefined dynamic_lookup`.
+
+Removing that flag is what made the invariant honest, and it immediately
+exposed **8 further imports that the old link had silently deferred to
+runtime**: `_close$UNIX2003`, `_fcntl$UNIX2003`, `_mmap$UNIX2003`,
+`_mprotect$UNIX2003`, `_munmap$UNIX2003`, `_open$UNIX2003`, `_pread$UNIX2003`,
+`_fwrite`. Seven are TWOLEVEL-namespace aliases that no archive in the SDK
+defines (`nm` finds `_close` etc. in `libkernel.a`, never the `$UNIX2003`
+form); `_fwrite` is absent from the `usr/local/lib/dyld/libc.a` the loader
+links. These are pre-existing latent failures that the permissive flag was
+concealing -- not regressions introduced by these fixes.
+
+### Current measured state
+
+Built image: MH_DYLINKER, LC_ID_DYLINKER, LC_UNIXTHREAD entry, 0
+LC_LOAD_DYLIB. **9 undefined symbols, 9 chained BIND fixups.** Down from 4
+imports + 8 masked = 12, but still not zero, so `/bin/echo` still cannot be
+accepted and **no dynamic gate run has been performed**.
+
+Remaining work, in order:
+
+1. The 8 libc symbols. Needs `$UNIX2003` alias definitions plus `fwrite` in
+   the archive set the MH_DYLINKER links (`usr/local/lib/dyld/libc.a`).
+2. `_mach_msg2`. No compatible wrapper exists. It is emitted from
+   `libsyscall/mach/mach_msg.c` calling `mach_msg2_trap` with 8 args; the
+   kernel trap is 47 with that ABI. The SDK's
+   `Developer/ravynOS.sdk/usr/include/mach/syscall_sw.h:125-131` jumps from -46
+   straight to -48, so the mapping is simply missing. That header is a
+   user-space SDK input (not `Kernel/xnu`), and adding `kernel_trap(...
+   -47, 8)` there is the candidate. The old -31 is a different ABI and must
+   not be substituted, and `mach_msg2` must not be renamed or stubbed: a stub
+   returning -1 would break dyld's messaging, which the recorded boot trace
+   shows is on the live `_mig_get_reply_port` -> `_mach_msg` path.
+
+Verification is `/tmp/zeroimport.sh` (0 undefined, 0 binds) plus one
+`run_dynamic_gate.sh` PASS (`RAVYN-DYNAMIC-USERLAND-OK`) once it reads zero.
+Neither the disappearance of the UNBINDABLE line nor a probe edit counts as
+acceptance.
+
+### 15.1 Progress on the remaining imports (2026-10-01, later)
+
+**mach_msg2 trap: the veneer now emits.** `mach_msg2_trap` had no
+user-space veneer because the trap table skipped it: both
+`Developer/ravynOS.sdk/usr/include/mach/syscall_sw.h` and the
+`System.framework/.../PrivateHeaders/mach/syscall_sw.h` copy jumped from
+`kernel_trap(pid_for_task,-46,2)` straight to `kernel_trap(macx_swapon,-48,4)`.
+`kernel_trap(mach_msg2_trap,-47,8)` is now present in both copies in the repo
+SDK, guarded by `#if defined(__LP64__)` to match the kernel registration
+(`osfmk/kern/syscall_sw.c`: `MACH_TRAP(mach_msg2_trap, 8, 16, munge_llllllll)`
+under `__LP64__ || __arm64__`, `kern_invalid` otherwise). 8 is the kernel's
+`munge_llllllll`; the older -31 is a different ABI and must not be substituted.
+
+**Two copies are not enough -- there are three trees.** The build does not
+compile against `Developer/ravynOS.sdk` in the repo. `Libraries/Makefile` and
+`build_all_libsystem.sh:39` both set
+`SDK="$BUILD/Developer/Platforms/ravynOS.platform/Developer/SDKs/ravynOS.sdk"`,
+a SEPARATE tree under `/Users/max/Projects/build`. Adding -47 to the repo
+copies changed nothing observable: the assembled object still emitted only
+`_macx_swapon`. Patching the two build-SDK copies made the veneer appear, with
+the correct immediate:
+
+    _mach_msg2_trap:
+      movq %rcx, %r10
+      movl $0x100002f, %eax        ## 0x1000000 | 47 = SYSCALL_CONSTRUCT_MACH(47)
+      syscall
+
+Both copies of `mach/syscall_sw.h` must carry the entry: they share an
+include guard, so which one wins depends on include order.
+
+**Still outstanding: `mach_msg2` ITSELF.** `libsyscall/mach/mach_msg.c` CALLS
+`mach_msg2()` at :302 (vector form) and :305 (scalar form) from
+`mach_msg_overwrite`, but `mach_msg2` is DEFINED nowhere in this tree -- only
+`mach_msg2_internal` (a 7-argument function that packs into `mach_msg2_trap`)
+exists. So the gap is now precisely: the trap veneer is available, but the
+`mach_msg2` wrapper that packs (msgh_bits|send_size), (msgh_remote|msgh_local),
+(msgh_voucher|msgh_id), (desc_count|rcv_name), (rcv_size|priority) into the
+trap's five packed uint64s has no implementation. Writing that packing means
+reproducing an Apple bit layout that is not available in this tree, and it must
+NOT be guessed. Not stubbed: a `-1` stub would break dyld, which reaches this
+through `_mach_msg_overwrite` -> `__kernelrpc_*` on the live MIG path.
+
+**The 8 libc imports are still unresolved** (7 x `$UNIX2003` + `_fwrite`).
+Audit noted the `$UNIX2003` suffix is LP64-gated in `sys/cdefs.h:586-592` and
+that `__LP64__` IS defined for `--target=x86_64-apple-darwin` (verified:
+`clang -dM` reports it). So the suffix should be EMPTY and these references
+should not exist -- which points at the header tree actually being compiled
+against, i.e. the same stale-build-SDK problem above, rather than at a missing
+provider. `libkernel.a` defines `_close`, `_open`, `_mmap`, ... but never the
+`$UNIX2003` forms. `_fwrite` has a real provider at
+`libsystem_c/stdio/FreeBSD/fwrite.c` in the `libFreeBSD` archive
+(`libFreeBSD/Makefile:261`), which full libsystem_c links but `libc_dyld.a`
+deliberately excludes.
+
+**State: 9 undefined, 9 binds. No QEMU run.** The invariant is not met, so
+`/bin/echo` still cannot be accepted and the single authorized dynamic gate
+attempt remains unspent.
+
+### 15.2 mach_msg2: the trap and the packing were authoritative; the wrapper was NOT missing (SUPERSEDED by §15.7)
+
+> **STATUS: SUPERSEDED / INTERMEDIATE.** The wrapper this section once called
+> "the exact missing prerequisite" was found in-tree and has been ported. The
+> MH_DYLINKER is now at **0 undefined / 0 binds** (§15.7). Nothing here describes
+> the current blocker, because there is no longer one. What remains below is
+> provenance only: the trap work and the packing derivation were both correct,
+> and the *reason* the wrapper looked missing is worth keeping.
+
+**The trap is done.** `kernel_trap(mach_msg2_trap,-47,8)` is in all four copies
+of `mach/syscall_sw.h` (two in the repo SDK, two in the build SDK) and the
+veneer assembles with the correct immediate:
+
+    _mach_msg2_trap:  movq %rcx,%r10 ; movl $0x100002f,%eax ; syscall
+                                            0x1000000|47 = MACH class, 47
+
+**The bit packing IS authoritative and in-tree.** It is the inverse of the
+kernel's own unpacking at `Kernel/xnu/osfmk/ipc/mach_msg.c:934-990`:
+
+    uint64_t mb_ss = args->msgh_bits_and_send_size;   /* LO bits, HI send_size */
+    uint64_t mr_lp = args->msgh_remote_and_local_port;/* LO remote,  HI local   */
+    uint64_t mv_id = args->msgh_voucher_and_id;       /* LO voucher, HI id      */
+    uint64_t dc_rn = args->desc_count_and_rcv_name;   /* LO dsc_cnt, HI rcv_name*/
+    uint64_t rs_pr = args->rcv_size_and_priority;     /* LO rcv_size, HI prio   */
+    timeout = args->timeout;                          /* passed through        */
+
+kernel reads `msgh_bits = (mach_msg_bits_t)(mb_ss)`,
+`send_size = (mach_msg_size_t)(mb_ss >> 32)`,
+`msgh_remote_port = (mach_port_name_t)(mr_lp)`, `msgh_local_port = (mr_lp >> 32)`,
+`msgh_voucher_port = (mach_port_name_t)(mv_id)`, `msgh_id = (mach_msg_id_t)(mv_id >> 32)`,
+`send_dsc_count = (mach_msg_size_t)dc_rn`, `rcv_name = (mach_port_name_t)(dc_rn >> 32)`,
+`priority = (mach_msg_priority_t)(rs_pr >> 32)`. So the packing is fully
+determined by LO/HI halves -- no inference needed for THAT part.
+
+**RETRACTED 2026-10-01: `mach_msg2()` was never closed-source, and this section
+was wrong about where it lives.** It is a userspace `static inline` in
+`osfmk/mach/message.h`, shipped in-tree at
+**`Kernel/xnu/osfmk/mach/message.h:1477-1530`**, and byte-identical to upstream
+`apple-oss-distributions/xnu` `main`
+`osfmk/mach/message.h:1461-1514` (fetched and compared directly). The earlier
+search only looked in `libsyscall/`, where the two CALL sites live and the
+definition genuinely is not -- so the absence was a search-scope artifact, the
+same class of error §4 records.
+
+The real defect was that this project's SDK `mach/message.h` did not carry it.
+`build-libraries.sh` had already SOURCED `mach_msg_option64_t`, every
+`MACH64_*` bit and `mach_msg_vector_t` into the SDK copy (osfmk:1042-1161 and
+:605-624) but not this `#if PRIVATE` region, so `mach_msg.c` compiled with no
+`mach_msg2` in scope even though `-DPRIVATE` was set.
+
+**The descriptor-count rule, which this section called underivable, is now
+determined:**
+
+    base = (MACH64_MSG_VECTOR set) ? ((mach_msg_vector_t *)data)->msgv_data
+                                    : (mach_msg_base_t *)data;
+    descriptors = ((option64 & MACH64_SEND_MSG) &&
+                   (base->header.msgh_bits & MACH_MSGH_BITS_COMPLEX))
+                ? base->body.msgh_descriptor_count : 0;
+
+so the low half of `desc_count_and_rcv_name` is neither "0 for scalar and 2 for
+vector" nor taken from the call arguments: it is read out of the message body,
+and for the VECTOR path out of `vecs[MACH_MSGV_IDX_MSG].msgv_data` -- which is
+precisely why that call site passes the `vecs` array as `data` and the literal
+`2, 2` as `send_size`/`rcv_size`. The literal `2, 2` are the vector element
+counts (they land in `mb_ss>>32` and `rs_pr`), not a descriptor count.
+
+### 15.3 The 8 libc imports: root-caused, and 7 of 8 fixed (2026-10-01, later)
+
+**The 7 `$UNIX2003` imports were a build-flag defect, not missing providers.**
+Root cause chain, each step measured:
+
+1. `bmake -n src/glue.o` emitted **0** occurrences of `XNU_PLATFORM_MacOSX`.
+   The build exports `EXTRA_DEFINES="-DXNU_PLATFORM_MacOSX"` (build-libraries.sh)
+   and bsd.sys.mk folds it into CFLAGS, but `Libraries/dyld/dyld/makefile`
+   assigns `CFLAGS = ${COMMONFLAGS} ${CFLAGS.${.TARGET:T}}`, REBUILDING CFLAGS
+   from COMMONFLAGS and discarding what bsd.sys.mk computed.
+2. That matters because this component compiles with
+   `-I${ROOT_SOURCE_DIR}/Kernel/xnu/bsd` ahead of the SDK, so `<sys/cdefs.h>`
+   is the KERNEL's header. That header picks its per-product values from
+   `XNU_PLATFORM_*` (Kernel/xnu/bsd/sys/cdefs.h:731-746); the MacOSX + x86_64
+   arm defines `__DARWIN_ONLY_UNIX_CONFORMANCE 1`.
+3. With the macro missing, no `XNU_PLATFORM_*` block matched, so
+   `__DARWIN_ONLY_UNIX_CONFORMANCE` stayed UNDEFINED, `#if` treated it as 0
+   (cdefs.h:667-672), `__DARWIN_SUF_UNIX03` became `"$UNIX2003"`, and
+   `__DARWIN_ALIAS_C()` (cdefs.h:713) appended that suffix to every aliased
+   libc name.
+
+Verified directly: with `-I Kernel/xnu/bsd -DXNU_PLATFORM_MacOSX` the same probe
+prints `SUF=[] ONLY=1`; the `XNU_PLATFORM_MacOSX` block is also what makes
+`__DARWIN_64_BIT_INO_T` come out 1. Fix: thread `${EXTRA_DEFINES}` through
+CFLAGS/CXXFLAGS/ACFLAGS explicitly. After it, `bmake -n src/glue.o` shows 1
+occurrence and **all seven** `_close/_open/_mmap/_fcntl/_mprotect/_munmap/
+_pread$UNIX2003` imports are gone -- the unsuffixed providers in `libkernel.a`
+now match.
+
+**`_fwrite` also resolved** by the same rebuild; it needed no new provider.
+
+### Interim state at this point in the workstream: 1 undefined, down from 9 (SUPERSEDED by §15.7 -- now 0/0)
+
+The single remaining link error is:
+
+    "__dyld_debugger_notification"
+
+referenced by `src/dyld_debugger.o`. A real provider EXISTS --
+`$SDK/usr/lib/system/libdyld.a` defines it as `T` -- but that archive is not
+on the dylinker's link line. Adding `-ldyld` fixes this symbol and immediately
+surfaces `___strcpy_chk`, which libdyld's member calls. `___strcpy_chk` also
+has a real, ABI-correct provider in the tree
+(`Libraries/Libsystem/libsystem_c/secure/strcpy_chk.c`, built into
+`libsystem_c/libFortifySource/libFortifySource.a`), but linking that archive
+WHolesale makes the link much worse (27 undefined: it drags in the libc++
+exception runtime and `__os_crash`), and passing a single archive member
+(`libFortifySource.a(strcpy_chk.o)`) does not survive bmake. So the correct
+next step is to build and link just `strcpy_chk.o`, not the archive.
+
+**CORRECTION to 15.1 and 15.2, per review:**
+
+- `mach_msg2_internal` has **8** parameters, not 7 (data, options, five packed
+  uint64s, timeout) -- see Kernel/xnu/libsyscall/mach/mach_msg.c:93-101.
+- The packing IS authoritative, not unavailable. 15.2 overstated the gap. The
+  kernel's own unpacking at Kernel/xnu/osfmk/ipc/mach_msg.c:934-990 fixes every
+  field and half: `mb_ss` = bits|send_size, `mr_lp` = remote|local,
+  `mv_id` = voucher|id, `dc_rn` = desc_count|rcv_name, `rs_pr` = rcv_size|
+  priority, timeout passed through.
+- **THIS THIRD BULLET WAS ALSO WRONG, and is retracted by §15.2/§15.7.** The
+  `mach_msg2()` prototype/body was never "closed-source libsystem" and never an
+  outstanding prerequisite: it is an in-tree userspace `static inline` at
+  `Kernel/xnu/osfmk/mach/message.h:1477-1530`, and its descriptor-count rule is
+  now ported and ABI-tested. The MH_DYLINKER is at **0 undefined / 0 binds**.
+
+**No QEMU at this point in the workstream** (`_mach_msg2` was still an import,
+so the invariant was not met). QEMU has since been run once with no verdict and
+is recorded in §15.8.
+
+### 15.4 The stray `glue.c` shadow and the 1-import state that followed (SUPERSEDED by §15.7 -- now 0/0)
+
+> **STATUS: SUPERSEDED / INTERMEDIATE.** The counts and the "ONE import" claim
+> below describe an intermediate state that has since passed. The MH_DYLINKER is
+> now **0 undefined / 0 binds** (§15.7). The `glue.c` root-cause analysis in this
+> section is sound and is kept as provenance; the residual-import framing is not
+> current, and "closed-source" was never the right answer (see §15.2).
+
+**At this point in the workstream** `__dyld_debugger_notification` was resolved
+and the build had exactly ONE import: `_mach_msg2`.
+
+The cause was not a source or flag defect and not a missing provider. A stray
+**0-byte `Libraries/dyld/dyld/src/glue.c`** was shadowing the real source at
+`Libraries/dyld/src/glue.c` (45265 bytes). The dylinker makefile lists
+`src/glue.c` in SRCS with `.PATH: ${.CURDIR}/..`, and bmake resolves the local
+`src/` directory first, so the empty file won. `glue.o` compiled to a 208-byte
+object whose `__TEXT` segment was **size 0x0** -- the entire glue layer,
+including the no-op debugger-notification hook, silently absent. Preprocessing
+`src/glue.c` with the real build flags produced only line markers and no code,
+which is what identified it.
+
+Confirmed fixed: `glue.o` is now 25456 bytes and defines
+`__dyld_debugger_notification` as `T`. No stub, no new provider, no guard
+changed -- the correct source was simply being shadowed by an empty file, and
+the file is gone.
+
+Counts across this workstream (all `nm -u` / `dyld_info -fixups` on the built
+MH_DYLINKER, which remains filetype DYLINKER, LC_ID_DYLINKER, LC_UNIXTHREAD
+entry, 0 LC_LOAD_DYLIB):
+
+| stage                                   | undefined | binds |
+|-----------------------------------------|-----------|-------|
+| start of this workstream                | 12        | 12    |
+| after libunwind ASM fix + shared-cache scoping | 9  | 9     |
+| after EXTRA_DEFINES fix (7 `$UNIX2003` + `_fwrite`) | 2 | 2 |
+| after removing the stray glue.c shadow | 1     | 1     |
+| **after porting the `mach_msg2()` inline (§15.7)** | **0** | **0** |
+
+The last row is the current state; the rows above it are history.
+
+The single remaining import was `_mach_msg2`. Its "closed-source wrapper"
+explanation was WRONG -- see §15.2; it is an in-tree userspace `static inline`
+in `osfmk/mach/message.h` that this project's SDK header simply did not carry.
+Resolved in §15.7, which also records the zero-import measurement that
+supersedes this table.
+
+QEMU has since been run against the 0/0 image and recorded in §15.8 (no
+verdict). It was not run while this section's 1-import state was still true.
+
+### 15.5 What actually changed for `__dyld_debugger_notification` (evidence)
+
+The fast audit's reading is right and my first report's framing was not:
+`glue.c` has **no whole-TU guard**. It opens with `#if TARGET_OS_SIMULATOR`
+(line 51) and the hook is at line 1211 under `#if ! TARGET_OS_SIMULATOR`, and
+neither macro is set on the command line.
+
+Measured:
+
+- `grep TARGET_OS_SIMULATOR Libraries/dyld/dyld/makefile` -> **no match**. No
+  flag change was involved.
+- `clang -dM -E` over `<TargetConditionals.h>` for the dylinker's target gives
+  `#define TARGET_OS_SIMULATOR 0` and `#define TARGET_OS_OSX 1`. So
+  `#if ! TARGET_OS_SIMULATOR` is TRUE and the definition was always meant to be
+  compiled in. The guard is not the defect.
+- Nothing about `TargetConditionals.h`, the source, or the flags changed
+  between the empty object and the good one.
+
+**What did change: a 0-byte file shadowing the source.** A stray
+`Libraries/dyld/dyld/src/glue.c` (0 bytes) existed alongside the real
+`Libraries/dyld/src/glue.c` (45265 bytes). The makefile lists `src/glue.c` in
+SRCS and sets `.PATH: ${.CURDIR}/..`, so bmake resolved the **local** `src/`
+directory first and the empty file won.
+
+Preprocessor evidence at the time of failure: running the exact build command
+with `-E` produced only line markers and no code --
+
+    # 1 "src/glue.c"
+    # 1 "src/glue.c" 2
+
+- i.e. the TU genuinely had no content. And `otool -l src/glue.o` showed
+  `__TEXT` with `size 0x0000000000000000`, offset 208.
+
+Causation then proved by a controlled two-sided experiment, same flags,
+same environment:
+
+| control | stray 0-byte `dyld/src/glue.c` | `src/glue.o` size | defines notification |
+|---------|-------------------------------|-------------------|----------------------|
+| A       | present                        | 208               | no                   |
+| B       | removed                        | 25456             | yes, `T` at 0x8c0   |
+
+Control A reproduces the empty object on demand; control B removes it. That
+is the positive control this project insists on: the file's presence is the
+cause, not the guard, the flags, or the header.
+
+After a clean rebuild the built image has **exactly 1 undefined symbol and 1
+chained BIND**: `_mach_msg2`. The link now exits non-zero precisely because
+that one symbol has no provider -- which is the correct, honest behaviour now
+that `isysroot-cc` no longer injects `-undefined dynamic_lookup` for
+`-dylinker`. The installed image is MH_DYLINKER / LC_ID_DYLINKER /
+LC_UNIXTHREAD entry / 0 LC_LOAD_DYLIB.
+
+### 15.6 Staging readiness: the built MH_DYLINKER can be staged (throwaway probe)
+
+The gate as configured cannot work yet for a reason independent of the imports:
+`manifest_dynamic.json` stages `/usr/lib/dyld` from
+`{"asset": "usr/lib/dyld"}`, and `assets/usr/lib/dyld` is a **DYLIB**
+(988088 bytes, sha256 d3749b24...). The kernel rejects that before dyld runs,
+with `OS_REASON_EXEC` / `EXEC_EXIT_REASON_BAD_MACHO` (namespace 9 code 0x1).
+
+A throwaway manifest was built to prove the correct artifact CAN be staged,
+without touching anything protected:
+
+- `tools/bootlab/work/manifest_mhdylinker_probe.json` (work/ is gitignored).
+  Generated from `manifest_dynamic.json`; a diff of the two `files` arrays
+  shows **exactly one** differing entry:
+
+      FROM {"path": "usr/lib/dyld", "asset": "usr/lib/dyld"}
+      TO   {"path": "usr/lib/dyld", "file": "<abs path to built MH_DYLINKER>"}
+
+  `mkimage.py`'s `"file"` key is read-only (`open(p,"rb").read()`) and accepts
+  an absolute path, so nothing under `assets/` is written, replaced, or even
+  opened for writing. `grep` for writes into `assets/` in mkimage.py returns
+  only two `"rb"` reads (template_head.bin / template_tail.bin).
+
+- Built to `work/probe_mhdylinker.img` with the kernel pinned to the read-only
+  `assets/kernel.development`. mkimage self-verified:
+  `verify OK: 61 files, 75 tree entries, all content hashes match`.
+
+Verified by reading the bytes back OUT of the image independently of mkimage
+(`fat32img.Fat32Img.read_path("/usr/lib/dyld")`):
+
+| check | result |
+|-------|--------|
+| staged bytes | 1725400, sha256 `67e15a6d...` |
+| built MH_DYLINKER bytes | 1725400, sha256 `67e15a6d...` |
+| **byte-identical** | **True** |
+| filetype | `MH_MAGIC_64 X86_64 ALL 0x00 DYLINKER 15 1944` |
+| LC_ID_DYLINKER / LC_UNIXTHREAD | 1 / 1 |
+| LC_LOAD_DYLIB | 0 |
+| chained BIND fixups | 1 — `__DATA_CONST __got 0x000D4010 bind _mach_msg2` |
+| `nm -u` | `_mach_msg2` |
+
+Note the staged sha differs from the asset's (`d3749b24...`), so this is
+demonstrably not the DYLIB.
+
+**Status: staging-READY, NOT acceptance-READY.** The image stages correctly,
+but it still carries the single `_mach_msg2` bind, so the MH_DYLINKER's
+self-rebase will still stop at `__got[2]` with the UNBINDABLE message. This
+probe exists to prove the staging path, nothing more. **No QEMU was run.**
+
+### 15.7 The zero-import invariant is MET (2026-10-01)
+
+**Change made: two SDK header copies only.** `Developer/ravynOS.sdk/usr/include/
+mach/message.h` and `.../System.framework/Versions/B/PrivateHeaders/mach/
+message.h` now carry `Kernel/xnu/osfmk/mach/message.h:1477-1530` verbatim --
+the `mach_msg2_internal()` declaration plus the `mach_msg2()` `static inline`
+under `#if PRIVATE` + `(defined(__LP64__) || defined(__arm64__))`. `diff` of
+the ported block against the osfmk source is empty.
+
+**Placement is load-bearing and is NOT the upstream-adjacent one.** The block
+goes *after* the sourced `MACH64_*` / `mach_msg_vector_t` block, because this
+SDK file carries those later than osfmk does. Inserting it after the `mach_msg`
+declaration (i.e. where it sits upstream) fails:
+
+    error: unknown type name 'mach_msg_option64_t'
+    error: use of undeclared identifier 'MACH64_MSG_VECTOR'
+    error: use of undeclared identifier 'mach_msg_vector_t'
+
+**Where it is selected.** `libsystem_kernel`'s CFLAGS carry `-DPRIVATE` and put
+the framework `PrivateHeaders` ahead of the SDK's `usr/include`, and the
+generated `.depend.mach_msg.o:102` names the framework copy. Both copies were
+updated and both are synced into the build SDK by `build-libraries.sh`.
+
+**Focused ABI test** (throwaway, `/tmp/mm2test.c`) stubs `mach_msg2_internal`
+and captures all 8 packed arguments. 27/27 assertions pass on **both** selected
+include paths, and they pin the two rules 15.2 could not derive:
+
+| case | `desc_count_and_rcv_name` low half |
+|---|---|
+| scalar, COMPLEX, sending | `base->body.msgh_descriptor_count` (3 in the test) |
+| scalar, COMPLEX, receive-only | 0 |
+| scalar, simple, sending | 0 even with a stale count in the body |
+| **vector**, COMPLEX, sending | **5** -- read through `vecs[0].msgv_data`, *not* the decoy count in the header passed as arg3 |
+| vector, receive-only | 0 |
+
+and that the vector path puts the literal `2, 2` into `mb_ss>>32` / `rs_pr`
+(the vector element counts) while every header field still comes from arg3.
+
+Three assertions failed on the first run. They were a defect in the TEST, not
+the port: this SDK's `MACH_MSGH_BITS(remote, local)` is the legacy 2-arg form
+and does **not** OR in `MACH_MSGH_BITS_COMPLEX`, so the test was never marking
+the message complex. Recorded because it is the §4 failure shape -- a test that
+fails for a reason unrelated to what it claims to measure.
+
+**Measurements after the rebuild** (strict link; `isysroot-cc` no longer
+injects `-undefined dynamic_lookup` for `-dylinker`):
+
+| stage | undefined | binds |
+|---|---|---|
+| after removing the stray `glue.c` shadow (15.4) | 1 | 1 |
+| **after porting the `mach_msg2()` inline** | **0** | **0** |
+
+- `libkernel.a` `mach_msg.o`: 0 references to `_mach_msg2`, 117 `callq` sites
+  to `_mach_msg2_internal`. Only mach undefined left is `_mach_msg2_trap`,
+  supplied by the existing trap-47 veneer.
+- built MH_DYLINKER: `nm -u` = 0; `dyld_info -fixups` shows rebases only, 0
+  binds. `LC_ID_DYLINKER` 1, `LC_UNIXTHREAD` 1, `LC_DYLD_CHAINED_FIXUPS` 1,
+  `LC_LOAD_DYLIB` 0.
+- no regression: `___unw_getcontext` and `___libunwind_Registers_x86_64_jumpto`
+  still defined; `_mach_msg2`, `___dyld_debugger_notification`, `_close$UNIX2003`,
+  `_mmap$UNIX2003`, `_munmap$UNIX2003` all `U=0`.
+
+**Image.** `work/probe_mhdylinker.img` from `work/manifest_mhdylinker_probe.json`,
+kernel pinned to the read-only `assets/kernel.development`:
+536870912 bytes, sha256 `b4ca1273250b05d7745ddf86db99420aa513c89599bd40a0b22b87ff40ad9e46`;
+mkimage `verify OK: 61 files, 75 tree entries`. The staged `/usr/lib/dyld` read
+back **out** of the image is `cdf7acb0762b0f8d9d83118ea145257e9f6a959d10c67ce9225aff277a149ec2`
+-- byte-identical to the built MH_DYLINKER, distinct from the 988088-byte
+`assets/usr/lib/dyld` DYLIB, 0 undefined and 0 binds read back from the image.
+
+### 15.8 First authorized boot produced NO verdict (harness, not kernel) -- see also §15.8b
+
+The gate was launched once, as authorized, after both counts reached zero:
+
+    python3 boot.py --img work/probe_mhdylinker.img --mode full --window 600 \
+        --out work/serial_MHDYLINKER_GATE.log
+
+Gates checked in the **live command line** before boot: no QEMU running;
+exactly one `qemu-system-x86_64`; `-smp 2`; kernel `cpus=1 quiet_boot=1`
+(`boot.py:74` / `boot.py:31`); fresh per-run `vars_full.fd` copied from
+`assets/vars.fd` (`boot.py:63`). Boot command sent at 11.9s.
+
+**Outcome: no serial log was produced, so there is no PASS and no BLOCKED.**
+`boot.py` writes its serial log only on the normal exit path (`boot.py:178`,
+after the print of `serial bytes: N -> path`). That print never happened and
+`work/serial_MHDYLINKER_GATE.log` does not exist. QEMU was terminated by
+`signal 15` from the harness at roughly 2 minutes -- long before the 600s
+kernel budget expired -- so this is **not** the documented firmware
+Shell-prompt-latency or `#UD-at-0xB0000` HARNESS case either; the run was cut
+short externally. The last CPU samples in `work/qemu_full.log` are in firmware
+address range (`RIP=...7ef5844f`, `...7ddf5464`), i.e. the guest was still in
+UEFI when it was killed, and the log contains 0 reset records.
+
+**Nothing about dyld was therefore tested.** The zero-import invariant is
+established statically and conclusively; whether `/bin/echo` now reaches `main`
+is **still unmeasured**. Do not read this run as evidence in either direction.
+Evidence kept from THIS run: `work/qemu_full.log` (4111586 B), `work/vars_full.fd`,
+`work/probe_mhdylinker.img{,.digests}`, plus `/tmp/gate_stdout.log` and the two
+build logs `/tmp/lsk_build.log` and `/tmp/dyld_build.log`. `work/serial_dynamic_PRIOR.log`
+is a copy of a PRE-EXISTING log, kept only for comparison; it is not from this run.
+No QEMU left running; `boot.py` removed its own `serial_full.sock`/`mon_full.sock`.
+
+⚠️ **A PREVIOUS LOG WAS LOST, and "all logs preserved" would be false.**
+`boot.py` writes its QEMU trace to a name derived from the MODE ALONE --
+`qemu_log = os.path.join(work, "qemu_%s.log" % args.mode)` (`boot.py:61`), no pid
+and no timestamp -- passed as `-D` (`boot.py:85`) and truncated every run. This
+run left 4111586 B / 3.9 MB there, whereas the directory inventory taken before
+this run recorded that same path at **52.0 MB**. The earlier `qemu_full.log` was
+therefore **overwritten and NOT preserved**, and it cannot be recovered.
+It is lost because `boot.py` gives
+that log a run-independent name, not because it was deleted here. Any earlier
+analysis that referred to the 52.0 MB `qemu_full.log` no longer has its
+underlying evidence on disk -- `boot.py`'s QEMU log needs a per-run name
+(`qemu_<mode>_<pid>_<ns>.log`, as the RX/shell runs already use) before a boot
+can be said to preserve prior evidence.
+
+### 15.8b Second authorized attempt: PRE-KERNEL FAILURE, still no dyld verdict (2026-10-01)
+
+Run on a durable background service so the ~2-minute command-wrapper limit
+could not kill QEMU -- the suspected cause of the first attempt's truncated
+verdict. Same already-built `work/probe_mhdylinker.img`
+(`b4ca1273250b05d7745ddf86db99420aa513c89599bd40a0b22b87ff40ad9e46`), no
+rebuild, **no `stage_dynamic_libs.sh`, no asset writes**. Verified before
+launch: no QEMU running; exactly one QEMU, `-smp 2`; `cpus=1 quiet_boot=1`;
+fresh per-run `vars_full.fd` copied from pristine `assets/vars.fd`
+(`53dd8277...`). The first attempt's 3.9 MB trace was preserved to
+`work/qemu_full.ATTEMPT1-first.log` before this run truncated the fixed-name path
+again.
+
+This time `boot.py` ran to completion and **wrote a serial log**
+(`work/serial_ATTEMPT2.log`, 6209 bytes), after `kernel boot budget (600s from
+the boot command) expired`, `BOOT_EXIT=1`, `alive-tick lines: 0  panic/trap
+lines: 0`.
+
+**Verdict: NOT a PASS.** `RAVYN-DYNAMIC-USERLAND-OK` does not appear (count 0),
+and the PID-1 banner does not either (count 0).
+
+**It is also not a kernel or dyld verdict, and the reason is decisive.** The
+serial output stops inside the ravynOS EFI loader, before any kernel output
+whatsoever -- there is no `Darwin Kernel` banner, no `bsd_init`, no panic:
+
+    RL: census(NULL) -> 00000000 n=1976
+    RL: LocateHandle -> 00000000 n=1976
+    RL: sweep found 0 volumes
+    RL: no SimpleFS
+    Shell>
+
+The loader came back with `sweep found 0 volumes` / `no SimpleFS`, returned to
+the UEFI shell, and never loaded the kernel. **The MH_DYLINKER never executed**,
+so `mach_msg2()`, dyld's self-rebase and `/bin/echo` were not exercised at all.
+This is a pre-kernel EFI volume-discovery failure, and it is consistent with
+attempt 1 also dying inside UEFI.
+
+Not yet distinguished: whether this is specific to the throwaway probe image or
+a property of the current EFI loader build. The MBR sector is byte-identical to
+the known-good `work/boot_dynamic.img` (both first-512-byte sha256 prefix
+`4b071b2a9d829f86`), so it is **not** a partition-geometry difference. A third
+boot is required to separate them and was NOT authorised, so the question stays
+open.
+
+Logs preserved: `work/serial_ATTEMPT2.log` (6209 B),
+`work/qemu_full.ATTEMPT2-second.log`, `work/qemu_full.ATTEMPT1-first.log`
+(4111586 B), `work/boot_ATTEMPT2_stdout.log`, `work/vars_full.fd`,
+`work/probe_mhdylinker.img{,.digests}`. No QEMU left running; `boot.py` removed
+`serial_full.sock` and `mon_full.sock`. No asset file was written this attempt.
+
+### 15.9 Two gitignored files under `tools/bootlab/assets/` were rewritten
+
+`stage_dynamic_libs.sh`, run to refresh the dylib closure before rebuilding the
+image, wrote:
+
+    assets/usr/lib/libobjc.A.dylib        <- $SDK/usr/lib/libobjc.A.dylib
+    assets/usr/lib/system/libobjc.dylib   <- $SDK/usr/lib/libobjc.A.dylib
+
+Both are **untracked and gitignored**, so `git status -- tools/bootlab/assets`
+is clean and no *tracked* asset was modified -- but they are files under a path
+this workstream's constraints place off-limits, and they are now inside the
+built image. Content is a refresh of the same 1608088-byte SDK artifact (the
+script verifies `_objc_msgSend` is present among 2145 defined symbols), so this
+is very likely a no-op in content terms. **No rollback or restoration has been
+attempted, pending approval.**

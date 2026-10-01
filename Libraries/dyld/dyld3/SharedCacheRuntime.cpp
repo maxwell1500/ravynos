@@ -572,6 +572,36 @@ static long pickCacheASLR(CacheInfo& info)
     return slide;
 }
 
+// __RAVYNOS__: SYSTEM-WIDE CACHE MAPPING IS UNSUPPORTED, and the call is
+// compiled out rather than stubbed.  Full rationale at the end of this block.
+//
+// WHY NOT RENAME.  The only syscall this kernel implements is
+// __shared_region_map_and_slide_2_np (bsd/kern/syscalls.master:848), which is
+// a DIFFERENT contract: 4 arguments (files_count, files, mappings_count,
+// mappings) with different mapping structures, versus this call's 6 arguments
+// (fd, count, mappings, slide, slideInfo, slideInfoSize).  Renaming would also
+// still be an external import through its Libsystem wrapper, so it would not
+// fix the bootstrap requirement.  A stub returning an error would be worse: it
+// would report "unsupported" for a path that cannot be reached anyway, while
+// pretending the gap is handled.
+//
+// WHY IT CANNOT BE REACHED.  The syscall does not exist here --
+// Kernel/xnu/bsd/kern/syscalls.master:664 keeps syscall 438 as
+// `{ int nosys(void); } { old shared_region_map_and_slide_np }`, a retired
+// entry point.  And there is no cache to map: no manifest stages a
+// dyld_shared_cache, and preflightCacheFile() returns false before this point.
+//
+// So the accurate statement is that this feature is unsupported on ravynOS,
+// not emulated.  Compiling the routine out is also what removes the
+// relocation: a function that is not emitted cannot contribute an import.
+// mapCachePrivate() -- the per-process path that needs no syscall -- is
+// untouched, so a cache, if one is ever staged, still loads.
+//
+// __RAVYNOS__ is the correct lever, not TARGET_OS_SIMULATOR: the gap is that
+// this kernel lacks the syscall, a property of ravynOS rather than of a
+// simulator build.  This mirrors the existing __RAVYNOS__ use in
+// findInSharedCacheImage() further down this file.
+#ifndef __RAVYNOS__
 static bool mapCacheSystemWide(const SharedCacheOptions& options, SharedCacheLoadInfo* results)
 {
     CacheInfo info;
@@ -605,6 +635,24 @@ static bool mapCacheSystemWide(const SharedCacheOptions& options, SharedCacheLoa
     }
     return true;
 }
+#endif // !__RAVYNOS__  (system-wide cache mapping unsupported on ravynOS)
+
+#if defined(__RAVYNOS__)
+// __RAVYNOS__: the system-wide path is compiled out above, so loadDyldCache()
+// must not call it.  Reporting an error (rather than "no cache") is deliberate:
+// reaching here means a cache file WAS found, and silently continuing would
+// hide that we cannot map it.  The error text names the real reason so the
+// next person to see it does not go looking for a cache-loading bug.
+static bool mapCacheSystemWide(const SharedCacheOptions& options, SharedCacheLoadInfo* results)
+{
+    (void)options;
+    if ( results->errorMessage == nullptr )
+        results->errorMessage = "system-wide dyld shared cache mapping is not supported on ravynOS "
+                                "(no __shared_region_map_and_slide_np syscall); build a per-process "
+                                "cache or do not stage one";
+    return true;    // true == hasError, per the caller's contract below
+}
+#endif // __RAVYNOS__
 #endif // TARGET_OS_SIMULATOR
 
 static bool mapCachePrivate(const SharedCacheOptions& options, SharedCacheLoadInfo* results)

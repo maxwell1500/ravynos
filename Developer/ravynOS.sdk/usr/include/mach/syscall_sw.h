@@ -122,6 +122,31 @@ kernel_trap(task_name_for_pid,-44,3)
 kernel_trap(task_for_pid,-45,3)
 kernel_trap(pid_for_task,-46,2)
 
+// mach_msg2_trap (trap 47) is LP64/arm64 ONLY on the kernel side: the
+// registration at osfmk/kern/syscall_sw.c is inside
+//   #if defined(__LP64__) || defined(__arm64__)
+//     /* 47 */ MACH_TRAP(mach_msg2_trap, 8, 16, munge_llllllll),
+//   #else
+//     /* 47 */ MACH_TRAP(kern_invalid, 0, 0, NULL), /* Do not take */
+//   #endif
+// so on 32-bit that trap number deliberately does nothing, and the veneer must
+// not exist there either.  The guard matches the kernel exactly rather than
+// advertising a call that the kernel would reject as kern_invalid.
+//
+// This entry was MISSING: the table above jumped -46 straight to -48, so
+// libsyscall had no way to emit a mach_msg2_trap veneer.  That is why
+// mach_msg2() -- which libsyscall's mach_msg.c calls with 8 arguments
+// (Kernel/xnu/libsyscall/mach/mach_msg.c:106,122,135) -- had no user-space
+// definition anywhere in this tree, and why the MH_DYLINKER carried
+// _mach_msg2 as an import.  A bootstrap dylinker must have zero imports.
+//
+// 8 args / 16 arg-bytes is the kernel's munge_llllllll for this trap and is
+// NOT interchangeable with the older -31: that is a different trap with a
+// different ABI, and substituting it would corrupt the call rather than fail.
+// 8 is therefore the only correct value here.
+#if defined(__LP64__)
+kernel_trap(mach_msg2_trap,-47,8)
+#endif
 #if defined(__LP64__)
 kernel_trap(macx_swapon,-48, 4)
 kernel_trap(macx_swapoff,-49, 2)

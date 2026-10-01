@@ -122,6 +122,22 @@ kernel_trap(task_name_for_pid,-44,3)
 kernel_trap(task_for_pid,-45,3)
 kernel_trap(pid_for_task,-46,2)
 
+// This file and Developer/ravynOS.sdk/usr/include/mach/syscall_sw.h are two
+// copies of the same header that share an include guard, so WHICHER one wins
+// depends on include order.  The -47 entry therefore has to exist in BOTH:
+// adding it to only one is why the mach_msg2_trap veneer silently failed to
+// appear the first time (the object still emitted _macx_swapon at -48 and no
+// _mach_msg2_trap at all).  Verified by assembling both copies and diffing
+// the emitted symbol lists.
+//
+// LP64-only, matching the kernel registration in osfmk/kern/syscall_sw.c:
+// on 32-bit that trap number is kern_invalid and must not be advertised.
+// 8 args is the kernel's munge_llllllll for trap 47; the older -31 has a
+// different ABI and is not a substitute.
+#if defined(__LP64__)
+kernel_trap(mach_msg2_trap,-47,8)
+#endif
+
 #if defined(__LP64__)
 kernel_trap(macx_swapon,-48, 4)
 kernel_trap(macx_swapoff,-49, 2)
