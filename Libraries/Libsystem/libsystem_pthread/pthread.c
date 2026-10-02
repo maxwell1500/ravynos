@@ -1654,7 +1654,7 @@ _pthread_set_self_dyld(void)
 }
 #endif // VARIANT_DYLD
 
-#if VARIANT_STATIC
+#if VARIANT_STATIC && !VARIANT_DYLD
 // Minimal main-thread bring-up for a statically linked ravynOS program.
 // Called by tools/bootlab/static-start.c before main(); see the comment on
 // _main_thread_static for why something like this has to exist.
@@ -1707,7 +1707,7 @@ __pthread_static_init(void)
 	// this whole path exists to issue.
 	_pthread_set_self(p);
 }
-#endif // VARIANT_STATIC
+#endif // VARIANT_STATIC && !VARIANT_DYLD
 
 PTHREAD_ALWAYS_INLINE
 static inline void
@@ -1928,12 +1928,20 @@ __pthread_init(const struct _libpthread_functions *pthread_funcs,
 	host_priority_info_data_t priority_info;
 	host_t host = mach_host_self();
 	kr = host_info(host, flavor, (host_info_t)&priority_info, &count);
-	if (kr != KERN_SUCCESS) {
-		PTHREAD_INTERNAL_CRASH(kr, "host_info() failed");
-	} else {
+	if (kr == KERN_SUCCESS) {
 		default_priority = (uint8_t)priority_info.user_priority;
 		min_priority = (uint8_t)priority_info.minimum_priority;
 		max_priority = (uint8_t)priority_info.maximum_priority;
+	} else {
+		// The priority range is only used to clamp the defaults handed to
+		// new threads, so a kernel that does not implement
+		// HOST_PRIORITY_INFO must not be fatal here. Fall back to the
+		// same values the kernel itself reports for that flavor.
+		default_priority = 31;	/* BASEPRI_DEFAULT */
+		min_priority = 0;	/* MINPRI_USER */
+		max_priority = 79;	/* MAXPRI_RESERVED */
+		_simple_asl_log(ASL_LEVEL_ERR, "pthread",
+				"host_info(HOST_PRIORITY_INFO) failed, using default priority range");
 	}
 	mach_port_deallocate(mach_task_self(), host);
 

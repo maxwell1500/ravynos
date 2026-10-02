@@ -28,6 +28,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include <TargetConditionals.h>
 
 #if __DARWIN_UNIX03
@@ -42,6 +43,45 @@ mach_port_t	clock_port = MACH_PORT_NULL;
 
 void _init_clock_port(void);
 
+/*
+ * ravynOS: host_get_clock_service is implemented
+ * (osfmk/kern/clock_oldops.c:253) and declared
+ * (osfmk/mach/mach_host.defs:159) in the kernel, but it has no entry in the
+ * mig_buckets dispatch table built by mig_init(), so the trap the userland
+ * stub issues comes back as failure ("bogus kernel message, id=206").
+ *
+ * The clock service is OPTIONAL for libc startup, and abort() over an
+ * optional service killed every dynamically linked process inside
+ * _libc_initializer -- before main() -- over something the process may never
+ * ask for.  The two consumers of clock_port are clock_get_time()/
+ * clock_get_attributes(), which report their own failure, and nanosleep(),
+ * which already turns a clock_get_time() failure into EINVAL and -1
+ * (below).  So the correct response is to report it and carry on with an
+ * unusable clock, not to kill the process.
+ *
+ * stdio is not initialized yet at this point in _libc_initializer, so this
+ * uses raw write(2) rather than fprintf().
+ */
+static void
+__clock_port_init_warn(const char *what, kern_return_t kr)
+{
+	static const char pre[] = "libsystem_c: _init_clock_port: ";
+	static const char post[] = " failed; clock-dependent calls will fail. kr=0x";
+	char tail[8 + 1];		/* max uint32 hex digits + newline */
+	unsigned int v = (unsigned int)kr;
+	size_t i = sizeof(tail);
+
+	tail[--i] = '\n';
+	do {
+		tail[--i] = "0123456789abcdef"[v & 0xf];
+		v >>= 4;
+	} while (v != 0);
+	(void)write(STDERR_FILENO, pre, sizeof(pre) - 1);
+	(void)write(STDERR_FILENO, what, strlen(what));
+	(void)write(STDERR_FILENO, post, sizeof(post) - 1);
+	(void)write(STDERR_FILENO, &tail[i], sizeof(tail) - i);
+}
+
 void _init_clock_port(void) {
 	kern_return_t kr;
 	mach_port_t host = mach_host_self();
@@ -49,12 +89,22 @@ void _init_clock_port(void) {
 	/* Get the clock service port for nanosleep */
 	kr = host_get_clock_service(host, SYSTEM_CLOCK, &clock_port);
 	if (kr != KERN_SUCCESS) {
-		abort();
+		/* Not fatal: see __clock_port_init_warn() above.  Force the port
+		 * back to MACH_PORT_NULL rather than trusting the out parameter
+		 * of a failed MIG call. */
+		clock_port = MACH_PORT_NULL;
+		__clock_port_init_warn("host_get_clock_service()", kr);
 	}
 	
 	kr = semaphore_create(mach_task_self(), &clock_sem, SYNC_POLICY_FIFO, 0);
 	if (kr != KERN_SUCCESS) {
-		abort();
+		/* Same reasoning: clock_sem is only consumed by nanosleep(), and
+		 * a NULL clock_sem makes that wait fail rather than hang.  The
+		 * static-libc path already leaves both globals MACH_PORT_NULL by
+		 * omitting this function entirely (sys/_libc_init_static.c), so
+		 * this is an accepted state on ravynOS, not a new one. */
+		clock_sem = MACH_PORT_NULL;
+		__clock_port_init_warn("semaphore_create()", kr);
 	}
 	mach_port_deallocate(mach_task_self(), host);
 }
@@ -62,6 +112,7 @@ void _init_clock_port(void) {
 extern semaphore_t clock_sem;
 extern mach_port_t clock_port;
 #endif /* !BUILDING_VARIANT */
+
 
 extern int __unix_conforming;
 #ifdef VARIANT_CANCELABLE

@@ -147,7 +147,9 @@ SRCS += \
 
 # custom syscall wrappers
 SRCS += \
-	custom/errno.c
+	custom/errno.c \
+	custom/symbol_variants.c \
+	custom/ml_fatal_trap.c
 
 # These Skywalk sources are all empty in the public xnu
 SRCS += \
@@ -317,7 +319,7 @@ ${.OBJDIR}/libsyscalls.a: ${XNU}/bsd/kern/syscalls.master copy_defs
 	${XNU}/libsyscall/xcodescripts/compile-syscalls.pl \
 	  ${.OBJDIR}/sys/stubs.list ${.TARGET}
 
-${.OBJDIR}/libmach.a: ${MACH_DEFS}
+${.OBJDIR}/libmach.a: ${MACH_DEFS} ${.OBJDIR}/obj/task_restartableUser.c
 	mkdir -p ${.OBJDIR}/obj/mig_hdr/include/mach \
 	  ${.OBJDIR}/obj/mig_hdr/include/servers \
 	  ${.OBJDIR}/obj/internal_hdr/include/mach \
@@ -353,6 +355,41 @@ ${.OBJDIR}/libmach.a: ${MACH_DEFS}
 	    done; \
 	done; \
 	${AR} rcs ${.TARGET} $$objs
+
+# restartable.defs (subsystem task_restartable, msgh base 8000) has the same
+# shape as the five above -- two out-of-line MIG client traps -- but unlike them
+# libsyscall has no hand-written wrapper for it, so it is neither in
+# mach_install_mig.sh's MIGS_INTERNAL list nor in its public MIGS list, and no
+# *User.c was ever generated for it anywhere in the tree. The kernel implements
+# the subsystem (restartable_server.c declares 8000-8002, 2 wired), and
+# mach/restartable.defs is installed in the SDK, so the interface is declared
+# publicly with nothing on the other side of it. libobjc imports both routines
+# from cache_init (Libraries/objc4/runtime/objc-cache.mm, HAVE_TASK_RESTARTABLE_
+# RANGES) and dyld failed the whole process on the first one.
+#
+# The stubs go in obj/ (the public pass directory) rather than obj/internal:
+# this defs carries no UserPrefix, so both passes would emit identical
+# symbols, and the obj/internal pass is reserved for the `_kernelrpc_*` twins
+# the hand-written trap wrappers call. obj/ is already globbed by the libmach.a
+# rule above, so naming the .c there is all that is needed to get it into
+# libkernel.a and hence libsystem_kernel.dylib.
+#
+# -I${XNU}/osfmk is required (and only here): restartable.defs pulls in
+# mach_debug/mach_debug_types.defs, which the SDK's mach tree does not carry --
+# osfmk/mach_debug/mach_debug_types.defs is its only copy. The rest of the
+# includes still resolve out of the SDK first, so the SDK mach tree keeps
+# winning; the osfmk root is searched only for the include that the SDK cannot
+# answer. kern/restartable.h comes from the same root.
+# mig names the .c after the SUBSYSTEM, not the .defs (restartable.defs
+# declares `subsystem task_restartable 8000`), and writes it into the current
+# directory -- not next to -header. The rule has to cd into obj/ for it to land
+# where the libmach.a glob below looks.
+${.OBJDIR}/obj/task_restartableUser.c: ${XNU}/libsyscall/mach/restartable.defs
+	mkdir -p ${.OBJDIR}/obj
+	cd ${.OBJDIR}/obj && \
+	  ${MIG} ${MIG_FLAGS} -I${XNU}/osfmk \
+	    -header restartable.h ${.ALLSRC}
+
 
 .for def in thread_act.defs mach_port.defs vm_map.defs mach_vm.defs
 ${.OBJDIR}/mach/${def:R}_internal.h: ${XNU}/libsyscall/mach/${def}

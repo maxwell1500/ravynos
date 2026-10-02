@@ -1807,12 +1807,17 @@ so `mach_msg2()`, dyld's self-rebase and `/bin/echo` were not exercised at all.
 This is a pre-kernel EFI volume-discovery failure, and it is consistent with
 attempt 1 also dying inside UEFI.
 
-Not yet distinguished: whether this is specific to the throwaway probe image or
-a property of the current EFI loader build. The MBR sector is byte-identical to
-the known-good `work/boot_dynamic.img` (both first-512-byte sha256 prefix
-`4b071b2a9d829f86`), so it is **not** a partition-geometry difference. A third
-boot is required to separate them and was NOT authorised, so the question stays
-open.
+**SUPERSEDED by sec. 15.10.** The open question below is now answered: it was
+neither the throwaway probe image nor the firmware. The image carried a stale
+loader binary, and the "1976 handles / census" measurements are artifacts of
+that retired build. Do not re-derive a firmware anomaly from this log.
+
+> (originally: "Not yet distinguished: whether this is specific to the throwaway
+> probe image or a property of the current EFI loader build. The MBR sector is
+> byte-identical to the known-good `work/boot_dynamic.img` (both first-512-byte
+> sha256 prefix `4b071b2a9d829f86`), so it is **not** a partition-geometry
+> difference. A third boot is required to separate them and was NOT authorised,
+> so the question stays open.")
 
 Logs preserved: `work/serial_ATTEMPT2.log` (6209 B),
 `work/qemu_full.ATTEMPT2-second.log`, `work/qemu_full.ATTEMPT1-first.log`
@@ -1835,3 +1840,733 @@ built image. Content is a refresh of the same 1608088-byte SDK artifact (the
 script verifies `_objc_msgSend` is present among 2145 defined symbols), so this
 is very likely a no-op in content terms. **No rollback or restoration has been
 attempted, pending approval.**
+
+### 15.10 Root cause of the sec. 15.8b pre-kernel failure: a stale image binary (2026-10-01)
+
+`serial_ATTEMPT2.log` is **not reproducible from current source**, and the cause
+is the IMAGE, not the loader code and not the firmware. Three independent
+pieces of evidence, each checked offline:
+
+1. **Which binary ran.** `work/probe_mhdylinker.img.digests` records
+   `System/Library/CoreServices/BOOT.EFI` =
+   `a87c7faa098c4c5bc449abc39cb2d8e0ae7255c2b2c8c982b1d15e407705ea5d`, which is
+   byte-identical to `tools/bootlab/assets/boot.efi` (177152 B, mtime
+   2026-09-30 05:37). The log's line 17 prints `size=0x000000000002c000`;
+   parsing the PE header of each loader copy gives `assets/boot.efi`
+   SizeOfImage `0x2c000`, `assets/BOOTX64.EFI` `0x17e2c0`, and the current
+   `work/efi/BOOTX64.EFI` `0x2d000`. Only `assets/boot.efi` matches.
+2. **That binary predates the current code.** `assets/boot.efi` contains the
+   strings `census(NULL)`, `sweep found` and `no SimpleFS`, and no `serial=`
+   at all. Current `loader.c` contains none of the census/sweep code (nor do
+   commits `ad52635ab2` or `27e1f4b7e9`): volume discovery today is a single
+   `HandleProtocol(li->DeviceHandle, SimpleFS)`.
+3. **It could not have succeeded.** `assets/boot.efi` contains the
+   EFI_LOADED_IMAGE GUID at `0x141c` but the
+   EFI_SIMPLE_FILE_SYSTEM_PROTOCOL_GUID is **ABSENT** — neither the correct
+   `964E5B22-...-8E39-...` form nor the old buggy `8E3F` form. The current
+   `work/efi/BOOTX64.EFI` has it correctly at `0x243c`. A binary with no
+   SimpleFS GUID in its packed bytes cannot return that protocol, which is
+   exactly `HP(SimpleFS)=00000003` followed by `RL: no SimpleFS`.
+
+**Control proving the firmware is fine.** `work/serial_applefree.full.log`, same
+OVMF build and same pristine `vars.fd`, shows the *identical* `DeviceHandle`
+`0x000000007e5a8d18` returning `HP(SimpleFS)=00000000` with
+`fs=0x000000007e479030`, then `RL: opened kernel` and a full boot. Same handle,
+same firmware, different binary. So there is **no current firmware failure**,
+and the "measured firmware anomaly" prose that stood in the `loader.c` header
+has been corrected.
+
+**The defect was in the manifest.** `manifest_dynamic.json` staged
+`System/Library/CoreServices/BOOT.EFI` from `{"asset": "boot.efi"}` and
+`EFI/BOOT/BOOTX64.EFI` from `{"asset": "BOOTX64.EFI"}` — both gitignored
+copies under `assets/`. The second was not even our loader (SizeOfImage
+`0x17e2c0`, 1.5 MB, no `RL:` strings). `manifest_control.json` and
+`manifest_applefree.json` already staged `{"file": "work/efi/BOOTX64.EFI"}`,
+the live build. Both entries in `manifest_dynamic.json` now use that `file:`
+key, so the dynamic gate stages the loader that `build_applefree.sh` actually
+produced. `manifest.json` was not touched.
+
+**STILL UNVERIFIED:** whether a dynamic-gate image on the current loader now
+reaches the kernel, and whether the MH_DYLINKER ever executes. That needs the
+next authorised QEMU boot, which was withheld here. Everything above is
+offline-verified from PE bytes, image digests and preserved logs; no QEMU was
+run, no file under `assets/` was written, and no existing image was
+overwritten.
+
+### 15.11 libslc_builder: CXXSTD none -> c++20 (2026-10-01)
+
+Reported by the independent build-error workstream and fixed there. Recorded
+here so the next session does not re-derive it.
+
+**The error.** `Libraries/dyld/libslc_builder` failed to compile on
+`Libraries/dyld/dyld3/ClosureBuilder.h:286`:
+
+    std::optional<uint64_t>    methodNameVMOffset;
+
+`std::optional` is a C++17 type. The build was compiling as pre-C++17, so the
+name was unknown.
+
+**The fix.** One line in `Libraries/dyld/libslc_builder/Makefile`:
+
+    -CXXSTD = none
+    +CXXSTD = c++20
+
+`c++20` rather than the bare minimum `c++17`, which is what the header alone
+would require. That choice was made by the build-error workstream; this section
+does not claim an audited reason for it, because no C++20-only construct was
+found in the target's own sources when checked here.
+
+**Verified.** The full `libslc_builder` target builds: `ClosureBuilder.o`
+compiles, and the complete archive is produced at 35,354,288 bytes with 329
+warnings and **0 errors**. The direct `bmake` invocation needed
+`AR=/usr/bin/ar ARFLAGS=-crs`, because Darwin's `ar` and bmake's defaults
+disagree; that is a host-tooling detail, not a source problem.
+
+**NOT verified, and stated rather than glossed:** this covers the full
+`libslc_builder` target **only**. There was no full dyld link, so nothing here
+shows that `libslc_builder` links cleanly against the rest of dyld, and no
+QEMU run means nothing here shows a shared cache is produced or consumed. Those
+remain open and belong to whoever runs the dyld link.
+
+No Makefile or other source file was modified in this workstream; this section
+is documentation of work done elsewhere.
+
+### 15.12 The full dyld target builds (2026-10-01)
+
+Closes the "no full dyld link" gap left open by 15.11. One new host-tooling
+failure, one symlink, and the whole target now links.
+
+**The error, reproduced.** With the 15.11 fix in place the full target got
+past `libslc_builder` and died in the last SUBDIR, `chroot_util`:
+
+    /Users/max/Projects/build/Tools/bin/llvm-objcopy --only-keep-debug chroot_util.full chroot_util.debug
+    bmake[1]: exec(/Users/max/Projects/build/Tools/bin/llvm-objcopy): No such file or directory
+    *** Error code 1
+
+The shape is misleading and worth stating plainly: `chroot_util.cpp` compiled
+clean and `chroot_util` **had already linked**. The failure is the
+`${OBJCOPY} --only-keep-debug` step that runs last, so a reader skimming for
+link errors will find none and conclude the link is broken. It is not.
+
+**Root cause.** `BSD/share/mk/sys.mk:266` sets `OBJCOPY ?= ${TOOLS}/llvm-objcopy`,
+and `bsd.prog.mk:205` / `bsd.lib.mk:275` run it as the final step of a
+successful link. `TOOLS` is `$BUILD/Tools/bin`, which `build-libraries.sh`
+assembles as a small directory of symlinks. It carried `llvm-libtool-darwin`
+and `xcrun` -- both documented there for exactly this reason -- but **not**
+`llvm-objcopy`. The host Command Line Tools ship `llvm-objdump` and no
+`llvm-objcopy`, so `xcrun -f` cannot find one, while the peer-built ravynOS
+toolchain has had one all along:
+
+    $BUILD/Developer/Platforms/ravynOS.platform/Developer/Toolchains/Default.xctoolchain/usr/bin/llvm-objcopy
+    4804560 bytes, LLVM 17.0.6
+
+**The fix.** One symlink in the existing `TOOLS_DIR` block of
+`tools/bootlab/build-libraries.sh` (+13 lines: 11 comment lines recording the
+above, 2 lines of symlink), next to the two links already there. Not a source
+change, not an mk-file change, and not a change to any dyld source: this is
+the same class of gap as `llvm-libtool-darwin`, one tool later in the build.
+
+**The full target, and the command that builds it.** The existing wrapper is
+the only documented bmake path, because `-m BSD/share/mk` and the
+`isysroot-cc` / `macar` / `xcrun`-shim environment it sets up are all
+load-bearing:
+
+    tools/bootlab/build-libraries.sh dyld > /tmp/full_dyld_build2.log 2>&1
+
+The `dyld` argument is the whole component, not a subset: the top-level
+Libraries/dyld bmake builds `libdyld.dylib` **and** descends into
+`SUBDIR = dyld libdsc libslc_builder chroot_util`. The direct-`bmake` route
+15.11 used needed explicit `AR=/usr/bin/ar ARFLAGS=-crs` precisely because it
+bypasses this wrapper, which already exports `AR=$HERE/macar`.
+
+**Result: exit 0, 0 errors, all four SUBDIRs reached.** Six artifacts, all
+rebuilt in one run:
+
+| artifact | bytes |
+|---|---|
+| `Libraries/dyld/libdyld.dylib` | 988,088 |
+| `Libraries/dyld/libdyld.a` | 4,167,832 |
+| `Libraries/dyld/dyld/dyld` (MH_DYLINKER) | 1,725,768 |
+| `Libraries/dyld/libdsc/libdsc.a` | 1,937,336 |
+| `Libraries/dyld/libslc_builder/libslc_builder.a` | 35,354,288 |
+| `Libraries/dyld/chroot_util/chroot_util` | 308,500 |
+
+`libslc_builder.a` lands on exactly the 35,354,288 bytes 15.11 recorded, so
+the `CXXSTD` change did not perturb it. `chroot_util` is the first successful
+link of that target and is a real binary, not just a link artifact: it is
+MH_EXEC and run from the tree it prints `No -chroot <dir>`, exiting 255
+(its usage error -- it was invoked with no `-chroot` argument).
+
+**Reproducible.** The identical command was run a second time: exit 0, 0
+errors, the same 32 compiler invocations, and the MH_DYLINKER byte-identical
+across runs:
+
+    sha256 0791f82781b268a9791d6e37fe291d8daccfed0ffb234c19f1ec4fda2ad295b9
+
+**The 15.7 zero-import invariant still holds** on the freshly rebuilt
+MH_DYLINKER, so this rebuild did not regress the loader the gate depends on:
+
+| check | result |
+|---|---|
+| `nm -u` | 0 |
+| chained BIND fixups | 0 |
+| `LC_ID_DYLINKER` / `LC_UNIXTHREAD` | 1 / 1 |
+| `LC_DYLD_CHAINED_FIXUPS` | 1 |
+| `LC_LOAD_DYLIB` | 0 |
+| filetype | `MH_MAGIC_64 X86_64 ALL 0x00 DYLINKER 15` |
+
+**What this does and does not establish. Read the limits before citing it.**
+
+- **Build only.** This is a link-and-static-analysis result. No QEMU was run
+  and **no runtime or boot behaviour is claimed** -- not for dyld, not for
+  `/bin/echo`, not for a shared cache. A target that links is not a target
+  that works.
+- **The manifest blocker is now RESOLVED and the staged image is verified
+  offline.** (This paragraph was written before the manifest was corrected and
+  has been updated against the verified result; the correction and the
+  validation were done by another workstream, not by this build task.)
+  `manifest_dynamic.json` no longer stages `usr/lib/dyld` from
+  `{"asset": "usr/lib/dyld"}` -- the 988,088-byte DYLIB that per 15.6 the kernel
+  rejects with `OS_REASON_EXEC` / `EXEC_EXIT_REASON_BAD_MACHO` before dyld runs.
+  It now stages it from the built loader via the read-only `"file"` key:
+
+      { "path": "usr/lib/dyld", "file": "../../Libraries/dyld/dyld/dyld", ... }
+
+  which is the artifact built in this section, and both EFI paths were moved off
+  the stale `assets/` copies at the same time (the 15.10 cause).
+
+  `python3 mkimage.py work/dyldgate_20261001_1209.img --manifest
+  manifest_dynamic.json` then returned `verify OK: 61 files, 75 tree entries`,
+  exit 0, and the bytes read back **out** of the finished image with
+  `fat32img.Fat32Img.read_path` are:
+
+  | check | result |
+  |---|---|
+  | `/usr/lib/dyld` bytes / sha256 | 1,725,768 / `0791f827...` -- **identical to the `Libraries/dyld/dyld/dyld` built above** |
+  | staged dylinker filetype | MH_DYLINKER, `LC_ID_DYLINKER=/usr/lib/dyld`, `LC_UNIXTHREAD` 1, `LC_DYLD_CHAINED_FIXUPS` 1, `LC_LOAD_DYLIB` 0, `nm -u` 0, chained binds 0 |
+  | both EFI paths | the live `work/efi/BOOTX64.EFI` (sha256 `4f7c8da5...`) |
+  | negative controls | `assets/usr/lib/dyld` (`d3749b24`, DYLIB) and `assets/boot.efi` (`a87c7faa`) **absent** from the image |
+
+  The zero-import invariant therefore holds not only on the build product but
+  on the bytes actually inside the image. That image was then **deleted**; the
+  evidence is the preserved record
+  `tools/bootlab/work/KEEP_dyldgate_20261001_offline_proof.txt` (per-file
+  sha256 list plus the read-back measurements), not a retained `.img`.
+
+  **None of this is a runtime result.** It is staging and static structure only.
+  It does not show the kernel accepting the image, dyld executing, or
+  `/bin/echo` reaching `main`; the next bullet is why that cannot be claimed.
+- **A third boot WAS explicitly authorized and run on 2026-10-01. Outcome:
+  still NO verdict, but the failure boundary moved a long way downstream.**
+  The user explicitly authorized exactly one controlled QEMU boot for this
+  gate; the earlier "no third boot" constraint was superseded by that
+  authorization and by nothing else. The run used a uniquely named image
+  built fresh for it, so no result below depends on a reused artifact:
+
+      python3 mkimage.py work/dyldgate_G1_20261001_125254.img \
+          --manifest manifest_dynamic.json \
+          --kernel work/stripped_kernel.development
+      python3 /tmp/dyldgate_G1_20261001_125254/boot.py \
+          --img .../work/dyldgate_G1_20261001_125254.img --mode full \
+          --window 600 --out .../work/serial_dyldgate_G1_20261001_125254.log
+
+  `run_dynamic_gate.sh` was deliberately **not** used: lines 88-103 always run
+  `stage_dynamic_libs.sh`, which writes the protected gitignored
+  `assets/usr/lib/libobjc.A.dylib` and `assets/usr/lib/system/libobjc.dylib`,
+  and it hardcodes `work/boot_dynamic.img` / `work/serial_dynamic.log`. `boot.py`
+  itself was **not edited**; a byte-identical copy (sha256 `e652aa57...`) was
+  run from a temp dir holding a symlink to `assets` and a fresh `work/`, because
+  `boot.py` resolves both relative to its own directory (`boot.py:52`, `:63`).
+  That is what kept this run from truncating `work/qemu_full.log` a third time
+  — the exact data loss documented at 15.8b.
+
+  **Staging, re-verified against the live loader (an audit claimed the loader
+  had drifted; it had not).** `work/efi/BOOTX64.EFI` is still
+  sha256 `4f7c8da567574af6fbe02e55a4b19d161c0fbb6b0a2ebf341ec4f3481d0a6897`,
+  mtime `Oct 1 11:02`, which **predates** the 12:12 offline proof — a file
+  cannot have changed after a record that postdates it. Three consecutive
+  reads returned the same digest. Provenance is
+  `tools/efiloader/src/loader.c` (`d7731bf9...`, 11:01) →
+  `work/efi/loader.FULL.obj` (`ca785303...`, 11:02) →
+  `work/efi/BOOTX64.EFI`, i.e. the **full** variant, distinct from
+  `BOOTX64.TRAMPOLINE.EFI` (`0caf37f7...`). Bytes read back **out** of the
+  finished image match at both EFI paths, and the stale `assets/boot.efi`
+  (`a87c7faa...`) and the 988,088-byte `assets/usr/lib/dyld` DYLIB
+  (`d3749b24...`) are both **absent**. `mkimage` reported
+  `verify OK: 61 files, 75 tree entries`, exit 0.
+
+  | attempt | outcome | verdict |
+  |---|---|---|
+  | 1 (15.8) | boot budget expired, `boot.py` wrote no serial log, so the run's boundary and marker count are **unrecorded** | none -- harness failure, dyld untested |
+  | 2 (15.8b) | ran to completion, stopped inside the ravynOS EFI loader at `sweep found 0 volumes` / `no SimpleFS`, returned to `Shell>` | none -- pre-kernel failure, MH_DYLINKER never executed |
+  | 3 (this one) | `RAVYN-DYNAMIC-USERLAND-OK` **unrecorded** (serial log never written); trace shows `CPL=0`/`CPL=3` | none -- see below |
+
+  **Why still no verdict, stated precisely so it is not mistaken for one.**
+  `boot.py` accumulates the serial stream in memory and writes the log only on
+  its normal exit path (`boot.py:175-176`). The harness process was SIGTERM'd
+  at 13:01:48 and never reached that write, so
+  `work/serial_dyldgate_G1_20261001_125254.log` **does not exist**. There is no
+  serial evidence for this run anywhere; it was not lost by being overwritten,
+  it was never written. **No runtime acceptance is claimed.** QEMU ran 266s of
+  the 600s kernel budget (44%), so this is not budget exhaustion.
+
+  **What the surviving QEMU `-d cpu_reset,int` trace does establish** (kept at
+  `work/KEEP_qemu_trace_dyldgate_G1_20261001_125254.log`, 21,312,822 B, plus
+  `work/KEEP_vars_used_dyldgate_G1_20261001_125254.fd`). This is a
+  `-d cpu_reset,int` trace: it records **raw addresses and register state
+  only**, with no symbol names and no process or image attribution. Only what
+  the raw records show is claimed below:
+  - Kernel-mode execution is reached and sustained: records at `CPL=0` with
+    kernel-range RIPs (`0xffffff80...`) appear from trace line 67,232 onward.
+    This run is the first with trace evidence of `CPL=0` and `CPL=3`. Attempt 2
+    is known to have stopped in EFI, before handoff; attempt 1 has no serial
+    record at all, so its boundary is unknown.
+  - **Execution at `CPL=3` occurs**: 226 records carry `CPL=3`, with RIPs from
+    `0x000000010561f1d0` to `0x00000001056dd2d6`. That span is `0xBE106`
+    (778,502 bytes), which **crosses ~190 distinct 4 KiB pages** but lies wholly
+    inside the single 1 MiB-aligned region `0x105600000`–`0x1056fffff`. These
+    records run from about 65% through the trace to 99.9% of it.
+  - `CR2` records non-zero fault addresses in that same low address range
+    alongside the `CPL=3` records.
+  - The **final raw record** is line 350,852: `v=03 e=0000 i=1 cpl=0` at
+    `IP=0008:ffffff8000249319`, followed by a register dump ending
+    `RIP=ffffff8000249319 ... CPL=0`. This is a **kernel-mode
+    breakpoint/debug event**, and it is the only `v=03` in the whole trace.
+    Its cause, and its relationship to the SIGTERM at 13:01:48, are **unknown**.
+
+  **What that does NOT establish, and must not be read as establishing it.**
+  Whether `/bin/echo` reached `main` is still **unmeasured**: the required
+  marker was never seen, because the serial log was never written. The 226
+  `CPL=3` records prove only that code executed at user privilege level; the
+  trace carries **no process identity, no image base and no mapping
+  information**, so nothing in it can attribute that execution to
+  `/bin/echo`, to the static exec-runner, or to any other staged binary.
+  Consequently it establishes **nothing** about dyld being mapped, the
+  libSystem closure resolving, or `main()` executing. An earlier draft of this
+  bullet named `_unix_syscall64`, `_hndl_unix_scall64`,
+  `_build_userspace_exit_reason`, `_DebuggerTrapWithState` and
+  `_serial_putc_options` as the final kernel activity; **those claims are
+  withdrawn** — they came from resolving raw RIPs through an `nm` symbol table
+  under an **assumed `vm_kernel_slide == 0`**, which was never verified, and the
+  trace itself contains none of those names (0 occurrences of each). An
+  unverified slide makes such attribution unsound. Likewise the claim that the
+  `CPL=3` addresses "include the exec-runner's own text" is withdrawn: nothing
+  identifies which image, if any, was mapped there.
+
+  The next run must therefore be instrumented so that serial output is written
+  **incrementally**, not accumulated in memory: `boot.py`'s buffer-then-write
+  design (`boot.py:175-176`) is what destroyed this run's only real evidence,
+  and it is the single highest-value fix before another attempt.
+
+  The zero-import invariant remains verified statically and is unchanged. The
+  accepted-verdict criteria in 15.7 are still **unmet**: `/tmp/zeroimport.sh`
+  plus one gate PASS remains the acceptance, and there is still no PASS.
+- **A fourth boot WAS authorized and run on 2026-10-01, and it produced the
+  first attributed failure boundary in this gate. Outcome: `DYNAMIC GATE:
+  BLOCKED` (gate exit 1). Full detail in **15.13**; the summary is here
+  because it corrects the conclusion the attempt-3 bullets above leave
+  open.** 15.12's last word above was "the next run must be instrumented so
+  that serial output is written incrementally" -- that is exactly what was
+  done, and it is why this run has a log at all. The protected `boot.py`
+  (`e652aa57...`) was **not** edited; a copy in an isolated temp dir
+  (`2cb126ff...`) was patched to open the log **before** `Popen` with
+  `buffering=0`, write every chunk from both recv sites on arrival, keep the
+  in-memory `output` mirror that gates the `Shell>` boot command, and drop
+  the final `open(out,"wb")` truncating rewrite -- the rewrite that destroyed
+  attempt 3's evidence. It was validated first against a fake-QEMU `PATH`
+  shim, including a `SIGKILL` case (unpatched `boot.py` reads `live=0 bytes`
+  under the same test, so the test is red-capable).
+
+  **Provenance.** Fresh unique image `dyldgate_G2_20261001_133604.img`
+  (536,870,912 B) built by the **unchanged** repo `mkimage.py` (`7d95c429...`)
+  run from `tools/bootlab` with `--manifest manifest_dynamic.json`, an
+  absolute `--kernel`, no `--gpt-conform`; `verify OK: 61 files, 75 tree
+  entries`, exit 0. Bytes read back **out** of the image match their sources:
+  both EFI paths `4f7c8da5...`, the MH_DYLINKER `/usr/lib/dyld`
+  `0791f827...` (`LC_ID_DYLINKER name = /usr/lib/dyld`, `LC_UNIXTHREAD` 1,
+  `LC_DYLD_CHAINED_FIXUPS` 1, `LC_LOAD_DYLIB` 0, `nm -u` 0), `sbin/launchd`
+  `61b16d1b...`, the kernel `e8895819...`, `/bin/echo` `d2d4d70e...`; the
+  stale `assets/usr/lib/dyld` DYLIB and `assets/boot.efi` are absent.
+  macOS has no `setsid(1)`, so the runner was started through a 20-line
+  `launch_detached.py` calling `Popen(..., start_new_session=True)`, giving
+  it its own session (`PID 3890 PGID 3890 SID 3890`) so no external
+  process-group signal can take the log writer down again. QEMU count was 0
+  before and exactly 1 after (PID 3893); one launch, no retry.
+
+  **The full 600 s kernel budget was spent**, from the boot command at
+  12.84 s to expiry at 612.95 s, runner exit 612.97 s, **QEMU exit code 0**.
+  The failure itself happened early and is not budget exhaustion: 38,089
+  serial bytes, equal captured and on disk, sha256 `95cb7c35...`. Incremental
+  capture is proven at runtime, not only in the shim -- the t=30.00 s
+  heartbeat reads `5403 bytes captured, 5403 on disk` while the runner was
+  still alive.
+
+  **Verbatim fault signature** (`KEEP_serial_dyldgate_G2_20261001_133604.log`,
+  lines 568-576, ordering verified 521 < 571 < 576 < 590):
+
+      === RAVYNOS DYNAMIC-USERLAND GATE: execve /bin/echo ===      (line 521)
+      DYLD-LOAD-BASE: 0x10e2bd000                                  (line 540)
+      CHAINPROBE: block FIRED, starts=0x10e3cd020 seg_count=4 ...   (line 546)
+      CHAINPROBE: 0 of 0 bind slots still unbound after the fixup pass (line 550)
+      dyld: Library not loaded: /usr/lib/libSystem.B.dylib          (line 568)
+        Referenced from: /bin/echo
+        Reason: no suitable image found.  Did find:
+          /usr/lib/libSystem.B.dylib: malformed mach-o image: dyld chained fixups info underruns __LINKEDIT
+          /usr/lib/libSystem.B.dylib: stat() failed with errno=1
+      pid 1 exited -- exit reason namespace 6 subcode 0x7, description Library not loaded: /usr/lib/libSystem.B.dylib   (line 576)
+      panic(cpu 0 caller 0xffffff8000abcca9):  initproc failed to start -- exit reason namespace 6 subcode 0x7 ...  (line 590)
+
+  `RAVYN-DYNAMIC-USERLAND-OK` occurrences: **0**. `DYLD-LOAD-BASE` and the
+  `CHAINPROBE` lines are the load-bearing new facts: **our built dyld was
+  mapped and executed**, and its chained-fixup pass completed with zero bind
+  slots left unbound. **The corrected conclusion: `/bin/echo` was reached --
+  PID 1 exec'd it and dyld took over -- and dyld then rejected the staged
+  `/usr/lib/libSystem.B.dylib`.** That is a different failure from all three
+  earlier attempts (none; pre-kernel EFI death; unattributable CPL=3
+  records), and it is still **not** a PASS: `/bin/echo`'s `main()` remains
+  unmeasured and the libSystem closure remains unresolved. Note the fault
+  string says "chained fixups" but is thrown from the **exports trie** check
+  at `Libraries/dyld/src/ImageLoaderMachO.cpp:488` (the real chained-fixups
+  check is lines 479-480, and the staged file has no
+  `LC_DYLD_CHAINED_FIXUPS`); one of the five candidates also fails `stat()`
+  with `errno=1` (EPERM), not ENOENT.
+- **Reusable by image creation: proven, not just permitted.** The MH_DYLINKER
+  built in this section was staged into a real image by the `"file"` key and
+  read back byte-identical, so this is no longer a prediction. The archives
+  (`libdsc.a`, `libslc_builder.a`, `libdyld.a`) remain host build products that
+  do not feed the image, and `chroot_util` is a host-side x86_64 utility that
+  must **not** be staged.
+
+One housekeeping note, not acted on: `chroot_util`'s outputs
+(`chroot_util`, `.debug`, `.full`, `.depend`) are untracked and **not matched by
+any `.gitignore`**. `Libraries/.gitignore` covers `/dyld/*.o` and
+`/dyld/*.dylib` and the root `.gitignore` covers `/Libraries/dyld/dyld/dyld`,
+but nothing covers `Libraries/dyld/chroot_util/`.
+
+### 15.13 Fourth attempt: dyld RAN. The blocker moved into libSystem.B.dylib (2026-10-01)
+
+One authorized QEMU attempt. **Verdict: `DYNAMIC GATE: BLOCKED` (gate exit 1)
+— not a PASS, and not a harness failure either.** For the first time in this
+gate the boundary is measured *inside dyld*: the kernel booted, PID 1 ran and
+announced itself, `/bin/echo` was exec'd, and **the dynamic linker itself was
+mapped and executed**. 15.12 closed with "the next run must be instrumented so
+that serial output is written incrementally"; that is what made this result
+possible, and it is recorded here first because every other fact below depends
+on having a log at all.
+
+**The harness fix, and its falsification test.** The protected
+`tools/bootlab/boot.py` (`e652aa57...`, sha256 unchanged before and after this
+run) was **not edited**. A copy was made in an isolated temp dir and patched
+there; the patch is four changes and nothing else:
+
+1. the serial log is `open()`ed **before** `Popen`, with `buffering=0`, and
+   every chunk from **both** recv sites (the main loop and the early-QEMU-exit
+   drain) is written the instant it arrives;
+2. the in-memory `output` mirror is **kept** (now `Capture.buf`) — it is what
+   gates sending the boot command on `b"Shell>"` and what the tick/trap summary
+   reads, so a file-only patch would silently never send the boot command and
+   the boot would "pass" as a firmware no-op;
+3. the final `open(out,"wb")` truncating rewrite is **gone** — the log is
+   closed, never rewritten, because that rewrite *is* the 15.12 data loss;
+4. `start_new_session=True` on `Popen`, plus SIGTERM/SIGINT handlers that
+   record and exit without touching the log.
+
+Runner: `/tmp/dyldgate_G2_20261001_132923/boot.py`, sha256 `2cb126ff...`.
+`BOOT_BASE` and `boot_cmd()` are byte-identical to the repo's, so the kernel
+command line is unchanged from every prior attempt.
+
+The patch was tested against a **fake QEMU shim on `PATH`** (`boot.py:25`
+invokes the bare name `qemu-system-x86_64`, so a shim substitutes the VM with
+zero edits) before any real boot. All three cases pass, and the test is
+provably red-capable: run against the *unpatched* repo `boot.py` the same T1
+case reports `live=0 bytes` and no log file — the exact G1 failure.
+
+| case | assertion | result |
+|---|---|---|
+| T1 | file has bytes and prefix-matches **while the runner is alive**, then `SIGKILL` (not SIGTERM — only a hard kill skips unwinding) and on-disk size still equals bytes sent | 65 B live → 722 B, `disk=722 sent=722`, exact match |
+| T2 | on the **normal** exit path final size equals bytes sent exactly (catches incremental write + a truncating final rewrite) | `disk=722 sent=722`, exact match |
+| T3 | a pre-seeded sentinel log is zeroed, and pre-`Shell>` bytes are captured | sentinel gone, `PRE-SHELL-BYTES` present |
+| T4 | the `Shell>` gate still fires off the mirror and the boot command is really sent | `boot.efi` present in what the shim received |
+
+**Staging, re-verified.** A **fresh unique** image was built by the
+**unchanged repo `mkimage.py`** (`7d95c429...`) run *from* `tools/bootlab`
+with `--manifest manifest_dynamic.json`, an absolute `--kernel`, and **no**
+`--gpt-conform` (that flag writes into repo `work/`). No copy of `mkimage.py`
+was made: it resolves every `"file"` entry against its own `HERE`, so a copy
+in `/tmp` would have turned `../../Libraries/dyld/dyld/dyld` into a missing
+path. `run_dynamic_gate.sh` was **not** used (lines 90/101 run
+`stage_dynamic_libs.sh`, which writes protected gitignored assets).
+
+    work/dyldgate_G2_20261001_133604.img   536,870,912 B
+    mkimage: "verify OK: 61 files, 75 tree entries", exit 0
+
+Bytes read back **out** of the finished image (`KEEP_readback_G2.txt`):
+
+| path | bytes | sha256 | matches source |
+|---|---|---|---|
+| `EFI/BOOT/BOOTX64.EFI` | 181,248 | `4f7c8da5...` | YES |
+| `System/Library/CoreServices/BOOT.EFI` | 181,248 | `4f7c8da5...` | YES (both EFI paths, one loader) |
+| `usr/lib/dyld` | 1,725,768 | `0791f827...` | YES |
+| `sbin/launchd` | 4,208 | `61b16d1b...` | YES |
+| `System/Library/Kernels/kernel.development` | 20,043,952 | `e8895819...` | YES |
+| `bin/echo` | 100,944 | `d2d4d70e...` | YES |
+
+The staged loader is `MH_MAGIC_64 X86_64 ALL DYLINKER ncmds=15`, with
+`LC_ID_DYLINKER name = /usr/lib/dyld`, `LC_UNIXTHREAD 1`,
+`LC_DYLD_CHAINED_FIXUPS 1`, `LC_LOAD_DYLIB 0` and `nm -u` = **0** — the
+15.7 zero-import invariant, confirmed on the bytes inside the image. Negative
+controls hold: the stale `assets/usr/lib/dyld` (988,088 B, **DYLIB**,
+`d3749b24...`) and `assets/boot.efi` (`a87c7faa...`) are **absent**.
+
+**The run.** macOS has no `setsid(1)`, so a 20-line `launch_detached.py`
+calls `subprocess.Popen(..., start_new_session=True)`, which is `setsid(2)`.
+The runner therefore had its **own session** (`PID 3890 PGID 3890 SID 3890`),
+which is the point: in attempt 3 the whole process group was signalled and the
+log died with it.
+
+    python3 /tmp/dyldgate_G2_20261001_132923/boot.py \
+      --img /tmp/dyldgate_G2_20261001_132923/work/dyldgate_G2_20261001_133604.img \
+      --mode full --window 600 \
+      --out   /tmp/dyldgate_G2_20261001_132923/work/serial_dyldgate_G2_20261001_133604.log \
+      --status /tmp/dyldgate_G2_20261001_132923/work/runner_dyldgate_G2_20261001_133604.status \
+      --stop-marker RAVYN-DYNAMIC-USERLAND-OK
+
+`command -v qemu-system-x86_64` resolved to `/usr/local/bin` (the real
+11.0.1 Mach-O) with the shim absent; QEMU process count was **0 before** and
+**exactly 1 after** (PID 3893). One launch, no retry.
+
+| measurement | value |
+|---|---|
+| boot command sent | 12.84 s |
+| kernel budget expiry | 612.95 s (600 s from the command) |
+| runner exit | 612.97 s, QEMU exit code **0** |
+| serial captured / on disk | 38,089 / 38,089 bytes (equal — nothing buffered) |
+| serial log sha256 | `95cb7c35...` |
+| QEMU `-d cpu_reset,int` trace | 26,343,467 B |
+
+Incremental capture is **proven at runtime, not just in the shim**: the
+heartbeat at t=30.00 s reads `5403 bytes captured, 5403 on disk` while the
+runner was still alive and mid-run.
+
+**The verdict, from the log.** Replicating `run_dynamic_gate.sh:111-141`
+(`KEEP_gate_verdict_dyldgate_G2.txt`) gives banner **1**, marker **0**, three
+fault-signature hits, and **HARNESS-first ordering holds** — the banner is at
+byte 30,688 and the first fault is at line 568:
+
+    === RAVYNOS DYNAMIC-USERLAND GATE: execve /bin/echo ===
+    DYLD-LOAD-BASE: 0x10e2bd000
+    CHAINPROBE: block FIRED, starts=0x10e3cd020 seg_count=4 off0=0 off1=0x18 off2=0x38 off3=0
+    CHAINPROBE: 0 of 0 bind slots still unbound after the fixup pass
+    dyld: Library not loaded: /usr/lib/libSystem.B.dylib
+      Referenced from: /bin/echo
+      Reason: no suitable image found.  Did find:
+        /usr/lib/libSystem.B.dylib: malformed mach-o image: dyld chained fixups info underruns __LINKEDIT
+        /usr/lib/libSystem.B.dylib: stat() failed with errno=1
+    pid 1 exited -- exit reason namespace 6 subcode 0x7
+    panic: initproc failed to start -- exit reason namespace 6 subcode 0x7
+
+`DYLD-LOAD-BASE` and the `CHAINPROBE` lines are the load-bearing new
+evidence: **dyld was mapped and ran**, and its chained-fixup pass completed
+with zero bind slots left unbound. That is a different order of magnitude
+from attempts 1-3 (no serial; died in EFI; unattributable CPL=3 records).
+
+**Root cause of the new blocker, located in source and confirmed in bytes.**
+The staged `/usr/lib/libSystem.B.dylib` is the `assets/` copy (71,948 B,
+`de05e04b...`): a 39-`LC_REEXPORT_DYLIB` facade over `/usr/lib/system/*` with
+a 1,745-byte `__text` and 27 global symbols. It carries **no
+`LC_DYLD_CHAINED_FIXUPS` at all**, and its single `LC_DYLD_EXPORTS_TRIE` has
+`dataoff=0 datasize=0` while `__LINKEDIT` starts at `fileoff=0x10000`. So:
+
+    Libraries/dyld/src/ImageLoaderMachO.cpp:488
+        if ( exportsTrieCmd->dataoff < linkeditFileOffsetStart )
+            throw "malformed mach-o image: dyld chained fixups info underruns __LINKEDIT";
+
+`0 < 65536` fires. Two things are worth stating because both are easy to get
+wrong: the message says *"chained fixups"* but line 488 is the **exports
+trie** check (the genuine chained-fixups check is lines 479-480, and this
+file has no such command), and one of the five "did find" candidates is a
+`stat()` failing with `errno=1` (EPERM), not ENOENT.
+
+**What this does not establish.** No PASS: `RAVYN-DYNAMIC-USERLAND-OK` never
+appears, so `/bin/echo`'s `main()` is **still unmeasured** and the libSystem
+closure is still unresolved — the gate now fails one step later than it ever
+has, not differently. The accepted-verdict criteria in 15.7 remain unmet.
+
+Evidence: `tools/bootlab/work/KEEP_serial_dyldgate_G2_20261001_133604.log`,
+`KEEP_gate_verdict_dyldgate_G2.txt`, `KEEP_runner_dyldgate_G2_20261001_133604.status`
+(+`.stdout`), `KEEP_qemu_trace_dyldgate_G2_20261001_133604.log`,
+`KEEP_vars_used_dyldgate_G2_20261001_133604.fd`, `KEEP_readback_G2.txt`,
+`PREBOOT_G2_20261001_protected_baseline.txt`. The image and its `.digests`
+are kept at `/tmp/dyldgate_G2_20261001_132923/work/`. Protected paths are
+unchanged: `boot.py` `e652aa57...`, `mkimage.py` `7d95c429...`,
+`manifest.json` `b8b7bed3...`, `fat32img.py` `cefa9110...`, the whole of
+`assets/` (84 files, aggregate `4c41b52c...`) byte-identical before and after,
+`Kernel/xnu` clean, `Libraries/Libsystem/private/` carrying only the
+pre-existing untracked `os/assumes.h`.
+
+Two honest caveats on the tooling. The runner's 30 s heartbeat only advances
+when a chunk arrives, so it stops at the panic — cosmetic, but it means a
+silent period is not visible in the status sidecar. And the red-control run
+against the unpatched `boot.py` **leaked its fake-QEMU child**: `boot.py` has
+no child cleanup on `SIGKILL`, and neither does the patched runner, so a hard
+kill of the runner orphans QEMU and someone must kill it by hand. That is a
+real gap in the harness for any future forced termination.
+
+### 15.14 Corrected dyld closure diagnosis and offline validation (2026-10-01)
+
+This corrects and extends the attempt-4 boundary in 15.13. The preserved run
+(`work/KEEP_serial_dyldgate_G2_20261001_133604.log`, 38,089 bytes, sha256
+`95cb7c35ed098762d3b0ba77118f5da7a62c773406e1933e0d343ab8c85675e7`; verdict:
+`work/KEEP_gate_verdict_dyldgate_G2.txt`) proves the repo-built MH_DYLINKER
+loaded and executed, PID 1 execve'd `/bin/echo`, and dyld rejected
+`libSystem.B.dylib` at `ImageLoaderMachO.cpp:488`. No QEMU run is part of this
+offline correction.
+
+**`.orig` staging is not a fix.** A manifest change to stage
+`assets/usr/lib/libSystem.B.dylib.orig` was built into
+`work/dyn_libsystem_orig_20261001.img`, then reverted. Parser-validated
+inspection of all 49 staged dylibs finds 28 rejected at line 488: each has
+`LC_DYLD_EXPORTS_TRIE dataoff=0 datasize=0` against nonzero
+`__LINKEDIT.fileoff`. Of the 39 `LC_REEXPORT_DYLIB` targets named by `.orig`,
+27 reject and only 12 pass. `.orig` therefore moves the same failure from
+depth 0 to depth 1; it does not unblock the gate. `manifest_dynamic.json`
+was restored to pre-edit sha256
+`6f30473c0d07462191f5ffeaf43029fda3e81049e7892a122b7edd3893beea23`.
+
+**Offline tooling.** `tools/bootlab/closure_check.py` parses raw Mach-O 64-bit
+bytes, resolves the manifest's transitive dylib closure, extracts defined and
+undefined symbols with weak classification, and replays dyld2's
+`ImageLoaderMachO.cpp` checks at lines 479/481/487/489. Run:
+
+    cd tools/bootlab && python3 closure_check.py [manifest.json]
+
+It exits 0 only when the closure is complete, no non-weak undefined symbols
+remain unresolved, and every staged dylib passes validation. On the current
+`manifest_dynamic.json`: 28 rejects and 99 unresolved non-weak symbols; 99
+overcounts because it scans the whole `LC_SYMTAB` (the repo-built closure's
+true count is 34). A test manifest staging the repo-built Libsystem closure
+reports 0 rejects, 0 unstaged dependencies, and 34 unresolved non-weak symbols.
+Thus the repo-built closure (`Libraries/Libsystem/libSystem.B.dylib` plus 28
+transitive dependencies) is Mach-O-valid (29/29 dyld2 checks pass), but not
+symbol-complete; those 34 unresolved symbols are link defects, being fixed
+separately.
+
+The 28 rejecting files are shared-cache extractions with `__TEXT vmaddr` in
+`0x7ff8...` and `__LINKEDIT vmaddr=0x7ff880000000`; even with a valid trie,
+each colliding image would additionally force multi-GB `vm_alloc`. The line-488
+check is byte-identical to upstream Apple dyld-832.7.3 (diffed against
+`/tmp/dyldup`), not a local regression; do not relax it.
+
+Other log interpretations: the `stat() failed with errno=1` line is a
+reporting artifact. `dyld2.cpp:3484` reads errno after `my_stat` without any
+errno reset in `src/`, so stale EPERM residue is printed at line 3510; it is
+not a second fault. The tty is not on the critical path: `serial=3` enables
+serial keyboard input (`osfmk/i386/i386_init.c:928`), and the A-F shell
+acceptance already proved the path. `assets/bin/sh` is a 4,280-byte
+`LC_UNIXTHREAD` tick stub, not a shell. `sh.static_init` (1,807,864 bytes,
+sha256 `a954602d55653555754562089ece49eb4888d0607120ced5980921254268dbf3`)
+produced the `# ` prompt. A dynamic `/bin/sh` needs a new build target.
+
+### 15.15 Repo-built closure boot: dyld completes; pthread host query fails (2026-10-01)
+
+Building on 15.13–15.14, the repo-built `Libraries/Libsystem/libSystem.B.dylib`
+and its 28 transitive dependencies form a Mach-O-valid closure: **29/29 pass
+dyld2 checks**. Of the original 34 unresolved non-weak symbols, 25 were fixed
+by the concurrent Libsystem work (libcorecrypto SRCS omissions,
+`$UNIX2003`/`$NOCANCEL` aliases, `_mach_msg_priority_*_inline` exports,
+`_ml_fatal_trap` definition, and the `libsystem_pthread` `VARIANT_STATIC`
+guard). The remaining **9** are only in code paths `/bin/echo` does not
+exercise.
+
+The incremental serial runner captured **51,167 bytes (796 lines)** from
+`work/dyn_repo_closure_20261001.img` (manifest
+`/tmp/manifest_repo_closure.json`). The full 29-node closure mapped and bound
+with **0 unbound slots**; dyld is fully working. PID 1 then exited with exit
+reason namespace 2, subcode `0x4` (SIGILL). RIP `0x000000010cab83fa` maps to
+`libsystem_pthread.dylib` offset `0x53fa`, inside `___pthread_init`. Its
+disassembly branches to `ud2` when `kr != KERN_SUCCESS`: this is the
+`PTHREAD_INTERNAL_CRASH(kr, "host_info() failed")` path after
+`host_info(mach_host_self(), HOST_PRIORITY_INFO, &priority_info, &count)`.
+The kernel likely does not implement `HOST_PRIORITY_INFO`, causing the MIG
+call to fail; a worker is changing libpthread to tolerate that failure.
+
+Evidence: `tools/bootlab/work/KEEP_serial_repo_closure_20261001.log`,
+`KEEP_runner_repo_closure_20261001.status`,
+`KEEP_verdict_repo_closure_20261001.txt`,
+`KEEP_closure_list_repo_closure_20261001.txt`, and
+`KEEP_closure_check_repo_closure_20261001.txt`.
+
+### 15.16 Dynamic-userland gate PASS: `/bin/echo` completed (2026-10-01)
+
+The repo-built Libsystem closure now passes the dynamic-userland gate, closing
+the boundary left open in 15.13–15.15. The stop marker
+`RAVYN-DYNAMIC-USERLAND-OK` appeared at serial line 797, 39.28 s after the
+boot command. `init_exec` prints that marker only after `execve` returns;
+therefore `/bin/echo`'s `main()` ran and completed. The full 29-node Libsystem
+closure mapped and bound successfully. dyld reported:
+
+    DYLD-LOAD-BASE: 0x10978d000
+    CHAINPROBE: block FIRED
+    0 of 0 bind slots still unbound after the fixup pass
+
+The run had 0 panic/trap lines and QEMU exited 0. Two remaining unresolved
+symbols reported from `libobjc.dylib`—`___libunwind_Registers_x86_64_jumpto`
+and `___unw_getcontext`—are non-blocking: they are lazy-bound and used only
+for DWARF unwinding, which `/bin/echo` did not execute.
+
+Seven blockers were fixed in sequence: dyld rejecting libSystem (stage the
+repo-built closure rather than Apple shared-cache extractions); libpthread
+`host_info` crash (tolerate failure in `pthread.c`); libc clock-service abort
+(tolerate `host_get_clock_service` and `semaphore_create` failures in
+`nanosleep.c`); missing libobjc `task_restartable_ranges_register` (generate
+the MIG client stub in libsystem_kernel); missing libSystem
+`___cxa_guard_acquire` (add `cxa_guard.c` to libsystem_c); missing
+`___libcxx_exp_memrsc_init` (compile the real LLVM
+`experimental/memory_resource.cpp`); and missing unwind symbols (compile the
+real `UnwindRegistersSave.S` and `UnwindRegistersRestore.S` from libunwind).
+No assembly was hand-written. The only file modified was
+`Libraries/Libsystem/Makefile` (81 insertions, 3 deletions, purely additive).
+
+Evidence: `work/KEEP_serial_repo_closure7_20261001.log` (54,413 bytes),
+`work/KEEP_runner_repo_closure7_20261001.status`, and
+`work/KEEP_closure_check_repo_closure7_20261001.txt`.
+### 15.17 Dynamic shell PASS: `/bin/sh` reaches an interactive prompt (2026-10-01)
+
+Building on 15.16, the first dynamic shell reached a terminal prompt on
+ravynOS. The `# ` prompt appeared at serial line 824, the final line of the
+824-line log, 39.12 s after the boot command. This proves startup to the prompt
+only; the harness sends no serial input, so the read/eval/print loop is not
+yet proven end-to-end.
+
+The dynamic `sh_dyn` is 177,416 bytes: FreeBSD ash (`dash`) linked against
+`libSystem.B.dylib` and `libedit.dylib`. It is `MH_EXECUTE` with `LC_MAIN`
+(not `LC_UNIXTHREAD` or `MH_DYLINKER`) and exactly two `LC_LOAD_DYLIB`
+commands: `/usr/lib/libSystem.B.dylib` and `/usr/lib/libedit.dylib`.
+`init_shell` is a static PID 1 binary (8,456 bytes): it opens
+`/dev/console`, duplicates it to fds 0/1/2, calls `setsid` and `TIOCSCTTY`,
+then execs `/bin/sh` with `{"sh", "-i"}` and environment
+`PATH=/bin:/usr/bin`, `TERM=dumb`, `HOME=/`.
+
+dyld loaded successfully:
+
+    DYLD-LOAD-BASE: 0x11286c000
+    CHAINPROBE: block FIRED
+    0 of 0 bind slots still unbound
+
+There were 0 panic/trap lines and QEMU exited 0. `closure_check` reported 39
+staged entries, 34 Mach-O nodes, 0 unstaged dependencies, and 30/30 dylibs
+passing dyld2 validation. The only findings were the two pre-existing,
+non-blocking libobjc unwind symbols noted in 15.16.
+
+Build: `libedit.dylib` (247,072 bytes) was built from
+`BSD/lib/libedit/` after dropping `-lncurses` (a 0-byte stub) and adding
+`-L${RAVYN_SDKROOT}/usr/lib -lSystem` to its Makefile. The 28 FreeBSD ash
+objects from `BSD/bin/sh/` were compiled with `-fPIC` and linked using
+`xcrun clang -nostdlib -nostdlibinc -nodefaultlibs -Wl,-no_uuid -Wl,-e,_main
+-L$SDK/usr/lib -lSystem -ledit`. No `crt1.o` was needed: `LC_MAIN` makes
+dyld call `main` directly. `/tmp/manifest_dynsh.json` stages `sh_dyn` as
+`bin/sh`, `libedit.dylib` as `usr/lib/libedit.dylib`, and `init_shell` as
+`sbin/launchd`.
+
+Evidence: `work/KEEP_serial_dynsh_20261001.log` (56,551 bytes, 824 lines) and
+`work/KEEP_runner_dynsh_20261001.status`.

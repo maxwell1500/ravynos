@@ -23,31 +23,24 @@
  *         -c loader.c -o loader.obj
  *   python3 ../pack.py loader.obj BOOTX64.EFI efi_main
  *
- * MEASURED FIRMWARE ANOMALY (blocks volume discovery as of 2026-09-28)
- * -------------------------------------------------------------------
- * On the OVMF build in /usr/local/share/qemu/edk2-x86_64-code.fd, this
- * loader cannot obtain EFI_SIMPLE_FILE_SYSTEM_PROTOCOL by any route:
+ * VOLUME DISCOVERY
+ * ----------------
+ * The kernel is opened through the boot-services path, one call deep:
+ * HandleProtocol(li->DeviceHandle, EFI_SIMPLE_FILE_SYSTEM_PROTOCOL) gives
+ * the SimpleFS on the volume this image was loaded from, OpenVolume gives
+ * the root directory, and RAVYN_KERNEL_PATH is opened from there.  There is
+ * no handle census, no LocateHandle sweep, and no direct IDE/ATA read.
  *
- *   - HandleProtocol (index 16, 0x98) is CORRECT: it returns a coherent
- *     EFI_LOADED_IMAGE_PROTOCOL whose SystemTable == ST, ImageBase
- *     0x7ddf5000, ImageSize 0x2c000, ImageCodeType 1, ImageDataType 2.
- *   - HandleProtocol(DeviceHandle | FileHandle | ParentHandle,
- *     SimpleFS) returns EFI_UNSUPPORTED, EFI_INVALID_PARAMETER and
- *     EFI_UNSUPPORTED respectively.
- *   - A sweep of all 1976 handles returned by the index-19 entry returns
- *     EFI_UNSUPPORTED for every one of them.
- *   - The entry at 0xB0 ignores its Protocol argument: it returns the same
- *     1976 handles for a NULL GUID, for SimpleFS, and for LoadedImage
- *     (which is installed on exactly ONE handle, ours).  It is therefore not
- *     behaving as LocateHandle.
- *   - 0xA0 (Reserved) is NULL, so the table layout is standard up to there.
- *   - Both GUIDs are byte-verified present and correct in the packed image.
- *   - The UEFI shell mounts FS0 from the same ESP, so SimpleFS exists.
- *
- * That combination is self-contradictory, so the next step is to stop
- * depending on it: read the kernel straight off the IDE disk with PCI/ATA
- * port I/O and parse GPT+FAT32 in this loader.  That needs no boot service
- * beyond nothing at all, and so cannot be blocked by this quirk.
+ * There is no firmware anomaly to work around on the OVMF build in
+ * /usr/local/share/qemu/edk2-x86_64-code.fd.  An earlier revision could not
+ * obtain SimpleFS by any route and the measurements were blamed on the
+ * firmware; the cause was that the failing image carried a STALE loader
+ * binary built before this path existed, one whose packed bytes did not
+ * even contain the SimpleFS GUID.  The current code succeeds on that same
+ * firmware: see the control in BOOT-PLAN sec. 15.10, where the identical
+ * DeviceHandle returns EFI_SUCCESS for SimpleFS.  A failure here means the
+ * image was built from the wrong loader, not that firmware is at fault --
+ * so check the loader digest against work/efi/BOOTX64.EFI first.
  *
  * -DRAVYN_TRAMPOLINE_TEST builds the phase-1 gate: the handoff lands in a
  * 32-bit routine of our own that echoes the boot_args pointer to the serial

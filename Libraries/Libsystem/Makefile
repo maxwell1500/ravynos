@@ -81,8 +81,85 @@ ${.OBJDIR}/config.${CpuArch}.normal.h:
 	${CpuArch} normal ${.OBJDIR} ${RAVYN_SDKROOT} ${.CURDIR}
 
 ${OBJS}: ${.OBJDIR}/config.${CpuArch}.normal.h ${SRCS}
+#-----------------------------------------------------------------------------
+#              THE THREE OBJECTS THIS TREE NEVER BUILT
+#-----------------------------------------------------------------------------
+# Four symbols reached the linked closure undefined, all of them because a
+# canonical upstream source file was never compiled here rather than because
+# anything is missing from LLVM. None of them is hand-written below: every one
+# is built from the LLVM sources that are already vendored in
+# Developer/Default.xctoolchain/llvm, at the same version the rest of the
+# toolchain is.
+#
+# __libcxx_exp_memrsc_init -- libc++.a's init.o (__libcxx_init) calls three
+# libc++ static-initialization chunk functions, and this dylib links libc++.a,
+# so all three land here. Two of them (__libcxx_memrsc_init, __libcxx_ios_init)
+# are defined by libc++.a itself. The third is defined in
+# llvm/libcxx/src/experimental/memory_resource.cpp, which upstream builds into
+# libc++experimental.a -- an archive this tree never produced:
+# Libraries/llvm_target/libcxx/lib/ holds libc++.a and nothing else. Compiling
+# that translation unit is the fix; a C stub cannot be, and not because of
+# convenience. __default_memory_resource() keeps the default resource in a
+# function-local `static constinit atomic<memory_resource*>` that lives in the
+# DEFINING translation unit, so a second definition would be a distinct object
+# that no caller of std::experimental::fundamentals_v1::pmr::get_default_resource()
+# ever reads. Compiling the real unit supplies the symbol and the storage it
+# initializes, which is the whole point of the function.
+#
+# It is linked into libSystem.B rather than into libsystem_c (where cxa_guard.c
+# went) because its only caller lives here and its dependencies --
+# _VSTD::__libcpp_allocate, __throw_bad_alloc, std::__1::__cxx_atomic_* -- are all
+# satisfied by the libc++.a already on this link line. Putting it in
+# libsystem_c would give libc undefined C++ symbols and a load-time cycle back
+# up into the dylib that re-exports it, for no gain.
+#
+# __unw_getcontext / unw_getcontext / __libunwind_Registers_x86_64_jumpto --
+# LLVM's libunwind keeps these three in two hand-written assembly files,
+# UnwindRegistersSave.S and UnwindRegistersRestore.S. The prebuilt
+# Libraries/llvm_target/libunwind/lib/libunwind.a contains only the seven C/C++
+# objects; upstream's src/CMakeLists.txt lists both .S files in
+# LIBUNWIND_ASM_SOURCES, so this archive was cut without them. That is exactly
+# why they must be compiled from LLVM's own assembly rather than written here:
+# __libunwind_Registers_x86_64_jumpto hard-codes the unw_tdep_frame_t slot
+# offsets (0 rax .. 128 rip, 56 rsp), and those offsets are the ABI.
+#
+# Both objects go through ${CC}, the same wrapper every other component uses.
 
-libunwind.dylib: ${.OBJDIR}/../llvm_target/libunwind/lib/libunwind.a
+LLVM_RT = ${ROOT_SOURCE_DIR}/Developer/Default.xctoolchain/llvm
+
+UNWIND_SAVE_S = ${LLVM_RT}/libunwind/src/UnwindRegistersSave.S
+UNWIND_RESTORE_S = ${LLVM_RT}/libunwind/src/UnwindRegistersRestore.S
+UNWIND_ASM_HDRS = ${LLVM_RT}/libunwind/src/assembly.h \
+	${LLVM_RT}/libunwind/src/cet_unwind.h
+UNWIND_ASM_OBJS = ${.OBJDIR}/UnwindRegistersSave.o \
+	${.OBJDIR}/UnwindRegistersRestore.o
+
+EXPMEMRSC_CPP = ${LLVM_RT}/libcxx/src/experimental/memory_resource.cpp
+EXPMEMRSC_O = ${.OBJDIR}/experimental_memory_resource.o
+
+# The wrapper gates its C force-includes off the .s/.S suffix, so these two
+# are handed to the assembler as assembly rather than preprocessed as C.
+${.OBJDIR}/UnwindRegistersSave.o: ${UNWIND_SAVE_S} ${UNWIND_ASM_HDRS}
+	${CC} -c -o $@ ${UNWIND_SAVE_S}
+
+${.OBJDIR}/UnwindRegistersRestore.o: ${UNWIND_RESTORE_S} ${UNWIND_ASM_HDRS}
+	${CC} -c -o $@ ${UNWIND_RESTORE_S}
+
+# -std=c++20: memory_resource.cpp uses `static constinit`, a C++20 keyword.
+# At the language default clang reports "unknown type name 'constinit'" and
+# produces nothing. Nothing else here depends on the language version.
+# -nostdinc++ with an explicit -isystem: this tree's libc++ headers, never the
+# host Command Line Tools ones. -isystem rather than -I so the C++ headers
+# sort after the SDK's, which is the order the SDK itself expects.
+${EXPMEMRSC_O}: ${EXPMEMRSC_CPP}
+	${CC} -c -o $@ --sysroot=${RAVYN_SDKROOT} \
+	  -mmacos-version-min=${MACOS_VERSION_MIN} -Wno-incompatible-sysroot \
+	  -nostdinc++ -isystem${RAVYN_SDKROOT}/usr/include/c++/v1 \
+	  -D_LIBCPP_BUILDING_LIBRARY -std=c++20 -fno-rtti -fPIC \
+	  ${EXPMEMRSC_CPP}
+
+libunwind.dylib: ${.OBJDIR}/../llvm_target/libunwind/lib/libunwind.a \
+	${UNWIND_ASM_OBJS}
 	mkdir -p ${RAVYN_SDKROOT}/usr/lib/system ${SYSROOT_DIR}/usr/lib/system
 	${CC} -umbrella System -Wl,-all_load -fuse-ld=${LD} -shared \
 	  -dylib -o ${RAVYN_SDKROOT}/usr/lib/system/libunwind.dylib \
@@ -105,8 +182,9 @@ libunwind.dylib: ${.OBJDIR}/../llvm_target/libunwind/lib/libunwind.a
 		${SYSROOT_DIR}/usr/lib/system/
 
 ${.OBJDIR}/lib${LIB}.dylib: ${.OBJDIR}/config.${CpuArch}.normal.h \
-lib${LIB}.a libunwind.dylib copyfile
-	${CC} -fuse-ld=${LD} -shared -dylib -o ${.TARGET} ${OBJS} ${LDFLAGS}
+lib${LIB}.a libunwind.dylib copyfile ${EXPMEMRSC_O}
+	${CC} -fuse-ld=${LD} -shared -dylib -o ${.TARGET} ${OBJS} \
+	  ${EXPMEMRSC_O} ${LDFLAGS}
 	${.CURDIR}/xcodescripts/create_dylib_symlinks.sh \
 	  ${RAVYN_SDKROOT} install normal
 	${.CURDIR}/xcodescripts/create_dylib_symlinks.sh \

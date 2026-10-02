@@ -5,7 +5,8 @@ SRCS = \
 	pthread_rwlock.c pthread_tsd.c qos.c resolver/resolver.c \
 	variants/pthread_cancelable_cancel.c \
 	variants/pthread_cancelable_legacy.c variants/pthread_cond_legacy.c \
-	variants/pthread_mutex_legacy.c variants/pthread_rwlock_legacy.c
+	variants/pthread_mutex_legacy.c variants/pthread_rwlock_legacy.c \
+	variants/pthread_cond_unix03.c variants/pthread_unix03_aliases.c
 
 SLF = /System/Library/Frameworks
 SYSPRIVHDR = System.framework/Versions/B/PrivateHeaders

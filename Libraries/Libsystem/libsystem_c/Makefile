@@ -59,7 +59,7 @@ CFLAGS = --target=${CpuArch}-apple-darwin --sysroot=${RAVYN_SDKROOT} \
 
 ACFLAGS = --sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSION_MIN}
 
-SRCS = darwin/forceLibcToBuild.c darwin/compatibility_hacks.c
+SRCS = darwin/forceLibcToBuild.c darwin/compatibility_hacks.c gen/cxa_guard.c
 
 lib${LIB}.a: ${ROOT_BINARY_DIR}/${CpuArch}/libc-features.h
 
@@ -127,6 +127,7 @@ LDFLAGS = -mmacos-version-min=${MACOS_VERSION_MIN} \
 	${.OBJDIR}/vCancelable/libvCancelable.a \
 	${.OBJDIR}/vDarwinExtsn/libvDarwinExtsn.a \
 	${.OBJDIR}/vInode32/libvInode32.a ${.OBJDIR}/vPre1050/libvPre1050.a \
+	${.OBJDIR}/lib${LIB}.a \
 	-Wl,-upward-lsystem_blocks -Wl,-upward-lxpc -Wl,-upward-ldispatch \
 	-Wl,-upward-lsystem_asl -Wl,-upward-lsystem_info \
 	-Wl,-upward-lsystem_notify -Wl,-upward-lsystem_trace \

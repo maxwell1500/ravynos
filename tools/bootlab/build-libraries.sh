@@ -110,6 +110,19 @@ mkdir -p "$TOOLS_DIR"
     ln -sf "$PLATFORM_TOOLCHAIN_BIN/llvm-libtool-darwin" "$TOOLS_DIR/llvm-libtool-darwin"
 [ -x "$BUILD/Developer/usr/bin/xcrun" ] &&
     ln -sf "$BUILD/Developer/usr/bin/xcrun" "$TOOLS_DIR/xcrun"
+# sys.mk:266 sets `OBJCOPY ?= ${TOOLS}/llvm-objcopy`, and bsd.prog.mk:205 /
+# bsd.lib.mk:275 run `${OBJCOPY} --only-keep-debug ${PROG_FULL} ${.TARGET}`
+# as the LAST step of a successful link. Same defect as llvm-libtool-darwin
+# above, one tool later in the build: the host CLT ships llvm-objdump but no
+# llvm-objcopy, so xcrun -f cannot find it and the peer toolchain does have it
+# (4,804,560 B, LLVM 17.0.6). Symptom is narrow and misleading because it
+# arrives only AFTER the link has already succeeded --
+#   bmake[1]: exec(.../Tools/bin/llvm-objcopy): No such file or directory
+#   *** Error code 1
+# i.e. chroot_util.cpp compiled clean and `chroot_util` LINKED, and the
+# failure is purely the debug-file extraction step.
+[ -x "$PLATFORM_TOOLCHAIN_BIN/llvm-objcopy" ] &&
+    ln -sf "$PLATFORM_TOOLCHAIN_BIN/llvm-objcopy" "$TOOLS_DIR/llvm-objcopy"
 export TOOLS="$TOOLS_DIR"
 export PROD_VERSION="${PROD_VERSION:-1229.100.1}"
 

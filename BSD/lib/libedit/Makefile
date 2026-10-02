@@ -128,7 +128,7 @@ ${.OBJDIR}/lib${LIB}.dylib: ${.OBJDIR}/lib${LIB}.a
 	  -Wl,-install_name,/usr/lib/libedit.dylib \
 	  -Wl,-current_version,3.1 -Wl,-compatibility_version,1.0 \
 	  -nodefaultlibs -Wl,-not_for_dyld_shared_cache \
-	  -Wl,-force_load,${.OBJDIR}/lib${LIB}.a -lncurses
+	  -Wl,-force_load,${.OBJDIR}/lib${LIB}.a -L${RAVYN_SDKROOT}/usr/lib -lSystem
 	mkdir -p ${RAVYN_SDKROOT}/usr/lib ${SYSROOT_DIR}/usr/lib
 	cp -f ${.TARGET} ${RAVYN_SDKROOT}/usr/lib/
 	cp -f ${.TARGET} ${SYSROOT_DIR}/usr/lib/
