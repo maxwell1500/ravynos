@@ -2151,12 +2151,6 @@ vm_map_get_range(
 	if (map == kernel_map) {
 		effective_range = kmem_ranges[range_id];
 
-		if (range_id == KMEM_RANGE_ID_DATA) {
-			printf("vm_map_get_range: range_id=%d size=%lu min=0x%llx max=0x%llx\n",
-			    range_id, (unsigned long)size,
-			    (unsigned long long)effective_range.min_address,
-			    (unsigned long long)effective_range.max_address);
-		}
 		if (startup_phase >= STARTUP_SUB_KMEM) {
 			/*
 			 * Hint provided by caller is zeroed as the range is restricted to a
