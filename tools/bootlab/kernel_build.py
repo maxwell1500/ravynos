@@ -134,7 +134,18 @@ for rel in ["iokit/DEVELOPMENT/IOPlatformExpert.cpo.json",
             "bsd/DEVELOPMENT/init_sysent.o.json",
             # model_dep.c holds efi_init()/efi_set_tables_64(). Without this
             # an edit there silently produced an unchanged kernel.
-            "osfmk/DEVELOPMENT/model_dep.o.json"]:
+            "osfmk/DEVELOPMENT/model_dep.o.json",
+            # /dev/console lives entirely in these six objects: devfs_vfsops
+            # creates the node, devfs_tree/devfs_vnops resolve it to a vnode,
+            # spec_vnops dispatches VCHR opens, cons.c is the major-0 console
+            # driver and km.c is the tty it forwards to. Without them an edit
+            # to any of them silently produced an unchanged kernel.
+            "bsd/DEVELOPMENT/devfs_vfsops.o.json",
+            "bsd/DEVELOPMENT/devfs_vnops.o.json",
+            "bsd/DEVELOPMENT/devfs_tree.o.json",
+            "bsd/DEVELOPMENT/spec_vnops.o.json",
+            "bsd/DEVELOPMENT/cons.o.json",
+            "bsd/DEVELOPMENT/km.o.json"]:
     cmd = load_json(os.path.join(BUILD_DIR, rel))
     print("Compiling %s..." % os.path.basename(rel).rsplit(".", 3)[0], flush=True)
     run(cmd["arguments"], cmd["directory"])
