@@ -8252,7 +8252,15 @@ job_mig_log_forward(job_t j, vm_offset_t inval, mach_msg_type_number_t invalCnt)
 		RETURN_NO_MEMORY();
 	}
 
-	if (!job_assumes(j, j->per_user)) {
+	/* (bool): job_assumes() expands to os_assumes_ctx(), which opens with
+	 * `__typeof__(e) _e`.  clang cannot apply __typeof__ to a bit-field --
+	 * per_user is declared `per_user:1` at core.c:670 -- and the error is not
+	 * suppressible.  Casting to the field's declared type yields an ordinary
+	 * rvalue of that same type, so the macro has a type to name and the
+	 * tested value is unchanged.  (A `long` local would be wrong: job_assumes
+	 * is also applied to pointer expressions, e.g. core.c:3089 and :7639, whose
+	 * results are compared against NULL.) */
+	if (!job_assumes(j, (bool)j->per_user)) {
 		return BOOTSTRAP_NOT_PRIVILEGED;
 	}
 
@@ -8555,7 +8563,10 @@ job_mig_swap_integer(job_t j, vproc_gsk_t inkey, vproc_gsk_t outkey, int64_t inv
 		/* No-op. */
 		break;
 	case VPROC_GSK_WEIRD_BOOTSTRAP:
-		if (job_assumes(j, j->weird_bootstrap)) {
+		/* (bool): see the note at core.c:8255 -- os_assumes_ctx() applies
+		 * __typeof__ to its operand and cannot be handed a bit-field.
+		 * weird_bootstrap is declared `weird_bootstrap:1` at core.c:665. */
+		if (job_assumes(j, (bool)j->weird_bootstrap)) {
 			job_log(j, LOG_DEBUG, "Unsetting weird bootstrap.");
 
 			mach_msg_size_t mxmsgsz = (typeof(mxmsgsz)) sizeof(union __RequestUnion__job_mig_job_subsystem);
@@ -8714,7 +8725,9 @@ job_mig_get_listener_port_rights(job_t j, mach_port_array_t *sports, mach_msg_ty
 	size_t cnt = 0;
 	struct machservice *msi = NULL;
 	SLIST_FOREACH(msi, &j->machservices, sle) {
-		if (msi->upfront && job_assumes(j, msi->recv)) {
+		/* (unsigned int): see the note at core.c:8255.  recv is one of the
+		 * `unsigned int ... :1` fields of struct machservice (core.c:206). */
+		if (msi->upfront && job_assumes(j, (unsigned int)msi->recv)) {
 			cnt++;
 		}
 	}

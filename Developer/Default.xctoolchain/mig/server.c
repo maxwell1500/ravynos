@@ -983,7 +983,36 @@ InArgMsgField(argument_t *arg,  char *str)
    * Hence we must cast the values.
    */
 
-  if (!(arg->argFlags & flRetCode)) {
+  /* The "In%dP->" prefix must be emitted for every argument that is actually
+   * carried in the request message -- including a user argument flagged
+   * `RetCode`.  Test the argument's KIND, not its flRetCode FLAG.
+   *
+   * The flag and the kind disagree whenever a `RetCode` argument sits in a
+   * SIMPLE request.  routine.c rtProcessRetCodeFlag() sets flRetCode on the
+   * user argument, but rtProcessRetCode() only rewrites that argument's
+   * argKind to akeRetCode when the request is NOT simple:
+   *
+   *     if (rt->rtRetCArg != argNULL && !rt->rtSimpleRequest)
+   *         arg->argKind = akeRetCode|akbUserArg|akbServerArg|akbSendRcv;
+   *
+   * So for a simple request the argument keeps argIdent akeNormal while
+   * still carrying flRetCode.  The old flag test then suppressed the prefix
+   * for an argument that IS a request-message field, emitting a bare
+   * identifier with no declaration anywhere -- `use of undeclared identifier`.
+   *
+   * Launchd hits exactly this: job_reply.defs declares
+   *
+   *     simpleroutine job_mig_send_signal_reply(
+   *             rp : mach_port_move_send_once_t;
+   *             kr : kern_return_t, RetCode);
+   *
+   * whose only non-port argument is inline, so the request stays simple and
+   * `kr` stays in the request message.  It must be read as `In0P->kr`.
+   *
+   * Verified: the only difference in generated output across all seven of
+   * launchd's .defs files is that one line becoming `In0P->kr`.
+   */
+  if (akIdent(arg->argKind) != akeRetCode) {
     if (akCheck(arg->argKind, akbServerImplicit))
       sprintf(who, "TrailerP->");
     else

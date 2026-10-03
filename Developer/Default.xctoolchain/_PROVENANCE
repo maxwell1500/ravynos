@@ -14,6 +14,25 @@ Imported from GitHub: https://github.com/swiftlang/llvm-project.git
 Tag: swift-6.0-RELEASE
 - llvm-project (SPDX:Apache-2.0 WITH LLVM-Exception)
 
+Resolved version of the above, and where it is recorded:
+- LLVM 17.0.6
+  - llvm/llvm/CMakeLists.txt:15-23  set(LLVM_VERSION_{MAJOR,MINOR,PATCH} 17/0/6)
+  - <repo>/Makefile:77-84          derives LLVM_VERSION from that file and
+                                  exports it to every SUBDIR (Makefile:117).
+                                    It is NOT hardcoded in the Makefile; edit
+                                    the CMakeLists to change the version.
+  - confirmed by the built compiler itself:
+      Default.xctoolchain/usr/bin/clang --version
+        Apple clang version 17.0.6
+  - Libraries/Makefile:119 hardcodes the matching resource dir
+    (-isystem${TOOLCHAIN}/usr/lib/clang/17/include)
+  - tag swift-6.0-RELEASE is consistent (Swift 6.0 is built on LLVM 17)
+
+Consequently libraries built out of this tree -- notably compiler-rt, whose
+archive is Libraries/llvm_target/compiler-rt/lib/ravynos/libclang_rt.osx.a
+and is installed as <SDK>/usr/lib/system/libcompiler_rt.dylib -- are
+VENDORED_APPLE_OSS at LLVM 17.0.6, NOT extracted from the host Mac.
+
 Imported from GitHub: https://github.com/apple-oss-distributions/tapi
 Tag: tapi-1600.0.11.8
 - llvm-project/tapi (SPDX:NCSA)

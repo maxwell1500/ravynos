@@ -908,7 +908,7 @@ ManifestDirectoryItem::~ManifestDirectoryItem ()
 const char* kAppleDoublePrefix = "._";
 const int kAppleDoublePrefixLength = 2;
 
-static int CompareFilenames (const FTSENT** a, const FTSENT** b)
+static int CompareFilenames (const FTSENT* const* a, const FTSENT* const* b)
 {
 	// ._name is always greater than name
 	// otherwise, ._ is ignored for sorting purposes
