@@ -510,12 +510,28 @@ fork_create_child(task_t parent_task,
 	 * until main_thread_set_immovable_pinned().
 	 *
 	 * The new thread is waiting on the event triggered by 'task_clear_return_wait'
+	 *
+	 * PID 1's main thread must continue into task_wait_to_return(), NOT
+	 * straight into bsdinit_task().
+	 *
+	 * bsdinit_task() is reached the way every other XNU reaches it: from
+	 * the init thread's first return-to-user transition, via the
+	 * `if (!bsd_init_done) { bsd_init_done = 1; bsdinit_task(); }` hook in
+	 * kern_sig.c.  Handing bsdinit_task to main_thread_create_waiting()
+	 * instead makes it the thread's *entry point*, and it runs on a thread
+	 * whose kernel stack has not been set up for it.  bsdinit_task() then
+	 * execs PID 1, which never returns; when exec instead unwinds, control
+	 * reaches call_continuation's `call *%rcx` epilogue, thread_terminate()
+	 * returns, and execution falls straight through the nop padding that
+	 * separates call_continuation from _x86_init_wrapper.  That wrapper then
+	 * does `movq %rsi, %rsp` with %rsi == 0, so the following `callq *%rdi`
+	 * pushes its return address to 0xfffffffffffffff8 and the machine
+	 * double-faults at _x86_init_wrapper + 0x6 with RSP == 0.
+	 *
+	 * The stock continuation is the only correct one here.
 	 */
-	extern void bsdinit_task(void);
-	thread_continue_t init_continuation = (clone_flags & CLONEPROC_INITPROC) ?
-	    (thread_continue_t)bsdinit_task : (thread_continue_t)task_wait_to_return;
 	result = main_thread_create_waiting(child_task,
-	    init_continuation,
+	    (thread_continue_t)task_wait_to_return,
 	    task_get_return_wait_event(child_task),
 	    &child_thread);
 
@@ -639,6 +655,27 @@ fork(proc_t parent_proc, __unused struct fork_args *uap, int32_t *retval)
 	}
 
 	return err;
+}
+
+/*
+ * vfork
+ *
+ * Description:	Create a new process and return the child's pid, without
+ *		sharing/exec'ing the parent address space the way a real
+ *		vfork(2) would.
+ *
+ *		There is no true vfork here: the kernel does not implement
+ *		the shared-address-space suspend protocol, and a full fork()
+ *		gives correct, isolated semantics for every caller.  Programs
+ *		calling vfork() therefore run cleanly instead of hitting
+ *		nosys(), which raises SIGSYS and kills the process.
+ *
+ * Return:	0 on success, errno on failure.
+ */
+int
+vfork(proc_t parent_proc, __unused struct vfork_args *uap, int32_t *retval)
+{
+	return fork(parent_proc, NULL, retval);
 }
 
 

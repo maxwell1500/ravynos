@@ -117,11 +117,7 @@
 63	AUE_NULL	ALL	{ int nosys(void); }   { used internally and reserved }
 64	AUE_NULL	ALL	{ int nosys(void); }   { old getpagesize }
 65	AUE_MSYNC	ALL	{ int msync(caddr_ut addr, size_ut len, int flags) NO_SYSCALL_STUB; }
-#if CONFIG_VFORK
 66	AUE_VFORK	ALL	{ int vfork(void) NO_SYSCALL_STUB; }
-#else
-66	AUE_NULL	ALL	{ int nosys(void); }   { old vfork }
-#endif
 67	AUE_NULL	ALL	{ int nosys(void); }   { old vread }
 68	AUE_NULL	ALL	{ int nosys(void); }   { old vwrite }
 69	AUE_NULL	ALL	{ int nosys(void); }   { old sbrk }

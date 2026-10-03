@@ -95,29 +95,14 @@ static void rebaseDyld(const dyld3::MachOLoaded* dyldMH)
     assert(ma->hasChainedFixups());
     uintptr_t slide = (long)ma; // all fixup chain based images have a base address of zero, so slide == load address
     __block Diagnostics diag;
-	// Install a tiny TSD block before any fallible syscalls hit libsyscall's
-	// cerror path, which expects GS-relative errno storage to exist.
-	//
-	// This MUST precede the fixup walk below, and it used to follow it. The
-	// fixup walk calls __simple_salloc -> _vm_allocate -> _mach_vm_allocate ->
-	// __kernelrpc_mach_vm_allocate -> __mig_get_reply_port, which reads
-	// _os_tsd_get_direct(__TSD_MIG_REPLY) -- a %gs-relative load. With no %gs
-	// base yet that faults, and it faulted: the first boot of our own
-	// MH_DYLINKER died at exactly that instruction (RIP +0xbe02d, four bytes
-	// into __mig_get_reply_port), with this backtrace:
-	//
-	//   __dyld_start -> dyldbootstrap::start -> rebaseDyld ->
-	//   rebaseDyld_block_invoke -> MachOLoaded::fixupAllChainedFixups ->
-	//   walkChain -> forEachFixupInAllChains -> MachOAnalyzer::withChainStarts
-	//   -> __simple_salloc -> _vm_allocate -> _mach_vm_allocate ->
-	//   __kernelrpc_mach_vm_allocate -> __mig_get_reply_port  <-- fault
-	//
-	// The comment above already stated the requirement; only the placement was
-	// wrong. Note __thread_set_tsd_base is itself a syscall on x86_64
-	// (SYSCALL_CONSTRUCT_MDEP(3)), so it is one of the earliest things that
-	// can establish a TSD base at all -- it cannot be moved much earlier than
-	// this, and it does not need to be.
+	// The %gs base is NOT installed by the kernel before __dyld_start: every
+	// thread enters this loader with an unset %gs, so any %gs-relative load
+	// faults. This loader reaches one long before rebaseDyld() did -- see the
+	// call in start(), which is the first statement that can touch GS.
 	_dyld_setup_minimal_tsd();
+
+	// rebaseDyld is also reached from start_sim() below, so the TSD block is
+	// installed here too. _dyld_setup_minimal_tsd() is idempotent.
 
 	// ---- INSTRUMENTATION -----------------------------------------------------
 	// Why this is here and not a diag.error(): Diagnostics::error formats into
@@ -194,6 +179,15 @@ uintptr_t start(const dyld3::MachOLoaded* appsMachHeader, int argc, const char* 
 
     // Emit kdebug tracepoint to indicate dyld bootstrap has started <rdar://46878536>
     dyld3::kdebug_trace_dyld_marker(DBG_DYLD_TIMING_BOOTSTRAP_START, 0, 0, 0, 0);
+	// Install the minimal TSD block before ANY I/O, not merely before the
+	// first fallible syscall. _simple_dprintf -> _simple_vdprintf -> _write ->
+	// libsyscall's error path calls cerror(), which loads the errno slot
+	// through %gs; with no %gs base that is a %SIGSEGV at _cerror_nocancel,
+	// which is exactly where the first boot of this loader died. Note
+	// __thread_set_tsd_base is a bare SYSCALL_CONSTRUCT_MDEP(3) (i.e. the
+	// `syscall` instruction, no libsyscall wrapper), so this call itself
+	// cannot re-enter cerror and does not need a TSD base.
+	_dyld_setup_minimal_tsd();
 
 	// ---- INSTRUMENTATION, NOT A FEATURE. REMOVE ONCE THE LOADER CRASH IS FIXED.
 	// dyldsMachHeader IS this image's load address. The loader is re-slid on
