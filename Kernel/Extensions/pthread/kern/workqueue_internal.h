@@ -26,8 +26,8 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
-#ifndef _WORKQUEUE_INTERNAL_H_
-#define _WORKQUEUE_INTERNAL_H_
+#ifndef _PTHREAD_KEXT_WORKQUEUE_INTERNAL_H_
+#define _PTHREAD_KEXT_WORKQUEUE_INTERNAL_H_
 
 /* These definitions are shared between the kext and userspace inside the pthread project. Consolidating
  * duplicate definitions that used to exist in both projects, when separate.
@@ -47,4 +47,4 @@
 // magical `nkevents` values for _pthread_wqthread
 #define WORKQ_EXIT_THREAD_NKEVENT   (-1)
 
-#endif // _WORKQUEUE_INTERNAL_H_
+#endif // _PTHREAD_KEXT_WORKQUEUE_INTERNAL_H_

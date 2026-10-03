@@ -32,13 +32,37 @@
 #include <sys/user.h>
 #include <kern/thread_call.h>
 
-struct ksyn_waitq_element {
-#if __LP64__
-	char opaque[48];
+#ifdef __LP64__
+#define _KSYN_WAITQ_ELEMENT_SIZE	48
 #else
-	char opaque[32];
+#define _KSYN_WAITQ_ELEMENT_SIZE	32
 #endif
+
+/*
+ * This used to be an opaque blob sized so that the pthread kext's own copy of
+ * the structure (Kernel/Extensions/pthread/kern/kern_internal.h) would fit in
+ * the uthread's uu_save union.  ravynOS now links that code statically, so
+ * there is no module boundary left to hide behind and the two definitions
+ * would collide - the real one has to be shared.  It is slightly larger than
+ * the old blob, but uu_save is sized by its largest member and no other member
+ * is that small, so struct uthread's layout is unchanged (asserted in
+ * sys/user.h).
+ */
+#if defined(PSYNCH) && defined(BSD_KERNEL_PRIVATE)
+
+struct ksyn_waitq_element {
+	TAILQ_ENTRY(ksyn_waitq_element) kwe_list;	/* link to other list members */
+	void *          kwe_kwqqueue;		/* queue blocked on */
+	thread_t        kwe_thread;
+	uint16_t        kwe_state;		/* state */
+	uint16_t        kwe_flags;
+	uint32_t        kwe_lockseq;		/* the sequence of the entry */
+	uint32_t	kwe_count;		/* upper bound on number of matches still pending */
+	uint32_t 	kwe_psynchretval;	/* thread retval */
+	void		*kwe_uth;		/* uthread */
 };
+
+#endif /* PSYNCH && BSD_KERNEL_PRIVATE */
 
 void workq_mark_exiting(struct proc *);
 void workq_exit(struct proc *);

@@ -60,7 +60,7 @@ static __unused void*
 VM_UNSLIDE(void* ptr)
 {
     vm_offset_t unslid_ptr;
-    vm_kernel_unslide_or_perm_external(ptr, &unslid_ptr);
+    vm_kernel_unslide_or_perm_external((vm_offset_t)ptr, &unslid_ptr);
     return (void*)unslid_ptr;
 }
 

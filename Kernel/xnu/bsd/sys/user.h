@@ -384,6 +384,19 @@ struct uthread {
 #endif /* CONFIG_DEBUG_SYSCALL_REJECTION */
 };
 
+#if defined(PSYNCH) && defined(BSD_KERNEL_PRIVATE) && defined(__LP64__)
+/*
+ * uus_kwe grew from an opaque 48-byte blob to the real
+ * struct ksyn_waitq_element (56 bytes) when the pthread kext was linked into
+ * the kernel statically.  uu_save is sized by its largest member and nothing
+ * else in it is that small, so it is still 104 bytes and every field of
+ * struct uthread from uu_save onwards keeps its offset - which matters,
+ * because offsets into struct uthread are baked into the compiled kernel.
+ */
+_Static_assert(sizeof(((struct uthread *)0)->uu_save) == 104,
+    "uu_save changed size; struct uthread offsets past it have moved");
+#endif
+
 typedef struct uthread * uthread_t;
 
 /* Definition of uu_flag */

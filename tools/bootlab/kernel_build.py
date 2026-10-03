@@ -152,6 +152,41 @@ args_ahci.append("-I" + os.path.join(SRC, "osfmk"))
 print("Compiling ahci_block.c...", flush=True)
 run(args_ahci, stubs["directory"])
 
+# ------------------------------------------------- pthread kext (statically)
+# The pthread kext (Kernel/Extensions/pthread, com.apple.kec.pthread) is not
+# in the stock filelists and is never built by the xnu Makefiles, so there is
+# no per-object .o.json for kern_support.c / kern_synch.c.  Clone
+# bsd_stubs.o.json the same way the two BSD clones above do, then add the
+# kext's own include roots and CFLAGS (from Kernel/Extensions/pthread/makefile).
+# kern_init.c is deliberately not compiled: it defines pthread_kern, which
+# bsd/pthread/pthread_shims.c already owns, and the kxld-only
+# pthread_start/pthread_stop entry points.  bsd/pthread/pthread_builtin.c is
+# the registrar in its place.
+pthread_kext = os.path.abspath(os.path.join(SRC, "..", "Extensions", "pthread"))
+pthread_kext_incs = [
+    "-I" + os.path.join(pthread_kext, "kern"),
+    "-I" + pthread_kext,
+    "-I" + os.path.join(pthread_kext, "..", "..", "Libraries", "Libsystem"),
+    "-I" + os.path.join(pthread_kext, "..", "..", "Libraries", "Libsystem", "private"),
+]
+pthread_kext_defs = ["-D__PTHREAD_EXPOSE_INTERNALS__",
+                     "-DABSOLUTETIME_SCALAR_TYPE",
+                     "-DNEEDS_SCHED_CALL_T",
+                     "-D__STDC_HOSTED__=0"]
+for name in ["kern_support.c", "kern_synch.c"]:
+    args_kx = list(stubs["arguments"])
+    args_kx[args_kx.index(stubs["file"])] = os.path.join(pthread_kext, name)
+    # NOT "kern_synch.o": bsd/kern/kern_synch.c owns that object name in the
+    # same build directory, and the plain name silently overwrote it.
+    args_kx[args_kx.index("-o") + 1] = os.path.join(bsd_dev, "pthread_kext_" + name[:-2] + ".o")
+    # Joined -I<dir> form on purpose: inserting a separate argument in the
+    # middle of the template's existing -I/'-I <dir>' pair orphans <dir> as a
+    # stray positional input, which clang reports as the very misleading
+    # "cannot specify -o when generating multiple output files".
+    args_kx += pthread_kext_incs + pthread_kext_defs
+    print("Compiling %s..." % name, flush=True)
+    run(args_kx, stubs["directory"])
+
 # ------------------------------------------------------------------ msdosfs
 print("Compiling msdosfs objects...", flush=True)
 run([os.path.join(HERE, "msdosfs_compile.sh")], HERE)
@@ -187,6 +222,8 @@ full_cmd = ldflags.split() + [
     os.path.join(BUILD_DIR, "nonlto.o"),
     os.path.join(BUILD_DIR, "ubsan_stubs.o"),
     os.path.join(bsd_dev, "pthread_builtin.o"),
+    os.path.join(bsd_dev, "pthread_kext_kern_support.o"),
+    os.path.join(bsd_dev, "pthread_kext_kern_synch.o"),
     os.path.join(bsd_dev, "ahci_block.o"),
 ] + msdosfs_objs + ["-Wl,-map," + link_map, "-o", out_kernel]
 print("Linking %s..." % out_kernel, flush=True)

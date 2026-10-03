@@ -560,7 +560,9 @@ redrive:
 			// we have no way of knowing who it is. When it arrives, the lock
 			// path will update the turnstile owner and return it to userspace.
 			old_owner = _kwq_clear_owner(kwq);
-			pthread_kern->psynch_wait_update_owner(kwq, THREAD_NULL,
+			/* The psynch_wait_* callbacks take uintptr_t kwq (upstream
+			 * kxld ABI); statically linked it is just the pointer. */
+			pthread_kern->psynch_wait_update_owner((uintptr_t)kwq, THREAD_NULL,
 					&kwq->kw_turnstile);
 			PTHREAD_TRACE(psynch_mutex_kwqprepost, kwq->kw_addr,
 					kwq->kw_prepost.lseq, count, 0);
@@ -624,7 +626,7 @@ redrive:
 						0);
 			}
 			old_owner = _kwq_clear_owner(kwq);
-			pthread_kern->psynch_wait_update_owner(kwq, THREAD_NULL,
+			pthread_kern->psynch_wait_update_owner((uintptr_t)kwq, THREAD_NULL,
 					&kwq->kw_turnstile);
 		}
 	}
@@ -683,7 +685,7 @@ again:
 
 	if (_kwq_handle_interrupted_wakeup(kwq, KWQ_INTR_WRITE, lseq, retval)) {
 		old_owner = _kwq_set_owner(kwq, current_thread(), 0);
-		pthread_kern->psynch_wait_update_owner(kwq, kwq->kw_owner,
+		pthread_kern->psynch_wait_update_owner((uintptr_t)kwq, kwq->kw_owner,
 				&kwq->kw_turnstile);
 		ksyn_wqunlock(kwq);
 		goto out;
@@ -720,7 +722,7 @@ again:
 				kwq->kw_prepost.lseq, kwq->kw_prepost.count, 1);
 
 		old_owner = _kwq_set_owner(kwq, current_thread(), 0);
-		pthread_kern->psynch_wait_update_owner(kwq, kwq->kw_owner,
+		pthread_kern->psynch_wait_update_owner((uintptr_t)kwq, kwq->kw_owner,
 				&kwq->kw_turnstile);
 
 		ksyn_wqunlock(kwq);
@@ -806,7 +808,7 @@ psynch_mtxcontinue(void *parameter, wait_result_t result)
 		}
 	}
 
-	pthread_kern->psynch_wait_complete(kwq, &kwq->kw_turnstile);
+	pthread_kern->psynch_wait_complete((uintptr_t)kwq, &kwq->kw_turnstile);
 
 	ksyn_wqunlock(kwq);
 	pthread_kern->psynch_wait_cleanup();
@@ -1023,7 +1025,7 @@ __psynch_cvsignal(user_addr_t cv, uint32_t cgen, uint32_t cugen,
 	}
 	
 	if (threadport != 0) {
-		th = port_name_to_thread((mach_port_name_t)threadport);
+		th = port_name_to_thread((mach_port_name_t)threadport, (port_intrans_options_t)0);
 		if (th == THREAD_NULL) {
 			return ESRCH;
 		}
@@ -1614,7 +1616,9 @@ _pth_proc_hashdelete(proc_t p)
 		}
 	}
 	pthread_list_unlock();
-	FREE(hashptr, M_PROC);
+	/* pthhash is the mask hashinit() derived for this table; hashdestroy()
+	 * is the kernel's own idiom for tearing one down. */
+	hashdestroy(hashptr, M_PROC, pthhash);
 }
 
 /* no lock held for this as the waitqueue is getting freed */
@@ -1973,7 +1977,7 @@ ksyn_signal(ksyn_wait_queue_t kwq, kwq_queue_type_t kqi,
 		tstore = &kwq->kw_turnstile;
 	}
 
-	ret = pthread_kern->psynch_wait_wakeup(kwq, kwe, tstore);
+	ret = pthread_kern->psynch_wait_wakeup((uintptr_t)kwq, kwe, tstore);
 
 	if (ret != KERN_SUCCESS && ret != KERN_NOT_WAITING) {
 		panic("ksyn_signal: panic waking up thread %x\n", ret);

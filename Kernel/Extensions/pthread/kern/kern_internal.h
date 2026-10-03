@@ -26,8 +26,8 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
-#ifndef _SYS_PTHREAD_INTERNAL_H_
-#define _SYS_PTHREAD_INTERNAL_H_
+#ifndef _PTHREAD_KERN_INTERNAL_H_
+#define _PTHREAD_KERN_INTERNAL_H_
 
 #include <pthread/bsdthread_private.h>
 #include <pthread/priority_private.h>
@@ -52,8 +52,17 @@ struct ksyn_waitq_element;
 #include "kern/synch_internal.h"
 #include "kern/workqueue_internal.h"
 #include "kern/kern_trace.h"
-#include "pthread/qos.h"
-#include "private/qos_private.h"
+#include <pthread/workqueue_internal.h>
+/*
+ * Static link: the kext used to pick these two up from libpthread's private
+ * headers (pthread/qos.h, private/qos_private.h).  Both are userspace
+ * headers and pull in sys/_pthread/*.h, which does not exist for the
+ * kernel.  Everything they contributed that is actually used here is the
+ * _pthread_set_flags enum, which the kernel mirrors as
+ * enum workq_set_self_flags (see the comment on that enum), so alias the
+ * two instead of re-including the userspace headers.
+ */
+typedef enum workq_set_self_flags _pthread_set_flags_t;
 
 /* pthread userspace SPI feature checking, these constants are returned from bsdthread_register,
  * as a bitmask, to inform userspace of the supported feature set. Old releases of OS X return
@@ -112,24 +121,18 @@ struct _pthread_registration_data {
 
 extern pthread_callbacks_t pthread_kern;
 
-struct ksyn_waitq_element {
-	TAILQ_ENTRY(ksyn_waitq_element) kwe_list;	/* link to other list members */
-	void *          kwe_kwqqueue;            	/* queue blocked on */
-	thread_t        kwe_thread;
-	uint16_t        kwe_state;			/* state */
-	uint16_t        kwe_flags;
-	uint32_t        kwe_lockseq;			/* the sequence of the entry */
-	uint32_t	kwe_count;			/* upper bound on number of matches still pending */
-	uint32_t 	kwe_psynchretval;		/* thread retval */
-	void		*kwe_uth;			/* uthread */
-};
+/* struct ksyn_waitq_element now lives in <sys/pthread_internal.h>: statically
+ * linked in, this header and the kernel's bsd/sys/pthread_internal.h are one
+ * translation unit's worth of the same struct and must not define it twice. */
 typedef struct ksyn_waitq_element * ksyn_waitq_element_t;
 
 #define PTH_DEFAULT_STACKSIZE 512*1024
 #define MAX_PTHREAD_SIZE 64*1024
 
-/* exported from the kernel but not present in any headers. */
-extern thread_t port_name_to_thread(mach_port_name_t port_name);
+/* exported from the kernel but not present in any headers.  port_name_to_thread()
+ * grew a port_intrans_options_t parameter since this code was written. */
+extern thread_t port_name_to_thread(mach_port_name_t port_name,
+    port_intrans_options_t options);
 
 /* function declarations for pthread_kext.c */
 void pthread_init(void);

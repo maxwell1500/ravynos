@@ -80,6 +80,8 @@ extern void panic(const char *string, ...) __printflike(1,2) __dead2;
 #include <mach/sync_policy.h>
 #include <mach/task.h>
 #include <mach/vm_prot.h>
+#include <mach/vm_statistics.h>	/* VM_MEMORY_STACK */
+#include <vm/vm_kern_xnu.h>	/* mach_vm_map_kernel(), VM_MAP_KERNEL_FLAGS_* */
 #include <kern/kern_types.h>
 #include <kern/task.h>
 #include <kern/clock.h>
@@ -273,15 +275,21 @@ _bsdthread_create(struct proc *p,
 
 	PTHREAD_TRACE(pthread_thread_create | DBG_FUNC_START, flags, 0, 0, 0);
 
-	kret = pthread_kern->thread_create(ctask, &th);
-	if (kret != KERN_SUCCESS)
+	/* thread_create() no longer exists; thread_create_immovable() is its
+	 * replacement (it is also what the callbacks table exposes). */
+	kret = pthread_kern->thread_create_immovable(ctask, &th);
+	if (kret != KERN_SUCCESS) {
 		return(ENOMEM);
+	}
 	thread_reference(th);
 
 	pthread_kern->thread_set_tag(th, THREAD_TAG_PTHREAD);
 
-	sright = (void *)pthread_kern->convert_thread_to_port(th);
-	th_thport = pthread_kern->ipc_port_copyout_send(sright, pthread_kern->task_get_ipcspace(ctask));
+	/* convert_thread_to_port()/ipc_port_copyout_send() were replaced by the
+	 * _pinned variants, which the kernel hands to the workqueue code in
+	 * bsd/pthread/pthread_workqueue.c. */
+	sright = (void *)pthread_kern->convert_thread_to_port_pinned(th);
+	th_thport = pthread_kern->ipc_port_copyout_send_pinned(sright, pthread_kern->task_get_ipcspace(ctask));
 	if (!MACH_PORT_VALID(th_thport)) {
 		error = EMFILE; // userland will convert this into a crash
 		goto out;
@@ -672,13 +680,16 @@ workq_create_threadstack(proc_t p, vm_map_t vmap, mach_vm_offset_t *out_addr)
 	kern_return_t kret;
 
 	th_allocsize = workq_thread_allocsize(p, vmap, &guardsize);
-	kret = mach_vm_map(vmap, &stackaddr, th_allocsize, page_size - 1,
-			VM_MAKE_TAG(VM_MEMORY_STACK) | VM_FLAGS_ANYWHERE, NULL, 0, FALSE,
+	/* mach_vm_map() now rejects anything outside VM_FLAGS_USER_MAP and has
+	 * no way to pass a user tag, so the stack tag moved into
+	 * vm_map_kernel_flags_t.vm_tag on the kernel entry points. */
+	kret = mach_vm_map_kernel(vmap, &stackaddr, th_allocsize, page_size - 1,
+			VM_MAP_KERNEL_FLAGS_ANYWHERE(.vm_tag = VM_MEMORY_STACK), NULL, 0, FALSE,
 			VM_PROT_DEFAULT, VM_PROT_ALL, VM_INHERIT_DEFAULT);
 
 	if (kret != KERN_SUCCESS) {
-		kret = mach_vm_allocate(vmap, &stackaddr, th_allocsize,
-				VM_MAKE_TAG(VM_MEMORY_STACK) | VM_FLAGS_ANYWHERE);
+		kret = mach_vm_allocate_kernel(vmap, &stackaddr, th_allocsize,
+				VM_MAP_KERNEL_FLAGS_ANYWHERE(.vm_tag = VM_MEMORY_STACK));
 	}
 
 	if (kret != KERN_SUCCESS) {
@@ -782,7 +793,9 @@ workq_set_register_state(proc_t p, thread_t th,
 
 		int error = pthread_kern->thread_set_wq_state32(th, (thread_state_t)&state);
 		if (error != KERN_SUCCESS) {
-			panic(__func__ ": thread_set_wq_state failed: %d", error);
+			/* __func__ is not usable as a macro argument here; panic()
+			 * is a macro and clang does not expand it in that position. */
+			panic("%s: thread_set_wq_state failed: %d", __func__, error);
 		}
 	} else {
 		x86_thread_state64_t state64 = {
@@ -800,7 +813,7 @@ workq_set_register_state(proc_t p, thread_t th,
 
 		int error = pthread_kern->thread_set_wq_state64(th, (thread_state_t)&state64);
 		if (error != KERN_SUCCESS) {
-			panic(__func__ ": thread_set_wq_state failed: %d", error);
+			panic("%s: thread_set_wq_state failed: %d", __func__, error);
 		}
 	}
 #elif defined(__arm__) || defined(__arm64__)
@@ -868,7 +881,7 @@ workq_kevent(proc_t p, struct workq_thread_addrs *th_addrs,
 
 	// squash any errors into just empty output
 	if (ret != 0 || *kevent_count_out == -1) {
-		*kevent_list_out = NULL;
+		*kevent_list_out = 0;
 		*kevent_count_out = 0;
 		return ret;
 	}
@@ -909,7 +922,7 @@ workq_setup_thread(proc_t p, thread_t th, vm_map_t map, user_addr_t stackaddr,
 {
 	struct workq_thread_addrs th_addrs;
 	bool first_use = (setup_flags & WQ_SETUP_FIRST_USE);
-	user_addr_t kevent_list = NULL;
+	user_addr_t kevent_list = 0;
 	int kevent_count = 0;
 
 	workq_thread_get_addrs(map, stackaddr, &th_addrs);
@@ -933,16 +946,17 @@ workq_setup_thread(proc_t p, thread_t th, vm_map_t map, user_addr_t stackaddr,
 		vm_map_offset_t th_page = vm_map_trunc_page_mask(th_addrs.self, mask);
 		vm_map_offset_t stk_page = vm_map_trunc_page_mask(th_addrs.stack_top - 1, mask);
 		if (th_page != stk_page) {
-			vm_fault(map, stk_page, VM_PROT_READ | VM_PROT_WRITE, FALSE, THREAD_UNINT, NULL, 0);
+			/* vm_fault() grew a vm_tag_t wire_tag parameter. */
+			vm_fault(map, stk_page, VM_PROT_READ | VM_PROT_WRITE, FALSE, VM_KERN_MEMORY_NONE, THREAD_UNINT, NULL, 0);
 		}
-		vm_fault(map, th_page, VM_PROT_READ | VM_PROT_WRITE, FALSE, THREAD_UNINT, NULL, 0);
+		vm_fault(map, th_page, VM_PROT_READ | VM_PROT_WRITE, FALSE, VM_KERN_MEMORY_NONE, THREAD_UNINT, NULL, 0);
 	}
 
 	if (setup_flags & WQ_SETUP_EXIT_THREAD) {
 		kevent_count = WORKQ_EXIT_THREAD_NKEVENT;
 	} else if (upcall_flags & WQ_FLAG_THREAD_KEVENT) {
 		unsigned int flags = KEVENT_FLAG_STACK_DATA | KEVENT_FLAG_IMMEDIATE;
-		workq_kevent(p, &th_addrs, NULL, 0, flags, &kevent_list, &kevent_count);
+		workq_kevent(p, &th_addrs, 0, 0, flags, &kevent_list, &kevent_count);
 	}
 
 	workq_set_register_state(p, th, &th_addrs, kport,
@@ -962,7 +976,7 @@ workq_handle_stack_events(proc_t p, thread_t th, vm_map_t map,
 		user_addr_t events, int nevents, int upcall_flags)
 {
 	struct workq_thread_addrs th_addrs;
-	user_addr_t kevent_list = NULL;
+	user_addr_t kevent_list = 0;
 	int kevent_count = 0, error;
 	__assert_only kern_return_t kr;
 
@@ -1015,6 +1029,4 @@ _pthread_init(void)
 	if (PE_parse_boot_argn("pthread_mutex_default_policy", &policy_bootarg, sizeof(policy_bootarg))) {
 		pthread_mutex_default_policy = policy_bootarg;
 	}
-
-	sysctl_register_oid(&sysctl__kern_pthread_mutex_default_policy);
 }
