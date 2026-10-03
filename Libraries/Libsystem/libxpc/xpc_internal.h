@@ -112,6 +112,30 @@ struct xpc_frame_header {
     uint64_t spare[4];
 };
 
+/*
+ * Mach messages carrying an XPC object carry this in msgh_id.  MIG RPC
+ * messages instead carry a subsystem base (>= 0x100 for every subsystem
+ * launchd speaks) and mach notifications carry MACH_NOTIFY_* (0x100+), so
+ * zero is unambiguous and lets xpc_pipe_try_receive() tell the two apart on
+ * a shared port set.
+ */
+#define XPC_MESSAGE_ID		0
+
+/* mpack extension type used to carry an _XPC_TYPE_ENDPOINT over the wire.
+ * A bare uint64 would decode as _XPC_TYPE_UINT64 and lose the port type.
+ */
+#define XPC_EXT_MACH_PORT	1
+
+/* Where the reply to a request received on a port set has to go.  A reply
+ * xpc_object_t inherits this from the request via xpc_dictionary_create_reply()
+ * and xpc_pipe_routine_reply() consumes it, so that the server-side reply
+ * path never has to be handed the port separately.
+ */
+struct xpc_reply_context {
+	mach_port_t	xrc_reply_port;	/* the peer's reply port */
+	uint64_t	xrc_id;		/* XPC sequence number to answer */
+};
+
 #define _XPC_FROM_WIRE 0x1
 struct xpc_object {
 	uint8_t			xo_xpc_type;
@@ -121,6 +145,7 @@ struct xpc_object {
 	xpc_u			xo_u;
 #ifdef __MACH__
 	audit_token_t *		xo_audit_token;
+	struct xpc_reply_context * xo_reply;	/* set on objects from the wire */
 #endif
 	TAILQ_ENTRY(xpc_object) xo_link;
 };
@@ -230,5 +255,8 @@ __private_extern__ int xpc_pipe_send(xpc_object_t obj, uint64_t id,
     xpc_port_t local, xpc_port_t remote);
 __private_extern__ int xpc_pipe_receive(xpc_port_t local, xpc_port_t *remote,
     xpc_object_t *result, uint64_t *id, struct xpc_credentials *creds);
+__private_extern__ int _xpc_pack(struct xpc_object *xo, void **buf,
+    uint64_t id, size_t *size);
+__private_extern__ struct xpc_object *_xpc_unpack(void *buf, size_t size);
 
 #endif	/* _LIBXPC_XPC_INTERNAL_H */

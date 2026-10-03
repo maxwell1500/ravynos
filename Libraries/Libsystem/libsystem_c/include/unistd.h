@@ -691,6 +691,28 @@ ssize_t	 pwrite(int __fd, const void * __buf, size_t __nbyte, off_t __offset) LI
 #endif /* !LIBC_ALIAS_PWRITE */
 //End-Libc
 
+/*
+ * FreeBSD/Linux copy_file_range(2).
+ *
+ * The kernel has no copy_file_range syscall (see Kernel/xnu
+ * bsd/kern/syscalls.master: it defines 34 chflags, 35 fchflags, and no
+ * SYS_copy_file_range at all), so this is implemented in Libsystem on top
+ * of pread/pwrite.  See libsystem_c/emulated/copy_file_range.c.
+ *
+ * A NULL off_in/off_out means "use and advance the file offset"; a
+ * non-NULL one is read on entry and updated with the resulting position.
+ */
+ssize_t	 copy_file_range(int __fd_in, off_t *__off_in,
+	    int __fd_out, off_t *__off_out, size_t __len, unsigned int __flags);
+
+/*
+ * FreeBSD chflagsat(2).  The kernel has no chflagsat syscall either; the
+ * implementation resolves the dirfd-relative path and defers to the real
+ * chflags(2)/fchflags(2).  See libsystem_c/emulated/chflagsat.c.
+ */
+int	 chflagsat(int __dfd, const char *__path, unsigned int __flags,
+	    int __atflags);
+
 /* Removed in Issue 6 */
 #if !defined(_POSIX_C_SOURCE) || _POSIX_C_SOURCE < 200112L
 /* Note that Issue 5 changed the argument as intprt_t,
@@ -983,6 +1005,69 @@ int	 ffsctl(int,unsigned long,void*,unsigned int) __OSX_AVAILABLE_STARTING(__MAC
 
 int	fsync_volume_np(int, int) __OSX_AVAILABLE_STARTING(__MAC_10_8, __IPHONE_6_0);
 int	sync_volume_np(const char *, int) __OSX_AVAILABLE_STARTING(__MAC_10_8, __IPHONE_6_0);
+
+/*
+ * FreeBSD pathconf(3) selectors that BSD userland expects.
+ *
+ * The kernel's <sys/unistd.h> defines 1.._PC_MIN_HOLE_SIZE (27); anything
+ * outside that range reaches vn_pathconf()'s default arm
+ * (Kernel/xnu/bsd/vfs/vfs_vnops.c:1929), which dispatches to the
+ * filesystem's VNOP_PATHCONF.  ravynOS's filesystems have no ACL support
+ * of any kind -- bsd/kern/syscalls.master defines no acl_get_file /
+ * acl_set_file / extattr syscalls, and there is no POSIX.1e or NFSv4 ACL
+ * code in the tree -- so those default to err_pathconf()
+ * (bsd/vfs/vfs_support.c:661) returning ENOTSUP.
+ *
+ * That is exactly the contract FreeBSD specifies for an unimplemented
+ * selector: fpathconf(3) fails with EINVAL/ENOTSUP rather than reporting
+ * support.  These values are therefore chosen to fall outside the
+ * kernel's handled range, so querying them reports "not supported"
+ * honestly instead of pretending.  cp(1)/mv(1) already handle that
+ * correctly: BSD/bin/cp/utils.c:411 and BSD/bin/mv/mv.c only warn on an
+ * errno other than EINVAL, and treat -1 as "no ACL support, skip ACL
+ * preservation" (utils.c:427).
+ *
+ * _PC_ACL_NFS4 and _PC_ACL_EXTENDED are the only two BSD userland tools
+ * here actually reference; the values are from FreeBSD's numbering.
+ */
+#define	_PC_ACL_NFS4		61	/* ACL supports NFSv4 ACLs */
+#define	_PC_ACL_EXTENDED	62	/* ACL supports POSIX.1e extended ACLs */
+
+/*
+ * <sys/stat.h> is generated from the kernel's BSD header set
+ * (Developer/ravynOS.sdk/Makefile runs Kernel/xnu's header install and
+ * unifdef), so it is not an editable Libsystem header.  ravynOS spells the
+ * BSD timestamp members the Darwin way (st_atimespec/st_mtimespec, both
+ * struct timespec) and has no separate user-flag namespace, so expose the
+ * FreeBSD spellings as aliases onto what actually exists.
+ *
+ * st_atim/st_mtim are exact aliases: st_atimespec/st_mtimespec are both
+ * struct timespec at the same offsets, so the BSD spelling denotes the
+ * identical storage.
+ *
+ * UF_ARCHIVE is FreeBSD's "file needs to be archived" user flag, and
+ * mv(1) uses it only to mask one bit out of the st_flags comparison and
+ * carry it onto the destination (BSD/bin/mv/mv.c:331-334).  It is defined
+ * to 0x00000010, the bit ravynOS's own <sys/stat.h> explicitly reserves
+ * for FreeBSD and leaves unimplemented:
+ *
+ *   "The following bit is reserved for FreeBSD.  It is not implemented
+ *    in Mac OS X."   -- usr/include/sys/stat.h:315-317
+ *   (there, as a commented-out UF_NOUNLINK 0x00000010)
+ *
+ * so the bit is genuinely free on ravynOS: no filesystem sets it, and no
+ * other UF_* constant in that header collides with it.  Aliasing it here
+ * therefore preserves mv(1)'s comparison exactly -- the masked bit is 0 on
+ * both sides, so the comparison reduces to the flags that matter.
+ */
+#ifndef st_atim
+#define	st_atim		st_atimespec
+#define	st_mtim		st_mtimespec
+#define	st_ctim		st_ctimespec
+#endif
+#ifndef UF_ARCHIVE
+#define	UF_ARCHIVE	0x00000010	/* user flag: file needs archiving */
+#endif
 
 extern int optreset;
 

@@ -140,6 +140,7 @@ _xpc_prim_create_flags(int type, xpc_u value, size_t size, uint16_t flags)
 	xo->xo_refcnt = 1;
 #if MACH
 	xo->xo_audit_token = NULL;
+	xo->xo_reply = NULL;
 #endif
 
 	if (type == _XPC_TYPE_DICTIONARY)

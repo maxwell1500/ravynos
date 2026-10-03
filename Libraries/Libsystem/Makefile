@@ -3,6 +3,15 @@ MK_WERROR = no
 LIB = System.B
 SRCS = init.c CompatibilityHacks.c stubs.c
 
+# NOTE ON -I${ROOT_SOURCE_DIR}/Kernel/xnu/libsyscall (PROVENANCE-PLAN.md §4 P5).
+# This path used to be .../libsyscall/mach, which put xnu's 14-header
+# KERNEL-internal mach/ generation AHEAD of the SDK's usr/include/mach, so a
+# single translation unit read mach.h, mach_init.h, mach_error.h,
+# mach_interface.h and vm_page_size.h from xnu while the other 58 mach/
+# headers came from the SDK. Pointing at the parent instead exposes no
+# top-level headers of its own (libsyscall/*.h does not exist), so
+# <mach/...> resolves through -isysroot to the SDK's single generation.
+# Same shape as the working precedent at tools/bootlab/isysroot-cc:196.
 CFLAGS = --sysroot=${RAVYN_SDKROOT} -w \
 	-mmacos-version-min=${MACOS_VERSION_MIN} \
 	-Wno-implicit-function-declaration \
@@ -11,7 +20,7 @@ CFLAGS = --sysroot=${RAVYN_SDKROOT} -w \
 	-I${ROOT_SOURCE_DIR}/Kernel/xnu/EXTERNAL_HEADERS \
 	-I${RAVYN_SDKROOT}/usr/include/pthread -I${.CURDIR}/private \
 	-I${ROOT_SOURCE_DIR}/Kernel/xnu/bsd \
-	-I${ROOT_SOURCE_DIR}/Kernel/xnu/libsyscall/mach \
+	-I${ROOT_SOURCE_DIR}/Kernel/xnu/libsyscall \
 	-I${ROOT_SOURCE_DIR}/Kernel/xnu/libsyscall/wrappers \
 	-I${.CURDIR}/libsystem_c/include \
 	-I${ROOT_BINARY_DIR}/Kernel/xnu/bsd \
@@ -139,11 +148,31 @@ EXPMEMRSC_O = ${.OBJDIR}/experimental_memory_resource.o
 
 # The wrapper gates its C force-includes off the .s/.S suffix, so these two
 # are handed to the assembler as assembly rather than preprocessed as C.
-${.OBJDIR}/UnwindRegistersSave.o: ${UNWIND_SAVE_S} ${UNWIND_ASM_HDRS}
-	${CC} -c -o $@ ${UNWIND_SAVE_S}
+#
+# -include unwind_asm_export.h is load-bearing, not cosmetic. LLVM's
+# assembly.h:258-265 emits DEFINE_LIBUNWIND_FUNCTION as ".globl" PLUS
+# HIDDEN_SYMBOL, and for Apple targets assembly.h:121 defines
+# HIDDEN_SYMBOL as .private_extern. Both .S files therefore compiled to
+# private-external symbols, ld64 localised them, and they never reached the
+# export trie -- libobjc's two references had nothing to bind to:
+#   $ nm -m UnwindRegistersSave.o
+#     0000000000000000 (__TEXT,__text) private external ___unw_getcontext
+#   $ nm $SDK/usr/lib/system/libunwind.dylib | grep -E 'unw_getcontext|jumpto'
+#     000000000000c1f0 t ___unw_getcontext
+#     000000000000c242 t ___libunwind_Registers_x86_64_jumpto
+# lowercase `t` -- linked in, not exported. Apple's own libunwind.dylib has
+# the same shape and gets away with it only because the dyld shared cache
+# links every image as one unit, where .private_extern resolves freely
+# between members. ravynOS loads each dylib standalone, so they must be
+# genuinely exported. The header changes only that visibility; see it for
+# why it overrides a macro rather than touching the vendored LLVM tree.
+${.OBJDIR}/UnwindRegistersSave.o: ${UNWIND_SAVE_S} ${UNWIND_ASM_HDRS} \
+		${.CURDIR}/unwind_asm_export.h
+	${CC} -c -o $@ -include ${.CURDIR}/unwind_asm_export.h ${UNWIND_SAVE_S}
 
-${.OBJDIR}/UnwindRegistersRestore.o: ${UNWIND_RESTORE_S} ${UNWIND_ASM_HDRS}
-	${CC} -c -o $@ ${UNWIND_RESTORE_S}
+${.OBJDIR}/UnwindRegistersRestore.o: ${UNWIND_RESTORE_S} ${UNWIND_ASM_HDRS} \
+		${.CURDIR}/unwind_asm_export.h
+	${CC} -c -o $@ -include ${.CURDIR}/unwind_asm_export.h ${UNWIND_RESTORE_S}
 
 # -std=c++20: memory_resource.cpp uses `static constinit`, a C++20 keyword.
 # At the language default clang reports "unknown type name 'constinit'" and
@@ -158,17 +187,38 @@ ${EXPMEMRSC_O}: ${EXPMEMRSC_CPP}
 	  -D_LIBCPP_BUILDING_LIBRARY -std=c++20 -fno-rtti -fPIC \
 	  ${EXPMEMRSC_CPP}
 
+# WHY THIS LINKS INTO ${.CURDIR} AND NOT STRAIGHT INTO THE SDK.
+#
+# This target used to write straight to ${RAVYN_SDKROOT}/usr/lib/system/,
+# which made the SDK the build OUTPUT directory rather than an install
+# destination. That is invisible while the SDK happens to live inside the
+# build tree, and it is exactly what left tools/bootlab/manifest_cpmv.json
+# un-relocatable: mkimage.py resolves "file" relative to tools/bootlab and
+# cannot expand ${RAVYN_SDKROOT}, so the only way to name this dylib was a
+# path that escaped the repo (../../../build/.../ravynOS.sdk/usr/lib/system/
+# ...). The manifest then named a machine-specific tree and PROVENANCE-PLAN
+# P0 could not close.
+#
+# The fix is the shape the rest of this closure already uses: link into
+# ${.CURDIR} -- an in-repo build product, already covered by the
+# /Libsystem/**/*.dylib rule in Libraries/.gitignore -- and `cp` it into the
+# SDK as an INSTALL step. Every other entry in the manifest names a
+# ${.CURDIR}/<component>/<lib>.dylib build product for the same reason.
+
+UNWIND_TARGET = ${.CURDIR}/libunwind.dylib
+
 libunwind.dylib: ${.OBJDIR}/../llvm_target/libunwind/lib/libunwind.a \
 	${UNWIND_ASM_OBJS}
 	mkdir -p ${RAVYN_SDKROOT}/usr/lib/system ${SYSROOT_DIR}/usr/lib/system
 	${CC} -umbrella System -Wl,-all_load -fuse-ld=${LD} -shared \
-	  -dylib -o ${RAVYN_SDKROOT}/usr/lib/system/libunwind.dylib \
+	  -dylib -o ${UNWIND_TARGET} \
 	  -Wl,-install_name,/usr/lib/system/libunwind.dylib \
 	  -Wl,-compatibility_version,1.0.0 -Wl,-current_version,35.4 \
 	  -L${RAVYN_SDKROOT}/usr/lib -L${RAVYN_SDKROOT}/usr/lib/system \
 	  -mmacosx-version-min=${MACOS_VERSION_MIN} ${.ALLSRC} \
 	  -lsystem_c -lsystem_pthread -lsystem_platform -lcompiler_rt \
 	  -lsystem_malloc -ldyld
+	cp -f ${UNWIND_TARGET} ${RAVYN_SDKROOT}/usr/lib/system/
 	# cp returns 1 when source and destination are the same file, and
 	# SYSROOT_DIR and RAVYN_SDKROOT can resolve to the same tree (they are
 	# both environment-supplied). That turned this "copy" into a hard build
@@ -178,11 +228,204 @@ libunwind.dylib: ${.OBJDIR}/../llvm_target/libunwind/lib/libunwind.a \
 	# genuine first copy still happens.
 	@cmp -s ${RAVYN_SDKROOT}/usr/lib/system/libunwind.dylib \
 	    ${SYSROOT_DIR}/usr/lib/system/libunwind.dylib 2>/dev/null || \
-	cp -f ${RAVYN_SDKROOT}/usr/lib/system/libunwind.dylib \
-		${SYSROOT_DIR}/usr/lib/system/
+	cp -f ${UNWIND_TARGET} ${SYSROOT_DIR}/usr/lib/system/
+
+#-----------------------------------------------------------------------------
+#                    libcompiler_rt.dylib -- THE MISSING PRODUCER
+#-----------------------------------------------------------------------------
+# libSystem.B LC_REEXPORT_DYLIBs this, and liblaunch, libsystem_pthread,
+# libsystem_notify, libsystem_info, libsystem_c, libsystem_malloc and
+# libunwind all link -lcompiler_rt, so the closure is INCOMPLETE without it.
+# Nothing in this repository used to produce it: Libraries/Makefile's
+# `compiler_rt` target only verifies the ARCHIVE libclang_rt.osx.a through
+# require_real_archive.sh, and that archive is itself only ever produced out
+# of tree. The dylib's bytes existed at $RAVYN_SDKROOT/usr/lib/system/ with no
+# rule that could regenerate them, which is why
+# tools/bootlab/manifest_cpmv.json had to name them by an out-of-repo path
+# (PROVENANCE-PLAN P0, "P6 UNKNOWN").
+#
+# So this target builds it for real, from the vendored compiler-rt sources,
+# and installs it like every other member above.
+#
+# The inputs, and why each flag is here:
+#
+#  * -fvisibility=default. compiler-rt's own Darwin build passes
+#    -fvisibility=hidden -DVISIBILITY_HIDDEN, which is correct for an archive
+#    that a CONSUMER links (only the builtins it references get pulled in).
+#    It is wrong for the dylib: built here, every object came out private
+#    external, ld64 exported nothing at all, and the result was a 4 KB image
+#    with an empty export trie. Measured, both ways.
+#
+#  * -fno-stack-protector. The reference objects import no __stack_chk_*.
+#
+#  * -D__DARWIN_UNIX03 -DXNU_PLATFORM_MacOSX
+#    -D__DARWIN_ONLY_UNIX_CONFORMANCE=0. This is the same header problem
+#    build-libraries.sh already injects the first two of for: the SDK's
+#    sys/cdefs.h wraps every symbol-versioning suffix in __DARWIN_ONLY_*, and
+#    userspace never defines those. Without the override, __DARWIN_SUF_UNIX03
+#    expands to nothing and enable_execute_stack.c imports _mprotect instead
+#    of _mprotect$UNIX2003. The reference imports the $UNIX2003 spelling.
+#    Both spellings exist in this closure, so either binds -- but the suffixed
+#    one is what libsystem_c actually exports under that name.
+#
+#  * -nodefaultlibs and -Wl,-not_for_dyld_shared_cache. ${CC} is
+#    tools/bootlab/isysroot-cc, which injects -nodefaultlibs because clang
+#    otherwise adds -lSystem to every dylib link -- and in this tree
+#    libSystem is assembled FROM these very libraries. ld64 in turn refuses
+#    -undefined dynamic_lookup on a shared-cache-eligible dylib, which is why
+#    the flag is spelled out here as well.
+#
+#  * -Wl,-force_load,<archive> rather than -Wl,-all_load <archive>. This is
+#    not cosmetic. clang's driver recognises an input whose basename is
+#    libclang_rt.osx.a as "the compiler runtime" and silently REPLACES it with
+#    the host CommandLineTools copy -- the argument never reaches ld64, the
+#    link succeeds, and the output is the host's runtime with our install
+#    name on it. Verified: -v shows the CLT path substituted, the link
+#    produces a 4 KB image with 0 exports, and the identical archive under
+#    any other name links to 560 symbols. -force_load passes the path through
+#    as linker input, so the name cannot be intercepted.
+#
+# COMPILER_RT_SOURCES is not "every .c under lib/builtins". It is the exact
+# x86_64/macOS set, derived from upstream's own lib/builtins/CMakeLists.txt
+# source lists, and it differs from a naive glob in four ways that all matter:
+#   - GENERIC_TF_SOURCES and x86_80_BIT_SOURCES are included (the 80-bit long
+#     double builtins).
+#   - filter_builtin_sources() drops the generic C file wherever an
+#     x86_64/i386-specific one exists: i386/fp_mode.c and
+#     x86_64/floatdidf.c, floatdisf.c, floatdixf.c, floatundidf.S,
+#     floatundisf.S, floatundixf.S.
+#   - upstream's Darwin-excludes/osx.txt removes seven sources, on the
+#     assumption that macOS's own libSystem exports those builtins. ravynOS's
+#     does NOT: measured, `nm -g -j libSystem.B.dylib` finds 0 of __addtf3,
+#     __divtf3, __multf3, __powitf2, __subtf3, __trampoline_setup. They are
+#     therefore KEPT here, and so is apple_versioning.c, whose $ld$hide$os*
+#     aliases are the versioning surface this dylib has always carried.
+#     atomic.c is kept for the same reason (COMPILER_RT_EXCLUDE_ATOMIC_BUILTIN
+#     defaults ON upstream for exactly that libSystem assumption).
+#   - os_version_check.c is dropped. It #includes <dispatch/dispatch.h>,
+#     which the ravynOS SDK cannot satisfy ("'os/object.h' file not found"),
+#     and it contributed no symbol to the reference archive either.
+#
+# The resulting export trie is identical to the reference dylib's: 529 names,
+# byte-for-byte the same set, verified with dyld_info -exports and diffed.
+
+RT_BUILTINS_DIR = ${LLVM_RT}/compiler-rt/lib/builtins
+
+COMPILER_RT_SOURCES = \
+	absvdi2.c absvsi2.c absvti2.c adddf3.c addsf3.c addtf3.c \
+	addvdi3.c addvsi3.c addvti3.c apple_versioning.c ashldi3.c ashlti3.c \
+	ashrdi3.c ashrti3.c atomic.c atomic_flag_clear.c \
+	atomic_flag_clear_explicit.c atomic_flag_test_and_set.c \
+	atomic_flag_test_and_set_explicit.c atomic_signal_fence.c \
+	atomic_thread_fence.c bswapdi2.c bswapsi2.c clear_cache.c clzdi2.c \
+	clzsi2.c clzti2.c cmpdi2.c cmpti2.c comparedf2.c comparesf2.c \
+	comparetf2.c ctzdi2.c ctzsi2.c ctzti2.c divdc3.c divdf3.c divdi3.c \
+	divmoddi4.c divmodsi4.c divmodti4.c divsc3.c divsf3.c divsi3.c divtc3.c \
+	divtf3.c divti3.c divxc3.c emutls.c enable_execute_stack.c eprintf.c \
+	extenddftf2.c extendhfsf2.c extendhftf2.c extendsfdf2.c extendsftf2.c \
+	ffsdi2.c ffssi2.c ffsti2.c fixdfdi.c fixdfsi.c fixdfti.c fixsfdi.c \
+	fixsfsi.c fixsfti.c fixtfdi.c fixtfsi.c fixtfti.c fixunsdfdi.c \
+	fixunsdfsi.c fixunsdfti.c fixunssfdi.c fixunssfsi.c fixunssfti.c \
+	fixunstfdi.c fixunstfsi.c fixunstfti.c fixunsxfdi.c fixunsxfsi.c \
+	fixunsxfti.c fixxfdi.c fixxfti.c floatditf.c floatsidf.c floatsisf.c \
+	floatsitf.c floattidf.c floattisf.c floattitf.c floattixf.c floatunditf.c \
+	floatunsidf.c floatunsisf.c floatunsitf.c floatuntidf.c floatuntisf.c \
+	floatuntitf.c floatuntixf.c gcc_personality_v0.c i386/fp_mode.c \
+	int_util.c lshrdi3.c lshrti3.c moddi3.c modsi3.c modti3.c muldc3.c \
+	muldf3.c muldi3.c mulodi4.c mulosi4.c muloti4.c mulsc3.c mulsf3.c \
+	multc3.c multf3.c multi3.c mulvdi3.c mulvsi3.c mulvti3.c mulxc3.c \
+	negdf2.c negdi2.c negsf2.c negti2.c negvdi2.c negvsi2.c negvti2.c \
+	paritydi2.c paritysi2.c parityti2.c popcountdi2.c popcountsi2.c \
+	popcountti2.c powidf2.c powisf2.c powitf2.c powixf2.c subdf3.c \
+	subsf3.c subtf3.c subvdi3.c subvsi3.c subvti3.c trampoline_setup.c \
+	truncdfbf2.c truncdfhf2.c truncdfsf2.c truncsfbf2.c truncsfhf2.c \
+	trunctfdf2.c trunctfhf2.c trunctfsf2.c ucmpdi2.c ucmpti2.c udivdi3.c \
+	udivmoddi4.c udivmodsi4.c udivmodti4.c udivsi3.c udivti3.c umoddi3.c \
+	umodsi3.c umodti3.c x86_64/floatdidf.c x86_64/floatdisf.c \
+	x86_64/floatdixf.c x86_64/floatundidf.S x86_64/floatundisf.S \
+	x86_64/floatundixf.S
+
+# The -I below is a search-order fix, not a dependency, and it is load-bearing
+# for exactly one file: atomic.c.
+#
+# atomic.c does `#include <libkern/OSAtomic.h>`. isysroot-cc injects
+# `-I${ROOT_SOURCE_DIR}/Kernel/xnu/libkern` into EVERY userspace compile, for
+# the components that genuinely want kernel headers, and that -I resolves the
+# include to the xnu KERNEL copy. The two disagree on their include guard --
+# the SDK's is _OSATOMIC_H_, the kernel's is _OS_OSATOMIC_H -- so the kernel
+# copy suppresses nothing in the SDK's and contributes no OSSpinLockLock /
+# OSSpinLockUnlock declarations. atomic.c then fails outright:
+#   atomic.c:88:40: error: call to undeclared function 'OSSpinLockUnlock'
+# and it is the only source in this list that fails.
+#
+# Neither ${RAVYN_SDKROOT}/usr/include nor naming libkern/libkern fixes it: the
+# wrapper appends its own -I after ours, and both tested forms still resolved
+# to the kernel header (verified, both ways).
+#
+# What does work is a directory in the build tree holding a `libkern' symlink
+# to the SDK's, placed on the search path ahead of the wrapper's.
+# <libkern/OSAtomic.h> then resolves to the SDK's copy for this target while
+# every other component keeps resolving it to the kernel's. Verified: with it
+# atomic.c compiles, imports _OSSpinLockLock/_OSSpinLockUnlock, and keeps
+# ___atomic_* external -- exactly what the reference archive's atomic.o does.
+RT_INCDIR = ${.OBJDIR}/compiler_rt/include
+
+${RT_INCDIR}/libkern:
+	@mkdir -p ${RT_INCDIR}
+	@rm -f ${RT_INCDIR}/libkern
+	ln -s ${RAVYN_SDKROOT}/usr/include/libkern ${RT_INCDIR}/libkern
+
+COMPILER_RT_CFLAGS = --sysroot=${RAVYN_SDKROOT} \
+	-mmacos-version-min=${MACOS_VERSION_MIN} \
+	-Wno-incompatible-sysroot \
+	-fPIC -O2 -fvisibility=default -fno-stack-protector \
+	-D__DARWIN_UNIX03 -DXNU_PLATFORM_MacOSX \
+	-D__DARWIN_ONLY_UNIX_CONFORMANCE=0 \
+	-I${RT_INCDIR} \
+	-I${RT_BUILTINS_DIR}
+
+COMPILER_RT_TARGET = ${.CURDIR}/libcompiler_rt.dylib
+RT_OBJDIR = ${.OBJDIR}/compiler_rt
+
+# Two .for passes, not a modifier chain. The obvious one-liner
+# ${SRCS:S/^/${OBJDIR}/rt/:S/.c$/.o/} cannot be written here: bmake reads the
+# first ':' as the start of another modifier, so the embedded '/' in the
+# replacement is misparsed ("Unknown modifier \":rt/\"") -- verified, and the
+# same for the '#' delimiter form. Deriving the list in one loop and emitting
+# the dependency rules from a second loop over the same list is the boring
+# shape that actually parses.
+#
+# The object path mirrors the source path, so i386/fp_mode.c and
+# x86_64/floatundidf.S land in their own subdirectories rather than beside a
+# same-named generic builtin.
+COMPILER_RT_OBJS =
+.for _crt_src in ${COMPILER_RT_SOURCES}
+COMPILER_RT_OBJS += ${RT_OBJDIR}/${_crt_src:S/.c$/.o/:S/.S$/.o/}
+.endfor
+
+.for _crt_src in ${COMPILER_RT_SOURCES}
+${RT_OBJDIR}/${_crt_src:S/.c$/.o/:S/.S$/.o/}: ${RT_BUILTINS_DIR}/${_crt_src} \
+	${RT_INCDIR}/libkern
+	@mkdir -p ${RT_OBJDIR}/${_crt_src:H}
+	${CC} -c -o ${RT_OBJDIR}/${_crt_src:S/.c$/.o/:S/.S$/.o/} \
+	  ${COMPILER_RT_CFLAGS} ${RT_BUILTINS_DIR}/${_crt_src}
+.endfor
+
+libcompiler_rt.dylib: ${COMPILER_RT_OBJS}
+	mkdir -p ${RAVYN_SDKROOT}/usr/lib/system ${SYSROOT_DIR}/usr/lib/system
+	${CC} -shared -dylib -o ${COMPILER_RT_TARGET} \
+	  -Wl,-force_load,${COMPILER_RT_OBJS} \
+	  -Wl,-install_name,/usr/lib/system/libcompiler_rt.dylib \
+	  -Wl,-compatibility_version,1.0.0 -Wl,-current_version,1.0.0 \
+	  -mmacosx-version-min=${MACOS_VERSION_MIN} \
+	  -Wl,-undefined,dynamic_lookup -Wl,-not_for_dyld_shared_cache
+	cp -f ${COMPILER_RT_TARGET} ${RAVYN_SDKROOT}/usr/lib/system/
+	@cmp -s ${RAVYN_SDKROOT}/usr/lib/system/libcompiler_rt.dylib \
+	    ${SYSROOT_DIR}/usr/lib/system/libcompiler_rt.dylib 2>/dev/null || \
+	cp -f ${COMPILER_RT_TARGET} ${SYSROOT_DIR}/usr/lib/system/
 
 ${.OBJDIR}/lib${LIB}.dylib: ${.OBJDIR}/config.${CpuArch}.normal.h \
-lib${LIB}.a libunwind.dylib copyfile ${EXPMEMRSC_O}
+lib${LIB}.a libunwind.dylib libcompiler_rt.dylib copyfile ${EXPMEMRSC_O}
 	${CC} -fuse-ld=${LD} -shared -dylib -o ${.TARGET} ${OBJS} \
 	  ${EXPMEMRSC_O} ${LDFLAGS}
 	${.CURDIR}/xcodescripts/create_dylib_symlinks.sh \

@@ -108,6 +108,25 @@ typedef enum {
 
 /* 23.2.7 ACL qualifier constants */
 
+/*
+ * FreeBSD NFSv4 ACL type.  ravynOS has no NFSv4 ACL support -- the kernel
+ * defines no acl_get/acl_set syscalls at all (Kernel/xnu bsd/kern/
+ * syscalls.master) and there is no nfsv4 ACL code in the tree -- so this
+ * type is declared for source compatibility with BSD userland, and every
+ * acl_* entry point below rejects it: acl_get_fd_np() and
+ * acl_get_file1() return EINVAL for any type other than ACL_TYPE_EXTENDED.
+ * That is the honest answer -- the query fails rather than reporting an
+ * ACL that was never read.
+ */
+#define	ACL_TYPE_NFS4		0x80000000
+
+/* POSIX.1e base entry tags, needed to interpret a POSIX.1e-style ACL. */
+#define	ACL_USER_OBJ		0x01
+#define	ACL_USER		0x02
+#define	ACL_GROUP_OBJ		0x04
+#define	ACL_GROUP		0x08
+#define	ACL_MASK		0x10
+#define	ACL_OTHER		0x20
 #define ACL_UNDEFINED_ID	NULL	/* XXX ? */
 
 /* 23.2.8 ACL Entry Constants */
@@ -206,6 +225,16 @@ extern acl_t	acl_copy_int_native(const void *buf_p);
 extern acl_t	acl_from_text(const char *buf_p);
 extern ssize_t	acl_size(acl_t acl);
 extern char	*acl_to_text(acl_t acl, ssize_t *len_p);
+
+/*
+ * FreeBSD acl_is_trivial_np(3).  An ACL is "trivial" when it conveys
+ * nothing beyond what the file's mode bits already say, so a utility can
+ * skip applying it.  Returns 0 and stores the answer in *trivial_p on
+ * success, -1 with errno set otherwise.
+ *
+ * See libsystem_c/posix1e/acl_trivial.c.
+ */
+extern int	acl_is_trivial_np(acl_t acl, int *trivial_p);
 __END_DECLS
 
 #endif /* _SYS_ACL_H */

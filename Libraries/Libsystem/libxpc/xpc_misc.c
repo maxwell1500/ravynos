@@ -36,6 +36,7 @@
 #include <pthread.h>
 #include "xpc/xpc.h"
 #include "xpc_internal.h"
+#include "xpc/launchd.h"
 
 #define RECV_BUFFER_SIZE	65536
 
@@ -84,8 +85,8 @@ xpc_array_destroy(struct xpc_object *dict)
 	}
 }
 
-static int
-xpc_pack(struct xpc_object *xo, void **buf, uint64_t id, size_t *size)
+__private_extern__ int
+_xpc_pack(struct xpc_object *xo, void **buf, uint64_t id, size_t *size)
 {
 	struct xpc_frame_header *header;
 	mpack_writer_t writer;
@@ -114,8 +115,8 @@ xpc_pack(struct xpc_object *xo, void **buf, uint64_t id, size_t *size)
 	return (0);
 }
 
-static struct xpc_object *
-xpc_unpack(void *buf, size_t size)
+__private_extern__ struct xpc_object *
+_xpc_unpack(void *buf, size_t size)
 {
 	mpack_tree_t tree;
 	struct xpc_object *xo;
@@ -139,6 +140,8 @@ xpc_object_destroy(struct xpc_object *xo)
 	if (xo->xo_xpc_type == _XPC_TYPE_ARRAY)
 		xpc_array_destroy(xo);
 
+	free(xo->xo_reply);
+	free(xo->xo_audit_token);
 	free(xo);
 }
 
@@ -171,16 +174,14 @@ static const char *xpc_errors[] = {
 	"No Such Process"
 };
 
-#if 0
 const char *
 xpc_strerror(int error)
 {
 
 	if (error > EXMAX || error < 0)
-		return "BAD ERROR";
+		return (strerror(error));
 	return (xpc_errors[error]);
 }
-#endif
 
 char *
 xpc_copy_description(xpc_object_t obj)
@@ -357,7 +358,7 @@ xpc_pipe_send(xpc_object_t xobj, uint64_t id, xpc_port_t local, xpc_port_t remot
 
 	assert(xpc_get_type(xobj) == &_xpc_type_dictionary);
 
-	if (xpc_pack(xobj, &buf, id, &size) != 0) {
+	if (_xpc_pack(xobj, &buf, id, &size) != 0) {
 		debugf("pack failed");
 		return (-1);
 	}
@@ -410,7 +411,7 @@ xpc_pipe_receive(xpc_port_t local, xpc_port_t *remote, xpc_object_t *result,
 
 	debugf("length=%ld", header->length);
 
-	*result = xpc_unpack(buffer + sizeof(*header), header->length);
+	*result = _xpc_unpack(buffer + sizeof(*header), header->length);
 
 	if (*result == NULL)
 		return (-1);

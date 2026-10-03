@@ -174,6 +174,7 @@ mach_send(xpc_port_t local, xpc_port_t remote, void *buf, size_t len,
 	message->header.msgh_bits = MACH_MSGH_BITS(MACH_MSG_TYPE_COPY_SEND,
 	    MACH_MSG_TYPE_MAKE_SEND);
 	message->header.msgh_remote_port = dst;
+	message->header.msgh_id = XPC_MESSAGE_ID;
 	message->header.msgh_local_port = src;
 	memcpy(&message->body, buf, len);
 	kr = mach_msg_send(&message->header);

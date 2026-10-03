@@ -154,27 +154,64 @@ for b in $DELIBERATELY_ABSENT; do
 done
 
 # --- 5. nothing anywhere in the library dirs may be 0 bytes ----------------
-# RECORDED KNOWN STUBS. Terminal libraries, deliberately not built. Each entry
-# is named with its reason so a future reader can tell a recorded exception
-# from a forgotten item -- and so that removing the name immediately re-arms
-# the check. These are NOT a relaxation of section 5: a 0-byte file outside
-# this list still fails, exactly as before.
+# This section used to carry a RECORDED_ZERO_BYTE_STUBS allow-list:
 #
-#   libedit.dylib       terminal line editor. BSD/lib/libedit has 36 .c files
-#                        and a real Makefile; it is simply not on the
-#                        Libsystem or dynamic-userland critical path.
-#   libncurses.dylib     terminal UI library, same reasoning as libedit.
-#   libncurses.6.dylib   versioned alias of libncurses; the real target is
-#                        libncurses.dylib above.
+#   RECORDED_ZERO_BYTE_STUBS="libedit.dylib libncurses.dylib libncurses.6.dylib"
 #
-# NOT in this list, deliberately: libutil.dylib. It was the fourth stub and it
-# IS libSystem-adjacent, so it was to be built rather than excused -- but
-# BSD/lib/libutil/Makefile carries the same `.if Darwin` branch that
-# touch-es an empty libutil.dylib (the pattern that destroyed
-# libCrashReporterClient and is the reason this guard exists). Building the
-# real libutil therefore requires editing a Makefile under BSD/, which is
-# outside the current ownership. It is reported, not excused.
-RECORDED_ZERO_BYTE_STUBS="libedit.dylib libncurses.dylib libncurses.6.dylib"
+# All three entries are now GONE, and the allow-list with them. Nothing is
+# excused here any more: a 0-byte file in these directories is a hard failure,
+# full stop. Each entry was retired against a measurement, not a preference:
+#
+#   libedit.dylib     BUILT. 247,072 bytes, from BSD/lib/libedit (36 .c) via
+#                     that directory's Darwin branch, which no longer touches.
+#   libutil.dylib     BUILT. 18,936 bytes. It was never allow-listed -- the
+#                     comment below records why -- and it is now real too.
+#   libncurses.dylib  REMOVED, not built. Nothing references it: measured
+#   libncurses.6.dylib 2026-10-02, zero LC_LOAD_DYLIB references to either name
+#                     exist anywhere in the SDK or in the staged bootlab
+#                     closure. Their producer, BSD/lib/ncurses/Makefile, was a
+#                     `touch` on the Darwin branch -- the same silent-stub
+#                     defect this script exists to catch -- and that branch now
+#                     fails loudly instead of writing the files.
+#
+# Why removal rather than a real build: ncurses' own build runs its configure
+# plus gmake, is not on the Libsystem or dynamic-userland critical path, and
+# building it would add a large unverified dependency to satisfy a link that
+# does not exist. If a BSD utility ever needs it, the loud failure at
+# BSD/lib/ncurses names exactly that prerequisite. A loud failure beats a
+# silent stub -- but a *recorded* stub is nearly as bad, because the list is
+# what let two of these survive for weeks.
+#
+# libutil.dylib is recorded here because it is the counter-example worth
+# keeping: it was the one zero-byte file deliberately NOT allow-listed, because
+# it is libSystem-adjacent, so it had to be built rather than excused. Building
+# it required removing the `touch` from BSD/lib/libutil/Makefile, which carried
+# the same Darwin branch that destroyed libCrashReporterClient. That is now
+# done, which is why it is not in this section at all.
+
+# --- 5b. the retired stubs must STAY gone ---------------------------------
+# The other direction matters as much: if one of these names reappears, that is
+# a stub being re-installed by a build path nobody has re-audited, and it must
+# fail rather than pass unnoticed. Same reasoning as DELIBERATELY_ABSENT above.
+DELIBERATELY_ABSENT_STUBS="libncurses.dylib libncurses.6.dylib"
+
+for b in $DELIBERATELY_ABSENT_STUBS; do
+  found=""
+  for d in usr/lib usr/lib/system usr/local/lib/system; do
+    [ -e "$SDK/$d/$b" ] && { found="$SDK/$d/$b"; break; }
+  done
+  if [ -n "$found" ]; then
+    sz=$(measure "$found")
+    if [ "${sz:-0}" -eq 0 ]; then
+      echo "FAIL: $found is 0 bytes -- a retired stub has returned"
+      fail=1
+    else
+      echo "FAIL: $found has returned. If ncurses was built for real, delete"
+      echo "      this name from DELIBERATELY_ABSENT_STUBS once, deliberately."
+      fail=1
+    fi
+  fi
+done
 
 for dir in usr/lib usr/lib/system usr/local/lib/system; do
   [ -d "$SDK/$dir" ] || continue
@@ -183,15 +220,8 @@ for dir in usr/lib usr/lib/system usr/local/lib/system; do
     sz=$(measure "$f")
     [ "${sz:-0}" -eq 0 ] || continue
     b=$(basename "$f")
-    case " $RECORDED_ZERO_BYTE_STUBS " in
-      *" $b "*)
-        echo "KNOWN-STUB: $dir/$b is 0 bytes (recorded; see the list above)"
-        ;;
-      *)
-        echo "FAIL: $dir/$b is 0 bytes"
-        fail=1
-        ;;
-    esac
+    echo "FAIL: $dir/$b is 0 bytes"
+    fail=1
   done
 done
 

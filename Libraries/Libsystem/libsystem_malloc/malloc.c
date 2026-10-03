@@ -1809,6 +1809,18 @@ malloc_size(const void *ptr)
 	return size;
 }
 
+/*
+ * sallocx(3) returns the usable size of an existing allocation, which is
+ * exactly what malloc_size() computes.  Darwin has no jemalloc, so the
+ * MALLOCX_* flags have no meaning here and are ignored; callers only pass 0.
+ */
+size_t
+sallocx(const void *ptr, int flags)
+{
+	(void)flags;
+	return (malloc_size(ptr));
+}
+
 size_t
 malloc_good_size(size_t size)
 {

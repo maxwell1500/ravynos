@@ -189,11 +189,13 @@ int	 fts_close(FTS *) LIBC_INODE64(fts_close);
 #ifndef LIBC_ALIAS_FTS_OPEN
 //End-Libc
 FTS	*fts_open(char * const *, int,
-	    int (*)(const FTSENT **, const FTSENT **)) __DARWIN_INODE64(fts_open);
+	    int (*)(const FTSENT * const *, const FTSENT * const *))
+	    __DARWIN_INODE64(fts_open);
 //Begin-Libc
 #else /* LIBC_ALIAS_FTS_OPEN */
 FTS	*fts_open(char * const *, int,
-	    int (*)(const FTSENT **, const FTSENT **)) LIBC_INODE64(fts_open);
+	    int (*)(const FTSENT * const *, const FTSENT * const *))
+	    LIBC_INODE64(fts_open);
 #endif /* !LIBC_ALIAS_FTS_OPEN */
 //End-Libc
 #ifdef __BLOCKS__

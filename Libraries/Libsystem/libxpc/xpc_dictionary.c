@@ -34,7 +34,17 @@
 static struct xpc_object *
 mpack2xpc_extension(int8_t type, const char *data)
 {
+	xpc_object_t xo;
+	xpc_u val;
 
+	if (type != XPC_EXT_MACH_PORT || data == NULL)
+		return (NULL);
+
+	val.port = MACH_PORT_NULL;
+	memcpy(&val.port, data, sizeof(val.port));
+	xo = _xpc_prim_create(_XPC_TYPE_ENDPOINT, val, 0);
+
+	return (xo);
 }
 
 struct xpc_object *
@@ -160,6 +170,16 @@ xpc2mpack(mpack_writer_t *writer, xpc_object_t obj)
 
 	case _XPC_TYPE_UUID:
 		break;
+
+	case _XPC_TYPE_ENDPOINT:
+		/*
+		 * A mach port travels as an mpack extension rather than a plain
+		 * uint64, otherwise it decodes back as _XPC_TYPE_UINT64 and
+		 * xpc_dictionary_copy_mach_send() can no longer tell it apart.
+		 */
+		mpack_write_ext(writer, XPC_EXT_MACH_PORT,
+		    (const char *)&xotmp->xo_port, sizeof(xotmp->xo_port));
+		break;
 	}
 }
 
@@ -182,13 +202,32 @@ xpc_dictionary_create(const char * const *keys, const xpc_object_t *values,
 xpc_object_t
 xpc_dictionary_create_reply(xpc_object_t original)
 {
-	struct xpc_object *xo_orig;
+	struct xpc_object *xo_orig, *xo;
 
 	xo_orig = original;
 	if ((xo_orig->xo_flags & _XPC_FROM_WIRE) == 0)
 		return (NULL);
 
-	return xpc_dictionary_create(NULL, NULL, 0);
+	xo = _xpc_prim_create(_XPC_TYPE_DICTIONARY, (xpc_u){0}, 0);
+	if (xo == NULL)
+		return (NULL);
+
+	/*
+ * The reply has to go back to the port this message arrived from, and it
+ * has to answer the sequence number it arrived under.  Copying the
+ * request's reply context is what lets xpc_pipe_routine_reply() send the
+ * reply with nothing but the reply object.
+	 */
+	if (xo_orig->xo_reply != NULL) {
+		xo->xo_reply = malloc(sizeof(*xo->xo_reply));
+		if (xo->xo_reply == NULL) {
+			xpc_object_destroy(xo);
+			return (NULL);
+		}
+		*xo->xo_reply = *xo_orig->xo_reply;
+	}
+
+	return (xo);
 }
 
 #ifdef MACH

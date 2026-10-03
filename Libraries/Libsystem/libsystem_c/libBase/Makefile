@@ -3,6 +3,8 @@ SUBDIR =
 LIB = Base
 SRCS = \
 	emulated/lchflags.c \
+	emulated/copy_file_range.c \
+	emulated/chflagsat.c \
 	emulated/lchmod.c \
 	emulated/lutimes.c \
 	emulated/statvfs.c \
@@ -39,6 +41,7 @@ SRCS = \
 	posix1e/acl_file.c \
 	posix1e/acl_flag.c \
 	posix1e/acl_perm.c \
+	posix1e/acl_trivial.c \
 	posix1e/acl_translate.c \
 	stdtime/getdate.c \
 	stdtime/timezone_unix03.c \
@@ -68,6 +71,7 @@ SRCS = \
 	sys/chmodx_np.c \
 	sys/crt_externs.c \
 	sys/fork.c \
+	sys/vfork.c \
 	sys/gettimeofday.c \
 	sys/openx_np.c \
 	sys/posix_spawn.c \
