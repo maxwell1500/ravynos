@@ -1,0 +1,332 @@
+{
+  "volume": "RAVYNOS",
+  "comment": [
+    "THE DURABLE MANIFEST OF THE REPO-BUILT CLOSURE (PROVENANCE-PLAN P0,",
+    "which is PARTIAL -- read PORTABILITY below before calling this file",
+    "portable).  Supersedes /tmp/manifest_cpmv.json, which was the only",
+    "thing keeping the borrowed host binaries out of a boot and which the",
+    "OS will eventually delete.  This file is that closure as a property",
+    "of the repository.",
+    "",
+    "WHAT IS STAGED.  The repo-built libSystem closure: ../../Libraries/",
+    "Libsystem/libSystem.B.dylib as the root, its 29 LC_LOAD_DYLIB /",
+    "LC_REEXPORT_DYLIB / LC_LOAD_UPWARD_DYLIB members under usr/lib/system/, the",
+    "source-built MH_DYLINKER at usr/lib/dyld, the apple-free EFI loader, the",
+    "kernel, and the dylib-linked core utilities built from BSD/bin/.",
+    "",
+    "PORTABILITY (P0) -- RELATIVE, NOT RELOCATABLE.  Read this before calling",
+    "the manifest portable.",
+    "",
+    "Every entry here is a path relative to tools/bootlab, which is how",
+    "mkimage.py resolves \"file\".  The /tmp original this was derived from",
+    "pinned 38 entries to /Users/max/Projects/build/... -- this machine's build",
+    "tree -- which would have baked a personal absolute path into the repo.  That",
+    "part is fixed: there are 0 absolute paths here.",
+    "",
+    "PORTABILITY (P0) -- CLOSED. Read this before changing any entry below.",
+    "",
+    "Every entry here is a path relative to tools/bootlab, which is how",
+    "mkimage.py resolves \"file\". The /tmp original this was derived from pinned 38",
+    "entries to /Users/max/Projects/build/... -- this machine's build tree --",
+    "which would have baked a personal absolute path into the repo.",
+    "",
+    "  * 24 members that were named by their $RAVYN_SDKROOT path are named by the",
+    "    byte-identical repo build product. Verified byte-for-byte at authoring",
+    "    time (cmp); the SDK copy is an install of the same file.",
+    "",
+    "  * libunwind.dylib is repo-built by Libraries/Libsystem/Makefile's",
+    "    libunwind.dylib target, from the tracked LLVM sources under",
+    "    Developer/Default.xctoolchain/llvm/libunwind. That target used to write",
+    "    STRAIGHT to ${RAVYN_SDKROOT}/usr/lib/system/, which made the SDK the",
+    "    build OUTPUT directory and is why this entry could not be named without",
+    "    escaping the repo. It now links into ${.CURDIR} and `cp`s to the SDK as",
+    "    an install step, like every other member here. LC_ID_DYLIB",
+    "    current_version is 35.4.0, matching -Wl,-current_version,35.4.",
+    "",
+    "  * libcompiler_rt.dylib NOW HAS A PRODUCER, which it did not have at all",
+    "    until 2026-10-02. Libraries/Libsystem/Makefile's libcompiler_rt.dylib",
+    "    target builds it from 170 vendored translation units under",
+    "    Developer/Default.xctoolchain/llvm/compiler-rt/lib/builtins and installs",
+    "    it to the SDK. Before that, Libraries/Makefile's `compiler_rt` target",
+    "    only verified the ARCHIVE libclang_rt.osx.a and nothing anywhere linked",
+    "    the dylib, which is why its origin was recorded as a P6 UNKNOWN.",
+    "",
+    "    The export surface is not approximated. Measured against the artifact it",
+    "    replaces: 529 exported names, the identical set (dyld_info -exports,",
+    "    diffed); the identical 13 load commands; LC_ID_DYLIB",
+    "    /usr/lib/system/libcompiler_rt.dylib at compatibility_version 1.0.0 and",
+    "    current_version 1.0.0; and 0 LC_LOAD_DYLIB, exactly as before. All 529",
+    "    names are DEFINED in this repository -- including the $ld$hide$os10.4$",
+    "    versioning aliases from apple_versioning.c and the $ld$hide$os10.5/6/7/8$",
+    "    atomic aliases -- and none was taken from a host Mac binary.",
+    "",
+    "    Two deliberate deltas, both recorded in the Makefile: the import set is",
+    "    29 rather than 30, substituting _bzero (which the SDK's strings.h",
+    "    declares, and which libsystem_c exports) for the pair",
+    "    __memcpy_chk/__memset_chk, and _mprotect$UNIX2003 -- the suffixed",
+    "    spelling -- is what gets imported. Every one of the 29 resolves inside",
+    "    this closure; verified by closure_gate.py.",
+    "",
+    "There are now 0 entries that leave the repository. closure_gate.py's",
+    "relocatability preflight passes with nothing to name.",
+    "",
+    "",
+    "  * work/* entries are build products (see KEEP_dynutils_20261001_build_",
+    "    closure.txt and build_init_shell.sh / build_applefree.sh).",
+    "",
+    "PROVENANCE (P2).  Zero entries resolve into assets/ except ONE:",
+    "com.apple.Boot.plist, which is a plist, not a binary.  There is no \"glob\"",
+    "entry, so no future edit can widen this tree back into the host-extracted",
+    "region under assets/usr/lib/system/ the way manifest_dynamic.json's glob",
+    "did.  Verified:",
+    "    python3 closure_check.py manifest_cpmv.json --nm-check 0",
+    "        -> 0 unstaged dependencies, 0 REJECT, 0 unresolved, HOST-EXTRACTED 0",
+    "  and the same verdict against the BYTES read back out of a built image",
+    "  (closure_check.py --image ...).",
+    "",
+    "NOTE ON THE PID 1.  sbin/launchd here is work/launchd, the real",
+    "launchd from Libraries/launchd built by build_launchd.sh -- a dylib-linked",
+    "MH_EXECUTE against /usr/lib/libSystem.B.dylib.  It REPLACES the static",
+    "work/init_shell PID 1, which merely execve()'d the dylib-linked /bin/sh.",
+    "Note the consequence: PID 1 is no longer dyld-free, so it now depends on",
+    "usr/lib/dyld and the whole libSystem closure resolving at boot, where",
+    "init_shell depended on none of it.  The dynamic-userland ECHO gate keeps",
+    "manifest_dynamic.json's own init_exec PID 1; only the library closure",
+    "below usr/lib/system/ is shared between the two."
+  ],
+  "dirs": [
+    "dev"
+  ],
+  "files": [
+    {
+      "path": "usr/lib/system/libobjc.dylib",
+      "file": "../../Libraries/objc4/libobjc.A.dylib",
+      "comment": "closure member, reached only via LC_LOAD_UPWARD_DYLIB from libdispatch/libxpc/libsystem_trace; built by Libraries/objc4"
+    },
+    {
+      "path": "usr/lib/system/libCrashReporterClient.dylib",
+      "file": "../../Libraries/CrashReporterClient/libCrashReporterClient.dylib",
+      "comment": "closure member, reached only via LC_LOAD_UPWARD_DYLIB from libdispatch/libxpc/libsystem_trace; built by Libraries/objc4"
+    },
+    {
+      "path": "usr/lib/system/libcompiler_rt.dylib",
+      "file": "../../Libraries/Libsystem/libcompiler_rt.dylib",
+      "comment": "closure member; built by Libraries/Libsystem/Makefile's libcompiler_rt.dylib target from the vendored Developer/Default.xctoolchain/llvm/compiler-rt sources (170 translation units), then installed to the SDK"
+    },
+    {
+      "path": "usr/lib/system/libcopyfile.dylib",
+      "file": "../../Libraries/Libsystem/copyfile/libcopyfile.dylib",
+      "comment": "closure member, reached only via LC_LOAD_UPWARD_DYLIB from libdispatch/libxpc/libsystem_trace; built by Libraries/objc4"
+    },
+    {
+      "path": "usr/lib/system/libcorecrypto.dylib",
+      "file": "../../Libraries/Libsystem/corecrypto/libcorecrypto.dylib",
+      "comment": "closure member, reached only via LC_LOAD_UPWARD_DYLIB from libdispatch/libxpc/libsystem_trace; built by Libraries/objc4"
+    },
+    {
+      "path": "usr/lib/system/libdispatch.dylib",
+      "file": "../../Libraries/Libsystem/libdispatch/libdispatch.dylib",
+      "comment": "closure member, reached only via LC_LOAD_UPWARD_DYLIB from libdispatch/libxpc/libsystem_trace; built by Libraries/objc4"
+    },
+    {
+      "path": "usr/lib/system/libdyld.dylib",
+      "file": "../../Libraries/dyld/libdyld.dylib",
+      "comment": "closure member, reached only via LC_LOAD_UPWARD_DYLIB from libdispatch/libxpc/libsystem_trace; built by Libraries/objc4"
+    },
+    {
+      "path": "usr/lib/system/liblaunch.dylib",
+      "file": "../../Libraries/Libsystem/liblaunch/liblaunch.dylib",
+      "comment": "closure member, reached only via LC_LOAD_UPWARD_DYLIB from libdispatch/libxpc/libsystem_trace; built by Libraries/objc4"
+    },
+    {
+      "path": "usr/lib/system/libmacho.dylib",
+      "file": "../../Libraries/Libsystem/libmacho/libmacho.dylib",
+      "comment": "closure member, reached only via LC_LOAD_UPWARD_DYLIB from libdispatch/libxpc/libsystem_trace; built by Libraries/objc4"
+    },
+    {
+      "path": "usr/lib/system/libremovefile.dylib",
+      "file": "../../Libraries/Libsystem/removefile/libremovefile.dylib",
+      "comment": "closure member, reached only via LC_LOAD_UPWARD_DYLIB from libdispatch/libxpc/libsystem_trace; built by Libraries/objc4"
+    },
+    {
+      "path": "usr/lib/system/libsystem_asl.dylib",
+      "file": "../../Libraries/Libsystem/libsystem_asl/libsystem_asl.dylib",
+      "comment": "closure member, reached only via LC_LOAD_UPWARD_DYLIB from libdispatch/libxpc/libsystem_trace; built by Libraries/objc4"
+    },
+    {
+      "path": "usr/lib/system/libsystem_blocks.dylib",
+      "file": "../../Libraries/Libsystem/libsystem_blocks/libsystem_blocks.dylib",
+      "comment": "closure member, reached only via LC_LOAD_UPWARD_DYLIB from libdispatch/libxpc/libsystem_trace; built by Libraries/objc4"
+    },
+    {
+      "path": "usr/lib/system/libsystem_c.dylib",
+      "file": "../../Libraries/Libsystem/libsystem_c/libsystem_c.dylib",
+      "comment": "closure member, reached only via LC_LOAD_UPWARD_DYLIB from libdispatch/libxpc/libsystem_trace; built by Libraries/objc4"
+    },
+    {
+      "path": "usr/lib/system/libsystem_coreservices.dylib",
+      "file": "../../Libraries/Libsystem/libsystem_coreservices/libsystem_coreservices.dylib",
+      "comment": "closure member, reached only via LC_LOAD_UPWARD_DYLIB from libdispatch/libxpc/libsystem_trace; built by Libraries/objc4"
+    },
+    {
+      "path": "usr/lib/system/libsystem_darwin.dylib",
+      "file": "../../Libraries/Libsystem/libsystem_darwin/libsystem_darwin.dylib",
+      "comment": "closure member, reached only via LC_LOAD_UPWARD_DYLIB from libdispatch/libxpc/libsystem_trace; built by Libraries/objc4"
+    },
+    {
+      "path": "usr/lib/system/libsystem_dnssd.dylib",
+      "file": "../../Libraries/Libsystem/libsystem_dnssd/libsystem_dnssd.dylib",
+      "comment": "closure member, reached only via LC_LOAD_UPWARD_DYLIB from libdispatch/libxpc/libsystem_trace; built by Libraries/objc4"
+    },
+    {
+      "path": "usr/lib/system/libsystem_info.dylib",
+      "file": "../../Libraries/Libsystem/libsystem_info/libsystem_info.dylib",
+      "comment": "closure member, reached only via LC_LOAD_UPWARD_DYLIB from libdispatch/libxpc/libsystem_trace; built by Libraries/objc4"
+    },
+    {
+      "path": "usr/lib/system/libsystem_kernel.dylib",
+      "file": "../../Libraries/Libsystem/libsystem_kernel/libsystem_kernel.dylib",
+      "comment": "closure member, reached only via LC_LOAD_UPWARD_DYLIB from libdispatch/libxpc/libsystem_trace; built by Libraries/objc4"
+    },
+    {
+      "path": "usr/lib/system/libsystem_m.dylib",
+      "file": "../../Libraries/Libsystem/libsystem_m/libsystem_m.dylib",
+      "comment": "closure member, reached only via LC_LOAD_UPWARD_DYLIB from libdispatch/libxpc/libsystem_trace; built by Libraries/objc4"
+    },
+    {
+      "path": "usr/lib/system/libsystem_malloc.dylib",
+      "file": "../../Libraries/Libsystem/libsystem_malloc/libsystem_malloc.dylib",
+      "comment": "closure member, reached only via LC_LOAD_UPWARD_DYLIB from libdispatch/libxpc/libsystem_trace; built by Libraries/objc4"
+    },
+    {
+      "path": "usr/lib/system/libsystem_notify.dylib",
+      "file": "../../Libraries/Libsystem/libsystem_notify/libsystem_notify.dylib",
+      "comment": "closure member, reached only via LC_LOAD_UPWARD_DYLIB from libdispatch/libxpc/libsystem_trace; built by Libraries/objc4"
+    },
+    {
+      "path": "usr/lib/system/libsystem_platform.dylib",
+      "file": "../../Libraries/Libsystem/libsystem_platform/dylib/libsystem_platform.dylib",
+      "comment": "closure member, reached only via LC_LOAD_UPWARD_DYLIB from libdispatch/libxpc/libsystem_trace; built by Libraries/objc4"
+    },
+    {
+      "path": "usr/lib/system/libsystem_pthread.dylib",
+      "file": "../../Libraries/Libsystem/libsystem_pthread/libsystem_pthread.dylib",
+      "comment": "closure member, reached only via LC_LOAD_UPWARD_DYLIB from libdispatch/libxpc/libsystem_trace; built by Libraries/objc4"
+    },
+    {
+      "path": "usr/lib/system/libsystem_pwdgrp.dylib",
+      "file": "../../Libraries/Libsystem/libsystem_pwdgrp/libsystem_pwdgrp.dylib",
+      "comment": "closure member, reached only via LC_LOAD_UPWARD_DYLIB from libdispatch/libxpc/libsystem_trace; built by Libraries/objc4"
+    },
+    {
+      "path": "usr/lib/system/libsystem_termcap.dylib",
+      "file": "../../Libraries/Libsystem/libsystem_termcap/libsystem_termcap.dylib",
+      "comment": "closure member, reached only via LC_LOAD_UPWARD_DYLIB from libdispatch/libxpc/libsystem_trace; built by Libraries/objc4"
+    },
+    {
+      "path": "usr/lib/system/libsystem_trace.dylib",
+      "file": "../../Libraries/Libsystem/libsystem_trace/libsystem_trace.dylib",
+      "comment": "closure member, reached only via LC_LOAD_UPWARD_DYLIB from libdispatch/libxpc/libsystem_trace; built by Libraries/objc4"
+    },
+    {
+      "path": "usr/lib/system/libunwind.dylib",
+      "file": "../../Libraries/Libsystem/libunwind.dylib",
+      "comment": "closure member; built by Libraries/Libsystem/Makefile's libunwind.dylib target from the vendored Developer/Default.xctoolchain/llvm/libunwind sources, then installed to the SDK"
+    },
+    {
+      "path": "usr/lib/system/libxpc.dylib",
+      "file": "../../Libraries/Libsystem/libxpc/libxpc.dylib",
+      "comment": "closure member, reached only via LC_LOAD_UPWARD_DYLIB from libdispatch/libxpc/libsystem_trace; built by Libraries/objc4"
+    },
+    {
+      "path": "usr/lib/libSystem.B.dylib",
+      "file": "../../Libraries/Libsystem/libSystem.B.dylib",
+      "comment": "ROOT of the walked closure: LC_REEXPORT_DYLIB x28 onto usr/lib/system/*.dylib"
+    },
+    {
+      "path": "usr/lib/libedit.dylib",
+      "file": "../../BSD/lib/libedit/libedit.dylib",
+      "comment": "dynamic shell history/line editing, built by BSD/lib/libedit; LC_ID_DYLIB is /usr/lib/libedit.dylib"
+    },
+    {
+      "path": "usr/lib/dyld",
+      "file": "../../Libraries/dyld/dyld/dyld",
+      "comment": "freshly source-built MH_DYLINKER; the assets/ copy is a DYLIB and the kernel rejects it with EXEC_EXIT_REASON_BAD_MACHO before dyld runs"
+    },
+    {
+      "path": "sbin/launchd",
+      "file": "work/launchd",
+      "comment": "the real launchd from Libraries/launchd, built by build_launchd.sh: MH_EXECUTE, LC_MAIN, DYLDLINK, LC_LOAD_DYLIB /usr/lib/libSystem.B.dylib. REPLACES work/init_shell as PID 1."
+    },
+    {
+      "path": "System/Library/Kernels/kernel.development",
+      "kernel": true,
+      "comment": "explicit --kernel payload: work/stripped_kernel.development"
+    },
+    {
+      "path": "System/Library/CoreServices/BOOT.EFI",
+      "file": "work/efi/BOOTX64.EFI",
+      "comment": "source-built apple-free loader (not the stale gitignored assets/ copy)"
+    },
+    {
+      "path": "EFI/BOOT/BOOTX64.EFI",
+      "file": "work/efi/BOOTX64.EFI",
+      "comment": "same loader at the removable-media path"
+    },
+    {
+      "path": "System/Library/CoreServices/com.apple.Boot.plist",
+      "asset": "com.apple.Boot.plist",
+      "comment": "boot-path file, unchanged from manifest_dynamic.json"
+    },
+    {
+      "path": "System/Library/KernelCollections/BootKernelExtensions.kc",
+      "kernel": true,
+      "comment": "boot-path file, unchanged from manifest_dynamic.json"
+    },
+    {
+      "path": "bin/sh",
+      "file": "work/sh_dyn",
+      "comment": "dylib-linked dash shell under test; LC_LOAD_DYLIB /usr/lib/libSystem.B.dylib + /usr/lib/libedit.dylib, LC_MAIN entry"
+    },
+    {
+      "path": "bin/echo",
+      "file": "work/echo_dyn",
+      "comment": "dynamic echo (BSD/bin/echo/echo.c) linked against libSystem.B.dylib; REPLACES the asset-based bin/echo stub (init_exec used to execve it)"
+    },
+    {
+      "path": "bin/ls",
+      "file": "work/ls_dyn",
+      "comment": "dynamic ls (BSD/bin/ls: ls.c cmp.c print.c util.c) linked against libSystem.B.dylib; replaces nothing, bin/ls was not previously staged"
+    },
+    {
+      "path": "bin/cat",
+      "file": "work/cat_dyn",
+      "comment": "dynamic cat (BSD/bin/cat/cat.c) linked against libSystem.B.dylib"
+    },
+    {
+      "path": "bin/mkdir",
+      "file": "work/mkdir_dyn",
+      "comment": "dynamic mkdir (BSD/bin/mkdir/mkdir.c) linked against libSystem.B.dylib"
+    },
+    {
+      "path": "bin/rm",
+      "file": "work/rm_dyn",
+      "comment": "dynamic rm (BSD/bin/rm/rm.c) linked against libSystem.B.dylib"
+    },
+    {
+      "path": "bin/test",
+      "file": "work/test_dyn",
+      "comment": "dynamic test (BSD/bin/test/test.c) linked against libSystem.B.dylib"
+    },
+    {
+      "path": "bin/cp",
+      "file": "work/cp_dyn",
+      "comment": "dynamic cp (BSD/bin/cp: cp.c utils.c) linked against libSystem.B.dylib, rebuilt Libsystem"
+    },
+    {
+      "path": "bin/mv",
+      "file": "work/mv_dyn",
+      "comment": "dynamic mv (BSD/bin/mv: mv.c) linked against libSystem.B.dylib, rebuilt Libsystem"
+    }
+  ]
+}

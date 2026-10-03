@@ -66,6 +66,12 @@ KERNEL="${RAVYN_KERNEL:-assets/kernel.development}"
 [ -f "$KERNEL" ] || KERNEL="work/stripped_kernel.development"
 IMG=work/minxfer.img
 echo "[3/5] mkimage -> $IMG"
+# THE BUILD GATE (PROVENANCE-PLAN P2), on the manifest mkimage.py is about to
+# be given.  minxfer stages no userland closure of its own -- it reproduces a
+# 64->32-bit CS transfer -- but it inherits whatever manifest_minxfer.json
+# stages, and a borrowed dylib there is exactly the silent failure this
+# refuses to let through.  Fails closed.
+python3 closure_gate.py manifest_minxfer.json || exit 1
 python3 mkimage.py "$IMG" --manifest manifest_minxfer.json --kernel "$KERNEL" || exit 1
 
 # Positive control: the loader must be findable IN THE IMAGE by byte search.

@@ -650,6 +650,15 @@ def main():
     ap.add_argument("--nm-check", type=int, default=3, metavar="N",
                     help="cross-check N files against `nm -m` (default 3, "
                          "0 disables)")
+    ap.add_argument("--provenance-check", dest="provenance_check",
+                    action="store_true", default=True,
+                    help="also run provenance_scan over the staged sources "
+                         "and report whether any came from the host's dyld "
+                         "shared cache (default: on)")
+    ap.add_argument("--no-provenance-check", dest="provenance_check",
+                    action="store_false",
+                    help="skip the provenance verdict entirely (the ~6 GB "
+                         "host-cache scan)")
     args = ap.parse_args()
 
     manifest = args.manifest
@@ -672,6 +681,11 @@ def main():
     nodes = {}          # staged_path -> MachO
     skipped = []        # (path, reason)
     errors = []         # (path, reason)
+    # Bytes read back OUT of the image, keyed by staged path.  Kept because
+    # the provenance verdict below must be made about these bytes, not about
+    # the files the manifest points at: only the former is evidence about the
+    # disk a machine will boot.  Populated only in --image mode.
+    readback = {}       # staged_path -> bytes
     for spath, src in staged:
         try:
             if img is not None:
@@ -679,6 +693,7 @@ def main():
                 if data is None:
                     errors.append((spath, "not present in image"))
                     continue
+                readback[spath] = data
             else:
                 if src is None:
                     skipped.append((spath, "manifest supplies no file bytes"))
@@ -891,8 +906,96 @@ def main():
                     print("      undefined %s: %s"
                           % (label, ", ".join(sorted(s)[:8])))
 
+    # ---- provenance -------------------------------------------------------
+    # Is any staged binary lifted out of the HOST Mac's dyld shared cache?
+    # Apple mints a fresh LC_UUID per build, so a UUID the host cache also
+    # records can only have come out of that Apple build.  This is a property
+    # distinct from every check above: a host-extracted dylib can be
+    # structurally perfect -- valid load commands, fully resolvable symbols --
+    # and still be a binary this repository never built and does not own.
+    # See provenance_scan.py and PROVENANCE-PLAN.md sec. 2.
+    #
+    # WHICH BYTES.  With --image the verdict is made about the bytes read back
+    # OUT of the finished image, not about the files the manifest names.  That
+    # distinction is the whole claim: "no staged binary came from the host
+    # cache" is a statement about a disk only if it was made about the disk.
+    # Re-deriving it from the source tree afterwards describes the build tree,
+    # and a manifest edited, a stage step re-run, or an image swapped between
+    # build and check all make those two answers disagree.
+    prov = None
+    if args.provenance_check:
+        sys.path.insert(0, HERE)
+        import provenance_scan
+        prov_paths = [(sp, sr) for sp, sr in staged
+                      if sr and os.path.isfile(sr)]
+        # The kernel is staged but is not a dyld-closure participant, so
+        # manifest_staged_files gives it no source.  That is a statement about
+        # symbol resolution, not about provenance: it is still a Mach-O the
+        # image loads.  Resolve it the way mkimage.py does so the set scanned
+        # for provenance is the set staged.  Without this, a swapped kernel --
+        # the one payload mkimage picks by mtime from outside the manifest --
+        # would never be judged at all.
+        try:
+            kern_src = provenance_scan.kernel_payload(HERE)
+        except provenance_scan.ManifestSourceError:
+            kern_src = None
+        if kern_src is not None:
+            for sp, _ in staged:
+                if os.path.basename(sp) == "kernel.development":
+                    prov_paths.append((sp, kern_src))
+        try:
+            uuids, nbytes, nfiles = provenance_scan.cached_host_uuid_set(
+                provenance_scan.DEFAULT_CACHE_DIR)
+        except Exception as exc:                          # noqa: BLE001
+            rule("PROVENANCE (host dyld shared cache)")
+            print("  !! NOT SATISFIED: host cache unavailable: %s" % exc)
+            print("  !! The provenance check could NOT run.")
+            prov = {"ran": False, "hits": None, "n": 0}
+        else:
+            hits = []
+            n = 0
+            for sp, sr in prov_paths:
+                if readback:
+                    # Image mode: judge the image's own bytes.  A staged path
+                    # the image did not yield is already recorded in `errors`
+                    # above, so there is nothing to invent here.
+                    if sp not in readback:
+                        continue
+                    found, text_vmaddr, _ = \
+                        provenance_scan.macho_uuids_and_text_bytes(readback[sp])
+                else:
+                    found, text_vmaddr, _ = \
+                        provenance_scan.macho_uuids_and_text(sr)
+                if not found and text_vmaddr is None:
+                    continue
+                n += 1
+                if any(u in uuids for u in found):
+                    hits.append(sp)
+            prov = {"ran": True, "hits": hits, "n": n}
+            rule("PROVENANCE (host dyld shared cache)")
+            print("  bytes judged from:       %s"
+                  % ("the image, read back out of it" if readback
+                     else "the staged source files"))
+            print("  staged Mach-O checked:   %d" % n)
+            print("  host UUID set:           %d candidates from %d cache "
+                  "file(s)" % (len(uuids), nfiles))
+            print("  HOST-EXTRACTED:          %d" % len(hits))
+            for sp in hits:
+                print("    %s" % sp)
+            if not hits:
+                print("  (every staged binary was built by this repository)")
+
     # ---- verdict ----------------------------------------------------------
     ok = (not errors and not missing_deps and not unresolved and not rejects)
+    # A host-extracted binary is a FAIL, not a warning: it is a binary this
+    # repository did not build, so its passing every structural check above
+    # proves nothing about whether it belongs in an image.
+    if prov is not None and prov["hits"]:
+        ok = False
+    # Likewise, a check that could not run is a FAIL, not a silent pass: a
+    # green verdict must mean the provenance question was actually answered.
+    if prov is not None and not prov["ran"]:
+        ok = False
     rule("VERDICT")
     if errors:
         print("  FAIL  %d staged file(s) could not be parsed" % len(errors))
@@ -905,6 +1008,16 @@ def main():
     if rejects:
         print("  FAIL  %d staged dylib(s) rejected by dyld2 validation"
               % len(rejects))
+    if prov is not None and not prov["ran"]:
+        print("  FAIL  provenance check could not run (host dyld cache "
+              "unavailable)")
+    elif prov is not None and prov["hits"]:
+        print("  FAIL  %d staged binary/ies came from the host dyld shared "
+              "cache" % len(prov["hits"]))
+    elif prov is not None:
+        print("  PASS  no staged binary came from the host dyld shared cache")
+    else:
+        print("  SKIP  provenance check not run (--no-provenance-check)")
     dis = [p for p, v, _ in nm_report if v == "DISAGREE"]
     if dis:
         print("  WARN  nm -m disagreement on %d file(s)" % len(dis))

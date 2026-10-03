@@ -51,6 +51,13 @@ ravynOS.xcodeproj
 /tools/bootlab/staged/
 /tools/bootlab/manifest_*.json
 
+# ...except manifest_cpmv.json, which is NOT a per-experiment manifest. It is
+# the durable clean closure the runners gate on (PROVENANCE-PLAN P0): the only
+# committed manifest whose closure and provenance both pass. Ignoring it would
+# make the gate depend on a file the OS may delete, which is the failure P0
+# exists to remove.
+!/tools/bootlab/manifest_cpmv.json
+
 # bmake -j dependency sidecars. The .o files they name are build products; the
 # sidecars are the by-product of the parallel make that produced them.
 .depend.*.o

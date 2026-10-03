@@ -94,12 +94,40 @@ fi
 
 if [ $BUILD -eq 1 ]; then
     ./build_init_exec.sh || { echo "DYNAMIC GATE: ABORT -- runner build failed"; exit 2; }
+    # P1 (2026-10-02): manifest_dynamic.json stages work/echo_dyn and
+    # work/sh_dyn, not the Apple product binaries that used to sit in
+    # assets/bin/ (quarantined; see assets-quarantine/QUARANTINE_INVENTORY.txt).
+    # The manifest therefore depends on work/ products, so this gate must build
+    # them or it would be gating an unbuildable tree.  build_dynutils.sh is the
+    # producer; it is skipped when the products are already present so a rerun
+    # costs nothing.
+    if [ ! -f work/echo_dyn ] || [ ! -f work/sh_dyn ]; then
+        ./build_dynutils.sh || { echo "DYNAMIC GATE: ABORT -- dynutils build failed"; exit 2; }
+    fi
     if [ ! -f work/stripped_kernel.development ]; then
         echo "FATAL: no kernel payload; run tools/bootlab/run.sh build first" >&2
         exit 2
     fi
+    # THE BUILD GATE (PROVENANCE-PLAN P2).  Judged on the same manifest
+    # mkimage.py is about to be given, so gating a tree cannot diverge from
+    # building it.  This is the second line of defence, not the first: it
+    # exists because 31 host-extracted dylibs are still in assets/, and five
+    # runner scripts can put them on a disk.  Every one of those five runs
+    # this same gate on its own manifest.
+    python3 closure_gate.py manifest_dynamic.json || {
+        echo "DYNAMIC GATE: ABORT -- closure/provenance gate refused"; exit 2; }
     python3 mkimage.py "$IMG" --manifest manifest_dynamic.json || {
         echo "DYNAMIC GATE: ABORT -- image build failed"; exit 2; }
+else
+    # --no-build: the image already exists, so judge the IMAGE rather than
+    # the manifest.  closure_check.py --image reads each staged path back out
+    # of the finished FAT32 image and scans those bytes, which is the only
+    # form of the question that is about what is about to boot.  A manifest
+    # edited after the build would otherwise pass while a borrowed dylib sat
+    # in the image.
+    [ -f "$IMG" ] || { echo "DYNAMIC GATE: ABORT -- --no-build but no $IMG"; exit 2; }
+    python3 closure_gate.py manifest_dynamic.json --image "$IMG" || {
+        echo "DYNAMIC GATE: ABORT -- closure/provenance gate refused $IMG"; exit 2; }
 fi
 
 echo "--- dynamic-userland gate: booting $IMG (window ${WINDOW}s) ---"

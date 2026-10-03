@@ -53,6 +53,11 @@ if [ -z "${RAVYN_KERNEL:-}" ] && [ -f work/stripped_kernel.development ] \
     echo "WARNING: re-run with RAVYN_KERNEL=work/stripped_kernel.development" >&2
 fi
 echo "[3/4] mkimage -> $IMG"
+# THE BUILD GATE (PROVENANCE-PLAN P2), on the manifest mkimage.py is about to
+# be given.  This script's whole subject is "the bytes in this image are the
+# bytes I just built"; letting an unvetted closure into that image would
+# falsify its premise.  Fails closed.
+python3 closure_gate.py manifest_applefree.json || exit 1
 python3 mkimage.py "$IMG" --manifest manifest_applefree.json --kernel "$KERNEL" || exit 1
 
 # A harness that reports a stale fact is the same shape as a gate that cannot

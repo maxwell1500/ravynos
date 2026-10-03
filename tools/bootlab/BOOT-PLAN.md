@@ -7,6 +7,16 @@ backed by a preserved log; nothing here is inferred from plausibility. The
 shell does **not** boot to an interactive shell and nothing in this document
 should be read as saying it does.
 
+**Companion document.** `PROVENANCE-PLAN.md` answers the separate question of
+where every binary comes from: what is ours, what is Apple's open-source
+Darwin, and what was lifted out of the host Mac. The rule that governs it is
+in **PROVENANCE-PLAN §4 P7** — borrowing Apple's *source* is the project,
+borrowing Apple's *built binaries* is the defect — and the mechanical gate that
+enforces it is described in `README.md` ("The build gate"). The short version:
+host **build tools** are acceptable and unavoidable; **vendored Apple OSS** is
+the intended path; host **runtime binaries** in a staged image are never
+acceptable.
+
 ---
 
 ## 1. The control that makes everything else trustworthy
@@ -2570,3 +2580,175 @@ dyld call `main` directly. `/tmp/manifest_dynsh.json` stages `sh_dyn` as
 
 Evidence: `work/KEEP_serial_dynsh_20261001.log` (56,551 bytes, 824 lines) and
 `work/KEEP_runner_dynsh_20261001.status`.
+### 15.18 Dynamic core utilities PASS: six binaries built, linked, and staged (2026-10-01)
+
+Building on 15.17, six FreeBSD userland utilities from `BSD/bin/`—`ls`, `cat`,
+`echo`, `mkdir`, `rm`, and `test`—were compiled with `-fPIC` and linked as
+`LC_MAIN` dylib executables against `libSystem.B.dylib`. Each has exactly one
+`LC_LOAD_DYLIB` (`/usr/lib/libSystem.B.dylib`) and `LC_MAIN` (not
+`LC_UNIXTHREAD`). Sizes: `ls` 39,816 B, `cat` 14,784 B, `echo` 8,616 B,
+`mkdir` 9,256 B, `rm` 15,680 B, `test` 13,968 B. The manifest
+`/tmp/manifest_dynsh2.json` stages them at `bin/{ls,cat,echo,mkdir,rm,test}`.
+
+`closure_check` reported 38 nodes, 0 unstaged dependencies, and 30/30 dylibs
+passing; the only findings were the two pre-existing libobjc unwind symbols,
+non-blocking as described in 15.16. `mkimage` processed 44 files and 57 tree
+entries; verification passed. Boot reached the `# ` prompt at serial line 824,
+41.94 s after the boot command, with 0 panic/trap lines; QEMU exited 0. This
+verifies the utilities are built, linked, and staged, **not that they run**:
+`--stop-marker '# '` stops at the shell prompt, and PID 1 only execs `/bin/sh`.
+Runtime proof requires a follow-up boot sending commands over serial.
+
+Compile command pattern:
+
+    xcrun clang -c -arch x86_64 -isysroot $SDK -mmacos-version-min=15.0 -fno-builtin -std=gnu11 -fPIC -D__unused= -Wall -Wno-unused-parameter -isystem $SDK/usr/include -isystem BSD/bin/<util> -o /tmp/dynutil_build/obj/<util>_<src>.o BSD/bin/<util>/<src>.c
+
+Link command pattern:
+
+    xcrun clang -nostdlib -nostdlibinc -nodefaultlibs -Wl,-no_uuid -Wl,-e,_main -arch x86_64 -L$SDK/usr/lib -lSystem -o work/<u>_dyn <objs>
+
+`cp` and `mv` remain blocked by missing FreeBSD macros (`AT_RESOLVE_BENEATH`,
+`O_RESOLVE_BENEATH`, `_PC_ACL_NFS4`, `_PC_ACL_EXTENDED`, `_PC_TYPE_NFS4`,
+`_PC_TIMESPEC`, `_PC_UF`, `_PATH_CP`, `_PATH_RM`, `_PATH_RSH`, `_PATH_DUM`,
+`_PATH_RARCHIVE`) and unimplemented `acl_is_trivial_np`, `chflagsat`, and
+`copy_file_range`.
+
+The dynamic shell work is covered by commit `03da2e863b` (21 files, 3,298
+insertions). Evidence: `work/KEEP_serial_dynsh2_20261001.log` (56,553 bytes,
+824 lines), `work/KEEP_runner_dynsh2_20261001.status`,
+`work/KEEP_manifest_dynsh2.json`, and
+`work/KEEP_dynutils_20261001_build_closure.txt`.
+### 15.19 Runtime proof: dynamic userland executes commands (2026-10-01)
+
+The BUILD/STAGE gate in 15.18 is now closed by interactive runtime proof. A
+modified copy of the incremental harness at
+`work/KEEP_harness_runtimeproof_boot_20261001.py` left protected
+`tools/bootlab/boot.py` untouched. It preserves incremental flushed logging
+and copies fresh `assets/vars.fd` each run; stale vars can cause an unrelated
+UEFI handoff `#UD` before kernel output. Its data-driven schedule supports
+marker/send/timeout steps, CR termination, delays, quiescence, and traces
+recording the matched prompt's byte offset. Marker searches advance, so each
+step waits for the next prompt. Existing bidirectional Unix serial transport
+on COM1 required no new QEMU plumbing. CR is the line terminator: TTY ICRNL
+maps it to NL, and ECHO returns typed bytes to serial.
+
+Run2 is the main evidence: 14/14 steps, zero strict panic/trap hits. Commands
+proved echo, `ls /`, `ls /bin`, `cat /hello.txt`, test true/false and status
+propagation, `&&`/`||`, mkdir, removal, redirection, and `ls /bin | cat`.
+The pipeline emitted two DYLD-LOAD-BASE blocks, proving two live dynamic
+processes connected by a pipe; its one-entry-per-line output also reflects
+`ls`'s non-tty behavior. Run2 had 13/13 dynamic launches and run3 10/10; each
+emitted the load-base and chain-probe markers and reported zero unbound slots.
+`/hello.txt` and `/tmp` were created by command redirection before use; they
+were not initially on the image. Run3 also tested `exit`: PID 1 exiting
+correctly panicked the kernel, so main runs omit exit and quiesce. This is a
+test artifact, not a userland defect. Its core dump failed because `/cores`
+does not exist.
+
+See 15.20 for the source-grounded `rm` and MIG findings, including the
+source-derived time API impact.
+
+Operational notes: the image persists read-write across runs and is no longer
+pristine; it now contains `/hello.txt`, `/rp3.txt`, `/tmp/dir1`, `/tmp/f1`,
+and `/tmp/rt3`. Rebuild it for a clean tree. Existing id=206/id=3418 messages
+and `vm_map_get_range` spam precede commands and are non-panicking. In the
+recv-driven harness, deadline checks must run on both received-data and
+socket-timeout/idle paths; otherwise an idle shell can prevent self-termination.
+
+Evidence: `work/KEEP_serial_runtimeproof_run1_20261001.log`,
+`KEEP_serial_runtimeproof_run2_20261001.log`,
+`KEEP_serial_runtimeproof_run3_20261001.log`, runner status and trace files,
+the preserved harness and schedules, and
+`KEEP_verdict_runtimeproof_20261001.txt`. This records the completed proof; no
+new QEMU run was made for this documentation change.
+
+### 15.20 Runtime findings: rm semantics and missing MIG dispatch
+
+The `rm` behavior and MIG gap above are grounded in source. `rm.c` only sets
+its directory-removal flag for `-d`; its man page documents the historical
+deviation from POSIX, and the available rmdir path reaches the msdosfs vnode
+operation. For MIG, the absent hash entries cause the bogus-message log and
+`MIG_BAD_ID` reply despite existing routines and subsystem entries; the
+insertion code deliberately skips NULL kstubs. The observed boot banner
+(`mig_table_max_displ = 2 mach_kobj_count = 241`) is consistent with this
+direct-index lookup behavior. [INFERENCE] No cause for the NULL kstubs was
+established; differing objroot timestamps do not establish booted-kernel
+provenance.
+
+Keep the scope distinction: runtime evidence establishes the dispatch
+failures; the time API blast radius is source-derived, not runtime-tested.
+`clock_gettime()` and mach timebase/absolute-time use other calls, while
+`nanosleep()` fails through the null host clock-service port. The kernel
+implementation is protected/out of scope.
+### 15.21 `cp` and `mv`: final utility gaps closed (2026-10-01)
+
+Building on 15.18 and the runtime harness in 15.19, `cp` and `mv` now build as
+`LC_MAIN` dylib executables and have both been proven to execute. The missing
+pieces were genuine Libsystem gaps, not defects in the utilities. This closes
+the last two requested utilities; 15.19/15.20 describe the harness and related
+runtime findings.
+
+Three real Libsystem functions were added. `copy_file_range` is emulated with
+`SYS_pread`/`SYS_pwrite`; there is no kernel syscall by that name
+(`bsd/kern/syscalls.master` has zero matches), so no syscall number was
+invented. It preserves the NULL-versus-explicit offset contract on every exit,
+returns a short count at EOF, propagates read `EINTR`, drains short writes,
+and rejects nonzero flags with `EINVAL`. `chflagsat` uses
+`SYS_setattrlistat` (524), whose kernel path resolves `dirfd` through
+`nameiat()`; errors, including `ENOTSUP` for unsupported vnode flags,
+propagate. `acl_is_trivial_np` walks ACL entries and computes POSIX.1e
+triviality rather than hardcoding it. ravynOS has no ACL support, and the
+utility's `_PC_ACL_*` probes return `ENOTSUP`, so `cp`/`mv` do not reach it.
+
+The macro decision preserves enforcement rather than defining unsupported
+features to zero: `AT_RESOLVE_BENEATH` maps to `AT_SYMLINK_NOFOLLOW_ANY` and
+`O_RESOLVE_BENEATH` to `O_NOFOLLOW_ANY`. Kernel namei rejects symlinks under
+these flags, including symlinks that would not escape the starting directory;
+this is stricter than FreeBSD's resolve-beneath semantics, in the safer
+direction. Other compatibility aliases are `st_atim`/`st_mtim` to
+`st_atimespec`/`st_mtimespec` (same layout) and `UF_ARCHIVE` to the reserved,
+unimplemented `0x00000010` bit. Since `sys/stat.h` is generated from kernel
+headers, these aliases are in editable `unistd.h`. Header changes also cover
+`fcntl.h`, `paths.h`, `sys/acl.h`, and `fts.h`; only `_PATH_CP` and `_PATH_RM`
+were referenced among the listed path macros. The `fts_open` comparator
+prototype now matches FreeBSD's `const FTSENT * const *`; its unprototyped
+`fts_compar` field means this does not change generated call code. The sole
+in-repo caller was updated, and both SDK dylibs binding `_fts_open$INODE64`
+were rebuilt.
+
+`mv` exposed a fourth gap: it references `vfork()` only to exec `cp` or `rm`,
+but the kernel's `CONFIG_VFORK`-guarded syscall slot is a null placeholder and
+no kernel implementation exists. `Libraries/Libsystem/libsystem_c/sys/vfork.c`
+therefore supplies a fork-based fallback by calling `__fork()`. This is not
+real `vfork`: it provides neither address-space sharing nor an exec/`_exit`
+restriction. Ordinary copy-on-write isolation avoids the classic shared-state
+hazard; correctness relies on fork isolation and caller discipline. The cost
+is a page-table copy. Calling `__fork()` avoids the pthread atfork callbacks
+that `fork()` would run, unnecessary overhead for this exec trampoline.
+
+`closure_check` reported 38 nodes, dependency edges increasing from 150 to
+175, four additional exported symbols (10,761 to 10,765), no unstaged
+dependencies, no dangling `N_INDR`, 30/30 dylibs passing, and no weak
+unresolved symbols. The only unresolved non-weak symbols remain the two
+pre-existing libobjc unwind symbols. `nm` confirmed all four additions as
+defined `T` symbols in `libsystem_c.dylib`, and `___fork` as `T` in
+`libsystem_kernel.dylib`. `mkimage` verified 46 files with matching content
+hashes.
+
+Runtime proof used a fresh image path and the serial-input harness described
+in 15.19. It created `/d.txt` containing `second-line`, copied it to `/c.txt`,
+and `cat /c.txt` returned `second-line`. It then renamed `/c.txt` to `/a.txt`;
+`ls -l /` showed `/a.txt` at 12 bytes and `/c.txt` absent. `/bin` listed
+`cat cp echo ls mkdir mv rm sh test`. The strict panic scan was clean; the
+only “panic” strings were the benign `panic_init` banner noted in 15.19.
+`/tmp` is absent on this FAT32 volume, so the successful commands used
+root-level paths. No new QEMU run was made for this documentation change.
+
+Evidence: `work/KEEP_serial_cpmv_runtime_20261001.log`,
+`KEEP_verdict_cpmv_runtime_20261001.txt`,
+`KEEP_closure_check_cpmv_20261001.txt`,
+`KEEP_img_digests_cpmv_20261001.txt`, `KEEP_mkimage_cpmv_20261001.log`,
+`KEEP_schedule_cpmv_runtime_20261001.json`,
+`KEEP_bootrun_cpmv_runtime_20261001.log`,
+`KEEP_status_cpmv_runtime_20261001.txt`, `KEEP_trace_cpmv_runtime_20261001.log`,
+and `work/cp_dyn`, `work/mv_dyn`.

@@ -1,4 +1,13 @@
 # Build artifacts — regenerate with ./run.sh
 work/
 __pycache__/
+
+# P1 quarantine (2026-10-02): 57 Apple binaries and dyld debug snapshots
+# MOVED out of assets/ into assets-quarantine/, byte-for-byte intact, with
+# their sha256/filetype/milestone identity recorded in
+# assets-quarantine/QUARANTINE_INVENTORY.txt.  Ignored for the same reason
+# assets/ is: these are Apple's compiled product, or quarantined precisely
+# because they must not be published.  Nothing in the clean closure stages
+# any of them; see PROVENANCE-PLAN.md sec. 4 P1.
+assets-quarantine/
 *.pyc

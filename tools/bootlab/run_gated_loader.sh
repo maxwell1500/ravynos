@@ -98,6 +98,10 @@ echo "      kernel sha256 : ${KSHA:0:16}  ($(stat -f%z "$KERNEL") bytes)"
 echo "      ^ RECORD THIS: if it differs from the control run's kernel, the"
 echo "        signature is not attributable to the loader alone."
 echo "[2/5] mkimage -> $IMG"
+# THE BUILD GATE (PROVENANCE-PLAN P2): same manifest mkimage.py is about to
+# be given, checked before a 512 MB image exists rather than as a dyld abort
+# inside QEMU.  Fails closed -- a host cache that cannot be read is a FAIL.
+python3 closure_gate.py manifest_dynamic.json || fail "closure/provenance gate refused manifest_dynamic.json"
 python3 mkimage.py "$IMG" --manifest manifest_dynamic.json || fail "mkimage failed"
 
 # ---------------------------------------------------------------------------

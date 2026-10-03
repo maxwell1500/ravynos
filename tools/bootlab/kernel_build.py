@@ -117,6 +117,21 @@ for rel in ["iokit/DEVELOPMENT/IOPlatformExpert.cpo.json",
             # wait4/proc_exit live in kern_exit.c. Without this an edit there
             # silently produced an unchanged kernel.
             "bsd/DEVELOPMENT/kern_exit.o.json",
+            # fork()/vfork() syscall entry points live in kern_fork.c.
+            # Without this an edit there silently produced an unchanged
+            # kernel, and syscall 66 stayed nosys().
+            "bsd/DEVELOPMENT/kern_fork.o.json",
+            # fork1() calls kern_protect()/proc_* helpers; keep it in step
+            # with kern_fork.c.
+            "bsd/DEVELOPMENT/kern_prot.o.json",
+            # mig_init() builds the MIG dispatch table in ipc_kobject.c.
+            # Without this the descriptor-stride fix never reached the
+            # kernel, so mig_table_max_displ stayed at its broken value.
+            "osfmk/DEVELOPMENT/ipc_kobject.o.json",
+            # init_sysent.c is the syscall dispatch table; without this a
+            # syscalls.master edit (e.g. enabling vfork on slot 66) never
+            # reached the kernel.
+            "bsd/DEVELOPMENT/init_sysent.o.json",
             # model_dep.c holds efi_init()/efi_set_tables_64(). Without this
             # an edit there silently produced an unchanged kernel.
             "osfmk/DEVELOPMENT/model_dep.o.json"]:
