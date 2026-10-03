@@ -134,6 +134,10 @@ extern malloc_zone_t *malloc_zone_from_ptr(const void *ptr);
 extern size_t malloc_size(const void *ptr);
     /* Returns size of given ptr */
 
+extern size_t sallocx(const void *ptr, int flags);
+    /* Returns size of given ptr. The flags argument is ignored; it exists
+     * for source compatibility with jemalloc, which Darwin does not use. */
+
 extern size_t malloc_good_size(size_t size);
     /* Returns number of bytes greater than or equal to size that can be allocated without padding */
 

@@ -438,7 +438,15 @@ unsigned int
 int	 chdir(const char *);
 int	 chown(const char *, uid_t, gid_t);
 
+//Begin-Libc
+#ifndef LIBC_ALIAS_CLOSE
+//End-Libc
 int	 close(int) __DARWIN_ALIAS_C(close);
+//Begin-Libc
+#else /* LIBC_ALIAS_CLOSE */
+int	 close(int) LIBC_ALIAS_C(close);
+#endif /* !LIBC_ALIAS_CLOSE */
+//End-Libc
 
 int	 dup(int);
 int	 dup2(int, int);
@@ -469,11 +477,27 @@ int	 link(const char *, const char *);
 off_t	 lseek(int, off_t, int);
 long	 pathconf(const char *, int);
 
+//Begin-Libc
+#ifndef LIBC_ALIAS_PAUSE
+//End-Libc
 int	 pause(void) __DARWIN_ALIAS_C(pause);
+//Begin-Libc
+#else /* LIBC_ALIAS_PAUSE */
+int	 pause(void) LIBC_ALIAS_C(pause);
+#endif /* !LIBC_ALIAS_PAUSE */
+//End-Libc
 
 int	 pipe(int [2]);
 
+//Begin-Libc
+#ifndef LIBC_ALIAS_READ
+//End-Libc
 ssize_t	 read(int, void *, size_t) __DARWIN_ALIAS_C(read);
+//Begin-Libc
+#else /* LIBC_ALIAS_READ */
+ssize_t	 read(int, void *, size_t) LIBC_ALIAS_C(read);
+#endif /* !LIBC_ALIAS_READ */
+//End-Libc
 
 int	 rmdir(const char *);
 int	 setgid(gid_t);
@@ -481,8 +505,17 @@ int	 setpgid(pid_t, pid_t);
 pid_t	 setsid(void);
 int	 setuid(uid_t);
 
+//Begin-Libc
+#ifndef LIBC_ALIAS_SLEEP
+//End-Libc
 unsigned int
 	 sleep(unsigned int) __DARWIN_ALIAS_C(sleep);
+//Begin-Libc
+#else /* LIBC_ALIAS_SLEEP */
+unsigned int
+	 sleep(unsigned int) LIBC_ALIAS_C(sleep);
+#endif /* !LIBC_ALIAS_SLEEP */
+//End-Libc
 
 long	 sysconf(int);
 pid_t	 tcgetpgrp(int);
@@ -490,14 +523,30 @@ int	 tcsetpgrp(int, pid_t);
 char	*ttyname(int);
 
 #if __DARWIN_UNIX03
+//Begin-Libc
+#ifndef LIBC_ALIAS_TTYNAME_R
+//End-Libc
 int	 ttyname_r(int, char *, size_t) __DARWIN_ALIAS(ttyname_r);
+//Begin-Libc
+#else /* LIBC_ALIAS_TTYNAME_R */
+int	 ttyname_r(int, char *, size_t) LIBC_ALIAS(ttyname_r);
+#endif /* !LIBC_ALIAS_TTYNAME_R */
+//End-Libc
 #else /* !__DARWIN_UNIX03 */
 char	*ttyname_r(int, char *, size_t);
 #endif /* __DARWIN_UNIX03 */
 
 int	 unlink(const char *);
 
+//Begin-Libc
+#ifndef LIBC_ALIAS_WRITE
+//End-Libc
 ssize_t	 write(int __fd, const void * __buf, size_t __nbyte) __DARWIN_ALIAS_C(write);
+//Begin-Libc
+#else /* LIBC_ALIAS_WRITE */
+ssize_t	 write(int __fd, const void * __buf, size_t __nbyte) LIBC_ALIAS_C(write);
+#endif /* !LIBC_ALIAS_WRITE */
+//End-Libc
 __END_DECLS
 
 
@@ -508,9 +557,25 @@ __END_DECLS
 
 #if __DARWIN_C_LEVEL >= 199209L
 __BEGIN_DECLS
+//Begin-Libc
+#ifndef LIBC_ALIAS_CONFSTR
+//End-Libc
 size_t	 confstr(int, char *, size_t) __DARWIN_ALIAS(confstr);
+//Begin-Libc
+#else /* LIBC_ALIAS_CONFSTR */
+size_t	 confstr(int, char *, size_t) LIBC_ALIAS(confstr);
+#endif /* !LIBC_ALIAS_CONFSTR */
+//End-Libc
 
+//Begin-Libc
+#ifndef LIBC_ALIAS_GETOPT
+//End-Libc
 int	 getopt(int, char * const [], const char *) __DARWIN_ALIAS(getopt);
+//Begin-Libc
+#else /* LIBC_ALIAS_GETOPT */
+int	 getopt(int, char * const [], const char *) LIBC_ALIAS(getopt);
+#endif /* !LIBC_ALIAS_GETOPT */
+//End-Libc
 
 extern char *optarg;			/* getopt(3) external variables */
 extern int optind, opterr, optopt;
@@ -547,7 +612,15 @@ int	 chroot(const char *) __POSIX_C_DEPRECATED(199506L);
 
 char	*crypt(const char *, const char *);
 #if __DARWIN_UNIX03
+//Begin-Libc
+#ifndef LIBC_ALIAS_ENCRYPT
+//End-Libc
 void	 encrypt(char *, int) __DARWIN_ALIAS(encrypt);
+//Begin-Libc
+#else /* LIBC_ALIAS_ENCRYPT */
+void	 encrypt(char *, int) LIBC_ALIAS(encrypt);
+#endif /* !LIBC_ALIAS_ENCRYPT */
+//End-Libc
 #else /* !__DARWIN_UNIX03 */
 int	 encrypt(char *, int);
 #endif /* __DARWIN_UNIX03 */
@@ -568,15 +641,77 @@ char	*getpass(const char *) __POSIX_C_DEPRECATED(199506L);
 char	*getwd(char *) __POSIX_C_DEPRECATED(200112L); /* obsoleted by getcwd() */
 #endif
 
+//Begin-Libc
+#ifndef LIBC_ALIAS_LCHOWN
+//End-Libc
 int	 lchown(const char *, uid_t, gid_t) __DARWIN_ALIAS(lchown);
+//Begin-Libc
+#else /* LIBC_ALIAS_LCHOWN */
+int	 lchown(const char *, uid_t, gid_t) LIBC_ALIAS(lchown);
+#endif /* !LIBC_ALIAS_LCHOWN */
+//End-Libc
 
+//Begin-Libc
+#ifndef LIBC_ALIAS_LOCKF
+//End-Libc
 int	 lockf(int, int, off_t) __DARWIN_ALIAS_C(lockf);
+//Begin-Libc
+#else /* LIBC_ALIAS_LOCKF */
+int	 lockf(int, int, off_t) LIBC_ALIAS_C(lockf);
+#endif /* !LIBC_ALIAS_LOCKF */
+//End-Libc
 
+//Begin-Libc
+#ifndef LIBC_ALIAS_NICE
+//End-Libc
 int	 nice(int) __DARWIN_ALIAS(nice);
+//Begin-Libc
+#else /* LIBC_ALIAS_NICE */
+int	 nice(int) LIBC_ALIAS(nice);
+#endif /* !LIBC_ALIAS_NICE */
+//End-Libc
 
+//Begin-Libc
+#ifndef LIBC_ALIAS_PREAD
+//End-Libc
 ssize_t	 pread(int __fd, void * __buf, size_t __nbyte, off_t __offset) __DARWIN_ALIAS_C(pread);
+//Begin-Libc
+#else /* LIBC_ALIAS_PREAD */
+ssize_t	 pread(int __fd, void * __buf, size_t __nbyte, off_t __offset) LIBC_ALIAS_C(pread);
+#endif /* !LIBC_ALIAS_PREAD */
+//End-Libc
 
+//Begin-Libc
+#ifndef LIBC_ALIAS_PWRITE
+//End-Libc
 ssize_t	 pwrite(int __fd, const void * __buf, size_t __nbyte, off_t __offset) __DARWIN_ALIAS_C(pwrite);
+//Begin-Libc
+#else /* LIBC_ALIAS_PWRITE */
+ssize_t	 pwrite(int __fd, const void * __buf, size_t __nbyte, off_t __offset) LIBC_ALIAS_C(pwrite);
+#endif /* !LIBC_ALIAS_PWRITE */
+//End-Libc
+
+/*
+ * FreeBSD/Linux copy_file_range(2).
+ *
+ * The kernel has no copy_file_range syscall (see Kernel/xnu
+ * bsd/kern/syscalls.master: it defines 34 chflags, 35 fchflags, and no
+ * SYS_copy_file_range at all), so this is implemented in Libsystem on top
+ * of pread/pwrite.  See libsystem_c/emulated/copy_file_range.c.
+ *
+ * A NULL off_in/off_out means "use and advance the file offset"; a
+ * non-NULL one is read on entry and updated with the resulting position.
+ */
+ssize_t	 copy_file_range(int __fd_in, off_t *__off_in,
+	    int __fd_out, off_t *__off_out, size_t __len, unsigned int __flags);
+
+/*
+ * FreeBSD chflagsat(2).  The kernel has no chflagsat syscall either; the
+ * implementation resolves the dirfd-relative path and defers to the real
+ * chflags(2)/fchflags(2).  See libsystem_c/emulated/chflagsat.c.
+ */
+int	 chflagsat(int __dfd, const char *__path, unsigned int __flags,
+	    int __atflags);
 
 /* Removed in Issue 6 */
 #if !defined(_POSIX_C_SOURCE) || _POSIX_C_SOURCE < 200112L
@@ -589,24 +724,64 @@ void	*sbrk(int);
 #endif
 
 #if __DARWIN_UNIX03
+//Begin-Libc
+#ifndef LIBC_ALIAS_SETPGRP
+//End-Libc
 pid_t	 setpgrp(void) __DARWIN_ALIAS(setpgrp);
+//Begin-Libc
+#else /* LIBC_ALIAS_SETPGRP */
+pid_t	 setpgrp(void) LIBC_ALIAS(setpgrp);
+#endif /* !LIBC_ALIAS_SETPGRP */
+//End-Libc
 #else /* !__DARWIN_UNIX03 */
 int	 setpgrp(pid_t pid, pid_t pgrp);	/* obsoleted by setpgid() */
 #endif /* __DARWIN_UNIX03 */
 
+//Begin-Libc
+#ifndef LIBC_ALIAS_SETREGID
+//End-Libc
 int	 setregid(gid_t, gid_t) __DARWIN_ALIAS(setregid);
+//Begin-Libc
+#else /* LIBC_ALIAS_SETREGID */
+int	 setregid(gid_t, gid_t) LIBC_ALIAS(setregid);
+#endif /* !LIBC_ALIAS_SETREGID */
+//End-Libc
 
+//Begin-Libc
+#ifndef LIBC_ALIAS_SETREUID
+//End-Libc
 int	 setreuid(uid_t, uid_t) __DARWIN_ALIAS(setreuid);
+//Begin-Libc
+#else /* LIBC_ALIAS_SETREUID */
+int	 setreuid(uid_t, uid_t) LIBC_ALIAS(setreuid);
+#endif /* !LIBC_ALIAS_SETREUID */
+//End-Libc
 
 void     swab(const void * __restrict, void * __restrict, ssize_t);
 void	 sync(void);
 int	 truncate(const char *, off_t);
 useconds_t	 ualarm(useconds_t, useconds_t);
+//Begin-Libc
+#ifndef LIBC_ALIAS_USLEEP
+//End-Libc
 int	 usleep(useconds_t) __DARWIN_ALIAS_C(usleep);
+//Begin-Libc
+#else /* LIBC_ALIAS_USLEEP */
+int	 usleep(useconds_t) LIBC_ALIAS_C(usleep);
+#endif /* !LIBC_ALIAS_USLEEP */
+//End-Libc
 pid_t	 vfork(void) __WATCHOS_PROHIBITED __TVOS_PROHIBITED;
 /* End XSI */
 
+//Begin-Libc
+#ifndef LIBC_ALIAS_FSYNC
+//End-Libc
 int	 fsync(int) __DARWIN_ALIAS_C(fsync);
+//Begin-Libc
+#else /* LIBC_ALIAS_FSYNC */
+int	 fsync(int) LIBC_ALIAS_C(fsync);
+#endif /* !LIBC_ALIAS_FSYNC */
+//End-Libc
 
 int	 ftruncate(int, off_t);
 int	 getlogin_r(char *, size_t);
@@ -720,12 +895,28 @@ int	 setgroups(int, const gid_t *);
 void	 sethostid(long);
 int	 sethostname(const char *, int);
 #if __DARWIN_UNIX03
+//Begin-Libc
+#ifndef LIBC_ALIAS_SETKEY
+//End-Libc
 void	 setkey(const char *) __DARWIN_ALIAS(setkey);
+//Begin-Libc
+#else /* LIBC_ALIAS_SETKEY */
+void	 setkey(const char *) LIBC_ALIAS(setkey);
+#endif /* !LIBC_ALIAS_SETKEY */
+//End-Libc
 #else /* !__DARWIN_UNIX03 */
 int	 setkey(const char *);
 #endif /* __DARWIN_UNIX03 */
 int	 setlogin(const char *);
+//Begin-Libc
+#ifndef LIBC_ALIAS_SETMODE
+//End-Libc
 void	*setmode(const char *) __DARWIN_ALIAS_STARTING(__MAC_10_6, __IPHONE_2_0, __DARWIN_ALIAS(setmode));
+//Begin-Libc
+#else /* LIBC_ALIAS_SETMODE */
+void	*setmode(const char *) LIBC_ALIAS(setmode);
+#endif /* !LIBC_ALIAS_SETMODE */
+//End-Libc
 int	 setrgid(gid_t);
 int	 setruid(uid_t);
 int	 setsgroups_np(int, const uuid_t);
@@ -752,16 +943,48 @@ int	 getsubopt(char **, char * const *, char **);
 #ifdef __LP64__
 int    fgetattrlist(int,void*,void*,size_t,unsigned int) __OSX_AVAILABLE_STARTING(__MAC_10_6, __IPHONE_3_0);
 int    fsetattrlist(int,void*,void*,size_t,unsigned int) __OSX_AVAILABLE_STARTING(__MAC_10_6, __IPHONE_3_0);
+//Begin-Libc
+#ifndef LIBC_ALIAS_GETATTRLIST
+//End-Libc
 int    getattrlist(const char*,void*,void*,size_t,unsigned int) __DARWIN_ALIAS(getattrlist);
+//Begin-Libc
+#else /* LIBC_ALIAS_GETATTRLIST */
+int    getattrlist(const char*,void*,void*,size_t,unsigned int) LIBC_ALIAS(getattrlist);
+#endif /* !LIBC_ALIAS_GETATTRLIST */
+//End-Libc
+//Begin-Libc
+#ifndef LIBC_ALIAS_SETATTRLIST
+//End-Libc
 int    setattrlist(const char*,void*,void*,size_t,unsigned int) __DARWIN_ALIAS(setattrlist);
+//Begin-Libc
+#else /* LIBC_ALIAS_SETATTRLIST */
+int    setattrlist(const char*,void*,void*,size_t,unsigned int) LIBC_ALIAS(setattrlist);
+#endif /* !LIBC_ALIAS_SETATTRLIST */
+//End-Libc
 int exchangedata(const char*,const char*,unsigned int) __WATCHOS_PROHIBITED __TVOS_PROHIBITED;
 int    getdirentriesattr(int,void*,void*,size_t,unsigned int*,unsigned int*,unsigned int*,unsigned int) __WATCHOS_PROHIBITED __TVOS_PROHIBITED;
 
 #else /* __LP64__ */
 int	fgetattrlist(int,void*,void*,size_t,unsigned long) __OSX_AVAILABLE_STARTING(__MAC_10_6, __IPHONE_3_0);
 int	fsetattrlist(int,void*,void*,size_t,unsigned long) __OSX_AVAILABLE_STARTING(__MAC_10_6, __IPHONE_3_0);
+//Begin-Libc
+#ifndef LIBC_ALIAS_GETATTRLIST
+//End-Libc
 int	getattrlist(const char*,void*,void*,size_t,unsigned long) __DARWIN_ALIAS(getattrlist);
+//Begin-Libc
+#else /* LIBC_ALIAS_GETATTRLIST */
+int	getattrlist(const char*,void*,void*,size_t,unsigned long) LIBC_ALIAS(getattrlist);
+#endif /* !LIBC_ALIAS_GETATTRLIST */
+//End-Libc
+//Begin-Libc
+#ifndef LIBC_ALIAS_SETATTRLIST
+//End-Libc
 int	setattrlist(const char*,void*,void*,size_t,unsigned long) __DARWIN_ALIAS(setattrlist);
+//Begin-Libc
+#else /* LIBC_ALIAS_SETATTRLIST */
+int	setattrlist(const char*,void*,void*,size_t,unsigned long) LIBC_ALIAS(setattrlist);
+#endif /* !LIBC_ALIAS_SETATTRLIST */
+//End-Libc
 int exchangedata(const char*,const char*,unsigned long)
 		__OSX_DEPRECATED(10.0, 10.13, "use renamex_np with the RENAME_SWAP flag")
 		__IOS_DEPRECATED(2.0, 11.0, "use renamex_np with the RENAME_SWAP flag")
@@ -782,6 +1005,69 @@ int	 ffsctl(int,unsigned long,void*,unsigned int) __OSX_AVAILABLE_STARTING(__MAC
 
 int	fsync_volume_np(int, int) __OSX_AVAILABLE_STARTING(__MAC_10_8, __IPHONE_6_0);
 int	sync_volume_np(const char *, int) __OSX_AVAILABLE_STARTING(__MAC_10_8, __IPHONE_6_0);
+
+/*
+ * FreeBSD pathconf(3) selectors that BSD userland expects.
+ *
+ * The kernel's <sys/unistd.h> defines 1.._PC_MIN_HOLE_SIZE (27); anything
+ * outside that range reaches vn_pathconf()'s default arm
+ * (Kernel/xnu/bsd/vfs/vfs_vnops.c:1929), which dispatches to the
+ * filesystem's VNOP_PATHCONF.  ravynOS's filesystems have no ACL support
+ * of any kind -- bsd/kern/syscalls.master defines no acl_get_file /
+ * acl_set_file / extattr syscalls, and there is no POSIX.1e or NFSv4 ACL
+ * code in the tree -- so those default to err_pathconf()
+ * (bsd/vfs/vfs_support.c:661) returning ENOTSUP.
+ *
+ * That is exactly the contract FreeBSD specifies for an unimplemented
+ * selector: fpathconf(3) fails with EINVAL/ENOTSUP rather than reporting
+ * support.  These values are therefore chosen to fall outside the
+ * kernel's handled range, so querying them reports "not supported"
+ * honestly instead of pretending.  cp(1)/mv(1) already handle that
+ * correctly: BSD/bin/cp/utils.c:411 and BSD/bin/mv/mv.c only warn on an
+ * errno other than EINVAL, and treat -1 as "no ACL support, skip ACL
+ * preservation" (utils.c:427).
+ *
+ * _PC_ACL_NFS4 and _PC_ACL_EXTENDED are the only two BSD userland tools
+ * here actually reference; the values are from FreeBSD's numbering.
+ */
+#define	_PC_ACL_NFS4		61	/* ACL supports NFSv4 ACLs */
+#define	_PC_ACL_EXTENDED	62	/* ACL supports POSIX.1e extended ACLs */
+
+/*
+ * <sys/stat.h> is generated from the kernel's BSD header set
+ * (Developer/ravynOS.sdk/Makefile runs Kernel/xnu's header install and
+ * unifdef), so it is not an editable Libsystem header.  ravynOS spells the
+ * BSD timestamp members the Darwin way (st_atimespec/st_mtimespec, both
+ * struct timespec) and has no separate user-flag namespace, so expose the
+ * FreeBSD spellings as aliases onto what actually exists.
+ *
+ * st_atim/st_mtim are exact aliases: st_atimespec/st_mtimespec are both
+ * struct timespec at the same offsets, so the BSD spelling denotes the
+ * identical storage.
+ *
+ * UF_ARCHIVE is FreeBSD's "file needs to be archived" user flag, and
+ * mv(1) uses it only to mask one bit out of the st_flags comparison and
+ * carry it onto the destination (BSD/bin/mv/mv.c:331-334).  It is defined
+ * to 0x00000010, the bit ravynOS's own <sys/stat.h> explicitly reserves
+ * for FreeBSD and leaves unimplemented:
+ *
+ *   "The following bit is reserved for FreeBSD.  It is not implemented
+ *    in Mac OS X."   -- usr/include/sys/stat.h:315-317
+ *   (there, as a commented-out UF_NOUNLINK 0x00000010)
+ *
+ * so the bit is genuinely free on ravynOS: no filesystem sets it, and no
+ * other UF_* constant in that header collides with it.  Aliasing it here
+ * therefore preserves mv(1)'s comparison exactly -- the masked bit is 0 on
+ * both sides, so the comparison reduces to the flags that matter.
+ */
+#ifndef st_atim
+#define	st_atim		st_atimespec
+#define	st_mtim		st_mtimespec
+#define	st_ctim		st_ctimespec
+#endif
+#ifndef UF_ARCHIVE
+#define	UF_ARCHIVE	0x00000010	/* user flag: file needs archiving */
+#endif
 
 extern int optreset;
 
