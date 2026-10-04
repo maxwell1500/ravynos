@@ -28,6 +28,11 @@
 #import <AppKit/AppKit.h>
 #import "desktop.h"
 
+/* MIN is not declared by the SDK's sys/param.h (the kernel's bsd/sys/param.h
+ * and objc4's objc-os.h both define it, but neither is on this include path).
+ * Standard macro, same definition. */
+#define MIN(a, b) (((a) < (b)) ? (a) : (b))
+
 const int width = 480;
 const int height = 640;
 extern int fd;

@@ -1,4 +1,5 @@
 #import <AppKit/AppKit.h>
+#include <servers/bootstrap.h>
 
 int main(int argc, const char **argv) {
     __NSInitializeProcess(argc, argv);

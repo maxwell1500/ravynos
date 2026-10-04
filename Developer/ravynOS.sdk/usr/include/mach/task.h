@@ -791,17 +791,6 @@ kern_return_t task_set_exc_guard_behavior
 	task_exc_guard_behavior_t behavior
 );
 
-/* Routine mach_task_is_self */
-#ifdef	mig_external
-mig_external
-#else
-extern
-#endif	/* mig_external */
-kern_return_t mach_task_is_self
-(
-	task_name_t task,
-	boolean_t *is_self
-);
 
 /* Routine task_dyld_process_info_notify_register */
 #ifdef	mig_external
@@ -1664,9 +1653,6 @@ __END_DECLS
 #ifdef  __MigPackStructs
 #pragma pack(push, 4)
 #endif
-	typedef struct {
-		mach_msg_header_t Head;
-	} __Request__mach_task_is_self_t __attribute__((unused));
 #ifdef  __MigPackStructs
 #pragma pack(pop)
 #endif
@@ -1867,7 +1853,6 @@ union __RequestUnion__task_subsystem {
 	__Request__task_inspect_t Request_task_inspect;
 	__Request__task_get_exc_guard_behavior_t Request_task_get_exc_guard_behavior;
 	__Request__task_set_exc_guard_behavior_t Request_task_set_exc_guard_behavior;
-	__Request__mach_task_is_self_t Request_mach_task_is_self;
 	__Request__task_dyld_process_info_notify_register_t Request_task_dyld_process_info_notify_register;
 	__Request__task_create_identity_token_t Request_task_create_identity_token;
 	__Request__task_identity_token_get_task_port_t Request_task_identity_token_get_task_port;
@@ -2612,12 +2597,6 @@ union __RequestUnion__task_subsystem {
 #ifdef  __MigPackStructs
 #pragma pack(push, 4)
 #endif
-	typedef struct {
-		mach_msg_header_t Head;
-		NDR_record_t NDR;
-		kern_return_t RetCode;
-		boolean_t is_self;
-	} __Reply__mach_task_is_self_t __attribute__((unused));
 #ifdef  __MigPackStructs
 #pragma pack(pop)
 #endif
@@ -2813,7 +2792,6 @@ union __ReplyUnion__task_subsystem {
 	__Reply__task_inspect_t Reply_task_inspect;
 	__Reply__task_get_exc_guard_behavior_t Reply_task_get_exc_guard_behavior;
 	__Reply__task_set_exc_guard_behavior_t Reply_task_set_exc_guard_behavior;
-	__Reply__mach_task_is_self_t Reply_mach_task_is_self;
 	__Reply__task_dyld_process_info_notify_register_t Reply_task_dyld_process_info_notify_register;
 	__Reply__task_create_identity_token_t Reply_task_create_identity_token;
 	__Reply__task_identity_token_get_task_port_t Reply_task_identity_token_get_task_port;
@@ -2883,7 +2861,6 @@ union __ReplyUnion__task_subsystem {
     { "task_inspect", 3451 },\
     { "task_get_exc_guard_behavior", 3452 },\
     { "task_set_exc_guard_behavior", 3453 },\
-    { "mach_task_is_self", 3455 },\
     { "task_dyld_process_info_notify_register", 3456 },\
     { "task_create_identity_token", 3457 },\
     { "task_identity_token_get_task_port", 3458 },\

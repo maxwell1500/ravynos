@@ -38,7 +38,12 @@ LDFLAGS = -framework CoreFoundation -Wl,-compatibility_version,1
 #-framework Security -framework SystemConfiguration \
 	-F/usr/local/SecurityPieces/Frameworks -framework security_cdsa_utils
 
-INCLUDES = -I${.CURDIR:H} -I${ROOT_SOURCE_DIR}/Libraries/Libsystem/liblaunch \
+# The SDK's usr/include must come before the wrapper's own -I of
+# Kernel/xnu/libkern (appended by isysroot-cc), or <libkern/OSAtomic.h>
+# resolves to the kernel's copy, which declares no OSSpinLock* (the userspace
+# SDK copy does). CFNetworkThreadSupport.h uses OSSpinLockTry/Lock/Unlock.
+INCLUDES = -I${RAVYN_SDKROOT}/usr/include -I${.CURDIR:H} \
+	-I${ROOT_SOURCE_DIR}/Libraries/Libsystem/liblaunch \
 	-I${.CURDIR}/SharedCode -I${.CURDIR}/Proxies -I${.CURDIR}/HTTP \
 	-I${.CURDIR} -I${ROOT_SOURCE_DIR}/Kernel/kext_tools/FILES/3rd
 DEFS = -DCF_ASSUME_NONNULL_BEGIN="" -DCF_ASSUME_NONNULL_END=""
@@ -51,5 +56,17 @@ CPPFLAGS += -F${RAVYN_SDKROOT}${SLF}/CoreServices.framework/Frameworks \
 	-Wmissing-prototypes -Wpointer-arith -Wcast-align -Wno-unknown-pragmas \
 	-Wno-incompatible-function-pointer-types ${DEFS} ${INCLUDES}
 
+
+# CFNetwork had no install hook, so it built into the object directory and was
+# never copied into either SDK. Foundation.h -> CoreServices.h -> CFNetwork.h,
+# so every framework that imports Foundation (LaunchServices, Dock, Filer,
+# AppKit) fails to compile with "'CFNetwork/CFNetwork.h' file not found" until
+# CFNetwork.framework is on the SDK framework search path. Install it the way
+# CoreFoundation/CoreGraphics do.
+fmwk-install-hook:
+.for dir in ${RAVYN_SDKROOT}/System/Library/Frameworks/ ${SYSROOT_DIR}/System/Library/Frameworks/
+	mkdir -p ${dir}
+	cp -Rfp ${.OBJDIR}/${FRAMEWORK}.framework ${dir}
+.endfor
 
 .include <rvn.framework.mk>

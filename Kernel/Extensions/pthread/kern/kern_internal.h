@@ -62,7 +62,18 @@ struct ksyn_waitq_element;
  * enum workq_set_self_flags (see the comment on that enum), so alias the
  * two instead of re-including the userspace headers.
  */
+/*
+ * KERNEL-only. The alias is needed because the kext cannot include
+ * libpthread's userspace qos_private.h (it pulls in sys/_pthread/*.h, which
+ * does not exist for the kernel). Userspace libsystem_pthread reaches this
+ * same header through pthread/internal.h and takes _pthread_set_flags_t from
+ * qos_private.h instead, so an unguarded alias collides with it:
+ *   qos_private.h:62: error: typedef redefinition with different types
+ *     ('unsigned int' vs 'enum workq_set_self_flags')
+ */
+#ifdef KERNEL
 typedef enum workq_set_self_flags _pthread_set_flags_t;
+#endif
 
 /* pthread userspace SPI feature checking, these constants are returned from bsdthread_register,
  * as a bitmask, to inform userspace of the supported feature set. Old releases of OS X return
@@ -154,7 +165,9 @@ int _bsdthread_create(struct proc *p, user_addr_t user_func, user_addr_t user_fu
 int _bsdthread_register(struct proc *p, user_addr_t threadstart, user_addr_t wqthread, int pthsize, user_addr_t dummy_value, user_addr_t targetconc_ptr, uint64_t dispatchqueue_offset, int32_t *retval);
 int _bsdthread_terminate(struct proc *p, user_addr_t stackaddr, size_t size, uint32_t kthport, uint32_t sem, int32_t *retval);
 int _bsdthread_ctl_set_qos(struct proc *p, user_addr_t cmd, mach_port_name_t kport, user_addr_t tsd_priority_addr, user_addr_t arg3, int *retval);
+#ifdef KERNEL
 int _bsdthread_ctl_set_self(struct proc *p, user_addr_t cmd, pthread_priority_t priority, mach_port_name_t voucher, _pthread_set_flags_t flags, int *retval);
+#endif
 int _bsdthread_ctl_qos_override_start(struct proc *p, user_addr_t cmd, mach_port_name_t kport, pthread_priority_t priority, user_addr_t resource, int *retval);
 int _bsdthread_ctl_qos_override_end(struct proc *p, user_addr_t cmd, mach_port_name_t kport, user_addr_t resource, user_addr_t arg3, int *retval);
 int _bsdthread_ctl_qos_override_dispatch(struct proc __unused *p, user_addr_t __unused cmd, mach_port_name_t kport, pthread_priority_t priority, user_addr_t arg3, int __unused *retval);

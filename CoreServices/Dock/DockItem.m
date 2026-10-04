@@ -30,6 +30,12 @@
 #import "WindowServer/rpc.h"
 #import <LaunchServices/LaunchServices.h>
 
+/* WindowServer RPC entry point, provided by libWindowServer on ravynOS. Same
+ * forward declaration as WindowServer.m:59, AppKit/NSWindow.m:69 and
+ * CoreGraphics/CGDirectDisplay.m:66; WindowServer/rpc.h defines only the
+ * WSRPC codes, not the entry point. */
+kern_return_t _windowServerRPC(void *data, size_t len, void *replyBuf, int *replyLen);
+
 #define RUNMK_DIAMETER 8
 #define RUNMK_SPACER 2
 

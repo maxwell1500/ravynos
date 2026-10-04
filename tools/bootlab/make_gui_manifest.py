@@ -124,15 +124,26 @@ def candidates(inst):
         cands.append(os.path.join(SDK, "System", "Library", "Frameworks", rel))
         cands.append(os.path.join(BUILD_FRAMEWORKS, rel))
     elif inst == "/usr/lib/system/libutil.dylib":
+        cands.append(os.path.join(SDK, "usr", "lib", "libutil.dylib"))
         cands.append(os.path.join(BUILD_SDK, "usr", "lib", "libutil.dylib"))
         cands.append(os.path.join(BUILD_SRC, "BSD", "lib", "libutil", "libutil.dylib"))
     elif inst == "/usr/lib/libicucore.A.dylib":
+        cands.append(os.path.join(SDK, "usr", "lib", "libicucore.A.dylib"))
         cands.append(os.path.join(BUILD_SDK, "usr", "lib", "libicucore.A.dylib"))
         cands.append(os.path.join(BUILD_SRC, "Libraries", "ICU", "libicucore.A.dylib"))
     elif inst == "/usr/lib/libicudata.dylib":
+        cands.append(os.path.join(SDK, "usr", "lib", "libicudata.dylib"))
         cands.append(os.path.join(BUILD_SDK, "usr", "lib", "libicudata.dylib"))
         cands.append(os.path.join(BUILD_SRC, "Libraries", "ICU", "target", "lib",
                                   "libicudata.dylib"))
+    # Generic repo-SDK candidate (e.g. /usr/lib/libsqlite3.dylib ->
+    # Developer/ravynOS.sdk/usr/lib/libsqlite3.dylib). The repo SDK now carries
+    # the libs the manifest used to source from the out-of-tree build SDK, so
+    # every entry can be repo-relative.
+    cands.append(os.path.join(SDK, inst.lstrip("/")))
+    # Final fallback: the out-of-tree build SDK, used only when the repo SDK
+    # does not carry the file.
+    cands.append(os.path.join(BUILD_SDK, inst.lstrip("/")))
     return cands
 
 
@@ -270,8 +281,19 @@ def main():
     #    than invent a bundle.
     for name in CS_APPS:
         dst_root = "System/Library/CoreServices/%s.app" % name
-        roots = [os.path.join(REPO, "CoreServices", name, name + ".app"),
-                 os.path.join(BUILD_SRC, "CoreServices", name, name + ".app")]
+        repo_root = os.path.join(REPO, "CoreServices", name, name + ".app")
+        work_root = os.path.join(HERE, "work", name + ".app")
+        build_root = os.path.join(BUILD_SRC, "CoreServices", name, name + ".app")
+        # A repo-relative source is what keeps the manifest portable. The
+        # --frameworks build writes the bundle into the out-of-tree build dir,
+        # so if no in-repo bundle exists, copy it under work/ (gitignored,
+        # exactly like WindowServer's work/ws_bundle) and stage from there.
+        # No absolute build path is then recorded in the manifest.
+        if not os.path.isdir(repo_root) and os.path.isdir(build_root):
+            if os.path.isdir(work_root):
+                shutil.rmtree(work_root)
+            shutil.copytree(build_root, work_root, symlinks=True)
+        roots = [repo_root, work_root]
         root = next((r for r in roots if os.path.isdir(r)), None)
         exe = os.path.join(root or "", "Contents", "ravynOS", name)
         if root is None or not os.path.isfile(exe):
@@ -282,6 +304,20 @@ def main():
             "%s.app bundle file (staged from %s)" % (name, root))
         closure.append((dst_root, root, "staged %d files" % n_app))
         expand_closure([exe], staged, entries, closure, seen)
+    # 7. launchctl and its libjansson dependency. launchd's hardcoded System
+    #    bootstrapper execs /bin/launchctl (BSD/sbin/launchd/core.c:7195), so the
+    #    binary must sit at that exact path; launchctl's LC_LOAD_DYLIB requires
+    #    libjansson, which is built into the repo SDK.
+    entries.append({
+        "path": "bin/launchctl",
+        "file": "work/launchctl_dyn",
+        "comment": "launchd's hardcoded /bin/launchctl (BSD/sbin/launchd/core.c:7195)",
+    })
+    entries.append({
+        "path": "usr/lib/libjansson.dylib",
+        "file": "../../Developer/ravynOS.sdk/usr/lib/libjansson.dylib",
+        "comment": "libjansson required by launchctl's LC_LOAD_DYLIB",
+    })
 
     paths = [e["path"] for e in entries]
     dupes = sorted({p for p in paths if paths.count(p) > 1})

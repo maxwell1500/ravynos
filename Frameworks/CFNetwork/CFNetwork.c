@@ -34,7 +34,12 @@
 #include <stdlib.h>  // for getenv
 #if defined(__MACH__)
 #include <mach-o/dyld.h>
-#include <SystemConfiguration/SystemConfiguration.h>
+/* SystemConfiguration.framework is not built on ravynOS (Frameworks/
+ * SystemConfiguration has only a schema generator, no framework Makefile),
+ * and its SCPreferences.h pulls in Security.framework, which is not built
+ * either. CFNetwork.c uses no SC* symbol, so the include was a build
+ * dependency on two frameworks that do not exist here. Removed so CFNetwork
+ * itself can build. */
 #endif
 
 #include <sys/types.h>

@@ -686,6 +686,34 @@ done
 # that cannot be proven active is the same as no guard.
 LIBKERN_INC="${ROOT_SOURCE_DIR:-$HERE/../..}/Kernel/xnu/libkern"
 if [ -d "$LIBKERN_INC" ]; then
+    # LIBKERN_INC is a general -I and is emitted last, so <libkern/OSAtomic.h>
+    # resolved to Kernel/xnu/libkern/libkern/OSAtomic.h. That kernel header
+    # declares OSSpinLockTry and OSSpinLockUnlock only inside #ifdef PRIVATE
+    # and declares no OSSpinLockLock at all, so userspace TUs failed with
+    #   call to undeclared function 'OSSpinLockTry'/'OSSpinLockLock'/
+    #   'OSSpinLockUnlock'
+    # (measured: `isysroot-cc --sysroot=$SDK -H` on a TU including only
+    # <libkern/OSAtomic.h> resolved to the kernel copy). The SDK's userspace
+    # copy declares all three unconditionally.
+    #
+    # An explicit -I of the sysroot's own usr/include does NOT fix it: clang
+    # folds that path into the -isysroot system include, which is searched
+    # AFTER every -I, so the kernel tree still won (measured directly with
+    # clang -H). Emit a dedicated shim directory instead -- it contains only
+    # a `libkern` symlink to the SDK's usr/include/libkern -- so the SDK's
+    # libkern headers are searched before LIBKERN_INC while every other header
+    # the kernel tree supplies (os/log.h's include_next target, private
+    # mach/libkern headers) is unchanged. Same technique the wrapper already
+    # uses for the mach and libc++ shims.
+    for s in $sdk_roots; do
+        if [ -d "$s/usr/include/libkern" ]; then
+            LIBKERN_SHIM="${ROOT_BINARY_DIR:-/tmp}/Tools/libkern-shim"
+            mkdir -p "$LIBKERN_SHIM"
+            ln -sfn "$s/usr/include/libkern" "$LIBKERN_SHIM/libkern"
+            out="$out '-I$LIBKERN_SHIM'"
+            break
+        fi
+    done
     out="$out '-I$LIBKERN_INC'"
 fi
 

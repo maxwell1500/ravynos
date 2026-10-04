@@ -2,7 +2,7 @@
 # build_dynutils.sh -- build the dylib-linked BSD core utilities that
 # manifest_cpmv.json stages as work/<u>_dyn.
 #
-#   ./build_dynutils.sh            build all nine
+#   ./build_dynutils.sh            build all ten
 #   ./build_dynutils.sh cp sh      build only those (others untouched)
 #   ./build_dynutils.sh --check    verify the staged work/<u>_dyn, build nothing
 #
@@ -15,6 +15,11 @@
 #   survive only as untracked files plus the command lines recorded in
 #   BOOT-PLAN.md 15.17-15.21.  A clean checkout could not stage that manifest.
 #   This script is that missing producer.
+#
+# launchctl_dyn is built here too.  BSD/bin/launchctl links -ljansson against
+# the libjansson.dylib this tree builds into the SDK (BSD/lib/libjansson, with
+# sources vendored under contrib/jansson).  It is not one of the nine entries
+# above, so it has no counterpart in manifest_cpmv.json yet.
 #
 # NOT A STUB, NOT A SYMBOL FAKER
 #   Every binary here is compiled from the vendored BSD sources in this
@@ -31,6 +36,9 @@
 #
 #   BSD/lib/libedit/libedit.dylib must also exist (BSD/bin/sh links -ledit).
 #   Build it from BSD/lib/libedit/Makefile; see BOOT-PLAN.md 15.17.
+#
+#   BSD/lib/libjansson/libjansson.dylib must exist for launchctl (it links
+#   -ljansson).  Build it from BSD/lib/libjansson/Makefile.
 #
 # WHY NOT THE FREEBSD bmake MAKEFILES
 #   BSD/bin/<u>/Makefile is a bsd.prog.mk target that links the FreeBSD way
@@ -50,7 +58,7 @@ OBJDIR="$HERE/work/dynutils"
 # ("xcrun clang"), and a scalar would make "$CC" a single bogus filename.
 CC=(${CLANG:-xcrun clang})
 
-ALL="sh echo ls cat mkdir rm test cp mv"
+ALL="sh echo ls cat mkdir rm test cp mv launchctl"
 
 # ---------------------------------------------------------------- SRCS table
 # Read from BSD/bin/<u>/Makefile SRCS/ the implicit PROG sources; listed here
@@ -70,6 +78,10 @@ srcs_for() {
         # and the rest of the shell's globals, which test must not own.
         test)  echo "test.c" ;;
         mv)    echo "mv.c" ;;
+        # launchctl is the only utility here that is not self-contained: it
+        # includes vproc.h / vproc_priv.h / vproc_internal.h and <bootstrap.h>
+        # from the liblaunch sources, and it links -llaunch -lutil -ljansson.
+        launchctl) echo "launchctl.c" ;;
     esac
 }
 
@@ -137,6 +149,24 @@ build_one() {
     # no bltin/ of its own -- it borrows the shell's.  Adding BSD/bin/sh to the
     # include path for every utility resolves that and costs nothing elsewhere.
     local inc=(-isystem "$srcdir" -isystem "$REPO/BSD/bin/sh")
+    # launchctl pulls in headers the SDK does not carry, all of them reached
+    # through liblaunch's own headers: vproc.h / vproc_priv.h /
+    # vproc_internal.h and <bootstrap.h> from the liblaunch sources,
+    # <sys/bsm/audit.h> from Libraries/openbsm, and <libutil.h> from
+    # BSD/lib/libutil (the SDK ships libutil.dylib but never staged its
+    # header).  vproc_priv.h -> <dispatch/dispatch.h> -> <os/object.h>, and
+    # the SDK's only os/object.h is the kernel flavour under usr/local.
+    #
+    # Two symbols are missing outright and are supplied here the same way
+    # tools/bootlab/build_launchd.sh supplies them for launchd: LOG_CONSOLE,
+    # the launchd-private syslog bit (Apple keeps it in a private syslog.h),
+    # and login_tty(), which this SDK declares in <util.h>, not <libutil.h>.
+    [ "$u" = "launchctl" ] && inc+=(-isystem "$REPO/Libraries/Libsystem/liblaunch" \
+                                    -isystem "$REPO/Libraries/openbsm" \
+                                    -isystem "$REPO/BSD/lib/libutil" \
+                                    -isystem "$SDK/usr/local/include/kernel" \
+                                    "-DLOG_CONSOLE=(1 << 31)" \
+                                    -include util.h)
     local srcroot="$srcdir"
     if [ "$u" = "sh" ]; then
         # Generated sources live in work/, not in the source tree, so the tree
@@ -180,6 +210,9 @@ build_one() {
     # empty array it does not trip `set -u` in bash 3.2.
     local extra=""
     [ "$u" = "sh" ] && extra="-ledit"
+    # launchctl's Makefile links these.  -ljansson resolves against the
+    # libjansson.dylib built by BSD/lib/libjansson into the SDK.
+    [ "$u" = "launchctl" ] && extra="-llaunch -ldispatch -lutil -ljansson"
     "${CC[@]}" "${LDFLAGS_COMMON[@]}" $extra -o "$out" "${objs[@]}" \
         2> "$OBJDIR/${u}_link.log" \
         || { echo "--- link errors for $u ---" >&2

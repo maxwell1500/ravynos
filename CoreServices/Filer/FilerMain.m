@@ -10,8 +10,12 @@
 
 #import <Cocoa/Cocoa.h>
 #import <CoreServices/CoreServices.h>
+#import <LaunchServices/LaunchServices.h>
 
-@interface FilerAppDelegate : NSObject <NSApplicationDelegate, NSWindowDelegate>
+// ravynOS AppKit has no NSWindowDelegate protocol (NSWindow's setDelegate:
+// takes an untyped id), so the conformance is dropped; the drag methods below
+// are still dispatched through respondsToSelector:.
+@interface FilerAppDelegate : NSObject <NSApplicationDelegate>
 @property (strong) NSWindow *window;
 @property (strong) NSString *currentPath;
 @end
@@ -22,14 +26,14 @@
     self.currentPath = @"/Applications";
 
     NSRect frame = NSMakeRect(200, 200, 800, 500);
-    NSUInteger style = NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable;
+    NSUInteger style = NSTitledWindowMask | NSClosableWindowMask | NSMiniaturizableWindowMask | NSResizableWindowMask;
     self.window = [[NSWindow alloc] initWithContentRect:frame styleMask:style backing:NSBackingStoreBuffered defer:NO];
     [self.window setTitle:@"Filer - /Applications"];
     [self.window setDelegate:self];
     [self.window makeKeyAndOrderFront:nil];
 
     // Register drag and drop for application bundles and files
-    [self.window registerForDraggedTypes:@[NSPasteboardTypeFileURL, NSPasteboardTypeString]];
+    [self.window registerForDraggedTypes:@[NSFilenamesPboardType, NSPasteboardTypeString]];
 }
 
 - (BOOL)installBundleFromPath:(NSString *)sourcePath toDirectory:(NSString *)destDir {
@@ -63,7 +67,7 @@
 
 - (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender {
     NSPasteboard *pboard = [sender draggingPasteboard];
-    if ([[pboard types] containsObject:NSPasteboardTypeFileURL]) {
+    if ([[pboard types] containsObject:NSFilenamesPboardType]) {
         return NSDragOperationCopy;
     }
     return NSDragOperationNone;
@@ -71,10 +75,12 @@
 
 - (BOOL)performDragOperation:(id<NSDraggingInfo>)sender {
     NSPasteboard *pboard = [sender draggingPasteboard];
-    if ([[pboard types] containsObject:NSPasteboardTypeFileURL]) {
-        NSArray *urls = [pboard readObjectsForClasses:@[[NSURL class]] options:nil];
-        for (NSURL *url in urls) {
-            [self installBundleFromPath:[url path] toDirectory:self.currentPath];
+    // NSPasteboard has no readObjectsForClasses:options:; the filenames type
+    // carries an NSArray of path strings through propertyListForType:.
+    NSArray *files = [pboard propertyListForType:NSFilenamesPboardType];
+    if (files) {
+        for (NSString *path in files) {
+            [self installBundleFromPath:path toDirectory:self.currentPath];
         }
         return YES;
     }

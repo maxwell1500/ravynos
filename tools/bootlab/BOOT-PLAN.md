@@ -2911,7 +2911,11 @@ includes from the public copy. The kernel's own copy
 pre-existing `mach_task_is_self` conflict (see §16.8) and could not be completed in
 this task. Boot verification is therefore still outstanding.
 
-### 16.8 Pre-existing, still open: `mach_task_is_self` typedef conflict
+(SUPERSEDED 2026-10-04 by §16.9-§16.12: the `mach_task_is_self` conflict is fixed,
+two further blockers were fixed, and `build-libraries.sh Libsystem` now exits 0.
+Boot verification is still outstanding.)
+
+### 16.8 Pre-existing, still open: `mach_task_is_self` typedef conflict (SUPERSEDED by §16.9 — the description below misidentified the conflict; fixed)
 
 `Kernel/xnu/BUILD/dst/.../PrivateHeaders/mach/task.h:800` and
 `Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfkm/mach/mach_init.h:79` both typedef
@@ -2921,3 +2925,227 @@ this task. Boot verification is therefore still outstanding.
 SDK's `mach.h` fails with `conflicting types for 'mach_task_is_self'`. This is a
 pre-existing SDK header-generation issue, independent of the `mach_interface.h` leak
 fixed in §16.5, and it is what currently blocks the `Libsystem` build.
+
+### 16.9 The `mach_task_is_self` conflict: corrected diagnosis and fix (2026-10-04)
+
+§16.8's description was wrong: this was never a struct typedef conflict. It was a
+function-prototype conflict, and it is fixed.
+
+The two declarations, both visible in the first TU to fail,
+`Kernel/xnu/libsyscall/wrappers/thread_register_state.c:28`:
+
+    Kernel/xnu/libsyscall/mach/mach/mach_init.h:79
+        extern boolean_t mach_task_is_self(task_name_t task);
+    <SDK>/usr/include/mach/task.h:800
+        kern_return_t mach_task_is_self(task_name_t task, boolean_t *is_self);
+
+Chain: `thread_register_state.c:28` -> in-tree `<mach/mach.h>`
+(`Kernel/xnu/libsyscall/mach/mach/mach.h`) -> `:65` `mach/mach_interface.h:48`
+`#include <mach/task.h>` (resolves to the SDK copy) -> `:69` in-tree `mach_init.h`.
+Confirmed with `clang -H` on the real emitted argv.
+
+Apple's verbatim (host SDK, `/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk`):
+
+    usr/include/mach/mach_init.h:77
+        __API_AVAILABLE(macos(11.3), ios(14.5), tvos(14.5), watchos(7.3))
+        extern boolean_t mach_task_is_self(task_name_t task);
+    usr/include/mach/task.h        grep -c mach_task_is_self == 0
+
+and the mechanism is in the defs, `usr/include/mach/task.defs:550`:
+
+    #if KERNEL || (!KERNEL && !LIBSYSCALL_INTERFACE)
+    routine PREFIX(mach_task_is_self)(
+                    task     : task_name_t;
+            out is_self  : boolean_t);
+    #else
+            /* Do not generate header, use the one in mach_init.h */
+            skip;
+    #endif
+
+The userspace generation therefore emits nothing into `task.h`; only the
+hand-written wrapper in `mach_init.h` exists.
+
+Fix (two SDK files; no `Kernel/xnu` change):
+
+- `Developer/ravynOS.sdk/usr/include/mach/task.h` — removed the six artifacts the
+  kernel-generation copy carried: the routine declaration (794-804),
+  `__Request__mach_task_is_self_t` (1667-1669), the `Request_` union member (1870),
+  `__Reply__mach_task_is_self_t` (2615-2620), the `Reply_` union member (2816), and
+  the subsystem-table entry `{ "mach_task_is_self", 3455 },` (2886). 2903 -> 2880
+  lines (Apple's is 2890 — see §16.10).
+- `Developer/ravynOS.sdk/usr/include/mach/mach_init.h` — restored the declaration
+  that had been deleted (presumably to dodge the collision): added
+  `#include <Availability.h>` and, after `mach_thread_self(void)`,
+  `__API_AVAILABLE(macos(11.3), ios(14.5), tvos(14.5), watchos(7.3))` +
+  `extern boolean_t mach_task_is_self(task_name_t task);` (now lines 76-77).
+
+### 16.10 Systemic verdict: the SDK's `usr/include/mach/` is the kernel/internal MIG generation
+
+The §16.9 edits fix the build, but the defect is systemic: the SDK ships the
+*kernel* generation of the mach headers, not the userspace one. Evidence:
+
+- The tree was batch-populated 2026-10-03 17:31.
+- `Developer/ravynOS.sdk/usr/include/mach/task.h` is byte-identical to
+  `Kernel/xnu/BUILD/obj/DEVELOPMENT_X86_64/osfmk/mach/task.h`.
+- After the §16.9 fix it still carries 14 `_kernelrpc_` occurrences
+  (`_kernelrpc_mach_ports_register3`, `_kernelrpc_mach_ports_lookup3`, ...) where
+  Apple's userspace header has the public `mach_ports_register`/`mach_ports_lookup`
+  (`grep -c _kernelrpc_` on Apple's `task.h` == 0).
+- Scope: the SDK `mach/` holds 172 entries vs Apple's 120, including 16 server-side
+  `*_server.h` and 48 `.defs` that a public SDK should not ship.
+- Against the userspace MIG output the build itself produces
+  (`Libraries/Libsystem/libsystem_kernel/mig_hdr/include/mach`, 27 files): 21 differ,
+  5 are identical, 1 (`mach_eventlink.h`) is absent from the SDK.
+
+The instance that bit here is that `task.h` carried a routine the defs explicitly
+`skip` for userspace.
+
+### 16.11 Two further blockers fixed for the clean Libsystem build (2026-10-04)
+
+Both are pre-existing and independent of §16.9; each was exposed only once the
+previous one stopped the build.
+
+(a) `Kernel/Extensions/pthread/kern/kern_internal.h` — userspace `libsystem_pthread`
+reaches this kernel header through `internal.h:491` (`-I Kernel/Extensions/pthread`
+from `libsystem_pthread/common.mk:31`). The `_pthread_set_flags_t` alias added on
+2026-10-02 sat *outside* the `#ifdef KERNEL` block, so it collided with
+`libsystem_pthread/private/qos_private.h:62`'s
+`__QOS_ENUM(_pthread_set_flags, unsigned int, ...)`:
+
+    qos_private.h:62: error: typedef redefinition with different types
+      ('unsigned int' vs 'enum workq_set_self_flags')
+
+Wrapped both the alias and its only user, `_bsdthread_ctl_set_self`, in
+`#ifdef KERNEL`. Userspace does not call `_bsdthread_ctl_set_self` (grep) and takes
+`_pthread_set_flags_t` from `qos_private.h`; the kext (`BSD/share/mk/rvn.kext.mk:17`
+adds `-DKERNEL`) keeps both.
+
+(b) `tools/bootlab/ravynos-mach-compat.h` — two force-include leaks, both fixed in
+the shim itself, so no `isysroot-cc` change was needed:
+
+- `.S` inputs got the C shim: `isysroot-cc` gates only on `-x assembler`, but a `.S`
+  file needs no `-x`. `compiler-rt/x86_64/floatundidf.S` and friends died with 2264
+  errors, `sys/_types/_int8_t.h:30:16: error: unexpected token in argument list`.
+  Wrapped the body in `#ifndef __ASSEMBLER__` (clang defines it for `.S`).
+- `libBase` compiles with `-DPRIVATE` (`libsystem_c/libBase/Makefile:100`), which
+  makes `mach/message.h:605-631` define `mach_msg_aux_header_t`, colliding with the
+  shim's own typedef:
+
+      typedef redefinition with different types
+        ('struct mach_msg_aux_header' vs 'struct mach_msg_aux_header_t')
+
+  Wrapped the type in `#if !PRIVATE`, mirroring message.h's own `#if PRIVATE`
+  (message.h's is an anonymous struct, so there is no tag to test against).
+
+Result: `tools/bootlab/build-libraries.sh Libsystem` exits 0, 0 compiler errors;
+`libdispatch.dylib` and `libSystem.B.dylib` are rebuilt. The build did *not* trip
+over the `libkern/OSAtomic.h` shadow (the other worker's `libkern-shim` is live).
+
+### 16.12 OPEN: regenerate the SDK `mach/` from the userspace MIG pass (risk + verification)
+
+Not done. The proper fix for §16.10 is to stop copying the kernel `EXPORT_HDRS` into
+the SDK and stage the userspace generation instead.
+
+The generator exists and already runs here.
+`Kernel/xnu/libsyscall/xcodescripts/mach_install_mig.sh` is invoked by
+`Libraries/Libsystem/libsystem_kernel/Makefile:331` with
+`SDKROOT=${RAVYN_SDKROOT} PLATFORM_NAME=MacOSX ARCHS=${CpuArch} SRCROOT=... OBJROOT=...
+BUILT_PRODUCTS_DIR=... DEVELOPER_DIR=... PATH=... CC=... CFLAGS=...`; `mig` resolves to
+`/usr/bin/mig` (and `Developer/Default.xctoolchain/usr/bin/mig`). The clean build of
+§16.11 already produced its output at `libsystem_kernel/mig_hdr/include/mach`
+(27 files, `-DLIBSYSCALL_INTERFACE`).
+
+What would have to change:
+
+- Stage that MIG-generated public set into the SDK alongside the hand-written
+  headers (`mach.h`, `mach_init.h`, `mach_interface.h`, `mach_right.h`, `sync.h`,
+  `thread_state.h`, ...), and stop shipping the 16 `*_server.h` and 48 `.defs`.
+  Either a new `build-libraries.sh` staging step or a one-time sync.
+
+What could break (measured, not assumed):
+
+- Arch flavor. The script deliberately maps `x86_64 -> MACHINE_ARCH=i386` ("really
+  needs a 32-bit arch ... thread_state_t really needs to pick up arm64 over intel").
+  `exc.h`'s `natural_t old_state[...]` is `[614]` in our SDK but `[1296]` in both the
+  userspace output and Apple's host SDK. A naive swap changes that struct's size; it
+  matches Apple, but must be confirmed against the kernel's MIG usage before trusting
+  it on the wire.
+- MIG generation drift: the userspace output carries the newer
+  `__MIG_STRNCPY_ZEROFILL_FORWARD_TYPE_DECLS_CSTRING_ATTR` block and different pointer
+  spacing (cosmetic), so the SDK would move to a newer mig generation.
+- Per-defs naming: `mach_host.h`/`mach_voucher.h`/`mach_port.h` carry `_kernelrpc_`
+  twins chosen per-defs (documented in the script); a wholesale swap must preserve
+  those overrides.
+
+Verification:
+
+1. File-list parity: `comm -3 <(ls SDK/usr/include/mach) <(ls <Apple SDK>/usr/include/mach)`
+   should lose the `*_server.h`/`.defs` entries (172 -> ~120).
+2. Content: diff the regenerated MIG files against Apple's host SDK `mach/` — expect
+   only the known arch/version deltas.
+3. Functional: `tools/bootlab/build-libraries.sh Libsystem` must still exit 0, then a
+   boot.
+
+Risk: HIGH. A struct-size change (e.g. `exc.h`'s thread_state) is silent at build
+time and only shows on the wire. The targeted §16.9 fix is safe and sufficient today;
+this regeneration is a separate, deliberate change.
+
+
+## 17. The 100x clock error was an orphaned fix, not a missing one (2026-10-04)
+
+Every "the writes are 3000x too slow" observation in this project was an artifact
+of the clock, not of the write path. `mach_absolute_time()` returned nanoseconds
+derived from a TSC frequency of exactly 24,000,000 Hz, so every duration measured
+with it was ~100x too large. `sleep(1)` read 21.9 s. The provenance matters
+because it explains why the bug existed at all.
+
+**How the wrong number was produced.** `osfmk/i386/tsc.c` takes the Skylake/ART
+path, which asks EFI for `ARTFrequency` under `/efi/platform`
+(`EFI_get_frequency`, tsc.c:292). Our EFI loader publishes no such node, so the
+call returns 0 and the code substitutes `BASE_ART_CLOCK_SOURCE` (tsc.h:44) =
+24 MHz — the ART *reference crystal* rate, not the TSC rate. CPUID leaf 0x15 also
+returned zeros, so `if (N == 0 || M == 0) { N = 1; M = 1; }` (tsc.c:310-313)
+fired and `tscFreq = refFreq * N / M` evaluated to 24 MHz exactly. Confirmed on
+the wire: `tsc_init: derived 24000000 Hz`.
+
+**Publishing `/efi/platform` would NOT have fixed this.** With the node present
+the result would be `ARTFrequency * 1/1` — still a crystal rate, because the
+N/M ratio from leaf 0x15 is exactly what converts crystal to TSC, and it is
+discarded when N and M are forced to 1. The true TSC here is 2,400,483,920 Hz,
+100.02x the 24 MHz the code settled on.
+
+**The fix already existed; the transplant destroyed it.** `pit_measure_tsc_freq()`
+was added by commit `97ceca6300` ("xnu/i386: Support for AMD, hybrid CPUs (Meteor
+Lake), and QEMU TCG") *together with a live caller*, in the default branch of the
+family switch:
+
+    } else if (cpuid_vmm_family() == CPUID_VMM_FAMILY_QEMU_TCG) {
+            uint64_t measured = pit_measure_tsc_freq();
+            if (measured != 0) { busFreq = measured; }
+            tscGranularity = 1;
+    } else {
+
+Someone had already hit this exact class of failure on this exact hypervisor.
+Commit `394fe3eac3` ("Transplant Darwin 24.0 (xnu-11215) kernel") then rewrote
+tsc.c (90 insertions, 235 deletions) with the stock Apple version, which has no
+QEMU branch — keeping the helper and dropping the call. After that commit the
+symbol occurs exactly once in the tree: the definition, with zero callers. That
+is why the stock Apple ART path, having no QEMU case, silently used the fallback
+constant.
+
+So the change restores prior intent rather than inventing a mechanism. The guard
+is deliberately conservative: the measured value wins only when the derived one
+is missing or disagrees by more than 1%
+(`if (tscFreq == 0 || diff * 100 > tscFreq)`), and a measurement of 0 or outside
+500 MHz-8 GHz is discarded outright. On a CPU whose ART path is correct the
+derived value is kept untouched.
+
+**Verification.** The kernel prints both numbers: `tsc_init: derived 24000000 Hz,
+PIT measured 2400483920 Hz` / `using PIT-measured 2400483920 Hz over derived
+24000000 Hz`, and `[RTCLOCK] frequency 2400000000 (2400483920)`. The old
+`Slow TSC, rtc_nanotime.shift == 6` line disappears — shift is 0, as expected
+for a 2.4 GHz TSC. Independently, a throwaway ring-3 payload read the commpage
+timebase and compared guest elapsed against host wall time over two fixed-TSC
+spin windows: ratios 0.9844 and 0.9840. Guest time and host time now agree; the
+~1.6% shortfall is the serial write and fsync landing after the guest timestamp
+is taken, not clock error.

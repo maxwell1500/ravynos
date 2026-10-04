@@ -58,6 +58,16 @@ ravynOS.xcodeproj
 # exists to remove.
 !/tools/bootlab/manifest_cpmv.json
 
+# ...and manifest_gui.json, the GUI boot image manifest produced by
+# make_gui_manifest.py. It is not a per-experiment manifest either: it stages
+# the real WindowServer/Dock/Filer bundles and their runtime closure. It was
+# held out of the tree only while make_gui_manifest.py wrote absolute build
+# paths for libutil/libicucore.A/libicudata (and later libsqlite3 and
+# LaunchServices); those now resolve to Developer/ravynOS.sdk and the bundles
+# stage from work/, so every "file" entry is repo-relative and the manifest is
+# portable.
+!/tools/bootlab/manifest_gui.json
+
 # bmake -j dependency sidecars. The .o files they name are build products; the
 # sidecars are the by-product of the parallel make that produced them.
 .depend.*.o

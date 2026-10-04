@@ -24,6 +24,11 @@ SOFTWARE. */
 #import <AppKit/NSFont.h>
 #import <AppKit/NSGraphicsStyle.h>
 
+/* MAX is not declared by the SDK's sys/param.h (the kernel's bsd/sys/param.h
+ * and objc4's objc-os.h both define it, but neither is on this include path).
+ * Standard macro, same definition. */
+#define MAX(a, b) (((a) > (b)) ? (a) : (b))
+
 enum {
 	kNSMenuKeyboardNavigationNone,
 	kNSMenuKeyboardNavigationUp,

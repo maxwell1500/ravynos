@@ -19,6 +19,14 @@ SRCS=           WindowServer.m \
 # The vendored libinput/libevdev Makefiles build into ${MAKEOBJDIR} itself (their
 # .PATH is ${.CURDIR}, and this tree's objdir is flat), so the shared objects
 # are ${MAKEOBJDIR}/libinput.so.1, not ${MAKEOBJDIR}/libinput/libinput.so.1.
+# LoginWindow.app and SystemUIServer.app are built by their own Makefiles
+# (CoreServices/WindowServer/{LoginWindow,SystemUIServer}) and looked up by
+# WindowServer.m through -[[NSBundle mainBundle] pathForResource:... ofType:@"app"]
+# ("LoadingWindow" at WindowServer.m:432, "LoginWindow" at :457, "SystemUIServer"
+# at :565), so they must sit in this bundle's Contents/Resources. They are built
+# first (build-libraries.sh --frameworks .../LoginWindow .../SystemUIServer
+# .../WindowServer). A comment cannot sit inside a continued variable assignment
+# in bmake, so this note lives above RESOURCES rather than beside the entries.
 RESOURCES=	${.CURDIR}/Icon.png \
 		${MAKEOBJDIR}/libinput.so.1 \
 		${MAKEOBJDIR}/libinput.so \
@@ -32,7 +40,15 @@ RESOURCES=	${.CURDIR}/Icon.png \
 		${.CURDIR}/Decorations/miniHover.png \
 		${.CURDIR}/Decorations/zoom.png \
 		${.CURDIR}/Decorations/zoomUpHover.png \
-		${.CURDIR}/Decorations/zoomDownHover.png
+		${.CURDIR}/Decorations/zoomDownHover.png \
+		${OBJTOP}/Frameworks/CoreServices/WindowServer/LoginWindow/LoginWindow.app \
+		${OBJTOP}/Frameworks/CoreServices/WindowServer/SystemUIServer/SystemUIServer.app
+
+# The sub-app bundles are built by their own Makefiles before this one runs,
+# so they are already on disk. An empty rule stops bmake treating the RESOURCES
+# entries as targets it must build.
+${OBJTOP}/Frameworks/CoreServices/WindowServer/LoginWindow/LoginWindow.app:
+${OBJTOP}/Frameworks/CoreServices/WindowServer/SystemUIServer/SystemUIServer.app:
 
 MK_WERROR=	no
 MK_PIE=		no

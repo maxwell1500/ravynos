@@ -25,6 +25,7 @@
 #import "desktop.h"
 #import "../common.h"
 #import "AboutWindow.h"
+#import <LaunchServices/LaunchServices.h>
 
 extern const char **environ;
 extern int exitCode;

@@ -43,12 +43,38 @@
 #ifndef RAVYNOS_MACH_COMPAT_H
 #define RAVYNOS_MACH_COMPAT_H
 
-#include <stdint.h>
-#include <mach/mach_types.h>     /* mach_msg_size_t */
-
 #ifndef LIBSYSCALL_MSGV_AUX_MAX_SIZE
 #define LIBSYSCALL_MSGV_AUX_MAX_SIZE 128
 #endif
+
+/*
+ * isysroot-cc gates the force-include on `-x assembler`, but a .S file needs no
+ * -x to be assembled: clang preprocesses it and assembles the result, so the
+ * shim still arrived at every .S input and the C declarations below were fed to
+ * the assembler:
+ *   sys/_types/_int8_t.h:30:16: error: unexpected token in argument list
+ *   typedef signed char int8_t;
+ * __ASSEMBLER__ is defined by clang exactly in those runs, so the shim steps
+ * aside on its own. The size macro stays visible: it is a plain integer and
+ * some .S inputs may consult it, while the C types below are only ever needed
+ * by .c inputs (Kernel/xnu/libsyscall/wrappers/_libkernel_init.h).
+ */
+#ifndef __ASSEMBLER__
+
+/*
+ * message.h defines mach_msg_aux_header_t itself inside `#if PRIVATE` (605-631),
+ * so a TU compiled with -DPRIVATE already has the type by the time message.h is
+ * reached. The force-include gate only inspects the SDK copy at `#if PRIVATE`
+ * depth 0, so it still hands this shim to those TUs; defer to message.h here or
+ * the two typedefs collide:
+ *   ravynos-mach-compat.h:72: error: typedef redefinition with different types
+ *     ('struct mach_msg_aux_header' vs 'struct mach_msg_aux_header_t')
+ * (message.h's is an anonymous struct, so there is no tag to test against.)
+ */
+#if !PRIVATE
+
+#include <stdint.h>
+#include <mach/mach_types.h>     /* mach_msg_size_t */
 
 struct mach_msg_aux_header {
 	mach_msg_size_t   msgdh_size;
@@ -56,6 +82,10 @@ struct mach_msg_aux_header {
 };
 
 typedef struct mach_msg_aux_header mach_msg_aux_header_t;
+
+#endif /* !PRIVATE */
+
+#endif /* !__ASSEMBLER__ */
 
 
 #endif /* RAVYNOS_MACH_COMPAT_H */

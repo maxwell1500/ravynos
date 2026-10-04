@@ -24,6 +24,11 @@
 #import "desktop.h"
 #import "NSMenuWindow.h"
 
+/* MAX is not declared by the SDK's sys/param.h (the kernel's bsd/sys/param.h
+ * and objc4's objc-os.h both define it, but neither is on this include path).
+ * Standard macro, same definition. */
+#define MAX(a, b) (((a) > (b)) ? (a) : (b))
+
 #define MIN_TITLE_KEY_GAP 8
 #define WINDOW_BORDER_THICKNESS 1
 #define IMAGE_TITLE_GAP 8
