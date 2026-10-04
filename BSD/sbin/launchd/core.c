@@ -148,6 +148,15 @@ extern int gL1CacheEnabled;
 
 #include "shim.h"
 
+/*
+ * ravynOS has no vproc MIG server (Kernel/xnu/osfmk contains no vproc
+ * subsystem at all), so every vproc mach message send is a send to a port
+ * nobody serves.  Set this to 1 if a vproc server is ever implemented; the
+ * post-fork ping in job_dispatch()'s child is skipped while it is 0.
+ */
+static const int _launchd_vproc_enabled = 0;
+
+
 #define _SYS_ENV_FILE "/etc/launchd_user.env"
 #define RETURN_NO_MEMORY()										\
 	do {														\
@@ -4510,9 +4519,24 @@ job_start(job_t j)
 		}
 		break;
 	case 0:
-		if (unlikely(_vproc_post_fork_ping())) {
-			syslog(LOG_ERR, "_vproc_post_fork_ping() fail");
-			DEBUG_EXIT(EXIT_FAILURE);
+		/*
+		 * vproc: this build has no vproc MIG server, so
+		 * _vproc_post_fork_ping() is a blocking mach_msg to a port
+		 * nobody serves and the child never returns from it -- it hangs
+		 * here, before job_start_child(), so the job never execs and
+		 * launchd creates nothing beyond the bootstrapper itself.
+		 * The transplanted launchd is deliberately pared back to run
+		 * without vproc (the XPC system domain at jobmgr_init() and
+		 * init_pre_kevent() are both #if 0'd out), and an audit of every
+		 * _vproc_* caller in liblaunch found no other blocking use on this
+		 * path, so skip the ping rather than hang forever.  If vproc is
+		 * ever implemented, restoring this call is a one-line revert.
+		 */
+		if (unlikely(_launchd_vproc_enabled)) {
+			if (unlikely(_vproc_post_fork_ping())) {
+				syslog(LOG_ERR, "_vproc_post_fork_ping() fail");
+				DEBUG_EXIT(EXIT_FAILURE);
+			}
 		}
 
 		(void)job_assumes_zero(j, runtime_close(execspair[0]));

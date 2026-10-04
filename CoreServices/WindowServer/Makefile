@@ -41,14 +41,6 @@ RESOURCES=	${.CURDIR}/Icon.png \
 		${.CURDIR}/Decorations/zoom.png \
 		${.CURDIR}/Decorations/zoomUpHover.png \
 		${.CURDIR}/Decorations/zoomDownHover.png \
-		${OBJTOP}/Frameworks/CoreServices/WindowServer/LoginWindow/LoginWindow.app \
-		${OBJTOP}/Frameworks/CoreServices/WindowServer/SystemUIServer/SystemUIServer.app
-
-# The sub-app bundles are built by their own Makefiles before this one runs,
-# so they are already on disk. An empty rule stops bmake treating the RESOURCES
-# entries as targets it must build.
-${OBJTOP}/Frameworks/CoreServices/WindowServer/LoginWindow/LoginWindow.app:
-${OBJTOP}/Frameworks/CoreServices/WindowServer/SystemUIServer/SystemUIServer.app:
 
 MK_WERROR=	no
 MK_PIE=		no
@@ -134,6 +126,45 @@ clean: .PHONY
 .include <sys.mk>
 .include <bsd.subdir.mk>
 .include <rvn.app.mk>
+
+# LoginWindow.app and SystemUIServer.app are built by their own Makefiles
+# (CoreServices/WindowServer/{LoginWindow,SystemUIServer}) before this one runs.
+# WindowServer.m looks them up with -[[NSBundle mainBundle] pathForResource:...
+# ofType:@"app"] -- "LoginWindow" at WindowServer.m:457 and "SystemUIServer" at
+# :565 -- and mainBundle is this bundle, so they must sit in
+# Contents/Resources/. (WindowServer.m:432 also looks for "LoadingWindow.app",
+# which has no source in this tree; WindowServer logs "missing LoginWindow.app!"
+# and falls through to the login shell without it.)
+#
+# These are deliberately NOT in RESOURCES: a directory named in RESOURCES makes
+# bmake treat it as a target it must build, and the sub-app objdir tree is not
+# present at that point. An explicit copy rule keyed on the built bundle is the
+# form that works.
+LOGINWINDOW_APP= ${OBJTOP}/Frameworks/CoreServices/WindowServer/LoginWindow/LoginWindow.app
+SYSTEMUISERVER_APP= ${OBJTOP}/Frameworks/CoreServices/WindowServer/SystemUIServer/SystemUIServer.app
+
+# A shell loop, not a bmake prerequisite: bmake stats the source path to decide
+# whether the target is out of date, and on this host the sub-app objdir path is
+# intermittently invisible to stat (readdir still lists it), which makes bmake
+# abort with "don't know how to make". Copying inside the recipe with retries
+# sidesteps that.
+all: stage-subapps
+stage-subapps:
+	@for app in LoginWindow SystemUIServer; do \
+		src=${OBJTOP}/Frameworks/CoreServices/WindowServer/$$app/$$app.app; \
+		dst=${APP_DIR}/Contents/Resources/$$app.app; \
+		rm -rf $$dst; \
+		ok=0; \
+		for i in 1 2 3 4 5 6 7 8 9 10; do \
+			if cp -Rfp "$$src" $$dst 2>/dev/null; then ok=1; break; fi; \
+			sleep 1; \
+		done; \
+		if [ $$ok -ne 1 ]; then \
+			echo "stage-subapps: cannot copy $$app from $$src" >&2; \
+			exit 1; \
+		fi; \
+		echo "staged $$app.app"; \
+	done
 
 ${OBJS}: ${MAKEOBJDIR}/Resources
 

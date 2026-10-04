@@ -318,6 +318,33 @@ def main():
         "file": "../../Developer/ravynOS.sdk/usr/lib/libjansson.dylib",
         "comment": "libjansson required by launchctl's LC_LOAD_DYLIB",
     })
+    # 8. Fonts. CoreText/AppKit resolve fonts through fontconfig, whose
+    #    Frameworks/CoreText/fontconfig/fonts.conf searches /System/Library/Fonts
+    #    (plus /Library/Fonts, ~/Library/Fonts, xdg fonts, ~/.fonts), and AppKit's
+    #    O2Font_FT.m hardcodes /System/Library/Fonts/TTF/NimbusSans-Regular.ttf as
+    #    its fallback face. The repo ships the font set in SystemLibrary/Fonts
+    #    (TTF/*.ttf plus Inter.ttc), so stage that tree at the path fontconfig
+    #    searches. Nothing is taken from the host.
+    font_root = os.path.join(REPO, "SystemLibrary", "Fonts")
+    if os.path.isdir(font_root):
+        # Only font files, not the Makefile that installs them (or any other
+        # non-font file the directory happens to carry).
+        n_fonts = 0
+        for dirpath, dirnames, filenames in os.walk(font_root):
+            dirnames.sort()
+            for name in sorted(filenames):
+                if not name.lower().endswith((".ttf", ".otf", ".ttc")):
+                    continue
+                src = os.path.join(dirpath, name)
+                rel = os.path.relpath(src, font_root).replace(os.sep, "/")
+                entries.append({
+                    "path": "System/Library/Fonts/" + rel,
+                    "file": manifest_source(os.path.realpath(src)),
+                    "comment": "font from the repo's SystemLibrary/Fonts",
+                })
+                n_fonts += 1
+        closure.append(("System/Library/Fonts", font_root,
+                        "staged %d files" % n_fonts))
 
     paths = [e["path"] for e in entries]
     dupes = sorted({p for p in paths if paths.count(p) > 1})

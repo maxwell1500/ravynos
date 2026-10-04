@@ -1,4 +1,5 @@
 FRAMEWORK=CoreData
+MK_WERROR = no
 .include "../framework.common.mk"
 
 SRCS= \
@@ -53,7 +54,7 @@ NSRelationshipDescription.h \
 NSXMLPersistentStore.h
 
 RESOURCES=Info.plist English.lproj
-CFLAGS+= ${FMWK_CFLAGS} -I${.CURDIR}/.. -I.. -I../libobjc2 -I../Foundation/Headers
+CFLAGS+= ${FMWK_CFLAGS} -I${.CURDIR}/.. -I.. -I../libobjc2 -I../Foundation/Headers -Wno-error=deprecated-objc-isa-usage
 
 .include <rvn.framework.mk>
 

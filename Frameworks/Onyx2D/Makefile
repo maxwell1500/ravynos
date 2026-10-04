@@ -251,6 +251,7 @@ libtiff.a:
 	    -DCMAKE_SYSTEM_VERSION=${MACOS_VERSION_MIN} \
 	    -DCMAKE_SYSTEM_PROCESSOR=${CpuArch} \
 	    -DBUILD_SHARED_LIBS=OFF \
+	    -Dwebp=OFF -Dlzma=OFF -Dzstd=OFF \
 	    -S${ROOT_SOURCE_DIR}/BSD/lib/libtiff -B${.OBJDIR}/tiff
 	cmake --build ${.OBJDIR}/tiff
 
