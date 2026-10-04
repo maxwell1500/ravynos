@@ -102,6 +102,20 @@ typedef integer_t       host_flavor_t;
 #define HOST_CAN_HAS_DEBUGGER   11
 #define HOST_PREFERRED_USER_ARCH 12     /* Get the preferred user-space architecture */
 
+#ifdef MACH_KERNEL_PRIVATE
+struct host_basic_info_old {
+	integer_t       max_cpus;       /* max number of cpus possible */
+	uint32_t        avail_cpus;     /* number of cpus now available */
+	natural_t       memory_size;    /* size of memory in bytes */
+	cpu_type_t      cpu_type;       /* cpu type */
+	cpu_subtype_t   cpu_subtype;    /* cpu subtype */
+};
+
+typedef struct host_basic_info_old      host_basic_info_data_old_t;
+typedef struct host_basic_info_old      *host_basic_info_old_t;
+#define HOST_BASIC_INFO_OLD_COUNT ((mach_msg_type_number_t) \
+	        (sizeof(host_basic_info_data_old_t)/sizeof(integer_t)))
+#endif /* MACH_KERNEL_PRIVATE */
 
 struct host_can_has_debugger_info {
 	boolean_t       can_has_debugger;
@@ -183,6 +197,31 @@ typedef struct host_priority_info       *host_priority_info_t;
 #define HOST_EXTMOD_INFO64      5       /* External modification stats */
 #define HOST_EXPIRED_TASK_INFO  6       /* Statistics for expired tasks */
 
+#if PRIVATE
+struct vm_compressor_q_lens {
+	uint32_t qcc_segments_available;
+	uint32_t qcc_segment_count;
+	uint32_t qcc_age_count;
+	uint32_t qcc_early_swappedin_count, qcc_regular_swappedin_count, qcc_late_swappedin_count;
+	uint32_t qcc_early_swapout_count, qcc_regular_swapout_count, qcc_late_swapout_count;
+	uint32_t qcc_swapio_count;
+	uint32_t qcc_swappedout_count;
+	uint32_t qcc_swappedout_sparse_count;
+	uint32_t qcc_major_count;
+	uint32_t qcc_filling_count;
+	uint32_t qcc_empty_count;
+	uint32_t qcc_bad_count;
+	uint32_t qcc_minor_count;
+}; /* PRIVATE */
+
+typedef struct vm_compressor_q_lens       vm_compressor_q_lens_data_t;
+#define HOST_VM_COMPRESSOR_Q_LENS 7
+#define VM_COMPRESSOR_Q_LENS_COUNT sizeof(struct vm_compressor_q_lens)/sizeof(integer_t)
+#endif
+
+#ifdef XNU_KERNEL_PRIVATE
+void host_statistics_init(void);
+#endif
 
 struct host_load_info {
 	integer_t       avenrun[3];     /* scaled by LOAD_SCALE */
@@ -254,6 +293,7 @@ typedef struct host_preferred_user_arch *host_preferred_user_arch_t;
 #define HOST_PREFERRED_USER_ARCH_COUNT ((mach_msg_type_number_t) \
 	        (sizeof(host_preferred_user_arch_data_t)/sizeof(integer_t)))
 
+#ifdef PRIVATE
 /*
  * CPU Statistics information
  */
@@ -290,7 +330,17 @@ typedef struct host_debug_info_internal  host_debug_info_internal_data_t;
 #define HOST_DEBUG_INFO_INTERNAL_COUNT  ((mach_msg_type_number_t)\
 	(sizeof (host_debug_info_internal_data_t) / sizeof(integer_t)))
 
+#endif /* PRIVATE */
 
+#ifdef KERNEL_PRIVATE
+
+extern kern_return_t    set_sched_stats_active(
+	boolean_t active);
+
+extern kern_return_t    get_sched_statistics(
+	struct _processor_statistics_np *out,
+	uint32_t *count);
+#endif  /* KERNEL_PRIVATE */
 
 
 #endif  /* _MACH_HOST_INFO_H_ */

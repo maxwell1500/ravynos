@@ -53,6 +53,7 @@
  * any improvements or extensions that they make and grant Carnegie Mellon
  * the rights to redistribute these changes.
  */
+#ifdef	PRIVATE
 
 #ifndef	_MACH_I386_SYSCALL_SW_H_
 #define _MACH_I386_SYSCALL_SW_H_
@@ -69,6 +70,7 @@
 
 #if defined(__i386__)
 
+#ifndef KERNEL
 /*
  * Syscall entry macros for use in libc:
  */
@@ -87,11 +89,13 @@ LEAF(_##trap_name,0) ;\
 	call	__sysenter_trap		;\
 END(_##trap_name)
 
+#endif /* !KERNEL */
 
 #endif /* defined(__i386__) */
 
 #if defined(__x86_64__)
 
+#ifndef KERNEL
 
 #define UNIX_SYSCALL_TRAP	\
 	syscall
@@ -112,6 +116,7 @@ LEAF(_##trap_name,0) ;\
 	syscall		;\
 END(_##trap_name)
 
+#endif /* !KERNEL */
 
 #endif /* defined(__x86_64__) */
 
@@ -162,3 +167,4 @@ END(_##trap_name)
 
 #endif	/* _MACH_I386_SYSCALL_SW_H_ */
 
+#endif	/* PRIVATE */

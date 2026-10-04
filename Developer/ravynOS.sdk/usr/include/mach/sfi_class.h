@@ -46,6 +46,20 @@
  */
 typedef uint32_t sfi_class_id_t;
 
+#ifdef XNU_KERNEL_PRIVATE
+
+/*
+ * Total number of classes supported including SFI_CLASS_UNSPECIFIED.
+ * If new class is defined increase this number.
+ */
+#define MAX_SFI_CLASS_ID        0x00000011
+
+/*
+ * Threads may initially start out unspecified
+ */
+#define SFI_CLASS_UNSPECIFIED   0x00000000
+
+#endif /* XNU_KERNEL_PRIVATE */
 
 /*
  * Threads are placed in this class as a result of placing threads or

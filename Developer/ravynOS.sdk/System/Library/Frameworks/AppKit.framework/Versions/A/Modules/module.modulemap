@@ -1,0 +1,5 @@
+framework module AppKit {
+    umbrella header "AppKit.h"
+    export *
+    module * { export * }
+}

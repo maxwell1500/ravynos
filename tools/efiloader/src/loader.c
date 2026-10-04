@@ -72,6 +72,65 @@ typedef struct { u32 Data1; u16 Data2; u16 Data3; u8 Data4[8]; } EFI_GUID;
 #define GUID_SIMPLE_FS     GUID(0x964E5B22, 0x6459, 0x11D2, \
 	0x8E, 0x39, 0x00, 0xA0, 0xC9, 0x69, 0x72, 0x3B)
 
+/*
+ * GOP -- UEFI 2.10 section 12.9 / Appendix O (GraphicsOutput.h).  The
+ * layout is load-bearing: HandleProtocol returns the interface pointer, and
+ * every field of it is a firmware vtable entry that must be called with the
+ * exact UEFI argument list.
+ *
+ *   QueryMode(This, ModeNumber, *Size, **Info)  callee-allocates Info
+ *   SetMode(This, ModeNumber)
+ *   Mode -> the ACTIVE EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE
+ *
+ * There is NO Revision member (unlike LoadedImage/SimpleFS) and NO ModeInfo
+ * entry: the protocol is exactly {QueryMode, SetMode, Blt, Mode}.  An extra
+ * field at offset 0 shifts the whole vtable, so every call lands on the
+ * wrong function -- which is not recoverable at runtime.
+ */
+#define GUID_GOP          GUID(0x9042A9DE, 0x23DC, 0x4A38, \
+	0x96, 0xFB, 0x7A, 0xDE, 0xD0, 0x80, 0x51, 0x6B)
+
+typedef struct {
+	u32 RedMask, GreenMask, BlueMask, ReservedMask;
+} EFI_PIXEL_BITMASK;
+
+/* EFI_GRAPHICS_PIXEL_FORMAT.  Only the two 8-bit-per-channel layouts name
+ * their channel order; PixelBitMask carries explicit masks instead. */
+#define PIXEL_RGB_RESERVED_8BIT 0
+#define PIXEL_BGR_RESERVED_8BIT 1
+#define PIXEL_BIT_MASK          2
+#define PIXEL_BLT_ONLY          3
+
+typedef struct {
+	u32 Version;                 /* 0 */
+	u32 HorizontalResolution;
+	u32 VerticalResolution;
+	u32 PixelFormat;             /* EFI_GRAPHICS_PIXEL_FORMAT */
+	EFI_PIXEL_BITMASK PixelInformation;  /* valid iff PixelBitMask */
+	u32 PixelsPerScanLine;       /* NOT necessarily HorizontalResolution */
+} EFI_GRAPHICS_OUTPUT_MODE_INFORMATION;
+
+typedef struct {
+	u32 MaxMode;
+	u32 Mode;
+	EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *Info;   /* firmware-owned */
+	u64 SizeOfInfo;
+	void *FrameBufferBase;       /* EFI_PHYSICAL_ADDRESS while BS live */
+	u64 FrameBufferSize;
+} EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE;
+
+typedef struct EFI_GRAPHICS_OUTPUT_PROTOCOL EFI_GRAPHICS_OUTPUT_PROTOCOL;
+struct EFI_GRAPHICS_OUTPUT_PROTOCOL {
+	u64 (*QueryMode)(EFI_GRAPHICS_OUTPUT_PROTOCOL *, u32, u64 *,
+	    EFI_GRAPHICS_OUTPUT_MODE_INFORMATION **);
+	u64 (*SetMode)(EFI_GRAPHICS_OUTPUT_PROTOCOL *, u32);
+	void *Blt;
+	EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE *Mode;
+};
+
+#define BY_PROTOCOL 2
+#define EFI_LOCATE_HANDLE_PROTOCOL 1
+
 typedef struct { u64 Signature; u32 Revision; u32 HeaderSize; u32 CRC32;
 	u32 Reserved; } EFI_TABLE_HEADER;
 
@@ -150,6 +209,8 @@ typedef EFI_STATUS (*EFI_LOCATE_HANDLE)(u32, EFI_GUID *, void *, u64 *, EFI_HAND
 typedef EFI_STATUS (*EFI_LOCATE_HANDLE_BUFFER)(u32, EFI_GUID *, void *, u64 *, void **);
 
 typedef EFI_STATUS (*EFI_EXIT_BOOT_SERVICES)(EFI_HANDLE, u64);
+typedef EFI_STATUS (*EFI_FREE_POOL)(void *);
+
 
 typedef struct {
 	EFI_BOOT_SERVICES_HDR Hdr;
@@ -158,7 +219,7 @@ typedef struct {
 	void *AllocatePages;
 	void *FreePages;
 	EFI_GET_MEMORY_MAP GetMemoryMap;
-	void *AllocatePool; void *FreePool;
+	void *AllocatePool; EFI_FREE_POOL FreePool;
 	void *CreateEvent; void *SetTimer; void *WaitForEvent;
 	void *SignalEvent; void *CloseEvent; void *CheckEvent;
 	void *InstallProtocolInterface;
@@ -169,6 +230,7 @@ typedef struct {
 	void *RegisterProtocolNotify;
 	EFI_LOCATE_HANDLE LocateHandle;
 	void *LocateDevicePath;
+	EFI_LOCATE_HANDLE_BUFFER LocateHandleBuffer;
 	void *InstallConfigurationTable;
 	void *LoadImage;
 	void *StartImage;
@@ -744,6 +806,406 @@ static u64 find_block(const u8 *map, u64 n, u64 dsz,
 }
 
 /* ------------------------------------------------------------------ */
+/* GOP: the framebuffer the kernel's graphics console will draw on     */
+/* ------------------------------------------------------------------ */
+
+#define GOP_MAX_MODES  32      /* candidates we keep, best score first */
+#define GOP_PREF_W     1024
+#define GOP_PREF_H     768
+#define GOP_MAX_DIM    2048
+#define GOP_MISMATCH   1000000ULL   /* usable, but the pixel layout is not ours */
+
+static EFI_GRAPHICS_OUTPUT_PROTOCOL *g_gop;
+static EFI_GRAPHICS_OUTPUT_MODE_INFORMATION g_gop_info;  /* ACTIVE mode copy */
+static u64 g_gop_fb;            /* active framebuffer physical base */
+static u64 g_gop_fb_size;       /* bytes of framebuffer the firmware promised */
+static u32 g_gop_mode;
+static int g_gop_ok;            /* 1 => the three fields above are valid */
+
+/* How many handles one search may return.  A machine with several
+ * graphics devices has one GOP handle each, and the buffer lives in the
+ * caller's frame: the loader's own .bss is not assumed writable here. */
+#define GOP_MAX_HANDLES 64
+
+struct gop_cand {
+	u64 score;
+	u32 mode;
+	EFI_GRAPHICS_OUTPUT_MODE_INFORMATION info;
+};
+
+/* Bits actually used by the pixel format, i.e. bits per pixel minus any
+ * reserved bits (a 32bpp mode may well report a 24-bit mask set). */
+static u32 gop_bpp(const EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *m)
+{
+	if (m->PixelFormat == PIXEL_RGB_RESERVED_8BIT ||
+	    m->PixelFormat == PIXEL_BGR_RESERVED_8BIT)
+		return 32;
+	if (m->PixelFormat == PIXEL_BIT_MASK) {
+		u32 used = m->PixelInformation.RedMask
+		    | m->PixelInformation.GreenMask
+		    | m->PixelInformation.BlueMask;
+		u32 n = 0;
+		while (used) { n += used & 1u; used >>= 1; }
+		return n;
+	}
+	return 0;   /* PixelBltOnly: no linear framebuffer to hand the kernel */
+}
+
+/*
+ * The kernel's 32bpp palette is 0x00RRGGBB: osfmk/console/video_console.c
+ * picks vc_color_index_table[32] == 2 out of vc_colors[8][4], whose entries
+ * are 0x00FF0000 red / 0x0000FF00 green / 0x000000FF blue.  In a
+ * little-endian word that is byte0 blue / byte1 green / byte2 red, i.e.
+ * exactly PixelBlueGreenRedReserved8BitPerColor.  A framebuffer whose blue
+ * channel is not at bit 0 would therefore draw with R and B swapped, and
+ * nothing in the loader can fix that -- the painter is kernel code.  So such
+ * a mode is only used if it is the ONLY thing on offer.
+ */
+static int gop_is_xrgb32(const EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *m)
+{
+	if (m->PixelFormat == PIXEL_BGR_RESERVED_8BIT)
+		return 1;
+	if (m->PixelFormat != PIXEL_BIT_MASK)
+		return 0;
+	return m->PixelInformation.RedMask == 0x00FF0000u
+	    && m->PixelInformation.GreenMask == 0x0000FF00u
+	    && m->PixelInformation.BlueMask == 0x000000FFu;
+}
+
+/*
+ * 0 means "unusable", anything else is a rank (smaller is better).
+ *
+ * Rejected outright: a mode the console cannot paint (bpp != 32), a screen
+ * smaller than 640x480 or larger than GOP_MAX_DIM (the console then maps
+ * height*rowBytes of physical memory for every screen), and a scan line
+ * narrower than the visible width.  The framebuffer itself is not described
+ * here: its base/size live in EFI_GRAPHICS_OUTPUT_PROTOCOL_MODE and are only
+ * known for the ACTIVE mode, so they are validated after SetMode.
+ */
+static u64 gop_score(const EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *m)
+{
+	u32 w = m->HorizontalResolution, h = m->VerticalResolution;
+	u32 bpp = gop_bpp(m);
+	u64 dw, dh, s;
+
+	if (w < 640 || h < 480) return 0;
+	if (w > GOP_MAX_DIM || h > GOP_MAX_DIM) return 0;
+	if (bpp != 32) return 0;                     /* the console's 8/16bpp
+	                                               painters want a palette
+	                                               we cannot program here */
+	if (m->PixelsPerScanLine < w) return 0;
+
+	dw = (w > GOP_PREF_W ? w - GOP_PREF_W : GOP_PREF_W - w);
+	dh = (h > GOP_PREF_H ? h - GOP_PREF_H : GOP_PREF_H - h);
+	s = dw + dh;
+	if (!gop_is_xrgb32(m)) s += GOP_MISMATCH;
+	return s ? s : 1;           /* an exact 1024x768x32 still has to rank */
+}
+
+static EFI_GRAPHICS_OUTPUT_PROTOCOL *gop_find(EFI_BOOT_SERVICES *BS,
+    EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *ST)
+{
+	EFI_GUID g = GUID_GOP;
+	EFI_GRAPHICS_OUTPUT_PROTOCOL *gop = 0;
+	EFI_HANDLE *hbuf = 0;
+	u64 st, n = 0;
+
+	/* 1. the image handle: EDK2 installs GOP on it when the image was
+	 *    loaded from a graphical console. */
+	st = BS->HandleProtocol(ImageHandle, &g, (void **)&gop);
+	s_puts("RL: gop HP(Image)="); s_hex32((u32)st);
+	s_puts(" gop="); s_hex64((u64)gop); s_puts("\r\n");
+	if (gop) return gop;
+
+	/* 2. the console-out handle, which is where GOP lives when the image
+	 *    was launched from the firmware shell. */
+	if (ST->ConsoleOutHandle) {
+	st = BS->HandleProtocol((EFI_HANDLE)(u64)ST->ConsoleOutHandle, &g,
+		    (void **)&gop);
+		s_puts("RL: gop HP(ConOut)="); s_hex32((u32)st);
+		s_puts(" gop="); s_hex64((u64)gop); s_puts("\r\n");
+		if (gop) return gop;
+	}
+
+	/*
+	 * 3. last resort: the UEFI-spec sweep, which is how every real
+	 *    GOP-aware bootloader finds it -- GOP is NOT on the image handle
+	 *    and NOT on the console handle when the image was launched from
+	 *    the firmware shell; it lives on the handle EDK2 created for the
+	 *    graphics device.
+	 *    LocateHandle (caller supplies the buffer) is tried first, and
+	 *    LocateHandleBuffer second.  Both are legitimate; the second
+	 *    exists only so that a firmware which cannot serve the first
+	 *    still gets a chance, and its pool buffer is freed again.
+	 *
+	 *    A #GP inside the firmware on the first attempt of this code was
+	 *    NOT the firmware's fault: the loader's EFI_BOOT_SERVICES copy
+	 *    was missing LocateDevicePath, so the pointer read as
+	 *    LocateHandleBuffer was LocateDevicePath and it was called with
+	 *    five arguments it does not have.  The table's offsets are now
+	 *    the ones UEFI 2.10 section 3 gives, in order, and the pointer
+	 *    dump below is the evidence that the slots are what they say.
+	 *
+	 *    BY_PROTOCOL == 2, and the buffer may come back with NULL
+	 *    entries in it.
+	 */
+	s_puts("RL: bs LH=0x"); s_hex64((u64)BS->LocateHandle);
+	s_puts(" LHB=0x"); s_hex64((u64)BS->LocateHandleBuffer);
+	s_puts(" LDP=0x"); s_hex64((u64)BS->LocateDevicePath);
+	s_puts(" CT=0x"); s_hex64((u64)ST->ConfigurationTable);
+	s_puts(" ICT=0x"); s_hex64((u64)BS->InstallConfigurationTable);
+	s_puts("\r\n");
+
+	/*
+	 * Three searches, in order, because the one every GOP-aware
+	 * bootloader uses first is not always the one this firmware serves.
+	 *
+	 * NoHandles is IN/OUT: on input it is the capacity of the buffer.
+	 * That is measured, not assumed -- with a zero capacity this build
+	 * answers EFI_NOT_STARTED to the plain sweep and triple-faults the
+	 * machine on the pooled one (QEMU exits, nothing more is printed).
+	 */
+	{
+		EFI_HANDLE hb[GOP_MAX_HANDLES];
+		u64 n = GOP_MAX_HANDLES;
+
+		st = BS->LocateHandle(BY_PROTOCOL, &g, 0, &n, hb);
+		s_puts("RL: LH byProtocol="); s_hex64(st);
+		s_puts(" n="); s_dec(n); s_puts("\r\n");
+		if (st == 0 && n) {
+			if (n > GOP_MAX_HANDLES) n = GOP_MAX_HANDLES;
+			for (u64 i = 0; i < n; i++) {
+				if (!hb[i]) continue;
+				st = BS->HandleProtocol(hb[i], &g, (void **)&gop);
+				s_puts("RL: gop handle["); s_dec(i);
+				s_puts("]=0x"); s_hex64((u64)hb[i]);
+				s_puts(" -> "); s_hex64(st);
+				s_puts(" gop="); s_hex64((u64)gop);
+				s_puts("\r\n");
+				if (gop) return gop;
+			}
+		}
+	}
+
+	/*
+	 * The same search keyed on a handle rather than on the protocol:
+	 * every handle sharing a device path with the console-out handle.
+	 * EDK2 installs GOP on the graphics device handle, which sits on
+	 * that same path, so this reaches it without asking the firmware to
+	 * enumerate anything at all.
+	 */
+	if (ST->ConsoleOutHandle) {
+		EFI_HANDLE hb[GOP_MAX_HANDLES];
+		u64 n = GOP_MAX_HANDLES;
+
+		st = BS->LocateHandle(EFI_LOCATE_HANDLE_PROTOCOL, &g,
+		    (void *)(u64)ST->ConsoleOutHandle, &n, hb);
+		s_puts("RL: LH byConsolePath="); s_hex64(st);
+		s_puts(" n="); s_dec(n); s_puts("\r\n");
+		if (st == 0 && n) {
+			if (n > GOP_MAX_HANDLES) n = GOP_MAX_HANDLES;
+			for (u64 i = 0; i < n; i++) {
+				if (!hb[i]) continue;
+				st = BS->HandleProtocol(hb[i], &g, (void **)&gop);
+				s_puts("RL: gop pathhandle["); s_dec(i);
+				s_puts("]=0x"); s_hex64((u64)hb[i]);
+				s_puts(" -> "); s_hex64(st);
+				s_puts(" gop="); s_hex64((u64)gop);
+				s_puts("\r\n");
+				if (gop) return gop;
+			}
+		}
+	}
+
+	/*
+	 * The pooled variant: the by-protocol sweep again, with the firmware
+	 * allocating the buffer.  Kept last, and freed again before
+	 * returning, whichever way it goes.
+	 */
+	n = GOP_MAX_HANDLES;
+	hbuf = 0;
+	st = BS->LocateHandleBuffer(BY_PROTOCOL, &g, 0, &n, (void **)&hbuf);
+	s_puts("RL: gop LHB="); s_hex64(st);
+	s_puts(" n="); s_dec(n);
+	s_puts(" buf="); s_hex64((u64)hbuf); s_puts("\r\n");
+	if (st == 0 && hbuf) {
+		if (n > GOP_MAX_HANDLES) n = GOP_MAX_HANDLES;
+		for (u64 i = 0; i < n; i++) {
+			if (!hbuf[i]) continue;
+			st = BS->HandleProtocol(hbuf[i], &g, (void **)&gop);
+			s_puts("RL: gop lhb handle["); s_dec(i);
+			s_puts("]=0x"); s_hex64((u64)hbuf[i]);
+			s_puts(" -> "); s_hex64(st);
+			s_puts(" gop="); s_hex64((u64)gop); s_puts("\r\n");
+			if (gop) break;
+		}
+	}
+	if (hbuf) BS->FreePool(hbuf);
+	return gop;
+}
+
+static void gop_dump_mode(u32 idx, const EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *m)
+{
+	s_puts("RL:   mode "); s_dec(idx);
+	s_puts(" "); s_dec(m->HorizontalResolution);
+	s_puts("x"); s_dec(m->VerticalResolution);
+	s_puts(" fmt="); s_dec(m->PixelFormat);
+	s_puts(" bpp="); s_dec(gop_bpp(m));
+	s_puts(" ppsl="); s_dec(m->PixelsPerScanLine);
+	s_puts(" mask=0x"); s_hex32(m->PixelInformation.RedMask);
+	s_puts("/0x"); s_hex32(m->PixelInformation.GreenMask);
+	s_puts("/0x"); s_hex32(m->PixelInformation.BlueMask);
+	s_puts("\r\n");
+}
+
+/*
+ * Acquire GOP, pick a mode, make it the ACTIVE one, and leave the active
+ * mode's description in g_gop_info.
+ *
+ * Non-fatal by design: on failure the caller leaves boot_args.Video zeroed
+ * and the kernel falls back to serial console exactly as it does today.
+ */
+static void gop_setup(EFI_BOOT_SERVICES *BS, EFI_HANDLE ImageHandle,
+    EFI_SYSTEM_TABLE *ST)
+{
+	struct gop_cand cand[GOP_MAX_MODES];
+	u64 maxmode = 0, st;
+	u32 nc = 0, m;
+
+	g_gop = gop_find(BS, ImageHandle, ST);
+	if (!g_gop) { s_puts("RL: GOP absent, booting headless\r\n"); return; }
+	if (!g_gop->Mode) {
+		s_puts("RL: GOP has no Mode, booting headless\r\n");
+		return;
+	}
+	maxmode = g_gop->Mode->MaxMode;
+	if (maxmode > 512) maxmode = 512;   /* never trust a count blindly */
+	s_puts("RL: GOP modes="); s_dec(maxmode);
+	s_puts(" active="); s_dec(g_gop->Mode->Mode); s_puts("\r\n");
+
+	for (m = 0; m < (u32)maxmode; m++) {
+		EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *info = 0;
+		u64 size = 0, score;
+		u32 k, j;
+
+		/* QueryMode allocates the description with AllocatePool and
+		 * hands ownership to us; it is freed on every path. */
+		st = g_gop->QueryMode(g_gop, m, &size, &info);
+		if (st || !info) {
+			s_puts("RL:   mode "); s_dec(m);
+			s_puts(" QueryMode="); s_hex32((u32)st); s_puts("\r\n");
+			continue;
+		}
+		if (size < sizeof(*info)) {
+			s_puts("RL:   mode "); s_dec(m);
+			s_puts(" QueryMode size="); s_dec(size);
+			s_puts(" < "); s_dec(sizeof(*info)); s_puts("\r\n");
+			BS->FreePool(info);
+			continue;
+		}
+		gop_dump_mode(m, info);
+		score = gop_score(info);
+		if (score) {
+			/* Keep the best GOP_MAX_MODES by score, sorted
+			 * ascending.  The firmware's mode ORDER is not a
+			 * quality order -- QEMU lists 1024x768 long after
+			 * several small ones -- so a "first N fit" would
+			 * quietly drop the mode we actually want. */
+			for (k = 0; k < nc && cand[k].score <= score; k++)
+				;
+			if (k < GOP_MAX_MODES) {
+				for (j = (nc < GOP_MAX_MODES
+				    ? nc : GOP_MAX_MODES - 1); j > k; j--)
+					cand[j] = cand[j - 1];
+				if (nc < GOP_MAX_MODES) nc++;
+				cand[k].score = score;
+				cand[k].mode = m;
+				cand[k].info = *info;
+			}
+		}
+		BS->FreePool(info);
+	}
+	if (!nc) { s_puts("RL: no usable GOP mode\r\n"); return; }
+	s_puts("RL: GOP usable modes="); s_dec(nc); s_puts("\r\n");
+
+	/* SetMode can fail on a mode we would otherwise have accepted, and
+	 * there is no way to know which without asking the firmware. */
+	for (u32 i = 0; i < nc; i++) {
+		const EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *mi;
+		u64 fb, fbsz;
+
+		st = g_gop->SetMode(g_gop, cand[i].mode);
+		s_puts("RL: SetMode("); s_dec(cand[i].mode);
+		s_puts(")="); s_hex32((u32)st); s_puts("\r\n");
+		if (st) continue;
+		/* Mode->Info and Mode->FrameBuffer* describe the mode that is
+		 * now ACTIVE, so read them back from the firmware instead of
+		 * trusting what QueryMode said a moment ago. */
+		mi = g_gop->Mode->Info;
+		fb = (u64)g_gop->Mode->FrameBufferBase;
+		fbsz = g_gop->Mode->FrameBufferSize;
+		if (!mi || !fb || (fb & 3) != 0) {
+			s_puts("RL: active mode has no usable framebuffer\r\n");
+			continue;
+		}
+		if (!gop_score(mi)) {
+			s_puts("RL: active mode no longer usable\r\n");
+			continue;
+		}
+		if ((u64)mi->PixelsPerScanLine * 4 * mi->VerticalResolution > fbsz) {
+			s_puts("RL: active framebuffer smaller than a screen\r\n");
+			continue;
+		}
+		g_gop_info = *mi;
+		g_gop_fb = fb;
+		g_gop_fb_size = fbsz;
+		g_gop_mode = cand[i].mode;
+		g_gop_ok = 1;
+		break;
+	}
+	if (!g_gop_ok) { s_puts("RL: every GOP SetMode failed\r\n"); return; }
+
+	s_puts("RL: GOP ACTIVE mode="); s_dec(g_gop_mode);
+	s_puts(" fb=0x"); s_hex64(g_gop_fb);
+	s_puts(" "); s_dec(g_gop_info.HorizontalResolution);
+	s_puts("x"); s_dec(g_gop_info.VerticalResolution);
+	s_puts(" bpp="); s_dec(gop_bpp(&g_gop_info));
+	s_puts(" ppsl="); s_dec(g_gop_info.PixelsPerScanLine);
+	s_puts(" size=0x"); s_hex64(g_gop_fb_size);
+	if (!gop_is_xrgb32(&g_gop_info))
+		s_puts(" (WARNING: pixel layout is not 0x00RRGGBB; colours will be wrong)");
+	s_puts("\r\n");
+}
+
+/*
+ * boot_args.Video, field for field, from the active mode.
+ *
+ * pe_init.c only copies this struct into PE_state.video when v_baseAddr is
+ * non-zero, and initialize_screen() only then keeps a graphics console --
+ * so v_baseAddr is the switch, not a detail.  v_display is GRAPHICS_MODE
+ * (boot.h), which is what the console takes as v_type.  v_scale is not in
+ * this struct: the kernel derives it from boot_args.flags.
+ */
+static void gop_fill_video(Boot_Video *V)
+{
+	if (!g_gop_ok) return;
+	V->v_display  = 1;                 /* GRAPHICS_MODE */
+	V->v_rowBytes = g_gop_info.PixelsPerScanLine * 4;  /* 32bpp */
+	V->v_width    = g_gop_info.HorizontalResolution;
+	V->v_height   = g_gop_info.VerticalResolution;
+	V->v_depth    = 32;
+	V->v_rotate   = 0;
+	V->v_baseAddr = g_gop_fb;
+	s_puts("RL: Video base=0x"); s_hex64(V->v_baseAddr);
+	s_puts(" "); s_dec(V->v_width);
+	s_puts("x"); s_dec(V->v_height);
+	s_puts(" row="); s_dec(V->v_rowBytes);
+	s_puts(" depth="); s_dec(V->v_depth);
+	s_puts(" display="); s_dec(V->v_display); s_puts("\r\n");
+}
+
+
+/* ------------------------------------------------------------------ */
 EFI_STATUS efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *ST);
 
 EFI_STATUS
@@ -789,6 +1251,20 @@ efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *ST)
 		s_puts("RL: FATAL loaded-image SystemTable != ST\r\n");
 		return ERR(22);
 	}
+
+	/*
+	 * --- 1b. the framebuffer ----------------------------------------
+	 *
+	 * Done here, before any GetMemoryMap, for two reasons.  The kernel
+	 * is handed a SNAPSHOT of the map taken later on, and that snapshot
+	 * has to describe the machine the kernel will actually run on; and
+	 * SetMode may change the memory map at all on firmware that
+	 * re-allocates the linear framebuffer.  Failure is not fatal: the
+	 * boot args keep Video zeroed and the kernel stays on serial, which
+	 * is the behaviour this loader had before GOP existed.
+	 */
+	gop_setup(BS, ImageHandle, ST);
+
 
 	/*
 	 * --- 2. the boot volume, and the kernel -------------------------
@@ -1122,7 +1598,10 @@ efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *ST)
 		A->MemoryMapSize = (u32)used;
 		A->MemoryMapDescriptorSize = (u32)dsz;
 		A->MemoryMapDescriptorVersion = (u32)dver;
-		A->Video.v_display = 0;           /* headless: serial=1 */
+		/* The GOP framebuffer, or all zeroes -- which pe_init.c reads as
+		 * "no video" and forces serial console.  Either way this is the
+		 * only write to any Video.* field in the loader. */
+		gop_fill_video(&A->Video);
 		{
 			u32 cn = 0;
 			const char *src = DEFAULT_CMDLINE;

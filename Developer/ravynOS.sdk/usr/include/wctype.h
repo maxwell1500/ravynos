@@ -1,130 +1,94 @@
-/*-
- * Copyright (c)1999 Citrus Project,
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
- * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
- * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
- * SUCH DAMAGE.
- *
- *	citrus Id: wctype.h,v 1.4 2000/12/21 01:50:21 itojun Exp
- *	$NetBSD: wctype.h,v 1.3 2000/12/22 14:16:16 itojun Exp $
- * $FreeBSD: /repoman/r/ncvs/src/include/wctype.h,v 1.10 2002/08/21 16:19:55 mike Exp $
- */
+// -*- C++ -*-
+//===----------------------------------------------------------------------===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//===----------------------------------------------------------------------===//
 
-#ifndef _WCTYPE_H_
-#define	_WCTYPE_H_
-
-#include <sys/cdefs.h>
-#include <_types.h>
-#include <_types/_wctrans_t.h>
-
-#define __DARWIN_WCTYPE_TOP_inline	__header_inline
-
-#include <_wctype.h>
-#include <ctype.h>
+#ifndef _LIBCPP_WCTYPE_H
+#define _LIBCPP_WCTYPE_H
 
 /*
- * Use inline functions if we are allowed to and the compiler supports them.
- */
-#if !defined(_DONT_USE_CTYPE_INLINE_) && \
-    (defined(_USE_CTYPE_INLINE_) || defined(__GNUC__) || defined(__cplusplus))
+    wctype.h synopsis
 
-__DARWIN_WCTYPE_TOP_inline int
-iswblank(wint_t _wc)
-{
-	return (__istype(_wc, _CTYPE_B));
-}
+Macros:
 
-#if !defined(_ANSI_SOURCE)
-__DARWIN_WCTYPE_TOP_inline int
-iswascii(wint_t _wc)
-{
-	return ((_wc & ~0x7F) == 0);
-}
+    WEOF
 
-__DARWIN_WCTYPE_TOP_inline int
-iswhexnumber(wint_t _wc)
-{
-	return (__istype(_wc, _CTYPE_X));
-}
+Types:
 
-__DARWIN_WCTYPE_TOP_inline int
-iswideogram(wint_t _wc)
-{
-	return (__istype(_wc, _CTYPE_I));
-}
+    wint_t
+    wctrans_t
+    wctype_t
 
-__DARWIN_WCTYPE_TOP_inline int
-iswnumber(wint_t _wc)
-{
-	return (__istype(_wc, _CTYPE_D));
-}
+int iswalnum(wint_t wc);
+int iswalpha(wint_t wc);
+int iswblank(wint_t wc);  // C99
+int iswcntrl(wint_t wc);
+int iswdigit(wint_t wc);
+int iswgraph(wint_t wc);
+int iswlower(wint_t wc);
+int iswprint(wint_t wc);
+int iswpunct(wint_t wc);
+int iswspace(wint_t wc);
+int iswupper(wint_t wc);
+int iswxdigit(wint_t wc);
+int iswctype(wint_t wc, wctype_t desc);
+wctype_t wctype(const char* property);
+wint_t towlower(wint_t wc);
+wint_t towupper(wint_t wc);
+wint_t towctrans(wint_t wc, wctrans_t desc);
+wctrans_t wctrans(const char* property);
 
-__DARWIN_WCTYPE_TOP_inline int
-iswphonogram(wint_t _wc)
-{
-	return (__istype(_wc, _CTYPE_Q));
-}
+*/
 
-__DARWIN_WCTYPE_TOP_inline int
-iswrune(wint_t _wc)
-{
-	return (__istype(_wc, 0xFFFFFFF0L));
-}
+#include <__config>
 
-__DARWIN_WCTYPE_TOP_inline int
-iswspecial(wint_t _wc)
-{
-	return (__istype(_wc, _CTYPE_T));
-}
-#endif /* !_ANSI_SOURCE */
-
-#else /* not using inlines */
-
-__BEGIN_DECLS
-int	iswblank(wint_t);
-
-#if !defined(_ANSI_SOURCE)
-wint_t	iswascii(wint_t);
-wint_t	iswhexnumber(wint_t);
-wint_t	iswideogram(wint_t);
-wint_t	iswnumber(wint_t);
-wint_t	iswphonogram(wint_t);
-wint_t	iswrune(wint_t);
-wint_t	iswspecial(wint_t);
+#if defined(_LIBCPP_HAS_NO_WIDE_CHARACTERS)
+#   error "The <wctype.h> header is not supported since libc++ has been configured with LIBCXX_ENABLE_WIDE_CHARACTERS disabled"
 #endif
-__END_DECLS
 
-#endif /* using inlines */
-
-__BEGIN_DECLS
-#if !defined(_ANSI_SOURCE) && (!defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE))
-wint_t	nextwctype(wint_t, wctype_t);
+#if !defined(_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER)
+#  pragma GCC system_header
 #endif
-wint_t	towctrans(wint_t, wctrans_t);
-wctrans_t
-	wctrans(const char *);
-__END_DECLS
 
-#ifdef _USE_EXTENDED_LOCALES_
-#include <xlocale/_wctype.h>
-#endif /* _USE_EXTENDED_LOCALES_ */
+// TODO:
+// In the future, we should unconditionally include_next <wctype.h> here and instead
+// have a mode under which the library does not need libc++'s <wctype.h> or <cwctype>
+// at all (i.e. a mode without wchar_t). As it stands, we need to do that to completely
+// bypass the using declarations in <cwctype> when we did not include <wctype.h>.
+// Otherwise, a using declaration like `using ::wint_t` in <cwctype> will refer to
+// nothing (with using_if_exists), and if we include another header that defines one
+// of these declarations (e.g. <wchar.h>), the second `using ::wint_t` with using_if_exists
+// will fail because it does not refer to the same declaration.
+#if __has_include_next(<wctype.h>)
+#   include_next <wctype.h>
+#   define _LIBCPP_INCLUDED_C_LIBRARY_WCTYPE_H
+#endif
 
-#endif		/* _WCTYPE_H_ */
+#ifdef __cplusplus
+
+#undef iswalnum
+#undef iswalpha
+#undef iswblank
+#undef iswcntrl
+#undef iswdigit
+#undef iswgraph
+#undef iswlower
+#undef iswprint
+#undef iswpunct
+#undef iswspace
+#undef iswupper
+#undef iswxdigit
+#undef iswctype
+#undef wctype
+#undef towlower
+#undef towupper
+#undef towctrans
+#undef wctrans
+
+#endif // __cplusplus
+
+#endif // _LIBCPP_WCTYPE_H

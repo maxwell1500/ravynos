@@ -111,3 +111,19 @@ Scratch from a standalone host compile, not part of any build system.
 /block.o
 /lchflags.o
 /llvm_target/
+# In-tree build products from the Frameworks build. The Frameworks tree
+# builds in place, so .o/.a/.dylib files land beside their sources.
+/Frameworks/**/*.o
+/Frameworks/**/*.a
+/Frameworks/**/*.dylib
+/Frameworks/**/*.so
+
+# Frameworks_build is the CMake build output directory for the Frameworks.
+/Frameworks_build/
+
+# In-tree build products from the Libraries builds (MiscLibs, firehose, zlib).
+/Libraries/MiscLibs/*.o
+/Libraries/MiscLibs/*.a
+/Libraries/libfirehose_kernel/*.o
+/Libraries/zlib/*.o
+/Libraries/zlib/*.a

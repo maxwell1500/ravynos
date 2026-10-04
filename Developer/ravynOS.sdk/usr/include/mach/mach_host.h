@@ -52,13 +52,13 @@ typedef function_table_entry   *function_table_t;
 #define	mach_host_MSG_COUNT	35
 #endif	/* mach_host_MSG_COUNT */
 
+#include <Availability.h>
 #include <mach/std_types.h>
 #include <mach/mig.h>
 #include <mach/mig.h>
 #include <mach/mach_types.h>
 #include <mach/mach_types.h>
 #include <mach_debug/mach_debug_types.h>
-#include <mach/mach_init.h>
 
 #ifdef __BeforeMigUserHeader
 __BeforeMigUserHeader
@@ -74,8 +74,6 @@ mig_external
 #else
 extern
 #endif	/* mig_external */
-__WATCHOS_PROHIBITED
-__TVOS_PROHIBITED
 kern_return_t host_info
 (
 	host_t host,
@@ -96,13 +94,13 @@ kern_return_t host_kernel_version
 	kernel_version_t kernel_version
 );
 
-/* Routine _host_page_size */
+/* Routine host_page_size */
 #ifdef	mig_external
 mig_external
 #else
 extern
 #endif	/* mig_external */
-kern_return_t _host_page_size
+kern_return_t host_page_size
 (
 	host_t host,
 	vm_size_t *out_page_size
@@ -139,40 +137,7 @@ kern_return_t host_processor_info
 	mach_msg_type_number_t *out_processor_infoCnt
 );
 
-/* Routine host_get_io_master */
-#ifdef	mig_external
-mig_external
-#else
-extern
-#endif	/* mig_external */
-kern_return_t host_get_io_master
-(
-	host_t host,
-	io_master_t *io_master
-);
-
-/* Routine host_get_io_main
- *
- * SOURCED verbatim from the mach_host.h that this build's own mig run
- * generates from Kernel/xnu/osfmk/mach/mach_host.defs, i.e.
- * Libraries/Libsystem/libsystem_kernel/mig_hdr/include/mach/mach_host.h:140-150.
- * ADDITIVE: host_get_io_master above is left exactly as it was.
- *
- * This is the SAME Mach trap under the newer name, not a second routine, and
- * that is measured rather than assumed. Three independent artifacts agree:
- *   this header          { "host_get_io_master", 205 }        (line 1267)
- *   generated impl       __DeclareSendRpc(205, "host_get_io_main")
- *                        (mach_hostUser.c:1093, Routine comment at :1025)
- * and the two message types are identical apart from the field name:
- *   __Request__host_get_io_master_t  { mach_msg_header_t Head; }
- *   __Request__host_get_io_main_t    { mach_msg_header_t Head; }
- *   __Reply__host_get_io_master_t    { Head; msgh_body;
- *                                      mach_msg_port_descriptor_t io_master; }
- *   __Reply__host_get_io_main_t      { Head; msgh_body;
- *                                      mach_msg_port_descriptor_t io_main;   }
- * So this declaration cannot route anywhere the existing one does not already
- * route. See tools/bootlab/LIBSYSTEM-KERNEL-BUILD-NOTES.md sec. 22.
- */
+/* Routine host_get_io_main */
 #ifdef	mig_external
 mig_external
 #else
@@ -284,8 +249,6 @@ mig_external
 #else
 extern
 #endif	/* mig_external */
-__WATCHOS_PROHIBITED
-__TVOS_PROHIBITED
 kern_return_t host_request_notification
 (
 	host_t host,
@@ -328,11 +291,22 @@ extern
 #endif	/* mig_external */
 kern_return_t mach_zone_info
 (
-	host_priv_t host,
+	mach_port_t host,
 	mach_zone_name_array_t *names,
 	mach_msg_type_number_t *namesCnt,
 	mach_zone_info_array_t *info,
 	mach_msg_type_number_t *infoCnt
+);
+
+/* Routine mach_zone_force_gc */
+#ifdef	mig_external
+mig_external
+#else
+extern
+#endif	/* mig_external */
+kern_return_t mach_zone_force_gc
+(
+	host_t host
 );
 
 /* Routine host_create_mach_voucher */
@@ -341,8 +315,6 @@ mig_external
 #else
 extern
 #endif	/* mig_external */
-__WATCHOS_PROHIBITED
-__TVOS_PROHIBITED
 kern_return_t host_create_mach_voucher
 (
 	host_t host,
@@ -357,8 +329,6 @@ mig_external
 #else
 extern
 #endif	/* mig_external */
-__WATCHOS_PROHIBITED
-__TVOS_PROHIBITED
 kern_return_t host_register_mach_voucher_attr_manager
 (
 	host_t host,
@@ -374,8 +344,6 @@ mig_external
 #else
 extern
 #endif	/* mig_external */
-__WATCHOS_PROHIBITED
-__TVOS_PROHIBITED
 kern_return_t host_register_well_known_mach_voucher_attr_manager
 (
 	host_t host,
@@ -391,26 +359,10 @@ mig_external
 #else
 extern
 #endif	/* mig_external */
-__WATCHOS_PROHIBITED
-__TVOS_PROHIBITED
 kern_return_t host_set_atm_diagnostic_flag
 (
 	host_t host,
 	uint32_t diagnostic_flag
-);
-
-/* Routine host_get_atm_diagnostic_flag */
-#ifdef	mig_external
-mig_external
-#else
-extern
-#endif	/* mig_external */
-__WATCHOS_PROHIBITED
-__TVOS_PROHIBITED
-kern_return_t host_get_atm_diagnostic_flag
-(
-	host_t host,
-	uint32_t *diagnostic_flag
 );
 
 /* Routine mach_memory_info */
@@ -421,7 +373,7 @@ extern
 #endif	/* mig_external */
 kern_return_t mach_memory_info
 (
-	host_priv_t host,
+	mach_port_t host,
 	mach_zone_name_array_t *names,
 	mach_msg_type_number_t *namesCnt,
 	mach_zone_info_array_t *info,
@@ -442,30 +394,6 @@ kern_return_t host_set_multiuser_config_flags
 	uint32_t multiuser_flags
 );
 
-/* Routine host_get_multiuser_config_flags */
-#ifdef	mig_external
-mig_external
-#else
-extern
-#endif	/* mig_external */
-kern_return_t host_get_multiuser_config_flags
-(
-	host_t host,
-	uint32_t *multiuser_flags
-);
-
-/* Routine host_check_multiuser_mode */
-#ifdef	mig_external
-mig_external
-#else
-extern
-#endif	/* mig_external */
-kern_return_t host_check_multiuser_mode
-(
-	host_t host,
-	uint32_t *multiuser_mode
-);
-
 /* Routine mach_zone_info_for_zone */
 #ifdef	mig_external
 mig_external
@@ -477,6 +405,46 @@ kern_return_t mach_zone_info_for_zone
 	host_priv_t host,
 	mach_zone_name_t name,
 	mach_zone_info_t *info
+);
+
+/* Routine mach_zone_info_for_largest_zone */
+#ifdef	mig_external
+mig_external
+#else
+extern
+#endif	/* mig_external */
+kern_return_t mach_zone_info_for_largest_zone
+(
+	host_priv_t host,
+	mach_zone_name_t *name,
+	mach_zone_info_t *info
+);
+
+/* Routine mach_zone_get_zlog_zones */
+#ifdef	mig_external
+mig_external
+#else
+extern
+#endif	/* mig_external */
+kern_return_t mach_zone_get_zlog_zones
+(
+	host_priv_t host,
+	mach_zone_name_array_t *names,
+	mach_msg_type_number_t *namesCnt
+);
+
+/* Routine mach_zone_get_btlog_records */
+#ifdef	mig_external
+mig_external
+#else
+extern
+#endif	/* mig_external */
+kern_return_t mach_zone_get_btlog_records
+(
+	host_priv_t host,
+	mach_zone_name_t name,
+	zone_btrecord_array_t *recs,
+	mach_msg_type_number_t *recsCnt
 );
 
 __END_DECLS
@@ -525,7 +493,7 @@ __END_DECLS
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-	} __Request___host_page_size_t __attribute__((unused));
+	} __Request__host_page_size_t __attribute__((unused));
 #ifdef  __MigPackStructs
 #pragma pack(pop)
 #endif
@@ -565,7 +533,7 @@ __END_DECLS
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-	} __Request__host_get_io_master_t __attribute__((unused));
+	} __Request__host_get_io_main_t __attribute__((unused));
 #ifdef  __MigPackStructs
 #pragma pack(pop)
 #endif
@@ -707,6 +675,16 @@ __END_DECLS
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
+	} __Request__mach_zone_force_gc_t __attribute__((unused));
+#ifdef  __MigPackStructs
+#pragma pack(pop)
+#endif
+
+#ifdef  __MigPackStructs
+#pragma pack(push, 4)
+#endif
+	typedef struct {
+		mach_msg_header_t Head;
 		NDR_record_t NDR;
 		mach_msg_type_number_t recipesCnt;
 		uint8_t recipes[5120];
@@ -765,16 +743,6 @@ __END_DECLS
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-	} __Request__host_get_atm_diagnostic_flag_t __attribute__((unused));
-#ifdef  __MigPackStructs
-#pragma pack(pop)
-#endif
-
-#ifdef  __MigPackStructs
-#pragma pack(push, 4)
-#endif
-	typedef struct {
-		mach_msg_header_t Head;
 	} __Request__mach_memory_info_t __attribute__((unused));
 #ifdef  __MigPackStructs
 #pragma pack(pop)
@@ -797,7 +765,9 @@ __END_DECLS
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-	} __Request__host_get_multiuser_config_flags_t __attribute__((unused));
+		NDR_record_t NDR;
+		mach_zone_name_t name;
+	} __Request__mach_zone_info_for_zone_t __attribute__((unused));
 #ifdef  __MigPackStructs
 #pragma pack(pop)
 #endif
@@ -807,7 +777,17 @@ __END_DECLS
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-	} __Request__host_check_multiuser_mode_t __attribute__((unused));
+	} __Request__mach_zone_info_for_largest_zone_t __attribute__((unused));
+#ifdef  __MigPackStructs
+#pragma pack(pop)
+#endif
+
+#ifdef  __MigPackStructs
+#pragma pack(push, 4)
+#endif
+	typedef struct {
+		mach_msg_header_t Head;
+	} __Request__mach_zone_get_zlog_zones_t __attribute__((unused));
 #ifdef  __MigPackStructs
 #pragma pack(pop)
 #endif
@@ -819,7 +799,7 @@ __END_DECLS
 		mach_msg_header_t Head;
 		NDR_record_t NDR;
 		mach_zone_name_t name;
-	} __Request__mach_zone_info_for_zone_t __attribute__((unused));
+	} __Request__mach_zone_get_btlog_records_t __attribute__((unused));
 #ifdef  __MigPackStructs
 #pragma pack(pop)
 #endif
@@ -832,10 +812,10 @@ __END_DECLS
 union __RequestUnion__mach_host_subsystem {
 	__Request__host_info_t Request_host_info;
 	__Request__host_kernel_version_t Request_host_kernel_version;
-	__Request___host_page_size_t Request__host_page_size;
+	__Request__host_page_size_t Request_host_page_size;
 	__Request__mach_memory_object_memory_entry_t Request_mach_memory_object_memory_entry;
 	__Request__host_processor_info_t Request_host_processor_info;
-	__Request__host_get_io_master_t Request_host_get_io_master;
+	__Request__host_get_io_main_t Request_host_get_io_main;
 	__Request__host_get_clock_service_t Request_host_get_clock_service;
 	__Request__kmod_get_info_t Request_kmod_get_info;
 	__Request__host_virtual_physical_table_info_t Request_host_virtual_physical_table_info;
@@ -847,16 +827,17 @@ union __RequestUnion__mach_host_subsystem {
 	__Request__host_lockgroup_info_t Request_host_lockgroup_info;
 	__Request__host_statistics64_t Request_host_statistics64;
 	__Request__mach_zone_info_t Request_mach_zone_info;
+	__Request__mach_zone_force_gc_t Request_mach_zone_force_gc;
 	__Request__host_create_mach_voucher_t Request_host_create_mach_voucher;
 	__Request__host_register_mach_voucher_attr_manager_t Request_host_register_mach_voucher_attr_manager;
 	__Request__host_register_well_known_mach_voucher_attr_manager_t Request_host_register_well_known_mach_voucher_attr_manager;
 	__Request__host_set_atm_diagnostic_flag_t Request_host_set_atm_diagnostic_flag;
-	__Request__host_get_atm_diagnostic_flag_t Request_host_get_atm_diagnostic_flag;
 	__Request__mach_memory_info_t Request_mach_memory_info;
 	__Request__host_set_multiuser_config_flags_t Request_host_set_multiuser_config_flags;
-	__Request__host_get_multiuser_config_flags_t Request_host_get_multiuser_config_flags;
-	__Request__host_check_multiuser_mode_t Request_host_check_multiuser_mode;
 	__Request__mach_zone_info_for_zone_t Request_mach_zone_info_for_zone;
+	__Request__mach_zone_info_for_largest_zone_t Request_mach_zone_info_for_largest_zone;
+	__Request__mach_zone_get_zlog_zones_t Request_mach_zone_get_zlog_zones;
+	__Request__mach_zone_get_btlog_records_t Request_mach_zone_get_btlog_records;
 };
 #endif /* !__RequestUnion__mach_host_subsystem__defined */
 /* typedefs for all replies */
@@ -901,7 +882,7 @@ union __RequestUnion__mach_host_subsystem {
 		NDR_record_t NDR;
 		kern_return_t RetCode;
 		vm_size_t out_page_size;
-	} __Reply___host_page_size_t __attribute__((unused));
+	} __Reply__host_page_size_t __attribute__((unused));
 #ifdef  __MigPackStructs
 #pragma pack(pop)
 #endif
@@ -944,9 +925,9 @@ union __RequestUnion__mach_host_subsystem {
 		mach_msg_header_t Head;
 		/* start of the kernel processed data */
 		mach_msg_body_t msgh_body;
-		mach_msg_port_descriptor_t io_master;
+		mach_msg_port_descriptor_t io_main;
 		/* end of the kernel processed data */
-	} __Reply__host_get_io_master_t __attribute__((unused));
+	} __Reply__host_get_io_main_t __attribute__((unused));
 #ifdef  __MigPackStructs
 #pragma pack(pop)
 #endif
@@ -1119,6 +1100,18 @@ union __RequestUnion__mach_host_subsystem {
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
+		NDR_record_t NDR;
+		kern_return_t RetCode;
+	} __Reply__mach_zone_force_gc_t __attribute__((unused));
+#ifdef  __MigPackStructs
+#pragma pack(pop)
+#endif
+
+#ifdef  __MigPackStructs
+#pragma pack(push, 4)
+#endif
+	typedef struct {
+		mach_msg_header_t Head;
 		/* start of the kernel processed data */
 		mach_msg_body_t msgh_body;
 		mach_msg_port_descriptor_t voucher;
@@ -1175,19 +1168,6 @@ union __RequestUnion__mach_host_subsystem {
 #endif
 	typedef struct {
 		mach_msg_header_t Head;
-		NDR_record_t NDR;
-		kern_return_t RetCode;
-		uint32_t diagnostic_flag;
-	} __Reply__host_get_atm_diagnostic_flag_t __attribute__((unused));
-#ifdef  __MigPackStructs
-#pragma pack(pop)
-#endif
-
-#ifdef  __MigPackStructs
-#pragma pack(push, 4)
-#endif
-	typedef struct {
-		mach_msg_header_t Head;
 		/* start of the kernel processed data */
 		mach_msg_body_t msgh_body;
 		mach_msg_ool_descriptor_t names;
@@ -1222,34 +1202,54 @@ union __RequestUnion__mach_host_subsystem {
 		mach_msg_header_t Head;
 		NDR_record_t NDR;
 		kern_return_t RetCode;
-		uint32_t multiuser_flags;
-	} __Reply__host_get_multiuser_config_flags_t __attribute__((unused));
-#ifdef  __MigPackStructs
-#pragma pack(pop)
-#endif
-
-#ifdef  __MigPackStructs
-#pragma pack(push, 4)
-#endif
-	typedef struct {
-		mach_msg_header_t Head;
-		NDR_record_t NDR;
-		kern_return_t RetCode;
-		uint32_t multiuser_mode;
-	} __Reply__host_check_multiuser_mode_t __attribute__((unused));
-#ifdef  __MigPackStructs
-#pragma pack(pop)
-#endif
-
-#ifdef  __MigPackStructs
-#pragma pack(push, 4)
-#endif
-	typedef struct {
-		mach_msg_header_t Head;
-		NDR_record_t NDR;
-		kern_return_t RetCode;
 		mach_zone_info_t info;
 	} __Reply__mach_zone_info_for_zone_t __attribute__((unused));
+#ifdef  __MigPackStructs
+#pragma pack(pop)
+#endif
+
+#ifdef  __MigPackStructs
+#pragma pack(push, 4)
+#endif
+	typedef struct {
+		mach_msg_header_t Head;
+		NDR_record_t NDR;
+		kern_return_t RetCode;
+		mach_zone_name_t name;
+		mach_zone_info_t info;
+	} __Reply__mach_zone_info_for_largest_zone_t __attribute__((unused));
+#ifdef  __MigPackStructs
+#pragma pack(pop)
+#endif
+
+#ifdef  __MigPackStructs
+#pragma pack(push, 4)
+#endif
+	typedef struct {
+		mach_msg_header_t Head;
+		/* start of the kernel processed data */
+		mach_msg_body_t msgh_body;
+		mach_msg_ool_descriptor_t names;
+		/* end of the kernel processed data */
+		NDR_record_t NDR;
+		mach_msg_type_number_t namesCnt;
+	} __Reply__mach_zone_get_zlog_zones_t __attribute__((unused));
+#ifdef  __MigPackStructs
+#pragma pack(pop)
+#endif
+
+#ifdef  __MigPackStructs
+#pragma pack(push, 4)
+#endif
+	typedef struct {
+		mach_msg_header_t Head;
+		/* start of the kernel processed data */
+		mach_msg_body_t msgh_body;
+		mach_msg_ool_descriptor_t recs;
+		/* end of the kernel processed data */
+		NDR_record_t NDR;
+		mach_msg_type_number_t recsCnt;
+	} __Reply__mach_zone_get_btlog_records_t __attribute__((unused));
 #ifdef  __MigPackStructs
 #pragma pack(pop)
 #endif
@@ -1262,10 +1262,10 @@ union __RequestUnion__mach_host_subsystem {
 union __ReplyUnion__mach_host_subsystem {
 	__Reply__host_info_t Reply_host_info;
 	__Reply__host_kernel_version_t Reply_host_kernel_version;
-	__Reply___host_page_size_t Reply__host_page_size;
+	__Reply__host_page_size_t Reply_host_page_size;
 	__Reply__mach_memory_object_memory_entry_t Reply_mach_memory_object_memory_entry;
 	__Reply__host_processor_info_t Reply_host_processor_info;
-	__Reply__host_get_io_master_t Reply_host_get_io_master;
+	__Reply__host_get_io_main_t Reply_host_get_io_main;
 	__Reply__host_get_clock_service_t Reply_host_get_clock_service;
 	__Reply__kmod_get_info_t Reply_kmod_get_info;
 	__Reply__host_virtual_physical_table_info_t Reply_host_virtual_physical_table_info;
@@ -1277,16 +1277,17 @@ union __ReplyUnion__mach_host_subsystem {
 	__Reply__host_lockgroup_info_t Reply_host_lockgroup_info;
 	__Reply__host_statistics64_t Reply_host_statistics64;
 	__Reply__mach_zone_info_t Reply_mach_zone_info;
+	__Reply__mach_zone_force_gc_t Reply_mach_zone_force_gc;
 	__Reply__host_create_mach_voucher_t Reply_host_create_mach_voucher;
 	__Reply__host_register_mach_voucher_attr_manager_t Reply_host_register_mach_voucher_attr_manager;
 	__Reply__host_register_well_known_mach_voucher_attr_manager_t Reply_host_register_well_known_mach_voucher_attr_manager;
 	__Reply__host_set_atm_diagnostic_flag_t Reply_host_set_atm_diagnostic_flag;
-	__Reply__host_get_atm_diagnostic_flag_t Reply_host_get_atm_diagnostic_flag;
 	__Reply__mach_memory_info_t Reply_mach_memory_info;
 	__Reply__host_set_multiuser_config_flags_t Reply_host_set_multiuser_config_flags;
-	__Reply__host_get_multiuser_config_flags_t Reply_host_get_multiuser_config_flags;
-	__Reply__host_check_multiuser_mode_t Reply_host_check_multiuser_mode;
 	__Reply__mach_zone_info_for_zone_t Reply_mach_zone_info_for_zone;
+	__Reply__mach_zone_info_for_largest_zone_t Reply_mach_zone_info_for_largest_zone;
+	__Reply__mach_zone_get_zlog_zones_t Reply_mach_zone_get_zlog_zones;
+	__Reply__mach_zone_get_btlog_records_t Reply_mach_zone_get_btlog_records;
 };
 #endif /* !__RequestUnion__mach_host_subsystem__defined */
 
@@ -1294,10 +1295,10 @@ union __ReplyUnion__mach_host_subsystem {
 #define subsystem_to_name_map_mach_host \
     { "host_info", 200 },\
     { "host_kernel_version", 201 },\
-    { "_host_page_size", 202 },\
+    { "host_page_size", 202 },\
     { "mach_memory_object_memory_entry", 203 },\
     { "host_processor_info", 204 },\
-    { "host_get_io_master", 205 },\
+    { "host_get_io_main", 205 },\
     { "host_get_clock_service", 206 },\
     { "kmod_get_info", 207 },\
     { "host_virtual_physical_table_info", 209 },\
@@ -1309,16 +1310,17 @@ union __ReplyUnion__mach_host_subsystem {
     { "host_lockgroup_info", 218 },\
     { "host_statistics64", 219 },\
     { "mach_zone_info", 220 },\
+    { "mach_zone_force_gc", 221 },\
     { "host_create_mach_voucher", 222 },\
     { "host_register_mach_voucher_attr_manager", 223 },\
     { "host_register_well_known_mach_voucher_attr_manager", 224 },\
     { "host_set_atm_diagnostic_flag", 225 },\
-    { "host_get_atm_diagnostic_flag", 226 },\
     { "mach_memory_info", 227 },\
     { "host_set_multiuser_config_flags", 228 },\
-    { "host_get_multiuser_config_flags", 229 },\
-    { "host_check_multiuser_mode", 230 },\
-    { "mach_zone_info_for_zone", 231 }
+    { "mach_zone_info_for_zone", 231 },\
+    { "mach_zone_info_for_largest_zone", 232 },\
+    { "mach_zone_get_zlog_zones", 233 },\
+    { "mach_zone_get_btlog_records", 234 }
 #endif
 
 #ifdef __AfterMigUserHeader

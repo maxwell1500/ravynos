@@ -1,297 +1,264 @@
-/*
- * Copyright (c) 2000-2004, 2013 Apple Inc. All rights reserved.
- *
- * @APPLE_LICENSE_HEADER_START@
- * 
- * This file contains Original Code and/or Modifications of Original Code
- * as defined in and that are subject to the Apple Public Source License
- * Version 2.0 (the 'License'). You may not use this file except in
- * compliance with the License. Please obtain a copy of the License at
- * http://www.opensource.apple.com/apsl/ and read it before using this
- * file.
- * 
- * The Original Code and all software distributed under the License are
- * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
- * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
- * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
- * Please see the License for the specific language governing rights and
- * limitations under the License.
- * 
- * @APPLE_LICENSE_HEADER_END@
- */
+// -*- C++ -*-
+//===----------------------------------------------------------------------===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//===----------------------------------------------------------------------===//
+
+#ifndef _LIBCPP_INTTYPES_H
+// AIX system headers need inttypes.h to be re-enterable while _STD_TYPES_T
+// is defined until an inclusion of it without _STD_TYPES_T occurs, in which
+// case the header guard macro is defined.
+#if !defined(_AIX) || !defined(_STD_TYPES_T)
+#define _LIBCPP_INTTYPES_H
+#endif // _STD_TYPES_T
 
 /*
- * <inttypes.h> -- Standard C header, defined in ISO/IEC 9899:1999
- * (aka "C99"), section 7.8.   This defines format string conversion
- * specifiers suitable for use within arguments to fprintf and fscanf
- * and their ilk.
- */
+    inttypes.h synopsis
 
-#if !defined(_INTTYPES_H_)
-#define _INTTYPES_H_
+This entire header is C99 / C++0X
 
-#  define __PRI_8_LENGTH_MODIFIER__ "hh"
-#  define __PRI_64_LENGTH_MODIFIER__ "ll"
-#  define __SCN_64_LENGTH_MODIFIER__ "ll"
-#  define __PRI_MAX_LENGTH_MODIFIER__ "j"
-#  define __SCN_MAX_LENGTH_MODIFIER__ "j"
+#include <stdint.h>  // <cinttypes> includes <cstdint>
 
-#  define PRId8         __PRI_8_LENGTH_MODIFIER__ "d"
-#  define PRIi8         __PRI_8_LENGTH_MODIFIER__ "i"
-#  define PRIo8         __PRI_8_LENGTH_MODIFIER__ "o"
-#  define PRIu8         __PRI_8_LENGTH_MODIFIER__ "u"
-#  define PRIx8         __PRI_8_LENGTH_MODIFIER__ "x"
-#  define PRIX8         __PRI_8_LENGTH_MODIFIER__ "X"
+Macros:
 
-#  define PRId16        "hd"
-#  define PRIi16        "hi"
-#  define PRIo16        "ho"
-#  define PRIu16        "hu"
-#  define PRIx16        "hx"
-#  define PRIX16        "hX"
+    PRId8
+    PRId16
+    PRId32
+    PRId64
 
-#  define PRId32        "d"
-#  define PRIi32        "i"
-#  define PRIo32        "o"
-#  define PRIu32        "u"
-#  define PRIx32        "x"
-#  define PRIX32        "X"
+    PRIdLEAST8
+    PRIdLEAST16
+    PRIdLEAST32
+    PRIdLEAST64
 
-#  define PRId64        __PRI_64_LENGTH_MODIFIER__ "d"
-#  define PRIi64        __PRI_64_LENGTH_MODIFIER__ "i"
-#  define PRIo64        __PRI_64_LENGTH_MODIFIER__ "o"
-#  define PRIu64        __PRI_64_LENGTH_MODIFIER__ "u"
-#  define PRIx64        __PRI_64_LENGTH_MODIFIER__ "x"
-#  define PRIX64        __PRI_64_LENGTH_MODIFIER__ "X"
+    PRIdFAST8
+    PRIdFAST16
+    PRIdFAST32
+    PRIdFAST64
 
-#  define PRIdLEAST8    PRId8
-#  define PRIiLEAST8    PRIi8
-#  define PRIoLEAST8    PRIo8
-#  define PRIuLEAST8    PRIu8
-#  define PRIxLEAST8    PRIx8
-#  define PRIXLEAST8    PRIX8
+    PRIdMAX
+    PRIdPTR
 
-#  define PRIdLEAST16   PRId16
-#  define PRIiLEAST16   PRIi16
-#  define PRIoLEAST16   PRIo16
-#  define PRIuLEAST16   PRIu16
-#  define PRIxLEAST16   PRIx16
-#  define PRIXLEAST16   PRIX16
+    PRIi8
+    PRIi16
+    PRIi32
+    PRIi64
 
-#  define PRIdLEAST32   PRId32
-#  define PRIiLEAST32   PRIi32
-#  define PRIoLEAST32   PRIo32
-#  define PRIuLEAST32   PRIu32
-#  define PRIxLEAST32   PRIx32
-#  define PRIXLEAST32   PRIX32
+    PRIiLEAST8
+    PRIiLEAST16
+    PRIiLEAST32
+    PRIiLEAST64
 
-#  define PRIdLEAST64   PRId64
-#  define PRIiLEAST64   PRIi64
-#  define PRIoLEAST64   PRIo64
-#  define PRIuLEAST64   PRIu64
-#  define PRIxLEAST64   PRIx64
-#  define PRIXLEAST64   PRIX64
+    PRIiFAST8
+    PRIiFAST16
+    PRIiFAST32
+    PRIiFAST64
 
-#  define PRIdFAST8     PRId8
-#  define PRIiFAST8     PRIi8
-#  define PRIoFAST8     PRIo8
-#  define PRIuFAST8     PRIu8
-#  define PRIxFAST8     PRIx8
-#  define PRIXFAST8     PRIX8
+    PRIiMAX
+    PRIiPTR
 
-#  define PRIdFAST16    PRId16
-#  define PRIiFAST16    PRIi16
-#  define PRIoFAST16    PRIo16
-#  define PRIuFAST16    PRIu16
-#  define PRIxFAST16    PRIx16
-#  define PRIXFAST16    PRIX16
+    PRIo8
+    PRIo16
+    PRIo32
+    PRIo64
 
-#  define PRIdFAST32    PRId32
-#  define PRIiFAST32    PRIi32
-#  define PRIoFAST32    PRIo32
-#  define PRIuFAST32    PRIu32
-#  define PRIxFAST32    PRIx32
-#  define PRIXFAST32    PRIX32
+    PRIoLEAST8
+    PRIoLEAST16
+    PRIoLEAST32
+    PRIoLEAST64
 
-#  define PRIdFAST64    PRId64
-#  define PRIiFAST64    PRIi64
-#  define PRIoFAST64    PRIo64
-#  define PRIuFAST64    PRIu64
-#  define PRIxFAST64    PRIx64
-#  define PRIXFAST64    PRIX64
+    PRIoFAST8
+    PRIoFAST16
+    PRIoFAST32
+    PRIoFAST64
 
-/* int32_t is 'int', but intptr_t is 'long'.  */
-#  define PRIdPTR       "ld"
-#  define PRIiPTR       "li"
-#  define PRIoPTR       "lo"
-#  define PRIuPTR       "lu"
-#  define PRIxPTR       "lx"
-#  define PRIXPTR       "lX"
+    PRIoMAX
+    PRIoPTR
 
-#  define PRIdMAX        __PRI_MAX_LENGTH_MODIFIER__ "d"
-#  define PRIiMAX        __PRI_MAX_LENGTH_MODIFIER__ "i"
-#  define PRIoMAX        __PRI_MAX_LENGTH_MODIFIER__ "o"
-#  define PRIuMAX        __PRI_MAX_LENGTH_MODIFIER__ "u"
-#  define PRIxMAX        __PRI_MAX_LENGTH_MODIFIER__ "x"
-#  define PRIXMAX        __PRI_MAX_LENGTH_MODIFIER__ "X"
+    PRIu8
+    PRIu16
+    PRIu32
+    PRIu64
 
-#  define SCNd8         __PRI_8_LENGTH_MODIFIER__ "d"
-#  define SCNi8         __PRI_8_LENGTH_MODIFIER__ "i"
-#  define SCNo8         __PRI_8_LENGTH_MODIFIER__ "o"
-#  define SCNu8         __PRI_8_LENGTH_MODIFIER__ "u"
-#  define SCNx8         __PRI_8_LENGTH_MODIFIER__ "x"
+    PRIuLEAST8
+    PRIuLEAST16
+    PRIuLEAST32
+    PRIuLEAST64
 
-#  define SCNd16        "hd"
-#  define SCNi16        "hi"
-#  define SCNo16        "ho"
-#  define SCNu16        "hu"
-#  define SCNx16        "hx"
+    PRIuFAST8
+    PRIuFAST16
+    PRIuFAST32
+    PRIuFAST64
 
-#  define SCNd32        "d"
-#  define SCNi32        "i"
-#  define SCNo32        "o"
-#  define SCNu32        "u"
-#  define SCNx32        "x"
+    PRIuMAX
+    PRIuPTR
 
-#  define SCNd64        __SCN_64_LENGTH_MODIFIER__ "d"
-#  define SCNi64        __SCN_64_LENGTH_MODIFIER__ "i"
-#  define SCNo64        __SCN_64_LENGTH_MODIFIER__ "o"
-#  define SCNu64        __SCN_64_LENGTH_MODIFIER__ "u"
-#  define SCNx64        __SCN_64_LENGTH_MODIFIER__ "x"
+    PRIx8
+    PRIx16
+    PRIx32
+    PRIx64
 
-#  define SCNdLEAST8    SCNd8
-#  define SCNiLEAST8    SCNi8
-#  define SCNoLEAST8    SCNo8
-#  define SCNuLEAST8    SCNu8
-#  define SCNxLEAST8    SCNx8
+    PRIxLEAST8
+    PRIxLEAST16
+    PRIxLEAST32
+    PRIxLEAST64
 
-#  define SCNdLEAST16   SCNd16
-#  define SCNiLEAST16   SCNi16
-#  define SCNoLEAST16   SCNo16
-#  define SCNuLEAST16   SCNu16
-#  define SCNxLEAST16   SCNx16
+    PRIxFAST8
+    PRIxFAST16
+    PRIxFAST32
+    PRIxFAST64
 
-#  define SCNdLEAST32   SCNd32
-#  define SCNiLEAST32   SCNi32
-#  define SCNoLEAST32   SCNo32
-#  define SCNuLEAST32   SCNu32
-#  define SCNxLEAST32   SCNx32
+    PRIxMAX
+    PRIxPTR
 
-#  define SCNdLEAST64   SCNd64
-#  define SCNiLEAST64   SCNi64
-#  define SCNoLEAST64   SCNo64
-#  define SCNuLEAST64   SCNu64
-#  define SCNxLEAST64   SCNx64
+    PRIX8
+    PRIX16
+    PRIX32
+    PRIX64
 
-#  define SCNdFAST8     SCNd8
-#  define SCNiFAST8     SCNi8
-#  define SCNoFAST8     SCNo8
-#  define SCNuFAST8     SCNu8
-#  define SCNxFAST8     SCNx8
+    PRIXLEAST8
+    PRIXLEAST16
+    PRIXLEAST32
+    PRIXLEAST64
 
-#  define SCNdFAST16    SCNd16
-#  define SCNiFAST16    SCNi16
-#  define SCNoFAST16    SCNo16
-#  define SCNuFAST16    SCNu16
-#  define SCNxFAST16    SCNx16
+    PRIXFAST8
+    PRIXFAST16
+    PRIXFAST32
+    PRIXFAST64
 
-#  define SCNdFAST32    SCNd32
-#  define SCNiFAST32    SCNi32
-#  define SCNoFAST32    SCNo32
-#  define SCNuFAST32    SCNu32
-#  define SCNxFAST32    SCNx32
+    PRIXMAX
+    PRIXPTR
 
-#  define SCNdFAST64    SCNd64
-#  define SCNiFAST64    SCNi64
-#  define SCNoFAST64    SCNo64
-#  define SCNuFAST64    SCNu64
-#  define SCNxFAST64    SCNx64
+    SCNd8
+    SCNd16
+    SCNd32
+    SCNd64
 
-#  define SCNdPTR       "ld"
-#  define SCNiPTR       "li"
-#  define SCNoPTR       "lo"
-#  define SCNuPTR       "lu"
-#  define SCNxPTR       "lx"
+    SCNdLEAST8
+    SCNdLEAST16
+    SCNdLEAST32
+    SCNdLEAST64
 
-#  define SCNdMAX       __SCN_MAX_LENGTH_MODIFIER__ "d"
-#  define SCNiMAX       __SCN_MAX_LENGTH_MODIFIER__ "i"
-#  define SCNoMAX       __SCN_MAX_LENGTH_MODIFIER__ "o"
-#  define SCNuMAX       __SCN_MAX_LENGTH_MODIFIER__ "u"
-#  define SCNxMAX       __SCN_MAX_LENGTH_MODIFIER__ "x"
+    SCNdFAST8
+    SCNdFAST16
+    SCNdFAST32
+    SCNdFAST64
 
-#include <sys/cdefs.h>
-#include <Availability.h>
+    SCNdMAX
+    SCNdPTR
 
-#include <_types.h>
-#include <sys/_types/_wchar_t.h>
+    SCNi8
+    SCNi16
+    SCNi32
+    SCNi64
+
+    SCNiLEAST8
+    SCNiLEAST16
+    SCNiLEAST32
+    SCNiLEAST64
+
+    SCNiFAST8
+    SCNiFAST16
+    SCNiFAST32
+    SCNiFAST64
+
+    SCNiMAX
+    SCNiPTR
+
+    SCNo8
+    SCNo16
+    SCNo32
+    SCNo64
+
+    SCNoLEAST8
+    SCNoLEAST16
+    SCNoLEAST32
+    SCNoLEAST64
+
+    SCNoFAST8
+    SCNoFAST16
+    SCNoFAST32
+    SCNoFAST64
+
+    SCNoMAX
+    SCNoPTR
+
+    SCNu8
+    SCNu16
+    SCNu32
+    SCNu64
+
+    SCNuLEAST8
+    SCNuLEAST16
+    SCNuLEAST32
+    SCNuLEAST64
+
+    SCNuFAST8
+    SCNuFAST16
+    SCNuFAST32
+    SCNuFAST64
+
+    SCNuMAX
+    SCNuPTR
+
+    SCNx8
+    SCNx16
+    SCNx32
+    SCNx64
+
+    SCNxLEAST8
+    SCNxLEAST16
+    SCNxLEAST32
+    SCNxLEAST64
+
+    SCNxFAST8
+    SCNxFAST16
+    SCNxFAST32
+    SCNxFAST64
+
+    SCNxMAX
+    SCNxPTR
+
+Types:
+
+    imaxdiv_t
+
+intmax_t  imaxabs(intmax_t j);
+imaxdiv_t imaxdiv(intmax_t numer, intmax_t denom);
+intmax_t  strtoimax(const char* restrict nptr, char** restrict endptr, int base);
+uintmax_t strtoumax(const char* restrict nptr, char** restrict endptr, int base);
+intmax_t  wcstoimax(const wchar_t* restrict nptr, wchar_t** restrict endptr, int base);
+uintmax_t wcstoumax(const wchar_t* restrict nptr, wchar_t** restrict endptr, int base);
+
+*/
+
+#include <__config>
+
+#if !defined(_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER)
+#  pragma GCC system_header
+#endif
+
+/* C99 stdlib (e.g. glibc < 2.18) does not provide format macros needed
+   for C++11 unless __STDC_FORMAT_MACROS is defined
+*/
+#if defined(__cplusplus) && !defined(__STDC_FORMAT_MACROS)
+#   define __STDC_FORMAT_MACROS
+#endif
+
+#if __has_include_next(<inttypes.h>)
+#  include_next <inttypes.h>
+#endif
+
+#ifdef __cplusplus
 
 #include <stdint.h>
 
-__BEGIN_DECLS
+#undef imaxabs
+#undef imaxdiv
 
-/* 7.8.2.1 */
-__OSX_AVAILABLE_STARTING(__MAC_10_4, __IPHONE_2_0)
-extern intmax_t
-imaxabs(intmax_t j);
+#endif // __cplusplus
 
-/* 7.8.2.2 */
-typedef struct {
-	intmax_t quot;
-	intmax_t rem;
-} imaxdiv_t;
-
-__OSX_AVAILABLE_STARTING(__MAC_10_4, __IPHONE_2_0)
-extern imaxdiv_t
-imaxdiv(intmax_t __numer, intmax_t __denom);
-
-/* 7.8.2.3 */
-__OSX_AVAILABLE_STARTING(__MAC_10_4, __IPHONE_2_0)
-extern intmax_t
-strtoimax(const char * __restrict __nptr,
-	  char ** __restrict __endptr,
-	  int __base);
-
-__OSX_AVAILABLE_STARTING(__MAC_10_4, __IPHONE_2_0)
-extern uintmax_t
-strtoumax(const char * __restrict __nptr,
-	  char ** __restrict __endptr,
-	  int __base);
-
-/* 7.8.2.4 */
-__OSX_AVAILABLE_STARTING(__MAC_10_4, __IPHONE_2_0)
-extern intmax_t
-wcstoimax(const wchar_t * __restrict __nptr,
-	  wchar_t ** __restrict __endptr,
-	  int __base);
-
-__OSX_AVAILABLE_STARTING(__MAC_10_4, __IPHONE_2_0)
-extern uintmax_t
-wcstoumax(const wchar_t * __restrict __nptr,
-	  wchar_t ** __restrict __endptr,
-	  int __base);
-
-/* Poison the following routines if -fshort-wchar is set */
-#if !defined(__cplusplus) && defined(__WCHAR_MAX__) && __WCHAR_MAX__ <= 0xffffU
-#pragma GCC poison wcstoimax wcstoumax
-#endif
-
-__END_DECLS
-
-#ifdef _USE_EXTENDED_LOCALES_
-#include <xlocale/_inttypes.h>
-#endif /* _USE_EXTENDED_LOCALES_ */
-
-/*
-   No need to #undef the __*_{8,64}_LENGTH_MODIFIER__ macros;
-   in fact, you can't #undef them, because later uses of any of
-   their dependents will *not* then do the intended substitution.
-   Expansion of a #define like this one:
-
-        #define x IDENT y
-
-   uses the cpp value of IDENT at the location where x is *expanded*,
-   not where it is #defined.
-*/
-
-#endif /* !_INTTYPES_H_ */
+#endif // _LIBCPP_INTTYPES_H

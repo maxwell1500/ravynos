@@ -6,11 +6,14 @@ SHLIB_MAJOR=    1
 
 .PATH:          ${MAKEOBJDIR}
 
+# src/registry.c (the optional xkbregistry API) is the only source that needs
+# libxml2, and libxml2 is not part of the SDK staged on this host. Upstream
+# builds it only when libxml2 is present; WindowServer uses no rxkb_* symbols,
+# so the optional feature is left out rather than pulling in a library.
 SRCS=   src/keysym.c \
         src/context.c \
         src/utils.c \
         src/state.c \
-        src/registry.c \
         src/keymap.c \
         src/compose/paths.c \
         src/compose/table.c \
@@ -66,11 +69,15 @@ CFLAGS+=        -I${.CURDIR}/include/drm \
                 -Wno-error=macro-redefined \
                 -Wno-error=unused-but-set-variable \
                 -Wno-error=unused-variable \
-                -Wno-error=\#warnings
+                -Wno-error=\#warnings \
+                -Wno-nullability-completeness
 CFLAGS.parser.c+= -I${MAKEOBJDIR}/src/xkbcomp
 CFLAGS.keywords.c+= -I${MAKEOBJDIR}/src/xkbcomp
 CFLAGS.scanner.c+= -I${MAKEOBJDIR}/src/xkbcomp
+LDFLAGS+=	-shared
 WARNS?=	2
+
+BISON?=	bison
 
 config.h: .PHONY
 	mkdir -p ${MAKEOBJDIR}/src/compose
@@ -79,8 +86,8 @@ config.h: .PHONY
 .SUFFIXES: .y
 .y.c:
 	mkdir -p ${MAKEOBJDIR}/src/xkbcomp
-	bison -o${MAKEOBJDIR}/${.TARGET} -p_xkbcommon_ \
-		-H${MAKEOBJDIR}/${.TARGET:R}.h ${.IMPSRC}
+	${BISON} -o${MAKEOBJDIR}/${.TARGET} -p_xkbcommon_ \
+		--defines=${MAKEOBJDIR}/${.TARGET:R}.h ${.IMPSRC}
 
 src/xkbcomp/parser.c: src/xkbcomp/parser.y
 

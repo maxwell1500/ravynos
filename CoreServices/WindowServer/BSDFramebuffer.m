@@ -25,6 +25,15 @@
 #import <sys/ipc.h>
 #import <sys/shm.h>
 #import "rpc.h" // for mode definitions
+/* FreeBSD mmap hint flags the ravynOS sys/mman.h does not define. Both are
+ * hints only, so 0 is the correct no-op value. */
+#ifndef MAP_NOCORE
+#define MAP_NOCORE 0
+#endif
+#ifndef MAP_NOSYNC
+#define MAP_NOSYNC 0
+#endif
+
 
 @implementation BSDFramebuffer
 

@@ -2,4 +2,6 @@
 #include "linux/uinput.h"
 #elif __FreeBSD__
 #include "freebsd/uinput.h"
+#else
+#include "freebsd/uinput.h"
 #endif

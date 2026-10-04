@@ -169,6 +169,7 @@ typedef struct thread_extended_info * thread_extended_info_t;
 
 #define THREAD_DEBUG_INFO_INTERNAL 6    /* for kernel development internal info */
 
+#if PRIVATE
 struct thread_debug_info_internal {
 	uint64_t page_creation_count;
 };
@@ -179,6 +180,7 @@ typedef struct thread_debug_info_internal  thread_debug_info_internal_data_t;
 #define THREAD_DEBUG_INFO_INTERNAL_COUNT  ((mach_msg_type_number_t)             \
 	                (sizeof (thread_debug_info_internal_data_t) / sizeof (natural_t)))
 
+#endif /* PRIVATE */
 
 #define IO_NUM_PRIORITIES       4
 
@@ -209,6 +211,12 @@ struct io_stat_info {
 
 typedef struct io_stat_info *io_stat_info_t;
 
+#if KERNEL_PRIVATE
+__BEGIN_DECLS
+void thread_group_join_io_storage(void);
+void thread_group_join_perf_controller(void);
+__END_DECLS
+#endif
 
 /*
  * Obsolete interfaces.

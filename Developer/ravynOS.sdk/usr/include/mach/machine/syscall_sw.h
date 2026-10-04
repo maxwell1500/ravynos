@@ -26,6 +26,7 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
+#ifdef	PRIVATE
 
 #ifndef _MACH_MACHINE_SYSCALL_SW_H_
 #define _MACH_MACHINE_SYSCALL_SW_H_
@@ -40,3 +41,4 @@
 
 #endif	/* _MACH_MACHINE_SYSCALL_SW_H_ */
 
+#endif	/* PRIVATE */

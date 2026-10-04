@@ -2,7 +2,14 @@ THISDIR:= ${.CURDIR}
 
 all: clean build
 clean:
+# BUILDROOT is the staging rootfs. It is supplied by the release build wrapper
+# (tools/build.sh / Makefile.ravynOS) and is NOT defined by the top-level
+# Makefile. Without this guard an unset BUILDROOT turns the line below into
+# `rm -rf /System/Library/CoreServices`, i.e. it deletes the host's own
+# CoreServices whenever this directory is visited by a bare `make`.
+.if defined(BUILDROOT) && !empty(BUILDROOT)
 	rm -rf ${BUILDROOT}/System/Library/CoreServices
+.endif
 	rm -rf /usr/obj/${TOPDIR}/${MACHINE}.${MACHINE_CPUARCH}/CoreServices/Dock
 	rm -rf /usr/obj/${TOPDIR}/${MACHINE}.${MACHINE_CPUARCH}/CoreServices/WindowServer
 

@@ -57,6 +57,43 @@ extern  kern_return_t   semaphore_signal_all(semaphore_t semaphore);
 
 extern  kern_return_t   semaphore_wait(semaphore_t semaphore);
 
+#ifdef  KERNEL
+
+#ifdef  __LP64__
+
+#ifdef  KERNEL_PRIVATE
+
+extern  kern_return_t   semaphore_timedwait(semaphore_t semaphore,
+    mach_timespec_t wait_time);
+
+#endif  /* KERNEL_PRIVATE */
+
+#else   /* __LP64__ */
+
+extern  kern_return_t   semaphore_timedwait(semaphore_t semaphore,
+    mach_timespec_t wait_time);
+
+#endif  /* __LP64__ */
+
+extern  kern_return_t   semaphore_wait_deadline(semaphore_t semaphore,
+    uint64_t deadline);
+extern  kern_return_t   semaphore_wait_noblock(semaphore_t semaphore);
+
+#ifdef  XNU_KERNEL_PRIVATE
+
+extern  kern_return_t   semaphore_wait_signal(semaphore_t wait_semaphore,
+    semaphore_t signal_semaphore);
+
+extern  kern_return_t   semaphore_timedwait_signal(semaphore_t wait_semaphore,
+    semaphore_t signal_semaphore,
+    mach_timespec_t wait_time);
+
+extern  kern_return_t   semaphore_signal_thread(semaphore_t semaphore,
+    thread_t thread);
+
+#endif  /* XNU_KERNEL_PRIVATE */
+
+#else   /* KERNEL */
 
 extern  kern_return_t   semaphore_timedwait(semaphore_t semaphore,
     mach_timespec_t wait_time);
@@ -71,9 +108,11 @@ extern  kern_return_t   semaphore_wait_signal(semaphore_t wait_semaphore,
 extern  kern_return_t   semaphore_signal_thread(semaphore_t semaphore,
     thread_t thread);
 
+#endif  /* KERNEL */
 
 __END_DECLS
 
+#ifdef  PRIVATE
 
 #define SEMAPHORE_OPTION_NONE           0x00000000
 
@@ -94,6 +133,8 @@ __END_DECLS
 
 #define SEMAPHORE_USE_SAVED_RESULT      0x01000000      /* internal use only */
 #define SEMAPHORE_SIGNAL_RELEASE        0x02000000      /* internal use only */
+#define SEMAPHORE_THREAD_HANDOFF        0x04000000
 
+#endif  /* PRIVATE */
 
 #endif  /* _MACH_SEMAPHORE_H_ */

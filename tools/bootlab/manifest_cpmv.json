@@ -327,6 +327,16 @@
       "path": "bin/mv",
       "file": "work/mv_dyn",
       "comment": "dynamic mv (BSD/bin/mv: mv.c) linked against libSystem.B.dylib, rebuilt Libsystem"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app",
+      "file": "work/WindowServer.app.tar.gz",
+      "comment": "WindowServer app bundle built by CoreServices/WindowServer/Makefile; Mach-O 64-bit executable x86_64; staged as tar.gz archive"
+    },
+    {
+      "path": "System/Library/LaunchDaemons/com.ravynos.WindowServer.json",
+      "file": "work/com.ravynos.WindowServer.json",
+      "comment": "WindowServer launchd job"
     }
   ]
 }

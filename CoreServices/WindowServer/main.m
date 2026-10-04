@@ -24,11 +24,8 @@
 #import "common.h"
 #import "WindowServer.h"
 #import <sys/event.h>
-#import <termios.h>
 #import <servers/bootstrap.h>
 #import "message.h"
-
-#define FINISH(x) ret=(x); goto __finish;
 
 extern int optopt;
 static jmp_buf jb;
@@ -70,8 +67,6 @@ int main(int argc, const char *argv[]) {
     signal(SIGTSTP, SIG_IGN);
     signal(SIGUSR1, SIG_IGN);
     signal(SIGUSR2, SIG_IGN);
-    signal(SIGTHR, SIG_IGN);
-    signal(SIGLIBRT, SIG_IGN);
 
     /* Drop our controlling terminal - we're gonna switch */
     /* This is the recommended but sucky way. Using TIOCNOTTY isn't working */
@@ -83,69 +78,21 @@ int main(int argc, const char *argv[]) {
         default: NSLog(@"parent: waiting"); waitpid(pid, &status, 0); exit(status); // parent
     }
 
+    pthread_t machSvcThread;
+    pthread_t kqThread;
+    bool svcThreadLive = false, kqThreadLive = false;
+
     setsid(); // Start a new session
 
-    int ret = 0;
-    int vt = 0, origvt = 0;
-    int fd = open("/dev/ttyv0", O_RDWR|O_CLOEXEC);
-    if(fd < 0) {
-        NSLog(@"Cannot open console: %s", strerror(errno));
-        FINISH(1);
-    }
-
-    ioctl(fd, VT_GETACTIVE, &origvt);
-
-    if(ioctl(fd, VT_OPENQRY, &vt) < 0) {
-        NSLog(@"Cannot allocate terminal: %s", strerror(errno));
-        FINISH(1);
-    }
-
-    char filename[64];
-    sprintf(filename, "/dev/ttyv%d", vt - 1);
-    NSLog(@"Allocated vt %d (%s)", vt, filename);
-
-    int wsfd = open(filename, O_RDWR|O_CLOEXEC);
-    if(wsfd < 0) {
-        NSLog(@"Cannot open terminal: %s", strerror(errno));
-        FINISH(1);
-    }
-
-    vtmode_t mode = {
-        .mode = VT_PROCESS,
-        .frsig = SIGUSR1,
-        .acqsig = SIGUSR1,
-        .relsig = SIGUSR2
-    };
-
+    /* FreeBSD allocated a private vt(4) here and switched the console onto it.
+     * Darwin has neither vt(4) nor syscons: there is no VT_GETACTIVE /
+     * VT_OPENQRY / VT_SETMODE / CONS_MOUSECTL, no vtmode_t and no tcsetsid.
+     * On ravynOS the display is reached directly through /dev/console, which
+     * WindowServer's BSDFramebuffer opens for itself, so there is no console
+     * handover for us to perform.
+     */
     if(setjmp(jb) != 0)
         goto __finish; // sighandler must have caught something - get out
-    //signal(SIGSEGV, crashHandler);
-
-    if(ioctl(wsfd, VT_ACTIVATE, vt) < 0) {
-        NSLog(@"Cannot activate terminal: %s", strerror(errno));
-        FINISH(1);
-    }
-
-    // Associate the new VT as our ctty
-    if(tcsetsid(wsfd, getpid())  < 0)
-        NSLog(@"tcsetsid: %s", strerror(errno));
-
-    if(ioctl(wsfd, VT_SETMODE, &mode) < 0)
-        NSLog(@"Cannot lock VT switching: %s", strerror(errno));
-
-    // Turn off tty input echo
-    struct termios old, new;
-    tcgetattr(wsfd, &old);
-    new = old;
-    new.c_lflag &= ~(ICANON | ECHO);
-    tcsetattr(wsfd,TCSANOW, &new);
-
-    // Hide the moused cursor so we don't get flickers
-    struct mouse_info mouse;
-    mouse.operation = MOUSE_HIDE;
-
-    if(ioctl(0, CONS_MOUSECTL, &mouse) == -1)
-	NSLog(@"Cannot hide console mouse cursor: %s", strerror(errno));
 
     ws = [WindowServer new];
     if(ws == nil)
@@ -174,34 +121,17 @@ int main(int argc, const char *argv[]) {
     }
     [ws setLogLevel:logLevel];
 
-    pthread_t machSvcThread;
-    pthread_create(&machSvcThread, NULL, machSvcLoop, (__bridge void *)ws);
-
-    pthread_t kqThread;
-    pthread_create(&kqThread, NULL, kqSvcLoop, (__bridge void *)ws);
-
+    svcThreadLive = pthread_create(&machSvcThread, NULL, machSvcLoop, (__bridge void *)ws) == 0;
+    kqThreadLive = pthread_create(&kqThread, NULL, kqSvcLoop, (__bridge void *)ws) == 0;
     [ws setShell:curShell];
     [ws run];
     ws = nil;
 
 __finish:
-    // Restore old terminal settings
-    tcsetattr(wsfd, TCSANOW, &old);
-
-    // Go back to the original vt now!
-    if(ioctl(fd, VT_ACTIVATE, origvt) < 0)
-        NSLog(@"Cannot restore original VT %d: %s", origvt, strerror(errno));
-    else
-        NSLog(@"Reactivated VT %d", origvt);
-
-    memset(&mode, 0, sizeof(mode));
-    if(ioctl(wsfd, VT_SETMODE, &mode) < 0)
-        NSLog(@"Cannot release VT switching: %s", strerror(errno));
-
-    close(fd);
-    close(wsfd);
-    pthread_cancel(machSvcThread);
-    pthread_cancel(kqThread);
+    if(svcThreadLive)
+        pthread_cancel(machSvcThread);
+    if(kqThreadLive)
+        pthread_cancel(kqThread);
     exit(0);
 }
 

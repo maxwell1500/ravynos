@@ -110,6 +110,64 @@
 #include <mach/kmod.h>
 #include <mach/dyld_kernel.h>
 
+#ifdef  KERNEL
+
+#include <mach/vm_types_unsafe.h>
+#include <mach/vm_param.h>
+
+/*
+ * If we are in the kernel, then pick up the kernel definitions for
+ * the basic mach types.
+ */
+typedef struct task                     *task_t, *task_name_t, *task_inspect_t, *task_read_t, *task_suspension_token_t, *task_policy_set_t, *task_policy_get_t;
+typedef struct thread                   *thread_t, *thread_act_t, *thread_inspect_t, *thread_read_t;
+typedef struct ipc_space                *ipc_space_t, *ipc_space_read_t, *ipc_space_inspect_t;
+typedef struct coalition                *coalition_t;
+typedef struct host                     *host_t;
+typedef struct host                     *host_priv_t;
+typedef struct host                     *host_security_t;
+typedef struct processor                *processor_t;
+typedef struct processor_set            *processor_set_t;
+typedef struct processor_set            *processor_set_control_t;
+typedef struct semaphore                *semaphore_t;
+typedef struct ledger                   *ledger_t;
+typedef struct alarm                    *alarm_t;
+typedef struct clock                    *clock_serv_t;
+typedef struct clock                    *clock_ctrl_t;
+typedef struct arcade_register          *arcade_register_t;
+typedef struct ipc_eventlink            *ipc_eventlink_t;
+typedef struct ipc_port                 *eventlink_port_pair_t[2];
+typedef struct task_id_token            *task_id_token_t;
+typedef struct kcdata_object            *kcdata_object_t;
+
+/*
+ * OBSOLETE: lock_set interfaces are obsolete.
+ */
+typedef struct lock_set                 *lock_set_t;
+struct lock_set;
+
+#ifndef MACH_KERNEL_PRIVATE
+
+__BEGIN_DECLS
+
+struct task;
+struct thread;
+struct host;
+struct processor;
+struct processor_set;
+struct semaphore;
+struct ledger;
+struct alarm;
+struct clock;
+struct arcade_register;
+struct ipc_eventlink;
+struct ipc_port;
+
+__END_DECLS
+
+#endif  /* MACH_KERNEL_PRIVATE */
+
+#else   /* KERNEL */
 
 /*
  * If we are not in the kernel, then these will all be represented by
@@ -117,12 +175,17 @@
  */
 typedef mach_port_t             task_t;
 typedef mach_port_t             task_name_t;
+typedef mach_port_t             task_policy_set_t;
+typedef mach_port_t             task_policy_get_t;
 typedef mach_port_t             task_inspect_t;
+typedef mach_port_t             task_read_t;
 typedef mach_port_t             task_suspension_token_t;
 typedef mach_port_t             thread_t;
 typedef mach_port_t             thread_act_t;
 typedef mach_port_t             thread_inspect_t;
+typedef mach_port_t             thread_read_t;
 typedef mach_port_t             ipc_space_t;
+typedef mach_port_t             ipc_space_read_t;
 typedef mach_port_t             ipc_space_inspect_t;
 typedef mach_port_t             coalition_t;
 typedef mach_port_t             host_t;
@@ -138,8 +201,12 @@ typedef mach_port_t             alarm_t;
 typedef mach_port_t             clock_serv_t;
 typedef mach_port_t             clock_ctrl_t;
 typedef mach_port_t             arcade_register_t;
-typedef mach_port_t             suid_cred_t;
+typedef mach_port_t             ipc_eventlink_t;
+typedef mach_port_t             eventlink_port_pair_t[2];
+typedef mach_port_t             task_id_token_t;
+typedef mach_port_t             kcdata_object_t;
 
+#endif  /* KERNEL */
 
 /*
  * These aren't really unique types.  They are just called
@@ -157,90 +224,11 @@ typedef mach_port_t             mem_entry_name_port_t;
 typedef mach_port_t             exception_handler_t;
 typedef exception_handler_t     *exception_handler_array_t;
 typedef mach_port_t             vm_task_entry_t;
-typedef mach_port_t             io_master_t;
-/* SOURCED from Kernel/xnu/osfmk/mach/mach_types.h:227, verbatim. ADDITIVE:
- * io_master_t above is left exactly as it was.
- *
- * xnu-11215 renamed io_master_t to io_main_t along with the Mach trap
- * host_get_io_master -> host_get_io_main. It is a rename, not a new type:
- * both are `typedef mach_port_t`, and this is the generation our own kernel
- * is built from (see tools/bootlab/LIBSYSTEM-KERNEL-BUILD-NOTES.md sec. 22).
- * libsyscall/mach/host.c:113-124 needs the newer spelling:
- *     /* compatibility symbol for IOKit_sim *\/
- *     host_get_io_master(host_t host, io_main_t *io_main)
- *         { return host_get_io_main(host, io_main); }
- */
 typedef mach_port_t             io_main_t;
-
-/* SOURCED from Kernel/xnu/osfmk/mach/mach_types.h:186, verbatim. ADDITIVE:
- * nothing above is replaced or removed. Same class as the io_main_t addition
- * above -- a typedef of an existing type, not a layout.
- *
- * thread_act_internal.h (mig-generated, userspace) uses thread_read_t, and the
- * SDK's Catalina mach_types.h has no such typedef. The userspace spelling at
- * :186 is the one sourced here; the KERNEL spelling at :123 is a different
- * declaration of the same name and does not apply to a userspace build.
- * See tools/bootlab/LIBSYSTEM-KERNEL-BUILD-NOTES.md sec. 33.
- */
-typedef mach_port_t             thread_read_t;
-
-/* SOURCED from Kernel/xnu/osfmk/mach/mach_types.h, verbatim, ADDITIVE. The
- * whole mach_port_t family in that header was checked member by member; these
- * two were the only ones the SDK lacked:
- *
- *   :181  typedef mach_port_t             task_read_t;      <- SDK: absent
- *   :188  typedef mach_port_t             ipc_space_read_t; <- SDK: absent
- *
- * The other eight (task_inspect_t, task_suspension_token_t, thread_inspect_t,
- * thread_read_t, ipc_space_t, ipc_space_inspect_t, coalition_t, io_main_t) are
- * all already present and were left alone. That check is the point: this is a
- * family, and sourcing it member by member by iterating on compiler errors is
- * what made the earlier rounds report "15 symbols" when the real answer needed
- * a per-header enumeration.
- *
- * Both are typedefs of mach_port_t. No struct, no layout, nothing that can
- * mis-size. See tools/bootlab/LIBSYSTEM-KERNEL-BUILD-NOTES.md sec. 33.
- */
-typedef mach_port_t             task_read_t;
-typedef mach_port_t             ipc_space_read_t;
-
-
-/* SOURCED from Kernel/xnu/osfmk/mach/mach_types.h:231, verbatim. ADDITIVE.
- *
- * thread_act_internal.h (mig-generated, userspace) needs
- * exception_handler_info_t; no SDK mach_types.h declares it.
- *
- * Only this one typedef is missing. The type it names is NOT: the SDK's own
- * mach_debug/ipc_info.h:116-119 already declares the identical struct
- *
- *     typedef struct ipc_info_port {
- *             natural_t iip_port_object;
- *             natural_t iip_receiver_object;
- *     } ipc_info_port_t;
- *
- * and line 121 already declares exception_handler_info_array_t. An earlier
- * attempt of mine re-copied all three and died with
- * "redefinition of 'ipc_info_port'" -- the SDK had them the whole time. Copying
- * a struct that already exists verbatim is a redefinition, not a fix. Only the
- * alias was ever missing.
- *
- * MIG encodes both types as POINTER descriptors (thread_act_internal.h:473 and
- * :1358), so userspace passes an exception_handler_info_t* and the kernel
- * fills it; the body is never marshalled here.
- * See tools/bootlab/LIBSYSTEM-KERNEL-BUILD-NOTES.md sec. 33.
- */
-/* ipc_info_port_t is declared by the SDK's own mach_debug/ipc_info.h:116-119,
- * which this file does not include. Reference the real definition rather than
- * copy it -- a verbatim copy of a struct that already exists is a
- * redefinition, not a fix. The include is self-contained: ipc_info.h needs
- * only natural_t and mach_port_name_t, both of which are already in scope
- * here.
- */
-#include <mach_debug/ipc_info.h>
-typedef ipc_info_port_t         exception_handler_info_t;
-
-
 typedef mach_port_t             UNDServerRef;
+typedef mach_port_t             mach_eventlink_t;
+
+typedef ipc_info_port_t         exception_handler_info_t;
 
 /*
  * Mig doesn't translate the components of an array.
@@ -249,6 +237,15 @@ typedef mach_port_t             UNDServerRef;
  * are not completely accurate at the moment for other kernel
  * components.
  */
+#if XNU_KERNEL_PRIVATE
+typedef mach_port_array_t        task_array_t;
+typedef mach_port_array_t        thread_array_t;
+typedef mach_port_array_t        processor_set_array_t;
+typedef mach_port_array_t        processor_set_name_array_t;
+typedef mach_port_array_t        processor_array_t;
+typedef mach_port_array_t        thread_act_array_t;
+typedef mach_port_array_t        ledger_array_t;
+#else
 typedef task_t                  *task_array_t;
 typedef thread_t                *thread_array_t;
 typedef processor_set_t         *processor_set_array_t;
@@ -256,6 +253,7 @@ typedef processor_set_t         *processor_set_name_array_t;
 typedef processor_t             *processor_array_t;
 typedef thread_act_t            *thread_act_array_t;
 typedef ledger_t                *ledger_array_t;
+#endif
 
 /*
  * However the real mach_types got declared, we also have to declare
@@ -288,18 +286,55 @@ typedef clock_ctrl_t            clock_ctrl_port_t;
 typedef exception_handler_t     exception_port_t;
 typedef exception_handler_array_t exception_port_arrary_t;
 typedef char vfs_path_t[4096];
-typedef char nspace_path_t[1024]; /* 1024 == PATH_MAX */
-typedef char suid_cred_path_t[1024];
-typedef uint32_t suid_cred_uid_t;
+/*
+ * 8K, c.f. FSGETPATH_MAXBUFLEN in bsd/vfs/vfs_syscalls.c.
+ * These types should NEVER be allocated on the stack.
+ */
+typedef char nspace_path_t[8192];
+typedef char nspace_name_t[8192];
 
+#ifdef KERNEL
+#define TASK_NULL               ((task_t) NULL)
+#define TASK_NAME_NULL          ((task_name_t) NULL)
+#define TASK_INSPECT_NULL       ((task_inspect_t) NULL)
+#define TASK_READ_NULL          ((task_read_t) NULL)
+#define THREAD_NULL             ((thread_t) NULL)
+#define THREAD_INSPECT_NULL     ((thread_inspect_t)NULL)
+#define THREAD_READ_NULL        ((thread_read_t)NULL)
+#define TID_NULL                ((uint64_t) NULL)
+#define THR_ACT_NULL            ((thread_act_t) NULL)
+#define IPC_SPACE_NULL          ((ipc_space_t) NULL)
+#define IPC_SPACE_READ_NULL     ((ipc_space_read_t) NULL)
+#define IPC_SPACE_INSPECT_NULL  ((ipc_space_inspect_t) NULL)
+#define COALITION_NULL          ((coalition_t) NULL)
+#define HOST_NULL               ((host_t) NULL)
+#define HOST_PRIV_NULL          ((host_priv_t)NULL)
+#define HOST_SECURITY_NULL      ((host_security_t)NULL)
+#define PROCESSOR_SET_NULL      ((processor_set_t) NULL)
+#define PROCESSOR_NULL          ((processor_t) NULL)
+#define SEMAPHORE_NULL          ((semaphore_t) NULL)
+#define LOCK_SET_NULL           ((lock_set_t) NULL)
+#define LEDGER_NULL             ((ledger_t) NULL)
+#define ALARM_NULL              ((alarm_t) NULL)
+#define CLOCK_NULL              ((clock_t) NULL)
+#define UND_SERVER_NULL         ((UNDServerRef) NULL)
+#define ARCADE_REG_NULL         ((arcade_register_t) NULL)
+#define MACH_EVENTLINK_NULL     ((mach_eventlink_t) 0)
+#define IPC_EVENTLINK_NULL      ((ipc_eventlink_t) NULL)
+#define TASK_ID_TOKEN_NULL      ((task_id_token_t) NULL)
+#define KCDATA_OBJECT_NULL      ((kcdata_object_t) NULL)
+#else
 #define TASK_NULL               ((task_t) 0)
 #define TASK_NAME_NULL          ((task_name_t) 0)
-#define TASK_INSPECT_NULL               ((task_inspect_t) 0)
+#define TASK_INSPECT_NULL       ((task_inspect_t) 0)
+#define TASK_READ_NULL          ((task_read_t) 0)
 #define THREAD_NULL             ((thread_t) 0)
 #define THREAD_INSPECT_NULL     ((thread_inspect_t) 0)
+#define THREAD_READ_NULL        ((thread_read_t) 0)
 #define TID_NULL                ((uint64_t) 0)
 #define THR_ACT_NULL            ((thread_act_t) 0)
 #define IPC_SPACE_NULL          ((ipc_space_t) 0)
+#define IPC_SPACE_READ_NULL     ((ipc_space_read_t) 0)
 #define IPC_SPACE_INSPECT_NULL  ((ipc_space_inspect_t) 0)
 #define COALITION_NULL          ((coalition_t) 0)
 #define HOST_NULL               ((host_t) 0)
@@ -314,10 +349,34 @@ typedef uint32_t suid_cred_uid_t;
 #define CLOCK_NULL              ((clock_t) 0)
 #define UND_SERVER_NULL         ((UNDServerRef) 0)
 #define ARCADE_REG_NULL         ((arcade_register_t) 0)
-#define SUID_CRED_NULL         ((suid_cred_t) 0)
+#define MACH_EVENTLINK_NULL     ((mach_eventlink_t) 0)
+#define IPC_EVENTLINK_NULL      ((ipc_eventlink_t) 0)
+#define TASK_ID_TOKEN_NULL      ((task_id_token_t) 0)
+#define KCDATA_OBJECT_NULL      ((kcdata_object_t) 0)
+#endif
+
+/* capability strictly _DECREASING_.
+ * not ordered the other way around because we want TASK_FLAVOR_CONTROL
+ * to be closest to the itk_lock. see task.h.
+ */
+typedef unsigned int            mach_task_flavor_t;
+#define TASK_FLAVOR_CONTROL     0    /* a task_t */
+#define TASK_FLAVOR_READ        1    /* a task_read_t */
+#define TASK_FLAVOR_INSPECT     2    /* a task_inspect_t */
+#define TASK_FLAVOR_NAME        3    /* a task_name_t */
+
+#define TASK_FLAVOR_MAX         TASK_FLAVOR_NAME
+
+/* capability strictly _DECREASING_ */
+typedef unsigned int            mach_thread_flavor_t;
+#define THREAD_FLAVOR_CONTROL   0    /* a thread_t */
+#define THREAD_FLAVOR_READ      1    /* a thread_read_t */
+#define THREAD_FLAVOR_INSPECT   2    /* a thread_inspect_t */
+
+#define THREAD_FLAVOR_MAX       THREAD_FLAVOR_INSPECT
 
 /* DEPRECATED */
-typedef natural_t       ledger_item_t;
+typedef natural_t               ledger_item_t;
 #define LEDGER_ITEM_INFINITY    ((ledger_item_t) (~0))
 
 typedef int64_t                 ledger_amount_t;
@@ -332,85 +391,5 @@ typedef char                    *labelstr_t;
  *	before mach/{std,mach}_types.{defs,h} were set up.
  */
 #include <mach/std_types.h>
-
-
-/* SOURCED verbatim from Kernel/xnu/osfmk/mach/mach_types.h, ADDITIVE. These
- * are the remaining mach_port_t typedefs of that header with no SDK
- * counterpart, enumerated member by member rather than found one error at a
- * time:
- *   :178 task_policy_set_t      :204 ipc_eventlink_t
- *   :179 task_policy_get_t      :206 task_id_token_t
- *                              :207 kcdata_object_t
- *                              :229 mach_eventlink_t
- * (the :205 `eventlink_port_pair_t[2]` line is an array declarator, not a
- * typedef, and is not needed by libsyscall)
- * See tools/bootlab/LIBSYSTEM-KERNEL-BUILD-NOTES.md sec. 33.
- */
-typedef mach_port_t             task_policy_set_t;
-typedef mach_port_t             task_policy_get_t;
-typedef mach_port_t             ipc_eventlink_t;
-typedef mach_port_t             task_id_token_t;
-typedef mach_port_t             kcdata_object_t;
-typedef mach_port_t             mach_eventlink_t;
-
-
-/* SOURCED from Kernel/xnu/osfmk/mach/mach_types.h:205, verbatim. ADDITIVE.
- *
- * typedef mach_port_t eventlink_port_pair_t[2];
- *
- * I previously recorded this line as "an array declarator, not a typedef, and
- * not needed by libsyscall" and left it out. That was WRONG, and it is worth
- * recording because the error is the same one sec. 17 warns about: my census
- * matched typedefs with a regex that could not see an array typedef, so it
- * reported a clean family that was not clean. The consumer is the
- * mig-generated mach_eventlink.h:84 and mach_eventlinkUser.c:185:
- *
- *   error: unknown type name 'eventlink_port_pair_t'
- *
- * A method that cannot see a form of the declaration cannot certify that the
- * form is absent. Grep the bare NAME, never the declaration shape.
- */
-typedef mach_port_t             eventlink_port_pair_t[2];
-
-
-/* SOURCED from Kernel/xnu/osfmk/mach/mach_types.h:362, verbatim. ADDITIVE.
- *
- *   typedef unsigned int mach_task_flavor_t;
- *
- * Needed by the mig-generated processor_set.h:216/:364 and
- * processor_setUser.c:1765/:1777. isysroot-cc's overlay_for already records
- * this exact error at its line 204, as the reason it strips mach/ from the
- * libsystem_kernel mig_hdr overlay -- so it is a known, named gap rather than
- * a new one. The stripping hides the generated processor_set.h; the raw
- * -I.../mig_hdr/include/mach on CFLAGS is not stripped, so the type is needed
- * either way.
- */
-typedef unsigned int            mach_task_flavor_t;
-
-/* SOURCED from Apple's own mach/task_info.h, verbatim. ADDITIVE.
- *
- *   typedef uint32_t task_corpse_forking_behavior_t;
- *
- * Two independent copies agree byte for byte: the host Command Line Tools SDK
- * at .../MacOSX.sdk/usr/include/mach/task_info.h:551, and this SDK's own
- * System/Library/Frameworks/Kernel.framework/Versions/A/Headers/mach/
- * task_info.h:531. It agrees with the .defs that drives the code, which is
- * mach_types.defs:349 `type task_corpse_forking_behavior_t = uint32_t;`.
- *
- * It is NOT in Kernel/xnu/osfmk/mach/mach_types.h, so this one cannot be
- * sourced from the in-tree generation -- there is nothing there to copy. It is
- * a real Apple header line in both SDKs, which is the same standard the
- * asm_help.h restoration met (LIBSYSTEM-KERNEL-BUILD-NOTES.md sec. 8).
- *
- * Needed by the mig-generated task.h:905/:1757 and taskUser.c:10056/:10066,
- * both the public and the internal pass:
- *
- *   error: unknown type name 'task_corpse_forking_behavior_t'
- *
- * The .defs had the type and no .h did, so the generated code used a
- * declaration that existed in the interface description and in neither
- * header. Same family as the three entries above.
- */
-typedef uint32_t                 task_corpse_forking_behavior_t;
 
 #endif  /* _MACH_MACH_TYPES_H_ */

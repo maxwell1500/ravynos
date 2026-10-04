@@ -4,11 +4,12 @@ SUBDIR =
 MK_WERROR=no
 CFLAGS+= -mmacos-version-min=${MACOS_VERSION_MIN} --sysroot=${RAVYN_SDKROOT} \
 	-B${TOOLS} -fuse-ld=${LD} -I${ROOT_SOURCE_DIR}/Libraries/zlib \
-	-I${ROOT_SOURCE_DIR}/BSD/lib/libpng
+	-I${ROOT_SOURCE_DIR}/BSD/lib/libpng -I${.OBJDIR}/png
 
 all: libfreetype.a
 libfreetype.a:
 	cmake -S ${.CURDIR} -B ${.OBJDIR} \
+		-DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
 		-DCMAKE_C_FLAGS="${CFLAGS}" \
 		-DCMAKE_C_COMPILER=${CC} \
 		-DCMAKE_CXX_COMPILER=${CXX} \
@@ -23,8 +24,8 @@ libfreetype.a:
 		-DSKIP_INSTALL_ALL=TRUE \
 		-DZLIB_FOUND=TRUE -DPNG_FOUND=TRUE \
 		-DZLIB_LIBRARIES="-lz" \
-		-DPNG_LIBRARY="-L${.OBJDIR:H}/png -lpng" \
-		-DPNG_PNG_INCLUDE_DIR="${.OBJDIR:H}/png"
+		-DPNG_LIBRARY="-L${.OBJDIR}/png -lpng" \
+		-DPNG_PNG_INCLUDE_DIR="${.OBJDIR}/png"
 	${MAKE} -C ${.OBJDIR}
 
 install:

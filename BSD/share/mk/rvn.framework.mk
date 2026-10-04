@@ -23,6 +23,21 @@ LDFLAGS += --sysroot=${SDKROOT}
 .endif
 .endif
 
+# ld64 refuses to emit a dylib that links neither libSystem nor libdyld
+# ("dynamic executables or dylibs must link with libSystem.dylib"). The
+# isysroot-cc wrapper strips -lSystem from every dylib link on purpose: the
+# SDK's libSystem.B.dylib is assembled *from* the Libraries/ sub-dylibs, so a
+# framework linking it would be circular. The Libraries sub-dylibs satisfy the
+# same ld64 rule by linking libdyld.dylib instead (see their otool -L), so the
+# framework rule does the same. The explicit -L is required because Apple ld
+# does not search <sysroot>/usr/lib/system by default, and the path is taken
+# from whichever sysroot this build names.
+.if defined(RAVYN_SDKROOT) && !empty(RAVYN_SDKROOT)
+LDFLAGS += -L${RAVYN_SDKROOT}/usr/lib/system -ldyld
+.elif defined(SDKROOT) && !empty(SDKROOT)
+LDFLAGS += -L${SDKROOT}/usr/lib/system -ldyld
+.endif
+
 .if defined(INSTALL_NAME_DIR) && !empty(INSTALL_NAME_DIR)
 LDFLAGS += -Wl,-install_name,${INSTALL_NAME_DIR}/${FRAMEWORK}
 .else

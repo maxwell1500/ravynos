@@ -31,6 +31,7 @@
 
 #include <mach/std_types.h>
 #include <mach/port.h>
+#include <mach/message.h>
 
 /*
  * Mach Voucher - an immutable collection of attribute value handles.
@@ -63,7 +64,14 @@ typedef mach_voucher_name_t     *mach_voucher_name_array_t;
  * This type changes appearance between user-space and kernel.  It is
  * a port at user-space and a reference to an ipc_voucher structure in-kernel.
  */
+#if !defined(KERNEL)
 typedef mach_voucher_t          ipc_voucher_t;
+#else
+#if !defined(MACH_KERNEL_PRIVATE)
+struct ipc_voucher;
+#endif
+typedef struct ipc_voucher      *ipc_voucher_t;
+#endif
 #define IPC_VOUCHER_NULL        ((ipc_voucher_t) 0)
 
 /*
@@ -91,12 +99,14 @@ typedef mach_voucher_attr_key_t *mach_voucher_attr_key_array_t;
 #define MACH_VOUCHER_ATTR_KEY_ATM               ((mach_voucher_attr_key_t)1)
 #define MACH_VOUCHER_ATTR_KEY_IMPORTANCE        ((mach_voucher_attr_key_t)2)
 #define MACH_VOUCHER_ATTR_KEY_BANK              ((mach_voucher_attr_key_t)3)
-#define MACH_VOUCHER_ATTR_KEY_PTHPRIORITY       ((mach_voucher_attr_key_t)4)
 
+/* following keys have been removed from embedded platforms */
+#define MACH_VOUCHER_ATTR_KEY_PTHPRIORITY       ((mach_voucher_attr_key_t)4)
 #define MACH_VOUCHER_ATTR_KEY_USER_DATA         ((mach_voucher_attr_key_t)7)
-#define MACH_VOUCHER_ATTR_KEY_BITS              MACH_VOUCHER_ATTR_KEY_USER_DATA /* deprecated */
+#define MACH_VOUCHER_ATTR_KEY_BITS              MACH_VOUCHER_ATTR_KEY_USER_DATA
 #define MACH_VOUCHER_ATTR_KEY_TEST              ((mach_voucher_attr_key_t)8)
 
+/* not used, for compatibility only */
 #define MACH_VOUCHER_ATTR_KEY_NUM_WELL_KNOWN    MACH_VOUCHER_ATTR_KEY_TEST
 
 /*
@@ -201,8 +211,17 @@ typedef mach_port_t                     mach_voucher_attr_control_t;
  * pointers to opaque structs in most of the kernel, and pointers to known struct
  * types in the Mach portion of the kernel.
  */
+#if !defined(KERNEL)
 typedef mach_port_t             ipc_voucher_attr_manager_t;
 typedef mach_port_t             ipc_voucher_attr_control_t;
+#else
+#if !defined(MACH_KERNEL_PRIVATE)
+struct ipc_voucher_attr_manager;
+struct ipc_voucher_attr_control;
+#endif
+typedef const struct ipc_voucher_attr_manager *ipc_voucher_attr_manager_t;
+typedef struct ipc_voucher_attr_control *ipc_voucher_attr_control_t;
+#endif
 #define IPC_VOUCHER_ATTR_MANAGER_NULL ((ipc_voucher_attr_manager_t) 0)
 #define IPC_VOUCHER_ATTR_CONTROL_NULL ((ipc_voucher_attr_control_t) 0)
 
@@ -212,7 +231,7 @@ typedef mach_port_t             ipc_voucher_attr_control_t;
  * The private handle that the voucher attribute manager provides to
  * the mach voucher mechanism to represent a given attr content/value.
  */
-typedef uint64_t mach_voucher_attr_value_handle_t;
+typedef uint64_t mach_voucher_attr_value_handle_t __kernel_ptr_semantics;
 typedef mach_voucher_attr_value_handle_t *mach_voucher_attr_value_handle_array_t;
 
 typedef mach_msg_type_number_t mach_voucher_attr_value_handle_array_size_t;

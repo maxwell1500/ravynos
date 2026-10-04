@@ -120,6 +120,8 @@ PRIVATE_DATAFILES = $(sort \
 	socketvar.h \
 	sockio.h \
 	sockio_private.h \
+	consio.h \
+	fbio.h \
 	spawn.h \
 	spawn_internal.h \
 	stackshot.h \

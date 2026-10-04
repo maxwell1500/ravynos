@@ -31,6 +31,9 @@
 #import <AppKit/NSAttributedString.h>
 #import <Onyx2D/O2Context.h>
 
+/* defined in NSWindow.m */
+void CGNativeBorderFrameWidthsForStyle(unsigned styleMask, CGFloat *top, CGFloat *left, CGFloat *bottom, CGFloat *right);
+
 @implementation NSThemeFrame
 
 // all measurements in pixels

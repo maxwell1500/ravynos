@@ -14,6 +14,8 @@
 #include <sys/time.h>
 #include <sys/ioccom.h>
 #include <sys/types.h>
+#include <stdint.h>
+#include <sys/ioctl.h>
 #endif
 
 #include "input-event-codes.h"

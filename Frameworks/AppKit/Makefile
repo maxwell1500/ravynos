@@ -1,12 +1,11 @@
 .PATH: ${.CURDIR}
 .PATH: ${MAKEOBJDIR}
 
+MK_WERROR = no
 FRAMEWORK=AppKit
 MK_AUTO_OBJ=yes
-NO_FMWK_COMMON=yes
-.include "../framework.common.mk"
 
-SUBDIR+=	xkeyboard-config
+#SUBDIR+=	xkeyboard-config
 
 SRCS= \
     CoreData_/NSPersistentDocument.m \
@@ -128,11 +127,6 @@ SRCS= \
     NSModalSessionX.m \
     NSMutableAttributedString.m \
     NSMutableParagraphStyle.m \
-    NSOpenGL/NSOpenGLContext.m \
-    NSOpenGL/NSOpenGLDrawable.m \
-    NSOpenGL/NSOpenGLPixelBuffer.m \
-    NSOpenGL/NSOpenGLPixelFormat.m \
-    NSOpenGL/NSOpenGLView.m \
     NSOpenPanel.m \
     NSOutlineView.m \
     NSPDFImageRep.m \
@@ -266,7 +260,7 @@ SRCS= \
     O2Context_builtin_FT.m 
 
 
-INCS= \
+HEADERS= \
     AppKit.h \
     AppKitExport.h \
     CoreData_/NSPersistentDocument.h \
@@ -576,33 +570,25 @@ RESOURCES=Info.plist en.lproj de.lproj fr.lproj \
 	NSSwitch.tiff \
 	NSKeyboardBinding/StandardKeyBindings.keyBindings
 
-CFLAGS+= -I${.CURDIR}/.. -I${BUILDROOT}/usr/include -I/sys \
-	 -F../OpenGL -framework OpenGL -I${.CURDIR}/Headers -I../Foundation/Headers \
-         -I${.CURDIR} -I${MAKEOBJDIR} -I${SRCTOP}/CoreServices \
-	 -I${SRCTOP}/Frameworks/Onyx2D/freetype/include \
-	 -I${SRCTOP}/Frameworks/CoreText/fontconfig/include \
-	 -I${SRCTOP}/Frameworks/CoreText/fontconfig/fontconfig \
-	 -D_BuildingFramework -DFREETYPE_PRESENT -pthread
-LDFLAGS+= ${FMWK_LDFLAGS} \
-	  -Wl,-R/System/Library/Frameworks/Foundation.framework/Versions/A \
-	  -Wl,-R/System/Library/Frameworks/CoreFoundation.framework/Versions/A \
-	  -Wl,-R/System/Library/Frameworks/CoreGraphics.framework/Versions/A \
-	  -Wl,-R/System/Library/Frameworks/CoreData.framework/Versions/A \
-	  -Wl,-R/System/Library/Frameworks/CoreText.framework/Versions/A \
-	  -Wl,-R/System/Library/Frameworks/QuartzCore.framework/Versions/A \
-	  -Wl,-R/System/Library/Frameworks/OpenGL.framework/Versions/A \
-	  -Wl,-R/System/Library/Frameworks/Onyx2D.framework/Versions/A \
-	  -L${OBJTOP}/Frameworks/Foundation/Foundation.framework \
-	  -L${OBJTOP}/Frameworks/CoreFoundation/CoreFoundation.framework \
-	  -L${OBJTOP}/Frameworks/CoreGraphics/CoreGraphics.framework \
-	  -L${OBJTOP}/Frameworks/CoreData/CoreData.framework \
-	  -L${OBJTOP}/Frameworks/CoreText/CoreText.framework \
-	  -L${OBJTOP}/Frameworks/QuartzCore/QuartzCore.framework \
-	  -L${OBJTOP}/Frameworks/OpenGL/OpenGL.framework \
-	  -L${OBJTOP}/Frameworks/Onyx2D/Onyx2D.framework \
-	  -pthread -lFoundation -lCoreFoundation -lCoreGraphics \
-          -lCoreText -lCoreData -lQuartzCore -lOpenGL -lOnyx2D \
-	  -lobjc -lmach -lm
+CFLAGS+= -I${.CURDIR:H} -I${BUILDROOT}/usr/include -I/sys \
+	 -F${OBJTOP}/Frameworks/OpenGL -framework OpenGL -I${MAKEOBJDIR}/Headers -I${.CURDIR:H}/Foundation/Headers \
+         -I${.CURDIR} -I${MAKEOBJDIR} -I${ROOT_SOURCE_DIR}/CoreServices \
+	 -I${ROOT_SOURCE_DIR}/Frameworks/Onyx2D/freetype/include \
+	 -I${ROOT_SOURCE_DIR}/Frameworks/CoreText/fontconfig/include \
+	 -I${ROOT_SOURCE_DIR}/Frameworks/CoreText/fontconfig/fontconfig \
+	 -D_BuildingFramework -DFREETYPE_PRESENT -pthread -Wno-error=deprecated-objc-isa-usage -include sys/param.h -include mach/mach.h -include mach/bootstrap.h -DOBJC_OLD_DISPATCH_PROTOTYPES=1 "-DABS(x)=((x)<0?-(x):(x))"
+LDFLAGS+= \
+	  -Wl,-rpath,/System/Library/Frameworks/Foundation.framework/Versions/A \
+	  -Wl,-rpath,/System/Library/Frameworks/CoreFoundation.framework/Versions/A \
+	  -Wl,-rpath,/System/Library/Frameworks/CoreGraphics.framework/Versions/A \
+	  -Wl,-rpath,/System/Library/Frameworks/CoreText.framework/Versions/A \
+	  -Wl,-rpath,/System/Library/Frameworks/Onyx2D.framework/Versions/A \
+	  -F${OBJTOP}/Frameworks/Foundation -framework Foundation \
+	  -F${OBJTOP}/Frameworks/CoreFoundation -framework CoreFoundation \
+	  -F${OBJTOP}/Frameworks/CoreGraphics -framework CoreGraphics \
+	  -F${OBJTOP}/Frameworks/CoreText -framework CoreText \
+	  -F${OBJTOP}/Frameworks/Onyx2D -framework Onyx2D \
+	  -lobjc -lm
 
 DIRS= \
 	NSMenu.subproj \
@@ -611,7 +597,6 @@ DIRS= \
 	NSKeyboardBinding \
 	CoreData_ \
 	NSSystemInfoPanel \
-	NSOpenGL \
 	NSTextView.subproj \
 	NSAnimation \
 	en.lproj \
@@ -640,19 +625,11 @@ make-obj-dirs: .PHONY
 fmwkclean:
 	rm -rf ${.CURDIR}/Headers
 
-_install-hook:
-	cp -fv lib${FRAMEWORK}.so ${FRAMEWORK}.framework/Versions/Current/
-	mv ${FRAMEWORK}.framework/Resources/NSKeyboardBinding/StandardKeyBindings.keyBindings \
-		${FRAMEWORK}.framework/Resources/
-	rmdir ${FRAMEWORK}.framework/Resources/NSKeyboardBinding
-.for lproj in en.lproj fr.lproj de.lproj
-	cp -av ${.CURDIR}/NSSystemInfoPanel/${lproj}/NSSystemInfoPanel.nib \
-                ${FRAMEWORK}.framework/Versions/Current/Resources/${lproj}/
+fmwk-install-hook:
+.for dir in ${RAVYN_SDKROOT}/System/Library/Frameworks/ ${SYSROOT_DIR}/System/Library/Frameworks/
+	mkdir -p ${dir}
+	cp -Rfp ${.OBJDIR}/${FRAMEWORK}.framework ${dir}
 .endfor
-	rm -rf ${BUILDROOT}/System/Library/Frameworks/${FRAMEWORK}.framework
-	cp -av ${FRAMEWORK}.framework ${BUILDROOT}/System/Library/Frameworks/
-	mkdir -pv ${BUILDROOT}/System/Library/KeyboardLayout
-	${MAKE} -C ${.CURDIR}/xkeyboard-config install DESTDIR=${DESTDIR} BUILDROOT=${BUILDROOT}
 
 clean-deps:
 	rm -f .depend.*
@@ -660,6 +637,4 @@ clean-deps:
 .include <rvn.framework.mk>
 
 clean: fmwkclean
-post-resources: _install-hook
 clean: clean-deps
-CFLAGS+= ${FMWK_CFLAGS}

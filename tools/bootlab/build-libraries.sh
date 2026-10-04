@@ -24,7 +24,40 @@ ROOT="$(cd "$HERE/../.." && pwd)"
 BUILD="${RAVYN_BUILD_DIR:-/Users/max/Projects/build}"
 SDK="$BUILD/Developer/Platforms/ravynOS.platform/Developer/SDKs/ravynOS.sdk"
 BMAKE="${BMAKE:-/usr/local/bin/bmake}"
+# The compiler this build targets is the ravynOS platform toolchain's clang,
+# NOT the host's.  These are different compilers and the difference is not
+# cosmetic: host clang 21 (Apple clang version 21.0.0, clang-2100.1.1.101)
+# SEGFAULTS compiling this tree's Objective-C, reproducibly, in
+# CGObjCRuntime::ComputeIvarBaseOffset on the very first Foundation file it
+# reaches:
+#   Frameworks/Foundation/NSObject/NSObject.m:112
+#   PLEASE ATTACH THE FOLLOWING FILES TO THE BUG REPORT
+# so `build-libraries.sh --frameworks Foundation` died with no diagnostic at
+# all.  The same command line under clang-17 (Apple clang version 17.0.6) from
+# $PLATFORM_TOOLCHAIN_BIN compiles it with 3 warnings and no errors.
+#
+# Preferring it also matches the rest of this script, which already takes
+# llvm-libtool-darwin and llvm-objcopy from that same peer toolchain because
+# the host Command Line Tools does not ship them at all.  The sysroot question
+# that made clang-17 unusable for C sub-builds does not arise: every -I this
+# build needs is supplied by isysroot-cc and by the per-project CFLAGS, and
+# clang-17 has no default sysroot to fall back on, so it simply uses the
+# -isysroot it is given.
+#
+# Still overridable: REAL_CC=... on the command line wins, as before.
+PLATFORM_TOOLCHAIN_BIN="$BUILD/Developer/Platforms/ravynOS.platform/Developer/Toolchains/Default.xctoolchain/usr/bin"
+if [ -z "${REAL_CC:-}" ] && [ -x "$PLATFORM_TOOLCHAIN_BIN/clang" ]; then
+    REAL_CC="$PLATFORM_TOOLCHAIN_BIN/clang"
+fi
 REAL_CC="${REAL_CC:-$(xcrun -f clang)}"
+# MUST be exported, and this was the silent part: a plain assignment here is a
+# shell variable of THIS script, and isysroot-cc is a separate process that
+# reads $REAL_CC from its own environment.  Un-exported, it fell back to its
+# own default of /usr/bin/cc -- the host compiler this whole block exists to
+# avoid -- and the setting looked perfectly in effect while changing nothing.
+# (A REAL_CC=... given on the command line arrives already exported, which is
+# why passing it by hand worked and relying on the default never did.)
+export REAL_CC
 
 [ -d "$SDK" ] || { echo "missing SDK: $SDK" >&2; exit 1; }
 [ -x "$BMAKE" ] || { echo "missing bmake: $BMAKE (brew install bmake)" >&2; exit 1; }
@@ -96,7 +129,7 @@ export SDK_SOURCE_DIR="$SDK"
 # The peer-built llvm-libtool-darwin (7,338,024 B, LLVM 17.0.6) lives under the
 # ravynOS platform toolchain; the host CLT does not ship it at all, so
 # xcrun -f cannot find it.
-PLATFORM_TOOLCHAIN_BIN="$BUILD/Developer/Platforms/ravynOS.platform/Developer/Toolchains/Default.xctoolchain/usr/bin"
+# (PLATFORM_TOOLCHAIN_BIN is set above, where REAL_CC is resolved from it.)
 # Assemble one directory holding every tool a recipe may name, so that the
 # unquoted `PATH=${TOOLS}:${PATH}` prefix puts *our* xcrun ahead of the system
 # one. libsystem_kernel's mach_install_mig.sh does `xcrun -sdk $SDKROOT -find
@@ -123,6 +156,15 @@ mkdir -p "$TOOLS_DIR"
 # failure is purely the debug-file extraction step.
 [ -x "$PLATFORM_TOOLCHAIN_BIN/llvm-objcopy" ] &&
     ln -sf "$PLATFORM_TOOLCHAIN_BIN/llvm-objcopy" "$TOOLS_DIR/llvm-objcopy"
+
+# Libraries/ICU/Makefile rewrites its own data library's install name through
+# ${TOOLS}/install_name_tool, so that -licudata resolves to /usr/lib at run
+# time.  The tool is in the host CLT, not in the peer toolchain (which ships
+# LLVM tools only), so it is staged from there.  Without it ICU dies at the
+# last step, after a complete build:
+#   bmake[1]: exec(.../Tools/bin/install_name_tool): No such file or directory
+[ -x "/usr/bin/install_name_tool" ] &&
+    ln -sf "/usr/bin/install_name_tool" "$TOOLS_DIR/install_name_tool"
 export TOOLS="$TOOLS_DIR"
 export PROD_VERSION="${PROD_VERSION:-1229.100.1}"
 
@@ -241,6 +283,16 @@ for t in ranlib nm otool strip libtool dsymutil; do
 done
 export AR="$HERE/macar"        # drops the -D that Darwin ar rejects
 export LD="ld"
+
+# bison: CoreServices/WindowServer/libxkbcommon/src/xkbcomp/parser.y uses
+# %define api.pure, which needs bison >= 2.7. The Command Line Tools bison is
+# 2.3 and dies at parser.y:88 with
+#   syntax error, unexpected identifier, expecting string
+# Homebrew's bison is keg-only (never on PATH); point the Makefiles' ${BISON}
+# at it when it is present. Unset falls back to the Makefile default "bison".
+for b in /usr/local/opt/bison/bin/bison /opt/homebrew/opt/bison/bin/bison; do
+    [ -x "$b" ] && export BISON="$b" && break
+done
 
 # ---------------------------------------------------------------------------
 # SDK header synchronization
@@ -446,6 +498,40 @@ SRV="$ROOT/Developer/ravynOS.sdk"
 sync_mach "$SRV/usr/include/mach" "$SDK/usr/include/mach"
 sync_mach "$SRV/System/Library/Frameworks/System.framework/Versions/B/PrivateHeaders/mach" \
           "$SDK/System/Library/Frameworks/System.framework/Versions/B/PrivateHeaders/mach"
+
+# fbio.h and consio.h are kernel-private headers that WindowServer needs.
+# They live in Kernel/xnu/bsd/sys/ and are listed in PRIVATE_DATAFILES, whose
+# xnu install target is System.framework/PrivateHeaders/sys
+# (INSTALL_SF_MI_LCL_LIST = ${DATAFILES} ${PRIVATE_DATAFILES}). WindowServer,
+# however, includes them as <sys/fbio.h>/<sys/consio.h>, and an angle-bracket
+# include resolves through the sysroot's usr/include, not through a framework
+# path -- CoreServices/WindowServer/BSDFramebuffer.h:42-43 does exactly that.
+# So install into BOTH SDK sys trees, the same way sync_mach refreshes both
+# mach trees above. Neither tree has a sync mechanism for bsd/sys headers, so
+# this is the only place they are staged.
+for h in fbio.h consio.h; do
+    [ -f "$ROOT/Kernel/xnu/bsd/sys/$h" ] || continue
+    for d in "$SDK/usr/include/sys" \
+             "$SDK/System/Library/Frameworks/System.framework/Versions/B/PrivateHeaders/sys"; do
+        mkdir -p "$d"
+        cp -f "$ROOT/Kernel/xnu/bsd/sys/$h" "$d/$h"
+    done
+done
+
+# login_cap.h is the public half of the login_cap(3) subsystem vendored into
+# BSD/lib/libutil (login_cap.c, login_class.c, login_auth.c, _secure_path.c).
+# WindowServer.h:43 includes <login_cap.h> and WindowServer.m:548-554 calls
+# login_getpwclass/login_close/setusercontext to drop privileges before
+# exec'ing the desktop session, so the header has to be in the SDK like any
+# other system header.  There is no bsd/sys install rule for it -- the
+# library's own Makefile installs only the dylib -- so stage it here, from the
+# source SDK copy, the same way the fbio.h/consio.h block above stages bsd/sys
+# headers.  Unconditional cp -f so an edit to the vendored header reaches the
+# build SDK instead of being masked by a stale copy.
+if [ -f "$SRV/usr/include/login_cap.h" ]; then
+    mkdir -p "$SDK/usr/include"
+    cp -f "$SRV/usr/include/login_cap.h" "$SDK/usr/include/login_cap.h"
+fi
 
 # sys/cdefs.h is the other split-brain header. The SDK's copy (1,010 lines) is
 # missing 60 macros that Kernel/xnu/bsd/sys/cdefs.h defines, two of which were
@@ -723,6 +809,114 @@ if [ "${1:-}" = "--pwdgrp-only" ]; then
     ( cd "$ROOT/Libraries/Libsystem/libsystem_pwdgrp" && \
       "$BMAKE" -m "$MKMODULES" "${BMAKE_TARGET:-all}" )
     exit $?
+fi
+
+# --top <target ...>: drive the repository's top-level Makefile with this
+# environment.
+#
+# Why: the top-level Makefile is what establishes the object-directory layout
+# (SRCTOP/OBJTOP/MAKEOBJDIRPREFIX are computed there and exported to every
+# SUBDIR), and it is the only place the per-component bmake invocations used
+# elsewhere in this script differ from a real build. Running components
+# directly (as the plain loop and --frameworks do) leaves .OBJDIR at the source
+# directory, so objects are written beside the sources; going through the
+# top-level Makefile puts them under $BUILD/Users/... as intended.
+#
+# TOOLS and TOOLCHAIN are forced on the command line: the top-level Makefile
+# assigns them unconditionally, which would otherwise replace the wrapper's
+# $BUILD/Tools/bin (holding llvm-libtool-darwin/llvm-objcopy/xcrun) and the
+# synthetic toolchain this script builds.
+if [ "${1:-}" = "--top" ]; then
+    shift
+    cd "$ROOT" && "$BMAKE" -m "$MKMODULES" -f Makefile \
+        TOOLS="$TOOLS" TOOLCHAIN="$TOOLCHAIN" MK_TOOLCHAIN=no "$@"
+    exit $?
+fi
+
+# --frameworks [subdir ...]: build the Frameworks/ tree and the CoreServices
+# applications with the same environment the Libraries/ build uses.
+#
+# Why this mode exists: the Frameworks/ and CoreServices/ Makefiles assume the
+# environment this script establishes (CC/CXX wrappers, TOOLCHAIN, TOOLS,
+# RAVYN_SDKROOT, EXTRA_DEFINES, ...), and the top-level Makefile's SUBDIR
+# recursion does not go through it. Driving bmake from here keeps one
+# environment definition for every component built on this host.
+#
+# Subdirs may be given bare (resolved under Frameworks/) or as a path relative
+# to the repository root, so the CoreServices applications can be named too:
+#   build-libraries.sh --frameworks CoreServices
+#   build-libraries.sh --frameworks CoreServices/WindowServer
+if [ "${1:-}" = "--frameworks" ]; then
+    shift
+    DIRS=("$@")
+    [ ${#DIRS[@]} -eq 0 ] && DIRS=(CoreFoundation Foundation CoreServices \
+        Onyx2D CoreGraphics AppKit CoreText)
+    rc=0
+    # ---------------------------------------------------------------------
+    # Framework staging paths.
+    #
+    # The Makefiles in Frameworks/ and CoreServices/ spell their framework
+    # references as ${OBJTOP}/Frameworks/<F>/<F>.framework and their header
+    # search paths as ${OBJTOP}/Frameworks/Foundation/Headers. With the
+    # OBJTOP this harness sets ($BUILD) both resolve under $BUILD/Frameworks,
+    # but MAKEOBJDIR (auto.obj.mk) places every component at
+    # MAKEOBJDIRPREFIX + the absolute source path, i.e. $BUILD$ROOT/Frameworks.
+    # Without the bridge, clang finds no ravynOS framework under
+    # $BUILD/Frameworks/... and silently falls back to the *host* macOS SDK
+    # framework of the same name, mixing Apple headers into the build (seen
+    # as AppKit/NSColor.h resolving to
+    # /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/...).
+    #
+    # Two things are bridged, and only structure is created:
+    #   * $BUILD/Frameworks -> the real objdir Frameworks/ tree, so every
+    #     -L${OBJTOP}/Frameworks/<F>/<F>.framework resolves.
+    #   * ${OBJTOP}/Frameworks/Foundation/Headers -> the source header tree,
+    #     which is the layout <Foundation/NSObject.h> expects and which no
+    #     rule in the build creates (upstream only resolves this because its
+    #     in-tree build has OBJTOP == SRCTOP).
+    # Idempotent: existing paths are left alone.
+    [ -e "$BUILD/Frameworks" ] || \
+        ln -sfn "$BUILD$ROOT/Frameworks" "$BUILD/Frameworks"
+    [ -e "$BUILD$ROOT/Frameworks/Foundation/Headers" ] || \
+        ln -sfn "$ROOT/Frameworks/Foundation/Headers" \
+                "$BUILD$ROOT/Frameworks/Foundation/Headers"
+    #
+    #   * ${OBJTOP}/Frameworks/AppKit/Headers/AppKit/*.h -- AppKit's public
+    #     headers are scattered across its subdirectories (NSColor.h lives in
+    #     NSColor.subproj/), so <AppKit/NSColor.h> resolves only through this
+    #     flat tree. The repository's own Frameworks/setup rule is what builds
+    #     it, and that rule is broken: it first calls a `marshalheaders` target
+    #     that Foundation/Makefile does not define, so it aborts before the
+    #     copy. Stage the same tree here, from headers that already exist.
+    #     Without it clang silently takes <AppKit/NSColor.h> from the host
+    #     macOS SDK and then mixes host and ravynOS AppKit headers.
+    APPKIT_HDRS="$BUILD$ROOT/Frameworks/AppKit/Headers/AppKit"
+    if [ ! -d "$APPKIT_HDRS" ]; then
+        mkdir -p "$APPKIT_HDRS"
+        find "$ROOT/Frameworks/AppKit" -name '*.h' \
+            -exec cp -f {} "$APPKIT_HDRS/" \;
+    fi
+    for d in "${DIRS[@]}"; do
+        if [ -d "$ROOT/Frameworks/$d" ]; then
+            base="$ROOT/Frameworks/$d"
+        elif [ -d "$ROOT/$d" ]; then
+            base="$ROOT/$d"
+        else
+            echo "no such framework/app dir: $d" >&2
+            rc=1
+            continue
+        fi
+        echo "=== building ${base#$ROOT/} ==="
+        # MAKEOBJDIR in the *environment* is what auto.obj.mk honours: bmake
+        # picks .OBJDIR before the Makefile is read, so MAKEOBJDIRPREFIX and
+        # command-line assignments are too late (measured: both left .OBJDIR at
+        # the source directory). The path mirrors the top-level layout, which
+        # is MAKEOBJDIRPREFIX + the absolute source path. OBJTOP is what the
+        # framework Makefiles spell their -L paths against.
+        ( cd "$base" && MAKEOBJDIR="$BUILD$base" OBJTOP="$BUILD" MK_AUTO_OBJ=yes \
+          "$BMAKE" -m "$MKMODULES" "${BMAKE_TARGET:-all}" ) || rc=1
+    done
+    exit $rc
 fi
 
 DIRS=("$@")

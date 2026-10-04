@@ -100,7 +100,10 @@ struct processor_basic_info {
 	cpu_subtype_t   cpu_subtype;    /* subtype of cpu */
 	boolean_t       running;        /* is processor running */
 	int             slot_num;       /* slot number */
-	boolean_t       is_master;      /* is this the master processor */
+	union {
+		boolean_t       is_master;  /* deprecated */
+		boolean_t       is_main;    /* is this the main processor */
+	};
 };
 
 typedef struct processor_basic_info     processor_basic_info_data_t;
@@ -149,6 +152,7 @@ typedef struct processor_set_load_info *processor_set_load_info_t;
 #define PROCESSOR_SET_LOAD_INFO_COUNT   ((mach_msg_type_number_t) \
 	        (sizeof(processor_set_load_info_data_t)/sizeof(natural_t)))
 
+#ifdef  PRIVATE
 
 #define PROCESSOR_SET_ENABLED_POLICIES                   3
 #define PROCESSOR_SET_ENABLED_POLICIES_COUNT ((mach_msg_type_number_t) \
@@ -163,5 +167,6 @@ typedef struct processor_set_load_info *processor_set_load_info_t;
 #define PROCESSOR_SET_FIFO_DEFAULT                      30
 #define PROCESSOR_SET_FIFO_LIMITS                       31
 
+#endif  /* PRIVATE */
 
 #endif  /* _MACH_PROCESSOR_INFO_H_ */

@@ -13,6 +13,7 @@ MK_WERROR=	no
 WARNS=	        1
 CFLAGS+=	-I${.CURDIR}/src -I${.CURDIR}/include -I${MAKEOBJDIR} \
 		-I${.CURDIR}/../libevdev/include/linux \
+		-I${.CURDIR}/../libevdev/include \
 		-I${SRCTOP}/sys/compat/linuxkpi/common/include \
 		-I${SRCTOP}/sys/compat/linuxkpi/dummy/include \
 		-I${SRCTOP}/sys/compat/linux \
@@ -20,7 +21,8 @@ CFLAGS+=	-I${.CURDIR}/src -I${.CURDIR}/include -I${MAKEOBJDIR} \
 		-D__u32=uint32_t -D__s8=int8_t -D__s16=int16_t \
 		-D__s32=int32_t -D__u64=uint64_t -D__s64=int64_t \
 		-D_IOC_NONE=1U -D_IOC_READ=2U -D_IOC_WRITE=4U -fPIC
-LDFLAGS+=	-Wl,-R'$$ORIGIN/../Resources'
+LDFLAGS+=	-Wl,-rpath,'$$ORIGIN/../Resources'
+LDFLAGS+=       -shared
 
 .include <bsd.lib.mk>
 

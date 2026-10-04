@@ -113,8 +113,14 @@ typedef struct task_basic_info_32       *task_basic_info_32_t;
 struct task_basic_info_64 {
 	integer_t       suspend_count;  /* suspend count for task */
 #if defined(__arm__) || defined(__arm64__)
+#if defined(KERNEL)
+	/* Compatibility with old 32-bit mach_vm_size_t */
+	natural_t       virtual_size;   /* virtual memory size (bytes) */
+	natural_t       resident_size;  /* resident memory size (bytes) */
+#else
 	mach_vm_size_t  virtual_size;   /* virtual memory size (bytes) */
 	mach_vm_size_t  resident_size;  /* resident memory size (bytes) */
+#endif
 #else /* defined(__arm__) || defined(__arm64__) */
 	mach_vm_size_t  virtual_size;   /* virtual memory size (bytes) */
 	mach_vm_size_t  resident_size;  /* resident memory size (bytes) */
@@ -129,7 +135,20 @@ typedef struct task_basic_info_64       task_basic_info_64_data_t;
 typedef struct task_basic_info_64       *task_basic_info_64_t;
 
 #if defined(__arm__) || defined(__arm64__)
-	#if   defined(__arm__) && defined(__IPHONE_OS_VERSION_MIN_REQUIRED) && (__IPHONE_OS_VERSION_MIN_REQUIRED < __IPHONE_5_0)
+	#if defined(KERNEL)
+/*
+ * Backwards-compatibility for old mach_vm*_t types.
+ * The kernel knows about old and new, and if you are compiled
+ * to run on an earlier iOS version, you interact with the old
+ * (narrow) version.  If you are compiled for a newer OS
+ * version, however, you are mapped to the wide version.
+ */
+
+	#define TASK_BASIC_INFO_64      5
+	#define TASK_BASIC_INFO_64_COUNT   \
+	        (sizeof(task_basic_info_64_data_t) / sizeof(natural_t))
+
+	#elif defined(__arm__) && defined(__IPHONE_OS_VERSION_MIN_REQUIRED) && (__IPHONE_OS_VERSION_MIN_REQUIRED < __IPHONE_5_0)
 /*
  * Note: arm64 can't use the old flavor.  If you somehow manage to,
  * you can cope with the nonsense data yourself.
@@ -400,12 +419,26 @@ struct task_vm_info {
 
 	/* added for rev5 */
 	integer_t decompressions;
+
+	/* added for rev6 */
+	int64_t ledger_swapins;
+
+	/* added for rev7 */
+	int64_t ledger_tag_neural_nofootprint_total;
+	int64_t ledger_tag_neural_nofootprint_peak;
 };
 typedef struct task_vm_info     task_vm_info_data_t;
 typedef struct task_vm_info     *task_vm_info_t;
 #define TASK_VM_INFO_COUNT      ((mach_msg_type_number_t) \
 	        (sizeof (task_vm_info_data_t) / sizeof (natural_t)))
-#define TASK_VM_INFO_REV5_COUNT TASK_VM_INFO_COUNT
+/*
+ * The capacity of task_info_t in mach_types.defs also needs to be adjusted
+ */
+#define TASK_VM_INFO_REV7_COUNT TASK_VM_INFO_COUNT
+#define TASK_VM_INFO_REV6_COUNT /* doesn't include neural total and peak */ \
+	((mach_msg_type_number_t) (TASK_VM_INFO_REV7_COUNT - 4))
+#define TASK_VM_INFO_REV5_COUNT /* doesn't include ledger swapins */ \
+	((mach_msg_type_number_t) (TASK_VM_INFO_REV6_COUNT - 2))
 #define TASK_VM_INFO_REV4_COUNT /* doesn't include decompressions */ \
 	((mach_msg_type_number_t) (TASK_VM_INFO_REV5_COUNT - 1))
 #define TASK_VM_INFO_REV3_COUNT /* doesn't include limit bytes */ \
@@ -420,7 +453,7 @@ typedef struct task_vm_info     *task_vm_info_t;
 typedef struct vm_purgeable_info        task_purgable_info_t;
 
 
-#define TASK_TRACE_MEMORY_INFO  24
+#define TASK_TRACE_MEMORY_INFO  24  /* no longer supported */
 struct task_trace_memory_info {
 	uint64_t  user_memory_address;  /* address of start of trace memory buffer */
 	uint64_t  buffer_size;                  /* size of buffer in bytes */
@@ -457,7 +490,7 @@ struct task_power_info_v2 {
 	gpu_energy_data gpu_energy;
 #if defined(__arm__) || defined(__arm64__)
 	uint64_t                task_energy;
-#endif
+#endif /* defined(__arm__) || defined(__arm64__) */
 	uint64_t                task_ptime;
 	uint64_t                task_pset_switches;
 };
@@ -471,6 +504,7 @@ typedef struct task_power_info_v2       *task_power_info_v2_t;
 
 #define TASK_VM_INFO_PURGEABLE_ACCOUNT 27 /* Used for xnu purgeable vm unit tests */
 
+#ifdef PRIVATE
 struct pvm_account_info {
 	uint64_t pvm_volatile_count; /* Number of volatile bytes associated with a task */
 	uint64_t pvm_volatile_compressed_count; /* Number of volatile compressed bytes associated with a task */
@@ -483,6 +517,7 @@ typedef struct pvm_account_info pvm_account_info_data_t;
 
 #define PVM_ACCOUNT_INFO_COUNT ((mach_msg_type_number_t) \
 	        (sizeof (pvm_account_info_data_t) / sizeof (natural_t)))
+#endif /* PRIVATE */
 
 #define TASK_FLAGS_INFO  28                     /* return t_flags field */
 struct task_flags_info {
@@ -498,6 +533,7 @@ typedef struct task_flags_info * task_flags_info_t;
 
 #define TASK_DEBUG_INFO_INTERNAL    29 /* Used for kernel internal development tests. */
 
+#ifdef PRIVATE
 struct task_debug_info_internal {
 	integer_t suspend_count;
 	uint64_t ipc_space_size;
@@ -507,6 +543,38 @@ typedef struct task_debug_info_internal task_debug_info_internal_data_t;
 #define TASK_DEBUG_INFO_INTERNAL_COUNT  ((mach_msg_type_number_t) \
 	        (sizeof (task_debug_info_internal_data_t) / sizeof(natural_t)))
 
+#endif /* PRIVATE */
+
+#ifdef PRIVATE
+
+typedef struct task_suspend_stats_s {
+	uint64_t tss_last_start; /* mach_absolute_time of beginning of last suspension*/
+	uint64_t tss_last_end; /* mach_absolute_time of end of last suspension */
+	uint64_t tss_count; /* number of times this task has been suspended */
+	uint64_t tss_duration; /* sum(mach_absolute_time) of time spend suspended */
+} *task_suspend_stats_t;
+
+typedef struct task_suspend_stats_s task_suspend_stats_data_t;
+#define TASK_SUSPEND_STATS_INFO 30
+#define TASK_SUSPEND_STATS_INFO_COUNT ((mach_msg_type_number_t) \
+	        (sizeof(task_suspend_stats_data_t) / sizeof(natural_t)))
+
+typedef struct task_suspend_source_s {
+	uint64_t tss_time; /* mach_absolute_time of suspend */
+	uint64_t tss_tid; /* tid of suspending thread */
+	int tss_pid; /* pid of suspending task */
+	char tss_procname[65]; /* name of suspending task */
+	uint8_t tss_padding[3]; /* pad to multiple of natural_t */
+} *task_suspend_source_t;
+#define TASK_SUSPEND_SOURCES_MAX 4
+typedef struct task_suspend_source_s task_suspend_source_array_t[TASK_SUSPEND_SOURCES_MAX];
+
+typedef struct task_suspend_source_s task_suspend_source_data_t;
+#define TASK_SUSPEND_SOURCES_INFO 31
+#define TASK_SUSPEND_SOURCES_INFO_COUNT ((mach_msg_type_number_t) \
+	        (sizeof(task_suspend_source_data_t) * TASK_SUSPEND_SOURCES_MAX / sizeof(natural_t)))
+
+#endif /* PRIVATE */
 
 /*
  * Type to control EXC_GUARD delivery options for a task
@@ -515,6 +583,7 @@ typedef struct task_debug_info_internal task_debug_info_internal_data_t;
 typedef uint32_t task_exc_guard_behavior_t;
 
 /* EXC_GUARD optional delivery settings on a per-task basis */
+#define TASK_EXC_GUARD_NONE                  0x00
 #define TASK_EXC_GUARD_VM_DELIVER            0x01 /* Deliver virtual memory EXC_GUARD exceptions */
 #define TASK_EXC_GUARD_VM_ONCE               0x02 /* Deliver them only once */
 #define TASK_EXC_GUARD_VM_CORPSE             0x04 /* Deliver them via a forked corpse */
@@ -529,11 +598,40 @@ typedef uint32_t task_exc_guard_behavior_t;
 
 #define TASK_EXC_GUARD_ALL                   0xff /* All optional deliver settings */
 
+#ifdef PRIVATE
 /*
  * Experimental mode of setting default guard behavior for non-Apple processes
  * The default for 3rd party guards is shifted up 8 bits - but otherwise the same values as above.
  */
 #define TASK_EXC_GUARD_THIRD_PARTY_DEFAULT_SHIFT 0x8 /* 3rd party default shifted up in boot-arg */
+
+#define TASK_EXC_GUARD_HONOR_NAMED_DEFAULTS 0x10000  /* Honor the by-process-name defaults */
+
+#endif
+
+/*
+ * Type to control corpse forking options for a task
+ * via task_get/set_corpse_forking_behavior interface(s).
+ */
+typedef uint32_t task_corpse_forking_behavior_t;
+
+#define TASK_CORPSE_FORKING_DISABLED_MEM_DIAG  0x01 /* Disable corpse forking because the task is running under a diagnostic tool */
+
+#ifdef XNU_KERNEL_PRIVATE
+
+__options_decl(task_control_port_options_t, uint32_t, {
+	TASK_CONTROL_PORT_OPTIONS_NONE     = 0x00000000,
+
+	TASK_CONTROL_PORT_PINNED_SOFT      = 0x00000001,
+	TASK_CONTROL_PORT_PINNED_HARD      = 0x00000002,
+	TASK_CONTROL_PORT_IMMOVABLE_SOFT   = 0x00000004,
+	TASK_CONTROL_PORT_IMMOVABLE_HARD   = 0x00000008,
+});
+
+#define TASK_CONTROL_PORT_IMMOVABLE (TASK_CONTROL_PORT_IMMOVABLE_SOFT | TASK_CONTROL_PORT_IMMOVABLE_HARD)
+#define TASK_CONTROL_PORT_PINNED    (TASK_CONTROL_PORT_PINNED_SOFT | TASK_CONTROL_PORT_PINNED_HARD)
+
+#endif /* XNU_KERNEL_PRIVATE */
 
 /*
  * Obsolete interfaces.

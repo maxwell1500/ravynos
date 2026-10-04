@@ -22,10 +22,9 @@
 
 #import <Foundation/NSRaise.h>
 #import <CoreGraphics/CGImage.h>
+#import <CoreGraphics/CGDirectDisplay.h>
 #import "WSDisplay.h"
 #import "rpc.h" // for flags constants
-
-extern struct CGDisplayMode *CGDisplayModeRetain(struct CGDisplayMode *);
 
 @implementation WSDisplay
 -init {

@@ -54,6 +54,7 @@
  * the rights to redistribute these changes.
  */
 
+#ifdef	PRIVATE
 
 #ifndef	_MACH_SYSCALL_SW_H_
 #define _MACH_SYSCALL_SW_H_
@@ -85,10 +86,11 @@
 kernel_trap(_kernelrpc_mach_vm_allocate_trap,-10,5) /* 4 args, +1 for mach_vm_size_t */
 kernel_trap(_kernelrpc_mach_vm_purgable_control_trap,-11,5) /* 4 args, +1 for mach_vm_offset_t */
 kernel_trap(_kernelrpc_mach_vm_deallocate_trap,-12,5) /* 3 args, +2 for mach_vm_size_t and mach_vm_address_t */
+kernel_trap(task_dyld_process_info_notify_get,-13,4) /* 2 args, +2 for mach_vm_address_t */
 kernel_trap(_kernelrpc_mach_vm_protect_trap,-14,7) /* 5 args, +2 for mach_vm_address_t and mach_vm_size_t */
 kernel_trap(_kernelrpc_mach_vm_map_trap,-15,9)
 kernel_trap(_kernelrpc_mach_port_allocate_trap,-16,3)
-kernel_trap(_kernelrpc_mach_port_destroy_trap,-17,2)
+/* mach_port_destroy */
 kernel_trap(_kernelrpc_mach_port_deallocate_trap,-18,2)
 kernel_trap(_kernelrpc_mach_port_mod_refs_trap,-19,4)
 kernel_trap(_kernelrpc_mach_port_move_member_trap,-20,3)
@@ -122,31 +124,10 @@ kernel_trap(task_name_for_pid,-44,3)
 kernel_trap(task_for_pid,-45,3)
 kernel_trap(pid_for_task,-46,2)
 
-// mach_msg2_trap (trap 47) is LP64/arm64 ONLY on the kernel side: the
-// registration at osfmk/kern/syscall_sw.c is inside
-//   #if defined(__LP64__) || defined(__arm64__)
-//     /* 47 */ MACH_TRAP(mach_msg2_trap, 8, 16, munge_llllllll),
-//   #else
-//     /* 47 */ MACH_TRAP(kern_invalid, 0, 0, NULL), /* Do not take */
-//   #endif
-// so on 32-bit that trap number deliberately does nothing, and the veneer must
-// not exist there either.  The guard matches the kernel exactly rather than
-// advertising a call that the kernel would reject as kern_invalid.
-//
-// This entry was MISSING: the table above jumped -46 straight to -48, so
-// libsyscall had no way to emit a mach_msg2_trap veneer.  That is why
-// mach_msg2() -- which libsyscall's mach_msg.c calls with 8 arguments
-// (Kernel/xnu/libsyscall/mach/mach_msg.c:106,122,135) -- had no user-space
-// definition anywhere in this tree, and why the MH_DYLINKER carried
-// _mach_msg2 as an import.  A bootstrap dylinker must have zero imports.
-//
-// 8 args / 16 arg-bytes is the kernel's munge_llllllll for this trap and is
-// NOT interchangeable with the older -31: that is a different trap with a
-// different ABI, and substituting it would corrupt the call rather than fail.
-// 8 is therefore the only correct value here.
-#if defined(__LP64__)
-kernel_trap(mach_msg2_trap,-47,8)
+#if defined(__LP64__) || defined(__arm64__)
+kernel_trap(mach_msg2_trap, -47, 8)
 #endif
+
 #if defined(__LP64__)
 kernel_trap(macx_swapon,-48, 4)
 kernel_trap(macx_swapoff,-49, 2)
@@ -179,10 +160,16 @@ kernel_trap(mach_voucher_extract_attr_recipe_trap,-72,4)
 kernel_trap(_kernelrpc_mach_port_type_trap,-76,3)
 kernel_trap(_kernelrpc_mach_port_request_notification_trap,-77,7)
 
+#if defined(__LP64__)
+kernel_trap(_exclaves_ctl_trap,-88,8)
+#else	/* __LP64__ */
+kernel_trap(_exclaves_ctl_trap,-88,14)
+#endif	/* __LP64__ */
+
 kernel_trap(mach_timebase_info_trap,-89,1)
 
 #if		defined(__LP64__)
-/* unit64_t arguments passed in one register in LP64 */
+/* uint64_t arguments passed in one register in LP64 */
 kernel_trap(mach_wait_until,-90,1)
 #else	/* __LP64__ */
 kernel_trap(mach_wait_until,-90,2)
@@ -192,7 +179,7 @@ kernel_trap(mk_timer_create,-91,0)
 kernel_trap(mk_timer_destroy,-92,1)
 
 #if		defined(__LP64__)
-/* unit64_t arguments passed in one register in LP64 */
+/* uint64_t arguments passed in one register in LP64 */
 kernel_trap(mk_timer_arm,-93,2)
 #else	/* __LP64__ */
 kernel_trap(mk_timer_arm,-93,3)
@@ -210,5 +197,6 @@ kernel_trap(debug_control_port_for_pid,-96,3)
  * N.B: Trap #-100 is in use by IOTrap.s in the IOKit Framework
  * (iokit_user_client_trap)
  */
-
 #endif	/* _MACH_SYSCALL_SW_H_ */
+
+#endif	/* PRIVATE */

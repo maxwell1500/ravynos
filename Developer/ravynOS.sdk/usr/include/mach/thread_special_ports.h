@@ -67,9 +67,13 @@
 #ifndef _MACH_THREAD_SPECIAL_PORTS_H_
 #define _MACH_THREAD_SPECIAL_PORTS_H_
 
-#define THREAD_KERNEL_PORT      1       /* Represents the thread to the outside
-	                                 *  world.*/
+#define THREAD_KERNEL_PORT      1       /* The full thread port for thread. */
 
+#define THREAD_INSPECT_PORT     2       /* The inspect port for thread. */
+
+#define THREAD_READ_PORT        3       /* The read port for thread. */
+
+#define THREAD_MAX_SPECIAL_PORT THREAD_READ_PORT
 /*
  *	Definitions for ease of use
  */
@@ -80,24 +84,4 @@
 #define thread_set_kernel_port(thread, port)    \
 	        (thread_set_special_port((thread), THREAD_KERNEL_PORT, (port)))
 
-
-/* --- SOURCED FROM IN-TREE XNU (see LIBSYSTEM-KERNEL-BUILD-NOTES.md sec. 13)
- *
- * Kernel/xnu/libsyscall references these but the SDK mach tree -- the
- * coherent generation that this build uses wholesale -- does not define
- * them. Each line below is copied VERBATIM from the in-tree xnu header
- * named beside it. Sourced, not invented; nothing here is a guessed
- * value or a synthesised struct layout.
- *
- * The gap is 15 constants across 7 headers, measured by intersecting the
- * identifier sets of the two mach trees with what libsyscall references --
- * not by compiling until the next error. Bounded and complete.
- */
-
-/* Kernel/xnu/osfmk/mach/thread_special_ports.h:72 */
-#define THREAD_INSPECT_PORT     2       /* The inspect port for thread. */
-/* Kernel/xnu/osfmk/mach/thread_special_ports.h:76 */
-#define THREAD_MAX_SPECIAL_PORT THREAD_READ_PORT
-/* Kernel/xnu/osfmk/mach/thread_special_ports.h:74 */
-#define THREAD_READ_PORT        3       /* The read port for thread. */
 #endif  /* _MACH_THREAD_SPECIAL_PORTS_H_ */

@@ -41,6 +41,7 @@
 #define _UAPI__UINPUT_H_
 
 #include <sys/types.h>
+#include <sys/ioctl.h>
 #include <linux/input.h>
 
 #define UINPUT_VERSION		5

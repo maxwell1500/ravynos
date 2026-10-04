@@ -1,4 +1,5 @@
 FRAMEWORK=QuartzCore
+MK_WERROR = no
 .include "../framework.common.mk"
 
 SRCS= \
@@ -27,7 +28,7 @@ SRCS= \
 	CILinearGradient.m \
 	CIVector.m
 
-INCS= \
+HEADERS= \
 	CAAction.h \
 	CAAnimation.h \
 	CAAnimationGroup.h \
@@ -57,17 +58,17 @@ INCS= \
 	CoreAnimation.h \
 	CoreImage.h \
 	CoreVideo.h \
-	QuartzCore.h 
-
+	QuartzCore.h
 RESOURCES=Info.plist English.lproj
-CFLAGS+= ${FMWK_CFLAGS} -I${SRCTOP}/Frameworks \
+CFLAGS+= ${FMWK_CFLAGS} -I${.CURDIR:H} \
 	-I${OBJTOP}/Frameworks/Foundation/Headers \
         -I${OBJTOP}/Frameworks/AppKit/Headers \
 	-F${OBJTOP}/Frameworks/OpenGL -framework OpenGL
 LDFLAGS+= ${FMWK_LDFLAGS} \
 	-L${OBJTOP}/Frameworks/OpenGL/OpenGL.framework \
 	-lOpenGL \
-        -Wl,-R/System/Library/Frameworks/OpenGL.framework/Versions/Current
+        -Wl,-rpath,/System/Library/Frameworks/OpenGL.framework/Versions/Current
+
 
 .include <rvn.framework.mk>
 

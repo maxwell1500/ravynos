@@ -1,253 +1,192 @@
-/*-
- * Copyright (c)1999 Citrus Project,
- * All rights reserved.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- *
- * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
- * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
- * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
- * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
- * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
- * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
- * SUCH DAMAGE.
- *
- * $FreeBSD: /repoman/r/ncvs/src/include/wchar.h,v 1.34 2003/03/13 06:29:53 tjr Exp $
- */
+// -*- C++ -*-
+//===----------------------------------------------------------------------===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//===----------------------------------------------------------------------===//
 
-/*-
- * Copyright (c) 1999, 2000 The NetBSD Foundation, Inc.
- * All rights reserved.
- *
- * This code is derived from software contributed to The NetBSD Foundation
- * by Julian Coleman.
- *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions
- * are met:
- * 1. Redistributions of source code must retain the above copyright
- *    notice, this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright
- *    notice, this list of conditions and the following disclaimer in the
- *    documentation and/or other materials provided with the distribution.
- * 3. All advertising materials mentioning features or use of this software
- *    must display the following acknowledgement:
- *        This product includes software developed by the NetBSD
- *        Foundation, Inc. and its contributors.
- * 4. Neither the name of The NetBSD Foundation nor the names of its
- *    contributors may be used to endorse or promote products derived
- *    from this software without specific prior written permission.
- *
- * THIS SOFTWARE IS PROVIDED BY THE NETBSD FOUNDATION, INC. AND CONTRIBUTORS
- * ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED
- * TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
- * PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL THE FOUNDATION OR CONTRIBUTORS
- * BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
- * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
- *
- *	$NetBSD: wchar.h,v 1.8 2000/12/22 05:31:42 itojun Exp $
- */
+#if defined(__need_wint_t) || defined(__need_mbstate_t)
 
-#ifndef _WCHAR_H_
-#define _WCHAR_H_
-
-#include <_types.h>
-#include <sys/cdefs.h>
-#include <Availability.h>
-
-#include <sys/_types/_null.h>
-#include <sys/_types/_size_t.h>
-#include <sys/_types/_mbstate_t.h>
-#include <sys/_types/_ct_rune_t.h>
-#include <sys/_types/_rune_t.h>
-#include <sys/_types/_wchar_t.h>
-
-#ifndef WCHAR_MIN
-#define WCHAR_MIN	__DARWIN_WCHAR_MIN
+#if !defined(_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER)
+#  pragma GCC system_header
 #endif
 
-#ifndef WCHAR_MAX
-#define WCHAR_MAX	__DARWIN_WCHAR_MAX
+#include_next <wchar.h>
+
+#elif !defined(_LIBCPP_WCHAR_H)
+#define _LIBCPP_WCHAR_H
+
+/*
+    wchar.h synopsis
+
+Macros:
+
+    NULL
+    WCHAR_MAX
+    WCHAR_MIN
+    WEOF
+
+Types:
+
+    mbstate_t
+    size_t
+    tm
+    wint_t
+
+int fwprintf(FILE* restrict stream, const wchar_t* restrict format, ...);
+int fwscanf(FILE* restrict stream, const wchar_t* restrict format, ...);
+int swprintf(wchar_t* restrict s, size_t n, const wchar_t* restrict format, ...);
+int swscanf(const wchar_t* restrict s, const wchar_t* restrict format, ...);
+int vfwprintf(FILE* restrict stream, const wchar_t* restrict format, va_list arg);
+int vfwscanf(FILE* restrict stream, const wchar_t* restrict format, va_list arg);  // C99
+int vswprintf(wchar_t* restrict s, size_t n, const wchar_t* restrict format, va_list arg);
+int vswscanf(const wchar_t* restrict s, const wchar_t* restrict format, va_list arg);  // C99
+int vwprintf(const wchar_t* restrict format, va_list arg);
+int vwscanf(const wchar_t* restrict format, va_list arg);  // C99
+int wprintf(const wchar_t* restrict format, ...);
+int wscanf(const wchar_t* restrict format, ...);
+wint_t fgetwc(FILE* stream);
+wchar_t* fgetws(wchar_t* restrict s, int n, FILE* restrict stream);
+wint_t fputwc(wchar_t c, FILE* stream);
+int fputws(const wchar_t* restrict s, FILE* restrict stream);
+int fwide(FILE* stream, int mode);
+wint_t getwc(FILE* stream);
+wint_t getwchar();
+wint_t putwc(wchar_t c, FILE* stream);
+wint_t putwchar(wchar_t c);
+wint_t ungetwc(wint_t c, FILE* stream);
+double wcstod(const wchar_t* restrict nptr, wchar_t** restrict endptr);
+float wcstof(const wchar_t* restrict nptr, wchar_t** restrict endptr);         // C99
+long double wcstold(const wchar_t* restrict nptr, wchar_t** restrict endptr);  // C99
+long wcstol(const wchar_t* restrict nptr, wchar_t** restrict endptr, int base);
+long long wcstoll(const wchar_t* restrict nptr, wchar_t** restrict endptr, int base);  // C99
+unsigned long wcstoul(const wchar_t* restrict nptr, wchar_t** restrict endptr, int base);
+unsigned long long wcstoull(const wchar_t* restrict nptr, wchar_t** restrict endptr, int base);  // C99
+wchar_t* wcscpy(wchar_t* restrict s1, const wchar_t* restrict s2);
+wchar_t* wcsncpy(wchar_t* restrict s1, const wchar_t* restrict s2, size_t n);
+wchar_t* wcscat(wchar_t* restrict s1, const wchar_t* restrict s2);
+wchar_t* wcsncat(wchar_t* restrict s1, const wchar_t* restrict s2, size_t n);
+int wcscmp(const wchar_t* s1, const wchar_t* s2);
+int wcscoll(const wchar_t* s1, const wchar_t* s2);
+int wcsncmp(const wchar_t* s1, const wchar_t* s2, size_t n);
+size_t wcsxfrm(wchar_t* restrict s1, const wchar_t* restrict s2, size_t n);
+const wchar_t* wcschr(const wchar_t* s, wchar_t c);
+      wchar_t* wcschr(      wchar_t* s, wchar_t c);
+size_t wcscspn(const wchar_t* s1, const wchar_t* s2);
+size_t wcslen(const wchar_t* s);
+const wchar_t* wcspbrk(const wchar_t* s1, const wchar_t* s2);
+      wchar_t* wcspbrk(      wchar_t* s1, const wchar_t* s2);
+const wchar_t* wcsrchr(const wchar_t* s, wchar_t c);
+      wchar_t* wcsrchr(      wchar_t* s, wchar_t c);
+size_t wcsspn(const wchar_t* s1, const wchar_t* s2);
+const wchar_t* wcsstr(const wchar_t* s1, const wchar_t* s2);
+      wchar_t* wcsstr(      wchar_t* s1, const wchar_t* s2);
+wchar_t* wcstok(wchar_t* restrict s1, const wchar_t* restrict s2, wchar_t** restrict ptr);
+const wchar_t* wmemchr(const wchar_t* s, wchar_t c, size_t n);
+      wchar_t* wmemchr(      wchar_t* s, wchar_t c, size_t n);
+int wmemcmp(wchar_t* restrict s1, const wchar_t* restrict s2, size_t n);
+wchar_t* wmemcpy(wchar_t* restrict s1, const wchar_t* restrict s2, size_t n);
+wchar_t* wmemmove(wchar_t* s1, const wchar_t* s2, size_t n);
+wchar_t* wmemset(wchar_t* s, wchar_t c, size_t n);
+size_t wcsftime(wchar_t* restrict s, size_t maxsize, const wchar_t* restrict format,
+                const tm* restrict timeptr);
+wint_t btowc(int c);
+int wctob(wint_t c);
+int mbsinit(const mbstate_t* ps);
+size_t mbrlen(const char* restrict s, size_t n, mbstate_t* restrict ps);
+size_t mbrtowc(wchar_t* restrict pwc, const char* restrict s, size_t n, mbstate_t* restrict ps);
+size_t wcrtomb(char* restrict s, wchar_t wc, mbstate_t* restrict ps);
+size_t mbsrtowcs(wchar_t* restrict dst, const char** restrict src, size_t len,
+                 mbstate_t* restrict ps);
+size_t wcsrtombs(char* restrict dst, const wchar_t** restrict src, size_t len,
+                 mbstate_t* restrict ps);
+
+*/
+
+#include <__config>
+#include <stddef.h>
+
+#if defined(_LIBCPP_HAS_NO_WIDE_CHARACTERS)
+#   error "The <wchar.h> header is not supported since libc++ has been configured with LIBCXX_ENABLE_WIDE_CHARACTERS disabled"
 #endif
 
-#include <stdarg.h>
-#include <stdio.h>
-#ifndef UNIFDEF_DRIVERKIT
-#include <time.h>
-#endif /* UNIFDEF_DRIVERKIT */
-#include <_wctype.h>
-
-
-/* Initially added in Issue 4 */
-__BEGIN_DECLS
-wint_t	btowc(int);
-#ifndef UNIFDEF_DRIVERKIT
-wint_t	fgetwc(FILE *);
-wchar_t	*fgetws(wchar_t * __restrict, int, FILE * __restrict);
-wint_t	fputwc(wchar_t, FILE *);
-int	fputws(const wchar_t * __restrict, FILE * __restrict);
-int	fwide(FILE *, int);
-int	fwprintf(FILE * __restrict, const wchar_t * __restrict, ...);
-int	fwscanf(FILE * __restrict, const wchar_t * __restrict, ...);
-wint_t	getwc(FILE *);
-wint_t	getwchar(void);
-#endif /* UNIFDEF_DRIVERKIT */
-size_t	mbrlen(const char * __restrict, size_t, mbstate_t * __restrict);
-size_t	mbrtowc(wchar_t * __restrict, const char * __restrict, size_t,
-	    mbstate_t * __restrict);
-int	mbsinit(const mbstate_t *);
-size_t	mbsrtowcs(wchar_t * __restrict, const char ** __restrict, size_t,
-	    mbstate_t * __restrict);
-#ifndef UNIFDEF_DRIVERKIT
-wint_t	putwc(wchar_t, FILE *);
-wint_t	putwchar(wchar_t);
-#endif /* UNIFDEF_DRIVERKIT */
-int	swprintf(wchar_t * __restrict, size_t, const wchar_t * __restrict, ...);
-int	swscanf(const wchar_t * __restrict, const wchar_t * __restrict, ...);
-#ifndef UNIFDEF_DRIVERKIT
-wint_t	ungetwc(wint_t, FILE *);
-int	vfwprintf(FILE * __restrict, const wchar_t * __restrict,
-	    __darwin_va_list);
-#endif /* UNIFDEF_DRIVERKIT */
-int	vswprintf(wchar_t * __restrict, size_t, const wchar_t * __restrict,
-	    __darwin_va_list);
-#ifndef UNIFDEF_DRIVERKIT
-int	vwprintf(const wchar_t * __restrict, __darwin_va_list);
-#endif /* UNIFDEF_DRIVERKIT */
-size_t	wcrtomb(char * __restrict, wchar_t, mbstate_t * __restrict);
-wchar_t	*wcscat(wchar_t * __restrict, const wchar_t * __restrict);
-wchar_t	*wcschr(const wchar_t *, wchar_t);
-int	wcscmp(const wchar_t *, const wchar_t *);
-int	wcscoll(const wchar_t *, const wchar_t *);
-wchar_t	*wcscpy(wchar_t * __restrict, const wchar_t * __restrict);
-size_t	wcscspn(const wchar_t *, const wchar_t *);
-#ifndef UNIFDEF_DRIVERKIT
-size_t	wcsftime(wchar_t * __restrict, size_t, const wchar_t * __restrict,
-	    const struct tm * __restrict) __DARWIN_ALIAS(wcsftime);
-#endif /* UNIFDEF_DRIVERKIT */
-size_t	wcslen(const wchar_t *);
-wchar_t	*wcsncat(wchar_t * __restrict, const wchar_t * __restrict, size_t);
-int	wcsncmp(const wchar_t *, const wchar_t *, size_t);
-wchar_t	*wcsncpy(wchar_t * __restrict , const wchar_t * __restrict, size_t);
-wchar_t	*wcspbrk(const wchar_t *, const wchar_t *);
-wchar_t	*wcsrchr(const wchar_t *, wchar_t);
-size_t	wcsrtombs(char * __restrict, const wchar_t ** __restrict, size_t,
-	    mbstate_t * __restrict);
-size_t	wcsspn(const wchar_t *, const wchar_t *);
-wchar_t	*wcsstr(const wchar_t * __restrict, const wchar_t * __restrict);
-size_t	wcsxfrm(wchar_t * __restrict, const wchar_t * __restrict, size_t);
-int	wctob(wint_t);
-double	wcstod(const wchar_t * __restrict, wchar_t ** __restrict);
-wchar_t	*wcstok(wchar_t * __restrict, const wchar_t * __restrict,
-	    wchar_t ** __restrict);
-long	 wcstol(const wchar_t * __restrict, wchar_t ** __restrict, int);
-unsigned long
-	 wcstoul(const wchar_t * __restrict, wchar_t ** __restrict, int);
-wchar_t	*wmemchr(const wchar_t *, wchar_t, size_t);
-int	wmemcmp(const wchar_t *, const wchar_t *, size_t);
-wchar_t	*wmemcpy(wchar_t * __restrict, const wchar_t * __restrict, size_t);
-wchar_t	*wmemmove(wchar_t *, const wchar_t *, size_t);
-wchar_t	*wmemset(wchar_t *, wchar_t, size_t);
-#ifndef UNIFDEF_DRIVERKIT
-int	wprintf(const wchar_t * __restrict, ...);
-int	wscanf(const wchar_t * __restrict, ...);
-#endif /* UNIFDEF_DRIVERKIT */
-int	wcswidth(const wchar_t *, size_t);
-int	wcwidth(wchar_t);
-__END_DECLS
-
-
-
-/* Additional functionality provided by:
- * POSIX.1-2001
- * ISO C99
- */
-
-#if __DARWIN_C_LEVEL >= 200112L || defined(_C99_SOURCE) || defined(__cplusplus)
-__BEGIN_DECLS
-#ifndef UNIFDEF_DRIVERKIT
-int	vfwscanf(FILE * __restrict, const wchar_t * __restrict,
-	    __darwin_va_list);
-#endif /* UNIFDEF_DRIVERKIT */
-int	vswscanf(const wchar_t * __restrict, const wchar_t * __restrict,
-	    __darwin_va_list);
-#ifndef UNIFDEF_DRIVERKIT
-int	vwscanf(const wchar_t * __restrict, __darwin_va_list);
-#endif /* UNIFDEF_DRIVERKIT */
-float	wcstof(const wchar_t * __restrict, wchar_t ** __restrict);
-long double
-	wcstold(const wchar_t * __restrict, wchar_t ** __restrict);
-#if !__DARWIN_NO_LONG_LONG
-long long
-	wcstoll(const wchar_t * __restrict, wchar_t ** __restrict, int);
-unsigned long long
-	wcstoull(const wchar_t * __restrict, wchar_t ** __restrict, int);
-#endif /* !__DARWIN_NO_LONG_LONG */
-__END_DECLS
+#if !defined(_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER)
+#  pragma GCC system_header
 #endif
 
-
-
-/* Additional functionality provided by:
- * POSIX.1-2008
- */
-
-#if __DARWIN_C_LEVEL >= 200809L
-__BEGIN_DECLS
-size_t  mbsnrtowcs(wchar_t * __restrict, const char ** __restrict, size_t,
-            size_t, mbstate_t * __restrict);
-wchar_t *wcpcpy(wchar_t * __restrict, const wchar_t * __restrict) __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_4_3);
-wchar_t *wcpncpy(wchar_t * __restrict, const wchar_t * __restrict, size_t) __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_4_3);
-wchar_t *wcsdup(const wchar_t *) __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_4_3);
-int     wcscasecmp(const wchar_t *, const wchar_t *) __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_4_3);
-int     wcsncasecmp(const wchar_t *, const wchar_t *, size_t n) __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_4_3);
-size_t  wcsnlen(const wchar_t *, size_t) __pure __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_4_3);
-size_t  wcsnrtombs(char * __restrict, const wchar_t ** __restrict, size_t,
-            size_t, mbstate_t * __restrict);
-#ifndef UNIFDEF_DRIVERKIT
-FILE *open_wmemstream(wchar_t ** __bufp, size_t * __sizep) __API_AVAILABLE(macos(10.13), ios(11.0), tvos(11.0), watchos(4.0));
-#endif /* UNIFDEF_DRIVERKIT */
-__END_DECLS
-#endif /* __DARWIN_C_LEVEL >= 200809L */
-
-
-
-/* Darwin extensions */
-
-#if __DARWIN_C_LEVEL >= __DARWIN_C_FULL
-__BEGIN_DECLS
-#ifndef UNIFDEF_DRIVERKIT
-wchar_t *fgetwln(FILE * __restrict, size_t *) __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_4_3);
-#endif /* UNIFDEF_DRIVERKIT */
-size_t	wcslcat(wchar_t *, const wchar_t *, size_t);
-size_t	wcslcpy(wchar_t *, const wchar_t *, size_t);
-__END_DECLS
-#endif /* __DARWIN_C_LEVEL >= __DARWIN_C_FULL */
-
-
-/* Poison the following routines if -fshort-wchar is set */
-#if !defined(__cplusplus) && defined(__WCHAR_MAX__) && __WCHAR_MAX__ <= 0xffffU
-#pragma GCC poison fgetwln fgetws fputwc fputws fwprintf fwscanf mbrtowc mbsnrtowcs mbsrtowcs putwc putwchar swprintf swscanf vfwprintf vfwscanf vswprintf vswscanf vwprintf vwscanf wcrtomb wcscat wcschr wcscmp wcscoll wcscpy wcscspn wcsftime wcsftime wcslcat wcslcpy wcslen wcsncat wcsncmp wcsncpy wcsnrtombs wcspbrk wcsrchr wcsrtombs wcsspn wcsstr wcstod wcstof wcstok wcstol wcstold wcstoll wcstoul wcstoull wcswidth wcsxfrm wcwidth wmemchr wmemcmp wmemcpy wmemmove wmemset wprintf wscanf
+// We define this here to support older versions of glibc <wchar.h> that do
+// not define this for clang.
+#ifdef __cplusplus
+#define __CORRECT_ISO_CPP_WCHAR_H_PROTO
 #endif
 
-#ifdef _USE_EXTENDED_LOCALES_
-#include <xlocale/_wchar.h>
-#endif /* _USE_EXTENDED_LOCALES_ */
+#  if __has_include_next(<wchar.h>)
+#    include_next <wchar.h>
+#  else
+#    include <__mbstate_t.h> // make sure we have mbstate_t regardless of the existence of <wchar.h>
+#  endif
 
-#endif /* !_WCHAR_H_ */
+// Determine whether we have const-correct overloads for wcschr and friends.
+#if defined(_WCHAR_H_CPLUSPLUS_98_CONFORMANCE_)
+#  define _LIBCPP_WCHAR_H_HAS_CONST_OVERLOADS 1
+#elif defined(__GLIBC_PREREQ)
+#  if __GLIBC_PREREQ(2, 10)
+#    define _LIBCPP_WCHAR_H_HAS_CONST_OVERLOADS 1
+#  endif
+#elif defined(_LIBCPP_MSVCRT)
+#  if defined(_CRT_CONST_CORRECT_OVERLOADS)
+#    define _LIBCPP_WCHAR_H_HAS_CONST_OVERLOADS 1
+#  endif
+#endif
+
+#if defined(__cplusplus) && !defined(_LIBCPP_WCHAR_H_HAS_CONST_OVERLOADS) && defined(_LIBCPP_PREFERRED_OVERLOAD)
+extern "C++" {
+inline _LIBCPP_INLINE_VISIBILITY
+wchar_t* __libcpp_wcschr(const wchar_t* __s, wchar_t __c) {return (wchar_t*)wcschr(__s, __c);}
+inline _LIBCPP_INLINE_VISIBILITY _LIBCPP_PREFERRED_OVERLOAD
+const wchar_t* wcschr(const wchar_t* __s, wchar_t __c) {return __libcpp_wcschr(__s, __c);}
+inline _LIBCPP_INLINE_VISIBILITY _LIBCPP_PREFERRED_OVERLOAD
+      wchar_t* wcschr(      wchar_t* __s, wchar_t __c) {return __libcpp_wcschr(__s, __c);}
+
+inline _LIBCPP_INLINE_VISIBILITY
+wchar_t* __libcpp_wcspbrk(const wchar_t* __s1, const wchar_t* __s2) {return (wchar_t*)wcspbrk(__s1, __s2);}
+inline _LIBCPP_INLINE_VISIBILITY _LIBCPP_PREFERRED_OVERLOAD
+const wchar_t* wcspbrk(const wchar_t* __s1, const wchar_t* __s2) {return __libcpp_wcspbrk(__s1, __s2);}
+inline _LIBCPP_INLINE_VISIBILITY _LIBCPP_PREFERRED_OVERLOAD
+      wchar_t* wcspbrk(      wchar_t* __s1, const wchar_t* __s2) {return __libcpp_wcspbrk(__s1, __s2);}
+
+inline _LIBCPP_INLINE_VISIBILITY
+wchar_t* __libcpp_wcsrchr(const wchar_t* __s, wchar_t __c) {return (wchar_t*)wcsrchr(__s, __c);}
+inline _LIBCPP_INLINE_VISIBILITY _LIBCPP_PREFERRED_OVERLOAD
+const wchar_t* wcsrchr(const wchar_t* __s, wchar_t __c) {return __libcpp_wcsrchr(__s, __c);}
+inline _LIBCPP_INLINE_VISIBILITY _LIBCPP_PREFERRED_OVERLOAD
+      wchar_t* wcsrchr(      wchar_t* __s, wchar_t __c) {return __libcpp_wcsrchr(__s, __c);}
+
+inline _LIBCPP_INLINE_VISIBILITY
+wchar_t* __libcpp_wcsstr(const wchar_t* __s1, const wchar_t* __s2) {return (wchar_t*)wcsstr(__s1, __s2);}
+inline _LIBCPP_INLINE_VISIBILITY _LIBCPP_PREFERRED_OVERLOAD
+const wchar_t* wcsstr(const wchar_t* __s1, const wchar_t* __s2) {return __libcpp_wcsstr(__s1, __s2);}
+inline _LIBCPP_INLINE_VISIBILITY _LIBCPP_PREFERRED_OVERLOAD
+      wchar_t* wcsstr(      wchar_t* __s1, const wchar_t* __s2) {return __libcpp_wcsstr(__s1, __s2);}
+
+inline _LIBCPP_INLINE_VISIBILITY
+wchar_t* __libcpp_wmemchr(const wchar_t* __s, wchar_t __c, size_t __n) {return (wchar_t*)wmemchr(__s, __c, __n);}
+inline _LIBCPP_INLINE_VISIBILITY _LIBCPP_PREFERRED_OVERLOAD
+const wchar_t* wmemchr(const wchar_t* __s, wchar_t __c, size_t __n) {return __libcpp_wmemchr(__s, __c, __n);}
+inline _LIBCPP_INLINE_VISIBILITY _LIBCPP_PREFERRED_OVERLOAD
+      wchar_t* wmemchr(      wchar_t* __s, wchar_t __c, size_t __n) {return __libcpp_wmemchr(__s, __c, __n);}
+}
+#endif
+
+#if defined(__cplusplus) && (defined(_LIBCPP_MSVCRT_LIKE) || defined(__MVS__))
+extern "C" {
+size_t mbsnrtowcs(wchar_t *__restrict __dst, const char **__restrict __src,
+                  size_t __nmc, size_t __len, mbstate_t *__restrict __ps);
+size_t wcsnrtombs(char *__restrict __dst, const wchar_t **__restrict __src,
+                  size_t __nwc, size_t __len, mbstate_t *__restrict __ps);
+}  // extern "C"
+#endif  // __cplusplus && (_LIBCPP_MSVCRT || __MVS__)
+
+#endif // _LIBCPP_WCHAR_H

@@ -2752,3 +2752,54 @@ Evidence: `work/KEEP_serial_cpmv_runtime_20261001.log`,
 `KEEP_bootrun_cpmv_runtime_20261001.log`,
 `KEEP_status_cpmv_runtime_20261001.txt`, `KEEP_trace_cpmv_runtime_20261001.log`,
 and `work/cp_dyn`, `work/mv_dyn`.
+
+### 15.22 GUI gap analysis: what stands between launchd-on-serial and a graphical desktop (2026-10-03)
+
+The GUI stack above the kernel handoff is already present in this tree and is largely real. The blockage is concentrated in four items at the kernel handoff, in strict dependency order.
+
+**Tier 0 — hard blockers, strict order:**
+
+1. **The EFI loader never acquires a framebuffer.** `tools/efiloader/src/loader.c:1125` is the only assignment to any `Video.*` boot-arg field: `A->Video.v_display = 0; /* headless: serial=1 */`. There is zero GOP / EFI_GRAPHICS_OUTPUT_PROTOCOL / QueryMode / SetMode / BLT code anywhere in `tools/efiloader/`. Everything else is downstream of this.
+
+2. **The kernel graphics console is starved, but needs no new kernel code.** `osfmk/console/video_console.c` is fully linked (120 `vc_*` symbols present in the linked kernel), but `pexpert/i386/pe_init.c:227` copies `args->Video` into `PE_state.video` only `if (args->Video.v_baseAddr)` — currently 0. Fixing #1 fixes this.
+
+3. **`IOGOPFramebuffer.kext` is not on the boot path.** Source is real (273 lines, `Kernel/Extensions/IOGraphics/IOGOPFramebuffer.cpp`, wired into `Kernel/Extensions/Makefile` SUBDIR and the plktool kernelcache target), but no `.kext` is built. Additionally, the staged `System/Library/KernelCollections/BootKernelExtensions.kc` is a byte-for-byte copy of the kernel: `tools/bootlab/work/boot.img.digests` records both at sha256 `48bc1c24...6780c`, because `tools/bootlab/mkimage.py:185-186` resolves any `"kernel": true` entry to the kernel bytes.
+
+4. **No console char device / VT / FBIO layer in the kernel.** `CoreServices/WindowServer/BSDFramebuffer.m` calls `ioctl(FBIOGTYPE)` / `ioctl(FBIO_GETLINEWIDTH)`; `main.m` uses `VT_OPENQRY` / `VT_ACTIVATE` / `VT_SETMODE` / `VT_GETACTIVE` / `CONS_MOUSECTL`. Those symbols exist ONLY inside `CoreServices/WindowServer/*.m` (4 hits, all consumers). There is no `sys/fbio.h`, `sys/consio.h`, or `sys/consvt.h`; no `VT_*` or `FBIO_*` constants in `Kernel/xnu/bsd/sys/ioctl.h`; no console cdev in `Kernel/xnu/bsd/dev/`. Two options: (a) port the FreeBSD VT / syscons layer, or (b) re-point BSDFramebuffer at an IOConnectClient on IOGOPFramebuffer (more Darwin-native; matches the kext already in the tree).
+
+**Tier 1 — required before any picture appears:**
+
+5. **AppKit and CoreText are never built.** `Frameworks/Makefile` SUBDIR = CoreFoundation, Foundation, CoreServices, Onyx2D, CoreGraphics only. On a Darwin host the top-level `Makefile:110` sets `SUBDIR ?= Developer .WAIT Kernel Libraries BSD`, which excludes Frameworks entirely.
+6. **CoreServices (WindowServer/Dock/Filer) is never built.** Not in the top-level SUBDIR; no `WindowServer.app` exists anywhere in the tree.
+7. No built GUI artifact of any kind exists.
+8. The boot image (`tools/bootlab/manifest_cpmv.json`, 47 files) stages zero GUI content.
+
+**Tier 2/3 — secondary:**
+
+- Dock and Filer have `RunAtLoad: false` (LaunchAgents). LoginWindow and SystemUIServer need no plist — WindowServer forks them from its own Resources (`WindowServer.m:436`, `:544`).
+- QEMU is headless (`tools/bootlab/boot.py:81-82`: `-vga std -display none`).
+- Boot args force serial: `com.apple.Boot.plist` contains `serial=1`, which `pexpert/i386/pe_init.c:82` uses to suppress screen operations.
+- Confirmed stubs: `Frameworks/OpenGL/OpenGL.c` is 4 lines (`void OpenGL(void) {}`) with 129 headers and no implementation; `Frameworks/ApplicationServices/Makefile` has `SRCS=` empty; `Frameworks/CoreServices/CoreServices.c` is 7 lines; `Frameworks/Cocoa/Cocoa.m` is 14 lines; `Frameworks/CoreVideo` is 82 lines with no vsync; `Frameworks/QuartzCore` is a skeleton; `FilerMain.m` is 94 lines; CoreGraphics PDF support is ~80 lines.
+
+**What is real (not stubs):**
+
+| Component | Path | Size |
+|---|---|---|
+| WindowServer | `CoreServices/WindowServer/` | 3,487 lines / 7 files — full LOADING → LoginWindow → DESKTOP → SystemUIServer state machine, libinput/xkb input, shm capture, CPU blit via Onyx2D |
+| Onyx2D | `Frameworks/Onyx2D/` | 285,069 lines — real CPU rasterizer (FreeType, PNG/GIF, beziers) |
+| CoreGraphics | `Frameworks/CoreGraphics/` | 5,380 lines — real client shim onto WindowServer RPC + shm |
+| AppKit | `Frameworks/AppKit/` | 88,074 lines |
+| Foundation | `Frameworks/Foundation/` | 142,690 lines |
+| CoreText | `Frameworks/CoreText/` | 43,499 lines |
+| kernel video console | `Kernel/xnu/osfmk/console/video_console.c` | linked; 120 `vc_*` symbols in the linked kernel |
+| IOGraphics kext | `Kernel/Extensions/IOGraphics/` | 45,160 lines — IOGOPFramebuffer.cpp (273), IOFramebuffer.cpp (~11.8k), IODisplay.cpp (~1.6k) |
+| WindowServer job | `SystemLibrary/LaunchDaemons/com.ravynos.WindowServer.json` | RunAtLoad:true, KeepAlive:true |
+
+**Ordered roadmap to a GUI:**
+
+- Phase 1 (kernel handoff — a coherent few-dozen-line piece in existing scaffolding): GOP mode-set in the EFI loader → fills `PE_state.video`; build and stage a real plktool kernelcache with IOGOPFramebuffer; revisit `serial=1` in boot args.
+- Phase 2 (display device): implement the console cdev + VT + FBIO layer, or re-point BSDFramebuffer to IOConnectClient on IOGOPFramebuffer. Largest unknown.
+- Phase 3 (build + stage the GUI — parallelizable): add AppKit/CoreText/CoreServices to the build; build WindowServer.app + resources; stage frameworks, fonts, cursors, splash, launchd jobs; open a QEMU display.
+- Phase 4 (session): set Dock/Filer RunAtLoad; then address Tier-3 stubs.
+
+**Caveats:** Upstream's "graphical desktop" claim is from its own release notes and screenshot; the demo VM was not downloaded or independently verified. Whether the VT/console layer exists in a BSD tree not checked in here, and whether CI builds Frameworks on a non-Darwin host, are both unverified.

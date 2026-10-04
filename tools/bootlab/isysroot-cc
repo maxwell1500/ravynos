@@ -370,6 +370,22 @@ for a in "$@"; do
                 out="$out '$a'"
             fi
             ;;
+        -fobjc-runtime=gnustep-2.0)
+            # The repo builds Objective-C against the GNUstep v2 runtime
+            # (BSD/share/mk/rvn.common.mk), but the host clang refuses that
+            # runtime for a Mach-O target:
+            #   clang: error: GNUstep Objective-C runtime version 2
+            #   incompatible with target binary format
+            # (lib/Driver/ToolChains/Clang.cpp gates it to ELF/COFF). It is not
+            # a codegen option that can be forced -- the driver rejects the
+            # invocation outright. The SDK this pipeline stages ships objc4's
+            # libobjc.A.dylib (objc_autoreleaseReturnValue, objc_opt_self,
+            # objc_msgSendSuper2, objc_debug_class_getNameRaw; no
+            # objc_msg_lookup), so the objects must use the Apple runtime to
+            # match the libobjc they link against. Host-only translation: the
+            # native ravynOS build uses its own patched clang, not this wrapper.
+            out="$out '-fobjc-runtime=macosx'"
+            ;;
         -umbrella)  if [ "$inject" = yes ]; then skip_next=yes; else out="$out '$a'"; fi ;;
         -lSystem)   if [ "$inject" = yes ]; then :; else out="$out '$a'"; fi ;;
         *) out="$out '$a'" ;;

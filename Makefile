@@ -106,11 +106,11 @@ SYSROOT_DIR = ${ROOT_BINARY_DIR}/sysroot
 
 TARGET_TRIPLE = ${CpuArch}-apple-darwin${DARWIN_MAJOR}
 
-.if "${.MAKE.OS}" == "Darwin"
-SUBDIR ?= Developer .WAIT Kernel Libraries BSD
-.else
-SUBDIR ?= Developer .WAIT Kernel Libraries Frameworks BSD
-.endif
+# Frameworks is host-independent (the same bmake tree builds it everywhere);
+# the previous Darwin-only exclusion meant the GUI frameworks were never even
+# descended into on this host. CoreServices carries the WindowServer/Dock/Filer
+# applications and depends on Frameworks, so it follows them.
+SUBDIR ?= Developer .WAIT Kernel Libraries Frameworks .WAIT CoreServices BSD
 
 .export ROOT_SOURCE_DIR ROOT_BINARY_DIR ARCH_CONFIGS KERNEL_CONFIGS \
 	PROD_VERSION PROD_FAMILY CFLAGS DEVEL DARWIN_VERSION \

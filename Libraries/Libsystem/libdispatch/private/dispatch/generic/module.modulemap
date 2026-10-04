@@ -1,10 +1,17 @@
-module DispatchPrivate [system] [extern_c] {
-	umbrella header "private.h"
-	exclude header "mach_private.h"
+module Dispatch {
+	requires blocks
+	export *
+	link "dispatch"
+}
+
+module DispatchIntrospection [system] [extern_c] {
+	header "introspection.h"
 	export *
 }
 
-module DispatchIntrospectionPrivate [system] [extern_c] {
-	header "introspection_private.h"
+module CDispatch [system] [extern_c] {
+	umbrella header "dispatch.h"
 	export *
+	requires blocks
+	link "dispatch"
 }

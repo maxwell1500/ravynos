@@ -26,6 +26,7 @@
 #import <AppKit/NSDisplay.h>
 #import <AppKit/NSApplication.h>
 #import <AppKit/NSWindow.h>
+#import <Onyx2D/O2ColorSpace.h>
 
 
 NSString * const NSScreenColorSpaceDidChangeNotification = @"NSScreenColorSpaceDidChangeNotification";

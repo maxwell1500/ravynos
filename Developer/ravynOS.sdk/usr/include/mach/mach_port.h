@@ -49,9 +49,10 @@ typedef function_table_entry   *function_table_t;
 #endif /* AUTOTEST */
 
 #ifndef	mach_port_MSG_COUNT
-#define	mach_port_MSG_COUNT	40
+#define	mach_port_MSG_COUNT	43
 #endif	/* mach_port_MSG_COUNT */
 
+#include <Availability.h>
 #include <mach/std_types.h>
 #include <mach/mig.h>
 #include <mach/mig.h>
@@ -113,8 +114,6 @@ mig_external
 #else
 extern
 #endif	/* mig_external */
-__WATCHOS_PROHIBITED
-__TVOS_PROHIBITED
 kern_return_t mach_port_allocate_name
 (
 	ipc_space_t task,
@@ -226,7 +225,7 @@ extern
 #endif	/* mig_external */
 kern_return_t mach_port_get_set_status
 (
-	ipc_space_inspect_t task,
+	ipc_space_read_t task,
 	mach_port_name_t name,
 	mach_port_name_array_t *members,
 	mach_msg_type_number_t *membersCnt
@@ -312,7 +311,7 @@ extern
 #endif	/* mig_external */
 kern_return_t mach_port_get_attributes
 (
-	ipc_space_inspect_t task,
+	ipc_space_read_t task,
 	mach_port_name_t name,
 	mach_port_flavor_t flavor,
 	mach_port_info_t port_info_out,
@@ -369,8 +368,6 @@ mig_external
 #else
 extern
 #endif	/* mig_external */
-__WATCHOS_PROHIBITED
-__TVOS_PROHIBITED
 kern_return_t task_set_port_space
 (
 	ipc_space_t task,
@@ -398,7 +395,7 @@ extern
 #endif	/* mig_external */
 kern_return_t mach_port_space_info
 (
-	ipc_space_inspect_t task,
+	ipc_space_read_t space,
 	ipc_info_space_t *space_info,
 	ipc_info_name_array_t *table_info,
 	mach_msg_type_number_t *table_infoCnt,
@@ -428,7 +425,7 @@ extern
 #endif	/* mig_external */
 kern_return_t mach_port_kernel_object
 (
-	ipc_space_inspect_t task,
+	ipc_space_read_t task,
 	mach_port_name_t name,
 	unsigned *object_type,
 	unsigned *object_addr
@@ -468,9 +465,9 @@ extern
 #endif	/* mig_external */
 kern_return_t mach_port_get_context
 (
-	ipc_space_inspect_t task,
+	ipc_space_read_t task,
 	mach_port_name_t name,
-	mach_port_context_t *context
+	mach_vm_address_t *context
 );
 
 /* Routine mach_port_set_context */
@@ -483,7 +480,7 @@ kern_return_t mach_port_set_context
 (
 	ipc_space_t task,
 	mach_port_name_t name,
-	mach_port_context_t context
+	mach_vm_address_t context
 );
 
 /* Routine mach_port_kobject */
@@ -494,7 +491,7 @@ extern
 #endif	/* mig_external */
 kern_return_t mach_port_kobject
 (
-	ipc_space_inspect_t task,
+	ipc_space_read_t task,
 	mach_port_name_t name,
 	natural_t *object_type,
 	mach_vm_address_t *object_addr
@@ -510,7 +507,7 @@ kern_return_t mach_port_construct
 (
 	ipc_space_t task,
 	mach_port_options_ptr_t options,
-	mach_port_context_t context,
+	uint64_t context,
 	mach_port_name_t *name
 );
 
@@ -525,7 +522,7 @@ kern_return_t mach_port_destruct
 	ipc_space_t task,
 	mach_port_name_t name,
 	mach_port_delta_t srdelta,
-	mach_port_context_t guard
+	uint64_t guard
 );
 
 /* Routine mach_port_guard */
@@ -538,7 +535,7 @@ kern_return_t mach_port_guard
 (
 	ipc_space_t task,
 	mach_port_name_t name,
-	mach_port_context_t guard,
+	uint64_t guard,
 	boolean_t strict
 );
 
@@ -552,7 +549,7 @@ kern_return_t mach_port_unguard
 (
 	ipc_space_t task,
 	mach_port_name_t name,
-	mach_port_context_t guard
+	uint64_t guard
 );
 
 /* Routine mach_port_space_basic_info */
@@ -567,6 +564,19 @@ kern_return_t mach_port_space_basic_info
 	ipc_info_space_basic_t *basic_info
 );
 
+/* Routine mach_port_special_reply_port_reset_link */
+#ifdef	mig_external
+mig_external
+#else
+extern
+#endif	/* mig_external */
+kern_return_t mach_port_special_reply_port_reset_link
+(
+	ipc_space_t task,
+	mach_port_name_t name,
+	boolean_t *srp_lost_link
+);
+
 /* Routine mach_port_guard_with_flags */
 #ifdef	mig_external
 mig_external
@@ -577,7 +587,7 @@ kern_return_t mach_port_guard_with_flags
 (
 	ipc_space_t task,
 	mach_port_name_t name,
-	mach_port_context_t guard,
+	uint64_t guard,
 	uint64_t flags
 );
 
@@ -591,8 +601,8 @@ kern_return_t mach_port_swap_guard
 (
 	ipc_space_t task,
 	mach_port_name_t name,
-	mach_port_context_t old_guard,
-	mach_port_context_t new_guard
+	uint64_t old_guard,
+	uint64_t new_guard
 );
 
 /* Routine mach_port_kobject_description */
@@ -603,11 +613,53 @@ extern
 #endif	/* mig_external */
 kern_return_t mach_port_kobject_description
 (
-	ipc_space_inspect_t task,
+	ipc_space_read_t task,
 	mach_port_name_t name,
 	natural_t *object_type,
 	mach_vm_address_t *object_addr,
 	kobject_description_t description
+);
+
+/* Routine mach_port_is_connection_for_service */
+#ifdef	mig_external
+mig_external
+#else
+extern
+#endif	/* mig_external */
+kern_return_t mach_port_is_connection_for_service
+(
+	ipc_space_t task,
+	mach_port_name_t connection_port,
+	mach_port_name_t service_port,
+	uint64_t *filter_policy_id
+);
+
+/* Routine mach_port_get_service_port_info */
+#ifdef	mig_external
+mig_external
+#else
+extern
+#endif	/* mig_external */
+kern_return_t mach_port_get_service_port_info
+(
+	ipc_space_read_t task,
+	mach_port_name_t name,
+	mach_service_port_info_data_t *sp_info_out
+);
+
+/* Routine mach_port_assert_attributes */
+#ifdef	mig_external
+mig_external
+#else
+extern
+#endif	/* mig_external */
+kern_return_t mach_port_assert_attributes
+(
+	ipc_space_t task,
+	mach_port_name_t name,
+	mach_port_flavor_t flavor,
+	mach_port_info_t info,
+	mach_msg_type_number_t infoCnt
 );
 
 __END_DECLS
@@ -1015,7 +1067,7 @@ __END_DECLS
 		mach_msg_header_t Head;
 		NDR_record_t NDR;
 		mach_port_name_t name;
-		mach_port_context_t context;
+		mach_vm_address_t context;
 	} __Request__mach_port_set_context_t __attribute__((unused));
 #ifdef  __MigPackStructs
 #pragma pack(pop)
@@ -1043,7 +1095,7 @@ __END_DECLS
 		mach_msg_ool_descriptor_t options;
 		/* end of the kernel processed data */
 		NDR_record_t NDR;
-		mach_port_context_t context;
+		uint64_t context;
 	} __Request__mach_port_construct_t __attribute__((unused));
 #ifdef  __MigPackStructs
 #pragma pack(pop)
@@ -1057,7 +1109,7 @@ __END_DECLS
 		NDR_record_t NDR;
 		mach_port_name_t name;
 		mach_port_delta_t srdelta;
-		mach_port_context_t guard;
+		uint64_t guard;
 	} __Request__mach_port_destruct_t __attribute__((unused));
 #ifdef  __MigPackStructs
 #pragma pack(pop)
@@ -1070,7 +1122,7 @@ __END_DECLS
 		mach_msg_header_t Head;
 		NDR_record_t NDR;
 		mach_port_name_t name;
-		mach_port_context_t guard;
+		uint64_t guard;
 		boolean_t strict;
 	} __Request__mach_port_guard_t __attribute__((unused));
 #ifdef  __MigPackStructs
@@ -1084,7 +1136,7 @@ __END_DECLS
 		mach_msg_header_t Head;
 		NDR_record_t NDR;
 		mach_port_name_t name;
-		mach_port_context_t guard;
+		uint64_t guard;
 	} __Request__mach_port_unguard_t __attribute__((unused));
 #ifdef  __MigPackStructs
 #pragma pack(pop)
@@ -1107,7 +1159,19 @@ __END_DECLS
 		mach_msg_header_t Head;
 		NDR_record_t NDR;
 		mach_port_name_t name;
-		mach_port_context_t guard;
+	} __Request__mach_port_special_reply_port_reset_link_t __attribute__((unused));
+#ifdef  __MigPackStructs
+#pragma pack(pop)
+#endif
+
+#ifdef  __MigPackStructs
+#pragma pack(push, 4)
+#endif
+	typedef struct {
+		mach_msg_header_t Head;
+		NDR_record_t NDR;
+		mach_port_name_t name;
+		uint64_t guard;
 		uint64_t flags;
 	} __Request__mach_port_guard_with_flags_t __attribute__((unused));
 #ifdef  __MigPackStructs
@@ -1121,8 +1185,8 @@ __END_DECLS
 		mach_msg_header_t Head;
 		NDR_record_t NDR;
 		mach_port_name_t name;
-		mach_port_context_t old_guard;
-		mach_port_context_t new_guard;
+		uint64_t old_guard;
+		uint64_t new_guard;
 	} __Request__mach_port_swap_guard_t __attribute__((unused));
 #ifdef  __MigPackStructs
 #pragma pack(pop)
@@ -1136,6 +1200,46 @@ __END_DECLS
 		NDR_record_t NDR;
 		mach_port_name_t name;
 	} __Request__mach_port_kobject_description_t __attribute__((unused));
+#ifdef  __MigPackStructs
+#pragma pack(pop)
+#endif
+
+#ifdef  __MigPackStructs
+#pragma pack(push, 4)
+#endif
+	typedef struct {
+		mach_msg_header_t Head;
+		NDR_record_t NDR;
+		mach_port_name_t connection_port;
+		mach_port_name_t service_port;
+	} __Request__mach_port_is_connection_for_service_t __attribute__((unused));
+#ifdef  __MigPackStructs
+#pragma pack(pop)
+#endif
+
+#ifdef  __MigPackStructs
+#pragma pack(push, 4)
+#endif
+	typedef struct {
+		mach_msg_header_t Head;
+		NDR_record_t NDR;
+		mach_port_name_t name;
+	} __Request__mach_port_get_service_port_info_t __attribute__((unused));
+#ifdef  __MigPackStructs
+#pragma pack(pop)
+#endif
+
+#ifdef  __MigPackStructs
+#pragma pack(push, 4)
+#endif
+	typedef struct {
+		mach_msg_header_t Head;
+		NDR_record_t NDR;
+		mach_port_name_t name;
+		mach_port_flavor_t flavor;
+		mach_msg_type_number_t infoCnt;
+		integer_t info[17];
+	} __Request__mach_port_assert_attributes_t __attribute__((unused));
 #ifdef  __MigPackStructs
 #pragma pack(pop)
 #endif
@@ -1182,9 +1286,13 @@ union __RequestUnion__mach_port_subsystem {
 	__Request__mach_port_guard_t Request_mach_port_guard;
 	__Request__mach_port_unguard_t Request_mach_port_unguard;
 	__Request__mach_port_space_basic_info_t Request_mach_port_space_basic_info;
+	__Request__mach_port_special_reply_port_reset_link_t Request_mach_port_special_reply_port_reset_link;
 	__Request__mach_port_guard_with_flags_t Request_mach_port_guard_with_flags;
 	__Request__mach_port_swap_guard_t Request_mach_port_swap_guard;
 	__Request__mach_port_kobject_description_t Request_mach_port_kobject_description;
+	__Request__mach_port_is_connection_for_service_t Request_mach_port_is_connection_for_service;
+	__Request__mach_port_get_service_port_info_t Request_mach_port_get_service_port_info;
+	__Request__mach_port_assert_attributes_t Request_mach_port_assert_attributes;
 };
 #endif /* !__RequestUnion__mach_port_subsystem__defined */
 /* typedefs for all replies */
@@ -1575,7 +1683,7 @@ union __RequestUnion__mach_port_subsystem {
 		mach_msg_header_t Head;
 		NDR_record_t NDR;
 		kern_return_t RetCode;
-		mach_port_context_t context;
+		mach_vm_address_t context;
 	} __Reply__mach_port_get_context_t __attribute__((unused));
 #ifdef  __MigPackStructs
 #pragma pack(pop)
@@ -1676,6 +1784,19 @@ union __RequestUnion__mach_port_subsystem {
 		mach_msg_header_t Head;
 		NDR_record_t NDR;
 		kern_return_t RetCode;
+		boolean_t srp_lost_link;
+	} __Reply__mach_port_special_reply_port_reset_link_t __attribute__((unused));
+#ifdef  __MigPackStructs
+#pragma pack(pop)
+#endif
+
+#ifdef  __MigPackStructs
+#pragma pack(push, 4)
+#endif
+	typedef struct {
+		mach_msg_header_t Head;
+		NDR_record_t NDR;
+		kern_return_t RetCode;
 	} __Reply__mach_port_guard_with_flags_t __attribute__((unused));
 #ifdef  __MigPackStructs
 #pragma pack(pop)
@@ -1706,6 +1827,44 @@ union __RequestUnion__mach_port_subsystem {
 		mach_msg_type_number_t descriptionCnt;
 		char description[512];
 	} __Reply__mach_port_kobject_description_t __attribute__((unused));
+#ifdef  __MigPackStructs
+#pragma pack(pop)
+#endif
+
+#ifdef  __MigPackStructs
+#pragma pack(push, 4)
+#endif
+	typedef struct {
+		mach_msg_header_t Head;
+		NDR_record_t NDR;
+		kern_return_t RetCode;
+		uint64_t filter_policy_id;
+	} __Reply__mach_port_is_connection_for_service_t __attribute__((unused));
+#ifdef  __MigPackStructs
+#pragma pack(pop)
+#endif
+
+#ifdef  __MigPackStructs
+#pragma pack(push, 4)
+#endif
+	typedef struct {
+		mach_msg_header_t Head;
+		NDR_record_t NDR;
+		kern_return_t RetCode;
+		mach_service_port_info_data_t sp_info_out;
+	} __Reply__mach_port_get_service_port_info_t __attribute__((unused));
+#ifdef  __MigPackStructs
+#pragma pack(pop)
+#endif
+
+#ifdef  __MigPackStructs
+#pragma pack(push, 4)
+#endif
+	typedef struct {
+		mach_msg_header_t Head;
+		NDR_record_t NDR;
+		kern_return_t RetCode;
+	} __Reply__mach_port_assert_attributes_t __attribute__((unused));
 #ifdef  __MigPackStructs
 #pragma pack(pop)
 #endif
@@ -1752,9 +1911,13 @@ union __ReplyUnion__mach_port_subsystem {
 	__Reply__mach_port_guard_t Reply_mach_port_guard;
 	__Reply__mach_port_unguard_t Reply_mach_port_unguard;
 	__Reply__mach_port_space_basic_info_t Reply_mach_port_space_basic_info;
+	__Reply__mach_port_special_reply_port_reset_link_t Reply_mach_port_special_reply_port_reset_link;
 	__Reply__mach_port_guard_with_flags_t Reply_mach_port_guard_with_flags;
 	__Reply__mach_port_swap_guard_t Reply_mach_port_swap_guard;
 	__Reply__mach_port_kobject_description_t Reply_mach_port_kobject_description;
+	__Reply__mach_port_is_connection_for_service_t Reply_mach_port_is_connection_for_service;
+	__Reply__mach_port_get_service_port_info_t Reply_mach_port_get_service_port_info;
+	__Reply__mach_port_assert_attributes_t Reply_mach_port_assert_attributes;
 };
 #endif /* !__RequestUnion__mach_port_subsystem__defined */
 
@@ -1796,9 +1959,13 @@ union __ReplyUnion__mach_port_subsystem {
     { "mach_port_guard", 3233 },\
     { "mach_port_unguard", 3234 },\
     { "mach_port_space_basic_info", 3235 },\
+    { "mach_port_special_reply_port_reset_link", 3236 },\
     { "mach_port_guard_with_flags", 3237 },\
     { "mach_port_swap_guard", 3238 },\
-    { "mach_port_kobject_description", 3239 }
+    { "mach_port_kobject_description", 3239 },\
+    { "mach_port_is_connection_for_service", 3240 },\
+    { "mach_port_get_service_port_info", 3241 },\
+    { "mach_port_assert_attributes", 3242 }
 #endif
 
 #ifdef __AfterMigUserHeader

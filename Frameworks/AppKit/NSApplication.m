@@ -42,6 +42,11 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 #include <stdlib.h>
 #include <unistd.h>
 
+/* bootstrap.h in SDK is an empty stub; declare what we need */
+#include <mach/mach.h>
+extern mach_port_t bootstrap_port;
+extern kern_return_t bootstrap_look_up(mach_port_t bp, const char *service_name, mach_port_t *sp);
+
 #import <WindowServer/message.h>
 #import <WindowServer/rpc.h>
 

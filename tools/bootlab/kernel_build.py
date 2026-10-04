@@ -163,6 +163,30 @@ args_ahci.append("-I" + os.path.join(SRC, "osfmk"))
 print("Compiling ahci_block.c...", flush=True)
 run(args_ahci, stubs["directory"])
 
+# bsd/dev/fb0.c is likewise not in the stock filelists (the real bsd/conf/files
+# entry only takes effect on a full Makefile-driven build, which this script
+# does not run).  Clone bsd_stubs.o.json the same way.  The extra -I is for
+# <machine/memory_types.h>, which vm/memory_types.h pulls in to define
+# VM_WIMG_IO -- without it the framebuffer mapping cannot be made uncached.
+args_fb0 = list(stubs["arguments"])
+args_fb0[args_fb0.index(stubs["file"])] = os.path.join(SRC, "bsd/dev/fb0.c")
+args_fb0[args_fb0.index("-o") + 1] = os.path.join(bsd_dev, "fb0.o")
+args_fb0.append("-I" + os.path.join(SRC, "osfmk/i386"))
+print("Compiling fb0.c...", flush=True)
+run(args_fb0, stubs["directory"])
+
+# kern_mman.c gains the character-device mmap dispatch that calls fb0's d_mmap,
+# so it must be recompiled too -- it is in the stock filelist, hence it does
+# have a per-object json to clone.
+print("Compiling kern_mman.c...", flush=True)
+run(load_json(os.path.join(bsd_dev, "kern_mman.o.json"))["arguments"],
+    stubs["directory"])
+
+# bsd_init.c calls fb0_init().
+print("Compiling bsd_init.c...", flush=True)
+run(load_json(os.path.join(bsd_dev, "bsd_init.o.json"))["arguments"],
+    stubs["directory"])
+
 # ------------------------------------------------- pthread kext (statically)
 # The pthread kext (Kernel/Extensions/pthread, com.apple.kec.pthread) is not
 # in the stock filelists and is never built by the xnu Makefiles, so there is
@@ -236,6 +260,7 @@ full_cmd = ldflags.split() + [
     os.path.join(bsd_dev, "pthread_kext_kern_support.o"),
     os.path.join(bsd_dev, "pthread_kext_kern_synch.o"),
     os.path.join(bsd_dev, "ahci_block.o"),
+    os.path.join(bsd_dev, "fb0.o"),
 ] + msdosfs_objs + ["-Wl,-map," + link_map, "-o", out_kernel]
 print("Linking %s..." % out_kernel, flush=True)
 run(full_cmd, BUILD_DIR)

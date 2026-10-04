@@ -71,22 +71,18 @@
 #define TASK_PORT_REGISTER_MAX  3
 
 /* Number of watchport for task */
-#define TASK_MAX_WATCHPORT_COUNT 32
+#define TASK_MAX_WATCHPORT_COUNT 128
 
+/* Number of exception ports for task */
+#define TASK_MAX_EXCEPTION_PORT_COUNT EXC_TYPES_COUNT
 
-/* --- SOURCED FROM IN-TREE XNU (see LIBSYSTEM-KERNEL-BUILD-NOTES.md sec. 13)
- *
- * Kernel/xnu/libsyscall references these but the SDK mach tree -- the
- * coherent generation that this build uses wholesale -- does not define
- * them. Each line below is copied VERBATIM from the in-tree xnu header
- * named beside it. Sourced, not invented; nothing here is a guessed
- * value or a synthesised struct layout.
- *
- * The gap is 15 constants across 7 headers, measured by intersecting the
- * identifier sets of the two mach trees with what libsyscall references --
- * not by compiling until the next error. Bounded and complete.
- */
+/* Number of different task port flavor */
+#define TASK_SELF_PORT_COUNT 4
 
-/* Kernel/xnu/osfmk/mach/mach_param.h:86 */
+/* Number of different thread port flavor */
+#define THREAD_SELF_PORT_COUNT 3
+
+/* Max length of conclave name */
 #define MAXCONCLAVENAME    128
+
 #endif  /* _MACH_MACH_PARAM_H_ */

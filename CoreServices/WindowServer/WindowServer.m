@@ -40,10 +40,10 @@
 #include <linux/input.h>
 
 #include <poll.h>
-#include <kvm.h>
 #include <sys/param.h>
 #include <sys/sysctl.h>
 #include <sys/user.h>
+#include <sys/proc_info.h>
 #include <sys/shm.h>
 #include <sys/ipc.h>
 #include <signal.h>
@@ -52,8 +52,21 @@
 #include <sys/resource.h>
 
 #include <launch.h>
+#include <servers/bootstrap.h>
 
 #import "rpc.h"
+/* WindowServer RPC entry point, provided by libWindowServer on ravynOS. */
+kern_return_t _windowServerRPC(void *data, size_t len, void *replyBuf, int *replyLen);
+
+/* FreeBSD mmap hint flags the ravynOS sys/mman.h does not define. Both are
+ * hints only, so 0 is the correct no-op value. */
+#ifndef MAP_NOCORE
+#define MAP_NOCORE 0
+#endif
+#ifndef MAP_NOSYNC
+#define MAP_NOSYNC 0
+#endif
+
 
 /* This lock prevents other threads from messing with the graphics context while we
  * are in the rendering loop
@@ -78,22 +91,36 @@ static void notifyAppExited(mach_port_t port, pid_t pid, const char *bundleID, c
             0, MACH_PORT_NULL, 100 /* ms timeout */, MACH_PORT_NULL);
 }
 
+/* Darwin's KERN_PROC_PATHNAME is a sysctl only the kernel exports; the
+ * userspace equivalent is PROC_PIDPATHINFO under the same KERN_PROC root. */
 static NSString *_pathForPID(pid_t pid) {
-    int mib[4];
-    char buf[PATH_MAX+1];
-    size_t len = PATH_MAX;
+    int mib[4] = { CTL_KERN, KERN_PROC, KERN_PROC_PID, PROC_PIDPATHINFO };
+    char buf[PROC_PIDPATHINFO_MAXSIZE + 1];
+    size_t len = PROC_PIDPATHINFO_MAXSIZE;
 
-    mib[0] = CTL_KERN;
-    mib[1] = KERN_PROC;
-    mib[2] = KERN_PROC_PATHNAME;
-    mib[3] = pid;
-
-    if(sysctl(mib, 4, buf, &len, NULL, 0) < 0) {
-        NSLog(@"KERN_PROC_PATHNAME(%d): %s", pid, strerror(errno));
+    memset(buf, 0, sizeof(buf));
+    if(sysctl(mib, 4, buf, &len, &pid, sizeof(pid)) < 0) {
+        NSLog(@"PROC_PIDPATHINFO(%d): %s", pid, strerror(errno));
         return nil;
     }
 
+    buf[sizeof(buf)-1] = '\0';
     return [NSString stringWithCString:buf];
+}
+
+/* The kvm(3) equivalent of kvm_getprocs(kvm, KERN_PROC_PID, pid, &count):
+ * sysctl() under the same root returns exactly one kinfo_proc for the pid. */
+static struct kinfo_proc *_procForPID(pid_t pid) {
+    static struct kinfo_proc kp;
+    int mib[4] = { CTL_KERN, KERN_PROC, KERN_PROC_PID, pid };
+    size_t len = sizeof(kp);
+
+    memset(&kp, 0, sizeof(kp));
+    if(sysctl(mib, 4, &kp, &len, NULL, 0) < 0 || len == 0)
+        return NULL;
+    if(kp.kp_proc.p_pid != pid)
+        return NULL;
+    return &kp;
 }
 
 -init {
@@ -118,7 +145,6 @@ static NSString *_pathForPID(pid_t pid) {
         return nil;
     }
 
-    kvm = kvm_open(NULL, "/dev/null", NULL, O_RDONLY, "WindowServer(kvm): ");
 
     displays = [NSMutableArray new];
     apps = [NSMutableDictionary new];
@@ -151,8 +177,6 @@ static NSString *_pathForPID(pid_t pid) {
     curShell = NONE;
     fb = nil;
     input = nil;
-    if(kvm)
-        kvm_close(kvm);
 }
 
 -(void)setLogLevel:(int)level {
@@ -260,14 +284,13 @@ static NSString *_pathForPID(pid_t pid) {
     if(ftruncate(shmfd, winrec.bufSize) < 0)
         NSLog(@"shmfd ftruncate failed: %s", strerror(errno));
 
-    int count = 0;
-    kp = kvm_getprocs(kvm, KERN_PROC_PID, [app pid], &count);
-    if(count != 1 || kp->ki_pid != [app pid]) {
+    kp = _procForPID([app pid]);
+    if(kp == NULL) {
         NSLog(@"Cannot get client task info! pid %u", [app pid]);
         return 0;
     }
 
-    if(fchown(shmfd, kp->ki_uid, kp->ki_rgid) < 0)
+    if(fchown(shmfd, kp->kp_eproc.e_ucred.cr_uid, kp->kp_eproc.e_pcred.p_rgid) < 0)
         NSLog(@"shmfd fchown failed: %s", strerror(errno));
 
     winrec.surfaceBuf = mmap(NULL, winrec.bufSize, PROT_WRITE|PROT_READ, MAP_SHARED|MAP_NOCORE, shmfd, 0);
@@ -320,15 +343,13 @@ static NSString *_pathForPID(pid_t pid) {
         if(ftruncate(shmfd, winrec.bufSize) < 0)
             NSLog(@"shmfd ftruncate failed: %s", strerror(errno));
 
-        int count = 0;
-        struct kinfo_proc *kp;
-        kp = kvm_getprocs(kvm, KERN_PROC_PID, [app pid], &count);
-        if(count != 1 || kp->ki_pid != [app pid]) {
+        struct kinfo_proc *kp = _procForPID([app pid]);
+        if(kp == NULL) {
             NSLog(@"Cannot get client task info! pid %u", [app pid]);
             return;
         }
 
-        if(fchown(shmfd, kp->ki_uid, kp->ki_rgid) < 0)
+        if(fchown(shmfd, kp->kp_eproc.e_ucred.cr_uid, kp->kp_eproc.e_pcred.p_rgid) < 0)
             NSLog(@"shmfd fchown failed: %s", strerror(errno));
 
         winrec.surfaceBuf = mmap(NULL, winrec.bufSize, PROT_WRITE|PROT_READ,

@@ -11,7 +11,7 @@
   "ProgramArguments": [
     "/System/Library/CoreServices/Dock.app/Contents/ravynOS/Dock"
   ],
-  "RunAtLoad": false,
+  "RunAtLoad": true,
   "KeepAlive": true,
   "Label": "com.ravynos.Dock"
 }

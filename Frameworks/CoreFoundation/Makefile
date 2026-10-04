@@ -122,13 +122,14 @@ CFLAGS = -ObjC -DCF_BUILDING_CF -DU_SHOW_CPLUSPLUS_API -DU_SHOW_DRAFT_API \
         -fexceptions -fconstant-cfstrings \
         -Wno-implicit-function-declaration -Wno-return-type \
 	-I${ROOT_SOURCE_DIR}/Kernel/xnu/bsd \
+	-I${RAVYN_SDKROOT}/usr/include \
 	-I${ROOT_SOURCE_DIR}/Kernel/xnu/osfmk \
 	-I${.OBJDIR} -I${ROOT_SOURCE_DIR}/Frameworks \
 	-I${ROOT_SOURCE_DIR}/Libraries/Libsystem/liblaunch \
 	-I${ROOT_SOURCE_DIR}/Libraries/Libsystem/libdispatch/private \
 	-I${ROOT_SOURCE_DIR}/Libraries/openbsm \
-	-I${ROOT_SOURCE_DIR}/Libraries/ICU/icuSources/i18n \
-	-I${ROOT_SOURCE_DIR}/Libraries/ICU/icuSources/common \
+	-I${ROOT_SOURCE_DIR}/Libraries/ICU/source/i18n \
+	-I${ROOT_SOURCE_DIR}/Libraries/ICU/source/common \
 	-I${ROOT_SOURCE_DIR}/Libraries/Libsystem/removefile \
 	-I${ROOT_SOURCE_DIR}/Libraries/Libsystem/private \
 	-I${ROOT_SOURCE_DIR}/Libraries/Libsystem/libsystem_blocks \
@@ -146,8 +147,18 @@ LDFLAGS = -Wl,-dylib -fexceptions -Wl,-init,___CFInitialize \
 	-Wl,-sectcreate,__UNICODE,__properties,${.CURDIR}/CFUniCharPropertyDatabase.data \
 	-Wl,-sectcreate,__UNICODE,__data,${.CURDIR}/${unicode_data_file_name} \
 	-Wl,-segprot,__UNICODE,r,r \
-	-lSystem -L${RAVYN_SDKROOT}/usr/lib -licucore -lobjc \
-	${ROOT_BINARY_DIR}${ROOT_SOURCE_DIR}/Libraries/llvm_target/compiler-rt/lib/ravynos/libclang_rt.osx.a
+	-lSystem -L${RAVYN_SDKROOT}/usr/lib -licucore -lobjc
+
+# Passed only when it has been built.  compiler-rt is a 0-byte placeholder in
+# this tree until Libraries/llvm_target/compiler-rt is built, and ld64 rejects
+# an empty archive outright instead of ignoring it:
+#   ld: file is empty in
+#     .../Libraries/llvm_target/compiler-rt/lib/ravynos/libclang_rt.osx.a
+CLANGRT_OSX_A =${ROOT_BINARY_DIR}${ROOT_SOURCE_DIR}/Libraries/llvm_target/compiler-rt/lib/ravynos/libclang_rt.osx.a
+CLANGRT_OSX_A !=test -s ${CLANGRT_OSX_A} && echo ${CLANGRT_OSX_A}
+.if !empty(CLANGRT_OSX_A)
+LDFLAGS += ${CLANGRT_OSX_A}
+.endif
 SUBDIR =
 
 ${.OBJDIR}/mach-o/arch.h:

@@ -76,10 +76,10 @@
  */
 #define HOST_PORT                        1
 #define HOST_PRIV_PORT                   2
-#define HOST_IO_MASTER_PORT              3
+#define HOST_IO_MAIN_PORT                3
 #define HOST_MAX_SPECIAL_KERNEL_PORT     7 /* room to grow */
 
-#define HOST_LAST_SPECIAL_KERNEL_PORT    HOST_IO_MASTER_PORT
+#define HOST_LAST_SPECIAL_KERNEL_PORT    HOST_IO_MAIN_PORT
 
 /*
  * Not provided by kernel
@@ -116,42 +116,6 @@
 #define HOST_MAX_SPECIAL_PORT           HOST_DOUBLEAGENTD_PORT
 /* MAX = last since rdar://59872249 */
 
-/*
- * The five lines above and the MAX line are SOURCED, not invented, and not a
- * cross-generation bridge. This project BUILDS AND RUNS its own kernel, from
- * Kernel/xnu at commit 394fe3eac3 "Transplant Darwin 24.0 (xnu-11215)
- * kernel", and /Users/max/Projects/build/DEVELOPMENT_X86_64/version.c carries
- * the resulting banner "Darwin Kernel Version 24.3.0". The in-tree
- * osfmk/mach/host_special_ports.h IS the ABI that kernel implements, so
- * userspace agreeing with it is userspace matching its own kernel.
- *
- * Verified in the built kernel, not argued from the source. host.c:1304
- * compiles to, in kernel.development.unstripped at _host_set_special_port
- * (ffffff800024cd10):
- *
- *   ffffffff80024cd24  leal  -0x24(%r15), %ecx     ; ecx = id - 36
- *   ffffffff80024cd28  cmpl  $-0x1c, %ecx         ; unsigned compare vs -28
- *   ffffffff80024cd2b  setb  %cl
- *
- * which accepts exactly id in [8, 35]. 8 is HOST_MAX_SPECIAL_KERNEL_PORT+1
- * and 35 is 28 + HOST_MAX_SPECIAL_KERNEL_PORT == HOST_DOUBLEAGENTD_PORT, i.e.
- * the bound the IN-TREE header names. The value this file used to carry
- * (HOST_FAIRPLAYD_PORT == 31) would have made userspace unable to name four
- * ports the running kernel accepts -- doubleagentd among them -- and nothing
- * about a wrong bound fails to compile.
- *
- * Source of every sourced line is named beside it:
- *   Kernel/xnu/osfmk/mach/host_special_ports.h:111  IOCOMPRESSIONSTATS
- *   Kernel/xnu/osfmk/mach/host_special_ports.h:112  MEMORY_ERROR
- *   Kernel/xnu/osfmk/mach/host_special_ports.h:113  MANAGEDAPPDISTD
- *   Kernel/xnu/osfmk/mach/host_special_ports.h:114  DOUBLEAGENTD
- *   Kernel/xnu/osfmk/mach/host_special_ports.h:116  MAX_SPECIAL_PORT
- *
- * The other two of the 15 census constants this file was missing are 25/26/27/
- * 28 above; HOST_IO_MAIN_PORT (line 79, the plain value 3) stays in the
- * appended block at the end of this file.
- */
-
 /* obsolete name */
 #define HOST_CHUD_PORT HOST_LAUNCHCTL_PORT
 
@@ -177,10 +141,10 @@
 	HOST_LOCAL_NODE, HOST_PRIV_PORT, (port)))
 #define host_set_host_priv_port(host, port) (KERN_INVALID_ARGUMENT)
 
-#define host_get_io_master_port(host, port)     \
+#define host_get_io_main_port(host, port)     \
 	(host_get_special_port((host),          \
-	HOST_LOCAL_NODE, HOST_IO_MASTER_PORT, (port)))
-#define host_set_io_master_port(host, port) (KERN_INVALID_ARGUMENT)
+	HOST_LOCAL_NODE, HOST_IO_MAIN_PORT, (port)))
+#define host_set_io_main_port(host, port) (KERN_INVALID_ARGUMENT)
 
 /*
  * User-settable special ports.
@@ -314,25 +278,32 @@
 #define host_set_fairplayd_port(host, port)     \
 	(host_set_special_port((host), HOST_FAIRPLAYD_PORT, (port)))
 
+#define host_get_iocompressionstats_port(host, port)     \
+	(host_get_special_port((host),                  \
+	HOST_LOCAL_NODE, HOST_IOCOMPRESSIONSTATS_PORT, (port)))
+#define host_set_iocompressionstats_port(host, port)     \
+	(host_set_special_port((host), HOST_IOCOMPRESSIONSTATS_PORT, (port)))
+
+#define host_get_memory_error_port(host, port)     \
+	(host_get_special_port((host),                  \
+	HOST_LOCAL_NODE, HOST_MEMORY_ERROR_PORT, (port)))
+#define host_set_memory_error_port(host, port)     \
+	(host_set_special_port((host), HOST_MEMORY_ERROR_PORT, (port)))
+
+#define host_get_managedappdistd_port(host, port)     \
+	(host_get_special_port((host),                  \
+	HOST_LOCAL_NODE, HOST_MANAGEDAPPDISTD_PORT, (port)))
+#define host_set_managedappdistd_port(host, port)     \
+	(host_set_special_port((host), HOST_MANAGEDAPPDISTD_PORT, (port)))
+
+#define host_get_doubleagentd_port(host, port)     \
+	(host_get_special_port((host),                  \
+	HOST_LOCAL_NODE, HOST_DOUBLEAGENTD_PORT, (port)))
+#define host_set_doubleagentd_port(host, port)     \
+	(host_set_special_port((host), HOST_DOUBLEAGENTD_PORT, (port)))
+
 /* HOST_RESOURCE_NOTIFY_PORT doesn't #defines these conveniences.
  *  All lookups go through send_resource_violation()
  */
 
-
-/* --- SOURCED FROM IN-TREE XNU (see LIBSYSTEM-KERNEL-BUILD-NOTES.md sec. 13,
- * amended in sec. 22)
- *
- * Of the 15 census constants, 12 now live in the numbered block above, in
- * their in-tree position and order. This file is no longer a chimera for host
- * special ports: its numbering scheme is now byte-identical to
- * Kernel/xnu/osfmk/mach/host_special_ports.h, which is the generation our own
- * kernel implements.
- *
- * One constant remains here because it has no place in that block: it is not
- * a host special PORT at all, but a plain value that kernel and userspace must
- * agree on independently.
- */
-
-/* Kernel/xnu/osfmk/mach/host_special_ports.h:79 */
-#define HOST_IO_MAIN_PORT                3
 #endif  /* _MACH_HOST_SPECIAL_PORTS_H_ */

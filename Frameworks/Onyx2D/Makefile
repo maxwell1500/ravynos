@@ -221,9 +221,9 @@ libjpeg.a:
 	    -DCMAKE_SYSROOT=${RAVYN_SDKROOT} \
 	    -DCMAKE_SYSTEM_VERSION=${MACOS_VERSION_MIN} \
 	    -DCMAKE_SYSTEM_PROCESSOR=${CpuArch} \
+	    -DENABLE_SHARED=OFF \
 	    -S${ROOT_SOURCE_DIR}/BSD/lib/libjpeg -B${.OBJDIR}/jpeg
 	cmake --build ${.OBJDIR}/jpeg
-
 libpng.a:
 	SDKROOT=${RAVYN_SDKROOT} cmake -DCMAKE_C_COMPILER=${CC} \
 	    -DCMAKE_C_FLAGS="-mmacos-version-min=${MACOS_VERSION_MIN} --sysroot=${RAVYN_SDKROOT} \
@@ -233,7 +233,7 @@ libpng.a:
 	    -DCMAKE_SYSROOT=${RAVYN_SDKROOT} \
 	    -DCMAKE_SYSTEM_VERSION=${MACOS_VERSION_MIN} \
 	    -DCMAKE_SYSTEM_PROCESSOR=${CpuArch} \
-	    -DPNG_TOOLS=OFF -DPNG_SHARED=OFF -DPNG_TESTS=OFF \
+	    -DPNG_TOOLS=OFF -DPNG_SHARED=OFF -DPNG_TESTS=OFF -DPNG_FRAMEWORK=OFF \
 	    -DZLIB_ROOT=${ROOT_SOURCE_DIR}/Libraries/zlib \
 	    -S${ROOT_SOURCE_DIR}/BSD/lib/libpng -B${.OBJDIR}/png
 	cmake --build ${.OBJDIR}/png
@@ -241,6 +241,7 @@ libpng.a:
 libtiff.a:
 	cmake -DCMAKE_C_COMPILER=${CC} -DCMAKE_CXX_COMPILER=${CXX} \
 	    -DCMAKE_C_COMPILER_LINKER=${LD} \
+	    -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
 	    -DCMAKE_C_FLAGS="-mmacos-version-min=${MACOS_VERSION_MIN} --sysroot=${RAVYN_SDKROOT} \
 		-I${ROOT_SOURCE_DIR}/Libraries/zlib -I${ROOT_SOURCE_DIR}/BSD/lib/libtiff" \
 	    -DCMAKE_CXX_FLAGS="-mmacos-version-min=${MACOS_VERSION_MIN} --sysroot=${RAVYN_SDKROOT}" \

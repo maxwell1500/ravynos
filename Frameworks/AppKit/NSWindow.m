@@ -63,6 +63,21 @@
 #import <WindowServer/rpc.h>
 #import "O2Context_builtin_FT.h"
 
+/* WindowServer RPC entry point, provided by libWindowServer on ravynOS.
+ * Declared here as CoreGraphics/CGDirectDisplay.m does, since rpc.h only
+ * carries the RPC codes, not the transport function. */
+kern_return_t _windowServerRPC(void *data, size_t len, void *replyBuf, int *replyLen);
+
+/* FreeBSD mmap hint flags the ravynOS sys/mman.h does not define. Both are
+ * hints only, so 0 is the correct no-op value (see BSD/usr.bin/
+ * build-ravynos-utils.sh, which defines them the same way). */
+#ifndef MAP_NOCORE
+#define MAP_NOCORE 0
+#endif
+#ifndef MAP_NOSYNC
+#define MAP_NOSYNC 0
+#endif
+
 NSString * const NSWindowDidBecomeKeyNotification=@"NSWindowDidBecomeKeyNotification";
 NSString * const NSWindowDidResignKeyNotification=@"NSWindowDidResignKeyNotification";
 NSString * const NSWindowDidBecomeMainNotification=@"NSWindowDidBecomeMainNotification";

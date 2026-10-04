@@ -120,19 +120,12 @@ typedef struct sf_mapping sf_mapping_t;
  * between dyld and the kernel.
  *
  */
-struct shared_file_mapping_np {
-	mach_vm_address_t       sfm_address;
-	mach_vm_size_t          sfm_size;
-	mach_vm_offset_t        sfm_file_offset;
-	vm_prot_t               sfm_max_prot;
-	vm_prot_t               sfm_init_prot;
-};
-
 struct shared_region_range_np {
 	mach_vm_address_t       srr_address;
 	mach_vm_size_t          srr_size;
 };
 
+#ifndef KERNEL
 
 __BEGIN_DECLS
 int     shared_region_map_file_np(int fd,
@@ -143,5 +136,6 @@ int     shared_region_make_private_np(uint32_t rangeCount,
     const struct shared_region_range_np *ranges);
 __END_DECLS
 
+#endif /* !KERNEL */
 
 #endif /* _MACH_SHARED_MEMORY_SERVER_H_ */

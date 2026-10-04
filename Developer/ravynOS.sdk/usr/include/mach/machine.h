@@ -78,6 +78,50 @@ typedef integer_t       cpu_threadtype_t;
 #define CPU_STATE_IDLE          2
 #define CPU_STATE_NICE          3
 
+#ifdef  KERNEL_PRIVATE
+
+#include <sys/cdefs.h>
+
+__BEGIN_DECLS
+cpu_type_t                      cpu_type(void);
+
+cpu_subtype_t           cpu_subtype(void);
+
+cpu_threadtype_t        cpu_threadtype(void);
+__END_DECLS
+
+#ifdef  MACH_KERNEL_PRIVATE
+
+struct machine_info {
+	integer_t       major_version;          /* kernel major version id */
+	integer_t       minor_version;          /* kernel minor version id */
+	integer_t       max_cpus;                       /* max number of CPUs possible */
+	uint32_t        memory_size;            /* size of memory in bytes, capped at 2 GB */
+	uint64_t        max_mem;                        /* actual size of physical memory */
+	uint32_t        physical_cpu;           /* number of physical CPUs now available */
+	integer_t       physical_cpu_max;       /* max number of physical CPUs possible */
+	uint32_t        logical_cpu;            /* number of logical cpu now available */
+	integer_t       logical_cpu_max;        /* max number of physical CPUs possible */
+};
+
+typedef struct machine_info     *machine_info_t;
+typedef struct machine_info     machine_info_data_t;
+
+extern struct machine_info      machine_info;
+
+__BEGIN_DECLS
+cpu_type_t                      slot_type(
+	int             slot_num);
+
+cpu_subtype_t           slot_subtype(
+	int             slot_num);
+
+cpu_threadtype_t        slot_threadtype(
+	int             slot_num);
+__END_DECLS
+
+#endif  /* MACH_KERNEL_PRIVATE */
+#endif  /* KERNEL_PRIVATE */
 
 
 /*
@@ -118,6 +162,11 @@ typedef integer_t       cpu_threadtype_t;
 #define CPU_TYPE_POWERPC                ((cpu_type_t) 18)
 #define CPU_TYPE_POWERPC64              (CPU_TYPE_POWERPC | CPU_ARCH_ABI64)
 /* skip				((cpu_type_t) 19)	*/
+/* skip				((cpu_type_t) 20) */
+/* skip				((cpu_type_t) 21) */
+/* skip				((cpu_type_t) 22) */
+/* skip				((cpu_type_t) 23) */
+/* skip				((cpu_type_t) 24) */
 
 /*
  *	Machine subtypes (these are defined here, instead of in a machine
@@ -130,7 +179,14 @@ typedef integer_t       cpu_threadtype_t;
  */
 #define CPU_SUBTYPE_MASK        0xff000000      /* mask for feature flags */
 #define CPU_SUBTYPE_LIB64       0x80000000      /* 64 bit libraries */
+#define CPU_SUBTYPE_PTRAUTH_ABI 0x80000000      /* pointer authentication with versioned ABI */
 
+/*
+ *      When selecting a slice, ANY will pick the slice with the best
+ *      grading for the selected cpu_type_t, unlike the "ALL" subtypes,
+ *      which are the slices that can run on any hardware for that cpu type.
+ */
+#define CPU_SUBTYPE_ANY         ((cpu_subtype_t) -1)
 
 /*
  *	Object files that are hand-crafted to run on any
@@ -331,12 +387,16 @@ typedef integer_t       cpu_threadtype_t;
 /* CPU subtype feature flags for ptrauth on arm64e platforms */
 #define CPU_SUBTYPE_ARM64_PTR_AUTH_MASK 0x0f000000
 #define CPU_SUBTYPE_ARM64_PTR_AUTH_VERSION(x) (((x) & CPU_SUBTYPE_ARM64_PTR_AUTH_MASK) >> 24)
+#ifdef PRIVATE
+#define CPU_SUBTYPE_ARM64_PTR_AUTH_CURRENT_VERSION 0
+#endif /* PRIVATE */
 
 /*
  *  ARM64_32 subtypes
  */
 #define CPU_SUBTYPE_ARM64_32_ALL        ((cpu_subtype_t) 0)
 #define CPU_SUBTYPE_ARM64_32_V8 ((cpu_subtype_t) 1)
+
 
 #endif /* !__ASSEMBLER__ */
 
@@ -365,6 +425,31 @@ typedef integer_t       cpu_threadtype_t;
 #define CPUFAMILY_INTEL_BROADWELL       0x582ed09c
 #define CPUFAMILY_INTEL_SKYLAKE         0x37fc219f
 #define CPUFAMILY_INTEL_KABYLAKE        0x0f817246
+#define CPUFAMILY_INTEL_ICELAKE         0x38435547
+#define CPUFAMILY_INTEL_COMETLAKE       0x1cf8a03e
+#define CPUFAMILY_INTEL_TIGERLAKE       0x6c6e7368
+#define CPUFAMILY_INTEL_ROCKETLAKE      0x6f636b65
+#define CPUFAMILY_INTEL_ALDERLAKE       0x616c6465
+#define CPUFAMILY_INTEL_RAPTORLAKE      0x72617074
+#define CPUFAMILY_INTEL_METEORLAKE      0x6d657465
+#define CPUFAMILY_INTEL_SILVERMONT      0x53696c76
+#define CPUFAMILY_INTEL_AIRMONT         0x4169726d
+#define CPUFAMILY_INTEL_GOLDMONT        0x476f6c64
+#define CPUFAMILY_INTEL_GOLDMONTPLUS    0x476c6450
+#define CPUFAMILY_INTEL_SAPPHIRERAPIDS  0x53617050
+#define CPUFAMILY_INTEL_EMERALDRAPIDS   0x456d6572
+#define CPUFAMILY_AMD_BULLDOZER         0x414d4431
+#define CPUFAMILY_AMD_PILEDRIVER        0x414d4432
+#define CPUFAMILY_AMD_STEAMROLLER       0x414d4433
+#define CPUFAMILY_AMD_EXCAVATOR         0x414d4434
+#define CPUFAMILY_AMD_JAGUAR            0x414d4435
+#define CPUFAMILY_AMD_PUMA              0x414d4436
+#define CPUFAMILY_AMD_ZEN               0x414d4437
+#define CPUFAMILY_AMD_ZENX              0x414d4438
+#define CPUFAMILY_AMD_ZEN2              0x414d4439
+#define CPUFAMILY_AMD_ZEN3              0x414d443a
+#define CPUFAMILY_AMD_ZEN4              0x414d443b
+#define CPUFAMILY_AMD_ZEN5              0x414d443c
 #define CPUFAMILY_ARM_9                 0xe73283ae
 #define CPUFAMILY_ARM_11                0x8ff620d8
 #define CPUFAMILY_ARM_XSCALE            0x53b005f5
@@ -379,29 +464,28 @@ typedef integer_t       cpu_threadtype_t;
 #define CPUFAMILY_ARM_HURRICANE         0x67ceee93
 #define CPUFAMILY_ARM_MONSOON_MISTRAL   0xe81e7ef6
 #define CPUFAMILY_ARM_VORTEX_TEMPEST    0x07d34b9f
-#ifndef RC_HIDE_XNU_LIGHTNING
 #define CPUFAMILY_ARM_LIGHTNING_THUNDER 0x462504d2
-#endif /* !RC_HIDE_XNU_LIGHTNING */
+#define CPUFAMILY_ARM_FIRESTORM_ICESTORM 0x1b588bb3
+#define CPUFAMILY_ARM_BLIZZARD_AVALANCHE 0xda33d83d
+#define CPUFAMILY_ARM_EVEREST_SAWTOOTH  0x8765edea
+#define CPUFAMILY_ARM_IBIZA             0xfa33415e
+#define CPUFAMILY_ARM_PALMA 0x72015832
+#define CPUFAMILY_ARM_COLL 0x2876f5b5
+#define CPUFAMILY_ARM_LOBOS 0x5f4dea93
+#define CPUFAMILY_ARM_DONAN 0x6f5129ac
+
+/* Described in rdar://64125549 */
+#define CPUSUBFAMILY_UNKNOWN            0
+#define CPUSUBFAMILY_ARM_HP             1
+#define CPUSUBFAMILY_ARM_HG             2
+#define CPUSUBFAMILY_ARM_M              3
+#define CPUSUBFAMILY_ARM_HS             4
+#define CPUSUBFAMILY_ARM_HC_HD          5
+#define CPUSUBFAMILY_ARM_HA             6
 
 /* The following synonyms are deprecated: */
 #define CPUFAMILY_INTEL_6_23    CPUFAMILY_INTEL_PENRYN
 #define CPUFAMILY_INTEL_6_26    CPUFAMILY_INTEL_NEHALEM
 
 
-
-/* --- SOURCED FROM IN-TREE XNU (see LIBSYSTEM-KERNEL-BUILD-NOTES.md sec. 13)
- *
- * Kernel/xnu/libsyscall references these but the SDK mach tree -- the
- * coherent generation that this build uses wholesale -- does not define
- * them. Each line below is copied VERBATIM from the in-tree xnu header
- * named beside it. Sourced, not invented; nothing here is a guessed
- * value or a synthesised struct layout.
- *
- * The gap is 15 constants across 7 headers, measured by intersecting the
- * identifier sets of the two mach trees with what libsyscall references --
- * not by compiling until the next error. Bounded and complete.
- */
-
-/* Kernel/xnu/osfmk/mach/machine.h:189 */
-#define CPU_SUBTYPE_ANY         ((cpu_subtype_t) -1)
 #endif  /* _MACH_MACHINE_H_ */

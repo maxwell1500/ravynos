@@ -84,6 +84,7 @@
 #include <sys/kauth.h>
 #include <sys/resourcevar.h>
 #include <sys/vnode_internal.h>
+#include <miscfs/specfs/specdev.h>   /* v_rdev */
 #include <sys/acct.h>
 #include <sys/wait.h>
 #include <sys/file_internal.h>
@@ -296,6 +297,7 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 	int                     fd = uap->fd;
 	int                     num_retries = 0;
 	kern_return_t           kr;
+	uint64_t                mmap_device_addr = 0;
 	/* page-aligned "user_map" quantities */
 	vm_map_offset_t         user_addr, user_end, user_mask;
 	vm_map_size_t           user_size;
@@ -584,12 +586,54 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 		}
 
 		/*
-		 * XXX hack to handle use of /dev/zero to map anon memory (ala
-		 * SunOS).
+		 * Character devices can back their own mapping: a frame buffer
+		 * (/dev/fb0) has to be written through directly, so its driver
+		 * installs a real d_mmap that establishes the mapping itself.
+		 * Everything else -- including /dev/zero, whose anonymous-mapping
+		 * hack dates from SunOS 3.2 -- still fails here.
+		 *
+		 * The driver's handler enters the mapping and reports the
+		 * address the caller received, so there is nothing left for the
+		 * file-backed path below to do.
 		 */
 		if (vp->v_type == VCHR || vp->v_type == VSTR) {
+			struct cdevsw *csw;
+
+			if (vp->v_type != VCHR ||
+			    major(vp->v_rdev) >= nchrdev) {
+				(void)vnode_put(vp);
+				error = ENODEV;
+				goto bad;
+			}
+
+			/*
+			 * Only a device that installed a real handler can back
+			 * its own mapping; everything else -- /dev/zero, /dev/null,
+			 * every tty -- still gets ENODEV as before.
+			 */
+			csw = &cdevsw[major(vp->v_rdev)];
+			if (csw->d_mmap == eno_mmap) {
+				(void)vnode_put(vp);
+				error = ENODEV;
+				goto bad;
+			}
+
+			/*
+			 * The handler enters the mapping itself and reports the
+			 * address the caller received, so the file-backed path
+			 * below has nothing left to do.  `prot' is a vm_prot_t
+			 * here; it shares values with the PROT_* constants the
+			 * handler signature uses.
+			 */
+			error = csw->d_mmap(vp->v_rdev,
+			    (uint64_t)user_addr, (uint64_t)user_size,
+			    (int)prot, p, &mmap_device_addr);
 			(void)vnode_put(vp);
-			error = ENODEV;
+			if (error != 0) {
+				goto bad;
+			}
+			*retval = (int)mmap_device_addr;
+			/* error is 0; the common epilogue below drops fp. */
 			goto bad;
 		} else {
 			/*

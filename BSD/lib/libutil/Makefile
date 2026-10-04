@@ -9,6 +9,10 @@ MK_WERROR = no
 LIB = util
 SRCS =	getmntopts.c \
 	humanize_number.c \
+	_secure_path.c \
+	login_auth.c \
+	login_cap.c \
+	login_class.c \
 	pidfile.c \
 	realhostname.c \
 	reexec_to_match_kernel.c \

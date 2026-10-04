@@ -699,11 +699,20 @@ bsd_init(void)
 	vfsinit();
 	extern int msdosfs_module_start(void *, void *);
 	extern int ahci_init(void);
+	extern void fb0_init(void);
 
 	bsd_init_kprintf("calling msdosfs_module_start\n");
 	msdosfs_module_start(NULL, NULL);
 	bsd_init_kprintf("calling ahci_init\n");
 	ahci_init();
+
+	/*
+	 * /dev/fb0 -- the BSD framebuffer device, backed by the GOP
+	 * framebuffer in the boot args.  Registered after the console is up so
+	 * that PE_state.video is populated.
+	 */
+	bsd_init_kprintf("calling fb0_init\n");
+	fb0_init();
 
 #if CONFIG_PROC_UUID_POLICY
 	/* Initial proc_uuid_policy subsystem */

@@ -69,22 +69,25 @@
 
 typedef int     task_special_port_t;
 
-#define TASK_KERNEL_PORT        1       /* Represents task to the outside
-	                                 *  world.*/
+#define TASK_KERNEL_PORT        1       /* The full task port for task. */
 
 #define TASK_HOST_PORT          2       /* The host (priv) port for task.  */
 
-#define TASK_NAME_PORT          3       /* the name (unpriv) port for task */
+#define TASK_NAME_PORT          3       /* The name port for task. */
 
 #define TASK_BOOTSTRAP_PORT     4       /* Bootstrap environment for task. */
+
+#define TASK_INSPECT_PORT       5       /* The inspect port for task. */
+
+#define TASK_READ_PORT          6       /* The read port for task. */
 
 /*
  * Evolving and likely to change.
  */
 
-#define TASK_SEATBELT_PORT      7       /* Seatbelt compiler/DEM port for task. */
+/* Was TASK_SEATBELT_PORT      7        Seatbelt compiler/DEM port for task. */
 
-/* PORT 8 was the GSSD TASK PORT which transformed to a host port */
+/* Was TASK_GSSD_PORT          8        which transformed to a host port */
 
 #define TASK_ACCESS_PORT        9       /* Permission check for task_for_pid. */
 
@@ -128,23 +131,8 @@ typedef int     task_special_port_t;
 #define task_set_task_debug_control_port(task, port) \
 	        (task_set_special_port((task), TASK_DEBUG_CONTROL_PORT, (port)))
 
+#ifdef XNU_KERNEL_PRIVATE
+#define DEBUG_PORT_ENTITLEMENT "com.apple.private.debug_port"
+#endif /* XNU_KERNEL_PRIVATE */
 
-
-/* --- SOURCED FROM IN-TREE XNU (see LIBSYSTEM-KERNEL-BUILD-NOTES.md sec. 13)
- *
- * Kernel/xnu/libsyscall references these but the SDK mach tree -- the
- * coherent generation that this build uses wholesale -- does not define
- * them. Each line below is copied VERBATIM from the in-tree xnu header
- * named beside it. Sourced, not invented; nothing here is a guessed
- * value or a synthesised struct layout.
- *
- * The gap is 15 constants across 7 headers, measured by intersecting the
- * identifier sets of the two mach trees with what libsyscall references --
- * not by compiling until the next error. Bounded and complete.
- */
-
-/* Kernel/xnu/osfmk/mach/task_special_ports.h:80 */
-#define TASK_INSPECT_PORT       5       /* The inspect port for task. */
-/* Kernel/xnu/osfmk/mach/task_special_ports.h:82 */
-#define TASK_READ_PORT          6       /* The read port for task. */
 #endif  /* _MACH_TASK_SPECIAL_PORTS_H_ */

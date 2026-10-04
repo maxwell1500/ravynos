@@ -111,7 +111,18 @@ typedef int  read_write_fcn_t(dev_t dev, struct uio *uio, int ioflag);
 typedef int  stop_fcn_t(struct tty *tp, int rw);
 typedef int  reset_fcn_t(int uban);
 typedef int  select_fcn_t(dev_t dev, int which, void * wql, struct proc *p);
-typedef int  mmap_fcn_t(void);
+/*
+ * Device mmap.  A character device that can back its own mapping (a frame
+ * buffer, /dev/mem) installs a real handler here; everything else keeps
+ * eno_mmap.  `addr' is the requested address, or 0 unless MAP_FIXED, and
+ * `size' is already page-rounded.  On success the handler stores the address
+ * the caller actually received in *ret_addr and returns 0.
+ *
+ * The types are spelled out rather than as vm_offset_t/vm_prot_t so that this
+ * header keeps its current (VM-free) include set.
+ */
+typedef int  mmap_fcn_t(dev_t dev, uint64_t addr, uint64_t size, int prot,
+    struct proc *p, uint64_t *ret_addr);
 typedef int  rsvd_fcn_t(void);
 
 typedef void empty_fcn_t(void);

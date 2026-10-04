@@ -1,190 +1,235 @@
-/*===---- stdatomic.h - Standard header for atomic types and operations -----===
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in
- * all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
- * THE SOFTWARE.
- *
- *===-----------------------------------------------------------------------===
- */
+// -*- C++ -*-
+//===----------------------------------------------------------------------===//
+//
+// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// See https://llvm.org/LICENSE.txt for license information.
+// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+//
+//===----------------------------------------------------------------------===//
 
-#ifndef __clang__
-#error unsupported compiler
+#ifndef _LIBCPP_STDATOMIC_H
+#define _LIBCPP_STDATOMIC_H
+
+/*
+    stdatomic.h synopsis
+
+template<class T>
+  using std-atomic = std::atomic<T>;        // exposition only
+
+#define _Atomic(T) std-atomic<T>
+
+#define ATOMIC_BOOL_LOCK_FREE see below
+#define ATOMIC_CHAR_LOCK_FREE see below
+#define ATOMIC_CHAR16_T_LOCK_FREE see below
+#define ATOMIC_CHAR32_T_LOCK_FREE see below
+#define ATOMIC_WCHAR_T_LOCK_FREE see below
+#define ATOMIC_SHORT_LOCK_FREE see below
+#define ATOMIC_INT_LOCK_FREE see below
+#define ATOMIC_LONG_LOCK_FREE see below
+#define ATOMIC_LLONG_LOCK_FREE see below
+#define ATOMIC_POINTER_LOCK_FREE see below
+
+using std::memory_order                // see below
+using std::memory_order_relaxed        // see below
+using std::memory_order_consume        // see below
+using std::memory_order_acquire        // see below
+using std::memory_order_release        // see below
+using std::memory_order_acq_rel        // see below
+using std::memory_order_seq_cst        // see below
+
+using std::atomic_flag                 // see below
+
+using std::atomic_bool                 // see below
+using std::atomic_char                 // see below
+using std::atomic_schar                // see below
+using std::atomic_uchar                // see below
+using std::atomic_short                // see below
+using std::atomic_ushort               // see below
+using std::atomic_int                  // see below
+using std::atomic_uint                 // see below
+using std::atomic_long                 // see below
+using std::atomic_ulong                // see below
+using std::atomic_llong                // see below
+using std::atomic_ullong               // see below
+using std::atomic_char8_t              // see below
+using std::atomic_char16_t             // see below
+using std::atomic_char32_t             // see below
+using std::atomic_wchar_t              // see below
+using std::atomic_int8_t               // see below
+using std::atomic_uint8_t              // see below
+using std::atomic_int16_t              // see below
+using std::atomic_uint16_t             // see below
+using std::atomic_int32_t              // see below
+using std::atomic_uint32_t             // see below
+using std::atomic_int64_t              // see below
+using std::atomic_uint64_t             // see below
+using std::atomic_int_least8_t         // see below
+using std::atomic_uint_least8_t        // see below
+using std::atomic_int_least16_t        // see below
+using std::atomic_uint_least16_t       // see below
+using std::atomic_int_least32_t        // see below
+using std::atomic_uint_least32_t       // see below
+using std::atomic_int_least64_t        // see below
+using std::atomic_uint_least64_t       // see below
+using std::atomic_int_fast8_t          // see below
+using std::atomic_uint_fast8_t         // see below
+using std::atomic_int_fast16_t         // see below
+using std::atomic_uint_fast16_t        // see below
+using std::atomic_int_fast32_t         // see below
+using std::atomic_uint_fast32_t        // see below
+using std::atomic_int_fast64_t         // see below
+using std::atomic_uint_fast64_t        // see below
+using std::atomic_intptr_t             // see below
+using std::atomic_uintptr_t            // see below
+using std::atomic_size_t               // see below
+using std::atomic_ptrdiff_t            // see below
+using std::atomic_intmax_t             // see below
+using std::atomic_uintmax_t            // see below
+
+using std::atomic_is_lock_free                         // see below
+using std::atomic_load                                 // see below
+using std::atomic_load_explicit                        // see below
+using std::atomic_store                                // see below
+using std::atomic_store_explicit                       // see below
+using std::atomic_exchange                             // see below
+using std::atomic_exchange_explicit                    // see below
+using std::atomic_compare_exchange_strong              // see below
+using std::atomic_compare_exchange_strong_explicit     // see below
+using std::atomic_compare_exchange_weak                // see below
+using std::atomic_compare_exchange_weak_explicit       // see below
+using std::atomic_fetch_add                            // see below
+using std::atomic_fetch_add_explicit                   // see below
+using std::atomic_fetch_sub                            // see below
+using std::atomic_fetch_sub_explicit                   // see below
+using std::atomic_fetch_or                             // see below
+using std::atomic_fetch_or_explicit                    // see below
+using std::atomic_fetch_and                            // see below
+using std::atomic_fetch_and_explicit                   // see below
+using std::atomic_flag_test_and_set                    // see below
+using std::atomic_flag_test_and_set_explicit           // see below
+using std::atomic_flag_clear                           // see below
+using std::atomic_flag_clear_explicit                  // see below
+
+using std::atomic_thread_fence                         // see below
+using std::atomic_signal_fence                         // see below
+
+*/
+
+#include <__config>
+
+#if !defined(_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER)
+#  pragma GCC system_header
 #endif
 
-#ifndef __STDATOMIC_H
-#define __STDATOMIC_H
+#if defined(__cplusplus) && _LIBCPP_STD_VER >= 23
 
-#include <stddef.h>
-#include <stdint.h>
+#include <atomic>
+#include <version>
 
-#ifdef __cplusplus
-extern "C" {
+#ifdef _Atomic
+# undef _Atomic
 #endif
 
-/* 7.17.1 Introduction */
+#define _Atomic(_Tp) ::std::atomic<_Tp>
 
-#define ATOMIC_BOOL_LOCK_FREE       __CLANG_ATOMIC_BOOL_LOCK_FREE
-#define ATOMIC_CHAR_LOCK_FREE       __CLANG_ATOMIC_CHAR_LOCK_FREE
-#define ATOMIC_CHAR16_T_LOCK_FREE   __CLANG_ATOMIC_CHAR16_T_LOCK_FREE
-#define ATOMIC_CHAR32_T_LOCK_FREE   __CLANG_ATOMIC_CHAR32_T_LOCK_FREE
-#define ATOMIC_WCHAR_T_LOCK_FREE    __CLANG_ATOMIC_WCHAR_T_LOCK_FREE
-#define ATOMIC_SHORT_LOCK_FREE      __CLANG_ATOMIC_SHORT_LOCK_FREE
-#define ATOMIC_INT_LOCK_FREE        __CLANG_ATOMIC_INT_LOCK_FREE
-#define ATOMIC_LONG_LOCK_FREE       __CLANG_ATOMIC_LONG_LOCK_FREE
-#define ATOMIC_LLONG_LOCK_FREE      __CLANG_ATOMIC_LLONG_LOCK_FREE
-#define ATOMIC_POINTER_LOCK_FREE    __CLANG_ATOMIC_POINTER_LOCK_FREE
+using std::memory_order _LIBCPP_USING_IF_EXISTS;
+using std::memory_order_relaxed _LIBCPP_USING_IF_EXISTS;
+using std::memory_order_consume _LIBCPP_USING_IF_EXISTS;
+using std::memory_order_acquire _LIBCPP_USING_IF_EXISTS;
+using std::memory_order_release _LIBCPP_USING_IF_EXISTS;
+using std::memory_order_acq_rel _LIBCPP_USING_IF_EXISTS;
+using std::memory_order_seq_cst _LIBCPP_USING_IF_EXISTS;
 
-/* 7.17.2 Initialization */
+using std::atomic_flag _LIBCPP_USING_IF_EXISTS;
 
-#define ATOMIC_VAR_INIT(value) (value)
-#define atomic_init __c11_atomic_init
+using std::atomic_bool _LIBCPP_USING_IF_EXISTS;
+using std::atomic_char _LIBCPP_USING_IF_EXISTS;
+using std::atomic_schar _LIBCPP_USING_IF_EXISTS;
+using std::atomic_uchar _LIBCPP_USING_IF_EXISTS;
+using std::atomic_short _LIBCPP_USING_IF_EXISTS;
+using std::atomic_ushort _LIBCPP_USING_IF_EXISTS;
+using std::atomic_int _LIBCPP_USING_IF_EXISTS;
+using std::atomic_uint _LIBCPP_USING_IF_EXISTS;
+using std::atomic_long _LIBCPP_USING_IF_EXISTS;
+using std::atomic_ulong _LIBCPP_USING_IF_EXISTS;
+using std::atomic_llong _LIBCPP_USING_IF_EXISTS;
+using std::atomic_ullong _LIBCPP_USING_IF_EXISTS;
+using std::atomic_char8_t _LIBCPP_USING_IF_EXISTS;
+using std::atomic_char16_t _LIBCPP_USING_IF_EXISTS;
+using std::atomic_char32_t _LIBCPP_USING_IF_EXISTS;
+using std::atomic_wchar_t _LIBCPP_USING_IF_EXISTS;
 
-/* 7.17.3 Order and consistency */
+using std::atomic_int8_t _LIBCPP_USING_IF_EXISTS;
+using std::atomic_uint8_t _LIBCPP_USING_IF_EXISTS;
+using std::atomic_int16_t _LIBCPP_USING_IF_EXISTS;
+using std::atomic_uint16_t _LIBCPP_USING_IF_EXISTS;
+using std::atomic_int32_t _LIBCPP_USING_IF_EXISTS;
+using std::atomic_uint32_t _LIBCPP_USING_IF_EXISTS;
+using std::atomic_int64_t _LIBCPP_USING_IF_EXISTS;
+using std::atomic_uint64_t _LIBCPP_USING_IF_EXISTS;
 
-typedef enum memory_order {
-  memory_order_relaxed = __ATOMIC_RELAXED,
-  memory_order_consume = __ATOMIC_CONSUME,
-  memory_order_acquire = __ATOMIC_ACQUIRE,
-  memory_order_release = __ATOMIC_RELEASE,
-  memory_order_acq_rel = __ATOMIC_ACQ_REL,
-  memory_order_seq_cst = __ATOMIC_SEQ_CST
-} memory_order;
+using std::atomic_int_least8_t _LIBCPP_USING_IF_EXISTS;
+using std::atomic_uint_least8_t _LIBCPP_USING_IF_EXISTS;
+using std::atomic_int_least16_t _LIBCPP_USING_IF_EXISTS;
+using std::atomic_uint_least16_t _LIBCPP_USING_IF_EXISTS;
+using std::atomic_int_least32_t _LIBCPP_USING_IF_EXISTS;
+using std::atomic_uint_least32_t _LIBCPP_USING_IF_EXISTS;
+using std::atomic_int_least64_t _LIBCPP_USING_IF_EXISTS;
+using std::atomic_uint_least64_t _LIBCPP_USING_IF_EXISTS;
 
-#define kill_dependency(y) (y)
+using std::atomic_int_fast8_t _LIBCPP_USING_IF_EXISTS;
+using std::atomic_uint_fast8_t _LIBCPP_USING_IF_EXISTS;
+using std::atomic_int_fast16_t _LIBCPP_USING_IF_EXISTS;
+using std::atomic_uint_fast16_t _LIBCPP_USING_IF_EXISTS;
+using std::atomic_int_fast32_t _LIBCPP_USING_IF_EXISTS;
+using std::atomic_uint_fast32_t _LIBCPP_USING_IF_EXISTS;
+using std::atomic_int_fast64_t _LIBCPP_USING_IF_EXISTS;
+using std::atomic_uint_fast64_t _LIBCPP_USING_IF_EXISTS;
 
-/* 7.17.4 Fences */
+using std::atomic_intptr_t _LIBCPP_USING_IF_EXISTS;
+using std::atomic_uintptr_t _LIBCPP_USING_IF_EXISTS;
+using std::atomic_size_t _LIBCPP_USING_IF_EXISTS;
+using std::atomic_ptrdiff_t _LIBCPP_USING_IF_EXISTS;
+using std::atomic_intmax_t _LIBCPP_USING_IF_EXISTS;
+using std::atomic_uintmax_t _LIBCPP_USING_IF_EXISTS;
 
-#ifndef KERNEL
-/* These should be provided by the libc implementation. */
-void atomic_thread_fence(memory_order);
-void atomic_signal_fence(memory_order);
-#endif
+using std::atomic_compare_exchange_strong _LIBCPP_USING_IF_EXISTS;
+using std::atomic_compare_exchange_strong_explicit _LIBCPP_USING_IF_EXISTS;
+using std::atomic_compare_exchange_weak _LIBCPP_USING_IF_EXISTS;
+using std::atomic_compare_exchange_weak_explicit _LIBCPP_USING_IF_EXISTS;
+using std::atomic_exchange _LIBCPP_USING_IF_EXISTS;
+using std::atomic_exchange_explicit _LIBCPP_USING_IF_EXISTS;
+using std::atomic_fetch_add _LIBCPP_USING_IF_EXISTS;
+using std::atomic_fetch_add_explicit _LIBCPP_USING_IF_EXISTS;
+using std::atomic_fetch_and _LIBCPP_USING_IF_EXISTS;
+using std::atomic_fetch_and_explicit _LIBCPP_USING_IF_EXISTS;
+using std::atomic_fetch_or _LIBCPP_USING_IF_EXISTS;
+using std::atomic_fetch_or_explicit _LIBCPP_USING_IF_EXISTS;
+using std::atomic_fetch_sub _LIBCPP_USING_IF_EXISTS;
+using std::atomic_fetch_sub_explicit _LIBCPP_USING_IF_EXISTS;
+using std::atomic_flag_clear _LIBCPP_USING_IF_EXISTS;
+using std::atomic_flag_clear_explicit _LIBCPP_USING_IF_EXISTS;
+using std::atomic_flag_test_and_set _LIBCPP_USING_IF_EXISTS;
+using std::atomic_flag_test_and_set_explicit _LIBCPP_USING_IF_EXISTS;
+using std::atomic_is_lock_free _LIBCPP_USING_IF_EXISTS;
+using std::atomic_load _LIBCPP_USING_IF_EXISTS;
+using std::atomic_load_explicit _LIBCPP_USING_IF_EXISTS;
+using std::atomic_store _LIBCPP_USING_IF_EXISTS;
+using std::atomic_store_explicit _LIBCPP_USING_IF_EXISTS;
 
-#define atomic_thread_fence(order) __c11_atomic_thread_fence(order)
-#define atomic_signal_fence(order) __c11_atomic_signal_fence(order)
+using std::atomic_signal_fence _LIBCPP_USING_IF_EXISTS;
+using std::atomic_thread_fence _LIBCPP_USING_IF_EXISTS;
 
-/* 7.17.5 Lock-free property */
+#elif defined(_LIBCPP_COMPILER_CLANG_BASED)
 
-#define atomic_is_lock_free(obj) __c11_atomic_is_lock_free(sizeof(*(obj)))
+// Before C++23, we include the next <stdatomic.h> on the path to avoid hijacking
+// the header. We do this because Clang has historically shipped a <stdatomic.h>
+// header that would be available in all Standard modes, and we don't want to
+// break that use case.
+# if __has_include_next(<stdatomic.h>)
+#   include_next <stdatomic.h>
+# endif
 
-/* 7.17.6 Atomic integer types */
+#endif // defined(__cplusplus) && _LIBCPP_STD_VER >= 23
 
-#ifdef __cplusplus
-typedef _Atomic(bool)               atomic_bool;
-#else
-typedef _Atomic(_Bool)              atomic_bool;
-#endif
-typedef _Atomic(char)               atomic_char;
-typedef _Atomic(signed char)        atomic_schar;
-typedef _Atomic(unsigned char)      atomic_uchar;
-typedef _Atomic(short)              atomic_short;
-typedef _Atomic(unsigned short)     atomic_ushort;
-typedef _Atomic(int)                atomic_int;
-typedef _Atomic(unsigned int)       atomic_uint;
-typedef _Atomic(long)               atomic_long;
-typedef _Atomic(unsigned long)      atomic_ulong;
-typedef _Atomic(long long)          atomic_llong;
-typedef _Atomic(unsigned long long) atomic_ullong;
-typedef _Atomic(uint_least16_t)     atomic_char16_t;
-typedef _Atomic(uint_least32_t)     atomic_char32_t;
-typedef _Atomic(wchar_t)            atomic_wchar_t;
-typedef _Atomic(int_least8_t)       atomic_int_least8_t;
-typedef _Atomic(uint_least8_t)      atomic_uint_least8_t;
-typedef _Atomic(int_least16_t)      atomic_int_least16_t;
-typedef _Atomic(uint_least16_t)     atomic_uint_least16_t;
-typedef _Atomic(int_least32_t)      atomic_int_least32_t;
-typedef _Atomic(uint_least32_t)     atomic_uint_least32_t;
-typedef _Atomic(int_least64_t)      atomic_int_least64_t;
-typedef _Atomic(uint_least64_t)     atomic_uint_least64_t;
-typedef _Atomic(int_fast8_t)        atomic_int_fast8_t;
-typedef _Atomic(uint_fast8_t)       atomic_uint_fast8_t;
-typedef _Atomic(int_fast16_t)       atomic_int_fast16_t;
-typedef _Atomic(uint_fast16_t)      atomic_uint_fast16_t;
-typedef _Atomic(int_fast32_t)       atomic_int_fast32_t;
-typedef _Atomic(uint_fast32_t)      atomic_uint_fast32_t;
-typedef _Atomic(int_fast64_t)       atomic_int_fast64_t;
-typedef _Atomic(uint_fast64_t)      atomic_uint_fast64_t;
-typedef _Atomic(intptr_t)           atomic_intptr_t;
-typedef _Atomic(uintptr_t)          atomic_uintptr_t;
-typedef _Atomic(size_t)             atomic_size_t;
-typedef _Atomic(ptrdiff_t)          atomic_ptrdiff_t;
-typedef _Atomic(intmax_t)           atomic_intmax_t;
-typedef _Atomic(uintmax_t)          atomic_uintmax_t;
-
-/* 7.17.7 Operations on atomic types */
-
-#define atomic_store(object, desired) __c11_atomic_store(object, desired, __ATOMIC_SEQ_CST)
-#define atomic_store_explicit __c11_atomic_store
-
-#define atomic_load(object) __c11_atomic_load(object, __ATOMIC_SEQ_CST)
-#define atomic_load_explicit __c11_atomic_load
-
-#define atomic_exchange(object, desired) __c11_atomic_exchange(object, desired, __ATOMIC_SEQ_CST)
-#define atomic_exchange_explicit __c11_atomic_exchange
-
-#define atomic_compare_exchange_strong(object, expected, desired) __c11_atomic_compare_exchange_strong(object, expected, desired, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)
-#define atomic_compare_exchange_strong_explicit __c11_atomic_compare_exchange_strong
-
-#define atomic_compare_exchange_weak(object, expected, desired) __c11_atomic_compare_exchange_weak(object, expected, desired, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)
-#define atomic_compare_exchange_weak_explicit __c11_atomic_compare_exchange_weak
-
-#define atomic_fetch_add(object, operand) __c11_atomic_fetch_add(object, operand, __ATOMIC_SEQ_CST)
-#define atomic_fetch_add_explicit __c11_atomic_fetch_add
-
-#define atomic_fetch_sub(object, operand) __c11_atomic_fetch_sub(object, operand, __ATOMIC_SEQ_CST)
-#define atomic_fetch_sub_explicit __c11_atomic_fetch_sub
-
-#define atomic_fetch_or(object, operand) __c11_atomic_fetch_or(object, operand, __ATOMIC_SEQ_CST)
-#define atomic_fetch_or_explicit __c11_atomic_fetch_or
-
-#define atomic_fetch_xor(object, operand) __c11_atomic_fetch_xor(object, operand, __ATOMIC_SEQ_CST)
-#define atomic_fetch_xor_explicit __c11_atomic_fetch_xor
-
-#define atomic_fetch_and(object, operand) __c11_atomic_fetch_and(object, operand, __ATOMIC_SEQ_CST)
-#define atomic_fetch_and_explicit __c11_atomic_fetch_and
-
-/* 7.17.8 Atomic flag type and operations */
-
-typedef struct atomic_flag { atomic_bool _Value; } atomic_flag;
-
-#define ATOMIC_FLAG_INIT { 0 }
-
-#ifndef KERNEL
-/* These should be provided by the libc implementation. */
-#ifdef __cplusplus
-bool atomic_flag_test_and_set(volatile atomic_flag *);
-bool atomic_flag_test_and_set_explicit(volatile atomic_flag *, memory_order);
-#else
-_Bool atomic_flag_test_and_set(volatile atomic_flag *);
-_Bool atomic_flag_test_and_set_explicit(volatile atomic_flag *, memory_order);
-#endif
-void atomic_flag_clear(volatile atomic_flag *);
-void atomic_flag_clear_explicit(volatile atomic_flag *, memory_order);
-#endif
-
-#define atomic_flag_test_and_set(object) __c11_atomic_exchange(&(object)->_Value, 1, __ATOMIC_SEQ_CST)
-#define atomic_flag_test_and_set_explicit(object, order) __c11_atomic_exchange(&(object)->_Value, 1, order)
-
-#define atomic_flag_clear(object) __c11_atomic_store(&(object)->_Value, 0, __ATOMIC_SEQ_CST)
-#define atomic_flag_clear_explicit(object, order) __c11_atomic_store(&(object)->_Value, 0, order)
-
-#ifdef __cplusplus
-}
-#endif
-
-#endif /* __STDATOMIC_H */
-
+#endif // _LIBCPP_STDATOMIC_H

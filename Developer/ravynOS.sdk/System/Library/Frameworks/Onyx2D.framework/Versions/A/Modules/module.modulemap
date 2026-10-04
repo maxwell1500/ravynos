@@ -1,0 +1,5 @@
+framework module Onyx2D {
+    umbrella header "Onyx2D.h"
+    export *
+    module * { export * }
+}

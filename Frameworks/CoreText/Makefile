@@ -1,31 +1,26 @@
 FRAMEWORK=CoreText
-.include "../framework.common.mk"
 
 SRCS= CTFont.m KTFont.m
-INCS= CoreText.h CoreTextExport.h CTFont.h KTFont.h
+HEADERS= CoreText.h CoreTextExport.h CTFont.h KTFont.h
 RESOURCES=Info.plist 
-LDFLAGS+= -Wl,--no-undefined -L${OBJTOP}/Frameworks/Onyx2D/Onyx2D.framework \
-	-lOnyx2D -Wl,-R/System/Library/Frameworks/Onyx2D.framework/Versions/A \
-	-L${OBJTOP}/Frameworks/CoreGraphics/CoreGraphics.framework -lCoreGraphics \
-	-Wl,-R/System/Library/Frameworks/CoreGraphics.framework/Versions/A \
-	-L${OBJTOP}/Frameworks/Foundation/Foundation.framework -lFoundation \
-	-Wl,-R/System/Library/Frameworks/Foundation.framework/Versions/A \
-	-L${OBJTOP}/tmp/usr/lib -lxml2 -lintl -lobjc -lmach
+LDFLAGS+= -F${OBJTOP}/Frameworks/Onyx2D -framework Onyx2D \
+	-Wl,-rpath,/System/Library/Frameworks/Onyx2D.framework/Versions/A \
+	-F${OBJTOP}/Frameworks/CoreGraphics -framework CoreGraphics \
+	-Wl,-rpath,/System/Library/Frameworks/CoreGraphics.framework/Versions/A \
+	-F${OBJTOP}/Frameworks/Foundation -framework Foundation \
+	-Wl,-rpath,/System/Library/Frameworks/Foundation.framework/Versions/A \
+	-lobjc
 WARNS= 1
 MK_WERROR= no
 
-SUBDIR+=	gperf .WAIT
-SUBDIR+=	fontconfig
-LINK_SUBDIR=	fontconfig/src
-LINK_EXCLUDE.fontconfig/src= fcarch.o
 
 clean:
 	rm -f ${MAKEOBJDIR}/*.o ${MAKEOBJDIR}/*.pico
 
 .include <rvn.framework.mk>
 
-CFLAGS+= ${FMWK_CFLAGS} -I.. -I../libobjc2 -I../Foundation/Headers \
-	 -I${.CURDIR}/.. -I${.CURDIR}/fontconfig/fontconfig \
+CFLAGS+= -I${.CURDIR:H} -I${.CURDIR:H}/libobjc2 -I${.CURDIR:H}/Foundation/Headers \
+	 -I${.CURDIR}/fontconfig/fontconfig \
 	 -F${OBJTOP}/Frameworks/OpenGL
 
 fontresources:
@@ -59,4 +54,10 @@ fontresources:
 	ln -sf /System/Library/Frameworks/CoreText.framework/Resources/${f} ${BUILDROOT}/etc/fonts/conf.d/
 .endfor
 
-installresources: std_install_hook fontresources
+installresources: fmwk-install-hook fontresources
+
+fmwk-install-hook:
+.for dir in ${RAVYN_SDKROOT}/System/Library/Frameworks/ ${SYSROOT_DIR}/System/Library/Frameworks/
+	mkdir -p ${dir}
+	cp -Rfp ${.OBJDIR}/${FRAMEWORK}.framework ${dir}
+.endfor

@@ -9,6 +9,10 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 // Original - Christopher Lloyd <cjwl@objc.net>
 #import <Cocoa/Cocoa.h>
 
+/* Placeholder for future implementation.
+ * Cocoa is not yet implemented in ravynOS. This stub exists so the
+ * framework can be linked; it should eventually contain the full
+ * Cocoa/AppKit API surface (NSView, NSWindow, NSApplication, etc.). */
 static void Cocoa(){
    [NSObject class];
    [NSApplication class];

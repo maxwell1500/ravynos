@@ -4,7 +4,7 @@ LIB=		evdev
 PACKAGE=        lib${LIB}
 SHLIB_MAJOR=    2
 
-.PATH:          ${.CURDIR}/libevdev
+.PATH:          ${.CURDIR}/libevdev ${.CURDIR}/tools
 SRCS=           libevdev-names.c \
                 libevdev-uinput.c \
                 libevdev.c \
@@ -30,7 +30,9 @@ CFLAGS+=        -I${SRCTOP}/sys/compat/linuxkpi/common/include \
                 -DHAVE_UNISTD_H \
                 -DSTDC_HEADERS \
                 -D_GNU_SOURCE \
-                -Wno-error=macro-redefined
+                -Wno-error=macro-redefined \
+                -Wno-nullability-completeness
+LDFLAGS+=       -shared
 WARNS?=	2
 
 config.h: .PHONY
@@ -51,27 +53,6 @@ event-names.h: .PHONY
         	${.CURDIR}/include/linux/freebsd/input.h \
         	${.CURDIR}/include/linux/freebsd/input-event-codes.h >${.TARGET}
 
-TOOL_CFLAGS= -D__double_t=double -D__float_t=float
-TOOL_LDFLAGS= -L${MAKEOBJDIR} -levdev -Wl,-R'$$ORIGIN'
-TOOLS=	libevdev-events touchpad-edge-detector \
-	mouse-dpi-tool libevdev-tweak-device
-
-tools: ${TOOLS}
-libevdev-events: tools/libevdev-events.c
-	${CC} ${CPPFLAGS} ${CFLAGS} ${TOOL_CFLAGS} -c $< -o $@.o
-	${CC} -o $@ $@.o ${TOOL_LDFLAGS}
-touchpad-edge-detector: tools/touchpad-edge-detector.c
-	${CC} ${CPPFLAGS} ${CFLAGS} ${TOOL_CFLAGS} -c $< -o $@.o
-	${CC} -o $@ $@.o ${TOOL_LDFLAGS} -lm
-mouse-dpi-tool: tools/mouse-dpi-tool.c
-	${CC} ${CPPFLAGS} ${CFLAGS} ${TOOL_CFLAGS} -c $< -o $@.o
-	${CC} -o $@ $@.o ${TOOL_LDFLAGS}
-libevdev-tweak-device: tools/libevdev-tweak-device.c
-	${CC} ${CPPFLAGS} ${CFLAGS} ${TOOL_CFLAGS} -c $< -o $@.o
-	${CC} -o $@ $@.o ${TOOL_LDFLAGS}
-
-tools-install: .PHONY
-	cp -fv ${TOOLS} ${APP_DIR}/Contents/Resources/
 
 .include <bsd.lib.mk>
 

@@ -41,7 +41,6 @@
 #include <pwd.h>
 #include <grp.h>
 #include <login_cap.h>
-#include <kvm.h>
 
 #import "message.h"
 #import "WSDisplay.h"
@@ -80,7 +79,6 @@ extern pthread_mutex_t renderLock;
 
     mach_port_name_t _servicePort;
     int _kq;
-    kvm_t *kvm;
 }
 
 -init;

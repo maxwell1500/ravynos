@@ -128,6 +128,38 @@ typedef struct mig_subsystem {
 	    routine[1];                                         /* Routine descriptor array */
 } *mig_subsystem_t;
 
+#ifdef XNU_KERNEL_PRIVATE
+/* KernelServer MIG routine/subsystem types */
+typedef void    (*mig_stub_kern_routine_t) (mach_msg_header_t *InHeadP, void *InDataP,
+    mach_msg_max_trailer_t *InTrailerP, mach_msg_header_t *OutHeadP, void *OutDataP);
+
+typedef mig_stub_kern_routine_t mig_kern_routine_t;
+
+typedef mig_kern_routine_t (*mig_kern_server_routine_t) (mach_msg_header_t *InHeadP);
+
+struct kern_routine_descriptor {
+	mig_impl_routine_t      impl_routine;      /* Server work func pointer   */
+	mig_stub_kern_routine_t kstub_routine;     /* Unmarshalling func pointer */
+	unsigned int            argc;              /* Number of argument words   */
+	unsigned int            descr_count;       /* Number complex descriptors */
+	unsigned int            reply_descr_count; /* Number descriptors in reply */
+	unsigned int            max_reply_msg;     /* Max size for reply msg */
+};
+
+typedef struct kern_routine_descriptor mig_kern_routine_descriptor;
+typedef struct kern_routine_descriptor *kern_routine_descriptor_t;
+
+typedef struct mig_kern_subsystem {
+	mig_kern_server_routine_t     kserver;     /* pointer to kernel demux routine */
+	mach_msg_id_t            start;            /* Min routine number */
+	mach_msg_id_t            end;              /* Max routine number + 1 */
+	mach_msg_size_t          maxsize;          /* Max reply message size */
+	vm_address_t             reserved;         /* reserved for MIG use */
+	mig_kern_routine_descriptor
+	    kroutine[1];                           /* Kernel routine descriptor array */
+} *mig_kern_subsystem_t;
+#endif /* XNU_KERNEL_PRIVATE */
+
 #define MIG_SUBSYSTEM_NULL              ((mig_subsystem_t)0)
 
 typedef struct mig_symtab {
@@ -151,10 +183,6 @@ typedef struct mig_symtab {
 #define MIG_SERVER_ROUTINE
 #endif
 
-
-/* MIG object runtime - not ready for public consumption */
-
-
 __BEGIN_DECLS
 
 /* Client side reply port allocate */
@@ -170,6 +198,15 @@ extern void mig_put_reply_port(mach_port_t reply_port);
 extern int mig_strncpy(char     *dest, const char *src, int     len);
 extern int mig_strncpy_zerofill(char    *dest, const char *src, int     len);
 
+#ifdef KERNEL_PRIVATE
+
+/* Allocate memory for out-of-stack mig structures */
+extern void *mig_user_allocate(vm_size_t size);
+
+/* Deallocate memory used for out-of-stack mig structures */
+extern void mig_user_deallocate(char *data, vm_size_t size);
+
+#else
 
 /* Allocate memory for out-of-line mig structures */
 extern void mig_allocate(vm_address_t *, vm_size_t);
@@ -177,6 +214,7 @@ extern void mig_allocate(vm_address_t *, vm_size_t);
 /* Deallocate memory used for out-of-line mig structures */
 extern void mig_deallocate(vm_address_t, vm_size_t);
 
+#endif /* KERNEL_PRIVATE */
 
 __END_DECLS
 
