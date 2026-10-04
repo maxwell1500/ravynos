@@ -632,7 +632,15 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 			if (error != 0) {
 				goto bad;
 			}
-			*retval = (int)mmap_device_addr;
+			/*
+			 * user_addr_t, not int.  The mapping the driver just
+			 * installed is a 64-bit user address above 4 GiB;
+			 * truncating it here hands the caller a pointer it
+			 * cannot use.  WindowServer mmaps /dev/fb0, so this
+			 * is the difference between compositing into scanout
+			 * and writing to unrelated memory.
+			 */
+			*retval = (user_addr_t)mmap_device_addr;
 			/* error is 0; the common epilogue below drops fp. */
 			goto bad;
 		} else {

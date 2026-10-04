@@ -683,10 +683,29 @@ load_job(const char *filename)
 		return (-1);
 
 	plist = json_loadf(input, JSON_DECODE_ANY, &error);
+	if (plist == NULL) {
+		fprintf(stderr, "%s: %s (line %d)\n", filename, error.text, error.line);
+		return (-1);
+	}
 	msg = json_object();
 	json_object_set_new(msg, "SubmitJob", plist);
 
-	return (launch_msg_json(msg) == NULL ? -1 : 0); 
+	/*
+	 * launch_msg() signals failure by returning NULL and does NOT set
+	 * errno -- liblaunch's launch_msg_internal() jumps to out_bad and
+	 * returns NULL without touching errno.  Our caller prints
+	 * strerror(errno), so without the clear below a failed submit is
+	 * misreported using whatever stale errno an earlier unrelated syscall
+	 * left behind (e.g. the ENOENT from scandir() of a job directory that
+	 * does not exist, which is what made this look like a missing file).
+	 */
+	errno = 0;
+	if (launch_msg_json(msg) == NULL) {
+		if (errno == 0)
+			errno = EIO;
+		return (-1);
+	}
+	return (0);
 }
 
 /*

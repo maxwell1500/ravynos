@@ -3149,3 +3149,49 @@ timebase and compared guest elapsed against host wall time over two fixed-TSC
 spin windows: ratios 0.9844 and 0.9840. Guest time and host time now agree; the
 ~1.6% shortfall is the serial write and fsync landing after the guest timestamp
 is taken, not clock error.
+
+## 18. Driver model and the post-QEMU paths (2026-10-04)
+
+**The driver model is compiled-in kexts.** `Kernel/Extensions/Makefile:1-4` (`SUBDIR`) and
+`:20-38` (`kernelcache`) wire 15 kexts into the prelinked kernelcache: `AppleAPIC`,
+`IOACPIFamily`, `IOPCIFamily`, `IOStorageFamily`, `IOATAFamily`, `hfs` (+ `hfs_encodings`),
+`AppleFileSystemDriver`, `RavynAHCIPort`, `IOGraphics`→`IOGOPFramebuffer` (renamed at `:11`),
+`corecrypto`, `pthread`, `IOHIDFamily`, `ApplePS2Controller`, `AppleI386PCI`. Two more are
+built but **not** in the prelinked cache: `AppleIntelPIIXATA` and `msdosfs` (both in `SUBDIR`
+at `:2`, absent from the `:20-38` list). Two are **not wired at all** — `IOUSBFamily` and
+`RavynXHCIPort` are commented out at `:4` and `:44-45`. USB being commented out is the first
+thing real hardware would need. The compiled-in route needs no bootloader change:
+`tools/bootlab/kernel_build.py` already builds this set (and the char devices `fb0.c`,
+`cons.c`, `km.c`, `devfs_*`, `spec_vnops` — see `:138-176,333`).
+
+**No injection machinery exists.** A grep for kext-injection, ACPI-patching and
+SMBIOS-spoofing across `tools/bootlab/*.py`, `*.sh`, `*.json`, `Makefile` and
+`tools/efiloader/src/*.c` returns **zero hits**. There is no OpenCore-style `config.plist`,
+no `DeviceProperties`, no `KernelAdd`/`KernelPatch`. The OpenCore route would be net-new
+work; the current model is kexts compiled into the kernelcache.
+
+**Three post-QEMU paths, each with its honest cost.**
+1. *Grow the compiled-in kext set.* Cheapest per kext — the build and kernelcache machinery
+   already exists — but every new driver is a port, and the set is unbounded.
+2. *An injection mechanism* (OpenCore-style kext injection). Unblocks loading unmodified
+   third-party kexts, but is net-new machinery (see above) and drags in the whole
+   config.plist/ACPI/SMBIOS surface.
+3. *Reuse Linux drivers via a Linux-kernel API shim.* FreeBSD's `linuxkpi` is the precedent:
+   network and storage wrappers are far cheaper than a graphics one. The in-tree hint that
+   DRM/KMS was considered: libdrm headers for radeon/amdgpu under `Frameworks/OpenGL/libdrm/`.
+
+**The Metal assessment, plainly.** No `Metal.framework`, `MetalKit` or `MPS` exists anywhere
+in the repo (the only "Metal" hit is a Clover theme PNG,
+`clover_extracted/CloverV2/EFI/CLOVER/themes/pointer-metal.png`). Metal is closed-source with
+no open implementation, so the paths are implement / translate / reverse-engineer — and all
+are gated behind a GPU driver that does not exist. There is no GPU rendering path today:
+`Frameworks/OpenGL/OpenGL.c` is a placeholder stub exporting the single symbol `_OpenGL`,
+and `CoreServices/WindowServer` composites on the CPU via Onyx2D. This is **two large items
+in series** — a GPU driver, then Metal on top of it — not one.
+
+**Linuxkpi check (the one item not previously done).** `grep -ril 'linuxkpi\|linux_compat\|lkpi'`
+across the tree finds only FreeBSD **man pages** — `BSD/share/man/man4/linuxkpi.4`,
+`linuxkpi_wlan.4`, `lindebugfs.4` — i.e. documentation, not implementation. No linuxkpi
+source exists under `Kernel/xnu/` or `BSD/` (the `Kernel/xnu` grep hits are POSIX
+`lockf`/`fcntl` code: `kern_lockf.c`, `kern_descrip.c`, `fcntl.h`). So the Linux-driver
+route starts from an **import** of FreeBSD's linuxkpi, not from in-tree remnants.

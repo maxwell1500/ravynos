@@ -164,16 +164,20 @@ def resolve(inst):
             return manifest_source(real), real
     return None, None
 
-def stage_bundle(entries, bundle_root, dst_root, comment):
+def stage_bundle(entries, bundle_root, dst_root, comment, exclude=()):
     """Stage every regular file under bundle_root at dst_root/<relative>.
 
     Symlinks are flattened to real file copies (manifest_source(realpath)),
     which is what the staged filesystem can hold.  Returns the file count.
+    `exclude` is a set of basenames to skip (dead-weight files the bundle
+    carries but nothing in the image uses).
     """
     n = 0
     for dirpath, dirnames, filenames in os.walk(bundle_root):
         dirnames.sort()
         for name in sorted(filenames):
+            if name in exclude:
+                continue
             src = os.path.join(dirpath, name)
             rel = os.path.relpath(src, bundle_root).replace(os.sep, "/")
             entries.append({
@@ -183,6 +187,15 @@ def stage_bundle(entries, bundle_root, dst_root, comment):
             })
             n += 1
     return n
+
+
+# WindowServer's bundle carries the vendored libinput/libevdev shared objects
+# (both under Contents/Resources/ and the duplicated top-level Resources/).
+# They are dead weight: nothing in the image depends on them, WindowServer is
+# not linked to them (nm -u shows no libinput/libevdev undefined symbols), and
+# the input path has no /dev/input source in the kernel.  Excluded from the
+# bundle walk so the manifest does not stage them.
+BUNDLE_EXCLUDE = {"libevdev.so", "libevdev.so.2", "libinput.so", "libinput.so.1"}
 
 
 def expand_closure(exes, staged, entries, closure, seen):
@@ -254,7 +267,7 @@ def main():
     n_bundle = stage_bundle(
         entries, bundle_root, BUNDLE_DST_ROOT,
         "WindowServer.app bundle file (extracted from "
-        "work/WindowServer.app.tar.gz)")
+        "work/WindowServer.app.tar.gz)", exclude=BUNDLE_EXCLUDE)
 
     # 4. Dylib closure of the bundle executable, at Darwin install paths.
     closure = []  # (install_path, source_or_None, status)
@@ -345,6 +358,23 @@ def main():
                 n_fonts += 1
         closure.append(("System/Library/Fonts", font_root,
                         "staged %d files" % n_fonts))
+    # 9. CoreData.  Built and staged into the repo SDK by the closure worker;
+    #    the manifest must reference it repo-relatively.  (Onyx2D is already
+    #    staged by the WindowServer closure and its entry already points at the
+    #    repo SDK, so adding it here would duplicate the path.)
+    coredata = os.path.join(SDK, "System", "Library", "Frameworks",
+                            "CoreData.framework", "Versions", "A", "CoreData")
+    if not os.path.isfile(coredata):
+        closure.append(("System/Library/Frameworks/CoreData.framework/Versions/A/CoreData",
+                        coredata, "MISSING"))
+    else:
+        entries.append({
+            "path": "System/Library/Frameworks/CoreData.framework/Versions/A/CoreData",
+            "file": manifest_source(os.path.realpath(coredata)),
+            "comment": "CoreData from the repo SDK",
+        })
+        closure.append(("System/Library/Frameworks/CoreData.framework/Versions/A/CoreData",
+                        coredata, "staged"))
 
     paths = [e["path"] for e in entries]
     dupes = sorted({p for p in paths if paths.count(p) > 1})
