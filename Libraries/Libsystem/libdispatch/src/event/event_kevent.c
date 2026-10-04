@@ -23,6 +23,7 @@
 #if HAVE_MACH
 #include "protocol.h"
 #include "protocolServer.h"
+#include <mach/host_priv.h>
 #endif
 
 #if DISPATCH_USE_KEVENT_WORKQUEUE && !DISPATCH_USE_KEVENT_QOS

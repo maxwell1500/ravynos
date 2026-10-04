@@ -226,6 +226,76 @@ for name in ["kern_support.c", "kern_synch.c"]:
 print("Compiling msdosfs objects...", flush=True)
 run([os.path.join(HERE, "msdosfs_compile.sh")], HERE)
 
+# ------------------------------------------------- MIG kernel-server stubs
+# The *_server.c files are produced by `mig`, and the layout of the routine
+# descriptor array that mig_init() (osfmk/kern/ipc_kobject.c) walks depends
+# on whether mig ran with -DKERNEL_SERVER=1:
+#
+#   without it -> "struct routine_descriptor routine[N]"  (40 bytes/entry,
+#                 has an arg_descr pointer, no reply_descr_count)
+#   with it    -> "struct kern_routine_descriptor kroutine[N]" (32 bytes/entry)
+#
+# mig_init() casts each subsystem to struct mig_kern_subsystem and reads
+# kstub_routine/max_reply_msg/reply_descr_count, i.e. the 32-byte kernel
+# layout.  When the generated tables carry the 40-byte user layout, every
+# msgh_id past the first is read at the wrong offset: routines get
+# misrouted, and ids that land on a zero field register nothing at all.
+# Those come back as "ipc_kobject_server: bogus kernel message, id=<n>"
+# and MIG_BAD_ID (-303 / 0xfffffed1) -- which is exactly how
+# host_get_clock_service (mach_host 200+6 = 206) and semaphore_create
+# (task 3400+18 = 3418) fail on this kernel.
+#
+# The checked-in generated sources were produced without -DKERNEL_SERVER=1,
+# and their timestamps are newer than the .defs files, so make never
+# regenerates them.  Regenerate them here with the kernel flags
+# (makedefs/MakeInc.def: MIGKSFLAGS) and recompile, so the tables match
+# what mig_init() reads.
+MIGKSFLAGS = ["-DMACH_KERNEL_PRIVATE", "-DKERNEL_SERVER=1", "-mach_msg2"]
+MIGDEFS_DIRS = [os.path.join(SRC, "osfmk", "mach"),
+                os.path.join(SRC, "osfmk", "device")]
+
+def mig_flags_from(json_path):
+    """Reuse the exact -D/-I set the object was built with (i.e. MIGFLAGS)."""
+    args = load_json(json_path)["arguments"]
+    out, i = [], 0
+    while i < len(args):
+        a = args[i]
+        if a == "-D":
+            out.append("-D" + args[i + 1]); i += 2; continue
+        if a == "-I":
+            out.append("-I" + args[i + 1]); i += 2; continue
+        if a.startswith("-D") and len(a) > 2:
+            out.append(a); i += 1; continue
+        if a.startswith("-I") and len(a) > 2:
+            out.append(a); i += 1; continue
+        i += 1
+    return out + ["-arch", "x86_64", "-fsigned-bitfields", "-novouchers"]
+
+server_jsons = sorted(glob.glob(os.path.join(osfmk_dev, "*_server.o.json")))
+if not server_jsons:
+    sys.exit("no MIG server objects found in %s" % osfmk_dev)
+for jpath in server_jsons:
+    base = os.path.basename(jpath)[:-len(".o.json")]
+    rel_c = load_json(jpath)["file"]              # e.g. mach/mach_host_server.c
+    c_path = os.path.join(osfmk_dev, rel_c)
+    h_path = os.path.splitext(c_path)[0] + ".h"
+    stem = base[:-len("_server")]                 # e.g. mach_host
+    defs = None
+    for dd in MIGDEFS_DIRS:
+        cand = os.path.join(dd, stem + ".defs")
+        if os.path.isfile(cand):
+            defs = cand
+            break
+    if defs is None:
+        sys.exit("no .defs found for %s (looked in %s)" % (base, MIGDEFS_DIRS))
+    print("Regenerating MIG kernel server %s from %s..."
+          % (rel_c, os.path.relpath(defs, SRC)), flush=True)
+    run(["mig", "-q"] + mig_flags_from(jpath) + MIGKSFLAGS + [
+        "-user", "/dev/null", "-header", "/dev/null",
+        "-server", c_path, "-sheader", h_path, defs], osfmk_dev)
+    print("Compiling %s..." % base, flush=True)
+    run(load_json(jpath)["arguments"], load_json(jpath)["directory"])
+
 # --------------------------------------------------------------------- link
 components = ["osfmk", "bsd", "iokit", "libkern", "libsa", "pexpert",
               "security", "san"]

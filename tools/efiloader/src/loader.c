@@ -87,8 +87,15 @@ typedef struct { u32 Data1; u16 Data2; u16 Data3; u8 Data4[8]; } EFI_GUID;
  * field at offset 0 shifts the whole vtable, so every call lands on the
  * wrong function -- which is not recoverable at runtime.
  */
+/* Last byte verified against the exact firmware QEMU loads,
+ * /usr/local/share/qemu/edk2-x86_64-code.fd.  The .fd is a flash image whose
+ * DXE FV is LZMA-compressed, so a raw byte search of the file finds nothing;
+ * after decompressing that FV (7z, 16122000 bytes) the trailing-0x6A GUID
+ * occurs 10 times and trailing-0x6B zero times.  0x6B was the bug: with it,
+ * LocateHandle(BY_PROTOCOL) returns EFI_NOT_FOUND for the GOP device that the
+ * same firmware installs. */
 #define GUID_GOP          GUID(0x9042A9DE, 0x23DC, 0x4A38, \
-	0x96, 0xFB, 0x7A, 0xDE, 0xD0, 0x80, 0x51, 0x6B)
+	0x96, 0xFB, 0x7A, 0xDE, 0xD0, 0x80, 0x51, 0x6A)
 
 typedef struct {
 	u32 RedMask, GreenMask, BlueMask, ReservedMask;

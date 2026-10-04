@@ -3,7 +3,7 @@
 # ------------------------------------------------------------------------
 
 SUBDIR = CoreFoundation
-#SUBDIR += CFNetwork
+SUBDIR += CFNetwork
 SUBDIR += Foundation
 SUBDIR += CoreServices
 SUBDIR += Onyx2D

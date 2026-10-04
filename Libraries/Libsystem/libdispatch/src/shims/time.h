@@ -26,6 +26,7 @@
 
 #ifndef __DISPATCH_SHIMS_TIME__
 #define __DISPATCH_SHIMS_TIME__
+#include <time.h>
 
 #ifndef __DISPATCH_INDIRECT__
 #error "Please #include <dispatch/dispatch.h> instead of this file directly."

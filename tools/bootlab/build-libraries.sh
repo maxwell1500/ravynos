@@ -533,6 +533,20 @@ if [ -f "$SRV/usr/include/login_cap.h" ]; then
     cp -f "$SRV/usr/include/login_cap.h" "$SDK/usr/include/login_cap.h"
 fi
 
+# launch.h is the public header of Libraries/Libsystem/liblaunch, the library
+# LaunchServices, Dock and Filer link as -llaunch.  liblaunch's Makefile builds
+# only the dylib -- there is no install rule for the header -- so a framework
+# that does `#import <launch.h>` (Frameworks/CoreServices/LaunchServices/
+# LaunchServices.mm) failed with "'launch.h' file not found".  The header now
+# lives in the source SDK (Developer/ravynOS.sdk/usr/include/launch.h, copied
+# from Libraries/Libsystem/liblaunch/launch.h) and is synced here exactly like
+# login_cap.h above: unconditional cp -f so an edit to the vendored header
+# reaches the build SDK instead of being masked by a stale copy.
+if [ -f "$SRV/usr/include/launch.h" ]; then
+    mkdir -p "$SDK/usr/include"
+    cp -f "$SRV/usr/include/launch.h" "$SDK/usr/include/launch.h"
+fi
+
 # sys/cdefs.h is the other split-brain header. The SDK's copy (1,010 lines) is
 # missing 60 macros that Kernel/xnu/bsd/sys/cdefs.h defines, two of which were
 # hard build failures because headers in both trees use them unconditionally:
@@ -727,10 +741,15 @@ sync_cdefs
 # let isysroot-cc force-include the shim -- a whole-tree mach swap is not an
 # option, see the note above sync_mach.
 MACH_COMPAT="$HERE/ravynos-mach-compat.h"
+# The type may be present in the file but hidden inside `#if PRIVATE` -- the
+# SDK's message.h mirrors xnu's layout, and userspace never defines PRIVATE, so
+# a plain grep finds the string while the type is not actually visible. Track
+# the #if PRIVATE depth and only accept the type at depth 0.
 if [ -f "$MACH_COMPAT" ] && \
-   ! grep -q mach_msg_aux_header_t "$SDK/usr/include/mach/message.h" 2>/dev/null; then
+   ! awk '/#if PRIVATE/{d++} /#endif/{if(d>0)d--} /mach_msg_aux_header_t/{if(d==0) f=1} END{exit !f}' \
+        "$SDK/usr/include/mach/message.h" 2>/dev/null; then
     export RAVYN_COMPAT_MAC_AUX="$MACH_COMPAT"
-    echo "note: mach/message.h lacks mach_msg_aux_header_t; force-including $(basename "$MACH_COMPAT")" >&2
+    echo "note: mach/message.h lacks a visible mach_msg_aux_header_t; force-including $(basename "$MACH_COMPAT")" >&2
 else
     unset RAVYN_COMPAT_MAC_AUX
 fi

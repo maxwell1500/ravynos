@@ -44,20 +44,26 @@ mach_port_t	clock_port = MACH_PORT_NULL;
 void _init_clock_port(void);
 
 /*
- * ravynOS: host_get_clock_service is implemented
- * (osfmk/kern/clock_oldops.c:253) and declared
- * (osfmk/mach/mach_host.defs:159) in the kernel, but it has no entry in the
- * mig_buckets dispatch table built by mig_init(), so the trap the userland
- * stub issues comes back as failure ("bogus kernel message, id=206").
+ * ravynOS: the kernel MIG routine host_get_clock_service (osfmk/mach/
+ * mach_host.defs:159, msgh_id 206; implemented at osfmk/kern/
+ * clock_oldops.c:253) is dispatched through the mig_buckets table that
+ * mig_init() builds in osfmk/kern/ipc_kobject.c.  That used to fail with
+ * MIG_BAD_ID (-303) because the generated *_server.c subsystem tables were
+ * built without -DKERNEL_SERVER=1, giving them the 40-byte userspace
+ * "struct routine_descriptor routine[]" layout while mig_init() walks the
+ * 32-byte "struct kern_routine_descriptor kroutine[]" layout -- so it read
+ * every msgh_id past the first at the wrong offset.  tools/bootlab/
+ * kernel_build.py now regenerates those stubs with the kernel MIG flags, so
+ * the call succeeds.  See the comment there.
  *
- * The clock service is OPTIONAL for libc startup, and abort() over an
- * optional service killed every dynamically linked process inside
- * _libc_initializer -- before main() -- over something the process may never
- * ask for.  The two consumers of clock_port are clock_get_time()/
- * clock_get_attributes(), which report their own failure, and nanosleep(),
- * which already turns a clock_get_time() failure into EINVAL and -1
- * (below).  So the correct response is to report it and carry on with an
- * unusable clock, not to kill the process.
+ * The tolerance below is still deliberate and is kept: the clock service is
+ * OPTIONAL for libc startup, and abort() over an optional service killed
+ * every dynamically linked process inside _libc_initializer -- before
+ * main() -- over something the process may never ask for.  The two consumers
+ * of clock_port are clock_get_time()/clock_get_attributes(), which report
+ * their own failure, and nanosleep(), which already turns a clock_get_time()
+ * failure into EINVAL and -1 (below).  So the correct response is to report
+ * it and carry on with an unusable clock, not to kill the process.
  *
  * stdio is not initialized yet at this point in _libc_initializer, so this
  * uses raw write(2) rather than fprintf().

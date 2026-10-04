@@ -425,8 +425,9 @@ done
 # so let the shim step aside whenever a reachable mach tree already has it.
 mach_has_aux=no
 for d in $mach_roots; do
-    if [ -f "$d/mach/message.h" ] &&
-       grep -q mach_msg_aux_header_t "$d/mach/message.h" 2>/dev/null; then
+    if [ -f "$d/mach/message.h" ] && \
+       awk '/#if PRIVATE/{p++} /#endif/{if(p>0)p--} /mach_msg_aux_header_t/{if(p==0) f=1} END{exit !f}' \
+            "$d/mach/message.h" 2>/dev/null; then
         mach_has_aux=yes
         break
     fi

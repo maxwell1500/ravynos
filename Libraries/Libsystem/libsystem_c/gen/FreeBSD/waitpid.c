@@ -53,7 +53,7 @@ pid_t
 __waitpid(pid_t pid, int *istat, int options)
 {
 #if __DARWIN_UNIX03
-	/* POSIX: Validate waitpid() options before calling wait4() */
+	/* POSIX: Validate waitpid() options before calling wait4(). */
 	if ((options & (WCONTINUED | WNOHANG | WUNTRACED)) != options) {
 		errno = EINVAL;
 		return ((pid_t)-1);

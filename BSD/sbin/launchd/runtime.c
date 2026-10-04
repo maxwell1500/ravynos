@@ -646,11 +646,16 @@ kqueue_demand_loop(void *arg __attribute__((unused)))
 void *
 waitpid_loop(void *arg __attribute__((unused)))
 {
-	pid_t pid;
-
 	for (;;) {
-		if ((pid = waitpid(-1, (int *) 0, WNOWAIT)) != -1)
-			jobmgr_reap_pid(root_jobmgr, pid);
+		siginfo_t si;
+		if (waitid(P_ALL, 0, &si, WEXITED | WNOWAIT) == 0) {
+			jobmgr_reap_pid(root_jobmgr, si.si_pid);
+		} else if (errno == ECHILD) {
+			/* No children. waitid would return ECHILD forever, so poll at
+			 * a bounded rate instead of spinning. When a child is forked,
+			 * waitid blocks in the kernel until it exits. */
+			usleep(100000);
+		}
 	}
 
 	return (NULL);

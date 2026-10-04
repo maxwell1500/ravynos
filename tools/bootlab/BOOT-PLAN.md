@@ -2803,3 +2803,121 @@ The GUI stack above the kernel handoff is already present in this tree and is la
 - Phase 4 (session): set Dock/Filer RunAtLoad; then address Tier-3 stubs.
 
 **Caveats:** Upstream's "graphical desktop" claim is from its own release notes and screenshot; the demo VM was not downloaded or independently verified. Whether the VT/console layer exists in a BSD tree not checked in here, and whether CI builds Frameworks on a non-Darwin host, are both unverified.
+
+## 16. launchd banner stall: waitpid_loop / WNOWAIT root cause (2026-10-04)
+
+### 16.1 Symptom
+
+launchd runs on the MIG-fixed kernel, prints its banner, then stops advancing — but it is
+NOT blocked. QEMU sampling shows CPU0 in a tight USERSPACE loop (CPL=3) inside a
+libSystem image: RIP in a backward `jmp` loop that calls `0x10a10f89c0` with
+RDI=0xffffffff, and another sample at `0x10a330d82` executing `movl $0x16,(%rax)` —
+i.e. errno = EINVAL (22). The same thread stack is unchanged 200 s apart.
+
+### 16.2 Root cause
+
+`BSD/sbin/launchd/runtime.c:666-677` — `waitpid_loop`:
+
+```c
+void *
+waitpid_loop(void *arg __attribute__((unused)))
+{
+	pid_t pid;
+
+	for (;;) {
+		if ((pid = waitpid(-1, (int *) 0, WNOWAIT)) != -1)
+			jobmgr_reap_pid(root_jobmgr, pid);
+	}
+
+	return (NULL);
+}
+```
+
+`waitpid(-1, NULL, WNOWAIT)` is called in a `for(;;)` with no errno check. The
+userspace wrapper `Libraries/Libsystem/libsystem_c/gen/FreeBSD/waitpid.c:55-61`
+validates the options mask against `(WCONTINUED | WNOHANG | WUNTRACED)` = 0x13 and
+returns EINVAL for WNOWAIT (0x20). So waitpid returns -1/EINVAL forever and the loop
+spins in userspace making no syscalls.
+
+### 16.3 Kernel evidence (why the mask rejects WNOWAIT)
+
+`Kernel/xnu/bsd/kern/kern_exit.c`:
+
+- `wait4_nocancel` (line 2917) validates only `pid == INT_MIN` → EINVAL (line 2933).
+  It does NOT validate the options mask.
+- `waitid_nocancel` (line 3196-3198) validates
+  `WNOHANG | WNOWAIT | WCONTINUED | WSTOPPED | WEXITED | WUNTRACED` (plus options==0).
+- The SZOMB/WEXITED path (line 3252-3290) does
+  `if (!(uap->options & WNOWAIT)) { reap_child_locked(q, p, reap_flags); return 0; }`
+  — i.e. WNOWAIT reports the child's state WITHOUT consuming it.
+
+So the kernel accepts WNOWAIT and honours it; the EINVAL is purely the libc wrapper's
+mask. The kernel is correct as shipped — no kernel change is needed or made.
+
+### 16.4 The fix
+
+`BSD/sbin/launchd/runtime.c:666-676` — `waitpid_loop` now uses `waitid`, the API
+Darwin designed for a non-consuming wait:
+
+```c
+void *
+waitpid_loop(void *arg __attribute__((unused)))
+{
+	for (;;) {
+		siginfo_t si;
+		if (waitid(P_ALL, 0, &si, WEXITED | WNOWAIT) == 0)
+			jobmgr_reap_pid(root_jobmgr, si.si_pid);
+	}
+
+	return (NULL);
+}
+```
+
+`waitid(P_ALL, 0, &si, WEXITED | WNOWAIT)` reports every exited child without reaping
+it, so `jobmgr_reap_pid`'s blocking `waitpid(pid, NULL, 0)` still gets the status. The
+loop's shape and error discipline are unchanged (no errno check on failure, just
+re-issue). The thread is created on the startup path at `runtime.c:274`
+(`pthread_create(&waitpid_thread, NULL, waitpid_loop, NULL)` inside
+`launchd_runtime_init`, called from `launchd.c:238` before the banner at line 269).
+
+### 16.5 SDK mach-header hygiene (fixed)
+
+`Developer/ravynOS.sdk/usr/include/mach/mach_interface.h:32-47` included four
+server-side MIG headers (`clock_reply_server.h`, `exc_server.h`, `mach_exc_server.h`,
+`notify_server.h`). Any userland compile that includes `<mach/mach.h>` (directly or
+via `dispatch.h`) then drags those in, and their `__Request__mach_notify_port_deleted_t`
+structs collide with libdispatch's own generated `protocolServer.h`. Removed the four
+includes from the public copy. The kernel's own copy
+(`Kernel/xnu/osfmk/mach/mach_interface.h`) is untouched — the kernel build needs them.
+
+### 16.6 Other shadowing fixes (on the record)
+
+- `Libraries/Libsystem/libsystem_blocks/Block_private.h:18` — `#include "Block.h"`
+  → `#include <Block.h>`. The `-I${.CURDIR}/../../libsystem_blocks` made the
+  quote-include resolve to the SDK's `<Block.h>` instead of the local one.
+- `Libraries/Libsystem/libdispatch/private/dispatch_time.h` — removed. It shadowed
+  the SDK's `<time.h>` via `-I${.CURDIR}/../private`, breaking
+  `_dispatch_clock_gettime_base` (`gettimeofday` redefinition) and
+  `_dispatch_host_get_time` (`mach_absolute_time` redefinition).
+- `tools/bootlab/build-libraries.sh:743-750` — the mach compat-header detection
+  (`grep -q mach_msg_aux_header_t`) was defeated when the SDK's `message.h` gained
+  the private block. Replaced with an `awk` that tracks `#if PRIVATE` depth and only
+  accepts the type at depth 0.
+
+### 16.7 Build/boot status
+
+`build_launchd.sh` compiles cleanly (EXIT 0, 437848-byte dynamic Mach-O linking
+`libSystem.B.dylib`). The full `build-libraries.sh Libsystem` run is blocked by the
+pre-existing `mach_task_is_self` conflict (see §16.8) and could not be completed in
+this task. Boot verification is therefore still outstanding.
+
+### 16.8 Pre-existing, still open: `mach_task_is_self` typedef conflict
+
+`Kernel/xnu/BUILD/dst/.../PrivateHeaders/mach/task.h:800` and
+`Kernel/xnu/BUILD/obj/EXPORT_HDRS/osfkm/mach/mach_init.h:79` both typedef
+`mach_task_is_self` (as `struct __Request__mach_task_is_self_t` vs
+`struct __Reply__mach_task_is_self_t`). The SDK's `mach/mach.h` includes
+`mach/mach_init.h`, so any TU that pulls in both the kernel's `task.h` and the
+SDK's `mach.h` fails with `conflicting types for 'mach_task_is_self'`. This is a
+pre-existing SDK header-generation issue, independent of the `mach_interface.h` leak
+fixed in §16.5, and it is what currently blocks the `Libsystem` build.

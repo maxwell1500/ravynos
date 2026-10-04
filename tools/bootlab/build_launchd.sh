@@ -219,6 +219,18 @@ make_force_compat() {
 #define RB_PAUSE       0x8000   /* pause for the debugger */
 #endif
 
+/* 3b. TASK_SEATBELT_PORT.  core.c:8688 compares ms->special_port_num against
+ *     it, but this SDK's usr/include/mach/task_special_ports.h carries it only
+ *     as a "Was ..." comment (xnu removed port 7).  The SDK's own private copy
+ *     at System.framework/Versions/B/PrivateHeaders/mach/task_special_ports.h:85
+ *     still defines it as 7, which is the value used here.  Needed only so
+ *     core.c compiles; it selects a log level for an anonymous job's failed
+ *     special-port setup.
+ */
+#ifndef TASK_SEATBELT_PORT
+#define TASK_SEATBELT_PORT 7
+#endif
+
 /* 4. boolean_t.  log.c opens with
  *      #ifndef boolean_t
  *      typedef int boolean_t;

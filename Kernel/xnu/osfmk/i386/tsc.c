@@ -199,6 +199,14 @@ EFI_get_frequency(const char *prop)
 #define PIT_CAL_MS      50UL
 #define PIT_CAL_LATCH   ((PIT_TICK_RATE * PIT_CAL_MS) / 1000UL)
 
+/*
+ * Plausibility bounds for a PIT-cross-checked TSC frequency.  The slowest
+ * x86 parts run the TSC at ~1 GHz and the fastest at ~5 GHz, so anything
+ * outside this window is a bad measurement rather than a real frequency.
+ */
+#define MIN_TSC_FREQ    500000000ULL     /* 500 MHz */
+#define MAX_TSC_FREQ    8000000000ULL     /* 8 GHz */
+
 static uint64_t
 pit_measure_tsc_freq(void)
 {
@@ -374,6 +382,61 @@ tsc_init(void)
 			busFreq = BASE_NHM_CLOCK_SOURCE;
 		}
 	}
+	}
+
+	/*
+	 * Cross-check the frequency we just derived against a direct
+	 * measurement of the TSC against the PIT, which is an independent
+	 * wall-clock reference.
+	 *
+	 * This matters because every path above can silently produce a
+	 * plausible-looking but wrong number when firmware does not supply
+	 * the inputs it expects.  The Skylake/ART path, for example, asks
+	 * EFI for "ARTFrequency" under /efi/platform; when the device tree
+	 * is missing EFI_get_frequency() returns 0 and the code substitutes
+	 * BASE_ART_CLOCK_SOURCE (24 MHz) -- a *reference crystal* rate, not
+	 * the TSC rate -- so the whole kernel then believes the TSC ticks
+	 * 24 million times a second when it really ticks billions of times
+	 * a second.  rtc_set_timescale() turns that into rntp->scale/shift,
+	 * commpage_set_nanotime() publishes it, and every mach_absolute_time()
+	 * reader -- kernel and user -- inherits the error.  Nothing else in
+	 * the system can notice: the miscalibration is self-consistent.
+	 *
+	 * Prefer the measurement whenever the two disagree, since it is
+	 * derived from a real time source rather than a fallback constant.
+	 * Ignore a measurement of 0 (the PIT calibrator signals failure that
+	 * way) and any result outside a plausible range, so a bad read can
+	 * never make things worse than the status quo.
+	 */
+	{
+		uint64_t measured = pit_measure_tsc_freq();
+
+		if (measured != 0 &&
+		    measured >= MIN_TSC_FREQ &&
+		    measured <= MAX_TSC_FREQ) {
+			uint64_t diff = (measured > tscFreq) ?
+			    (measured - tscFreq) : (tscFreq - measured);
+
+			kprintf("tsc_init: derived %llu Hz, PIT measured %llu Hz\n",
+			    tscFreq, measured);
+
+			if (tscFreq == 0 || diff * 100 > tscFreq) {
+				kprintf("tsc_init: using PIT-measured %llu Hz "
+				    "over derived %llu Hz\n", measured, tscFreq);
+				tscFreq = measured;
+				/*
+				 * Take the TSC as its own reference (ratio 1):
+				 * drop the bus-ratio indirection so the factors
+				 * derived below are recomputed from the
+				 * corrected frequency.
+				 */
+				busFreq = measured;
+				tscGranularity = 1;
+			}
+		} else {
+			kprintf("tsc_init: PIT measurement unusable (%llu Hz), "
+			    "keeping derived %llu Hz\n", measured, tscFreq);
+		}
 	}
 
 	if (busFreq != 0) {

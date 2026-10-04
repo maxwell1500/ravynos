@@ -38,6 +38,21 @@ LDFLAGS += -L${RAVYN_SDKROOT}/usr/lib/system -ldyld
 LDFLAGS += -L${SDKROOT}/usr/lib/system -ldyld
 .endif
 
+# Every framework dylib must record its canonical install path as LC_ID_DYLIB.
+# ld64 defaults LC_ID_DYLIB to the -o path when no -install_name is given, so a
+# framework built in the object directory records
+#   .../build/<abs source path>/Frameworks/<F>/<F>.framework/Versions/<V>/<F>
+# dyld then copies that string literally into every client's LC_LOAD_DYLIB, and
+# nothing inside the image can resolve it (there is no build tree on the target).
+# Foundation and CoreFoundation were the only frameworks that set
+# INSTALL_NAME_DIR, which is why they were the only two that worked.  Default it
+# here so every framework records the canonical
+# /System/Library/Frameworks/<F>.framework/Versions/<V>/<F>; a framework may
+# still override with INSTALL_NAME_DIR or INSTALL_NAME.
+.if !defined(INSTALL_NAME_DIR) && !defined(INSTALL_NAME)
+INSTALL_NAME_DIR = /System/Library/Frameworks/${FRAMEWORK}.framework/Versions/${FMWK_VERSION}
+.endif
+
 .if defined(INSTALL_NAME_DIR) && !empty(INSTALL_NAME_DIR)
 LDFLAGS += -Wl,-install_name,${INSTALL_NAME_DIR}/${FRAMEWORK}
 .else
