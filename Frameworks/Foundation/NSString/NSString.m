@@ -77,6 +77,18 @@ extern int *__NSConstantStringClassReference;
    return NSAllocateObject(self,0,zone);
 }
 
+/* +[NSObject alloc] calls NSAllocateObject(self,...) directly and never
+ * routes through +allocWithZone:, so the class-cluster redirect above is
+ * bypassed by every [[NSString alloc] init...] in the framework.  The
+ * object then really is an NSString and -initWithBytes:length:encoding:
+ * hits the NSInvalidAbstractInvocation() stub.  Redirect here too.  */
++(id)alloc {
+   if(self==objc_lookUpClass("NSString"))
+    return NSAllocateObject(objc_lookUpClass("NSString_placeholder"),0,NULL);
+
+   return NSAllocateObject(self,0,NULL);
+}
+
 -initWithCharactersNoCopy:(unichar *)characters length:(NSUInteger)length freeWhenDone:(BOOL)freeWhenDone {
    NSInvalidAbstractInvocation();
    return nil;
