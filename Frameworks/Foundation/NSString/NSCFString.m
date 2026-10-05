@@ -118,6 +118,21 @@ NSUInteger NSGetCFStringWithMaxLength(const unichar *characters,
     [super dealloc];
 }
 
+/* Ported verbatim from upstream ravynsoft/ravynos
+ * Frameworks/Foundation/NSString/NSCFString.m:121-126.  We had no override
+ * here, so an NSCFString receiving -initWithCharactersNoCopy: fell through
+ * to NSString's abstract stub, which raises NSInvalidAbstractInvocation.
+ * The fourth parameter of NSCFStringNewWithCharacters is named "lossy" on
+ * both sides and is never read in the body (the conversion passes YES
+ * literally), so passing freeWhenDone into it is upstream's own naming,
+ * not an adaptation.
+ */
+- initWithCharactersNoCopy:(unichar *)characters length:(NSUInteger)length freeWhenDone:(BOOL)freeWhenDone
+{
+    NSDeallocateObject(self);
+    return NSCFStringNewWithCharacters(NULL, characters, length, freeWhenDone);
+}
+
 -(NSUInteger)length {
     uint8_t infobits = self->cfinfo[CF_INFO_BITS];
 
