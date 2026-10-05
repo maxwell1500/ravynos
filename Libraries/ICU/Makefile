@@ -130,7 +130,12 @@ libicucore.A.dylib: lib${LIB}.a
 	  -Wl,-current_version,78.3 -Wl,-compatibility_version,1 \
 	  $$(find ${.OBJDIR}/target/common ${.OBJDIR}/target/i18n \
 	  ${.OBJDIR}/target/io -name '*.o') ${LDFLAGS} ${ICU_LINK_FLAGS}
-.for dir in ${RAVYN_SDKROOT} ${SYSROOT_DIR}
+	# ravynOS: RAVYN_REPO_SDKROOT is the in-repo SDK that
+# tools/bootlab/make_gui_manifest.py stages from and PREFERS over the build
+# tree. It is distinct from RAVYN_SDKROOT/SYSROOT_DIR, which build-libraries.sh:78
+# sets to the SAME build-tree path -- so the loop below iterated the build tree
+# twice and never touched the SDK the image actually stages from.
+.for dir in ${RAVYN_SDKROOT} ${SYSROOT_DIR} ${RAVYN_REPO_SDKROOT}
 	mkdir -p ${dir}/usr/lib ${dir}/usr/include
 	cp -fp ${.OBJDIR}/${.TARGET} ${dir}/usr/lib/
 	ln -sf ${.TARGET} ${dir}/usr/lib/libicucore.dylib

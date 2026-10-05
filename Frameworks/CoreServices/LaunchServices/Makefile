@@ -30,7 +30,9 @@ LDFLAGS = -lsqlite3 -llaunch
 # default and nothing replaced it. Install it into both SDK trees the way
 # CoreFoundation/CoreGraphics do.
 fmwk-install-hook:
-.for dir in ${RAVYN_SDKROOT}/System/Library/Frameworks/ ${SYSROOT_DIR}/System/Library/Frameworks/
+	# ravynOS: see Frameworks/Foundation/Makefile's fmwk-install-hook -- RAVYN_REPO_SDKROOT
+	# is the in-repo SDK the manifest stages from and prefers.
+.for dir in ${RAVYN_SDKROOT}/System/Library/Frameworks/ ${SYSROOT_DIR}/System/Library/Frameworks/ ${RAVYN_REPO_SDKROOT}/System/Library/Frameworks/
 	mkdir -p ${dir}
 	cp -Rfp ${.OBJDIR}/${FRAMEWORK}.framework ${dir}
 .endfor
