@@ -784,6 +784,13 @@ cmd_bootstrap(int argc, char * const argv[])
 					printf("ok\n");
 				else
 					printf("failed: %s\n", strerror(errno));
+				/* Same reason as the fflush above, one level down: without
+				 * this the verdict itself is lost whenever launchctl dies
+				 * before stdout is flushed at exit.  A submit that fails
+				 * because launchd never received it is exactly the case
+				 * that looked identical to "no output at all".
+				 */
+				fflush(stdout);
 			}
 		}
 		// give jobs time to start
