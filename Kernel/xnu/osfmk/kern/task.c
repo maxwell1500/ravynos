@@ -2498,6 +2498,37 @@ task_deliver_crash_notification(
 		    task_pid(corpse), (int)etype, (int)subcode,
 		    (int)code[0], (int)code[1],
 		    (unsigned long long)corpse->crashed_thread_id, cname);
+		/*
+		 * ravynOS: record the audit token too, because the NAME is
+		 * routinely empty and that emptiness is what cost a whole
+		 * investigation: on 2026-10-05 a corpse printed as "pid 5 ...
+		 * name " and was assumed, from an unrelated console line, to be
+		 * WindowServer.  It was never identified at all.
+		 *
+		 * Stated plainly rather than guessed at: there is NO path in an
+		 * audit token on this platform.  struct audit_token_t is exactly
+		 * `unsigned int val[8]` (osfmk/mach/message.h:739-741) and a tree
+		 * -wide grep for an audit-token-to-path helper finds nothing --
+		 * there is no get_audit_token_path().  The process path lives in
+		 * struct proc (p_name/p_path), which is why task_procname() above
+		 * is the right accessor, and a corpse's own proc is Z_ZERO.
+		 *
+		 * What IS available and is printed below: the token's identity
+		 * values.  val[0] is the pid, val[1..4] the uid/gid/euid/egid, and
+		 * critically these are INHERITED FROM THE CRASHED TASK, not
+		 * reallocated: task_create() copies the parent task's audit token
+		 * into task_tokens.audit_token (task.c:1693-1696, the
+		 * `parent_task != NULL` branch) and a corpse is created with a
+		 * parent_task and TF_CORPSE_FORK (task.h:320).  So this is the
+		 * REAL identity of the dead process, independent of the corpse's
+		 * own nameless proc.
+		 */
+		audit_token_t *cat = task_get_audit_token(corpse);
+		if (cat != NULL) {
+			printf("CORPSE:   audit val=[%u %u %u %u %u %u %u %u]\n",
+			    cat->val[0], cat->val[1], cat->val[2], cat->val[3],
+			    cat->val[4], cat->val[5], cat->val[6], cat->val[7]);
+		}
 		queue_iterate(&corpse->threads, th_iter, thread_t, task_threads) {
 			x86_saved_state64_t *ss = USER_REGS64(th_iter);
 			if (ss == NULL) {

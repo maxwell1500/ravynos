@@ -424,14 +424,30 @@ ipc_readmsg2(launch_data_t data, const char *cmd, void *context)
 				}
 				resp = launch_data_new_errno(errno);
 			} else if (!strcmp(cmd, LAUNCH_KEY_SUBMITJOB)) {
+				/* ravynOS: see the identical handler in ipc_process_command().
+				 * This is the trusted-socket twin; launchctl's SubmitJob
+				 * arrives over MIG, but a failed job load must be
+				 * distinguishable from a successful one on either path.
+				 */
+				launch_data_t submit_label = launch_data_dict_lookup(data, "Label");
+				int submit_err;
+
 				if (launch_data_get_type(data) == LAUNCH_DATA_ARRAY) {
 					resp = job_import_bulk(data);
+					submit_err = (launch_data_get_type(resp) == LAUNCH_DATA_ERRNO) ? launch_data_get_errno(resp) : 0;
 				} else {
 					if (job_import(data)) {
 						errno = 0;
 					}
+					submit_err = errno;
 					resp = launch_data_new_errno(errno);
 				}
+				launchd_syslog(LOG_NOTICE | LOG_CONSOLE,
+				    "SUBMIT: label=%s type=%s err=%d (%s) via=socket",
+				    (submit_label && launch_data_get_type(submit_label) == LAUNCH_DATA_STRING) ? launch_data_get_string(submit_label) : "(none)",
+				    (launch_data_get_type(data) == LAUNCH_DATA_ARRAY) ? "bulk" : "single",
+				    submit_err, strerror(submit_err));
+
 			} else if (!strcmp(cmd, LAUNCH_KEY_UNSETUSERENVIRONMENT)) {
 				unsetenv(launch_data_get_string(data));
 				resp = launch_data_new_errno(0);
@@ -553,14 +569,34 @@ ipc_process_command(launch_data_t data, const char *cmd, void *context)
 				}
 				resp = launch_data_new_errno(errno);
 			} else if (!strcmp(cmd, LAUNCH_KEY_SUBMITJOB)) {
+				/* ravynOS: launchctl prints "Loading job: <name>: " from
+				 * its OWN stdout BEFORE the submit completes, and nothing
+				 * downstream ever reported whether the submit was accepted.
+				 * On 2026-10-05 that line was read as proof that
+				 * WindowServer had been spawned, when in fact the corpse
+				 * that followed was never identified at all. Report both
+				 * the command and the outcome here, on the console, at the
+				 * one place in the system where the answer is known.
+				 */
+				const char *submit_label = launch_data_dict_lookup(data, "Label");
+				int submit_err;
+
 				if (launch_data_get_type(data) == LAUNCH_DATA_ARRAY) {
 					resp = job_import_bulk(data);
+					submit_err = (launch_data_get_type(resp) == LAUNCH_DATA_ERRNO) ? launch_data_get_errno(resp) : 0;
 				} else {
 					if (job_import(data)) {
 						errno = 0;
 					}
+					submit_err = errno;
 					resp = launch_data_new_errno(errno);
 				}
+				launchd_syslog(LOG_NOTICE | LOG_CONSOLE,
+				    "SUBMIT: label=%s type=%s err=%d (%s)",
+				    (submit_label && launch_data_get_type(submit_label) == LAUNCH_DATA_STRING) ? launch_data_get_string(submit_label) : "(none)",
+				    (launch_data_get_type(data) == LAUNCH_DATA_ARRAY) ? "bulk" : "single",
+				    submit_err, strerror(submit_err));
+
 			} else if (!strcmp(cmd, LAUNCH_KEY_UNSETUSERENVIRONMENT)) {
 				unsetenv(launch_data_get_string(data));
 				resp = launch_data_new_errno(0);

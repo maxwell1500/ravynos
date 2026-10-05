@@ -4848,8 +4848,24 @@ job_start_child(job_t j)
 	if (likely(!(j->inetcompat || use_xpcproxy))) {
 		file2exec = j->prog ? j->prog : argv[0];
 	}
+	/* ravynOS: launchd is the ONLY process that exec's a job's
+	 * ProgramArguments -- launchctl only sends a SubmitJob MIG message
+	 * (BSD/bin/launchctl/launchctl.c:675 -> liblaunch launch_msg ->
+	 * vproc_mig_ipc_request -> sbin/launchd/ipc.c job_import ->
+	 * job_dispatch -> job_start -> here). So this line is the first and
+	 * only point in the whole boot at which the path of every job
+	 * process can be named from a source we control. Without it a corpse
+	 * with an unidentifiable pid cannot be attributed to any job: the
+	 * Z_ZERO corpse wrapper carries no name and Darwin has no AT_EXECNAME.
+	 */
+	job_log(j, LOG_NOTICE | LOG_CONSOLE, "SPAWN: exec=%s argv0=%s prog=%s",
+	    file2exec ? file2exec : "(null)", (argv && argv[0]) ? argv[0] : "(null)",
+	    j->prog ? j->prog : "(spawnp)");
+
 
 	errno = psf(NULL, file2exec, NULL, &spattr, (char *const *)argv, environ);
+	job_log(j, LOG_NOTICE | LOG_CONSOLE, "SPAWN: ret=%d (%s) pid=%d",
+	    errno, strerror(errno), getpid());
 	syslog(LOG_ERR, "job_start failed %s\n", strerror(errno));
 	sleep(20);
 	
