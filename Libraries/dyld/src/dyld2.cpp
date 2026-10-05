@@ -4675,6 +4675,24 @@ static ImageLoader* libraryLocator(const char* libraryName, bool search, const c
 	context.canBePIE			= false;
 	context.origin				= origin;
 	context.rpath				= rpaths;
+	// ---- ravynOS: name the dylib BEFORE we try to load it ------------------
+	// The DYLD-IMAGE print below fires only after load() returns, so it is
+	// blind to exactly the case we need: a process that dies WHILE a dylib is
+	// being mapped never announces that dylib at all. WindowServer does
+	// precisely that. Across boot_gui22/23/24 its fault address was
+	// byte-identical (0x00006c2f63746540) — deterministic, not corruption —
+	// and the in-flight print showed it loading CoreText and nothing more,
+	// with its RIP falling outside every announced image's mapped range. The
+	// missing image was the one it died loading.
+	//
+	// Printing the path before load() closes that gap: the last line on the
+	// console at the moment of death now names the culprit directly, and no
+	// image list needs to be complete.
+	//
+	// Same _simple_dprintf rationale as every other print here: diag.error()
+	// formats into _buffer and only fprintf()s under `#if BUILDING_CACHE_BUILDER`,
+	// which is false in this TOOL build, so it prints nothing at all.
+	_simple_dprintf(2, "DYLD-IMAGE-LOADING: %s\n", libraryName ? libraryName : "(null)");
 	// ---- ravynOS: in-flight image print --------------------------------------
 	// The end-of-_main image dump in this file runs only after every dylib is
 	// linked, so it is blind to a process that dies WHILE loading. WindowServer
