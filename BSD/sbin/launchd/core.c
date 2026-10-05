@@ -4906,6 +4906,38 @@ job_start_child(job_t j)
 		if (j->stderrpath) {
 			err_fd = open(j->stderrpath, O_WRONLY|O_CREAT|O_APPEND|O_NOCTTY, DEFFILEMODE);
 		}
+		/*
+		 * ravynOS: force both descriptors to >= 3 with F_DUPFD.
+		 *
+		 * The adddup2/addclose pair below is only safe if the spare
+		 * descriptors are not themselves 0, 1 or 2. If they were, the
+		 * addclose would close the very descriptor just dup'd onto
+		 * stdout/stderr -- e.g. err_fd == 1 would give
+		 * adddup2(1, 2) followed by addclose(1), closing fd 1 again and
+		 * leaving the job with no stdout at all. open() hands out the
+		 * lowest free descriptor, so this is entirely possible whenever
+		 * 0/1/2 are not already occupied.
+		 *
+		 * On THIS system they are occupied -- launchd.c:164-166 calls
+		 * testfd_or_openfd() for STDIN/STDOUT/STDERR on _PATH_DEVNULL --
+		 * so the bug is latent rather than live, and the spawn observed
+		 * working. It is fixed anyway because correctness here must not
+		 * depend on an invariant three files away in launchd.c, and because
+		 * _PATH_DEVNULL is exactly the kind of thing that changes.
+		 *
+		 * F_DUPFD_CLOEXEC would be wrong here: the descriptor must survive
+		 * exec into the child.
+		 */
+		if (out_fd >= 0) {
+			int hi = fcntl(out_fd, F_DUPFD, 3);
+			if (hi < 0) { (void)close(out_fd); out_fd = -1; }
+			else if (hi != out_fd) { (void)close(out_fd); out_fd = hi; }
+		}
+		if (err_fd >= 0) {
+			int hi = fcntl(err_fd, F_DUPFD, 3);
+			if (hi < 0) { (void)close(err_fd); err_fd = -1; }
+			else if (hi != err_fd) { (void)close(err_fd); err_fd = hi; }
+		}
 
 		if ((j->stdoutpath && out_fd < 0) || (j->stderrpath && err_fd < 0)) {
 			/* KEY PRESENT BUT OPEN FAILED: log it loudly, close whatever did
