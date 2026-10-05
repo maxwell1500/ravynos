@@ -82,6 +82,62 @@ DIRS = [
 # then build tree) and reported MISSING when absent rather than invented.
 CS_APPS = ["Dock", "Filer"]
 
+# /etc/bootstrap -- the pre-daemon system setup hook.  launchctl's System
+# session calls it via system("/etc/bootstrap") before scanning
+# /System/Library/LaunchDaemons.  ravynOS boots from a pre-built image whose
+# root is already mounted and configured, so there is no filesystem to check or
+# mount (no zfs, no fsck).  The only runtime state that can go stale is the
+# nologin marker and the WindowServer rendezvous file, so clear those and
+# return success.
+#
+# The /etc/bootstrap.d hook the FreeBSD bootstrap runs is deliberately NOT
+# reproduced here: that directory does not exist in this image, and the shell
+# staged as /bin/sh has no '[' builtin and the image has no /bin/[ (only
+# /bin/test), so a '[' test fails with "[: not found" -- measured in the boot
+# log.  Add the hook with /bin/test if /etc/bootstrap.d is ever populated.
+ETC_BOOTSTRAP = """#!/bin/sh
+# ravynOS /etc/bootstrap
+#
+# launchctl's System session calls this before loading LaunchDaemons
+# (BSD/bin/launchctl/launchctl.c: system_specific_bootstrap() ->
+# system("/etc/bootstrap")).  It is the pre-daemon system setup hook.
+#
+# ravynOS boots from a pre-built image whose root is already mounted and
+# configured, so there is no filesystem to check or mount here (no zfs, no
+# fsck).  The only runtime state that can go stale across a reboot is the
+# nologin marker and the WindowServer rendezvous file, so clear those and
+# return success.
+echo "-=- Bootstrap running -=-"
+rm -f /var/run/nologin /var/run/windowserver
+echo "-=- Bootstrap complete -=-"
+exit 0
+"""
+
+# /etc/rc -- the post-daemon "runcom" phase.  launchctl's System session runs
+# it after the LaunchDaemons are loaded (runcom() -> execl(/bin/sh, "sh",
+# "/etc/rc")).  On ravynOS the root is a pre-built image: the filesystems are
+# already mounted, there is no fsck, and hostname/network/console settings are
+# applied by launchd or compiled in.  There is genuinely nothing to configure
+# at this phase, so the correct minimal content is a script that reports it ran
+# and returns success -- runcom() waits on it, and the agent scan that starts
+# Dock and Filer runs after the System session completes.
+ETC_RC = """#!/bin/sh
+# ravynOS /etc/rc
+#
+# launchctl's System session runs this once the LaunchDaemons are loaded
+# (BSD/bin/launchctl/launchctl.c: runcom() -> execl(/bin/sh, "sh", "/etc/rc")).
+# It is the BSD "runcom" phase: post-daemon system configuration.
+#
+# On ravynOS the root is a pre-built image: the filesystems are already
+# mounted, there is no fsck, and hostname/network/console settings are applied
+# by launchd or compiled in.  There is genuinely nothing to configure at this
+# phase, so this script reports that it ran and returns success.  Add rc-time
+# setup here if ravynOS ever needs it; keep the exit status 0 so the System
+# session completes and the agent scan (Dock, Filer) runs.
+echo "-=- rc complete -=-"
+exit 0
+"""
+
 
 def otool_deps(path):
     """LC_LOAD_DYLIB / LC_REEXPORT_DYLIB paths of a Mach-O, as otool reports them."""
@@ -358,24 +414,59 @@ def main():
                 n_fonts += 1
         closure.append(("System/Library/Fonts", font_root,
                         "staged %d files" % n_fonts))
-    # 9. CoreData.  Built and staged into the repo SDK by the closure worker;
-    #    the manifest must reference it repo-relatively.  (Onyx2D is already
-    #    staged by the WindowServer closure and its entry already points at the
-    #    repo SDK, so adding it here would duplicate the path.)
-    coredata = os.path.join(SDK, "System", "Library", "Frameworks",
-                            "CoreData.framework", "Versions", "A", "CoreData")
-    if not os.path.isfile(coredata):
-        closure.append(("System/Library/Frameworks/CoreData.framework/Versions/A/CoreData",
-                        coredata, "MISSING"))
-    else:
+    # 9. CoreData and QuartzCore.  Both are built and staged into the repo SDK
+    #    by the closure worker; the manifest must reference them repo-relatively.
+    #    QuartzCore is what provides _OBJC_CLASS_$_CALayer, which WindowServer
+    #    needs at load time.  (Onyx2D is already staged by the WindowServer
+    #    closure and its entry already points at the repo SDK, so adding it here
+    #    would duplicate the path.)
+    for fw in ("CoreData", "QuartzCore"):
+        rel = "System/Library/Frameworks/%s.framework/Versions/A/%s" % (fw, fw)
+        src = os.path.join(SDK, "System", "Library", "Frameworks",
+                           fw + ".framework", "Versions", "A", fw)
+        if not os.path.isfile(src):
+            closure.append((rel, src, "MISSING"))
+            continue
         entries.append({
-            "path": "System/Library/Frameworks/CoreData.framework/Versions/A/CoreData",
-            "file": manifest_source(os.path.realpath(coredata)),
-            "comment": "CoreData from the repo SDK",
+            "path": rel,
+            "file": manifest_source(os.path.realpath(src)),
+            "comment": "%s from the repo SDK" % fw,
         })
-        closure.append(("System/Library/Frameworks/CoreData.framework/Versions/A/CoreData",
-                        coredata, "staged"))
+        closure.append((rel, src, "staged"))
 
+    # 10. /etc/bootstrap and /etc/rc.  launchctl's System session calls
+    #     /etc/bootstrap before loading LaunchDaemons and runs /etc/rc after
+    #     (BSD/bin/launchctl/launchctl.c: system_specific_bootstrap() does
+    #     system("/etc/bootstrap"); runcom() does execl(/bin/sh, "sh", "/etc/rc")).
+    #     Both are absent from the image, so the session aborts with
+    #     "sh: cannot open /etc/rc" and the agent scan that starts Dock and Filer
+    #     never runs.  The image is a pre-built, already-mounted root, so the
+    #     correct minimal content is a script that clears the only stale runtime
+    #     state (/etc/bootstrap) and one that reports and returns success
+    #     (/etc/rc) -- see the comments in the scripts themselves.
+    entries.append({
+        "path": "etc/bootstrap",
+        "text": ETC_BOOTSTRAP,
+        "comment": "system bootstrap, run by launchctl's System session before LaunchDaemons",
+    })
+    entries.append({
+        "path": "etc/rc",
+        "text": ETC_RC,
+        "comment": "system rc, run by launchctl's System session after LaunchDaemons",
+    })
+
+    # Dedupe: collapse benign duplicates (same path, same file) to one entry.
+    # A genuine conflict (same path, DIFFERENT file) is a real error and exits.
+    by_path = {}
+    for e in entries:
+        p = e["path"]
+        if p in by_path:
+            if by_path[p].get("file") != e.get("file"):
+                sys.exit("conflicting manifest entries for %s: %s vs %s"
+                         % (p, by_path[p].get("file"), e.get("file")))
+        else:
+            by_path[p] = e
+    entries = list(by_path.values())
     paths = [e["path"] for e in entries]
     dupes = sorted({p for p in paths if paths.count(p) > 1})
     if dupes:

@@ -1,23 +1,12 @@
 /*
- * Copyright (C) 2022-2024 Zoe Knox <zoe@pixin.net>
- * 
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
+ * WSInput.m -- WindowServer input handling.
  *
- * The above copyright notice and this permission notice shall be included in
- * all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
- * THE SOFTWARE.
+ * The event source is Linux-only: libinput over udev, with the keymap
+ * coming from xkbcommon. ravynOS has no /dev/input provider (the kernel
+ * creates no input nodes) and WindowServer is not linked against libinput,
+ * so on Darwin the whole event path is compiled out and the class degrades
+ * to a no-op that still answers the geometry/pointer accessors WindowServer
+ * calls. The xkb keymap code is cross-platform and stays.
  */
 
 #include <mach/mach.h>
@@ -43,75 +32,18 @@ static unichar translateKeySym(xkb_keysym_t keysym) {
         case XKB_KEY_KP_Right: return NSRightArrowFunctionKey;
         case XKB_KEY_Down:
         case XKB_KEY_KP_Down: return NSDownArrowFunctionKey;
-        case XKB_KEY_Page_Up:
-        case XKB_KEY_KP_Page_Up: return NSPageUpFunctionKey;
-        case XKB_KEY_Page_Down:
-        case XKB_KEY_KP_Page_Down: return NSPageDownFunctionKey;
-        case XKB_KEY_End:
-        case XKB_KEY_KP_End: return NSEndFunctionKey;
-        case XKB_KEY_Begin:
-        case XKB_KEY_KP_Begin: return NSHomeFunctionKey;
-        case XKB_KEY_Delete:
-        case XKB_KEY_KP_Delete: return NSDeleteFunctionKey;
-        case XKB_KEY_Insert:
-        case XKB_KEY_KP_Insert: return NSInsertFunctionKey;
-        case XKB_KEY_F1: return NSF1FunctionKey;
-        case XKB_KEY_F2: return NSF2FunctionKey;
-        case XKB_KEY_F3: return NSF3FunctionKey;
-        case XKB_KEY_F4: return NSF4FunctionKey;
-        case XKB_KEY_F5: return NSF5FunctionKey;
-        case XKB_KEY_F6: return NSF6FunctionKey;
-        case XKB_KEY_F7: return NSF7FunctionKey;
-        case XKB_KEY_F8: return NSF8FunctionKey;
-        case XKB_KEY_F9: return NSF9FunctionKey;
-        case XKB_KEY_F10: return NSF10FunctionKey;
-        case XKB_KEY_F11: return NSF11FunctionKey;
-        case XKB_KEY_F12: return NSF12FunctionKey;
-        case XKB_KEY_F13: return NSF13FunctionKey;
-        case XKB_KEY_F14: return NSF14FunctionKey;
-        case XKB_KEY_F15: return NSF15FunctionKey;
-        case XKB_KEY_F16: return NSF16FunctionKey;
-        case XKB_KEY_F17: return NSF17FunctionKey;
-        case XKB_KEY_F18: return NSF18FunctionKey;
-        case XKB_KEY_F19: return NSF19FunctionKey;
-        case XKB_KEY_F20: return NSF20FunctionKey;
-        case XKB_KEY_F21: return NSF21FunctionKey;
-        case XKB_KEY_F22: return NSF22FunctionKey;
-        case XKB_KEY_F23: return NSF23FunctionKey;
-        case XKB_KEY_F24: return NSF24FunctionKey;
-        case XKB_KEY_F25: return NSF25FunctionKey;
-        case XKB_KEY_F26: return NSF26FunctionKey;
-        case XKB_KEY_F27: return NSF27FunctionKey;
-        case XKB_KEY_F28: return NSF28FunctionKey;
-        case XKB_KEY_F29: return NSF29FunctionKey;
-        case XKB_KEY_F30: return NSF30FunctionKey;
-        case XKB_KEY_F31: return NSF31FunctionKey;
-        case XKB_KEY_F32: return NSF32FunctionKey;
-        case XKB_KEY_F33: return NSF33FunctionKey;
-        case XKB_KEY_F34: return NSF34FunctionKey;
-        case XKB_KEY_F35: return NSF35FunctionKey;
-        default: return keysym;
+        default: return 0;
     }
-}
-
-static inline void utf16_to_utf8(unichar ch, char *buf) {
-    /* We know all the function keys above are in the 0xF7xx range so
-       we can cheat a little bit for speed here */
-    if((ch & 0xFF00) != 0xF700)
-        NSLog(@"ERROR: Function key code %04x not in F7XX range!", ch);
-    if(buf == NULL)
-        return;
-    buf[0] = 0xEF;
-    buf[1] = (0x9C | (ch & 0xC0)) & 0xFF;
-    buf[2] = (0x80 | (ch & 0x30) | (ch & 0xF)) & 0xFF;
 }
 
 @implementation WSInput
 
 -init {
+#if defined(__linux__)
     udev = udev_new();
     li = libinput_udev_create_context(&interface, NULL, udev);
     libinput_udev_assign_seat(li, "seat0");
+#endif
 
     xkbCtx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
     xkb_state = xkb_state_unmodified = NULL;
@@ -126,9 +58,13 @@ static inline void utf16_to_utf8(unichar ch, char *buf) {
     xkb_state_unref(xkb_state);
     xkb_state_unref(xkb_state_unmodified);
     xkb_context_unref(xkbCtx);
+#if defined(__linux__)
     libinput_unref(li);
     udev_unref(udev);
+#endif
 }
+
+#if defined(__linux__)
 
 -(void)run:(id)target {
     struct libinput_event *event = NULL;
@@ -152,11 +88,6 @@ static inline void utf16_to_utf8(unichar ch, char *buf) {
         default: level = LIBINPUT_LOG_PRIORITY_ERROR;
     }
     libinput_log_set_priority(li, level);
-}
-
-// Call this whenever the cursor moves to a new screen
--(void)setGeometry:(NSRect)geom {
-    geometry = geom;
 }
 
 /* event is destroyed after this function returns */
@@ -210,7 +141,7 @@ static inline void utf16_to_utf8(unichar ch, char *buf) {
             } else {
                 memset(me.chars, 0, sizeof(me.chars));
                 utf16_to_utf8(nskey, me.chars);
-                memcpy(me.charsIg, me.chars, sizeof(me.chars));
+                memcpy(me.charsIg, me.chars, sizeof(me.charsIg));
             }
 
             // FIXME: handle autorepeat
@@ -320,6 +251,12 @@ static inline void utf16_to_utf8(unichar ch, char *buf) {
     }
 }
 
+-(int)fileDescriptor {
+    return libinput_get_fd(li);
+}
+
+#endif /* __linux__ */
+
 // this reads the default system keymap. Call it after changing the default from prefs.
 -(void)setKeymap {
     xkb_keymap_unref(xkb_keymap);
@@ -354,9 +291,8 @@ static inline void utf16_to_utf8(unichar ch, char *buf) {
     pointerY = pos.y;
 }
 
--(int)fileDescriptor {
-    return libinput_get_fd(li);
+-(void)setGeometry:(NSRect)geom {
+    geometry = geom;
 }
-
 
 @end

@@ -20,7 +20,6 @@ SRCS= \
 	CGImageDestination.m \
 	CGImageProperties.m \
 	CGImageSource.m \
-	CGLPixelSurface.m \
 	CGLayer.m \
 	CGPDFContext.m \
 	CGPDFDocument.m \
@@ -49,7 +48,6 @@ HEADERS= \
 	CGImageDestination.h \
 	CGImageProperties.h \
 	CGImageSource.h \
-	CGLPixelSurface.h \
 	CGLayer.h \
 	CGPDFContext.h \
 	CGPDFDocument.h \

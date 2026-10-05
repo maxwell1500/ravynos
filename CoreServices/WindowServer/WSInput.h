@@ -22,29 +22,11 @@
 
 #import <Foundation/Foundation.h>
 #import <AppKit/NSEvent.h>
-#include <libudev.h>
-#include <libinput.h>
 #include <xkbcommon/xkbcommon.h>
 #include <xkbcommon/xkbcommon-keysyms.h>
 
-#undef direction
-#include <linux/input.h>
 
 static unichar translateKeySym(xkb_keysym_t keysym);
-
-static int open_restricted_cb(const char *path, int flags, void *data) {
-    int fd = open(path, flags);
-    return fd < 0 ? -errno : fd;
-}
-
-static void close_restricted_cb(int fd, void *data) {
-    close(fd);
-}
-
-const static struct libinput_interface interface = {
-    .open_restricted = open_restricted_cb,
-    .close_restricted = close_restricted_cb,
-};
 
 double clipTo(double val, double min, double max);
 
@@ -56,8 +38,10 @@ double clipTo(double val, double min, double max);
 
 @interface WSInput : NSObject {
     int logLevel;
+#if defined(__linux__)
     struct udev *udev;
     struct libinput *li;
+#endif
     struct xkb_context *xkbCtx;
     struct xkb_keymap *xkb_keymap;
     struct xkb_state *xkb_state;
@@ -73,7 +57,9 @@ double clipTo(double val, double min, double max);
 -init;
 -(void)dealloc;
 -(void)run:(NSObject *)target; /* target obj receives the events */
+#if defined(__linux__)
 -(void)processEvent:(struct libinput_event *)event target:(NSObject *)target;
+#endif
 -(void)setLogLevel:(int)level;
 -(void)setDebugLevel:(int)level;
 -(void)setKeymap;

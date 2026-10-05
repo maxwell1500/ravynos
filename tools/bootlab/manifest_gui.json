@@ -1,0 +1,1381 @@
+{
+  "volume": "RAVYNOS",
+  "comment": [
+    "THE DURABLE MANIFEST OF THE REPO-BUILT CLOSURE (PROVENANCE-PLAN P0,",
+    "which is PARTIAL -- read PORTABILITY below before calling this file",
+    "portable).  Supersedes /tmp/manifest_cpmv.json, which was the only",
+    "thing keeping the borrowed host binaries out of a boot and which the",
+    "OS will eventually delete.  This file is that closure as a property",
+    "of the repository.",
+    "",
+    "WHAT IS STAGED.  The repo-built libSystem closure: ../../Libraries/",
+    "Libsystem/libSystem.B.dylib as the root, its 29 LC_LOAD_DYLIB /",
+    "LC_REEXPORT_DYLIB / LC_LOAD_UPWARD_DYLIB members under usr/lib/system/, the",
+    "source-built MH_DYLINKER at usr/lib/dyld, the apple-free EFI loader, the",
+    "kernel, and the dylib-linked core utilities built from BSD/bin/.",
+    "",
+    "PORTABILITY (P0) -- RELATIVE, NOT RELOCATABLE.  Read this before calling",
+    "the manifest portable.",
+    "",
+    "Every entry here is a path relative to tools/bootlab, which is how",
+    "mkimage.py resolves \"file\".  The /tmp original this was derived from",
+    "pinned 38 entries to /Users/max/Projects/build/... -- this machine's build",
+    "tree -- which would have baked a personal absolute path into the repo.  That",
+    "part is fixed: there are 0 absolute paths here.",
+    "",
+    "PORTABILITY (P0) -- CLOSED. Read this before changing any entry below.",
+    "",
+    "Every entry here is a path relative to tools/bootlab, which is how",
+    "mkimage.py resolves \"file\". The /tmp original this was derived from pinned 38",
+    "entries to /Users/max/Projects/build/... -- this machine's build tree --",
+    "which would have baked a personal absolute path into the repo.",
+    "",
+    "  * 24 members that were named by their $RAVYN_SDKROOT path are named by the",
+    "    byte-identical repo build product. Verified byte-for-byte at authoring",
+    "    time (cmp); the SDK copy is an install of the same file.",
+    "",
+    "  * libunwind.dylib is repo-built by Libraries/Libsystem/Makefile's",
+    "    libunwind.dylib target, from the tracked LLVM sources under",
+    "    Developer/Default.xctoolchain/llvm/libunwind. That target used to write",
+    "    STRAIGHT to ${RAVYN_SDKROOT}/usr/lib/system/, which made the SDK the",
+    "    build OUTPUT directory and is why this entry could not be named without",
+    "    escaping the repo. It now links into ${.CURDIR} and `cp`s to the SDK as",
+    "    an install step, like every other member here. LC_ID_DYLIB",
+    "    current_version is 35.4.0, matching -Wl,-current_version,35.4.",
+    "",
+    "  * libcompiler_rt.dylib NOW HAS A PRODUCER, which it did not have at all",
+    "    until 2026-10-02. Libraries/Libsystem/Makefile's libcompiler_rt.dylib",
+    "    target builds it from 170 vendored translation units under",
+    "    Developer/Default.xctoolchain/llvm/compiler-rt/lib/builtins and installs",
+    "    it to the SDK. Before that, Libraries/Makefile's `compiler_rt` target",
+    "    only verified the ARCHIVE libclang_rt.osx.a and nothing anywhere linked",
+    "    the dylib, which is why its origin was recorded as a P6 UNKNOWN.",
+    "",
+    "    The export surface is not approximated. Measured against the artifact it",
+    "    replaces: 529 exported names, the identical set (dyld_info -exports,",
+    "    diffed); the identical 13 load commands; LC_ID_DYLIB",
+    "    /usr/lib/system/libcompiler_rt.dylib at compatibility_version 1.0.0 and",
+    "    current_version 1.0.0; and 0 LC_LOAD_DYLIB, exactly as before. All 529",
+    "    names are DEFINED in this repository -- including the $ld$hide$os10.4$",
+    "    versioning aliases from apple_versioning.c and the $ld$hide$os10.5/6/7/8$",
+    "    atomic aliases -- and none was taken from a host Mac binary.",
+    "",
+    "    Two deliberate deltas, both recorded in the Makefile: the import set is",
+    "    29 rather than 30, substituting _bzero (which the SDK's strings.h",
+    "    declares, and which libsystem_c exports) for the pair",
+    "    __memcpy_chk/__memset_chk, and _mprotect$UNIX2003 -- the suffixed",
+    "    spelling -- is what gets imported. Every one of the 29 resolves inside",
+    "    this closure; verified by closure_gate.py.",
+    "",
+    "There are now 0 entries that leave the repository. closure_gate.py's",
+    "relocatability preflight passes with nothing to name.",
+    "",
+    "",
+    "  * work/* entries are build products (see KEEP_dynutils_20261001_build_",
+    "    closure.txt and build_init_shell.sh / build_applefree.sh).",
+    "",
+    "PROVENANCE (P2).  Zero entries resolve into assets/ except ONE:",
+    "com.apple.Boot.plist, which is a plist, not a binary.  There is no \"glob\"",
+    "entry, so no future edit can widen this tree back into the host-extracted",
+    "region under assets/usr/lib/system/ the way manifest_dynamic.json's glob",
+    "did.  Verified:",
+    "    python3 closure_check.py manifest_cpmv.json --nm-check 0",
+    "        -> 0 unstaged dependencies, 0 REJECT, 0 unresolved, HOST-EXTRACTED 0",
+    "  and the same verdict against the BYTES read back out of a built image",
+    "  (closure_check.py --image ...).",
+    "",
+    "NOTE ON THE PID 1.  sbin/launchd here is work/launchd, the real",
+    "launchd from Libraries/launchd built by build_launchd.sh -- a dylib-linked",
+    "MH_EXECUTE against /usr/lib/libSystem.B.dylib.  It REPLACES the static",
+    "work/init_shell PID 1, which merely execve()'d the dylib-linked /bin/sh.",
+    "Note the consequence: PID 1 is no longer dyld-free, so it now depends on",
+    "usr/lib/dyld and the whole libSystem closure resolving at boot, where",
+    "init_shell depended on none of it.  The dynamic-userland ECHO gate keeps",
+    "manifest_dynamic.json's own init_exec PID 1; only the library closure",
+    "below usr/lib/system/ is shared between the two.",
+    "",
+    "GUI ADDENDUM (make_gui_manifest.py): the cpmv entry that staged",
+    "System/Library/CoreServices/WindowServer.app as work/WindowServer.app.tar.gz",
+    "is dropped -- a gzip tarball at the path launchd execs cannot run, and no",
+    "framework dylibs were staged.  This manifest stages the real bundle tree",
+    "(every regular file, symlinks flattened) plus WindowServer's transitive",
+    "dylib closure at Darwin install paths, plus the Dock/Filer LaunchAgents.",
+    "It also emits the var/tmp/private directory tree launchd needs: with",
+    "no /var/log a job's stdio redirect cannot be opened and the job does",
+    "not start, and syslogd cannot bind /var/run/log."
+  ],
+  "dirs": [
+    "dev",
+    "private",
+    "private/var",
+    "private/var/log",
+    "private/tmp",
+    "var",
+    "var/log",
+    "var/run",
+    "var/tmp",
+    "tmp"
+  ],
+  "files": [
+    {
+      "path": "usr/lib/system/libobjc.dylib",
+      "file": "../../Libraries/objc4/libobjc.A.dylib",
+      "comment": "closure member, reached only via LC_LOAD_UPWARD_DYLIB from libdispatch/libxpc/libsystem_trace; built by Libraries/objc4"
+    },
+    {
+      "path": "usr/lib/system/libCrashReporterClient.dylib",
+      "file": "../../Libraries/CrashReporterClient/libCrashReporterClient.dylib",
+      "comment": "closure member, reached only via LC_LOAD_UPWARD_DYLIB from libdispatch/libxpc/libsystem_trace; built by Libraries/objc4"
+    },
+    {
+      "path": "usr/lib/system/libcompiler_rt.dylib",
+      "file": "../../Libraries/Libsystem/libcompiler_rt.dylib",
+      "comment": "closure member; built by Libraries/Libsystem/Makefile's libcompiler_rt.dylib target from the vendored Developer/Default.xctoolchain/llvm/compiler-rt sources (170 translation units), then installed to the SDK"
+    },
+    {
+      "path": "usr/lib/system/libcopyfile.dylib",
+      "file": "../../Libraries/Libsystem/copyfile/libcopyfile.dylib",
+      "comment": "closure member, reached only via LC_LOAD_UPWARD_DYLIB from libdispatch/libxpc/libsystem_trace; built by Libraries/objc4"
+    },
+    {
+      "path": "usr/lib/system/libcorecrypto.dylib",
+      "file": "../../Libraries/Libsystem/corecrypto/libcorecrypto.dylib",
+      "comment": "closure member, reached only via LC_LOAD_UPWARD_DYLIB from libdispatch/libxpc/libsystem_trace; built by Libraries/objc4"
+    },
+    {
+      "path": "usr/lib/system/libdispatch.dylib",
+      "file": "../../Libraries/Libsystem/libdispatch/libdispatch.dylib",
+      "comment": "closure member, reached only via LC_LOAD_UPWARD_DYLIB from libdispatch/libxpc/libsystem_trace; built by Libraries/objc4"
+    },
+    {
+      "path": "usr/lib/system/libdyld.dylib",
+      "file": "../../Libraries/dyld/libdyld.dylib",
+      "comment": "closure member, reached only via LC_LOAD_UPWARD_DYLIB from libdispatch/libxpc/libsystem_trace; built by Libraries/objc4"
+    },
+    {
+      "path": "usr/lib/system/liblaunch.dylib",
+      "file": "../../Libraries/Libsystem/liblaunch/liblaunch.dylib",
+      "comment": "closure member, reached only via LC_LOAD_UPWARD_DYLIB from libdispatch/libxpc/libsystem_trace; built by Libraries/objc4"
+    },
+    {
+      "path": "usr/lib/system/libmacho.dylib",
+      "file": "../../Libraries/Libsystem/libmacho/libmacho.dylib",
+      "comment": "closure member, reached only via LC_LOAD_UPWARD_DYLIB from libdispatch/libxpc/libsystem_trace; built by Libraries/objc4"
+    },
+    {
+      "path": "usr/lib/system/libremovefile.dylib",
+      "file": "../../Libraries/Libsystem/removefile/libremovefile.dylib",
+      "comment": "closure member, reached only via LC_LOAD_UPWARD_DYLIB from libdispatch/libxpc/libsystem_trace; built by Libraries/objc4"
+    },
+    {
+      "path": "usr/lib/system/libsystem_asl.dylib",
+      "file": "../../Libraries/Libsystem/libsystem_asl/libsystem_asl.dylib",
+      "comment": "closure member, reached only via LC_LOAD_UPWARD_DYLIB from libdispatch/libxpc/libsystem_trace; built by Libraries/objc4"
+    },
+    {
+      "path": "usr/lib/system/libsystem_blocks.dylib",
+      "file": "../../Libraries/Libsystem/libsystem_blocks/libsystem_blocks.dylib",
+      "comment": "closure member, reached only via LC_LOAD_UPWARD_DYLIB from libdispatch/libxpc/libsystem_trace; built by Libraries/objc4"
+    },
+    {
+      "path": "usr/lib/system/libsystem_c.dylib",
+      "file": "../../Libraries/Libsystem/libsystem_c/libsystem_c.dylib",
+      "comment": "closure member, reached only via LC_LOAD_UPWARD_DYLIB from libdispatch/libxpc/libsystem_trace; built by Libraries/objc4"
+    },
+    {
+      "path": "usr/lib/system/libsystem_coreservices.dylib",
+      "file": "../../Libraries/Libsystem/libsystem_coreservices/libsystem_coreservices.dylib",
+      "comment": "closure member, reached only via LC_LOAD_UPWARD_DYLIB from libdispatch/libxpc/libsystem_trace; built by Libraries/objc4"
+    },
+    {
+      "path": "usr/lib/system/libsystem_darwin.dylib",
+      "file": "../../Libraries/Libsystem/libsystem_darwin/libsystem_darwin.dylib",
+      "comment": "closure member, reached only via LC_LOAD_UPWARD_DYLIB from libdispatch/libxpc/libsystem_trace; built by Libraries/objc4"
+    },
+    {
+      "path": "usr/lib/system/libsystem_dnssd.dylib",
+      "file": "../../Libraries/Libsystem/libsystem_dnssd/libsystem_dnssd.dylib",
+      "comment": "closure member, reached only via LC_LOAD_UPWARD_DYLIB from libdispatch/libxpc/libsystem_trace; built by Libraries/objc4"
+    },
+    {
+      "path": "usr/lib/system/libsystem_info.dylib",
+      "file": "../../Libraries/Libsystem/libsystem_info/libsystem_info.dylib",
+      "comment": "closure member, reached only via LC_LOAD_UPWARD_DYLIB from libdispatch/libxpc/libsystem_trace; built by Libraries/objc4"
+    },
+    {
+      "path": "usr/lib/system/libsystem_kernel.dylib",
+      "file": "../../Libraries/Libsystem/libsystem_kernel/libsystem_kernel.dylib",
+      "comment": "closure member, reached only via LC_LOAD_UPWARD_DYLIB from libdispatch/libxpc/libsystem_trace; built by Libraries/objc4"
+    },
+    {
+      "path": "usr/lib/system/libsystem_m.dylib",
+      "file": "../../Libraries/Libsystem/libsystem_m/libsystem_m.dylib",
+      "comment": "closure member, reached only via LC_LOAD_UPWARD_DYLIB from libdispatch/libxpc/libsystem_trace; built by Libraries/objc4"
+    },
+    {
+      "path": "usr/lib/system/libsystem_malloc.dylib",
+      "file": "../../Libraries/Libsystem/libsystem_malloc/libsystem_malloc.dylib",
+      "comment": "closure member, reached only via LC_LOAD_UPWARD_DYLIB from libdispatch/libxpc/libsystem_trace; built by Libraries/objc4"
+    },
+    {
+      "path": "usr/lib/system/libsystem_notify.dylib",
+      "file": "../../Libraries/Libsystem/libsystem_notify/libsystem_notify.dylib",
+      "comment": "closure member, reached only via LC_LOAD_UPWARD_DYLIB from libdispatch/libxpc/libsystem_trace; built by Libraries/objc4"
+    },
+    {
+      "path": "usr/lib/system/libsystem_platform.dylib",
+      "file": "../../Libraries/Libsystem/libsystem_platform/dylib/libsystem_platform.dylib",
+      "comment": "closure member, reached only via LC_LOAD_UPWARD_DYLIB from libdispatch/libxpc/libsystem_trace; built by Libraries/objc4"
+    },
+    {
+      "path": "usr/lib/system/libsystem_pthread.dylib",
+      "file": "../../Libraries/Libsystem/libsystem_pthread/libsystem_pthread.dylib",
+      "comment": "closure member, reached only via LC_LOAD_UPWARD_DYLIB from libdispatch/libxpc/libsystem_trace; built by Libraries/objc4"
+    },
+    {
+      "path": "usr/lib/system/libsystem_pwdgrp.dylib",
+      "file": "../../Libraries/Libsystem/libsystem_pwdgrp/libsystem_pwdgrp.dylib",
+      "comment": "closure member, reached only via LC_LOAD_UPWARD_DYLIB from libdispatch/libxpc/libsystem_trace; built by Libraries/objc4"
+    },
+    {
+      "path": "usr/lib/system/libsystem_termcap.dylib",
+      "file": "../../Libraries/Libsystem/libsystem_termcap/libsystem_termcap.dylib",
+      "comment": "closure member, reached only via LC_LOAD_UPWARD_DYLIB from libdispatch/libxpc/libsystem_trace; built by Libraries/objc4"
+    },
+    {
+      "path": "usr/lib/system/libsystem_trace.dylib",
+      "file": "../../Libraries/Libsystem/libsystem_trace/libsystem_trace.dylib",
+      "comment": "closure member, reached only via LC_LOAD_UPWARD_DYLIB from libdispatch/libxpc/libsystem_trace; built by Libraries/objc4"
+    },
+    {
+      "path": "usr/lib/system/libunwind.dylib",
+      "file": "../../Libraries/Libsystem/libunwind.dylib",
+      "comment": "closure member; built by Libraries/Libsystem/Makefile's libunwind.dylib target from the vendored Developer/Default.xctoolchain/llvm/libunwind sources, then installed to the SDK"
+    },
+    {
+      "path": "usr/lib/system/libxpc.dylib",
+      "file": "../../Libraries/Libsystem/libxpc/libxpc.dylib",
+      "comment": "closure member, reached only via LC_LOAD_UPWARD_DYLIB from libdispatch/libxpc/libsystem_trace; built by Libraries/objc4"
+    },
+    {
+      "path": "usr/lib/libSystem.B.dylib",
+      "file": "../../Libraries/Libsystem/libSystem.B.dylib",
+      "comment": "ROOT of the walked closure: LC_REEXPORT_DYLIB x28 onto usr/lib/system/*.dylib"
+    },
+    {
+      "path": "usr/lib/libedit.dylib",
+      "file": "../../BSD/lib/libedit/libedit.dylib",
+      "comment": "dynamic shell history/line editing, built by BSD/lib/libedit; LC_ID_DYLIB is /usr/lib/libedit.dylib"
+    },
+    {
+      "path": "usr/lib/dyld",
+      "file": "../../Libraries/dyld/dyld/dyld",
+      "comment": "freshly source-built MH_DYLINKER; the assets/ copy is a DYLIB and the kernel rejects it with EXEC_EXIT_REASON_BAD_MACHO before dyld runs"
+    },
+    {
+      "path": "sbin/launchd",
+      "file": "work/launchd",
+      "comment": "the real launchd from Libraries/launchd, built by build_launchd.sh: MH_EXECUTE, LC_MAIN, DYLDLINK, LC_LOAD_DYLIB /usr/lib/libSystem.B.dylib. REPLACES work/init_shell as PID 1."
+    },
+    {
+      "path": "System/Library/Kernels/kernel.development",
+      "kernel": true,
+      "comment": "explicit --kernel payload: work/stripped_kernel.development"
+    },
+    {
+      "path": "System/Library/CoreServices/BOOT.EFI",
+      "file": "work/efi/BOOTX64.EFI",
+      "comment": "source-built apple-free loader (not the stale gitignored assets/ copy)"
+    },
+    {
+      "path": "EFI/BOOT/BOOTX64.EFI",
+      "file": "work/efi/BOOTX64.EFI",
+      "comment": "same loader at the removable-media path"
+    },
+    {
+      "path": "System/Library/CoreServices/com.apple.Boot.plist",
+      "asset": "com.apple.Boot.plist",
+      "comment": "boot-path file, unchanged from manifest_dynamic.json"
+    },
+    {
+      "path": "System/Library/KernelCollections/BootKernelExtensions.kc",
+      "kernel": true,
+      "comment": "boot-path file, unchanged from manifest_dynamic.json"
+    },
+    {
+      "path": "bin/sh",
+      "file": "work/sh_dyn",
+      "comment": "dylib-linked dash shell under test; LC_LOAD_DYLIB /usr/lib/libSystem.B.dylib + /usr/lib/libedit.dylib, LC_MAIN entry"
+    },
+    {
+      "path": "bin/echo",
+      "file": "work/echo_dyn",
+      "comment": "dynamic echo (BSD/bin/echo/echo.c) linked against libSystem.B.dylib; REPLACES the asset-based bin/echo stub (init_exec used to execve it)"
+    },
+    {
+      "path": "bin/ls",
+      "file": "work/ls_dyn",
+      "comment": "dynamic ls (BSD/bin/ls: ls.c cmp.c print.c util.c) linked against libSystem.B.dylib; replaces nothing, bin/ls was not previously staged"
+    },
+    {
+      "path": "bin/cat",
+      "file": "work/cat_dyn",
+      "comment": "dynamic cat (BSD/bin/cat/cat.c) linked against libSystem.B.dylib"
+    },
+    {
+      "path": "bin/mkdir",
+      "file": "work/mkdir_dyn",
+      "comment": "dynamic mkdir (BSD/bin/mkdir/mkdir.c) linked against libSystem.B.dylib"
+    },
+    {
+      "path": "bin/rm",
+      "file": "work/rm_dyn",
+      "comment": "dynamic rm (BSD/bin/rm/rm.c) linked against libSystem.B.dylib"
+    },
+    {
+      "path": "bin/test",
+      "file": "work/test_dyn",
+      "comment": "dynamic test (BSD/bin/test/test.c) linked against libSystem.B.dylib"
+    },
+    {
+      "path": "bin/cp",
+      "file": "work/cp_dyn",
+      "comment": "dynamic cp (BSD/bin/cp: cp.c utils.c) linked against libSystem.B.dylib, rebuilt Libsystem"
+    },
+    {
+      "path": "bin/mv",
+      "file": "work/mv_dyn",
+      "comment": "dynamic mv (BSD/bin/mv: mv.c) linked against libSystem.B.dylib, rebuilt Libsystem"
+    },
+    {
+      "path": "System/Library/LaunchDaemons/com.ravynos.WindowServer.json",
+      "file": "work/com.ravynos.WindowServer.json",
+      "comment": "WindowServer launchd job"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/WindowServer",
+      "file": "work/ws_bundle/WindowServer.app/Contents/ravynOS/WindowServer",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Info.plist",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Info.plist",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/10-generic-keyboard.quirks",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/10-generic-keyboard.quirks",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/10-generic-mouse.quirks",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/10-generic-mouse.quirks",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/10-generic-trackball.quirks",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/10-generic-trackball.quirks",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/30-vendor-a4tech.quirks",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/30-vendor-a4tech.quirks",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/30-vendor-aiptek.quirks",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/30-vendor-aiptek.quirks",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/30-vendor-alps.quirks",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/30-vendor-alps.quirks",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/30-vendor-contour.quirks",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/30-vendor-contour.quirks",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/30-vendor-cypress.quirks",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/30-vendor-cypress.quirks",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/30-vendor-elantech.quirks",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/30-vendor-elantech.quirks",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/30-vendor-glorious.quirks",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/30-vendor-glorious.quirks",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/30-vendor-ibm.quirks",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/30-vendor-ibm.quirks",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/30-vendor-kensington.quirks",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/30-vendor-kensington.quirks",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/30-vendor-logitech.quirks",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/30-vendor-logitech.quirks",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/30-vendor-madcatz.quirks",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/30-vendor-madcatz.quirks",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/30-vendor-microsoft.quirks",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/30-vendor-microsoft.quirks",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/30-vendor-oracle.quirks",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/30-vendor-oracle.quirks",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/30-vendor-qemu.quirks",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/30-vendor-qemu.quirks",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/30-vendor-razer.quirks",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/30-vendor-razer.quirks",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/30-vendor-synaptics.quirks",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/30-vendor-synaptics.quirks",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/30-vendor-trust.quirks",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/30-vendor-trust.quirks",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/30-vendor-vmware.quirks",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/30-vendor-vmware.quirks",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/30-vendor-wacom.quirks",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/30-vendor-wacom.quirks",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/50-system-acer.quirks",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/50-system-acer.quirks",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/50-system-apple.quirks",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/50-system-apple.quirks",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/50-system-asus.quirks",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/50-system-asus.quirks",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/50-system-chicony.quirks",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/50-system-chicony.quirks",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/50-system-chuwi.quirks",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/50-system-chuwi.quirks",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/50-system-cyborg.quirks",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/50-system-cyborg.quirks",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/50-system-dell.quirks",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/50-system-dell.quirks",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/50-system-framework.quirks",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/50-system-framework.quirks",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/50-system-gigabyte.quirks",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/50-system-gigabyte.quirks",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/50-system-google.quirks",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/50-system-google.quirks",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/50-system-gpd.quirks",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/50-system-gpd.quirks",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/50-system-graviton.quirks",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/50-system-graviton.quirks",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/50-system-hp.quirks",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/50-system-hp.quirks",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/50-system-huawei.quirks",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/50-system-huawei.quirks",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/50-system-lenovo.quirks",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/50-system-lenovo.quirks",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/50-system-pine64.quirks",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/50-system-pine64.quirks",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/50-system-sony.quirks",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/50-system-sony.quirks",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/50-system-starlabs.quirks",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/50-system-starlabs.quirks",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/50-system-system76.quirks",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/50-system-system76.quirks",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/50-system-toshiba.quirks",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/50-system-toshiba.quirks",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/50-system-vaio.quirks",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/50-system-vaio.quirks",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/Icon.png",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/Icon.png",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/README.md",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/README.md",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/arrowCursor.png",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/arrowCursor.png",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/close.png",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/close.png",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/closeHover.png",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/closeHover.png",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/mini.png",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/mini.png",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/miniHover.png",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/miniHover.png",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/resizeCursor.png",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/resizeCursor.png",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/zoom.png",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/zoom.png",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/zoomDownHover.png",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/zoomDownHover.png",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/zoomUpHover.png",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/zoomUpHover.png",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/LoadingWindow.app/LoadingWindow",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/LoadingWindow.app/Contents/ravynOS/LoadingWindow",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/LoadingWindow.app/Contents/Info.plist",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/LoadingWindow.app/Contents/Info.plist",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/LoadingWindow.app/Contents/Resources/splash-1.png",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/LoadingWindow.app/Contents/Resources/splash-1.png",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/LoadingWindow.app/Contents/ravynOS/LoadingWindow",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/LoadingWindow.app/Contents/ravynOS/LoadingWindow",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/LoadingWindow.app/Contents/ravynOS/LoadingWindow.debug",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/LoadingWindow.app/Contents/ravynOS/LoadingWindow.debug",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/LoadingWindow.app/Contents/ravynOS/LoadingWindow.full",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/LoadingWindow.app/Contents/ravynOS/LoadingWindow.full",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/LoginWindow.app/LoginWindow",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/LoginWindow.app/Contents/ravynOS/LoginWindow",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/LoginWindow.app/Contents/Info.plist",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/LoginWindow.app/Contents/Info.plist",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/LoginWindow.app/Contents/Resources/hyena.png",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/LoginWindow.app/Contents/Resources/hyena.png",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/LoginWindow.app/Contents/Resources/ravynos-full.png",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/LoginWindow.app/Contents/Resources/ravynos-full.png",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/LoginWindow.app/Contents/ravynOS/LoginWindow",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/LoginWindow.app/Contents/ravynOS/LoginWindow",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/LoginWindow.app/Contents/ravynOS/LoginWindow.debug",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/LoginWindow.app/Contents/ravynOS/LoginWindow.debug",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/LoginWindow.app/Contents/ravynOS/LoginWindow.full",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/LoginWindow.app/Contents/ravynOS/LoginWindow.full",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/SystemUIServer.app/SystemUIServer",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/SystemUIServer.app/Contents/ravynOS/SystemUIServer",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/SystemUIServer.app/Contents/Info.plist",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/SystemUIServer.app/Contents/Info.plist",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/SystemUIServer.app/Contents/Resources/Icon.png",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/SystemUIServer.app/Contents/Resources/Icon.png",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/SystemUIServer.app/Contents/Resources/hyena.png",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/SystemUIServer.app/Contents/Resources/hyena.png",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/SystemUIServer.app/Contents/Resources/kickSession",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/SystemUIServer.app/Contents/Resources/kickSession",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/SystemUIServer.app/Contents/Resources/ravynos-mark-64.png",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/SystemUIServer.app/Contents/Resources/ravynos-mark-64.png",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/SystemUIServer.app/Contents/ravynOS/SystemUIServer",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/SystemUIServer.app/Contents/ravynOS/SystemUIServer",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/SystemUIServer.app/Contents/ravynOS/SystemUIServer.debug",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/SystemUIServer.app/Contents/ravynOS/SystemUIServer.debug",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/Resources/SystemUIServer.app/Contents/ravynOS/SystemUIServer.full",
+      "file": "work/ws_bundle/WindowServer.app/Contents/Resources/SystemUIServer.app/Contents/ravynOS/SystemUIServer.full",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/ravynOS/WindowServer",
+      "file": "work/ws_bundle/WindowServer.app/Contents/ravynOS/WindowServer",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/ravynOS/WindowServer.debug",
+      "file": "work/ws_bundle/WindowServer.app/Contents/ravynOS/WindowServer.debug",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/CoreServices/WindowServer.app/Contents/ravynOS/WindowServer.full",
+      "file": "work/ws_bundle/WindowServer.app/Contents/ravynOS/WindowServer.full",
+      "comment": "WindowServer.app bundle file (extracted from work/WindowServer.app.tar.gz)"
+    },
+    {
+      "path": "System/Library/Frameworks/CoreText.framework/Versions/A/CoreText",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/CoreText.framework/Versions/A/CoreText",
+      "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
+    },
+    {
+      "path": "System/Library/Frameworks/AppKit.framework/Versions/A/AppKit",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/AppKit.framework/Versions/A/AppKit",
+      "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
+    },
+    {
+      "path": "System/Library/Frameworks/Foundation.framework/Versions/C/Foundation",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation",
+      "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
+    },
+    {
+      "path": "System/Library/Frameworks/CoreGraphics.framework/Versions/A/CoreGraphics",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/CoreGraphics.framework/Versions/A/CoreGraphics",
+      "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
+    },
+    {
+      "path": "System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
+      "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
+    },
+    {
+      "path": "System/Library/Frameworks/Onyx2D.framework/Versions/A/Onyx2D",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/Onyx2D.framework/Versions/A/Onyx2D",
+      "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
+    },
+    {
+      "path": "usr/lib/system/libutil.dylib",
+      "file": "../../Developer/ravynOS.sdk/usr/lib/libutil.dylib",
+      "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
+    },
+    {
+      "path": "System/Library/Frameworks/QuartzCore.framework/Versions/A/QuartzCore",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/QuartzCore.framework/Versions/A/QuartzCore",
+      "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
+    },
+    {
+      "path": "System/Library/Frameworks/CoreData.framework/Versions/A/CoreData",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/CoreData.framework/Versions/A/CoreData",
+      "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
+    },
+    {
+      "path": "usr/lib/libfontconfig.dylib",
+      "file": "../../Developer/ravynOS.sdk/usr/lib/libfontconfig.dylib",
+      "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
+    },
+    {
+      "path": "usr/lib/libexpat.dylib",
+      "file": "../../Developer/ravynOS.sdk/usr/lib/libexpat.dylib",
+      "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
+    },
+    {
+      "path": "usr/lib/libicucore.A.dylib",
+      "file": "../../Developer/ravynOS.sdk/usr/lib/libicucore.A.dylib",
+      "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
+    },
+    {
+      "path": "usr/lib/libicudata.dylib",
+      "file": "../../Developer/ravynOS.sdk/usr/lib/libicudata.dylib",
+      "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
+    },
+    {
+      "path": "System/Library/LaunchAgents/com.ravynos.Dock.json",
+      "file": "../../SystemLibrary/LaunchAgents/com.ravynos.Dock.json",
+      "comment": "GUI LaunchAgent from the repo's SystemLibrary/"
+    },
+    {
+      "path": "System/Library/LaunchAgents/com.ravynos.Filer.json",
+      "file": "../../SystemLibrary/LaunchAgents/com.ravynos.Filer.json",
+      "comment": "GUI LaunchAgent from the repo's SystemLibrary/"
+    },
+    {
+      "path": "System/Library/CoreServices/Dock.app/Dock",
+      "file": "work/Dock.app/Contents/ravynOS/Dock",
+      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Dock.app)"
+    },
+    {
+      "path": "System/Library/CoreServices/Dock.app/Contents/Info.plist",
+      "file": "work/Dock.app/Contents/Info.plist",
+      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Dock.app)"
+    },
+    {
+      "path": "System/Library/CoreServices/Dock.app/Contents/Resources/Dock.png",
+      "file": "work/Dock.app/Contents/Resources/Dock.png",
+      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Dock.app)"
+    },
+    {
+      "path": "System/Library/CoreServices/Dock.app/Contents/Resources/running.png",
+      "file": "work/Dock.app/Contents/Resources/running.png",
+      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Dock.app)"
+    },
+    {
+      "path": "System/Library/CoreServices/Dock.app/Contents/Resources/window.png",
+      "file": "work/Dock.app/Contents/Resources/window.png",
+      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Dock.app)"
+    },
+    {
+      "path": "System/Library/CoreServices/Dock.app/Contents/Resources/Downloads.app/Downloads",
+      "file": "work/Dock.app/Contents/Resources/Downloads.app/Contents/ravynOS/Downloads",
+      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Dock.app)"
+    },
+    {
+      "path": "System/Library/CoreServices/Dock.app/Contents/Resources/Downloads.app/Contents/Info.plist",
+      "file": "work/Dock.app/Contents/Resources/Downloads.app/Contents/Info.plist",
+      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Dock.app)"
+    },
+    {
+      "path": "System/Library/CoreServices/Dock.app/Contents/Resources/Downloads.app/Contents/Resources/Downloads.png",
+      "file": "work/Dock.app/Contents/Resources/Downloads.app/Contents/Resources/Downloads.png",
+      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Dock.app)"
+    },
+    {
+      "path": "System/Library/CoreServices/Dock.app/Contents/Resources/Downloads.app/Contents/ravynOS/Downloads",
+      "file": "work/Dock.app/Contents/Resources/Downloads.app/Contents/ravynOS/Downloads",
+      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Dock.app)"
+    },
+    {
+      "path": "System/Library/CoreServices/Dock.app/Contents/Resources/Downloads.app/Contents/ravynOS/Downloads.debug",
+      "file": "work/Dock.app/Contents/Resources/Downloads.app/Contents/ravynOS/Downloads.debug",
+      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Dock.app)"
+    },
+    {
+      "path": "System/Library/CoreServices/Dock.app/Contents/Resources/Downloads.app/Contents/ravynOS/Downloads.full",
+      "file": "work/Dock.app/Contents/Resources/Downloads.app/Contents/ravynOS/Downloads.full",
+      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Dock.app)"
+    },
+    {
+      "path": "System/Library/CoreServices/Dock.app/Contents/Resources/Trash.app/Trash",
+      "file": "work/Dock.app/Contents/Resources/Trash.app/Contents/ravynOS/Trash",
+      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Dock.app)"
+    },
+    {
+      "path": "System/Library/CoreServices/Dock.app/Contents/Resources/Trash.app/Contents/Info.plist",
+      "file": "work/Dock.app/Contents/Resources/Trash.app/Contents/Info.plist",
+      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Dock.app)"
+    },
+    {
+      "path": "System/Library/CoreServices/Dock.app/Contents/Resources/Trash.app/Contents/Resources/Trash.png",
+      "file": "work/Dock.app/Contents/Resources/Trash.app/Contents/Resources/Trash.png",
+      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Dock.app)"
+    },
+    {
+      "path": "System/Library/CoreServices/Dock.app/Contents/Resources/Trash.app/Contents/Resources/Trash_full.png",
+      "file": "work/Dock.app/Contents/Resources/Trash.app/Contents/Resources/Trash_full.png",
+      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Dock.app)"
+    },
+    {
+      "path": "System/Library/CoreServices/Dock.app/Contents/Resources/Trash.app/Contents/ravynOS/Trash",
+      "file": "work/Dock.app/Contents/Resources/Trash.app/Contents/ravynOS/Trash",
+      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Dock.app)"
+    },
+    {
+      "path": "System/Library/CoreServices/Dock.app/Contents/Resources/Trash.app/Contents/ravynOS/Trash.debug",
+      "file": "work/Dock.app/Contents/Resources/Trash.app/Contents/ravynOS/Trash.debug",
+      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Dock.app)"
+    },
+    {
+      "path": "System/Library/CoreServices/Dock.app/Contents/Resources/Trash.app/Contents/ravynOS/Trash.full",
+      "file": "work/Dock.app/Contents/Resources/Trash.app/Contents/ravynOS/Trash.full",
+      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Dock.app)"
+    },
+    {
+      "path": "System/Library/CoreServices/Dock.app/Contents/ravynOS/Dock",
+      "file": "work/Dock.app/Contents/ravynOS/Dock",
+      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Dock.app)"
+    },
+    {
+      "path": "System/Library/CoreServices/Dock.app/Contents/ravynOS/Dock.debug",
+      "file": "work/Dock.app/Contents/ravynOS/Dock.debug",
+      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Dock.app)"
+    },
+    {
+      "path": "System/Library/CoreServices/Dock.app/Contents/ravynOS/Dock.full",
+      "file": "work/Dock.app/Contents/ravynOS/Dock.full",
+      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Dock.app)"
+    },
+    {
+      "path": "System/Library/Frameworks/LaunchServices.framework/Versions/A/LaunchServices",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/LaunchServices.framework/Versions/A/LaunchServices",
+      "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
+    },
+    {
+      "path": "usr/lib/libsqlite3.dylib",
+      "file": "../../Developer/ravynOS.sdk/usr/lib/libsqlite3.dylib",
+      "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
+    },
+    {
+      "path": "System/Library/CoreServices/Filer.app/Filer",
+      "file": "work/Filer.app/Contents/ravynOS/Filer",
+      "comment": "Filer.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Filer.app)"
+    },
+    {
+      "path": "System/Library/CoreServices/Filer.app/Contents/Resources/filer.png",
+      "file": "work/Filer.app/Contents/Resources/filer.png",
+      "comment": "Filer.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Filer.app)"
+    },
+    {
+      "path": "System/Library/CoreServices/Filer.app/Contents/ravynOS/Filer",
+      "file": "work/Filer.app/Contents/ravynOS/Filer",
+      "comment": "Filer.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Filer.app)"
+    },
+    {
+      "path": "System/Library/CoreServices/Filer.app/Contents/ravynOS/Filer.debug",
+      "file": "work/Filer.app/Contents/ravynOS/Filer.debug",
+      "comment": "Filer.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Filer.app)"
+    },
+    {
+      "path": "System/Library/CoreServices/Filer.app/Contents/ravynOS/Filer.full",
+      "file": "work/Filer.app/Contents/ravynOS/Filer.full",
+      "comment": "Filer.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Filer.app)"
+    },
+    {
+      "path": "bin/launchctl",
+      "file": "work/launchctl_dyn",
+      "comment": "launchd's hardcoded /bin/launchctl (BSD/sbin/launchd/core.c:7195)"
+    },
+    {
+      "path": "usr/lib/libjansson.dylib",
+      "file": "../../Developer/ravynOS.sdk/usr/lib/libjansson.dylib",
+      "comment": "libjansson required by launchctl's LC_LOAD_DYLIB"
+    },
+    {
+      "path": "System/Library/Fonts/Inter.ttc",
+      "file": "../../SystemLibrary/Fonts/Inter.ttc",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/C059-BdIta.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/C059-BdIta.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/C059-Bold.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/C059-Bold.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/C059-Italic.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/C059-Italic.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/C059-Roman.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/C059-Roman.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/D050000L.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/D050000L.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/Font Awesome 6 Brands-Regular-400.otf",
+      "file": "../../SystemLibrary/Fonts/TTF/Font Awesome 6 Brands-Regular-400.otf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/Font Awesome 6 Free-Regular-400.otf",
+      "file": "../../SystemLibrary/Fonts/TTF/Font Awesome 6 Free-Regular-400.otf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/Font Awesome 6 Free-Solid-900.otf",
+      "file": "../../SystemLibrary/Fonts/TTF/Font Awesome 6 Free-Solid-900.otf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/Inter-Black.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/Inter-Black.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/Inter-BlackItalic.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/Inter-BlackItalic.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/Inter-Bold.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/Inter-Bold.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/Inter-BoldItalic.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/Inter-BoldItalic.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/Inter-ExtraBold.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/Inter-ExtraBold.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/Inter-ExtraBoldItalic.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/Inter-ExtraBoldItalic.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/Inter-ExtraLight.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/Inter-ExtraLight.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/Inter-ExtraLightItalic.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/Inter-ExtraLightItalic.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/Inter-Italic.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/Inter-Italic.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/Inter-Light.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/Inter-Light.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/Inter-LightItalic.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/Inter-LightItalic.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/Inter-Medium.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/Inter-Medium.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/Inter-MediumItalic.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/Inter-MediumItalic.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/Inter-Regular.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/Inter-Regular.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/Inter-SemiBold.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/Inter-SemiBold.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/Inter-SemiBoldItalic.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/Inter-SemiBoldItalic.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/Inter-Thin.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/Inter-Thin.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/Inter-ThinItalic.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/Inter-ThinItalic.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/InterDisplay-Black.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/InterDisplay-Black.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/InterDisplay-BlackItalic.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/InterDisplay-BlackItalic.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/InterDisplay-Bold.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/InterDisplay-Bold.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/InterDisplay-BoldItalic.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/InterDisplay-BoldItalic.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/InterDisplay-ExtraBold.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/InterDisplay-ExtraBold.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/InterDisplay-ExtraBoldItalic.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/InterDisplay-ExtraBoldItalic.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/InterDisplay-ExtraLight.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/InterDisplay-ExtraLight.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/InterDisplay-ExtraLightItalic.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/InterDisplay-ExtraLightItalic.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/InterDisplay-Italic.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/InterDisplay-Italic.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/InterDisplay-Light.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/InterDisplay-Light.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/InterDisplay-LightItalic.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/InterDisplay-LightItalic.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/InterDisplay-Medium.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/InterDisplay-Medium.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/InterDisplay-MediumItalic.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/InterDisplay-MediumItalic.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/InterDisplay-Regular.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/InterDisplay-Regular.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/InterDisplay-SemiBold.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/InterDisplay-SemiBold.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/InterDisplay-SemiBoldItalic.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/InterDisplay-SemiBoldItalic.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/InterDisplay-Thin.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/InterDisplay-Thin.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/InterDisplay-ThinItalic.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/InterDisplay-ThinItalic.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/InterVariable-Italic.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/InterVariable-Italic.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/InterVariable.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/InterVariable.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/NimbusMonoPS-Bold.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/NimbusMonoPS-Bold.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/NimbusMonoPS-BoldItalic.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/NimbusMonoPS-BoldItalic.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/NimbusMonoPS-Italic.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/NimbusMonoPS-Italic.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/NimbusMonoPS-Regular.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/NimbusMonoPS-Regular.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/NimbusRoman-Bold.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/NimbusRoman-Bold.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/NimbusRoman-BoldItalic.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/NimbusRoman-BoldItalic.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/NimbusRoman-Italic.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/NimbusRoman-Italic.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/NimbusRoman-Regular.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/NimbusRoman-Regular.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/NimbusSans-Bold.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/NimbusSans-Bold.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/NimbusSans-BoldItalic.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/NimbusSans-BoldItalic.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/NimbusSans-Italic.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/NimbusSans-Italic.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/NimbusSans-Regular.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/NimbusSans-Regular.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/NimbusSansNarrow-Bold.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/NimbusSansNarrow-Bold.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/NimbusSansNarrow-BoldOblique.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/NimbusSansNarrow-BoldOblique.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/NimbusSansNarrow-Oblique.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/NimbusSansNarrow-Oblique.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/NimbusSansNarrow-Regular.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/NimbusSansNarrow-Regular.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/P052-Bold.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/P052-Bold.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/P052-BoldItalic.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/P052-BoldItalic.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/P052-Italic.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/P052-Italic.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/P052-Roman.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/P052-Roman.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/StandardSymbolsPS.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/StandardSymbolsPS.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/URWBookman-Demi.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/URWBookman-Demi.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/URWBookman-DemiItalic.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/URWBookman-DemiItalic.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/URWBookman-Light.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/URWBookman-Light.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/URWBookman-LightItalic.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/URWBookman-LightItalic.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/URWGothic-Book.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/URWGothic-Book.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/URWGothic-BookOblique.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/URWGothic-BookOblique.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/URWGothic-Demi.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/URWGothic-Demi.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/URWGothic-DemiOblique.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/URWGothic-DemiOblique.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "System/Library/Fonts/TTF/Z003-MediumItalic.ttf",
+      "file": "../../SystemLibrary/Fonts/TTF/Z003-MediumItalic.ttf",
+      "comment": "font from the repo's SystemLibrary/Fonts"
+    },
+    {
+      "path": "etc/bootstrap",
+      "text": "#!/bin/sh\n# ravynOS /etc/bootstrap\n#\n# launchctl's System session calls this before loading LaunchDaemons\n# (BSD/bin/launchctl/launchctl.c: system_specific_bootstrap() ->\n# system(\"/etc/bootstrap\")).  It is the pre-daemon system setup hook.\n#\n# ravynOS boots from a pre-built image whose root is already mounted and\n# configured, so there is no filesystem to check or mount here (no zfs, no\n# fsck).  The only runtime state that can go stale across a reboot is the\n# nologin marker and the WindowServer rendezvous file, so clear those and\n# return success.\necho \"-=- Bootstrap running -=-\"\nrm -f /var/run/nologin /var/run/windowserver\necho \"-=- Bootstrap complete -=-\"\nexit 0\n",
+      "comment": "system bootstrap, run by launchctl's System session before LaunchDaemons"
+    },
+    {
+      "path": "etc/rc",
+      "text": "#!/bin/sh\n# ravynOS /etc/rc\n#\n# launchctl's System session runs this once the LaunchDaemons are loaded\n# (BSD/bin/launchctl/launchctl.c: runcom() -> execl(/bin/sh, \"sh\", \"/etc/rc\")).\n# It is the BSD \"runcom\" phase: post-daemon system configuration.\n#\n# On ravynOS the root is a pre-built image: the filesystems are already\n# mounted, there is no fsck, and hostname/network/console settings are applied\n# by launchd or compiled in.  There is genuinely nothing to configure at this\n# phase, so this script reports that it ran and returns success.  Add rc-time\n# setup here if ravynOS ever needs it; keep the exit status 0 so the System\n# session completes and the agent scan (Dock, Filer) runs.\necho \"-=- rc complete -=-\"\nexit 0\n",
+      "comment": "system rc, run by launchctl's System session after LaunchDaemons"
+    }
+  ]
+}

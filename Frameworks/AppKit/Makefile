@@ -588,7 +588,9 @@ LDFLAGS+= \
 	  -F${OBJTOP}/Frameworks/CoreGraphics -framework CoreGraphics \
 	  -F${OBJTOP}/Frameworks/CoreText -framework CoreText \
 	  -F${OBJTOP}/Frameworks/Onyx2D -framework Onyx2D \
-	  -lobjc -lm
+	  -F${OBJTOP}/Frameworks/QuartzCore -framework QuartzCore \
+	  -F${OBJTOP}/Frameworks/CoreData -framework CoreData \
+	  -L${RAVYN_SDKROOT}/usr/lib -lfontconfig -lexpat -lobjc -lm
 
 DIRS= \
 	NSMenu.subproj \

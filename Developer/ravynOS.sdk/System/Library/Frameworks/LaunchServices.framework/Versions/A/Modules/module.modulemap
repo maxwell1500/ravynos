@@ -1,0 +1,5 @@
+framework module LaunchServices {
+    umbrella header "LaunchServices.h"
+    export *
+    module * { export * }
+}

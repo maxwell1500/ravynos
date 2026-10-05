@@ -46,7 +46,9 @@ BMAKE="${BMAKE:-/usr/local/bin/bmake}"
 #
 # Still overridable: REAL_CC=... on the command line wins, as before.
 PLATFORM_TOOLCHAIN_BIN="$BUILD/Developer/Platforms/ravynOS.platform/Developer/Toolchains/Default.xctoolchain/usr/bin"
-if [ -z "${REAL_CC:-}" ] && [ -x "$PLATFORM_TOOLCHAIN_BIN/clang" ]; then
+if [ -z "${REAL_CC:-}" ] && [ -x "$PLATFORM_TOOLCHAIN_BIN/clang-17" ]; then
+    REAL_CC="$PLATFORM_TOOLCHAIN_BIN/clang-17"
+elif [ -z "${REAL_CC:-}" ] && [ -x "$PLATFORM_TOOLCHAIN_BIN/clang" ]; then
     REAL_CC="$PLATFORM_TOOLCHAIN_BIN/clang"
 fi
 REAL_CC="${REAL_CC:-$(xcrun -f clang)}"

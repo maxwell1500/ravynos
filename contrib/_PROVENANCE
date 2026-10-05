@@ -5,3 +5,7 @@ Version: 3.53.4 (official amalgamation; archive SHA3-256 628a44cfe82c66aed1ccbbe
 Imported from https://github.com/akheron/jansson/releases/download/v2.15.1/jansson-2.15.1.tar.gz
 Version: 2.15.1 (official release; archive sha256 0c7114dc0b2d22a670724a1f95922029d7077c19dbf79a584cb8084d2f267f2f; GPG-signed by Petri Lehtinen <petri@digip.org>, key B5D6953E6D5059ED7ADA0F2FD3657D24D058434C)
 - src/*.c, src/*.h plus configure-generated src/jansson_config.h and src/jansson_private_config.h (SPDX:MIT) — see contrib/jansson/PROVENANCE.md for sha256s
+
+Imported from https://github.com/libexpat/libexpat/releases/download/R_2_6_4/expat-2.6.4.tar.gz
+Version: 2.6.4 (official release; archive sha256 fd03b7172b3bd7427a3e7a812063f74754f24542429b634e0db6511b53fb2278; GPG-signed by Expat maintainers)
+- lib/*.c, lib/*.h plus configure-generated lib/expat_config.h (SPDX:MIT) — see contrib/expat/PROVENANCE.md for sha256s

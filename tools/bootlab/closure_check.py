@@ -37,6 +37,11 @@ Exit status:
     0  closure complete, no unresolved non-weak undefined symbols, and
        every staged dylib passes the dyld2 validation
     1  otherwise (the report says which, and why)
+
+The checks are, in verdict order: parse, staged dependencies, non-weak
+undefined symbols, dyld2 LINKEDIT validation, provider reachability through
+LC_LOAD_DYLIB, and initializers-without-libSystem.  The last two cover
+defects that no amount of symbol resolution can see.
 """
 
 import argparse
@@ -95,6 +100,15 @@ LC_REEXPORT_DYLIB = 0x8000001F
 LC_LAZY_LOAD_DYLIB = 0x20
 LC_LOAD_UPWARD_DYLIB = 0x80000023
 
+# Section flags.  S_MOD_INIT_FUNC_POINTERS / S_INIT_FUNC_OFFSETS are the two
+# section types dyld's ImageLoaderMachO.cpp scans to decide fHasInitializers
+# (src/ImageLoaderMachO.cpp:775-780) and then walks in doModInitFunctions
+# (:2306-2380).  A section of either type is exactly what makes dyld throw
+# "initializer in image (...) that does not link with libSystem.dylib".
+SECTION_TYPE = 0x000000FF
+S_MOD_INIT_FUNC_POINTERS = 0x9
+S_INIT_FUNC_OFFSETS = 0xD
+
 # Dependency-bearing commands.  All four name a dylib that must exist on the
 # staged disk for the loader to make progress.
 DEP_CMDS = (
@@ -151,6 +165,7 @@ class MachO(object):
         self.ncmds = 0
         self.segments = []          # (segname, fileoff, filesize)
         self.symtab = None          # (symoff, nsyms, stroff, strsize)
+        self.sections = []          # (segname, sectname, size, flags)
         self.dysymtab = None        # dict of dysymtab fields
         self.exports_trie = None    # (dataoff, datasize) or None
         self.chained_fixups = None  # (dataoff, datasize) or None
@@ -197,6 +212,21 @@ class MachO(object):
             self.segments.append((segname, fileoff, filesize))
             if segname == "__LINKEDIT":
                 self.linkedit = (fileoff, filesize)
+            # nsects is the uint32 at +64; section_64 is 80 bytes and starts
+            # at +72.  Only size (offset +40) and flags (offset +64) are
+            # needed here: a S_MOD_INIT_FUNC_POINTERS / S_INIT_FUNC_OFFSETS
+            # section of nonzero size is what makes dyld call initializers.
+            nsects = struct.unpack_from("<I", d, off + 64)[0]
+            for i in range(nsects):
+                soff = off + 72 + 80 * i
+                if soff + 80 > cmdsize + off:
+                    raise MachOError("LC_SEGMENT_64 section runs past the "
+                                     "load command")
+                sectname = cstr(d, soff)
+                ssegname = cstr(d, soff + 16)
+                size, sflags = struct.unpack_from("<Q", d, soff + 40)[0], \
+                    struct.unpack_from("<I", d, soff + 64)[0]
+                self.sections.append((ssegname, sectname, size, sflags))
         elif cmd == LC_SYMTAB:
             symoff, nsyms, stroff, strsize = struct.unpack_from("<4I", d, off + 8)
             self.symtab = (symoff, nsyms, stroff, strsize)
@@ -231,6 +261,42 @@ class MachO(object):
             self.load_dylinker = self._dylib_name(off)
         elif cmd in DEP_CMDS:
             self.deps.append((cmd, self._dylib_name(off)))
+
+    def initializer_sections(self):
+        """[(segname, sectname, size)] of the initializer pointer tables.
+
+        dyld sets fHasInitializers when any section's low byte of flags is
+        S_MOD_INIT_FUNC_POINTERS or S_INIT_FUNC_OFFSETS
+        (ImageLoaderMachO.cpp:775-780) and then walks exactly those sections
+        in doModInitFunctions.  A zero-size one holds no initializer, so it
+        cannot trigger anything and is not reported.
+        """
+        out = []
+        for segname, sectname, size, flags in self.sections:
+            if (flags & SECTION_TYPE) in (S_MOD_INIT_FUNC_POINTERS,
+                                          S_INIT_FUNC_OFFSETS) and size:
+                out.append((segname, sectname, size))
+        return out
+
+    def has_initializers(self):
+        return bool(self.initializer_sections())
+
+    def libsystem_linked(self):
+        """True if libSystem appears in this image's LC_LOAD_DYLIB set.
+
+        ravynOS stages the re-exporting dylib as /usr/lib/libSystem.B.dylib,
+        Apple ships /usr/lib/system/libSystem.dylib, and both are named only
+        by their install name in LC_LOAD_DYLIB, so the identity that has to
+        match is the basename containing "libSystem".  Every dependency-
+        bearing command counts, not just LC_LOAD_DYLIB: dyld puts all of them
+        in the same dependency list it searches for libSystem helpers.
+        """
+        for _cmd, name in self.deps:
+            if name is None:
+                continue
+            if "libSystem" in os.path.basename(name):
+                return True
+        return False
 
     def _dylib_name(self, off):
         nameoff = struct.unpack_from("<I", self.data, off + 8)[0]
@@ -840,6 +906,124 @@ def main():
         for n in names:
             print("      %s" % n)
 
+    # ---- LC_LOAD_DYLIB reachability check -------------------------------
+    # A symbol is only resolvable at runtime if its provider is reachable
+    # via the consumer's LC_LOAD_DYLIB list (transitively). A staged-but-
+    # unlinked provider kills the boot at dyld bind time — the _OBJC_CLASS_$_CALayer
+    # and _OBJC_CLASS_$_NSEntityDescription class of defect.
+    sym_providers = {}
+    for p, node in nodes.items():
+        try:
+            for sym in node.defined_globals():
+                sym_providers.setdefault(sym, set()).add(p)
+        except Exception:
+            pass
+
+    # Map install names to staged paths for dep resolution
+    name_to_path = {}
+    for p in nodes:
+        base = p.split('/')[-1]
+        name_to_path[base] = p
+        name_to_path[p] = p
+
+    def transitive_deps(start):
+        seen = set()
+        stack = [start]
+        while stack:
+            cur = stack.pop()
+            if cur in seen:
+                continue
+            seen.add(cur)
+            if cur in nodes:
+                for cmd, iname in nodes[cur].deps:
+                    # Resolve dep install name to a staged path
+                    base = iname.split('/')[-1]
+                    if base in name_to_path:
+                        stack.append(name_to_path[base])
+                    elif iname in name_to_path:
+                        stack.append(name_to_path[iname])
+        return seen
+
+    unreachable = []
+    for p, names in unresolved:
+        if p not in nodes:
+            continue
+        closure = transitive_deps(p)
+        for sym in names:
+            if sym in sym_providers:
+                providers = sym_providers[sym]
+                if not any(prov in closure for prov in providers):
+                    unreachable.append((p, sym, sorted(providers)))
+
+    if unreachable:
+        rule("UNREACHABLE PROVIDERS (provider NOT in consumer's LC_LOAD_DYLIB)")
+        print("  cases: %d" % len(unreachable))
+        for consumer, sym, providers in unreachable[:20]:
+            print("    %s" % consumer)
+            print("      %s  (provider: %s)" % (sym, providers))
+        if len(unreachable) > 20:
+            print("    ... and %d more" % (len(unreachable) - 20))
+
+    # ---- libSystem link check --------------------------------------------
+    # dyld refuses to run any initializer before libSystem's own initializers
+    # have run: walking a S_MOD_INIT_FUNC_POINTERS / S_INIT_FUNC_OFFSETS
+    # section while gProcessInfo->libSystemInitialized is false throws
+    #   dyld: initializer in image (<path>) that does not link with
+    #         libSystem.dylib
+    # unless that image's install name IS libSystem
+    # (ImageLoaderMachO.cpp:2302-2327 and :2343-2362).  Every symbol in such
+    # an image can resolve perfectly and the process still dies, so symbol
+    # resolution cannot see this defect at all -- CoreFoundation tripped it
+    # with a fully resolvable closure.  What is checked is the one property
+    # dyld itself looks at: does the image name libSystem among its
+    # dependency-bearing load commands?
+    #
+    # Initializer presence is read out of the image, not assumed: sections are
+    # parsed above, so "has initializers" means a real nonzero-size
+    # S_MOD_INIT_FUNC_POINTERS / S_INIT_FUNC_OFFSETS table, which is the same
+    # predicate that sets fHasInitializers in dyld.  If a node cannot answer
+    # the question the section table is not proof for that node, so it is
+    # reported in `init_unknown` and counted as a FAIL rather than skipped.
+    init_unknown = []
+    no_libsystem = []
+    with_inits = []
+    for p in sorted(nodes):
+        node = nodes[p]
+        try:
+            inits = node.initializer_sections()
+        except Exception as exc:                          # noqa: BLE001
+            init_unknown.append((p, "initializer scan failed: %s" % exc))
+            continue
+        if not inits:
+            continue
+        with_inits.append(p)
+        # libSystem itself is the one image dyld permits to run initializers
+        # first, so it is not a finding when it does not link itself.
+        if "libSystem" in os.path.basename(p):
+            continue
+        if not node.libsystem_linked():
+            no_libsystem.append((p, inits,
+                                 sorted({n for _c, n in node.deps if n})))
+
+    rule("INITIALIZERS WITHOUT libSystem (dyld rejects before running them)")
+    print("  staged images with initializers: %d    "
+          "initializer presence UNKNOWN:    %d" % (len(with_inits),
+                                                   len(init_unknown)))
+    print("  of those, NOT linking libSystem: %d" % len(no_libsystem))
+    for p, inits, deps in no_libsystem[:20]:
+        print("    %s" % p)
+        print("      initializer sections: %s"
+              % ", ".join("%s,%s (%d bytes)" % (s, n, sz) for s, n, sz in inits))
+        print("      LC_LOAD_DYLIB: %s" % (", ".join(deps) or "(none)"))
+    if len(no_libsystem) > 20:
+        print("    ... and %d more" % (len(no_libsystem) - 20))
+    for p, why in init_unknown[:20]:
+        print("    !! %s: %s" % (p, why))
+    if len(init_unknown) > 20:
+        print("    ... and %d more" % (len(init_unknown) - 20))
+    if not no_libsystem and not init_unknown:
+        print("  (every staged image with initializers links libSystem)")
+
     rule("UNRESOLVED WEAK UNDEFINED SYMBOLS (not a boot blocker)")
     print("  files affected: %d    distinct symbols: %d"
           % (len(weak_unresolved), len(distinct_weak)))
@@ -986,7 +1170,8 @@ def main():
                 print("  (every staged binary was built by this repository)")
 
     # ---- verdict ----------------------------------------------------------
-    ok = (not errors and not missing_deps and not unresolved and not rejects)
+    ok = (not errors and not missing_deps and not unresolved and not rejects
+          and not unreachable and not no_libsystem and not init_unknown)
     # A host-extracted binary is a FAIL, not a warning: it is a binary this
     # repository did not build, so its passing every structural check above
     # proves nothing about whether it belongs in an image.
@@ -1008,6 +1193,20 @@ def main():
     if rejects:
         print("  FAIL  %d staged dylib(s) rejected by dyld2 validation"
               % len(rejects))
+    if unreachable:
+        print("  FAIL  %d symbol(s) have a provider NOT reachable via the"
+              % len(unreachable))
+        print("        consumer's LC_LOAD_DYLIB (staged but unlinked — dyld "
+              "rejects at bind time)")
+    if init_unknown:
+        print("  FAIL  initializer presence could not be determined for %d "
+              "staged image(s)" % len(init_unknown))
+    if no_libsystem:
+        print("  FAIL  %d staged image(s) have initializers but do NOT link "
+              "libSystem" % len(no_libsystem))
+        print("        (dyld throws \"initializer in image (...) that does not "
+              "link with")
+        print("        libSystem.dylib\" before running them)")
     if prov is not None and not prov["ran"]:
         print("  FAIL  provenance check could not run (host dyld cache "
               "unavailable)")

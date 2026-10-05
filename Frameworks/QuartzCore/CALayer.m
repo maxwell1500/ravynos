@@ -1,6 +1,6 @@
 #import <QuartzCore/CALayer.h>
 #import <QuartzCore/CAAnimation.h>
-#import <QuartzCore/CALayerContext.h>
+
 #import <QuartzCore/CATransaction.h>
 #import <Foundation/NSDictionary.h>
 
@@ -14,6 +14,8 @@ NSString * const kCAFilterTrilinear=@"trilinear";
    return [[[self alloc] init] autorelease];
 }
 
+
+#if defined(__linux__)
 
 -(CALayerContext *)_context {
    return _context;
@@ -29,6 +31,7 @@ NSString * const kCAFilterTrilinear=@"trilinear";
    _context=context;
    [_sublayers makeObjectsPerformSelector:@selector(_setContext:) withObject:context];
 }
+#endif
 
 -(CALayer *)superlayer {
    return _superlayer;
@@ -43,7 +46,9 @@ NSString * const kCAFilterTrilinear=@"trilinear";
    [_sublayers release];
    _sublayers=sublayers;
    [_sublayers makeObjectsPerformSelector:@selector(_setSuperLayer:) withObject:self];
+#if defined(__linux__)
    [_sublayers makeObjectsPerformSelector:@selector(_setContext:) withObject:_context];
+#endif
 }
 
 -(id)delegate {
@@ -289,11 +294,13 @@ NSString * const kCAFilterTrilinear=@"trilinear";
 }
 
 -(void)addAnimation:(CAAnimation *)animation forKey:(NSString *)key {
+#if defined(__linux__)
    if(_context==nil)
     return;
     
    [_animations setObject:animation forKey:key];
    [_context startTimerIfNeeded];
+#endif
 }
 
 -(CAAnimation *)animationForKey:(NSString *)key {

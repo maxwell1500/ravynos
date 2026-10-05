@@ -3195,3 +3195,88 @@ across the tree finds only FreeBSD **man pages** — `BSD/share/man/man4/linuxkp
 source exists under `Kernel/xnu/` or `BSD/` (the `Kernel/xnu` grep hits are POSIX
 `lockf`/`fcntl` code: `kern_lockf.c`, `kern_descrip.c`, `fcntl.h`). So the Linux-driver
 route starts from an **import** of FreeBSD's linuxkpi, not from in-tree remnants.
+
+## 19. The objdir layout rule, and the phantom "filesystem anomaly" (2026-10-04)
+
+**The rule.** `build-libraries.sh --frameworks <d>` sets
+`MAKEOBJDIR="$BUILD$base"` where `base` is the **absolute source path**. So the
+object directory for `CoreServices/WindowServer` is
+`/Users/max/Projects/build/Users/max/Projects/ravynos/CoreServices/WindowServer` —
+**there is no `Frameworks/` segment**. `$BUILD` is `/Users/max/Projects/build` and
+`$base` is `/Users/max/Projects/ravynos/CoreServices/WindowServer`; concatenating them
+skips `Frameworks/` entirely. The `build/Frameworks` symlink that
+`build-libraries.sh` creates points at `build/Users/max/Projects/ravynos/Frameworks`,
+which is a *different* tree from where CoreServices apps are actually built.
+
+**The phantom anomaly this caused.** Believing the objdir was under
+`.../ravynos/Frameworks/CoreServices/WindowServer/`, I stat-ed that path, found it
+missing, and concluded the sub-app bundles were being deleted by a host filesystem
+anomaly (readdir lists them, stat/ls/cp return ENOENT, persistently, for 20+ seconds).
+That conclusion was **wrong**. The bundles were always at
+`.../ravynos/CoreServices/WindowServer/<app>/<app>.app` — stat-able, copyable, and
+correct. The "anomaly" was a path of my own invention.
+
+**The lesson, in both directions.** When a build product cannot be found, **derive its
+path from the build script's own variable assignments before concluding anything about
+the filesystem**. `MAKEOBJDIR="$BUILD$base"` is one line; reading it would have saved
+the entire investigation. A readdir-vs-stat inconsistency is a real signature (dangling
+symlink), but it must be demonstrated on the **correct** path first — and here the
+path was wrong, so the demonstration proved nothing.
+
+**Practical consequence for staging.** Any Makefile rule that copies a built bundle
+must source it from `${MAKEOBJDIR}/<app>/<app>.app` (or `${OBJTOP}`-free
+`$BUILD$base/<app>/<app>.app`), never from a path containing `Frameworks/` for a
+CoreServices component. The `stage-subapps` rule in
+`CoreServices/WindowServer/Makefile` now does exactly this.
+
+## 20. The staged shell has no `[` builtin — use `/bin/test` (2026-10-04)
+
+**The fact.** The shell staged as `/bin/sh` (a 177 KB Mach-O) has **no `[` builtin**,
+and the image has **no `/bin/[` or `/usr/bin/[`** — only `/bin/test` (13,968 B).
+So any staged shell script that writes `if [ ... ]` or `[ -x "$f" ]` fails at run
+time with:
+
+    /etc/bootstrap: [: not found
+
+**How this was found.** The first generated `/etc/bootstrap` used a FreeBSD-style
+`if [ -d /etc/bootstrap.d ]` guard. The boot log showed `-=- Bootstrap running -=-`
+followed by `[: not found`: the script ran, the `[` command did not. The file was
+byte-clean — `#!/bin/sh\n` (23 21 2f 62 69 6e 2f 73 68 0a) and `grep -c $'\r'` = 0 —
+so this was not the shebang and not CRLF; the `[` command genuinely does not exist.
+
+**The rule.** Shell scripts staged into the image MUST use `/bin/test` (or POSIX
+`test`) instead of `[`, or avoid conditional tests entirely. This is not specific to
+`/etc/bootstrap`: it will bite any script we stage. If a `[`-style guard is wanted,
+either add a real `/bin/[` to the image or write `test ...`.
+
+---
+
+## 16. Toolchain selection: a missing binary silently selects the host compiler
+
+**The bug.** `build-libraries.sh` line 49 tested for `$PLATFORM_TOOLCHAIN_BIN/clang`
+to select the repo's cross-compiler. But the repo toolchain ships `clang-17`, not
+`clang` — so the test failed and `REAL_CC` silently fell back to `$(xcrun -f clang)`,
+which is the HOST clang 21. Every library built through this script was therefore
+compiled by the host compiler, not the repo's clang-17.
+
+**Why it cost days.** The host clang 21 emits out-of-line calls to libc++ `<charconv>`
+functions (`__d2s_buffered_n`, `__f2s_buffered_n`, `__d2exp_buffered_n`,
+`__d2fixed_buffered_n`) that the repo's clang-17 libc++ does not have. These four
+symbols appeared as undefined in `libicucore.A.dylib` and blocked the closure gate.
+The root cause was invisible: the build succeeded, the symbols were just wrong.
+
+**The fix.** Test for `clang-17` FIRST, then `clang`:
+```sh
+if [ -z "${REAL_CC:-}" ] && [ -x "$PLATFORM_TOOLCHAIN_BIN/clang-17" ]; then
+    REAL_CC="$PLATFORM_TOOLCHAIN_BIN/clang-17"
+elif [ -z "${REAL_CC:-}" ] && [ -x "$PLATFORM_TOOLCHAIN_BIN/clang" ]; then
+    REAL_CC="$PLATFORM_TOOLCHAIN_BIN/clang"
+fi
+```
+
+**The lesson.** A toolchain check that tests for the wrong binary name does not
+fail — it falls back to the host compiler silently. Any "which compiler built
+this?" question should be answered by checking the binary's LC_BUILD_VERSION or
+`__comment` section, not by assuming the build script picked the right one. When
+a symbol appears that the repo's libc++ should not need, suspect the compiler
+version first.

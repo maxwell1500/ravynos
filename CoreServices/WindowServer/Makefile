@@ -27,12 +27,14 @@ SRCS=           WindowServer.m \
 # first (build-libraries.sh --frameworks .../LoginWindow .../SystemUIServer
 # .../WindowServer). A comment cannot sit inside a continued variable assignment
 # in bmake, so this note lives above RESOURCES rather than beside the entries.
-RESOURCES=	${.CURDIR}/Icon.png \
-		${MAKEOBJDIR}/libinput.so.1 \
+RESOURCES=	${.CURDIR}/Icon.png
+.if defined(__linux__)
+RESOURCES+=	${MAKEOBJDIR}/libinput.so.1 \
 		${MAKEOBJDIR}/libinput.so \
 		${MAKEOBJDIR}/libevdev.so.2 \
-		${MAKEOBJDIR}/libevdev.so \
-		${.CURDIR}/Cursors/arrowCursor.png \
+		${MAKEOBJDIR}/libevdev.so
+.endif
+RESOURCES+=	${.CURDIR}/Cursors/arrowCursor.png \
 		${.CURDIR}/Cursors/resizeCursor.png \
 		${.CURDIR}/Decorations/close.png \
 		${.CURDIR}/Decorations/closeHover.png \
@@ -83,11 +85,13 @@ LDFLAGS+=	-Wl,-rpath,'$$ORIGIN/../Resources' \
                 -Wl,-rpath,/System/Library/Frameworks/CoreFoundation.framework/Versions/A \
                 -Wl,-rpath,/System/Library/Frameworks/Onyx2D.framework/Versions/A \
                 -Wl,-rpath,/System/Library/Frameworks/AppKit.framework/Versions/A \
-                -Wl,-rpath,/System/Library/Frameworks/CoreText.framework/Versions/A \
-		${MAKEOBJDIR}/libinput.a ${MAKEOBJDIR}/libevdev.a \
-		${MAKEOBJDIR}/libxkbcommon.a ${MAKEOBJDIR}/libquirks.a \
+                -Wl,-rpath,/System/Library/Frameworks/CoreText.framework/Versions/A
+.if defined(__linux__)
+LDFLAGS+=	${MAKEOBJDIR}/libinput.a ${MAKEOBJDIR}/libevdev.a \
 		${MAKEOBJDIR}/libinput-util.a ${MAKEOBJDIR}/libfilter.a \
-		${MAKEOBJDIR}/libmtdev.a \
+		${MAKEOBJDIR}/libmtdev.a
+.endif
+LDFLAGS+=	${MAKEOBJDIR}/libxkbcommon.a ${MAKEOBJDIR}/libquirks.a \
 		-lutil -pthread -lobjc -lm
 
 # The vendored libinput/libevdev/libxkbcommon/mtdev trees build their objects
@@ -140,8 +144,11 @@ clean: .PHONY
 # bmake treat it as a target it must build, and the sub-app objdir tree is not
 # present at that point. An explicit copy rule keyed on the built bundle is the
 # form that works.
-LOGINWINDOW_APP= ${OBJTOP}/Frameworks/CoreServices/WindowServer/LoginWindow/LoginWindow.app
-SYSTEMUISERVER_APP= ${OBJTOP}/Frameworks/CoreServices/WindowServer/SystemUIServer/SystemUIServer.app
+# The sub-app objdir is $BUILD$abs-source-path, i.e. .../ravynos/CoreServices/
+# WindowServer/<app> -- NOT .../ravynos/Frameworks/CoreServices/... (there is no
+# Frameworks/ component; $BUILD$base already ends at the app directory).
+LOGINWINDOW_APP= ${MAKEOBJDIR}/LoginWindow/LoginWindow.app
+SYSTEMUISERVER_APP= ${MAKEOBJDIR}/SystemUIServer/SystemUIServer.app
 
 # A shell loop, not a bmake prerequisite: bmake stats the source path to decide
 # whether the target is out of date, and on this host the sub-app objdir path is
@@ -150,8 +157,8 @@ SYSTEMUISERVER_APP= ${OBJTOP}/Frameworks/CoreServices/WindowServer/SystemUIServe
 # sidesteps that.
 all: stage-subapps
 stage-subapps:
-	@for app in LoginWindow SystemUIServer; do \
-		src=${OBJTOP}/Frameworks/CoreServices/WindowServer/$$app/$$app.app; \
+	@for app in LoadingWindow LoginWindow SystemUIServer; do \
+		src=${MAKEOBJDIR}/$$app/$$app.app; \
 		dst=${APP_DIR}/Contents/Resources/$$app.app; \
 		rm -rf $$dst; \
 		ok=0; \

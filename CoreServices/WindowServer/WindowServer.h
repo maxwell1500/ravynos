@@ -45,7 +45,9 @@
 #import "message.h"
 #import "WSDisplay.h"
 #import "BSDFramebuffer.h"
-#import "WSInput.h"
+#if defined(__linux__)
+ #import "WSInput.h"
+#endif
 #import "WSWindowRecord.h"
 #import "WSAppRecord.h"
 
@@ -68,7 +70,9 @@ extern pthread_mutex_t renderLock;
     NSRect _geometry;
     CGFontRef _titleFont;
 
-    WSInput *input;
+#if defined(__linux__)
+     WSInput *input;
+#endif
     int cursorHideCount;
 
     NSMutableArray *displays;

@@ -60,8 +60,14 @@ typedef enum NSComparisonResult {
 - (void)encodeWithCoder:(NSCoder *)coder;
 @end
 
+#ifdef __cplusplus
+extern "C" {
+#endif
 void NSLog(NSString *format,...);
 void NSLogv(NSString *format,va_list arguments);
+#ifdef __cplusplus
+}
+#endif
 
 #define NS_RETURNS_INNER_POINTER __attribute__((objc_returns_inner_pointer))
 #endif

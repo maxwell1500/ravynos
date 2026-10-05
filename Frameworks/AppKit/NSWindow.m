@@ -1857,7 +1857,7 @@ const float WSWindowEdgePad = 2;
     else {
         _flushNeeded=NO;
 
-        if(!([self isOpaque] && [_contentView isKindOfClass:[NSOpenGLView class]] && [_contentView isOpaque])) {
+        if(!([self isOpaque] && [_contentView isOpaque])) {
             O2ContextFlush(_context);
         }
     }

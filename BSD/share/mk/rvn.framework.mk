@@ -33,9 +33,9 @@ LDFLAGS += --sysroot=${SDKROOT}
 # does not search <sysroot>/usr/lib/system by default, and the path is taken
 # from whichever sysroot this build names.
 .if defined(RAVYN_SDKROOT) && !empty(RAVYN_SDKROOT)
-LDFLAGS += -L${RAVYN_SDKROOT}/usr/lib/system -ldyld
+LDFLAGS += -L${RAVYN_SDKROOT}/usr/lib/system ${RAVYN_SDKROOT}/usr/lib/libSystem.B.dylib -ldyld
 .elif defined(SDKROOT) && !empty(SDKROOT)
-LDFLAGS += -L${SDKROOT}/usr/lib/system -ldyld
+LDFLAGS += -L${SDKROOT}/usr/lib/system ${SDKROOT}/usr/lib/libSystem.B.dylib -ldyld
 .endif
 
 # Every framework dylib must record its canonical install path as LC_ID_DYLIB.

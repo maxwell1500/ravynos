@@ -1,7 +1,9 @@
 #import <Foundation/Foundation.h>
 #import <CoreVideo/CVBase.h>
 #import <CoreVideo/CVReturn.h>
+#if defined(__linux__)
 #import <OpenGL/OpenGL.h>
+#endif
 
 @class CVDisplayLink;
 
@@ -11,7 +13,7 @@ typedef CVReturn (*CVDisplayLinkOutputCallback)(CVDisplayLinkRef, const CVTimeSt
 
 COREVIDEO_EXPORT CVReturn CVDisplayLinkCreateWithActiveCGDisplays(CVDisplayLinkRef *result);
 COREVIDEO_EXPORT CVReturn CVDisplayLinkSetOutputCallback(CVDisplayLinkRef self, CVDisplayLinkOutputCallback callback, void *userInfo);
-COREVIDEO_EXPORT CVReturn CVDisplayLinkSetCurrentCGDisplayFromOpenGLContext(CVDisplayLinkRef self, CGLContextObj cglContext, CGLPixelFormatObj cglPixelFormat);
+COREVIDEO_EXPORT CVReturn CVDisplayLinkSetCurrentCGDisplayFromOpenGLContext(CVDisplayLinkRef self, void *cglContext, void *cglPixelFormat);
 
 COREVIDEO_EXPORT CVReturn CVDisplayLinkStart(CVDisplayLinkRef self);
 COREVIDEO_EXPORT CVReturn CVDisplayLinkStop(CVDisplayLinkRef self);

@@ -11,13 +11,11 @@ SRCS= \
 	CALayerContext.m \
 	CAMediaTimingFunction.m \
 	CAPropertyAnimation.m \
-	CARenderer.m \
 	CATransaction.m \
 	CATransactionGroup.m \
 	CATransform3D.m \
 	CATransition.m \
 	CAValueFunction.m \
-	CAWindowOpenGLContext.m \
 	CIAffineTransform.m \
 	CIBloom.m \
 	CIBoxBlur.m \
@@ -63,11 +61,18 @@ RESOURCES=Info.plist English.lproj
 CFLAGS+= ${FMWK_CFLAGS} -I${.CURDIR:H} \
 	-I${OBJTOP}/Frameworks/Foundation/Headers \
         -I${OBJTOP}/Frameworks/AppKit/Headers \
-	-F${OBJTOP}/Frameworks/OpenGL -framework OpenGL
+	-I${RAVYN_SDKROOT}/usr/local/include/kernel \
+	-I${RAVYN_SDKROOT}/usr/include/machine \
+	-I${RAVYN_SDKROOT}/usr/include \
+	-I${ROOT_SOURCE_DIR}/Kernel/xnu/bsd \
+	-Wno-error=deprecated-objc-isa-usage
+
+
+
+
+
 LDFLAGS+= ${FMWK_LDFLAGS} \
-	-L${OBJTOP}/Frameworks/OpenGL/OpenGL.framework \
-	-lOpenGL \
-        -Wl,-rpath,/System/Library/Frameworks/OpenGL.framework/Versions/Current
+
 
 
 .include <rvn.framework.mk>

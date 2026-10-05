@@ -2,7 +2,9 @@
 #import <QuartzCore/CALayer.h>
 #import <QuartzCore/CARenderer.h>
 #import <Foundation/NSString.h>
+#if defined(__linux__)
 #import <OpenGL/gl.h>
+#endif
 
 @interface CALayer(private)
 -(void)_setContext:(CALayerContext *)context;
@@ -13,6 +15,8 @@
 @implementation CALayerContext
 
 -initWithFrame:(CGRect)rect {
+   _frame=rect;
+#if defined(__linux__)
    CGLError error;
    
    CGLPixelFormatAttribute attributes[1]={
@@ -25,8 +29,6 @@
    if((error=CGLCreateContext(_pixelFormat,NULL,&_glContext))!=kCGLNoError)
     NSLog(@"CGLCreateContext failed with %d in %s %d",error,__FILE__,__LINE__);
 
-   _frame=rect;
-   
    GLint width=rect.size.width;
    GLint height=rect.size.height;
    
@@ -40,6 +42,7 @@
    CGLSetParameter(_glContext,kCGLCPSurfaceOpacity,&opacity);
 
    _renderer=[[CARenderer rendererWithCGLContext:_glContext options:nil] retain];
+#endif
       
    return self;
 }
@@ -50,6 +53,7 @@
    [super dealloc];
 }
 
+#if defined(__linux__)
 -(void)setFrame:(CGRect)rect {
    _frame=rect;
    
@@ -62,6 +66,7 @@
    CGLSetParameter(_glContext,kCGLCPSurfaceBackingOrigin,backingOrigin);
    CGLSetParameter(_glContext,kCGLCPSurfaceBackingSize,backingSize);
 }
+#endif
 
 -(void)setLayer:(CALayer *)layer {
    layer=[layer retain];
@@ -75,6 +80,7 @@
 -(void)invalidate {
 }
 
+#if defined(__linux__)
 -(void)assignTextureIdsToLayerTree:(CALayer *)layer {
 
    if([layer _textureId]==nil){
@@ -104,7 +110,7 @@
    
    GLsizei i=0;
    GLuint  deleteIds[[_deleteTextureIds count]];
-   
+
    for(NSNumber *number in _deleteTextureIds)
     deleteIds[i++]=[number unsignedIntValue];
    
@@ -117,6 +123,7 @@
    
    [_renderer render];
 }
+#endif
 
 -(void)render {
    [self renderLayer:_layer];

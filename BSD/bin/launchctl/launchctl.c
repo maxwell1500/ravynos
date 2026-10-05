@@ -770,6 +770,15 @@ cmd_bootstrap(int argc, char * const argv[])
 					continue;
 				
 				printf("Loading job: %s: ", name);
+				/*
+				 * stdout is block-buffered here (it is not a tty),
+				 * so without an explicit flush this line, and the
+				 * "ok"/"failed" verdict that follows it, sit in the
+				 * buffer and never reach the console if we die or
+				 * block partway through the scan.  That hid a real
+				 * submission failure behind no output at all.
+				 */
+				fflush(stdout);
 				asprintf(&path, "%s/%s", bootstrap_paths[i], name);
 				if (load_job(path) == 0)
 					printf("ok\n");
@@ -1124,7 +1133,19 @@ main(int argc, char * const argv[])
 	const char *cmd;
 	size_t i;
 	int c;
-
+	/*
+	 * Resolve our bootstrap port before doing anything that talks to
+	 * launchd.  launchd publishes the job manager port to us: job_start()
+	 * calls runtime_fork(j->mgr->jm_port) (BSD/sbin/launchd/core.c:4502),
+	 * and runtime_fork() does launchd_set_bport(bsport)
+	 * (BSD/sbin/launchd/runtime.c:766) before forking, so the port arrives
+	 * here as our TASK_BOOTSTRAP_PORT.  liblaunch's bootstrap_init() is the
+	 * routine that reads it into the bootstrap_port global
+	 * (Libraries/Libsystem/liblaunch/libbootstrap.c:44); nothing in
+	 * liblaunch or in this file ever called it, so the global stayed
+	 * MACH_PORT_NULL and every vproc_mig_* request went nowhere.
+	 */
+	bootstrap_init();
 	while ((c = getopt(argc, argv, "S:h")) != -1) {
 		switch (c) {
 

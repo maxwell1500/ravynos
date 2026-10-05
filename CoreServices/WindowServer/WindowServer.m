@@ -37,7 +37,9 @@
 #import "WindowServer.h"
 
 #undef direction // defined in mach.h
-#include <linux/input.h>
+#if defined(__linux__)
+ #include <linux/input.h>
+#endif
 
 #include <poll.h>
 #include <sys/param.h>
@@ -152,8 +154,10 @@ static struct kinfo_proc *_procForPID(pid_t pid) {
     for(int i = 0; i < kCGNumReservedWindowLevels; ++i)
         _windows[i] = [NSMutableArray new];
 
-    input = [WSInput new];
-    [input setLogLevel:logLevel];
+#if defined(__linux__)
+     input = [WSInput new];
+     [input setLogLevel:logLevel];
+#endif
 
     // FIXME: try drm/kms first then fall back
     fb = [BSDFramebuffer new];
@@ -166,8 +170,10 @@ static struct kinfo_proc *_procForPID(pid_t pid) {
 
     // this is to keep our X,Y from leaving the screen bounds and eventually can be used to find
     // edges when there are multiple screens
-    [input setGeometry:_geometry];
-    [input setPointerPos:NSMakePoint(_geometry.size.width / 2, _geometry.size.height / 2)];
+#if defined(__linux__)
+     [input setGeometry:_geometry];
+     [input setPointerPos:NSMakePoint(_geometry.size.width / 2, _geometry.size.height / 2)];
+#endif
 
     ready = YES;
     return self;
@@ -176,21 +182,29 @@ static struct kinfo_proc *_procForPID(pid_t pid) {
 -(void)dealloc {
     curShell = NONE;
     fb = nil;
-    input = nil;
+#if defined(__linux__)
+     input = nil;
+#endif
 }
 
 -(void)setLogLevel:(int)level {
     logLevel = level;
-    [input setLogLevel:level];
+#if defined(__linux__)
+     [input setLogLevel:level];
+#endif
 }
 
 -(void)setDebugLevel:(int)level subsystem:(char)sys {
     id obj = nil;
     switch(sys) {
-        case 'i': obj = input; break;
+#if defined(__linux__)
+         case 'i': obj = input; break;
+#endif
     }
-    if(obj)
-        [obj setDebugLevel:level];
+#if defined(__linux__)
+     if(obj)
+         [obj setDebugLevel:level];
+#endif
 }
 
 -(BOOL)isReady {
@@ -635,14 +649,16 @@ static struct kinfo_proc *_procForPID(pid_t pid) {
     NSRect cursorRect = NSMakeRect(0, 0, _cursor_height, _cursor_height);
 
     struct pollfd fds;
-    fds.fd = [input fileDescriptor];
-    fds.events = POLLIN;
+#if defined(__linux__)
+     fds.fd = [input fileDescriptor];
+     fds.events = POLLIN;
+ 
+     while(ready == YES) {
+         if(poll(&fds, 1, 50) > 0)
+             [input run:self];
+ 
+         cursorRect.origin = [input pointerPos];
 
-    while(ready == YES) {
-        if(poll(&fds, 1, 50) > 0)
-            [input run:self];
-
-        cursorRect.origin = [input pointerPos];
 
         // FIXME: handle multiple displays here. Use a thread per display?
         pthread_mutex_lock(&renderLock);
@@ -685,6 +701,8 @@ static struct kinfo_proc *_procForPID(pid_t pid) {
                 [fb draw];
         pthread_mutex_unlock(&renderLock);
     }
+
+#endif /* __linux__ */
 }
 
 - (void)rpcMainDisplayID:(PortMessage *)msg {
@@ -1455,9 +1473,11 @@ static struct kinfo_proc *_procForPID(pid_t pid) {
     if(display) {
         ret = kCGErrorSuccess;
         CGRect bounds = [display geometry];
-        double x = clipTo(data->val2, bounds.origin.x, bounds.size.width);
-        double y = clipTo(data->val3, bounds.origin.y, bounds.size.height);
-        [input setPointerPos:NSMakePoint(x, y)];
+#if defined(__linux__)
+         double x = clipTo(data->val2, bounds.origin.x, bounds.size.width);
+         double y = clipTo(data->val3, bounds.origin.y, bounds.size.height);
+         [input setPointerPos:NSMakePoint(x, y)];
+#endif
     }
     struct wsRPCSimple reply;
     reply.base.code = kCGDisplayMoveCursorToPoint;
@@ -1490,9 +1510,11 @@ static struct kinfo_proc *_procForPID(pid_t pid) {
     if(display) {
         ret = kCGErrorSuccess;
         CGRect bounds = [display geometry];
-        double x = clipTo(data->val2, bounds.origin.x, bounds.size.width);
-        double y = clipTo(data->val3, bounds.origin.y, bounds.size.height);
-        [input setPointerPos:NSMakePoint(x, y)];
+#if defined(__linux__)
+         double x = clipTo(data->val2, bounds.origin.x, bounds.size.width);
+         double y = clipTo(data->val3, bounds.origin.y, bounds.size.height);
+         [input setPointerPos:NSMakePoint(x, y)];
+#endif
     }
 
     struct wsRPCSimple reply;
@@ -1504,11 +1526,11 @@ static struct kinfo_proc *_procForPID(pid_t pid) {
 
 -(void)rpcGetLastMouseDelta:(PortMessage *)msg {
     struct wsRPCSimple data;
-    NSPoint pos = [input pointerPos];
-    data.base.code = kCGGetLastMouseDelta;
-    data.base.len = 8;
-    data.val1 = pos.x;
-    data.val2 = pos.y;
+#if defined(__linux__)
+     NSPoint pos = [input pointerPos];
+     data.val1 = pos.x;
+     data.val2 = pos.y;
+#endif
     [self sendInlineData:&data length:sizeof(data) withCode:MSG_ID_RPC toPort:msg->descriptor.name];
 }
 

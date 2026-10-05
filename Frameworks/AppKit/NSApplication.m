@@ -717,6 +717,14 @@ static NSMenuItem *itemWithTag(NSMenu *root, int tag) {
   return result;
 }
 
+NSArray *CGSOrderedWindowNumbers() {
+  NSArray *windows=[NSApp windows];
+  NSMutableArray *result=[NSMutableArray array];
+  for(NSWindow *window in windows)
+   [result addObject:[NSNumber numberWithInt:[window windowNumber]]];
+  return result;
+}
+
 -(void)preventWindowOrdering {
    NSUnimplementedMethod();
 }

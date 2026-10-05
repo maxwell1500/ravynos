@@ -18,7 +18,8 @@ SRCS =	getmntopts.c \
 	reexec_to_match_kernel.c \
 	trimdomain.c \
 	tzlink.c \
-	wipefs.cpp
+	wipefs.cpp \
+	ExtentManager.cpp
 
 
 MAN = getmntopts.3 \

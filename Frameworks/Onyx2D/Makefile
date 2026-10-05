@@ -208,7 +208,7 @@ CFLAGS += -I${.CURDIR} -I${.CURDIR:H} -I${.CURDIR:H}/Foundation/Headers \
 CFLAGS += -I${.CURDIR}/freetype/include \
 	-include${RAVYN_SDKROOT}/usr/include/sys/param.h
 LDFLAGS += ${.OBJDIR}/jpeg/libjpeg.a ${.OBJDIR}/png/libpng.a \
-	${.OBJDIR}/tiff/libtiff/libtiff.a ${.OBJDIR}/freetype/libfreetype.a \
+	${.OBJDIR}/tiff/libtiff/libtiff.a -Wl,-force_load,${.OBJDIR}/freetype/libfreetype.a \
 	-framework CoreFoundation -framework Foundation -lz
 
 lib${FRAMEWORK}.a: libjpeg.a libpng.a libtiff.a freetype
