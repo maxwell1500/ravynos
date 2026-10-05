@@ -48,9 +48,11 @@ import argparse
 import json
 import os
 import re
+import shutil
 import struct
 import subprocess
 import sys
+import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -107,7 +109,7 @@ LC_LOAD_UPWARD_DYLIB = 0x80000023
 # "initializer in image (...) that does not link with libSystem.dylib".
 SECTION_TYPE = 0x000000FF
 S_MOD_INIT_FUNC_POINTERS = 0x9
-S_INIT_FUNC_OFFSETS = 0xD
+S_INIT_FUNC_OFFSETS = 0x16
 
 # Dependency-bearing commands.  All four name a dylib that must exist on the
 # staged disk for the loader to make progress.
@@ -655,6 +657,219 @@ def manifest_staged_files(man, base_dir):
 
 
 # --------------------------------------------------------------------------
+# Derived intermediates: staged build products that are COPIES of something
+# built elsewhere.  mkimage hashes what the manifest points at and the image
+# then hashes clean, so a stale copy is invisible to every byte-level check
+# this tool makes -- the disk is internally consistent and wrong.  Measured:
+# work/WindowServer.app.tar.gz was built at 14:52 while the WindowServer
+# binaries it was packed from were rebuilt at 17:19, so the image shipped the
+# old WindowServer: `otool -L` showed liblaunch.dylib (linked, never used),
+# and __vprocmgr_switch_to_session was absent.  The build output was right in
+# the build tree the whole time.
+#
+# Each entry maps the intermediate, relative to tools/bootlab, to the build
+# output it represents and how to find that output.  A staged source under
+# work/ that is NOT listed here is reported as UNKNOWN, never passed
+# silently: an unmappable intermediate is exactly the case where the tool
+# cannot promise the image is current.
+# --------------------------------------------------------------------------
+
+DERIVED_INTERMEDIATES = (
+    # (intermediate rel path, upstream path or None, why)
+    # The intermediate root is the directory the tarball was EXTRACTED INTO,
+    # so the upstream root is the directory the tarball was PACKED from --
+    # one level up from the .app, which is what makes
+    # work/ws_bundle/WindowServer.app/Contents/... line up with
+    # <build>/.../WindowServer/WindowServer.app/Contents/...
+    ("work/ws_bundle",
+     "/Users/max/Projects/build/Users/max/Projects/ravynos/CoreServices"
+     "/WindowServer",
+     "extracted from work/WindowServer.app.tar.gz, packed from the build tree"),
+    ("work/Dock.app",
+     "/Users/max/Projects/build/Users/max/Projects/ravynos/CoreServices"
+     "/Dock/Dock.app",
+     "copied out of the build tree by make_gui_manifest.py"),
+    ("work/Filer.app",
+     "/Users/max/Projects/build/Users/max/Projects/ravynos/CoreServices"
+     "/Filer/Filer.app",
+     "copied out of the build tree by make_gui_manifest.py"),
+    # The stripped kernel is NOT registered here.  It used to be, against
+    # <build>/kernel.development, compared by mtime only -- a weak rule that
+    # passed for the wrong reason: that build-tree file is dated 08-31 while
+    # the staged kernel is dated 10-04, so the comparison was measuring an
+    # unrelated artifact.  Its real input is work/new_kernel.development and
+    # its recipe is recoverable, so it is checked by REPRODUCING the strip
+    # instead (see RECIPE_CHECKS).
+)
+
+
+# --------------------------------------------------------------------------
+# Source-built staged products: work/ files that are NOT copies of another
+# build output but the build output itself, compiled from sources in this
+# repository.  There is no upstream artifact to compare bytes against -- the
+# artifact IS the product -- so the freshness question is different: is the
+# product at least as new as every source it was compiled from?
+#
+# Each entry is (work/ path, producer script, source paths).  The producer
+# and the source list are both taken from the script that emits the file, not
+# guessed:
+#
+#   work/<u>_dyn   build_dynutils.sh: srcs_for() (the SRCS table it says it
+#                  took from BSD/bin/<u>/Makefile), build_one(): compiles
+#                  each with $CC and links -o "$HERE/work/${u}_dyn".
+#   work/launchd   build_launchd.sh: OUT="$HERE/work/launchd", SRCS_HAND +
+#                  SRCS_MIG ("verbatim from BSD/sbin/launchd/Makefile").
+#   work/efi/      build_applefree.sh: -c tools/efiloader/src/loader.c then
+#     BOOTX64.EFI  pack.py -> work/efi/BOOTX64.EFI.
+#
+# `sh` also compiles GENERATED sources (nodes.c/syntax.c come from
+# mksyntax.c/mknodes.c + nodetypes, token.h from the mktokens script) which
+# are not committed; build_dynutils.sh:119-140 documents that, so the
+# generators are listed as the sources instead of the generated files.
+# --------------------------------------------------------------------------
+
+_DYNUTILS_SRCS = {
+    "sh": "bltin/echo.c alias.c arith_yacc.c arith_yylex.c cd.c error.c eval.c"
+          " exec.c expand.c histedit.c input.c jobs.c mail.c main.c"
+          " memalloc.c miscbltin.c mystring.c options.c output.c parser.c"
+          " redir.c show.c trap.c var.c builtins.c shims.c"
+          # generated, not committed: see build_dynutils.sh:119-140
+          " mksyntax.c mknodes.c nodetypes nodes.c.pat mktokens",
+    "ls": "cmp.c ls.c print.c util.c",
+    "cp": "cp.c utils.c",
+    "echo": "echo.c",
+    "cat": "cat.c",
+    "mkdir": "mkdir.c",
+    "rm": "rm.c",
+    "test": "test.c",
+    "mv": "mv.c",
+    "launchctl": "launchctl.c",
+}
+
+
+def source_built_products():
+    """[(work_rel_path, producer, [source paths])] recovered from scripts."""
+    repo = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir))
+    out = []
+    for util, srcs in sorted(_DYNUTILS_SRCS.items()):
+        paths = [os.path.join(repo, "BSD", "bin", util, s)
+                 for s in srcs.split()]
+        # NOTE on `test`: build_dynutils.sh:80-84 records that test.c is
+        # self-contained and must NOT compile the shell's error.c in, so
+        # only BSD/bin/test/test.c is listed here.  Listing error.c would
+        # make a shell edit look like a reason to rebuild test.
+        out.append(("work/%s_dyn" % util, "build_dynutils.sh", paths))
+    lsrcs = ("launchd.c core.c kill2.c ktrace.c ipc.c log.c runtime.c"
+             " init/init.c")
+    out.append(("work/launchd", "build_launchd.sh",
+                [os.path.join(repo, "BSD", "sbin", "launchd", s)
+                 for s in lsrcs.split()]))
+    out.append(("work/efi/BOOTX64.EFI", "build_applefree.sh",
+                [os.path.join(repo, "tools", "efiloader", "src", "loader.c")]))
+    return out
+
+
+# --------------------------------------------------------------------------
+# Reproducible recipes: staged products whose exact transform is recoverable
+# from the producing script, so freshness can be decided by CONTENT rather
+# than by mtime.
+#
+# The stripped kernel is the case.  kernel_build.py:338-339 does
+#
+#     stripped = os.path.join(WORK, "stripped_kernel.development")
+#     run(["strip", "-x", "-o", stripped, out_kernel], WORK)
+#
+# with out_kernel = work/new_kernel.development (kernel_build.py:315).  Both
+# that file and the strip tool are on this machine, so the recipe can simply
+# be re-run and the result compared byte for byte.  That is strictly stronger
+# than the mtime comparison it replaces, which compared the staged kernel
+# against <build>/kernel.development -- a file dated 08-31, months older and
+# from a different link, so the "pass" said nothing about this kernel at all.
+#
+# If the recipe cannot be reproduced (no strip, input missing, tool failure)
+# the result is UNKNOWN, never a pass.
+# --------------------------------------------------------------------------
+
+RECIPE_CHECKS = (
+    # (work rel path, argv builder, why)
+    ("work/stripped_kernel.development", "strip_kernel", None),
+)
+
+
+def strip_kernel(staged_path, tmpdir):
+    """Re-run `strip -x` over the linked kernel; return the reproduced bytes.
+
+    Returns (path_to_reproduced_file, recipe_text) or raises, in which case
+    the caller records UNKNOWN rather than passing.
+    """
+    linked = os.path.join(HERE, "work", "new_kernel.development")
+    if not os.path.isfile(linked):
+        raise RuntimeError("strip input missing: %s" % linked)
+    out = os.path.join(tmpdir, "repro_stripped_kernel.development")
+    subprocess.run(["strip", "-x", "-o", out, linked], check=True,
+                   stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    return out, "strip -x work/new_kernel.development"
+
+
+# --------------------------------------------------------------------------
+# Candidate sources: committed files that plausibly produce a staged work/
+# intermediate, for which NO mapping is claimed because the staged bytes were
+# measured NOT to match.  Listing one here is a statement of evidence, not a
+# registration: the report names the candidate and says whether the bytes
+# agree, so a human can decide.  Registering a mapping whose content does not
+# match would manufacture a staleness failure out of a deliberate edit --
+# worse than admitting the tool does not know.
+#
+# work/com.ravynos.WindowServer.json: SystemLibrary/LaunchDaemons/Makefile:16-18
+# installs its own directory's com.ravynos.WindowServer.json verbatim with
+# `install -m 0644`, so that committed file is the obvious candidate.  The
+# staged copy is NOT what that recipe produces: the committed file adds
+# EnvironmentVariables (ASL_DISABLE, LANG) and sends stderr to /tmp/stderr.txt,
+# while the staged copy has neither and points both streams at /dev/console.
+# So the staged file is a hand-edited bootlab variant.  Which one is CORRECT is
+# a product decision, not something this tool may decide, so it stays UNKNOWN.
+# --------------------------------------------------------------------------
+
+CANDIDATE_SOURCES = {
+    "work/com.ravynos.WindowServer.json":
+        "SystemLibrary/LaunchDaemons/com.ravynos.WindowServer.json",
+}
+
+
+def derived_intermediate(rel_path):
+    """(upstream_path, why) if `rel_path` is a known derived intermediate.
+
+    Returns (None, None) for anything else, including a path under a listed
+    intermediate's directory that does not exist on disk.
+    """
+    rel = rel_path.replace(os.sep, "/")
+    for prefix, upstream, why in DERIVED_INTERMEDIATES:
+        if rel == prefix or rel.startswith(prefix + "/"):
+            return upstream, why
+    return None, None
+
+
+def newest_mtime(root):
+    """Newest mtime under `root`, or (None, None) -> (mtime, path).
+
+    A bundle's freshness is the freshness of its most recently written
+    member: a single rebuilt executable inside an otherwise untouched bundle
+    is what ships stale, so the max is the number that has to be compared.
+    """
+    best_t, best_p = None, None
+    for dirpath, _dirnames, filenames in os.walk(root):
+        for name in filenames:
+            p = os.path.join(dirpath, name)
+            try:
+                t = os.path.getmtime(p)
+            except OSError:
+                continue
+            if best_t is None or t > best_t:
+                best_t, best_p = t, p
+    return best_t, best_p
+
+
+# --------------------------------------------------------------------------
 # nm -m cross-check
 # --------------------------------------------------------------------------
 
@@ -997,9 +1212,14 @@ def main():
         if not inits:
             continue
         with_inits.append(p)
-        # libSystem itself is the one image dyld permits to run initializers
-        # first, so it is not a finding when it does not link itself.
-        if "libSystem" in os.path.basename(p):
+        # Two images are exempt, and both for the same reason: they are not
+        # run through ImageLoaderMachO::doModInitFunctions at all.
+        #   - libSystem itself: dyld's own code allows exactly one image to
+        #     run initializers first, and it is libSystem.
+        #   - dyld (MH_DYLINKER): loaded by the kernel, not by dyld, so its
+        #     initializer walk never sees the libSystemInitialized gate.
+        if (node.filetype == MH_DYLINKER
+                or "libSystem" in os.path.basename(p)):
             continue
         if not node.libsystem_linked():
             no_libsystem.append((p, inits,
@@ -1023,6 +1243,296 @@ def main():
         print("    ... and %d more" % (len(init_unknown) - 20))
     if not no_libsystem and not init_unknown:
         print("  (every staged image with initializers links libSystem)")
+
+    # ---- derived-intermediate staleness --------------------------------
+    # A manifest entry may name a COPY of a build product rather than the
+    # build product itself.  mkimage hashes what the manifest names and the
+    # finished image then hashes clean, so a stale copy passes every
+    # byte-level check above: the disk is internally consistent and wrong.
+    # Measured: work/WindowServer.app.tar.gz was packed at 14:52 from binaries
+    # rebuilt at 17:19, and the image shipped the 14:52 WindowServer -- with
+    # liblaunch.dylib in its LC_LOAD_DYLIB and no __vprocmgr_switch_to_session
+    # import, i.e. linked but never called, which no structural check can
+    # distinguish.  The freshness question is therefore asked here, against
+    # the build output each intermediate stands for.
+    #
+    # What counts as stale, per kind of intermediate:
+    #
+    #   directory intermediate (an extracted or copied bundle tree).  Each
+    #   staged file is compared against the file at the SAME relative path
+    #   in the build tree, by CONTENT.  A content difference is the finding:
+    #   the image carries bytes the build no longer produces.  An mtime
+    #   difference alone is not -- `cp -p` and `tar` do not round mtimes,
+    #   and a resource that was never rebuilt is not stale merely because a
+    #   sibling executable was.  Comparing every file against the newest
+    #   file in the tree would report all 90 of them; that is noise, and
+    #   noise is how a gate gets ignored.
+    #
+    #   single-file intermediate (work/stripped_kernel.development is a
+    #   stripped copy, so its bytes never match the build's).  Content can
+    #   never match, so mtime is the only available signal and is used
+    #   directly, with MTIME_SLOP for the same-second case.
+    #
+    # A relative path with no counterpart in the build tree is UNKNOWN, not
+    # a finding: the build may legitimately not produce it.
+    MTIME_SLOP = 2.0
+    stale = []                # copies that differ from their build output
+    fresh = []
+    source_stale = []         # source-built products older than a source
+    source_fresh = []
+    stale_unknown = []
+    recipe_stale = []          # reproduced transform does NOT match
+    recipe_fresh = []
+    source_recipes = {rel: (producer, srcs)
+                      for rel, producer, srcs in source_built_products()}
+    recipe_checks = {rel: (globals()[builder], why)
+                     for rel, builder, why in RECIPE_CHECKS}
+    # The kernel is a staged Mach-O that manifest_staged_files maps to NO
+    # source (it is not a dyld-closure participant), so it never reaches the
+    # loop below.  Resolve it the way mkimage.py's newest_kernel() and
+    # provenance_scan.kernel_payload() do, so the strip recipe is actually
+    # exercised instead of silently counting zero.
+    kernel_rel = None
+    try:
+        sys.path.insert(0, HERE)
+        import provenance_scan
+        kernel_src = provenance_scan.kernel_payload(HERE)
+    except Exception as exc:                              # noqa: BLE001
+        stale_unknown.append(("System/Library/Kernels/kernel.development",
+                              "work/stripped_kernel.development",
+                              "kernel payload could not be resolved for the "
+                             "strip recipe: %s" % exc))
+        kernel_src = None
+    if kernel_src is not None:
+        kernel_rel = os.path.relpath(kernel_src, HERE)
+        if kernel_rel in recipe_checks:
+            recipe_staged = [
+                (sp, kernel_src)
+                for sp, _src in staged
+                if "kernel.development" in os.path.basename(sp)]
+    else:
+        recipe_staged = []
+    # Recipes are re-run into a scratch directory, never over the staged file.
+    reprodir = tempfile.mkdtemp(prefix="closure_check_repro_")
+
+
+    def content_differs(a, b):
+        try:
+            if os.path.getsize(a) != os.path.getsize(b):
+                return True
+            with open(a, "rb") as fa, open(b, "rb") as fb:
+                while True:
+                    ca, cb = fa.read(1 << 20), fb.read(1 << 20)
+                    if ca != cb:
+                        return True
+                    if not ca:
+                        return False
+        except OSError:
+            return False
+
+    try:
+        for spath, src in staged:
+            if src is None or not os.path.isfile(src):
+                continue
+            rel = os.path.relpath(src, HERE)
+            if not (rel == "work" or rel.startswith("work" + os.sep)):
+                continue
+
+            # A reproducible recipe is the strongest check available and is
+            # tried first: the transform is re-run and the result compared
+            # byte for byte, so "is this staged artifact the build the tree
+            # currently describes?" is answered by CONTENT, not timestamps.
+            check = recipe_checks.get(rel)
+            if check is not None:
+                builder, _why = check
+                try:
+                    reproduced, recipe_text = builder(src, reprodir)
+                except Exception as exc:                  # noqa: BLE001
+                    stale_unknown.append((spath, rel,
+                                          "recipe could not be reproduced: %s"
+                                          % exc))
+                    continue
+                if content_differs(src, reproduced):
+                    recipe_stale.append((spath, rel, recipe_text, reproduced))
+                else:
+                    recipe_fresh.append((spath, rel, recipe_text))
+                continue
+
+            # A source-built product has no upstream artifact to diff
+            # against: the artifact IS the output.  Its freshness is instead
+            # the question of whether every source it was compiled from is
+            # older than it.  Registered from the producing script's own
+            # SRCS table (see source_built_products), never guessed.
+            recipe = source_recipes.get(rel)
+            if recipe is not None:
+                producer, srcs = recipe
+                missing = [s for s in srcs if not os.path.isfile(s)]
+                if missing:
+                    stale_unknown.append((spath, rel,
+                                          "%s: source(s) missing from the tree:"
+                                          " %s" % (producer, missing[0])))
+                    continue
+                newest_src = max(srcs, key=os.path.getmtime)
+                delta = os.path.getmtime(src) - os.path.getmtime(newest_src)
+                rec = (spath, rel, producer, delta, newest_src)
+                (source_stale if delta < -MTIME_SLOP
+                 else source_fresh).append(rec)
+                continue
+
+            upstream, why = derived_intermediate(rel)
+            if upstream is None:
+                # Not a known copy and not a registered build product.  It
+                # may still be the product of a script this tool does not
+                # know, so this is UNKNOWN rather than a finding -- but it is
+                # reported, because an unmappable intermediate is exactly
+                # where this check cannot promise the image is current, and a
+                # green verdict must not imply that it can.
+                note = "no upstream build output registered for this "
+                note += "intermediate"
+                # If a committed source plausibly produces this file, say so
+                # AND say whether the staged bytes match it.  That is not a
+                # mapping -- it is the evidence a human needs to decide
+                # whether one should be registered.
+                cand = CANDIDATE_SOURCES.get(rel)
+                if cand:
+                    cand_path = os.path.join(
+                        os.path.abspath(os.path.join(HERE, os.pardir, os.pardir)),
+                        cand)
+                    if not os.path.isfile(cand_path):
+                        note += "; candidate source absent: %s" % cand
+                    elif content_differs(src, cand_path):
+                        note += ("; candidate source %s EXISTS but the staged"
+                                 " bytes DIFFER from it -- this staged file is"
+                                 " a hand-edited variant, not what the"
+                                 " committed source produces, so no mapping can"
+                                 " be claimed" % cand)
+                    else:
+                        note += ("; candidate source %s matches byte for byte"
+                                 " (safe to register)" % cand)
+                stale_unknown.append((spath, rel, note))
+                continue
+            if os.path.isdir(upstream):
+                prefix = next(p for p, _u, _w in DERIVED_INTERMEDIATES
+                              if rel == p or rel.startswith(p + os.sep))
+                counterpart = os.path.join(
+                    upstream, os.path.relpath(rel, prefix))
+                if not os.path.isfile(counterpart):
+                    stale_unknown.append((spath, rel,
+                                          "no counterpart at %s in the build"
+                                          " tree" % counterpart))
+                    continue
+                if content_differs(src, counterpart):
+                    stale.append((spath, rel, counterpart,
+                                  os.path.getmtime(counterpart)
+                                  - os.path.getmtime(src)))
+                else:
+                    fresh.append((spath, rel))
+            else:
+                if not os.path.isfile(upstream):
+                    stale_unknown.append((spath, rel,
+                                          "upstream build output missing: %s"
+                                          % upstream))
+                    continue
+                delta = os.path.getmtime(upstream) - os.path.getmtime(src)
+                rec = (spath, rel, upstream, delta)
+                (stale if delta > MTIME_SLOP else fresh).append(rec)
+        # The kernel payload, which carries no source in `staged` and so was
+        # never reached above.  Its recipe is re-run here instead.
+        if recipe_staged and kernel_rel in recipe_checks:
+            builder, _why = recipe_checks[kernel_rel]
+            for spath, ksrc in recipe_staged:
+                try:
+                    reproduced, recipe_text = builder(ksrc, reprodir)
+                except Exception as exc:                  # noqa: BLE001
+                    stale_unknown.append((spath, kernel_rel,
+                                          "recipe could not be reproduced: %s"
+                                          % exc))
+                    continue
+                if content_differs(ksrc, reproduced):
+                    recipe_stale.append((spath, kernel_rel, recipe_text,
+                                         reproduced))
+                else:
+                    recipe_fresh.append((spath, kernel_rel, recipe_text))
+    finally:
+        # Holds re-run recipes; never left behind, and never written over a
+        # staged file.
+        shutil.rmtree(reprodir, ignore_errors=True)
+
+    # One row per STALE FILE, not per bundle: a bundle is stale because of
+    # specific files, and naming those files is the whole value of the
+    # check.  (The earlier form compared every file in a bundle against the
+    # newest file in the tree and so reported all 90, which is the mtime
+    # heuristic this section exists to replace.)
+    rule("DERIVED-INTERMEDIATE STALENESS (staged artifact is not the build "
+         "the tree currently describes)")
+    print("  copies compared:               %d    STALE: %d    "
+          "byte-identical: %d    UNKNOWN: %d"
+          % (len(stale) + len(fresh), len(stale), len(fresh),
+             len(stale_unknown)))
+    print("  rule: a staged copy under work/ must carry the same bytes as the "
+          "build")
+    print("        output it was copied from")
+    for spath, rel, counterpart, delta in sorted(stale,
+                                                 key=lambda r: -r[3])[:20]:
+        print("    STALE  %s" % spath)
+        print("      staged copy:  %s" % rel)
+        print("      build output: %s" % counterpart)
+        print("      contents differ from the build output")
+    if len(stale) > 20:
+        print("    ... and %d more" % (len(stale) - 20))
+    for spath, rel, why in stale_unknown[:20]:
+        print("    UNKNOWN  %s" % rel)
+        print("      staged as: %s" % spath)
+        print("      %s" % why)
+    if len(stale_unknown) > 20:
+        print("    ... and %d more" % (len(stale_unknown) - 20))
+
+    # Reproduced recipes: the transform was re-run and the bytes compared.
+    # This is the strongest evidence the tool can produce -- "the staged
+    # artifact is exactly what the tree's own recipe makes right now".
+    print("  reproduced recipes:            %d    STALE: %d    "
+          "byte-identical: %d"
+          % (len(recipe_stale) + len(recipe_fresh), len(recipe_stale),
+             len(recipe_fresh)))
+    print("  rule: re-running the producing recipe must reproduce the staged "
+          "bytes")
+    for spath, rel, recipe_text, reproduced in recipe_stale[:20]:
+        print("    STALE  %s" % spath)
+        print("      staged copy:   %s" % rel)
+        print("      recipe:        %s" % recipe_text)
+        print("      re-running it produced different bytes than the staged "
+              "artifact")
+    for spath, rel, recipe_text in recipe_fresh:
+        print("    ok     %-32s reproduced byte-for-byte by `%s`"
+              % (rel, recipe_text))
+
+    # Source-built products: a different question (product vs its sources),
+    # reported under the same heading because it is the same defect class --
+    # a staged artifact that is not the build the tree currently describes.
+    print("  source-built products compared: %d    STALE: %d    "
+          "up to date: %d"
+          % (len(source_stale) + len(source_fresh), len(source_stale),
+             len(source_fresh)))
+    print("  rule: a product built from repo sources must be at least as new "
+          "as every source")
+    print("        it was compiled from (recipes recovered from the producing "
+          "scripts)")
+    for spath, rel, producer, delta, newest_src in sorted(
+            source_stale, key=lambda r: r[3])[:20]:
+        print("    STALE  %s" % spath)
+        print("      built by %s, which compiles %s" % (producer, newest_src))
+        print("      that source is %.0fs NEWER than the staged product"
+              % (-delta))
+    if len(source_stale) > 20:
+        print("    ... and %d more" % (len(source_stale) - 20))
+    # Deduplicated by intermediate: work/efi/BOOTX64.EFI is staged at two
+    # paths, and listing the same comparison twice would read as two checks.
+    for rel, producer, delta, newest_src in sorted(
+            {(r, p, d, n): None for _s, r, p, d, n in source_fresh}):
+        print("    ok     %-26s (%s, newest source %s%.0fs older)"
+              % (rel, producer, "+" if delta >= 0 else "", abs(delta)))
+    if not (stale or source_stale or recipe_stale or stale_unknown):
+        print("  (every staged artifact matches the build it was made from)")
 
     rule("UNRESOLVED WEAK UNDEFINED SYMBOLS (not a boot blocker)")
     print("  files affected: %d    distinct symbols: %d"
@@ -1171,7 +1681,8 @@ def main():
 
     # ---- verdict ----------------------------------------------------------
     ok = (not errors and not missing_deps and not unresolved and not rejects
-          and not unreachable and not no_libsystem and not init_unknown)
+          and not unreachable and not no_libsystem and not init_unknown
+          and not stale and not source_stale and not recipe_stale)
     # A host-extracted binary is a FAIL, not a warning: it is a binary this
     # repository did not build, so its passing every structural check above
     # proves nothing about whether it belongs in an image.
@@ -1207,6 +1718,26 @@ def main():
         print("        (dyld throws \"initializer in image (...) that does not "
               "link with")
         print("        libSystem.dylib\" before running them)")
+    if stale:
+        print("  FAIL  %d staged file(s) come from a derived intermediate "
+              "that DIFFERS" % len(stale))
+        print("        from the build output it represents (a stale copy still "
+              "hashes clean:")
+        print("        the image is internally consistent and wrong)")
+    if source_stale:
+        print("  FAIL  %d staged product(s) are OLDER than a source they were"
+              % len(source_stale))
+        print("        compiled from (the tree describes a build this image does "
+              "not carry)")
+    if recipe_stale:
+        print("  FAIL  %d staged artifact(s) are NOT reproduced by their own "
+              "recipe" % len(recipe_stale))
+        print("        (re-running the producing step yields different bytes "
+              "than the image)")
+    if stale_unknown:
+        print("  UNKNOWN  %d staged file(s) source from work/ with no "
+              "registered upstream build" % len(stale_unknown))
+        print("        output — their freshness could not be determined")
     if prov is not None and not prov["ran"]:
         print("  FAIL  provenance check could not run (host dyld cache "
               "unavailable)")
