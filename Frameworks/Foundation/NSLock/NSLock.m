@@ -21,6 +21,19 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 }
 
+/* +[NSObject new] is [[self alloc] init], and +[NSObject alloc] calls
+ * NSAllocateObject(self,...) directly -- it never routes through
+ * +allocWithZone:.  So "[NSLock new]" built a real, abstract NSLock and
+ * -init hit the NSInvalidAbstractInvocation() stub below, exactly as
+ * [[NSString alloc] init...] did before d8660ddce5.  The redirect belongs
+ * in +alloc as well; NSString/NSString.m carries the same fix.  */
++(id)alloc {
+   if(self==[NSLock class])
+    return NSAllocateObject([[NSPlatform currentPlatform] lockClass],0,NULL);
+
+   return NSAllocateObject(self,0,NULL);
+}
+
 -init {
    NSInvalidAbstractInvocation();
    return self;
