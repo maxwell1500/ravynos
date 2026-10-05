@@ -63,7 +63,20 @@ ${.OBJDIR}/lib${LIB}.dylib: ${.OBJDIR}/lib${LIB}.a
 	  -Wl,-install_name,/usr/lib/system/lib${LIB}.dylib \
 	  -Wl,-current_version,1 -Wl,-compatibility_version,1.0.0 \
 	  -L${RAVYN_SDKROOT}/usr/lib/system -L${RAVYN_SDKROOT}/usr/lib
-	mkdir -p ${RAVYN_SDKROOT}/usr/lib/system ${SYSROOT_DIR}/usr/lib/system
+	mkdir -p ${RAVYN_SDKROOT}/usr/lib/system ${SYSROOT_DIR}/usr/lib/system \
+		${RAVYN_REPO_SDKROOT}/usr/lib
 	cp -f ${.TARGET} ${RAVYN_SDKROOT}/usr/lib/system/
 	cp -f ${.TARGET} ${RAVYN_SDKROOT}/usr/lib/
 	cp -f ${.TARGET} ${SYSROOT_DIR}/usr/lib/system/
+	cp -f ${.TARGET} ${RAVYN_REPO_SDKROOT}/usr/lib/
+	# RAVYN_REPO_SDKROOT is the in-repo SDK that
+	# tools/bootlab/make_gui_manifest.py stages from, and this loop did not
+	# name it: RAVYN_SDKROOT and SYSROOT_DIR both resolve to the build-tree
+	# SDK, so every destination above was inside the build tree and the
+	# staged usr/lib/libutil.dylib was never refreshed by a build.
+	# Measured consequence: the staged copy carried _ExtentManager (6
+	# symbols) while the freshly built one had 4 -- the shipped binary was
+	# a rebuild of older content, found only by comparing SYMBOLS, because
+	# the two sha256 values differ on this toolchain even between builds of
+	# identical source.  Additive: the three destinations above are kept,
+	# since they are what subsequent links resolve against.
