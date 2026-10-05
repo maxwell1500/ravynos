@@ -191,8 +191,16 @@ static void *nsThreadStartThread(void* t)
 -init {
    _dictionary=[NSMutableDictionary new];
    _sharedObjects=[NSMutableDictionary new];
-   if(isMultiThreaded)
-      _sharedObjectLock=[NSLock new];
+   // if we were init'ed before didBecomeMultithreaded, we won't have a lock either
+   //
+   // Assigned unconditionally: _NSThreadSharedInstance() sends -[_sharedObjectLock
+   // lock] on every call without a NULL guard (NSThread.m:305), and
+   // class_createInstance does not zero the instance, so leaving this ivar
+   // unwritten on a single-threaded boot made an unconditionally-executed path
+   // read indeterminate memory.  -start carries its own lazy re-check below,
+   // but it only runs when a thread is created, so the main thread never got
+   // one.
+   _sharedObjectLock=[NSLock new];
    return self;
 }
 
@@ -293,6 +301,66 @@ static void *nsThreadStartThread(void* t)
    NSUnimplementedMethod();
 }
 
+/* ravynOS: one-shot capture for the WindowServer corpse.  Static-once, and a
+ * single raw write(2) -- never printf.  An inline print on this path has been
+ * measured to change how far dyld gets (1 image without, 265 with), so the
+ * only thing emitted is the buffer, once, from this non-hot path. */
+static char ravyn_capture_buf[512];
+static volatile int ravyn_capture_done = 0;
+
+static const char ravyn_hex[] = "0123456789abcdef";
+
+static void
+ravyn_put_hex16(char *dst, unsigned long x)
+{
+	int i;
+	for (i = 15; i >= 0; i--) {
+		dst[i] = ravyn_hex[x & 0xf];
+		x >>= 4;
+	}
+}
+
+void ravyn_capture_shared(const char *path, void *thread, void *shared,
+	void *lock, void *result);
+
+void
+ravyn_capture_shared(const char *path, void *thread, void *shared,
+    void *lock, void *result)
+{
+	char *p = ravyn_capture_buf;
+	const char *s;
+	unsigned long v;
+
+	if (ravyn_capture_done) {
+		return;
+	}
+	ravyn_capture_done = 1;
+
+	s = "RNSHARE "; while (*s) { *p++ = *s++; }
+	s = "path=";   while (*s) { *p++ = *s++; }
+	s = path;      while (*s) { *p++ = *s++; }
+	*p++ = ' ';
+
+	s = "thread=";  while (*s) { *p++ = *s++; }
+	v = (unsigned long)thread;   ravyn_put_hex16(p, v); p += 16; *p++ = ' ';
+
+	s = "shared=";  while (*s) { *p++ = *s++; }
+	v = (unsigned long)shared;   ravyn_put_hex16(p, v); p += 16; *p++ = ' ';
+
+	s = "lock=";    while (*s) { *p++ = *s++; }
+	v = (unsigned long)lock;     ravyn_put_hex16(p, v); p += 16; *p++ = ' ';
+
+	s = "result=";  while (*s) { *p++ = *s++; }
+	v = (unsigned long)result;   ravyn_put_hex16(p, v); p += 16; *p++ = ' ';
+
+	s = "isa=";     while (*s) { *p++ = *s++; }
+	v = result ? (unsigned long)*(void **)result : 0UL;
+	ravyn_put_hex16(p, v); p += 16;
+
+	*p++ = '\n';
+	(void)write(2, ravyn_capture_buf, (size_t)(p - ravyn_capture_buf));
+}
+
 -(NSMutableDictionary *)sharedDictionary {
    return _sharedObjects;
 }
@@ -314,6 +382,8 @@ static inline id _NSThreadSharedInstance(NSThread *thread,NSString *className,BO
       [thread->_sharedObjectLock unlock];
       [result release];
    }
+   ravyn_capture_shared("A/B/C", (void *)thread, (void *)shared,
+       (void *)thread->_sharedObjectLock, (void *)result);
 
    return result;
 }

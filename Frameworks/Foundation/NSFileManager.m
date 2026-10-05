@@ -47,7 +47,14 @@ NSString * const NSFileSystemFreeSize=@"NSFileSystemFreeSize";
 @implementation NSFileManager
 
 +(NSFileManager *)defaultManager {
-   return NSThreadSharedInstance(@"NSFileManager");
+   id result = NSThreadSharedInstance(@"NSFileManager");
+   /* ravynOS: capture the receiver the corpse saw. Static-once, one raw
+    * write(2) from ravyn_capture_shared -- never a printf on this path. */
+   if (result) {
+       extern void ravyn_capture_shared(const char *, void *, void *, void *, void *);
+       ravyn_capture_shared("defaultManager", 0, 0, 0, *(void **)result);
+   }
+   return result;
 }
 
 -delegate {
