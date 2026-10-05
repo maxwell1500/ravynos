@@ -722,6 +722,24 @@ void ImageLoaderMachO::parseLoadCmds(const LinkContext& context)
 	const struct load_command* firstUnknownCmd = NULL;
 	const struct version_min_command* minOSVersionCmd = NULL;
 	const dysymtab_command* dynSymbolTable = NULL;
+	// fMachOData is reassigned from the segment loop above (:700) under the
+	// predicate segFileOffset(i)==0 && segFileSize(i)!=0. The constructor
+	// already rejects images with no start-of-file segment (:369) and rejects
+	// more than one (:245), so for a well-formed non-cached image that
+	// assignment is expected to have run — but nothing between the loop and
+	// this dereference verifies it did. Validate before trusting it, and fail
+	// through the same convention the rest of this function uses
+	// (dyld::throwf, cf. :152/:154) rather than dereferencing a bad pointer.
+	//
+	// NOTE: this is a correctness check, not instrumentation. It deliberately
+	// emits NO console output: a write(2) to fd 2 anywhere on this path was
+	// measured to change how far dyld gets (1 image without, 265 with), so a
+	// print here would contaminate the very thing being diagnosed.
+	if ( fMachOData == NULL )
+		dyld::throwf("malformed mach-o image: no segment mapped the start of file after mapping");
+	if ( fSegmentsCount > 0 && segFileOffset(0) == 0
+			&& (uintptr_t)fMachOData != (uintptr_t)segActualLoadAddress(0) )
+		dyld::throwf("malformed mach-o image: unexpected header address %p after mapping", (void*)fMachOData);
 	const uint32_t cmd_count = ((macho_header*)fMachOData)->ncmds;
 	const struct load_command* const cmds = (struct load_command*)&fMachOData[sizeof(macho_header)];
 	const struct load_command* cmd = cmds;
