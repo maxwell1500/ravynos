@@ -80,7 +80,7 @@ BOOL NSObjectIsKindOfClass(id object,Class kindOf) {
 }
 
 +(id)alloc {
-    return NSAllocateObject(self, 0, NULL);
+    return [self allocWithZone: NULL];
 }
 
 -(id)alloc {
