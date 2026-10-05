@@ -7,7 +7,8 @@
 	"ProgramArguments": [
 		"/System/Library/CoreServices/WindowServer.app/Contents/ravynOS/WindowServer"
 	],
-        "StandardErrorPath":"/tmp/stderr.txt",
+	"StandardOutPath": "/dev/console",
+	"StandardErrorPath": "/dev/console",
 	"KeepAlive": true,
 	"RunAtLoad": true
 }
