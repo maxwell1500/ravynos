@@ -6781,7 +6781,68 @@ reloadAllImages:
 		if (dyld3::kdebug_trace_dyld_enabled(DBG_DYLD_TIMING_LAUNCH_EXECUTABLE)) {
 			dyld3::kdebug_trace_dyld_duration_end(launchTraceID, DBG_DYLD_TIMING_LAUNCH_EXECUTABLE, 0, 0, 2);
 		}
-		ARIADNEDBG_CODE(220, 1);
+	ARIADNEDBG_CODE(220, 1);
+
+	// ---- ravynOS: loaded-image dump -----------------------------------------
+	// The kernel's corpse dump prints a dying thread's RIP but cannot name the
+	// image it sits in. That is structural, not an oversight: the kernel's
+	// corpse kcdata carries no image list. TASK_CRASHINFO_TASKDYLD_INFO (0x803)
+	// and TASK_CRASHINFO_UUID (0x804) are defined in osfmk/kern/kcdata.h but
+	// have no producer anywhere in the tree; the dyld image list
+	// (TASK_BTINFO_DYLD_LOADINFO64) is only populated for lightweight corpses
+	// and is never stored in task->corpse_info; kern_stackshot.c writes
+	// KCDATA_TYPE_LIBRARY_LOADINFO64 only under STACKSHOT_SAVE_LOADINFO and
+	// corpse creation never triggers a stackshot; and even then
+	// user64_dyld_uuid_info carries only imageLoadAddress and imageUUID, no
+	// path. The list therefore exists only in userspace, so the only place it
+	// can be made observable is here.
+	//
+	// PLACEMENT IS LOAD-BEARING. The existing DYLD-LOAD-BASE print lives in
+	// dyldInitialization.cpp:206, BEFORE rebaseDyld() and before dyld::_main()
+	// is ever called, so at that point only dyld itself is loaded and
+	// sAllImages is empty. Printing there would be the same defect class as a
+	// correct mechanism in the wrong place -- which has already bitten this
+	// file twice (the DYLD-LOAD-BASE placement, and the %gs/TSD fix). This
+	// block sits at the end of _main's "launch old way" path, after link()
+	// has pulled in every dependent dylib and after initializeMainExecutable(),
+	// and by construction it is also after _dyld_setup_minimal_tsd()
+	// (dyldInitialization.cpp:190), so the %gs-relative access that made
+	// diag.error() unusable cannot fault here either. _simple_dprintf is used
+	// for the same reason as the CHAINPROBE prints: in this TOOL build
+	// diag.error() formats into _buffer and only fprintf()s under
+	// `#if BUILDING_CACHE_BUILDER`, so it prints nothing at all.
+	//
+	// Printed for every image including the main executable, so these lines and
+	// the DYLD-LOAD-BASE line can be cross-checked against each other.
+	{
+		// gProcessInfo is declared at dyld2.h:67 and initialised to
+		// &dyld_all_image_infos at dyld_debugger.cpp:242 — the very object the
+		// kernel locates via the __DATA,__all_image_info section in
+		// note_all_image_info_section (Kernel/xnu/bsd/kern/mach_loader.c:325).
+		_simple_dprintf(2, "DYLD-ALL-IMAGE-INFO: 0x%lx\n",
+		                (unsigned long)dyld::gProcessInfo);
+		uint32_t _n = getImageCount();
+		_simple_dprintf(2, "DYLD-IMAGE-COUNT: %u\n", _n);
+		for (uint32_t _i = 0; _i < _n; ++_i) {
+			ImageLoader* _im = getIndexedImage(_i);
+			if ( _im == NULL )
+				continue;
+			const char* _p = _im->getPath();
+			// ImageLoaderMegaDylib::machHeader() is `unreachable()`
+			// (ImageLoaderMegaDylib.h:61), so calling it on a shared-cache
+			// proxy image would kill the very process this diagnostic
+			// exists to observe. Skip those; their base is in the cache
+			// header, not in an individually mapped image anyway.
+			if ( _im->inSharedCache() ) {
+				_simple_dprintf(2, "DYLD-IMAGE: %s base (shared cache)\n",
+				                _p ? _p : "(null)");
+				continue;
+			}
+			_simple_dprintf(2, "DYLD-IMAGE: %s base 0x%lx\n",
+			                _p ? _p : "(null)",
+			                (unsigned long)(uintptr_t)_im->machHeader());
+		}
+	}
 
 #if __MAC_OS_X_VERSION_MIN_REQUIRED
 		if ( gLinkContext.driverKit ) {
