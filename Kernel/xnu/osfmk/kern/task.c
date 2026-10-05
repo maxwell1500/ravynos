@@ -2482,20 +2482,39 @@ task_deliver_crash_notification(
 		 * USER_REGS64() is the canonical kernel accessor
 		 * (osfmk/i386/thread.h:166).
 		 */
-		printf("CORPSE: pid %d etype %d subcode %d code %d/%d crashed_tid %llu\n",
+		/*
+		 * Name via task_procname() (defined below, task.c:10494), which
+		 * routes through proc_name(task_pid(task), ...) -> proc_find().
+		 * Deliberately NOT task_best_name(): that expands to
+		 * proc_best_name(task_get_proc_raw(task)) and proc_best_name()
+		 * performs no NULL check (bsd/kern/kern_proc.c:1448), so it
+		 * would fault on a corpse.  struct task itself has no name
+		 * member at all (osfmk/kern/task.h:190-603) — the name lives in
+		 * struct proc's p_comm/p_name.
+		 */
+		char cname[MAXCOMLEN + 1];
+		task_procname(corpse, cname, sizeof(cname));
+		printf("CORPSE: pid %d etype %d subcode %d code %d/%d crashed_tid %llu name %s\n",
 		    task_pid(corpse), (int)etype, (int)subcode,
 		    (int)code[0], (int)code[1],
-		    (unsigned long long)corpse->crashed_thread_id);
+		    (unsigned long long)corpse->crashed_thread_id, cname);
 		queue_iterate(&corpse->threads, th_iter, thread_t, task_threads) {
 			x86_saved_state64_t *ss = USER_REGS64(th_iter);
 			if (ss == NULL) {
 				continue;
 			}
-			printf("CORPSE:   tid %d rip 0x%016llx rsp 0x%016llx rbp 0x%016llx\n",
+			/*
+			 * cr2 is the x86 page-fault linear address, i.e. the
+			 * address the thread actually faulted on, as opposed to
+			 * code[0]/code[1] above which merely echo etype/subcode.
+			 * Field is at osfmk/mach/i386/thread_status.h:445.
+			 */
+			printf("CORPSE:   tid %d rip 0x%016llx rsp 0x%016llx rbp 0x%016llx fault 0x%016llx\n",
 			    th_iter->thread_id,
 			    (unsigned long long)ss->isf.rip,
 			    (unsigned long long)ss->isf.rsp,
-			    (unsigned long long)ss->rbp);
+			    (unsigned long long)ss->rbp,
+			    (unsigned long long)ss->cr2);
 		}
 		printf("Failed to send exception EXC_CORPSE_NOTIFY. error code: %d for pid %d\n", kr, task_pid(corpse));
 	}
