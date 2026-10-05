@@ -693,6 +693,19 @@ DERIVED_INTERMEDIATES = (
      "/Users/max/Projects/build/Users/max/Projects/ravynos/CoreServices"
      "/Filer/Filer.app",
      "copied out of the build tree by make_gui_manifest.py"),
+    # The WindowServer job plist is a copy of a TRACKED source file, not of a
+    # build output.  It was registered as AUTHORED-AND-DIVERGENT while the
+    # staged copy hand-diverged from the tracked original; that divergence was
+    # a provenance defect (an untracked edit in gitignored work/) and was
+    # resolved upstream in 795ef92e46, which landed the console paths in the
+    # tracked file.  It is a content-equality copy now, and the comparison is
+    # real enforcement: it is exactly what catches the hand-edit drifting away
+    # again, which is how this file went stale in the first place.
+    ("work/com.ravynos.WindowServer.json",
+     os.path.join(os.path.abspath(os.path.join(HERE, os.pardir, os.pardir)),
+                  "SystemLibrary", "LaunchDaemons",
+                  "com.ravynos.WindowServer.json"),
+     "copy of the tracked source plist; re-derived from it after 795ef92e46"),
     # The stripped kernel is NOT registered here.  It used to be, against
     # <build>/kernel.development, compared by mtime only -- a weak rule that
     # passed for the wrong reason: that build-tree file is dated 08-31 while
@@ -820,20 +833,21 @@ def strip_kernel(staged_path, tmpdir):
 # match would manufacture a staleness failure out of a deliberate edit --
 # worse than admitting the tool does not know.
 #
-# work/com.ravynos.WindowServer.json: SystemLibrary/LaunchDaemons/Makefile:16-18
-# installs its own directory's com.ravynos.WindowServer.json verbatim with
-# `install -m 0644`, so that committed file is the obvious candidate.  The
-# staged copy is NOT what that recipe produces: the committed file adds
-# EnvironmentVariables (ASL_DISABLE, LANG) and sends stderr to /tmp/stderr.txt,
-# while the staged copy has neither and points both streams at /dev/console.
-# So the staged file is a hand-edited bootlab variant.  Which one is CORRECT is
-# a product decision, not something this tool may decide, so it stays UNKNOWN.
+# work/com.ravynos.WindowServer.json was this table's only entry, while its
+# staged copy hand-diverged from the tracked original.  That divergence was
+# never a deliberate variant: it was an untracked edit living in gitignored
+# work/ with no commit behind it, on the one file that decides whether
+# WindowServer output is visible at all.  Commit 795ef92e46 landed the console
+# paths in the tracked original and the staged copy was re-derived from it, so
+# the file is a content-equal copy now and is registered in
+# DERIVED_INTERMEDIATES instead -- where the comparison actually enforces that
+# the two do not drift apart again, which is how it went stale in the first
+# place.  The table is retained empty: the pattern is the right one for the
+# next file whose bytes genuinely do not match, and dropping the mechanism
+# along with its only member is a larger change than this fix calls for.
 # --------------------------------------------------------------------------
 
-CANDIDATE_SOURCES = {
-    "work/com.ravynos.WindowServer.json":
-        "SystemLibrary/LaunchDaemons/com.ravynos.WindowServer.json",
-}
+CANDIDATE_SOURCES = {}
 
 
 def derived_intermediate(rel_path):
@@ -1433,9 +1447,17 @@ def main():
                                           "upstream build output missing: %s"
                                           % upstream))
                     continue
+                # Content, not mtime.  The rule printed above says a staged
+                # copy "must carry the same bytes as the build output it was
+                # copied from", and for a single-file upstream the mtime
+                # comparison cannot honour that: a hand-edited copy that was
+                # touched LAST is newer than its source and would pass.  That
+                # is precisely how work/com.ravynos.WindowServer.json went
+                # stale unnoticed.  mtime is kept only as the reported age.
                 delta = os.path.getmtime(upstream) - os.path.getmtime(src)
                 rec = (spath, rel, upstream, delta)
-                (stale if delta > MTIME_SLOP else fresh).append(rec)
+                (stale if content_differs(src, upstream)
+                 else fresh).append(rec)
         # The kernel payload, which carries no source in `staged` and so was
         # never reached above.  Its recipe is re-run here instead.
         if recipe_staged and kernel_rel in recipe_checks:
@@ -1525,6 +1547,7 @@ def main():
               % (-delta))
     if len(source_stale) > 20:
         print("    ... and %d more" % (len(source_stale) - 20))
+
     # Deduplicated by intermediate: work/efi/BOOTX64.EFI is staged at two
     # paths, and listing the same comparison twice would read as two checks.
     for rel, producer, delta, newest_src in sorted(
