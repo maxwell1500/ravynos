@@ -2425,6 +2425,7 @@ static vm_map_offset_t corpse_vma(vm_map_t, vm_map_offset_t);
 static vm_map_offset_t corpse_vma_end(vm_map_t, vm_map_offset_t);
 static int corpse_vma_prot(vm_map_t, vm_map_offset_t);
 static vm_object_size_t corpse_vma_objsize(vm_map_t, vm_map_offset_t);
+static boolean_t corpse_stack_readable(thread_t, vm_map_offset_t);
 
 /*
  * task_deliver_crash_notification:
@@ -2582,6 +2583,31 @@ task_deliver_crash_notification(
 			    (unsigned long long)ss->rbx,
 			    (unsigned long long)ss->r8,
 			    (unsigned long long)ss->r9);
+			/*
+			 * ravynOS: the return address at [rsp] and the slot above it.
+			 * _objc_msgSend is a leaf function -- it pushes nothing before
+			 * the faulting `andl 0x18(%r10),%r11d` -- so [rsp] on entry is
+			 * the caller's return address and resolving it against the
+			 * loaded images names the calling function directly, instead of
+			 * requiring another round of fault-address reconstruction.
+			 *
+			 * Both reads are guarded through the same VMA helpers used
+			 * below: if the slot is not mapped we print (unmapped) rather
+			 * than faulting inside a diagnostic.
+			 */
+			if (corpse_stack_readable(th_iter, (vm_map_offset_t)ss->isf.rsp)) {
+				uint64_t ret0 = *(volatile uint64_t *)(uintptr_t)ss->isf.rsp;
+				uint64_t ret1 = *(volatile uint64_t *)(uintptr_t)(ss->isf.rsp + 8);
+				printf("CORPSE:   ret0 0x%016llx (vma 0x%016llx-0x%016llx) ret1 0x%016llx (vma 0x%016llx-0x%016llx)\n",
+				    (unsigned long long)ret0,
+				    corpse_vma(get_task_map(corpse), (vm_map_offset_t)ret0),
+				    corpse_vma_end(get_task_map(corpse), (vm_map_offset_t)ret0),
+				    (unsigned long long)ret1,
+				    corpse_vma(get_task_map(corpse), (vm_map_offset_t)ret1),
+				    corpse_vma_end(get_task_map(corpse), (vm_map_offset_t)ret1));
+			} else {
+				printf("CORPSE:   ret0 (unmapped rsp) ret1 (unmapped)\n");
+			}
 			/*
 			 * ravynOS: resolve both addresses against the corpse's
 			 * own map. Without this the corpse is unusable: on
@@ -10709,6 +10735,31 @@ corpse_vma_objsize(vm_map_t map, vm_map_offset_t addr)
 	}
 	vm_map_unlock_read(map);
 	return r;
+}
+
+/*
+ * ravynOS: true if [addr .. addr+15] is mapped and readable, so the corpse
+ * diagnostic may dereference two 8-byte stack slots at [rsp]. Uses the map
+ * read lock only to test presence; the actual read happens after the lock is
+ * dropped, which is safe because a crashed thread's stack cannot change
+ * underneath us -- the thread is dead and this is a corpse's map.
+ */
+static boolean_t
+corpse_stack_readable(thread_t th, vm_map_offset_t addr)
+{
+	vm_map_t map;
+	vm_map_entry_t entry = NULL;
+	boolean_t ok = FALSE;
+
+	if (th == NULL || (map = get_task_map(th)) == NULL) {
+		return FALSE;
+	}
+	vm_map_lock_read(map);
+	if (vm_map_lookup_entry(map, addr, &entry)) {
+		ok = ((entry->protection & VM_PROT_READ) != 0) && !entry->is_sub_map;
+	}
+	vm_map_unlock_read(map);
+	return ok;
 }
 
 void
