@@ -34,8 +34,20 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 @implementation NSFileManager(posix)
 
+/* This category exists ONLY to swap the concrete implementation class, and
+ * the original ignored its receiver entirely -- so `[AnySubclass alloc]`
+ * also produced an NSFileManager_posix.  That was latent until
+ * bbd85b31cd changed +[NSObject alloc] to route through +allocWithZone:,
+ * which made [X alloc] reach this method for the first time.  Restore the
+ * invariant that a +allocWithZone: returns an instance of its receiver:
+ * redirect only when the receiver really is NSFileManager, and otherwise
+ * fall through to NSObject's implementation so subclasses get themselves.
+ */
 +allocWithZone:(NSZone *)zone {
-   return NSAllocateObject([NSFileManager_posix class],0,NULL);
+   if (self == [NSFileManager class])
+      return NSAllocateObject([NSFileManager_posix class],0,zone);
+
+   return NSAllocateObject(self,0,zone);
 }
 
 @end
