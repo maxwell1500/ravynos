@@ -943,8 +943,86 @@ if [ "${1:-}" = "--frameworks" ]; then
         ( cd "$base" && MAKEOBJDIR="$BUILD$base" OBJTOP="$BUILD" MK_AUTO_OBJ=yes \
           "$BMAKE" -m "$MKMODULES" "${BMAKE_TARGET:-all}" ) || rc=1
     done
+    #
+    # Stage into the SDK the image actually consumes.
+    #
+    # RAVYN_SDKROOT and SYSROOT_DIR both point at $SDK, the build-tree SDK
+    # (:25 and :78), and Frameworks/<F>/Makefile's fmwk-install-hook loops
+    # over ${RAVYN_SDKROOT} and ${SYSROOT_DIR} -- the same path -- so it
+    # installs into $SDK twice and never into the repository SDK.
+    # manifest_gui.json stages System/Library/Frameworks/<F>.framework from
+    # ../../Developer/ravynOS.sdk/... (the repo SDK), and nothing has bridged
+    # the two since 2026-10-04: they are two real directories, not a symlink.
+    # So the build succeeded and exited 0 while the image kept whatever
+    # binary was last copied there by hand.  This step is what makes a
+    # build-and-stage actually move the image's binaries; the per-framework
+    # before/after sha is so a no-op build cannot look like a staged one.
+    REPO_SDK="$ROOT/Developer/ravynOS.sdk"
+    mkdir -p "$REPO_SDK/System/Library/Frameworks"
+    for d in "${DIRS[@]}"; do
+        name="$(basename "${d%.app}")"
+        src="$SDK/System/Library/Frameworks/$name.framework"
+        if [ ! -d "$src" ]; then
+            echo "--- staging: $name: no framework at ${src#$BUILD/}, skipped"
+            continue
+        fi
+        bin="$(find "$src/Versions" -maxdepth 2 -type f -perm -u+x \
+                   ! -name '*.debug' ! -name '*.full' 2>/dev/null | head -1)"
+        if [ -z "$bin" ]; then
+            echo "--- staging: $name: no executable in Versions/, skipped"
+            continue
+        fi
+        rel="${bin#$src/}"
+        dst="$REPO_SDK/System/Library/Frameworks/$name.framework/$rel"
+        before="(absent)"
+        [ -f "$dst" ] && before="$(shasum -a 256 "$dst" | cut -d' ' -f1)"
+        mkdir -p "$(dirname "$dst")"
+        cp -Rf "$src/." "$REPO_SDK/System/Library/Frameworks/$name.framework/"
+        after="$(shasum -a 256 "$dst" | cut -d' ' -f1)"
+        if [ "$before" = "$after" ]; then
+            echo "--- staging: $name UNCHANGED  $after"
+        else
+            echo "--- staging: $name UPDATED    $before -> $after"
+        fi
+    done
     exit $rc
-fi
+elif [ "${1:-}" = "--bsd" ]; then
+    shift
+    DIRS=("$@")
+    [ ${#DIRS[@]} -eq 0 ] && DIRS=(BSD/lib)
+    rc=0
+    # ---------------------------------------------------------------------
+    # BSD/ subdirectories.
+    #
+    # BSD/ had NO entry point here at all, so BSD/lib/libutil was buildable
+    # only by invoking bmake by hand -- and a hand invocation fails three
+    # ways before it reaches the link: CC/LD resolve from ${TOOLCHAIN} to a
+    # path that does not exist on this host, MACOS_VERSION_MIN is unset so
+    # -mmacos-version-min= is emitted empty, and these Makefiles spell their
+    # includes ROOT-RELATIVE (-I/Kernel/xnu/libsyscall/wrappers/spawn), which
+    # only resolve when bmake is invoked from the repo root.
+    #
+    # Being hand-buildable is not a convenience, it is the defect: nothing
+    # refreshed the repo SDK copy of usr/lib/libutil.dylib, so the staged
+    # binary and a fresh build diverged (staged had 6 _ExtentManager symbols,
+    # the build had 4) and only a SYMBOL comparison found it -- sha could not.
+    #
+    # So: same environment exports as every other mode (already set above),
+    # invoked from $ROOT so the root-relative includes resolve, MAKEOBJDIR
+    # pointed at $BUILD<abs source path> exactly as --frameworks does.
+    for d in "${DIRS[@]}"; do
+        base="$ROOT/$d"
+        if [ ! -d "$base" ]; then
+            echo "no such BSD dir: $d" >&2
+            rc=1
+            continue
+        fi
+        echo "=== building ${base#$ROOT/} ==="
+        ( cd "$ROOT" && MAKEOBJDIR="$BUILD$base" \
+          "$BMAKE" -C "$base" -m "$MKMODULES" "${BMAKE_TARGET:-all}" ) || rc=1
+    done
+    exit $rc
+ fi
 
 DIRS=("$@")
 [ ${#DIRS[@]} -eq 0 ] && DIRS=(MiscLibs libfirehose_kernel objc4 dyld Libsystem)

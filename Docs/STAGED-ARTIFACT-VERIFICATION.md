@@ -103,8 +103,32 @@ Twelve have an install or copy loop and do not:
 `Frameworks/CoreText/{gperf,fontconfig}`, `Frameworks/AppKit/xkeyboard-config`,
 `CoreServices/WindowServer/libinput`.
 
-This is a **watch-list, not a fix-list.** Only one of the twelve
-(`BSD/lib/libutil`, a thirteenth entry not listed here) has been shown to
-actually ship a divergent binary. The rest are latent conditions; several are
-vendored-source or header trees that ship nothing binary. Fix them as they are
-proven, under the rule above — not speculatively.
+This is a **watch-list, not a fix-list.** None of the twelve has been shown to
+ship a divergent binary; they are latent conditions, and several are
+vendored-source or header trees that ship nothing binary at all. Fix them as
+they are proven, under the rule above — not speculatively.
+
+### Resolution — FIXED AND VERIFIED
+
+`BSD/` now has an entry point: `build-libraries.sh --bsd BSD/lib/<name>`, in
+the same shape as `--frameworks`, exporting the same environment and invoking
+bmake from the repo root so the BSD Makefiles' root-relative includes resolve.
+Hand-invoking bmake on those Makefiles fails three ways before the link (CC/LD
+from a nonexistent `${TOOLCHAIN}`, an empty `-mmacos-version-min=`, and
+root-relative `-I/Kernel/...` paths), which is why `BSD/` was previously
+buildable only by hand — and being hand-buildable *was* the defect.
+
+After `build-libraries.sh --bsd BSD/lib/libutil`, `_ExtentManager` symbol
+count is **6 at all three locations** (repo SDK, build-tree SDK, BSD build
+product) and the full defined-symbol sets are identical.
+
+Re-running the comparison over the shipped set: **14 MATCH, 1
+REBUILD-EQUIVALENT (`usr/lib/libSystem.B.dylib`), 0 CONTENT-DIFFERENT, 31
+one-sided.** The gate is met.
+
+`BSD/lib/libutil` is **not** among the twelve above: it is a thirteenth
+Makefile, it was the only one proven to ship a divergent binary, and it is now
+fixed and verified. Its remedy also differed from the rest — the defect there
+was not a missing repo path alone but that `BSD/` had no build entry point at
+all, so nothing refreshed the staged binary. The remaining eleven entries are
+latent.
