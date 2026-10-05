@@ -970,8 +970,24 @@ task_exception_notify(exception_type_t exception,
 	 * instructions earlier and is not mapped by then.
 	 *
 	 * Here the thread is still running, its registers are live and its map
-	 * is definitionally intact, so the same two dereferences cannot fail.
-	 * The values are parked in a kernel static for the corpse dump to print.
+	 * is definitionally intact -- the crashing thread IS current_thread() and
+	 * its map is current -- so copyin() of the stack cannot hit the torn-down
+	 * map that defeated copyinmap() at corpse time. The values are parked in a
+	 * kernel static for the corpse dump to print.
+	 *
+	 * DO NOT REPLACE copyin() WITH A RAW DEREFERENCE.
+	 *
+	 * That was tried and it PANICKED THE KERNEL. The first version of this
+	 * code did *(volatile uint64_t *)(uintptr_t)rsp directly. With SMAP
+	 * enabled the kernel cannot dereference a user address at all, so the
+	 * access trapped:
+	 *
+	 *   Fault CR2: 0x00007ff7b6093b08    (the user stack pointer)
+	 *   _task_exception_notify + 0xa2
+	 *
+	 * i.e. a diagnostic added to catch a userspace crash took the whole
+	 * kernel down. copyin() is required, not an optimisation. Any future
+	 * reader who thinks "it is just two loads" needs to see this line.
 	 */
 	{
 		extern uint64_t ravyn_last_ret[2];
@@ -985,8 +1001,17 @@ task_exception_notify(exception_type_t exception,
 		}
 		if (ravyn_ss != NULL && ravyn_ss->isf.rsp != 0) {
 			uint64_t rsp = (uint64_t)ravyn_ss->isf.rsp;
-			ravyn_last_ret[0] = *(volatile uint64_t *)(uintptr_t)rsp;
-			ravyn_last_ret[1] = *(volatile uint64_t *)(uintptr_t)(rsp + 8);
+			uint64_t slots[2] = { 0, 0 };
+
+			/* Returns errno: 0 on success, EFAULT on a bad address. The
+			 * current thread's map is current, so this is the plain
+			 * copyin() and NOT copyinmap(). */
+			if (copyin((user_addr_t)rsp, (void *)slots, sizeof(slots)) == 0) {
+				ravyn_last_ret[0] = slots[0];
+				ravyn_last_ret[1] = slots[1];
+			}
+			/* On failure both stay 0, which the corpse dump prints as
+			 * "(unavailable)". A diagnostic must never fault the kernel. */
 		}
 	}
 
