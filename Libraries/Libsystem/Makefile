@@ -187,6 +187,75 @@ ${EXPMEMRSC_O}: ${EXPMEMRSC_CPP}
 	  -D_LIBCPP_BUILDING_LIBRARY -std=c++20 -fno-rtti -fPIC \
 	  ${EXPMEMRSC_CPP}
 
+# libc++'s four buffered float-to-string internals.
+#
+# ICU compiles std::to_chars calls that clang lowers into out-of-line calls to
+# std::__1::__d2s_buffered_n / __f2s_buffered_n / __d2exp_buffered_n /
+# __d2fixed_buffered_n. Upstream libc++ defines those in src/ryu/{d2s,f2s,
+# d2fixed}.cpp; this tree's libc++.a was produced without them, so every staged
+# consumer of a floating-point to_chars carried four unbound libc++ symbols and
+# closure_gate.py reported them unresolved. They are NOT defined by
+# src/charconv.cpp -- compiling that file yields an object that *references* all
+# four as undefined, which is why archiving charconv.o alone changes nothing.
+#
+# The flags are those of EXPMEMRSC above, verbatim, plus one addition that is
+# mandatory rather than stylistic: -I${LLVM_RT}/libcxx/src. Without it
+# to_chars_floating_point.h:33 fails with
+#   fatal error: 'include/ryu/ryu.h' file not found
+# because that header is included as "include/ryu/ryu.h" relative to src/.
+#
+# These objects go INTO libc++.a rather than onto the libSystem link line. They
+# are libc++ internals, not libSystem exports: putting them on the link would
+# give the dylib the wrong linkage for symbols whose callers are already bound
+# to libc++.a's copies, and would duplicate the definitions.
+#
+# The archive is written to ${RAVYN_SDKROOT}/usr/lib/libc++.a because that is
+# the exact file -lc++ resolves against (LDFLAGS carries -L${RAVYN_SDKROOT}/usr/lib),
+# so updating it here is what changes what the link below actually picks up.
+LIBCXX_A_TREE = ${ROOT_SOURCE_DIR}/Libraries/llvm_target/libcxx/lib/libc++.a
+LIBCXX_A = ${RAVYN_SDKROOT}/usr/lib/libc++.a
+RYU_DIR = ${LLVM_RT}/libcxx/src/ryu
+RYU_CPP = ${RYU_DIR}/d2s.cpp ${RYU_DIR}/f2s.cpp ${RYU_DIR}/d2fixed.cpp
+RYU_O = ${.OBJDIR}/ryu_d2s.o ${.OBJDIR}/ryu_f2s.o ${.OBJDIR}/ryu_d2fixed.o
+LIBCXX_SRC_DIR = ${LLVM_RT}/libcxx/src
+
+${.OBJDIR}/ryu_d2s.o: ${RYU_DIR}/d2s.cpp
+	${CC} -c -o $@ --sysroot=${RAVYN_SDKROOT} \
+	  -mmacos-version-min=${MACOS_VERSION_MIN} -Wno-incompatible-sysroot \
+	  -nostdinc++ -isystem${RAVYN_SDKROOT}/usr/include/c++/v1 \
+	  -I${LIBCXX_SRC_DIR} \
+	  -D_LIBCPP_BUILDING_LIBRARY -std=c++20 -fno-rtti -fPIC \
+	  ${RYU_DIR}/d2s.cpp
+
+${.OBJDIR}/ryu_f2s.o: ${RYU_DIR}/f2s.cpp
+	${CC} -c -o $@ --sysroot=${RAVYN_SDKROOT} \
+	  -mmacos-version-min=${MACOS_VERSION_MIN} -Wno-incompatible-sysroot \
+	  -nostdinc++ -isystem${RAVYN_SDKROOT}/usr/include/c++/v1 \
+	  -I${LIBCXX_SRC_DIR} \
+	  -D_LIBCPP_BUILDING_LIBRARY -std=c++20 -fno-rtti -fPIC \
+	  ${RYU_DIR}/f2s.cpp
+
+${.OBJDIR}/ryu_d2fixed.o: ${RYU_DIR}/d2fixed.cpp
+	${CC} -c -o $@ --sysroot=${RAVYN_SDKROOT} \
+	  -mmacos-version-min=${MACOS_VERSION_MIN} -Wno-incompatible-sysroot \
+	  -nostdinc++ -isystem${RAVYN_SDKROOT}/usr/include/c++/v1 \
+	  -I${LIBCXX_SRC_DIR} \
+	  -D_LIBCPP_BUILDING_LIBRARY -std=c++20 -fno-rtti -fPIC \
+	  ${RYU_DIR}/d2fixed.cpp
+
+# Two steps, and the first is not optional. `ar r` on a path that does not exist
+# CREATES a fresh archive containing only the members named -- so without the
+# seed below, building into an empty SDK would leave a libc++.a holding three
+# ryu objects and none of libc++, and every libc++ reference in libSystem would
+# then be undefined. The seed restores the canonical archive first, so the rule
+# works both against a populated SDK and against an empty one.
+#
+# `ar r` replaces a member of the same name and adds a new one otherwise, so
+# this is idempotent: re-running does not accumulate duplicates.
+${LIBCXX_A}: ${LIBCXX_A_TREE} ${RYU_O}
+	@cp -f ${LIBCXX_A_TREE} ${LIBCXX_A}
+	@${AR} r ${LIBCXX_A} ${RYU_O}
+
 # WHY THIS LINKS INTO ${.CURDIR} AND NOT STRAIGHT INTO THE SDK.
 #
 # This target used to write straight to ${RAVYN_SDKROOT}/usr/lib/system/,
@@ -425,7 +494,8 @@ libcompiler_rt.dylib: ${COMPILER_RT_OBJS}
 	cp -f ${COMPILER_RT_TARGET} ${SYSROOT_DIR}/usr/lib/system/
 
 ${.OBJDIR}/lib${LIB}.dylib: ${.OBJDIR}/config.${CpuArch}.normal.h \
-lib${LIB}.a libunwind.dylib libcompiler_rt.dylib copyfile ${EXPMEMRSC_O}
+lib${LIB}.a libunwind.dylib libcompiler_rt.dylib copyfile ${EXPMEMRSC_O} \
+	${LIBCXX_A}
 	${CC} -fuse-ld=${LD} -shared -dylib -o ${.TARGET} ${OBJS} \
 	  ${EXPMEMRSC_O} ${LDFLAGS}
 	${.CURDIR}/xcodescripts/create_dylib_symlinks.sh \
