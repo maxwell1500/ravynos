@@ -4661,6 +4661,38 @@ bool dladdrFromCache(const void* address, Dl_info* info)
 }
 #endif
 
+// ---- ravynOS: allocation-free console output ---------------------------------
+// _simple_dprintf() formats through _simple_vsprintf()/_simple_salloc(), and
+// _simple_salloc is dyld's BOOTSTRAP bump allocator -- the same arena dyld is
+// using for path and string buffers while it loads images. Calling it once per
+// dylib therefore perturbs the loader being instrumented. Measured: with these
+// prints present WindowServer loaded 265 images before dying, with them absent
+// it loaded 1, from images whose frameworks are byte-identical.
+//
+// So these emit through a fixed on-stack buffer and a direct write(2). No
+// malloc, no _simple_salloc, no _simple_vsprintf, no printf of any kind -- the
+// only work done is a bounded copy and an unsigned-long-to-hex loop over
+// caller-supplied bytes. Nothing here can reach an allocator.
+static void
+_ravyn_emit(const char* pre, const char* path, const char* mid, unsigned long val, int hasVal)
+{
+	char buf[1024];
+	unsigned long i = 0, n = 0;
+	#define RAVYN_PUT(c) do { if (i < sizeof(buf)-1) buf[i++] = (char)(c); } while (0)
+	for (const char* p = pre; p && *p; ++p) RAVYN_PUT(*p);
+	for (const char* p = path; p && *p && i < sizeof(buf)-2; ++p) RAVYN_PUT(*p);
+	if ( mid ) { for (const char* p = mid; p && *p; ++p) RAVYN_PUT(*p); }
+	if ( hasVal ) {
+		char tmp[32]; int k = 0;
+		unsigned long v = val;
+		do { tmp[k++] = "0123456789abcdef"[v & 0xf]; v >>= 4; } while (v);
+		while (k) RAVYN_PUT(tmp[--k]);
+	}
+	RAVYN_PUT('\n');
+	#undef RAVYN_PUT
+	(void)!write(2, buf, i);
+	(void)n;
+}
 static ImageLoader* libraryLocator(const char* libraryName, bool search, const char* origin, const ImageLoader::RPathChain* rpaths, unsigned& cacheIndex)
 {
 	dyld::LoadContext context;
@@ -4692,7 +4724,7 @@ static ImageLoader* libraryLocator(const char* libraryName, bool search, const c
 	// Same _simple_dprintf rationale as every other print here: diag.error()
 	// formats into _buffer and only fprintf()s under `#if BUILDING_CACHE_BUILDER`,
 	// which is false in this TOOL build, so it prints nothing at all.
-	_simple_dprintf(2, "DYLD-IMAGE-LOADING: %s\n", libraryName ? libraryName : "(null)");
+	_ravyn_emit("DYLD-IMAGE-LOADING: ", libraryName ? libraryName : "(null)", 0, 0, 0);
 	// ---- ravynOS: in-flight image print --------------------------------------
 	// The end-of-_main image dump in this file runs only after every dylib is
 	// linked, so it is blind to a process that dies WHILE loading. WindowServer
@@ -4717,12 +4749,10 @@ static ImageLoader* libraryLocator(const char* libraryName, bool search, const c
 		// (ImageLoaderMegaDylib.h:61), so guard it exactly as the end-of-_main
 		// dump does -- a diagnostic must not kill its own subject.
 		if ( _loaded->inSharedCache() ) {
-			_simple_dprintf(2, "DYLD-IMAGE: %s base (shared cache)\n",
-			                _lp ? _lp : "(null)");
+			_ravyn_emit("DYLD-IMAGE: ", _lp ? _lp : "(null)", " base (shared cache)", 0, 0);
 		} else {
-			_simple_dprintf(2, "DYLD-IMAGE: %s base 0x%lx\n",
-			                _lp ? _lp : "(null)",
-			                (unsigned long)(uintptr_t)_loaded->machHeader());
+			_ravyn_emit("DYLD-IMAGE: ", _lp ? _lp : "(null)", " base 0x",
+			            (unsigned long)(uintptr_t)_loaded->machHeader(), 1);
 		}
 	}
 	return _loaded;
@@ -6869,10 +6899,10 @@ reloadAllImages:
 		// &dyld_all_image_infos at dyld_debugger.cpp:242 — the very object the
 		// kernel locates via the __DATA,__all_image_info section in
 		// note_all_image_info_section (Kernel/xnu/bsd/kern/mach_loader.c:325).
-		_simple_dprintf(2, "DYLD-ALL-IMAGE-INFO: 0x%lx\n",
-		                (unsigned long)dyld::gProcessInfo);
+		_ravyn_emit("DYLD-ALL-IMAGE-INFO: 0x", 0, 0,
+		            (unsigned long)dyld::gProcessInfo, 1);
 		uint32_t _n = getImageCount();
-		_simple_dprintf(2, "DYLD-IMAGE-COUNT: %u\n", _n);
+		_ravyn_emit("DYLD-IMAGE-COUNT: 0x", 0, 0, (unsigned long)_n, 1);
 		for (uint32_t _i = 0; _i < _n; ++_i) {
 			ImageLoader* _im = getIndexedImage(_i);
 			if ( _im == NULL )
@@ -6884,13 +6914,11 @@ reloadAllImages:
 			// exists to observe. Skip those; their base is in the cache
 			// header, not in an individually mapped image anyway.
 			if ( _im->inSharedCache() ) {
-				_simple_dprintf(2, "DYLD-IMAGE: %s base (shared cache)\n",
-				                _p ? _p : "(null)");
+				_ravyn_emit("DYLD-IMAGE: ", _p ? _p : "(null)", " base (shared cache)", 0, 0);
 				continue;
 			}
-			_simple_dprintf(2, "DYLD-IMAGE: %s base 0x%lx\n",
-			                _p ? _p : "(null)",
-			                (unsigned long)(uintptr_t)_im->machHeader());
+			_ravyn_emit("DYLD-IMAGE: ", _p ? _p : "(null)", " base 0x",
+			            (unsigned long)(uintptr_t)_im->machHeader(), 1);
 		}
 	}
 
