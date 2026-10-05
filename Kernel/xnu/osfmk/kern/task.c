@@ -2417,6 +2417,15 @@ out_no_lock:
 	return kr;
 }
 
+/* ravynOS: forward declarations for the corpse VMA helpers defined at the
+ * bottom of this file. task_deliver_crash_notification() below calls them,
+ * and without these they are implicitly declared non-static and the
+ * definitions collide ("static declaration follows non-static declaration"). */
+static vm_map_offset_t corpse_vma(vm_map_t, vm_map_offset_t);
+static vm_map_offset_t corpse_vma_end(vm_map_t, vm_map_offset_t);
+static int corpse_vma_prot(vm_map_t, vm_map_offset_t);
+static vm_object_size_t corpse_vma_objsize(vm_map_t, vm_map_offset_t);
+
 /*
  * task_deliver_crash_notification:
  *
@@ -2546,6 +2555,54 @@ task_deliver_crash_notification(
 			    (unsigned long long)ss->isf.rsp,
 			    (unsigned long long)ss->rbp,
 			    (unsigned long long)ss->cr2);
+			/*
+			 * ravynOS: resolve both addresses against the corpse's
+			 * own map. Without this the corpse is unusable: on
+			 * 2026-10-05 "pid 5"'s rip fell inside no image base
+			 * anywhere in the boot log, so the process could not be
+			 * named and was mis-attributed to WindowServer on the
+			 * strength of an unrelated console line. Printing the
+			 * VMA range lets the same addresses be matched against
+			 * the DYLD-IMAGE base lines by arithmetic, which is the
+			 * only naming route that exists.
+			 *
+			 * There is NO vmo_name in this kernel: `grep -rn vmo_name`
+			 * over the whole tree returns zero hits, and struct
+			 * vm_map_entry (osfmk/vm/vm_map_xnu.h:168) has no name
+			 * member either. So the range plus the object's size and
+			 * protection is what is available, and that is what is
+			 * printed.
+			 *
+			 * API note, because the obvious names do not exist here:
+			 * there is no vm_map_find_entry(). The entry lookup is
+			 * vm_map_lookup_entry() (osfmk/vm/vm_map.c:2066,
+			 * declared in osfmk/vm/vm_map_internal.h), it takes a read
+			 * lock and returns boolean_t, and the object accessor is the
+			 * VME_OBJECT() macro (osfmk/vm/vm_map_xnu.h:321) which
+			 * asserts the entry is not a submap -- hence the explicit
+			 * is_sub_map guard below.
+			 *
+			 * task_map() and the lock: called from exception triage
+			 * with the task lock NOT held. Every failure mode prints
+			 * "(unmapped)" rather than faulting; this is a diagnostic
+			 * and must never be able to panic the machine it is
+			 * diagnosing.
+			 */
+			vm_map_t corpse_map = get_task_map(corpse);
+			if (corpse_map != NULL) {
+				printf("CORPSE:   ripvma 0x%016llx-0x%016llx prot %d objsize 0x%llx\n",
+				    corpse_vma(corpse_map, (vm_map_offset_t)ss->isf.rip),
+				    corpse_vma_end(corpse_map, (vm_map_offset_t)ss->isf.rip),
+				    corpse_vma_prot(corpse_map, (vm_map_offset_t)ss->isf.rip),
+				    corpse_vma_objsize(corpse_map, (vm_map_offset_t)ss->isf.rip));
+				printf("CORPSE:   fltvma 0x%016llx-0x%016llx prot %d objsize 0x%llx\n",
+				    corpse_vma(corpse_map, (vm_map_offset_t)ss->cr2),
+				    corpse_vma_end(corpse_map, (vm_map_offset_t)ss->cr2),
+				    corpse_vma_prot(corpse_map, (vm_map_offset_t)ss->cr2),
+				    corpse_vma_objsize(corpse_map, (vm_map_offset_t)ss->cr2));
+			} else {
+				printf("CORPSE:   ripvma (no map) fltvma (no map)\n");
+			}
 		}
 		printf("Failed to send exception EXC_CORPSE_NOTIFY. error code: %d for pid %d\n", kr, task_pid(corpse));
 	}
@@ -10541,6 +10598,91 @@ error_exit:
 /* defined in bsd/kern/kern_proc.c */
 extern void proc_name(int pid, char *buf, int size);
 extern const char *proc_best_name(struct proc *p);
+
+/*
+ * ravynOS: corpse VMA resolution helpers, used only by the EXC_CORPSE_NOTIFY
+ * diagnostic in task_exception_notify(). Each re-does the lookup under the
+ * map read lock rather than sharing a single entry, so a map torn down
+ * between two queries degrades one value to "(unmapped)" instead of
+ * touching freed memory.
+ *
+ * All four return a sentinel (0 for the offsets, -1 for prot) when the
+ * address is not mapped, or when the entry is a submap -- VME_OBJECT()
+ * asserts on a submap, so that case must be filtered before it is called.
+ */
+static vm_map_offset_t
+corpse_vma(vm_map_t map, vm_map_offset_t addr)
+{
+	vm_map_entry_t entry = NULL;
+	vm_map_offset_t r = 0;
+
+	if (map == NULL) {
+		return r;
+	}
+	vm_map_lock_read(map);
+	if (vm_map_lookup_entry(map, addr, &entry) && !entry->is_sub_map) {
+		r = entry->vme_start;
+	}
+	vm_map_unlock_read(map);
+	return r;
+}
+
+static vm_map_offset_t
+corpse_vma_end(vm_map_t map, vm_map_offset_t addr)
+{
+	vm_map_entry_t entry = NULL;
+	vm_map_offset_t r = 0;
+
+	if (map == NULL) {
+		return r;
+	}
+	vm_map_lock_read(map);
+	if (vm_map_lookup_entry(map, addr, &entry) && !entry->is_sub_map) {
+		r = entry->vme_end;
+	}
+	vm_map_unlock_read(map);
+	return r;
+}
+
+static int
+corpse_vma_prot(vm_map_t map, vm_map_offset_t addr)
+{
+	vm_map_entry_t entry = NULL;
+	int r = -1;
+
+	if (map == NULL) {
+		return r;
+	}
+	vm_map_lock_read(map);
+	if (vm_map_lookup_entry(map, addr, &entry) && !entry->is_sub_map) {
+		r = (int)entry->protection;
+	}
+	vm_map_unlock_read(map);
+	return r;
+}
+
+static vm_object_size_t
+corpse_vma_objsize(vm_map_t map, vm_map_offset_t addr)
+{
+	vm_map_entry_t entry = NULL;
+	vm_object_t object;
+	vm_object_size_t r = 0;
+
+	if (map == NULL) {
+		return r;
+	}
+	vm_map_lock_read(map);
+	if (vm_map_lookup_entry(map, addr, &entry) && !entry->is_sub_map) {
+		object = VME_OBJECT(entry);
+		if (object != VM_OBJECT_NULL) {
+			vm_object_lock(object);
+			r = object->vo_un1.vou_size;
+			vm_object_unlock(object);
+		}
+	}
+	vm_map_unlock_read(map);
+	return r;
+}
 
 void
 task_procname(task_t task, char *buf, int size)

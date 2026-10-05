@@ -226,6 +226,21 @@ launchd_vsyslog(struct launchd_syslog_attr *attr, const char *fmt, va_list args)
 	vsnprintf(message, sizeof(message), fmt, args);
 	if (echo2console && launchd_console) {
 		fprintf(launchd_console, "%-32s %-8u %-64s %-8u  %s\n", attr->from_name, attr->from_pid, attr->about_name, attr->about_pid, message);
+		/* ravynOS: launchd_console is a plain fdopen() FILE in "w" mode,
+		 * so it is fully buffered, and the only fflush() calls anywhere are
+		 * at launchd.c:265,410-417 -- not per line. Every console line
+		 * launchd emits therefore sits in the stdio buffer until one of
+		 * those points happens to run.
+		 *
+		 * That is fatal for anything logged immediately around a spawn:
+		 * job_start_child() calls posix_spawn(), which fork+execve's. execve
+		 * replaces the process image WITHOUT flushing the parent's stdio
+		 * buffer, so any console line written just before the spawn can be
+		 * lost outright. On 2026-10-05 a "SPAWN: exec=..." line was added and
+		 * never appeared in the log for exactly this reason. Flush per line so
+		 * a line that returns from fprintf is actually on the wire.
+		 */
+		fflush(launchd_console);
 	}
 
 	if (log2here) {
