@@ -4862,8 +4862,94 @@ job_start_child(job_t j)
 	    file2exec ? file2exec : "(null)", (argv && argv[0]) ? argv[0] : "(null)",
 	    j->prog ? j->prog : "(spawnp)");
 
+	/*
+	 * ravynOS: apply StandardOutPath / StandardErrorPath.
+	 *
+	 * Both keys were parsed all along (job_import_string's 's'/'S' case at
+	 * core.c:2770-2772 stores them into j->stdoutpath / j->stderrpath) and
+	 * exported back out (core.c:1137-1141), but NOTHING EVER APPLIED THEM:
+	 * this call passed NULL as the posix_spawn_file_actions_t argument and
+	 * no file-action code existed anywhere in launchd. So the keys were dead
+	 * configuration.
+	 *
+	 * The damage was not cosmetic. A job with no redirection inherits
+	 * launchd's fd 1 and fd 2, and launchd never dup2()s its /dev/console
+	 * handle onto them -- it open()s /dev/console into a fresh descriptor
+	 * (launchd.c:213-219) and only ever writes there through launchd_console.
+	 * com.ravynos.WindowServer is the only job in the image carrying these
+	 * two keys, so it was the only job whose writes had no path to the
+	 * serial console -- which is why 20+ boots produced a silent corpse and
+	 * why the process was mis-identified for an entire session. dyld's
+	 * _simple_dprintf writes to fd 2, so a real fault produced no output at
+	 * all.
+	 *
+	 * Every return value is checked. That is the whole point of doing this
+	 * by hand rather than relying on posix_spawn to do it: the classic way
+	 * to end up with a child whose fd 1 or fd 2 is CLOSED is to open() a
+	 * descriptor, ignore the failure, and still append the dup2 and close
+	 * actions -- so on failure we fall back to passing NULL (inherit),
+	 * which is the same as the previous behaviour, never to a half-built
+	 * action list.
+	 */
+	posix_spawn_file_actions_t file_actions = NULL;
+	int have_actions = 0;
 
-	errno = psf(NULL, file2exec, NULL, &spattr, (char *const *)argv, environ);
+	if (j->stdoutpath || j->stderrpath) {
+		/* Open both descriptors in the PARENT, before the fork. Doing the
+		 * open() in the parent is what makes the failure detectable at all:
+		 * posix_spawn's addopen would fail silently inside the child. */
+		int out_fd = -1, err_fd = -1;
+
+		if (j->stdoutpath) {
+			out_fd = open(j->stdoutpath, O_WRONLY|O_CREAT|O_APPEND|O_NOCTTY, DEFFILEMODE);
+		}
+		if (j->stderrpath) {
+			err_fd = open(j->stderrpath, O_WRONLY|O_CREAT|O_APPEND|O_NOCTTY, DEFFILEMODE);
+		}
+
+		if ((j->stdoutpath && out_fd < 0) || (j->stderrpath && err_fd < 0)) {
+			/* KEY PRESENT BUT OPEN FAILED: log it loudly, close whatever did
+			 * succeed, and fall through to NULL (inherit). Previously this
+			 * state was indistinguishable from "no redirection requested". */
+			job_log(j, LOG_ERR | LOG_CONSOLE,
+			    "SPAWN: redirect failed out=%d (%s) err=%d (%s); falling back to inherit",
+			    (j->stdoutpath && out_fd < 0) ? errno : 0,
+			    (j->stdoutpath && out_fd < 0) ? strerror(errno) : "-",
+			    (j->stderrpath && err_fd < 0) ? errno : 0,
+			    (j->stderrpath && err_fd < 0) ? strerror(errno) : "-");
+			if (out_fd >= 0) { (void)close(out_fd); out_fd = -1; }
+			if (err_fd >= 0) { (void)close(err_fd); err_fd = -1; }
+		} else {
+			/* KEY ABSENT stays NULL: the three jobs with no redirection keys
+			 * keep inheriting launchd's fds exactly as before. */
+			if (job_assumes_zero_p(j, posix_spawn_file_actions_init(&file_actions)) != -1) {
+				have_actions = 1;
+				if (out_fd >= 0) {
+					/* Standard posix_spawn idiom: open already happened in
+				 * the parent, so use adddup2 rather than addopen, and close
+				 * the spare descriptor so it does not leak into the child. */
+					(void)job_assumes_zero_p(j, posix_spawn_file_actions_adddup2(&file_actions, out_fd, STDOUT_FILENO));
+					(void)job_assumes_zero_p(j, posix_spawn_file_actions_addclose(&file_actions, out_fd));
+				}
+				if (err_fd >= 0) {
+					(void)job_assumes_zero_p(j, posix_spawn_file_actions_adddup2(&file_actions, err_fd, STDERR_FILENO));
+					(void)job_assumes_zero_p(j, posix_spawn_file_actions_addclose(&file_actions, err_fd));
+				}
+			} else {
+				if (out_fd >= 0) { (void)close(out_fd); }
+				if (err_fd >= 0) { (void)close(err_fd); }
+				file_actions = NULL;
+				have_actions = 0;
+			}
+		}
+	}
+
+	errno = psf(NULL, file2exec, have_actions ? &file_actions : NULL, &spattr, (char *const *)argv, environ);
+	if (have_actions) {
+		(void)posix_spawn_file_actions_destroy(&file_actions);
+	}
+
+
 	job_log(j, LOG_NOTICE | LOG_CONSOLE, "SPAWN: ret=%d (%s) pid=%d",
 	    errno, strerror(errno), getpid());
 	syslog(LOG_ERR, "job_start failed %s\n", strerror(errno));

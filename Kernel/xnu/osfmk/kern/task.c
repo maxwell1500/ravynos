@@ -2556,6 +2556,33 @@ task_deliver_crash_notification(
 			    (unsigned long long)ss->rbp,
 			    (unsigned long long)ss->cr2);
 			/*
+			 * ravynOS: the general registers, because on x86-64 the two
+			 * that identify an Objective-C dispatch are rdi (the receiver)
+			 * and rsi (the selector). One boot names both the object and
+			 * the message.
+			 *
+			 * This is what finally identified pid 5. Its rip resolved to
+			 * _objc_msgSend + 0x1d in libobjc.dylib, which is
+			 *     andl 0x18(%r10), %r11d   with %r10 = isa & class_mask
+			 * so the fault address was (isa & mask) + 0x18, and working
+			 * backwards the isa was 0x00006c2f63746528 -- the ASCII bytes
+			 * "(etc/l\0\0". An Objective-C message had been sent to a
+			 * receiver whose isa field held a pointer to string data.
+			 * Printing rdi/rsi makes the offending object and selector
+			 * directly visible instead of requiring that reconstruction.
+			 *
+			 * Field names are the kernel's own, from struct x86_saved_state64
+			 * (osfmk/mach/i386/thread_status.h:440-447 for rdi/rsi/rdx/r10/
+			 * r8/r9); rax and rbx are further down the same struct.
+			 */
+			printf("CORPSE:   regs rdi 0x%016llx rsi 0x%016llx rax 0x%016llx rbx 0x%016llx r8 0x%016llx r9 0x%016llx\n",
+			    (unsigned long long)ss->rdi,
+			    (unsigned long long)ss->rsi,
+			    (unsigned long long)ss->rax,
+			    (unsigned long long)ss->rbx,
+			    (unsigned long long)ss->r8,
+			    (unsigned long long)ss->r9);
+			/*
 			 * ravynOS: resolve both addresses against the corpse's
 			 * own map. Without this the corpse is unusable: on
 			 * 2026-10-05 "pid 5"'s rip fell inside no image base
