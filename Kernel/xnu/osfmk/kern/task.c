@@ -2466,6 +2466,37 @@ task_deliver_crash_notification(
 	wsave = thread_interrupt_level(THREAD_UNINT);
 	kr = exception_triage_thread(EXC_CORPSE_NOTIFY, code, EXCEPTION_CODE_MAX, thread);
 	if (kr != KERN_SUCCESS) {
+		/*
+		 * ravynOS: there is no crash reporter, and the host has no
+		 * EXC handler installed (realhost.exc_actions[i].port is
+		 * IP_NULL from ipc_init), so this delivery always fails with
+		 * KERN_FAILURE and the only thing anyone ever sees is the
+		 * error-code line below -- with no registers, no faulting
+		 * address, no thread list.  Print the corpse record ourselves
+		 * so a crash is at least diagnosable from the serial console.
+		 *
+		 * Field names are taken from the kernel's own definitions,
+		 * not guessed: rbp/rip/rsp come from struct x86_saved_state64
+		 * (osfmk/mach/i386/thread_status.h:438 for rbp, :422 rip and
+		 * :425 rsp, both inside the nested x86_64_intr_stack_frame isf).
+		 * USER_REGS64() is the canonical kernel accessor
+		 * (osfmk/i386/thread.h:166).
+		 */
+		printf("CORPSE: pid %d etype %d subcode %d code %d/%d crashed_tid %llu\n",
+		    task_pid(corpse), (int)etype, (int)subcode,
+		    (int)code[0], (int)code[1],
+		    (unsigned long long)corpse->crashed_thread_id);
+		queue_iterate(&corpse->threads, th_iter, thread_t, task_threads) {
+			x86_saved_state64_t *ss = USER_REGS64(th_iter);
+			if (ss == NULL) {
+				continue;
+			}
+			printf("CORPSE:   tid %d rip 0x%016llx rsp 0x%016llx rbp 0x%016llx\n",
+			    th_iter->thread_id,
+			    (unsigned long long)ss->isf.rip,
+			    (unsigned long long)ss->isf.rsp,
+			    (unsigned long long)ss->rbp);
+		}
 		printf("Failed to send exception EXC_CORPSE_NOTIFY. error code: %d for pid %d\n", kr, task_pid(corpse));
 	}
 

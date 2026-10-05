@@ -69,6 +69,7 @@ compile_with(init_cmd,
 for rel in ["osfmk/i386/tsc.c", "osfmk/kern/startup.c", "osfmk/kern/telemetry.c",
             "osfmk/kern/zalloc.c", "osfmk/kern/bsd_kern.c",
             "osfmk/kern/kalloc.c", "osfmk/kern/sched_prim.c", "osfmk/kern/smr.c",
+            "osfmk/kern/task.c",
             "osfmk/i386/mp_desc.c", "osfmk/i386/cpu_topology.c",
             "osfmk/i386/pcb_native.c", "osfmk/kern/thread_call.c",
             "osfmk/kern/mpsc_queue.c", "osfmk/kern/core_analytics.c"]:
