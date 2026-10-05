@@ -4724,6 +4724,28 @@ static ImageLoader* libraryLocator(const char* libraryName, bool search, const c
 	// Same _simple_dprintf rationale as every other print here: diag.error()
 	// formats into _buffer and only fprintf()s under `#if BUILDING_CACHE_BUILDER`,
 	// which is false in this TOOL build, so it prints nothing at all.
+	// ---- ravynOS: name the dylib BEFORE we try to load it ------------------
+	// The DYLD-IMAGE print below fires only after load() returns, so it is
+	// blind to exactly the case we need: a process that dies WHILE a dylib is
+	// being mapped never announces that dylib at all. WindowServer does
+	// precisely that. Across boot_gui22/23/24 its fault address was
+	// byte-identical (0x00006c2f63746540) -- deterministic, not corruption --
+	// and the in-flight print showed it loading CoreText and nothing more,
+	// with its RIP falling outside every announced image's mapped range. The
+	// missing image was the one it died loading.
+	//
+	// Printing the path before load() closes that gap: the last line on the
+	// console at the moment of death names the culprit directly, and no
+	// complete image list is needed to find it. libraryName is already the
+	// function parameter, so nothing is inferred.
+	//
+	// _ravyn_emit, not _simple_dprintf, and that is the point of this
+	// re-application. _simple_dprintf routes through _simple_salloc, dyld's
+	// bootstrap bump allocator, so using it here would perturb dyld's own
+	// state in exactly the window we are trying to observe. _ravyn_emit
+	// (dyld2.cpp:4677) is a stack buffer plus one write(2) and allocates
+	// nothing, so the only thing it adds is the write itself.
+	_ravyn_emit("DYLD-IMAGE-LOADING: ", libraryName ? libraryName : "(null)", "\n", 0, 0);
 	ImageLoader* _loaded = load(libraryName, context, cacheIndex);
 	if ( _loaded != NULL ) {
 		const char* _lp = _loaded->getPath();
