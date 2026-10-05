@@ -77,6 +77,12 @@ export PATH="$(echo "$PATH" | tr ':' '\n' | grep -v ' ' | paste -sd: -)"
 
 export RAVYN_SDKROOT="$SDK" SYSROOT_DIR="$SDK"
 export ROOT_SOURCE_DIR="$ROOT" ROOT_BINARY_DIR="$BUILD"
+# ravynOS: RAVYN_REPO_SDKROOT is the IN-REPO SDK that
+# tools/bootlab/make_gui_manifest.py stages frameworks from, and it tries
+# that one FIRST. It is distinct from RAVYN_SDKROOT/SYSROOT_DIR above, which
+# both point into the build tree -- which is what left the repo SDK being
+# updated only by hand. Framework install hooks copy to both.
+export RAVYN_REPO_SDKROOT="${RAVYN_REPO_SDKROOT:-$ROOT/Developer/ravynOS.sdk}"
 export CpuArch="${CpuArch:-x86_64}" MACOS_VERSION_MIN="${MACOS_VERSION_MIN:-15.0}"
 
 # bmake ships its own copy of the FreeBSD mk files, and its bundled
