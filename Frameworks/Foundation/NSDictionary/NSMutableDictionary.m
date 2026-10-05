@@ -14,8 +14,15 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 @implementation NSMutableDictionary
 
+/* Receiver-matched class-cluster swap.  Without this guard a subclass of
+ * NSMutableDictionary inherited the method and was handed an
+ * NSMutableDictionary_CF -- an instance of a class that is not its own.
+ * Same invariant, same house shape, as NSLock.m:16-22 and NSString.m:73-78. */
 +allocWithZone:(NSZone *)zone {
-   return NSAllocateObject([NSMutableDictionary_CF class],0,zone);
+   if (self == [NSMutableDictionary class])
+      return NSAllocateObject([NSMutableDictionary_CF class],0,zone);
+
+   return NSAllocateObject(self,0,zone);
 }
 
 -initWithCapacity:(NSUInteger)capacity {

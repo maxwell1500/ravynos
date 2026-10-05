@@ -15,9 +15,15 @@
 //#import <AppKit/NSGraphicsContext.h>
 
 @implementation KTFont(KTFont_FT)
+/* This category exists only to install the FreeType-backed concrete class.
+ * Without a receiver guard it would also hijack [KTFontSubclass alloc].
+ */
 +(id)allocWithZone:(NSZone*)zone
 {
-   return NSAllocateObject([KTFont_FT class], 0, NULL);
+   if (self == [KTFont class])
+      return NSAllocateObject([KTFont_FT class], 0, zone);
+
+   return NSAllocateObject(self, 0, zone);
 }
 @end
 

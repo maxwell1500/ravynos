@@ -24,8 +24,14 @@ O2FontRef O2FontCreateWithDataProvider_platform(O2DataProviderRef provider) {
 
 @implementation O2Font(FreeType)
 
+/* This category exists only to install the FreeType-backed concrete class.
+ * Without a receiver guard it would also hijack [O2FontSubclass alloc].
+ */
 +allocWithZone:(NSZone *)zone {
-   return NSAllocateObject([O2Font_FT class],0,NULL);
+   if (self == [O2Font class])
+      return NSAllocateObject([O2Font_FT class],0,zone);
+
+   return NSAllocateObject(self,0,zone);
 }
 
 @end
