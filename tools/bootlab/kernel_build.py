@@ -112,6 +112,11 @@ for rel in ["iokit/DEVELOPMENT/IOPlatformExpert.cpo.json",
             # thread_setentrypoint() lives in bsd_i386.c. Without this an edit
             # there silently produced an unchanged kernel.
             "osfmk/DEVELOPMENT/bsd_i386.o.json",
+            # exception.c owns the ravyn_last_ret[] capture taken in
+            # task_exception_notify(). Without this an edit there silently
+            # produced an unchanged kernel -- the same green-build-that-
+            # changed-nothing failure this file's comments keep warning about.
+            "osfmk/DEVELOPMENT/exception.o.json",
             # kern_sig.c owns the crash-reporting os_reason buffer allocation
             # (build_signal_reason). It was absent from this allowlist, so an
             # edit to that file silently produced an unchanged kernel -- a

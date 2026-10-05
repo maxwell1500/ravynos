@@ -959,6 +959,37 @@ task_exception_notify(exception_type_t exception,
 	code[1] = excsubcode;
 
 	wsave = thread_interrupt_level(THREAD_UNINT);
+	/*
+	 * ravynOS: capture [rsp] and [rsp+8] HERE, at exception time, and not in
+	 * task_deliver_crash_notification(). That function is called from the
+	 * thread-TEARDOWN path -- osfmk/kern/thread.c:619 and :929, both inside
+	 * the last thread's termination -- by which time the crashed task's
+	 * vm_map is being torn down. A copyinmap() of the crashed thread's own
+	 * stack there returned KERN_INVALID_ADDRESS on every pid and every
+	 * frame, for every address, because the stack was mapped a few
+	 * instructions earlier and is not mapped by then.
+	 *
+	 * Here the thread is still running, its registers are live and its map
+	 * is definitionally intact, so the same two dereferences cannot fail.
+	 * The values are parked in a kernel static for the corpse dump to print.
+	 */
+	{
+		extern uint64_t ravyn_last_ret[2];
+		x86_saved_state64_t *ravyn_ss = NULL;
+
+		ravyn_last_ret[0] = 0;
+		ravyn_last_ret[1] = 0;
+		thread_t ravyn_t = current_thread();
+		if (ravyn_t != THREAD_NULL && thread_is_64bit_addr(ravyn_t)) {
+			ravyn_ss = USER_REGS64(ravyn_t);
+		}
+		if (ravyn_ss != NULL && ravyn_ss->isf.rsp != 0) {
+			uint64_t rsp = (uint64_t)ravyn_ss->isf.rsp;
+			ravyn_last_ret[0] = *(volatile uint64_t *)(uintptr_t)rsp;
+			ravyn_last_ret[1] = *(volatile uint64_t *)(uintptr_t)(rsp + 8);
+		}
+	}
+
 	kr = exception_triage(exception, code, EXCEPTION_CODE_MAX);
 	(void) thread_interrupt_level(wsave);
 	return kr;

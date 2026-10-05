@@ -2425,7 +2425,11 @@ static vm_map_offset_t corpse_vma(vm_map_t, vm_map_offset_t);
 static vm_map_offset_t corpse_vma_end(vm_map_t, vm_map_offset_t);
 static int corpse_vma_prot(vm_map_t, vm_map_offset_t);
 static vm_object_size_t corpse_vma_objsize(vm_map_t, vm_map_offset_t);
-static kern_return_t corpse_copyin_stack(thread_t, vm_map_offset_t, void *, vm_size_t);
+
+/* ravynOS: filled in osfmk/kern/exception.c:962 at exception time, read by
+ * task_deliver_crash_notification() at corpse time. See the comment there for
+ * why the capture cannot live in the reader. */
+uint64_t ravyn_last_ret[2];
 
 /*
  * task_deliver_crash_notification:
@@ -2595,28 +2599,27 @@ task_deliver_crash_notification(
 			 * below: if the slot is not mapped we print (unmapped) rather
 			 * than faulting inside a diagnostic.
 			 */
-			{
-				uint64_t slots[2] = {0, 0};
-				kern_return_t ckr;
-
-				ckr = corpse_copyin_stack(th_iter, (vm_map_offset_t)ss->isf.rsp, slots, sizeof(slots));
-				if (ckr != KERN_SUCCESS) {
-					/* Per instruction: a failure here is ITSELF the finding. A
-					 * thread whose stack cannot be copied from is a kernel-level
-					 * anomaly, so report the kern_return verbatim rather than
-					 * folding it into "unmapped". */
-					printf("CORPSE:   ret0 (copyin failed kr=%d) ret1 (copyin failed kr=%d) from rsp 0x%016llx\n",
-					    (int)ckr, (int)ckr, (unsigned long long)ss->isf.rsp);
-				} else {
-					vm_map_t m = get_task_map(corpse);
-					printf("CORPSE:   ret0 0x%016llx (vma 0x%016llx-0x%016llx) ret1 0x%016llx (vma 0x%016llx-0x%016llx)\n",
-					    (unsigned long long)slots[0],
-					    corpse_vma(m, (vm_map_offset_t)slots[0]),
-					    corpse_vma_end(m, (vm_map_offset_t)slots[0]),
-					    (unsigned long long)slots[1],
-					    corpse_vma(m, (vm_map_offset_t)slots[1]),
-					    corpse_vma_end(m, (vm_map_offset_t)slots[1]));
-				}
+			/*
+			 * ravynOS: printed from the static captured in the EXCEPTION path,
+			 * not read here. task_deliver_crash_notification() runs from thread
+			 * teardown (osfmk/kern/thread.c:619 and :929) after the crashed
+			 * task's vm_map has begun teardown, so any read of the thread's own
+			 * stack at this point fails -- copyinmap() returned
+			 * KERN_INVALID_ADDRESS on every pid and every frame. The capture
+			 * therefore happens in task_exception_notify()
+			 * (osfmk/kern/exception.c:962) while the thread is still live.
+			 */
+			if (ravyn_last_ret[0] != 0 || ravyn_last_ret[1] != 0) {
+				vm_map_t m = get_task_map(corpse);
+				printf("CORPSE:   ret0 0x%016llx (vma 0x%016llx-0x%016llx) ret1 0x%016llx (vma 0x%016llx-0x%016llx) from-rsp-saved\n",
+				    (unsigned long long)ravyn_last_ret[0],
+				    corpse_vma(m, (vm_map_offset_t)ravyn_last_ret[0]),
+				    corpse_vma_end(m, (vm_map_offset_t)ravyn_last_ret[0]),
+				    (unsigned long long)ravyn_last_ret[1],
+				    corpse_vma(m, (vm_map_offset_t)ravyn_last_ret[1]),
+				    corpse_vma_end(m, (vm_map_offset_t)ravyn_last_ret[1]));
+			} else {
+				printf("CORPSE:   ret0 (unavailable) ret1 (unavailable)\n");
 			}
 			/*
 			 * ravynOS: resolve both addresses against the corpse's
@@ -10747,34 +10750,6 @@ corpse_vma_objsize(vm_map_t map, vm_map_offset_t addr)
 	return r;
 }
 
-/*
- * ravynOS: copy two 8-byte slots out of a crashed thread's stack.
- *
- * This REPLACES a vm_map_lookup_entry-based readability probe, which was
- * wrong in a way that made the instrument lie. It rejected entries with
- * is_sub_map set -- but a thread stack in xnu IS a submap of the task map,
- * so the main thread's own stack was filtered out and every ret0/ret1
- * printed "(unmapped)". That is provably false for this corpse: _objc_msgSend
- * successfully executed `andq (%rdi)` against a stack-range rdi, so the
- * stack was readable at the moment of the fault. The instrument, not the
- * process, was reporting unmapped.
- *
- * copyinmap() is the correct primitive: it takes a vm_map_t, takes a
- * reference on it, switches to it when it is not the current map, and goes
- * through the ordinary copyin path which handles submaps and protections
- * (osfmk/vm/vm_kern.c:4216). Returns kern_return_t, so a genuine failure is
- * distinguishable from "not mapped" and is reported as such.
- */
-static kern_return_t
-corpse_copyin_stack(thread_t th, vm_map_offset_t addr, void *dst, vm_size_t len)
-{
-	vm_map_t map;
-
-	if (th == NULL || (map = get_task_map(th)) == NULL) {
-		return KERN_INVALID_ARGUMENT;
-	}
-	return copyinmap(map, addr, dst, len);
-}
 
 void
 task_procname(task_t task, char *buf, int size)
