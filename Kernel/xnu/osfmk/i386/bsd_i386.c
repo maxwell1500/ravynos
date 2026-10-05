@@ -829,17 +829,6 @@ thread_setentrypoint(thread_t thread, mach_vm_address_t entry)
 
 		iss32->eip = CAST_DOWN_EXPLICIT(unsigned int, entry);
 	}
-	if (no_shared_cr3) {
-		/* The return trampoline loads cpu_ucr3, which no context
-		 * switch may have refreshed for this task (exec morphs the
-		 * current thread in place). Point it at the full pmap so
-		 * user-mode entry points stay mapped.
-		 */
-		pmap_t pmap = thread->map->pmap;
-		int my_cpu = cpu_number();
-		cpu_datap(my_cpu)->cpu_ucr3 = pmap->pm_cr3;
-		cpu_shadowp(my_cpu)->cpu_ucr3 = pmap->pm_cr3;
-	}
 }
 
 

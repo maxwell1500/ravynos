@@ -109,6 +109,9 @@ for rel in ["iokit/DEVELOPMENT/IOPlatformExpert.cpo.json",
             "bsd/DEVELOPMENT/ubc_subr.o.json",
             "bsd/DEVELOPMENT/kern_cs.o.json",
             "bsd/DEVELOPMENT/kern_mib.o.json",
+            # thread_setentrypoint() lives in bsd_i386.c. Without this an edit
+            # there silently produced an unchanged kernel.
+            "osfmk/DEVELOPMENT/bsd_i386.o.json",
             # kern_sig.c owns the crash-reporting os_reason buffer allocation
             # (build_signal_reason). It was absent from this allowlist, so an
             # edit to that file silently produced an unchanged kernel -- a
