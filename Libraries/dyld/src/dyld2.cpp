@@ -4675,7 +4675,39 @@ static ImageLoader* libraryLocator(const char* libraryName, bool search, const c
 	context.canBePIE			= false;
 	context.origin				= origin;
 	context.rpath				= rpaths;
-	return load(libraryName, context, cacheIndex);
+	// ---- ravynOS: in-flight image print --------------------------------------
+	// The end-of-_main image dump in this file runs only after every dylib is
+	// linked, so it is blind to a process that dies WHILE loading. WindowServer
+	// demonstrably does exactly that: across a 706-line boot log carrying five
+	// complete image blocks (30/32/31/31/30 images), none of them contained
+	// WindowServer, AppKit or Foundation. Its fault address was byte-identical
+	// across boots and images, so the failure is deterministic, not corruption.
+	//
+	// libraryLocator is dyld's loadLibrary callback (installed at :4693), invoked
+	// once per dependent dylib as it is mapped. Printing the image it just
+	// returned therefore names the image in flight at the moment of death: a
+	// process that dies loading the 5th dylib has already printed the first 4,
+	// and the last line it printed identifies the culprit.
+	//
+	// Same _simple_dprintf rationale as every other print here: diag.error()
+	// formats into _buffer and only fprintf()s under `#if BUILDING_CACHE_BUILDER`,
+	// which is false in this TOOL build, so it prints nothing at all.
+	ImageLoader* _loaded = load(libraryName, context, cacheIndex);
+	if ( _loaded != NULL ) {
+		const char* _lp = _loaded->getPath();
+		// machHeader() is unreachable() on a shared-cache proxy
+		// (ImageLoaderMegaDylib.h:61), so guard it exactly as the end-of-_main
+		// dump does -- a diagnostic must not kill its own subject.
+		if ( _loaded->inSharedCache() ) {
+			_simple_dprintf(2, "DYLD-IMAGE: %s base (shared cache)\n",
+			                _lp ? _lp : "(null)");
+		} else {
+			_simple_dprintf(2, "DYLD-IMAGE: %s base 0x%lx\n",
+			                _lp ? _lp : "(null)",
+			                (unsigned long)(uintptr_t)_loaded->machHeader());
+		}
+	}
+	return _loaded;
 }
 
 static const char* basename(const char* path)
