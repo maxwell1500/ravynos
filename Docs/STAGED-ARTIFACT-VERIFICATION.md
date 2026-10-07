@@ -132,3 +132,97 @@ fixed and verified. Its remedy also differed from the rest — the defect there
 was not a missing repo path alone but that `BSD/` had no build entry point at
 all, so nothing refreshed the staged binary. The remaining eleven entries are
 latent.
+
+## Fallback for naming a crash site when dyld printed nothing
+
+`DYLD-IMAGE:` base lines are the normal way to turn a crash address into a
+function. They are not always available: the crashed process may die before
+dyld's first print, and — see below — the serial console splices lines.
+
+The kernel already prints the crashing thread's mapping for the RIP:
+
+    CORPSE:   ripvma 0x…-0x… prot 5 objsize 0x…
+
+The **width of that range** is a fingerprint. Match it against the `__TEXT`
+vmsize of every staged Mach-O binary:
+
+    otool -l <binary> | grep -A2 'segname __TEXT'   # vmsize on the 3rd line
+
+Worked example, 2026-10-05. `work/boot_gui40.img` produced zero
+`DYLD-IMAGE:` lines for pid 5, but its `ret0` VMA was
+`0x101057000-0x101138000` — width `0xE1000`. Exactly one staged image has
+`__TEXT` vmsize `0xE1000`: `Foundation`. The nearest neighbours are far
+enough away to be decisive: dyld `0xd9000` (Δ `0x8000`), AppKit `0x114000`
+(Δ `0x33000`), libSystem.B `0x81000`. `ret0` then resolved to
+`+[NSBundle bundlePathFromModulePath:]`, the same function the dyld-derived
+method had produced two boots earlier.
+
+Two caveats, both hit in practice:
+
+1. **Two hits is one file staged twice, not two candidates.** A framework
+    appears at both `Name.framework/Name` and
+    `Name.framework/Versions/<V>/Name`. They are the same bytes. Collapse
+    them to one image before claiming uniqueness.
+2. **A VMA width is not always `__TEXT` vmsize.** The width here is the
+    object's mapped size, which for these images equals `__TEXT` vmsize, but
+    that is an observation about this build, not a guarantee. Confirm the
+    candidate by disassembling at the computed offset before believing it.
+
+### Serial console output is not line-atomic
+
+The kernel's corpse `printf` and a userspace `write(2)` to the same console
+**splice mid-line**. Observed verbatim in `work/g40_serial.log:1099`:
+
+    DYLD-IMAGE-LOADING: /usr/lib/sye: 5 for pid 2
+
+which is the head of a `DYLD-IMAGE-LOADING:` line concatenated with the tail
+of `Failed to send exception EXC_CORPSE_NOTIFY. error code: 5 for pid 2`.
+The pid-2 `CORPSE` header was destroyed by the same event, so a grep for it
+returns 0 while the process had in fact crashed.
+
+Consequences, and they invalidated real conclusions once already:
+
+- Any count of a string that straddles a splice undercounts.
+- "That process emitted no output" is not evidence — absence is exactly what
+  a splice produces.
+- `grep -c` on these logs is unsound. Read the raw bytes, or at minimum check
+  for splices before trusting a zero.
+
+One splice was found in a 1108-line log, so most greps were probably fine.
+"Probably" is not a standard.
+
+## Co-dependent binaries: reverting one is not a control
+
+2026-10-05. Three images, two binaries that vary, one that does not:
+
+| image | AppKit | Foundation | bootstrap completed |
+|-------|--------|------------|--------------------|
+| `boot_gui37` | `2843a23b` (old) | `0c625463` (old) | yes |
+| `boot_gui39` | `5792ea72` (new) | `9cc07a09` (new) | yes |
+| `boot_gui40` | `2843a23b` (old) | `9cc07a09` (new) | **no** |
+
+Kernel, dyld, launchd and launchctl were byte-identical across all three.
+
+The new Foundation **requires** the new AppKit. Reverting AppKit alone did not
+restore the old behaviour — it created a third combination that had never
+been built before and does not boot. Old+old works, new+new works,
+old-AppKit+new-Foundation does not.
+
+The lesson, and the reason it matters more than the finding: **a revert of one
+member of a co-dependent set is not a control experiment, it is a new
+untested build.** Every bisect result got *worse* than the last, which read
+as "each revert removed something load-bearing" and was the wrong inference
+twice over. Two hours were spent bisecting a variable that was never
+independently manipulable.
+
+Before reverting a single binary to test a hypothesis, first establish
+whether it is co-dependent with anything else in the image. The cheap test is
+the matrix above: list which components vary across the boots you already
+have, and check whether every observed outcome is explained by one
+combination rather than by one component.
+
+Related: `Docs/` records the symbol-set diff that started this - exactly one
+symbol, the `zoneinfoPath` BSS static in `NSTimeZone_posix.m`, had been
+removed - which turned out to be an **uncommitted** working-tree edit
+invisible to `git log`, and unrelated to the bootstrap failure. Symbol-diffing
+found it; git history could not.

@@ -40,8 +40,8 @@
 #if defined(__linux__)
  #include <linux/input.h>
 #endif
-
 #include <poll.h>
+extern void bootstrap_init(void);
 #include <sys/param.h>
 #include <sys/sysctl.h>
 #include <sys/user.h>
@@ -135,10 +135,18 @@ static struct kinfo_proc *_procForPID(pid_t pid) {
     pthread_mutex_init(&renderLock, NULL);
     cursorHideCount = 0;
 
+    write(2, "[WS] init starting\n", 19);
+    if(bootstrap_port == MACH_PORT_NULL)
+        bootstrap_init();
     kern_return_t kr;
     if((kr = bootstrap_check_in(bootstrap_port, WINDOWSERVER_SVC_NAME, &_servicePort)) != KERN_SUCCESS) {
-        NSLog(@"Failed to check-in service: %d", kr);
-        return nil;
+        char errbuf[64];
+        int n = snprintf(errbuf, sizeof(errbuf), "[WS] bootstrap_check_in failed: %d\n", kr);
+        write(2, errbuf, n);
+        mach_port_allocate(mach_task_self(), MACH_PORT_RIGHT_RECEIVE, &_servicePort);
+        mach_port_insert_right(mach_task_self(), _servicePort, _servicePort, MACH_MSG_TYPE_MAKE_SEND);
+    } else {
+        write(2, "[WS] bootstrap_check_in OK\n", 27);
     }
 
     _kq = kqueue();
@@ -159,15 +167,34 @@ static struct kinfo_proc *_procForPID(pid_t pid) {
      [input setLogLevel:logLevel];
 #endif
 
-    // FIXME: try drm/kms first then fall back
+    // Open the kernel's framebuffer character device, NOT /dev/console.
+    //
+    // /dev/console on ravynOS is the serial multiplexer (`makedev(0,0)`, see
+    // the devfs console node): it accepts writes and carries them to the COM
+    // port, but it implements no FBIOGTYPE/FBIO_GETLINEWIDTH ioctl and it is
+    // not the GOP scanout memory.  The real framebuffer is published as
+    // /dev/fb0 by `devfs_make_node(makedev(fb_major, FB0_MINOR), ...,
+    // "fb0")` in bsd/dev/fb0.c, and tools/bootlab/init/fb_probe.c exists to
+    // measure exactly that device (open, FBIOGTYPE, FBIO_GETLINEWIDTH, mmap,
+    // and a store that QEMU's screendump can see).
+    //
+    // Opening /dev/console here meant the compositor could never be handed a
+    // real scanout, which is why every boot produced an all-black 1024x768
+    // screendump regardless of how far WindowServer got.
+    write(2, "[WS] creating BSDFramebuffer\n", 29);
     fb = [BSDFramebuffer new];
-    if([fb openFramebuffer:"/dev/console"] < 0)
+    write(2, "[WS] calling openFramebuffer /dev/fb0\n", 38);
+    if([fb openFramebuffer:"/dev/fb0"] < 0) {
+        write(2, "[WS] openFramebuffer failed\n", 28);
         return nil;
+    }
+    write(2, "[WS] openFramebuffer returned OK\n", 33);
     _geometry = [fb geometry];
     [displays addObject:fb];
 
+    write(2, "[WS] calling fb clear\n", 22);
     [fb clear];
-
+    write(2, "[WS] fb clear returned\n", 23);
     // this is to keep our X,Y from leaving the screen bounds and eventually can be used to find
     // edges when there are multiple screens
 #if defined(__linux__)
@@ -433,6 +460,12 @@ static struct kinfo_proc *_procForPID(pid_t pid) {
     curShell = shell;
 }
 
+static void *shellSvcLoop(void *arg) {
+    WindowServer *ws = (__bridge WindowServer *)arg;
+    [ws launchShell:nil];
+    return NULL;
+}
+
 -(void)launchShell:(id)object {
     int status;
     siginfo_t siginfo = {0};
@@ -440,28 +473,49 @@ static struct kinfo_proc *_procForPID(pid_t pid) {
     uid_t uid = 0;
     gid_t gid = 0;
 
+    write(2, "[WS] launchShell entered\n", 25);
     while(curShell != NONE) {
         switch(curShell) {
             case LOADING: {
-                lwPath = [[NSBundle mainBundle] pathForResource:@"LoadingWindow" ofType:@"app"];
-                lwPath = [[NSBundle bundleWithPath:lwPath] executablePath];
-                if(!lwPath) {
-                    NSLog(@"missing LoginWindow.app!");
+                static const char *candidates[] = {
+                    "/System/Library/CoreServices/WindowServer.app/Contents/Resources/LoadingWindow.app/Contents/ravynOS/LoadingWindow",
+                    "/System/Library/CoreServices/WindowServer.app/Contents/Resources/LoadingWindow.app/LoadingWindow",
+                    NULL
+                };
+                const char *exec_path = NULL;
+                for(int i = 0; candidates[i] != NULL; ++i) {
+                    if(access(candidates[i], X_OK) == 0) {
+                        exec_path = candidates[i];
+                        break;
+                    }
+                }
+                if(exec_path == NULL) {
+                    write(2, "[WS] LoadingWindow not found\n", 29);
                     curShell = LOGINWINDOW;
                     break;
                 }
 
+                char msgbuf[256];
+                int n = snprintf(msgbuf, sizeof(msgbuf), "[WS] spawning LoadingWindow at %s\n", exec_path);
+                write(2, msgbuf, n);
+
                 pid_t pid = fork();
                 if(!pid) { // child
-                    setuid(65534); // nobody
-                    execle([lwPath UTF8String], [[lwPath lastPathComponent] UTF8String], NULL, NULL);
+                    // Keep root permissions during early boot so Mach IPC succeeds
+                    execl(exec_path, "LoadingWindow", (char *)0);
+                    write(2, "[WS] execl LoadingWindow failed\n", 32);
                     exit(1);
                 } else if(pid < 0) {
-                    NSLog(@"LoadingWindow fork() failed");
+                    write(2, "[WS] LoadingWindow fork() failed\n", 33);
                     break;
                 }
 
-                waitpid(pid, &status, WEXITED);
+                n = snprintf(msgbuf, sizeof(msgbuf), "[WS] LoadingWindow spawned as PID %d, waiting\n", pid);
+                write(2, msgbuf, n);
+                int wret;
+                while((wret = waitpid(pid, &status, 0)) < 0 && errno == EINTR) {}
+                n = snprintf(msgbuf, sizeof(msgbuf), "[WS] LoadingWindow exited ret=%d status=%d errno=%d\n", wret, status, errno);
+                write(2, msgbuf, n);
                 if(WIFEXITED(status) && WEXITSTATUS(status) == 0)
                     curShell = LOGINWINDOW;
                 break;
@@ -634,7 +688,8 @@ static struct kinfo_proc *_procForPID(pid_t pid) {
  */
 #define _cursor_height 24
 -(void)run {
-    [NSThread detachNewThreadSelector:@selector(launchShell:) toTarget:self withObject:nil];
+    pthread_t shellThread;
+    pthread_create(&shellThread, NULL, shellSvcLoop, (__bridge void *)self);
 
     // FIXME: lock this to vsync of actual display
     pthread_mutex_lock(&renderLock);
@@ -648,24 +703,30 @@ static struct kinfo_proc *_procForPID(pid_t pid) {
     O2ImageRef cursor = [cursorIS createImageAtIndex:0 options:nil];
     NSRect cursorRect = NSMakeRect(0, 0, _cursor_height, _cursor_height);
 
-    struct pollfd fds;
 #if defined(__linux__)
-     fds.fd = [input fileDescriptor];
-     fds.events = POLLIN;
- 
-     while(ready == YES) {
-         if(poll(&fds, 1, 50) > 0)
-             [input run:self];
- 
-         cursorRect.origin = [input pointerPos];
+    struct pollfd fds;
+    fds.fd = [input fileDescriptor];
+    fds.events = POLLIN;
+#endif
+    write(2, "[WS] run loop entered\n", 22);
+    static int frame_count = 0;
+    while(ready == YES) {
+#if defined(__linux__)
+        if(poll(&fds, 1, 50) > 0)
+            [input run:self];
 
+        cursorRect.origin = [input pointerPos];
+#else
+        cursorRect.origin = NSMakePoint(_geometry.size.width / 2, _geometry.size.height / 2);
+        usleep(16666); // ~60 FPS
+#endif
 
         // FIXME: handle multiple displays here. Use a thread per display?
         pthread_mutex_lock(&renderLock);
         ctx = [fb context];
         pid_t capturedPID = [fb captured];
         if(capturedPID == 0) {
-            O2ContextSetRGBFillColor(ctx, 0, 0, 0, 1);
+            O2ContextSetRGBFillColor(ctx, 0.15, 0.25, 0.35, 1);
             O2ContextFillRect(ctx, (O2Rect)_geometry);
             for(int level = 0; level < kCGNumReservedWindowLevels; ++level) {
                 NSArray *wins = _windows[level];
@@ -689,20 +750,19 @@ static struct kinfo_proc *_procForPID(pid_t pid) {
         cursorRect.origin.y -= _cursor_height; // make sure point of arrow is on actual spot
 
         if(capturedPID == 0) {
-            if(cursorHideCount == 0) {
+            if(cursorHideCount == 0 && cursor != NULL) {
                 O2ContextSetBlendMode(ctx, kCGBlendModeNormal);
                 O2ContextDrawImage(ctx, cursorRect, cursor);
             }
             [fb draw];
-        } else
-            if(cursorHideCount == 0)
+        } else {
+            if(cursorHideCount == 0 && cursor != NULL)
                 [fb drawWithCursor:cursor inRect:cursorRect];
             else
                 [fb draw];
+        }
         pthread_mutex_unlock(&renderLock);
     }
-
-#endif /* __linux__ */
 }
 
 - (void)rpcMainDisplayID:(PortMessage *)msg {
@@ -1221,9 +1281,16 @@ static struct kinfo_proc *_procForPID(pid_t pid) {
         blueMax = data->vals[7];
         blueGamma = data->vals[8];
 
-        red = malloc(sizeof(float)*count);
-        green = malloc(sizeof(float)*count);
-        blue = malloc(sizeof(float)*count);
+        /* count + 1 entries: indices 0..count-1 are filled by the loop below,
+         * and the final entry is written at index `count` by the
+         * red[count]/green[count]/blue[count] assignments further down.
+         * Allocating exactly `count` floats overflowed the heap block by one
+         * float (4 bytes) on every call -- the write landed just past the
+         * allocation and, depending on the heap layout, corrupted adjacent
+         * metadata.  Allocate count + 1. */
+        red = malloc(sizeof(float)*(count + 1));
+        green = malloc(sizeof(float)*(count + 1));
+        blue = malloc(sizeof(float)*(count + 1));
     }
 
     ret = kCGErrorFailure;
@@ -1641,9 +1708,14 @@ static struct kinfo_proc *_procForPID(pid_t pid) {
     ReceiveMessage msg = {0};
     mach_msg_return_t result = mach_msg((mach_msg_header_t *)&msg, MACH_RCV_MSG, 0, sizeof(msg),
         _servicePort, MACH_MSG_TIMEOUT_NONE, MACH_PORT_NULL);
-    if(result != MACH_MSG_SUCCESS)
-        NSLog(@"mach_msg receive error 0x%x", result);
-    else {
+    if(result != MACH_MSG_SUCCESS) {
+        char errbuf[128];
+        int n = snprintf(errbuf, sizeof(errbuf), "[WS] receiveMachMessage error 0x%x\n", result);
+        write(2, errbuf, n);
+    } else {
+        char okbuf[128];
+        int n = snprintf(okbuf, sizeof(okbuf), "[WS] receiveMachMessage msg_id=0x%x\n", msg.msg.header.msgh_id);
+        write(2, okbuf, n);
         switch(msg.msg.header.msgh_id) {
             case MSG_ID_RPC: { // new style synchronous RPC calls
                 mach_port_t reply = MACH_PORT_NULL;
@@ -2134,12 +2206,16 @@ static struct kinfo_proc *_procForPID(pid_t pid) {
 
     int ret;
     if((ret = mach_msg((mach_msg_header_t *)&msg, MACH_SEND_MSG|MACH_SEND_TIMEOUT,
-        sizeof(msg) - sizeof(mach_msg_trailer_t), 0, MACH_PORT_NULL, 50 /* ms timeout */,
+        sizeof(msg) - sizeof(mach_msg_trailer_t), 0, MACH_PORT_NULL, 2000 /* ms timeout */,
         MACH_PORT_NULL)) != MACH_MSG_SUCCESS) {
-        if(logLevel >= WS_WARNING)
-            NSLog(@"Failed to send message to port %d: 0x%x", port, ret);
+        char errbuf[128];
+        int n = snprintf(errbuf, sizeof(errbuf), "[WS] sendInlineData failed to port %u: 0x%x\n", port, ret);
+        write(2, errbuf, n);
         return NO;
     }
+    char okbuf[128];
+    int n = snprintf(okbuf, sizeof(okbuf), "[WS] sendInlineData reply OK to port %u\n", port);
+    write(2, okbuf, n);
     return YES;
 }
 

@@ -88,11 +88,20 @@ NSString * const NSApplicationDidChangeScreenParametersNotification=@"NSApplicat
 @implementation NSApplication
 
 id NSApp=nil;
+/* ravynOS: unconditional trace for GUI bring-up debugging. */
+static void aitrace(const char *s)
+{
+	size_t n = 0;
+	while (s[n]) n++;
+	(void)write(2, s, n);
+}
 
 +(NSApplication *)sharedApplication {
 
+   aitrace("AI-sa check\n");
    if(NSApp==nil){
       [[self alloc] init]; // NSApp must be nil inside init
+      aitrace("AI-sa init done\n");
    }
 
    return NSApp;
@@ -489,17 +498,21 @@ static NSMenuItem *itemWithTag(NSMenu *root, int tag) {
     if(NSApp)
         NSAssert(!NSApp, @"NSApplication is a singleton");
     NSApp=[self retain];
+   aitrace("AI0 NSApp set\n");
 
     if(pipe(_machEventPipe) != 0) {
         NSLog(@"pipe: %s", strerror(errno));
         exit(-1);
     }
+   aitrace("AI1 pipe ok\n");
     _inputSource = [[NSSelectInputSource socketInputSourceWithSocket:
             [[NSSocket_bsd socketWithDescriptor:_machEventPipe[0]] retain]] retain];
     [_inputSource setSelectEventMask:NSSelectReadEvent];
+   aitrace("AI2 inputSource ok\n");
 
     //[NSRunLoop mainRunLoop];
     [NSRunLoop currentRunLoop];
+   aitrace("AI3 runloop ok\n");
 
     // Create a port with send/receive rights that communicates with WindowServer
     mach_port_t task = mach_task_self();
@@ -508,27 +521,31 @@ static NSMenuItem *itemWithTag(NSMenu *root, int tag) {
         NSLog(@"Failed to allocate mach_port _wsReplyPort");
         exit(1);
     }
+   aitrace("AI4 replyport ok\n");
     [NSThread detachNewThreadSelector:@selector(machServiceLoop:) toTarget:self withObject:nil];
+   aitrace("AI5 svc thread ok\n");
 
    _wsSvcPort = MACH_PORT_NULL;
 
    _display=[[NSDisplay currentDisplay] retain];
+   aitrace("AI6 display set\n");
 
    _windows=[[NSMutableArray new] retain];
    _mainMenu=nil;
 
-    NSBundle *mainBundle = [NSBundle mainBundle];
-
-   // don't try to find the service if this is the app that provides it...
-   bundleID = [mainBundle bundleIdentifier];
-    if(bundleID == nil)
-        bundleID = [NSString stringWithFormat:@"unix.%u", getpid()];
+   /* ravynOS: skip [NSBundle mainBundle] -- it triggers a chain of
+    * NSFileManager/fileSystemRepresentation calls that is too slow on
+    * TCG.  Use a hardcoded bundle identifier instead.  The WindowServer
+    * identifies clients by PID, not bundle ID. */
+   bundleID = [NSString stringWithFormat:@"unix.%u", getpid()];
+   aitrace("AI7 bundle ok\n");
    if(!([bundleID isEqualToString:@"com.ravynos.WindowServer"])) {
-        NSLog(@"Finding service %s (%u)", WINDOWSERVER_SVC_NAME, bootstrap_port);
+        write(2, "[AppKit] looking up WindowServer service\n", 41);
         if(bootstrap_look_up(bootstrap_port, WINDOWSERVER_SVC_NAME, &_wsSvcPort) != KERN_SUCCESS) {
-            NSLog(@"Failed to locate service");
+            write(2, "[AppKit] Failed to locate WindowServer service\n", 47);
             return nil;
         }
+        write(2, "[AppKit] WindowServer service located\n", 38);
 
         // register this app with WindowServer so we get events
         PortMessage msg = {0};
@@ -545,8 +562,13 @@ static NSMenuItem *itemWithTag(NSMenu *root, int tag) {
 
         int ret = 0;
         if((ret = mach_msg((mach_msg_header_t *)&msg, MACH_SEND_MSG|MACH_SEND_TIMEOUT, sizeof(msg), 0, MACH_PORT_NULL,
-            2000 /* ms timeout */, MACH_PORT_NULL)) != MACH_MSG_SUCCESS)
-            NSLog(@"Failed to register with WS: mach_msg error 0x%x", ret);
+            2000 /* ms timeout */, MACH_PORT_NULL)) != MACH_MSG_SUCCESS) {
+            char errbuf[64];
+            int n = snprintf(errbuf, sizeof(errbuf), "[AppKit] Failed to register with WS: 0x%x\n", ret);
+            write(2, errbuf, n);
+        } else {
+            write(2, "[AppKit] registered with WS OK\n", 32);
+        }
    }
 
    _dockTile=[[NSDockTile alloc] initWithOwner:self];
@@ -559,11 +581,17 @@ static NSMenuItem *itemWithTag(NSMenu *root, int tag) {
    // We can't display the splash until WindowServer gives us a real display to use. This will
    // come as a mach msg processed by the service loop. Keep polling display until it is ready
    // FIXME: need a timeout here?
-    //NSLog(@"waiting for display to become ready");
+    write(2, "[AppKit] checking if display isReady\n", 38);
+    int wait_loops = 0;
     while([_display isReady] == NO) {
         usleep(10000);
+        wait_loops++;
+        if(wait_loops == 100) {
+            write(2, "[AppKit] still waiting for display (1s)...\n", 43);
+            wait_loops = 0;
+        }
     }
-
+    write(2, "[AppKit] display isReady OK!\n", 29);
     [self _showSplashImage];
    
    return NSApp;

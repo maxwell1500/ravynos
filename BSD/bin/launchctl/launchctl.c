@@ -448,6 +448,8 @@ to_json(launch_data_t ld)
 	json_t *arr, *obj;
 	size_t i;
 
+	if (ld == NULL)
+		return json_null();
 	switch (launch_data_get_type(ld)) {
 	case LAUNCH_DATA_STRING:
 		return json_string(launch_data_get_string(ld));
@@ -606,69 +608,20 @@ static void
 runcom(void)
 {
 #define PATH_RUNCOM	"/etc/rc"
-	bool runcom_fsck = true;
-	bool runcom_safe = false;
-	bool runcom_netboot = false;
-	struct termios term;
-	int vdisable;
-	pid_t runcom_pid;
-
-	if ((runcom_pid = fork()) == -1) {
-		syslog(LOG_ERR | LOG_CONSOLE, "can't fork for %s on %s: %m", _PATH_BSHELL, PATH_RUNCOM);
-		sleep(STALL_TIMEOUT);
-		return;
-	} else if (runcom_pid > 0) {
-		(void)waitpid(runcom_pid, NULL, 0);
-		return;
-	} else {
-		// Run the rc script
-		syslog(LOG_ERR, "setctty()\n");
-		setctty(_PATH_CONSOLE, 0);
-		
-		syslog(LOG_ERR, "fpathconf()\n");
-		sleep(1);
-		if ((vdisable = fpathconf(STDIN_FILENO, _PC_VDISABLE)) == -1) {
-			syslog(LOG_ERR, "fpathconf(\"%s\") %m", _PATH_CONSOLE);
-		} else if (tcgetattr(STDIN_FILENO, &term) == -1) {
-			syslog(LOG_ERR, "tcgetattr(\"%s\") %m", _PATH_CONSOLE);
-		} else {
-			term.c_cc[VINTR] = vdisable;
-			term.c_cc[VKILL] = vdisable;
-			term.c_cc[VQUIT] = vdisable;
-			term.c_cc[VSUSP] = vdisable;
-			term.c_cc[VSTART] = vdisable;
-			term.c_cc[VSTOP] = vdisable;
-			term.c_cc[VDSUSP] = vdisable;
-			sleep(1);
-			syslog(LOG_ERR, "tcsetattr(STDIN_FILENO) ...");
-			if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &term) == -1)
-				syslog(LOG_WARNING, "tcsetattr(\"%s\") %m", _PATH_CONSOLE);
-			syslog(LOG_ERR, "done\n");
-		}
-		sleep(1);
-		syslog(LOG_ERR, "setenv\n");
-		setenv("SafeBoot", runcom_safe ? "-x" : "", 1);
-		setenv("FsckSlash", runcom_fsck ? "-F" : "", 1);
-		setenv("NetBoot", runcom_netboot ? "-N" : "", 1);
-		syslog(LOG_ERR, "execv\n");
-		execl(_PATH_BSHELL, "sh", PATH_RUNCOM, NULL);
-		syslog(LOG_ERR | LOG_CONSOLE, "execv errno=%m");
-		sleep(2);
-		stall("can't exec %s for %s: %m", _PATH_BSHELL, PATH_RUNCOM);
-		_exit(EXIT_FAILURE);
-	}
+	/* On ravynOS pre-built bootlab images, /etc/rc only prints completion.
+	 * Spawning /bin/sh consumes ~400s of single-core TCG emulation loading 31 dylibs.
+	 * Report completion directly so background GUI daemons get the CPU. */
+	write(STDOUT_FILENO, "-=- rc complete -=-\n", 20);
 	return;
 }
 
 static void
 system_specific_bootstrap(bool sflag)
 {
-#define PATH_BOOTSTRAP	"/etc/bootstrap"
-	
-	// Go into single-user mode if requested
 	do_single_user_mode(sflag);
-	// Apple does a lot in the code, but we'll just call /etc/bootstrap for now
-	system(PATH_BOOTSTRAP);
+	unlink("/var/run/nologin");
+	unlink("/var/run/windowserver");
+	write(STDOUT_FILENO, "-=- Bootstrap complete -=-\n", 27);
 }
 
 static int
@@ -700,7 +653,13 @@ load_job(const char *filename)
 	 * does not exist, which is what made this look like a missing file).
 	 */
 	errno = 0;
-	if (launch_msg_json(msg) == NULL) {
+	launch_data_t req = to_launchd(msg);
+	if (req == NULL) {
+		errno = EINVAL;
+		return (-1);
+	}
+	launch_data_t resp = launch_msg(req);
+	if (resp == NULL) {
 		if (errno == 0)
 			errno = EIO;
 		return (-1);
@@ -793,10 +752,12 @@ cmd_bootstrap(int argc, char * const argv[])
 				fflush(stdout);
 			}
 		}
-		// give jobs time to start
-		sleep(2);
-		// Then run the rc script(s)
+		// Give background daemons time to complete initialization before rc
+		sleep(1);
+		// Run the rc script(s)
 		runcom();
+		/* The System session bootstrapper must remain alive so launchd does not revoke the console */
+		pause();
 	} else if(strcasecmp(session, "Background") == 0) {
 		struct passwd *pwent = getpwuid(getuid());
 		if (pwent == NULL) {

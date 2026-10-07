@@ -27,6 +27,7 @@
 #import <Foundation/NSRaise.h>
 #import <Foundation/NSZombieObject.h>
 #import <Foundation/NSDebug.h>
+#include <stdio.h>
 #include <string.h>
 #ifdef WIN32
 #include <windows.h>
@@ -70,10 +71,19 @@ id NSAllocateObject(Class class, NSUInteger extraBytes, NSZone *zone)
     id result;
 
     result = class_createInstance(class, extraBytes);
-    if(result != nil) {
-        if (__NSAllocateObjectHook) {
-            __NSAllocateObjectHook(result);
-        }
+    if(result == nil) {
+        /* Deliberately fprintf(stderr) and NOT NSLog: NSLog formats through
+         * NSString, which allocates, which comes straight back here.  A
+         * diagnostic on this path must not re-enter the allocator.
+         */
+        fprintf(stderr,
+                "NSAllocateObject: class_createInstance returned NULL for %s extraBytes=%lu\n",
+                class ? class_getName(class) : "(null class)", (unsigned long)extraBytes);
+        return nil;
+    }
+
+    if (__NSAllocateObjectHook) {
+        __NSAllocateObjectHook(result);
     }
 
     /* Make sure our type is aligned with CoreFoundation */

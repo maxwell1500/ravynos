@@ -6290,6 +6290,29 @@ _main(const macho_header* mainExecutableMH, uintptr_t mainExecutableSlide,
 		int argc, const char* argv[], const char* envp[], const char* apple[], 
 		uintptr_t* startGlue)
 {
+	/* ravynOS: first statement of _main, ahead of every other thing.
+	 *
+	 * One line that answers the question the last three sessions could not:
+	 * does dyld's _main execute for this process at all? The corpse for
+	 * pid 5 resolves to _objc_msgSend + 0x1d in libobjc.dylib with its isa
+	 * set to the ASCII bytes "/etc/l" -- an initialiser demonstrably ran --
+	 * yet that process has never emitted DYLD-LOAD-BASE, DYLD-IMAGE, or any
+	 * other byte. Either dyld is alive and every print is failing to reach
+	 * fd 2, or _main was never reached and the framing is wrong again.
+	 * This distinguishes them in one boot.
+	 *
+	 * _ravyn_emit, never _simple_dprintf: _simple_dprintf routes through
+	 * _simple_salloc, dyld's bootstrap bump allocator, and perturbing that
+	 * in the first instruction of _main is exactly what we must not do.
+	 * Deliberately the very first statement, before the KDEBUG block, so
+	 * nothing can run before it.
+	 */
+	_ravyn_emit("DYLD-ENTRY: argc=", 0, 0, (unsigned long)argc, 1);
+	if (argc > 0 && argv != NULL && argv[0] != NULL) {
+		_ravyn_emit(" argv0=", argv[0], "\n", 0, 0);
+	} else {
+		_ravyn_emit(" argv0=(none)\n", 0, 0, 0, 0);
+	}
 #if KDEBUG
 	if (dyld3::kdebug_trace_dyld_enabled(DBG_DYLD_TIMING_LAUNCH_EXECUTABLE)) {
 		launchTraceID = dyld3::kdebug_trace_dyld_duration_start(DBG_DYLD_TIMING_LAUNCH_EXECUTABLE, (uint64_t)mainExecutableMH, 0, 0);

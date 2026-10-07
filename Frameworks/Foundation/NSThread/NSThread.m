@@ -228,8 +228,13 @@ static void *nsThreadStartThread(void* t)
                                                           object: nil
                                                         userInfo: nil];
 		isMultiThreaded = YES;
-      // lazily initialize mainThread's lock
-      mainThread->_sharedObjectLock=[NSLock new];
+      // Lazily initialise mainThread's lock.  -init now assigns
+      // _sharedObjectLock unconditionally, so on any current build this is
+      // already non-NULL; the guard keeps the pre-existing lazy path from
+      // overwriting (and leaking) a live lock, which is what the unconditional
+      // assignment here used to do.
+      if(!mainThread->_sharedObjectLock)
+        mainThread->_sharedObjectLock=[NSLock new];
 #if !defined(GCC_RUNTIME_3) && !defined(APPLE_RUNTIME_4)
 		_NSInitializeSynchronizedDirective();
 #endif
@@ -320,6 +325,26 @@ ravyn_put_hex16(char *dst, unsigned long x)
 	}
 }
 
+/* ravynOS: unconditional trace helpers for GUI bring-up debugging. */
+static void ravyn_trace_s(const char *s)
+{
+	size_t n = 0;
+	while (s[n]) n++;
+	(void)write(2, s, n);
+}
+static void ravyn_trace_hex(const char *tag, unsigned long v)
+{
+	char buf[96];
+	char *p = buf;
+	const char *s = tag;
+	while (*s) *p++ = *s++;
+	*p++ = '=';
+	ravyn_put_hex16(p, v); p += 16;
+	*p++ = '\n';
+	(void)write(2, buf, (size_t)(p - buf));
+}
+static int ravyn_sh_trace_count = 0;
+static int ravyn_sh_ret_count = 0;
 void ravyn_capture_shared(const char *path, void *thread, void *shared,
 	void *lock, void *result);
 
@@ -365,22 +390,88 @@ ravyn_capture_shared(const char *path, void *thread, void *shared,
    return _sharedObjects;
 }
 
-static inline id _NSThreadSharedInstance(NSThread *thread,NSString *className,BOOL create) {
-   NSMutableDictionary *shared=thread->_sharedObjects;
-   if(!shared)
-      return nil;
-	id result=nil;
-   [thread->_sharedObjectLock lock];
-   result=[shared objectForKey:className];
-   [thread->_sharedObjectLock unlock];
+/* Guard for the per-thread shared-object dictionary.  Statically initialised so
+ * that it is valid before any Objective-C object exists -- see the comment in
+ * _NSThreadSharedInstance below. */
+static pthread_mutex_t _NSThreadSharedBootstrapLock = PTHREAD_MUTEX_INITIALIZER;
 
+static inline id _NSThreadSharedInstance(NSThread *thread,NSString *className,BOOL create) {
+   /* Entry capture: the exit capture at the end of this function is
+    * unreachable when the fault happens inside NSPlatformCurrentThread(),
+    * which re-enters Foundation during -[NSThread init].  Capture on entry
+    * so at least one invocation is always reported. */
+   ravyn_capture_shared("entry", (void *)thread, 0, 0, 0);
+   if (ravyn_sh_trace_count < 100) {
+      ravyn_sh_trace_count++;
+      ravyn_trace_hex("SH-thread", (unsigned long)thread);
+      ravyn_trace_hex("SH-shared", (unsigned long)thread->_sharedObjects);
+   }
+
+   NSMutableDictionary *shared=thread->_sharedObjects;
+   if(!shared) {
+      ravyn_trace_s("SH-nil-return\n");
+      return nil;
+   }
+	id result=nil;
+   /* ravynOS: the shared-object dictionary is guarded by a STATICALLY
+    * INITIALISED pthread mutex, not by this thread's `_sharedObjectLock`.
+    *
+    * `_sharedObjectLock` is itself an [NSLock new], and NSLock's allocation
+    * used to reach +[NSPlatform currentPlatform] -> NSThreadSharedInstance
+    * -> NSPlatformCurrentThread -> [NSThread alloc] -> -[NSThread init], which
+    * assigns `_sharedObjectLock`.  So any lookup arriving during thread
+    * construction found the ivar still zero and had nothing usable to lock
+    * with.  Measured on this tree: WindowServer faulted at `isa + 0x18` inside
+    * objc_msgSend (g42-g48); reordering publication instead produced unbounded
+    * recursion (g49); nil-guarding the lock produced a permanent nil lock
+    * (g51).
+    *
+    * Upstream GNUstep solved this by never using a heap lock for thread
+    * bootstrap state at all -- it guards its thread registry with
+    *     static gs_mutex_t _exitingThreadsLock = GS_MUTEX_INIT_STATIC;
+    * (libs-base Source/NSThread.m), a constant-initialised C mutex that needs
+    * no allocation and so cannot depend on the object it protects.  This is
+    * that same shape: PTHREAD_MUTEX_INITIALIZER needs no constructor call, so
+    * the guard is valid from the first instruction of the process, including
+    * in the middle of -[NSThread init].
+    *
+    * `_sharedObjectLock` is left in place for its user-facing -lock/-unlock
+    * semantics; it is simply no longer on the bootstrap path. */
+   pthread_mutex_lock(&_NSThreadSharedBootstrapLock);
+   ravyn_trace_s("SH-locked\n");
+   result=[shared objectForKey:className];
+   ravyn_trace_hex("SH-lookup", (unsigned long)result);
    if(result==nil && create){
+      pthread_mutex_unlock(&_NSThreadSharedBootstrapLock);
       // do not hold lock during object allocation
       result=[NSClassFromString(className) new];
-      [thread->_sharedObjectLock lock];
-      [shared setObject:result forKey:className];
-      [thread->_sharedObjectLock unlock];
-      [result release];
+   ravyn_trace_hex("SH-alloced", (unsigned long)result);
+      pthread_mutex_lock(&_NSThreadSharedBootstrapLock);
+      /* Another thread may have published the same class name while the
+       * allocation ran without the lock held; keep whichever landed first so
+       * callers see one shared instance per (thread, class). */
+      id existing=[shared objectForKey:className];
+      if(existing==nil){
+         [shared setObject:result forKey:className];
+      } else {
+         [result release];
+         result=existing;
+      }
+   }
+   pthread_mutex_unlock(&_NSThreadSharedBootstrapLock);
+   if (ravyn_sh_ret_count < 200) {
+      ravyn_sh_ret_count++;
+      ravyn_trace_hex("SH-ret", (unsigned long)result);
+      const char *cn = [className cStringUsingEncoding:NSASCIIStringEncoding];
+      if (cn) {
+         char buf[128]; int n=0;
+         buf[n++]='c'; buf[n++]='l'; buf[n++]='a'; buf[n++]='s'; buf[n++]='s';
+         for (int i=0; cn[i] && n<120; i++) buf[n++]=cn[i];
+         buf[n++]='\n';
+         write(2, buf, (size_t)n);
+      }
+   } else {
+      ravyn_sh_ret_count++;
    }
    ravyn_capture_shared("A/B/C", (void *)thread, (void *)shared,
        (void *)thread->_sharedObjectLock, (void *)result);

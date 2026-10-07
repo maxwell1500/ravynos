@@ -49,15 +49,15 @@ static NSLocale *_sharedCurrentLocale = nil;
    return _sharedSystemLocale;
 }
 
-+currentLocale {
+ +currentLocale {
+   if(_sharedCurrentLocale==nil)
+      write(2,"LC-enter\n",9);
    if (_sharedCurrentLocale == nil)
    {
-      NSString *localeIdentifier;
-      
-      if([self respondsToSelector:@selector(_platformCurrentLocaleIdentifier)])
-       localeIdentifier=[self performSelector:@selector(_platformCurrentLocaleIdentifier)];
-      else
-       localeIdentifier=@"en_US";
+      /* ravynOS: skip performSelector:_platformCurrentLocaleIdentifier --
+       * the ObjC runtime's performSelector path is slow on TCG and crashes
+       * with NULL pointer dereference.  Use hardcoded locale. */
+      NSString *localeIdentifier = @"en_US";
        
       _sharedCurrentLocale = [[NSLocale alloc] initWithLocaleIdentifier:localeIdentifier];
    }
@@ -143,29 +143,9 @@ static NSLocale *_sharedCurrentLocale = nil;
 									   nil
 									   ];
 	
-	if([[self class] respondsToSelector:@selector(_platformLocaleAdditionalDescriptionForIdentifier:)]) {
-		// Use any platform specific method to fill the locale info if one is defined
-		NSDictionary *info = [[self class] performSelector:@selector(_platformLocaleAdditionalDescriptionForIdentifier:) withObject:identifier];
-		[localeInfo addEntriesFromDictionary:info];
-	} else {
-		// Else use setlocale & localeconv to try to get some locale info
-		char *currentLocale = setlocale(LC_ALL, NULL);
-		if (setlocale(LC_ALL, [[identifier UTF8String]
-                    stringByAppendingString:@".UTF-8"]) == NULL) {
-			identifier = @"en_US";
-		}
-		struct lconv *conv = localeconv();
-		
-		// FIXME: This is wrong in that it is using the current locales value, not the identified one
-		NSNumber *usesMetric=[NSNumber numberWithBool:NSCurrentLocaleIsMetric(identifier)];
-		
-		[localeInfo setObject:[NSString stringWithUTF8String:conv->decimal_point] forKey: NSLocaleDecimalSeparator];
-		[localeInfo setObject:[NSString stringWithUTF8String:conv->currency_symbol] forKey: NSLocaleCurrencySymbol];
-		[localeInfo setObject:usesMetric forKey: NSLocaleUsesMetricSystem];
-		
-		// Restore the initial locale
-		setlocale(LC_ALL, currentLocale);
-	}
+   /* ravynOS: skip performSelector and setlocale/localeconv -- the
+    * performSelector path crashes with NULL pointer dereference on TCG,
+    * and setlocale/localeconv are not needed for boot. */
 	_locale = [[NSDictionary allocWithZone:NULL] initWithDictionary:localeInfo];
 	return self;
 }

@@ -15,7 +15,8 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 #include <string.h>
 #include <stdio.h>
-
+#include <unistd.h>
+static int ravyn_fsrep_count = 0;
 
 /*  The rule of slash is to always use / for slash. All calls to platform API's must convert between
     the / and the platform slash. All public API, down to the Objective-C C string image name calls must use /.
@@ -301,7 +302,23 @@ extern char *NSString_unicodeToAnyCString(NSStringEncoding encoding,
 }
 
 -(const char *)fileSystemRepresentation {
-   return [[NSFileManager defaultManager] fileSystemRepresentationWithPath:self];
+   if (ravyn_fsrep_count < 50) {
+      char buf[64]; int n=0;
+      for (const char *s="FSREP"; *s; s++) buf[n++]=*s;
+      buf[n++]='=';
+      int cnt=ravyn_fsrep_count;
+      if (cnt>=1000) { buf[n++]='1'; buf[n++]='0'; buf[n++]='0'; buf[n++]='0'; cnt-=1000; }
+      if (cnt>=100) { buf[n++]='0'+cnt/100; cnt%=100; }
+      if (cnt>=10) { buf[n++]='0'+cnt/10; cnt%=10; }
+      buf[n++]='0'+cnt;
+      buf[n++]='\n';
+      write(2, buf, (size_t)n);
+   }
+   ravyn_fsrep_count++;
+   /* ravynOS: bypass NSFileManager -- the NSThreadSharedInstance/NSFileManager
+    * chain is too slow on TCG and triggers NULL pointer dereference crashes
+    * in AppKit after ~45 calls.  Return the C string directly. */
+   return [self cString];
 }
 
 -(const uint16_t *)fileSystemRepresentationW {

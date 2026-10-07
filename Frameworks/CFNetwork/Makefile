@@ -64,7 +64,13 @@ CPPFLAGS += -F${RAVYN_SDKROOT}${SLF}/CoreServices.framework/Frameworks \
 # CFNetwork.framework is on the SDK framework search path. Install it the way
 # CoreFoundation/CoreGraphics do.
 fmwk-install-hook:
-.for dir in ${RAVYN_SDKROOT}/System/Library/Frameworks/ ${SYSROOT_DIR}/System/Library/Frameworks/
+	# ravynOS: RAVYN_REPO_SDKROOT is the in-repo SDK that
+# tools/bootlab/make_gui_manifest.py stages from, and it PREFERS it over
+# the build tree (repo-first candidate order). It used to be written only
+# by hand, so a framework built today left the staged copy stale and the
+# image silently shipped an old binary. Additive: the build-tree copies
+# are what subsequent links resolve against and must be preserved.
+.for dir in ${RAVYN_SDKROOT}/System/Library/Frameworks/ ${SYSROOT_DIR}/System/Library/Frameworks/ ${RAVYN_REPO_SDKROOT}/System/Library/Frameworks/
 	mkdir -p ${dir}
 	cp -Rfp ${.OBJDIR}/${FRAMEWORK}.framework ${dir}
 .endfor

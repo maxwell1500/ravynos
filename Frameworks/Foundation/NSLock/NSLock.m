@@ -10,14 +10,38 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 #import <Foundation/NSLock.h>
 #import <Foundation/NSPlatform.h>
 #import <Foundation/NSRaise.h>
+#import "../platform_posix/NSLock_posix.h"
 
 @implementation NSLock
 
+/* ravynOS: the abstract NSLock is instantiated through the CONCRETE platform
+ * class directly, not through [[NSPlatform currentPlatform] lockClass].
+ *
+ * Asking the platform instance here closes a construction cycle that makes
+ * Foundation unusable before main():
+ *
+ *   NSPlatformCurrentThread  ->  [NSThread alloc] + -[NSThread init]
+ *     ->  [NSLock new]  ->  +[NSLock alloc]
+ *       ->  [[NSPlatform currentPlatform] lockClass]
+ *         ->  NSThreadSharedInstance  ->  NSPlatformCurrentThread  ->  ...
+ *
+ * lockClass is a constant ([NSPlatform_posix -lockClass] just returns
+ * [NSLock_posix class]), so consulting the platform *instance* buys nothing and
+ * costs a re-entrant call into the very machinery that is still starting up.
+ * Measured on this tree: with the platform lookup in place WindowServer crashed
+ * at +[NSLock alloc]'s objc_msgSend of `lockClass` (fault isa+0x18, g42-g48);
+ * reordering the publish instead exposed unbounded recursion in the same cycle
+ * (g49, fault on an unmapped stack page).
+ *
+ * NSLock_posix is the only concrete NSLock subclass on this platform and lives
+ * in the same framework, so naming it directly is both correct and honest about
+ * what +alloc does.  -[NSPlatform_posix lockClass] is left in place for callers
+ * that already hold a platform instance. */
 +allocWithZone:(NSZone *)zone {
-   if(self==[NSLock class])
-    return NSAllocateObject([[NSPlatform currentPlatform] lockClass],0,zone);
-   else
-    return NSAllocateObject(self,0,zone);
+  if(self==[NSLock class])
+   return NSAllocateObject([NSLock_posix class],0,zone);
+  else
+   return NSAllocateObject(self,0,zone);
 
 }
 
@@ -29,7 +53,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
  * in +alloc as well; NSString/NSString.m carries the same fix.  */
 +(id)alloc {
    if(self==[NSLock class])
-    return NSAllocateObject([[NSPlatform currentPlatform] lockClass],0,NULL);
+   return NSAllocateObject([NSLock_posix class],0,NULL);
 
    return NSAllocateObject(self,0,NULL);
 }

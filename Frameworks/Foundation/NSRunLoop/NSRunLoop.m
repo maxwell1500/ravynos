@@ -23,6 +23,15 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 NSString * const NSDefaultRunLoopMode=@"kCFRunLoopDefaultMode";
 NSString * const NSRunLoopCommonModes=@"kCFRunLoopCommonModes";
 
+#include <unistd.h>
+/* ravynOS: unconditional trace for GUI bring-up debugging. */
+static void rltrace(const char *s)
+{
+	size_t n = 0;
+	while (s[n]) n++;
+	(void)write(2, s, n);
+}
+
 @implementation NSRunLoop
 
 +(NSRunLoop *)currentRunLoop {
@@ -34,17 +43,22 @@ NSString * const NSRunLoopCommonModes=@"kCFRunLoopCommonModes";
 }
 
 -init {
+   rltrace("RL-enter\n");
    NSInputSource *parentDeath;
 
    _modes=NSCreateMapTableWithZone(NSObjectMapKeyCallBacks,NSObjectMapValueCallBacks,0,[self zone]);
+   rltrace("RL-modes\n");
    _commonModes=[[NSMutableArray alloc] init];
    [_commonModes addObject:NSDefaultRunLoopMode];
    _currentMode=NSDefaultRunLoopMode;
    _continue=[[NSMutableArray alloc] init];
    _orderedPerforms=[NSMutableArray new];
+   rltrace("RL-arrays\n");
 
+   rltrace("RL-parentdeath\n");
    if((parentDeath=[[NSPlatform currentPlatform] parentDeathInputSource])!=nil)
     [self addInputSource:parentDeath forMode:NSDefaultRunLoopMode];
+   rltrace("RL-done\n");
 
    return self;
 }

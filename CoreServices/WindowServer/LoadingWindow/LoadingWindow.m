@@ -33,58 +33,42 @@ NSTimer *timer;
     [self setLevel:kCGMaximumWindowLevelKey];
     return self;
 }
-
 -(void)applicationWillFinishLaunching:(NSNotification *)note {
-    backdrop = [[NSImageView alloc] initWithFrame:[self frame]];
-    NSString *path = [[NSBundle mainBundle] pathForResource:@"splash-1" ofType:@"png"];
-    NSImage *splash = [[NSImage alloc] initWithContentsOfFile:path];
-    [splash setScalesWhenResized:YES];
-    [splash setSize:NSMakeSize([self frame].size.width, [self frame].size.height)];
-    [backdrop setImage:splash];
-
-    float width = [self frame].size.width;
-    float height = [self frame].size.height;
-
-    spinner = [[NSProgressIndicator alloc]
-        initWithFrame:NSMakeRect(width / 2 - 32, height / 4, 64, 64)];
-    [spinner setControlSize:NSRegularControlSize];
-    [spinner setIndeterminate:YES];
-    [spinner setAnimationDelay:0.025];
-    [spinner setUsesThreadedAnimation:NO];
-    [spinner setStyle:NSProgressIndicatorSpinningStyle];
-
-    [backdrop addSubview:spinner];
-    [[self contentView] addSubview:backdrop];
-    [spinner startAnimation:nil];
-
-    [self becomeMainWindow];
-    [self makeKeyAndOrderFront:nil];
-
-    timer = [NSTimer scheduledTimerWithTimeInterval:0.05 target:nil selector:NULL
-                                   userInfo:nil repeats:YES];
-    [NSThread detachNewThreadSelector:@selector(watchForFile:) toTarget:self withObject:nil];
+   write(2, "[LW] applicationWillFinishLaunching\n", 36);
+   /* ravynOS: skip NSImageView/NSProgressIndicator -- the NSWindow
+    * initialization chain triggers 45+ NSFileManager/fileSystemRepresentation
+    * calls that crash with NULL pointer dereference on TCG.  Just make
+    * the window key and enter the run loop. */
+   [self becomeMainWindow];
+   [self makeKeyAndOrderFront:nil];
+   timer = [NSTimer scheduledTimerWithTimeInterval:0.05 target:nil selector:NULL
+                          userInfo:nil repeats:YES];
+   [NSThread detachNewThreadSelector:@selector(watchForFile:) toTarget:self withObject:nil];
 }
 
 -(void)watchForFile:(id)object {
+    write(2, "[LW] watchForFile thread running\n", 33);
     while(access("/var/run/windowserver", F_OK) != 0) {
-        usleep(50000);
+        usleep(100000);
     }
-
+    write(2, "[LW] /var/run/windowserver detected, terminating\n", 49);
     [spinner stopAnimation:nil];
     [NSApp terminate:self];
 }
 
 @end
 
-int main(int argc, const char *argv[]) {
-    __NSInitializeProcess(argc, argv);
+extern void bootstrap_init(void);
 
-    @autoreleasepool {
-        NSApplication *app = [NSApplication sharedApplication];
-        LoadingWindow *del = [LoadingWindow new];
-        [NSApp setDelegate:del];
-        [NSApp run];
-    }
+int main(int argc, const char *argv[]) {
+    write(2, "[LW] main entered\n", 18);
+    bootstrap_init();
+    write(2, "[LW] bootstrap_init done\n", 25);
+    /* ravynOS: skip __NSInitializeProcess and NSApplication -- the init
+     * path crashes with NULL pointer dereference on TCG.  The
+     * WindowServer has already painted the desktop.  Exit with status 0
+     * so the WindowServer transitions to LOGINWINDOW. */
+    write(2, "[LW] exiting without ObjC init\n", 32);
     exit(0);
 }
 

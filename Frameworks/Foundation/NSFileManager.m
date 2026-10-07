@@ -16,6 +16,9 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 #import <Foundation/NSBundle.h>
 #import <Foundation/NSURL.h>
 #import <Foundation/NSPathUtilities.h>
+#include <dirent.h>
+#include <string.h>
+#include <sys/stat.h>
 
 NSString * const NSFileType = @"NSFileType";
 NSString * const NSFileTypeRegular = @"NSFileTypeRegular";
@@ -213,8 +216,18 @@ stringByAppendingPathComponent:[files objectAtIndex:x]] paths:paths];
 }
 
 -(NSArray *)directoryContentsAtPath:(NSString *)path {
-   //NSInvalidAbstractInvocation();
-   return nil;
+   DIR *dirp = opendir([path fileSystemRepresentation]);
+   if (dirp == NULL)
+      return nil;
+   NSMutableArray *result=[NSMutableArray array];
+   struct dirent *dire;
+   while ((dire = readdir(dirp))) {
+      if (strcmp(dire->d_name, ".") == 0) continue;
+      if (strcmp(dire->d_name, "..") == 0) continue;
+      [result addObject:[NSString stringWithCString:dire->d_name encoding:NSUTF8StringEncoding]];
+   }
+   closedir(dirp);
+   return result;
 }
 
 -(NSDirectoryEnumerator *)enumeratorAtPath:(NSString *)path {
@@ -267,20 +280,17 @@ stringByAppendingPathComponent:[files objectAtIndex:x]] paths:paths];
 }
 
 -(BOOL)fileExistsAtPath:(NSString *)path {
-   /* *** HACK ALERT ***
-    * For some reason (likely the way this object is created), it has a nil
-    * isa which causes all sorts of fun problems. This function is called
-    * early in an app's initialization of NSBundle so we patch it here
-    * until the root cause can be fixed.
-    */
-   *(uintptr_t *)self = (uintptr_t)objc_lookUpClass("NSFileManager_posix");
    BOOL foo;
    return [self fileExistsAtPath:path isDirectory:&foo];
 }
 
 -(BOOL)fileExistsAtPath:(NSString *)path isDirectory:(BOOL *)isDirectory {
-   //NSInvalidAbstractInvocation();
-   return NO;
+   struct stat buf;
+   if (stat([path fileSystemRepresentation], &buf) < 0)
+      return NO;
+   if (isDirectory != NULL)
+      *isDirectory = S_ISDIR(buf.st_mode);
+   return YES;
 }
 
 -(BOOL)removeFileAtPath:(NSString *)path handler:handler {
@@ -328,8 +338,7 @@ stringByAppendingPathComponent:[files objectAtIndex:x]] paths:paths];
 }
 
 -(const char *)fileSystemRepresentationWithPath:(NSString *)path {
-   //NSInvalidAbstractInvocation();
-   return NULL;
+   return [path cString];
 }
 
 -(const uint16_t *)fileSystemRepresentationWithPathW:(NSString *)path {

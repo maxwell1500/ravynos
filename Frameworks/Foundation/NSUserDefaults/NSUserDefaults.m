@@ -19,7 +19,8 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 #import <Foundation/NSPlatform.h>
 #import <Foundation/NSPersistantDomain.h>
 #import <Foundation/NSRaiseException.h>
-#import <langinfo.h>
+#include <unistd.h>
+#include <langinfo.h>
 
 NSString * const NSGlobalDomain=@"NSGlobalDomain";
 NSString * const NSArgumentDomain=@"NSArgumentDomain";
@@ -115,10 +116,12 @@ NSString * const NSUserDefaultsDidChangeNotification=@"NSUserDefaultsDidChangeNo
 
    [[NSProcessInfo processInfo] environment];
    
+   udtrace("UD-init-start\n");
    [self registerFoundationDefaults];
-
+   udtrace("UD-registerFoundation done\n");
    [self registerArgumentDefaults];
    [self registerProcessNameDefaults];
+   udtrace("UD-registerProcessName done\n");
 
     NSMutableDictionary *dict = [NSMutableDictionary new];
     [dict addEntriesWithDictionary:[_domains objectForKey:NSGlobalDomain]];
@@ -206,6 +209,12 @@ NSString * const NSUserDefaultsDidChangeNotification=@"NSUserDefaultsDidChangeNo
 -initWithUser:(NSString *)user {
    NSUnimplementedMethod();
    return nil;
+}
+static void udtrace(const char *s)
+{
+	size_t n = 0;
+	while (s[n]) n++;
+	(void)write(2, s, n);
 }
 
 static NSUserDefaults* stdUserDefaults = nil;

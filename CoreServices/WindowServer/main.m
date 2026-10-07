@@ -27,6 +27,7 @@
 #import <servers/bootstrap.h>
 #import "message.h"
 
+extern void bootstrap_init(void);
 extern int optopt;
 static jmp_buf jb;
 
@@ -47,12 +48,17 @@ static void crashHandler(int sig) {
 }
 
 int main(int argc, const char *argv[]) {
+    write(2, "[WS] main entered\n", 18);
+    bootstrap_init();
+    write(2, "[WS] bootstrap_init done\n", 25);
     NSAutoreleasePool *pool = [NSAutoreleasePool new];
+    write(2, "[WS] pool created\n", 18);
     int logLevel = WS_ERROR;
     srandomdev();
     int curShell = LOADING;
     WindowServer *ws = nil;
     [pool drain];
+    write(2, "[WS] pool drained\n", 18);
 
     /* Become immortal. Mwahahahaha! 
      * Note: don't trap SIGCHLD - we need it to wait on process exits
@@ -67,39 +73,20 @@ int main(int argc, const char *argv[]) {
     signal(SIGTSTP, SIG_IGN);
     signal(SIGUSR1, SIG_IGN);
     signal(SIGUSR2, SIG_IGN);
-
-    /* Drop our controlling terminal - we're gonna switch */
-    /* This is the recommended but sucky way. Using TIOCNOTTY isn't working */
-    pid_t pid = fork();
-    int status;
-    switch(pid) {
-        case -1: NSLog(@"fork: %s", strerror(errno)); exit(1);
-        case 0: break; // let child continue
-        default: NSLog(@"parent: waiting"); waitpid(pid, &status, 0); exit(status); // parent
-    }
-
+    write(2, "[WS] signals ignored OK\n", 24);
     pthread_t machSvcThread;
     pthread_t kqThread;
     bool svcThreadLive = false, kqThreadLive = false;
-
-    setsid(); // Start a new session
-
-    /* FreeBSD allocated a private vt(4) here and switched the console onto it.
-     * Darwin has neither vt(4) nor syscons: there is no VT_GETACTIVE /
-     * VT_OPENQRY / VT_SETMODE / CONS_MOUSECTL, no vtmode_t and no tcsetsid.
-     * On ravynOS the display is reached directly through /dev/console, which
-     * WindowServer's BSDFramebuffer opens for itself, so there is no console
-     * handover for us to perform.
-     */
-    if(setjmp(jb) != 0)
-        goto __finish; // sighandler must have caught something - get out
-
+    write(2, "[WS] creating WindowServer instance\n", 36);
     ws = [WindowServer new];
-    if(ws == nil)
+    if(ws == nil) {
+        write(2, "[WS] WindowServer new returned nil\n", 35);
         exit(1);
-
-    while(getopt(argc, argv, "LxvD:") != -1) {
-        switch(optopt) {
+    }
+    write(2, "[WS] WindowServer instance created OK\n", 38);
+    int opt;
+    while((opt = getopt(argc, (char * const *)argv, "LxvD:")) != -1) {
+        switch(opt) {
             case 'L': // bypass loginwindow, run desktop for current user
                 curShell = DESKTOP;
                 break;
@@ -124,6 +111,7 @@ int main(int argc, const char *argv[]) {
     svcThreadLive = pthread_create(&machSvcThread, NULL, machSvcLoop, (__bridge void *)ws) == 0;
     kqThreadLive = pthread_create(&kqThread, NULL, kqSvcLoop, (__bridge void *)ws) == 0;
     [ws setShell:curShell];
+    write(2, "[WS] entering ws run\n", 22);
     [ws run];
     ws = nil;
 

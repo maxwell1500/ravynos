@@ -54,6 +54,7 @@
 - (int)openFramebuffer: (const char *)device
 {
     struct fbtype fb;
+    write(2, "[WS] openFramebuffer\n", 21);
 
     fbfd = open(device, O_RDWR);
     if(fbfd < 0) {
@@ -88,24 +89,54 @@
     size_t pagemask = getpagesize() - 1;
     size = (stride * height + pagemask) & ~pagemask;
     data = mmap(NULL, size, PROT_READ|PROT_WRITE, MAP_SHARED|MAP_NOCORE|MAP_NOSYNC, fbfd, 0);
-
     if(data == MAP_FAILED) {
+        write(2, "[WS] fb0 mmap FAILED\n", 21);
         perror("mmap");
         return -1;
     }
+    write(2, "[WS] fb0 mmap OK\n", 17);
+    char geombuf[128];
+    int glen = snprintf(geombuf, sizeof(geombuf), "[WS] fb geom: %dx%d depth %d stride %d size %d\n", width, height, depth, stride, size);
+    write(2, geombuf, glen);
 
-    NSLog(@"fb geometry: %dx%d depth %d stride %d size %d", width, height, depth, stride, size);
-
+    // Paint immediate 4-colour test pattern into mmap'd scanout to prove
+    // scanout visibility end-to-end, matching tools/bootlab/init/fb_probe.c.
+    if(data != NULL && data != MAP_FAILED && stride > 0 && width > 0 && height > 0) {
+        volatile uint32_t *fb_pixels = (volatile uint32_t *)data;
+        uint32_t stride_px = (uint32_t)(stride / 4);
+        for(uint32_t y = 0; y < (uint32_t)height; y++) {
+            volatile uint32_t *row = fb_pixels + (size_t)y * stride_px;
+            for(uint32_t x = 0; x < (uint32_t)width; x++) {
+                uint32_t bar = (x * 4) / (uint32_t)width;
+                uint32_t c;
+                if(bar == 0)
+                    c = 0xFFFFFFFFu; // White
+                else if(bar == 1)
+                    c = 0x00FF0000u; // Red
+                else if(bar == 2)
+                    c = 0x0000FF00u; // Green
+                else
+                    c = 0x000000FFu; // Blue
+                row[x] = c;
+            }
+        }
+        write(2, "[WS] fb test pattern painted OK\n", 32);
+    }
     cs = CGColorSpaceCreateDeviceRGB();
+    write(2, "[WS] creating ctx\n", 18);
     ctx = [O2Context createWithBytes:NULL width:width height:height 
                 bitsPerComponent:8 bytesPerRow:stride colorSpace:(__bridge O2ColorSpaceRef)cs
                 bitmapInfo:[self format] releaseCallback:NULL releaseInfo:NULL];
+    write(2, "[WS] ctx created\n", 17);
     ctxPixels = [[ctx surface] pixelBytes];
+    write(2, "[WS] creating ctx2\n", 19);
     ctx2 = [O2Context createWithBytes:NULL width:width height:height 
             bitsPerComponent:8 bytesPerRow:stride colorSpace:(__bridge O2ColorSpaceRef)cs
             bitmapInfo:[self format] releaseCallback:NULL releaseInfo:NULL];
+    write(2, "[WS] ctx2 created\n", 18);
     ctx2Pixels = [[ctx2 surface] pixelBytes];
     activeCtx = ctx;
+    write(2, "[WS] openFramebuffer finished OK\n", 33);
     return 0;
 }
 
@@ -130,10 +161,11 @@
         pixels = [[captureCtx surface] pixelBytes];
     else 
         pixels = ctxPixels;
-
-    O2ContextSetRGBFillColor(activeCtx, 0, 0, 0, 1);
+    write(2, "[WS] fb clear starting\n", 23);
+    O2ContextSetRGBFillColor(activeCtx, 0.15, 0.25, 0.35, 1);
     O2ContextFillRect(activeCtx, (O2Rect)NSMakeRect(0, 0, width, height));
     memcpy(data, pixels, size);
+    write(2, "[WS] fb clear finished\n", 23);
 }
 
 - (void)draw
@@ -143,6 +175,14 @@
         pixels = [[captureCtx surface] pixelBytes];
     else
         pixels = ctxPixels;
+
+    static int draw_count = 0;
+    if(draw_count < 5 || (draw_count % 60) == 0) {
+        char dbuf[32];
+        int dn = snprintf(dbuf, sizeof(dbuf), "[WS] fb draw #%d\n", draw_count);
+        write(2, dbuf, dn);
+    }
+    draw_count++;
     memcpy(data, pixels, size); // FIXME: this is slooowwww
 }
 

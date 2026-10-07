@@ -1248,11 +1248,17 @@ kern_return_t _windowServerRPC(void *data, size_t len, void *replyBuf, int *repl
 
     int flags = 0;
     if(replyBuf != NULL && replyLen != NULL)
-        flags = MACH_RCV_MSG;
+        flags = MACH_RCV_MSG | MACH_RCV_TIMEOUT;
+
+    char logbuf[128];
+    int logn = snprintf(logbuf, sizeof(logbuf), "[CG] _windowServerRPC code %u sending to port %u\n", *(uint32_t*)data, wsPort);
+    write(2, logbuf, logn);
 
     kern_return_t ret = KERN_SUCCESS;
     ret = mach_msg((mach_msg_header_t *)&msg, MACH_SEND_MSG|MACH_SEND_TIMEOUT|flags, sizeof(msg),
             sizeof(msg), replyPort, 2000, MACH_PORT_NULL);
+    logn = snprintf(logbuf, sizeof(logbuf), "[CG] _windowServerRPC mach_msg returned 0x%x\n", ret);
+    write(2, logbuf, logn);
     if(ret == KERN_SUCCESS && replyBuf != NULL) {
         Message *rmsg = (Message *)&msg;
         if(*replyLen >= rmsg->len) {

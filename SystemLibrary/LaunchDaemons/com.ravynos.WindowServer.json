@@ -4,11 +4,12 @@
                 "LANG": "C.UTF-8"
 	},
 	"Label": "com.ravynos.WindowServer",
+	"MachServices": {
+		"com.ravynos.WindowServer": true
+	},
 	"ProgramArguments": [
 		"/System/Library/CoreServices/WindowServer.app/Contents/ravynOS/WindowServer"
 	],
-	"StandardOutPath": "/dev/console",
-	"StandardErrorPath": "/dev/console",
 	"KeepAlive": true,
 	"RunAtLoad": true
 }

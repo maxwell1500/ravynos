@@ -38,6 +38,7 @@ SOFTWARE. */
 
 - (NSArray *)screens;
 - (uint32_t)depth;
+- (BOOL)isReady;
 
 - (NSPasteboard *)pasteboardWithName:(NSString *)name;
 

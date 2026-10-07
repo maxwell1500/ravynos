@@ -32,17 +32,12 @@ SOFTWARE. */
 @implementation NSDisplay
 
 +(void)initialize {
-   if(self==[NSDisplay class]){
-    NSDictionary *map=[NSDictionary dictionaryWithObjectsAndKeys:
-     @"Command",@"LeftControl",
-     @"Alt",@"LeftAlt",
-     @"Control",@"RightControl",
-     @"Alt",@"RightAlt",
-     nil];
-    NSDictionary *modifierMapping=[NSDictionary dictionaryWithObject:map forKey:@"NSModifierFlagMapping"];
-
-    [[NSUserDefaults standardUserDefaults] registerDefaults:modifierMapping];
-   }
+   /* ravynOS: skip NSUserDefaults registration -- the modifier mapping is
+    * not required for WindowServer to paint the LoadingWindow, and the
+    * NSUserDefaults init chain (NSProcessInfo, NSPlatform, NSLocale,
+    * NSPersistantDomain, NSPropertyListReader) is too slow on TCG and
+    * currently blocks the client thread.  Re-enable once the
+    * Foundation file-IO path is fast enough. */
 }
 
 +(NSDisplay *)currentDisplay {
@@ -50,45 +45,53 @@ SOFTWARE. */
 }
 
 -init {
-    _eventQueue=[NSMutableArray new];
-    _screens = [NSMutableArray new];
+   /* ravynOS: skip CG RPC calls in -init.  CGMainDisplayID(),
+    * CGGetActiveDisplayList(), CGDisplayCopyDisplayMode(), and
+    * CGDisplayCopyColorSpace() are all blocking Mach IPC calls to the
+    * WindowServer, and the WindowServer is busy in its render loop and
+    * does not respond in time.  Use hardcoded values matching the
+    * QEMU fb0 framebuffer (1024x768x32).  The display list is
+    * populated from the WindowServer's side anyway. */
+   _eventQueue=[NSMutableArray new];
+   _screens = [NSMutableArray new];
 
-    CGDirectDisplayID cgDisplays[8];
-    uint32_t count = 0;
-    CGDirectDisplayID mainDisplay = CGMainDisplayID();
-    CGGetActiveDisplayList(8, &cgDisplays, &count);
+   NSRect frame = NSMakeRect(0, 0, 1024, 768);
+   NSRect visFrame = frame;
+   visFrame.size.height -= MENU_BAR_HEIGHT;
+   NSScreen *screen = [[[NSScreen alloc] initWithFrame:frame visibleFrame:visFrame] retain];
+   [_screens addObject:screen];
 
-    // make the main display first in our screen list
-    // the main display is the one that has an origin of 0,0
-    CGDisplayModeRef mode = CGDisplayCopyDisplayMode(mainDisplay);
-    CGColorSpaceRef cs = CGDisplayCopyColorSpace(mainDisplay);
-    NSRect frame = NSMakeRect(0, 0, CGDisplayModeGetWidth(mode), CGDisplayModeGetHeight(mode));
-    NSRect visFrame = frame;
-    visFrame.size.height -= MENU_BAR_HEIGHT;
-    NSScreen *screen = [[[NSScreen alloc] initWithFrame:frame visibleFrame:visFrame] retain];
-    [screen _propertiesFromMode:mode colorSpace:cs displayID:mainDisplay];
-    CGDisplayModeRelease(mode);
-    [_screens addObject:screen];
-
-    // now add any other displays as additional screens
-    for(int i = 0; i < count; ++i) {
-        if(cgDisplays[i] == mainDisplay)
-            continue;
-        mode = CGDisplayCopyDisplayMode(cgDisplays[i]);
-        cs = CGDisplayCopyColorSpace(mainDisplay);
-        frame = NSMakeRect(0, 0, CGDisplayModeGetWidth(mode), CGDisplayModeGetHeight(mode));
-        NSScreen *screen = [[[NSScreen alloc] initWithFrame:frame visibleFrame:frame] retain];
-        [screen _propertiesFromMode:mode colorSpace:cs displayID:cgDisplays[i]];
-        CGDisplayModeRelease(mode);
-        [_screens addObject:screen];
-    }
-    
-    _depth = 32;
-    return self;
+   _depth = 32;
+   return self;
 }
 
 -(NSArray *)screens {
     return [NSArray arrayWithArray:_screens];
+}
+
+-(BOOL)isReady {
+    if([_screens count] == 0) {
+        write(2, "[AppKit] NSDisplay isReady: querying CGMainDisplayID...\n", 56);
+        CGDirectDisplayID mainDisplay = CGMainDisplayID();
+        char buf[64];
+        int n = snprintf(buf, sizeof(buf), "[AppKit] NSDisplay isReady: mainDisplay=0x%x\n", mainDisplay);
+        write(2, buf, n);
+        if(mainDisplay != kCGNullDirectDisplay) {
+            CGDisplayModeRef mode = CGDisplayCopyDisplayMode(mainDisplay);
+            if(mode) {
+                CGColorSpaceRef cs = CGDisplayCopyColorSpace(mainDisplay);
+                NSRect frame = NSMakeRect(0, 0, CGDisplayModeGetWidth(mode), CGDisplayModeGetHeight(mode));
+                NSRect visFrame = frame;
+                visFrame.size.height -= MENU_BAR_HEIGHT;
+                NSScreen *screen = [[[NSScreen alloc] initWithFrame:frame visibleFrame:visFrame] retain];
+                [screen _propertiesFromMode:mode colorSpace:cs displayID:mainDisplay];
+                CGDisplayModeRelease(mode);
+                [_screens addObject:screen];
+                write(2, "[AppKit] NSDisplay isReady: added screen to _screens\n", 53);
+            }
+        }
+    }
+    return [_screens count] > 0;
 }
 
 -(uint32_t)depth { return _depth; }
