@@ -75,7 +75,13 @@ BOOL NSNextDictionaryEnumeratorPair(CFDictionaryEnumerator *state,void **key,voi
 @implementation NSMutableDictionary_CF
 
 const void *objectRetainCallBack(CFAllocatorRef allocator,const void *value) {
-   return CFRetain(value);
+   /* These objects are NSObject-derived (dicts/numbers/strings created via
+    * NSAllocateObject), so their lifetime is the ObjC refcount.  Using CFRetain
+    * here increments a separate CF refcount that ObjC -release/-dealloc ignores,
+    * so the container neither keeps the value alive nor releases it correctly.
+    * Retain/release via the ObjC API to match how the object is created and how
+    * the key callback (copyWithZone:) retains. */
+   return (const void *)[(id)value retain];
 }
 
 const void *objectCopyCallBack(CFAllocatorRef allocator,const void *value) {
@@ -83,7 +89,7 @@ const void *objectCopyCallBack(CFAllocatorRef allocator,const void *value) {
 }
 
 static void objectReleaseCallBack(CFAllocatorRef allocator,const void *value) {
-   CFRelease(value);
+   [(id)value release];
 }
 
 static CFDictionaryKeyCallBacks objectKeyCallBacks={
@@ -121,8 +127,13 @@ static CFStringRef defaultCopyDescription(const void *value) {
 }
 
 -objectForKey:key {
-   NSUInteger i=_keyCallBacks.hash(key)%_nBuckets;
+   NSUInteger i;
    NSDictNode *j;
+
+   if(_buckets == NULL || _nBuckets == 0)
+    return NULL;
+
+   i=_keyCallBacks.hash(key)%_nBuckets;
 
    for(j=_buckets[i];j!=NULL;j=j->next)
     if(j->key == key || _keyCallBacks.equal(j->key,key))
@@ -132,7 +143,11 @@ static CFStringRef defaultCopyDescription(const void *value) {
 }
 
 static CFDictionaryEnumerator keyEnumeratorState(NSMutableDictionary_CF *self){
-  CFDictionaryEnumerator state;
+   CFDictionaryEnumerator state;
+
+   memset(&state,0,sizeof(state));
+   if(self->_buckets == NULL || self->_nBuckets == 0)
+    return state;
 
    state._nBuckets=self->_nBuckets;
    state._buckets=self->_buckets;
@@ -150,8 +165,19 @@ static CFDictionaryEnumerator keyEnumeratorState(NSMutableDictionary_CF *self){
 static void NSDictInsert(NSMutableDictionary_CF *self,const void *key,const void *value){
    NSZone    *zone;
    NSUInteger   hash=self->_keyCallBacks.hash(key);
-   NSUInteger        i=hash%self->_nBuckets;
+   NSUInteger        i;
    NSDictNode *j;
+
+   /* A dealloc in progress on this instance (or a not-yet-initialised one)
+    * leaves _buckets NULL.  Rather than divide by zero, treat it as an empty
+    * container and lazily (re)create the bucket array. */
+   if(self->_buckets == NULL || self->_nBuckets == 0){
+    self->_nBuckets = 4;
+    self->_buckets = NSZoneCalloc(NULL,self->_nBuckets,sizeof(NSDictNode *));
+    self->_count = 0;
+   }
+
+   i=hash%self->_nBuckets;
 
    for(j=self->_buckets[i];j!=NULL;j=j->next)
     if(self->_keyCallBacks.equal(j->key,key)){
@@ -221,8 +247,14 @@ static inline void setObjectForKey(NSMutableDictionary_CF *self,id object,id key
 }
 
 static void NSDictRemove(NSMutableDictionary_CF *self,const void *key){
-   NSUInteger i=self->_keyCallBacks.hash(key)%self->_nBuckets;
-   NSDictNode *j=self->_buckets[i],*prev=j;
+   NSUInteger i;
+   NSDictNode *j,*prev;
+
+   if(self->_buckets == NULL || self->_nBuckets == 0)
+    return;
+
+   i=self->_keyCallBacks.hash(key)%self->_nBuckets;
+   j=self->_buckets[i],prev=j;
 
    for(;j!=NULL;j=j->next){
     if(self->_keyCallBacks.equal(j->key,key)){
@@ -260,7 +292,23 @@ static void NSDictRemove(NSMutableDictionary_CF *self,const void *key){
    _valueCallBacks.release=(valueCallBacks->release!=NULL)?valueCallBacks->release:defaultReleaseCallBack;
    _valueCallBacks.copyDescription=(valueCallBacks->copyDescription!=NULL)?valueCallBacks->copyDescription:defaultCopyDescription;
 
-   _count=0;
+   /* A second -init on the same instance (the allocWithZone class-cluster
+     * path can hand an already-initialised object back to a subclass's
+     * designated initialiser) would leak, or worse keep, the old bucket
+     * array with its stale node pointers.  Release it first. */
+    if(_buckets!=NULL){
+     NSUInteger b;
+     for(b=0;b<_nBuckets;b++){
+      NSDictNode *j=_buckets[b],*next;
+      for(;j!=NULL;j=next){
+       next=j->next;
+       NSZoneFree(NULL,j);
+      }
+     }
+     NSZoneFree(NULL,_buckets);
+     _buckets=NULL;
+    }
+    _count=0;
     _nBuckets=4;
     _buckets=NSZoneCalloc(NULL,_nBuckets,sizeof(NSDictNode *));
     
@@ -293,19 +341,37 @@ static void NSDictRemove(NSMutableDictionary_CF *self,const void *key){
    NSZone *zone=NSZoneFromPointer(self);
    NSUInteger i;
    NSDictNode *j,*next;
+   void *key,*value;
+   struct _NSDictNode **buckets=self->_buckets;
+   NSUInteger nBuckets=self->_nBuckets;
 
-   for(i=0;i<_nBuckets;i++){
-    for(j=self->_buckets[i];j!=NULL;j=next){
-     _keyCallBacks.release(NULL,j->key);
-     _valueCallBacks.release(NULL,j->value);
+   /* Detach the container before running any release callback.  The
+    * callbacks are arbitrary application code and may re-enter this
+    * dictionary (observers registered on the same notification tear
+    * themselves down from dealloc), so both reading j->next after the
+    * release and leaving _buckets live across the loop let a re-entrant
+    * call free memory we are about to walk.  Detach first, then walk. */
+   self->_buckets=NULL;
+   self->_nBuckets=0;
+   self->_count=0;
+
+   for(i=0;i<nBuckets;i++){
+    for(j=buckets[i];j!=NULL;j=next){
+     /* Read the chain link and the stored objects BEFORE releasing: the
+      * release is arbitrary code and may free j. */
+     key=j->key;
+     value=j->value;
      next=j->next;
+
+     if(key != NULL)
+      _keyCallBacks.release(NULL,key);
+     if(value != NULL)
+      _valueCallBacks.release(NULL,value);
      NSZoneFree(zone,j);
     }
    }
-   NSZoneFree(zone,self->_buckets);
+   NSZoneFree(zone,buckets);
    NSDeallocateObject(self);
-   return;
-   [super dealloc];
 }
 
 -(void)addEntriesFromDictionary:(NSDictionary *)dictionary {
