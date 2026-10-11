@@ -26,6 +26,7 @@ SOFTWARE. */
 #import <Onyx2D/O2Font.h>
 #import <AppKit/O2Font_FT.h>
 #import <fontconfig.h>
+#import <poll.h>
 
 #define MENU_BAR_HEIGHT 24  // exclude from visibleFrame height
 
@@ -169,18 +170,36 @@ SOFTWARE. */
 
 -(NSEvent *)nextEventMatchingMask:(unsigned)mask untilDate:(NSDate *)untilDate inMode:(NSString *)mode dequeue:(BOOL)dequeue {
     NSEvent *result=nil;
-
     if([_eventQueue count])
         untilDate=[NSDate date];
-   
-    [[NSRunLoop currentRunLoop] addInputSource:[NSApp inputSource] forMode:mode];
-    [[NSRunLoop currentRunLoop] runMode:mode beforeDate:untilDate];
+    else {
+        /* The pipe wake-up (NSSelectInputSource -> NSRunLoop) does not reliably
+         * return on ravynOS, and blocking forever here starves every client of
+         * key, mouse and redraw events.  Bound the wait instead: the mach service
+         * thread posts events and pokes us through _machEventPipe, so a short
+         * poll keeps the queue live without depending on that select path. */
+        NSDate *bounded=[NSDate dateWithTimeIntervalSinceNow:0.05];
+        untilDate=[untilDate earlierDate:bounded];
+    }
+    [[NSRunLoop currentRunLoop] limitDateForMode:mode];
+    int pipeFd = [NSApp machEventPipeReadFd];
+    if(pipeFd >= 0) {
+        struct pollfd pfd;
+        pfd.fd = pipeFd;
+        pfd.events = POLLIN;
+        NSTimeInterval waitFor = [untilDate timeIntervalSinceNow];
+        if(waitFor < 0)
+            waitFor = 0;
+        if(waitFor > 0.25)
+            waitFor = 0.25;
+        poll(&pfd, 1, (int)(waitFor * 1000));
+    }
     [NSApp _drainPipe]; // if there are events, read one at a time
     [[NSRunLoop currentRunLoop] removeInputSource:[NSApp inputSource] forMode:mode];
 
+    @synchronized(_eventQueue) {
     while(result==nil && [_eventQueue count]>0) {
-        NSEvent *check=[_eventQueue objectAtIndex:0];
-    
+        NSEvent *check=[_eventQueue objectAtIndex:0];    
     if(!(NSEventMaskFromType([check type])&mask))
          [_eventQueue removeObjectAtIndex:0];
     else {
@@ -194,7 +213,7 @@ SOFTWARE. */
             [_eventQueue removeObjectAtIndex:0];
        }
    }
-
+    }
     if(result==nil)
         result=[[[NSEvent alloc] initWithType:NSAppKitSystem location:NSMakePoint(0,0) modifierFlags:0 window:nil] autorelease];
    
@@ -202,6 +221,7 @@ SOFTWARE. */
 }
 
 -(void)discardEventsMatchingMask:(unsigned)mask beforeEvent:(NSEvent *)event {
+   @synchronized(_eventQueue) {
    int count=[_eventQueue count];
 
    while(--count>=0){
@@ -215,16 +235,24 @@ SOFTWARE. */
     if(NSEventMaskFromType([event type])&mask)
      [_eventQueue removeObjectAtIndex:count];
    }
+   }
 }
 
 -(void)postEvent:(NSEvent *)event atStart:(BOOL)atStart {
-   if(atStart)
-    [_eventQueue insertObject:event atIndex:0];
-   else
-    [_eventQueue addObject:event];
+   /* Called from the NSApplication mach service thread while the main thread
+    * drains the same queue in -nextEventMatchingMask:.  NSMutableArray is not
+    * thread-safe, so the two threads racing addObject/removeObjectAtIndex
+    * realloc/free the backing store concurrently and corrupt the allocator. */
+   @synchronized(_eventQueue) {
+    if(atStart)
+     [_eventQueue insertObject:event atIndex:0];
+    else
+     [_eventQueue addObject:event];
+   }
 }
 
 -(BOOL)containsAndRemovePeriodicEvents {
+   @synchronized(_eventQueue) {
    BOOL result=NO;
    int  count=[_eventQueue count];
 
@@ -236,6 +264,7 @@ SOFTWARE. */
    }
 
    return result;
+   }
 }
 
 -(unsigned)modifierForDefault:(NSString *)key:(unsigned)standard {

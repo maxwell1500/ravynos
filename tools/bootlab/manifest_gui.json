@@ -1373,6 +1373,11 @@
       "comment": "system bootstrap, run by launchctl's System session before LaunchDaemons"
     },
     {
+      "path": "etc/passwd",
+      "text": "root:*:0:0:Charlie &:/root:/bin/sh\ndaemon:*:1:1:Daemon:/var/db:/usr/sbin/nologin\n",
+      "comment": "passwd database for libsystem_pwdgrp. Without it, setpwent()'s fopen() fails and leaves _pw_fp NULL, so getpwnam()/getpwuid() can never resolve any user; SystemUIServer's clock asks for the current user during init and spins in the getpwent/setpwent cycle holding up the whole menu bar."
+    },
+    {
       "path": "etc/rc",
       "text": "#!/bin/sh\n# ravynOS /etc/rc\n#\n# launchctl's System session runs this once the LaunchDaemons are loaded\n# (BSD/bin/launchctl/launchctl.c: runcom() -> execl(/bin/sh, \"sh\", \"/etc/rc\")).\n# It is the BSD \"runcom\" phase: post-daemon system configuration.\n#\n# On ravynOS the root is a pre-built image: the filesystems are already\n# mounted, there is no fsck, and hostname/network/console settings are applied\n# by launchd or compiled in.  There is genuinely nothing to configure at this\n# phase, so this script reports that it ran and returns success.  Add rc-time\n# setup here if ravynOS ever needs it; keep the exit status 0 so the System\n# session completes and the agent scan (Dock, Filer) runs.\necho \"-=- rc complete -=-\"\nexit 0\n",
       "comment": "system rc, run by launchctl's System session after LaunchDaemons"

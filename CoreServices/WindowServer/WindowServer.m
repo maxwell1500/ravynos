@@ -33,6 +33,7 @@
 #import <AppKit/NSProgressIndicator.h>
 #import <AppKit/NSImageView.h>
 #import <AppKit/NSGraphicsContext.h>
+#import <objc/runtime.h>
 #import "common.h"
 #import "WindowServer.h"
 
@@ -46,6 +47,9 @@ extern void bootstrap_init(void);
 #include <sys/sysctl.h>
 #include <sys/user.h>
 #include <sys/proc_info.h>
+/* proc_pidpath is provided by libsystem_kernel but not declared in this
+ * SDK's sys/proc_info.h. */
+int proc_pidpath(pid_t pid, char *buf, uint32_t buffersize);
 #include <sys/shm.h>
 #include <sys/ipc.h>
 #include <signal.h>
@@ -75,6 +79,23 @@ kern_return_t _windowServerRPC(void *data, size_t len, void *replyBuf, int *repl
  */
 pthread_mutex_t renderLock;
 
+/* The apps dictionary is shared between the mach service thread (lookups on
+ * every RPC), the kqueue thread (removeObjectForKey when a child exits) and
+ * the shell thread (registration).  Concurrent NSMutableDictionary mutation
+ * returns dangling pointers, so every access is serialised.  Held for the
+ * whole RPC dispatch, because the handler uses the record after the lookup. */
+static pthread_mutex_t appsLock;
+
+/* Recursive: an RPC handler holds this across helpers (windowModify ->
+ * updateClientWindowState -> notifyDock) that also take it. */
+static void appsLockInit(void) {
+    pthread_mutexattr_t attr;
+    pthread_mutexattr_init(&attr);
+    pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
+    pthread_mutex_init(&appsLock, &attr);
+    pthread_mutexattr_destroy(&attr);
+}
+
 @implementation WindowServer
 
 static void notifyAppExited(mach_port_t port, pid_t pid, const char *bundleID, const char *path) {
@@ -96,17 +117,14 @@ static void notifyAppExited(mach_port_t port, pid_t pid, const char *bundleID, c
 /* Darwin's KERN_PROC_PATHNAME is a sysctl only the kernel exports; the
  * userspace equivalent is PROC_PIDPATHINFO under the same KERN_PROC root. */
 static NSString *_pathForPID(pid_t pid) {
-    int mib[4] = { CTL_KERN, KERN_PROC, KERN_PROC_PID, PROC_PIDPATHINFO };
     char buf[PROC_PIDPATHINFO_MAXSIZE + 1];
-    size_t len = PROC_PIDPATHINFO_MAXSIZE;
-
     memset(buf, 0, sizeof(buf));
-    if(sysctl(mib, 4, buf, &len, &pid, sizeof(pid)) < 0) {
-        NSLog(@"PROC_PIDPATHINFO(%d): %s", pid, strerror(errno));
+    int n = proc_pidpath(pid, buf, sizeof(buf) - 1);
+    if(n <= 0) {
+        NSLog(@"proc_pidpath(%d): failed (n=%d errno=%d)", pid, n, errno);
         return nil;
     }
-
-    buf[sizeof(buf)-1] = '\0';
+    buf[n] = '\0';
     return [NSString stringWithCString:buf];
 }
 
@@ -133,6 +151,7 @@ static struct kinfo_proc *_procForPID(pid_t pid) {
     curApp = nil;
     curWindow = nil;
     pthread_mutex_init(&renderLock, NULL);
+    appsLockInit();
     cursorHideCount = 0;
 
     write(2, "[WS] init starting\n", 19);
@@ -162,10 +181,9 @@ static struct kinfo_proc *_procForPID(pid_t pid) {
     for(int i = 0; i < kCGNumReservedWindowLevels; ++i)
         _windows[i] = [NSMutableArray new];
 
-#if defined(__linux__)
-     input = [WSInput new];
-     [input setLogLevel:logLevel];
-#endif
+    write(2, "[WS] creating WSInput\n", 22);
+    input = [WSInput new];
+    [input setLogLevel:logLevel];
 
     // Open the kernel's framebuffer character device, NOT /dev/console.
     //
@@ -197,10 +215,10 @@ static struct kinfo_proc *_procForPID(pid_t pid) {
     write(2, "[WS] fb clear returned\n", 23);
     // this is to keep our X,Y from leaving the screen bounds and eventually can be used to find
     // edges when there are multiple screens
-#if defined(__linux__)
-     [input setGeometry:_geometry];
-     [input setPointerPos:NSMakePoint(_geometry.size.width / 2, _geometry.size.height / 2)];
-#endif
+    if(input) {
+        [input setGeometry:_geometry];
+        [input setPointerPos:NSMakePoint(_geometry.size.width / 2, _geometry.size.height / 2)];
+    }
 
     ready = YES;
     return self;
@@ -209,24 +227,19 @@ static struct kinfo_proc *_procForPID(pid_t pid) {
 -(void)dealloc {
     curShell = NONE;
     fb = nil;
-#if defined(__linux__)
-     input = nil;
-#endif
+    input = nil;
 }
 
 -(void)setLogLevel:(int)level {
     logLevel = level;
-#if defined(__linux__)
-     [input setLogLevel:level];
-#endif
+    if(input)
+        [input setLogLevel:level];
 }
 
 -(void)setDebugLevel:(int)level subsystem:(char)sys {
     id obj = nil;
     switch(sys) {
-#if defined(__linux__)
-         case 'i': obj = input; break;
-#endif
+        case 'i': obj = input; break;
     }
 #if defined(__linux__)
      if(obj)
@@ -312,11 +325,10 @@ static struct kinfo_proc *_procForPID(pid_t pid) {
     winrec.title = [NSString stringWithCString:data->title length:len];
     winrec.icon = nil;
 
-    winrec.shmPath = [NSString stringWithFormat:@"/%@/%u/win/%u", [app bundleID],
-        [app pid], winrec.number];
+    winrec.shmPath = [NSString stringWithFormat:@"/win_%u_%u", [app pid], winrec.number];
     winrec.bufSize = ([fb getDepth]/8) * data->w * data->h;
 
-    int shmfd = shm_open([winrec.shmPath cString], O_RDWR|O_CREAT, 0600);
+    int shmfd = shm_open([winrec.shmPath cString], O_RDWR|O_CREAT, 0666);
     if(shmfd < 0) {
         NSLog(@"Cannot open shm fd: %s", strerror(errno));
         return 0;
@@ -325,14 +337,7 @@ static struct kinfo_proc *_procForPID(pid_t pid) {
     if(ftruncate(shmfd, winrec.bufSize) < 0)
         NSLog(@"shmfd ftruncate failed: %s", strerror(errno));
 
-    kp = _procForPID([app pid]);
-    if(kp == NULL) {
-        NSLog(@"Cannot get client task info! pid %u", [app pid]);
-        return 0;
-    }
-
-    if(fchown(shmfd, kp->kp_eproc.e_ucred.cr_uid, kp->kp_eproc.e_pcred.p_rgid) < 0)
-        NSLog(@"shmfd fchown failed: %s", strerror(errno));
+    /* shm is already 0666, no need for fchown via failing sysctl */
 
     winrec.surfaceBuf = mmap(NULL, winrec.bufSize, PROT_WRITE|PROT_READ, MAP_SHARED|MAP_NOCORE, shmfd, 0);
     close(shmfd);
@@ -351,9 +356,11 @@ static struct kinfo_proc *_procForPID(pid_t pid) {
 
     [app addWindow:winrec];
     [self addWindowByLevel:winrec];
-    if(curApp == app)
-        curWindow = winrec; // FIXME: is this how macOS behaves?
-    if(logLevel >= WS_INFO)
+    /* The app that creates a window becomes the active one so key events have
+     * a destination; without this curApp stays nil until the Dock activates it. */
+    if(curApp != app)
+        curApp = app;
+    curWindow = winrec;    if(logLevel >= WS_INFO)
         NSLog(@"windowCreate: success! %@", winrec);
     return winrec.number;
 }
@@ -365,6 +372,10 @@ static struct kinfo_proc *_procForPID(pid_t pid) {
     }
 
     WSWindowRecord *winrec = [app windowWithID:data->windowID];
+    if(winrec == nil) {
+        NSLog(@"windowModify: winrec is nil for windowID %llu", data->windowID);
+        return;
+    }
     int oldState = winrec.state;
     winrec.state = data->state;
     winrec.styleMask = data->style;
@@ -375,7 +386,7 @@ static struct kinfo_proc *_procForPID(pid_t pid) {
         pthread_mutex_lock(&renderLock);
         winrec.bufSize = ([fb getDepth]/8) * data->w * data->h;
 
-        int shmfd = shm_open([winrec.shmPath cString], O_RDWR|O_CREAT, 0600);
+        int shmfd = shm_open([winrec.shmPath cString], O_RDWR|O_CREAT, 0666);
         if(shmfd < 0) {
             NSLog(@"Cannot open shm fd: %s", strerror(errno));
             return;
@@ -384,14 +395,7 @@ static struct kinfo_proc *_procForPID(pid_t pid) {
         if(ftruncate(shmfd, winrec.bufSize) < 0)
             NSLog(@"shmfd ftruncate failed: %s", strerror(errno));
 
-        struct kinfo_proc *kp = _procForPID([app pid]);
-        if(kp == NULL) {
-            NSLog(@"Cannot get client task info! pid %u", [app pid]);
-            return;
-        }
-
-        if(fchown(shmfd, kp->kp_eproc.e_ucred.cr_uid, kp->kp_eproc.e_pcred.p_rgid) < 0)
-            NSLog(@"shmfd fchown failed: %s", strerror(errno));
+        /* shm is already 0666, no need for fchown via failing sysctl */
 
         winrec.surfaceBuf = mmap(NULL, winrec.bufSize, PROT_WRITE|PROT_READ,
                 MAP_SHARED|MAP_NOCORE, shmfd, 0);
@@ -434,14 +438,16 @@ static struct kinfo_proc *_procForPID(pid_t pid) {
 }
 
 -(void)addWindowByLevel:(WSWindowRecord *)window {
-    if(logLevel >= WS_INFO)
-        NSLog(@"addWindowByLevel %@", window);
+    if(window == nil) return;
+    if(window.level < 0 || window.level >= kCGNumReservedWindowLevels) return;
+    pthread_mutex_lock(&renderLock);
     [_windows[window.level] addObject:window];
+    pthread_mutex_unlock(&renderLock);
 }
 
 -(void)removeWindowByLevel:(WSWindowRecord *)window {
-    if(logLevel >= WS_INFO)
-        NSLog(@"removeWindowByLevel %@", window);
+    if(window == nil) return;
+    if(window.level < 0 || window.level >= kCGNumReservedWindowLevels) return;
     pthread_mutex_lock(&renderLock);
     [_windows[window.level] removeObject:window];
     pthread_mutex_unlock(&renderLock);
@@ -611,58 +617,36 @@ static void *shellSvcLoop(void *arg) {
                 }
                 break;
             case DESKTOP: {
-                pid_t pid = fork();
-                if(pid == 0) {
-                    struct passwd *pw = getpwuid(uid);
-                    if(!pw) {
-                        NSLog(@"uid not found");
-                        curShell = LOGINWINDOW;
-                        break;
+                static BOOL desktopLaunched = NO;
+                if(!desktopLaunched) {
+                    desktopLaunched = YES;
+                    // Launch Filer
+                    if(fork() == 0) {
+                        char *argv[] = { "Filer", NULL };
+                        char *envp[] = { "RAVYN_BUNDLE_ID=com.ravynos.Filer", NULL };
+                        execve("/System/Library/CoreServices/Filer.app/Contents/ravynOS/Filer", argv, envp);
+                        _exit(1);
                     }
-                    setlogin(pw->pw_name);
-                    chdir(pw->pw_dir);
-
-                    login_cap_t *lc = login_getpwclass(pw);
-                    if (setusercontext(lc, pw, pw->pw_uid,
-                        LOGIN_SETALL & ~(LOGIN_SETLOGIN)) != 0) {
-                            perror("setusercontext");
-                            exit(-1);
+                    // Launch Dock
+                    if(fork() == 0) {
+                        char *argv[] = { "Dock", NULL };
+                        char *envp[] = { "RAVYN_BUNDLE_ID=com.ravynos.Dock", NULL };
+                        execve("/System/Library/CoreServices/Dock.app/Contents/ravynOS/Dock", argv, envp);
+                        _exit(1);
                     }
-                    login_close(lc);
-
-                    NSString *path = [[NSBundle mainBundle] pathForResource:@"SystemUIServer" ofType:@"app"];
-                    if(path)
-                        path = [[NSBundle bundleWithPath:path] executablePath];
-
-                    if(path) {
-                        execle([path UTF8String], [path UTF8String], NULL, NULL);
+                    // Launch SystemUIServer
+                    if(fork() == 0) {
+                        char *argv[] = { "SystemUIServer", NULL };
+                        char *envp[] = { "RAVYN_BUNDLE_ID=com.ravynos.SystemUIServer", NULL };
+                        execve("/System/Library/CoreServices/WindowServer.app/Contents/Resources/SystemUIServer.app/Contents/ravynOS/SystemUIServer", argv, envp);
+                        execve("/System/Library/CoreServices/WindowServer.app/Contents/Resources/SystemUIServer.app/SystemUIServer", argv, envp);
+                        execve("/System/Library/CoreServices/SystemUIServer.app/Contents/ravynOS/SystemUIServer", argv, envp);
+                        _exit(1);
                     }
-
-                    perror("execl");
-                    exit(1);
-                } else if(pid < 0) {
-                    perror("fork");
-                    sleep(1);
-                    curShell = LOGINWINDOW;
-                    break;
                 }
+                sleep(60);
+                continue;
 
-                pid_t exited = 0;
-                while((exited = wait(&status)) != pid) ;
-
-                switch(WEXITSTATUS(status)) {
-                    case EXIT_RESTART: NSLog(@"should restart!");
-                                       curShell = NONE;
-                                       kill(1, SIGINT);
-                                       break;
-                    case EXIT_SHUTDOWN: NSLog(@"should shut down!");
-                                        curShell = NONE;
-                                        kill(1, SIGUSR2);
-                                        break;
-                    case EXIT_LOGOUT: [self performLogout:uid];
-                                      curShell = LOGINWINDOW;
-                                      break;
-                }
             }
             break;
         }
@@ -696,30 +680,28 @@ static void *shellSvcLoop(void *arg) {
     O2BitmapContext *ctx = [fb context];
     pthread_mutex_unlock(&renderLock);
 
-    NSString *path = [[NSBundle mainBundle] pathForResource:@"arrowCursor" ofType:@"png"];
-    NSData *cursorData = [NSData dataWithContentsOfFile:path];
-    O2ImageSource *cursorIS = [O2ImageSource newImageSourceWithData:(__bridge CFMutableDataRef)cursorData
-                                                            options:NULL];
-    O2ImageRef cursor = [cursorIS createImageAtIndex:0 options:nil];
+    O2ImageRef cursor = NULL;
+    write(2, "[WS] using fallback vector cursor\n", 34);
     NSRect cursorRect = NSMakeRect(0, 0, _cursor_height, _cursor_height);
 
-#if defined(__linux__)
-    struct pollfd fds;
-    fds.fd = [input fileDescriptor];
-    fds.events = POLLIN;
-#endif
+    struct pollfd fds[2];
+    fds[0].fd = [input fileDescriptor];
+    fds[0].events = POLLIN;
+    fds[1].fd = [input keyboardFileDescriptor];
+    fds[1].events = POLLIN;
     write(2, "[WS] run loop entered\n", 22);
-    static int frame_count = 0;
+    int frame_count = 0;
     while(ready == YES) {
-#if defined(__linux__)
-        if(poll(&fds, 1, 50) > 0)
+        int nfds = (fds[0].fd >= 0) + (fds[1].fd >= 0);
+        if(nfds > 0 && poll(fds, 2, 16) > 0) {
             [input run:self];
-
-        cursorRect.origin = [input pointerPos];
-#else
-        cursorRect.origin = NSMakePoint(_geometry.size.width / 2, _geometry.size.height / 2);
-        usleep(16666); // ~60 FPS
-#endif
+        } else {
+            usleep(16666); // ~60 FPS
+        }
+        if(input)
+            cursorRect.origin = [input pointerPos];
+        else
+            cursorRect.origin = NSMakePoint(_geometry.size.width / 2, _geometry.size.height / 2);
 
         // FIXME: handle multiple displays here. Use a thread per display?
         pthread_mutex_lock(&renderLock);
@@ -729,20 +711,16 @@ static void *shellSvcLoop(void *arg) {
             O2ContextSetRGBFillColor(ctx, 0.15, 0.25, 0.35, 1);
             O2ContextFillRect(ctx, (O2Rect)_geometry);
             for(int level = 0; level < kCGNumReservedWindowLevels; ++level) {
-                NSArray *wins = _windows[level];
-                int count = [wins count];
+                NSArray *wins = [_windows[level] copy];
+                NSInteger count = [wins count];
                 for(int i = 0; i < count; ++i) {
                     WSWindowRecord *win = [wins objectAtIndex:i];
                     if(win.state == HIDDEN || win.state == MINIMIZED || win.state == CLOSED)
                         continue;
-                    // Ensure curWindow is on top of stack
-                    if(win != curWindow) {
+                    /* A window whose shm surface never mapped (shm_open or
+                     * mmap failed) has a NULL surface; drawing it faults. */
+                    if(win.surface != NULL)
                         [ctx drawImage:win.surface inRect:win.geometry];
-                    }
-                }
-                if(curWindow.level == level && curWindow.state != MINIMIZED
-                        && curWindow.state != HIDDEN) {
-                    [ctx drawImage:curWindow.surface inRect:curWindow.geometry];
                 }
             }
         }
@@ -750,9 +728,17 @@ static void *shellSvcLoop(void *arg) {
         cursorRect.origin.y -= _cursor_height; // make sure point of arrow is on actual spot
 
         if(capturedPID == 0) {
-            if(cursorHideCount == 0 && cursor != NULL) {
-                O2ContextSetBlendMode(ctx, kCGBlendModeNormal);
-                O2ContextDrawImage(ctx, cursorRect, cursor);
+            if(cursorHideCount == 0) {
+                if(cursor != NULL) {
+                    O2ContextSetBlendMode(ctx, kCGBlendModeNormal);
+                    O2ContextDrawImage(ctx, cursorRect, cursor);
+                } else {
+                    /* High-contrast fallback cursor: black frame with white center */
+                    O2ContextSetRGBFillColor(ctx, 0.0, 0.0, 0.0, 1.0);
+                    O2ContextFillRect(ctx, (O2Rect)NSMakeRect(cursorRect.origin.x, cursorRect.origin.y, 14, 14));
+                    O2ContextSetRGBFillColor(ctx, 1.0, 1.0, 1.0, 1.0);
+                    O2ContextFillRect(ctx, (O2Rect)NSMakeRect(cursorRect.origin.x + 2, cursorRect.origin.y + 2, 10, 10));
+                }
             }
             [fb draw];
         } else {
@@ -762,6 +748,12 @@ static void *shellSvcLoop(void *arg) {
                 [fb draw];
         }
         pthread_mutex_unlock(&renderLock);
+        ++frame_count;
+        if((frame_count % 60) == 0) {
+            char tb[48];
+            int tn = snprintf(tb, sizeof(tb), "[WS] fb draw #%d\n", frame_count);
+            write(2, tb, tn);
+        }
     }
 }
 
@@ -1558,6 +1550,8 @@ static void *shellSvcLoop(void *arg) {
     int ret = kCGErrorFailure;
 
     WSAppRecord *app = [apps objectForKey:[NSString stringWithCString:msg->bundleID]];
+    if(app == nil || ![app isKindOfClass:[WSAppRecord class]])
+        app = [self findAppByPID:msg->pid];
     if(app) {
         ret = kCGErrorSuccess;
         [app mouseCursorConnected:((struct wsRPCSimple *)msg->data)->val1];
@@ -1607,7 +1601,8 @@ static void *shellSvcLoop(void *arg) {
     if(msg->len == sizeof(struct wsRPCWindow)) {
         struct wsRPCWindow *data = (struct wsRPCWindow*)msg->data;
         WSAppRecord *app = [apps objectForKey:[NSString stringWithCString:msg->bundleID]];
-
+        if(app == nil || ![app isKindOfClass:[WSAppRecord class]])
+            app = [self findAppByPID:msg->pid];
         if(app != nil) {
             if([self windowCreate:data forApp:app] != 0)
                 reply.val1 = kWSErrorSuccess;
@@ -1624,7 +1619,8 @@ static void *shellSvcLoop(void *arg) {
     if(msg->len == sizeof(struct wsRPCWindow)) {
         struct wsRPCWindow *data = (struct wsRPCWindow*)msg->data;
         WSAppRecord *app = [apps objectForKey:[NSString stringWithCString:msg->bundleID]];
-
+        if(app == nil || ![app isKindOfClass:[WSAppRecord class]])
+            app = [self findAppByPID:msg->pid];
         if(app != nil) {
             [self windowModify:data forApp:app];
             reply.val1 = kWSErrorSuccess;
@@ -1639,7 +1635,8 @@ static void *shellSvcLoop(void *arg) {
     if(msg->len == sizeof(struct wsRPCWindow)) {
         struct wsRPCWindow *data = (struct wsRPCWindow*)msg->data;
         WSAppRecord *app = [apps objectForKey:[NSString stringWithCString:msg->bundleID]];
-
+        if(app == nil || ![app isKindOfClass:[WSAppRecord class]])
+            app = [self findAppByPID:msg->pid];
         if(app != nil) {
             WSWindowRecord *winrec = [app removeWindowWithID:data->windowID];
             [self removeWindowFromAllLevels:winrec];
@@ -1658,6 +1655,8 @@ static void *shellSvcLoop(void *arg) {
     struct wsRPCWindow *data = (struct wsRPCWindow *)msg->data;
     const char *bundleID = (const char *)((msg->data)+sizeof(struct wsRPCWindow));
     WSAppRecord *app = [apps objectForKey:[NSString stringWithCString:bundleID]];
+    if(app != nil && ![app isKindOfClass:[WSAppRecord class]])
+        app = nil;
 
     if(app != nil) {
         WSAppRecord *oldApp = curApp;
@@ -1713,11 +1712,11 @@ static void *shellSvcLoop(void *arg) {
         int n = snprintf(errbuf, sizeof(errbuf), "[WS] receiveMachMessage error 0x%x\n", result);
         write(2, errbuf, n);
     } else {
-        char okbuf[128];
-        int n = snprintf(okbuf, sizeof(okbuf), "[WS] receiveMachMessage msg_id=0x%x\n", msg.msg.header.msgh_id);
-        write(2, okbuf, n);
         switch(msg.msg.header.msgh_id) {
             case MSG_ID_RPC: { // new style synchronous RPC calls
+                /* Serialise against the kqueue thread's app removal; the RPC
+                 * handlers resolve an app record and then use it. */
+                pthread_mutex_lock(&appsLock);
                 mach_port_t reply = MACH_PORT_NULL;
                 if(msg.portMsg.msgh_descriptor_count > 0)
                     reply = msg.portMsg.descriptor.name;
@@ -1735,6 +1734,7 @@ static void *shellSvcLoop(void *arg) {
                 if(base->len > sizeof(msg.portMsg.data) - sizeof(struct wsRPCBase)) {
                     NSLog(@"RPC[%@ %u] rejected code %u request with oversized data block of %u bytes",
                             base->code, base->len);
+                    pthread_mutex_unlock(&appsLock);
                     return;
                 }
 
@@ -1792,15 +1792,16 @@ static void *shellSvcLoop(void *arg) {
                     // App management (Dock)
                     case kWSApplicationActivate: [self rpcApplicationActivate:&msg.portMsg]; break;
                 }
+                pthread_mutex_unlock(&appsLock);
                 break;
             }
             case MSG_ID_PORT:
             {
                 mach_port_t port = msg.portMsg.descriptor.name;
                 pid_t pid = msg.portMsg.pid;
-                NSString *bundleID = [NSString stringWithCString:msg.portMsg.bundleID];
-                if(logLevel >= WS_INFO)
+                NSString *bundleID = [NSString stringWithCString:msg.portMsg.bundleID];                if(logLevel >= WS_INFO)
                     NSLog(@"Port registration received from %@ pid %u for port %u", bundleID, pid, port);
+                pthread_mutex_lock(&appsLock);
                 WSAppRecord *rec = [apps objectForKey:bundleID];
                 if(!rec) {
                     rec = [WSAppRecord new];
@@ -1816,11 +1817,14 @@ static void *shellSvcLoop(void *arg) {
                     NSLog(@"Port registration received for %@ pid %u when already registered (%u -> %u)",
                             rec.bundleID, pid, rec.port, port);
                 [apps setObject:rec forKey:bundleID];
+                pthread_mutex_unlock(&appsLock);
+
 
                 Message msg = {0};
+                pthread_mutex_lock(&appsLock);
                 WSAppRecord *dock = [apps objectForKey:@"com.ravynos.Dock"];
-                if(dock == nil) {
-                    NSLog(@"Cannot notify for new app - is Dock running?");
+                if(dock == nil || ![dock isKindOfClass:[WSAppRecord class]] || [dock port] == MACH_PORT_NULL) {
+                    // dock is nil or not ready, skip notification quietly
                 } else {
                     msg.header.msgh_remote_port = [dock port];
                     msg.header.msgh_bits = MACH_MSGH_BITS_SET(MACH_MSG_TYPE_COPY_SEND, 0, 0, 0);
@@ -1835,13 +1839,16 @@ static void *shellSvcLoop(void *arg) {
                             sizeof(msg) - sizeof(mach_msg_trailer_t),
                             0, MACH_PORT_NULL, 100 /* ms timeout */, MACH_PORT_NULL);
                 }
+                pthread_mutex_unlock(&appsLock);
 
                 [self watchForProcessExit:pid];
 
                 // A newly-launched app becomes the active one
                 if(![rec skipSwitcher]) {
                     [self deactivateApp:curApp];
+                    pthread_mutex_lock(&appsLock);
                     curApp = [apps objectForKey:bundleID];
+                    pthread_mutex_unlock(&appsLock);
                     [self activateApp:curApp];
                 }
                 break;
@@ -1852,12 +1859,16 @@ static void *shellSvcLoop(void *arg) {
                     case CODE_MENU_FOR_APP:
                     {
                         Message menuMsg = {0};
+                        pthread_mutex_lock(&appsLock);
                         WSAppRecord *app = [apps objectForKey:@"com.ravynos.SystemUIServer"];
-                        if(app == nil) {
+                        if(app == nil || ![app isKindOfClass:[WSAppRecord class]]) {
+                            pthread_mutex_unlock(&appsLock);
                             NSLog(@"Cannot install menus for client - is SystemUIServer running?");
                             break;
                         }
-                        menuMsg.header.msgh_remote_port = [app port];
+                        mach_port_t suiPort = [app port];
+                        pthread_mutex_unlock(&appsLock);
+                        menuMsg.header.msgh_remote_port = suiPort;
                         menuMsg.header.msgh_bits = MACH_MSGH_BITS_SET(MACH_MSG_TYPE_COPY_SEND, 0, 0, 0);
                         menuMsg.header.msgh_id = MSG_ID_INLINE;
                         menuMsg.header.msgh_size = sizeof(menuMsg) - sizeof(mach_msg_trailer_t);
@@ -1948,11 +1959,21 @@ static void *shellSvcLoop(void *arg) {
             case EVFILT_PROC:
                 if((out[i].fflags & NOTE_EXIT)) {
                     //NSLog(@"PID %lu exited", out[i].ident);
+                    pthread_mutex_lock(&appsLock);
+                    /* findAppByPID returns an unowned pointer. Capture everything
+                     * we need and take our own reference BEFORE removing the app
+                     * from the dictionary: removeObjectForKey: releases the record,
+                     * leaving any later use of it a use-after-free. */
                     WSAppRecord *app = [self findAppByPID:out[i].ident];
                     if(app == nil) {
+                        pthread_mutex_unlock(&appsLock);
                         NSLog(@"PID %u exited, but no matching app record", out[i].ident);
                         break;
                     }
+                    NSString *deadBundleID = [app.bundleID copy];
+                    NSString *deadPath = [app.path copy];
+                    NSArray *deadWins = [app.windows copy];
+                    pthread_mutex_unlock(&appsLock);
 
                     if(curApp == app) {
                         [self switchApp];
@@ -1961,21 +1982,30 @@ static void *shellSvcLoop(void *arg) {
                             curWindow = nil;
                         }
                     }
-
-                    [apps removeObjectForKey:app.bundleID];
-                    for(int x = 0; x < [[app windows] count]; ++x)
-                        [self removeWindowFromAllLevels:[[app windows] objectAtIndex:x]];
-                    [app removeAllWindows];
-
+                    pthread_mutex_lock(&appsLock);
+                    [apps removeObjectForKey:deadBundleID];
                     WSAppRecord *sysui = [apps objectForKey:@"com.ravynos.SystemUIServer"];
-                    if(sysui != nil)
-                        notifyAppExited([sysui port], out[i].ident,
-                                [app.bundleID UTF8String], [app.path UTF8String]);
-
+                    mach_port_t sysuiPort = (sysui != nil && [sysui isKindOfClass:[WSAppRecord class]])
+                        ? [sysui port] : MACH_PORT_NULL;
                     WSAppRecord *dock = [apps objectForKey:@"com.ravynos.Dock"];
-                    if(dock != nil)
-                        notifyAppExited([dock port], out[i].ident,
-                                [app.bundleID UTF8String], [app.path UTF8String]);
+                    mach_port_t dockPort = (dock != nil && [dock isKindOfClass:[WSAppRecord class]])
+                        ? [dock port] : MACH_PORT_NULL;
+                    pthread_mutex_unlock(&appsLock);
+
+                    for(int x = 0; x < [deadWins count]; ++x)
+                        [self removeWindowFromAllLevels:[deadWins objectAtIndex:x]];
+
+                    if(sysuiPort != MACH_PORT_NULL)
+                        notifyAppExited(sysuiPort, out[i].ident,
+                                [deadBundleID UTF8String], [deadPath UTF8String]);
+                    if(dockPort != MACH_PORT_NULL && dockPort != sysuiPort)
+                        notifyAppExited(dockPort, out[i].ident,
+                                [deadBundleID UTF8String], [deadPath UTF8String]);
+
+                    deadWins = nil;
+                    deadPath = nil;
+                    deadBundleID = nil;
+                    app = nil;
                 }
                 break;
             default:
@@ -2008,9 +2038,7 @@ static void *shellSvcLoop(void *arg) {
 
 - (BOOL)sendEventToApp:(struct mach_event *)event {
     static BOOL inDrag = NO;
-    static WSWindowRecord *dragWindow = nil;
-
-    NSPoint pos = NSMakePoint(event->x, event->y);
+    static WSWindowRecord *dragWindow = nil;    NSPoint pos = NSMakePoint(event->x, event->y);
 
     /* Any key input goes to active window & app, even if pointer is over something else
      * Otherwise, identify the window (if any) that is under the pointer. Windows on macOS
@@ -2116,15 +2144,33 @@ static void *shellSvcLoop(void *arg) {
         }
     }
 
-    if(app == nil)
+    if(app == nil || ![app isKindOfClass:[WSAppRecord class]]) {
+        return YES;
+    }
+
+    // Key events were already aimed at the focused window above; only mouse
+    // events re-aim at whatever window the pointer is over.
+    if(event->code != NSKeyDown && event->code != NSKeyUp)
+        event->windowID = window.number;
+
+    mach_port_t destPort = [app port];
+    if(destPort == MACH_PORT_NULL) {
+        return YES;
+    }
+    if(destPort == MACH_PORT_NULL)
         return YES;
 
-    event->windowID = window.number;
+    if(event->code == NSKeyDown || event->code == NSKeyUp) {
+        char ktb[192]; int ktn = snprintf(ktb, sizeof(ktb),
+            "[WS] key send code=%d winID=%d curApp=%p appPort=%u\n",
+            (int)event->code, (int)event->windowID, curApp, destPort);
+        if(ktn>0) write(2, ktb, ktn);
+    }
 
     return [self sendInlineData:event
                          length:sizeof(struct mach_event)
                        withCode:CODE_INPUT_EVENT
-                          toPort:[app port]];
+                          toPort:destPort];
 }
 
 - (void)updateClientWindowState:(WSWindowRecord *)window {
@@ -2149,11 +2195,16 @@ static void *shellSvcLoop(void *arg) {
     memcpy(key, appKey+1, len);
     key[len] = 0;
 
+    pthread_mutex_lock(&appsLock);
     WSAppRecord *app = [apps objectForKey:[NSString stringWithCString:key]];
-    if(app)
-        [self sendInlineData:&data length:sizeof(data) withCode:CODE_WINDOW_STATE toPort:[app port]];
-    else
+    if(app != nil && [app isKindOfClass:[WSAppRecord class]]) {
+        mach_port_t appPort = [app port];
+        pthread_mutex_unlock(&appsLock);
+        [self sendInlineData:&data length:sizeof(data) withCode:CODE_WINDOW_STATE toPort:appPort];
+    } else {
+        pthread_mutex_unlock(&appsLock);
         NSLog(@"Cannot send window state update to app: not found. %@", window);
+    }
 
     // Tell Dock if the window gets minimized or closed so it can manage icons
     if(window.state == MINIMIZED || window.state == CLOSED)
@@ -2161,13 +2212,16 @@ static void *shellSvcLoop(void *arg) {
 }
 
 - (BOOL)notifyDock:(void *)data length:(int)length withCode:(int)code forApp:(WSAppRecord *)app {
+    pthread_mutex_lock(&appsLock);
     WSAppRecord *dock = [apps objectForKey:@"com.ravynos.Dock"];
-    if(dock == nil) {
+    if(dock == nil || ![dock isKindOfClass:[WSAppRecord class]]) {
         if(logLevel >= WS_WARNING)
             NSLog(@"Cannot notify Dock - is it running?");
+        pthread_mutex_unlock(&appsLock);
         return NO;
     }
 
+    pthread_mutex_unlock(&appsLock);
     Message msg = {0};
     msg.header.msgh_remote_port = [dock port];
     msg.header.msgh_bits = MACH_MSGH_BITS_SET(MACH_MSG_TYPE_COPY_SEND, 0, 0, 0);
@@ -2225,27 +2279,34 @@ static void *shellSvcLoop(void *arg) {
     kevent(_kq, kev, 1, NULL, 0, NULL);
 }
 
+/* Returns a +1 reference: callers keep the record alive across
+ * removeObjectForKey:, which releases the dictionary's own reference. */
 - (WSAppRecord *)findAppByPID:(unsigned int)pid {
     NSEnumerator *apprecs = [apps objectEnumerator];
-    WSAppRecord *app;
-    while((app = [apprecs nextObject]) != nil) {
+    id record;
+    while((record = [apprecs nextObject]) != nil) {
+        if(![record isKindOfClass:[WSAppRecord class]])
+            continue;
+        WSAppRecord *app = record;
         if(app.pid == pid)
-            return app;
+            return (WSAppRecord *)CFRetain((CFTypeRef)app);
     }
     return nil;
 }
 
 -(void)deactivateApp:(WSAppRecord *)app {
-    if(app == nil)
+    if(app == nil || ![app isKindOfClass:[WSAppRecord class]])
         return;
 
     Message msg = {0};
     struct mach_activation_data data = {0};
+    pthread_mutex_lock(&appsLock);
     WSAppRecord *sysui = [apps objectForKey:@"com.ravynos.SystemUIServer"];
-    if(sysui == nil) {
-        NSLog(@"cannot notify for deactivated app - is SystemUIServer running?");
+    if(sysui == nil || ![sysui isKindOfClass:[WSAppRecord class]] || [sysui port] == MACH_PORT_NULL) {
+        pthread_mutex_unlock(&appsLock);
         return;
     }
+    pthread_mutex_unlock(&appsLock);
     msg.header.msgh_remote_port = [sysui port];
     msg.header.msgh_bits = MACH_MSGH_BITS_SET(MACH_MSG_TYPE_COPY_SEND, 0, 0, 0);
     msg.header.msgh_id = MSG_ID_INLINE;
@@ -2266,11 +2327,13 @@ static void *shellSvcLoop(void *arg) {
 
     Message msg = {0};
     struct mach_activation_data data = {0, 1};
+    pthread_mutex_lock(&appsLock);
     WSAppRecord *sysui = [apps objectForKey:@"com.ravynos.SystemUIServer"];
-    if(sysui == nil) {
-        NSLog(@"cannot notify for activated app - is SystemUIServer running?");
+    if(sysui == nil || ![sysui isKindOfClass:[WSAppRecord class]] || [sysui port] == MACH_PORT_NULL) {
+        pthread_mutex_unlock(&appsLock);
         return;
     }
+    pthread_mutex_unlock(&appsLock);
     msg.header.msgh_remote_port = [sysui port];
     msg.header.msgh_bits = MACH_MSGH_BITS_SET(MACH_MSG_TYPE_COPY_SEND, 0, 0, 0);
     msg.header.msgh_id = MSG_ID_INLINE;
@@ -2293,7 +2356,10 @@ static void *shellSvcLoop(void *arg) {
     NSMutableArray *viableApps = [NSMutableArray new];
     NSArray *list = [apps allValues];
     for(int i = 0; i < [list count]; ++i) {
-        WSAppRecord *app = [list objectAtIndex:i];
+        id obj = [list objectAtIndex:i];
+        if(![obj isKindOfClass:[WSAppRecord class]])
+            continue;
+        WSAppRecord *app = (WSAppRecord *)obj;
         if([app skipSwitcher])
             continue;
         [viableApps addObject:app];
@@ -2309,13 +2375,18 @@ static void *shellSvcLoop(void *arg) {
             break;
         }
     }
-    
+
+    /* curApp may have been nil, or the app that exited is no longer in the
+     * list. Fall back to the first viable app so key events have a target. */
+    if(curApp == nil && [viableApps count] > 0)
+        curApp = [viableApps objectAtIndex:0];
+
     [self switchFromApp:oldApp];
 }
 
 -(void)switchFromApp:(WSAppRecord *)oldApp toWindow:(WSWindowRecord *)win {
     struct mach_activation_data data = {0};
-    if(oldApp != curApp) {
+    if(oldApp != curApp && oldApp != nil && [oldApp isKindOfClass:[WSAppRecord class]]) {
         // Inform the old app that it has become inactive
         [self sendInlineData:&data
                       length:sizeof(data)
@@ -2349,10 +2420,12 @@ static void *shellSvcLoop(void *arg) {
     // Inform the now-active app of its status
     data.windowID = (curWindow == nil) ? 0 : curWindow.number;
     data.active = 1;
-    [self sendInlineData:&data
-                  length:sizeof(data)
-                withCode:CODE_ACTIVATION_STATE
-                   toPort:[curApp port]];
+    if(curApp != nil && [curApp isKindOfClass:[WSAppRecord class]]) {
+        [self sendInlineData:&data
+                      length:sizeof(data)
+                    withCode:CODE_ACTIVATION_STATE
+                       toPort:[curApp port]];
+    }
 
     // Now tell SystemUIServer the app became active
     [self activateApp:curApp];
