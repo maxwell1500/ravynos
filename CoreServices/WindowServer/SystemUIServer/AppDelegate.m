@@ -30,9 +30,7 @@
 
 
 @implementation AppDelegate
-- (AppDelegate *)init {
-    menuBar = [MenuBarWindow alloc];
-    return self;
+- (AppDelegate *)init {    NSScreen *mainDisplay = [NSScreen mainScreen];    [[menuBar contentView] setNeedsDisplay:YES];
 }
 
 #if 0
@@ -78,14 +76,11 @@
 }
 #endif
 
--(void)applicationWillFinishLaunching:(NSNotification *)note {
-    NSScreen *mainDisplay = [NSScreen mainScreen];
-    [menuBar initWithFrame:[mainDisplay frame]];
-    [menuBar setDelegate:self];
+-(void)applicationWillFinishLaunching:(NSNotification *)note {    /* The menu bar window is already built in -init.  Calling initWithFrame:
+     * again would register a second window record for the same NSWindow (same
+     * window number, new level), which crashes the compositor's window walk. */
     [[menuBar contentView] setNeedsDisplay:YES];
-    [menuBar makeKeyAndOrderFront:self];
-    [menuBar makeMainWindow];
-
+    [menuBar makeKeyAndOrderFront:self];    [menuBar makeMainWindow];
     NSNotificationCenter *defaultCenter = [NSNotificationCenter defaultCenter];
     [defaultCenter addObserver:self selector:@selector(menuDidUpdate:)
         name:NSMenuDidUpdateNotification object:nil];

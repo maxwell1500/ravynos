@@ -33,26 +33,16 @@ extern pthread_mutex_t mtx;
     frame.size.height = menuBarHeight;
     self = [self initWithContentRect:frame styleMask:NSBorderlessWindowMask
         backing:NSBackingStoreBuffered defer:NO];
-
     [self setMovableByWindowBackground:NO];
     [self setLevel:kCGMainMenuWindowLevelKey];
 
     float mainWidth = frame.size.width * 0.65;
-    float extraWidth = frame.size.width - mainWidth;
-
-    clockView = [[ClockView alloc] initWithFrame:frame];
-    NSSize clockSize = [clockView size];
-
-    menuView = [[MenuView alloc] initWithFrame:
-	NSMakeRect(0, 0, mainWidth, menuBarHeight)];
-
-    extrasView = [[ExtrasView alloc]
+    float extraWidth = frame.size.width - mainWidth;    clockView = [[ClockView alloc] initWithFrame:frame];    NSSize clockSize = [clockView size];    menuView = [[MenuView alloc] initWithFrame:
+	NSMakeRect(0, 0, mainWidth, menuBarHeight)];    extrasView = [[ExtrasView alloc]
 	initWithFrame:NSMakeRect(frame.size.width - extraWidth, 0,
 		extraWidth - clockSize.width, menuBarHeight)];
 
-    menuDict = [NSMutableDictionary new];
-
-    [_contentView addSubview:menuView];
+    menuDict = [NSMutableDictionary new];    [_contentView addSubview:menuView];
     [_contentView addSubview:extrasView];
     [_contentView addSubview:clockView];
     [_contentView setAutoresizingMask:0];

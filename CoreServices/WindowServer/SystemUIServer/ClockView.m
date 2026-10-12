@@ -21,6 +21,7 @@
  */
 
 #include <pthread.h>
+#include <stdio.h>
 #include <unistd.h>
 #include <locale.h>
 #import <AppKit/AppKit.h>
@@ -35,6 +36,7 @@ pthread_mutex_t mtx;
 @end
 
 @implementation ClockView
+
 - initWithFrame:(NSRect)frame {
     NSUserDefaults *prefs = [NSUserDefaults standardUserDefaults];
     dateFormat = [prefs stringForKey:PrefsDateFormatStringKey];
@@ -43,29 +45,44 @@ pthread_mutex_t mtx;
         if([locale hasPrefix:@"en"])
             dateFormat = defaultFormatEN;
         else if([locale hasPrefix:@"C"])
-        dateFormat = @"%Y-%m-%d %R";
+            dateFormat = @"%Y-%m-%d %R";
         else
             dateFormat = [prefs objectForKey:NSTimeDateFormatString];
     }
-    dateFormatter = [[NSDateFormatter alloc] initWithDateFormat:dateFormat 
-        allowNaturalLanguage:YES locale:[NSLocale currentLocale]];
+    if(dateFormat == nil)
+        dateFormat = defaultFormatEN;
 
+    dateFormatter = [[NSDateFormatter alloc] initWithDateFormat:dateFormat
+                                        allowNaturalLanguage:YES
+                                        locale:[NSLocale currentLocale]];
+
+    /* -[NSFont systemFontOfSize:] resolves through CoreText's
+     * CTFontCreateUIFontForLanguage, which KTFont cannot implement in this
+     * tree (no concrete subclass), so it returns NULL and AppKit falls back
+     * to resolving a real face through O2Font.  Layout only needs the size,
+     * so keep the font request and measure the attributed string; if no face
+     * comes back, the fixed-width fallback below keeps the clock laid out. */
     NSFont *font = [NSFont systemFontOfSize:15];
-    attributes = [NSDictionary
-        dictionaryWithObjects:@[font, [NSColor blackColor]]
-                      forKeys:@[NSFontAttributeName, NSForegroundColorAttributeName]];
+    if(font != nil)
+        attributes = [NSDictionary dictionaryWithObjects:@[font, [NSColor blackColor]]
+                                            forKeys:@[NSFontAttributeName,
+                                                      NSForegroundColorAttributeName]];
+    else
+        attributes = [NSDictionary dictionaryWithObjects:@[[NSColor blackColor]]
+                                            forKeys:@[NSForegroundColorAttributeName]];
 
-    dateString = [[NSAttributedString alloc]
-        initWithString:[self currentDateValue] attributes:attributes];
+    dateString = [[NSAttributedString alloc] initWithString:[self currentDateValue]
+                                               attributes:attributes];
 
     NSSize sz = [dateString size];
+    if(sz.width <= 0)
+        sz.width = 96;
     sz.width += menuBarHPad;
-    self = [super initWithFrame:NSMakeRect(frame.size.width - sz.width, menuBarVPad,
-            sz.width + menuBarHPad, sz.height)];
-    sz.width += menuBarHPad;
+
+    self = [super initWithFrame:NSMakeRect(frame.size.width - sz.width,
+            menuBarVPad, sz.width + menuBarHPad, sz.height)];
 
     pthread_mutex_init(&mtx, NULL);
-
     [NSThread detachNewThreadSelector:@selector(notifyTick:)
                              toTarget:self
                            withObject:nil];
@@ -78,9 +95,7 @@ pthread_mutex_t mtx;
 
 - (void)notifyTick:(id)arg {
     static NSString *_dateValue = NULL;
-
-    while(YES) {
-        if([_dateValue isEqualToString:[self currentDateValue]] == NO) {
+    while(YES) {        if([_dateValue isEqualToString:[self currentDateValue]] == NO) {
             _dateValue = [self currentDateValue];
             [self setNeedsDisplay:YES];
             [NSApp _wakeUp];
