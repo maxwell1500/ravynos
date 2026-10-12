@@ -66,10 +66,10 @@ LEAF(_sigsetjmp, 0)
 	// %esi is int savemask
 	movl	%esi, JB_SAVEMASK(%rdi) // jmpbuf[_JBLEN] = savemask;
 	cmpl	$0, %esi		// if savemask != 0
-	jne	_setjmp			 // setjmp(jmpbuf);
+	jne	L_mask_setjmp			 // setjmp(jmpbuf);
 	jmp	L_do__setjmp		// else _setjmp(jmpbuf);
 
-LEAF(_setjmp, 0)
+L_mask_setjmp:
 	pushq	%rdi			// Preserve the jmp_buf across the call
 	movl	$1, %edi		// how = SIG_BLOCK
 	xorq	%rsi, %rsi	      // set = NULL
@@ -92,15 +92,24 @@ LEAF(_setjmp, 0)
 	addq	$40, %rsp			// restore %rsp
 
 L_do__setjmp:
-	BRANCH_EXTERN(__setjmp)
+	jmp	__setjmp
+
+/* setjmp(): POSIX requires that plain setjmp does NOT save the signal
+ * mask.  Doing so here dragged the private __sigprocmask/__sigaltstack
+ * path into every setjmp() call, and that path never returns on this
+ * target, so every setjmp() hung (FreeType's validator uses ft_setjmp,
+ * which is how the SystemUIServer menu bar stalled). */
+LEAF(_setjmp, 0)
+	jmp	__setjmp
+END(_setjmp)
 
 LEAF(_siglongjmp, 0)
 	// %rdi is sigjmp_buf * jmpbuf;
 	cmpl	$0, JB_SAVEMASK(%rdi)      // if jmpbuf[_JBLEN] != 0
-	jne	_longjmp		//     longjmp(jmpbuf, var);
+	jne	L_mask_longjmp		//     longjmp(jmpbuf, var);
 	jmp	L_do__longjmp	       // else _longjmp(jmpbuf, var);
 
-LEAF(_longjmp, 0)
+L_mask_longjmp:
 	// %rdi is address of jmp_buf (saved context)
 	pushq	%rdi				// Preserve the jmp_buf across the call
 	pushq	%rsi				// Preserve the value across the call
@@ -119,5 +128,10 @@ LEAF(_longjmp, 0)
 	popq 	%rdi				// Pass jmpbuf to _longjmp
 
 L_do__longjmp:
-	BRANCH_EXTERN(__longjmp)	// else
+	jmp	__longjmp
+END(_longjmp)
+
+/* longjmp(): mirror of setjmp() above -- no signal-mask work. */
+LEAF(_longjmp, 0)
+	jmp	__longjmp
 END(_longjmp)
