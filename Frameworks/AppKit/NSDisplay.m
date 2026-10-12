@@ -286,83 +286,50 @@ SOFTWARE. */
 }
 
 -(NSSet *)allFontFamilyNames {
-   int i;
-   FcPattern *pat=FcPatternCreate();
-   FcObjectSet *props=FcObjectSetBuild(FC_FAMILY, NULL);
-   
-   FcFontSet *set = FcFontList (O2FontSharedFontConfig(), pat, props);
-   NSMutableSet* ret=[NSMutableSet set];
-   
-   for(i = 0; i < set->nfont; i++)
-   {
-      FcChar8 *family;
-      if (FcPatternGetString (set->fonts[i], FC_FAMILY, 0, &family) == FcResultMatch) {
-         [ret addObject:[NSString stringWithUTF8String:(char*)family]];
-      }
+   NSMutableSet *ret=[NSMutableSet set];
+   NSArray      *names=O2FontKnownFontNames();
+   NSEnumerator *next=[names objectEnumerator];
+   NSString     *name;
+
+   /* Enumerate the fonts this platform can resolve rather than asking
+    * fontconfig: fontconfig is not the face lookup path here (see
+    * O2Font_ttf.m), and initialising it from this method crashed the menu
+    * bar inside FcConfigMessage (it reports "out of memory" and then
+    * prints through a NULL stream). */
+   while((name=[next nextObject])!=nil){
+    NSRange dash=[name rangeOfString:@"-"];
+
+    [ret addObject:(dash.location==NSNotFound)?name:[name substringToIndex:dash.location]];
    }
-   
-   FcPatternDestroy(pat);
-   FcObjectSetDestroy(props);
-   FcFontSetDestroy(set);
+
    return ret;
 }
 
 -(NSArray *)fontTypefacesForFamilyName:(NSString *)familyName {
-   int i;
-   FcPattern *pat=FcPatternCreate();
-   FcPatternAddString(pat, FC_FAMILY, (unsigned char*)[familyName UTF8String]);
-   FcObjectSet *props=FcObjectSetBuild(FC_FAMILY, FC_STYLE, FC_SLANT, FC_WIDTH, FC_WEIGHT, NULL);
+   NSMutableArray *ret=[NSMutableArray array];
+   NSString       *prefix=[familyName stringByAppendingString:@"-"];
+   NSEnumerator   *next=[O2FontKnownFontNames() objectEnumerator];
+   NSString       *name;
 
-   FcFontSet *set = FcFontList (O2FontSharedFontConfig(), pat, props);
-   NSMutableArray* ret=[NSMutableArray array];
-   
-   for(i = 0; i < set->nfont; i++)
-   {
-      FcChar8 *typeface;
-      FcPattern *p=set->fonts[i];
-      if (FcPatternGetString (p, FC_STYLE, 0, &typeface) == FcResultMatch) {
-         NSString* traitName=[NSString stringWithUTF8String:(char*)typeface];
-         FcChar8* pattern=FcNameUnparse(p);
-         NSString* name=[NSString stringWithUTF8String:(char*)pattern];
-         FcStrFree(pattern);
-         
-         NSFontTraitMask traits=0;
-         int slant, width, weight;
-         
-         FcPatternGetInteger(p, FC_SLANT, FC_SLANT_ROMAN, &slant);
-         FcPatternGetInteger(p, FC_WIDTH, FC_WIDTH_NORMAL, &width);
-         FcPatternGetInteger(p, FC_WEIGHT, 0, &weight);
+   /* Same reasoning as -allFontFamilyNames: no fontconfig. */
+   while((name=[next nextObject])!=nil){
+    NSString        *traitName;
+    NSFontTraitMask  traits=0;
 
-         switch(slant) {
-            case FC_SLANT_OBLIQUE:
-            case FC_SLANT_ITALIC:
-               traits|=NSItalicFontMask;
-               break;
-         }
-         
-         if(weight>FC_WEIGHT_SEMIBOLD)
-            traits|=NSBoldFontMask;
+    if(![name hasPrefix:prefix])
+     continue;
 
-         if(width<=FC_WIDTH_SEMICONDENSED)
-            traits|=NSNarrowFontMask;
-         else if(width>=FC_WIDTH_SEMIEXPANDED)
-            traits|=NSExpandedFontMask;
+    traitName=[name substringFromIndex:[prefix length]];
 
-        // FIXME: we should set FixedPitch (monospace) and other attrs too (see NSFontManager.h)
-         
-         name = [NSString stringWithFormat:@"%@-%@",
-            [[[[name componentsSeparatedByString:@":"] firstObject] // strip off any 'style=XXX' stuff
-            componentsSeparatedByString:@","] firstObject],         // and any multiple names
-            traitName]; // and append "-Traits"
-         NSFontTypeface *face=[[NSFontTypeface alloc] initWithName:name traitName:traitName traits:traits];
-         [ret addObject:face];
-         [face release];
-      }
+    if([traitName rangeOfString:@"Bold"].location!=NSNotFound)
+     traits|=NSBoldFontMask;
+    if([traitName rangeOfString:@"Italic"].location!=NSNotFound ||
+       [traitName rangeOfString:@"Oblique"].location!=NSNotFound)
+     traits|=NSItalicFontMask;
+
+    [ret addObject:[[[NSFontTypeface alloc] initWithName:name traitName:traitName traits:traits] autorelease]];
    }
-   
-   FcPatternDestroy(pat);
-   FcObjectSetDestroy(props);
-   FcFontSetDestroy(set);
+
    return ret;
 }
 

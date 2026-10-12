@@ -9,7 +9,6 @@ FT_Library freeTypeLibrary;
 +(void)initialize {
   if(self==[O2Font_freetype class]){
    int error = FT_Init_FreeType(&freeTypeLibrary);
-  
    if ( error ) {
      NSLog(@"error initializing FreeType %d",error);
    }
@@ -17,15 +16,60 @@ FT_Library freeTypeLibrary;
 }
 
 
+- (id)initWithFilename:(const char *)path {
+   /* File-based face creation. The memory-based path (FT_New_Memory_Face with
+    * an O2DataProvider's bytes) never returns on this target even though the
+    * identical call parses the same file in ~0.1ms on the host, so files are
+    * opened directly instead. */
+   if(![super init])
+    return nil;
+
+   _platformType=O2FontPlatformTypeFreeType;
+
+   int error=FT_New_Face(freeTypeLibrary,path,0,&_face);
+
+   if(error!=0){
+    NSLog(@"FT_New_Face returned %d",error);
+    [self dealloc];
+    return nil;
+   }
+
+   FT_Select_Charmap(_face, FT_ENCODING_UNICODE);
+
+   if(!(_face->face_flags&FT_FACE_FLAG_SCALABLE))
+    NSLog(@"FreeType font face is not scalable");
+
+   _unitsPerEm=(float)_face->units_per_EM;
+   _ascent=_face->ascender;
+   _descent=_face->descender;
+   _leading=0;
+   _capHeight=_face->height;
+   _xHeight=_face->height;
+   _italicAngle=0;
+   _stemV=0;
+   _bbox.origin.x=_face->bbox.xMin;
+   _bbox.origin.y=_face->bbox.yMin;
+   _bbox.size.width=_face->bbox.xMax-_face->bbox.xMin;
+   _bbox.size.height=_face->bbox.yMax-_face->bbox.yMin;
+   _numberOfGlyphs=_face->num_glyphs;
+   _advances=NULL;
+
+   return self;
+}
+
 -initWithDataProvider:(O2DataProviderRef)provider {
    if([super initWithDataProvider:provider]==nil)
     return nil;
 
    _platformType=O2FontPlatformTypeFreeType;
-   
+
+   /* FT_New_Memory_Face() keeps the caller's buffer for the face's lifetime,
+    * so the provider must outlive any release by the caller. */
+   _dataProvider=O2DataProviderRetain(provider);
+
    const void *bytes=[provider bytes];
    size_t      length=[provider length];
-
+   
    int error=FT_New_Memory_Face(freeTypeLibrary,bytes,length,0,&_face);
    
    if(error!=0){
@@ -85,7 +129,13 @@ FT_Library freeTypeLibrary;
    [_macRomanEncoding release];
    [_macExpertEncoding release];
    [_winAnsiEncoding release];
+   if(_dataProvider!=NULL)
+    O2DataProviderRelease(_dataProvider);
    [super dealloc];
+}
+
+- (FT_Face)face {
+   return _face;
 }
 
 FT_Face O2FontFreeTypeFace(O2Font_freetype *self) {
