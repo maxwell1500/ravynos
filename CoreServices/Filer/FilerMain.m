@@ -50,6 +50,9 @@
 
 -(void)drawRect:(NSRect)dirty {
     NSSize sz=[self bounds].size;
+    CGContextRef ctx=[[[self window] graphicsContext] graphicsPort];
+    if(ctx==NULL)
+        return;
     float x=8.0f;
     if(_img){
         NSSize isz=[_img size];
