@@ -453,6 +453,20 @@ view does not need to draw the application or custom string badges.
     }
 }
 
+-(void)_installTileClickProxy {
+    NSMutableArray *ordered = [NSMutableArray new];
+    NSArray *subs = [[self subviews] copy];
+    for(NSView *v in subs) {
+        if([v isKindOfClass:[NSTileClickProxy class]])
+            continue;
+        [ordered addObject:v];
+    }
+    NSTileClickProxy *proxy = [[NSTileClickProxy alloc] initWithFrame:[self bounds]];
+    [proxy setTileOwner:self];
+    [ordered addObject:proxy];
+    [self setSubviews:ordered];
+}
+
 -(NSDictionary *)tileData {
     return dockTileData(_path);
 }
@@ -463,5 +477,16 @@ view does not need to draw the application or custom string badges.
     [self class], self, _path, _execPath, _label, _windows, _flags,
     _bundleID];
 }
+/**/
 @end
 
+@implementation NSTileClickProxy
+-(void)setTileOwner:(id)owner {
+    _tileOwner = owner;
+}
+
+-(void)mouseDown:(NSEvent *)event {
+    if(_tileOwner != nil)
+        [_tileOwner openApp:self];
+}
+@end

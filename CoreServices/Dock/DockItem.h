@@ -102,5 +102,14 @@ typedef enum DockItemFlags DockItemFlags;
 -(void)activateWindow:(id)sender;
 -(void)openApp:(id)sender;
 -(NSDictionary *)tileData;
+-(void)_installTileClickProxy;
+@end
 
+// A tile's icon/badge/run-marker are live subviews, so AppKit's hitTest
+// (NSWindow.m:2223 [_backgroundView hitTest:] -> deepest view) hands the click to
+// one of them instead of the DockItem. An invisible cover installed frontmost is
+// what receives the click and forwards it to openApp:.
+@interface NSTileClickProxy : NSView { id _tileOwner; }
+-(void)setTileOwner:(id)owner;
+-(void)mouseDown:(NSEvent *)event;
 @end

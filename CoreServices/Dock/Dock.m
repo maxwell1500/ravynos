@@ -325,6 +325,8 @@ extern Dock *dock; // our singleton object in main.m
         [item setFrameOrigin:itemPos];
         [item setTileSize:size];
         [[_window contentView] addSubview:item];
+        [item _installTileClickProxy];
+
         if(_location == LOCATION_BOTTOM)
             itemPos.x += _tileSize + CELL_SPACER / 2;
         else
@@ -336,6 +338,7 @@ extern Dock *dock; // our singleton object in main.m
     [item setFrameOrigin:itemPos];
     [item setTileSize:size];
     [[_window contentView] addSubview:item];
+    [item _installTileClickProxy];
     [[_window contentView] setNeedsDisplay:YES];
 }
 
