@@ -41,20 +41,6 @@
 
 -(void)setIconPath:(NSString *)p {
     _iconPath = [p copy];
-    /* Foundation's NSImage drawInRect: paints nothing for these PNGs in this tree,
-     * while the Dock tiles render the very same files through an NSImageView with
-     * explicit scaling -- so reuse that proven mechanism instead of drawing here. */
-    if(_iconPath && [[NSFileManager defaultManager] fileExistsAtPath:_iconPath]){
-        NSSize sz=[self bounds].size;
-        _iv=[[NSImageView alloc] initWithFrame:NSMakeRect(8,(sz.height-36)/2,36,36)];
-        [_iv setImage:[[NSImage alloc] initWithContentsOfFile:_iconPath]];
-        [[_iv image] setScalesWhenResized:YES];
-        [_iv setImageScaling:NSImageScaleProportionallyUpOrDown];
-        [self addSubview:_iv];
-        [_iv setNeedsDisplay:YES];
-    } else {
-        _iv=nil;
-    }
 }
 
 -(void)drawRect:(NSRect)dirty {
@@ -63,8 +49,8 @@
     if(ctx==NULL)
         return;
     float x=8.0f;
-    if(_iv)
-        x+=42.0f;   /* the NSImageView subview paints the artwork itself */
+    if(_iconPath)
+        x=8.0f;   /* artwork lives on the window's content view, not inside this view */
     if(_label==nil)
         return;
     NSFont *font=[NSFont fontWithName:@"Inter-Regular" size:12];
@@ -531,13 +517,30 @@ static uint32_t termAnsiColor(int n) {
     [boot setLabel:@"/ (boot volume)"];
     DesktopPlaceView *trash=[ [DesktopPlaceView alloc] initWithFrame:NSMakeRect(170,4,150,52)];
     [trash setLabel:@"Trash"];
-    if(res)
-        [trash setIconPath:[NSString stringWithFormat:@"%@/Trash.app/Contents/Resources/Trash.png",res]];
+    NSString *trashIcon = res ? [NSString stringWithFormat:@"%@/Trash.app/Contents/Resources/Trash.png",res] : nil;
+    if(trashIcon)
+        [trash setIconPath:trashIcon];
     DesktopPlaceView *home=[ [DesktopPlaceView alloc] initWithFrame:NSMakeRect(332,4,150,52)];
     [home setLabel:[NSString stringWithFormat:@"Home (%@)",NSHomeDirectory()]];
     [[self.window contentView] addSubview:boot];
     [[self.window contentView] addSubview:trash];
     [[self.window contentView] addSubview:home];
+    /* Artwork sits on the window's content view: nested subviews of a view that
+     * overrides drawRect: never composite in this tree, which is exactly what the
+     * CLICK47 direct-attachment test proved (Filer painted 1464 dark px there). */
+    if(trashIcon){
+        NSImage *im=[[NSImage alloc] initWithContentsOfFile:trashIcon];
+        if(im){
+            NSImageView *tiv=[[NSImageView alloc] initWithFrame:NSMakeRect(178,30,36,36)];
+            [tiv setImage:im];
+            [tiv setNeedsDisplay:YES];
+            [[self.window contentView] addSubview:tiv];
+        }
+    }
+    /* Dock.m forces the content view to composite its subviews with an explicit
+     * drawRect call ("Cocoa does not automatically redraw"), which is why Dock's
+     * NSImageViews paint while ours did not -- mirror that idiom here. */
+    [[self.window contentView] drawRect:[[self.window contentView] bounds]];
     [boot setNeedsDisplay:YES];
     [trash setNeedsDisplay:YES];
     [home setNeedsDisplay:YES];

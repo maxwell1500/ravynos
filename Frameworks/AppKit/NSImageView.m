@@ -114,5 +114,39 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
    [_cell setImageScaling:scaling];
    [self setNeedsDisplay:YES];
 }
+/* This tree never draws cell-based views (-[NSView displayRectIgnoringOpacity:inContext:]
+ * is NSUnimplementedMethod and base -drawRect: does nothing), so image views painted
+ * nothing anywhere; composite the image ourselves using the scaling already stored on
+ * the cell and the graphicsPort idiom proven to work elsewhere in this tree. */
+-(void)drawRect:(NSRect)rect {
+    NSImage *img=[_cell _imageValue];
+    if(img==nil)
+        return;
+    NSRect bnds=[self bounds];
+    NSSize fsz=bnds.size;
+    NSSize isz=[img size];
+    /* Several PNGs here report no intrinsic size, so fall back to the view box. */
+    if(isz.width<=0 || isz.height<=0){
+        isz.width=fsz.width;
+        isz.height=fsz.height;
+    }
+    float sx=fsz.width/isz.width, sy=fsz.height/isz.height;
+    float s=(sx<sy)?sx:sy;
+    if([_cell imageScaling]==NSImageScaleNone)
+        s=1.0f;
+    NSSize dsz;
+    dsz.width=isz.width*s;
+    dsz.height=isz.height*s;
+    NSPoint org;
+    org.x=bnds.origin.x+(fsz.width-dsz.width)/2;
+    org.y=bnds.origin.y+(fsz.height-dsz.height)/2;
+    CGContextRef port=[[[self window] graphicsContext] graphicsPort];
+    if(port==NULL)
+        return;
+    [img drawInRect:NSMakeRect(org.x,org.y,dsz.width,dsz.height)
+        fromRect:NSZeroRect
+        operation:NSCompositingOperationSourceOver
+        fraction:1.0];
+}
 
 @end
