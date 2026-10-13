@@ -55,10 +55,12 @@
         return;
     float x=8.0f;
     if(_img){
-        NSSize isz=[_img size];
-        float side=(isz.height<36.0f)?(float)isz.height:36.0f;
+        /* NSImage reports no intrinsic size for some PNGs here, which is why the
+         * Dock tiles set an explicit frame instead of trusting [img size]; draw at
+         * a fixed box and let fromRect NULL mean "whole image". */
+        float side=36.0f;
         [_img drawInRect:NSMakeRect(x,(sz.height-side)/2,side,side)
-            fromRect:NSMakeRect(0,0,isz.width,isz.height)
+            fromRect:NSZeroRect
             operation:NSCompositingOperationSourceOver fraction:1.0];
         x+=side+6.0f;
     }
