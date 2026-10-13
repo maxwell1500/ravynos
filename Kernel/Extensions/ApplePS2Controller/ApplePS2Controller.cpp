@@ -30,6 +30,7 @@
 
 extern "C"
 {
+    void ps2keyboard_tap(uint8_t code); /* bsd/dev/ps2keyboard.c */
     #include <pexpert/i386/protos.h>
     #include <machine/machine_routines.h>
 }
@@ -686,6 +687,9 @@ void ApplePS2Controller::dispatchDriverInterrupt(PS2DeviceType deviceType,
   }
   else if ( deviceType == kDT_Keyboard )
   {
+    // Mirror the raw scan code to the /dev/keyboard driver (if present)
+    ps2keyboard_tap(data);
+
     // Dispatch the data to the keyboard driver.
     if (_interruptInstalledKeyboard)       
       (*_interruptActionKeyboard)(_interruptTargetKeyboard, data);

@@ -70,38 +70,29 @@ NSString * const NSUserDefaultsDidChangeNotification=@"NSUserDefaultsDidChangeNo
 }
 
 -(void)registerFoundationDefaults {
-   NSString     *path=[[NSBundle bundleForClass:[self class]] 
-                  pathForResource:@"NSUserDefaults" ofType:@"plist"];
-   NSDictionary *plist=[NSDictionary dictionaryWithContentsOfFile:path];
-
-   if(plist==nil)
-    NSCLog("internal error, unable to locate NSUserDefaults.plist, path=%s, bundle at %s",path == nil ? "" : [path UTF8String],[[[NSBundle bundleForClass:[self class]]  resourcePath] UTF8String]);
-   else
-    [_domains setObject:plist forKey:@"Foundation"];
+   NSDictionary *plist = [NSDictionary dictionaryWithObjectsAndKeys:
+      [NSArray arrayWithObjects:@"AM", @"PM", nil], @"NSAMPMDesignation",
+      @"%A, %B %d, %Y", @"NSDateFormatString",
+      [NSArray arrayWithObjects:@"January", @"February", @"March", @"April", @"May", @"June", @"July", @"August", @"September", @"October", @"November", @"December", nil], @"NSMonthNameArray",
+      [NSArray arrayWithObjects:@"Jan", @"Feb", @"Mar", @"Apr", @"May", @"Jun", @"Jul", @"Aug", @"Sep", @"Oct", @"Nov", @"Dec", nil], @"NSShortMonthNameArray",
+      [NSArray arrayWithObjects:@"Sunday", @"Monday", @"Tuesday", @"Wednesday", @"Thursday", @"Friday", @"Saturday", nil], @"NSWeekDayNameArray",
+      [NSArray arrayWithObjects:@"Sun", @"Mon", @"Tue", @"Wed", @"Thu", @"Fri", @"Sat", nil], @"NSShortWeekDayNameArray",
+      @"%A, %B %d, %Y %H:%M:%S %Z", @"NSTimeDateFormatString",
+      @"%H:%M:%S", @"NSTimeFormatString",
+      @"~/Library/Preferences", @"NSUserDefaultsUserDirectory",
+      nil];
+   if(plist)
+      [_domains setObject:plist forKey:@"Foundation"];
 }
 
 -(void)registerProcessNameDefaults {
-#if 0
-   NSString *directory=[[_domains objectForKey:@"Foundation"] objectForKey:@"NSUserDefaultsUserDirectory"];
-   NSString *path=[[[directory stringByAppendingPathComponent:[[NSProcessInfo processInfo] processName]] stringByAppendingPathExtension:@"plist"] stringByExpandingTildeInPath];
+   NSString *name = [[NSProcessInfo processInfo] processName];
+   if(name == nil)
+      name = @"default";
 
-   if(path!=nil){
-    NSDictionary *plist=[NSDictionary dictionaryWithContentsOfFile:path];
-
-    [_domains setObject:plist forKey:[[NSProcessInfo processInfo] processName]];
-   }
-#else
-  NSString           *name=[[NSBundle mainBundle] bundleIdentifier];
-  NSPersistantDomain *domain;
-  
-  if(name==nil)
-   name=[NSString stringWithFormat:@"noid.%@",[[NSProcessInfo processInfo] processName]];
-   
-  domain=[[[NSPlatform currentPlatform] persistantDomainClass] persistantDomainWithName:name];
-
-  [_domains setObject:domain forKey:[[NSProcessInfo processInfo] processName]];
-#endif
-
+   NSPersistantDomain *domain = [[[NSPlatform currentPlatform] persistantDomainClass] persistantDomainWithName:name];
+   if(domain)
+      [_domains setObject:domain forKey:name];
 }
 
 -init {
@@ -124,81 +115,17 @@ NSString * const NSUserDefaultsDidChangeNotification=@"NSUserDefaultsDidChangeNo
    udtrace("UD-registerProcessName done\n");
 
     NSMutableDictionary *dict = [NSMutableDictionary new];
-    [dict addEntriesWithDictionary:[_domains objectForKey:NSGlobalDomain]];
+    [dict addEntriesFromDictionary:[_domains objectForKey:NSGlobalDomain]];
     [_domains setObject:dict forKey:NSGlobalDomain];
     
-    const char *lstr = [[[[NSLocale currentLocale] localeIdentifier]
-        stringByAppendingString:@".UTF-8"] UTF8String];
-    char *current = setlocale(LC_ALL, NULL);
-    setlocale(LC_ALL, lstr);
-    
-    // long day names
-    NSMutableArray *arr = [NSMutableArray arrayWithCapacity:7];
-    [arr addObject:[NSString stringWithUTF8String:nl_langinfo(DAY_1)]];
-    [arr addObject:[NSString stringWithUTF8String:nl_langinfo(DAY_2)]];
-    [arr addObject:[NSString stringWithUTF8String:nl_langinfo(DAY_3)]];
-    [arr addObject:[NSString stringWithUTF8String:nl_langinfo(DAY_4)]];
-    [arr addObject:[NSString stringWithUTF8String:nl_langinfo(DAY_5)]];
-    [arr addObject:[NSString stringWithUTF8String:nl_langinfo(DAY_6)]];
-    [arr addObject:[NSString stringWithUTF8String:nl_langinfo(DAY_7)]];
-    [dict setObject:arr forKey:NSWeekDayNameArray];
-
-    // short day names
-    arr = [NSMutableArray arrayWithCapacity:7];
-    [arr addObject:[NSString stringWithUTF8String:nl_langinfo(ABDAY_1)]];
-    [arr addObject:[NSString stringWithUTF8String:nl_langinfo(ABDAY_2)]];
-    [arr addObject:[NSString stringWithUTF8String:nl_langinfo(ABDAY_3)]];
-    [arr addObject:[NSString stringWithUTF8String:nl_langinfo(ABDAY_4)]];
-    [arr addObject:[NSString stringWithUTF8String:nl_langinfo(ABDAY_5)]];
-    [arr addObject:[NSString stringWithUTF8String:nl_langinfo(ABDAY_6)]];
-    [arr addObject:[NSString stringWithUTF8String:nl_langinfo(ABDAY_7)]];
-    [dict setObject:arr forKey:NSShortWeekDayNameArray];
-
-    // long month names
-    arr = [NSMutableArray arrayWithCapacity:12];
-    [arr addObject:[NSString stringWithUTF8String:nl_langinfo(MON_1)]];
-    [arr addObject:[NSString stringWithUTF8String:nl_langinfo(MON_2)]];
-    [arr addObject:[NSString stringWithUTF8String:nl_langinfo(MON_3)]];
-    [arr addObject:[NSString stringWithUTF8String:nl_langinfo(MON_4)]];
-    [arr addObject:[NSString stringWithUTF8String:nl_langinfo(MON_5)]];
-    [arr addObject:[NSString stringWithUTF8String:nl_langinfo(MON_6)]];
-    [arr addObject:[NSString stringWithUTF8String:nl_langinfo(MON_7)]];
-    [arr addObject:[NSString stringWithUTF8String:nl_langinfo(MON_8)]];
-    [arr addObject:[NSString stringWithUTF8String:nl_langinfo(MON_9)]];
-    [arr addObject:[NSString stringWithUTF8String:nl_langinfo(MON_10)]];
-    [arr addObject:[NSString stringWithUTF8String:nl_langinfo(MON_11)]];
-    [arr addObject:[NSString stringWithUTF8String:nl_langinfo(MON_12)]];
-    [dict setObject:arr forKey:NSMonthNameArray];
-
-    // short month names
-    arr = [NSMutableArray arrayWithCapacity:12];
-    [arr addObject:[NSString stringWithUTF8String:nl_langinfo(ABMON_1)]];
-    [arr addObject:[NSString stringWithUTF8String:nl_langinfo(ABMON_2)]];
-    [arr addObject:[NSString stringWithUTF8String:nl_langinfo(ABMON_3)]];
-    [arr addObject:[NSString stringWithUTF8String:nl_langinfo(ABMON_4)]];
-    [arr addObject:[NSString stringWithUTF8String:nl_langinfo(ABMON_5)]];
-    [arr addObject:[NSString stringWithUTF8String:nl_langinfo(ABMON_6)]];
-    [arr addObject:[NSString stringWithUTF8String:nl_langinfo(ABMON_7)]];
-    [arr addObject:[NSString stringWithUTF8String:nl_langinfo(ABMON_8)]];
-    [arr addObject:[NSString stringWithUTF8String:nl_langinfo(ABMON_9)]];
-    [arr addObject:[NSString stringWithUTF8String:nl_langinfo(ABMON_10)]];
-    [arr addObject:[NSString stringWithUTF8String:nl_langinfo(ABMON_11)]];
-    [arr addObject:[NSString stringWithUTF8String:nl_langinfo(ABMON_12)]];
-    [dict setObject:arr forKey:NSShortMonthNameArray];
-
-    [dict setObject:[NSString stringWithUTF8String:nl_langinfo(T_FMT)]
-        forKey:NSTimeFormatString];
-    [dict setObject:[NSString stringWithUTF8String:nl_langinfo(D_FMT)]
-        forKey:NSDateFormatString];
-    [dict setObject:[NSString stringWithUTF8String:nl_langinfo(D_T_FMT)]
-        forKey:NSTimeDateFormatString];
-
-    arr = [NSMutableArray arrayWithCapacity:2];
-    [arr addObject:[NSString stringWithUTF8String:nl_langinfo(AM_STR)]];
-    [arr addObject:[NSString stringWithUTF8String:nl_langinfo(PM_STR)]];
-    [dict setObject:arr forKey:NSAMPMDesignation];
-
-    setlocale(LC_ALL, current);
+    [dict setObject:@[ @"Sunday", @"Monday", @"Tuesday", @"Wednesday", @"Thursday", @"Friday", @"Saturday" ] forKey:NSWeekDayNameArray];
+    [dict setObject:@[ @"Sun", @"Mon", @"Tue", @"Wed", @"Thu", @"Fri", @"Sat" ] forKey:NSShortWeekDayNameArray];
+    [dict setObject:@[ @"January", @"February", @"March", @"April", @"May", @"June", @"July", @"August", @"September", @"October", @"November", @"December" ] forKey:NSMonthNameArray];
+    [dict setObject:@[ @"Jan", @"Feb", @"Mar", @"Apr", @"May", @"Jun", @"Jul", @"Aug", @"Sep", @"Oct", @"Nov", @"Dec" ] forKey:NSShortMonthNameArray];
+    [dict setObject:@"%H:%M:%S" forKey:NSTimeFormatString];
+    [dict setObject:@"%m/%d/%y" forKey:NSDateFormatString];
+    [dict setObject:@"%a %b %e %H:%M:%S %Z %Y" forKey:NSTimeDateFormatString];
+    [dict setObject:@[ @"AM", @"PM" ] forKey:NSAMPMDesignation];
 
    [_domains setObject:[NSMutableDictionary dictionary]
                 forKey:NSRegistrationDomain];

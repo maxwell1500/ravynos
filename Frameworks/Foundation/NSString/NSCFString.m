@@ -39,8 +39,10 @@ NSString *NSCFStringNewWithCharacters(NSZone *zone, const unichar *characters,
         NSUInteger length, BOOL lossy)
 {
     NSUInteger reslen;
-    char *bytes = NSUnicodeToUTF8(characters, length, YES, &reslen, NULL, YES);
+    char *bytes = NSUnicodeToUTF8(characters, length, YES, &reslen, NULL, NO);
     NSString *string = NSCFStringNewWithBytes(zone, (const char *)bytes, reslen);
+    if (bytes)
+        NSZoneFree(NULL, bytes);
     return string;
 }
 
@@ -48,12 +50,13 @@ NSString *NSCFStringNewWithBytes(NSZone *zone, const char *bytes,
          NSUInteger length)
 {
     NSCFString *self = NSAllocateObject([NSCFString class], 
-            length * sizeof(char), zone);
+            (length + 1) * sizeof(char), zone);
     if (self) {
         self->variants.notInlineImmutable1.length = length;
         self->variants.notInlineImmutable1.bytes = self->bytes;
         for (int i = 0; i < length; i++)
             self->bytes[i] = ((unsigned char *)bytes)[i];
+        self->bytes[length] = '\0';
         // cfinfo immutable, not inline, don't free, 8bit, no length byte, no NULL byte
         self->cfinfo[CF_INFO_BITS] = kNSCFDoNotFree;
         self->cfinfo[CF_RC_BITS] = 1;
@@ -153,7 +156,7 @@ NSUInteger NSGetCFStringWithMaxLength(const unichar *characters,
             return len;
         }
     }
-    return (self->variants.notInlineImmutable1.length & 0xff);
+    return self->variants.notInlineImmutable1.length;
 }
 
 -(unichar)characterAtIndex:(NSUInteger)location {

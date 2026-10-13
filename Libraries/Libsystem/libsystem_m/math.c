@@ -38,45 +38,87 @@ bool islessequal(double __x, double __y) { return __builtin_islessequal(__x, __y
 bool islessgreater(double __x, double __y) { return __builtin_islessgreater(__x, __y); }
 bool isunordered(double __x, double __y) { return __builtin_isunordered(__x, __y); }
 
-float acosf(float __x) { return __builtin_acosf(__x); }
-double acos(double __x) { return __builtin_acos(__x); }
-long double acosl(long double __x) { return __builtin_acosl(__x); }
+double sqrt(double x);
+float sqrtf(float x);
+long double sqrtl(long double x);
+double exp(double x);
+float expf(float x);
+long double expl(long double x);
+double log(double x);
+float logf(float x);
+long double logl(long double x);
 
-float asinf(float __x) { return __builtin_asinf(__x); }
-double asin(double __x) { return __builtin_asin(__x); }
-long double asinl(long double __x) { return __builtin_asinl(__x); }
+double atan2(double y, double x) {
+    double r;
+    __asm__ ("fpatan" : "=t" (r) : "0" (x), "u" (y) : "st(1)");
+    return r;
+}
+float atan2f(float y, float x) { return (float)atan2((double)y, (double)x); }
+long double atan2l(long double y, long double x) {
+    long double r;
+    __asm__ ("fpatan" : "=t" (r) : "0" (x), "u" (y) : "st(1)");
+    return r;
+}
 
-float atanf(float __x) { return __builtin_atanf(__x); }
-double atan(double __x) { return __builtin_atan(__x); }
-long double atanl(long double __x) { return __builtin_atanl(__x); }
+double atan(double x) {
+    double r;
+    __asm__ ("fld1; fpatan" : "=t" (r) : "0" (x));
+    return r;
+}
+float atanf(float x) { return (float)atan((double)x); }
+long double atanl(long double x) {
+    long double r;
+    __asm__ ("fld1; fpatan" : "=t" (r) : "0" (x));
+    return r;
+}
 
-float atan2f(float __y, float __x) { return __builtin_atan2f(__y, __x); }
-double atan2(double __x, double __y) { return __builtin_atan2(__x, __y); }
-long double atan2l(long double __y, long double __x) { return __builtin_atan2l(__y, __x); }
+double asin(double x) { return atan2(x, sqrt(1.0 - x * x)); }
+float asinf(float x) { return (float)asin((double)x); }
+long double asinl(long double x) { return (long double)asin((double)x); }
 
-float ceilf(float __x) { return __builtin_ceilf(__x); }
-double ceil(double __x) { return __builtin_ceil(__x); }
-long double ceill(long double __x) { return __builtin_ceill(__x); }
+double acos(double x) { return atan2(sqrt(1.0 - x * x), x); }
+float acosf(float x) { return (float)acos((double)x); }
+long double acosl(long double x) { return (long double)acos((double)x); }
 
-float cosf(float __x) { return __builtin_cosf(__x); }
-double cos(double __x) { return __builtin_cos(__x); }
-long double cosl(long double __x) { return __builtin_cosl(__x); }
+double cos(double x) {
+    double r;
+    __asm__ ("fcos" : "=t" (r) : "0" (x));
+    return r;
+}
+float cosf(float x) { return (float)cos((double)x); }
+long double cosl(long double x) {
+    long double r;
+    __asm__ ("fcos" : "=t" (r) : "0" (x));
+    return r;
+}
 
-float coshf(float __x) { return __builtin_coshf(__x); }
-double cosh(double __x) { return __builtin_cosh(__x); }
-long double coshl(long double __x) { return __builtin_coshl(__x); }
+double ceil(double x) { double r; __asm__ ("roundsd $2, %1, %0" : "=x" (r) : "x" (x)); return r; }
+float ceilf(float x) { float r; __asm__ ("roundss $2, %1, %0" : "=x" (r) : "x" (x)); return r; }
+long double ceill(long double x) { return (long double)ceil((double)x); }
 
-float expf(float __x) { return __builtin_expf(__x); }
-double exp(double __x) { return __builtin_exp(__x); }
-long double expl(long double __x) { return __builtin_expl(__x); }
+double cosh(double x) { return (exp(x) + exp(-x)) * 0.5; }
+float coshf(float x) { return (float)cosh((double)x); }
+long double coshl(long double x) { return (long double)cosh((double)x); }
+
+double exp(double x) {
+    double r;
+    __asm__ ("fldl2e; fmulp; fld %%st(0); frndint; fsubr %%st(0), %%st(1); fxch; f2xm1; fld1; faddp; fscale; fstp %%st(1)" : "=t" (r) : "0" (x) : "st(1)");
+    return r;
+}
+float expf(float x) { return (float)exp((double)x); }
+long double expl(long double x) {
+    long double r;
+    __asm__ ("fldl2e; fmulp; fld %%st(0); frndint; fsubr %%st(0), %%st(1); fxch; f2xm1; fld1; faddp; fscale; fstp %%st(1)" : "=t" (r) : "0" (x) : "st(1)");
+    return r;
+}
 
 float fabsf(float __x) { return __builtin_fabsf(__x); }
 double fabs(double __x) { return __builtin_fabs(__x); }
 long double fabsl(long double __x) { return __builtin_fabsl(__x); }
 
-float floorf(float __x) { return __builtin_floorf(__x); }
-double floor(double __x) { return __builtin_floor(__x); }
-long double floorl(long double __x) { return __builtin_floorl(__x); }
+double floor(double x) { double r; __asm__ ("roundsd $1, %1, %0" : "=x" (r) : "x" (x)); return r; }
+float floorf(float x) { float r; __asm__ ("roundss $1, %1, %0" : "=x" (r) : "x" (x)); return r; }
+long double floorl(long double x) { return (long double)floor((double)x); }
 
 float fmodf(float __x, float __y) { return (float)fmodl(__x, __y); }
 double fmod(double __x, double __y) { return (double)fmodl(__x, __y); }
@@ -114,42 +156,90 @@ float ldexpf(float __x, int __e) { return __builtin_ldexpf(__x, __e); }
 double ldexp(double __x, int __e) { return __builtin_ldexp(__x, __e); }
 long double ldexpl(long double __x, int __e) { return __builtin_ldexpl(__x, __e); }
 
-float logf(float __x) { return __builtin_logf(__x); }
-double log(double __x) { return __builtin_log(__x); }
-long double logl(long double __x) { return __builtin_logl(__x); }
+double log(double x) {
+    double r;
+    __asm__ ("fldln2; fxch; fyl2x" : "=t" (r) : "0" (x) : "st(1)");
+    return r;
+}
+float logf(float x) { return (float)log((double)x); }
+long double logl(long double x) {
+    long double r;
+    __asm__ ("fldln2; fxch; fyl2x" : "=t" (r) : "0" (x) : "st(1)");
+    return r;
+}
 
-float log10f(float __x) { return __builtin_log10f(__x); }
-double log10(double __x) { return __builtin_log10(__x); }
-long double log10l(long double __x) { return __builtin_log10l(__x); }
+double log10(double x) {
+    double r;
+    __asm__ ("fldlg2; fxch; fyl2x" : "=t" (r) : "0" (x) : "st(1)");
+    return r;
+}
+float log10f(float x) { return (float)log10((double)x); }
+long double log10l(long double x) {
+    long double r;
+    __asm__ ("fldlg2; fxch; fyl2x" : "=t" (r) : "0" (x) : "st(1)");
+    return r;
+}
 
 float modff(float __x, float* __y) { return __builtin_modff(__x, __y); }
 double modf(double __x, double* __y)  { return __builtin_modf(__x, __y); }
 long double modfl(long double __x, long double* __y) { return __builtin_modfl(__x, __y); }
 
-float powf(float __x, float __y) { return __builtin_powf(__x, __y); }
-double pow(double __x, double __y) { return __builtin_pow(__x, __y); }
-long double powl(long double __x, long double __y) { return __builtin_powl(__x, __y); }
+double pow(double x, double y) {
+    if (x == 0.0) return (y == 0.0) ? 1.0 : 0.0;
+    if (y == 0.0) return 1.0;
+    if (y == 1.0) return x;
+    return exp(y * log(x));
+}
+float powf(float x, float y) { return (float)pow((double)x, (double)y); }
+long double powl(long double x, long double y) { return (long double)pow((double)x, (double)y); }
 
-float sinf(float __x) { return __builtin_sinf(__x); }
-double sin(double __x) { return __builtin_sin(__x); }
-long double sinl(long double __x) { return __builtin_sinl(__x); }
+double sin(double x) {
+    double r;
+    __asm__ ("fsin" : "=t" (r) : "0" (x));
+    return r;
+}
+float sinf(float x) { return (float)sin((double)x); }
+long double sinl(long double x) {
+    long double r;
+    __asm__ ("fsin" : "=t" (r) : "0" (x));
+    return r;
+}
 
-float sinhf(float __x) { return __builtin_sinhf(__x); }
-double sinh(double __x) { return __builtin_sinh(__x); }
-long double sinhl(long double __x) { return __builtin_sinhl(__x); }
+double sinh(double x) { return (exp(x) - exp(-x)) * 0.5; }
+float sinhf(float x) { return (float)sinh((double)x); }
+long double sinhl(long double x) { return (long double)sinh((double)x); }
 
-float sqrtf(float __x) { return __builtin_sqrtf(__x); }
-double sqrt(double __x) { return __builtin_sqrt(__x); }
-long double sqrtl(long double __x) { return __builtin_sqrtl(__x); }
+double sqrt(double x) {
+    double r;
+    __asm__ ("sqrtsd %1, %0" : "=x" (r) : "x" (x));
+    return r;
+}
+float sqrtf(float x) {
+    float r;
+    __asm__ ("sqrtss %1, %0" : "=x" (r) : "x" (x));
+    return r;
+}
+long double sqrtl(long double x) {
+    long double r;
+    __asm__ ("fsqrt" : "=t" (r) : "0" (x));
+    return r;
+}
 
-float tanf(float __x) { return __builtin_tanf(__x); }
-double tan(double __x) { return __builtin_tan(__x); }
-long double tanl(long double __x) { return __builtin_tanl(__x); }
+double tan(double x) {
+    double one, r;
+    __asm__ ("fptan" : "=m" (one), "=t" (r) : "0" (x));
+    return r;
+}
+float tanf(float x) { return (float)tan((double)x); }
+long double tanl(long double x) {
+    long double one, r;
+    __asm__ ("fptan" : "=m" (one), "=t" (r) : "0" (x));
+    return r;
+}
 
-float tanhf(float __x) { return __builtin_tanhf(__x); }
-double tanh(double __x) { return __builtin_tanh(__x); }
-long double tanhl(long double __x) { return __builtin_tanhl(__x); }
-
+double tanh(double x) { double e = exp(2.0 * x); return (e - 1.0) / (e + 1.0); }
+float tanhf(float x) { return (float)tanh((double)x); }
+long double tanhl(long double x) { return (long double)tanh((double)x); }
 float acoshf(float __x) { return __builtin_acoshf(__x); }
 double acosh(double __x) { return __builtin_acosh(__x); }
 long double acoshl(long double __x) { return __builtin_acoshl(__x); }

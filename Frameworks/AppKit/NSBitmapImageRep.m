@@ -113,11 +113,14 @@ NSString* NSImageCompressionFactor = @"NSImageCompressionFactor";
     if(cgImage==nil)
      break;
         
+    NSNumber        *xres=nil;
+    NSNumber        *yres=nil;
     CFDictionaryRef properties=CGImageSourceCopyPropertiesAtIndex(imageSource,i,nil);
-    NSNumber        *xres=[[(id)CFDictionaryGetValue(properties,kCGImagePropertyDPIWidth) copy] autorelease];
-    NSNumber        *yres=[[(id)CFDictionaryGetValue(properties,kCGImagePropertyDPIHeight) copy] autorelease];
-
-    CFRelease(properties);
+    if(properties != NULL) {
+        xres=[[(id)CFDictionaryGetValue(properties,kCGImagePropertyDPIWidth) copy] autorelease];
+        yres=[[(id)CFDictionaryGetValue(properties,kCGImagePropertyDPIHeight) copy] autorelease];
+        CFRelease(properties);
+    }
 
     NSBitmapImageRep *imageRep=[[self alloc] initWithCGImage:cgImage];
     NSSize size={ CGImageGetWidth(cgImage),CGImageGetHeight(cgImage) };
@@ -235,11 +238,14 @@ NSString* NSImageCompressionFactor = @"NSImageCompressionFactor";
     return nil;
    }
    
+   NSNumber        *xres=nil;
+   NSNumber        *yres=nil;
    CFDictionaryRef properties=CGImageSourceCopyPropertiesAtIndex(imageSource,0,nil);
-   NSNumber        *xres=[[(id)CFDictionaryGetValue(properties,kCGImagePropertyDPIWidth) copy] autorelease];
-   NSNumber        *yres=[[(id)CFDictionaryGetValue(properties,kCGImagePropertyDPIHeight) copy] autorelease];
-
-   CFRelease(properties);
+   if(properties != NULL) {
+       xres=[[(id)CFDictionaryGetValue(properties,kCGImagePropertyDPIWidth) copy] autorelease];
+       yres=[[(id)CFDictionaryGetValue(properties,kCGImagePropertyDPIHeight) copy] autorelease];
+       CFRelease(properties);
+   }
    CFRelease(imageSource);
 
    if(cgImage==nil){

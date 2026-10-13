@@ -150,7 +150,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 }
 
 -initTextCell:(NSString *)string {
-   _focusRingType=[isa defaultFocusRingType];
+   _focusRingType=[[self class] defaultFocusRingType];
    _state=NSOffState;
    _font=[[NSFont userFontOfSize:0] retain];
    _objectValue=[string copy];
@@ -169,7 +169,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 }
 
 -initImageCell:(NSImage *)image {
-   _focusRingType=[isa defaultFocusRingType];
+   _focusRingType=[[self class] defaultFocusRingType];
    _state=NSOffState;
    _font=nil;
    _objectValue=nil;

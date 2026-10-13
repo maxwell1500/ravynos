@@ -1205,6 +1205,7 @@ static uint32_t CGDisplayStateFlags(CGDirectDisplayID display) {
 kern_return_t _windowServerRPC(void *data, size_t len, void *replyBuf, int *replyLen) {
     static mach_port_t replyPort = MACH_PORT_NULL;
     static mach_port_t wsPort = MACH_PORT_NULL;
+    write(2, "[CG] rpc enter\n", 14);
 
     // Get WindowServer's service port
     if(wsPort == MACH_PORT_NULL) {
@@ -1214,6 +1215,7 @@ kern_return_t _windowServerRPC(void *data, size_t len, void *replyBuf, int *repl
         if(wsPort == MACH_PORT_NULL)
             return KERN_FAILURE;
     }
+    { char _tb[128]; int _tn = snprintf(_tb, sizeof(_tb), "[CG] rpc wsPort=0x%x\n", wsPort); write(2, _tb, _tn); }
 
     // Create a port with send/receive rights for us to use
     if(replyPort == MACH_PORT_NULL) {
@@ -1223,6 +1225,7 @@ kern_return_t _windowServerRPC(void *data, size_t len, void *replyBuf, int *repl
         if(ret != KERN_SUCCESS)
             return ret;
     }
+    { char _tb[128]; int _tn = snprintf(_tb, sizeof(_tb), "[CG] rpc replyPort=0x%x\n", replyPort); write(2, _tb, _tn); }
 
     // OK, we seem to have ports set up... do the RPC. This is a blocking call until WS responds.
     PortMessage msg = {0};
@@ -1237,9 +1240,27 @@ kern_return_t _windowServerRPC(void *data, size_t len, void *replyBuf, int *repl
         msg.descriptor.disposition = MACH_MSG_TYPE_MAKE_SEND;
     }
     msg.pid = getpid();
-    CFStringRef bundleID = (__bridge CFStringRef)[[NSBundle mainBundle] bundleIdentifier];
-    if(bundleID)
-        strncpy(msg.bundleID, [(__bridge NSString *)bundleID cString], sizeof(msg.bundleID));
+    write(2, "[CG] rpc pre-bundleID\n", 19);
+    /* The WindowServer always hands us RAVYN_BUNDLE_ID in the environment.
+     * Prefer it: calling +[NSBundle mainBundle] triggers NSBundle class
+     * initialization, which walks the executable's bundle and hangs on the
+     * FAT32 volume for some apps (Dock, SystemUIServer). */
+    const char *env_bid = getenv("RAVYN_BUNDLE_ID");
+    if(env_bid && env_bid[0]) {
+        strncpy(msg.bundleID, env_bid, sizeof(msg.bundleID) - 1);
+    } else {
+        CFStringRef bundleID = (__bridge CFStringRef)[[NSBundle mainBundle] bundleIdentifier];
+        if(bundleID && [(__bridge NSString *)bundleID length] > 0)
+            strncpy(msg.bundleID, [(__bridge NSString *)bundleID cString], sizeof(msg.bundleID) - 1);
+        else {
+            env_bid = getenv("RAVYN_BUNDLE_ID");
+            if(env_bid && env_bid[0])
+                strncpy(msg.bundleID, env_bid, sizeof(msg.bundleID) - 1);
+            else
+                snprintf(msg.bundleID, sizeof(msg.bundleID), "unix.%u", getpid());
+        }
+    }
+    write(2, "[CG] rpc post-bundleID\n", 20);
 
     if(len > sizeof(msg.data))
         return MACH_SEND_TOO_LARGE;

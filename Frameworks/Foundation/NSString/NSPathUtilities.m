@@ -302,8 +302,9 @@ extern char *NSString_unicodeToAnyCString(NSStringEncoding encoding,
 }
 
 -(const char *)fileSystemRepresentation {
-   if (ravyn_fsrep_count < 50) {
-      char buf[64]; int n=0;
+   const char *cstr=[self cString];
+   if (ravyn_fsrep_count < 500) {
+      char buf[128]; int n=0;
       for (const char *s="FSREP"; *s; s++) buf[n++]=*s;
       buf[n++]='=';
       int cnt=ravyn_fsrep_count;
@@ -311,6 +312,8 @@ extern char *NSString_unicodeToAnyCString(NSStringEncoding encoding,
       if (cnt>=100) { buf[n++]='0'+cnt/100; cnt%=100; }
       if (cnt>=10) { buf[n++]='0'+cnt/10; cnt%=10; }
       buf[n++]='0'+cnt;
+      buf[n++]=' ';
+      for (const char *s=cstr; s && *s && n<120; s++) buf[n++]=*s;
       buf[n++]='\n';
       write(2, buf, (size_t)n);
    }
@@ -318,7 +321,7 @@ extern char *NSString_unicodeToAnyCString(NSStringEncoding encoding,
    /* ravynOS: bypass NSFileManager -- the NSThreadSharedInstance/NSFileManager
     * chain is too slow on TCG and triggers NULL pointer dereference crashes
     * in AppKit after ~45 calls.  Return the C string directly. */
-   return [self cString];
+   return cstr;
 }
 
 -(const uint16_t *)fileSystemRepresentationW {

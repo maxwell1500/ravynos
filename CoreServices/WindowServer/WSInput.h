@@ -41,6 +41,14 @@ double clipTo(double val, double min, double max);
 #if defined(__linux__)
     struct udev *udev;
     struct libinput *li;
+#else
+    int mouseFd;
+    int kbdFd;
+    BOOL kbdExtended;
+    BOOL shiftDown;
+    BOOL ctrlDown;
+    BOOL altDown;
+    BOOL capsLockOn;
 #endif
     struct xkb_context *xkbCtx;
     struct xkb_keymap *xkb_keymap;
@@ -68,6 +76,11 @@ double clipTo(double val, double min, double max);
 -(NSPoint)setPointerPos:(NSPoint)pos;
 -(void)setGeometry:(NSRect)geom;
 -(int)fileDescriptor;
+#if !defined(__linux__)
+-(int)keyboardFileDescriptor;
+-(void)runKeyboard:(NSObject *)target;
+-(void)processKeyByte:(uint8_t)code target:(NSObject *)target;
+#endif
 
 @end
 

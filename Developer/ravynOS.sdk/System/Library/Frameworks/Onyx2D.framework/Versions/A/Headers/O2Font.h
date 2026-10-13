@@ -83,6 +83,13 @@ typedef enum {
 
 O2FontRef O2FontCreateWithFontName(NSString *name);
 O2FontRef O2FontCreateWithDataProvider(O2DataProviderRef provider);
+
+/* The names of the fonts this platform can actually resolve.  Exposed so
+ * AppKit's font-family enumeration does not have to ask fontconfig, which
+ * this tree deliberately does not use for face lookup (see O2Font_ttf.m's
+ * name -> path table): initialising it here is what crashed
+ * SystemUIServer inside FcConfigMessage. */
+NSArray *O2FontKnownFontNames(void);
 O2FontRef O2FontRetain(O2FontRef self);
 void O2FontRelease(O2FontRef self);
 

@@ -38,6 +38,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 #include <sys/types.h>
 #include <sys/un.h>
+#include <mach-o/dyld.h>
 #include <sys/socket.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -224,7 +225,6 @@ static NSMenuItem *itemWithTag(NSMenu *root, int tag) {
                             NSWindow *window = (me.windowID == 0)
                                 ? [self mainWindow]
                                 : [self windowWithWindowNumber:me.windowID];
-
                             // translate screen to window coords
                             me.x -= [window frame].origin.x;
                             me.y -= [window frame].origin.y;
@@ -494,6 +494,12 @@ static NSMenuItem *itemWithTag(NSMenu *root, int tag) {
     return(write(_machEventPipe[1], "\n", 2));
 }
 
+/* Read end of the mach event pipe: the display waits on this directly, since
+ * the NSRunLoop pipe wake-up is unreliable on ravynOS. */
+-(int)machEventPipeReadFd {
+    return _machEventPipe[0];
+}
+
 -init {
     if(NSApp)
         NSAssert(!NSApp, @"NSApplication is a singleton");
@@ -533,11 +539,31 @@ static NSMenuItem *itemWithTag(NSMenu *root, int tag) {
    _windows=[[NSMutableArray new] retain];
    _mainMenu=nil;
 
-   /* ravynOS: skip [NSBundle mainBundle] -- it triggers a chain of
-    * NSFileManager/fileSystemRepresentation calls that is too slow on
-    * TCG.  Use a hardcoded bundle identifier instead.  The WindowServer
-    * identifies clients by PID, not bundle ID. */
-   bundleID = [NSString stringWithFormat:@"unix.%u", getpid()];
+   /* ravynOS: derive bundle ID from the executable name (avoids
+    * [NSBundle mainBundle], which stalls under TCG).  WindowServer
+    * identifies Dock/SUI clients by these IDs. */
+   { char exePath[512];
+     uint32_t exeBufSize = sizeof(exePath);
+     NSString *exeName = nil;
+     if(_NSGetExecutablePath(exePath, &exeBufSize) == 0) {
+         const char *slash = strrchr(exePath, '/');
+         exeName = [NSString stringWithUTF8String:slash ? slash+1 : exePath];
+     }
+     if([exeName isEqualToString:@"Filer"]) {
+         bundleID = @"com.ravynos.Filer";
+     } else if([exeName isEqualToString:@"Dock"]) {
+         bundleID = @"com.ravynos.Dock";
+     } else if([exeName isEqualToString:@"SystemUIServer"]) {
+         bundleID = @"com.ravynos.SystemUIServer";
+     } else {
+         bundleID = [NSString stringWithFormat:@"unix.%u", getpid()];
+     }
+     char btrace[160];
+     int bn = snprintf(btrace, sizeof(btrace), "[AppKit] exe=%s bundleID=%s\n",
+         exeName ? [exeName UTF8String] : "(nil)",
+         bundleID ? [bundleID UTF8String] : "(nil)");
+     if (bn > 0) write(2, btrace, bn);
+   }
    aitrace("AI7 bundle ok\n");
    if(!([bundleID isEqualToString:@"com.ravynos.WindowServer"])) {
         write(2, "[AppKit] looking up WindowServer service\n", 41);
@@ -592,7 +618,9 @@ static NSMenuItem *itemWithTag(NSMenu *root, int tag) {
         }
     }
     write(2, "[AppKit] display isReady OK!\n", 29);
-    [self _showSplashImage];
+    /* ravynOS: skip _showSplashImage on TCG -- avoids scanning registered image
+     * rep classes and searching bundle resources for non-existent splash. */
+    // [self _showSplashImage];
    
    return NSApp;
 }
@@ -896,7 +924,6 @@ static int _tagAllMenus(NSMenu *menu, int tag) {
         NSLog(@"Failed to send menus to WS");
 
     [menuCopy release];
-    [d release];
 }
 
 - (void)addRecentItem:(NSURL *)url {
@@ -1072,12 +1099,9 @@ static int _tagAllMenus(NSMenu *menu, int tag) {
    NSAutoreleasePool *pool=[NSAutoreleasePool new];
    BOOL               needsUntitled=YES;
 
-   NS_DURING
     [[NSNotificationCenter defaultCenter] postNotificationName: NSApplicationWillFinishLaunchingNotification object:self];
-   NS_HANDLER
-    [self reportException:localException];
-   NS_ENDHANDLER
 
+   write(2,"[NSApp] finishLaunching: willFinish posted\n",43);
 	// Load the application icon if we have one
 	NSString* iconName = [[[NSBundle mainBundle] infoDictionary]
 						  objectForKey:@"CFBundleIconFile"];
@@ -1093,12 +1117,14 @@ static int _tagAllMenus(NSMenu *menu, int tag) {
     if([self mainMenu] == nil)
         [self setMenu:[NSMenu new]];
 	
+   write(2,"[NSApp] finishLaunching: menu ok\n",33);
 // Give us a first event
    [NSTimer scheduledTimerWithTimeInterval:0.1 target:nil
      selector:NULL userInfo:nil repeats:NO];
 
    [self _closeSplashImage];
 
+   write(2,"[NSApp] finishLaunching: splash closed\n",39);
    NSDocumentController *controller = nil;
    id types=[[[NSBundle mainBundle]
 		 infoDictionary]
@@ -1128,11 +1154,8 @@ static int _tagAllMenus(NSMenu *menu, int tag) {
        [controller newDocument: self];
    }
    
-   NS_DURING
+   write(2,"[NSApp] finishLaunching: posting didFinish\n",43);
     [[NSNotificationCenter defaultCenter] postNotificationName:NSApplicationDidFinishLaunchingNotification object:self];
-   NS_HANDLER
-    [self reportException:localException];
-   NS_ENDHANDLER
 
    [pool release];
 }
@@ -1181,7 +1204,6 @@ static int _tagAllMenus(NSMenu *menu, int tag) {
 }
 
 -(void)run {
-
   static BOOL didlaunch = NO;
   NSAutoreleasePool *pool;
 
@@ -1199,12 +1221,10 @@ static int _tagAllMenus(NSMenu *menu, int tag) {
 
     event=[self nextEventMatchingMask:NSAnyEventMask untilDate:[NSDate distantFuture] inMode:NSDefaultRunLoopMode dequeue:YES];
 
-    NS_DURING
-     [self sendEvent:event];
-
-    NS_HANDLER
-     [self reportException:localException];
-    NS_ENDHANDLER
+    /* NS_DURING is not used: its setjmp-based prologue never returns on this
+     * platform, so it would freeze the event loop. Exceptions are unsupported
+     * anyway -- __NSPushExceptionFrame/__NSPopExceptionFrame are no-ops here. */
+    [self sendEvent:event];
 
     [self _checkForReleasedWindows];
     [self _checkForTerminate];
@@ -1231,7 +1251,6 @@ static int _tagAllMenus(NSMenu *menu, int tag) {
 -(void)sendEvent:(NSEvent *)event {
     if(event == nil)
         return;
-
    if([event type]==NSKeyDown){
     unsigned modifierFlags=[event modifierFlags];
 
@@ -1250,18 +1269,15 @@ static int _tagAllMenus(NSMenu *menu, int tag) {
 
 -(NSEvent *)nextEventMatchingMask:(unsigned int)mask untilDate:(NSDate *)untilDate inMode:(NSString *)mode dequeue:(BOOL)dequeue {
    NSEvent *nextEvent=nil;
-   
+
    do {
    NSAutoreleasePool *pool=[NSAutoreleasePool new];
-
-   NS_DURING
-    //[NSClassFromString(@"Win32RunningCopyPipe") performSelector:@selector(createRunningCopyPipe)];
 
     // This should happen before _makeSureIsOnAScreen so we don't reposition done windows
     [self _checkForReleasedWindows];
 
     [[NSApp windows] makeObjectsPerformSelector:@selector(_makeSureIsOnAScreen)];
- 
+
     [self _checkForAppActivation];
      [self _displayAllWindowsIfNeeded];
 
@@ -1271,10 +1287,6 @@ static int _tagAllMenus(NSMenu *menu, int tag) {
       [nextEvent release];
       nextEvent=nil;
      }
-     
-   NS_HANDLER
-    [self reportException:localException];
-   NS_ENDHANDLER
 
    [pool release];
    }while(nextEvent==nil && [untilDate timeIntervalSinceNow]>0);

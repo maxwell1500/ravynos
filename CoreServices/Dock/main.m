@@ -26,17 +26,26 @@
 Dock *dock = nil;
 
 int main(int argc, const char *argv[]) {
+    extern void bootstrap_init(void);
+    write(2, "[Dock] main entered\n", 20);
+    bootstrap_init();
+    write(2, "[Dock] bootstrap_init done\n", 27);
     __NSInitializeProcess(argc, argv);
+    write(2, "[Dock] __NSInitializeProcess done\n", 34);
 
     NSAutoreleasePool *pool = [NSAutoreleasePool new];
+    write(2, "[Dock] initializing NSApplication\n", 34);
     [NSApplication sharedApplication];
+    write(2, "[Dock] creating Dock instance\n", 30);
 
     dock = [Dock new];
     if(!dock)
         exit(-1);
+    write(2, "[Dock] Dock instance created\n", 29);
     [pool drain];
 
     [NSApp setDelegate:dock];
+    write(2, "[Dock] calling NSApp run\n", 25);
     [NSApp run];
     return 0;
 }

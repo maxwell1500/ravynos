@@ -457,27 +457,36 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 +(NSColor *)colorWithCatalogName:(NSString *)catalogName colorName:(NSString *)colorName {
     NSColorList *list = [NSColorList colorListNamed:catalogName];
-    if(!list) {
-        NSLog(@"*** Unknown color catalog %@",catalogName);
-        return nil;
+    if(list) {
+        NSColor *color = [list colorWithKey:colorName];
+        if(color) {
+            // handle aliases to other catalog colors
+            while([color isKindOfClass:[NSColor_catalog class]]) {
+                NSValue *value = [color color];
+                if([value isKindOfClass:[NSColor_catalog class]])
+                    color = [NSColor colorWithCatalogName:catalogName colorName:[value colorName]];
+                else
+                    return (NSColor *)value;
+            }
+            return color;
+        }
     }
 
-    NSColor *color = [list colorWithKey:colorName];
-    if(!color) {
-        NSLog(@"*** Unknown color %@ for catalog %@",colorName,catalogName);
-        return nil;
-    }
+    // Fallback for missing color catalogs / system colors
+    if([colorName hasSuffix:@"TextColor"])
+        return [NSColor blackColor];
+    if([colorName isEqualToString:@"controlColor"] || [colorName isEqualToString:@"windowBackgroundColor"])
+        return [NSColor colorWithCalibratedRed:0.92 green:0.92 blue:0.92 alpha:1.0];
+    if([colorName isEqualToString:@"controlBackgroundColor"] || [colorName isEqualToString:@"textBackgroundColor"])
+        return [NSColor whiteColor];
+    if([colorName hasPrefix:@"selected"] || [colorName hasPrefix:@"alternateSelected"])
+        return [NSColor colorWithCalibratedRed:0.20 green:0.50 blue:0.85 alpha:1.0];
+    if([colorName isEqualToString:@"highlightColor"])
+        return [NSColor colorWithCalibratedRed:0.80 green:0.85 blue:0.95 alpha:1.0];
+    if([colorName isEqualToString:@"shadowColor"])
+        return [NSColor colorWithCalibratedWhite:0.3 alpha:1.0];
 
-    // handle aliases to other catalog colors
-    while([color isKindOfClass:[NSColor_catalog class]]) {
-        NSValue *value = [color color];
-        if([value isKindOfClass:[NSColor_catalog class]])
-            color = [NSColor colorWithCatalogName:catalogName colorName:[value colorName]];
-        else
-            return value;
-    }
-
-    return color;
+    return [NSColor colorWithCalibratedWhite:0.5 alpha:1.0];
 }
 
 +(NSColor *)colorFromPasteboard:(NSPasteboard *)pasteboard {

@@ -94,7 +94,7 @@ NSString * const NSFontSlantTrait = @"NSFontSlantTrait";
    
    [copy addEntriesFromDictionary:attributes];
    
-   return [isa fontDescriptorWithFontAttributes:copy];
+   return [[self class] fontDescriptorWithFontAttributes:copy];
 }
 
 -(NSFontDescriptor *)fontDescriptorWithFace:(NSString *)face {
@@ -102,7 +102,7 @@ NSString * const NSFontSlantTrait = @"NSFontSlantTrait";
 
    [copy setObject:face forKey:NSFontFaceAttribute];
    
-   return [isa fontDescriptorWithFontAttributes:copy];
+   return [[self class] fontDescriptorWithFontAttributes:copy];
 }
 
 -(NSFontDescriptor *)fontDescriptorWithFamily:(NSString *)family {
@@ -110,7 +110,7 @@ NSString * const NSFontSlantTrait = @"NSFontSlantTrait";
 
    [copy setObject:family forKey:NSFontFamilyAttribute];
 
-   return [isa fontDescriptorWithFontAttributes:copy];
+   return [[self class] fontDescriptorWithFontAttributes:copy];
 }
 
 -(NSFontDescriptor *)fontDescriptorWithMatrix:(NSAffineTransform *)matrix {
@@ -118,7 +118,7 @@ NSString * const NSFontSlantTrait = @"NSFontSlantTrait";
 
    [copy setObject:matrix forKey:NSFontMatrixAttribute];
 
-   return [isa fontDescriptorWithFontAttributes:copy];
+   return [[self class] fontDescriptorWithFontAttributes:copy];
 }
 
 -(NSFontDescriptor *)fontDescriptorWithSize:(float)pointSize {
@@ -126,7 +126,7 @@ NSString * const NSFontSlantTrait = @"NSFontSlantTrait";
 
    [copy setObject:[NSNumber numberWithFloat:pointSize] forKey:NSFontSizeAttribute];
 
-   return [isa fontDescriptorWithFontAttributes:copy];
+   return [[self class] fontDescriptorWithFontAttributes:copy];
 }
 
 -(NSFontDescriptor *)fontDescriptorWithSymbolicTraits:(NSFontSymbolicTraits)traits {
@@ -136,7 +136,7 @@ NSString * const NSFontSlantTrait = @"NSFontSlantTrait";
 	[traitsCopy setObject: [NSNumber numberWithUnsignedInt: traits] forKey: NSFontSymbolicTrait];
    [copy setObject:traitsCopy forKey:NSFontTraitsAttribute];
 
-   return [isa fontDescriptorWithFontAttributes:copy];
+   return [[self class] fontDescriptorWithFontAttributes:copy];
 }
 
 -(NSArray *)matchingFontDescriptorsWithMandatoryKeys:(NSSet *)keys {

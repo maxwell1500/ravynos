@@ -28,6 +28,8 @@ extern vproc_err_t _vprocmgr_switch_to_session(const char *target_session,
                                                vproc_flags_t flags);
 
 int main(int argc, const char **argv) {
+    extern void bootstrap_init(void);
+    bootstrap_init();
     __NSInitializeProcess(argc, argv);
 
     NSAutoreleasePool *pool = [NSAutoreleasePool new];

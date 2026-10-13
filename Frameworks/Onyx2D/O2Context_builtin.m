@@ -457,7 +457,6 @@ static inline O2AffineTransform createImageToSurfaceTransform(O2ImageRef image,O
    O2DContextAddEdge(self,p2, p3);
    O2DContextAddEdge(self,p3, p0);
    O2DContextClipAndFillEdges(self,VG_EVEN_ODD);
-
    O2ContextSetPaint(self,nil);
 
    O2RasterizerClear(self);
@@ -620,7 +619,7 @@ ONYX2D_STATIC_INLINE void O2RasterizeWriteCoverageSpan8888_Normal(O2Surface *sur
     
     while(YES){
      int chunk=O2PaintReadSpan_argb8u_PRE(paint,x,y,src,length);
-           
+
      if(chunk<0) // skip
       chunk=-chunk;
      else {
@@ -1174,6 +1173,7 @@ void O2DContextFillEdgesOnSurface(O2Context_builtin *self,O2Surface *surface,O2I
 #endif
      self->_writeCoverageFunction(surface,mask,paint,node->scanx,scany,node->coverage,node->length,self->_blendFunction);
     }
+
    }
       
    for(;activeRoot!=NULL;activeRoot=activeRoot->next)

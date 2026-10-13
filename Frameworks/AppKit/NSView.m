@@ -565,7 +565,7 @@ static inline void buildTransformsIfNeeded(NSView *self) {
    NSMenu *result=[self menu];
    
    if(result==nil) {
-    result=[isa defaultMenu];
+    result=[[self class] defaultMenu];
 
     if(result) {
      NSArray *itemArray=[result itemArray];
@@ -2020,7 +2020,7 @@ static NSGraphicsContext *graphicsContextForView(NSView *view){
    [opaque displayRectIgnoringOpacity:rect];
 }
 
--(void)displayRectIgnoringOpacity:(NSRect)rect {   
+-(void)displayRectIgnoringOpacity:(NSRect)rect {
    NSRect visibleRect=[self visibleRect];
 
    rect=NSIntersectionRect(rect,visibleRect);

@@ -244,18 +244,14 @@ const float WSWindowEdgePad = 2;
 
     _number = (int)self;
     _styleMask=styleMask;
-    _frame=[self frameRectForContentRect:contentRect];
-    _frame=[self constrainFrameRect: _frame toScreen: [NSScreen mainScreen]];
-    _level=NSNormalWindowLevel;
+    _frame=[self frameRectForContentRect:contentRect];    _frame=[self constrainFrameRect: _frame toScreen: [NSScreen mainScreen]];    _level=NSNormalWindowLevel;
     struct wsRPCWindow data = {
         { kWSWindowCreate, sizeof(struct wsRPCWindow) - sizeof(struct wsRPCBase) },
         _number, _frame.origin.x, _frame.origin.y,
         _frame.size.width, _frame.size.height, _styleMask, 0, {'\0'}, _level
     };
     struct wsRPCSimple reply = {0};
-    int len = sizeof(reply);
-    kern_return_t ret = _windowServerRPC(&data, sizeof(data), &reply, &len);
-    if(ret != KERN_SUCCESS)
+    int len = sizeof(reply);    kern_return_t ret = _windowServerRPC(&data, sizeof(data), &reply, &len);    if(ret != KERN_SUCCESS)
         return nil;
 
     _preferredScreen = screen;
@@ -276,7 +272,7 @@ const float WSWindowEdgePad = 2;
 
    _menu=nil;
 
-   _backgroundView=[[[isa frameViewClassForStyleMask:styleMask] alloc] initWithFrame:backgroundFrame];
+   _backgroundView=[[[[self class] frameViewClassForStyleMask:styleMask] alloc] initWithFrame:backgroundFrame];
    [_backgroundView setAutoresizesSubviews:YES];
    [_backgroundView setAutoresizingMask:NSViewWidthSizable|NSViewHeightSizable];
    [_backgroundView _setWindow:self];
@@ -337,10 +333,7 @@ const float WSWindowEdgePad = 2;
     _isMiniaturized = NO;
 
     buffer = NULL;
-    bundleID = [[NSBundle mainBundle] bundleIdentifier];
-    if(bundleID == nil)
-        bundleID = [NSString stringWithFormat:@"unix.%u", getpid()];
-    shmPath = [NSString stringWithFormat:@"/%s/%u/win/%u", [bundleID cString], getpid(), _number];
+    shmPath = [[NSString stringWithFormat:@"/win_%u_%u", getpid(), _number] retain];
 
     _context = [self cgContext];
     [[NSDraggingManager draggingManager] registerWindow:self dragTypes:nil];
@@ -364,6 +357,7 @@ const float WSWindowEdgePad = 2;
     if(buffer && bufsize)
         munmap(buffer, bufsize);
     shm_unlink([shmPath cString]);
+    [shmPath release];
     //if(_cglContext)
     //    [_cglContext release];
     //if(_caContext)
@@ -392,29 +386,60 @@ const float WSWindowEdgePad = 2;
 -(O2Context *) createCGContextIfNeeded
 {
     if(_context == nil) {
+        /* A previously created context is still referenced by any
+         * NSGraphicsContext that wrapped it (graphicsContextWithGraphicsPort:
+         * retains the port) and by whatever grabbed the current context before
+         * this window was ordered front.  Must release it and drop our mapping
+         * of its bytes before allocating a new one, or those holders draw into
+         * a surface we have already torn down.
+         *
+         * Dealloc order matters: -release can run -dealloc on the context,
+         * which releases its O2Surface; O2Surface's dealloc only drops the
+         * cached pixelBytes pointer for externally-supplied storage, it never
+         * frees it, so unmapping after the release is safe. */
+        [_context release];
+        _context = nil;
+
         if(buffer != NULL && bufsize > 0)
             munmap(buffer, bufsize);
 
         int depth = [_display depth] / 8;
-        int shmfd = shm_open([shmPath cString], O_RDWR, 0600);
         bufsize = depth * _frame.size.width * _frame.size.height;
-
+        int shmfd = shm_open([shmPath cString], O_RDWR | O_CREAT, 0666);
         if(shmfd >= 0) {
+            ftruncate(shmfd, bufsize);
             buffer = mmap(NULL, bufsize, PROT_WRITE|PROT_READ, MAP_SHARED|MAP_NOCORE, shmfd, 0);
             close(shmfd);
+        } else {
+            buffer = NULL;
         }
-
         O2ColorSpaceRef colorSpace = O2ColorSpaceCreateDeviceRGB();
         O2Surface *surface = [[O2Surface alloc] initWithBytes:buffer
                 width:_frame.size.width height:_frame.size.height
                 bitsPerComponent:8 bytesPerRow:4*_frame.size.width colorSpace:colorSpace
                 bitmapInfo:kO2BitmapByteOrderDefault|kCGImageAlphaPremultipliedFirst];
         _context = [[O2Context_builtin_FT alloc] initWithSurface:surface flipped:NO];
+        [surface release];
 
-        NSGraphicsContext *gc = [NSGraphicsContext currentContext];
-        if(gc != nil)
-            [gc release];
-        gc = [NSGraphicsContext graphicsContextWithGraphicsPort:_context flipped:NO];
+        /* Install this window's context as the thread's current one.
+         *
+         * The code this replaces did:
+         *     NSGraphicsContext *gc = [NSGraphicsContext currentContext];
+         *     if(gc != nil) [gc release];
+         *     gc = [NSGraphicsContext graphicsContextWithGraphicsPort:_context
+         *                                                      flipped:NO];
+         * The unconditional release drops the context that was already
+         * current -- including any context a caller is still holding -- and
+         * replaces it with a freshly made one that nobody else owns.  The
+         * released object is then handed back to callers of -graphicsContext
+         * through -_threadToContext, so any view that grabbed it before the
+         * window was ordered front ends up drawing into a freed context and
+         * its pixels never reach the shm surface.
+         *
+         * -setCurrentContext: owns the reference it is given; hand the new
+         * context to it without touching the previous one. */
+        NSGraphicsContext *gc = [NSGraphicsContext
+            graphicsContextWithGraphicsPort:_context flipped:NO];
         [NSGraphicsContext setCurrentContext:gc];
         NSValue *key = [NSValue valueWithPointer:[NSThread currentThread]];
         [_threadToContext setObject:gc forKey:key];
@@ -875,9 +900,15 @@ const float WSWindowEdgePad = 2;
         _frame.size = size;
         [self _updateWSState];
 
+        /* Drop the context that spanned the old geometry.  Releasing it here
+         * (rather than leaving it dangling for createCGContextIfNeeded to
+         * replace) makes the old O2Surface die with it, so no view can keep
+         * drawing into a surface the WindowServer has already re-mapped at a
+         * different size.  The shm segment itself is unlinked only in -dealloc
+         * so any late flusher still maps valid bytes. */
         [_context release];
         _context = nil;
-        [self cgContext];
+        [self createCGContextIfNeeded];
         //[_caContext release];
         //_caContext = NULL;
         //CGLReleaseContext(_cglContext);
@@ -1632,7 +1663,7 @@ const float WSWindowEdgePad = 2;
       ([responder isKindOfClass:[NSControl class]] && _firstResponder==[(NSControl *)responder currentEditor]))
     return YES;
 
-   if(![_firstResponder resignFirstResponder])
+   if(_firstResponder != nil && ![_firstResponder resignFirstResponder])
     return NO;
 
    _firstResponder=responder;
@@ -1851,15 +1882,11 @@ const float WSWindowEdgePad = 2;
    _flushDisabled--;
 }
 
--(void)flushWindow {
-    if(_flushDisabled > 0)
+-(void)flushWindow {    if(_flushDisabled > 0)
         _flushNeeded=YES;
     else {
         _flushNeeded=NO;
-
-        if(!([self isOpaque] && [_contentView isOpaque])) {
-            O2ContextFlush(_context);
-        }
+        O2ContextFlush(_context);
     }
 }
 
@@ -1868,8 +1895,7 @@ const float WSWindowEdgePad = 2;
     [self flushWindow];
 }
 
--(void)displayIfNeeded {
-   if([self isVisible] && ![self isMiniaturized] && [self viewsNeedDisplay]){
+-(void)displayIfNeeded {   if([self isVisible] && ![self isMiniaturized] && [self viewsNeedDisplay]){
     NSAutoreleasePool *pool=[NSAutoreleasePool new];
 
 	if ([NSGraphicsContext quartzDebuggingIsEnabled] == YES) {
@@ -3169,7 +3195,11 @@ const float WSWindowEdgePad = 2;
         _number, _frame.origin.x, _frame.origin.y,
         _frame.size.width, _frame.size.height, _styleMask, 0, {'\0'}, _level
     };
-    strncpy(data.title, [_title UTF8String], sizeof(data.title));
+    if(_title) {
+        const char *ts = [_title cString];
+        if(ts)
+            strncpy(data.title, ts, sizeof(data.title) - 1);
+    }
     if(_isMiniaturized == YES)
         data.state = MINIMIZED;
     else if(_isZoomed == YES)

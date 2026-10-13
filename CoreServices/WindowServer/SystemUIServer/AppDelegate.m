@@ -30,7 +30,19 @@
 
 
 @implementation AppDelegate
-- (AppDelegate *)init {    NSScreen *mainDisplay = [NSScreen mainScreen];    [[menuBar contentView] setNeedsDisplay:YES];
+- (AppDelegate *)init {
+    /* The window is built here, not in applicationWillFinishLaunching:.  A
+     * second initWithFrame: for the same NSWindow registers another window
+     * record (same window number, new level) and crashes the compositor's
+     * window walk.  This body was emptied when the [G] trace markers were
+     * stripped: the creation, setDelegate: and the return all sat on lines
+     * with a marker and went with it, which left menuBar nil and -init
+     * returning garbage to [NSApp setDelegate:]. */
+    NSScreen *mainDisplay = [NSScreen mainScreen];
+    menuBar = [[MenuBarWindow alloc] initWithFrame:[mainDisplay frame]];
+    [menuBar setDelegate:self];
+    [[menuBar contentView] setNeedsDisplay:YES];
+    return self;
 }
 
 #if 0

@@ -120,7 +120,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 -(NSColor *)colorWithAlphaComponent:(CGFloat)alpha {
    CGColorRef ref=CGColorCreateCopyWithAlpha(_colorRef,alpha);
-   NSColor   *result=[[[isa alloc] initWithColorRef:ref spaceName:_colorSpaceName] autorelease];
+   NSColor   *result=[[[[self class] alloc] initWithColorRef:ref spaceName:_colorSpaceName] autorelease];
    
    CGColorRelease(ref);
    return result;

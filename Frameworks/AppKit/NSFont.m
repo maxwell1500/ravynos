@@ -209,7 +209,8 @@ static NSLock *_cacheLock=nil;
 
 +(NSFont *)boldSystemFontOfSize:(float)size {
     NSFont *font = [self systemFontOfSize:size];
-    return [[NSFontManager sharedFontManager] convertFont:font toHaveTrait:NSBoldFontMask];
+    NSFont *bold = [[NSFontManager sharedFontManager] convertFont:font toHaveTrait:NSBoldFontMask];
+    return bold ? bold : font;
 }
 
 +(NSFont *)controlContentFontOfSize:(float)size {
@@ -241,7 +242,8 @@ static NSLock *_cacheLock=nil;
 }
 
 +(NSFont *)titleBarFontOfSize:(float)size {
-    return [self boldSystemFontOfSize:size];
+    NSFont *font = [self boldSystemFontOfSize:size];
+    return font ? font : [self systemFontOfSize:size];
 }
 
 +(NSFont *)toolTipsFontOfSize:(float)size {
@@ -324,7 +326,7 @@ static NSLock *_cacheLock=nil;
 	_cgFont=CGFontCreateWithFontName((CFStringRef)_name);
 	if (_cgFont) {
 		_ctFont=CTFontCreateWithGraphicsFont(_cgFont,_pointSize,NULL,NULL);
-		[isa addFontToCache:self];
+		[[self class] addFontToCache:self];
         O2FontLog(@"name: %@ _cgFont: %@ _ctFont: %@", name, _cgFont, _ctFont);
 	} else {
 		[self release];
@@ -334,7 +336,7 @@ static NSLock *_cacheLock=nil;
 }
 
 -(void)dealloc {
-   [isa removeFontFromCache:self];
+   [[self class] removeFontFromCache:self];
 
    [_name release];
    CGFontRelease(_cgFont);

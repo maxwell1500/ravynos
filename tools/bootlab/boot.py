@@ -144,6 +144,15 @@ def main():
             data = sock.recv(4096)
             if data:
                 output += data
+                # Write through as well: the final write below only happens if
+                # this loop ends on its own, and a caller that gives up early
+                # (or kills us) otherwise loses the entire boot log -- which is
+                # exactly when the log is worth the most.
+                try:
+                    with open(out, "ab") as f:
+                        f.write(data)
+                except OSError:
+                    pass
                 if b"Shell>" in output and not sent:
                     time.sleep(5)
                     sock.sendall(cmd)

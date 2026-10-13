@@ -700,6 +700,8 @@ bsd_init(void)
 	extern int msdosfs_module_start(void *, void *);
 	extern int ahci_init(void);
 	extern void fb0_init(void);
+	extern void ps2mouse_init(void);
+	extern void ps2keyboard_init(void);
 
 	bsd_init_kprintf("calling msdosfs_module_start\n");
 	msdosfs_module_start(NULL, NULL);
@@ -713,6 +715,10 @@ bsd_init(void)
 	 */
 	bsd_init_kprintf("calling fb0_init\n");
 	fb0_init();
+	bsd_init_kprintf("calling ps2mouse_init\n");
+	ps2mouse_init();
+	bsd_init_kprintf("calling ps2keyboard_init\n");
+	ps2keyboard_init();
 
 #if CONFIG_PROC_UUID_POLICY
 	/* Initial proc_uuid_policy subsystem */

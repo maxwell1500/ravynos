@@ -14,18 +14,20 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 #import <Foundation/NSArray.h>
 #import "NSPersistantDomain_posix.h"
 #import "../NSPropertyList/NSPropertyListWriter_vintage.h"
-
+#include <unistd.h>
 @implementation NSPersistantDomain_posix
 
 -initWithName:(NSString *)name {
-    NSDictionary *serializedDictionary;
+    NSDictionary *serializedDictionary = nil;
     
     _path = [NSHomeDirectory() stringByAppendingPathComponent:@"Library"];
     _path = [_path stringByAppendingPathComponent:@"Preferences"];
     _path = [_path stringByAppendingPathComponent:name];
     _path = [[_path stringByAppendingPathExtension:@"plist"] retain];
     
-    serializedDictionary = [NSPropertyListReader dictionaryWithContentsOfFile:_path];
+    if (access([_path UTF8String], R_OK) == 0)
+        serializedDictionary = [NSPropertyListReader dictionaryWithContentsOfFile:_path];
+
     if (serializedDictionary != nil)
         _mutableDomain = [serializedDictionary mutableCopy];
     else

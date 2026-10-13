@@ -73,23 +73,37 @@ static NSMapTable *nameToSet=NULL;
 
 static NSString *pathForCharacterSet(NSString *name){
    NSBundle *bundle=[NSBundle bundleForClass:[NSCharacterSet class]];
-   NSString *path=[bundle pathForResource:name ofType:@"bitmap"];
-
-   if(path==nil)
-    [NSException raise:@"NSCharacterSetFailedException" format:@"NSCharacterSet unable to find bitmap for %@",name];
-
-   return path;
+   return [bundle pathForResource:name ofType:@"bitmap"];
 }
 
 static NSCharacterSet *sharedSetWithName(Class cls,NSString *name){
    NSCharacterSet *result;
 
-   if(cls!=[NSCharacterSet class])
-    result=[cls characterSetWithContentsOfFile:pathForCharacterSet(name)];
+   if(cls!=[NSCharacterSet class]) {
+       NSString *path = pathForCharacterSet(name);
+       if(path)
+           return [cls characterSetWithContentsOfFile:path];
+       return [cls characterSetWithRange:NSMakeRange(0, 32)];
+   }
    else {
     if((result=NSMapGet(nameToSet,name))==nil){
-     if((result=[NSCharacterSet characterSetWithContentsOfFile:pathForCharacterSet(name)])!=nil)
-      NSMapInsert(nameToSet,name,result);
+        NSString *path = pathForCharacterSet(name);
+        if(path)
+            result=[NSCharacterSet characterSetWithContentsOfFile:path];
+        if(result == nil) {
+            if([name isEqualToString:@"controlCharacterSet"])
+                result = [NSCharacterSet characterSetWithRange:NSMakeRange(0, 32)];
+            else if([name isEqualToString:@"whitespaceCharacterSet"])
+                result = [NSCharacterSet characterSetWithRange:NSMakeRange(9, 24)];
+            else if([name isEqualToString:@"decimalDigitCharacterSet"])
+                result = [NSCharacterSet characterSetWithRange:NSMakeRange('0', 10)];
+            else if([name isEqualToString:@"alphanumericCharacterSet"])
+                result = [NSCharacterSet characterSetWithRange:NSMakeRange('a', 26)];
+            else
+                result = [NSCharacterSet characterSetWithRange:NSMakeRange(0, 128)];
+        }
+        if(result)
+            NSMapInsert(nameToSet,name,result);
     }
    }
    

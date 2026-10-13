@@ -32,26 +32,14 @@ const NSString *NSApplicationDidQuitNotification = @"NSApplicationDidQuit";
 int exitCode = 0;
 
 int main(int argc, const char *argv[]) {
-    __NSInitializeProcess(argc, argv);
-
+    extern void bootstrap_init(void);    bootstrap_init();    __NSInitializeProcess(argc, argv);
     NSAutoreleasePool *pool = [NSAutoreleasePool new];
     [NSApplication sharedApplication];
-
     AppDelegate *del = [AppDelegate new];
-    if(!del)
-        exit(EXIT_FAILURE);
-
-    // kick off a per-user launchd to invoke LaunchAgents and per-user LaunchDaemons
-    // this starts Filer and Dock to establish the desktop session
-    NSString *kickerPath = [[NSBundle mainBundle] pathForResource:@"kickSession" ofType:@""];
-    if(kickerPath) {
-        NSLog(@"kicking off session");
-        system([kickerPath UTF8String]);
+    if(!del) {        exit(EXIT_FAILURE);
     }
-
     [pool drain];
-    [NSApp setDelegate:del];
-    [NSApp run];
+    [NSApp setDelegate:del];    [NSApp run];
     exit(exitCode);
 }
 

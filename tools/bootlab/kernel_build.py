@@ -184,6 +184,23 @@ args_fb0.append("-I" + os.path.join(SRC, "osfmk/i386"))
 print("Compiling fb0.c...", flush=True)
 run(args_fb0, stubs["directory"])
 
+# bsd/dev/ps2mouse.c is the /dev/mouse driver.
+args_ps2mouse = list(stubs["arguments"])
+args_ps2mouse[args_ps2mouse.index(stubs["file"])] = os.path.join(SRC, "bsd/dev/ps2mouse.c")
+args_ps2mouse[args_ps2mouse.index("-o") + 1] = os.path.join(bsd_dev, "ps2mouse.o")
+args_ps2mouse.append("-I" + os.path.join(SRC, "osfmk/i386"))
+print("Compiling ps2mouse.c...", flush=True)
+run(args_ps2mouse, stubs["directory"])
+
+# bsd/dev/ps2keyboard.c -- /dev/keyboard, fed by the ApplePS2Controller kext
+# through ps2keyboard_tap(). Same not-in-filelist situation as fb0/ps2mouse.
+args_ps2kbd = list(stubs["arguments"])
+args_ps2kbd[args_ps2kbd.index(stubs["file"])] = os.path.join(SRC, "bsd/dev/ps2keyboard.c")
+args_ps2kbd[args_ps2kbd.index("-o") + 1] = os.path.join(bsd_dev, "ps2keyboard.o")
+args_ps2kbd.append("-I" + os.path.join(SRC, "osfmk/i386"))
+print("Compiling ps2keyboard.c...", flush=True)
+run(args_ps2kbd, stubs["directory"])
+
 # kern_mman.c gains the character-device mmap dispatch that calls fb0's d_mmap,
 # so it must be recompiled too -- it is in the stock filelist, hence it does
 # have a per-object json to clone.
@@ -340,6 +357,8 @@ full_cmd = ldflags.split() + [
     os.path.join(bsd_dev, "pthread_kext_kern_synch.o"),
     os.path.join(bsd_dev, "ahci_block.o"),
     os.path.join(bsd_dev, "fb0.o"),
+    os.path.join(bsd_dev, "ps2mouse.o"),
+    os.path.join(bsd_dev, "ps2keyboard.o"),
 ] + msdosfs_objs + ["-Wl,-map," + link_map, "-o", out_kernel]
 print("Linking %s..." % out_kernel, flush=True)
 run(full_cmd, BUILD_DIR)

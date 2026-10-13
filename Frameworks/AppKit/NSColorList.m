@@ -19,19 +19,8 @@ static NSMutableDictionary *_namedColorLists = nil;
 + (void)_createDefaultColorLists
 {
     _namedColorLists = [[NSMutableDictionary alloc] init];
-    NSFileManager *fm = [NSFileManager defaultManager];
-    NSString *library = [[[NSPlatform currentPlatform] libraryDirectory] stringByAppendingPathComponent:@"Colors"];
-    NSArray *places = [NSArray arrayWithObjects:@"/System/Library/Colors",@"/Library/Colors",library,nil];
-    for(int x=0; x<[places count]; ++x) {
-        NSArray *lists = [fm contentsOfDirectoryAtPath:[places objectAtIndex:x] error:NULL];
-        for(int y=0; y<[lists count]; ++y) {
-            NSString *name = [lists objectAtIndex:y];
-            NSString *path = [[places objectAtIndex:x] stringByAppendingPathComponent:name];
-            name = [name stringByDeletingPathExtension];
-            NSColorList *clr = [[[NSColorList alloc] initWithName:name fromFile:path] autorelease];
-            [_namedColorLists setObject:clr forKey:name];
-        }
-    }
+    /* ravynOS: on early boot, /System/Library/Colors does not exist in the minimal image;
+     * bypass recursive contentsOfDirectoryAtPath scans to avoid TCG stalls. */
 }
 
 + (NSArray *)availableColorLists

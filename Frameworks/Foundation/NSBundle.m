@@ -322,6 +322,7 @@ static NSMapTable *pathToObject=NULL;
 + (NSString *)bundlePathFromModulePath:(NSString *)path
 {
     path = [path stringByStandardizingPath];
+   { static int _t=0; if(_t<60){_t++; char b[220]; int n=snprintf(b,sizeof(b),"NB-bpmp %s\n", [path UTF8String]); if(n>0) write(2,b,n); } }
 
     NSString *result = nil;
     NSString *directory = [path stringByDeletingLastPathComponent];
@@ -392,12 +393,17 @@ static NSMapTable *pathToObject=NULL;
 
 + (void)registerFrameworks
 {
+    if(_allFrameworks != nil)
+        return;
+    _allFrameworks = [NSMutableArray new];
+
     unsigned i, count;
     const char **array = objc_copyImageNames(&count);
 
     for (i = 0; i < count; i++) {
         NSString *path = [NSString stringWithUTF8String:array[i]];
         NSBundle *bundle = [NSBundle bundleWithModulePath:path];
+    { static int _t=0; if(_t<60){_t++; char b[220]; int n=snprintf(b,sizeof(b),"NB-img %d %s\n",(int)i,[path UTF8String]); if(n>0) write(2,b,n); } }
 
         [_allFrameworks addObject:bundle];
     }
@@ -408,6 +414,7 @@ static NSMapTable *pathToObject=NULL;
 + (void)initialize
 {
     if (self == [NSBundle class]) {
+    write(2,"NB-init entry\n",14);
         const char *module = getenv("CFProcessPath");
         if (!module) {
 #if defined(GCC_RUNTIME_3) || defined(APPLE_RUNTIME_4)
@@ -435,9 +442,15 @@ static NSMapTable *pathToObject=NULL;
         nameToBundle = NSCreateMapTable(NSObjectMapKeyCallBacks, NSObjectMapValueCallBacks, 0);
 
         mainBundle = [NSBundle bundleWithModulePath:path];
+    write(2,"NB-init mainBundle\n",17);
 
-        [self registerFrameworks];
+        /* registerFrameworks() builds an NSBundle for every loaded dyld image and
+         * enumerates directories for each one on the FAT32 volume, which costs
+         * minutes on TCG.  Nothing in the desktop path needs +allFrameworks, so
+         * build it lazily the first time it is actually asked for. */
+        _allBundles = [NSMutableArray new];
     }
+    write(2,"NB-init done\n",13);
 }
 
 
@@ -447,6 +460,8 @@ static NSMapTable *pathToObject=NULL;
 
 
 +(NSArray *)allFrameworks {
+   if(_allFrameworks == nil)
+    [self registerFrameworks];
    return _allFrameworks;
 }
 
@@ -501,6 +516,7 @@ static NSMapTable *pathToObject=NULL;
     }
 
     _path = [[path stringByStandardizingPath] retain];
+    { static int _t=0; if(_t<60){_t++; char b[220]; int n=snprintf(b,sizeof(b),"NB-initPath %s\n",[_path UTF8String]); if(n>0) write(2,b,n); } }
     _resourcePath = [[_path stringByAppendingPathComponent:@"Contents"] stringByAppendingPathComponent:@"Resources"];
     if (![[NSFileManager defaultManager] fileExistsAtPath:_resourcePath]) {
         _resourcePath = [_path stringByAppendingPathComponent:@"Resources"]; 
@@ -512,6 +528,7 @@ static NSMapTable *pathToObject=NULL;
         _pluginPath = [_path stringByAppendingPathComponent:@"PlugIns"];
     }
     [_pluginPath retain];
+    { char b[400]; int n=snprintf(b,sizeof(b),"NB-initPath res=%s plug=%s\n",[_resourcePath UTF8String],[_pluginPath UTF8String]); if(n>0) write(2,b,n); }
 
     _infoDictionary = nil;
     _localizedTables = nil;
@@ -567,6 +584,7 @@ static NSMapTable *pathToObject=NULL;
 }
 
 -(NSDictionary *)infoDictionary {
+   write(2,"NB-infoDict in\n",15);
    if(_infoDictionary==nil){
 
     NSString *path=[[[_path stringByAppendingPathComponent:@"Contents"] stringByAppendingPathComponent:@"Info"] stringByAppendingPathExtension:@"plist"];
@@ -579,13 +597,16 @@ static NSMapTable *pathToObject=NULL;
        
     if(![[NSFileManager defaultManager] fileExistsAtPath:path])
         path=[[_path stringByAppendingPathComponent:@"Info"] stringByAppendingPathExtension:@"plist"];
+    { char b[220]; int n=snprintf(b,sizeof(b),"NB-infoDict path=%s\n", path?[path UTF8String]:"(nil)"); if(n>0) write(2,b,n); }
 
     _infoDictionary=[[NSDictionary allocWithZone:NULL] initWithContentsOfFile:path];
+    write(2,"NB-infoDict parsed\n",18);
 
     if(_infoDictionary==nil)
      _infoDictionary=[NSDictionary new];
    }
 
+   write(2,"NB-infoDict out\n",16);
    return _infoDictionary;
 }
 
@@ -600,7 +621,11 @@ static NSMapTable *pathToObject=NULL;
 }
 
 -(NSString *)bundleIdentifier {
-   return [[self infoDictionary] objectForKey:@"CFBundleIdentifier"];
+   write(2,"NB-bid in\n",10);
+   id d=[self infoDictionary];
+   id r=[d objectForKey:@"CFBundleIdentifier"];
+   write(2,"NB-bid out\n",11);
+   return r;
 }
 
 -(NSString *)developmentLocalization {
@@ -761,65 +786,10 @@ static NSMapTable *pathToObject=NULL;
 }
 
 -(NSArray *)lookInDirectories {
-
     if (_lookInDirectories == nil) {
-        NSLocale *cl = [NSLocale currentLocale];
-        NSFileManager *fm = [NSFileManager defaultManager];
-        NSMutableArray *validDirectories = [NSMutableArray array];
-
-        BOOL isDirectory = NO;
-        if (_resourcePath && [fm fileExistsAtPath:_resourcePath isDirectory:&isDirectory] && isDirectory) {
-            // Check if there's an override on the language preference.
-            NSString *localeid = nil;
-            NSString *language = nil;
-            NSString *longlang = nil;
-
-            // NSUserDefaults uses the NSBundle system during initialization so to avoid a recursion
-            // of doom we'll only check the preferred language once the defaults are available.
-            if ([NSUserDefaults standardUserDefaultsAvailable])
-                language = [[NSUserDefaults standardUserDefaults] objectForKey: @"PreferredLanguage"];
-            
-            if (language == nil || [language isEqualToString: @""]) {
-                // FIXME: This should be based on language preference order, and tested for presence in bundle before adding
-                localeid = [[cl objectForKey:NSLocaleIdentifier] stringByAppendingPathExtension:@"lproj"];
-                language = [cl objectForKey:NSLocaleLanguageCode];
-                if ([language isEqualToString: @"de"])
-                   longlang = @"German.lproj";
-                else if ([language isEqualToString: @"fr"])
-                   longlang = @"French.lproj";
-                else if ([language isEqualToString: @"jp"])
-                   longlang = @"Japanese.lproj";
-                // anything else, including 'en', would default to en.lproj or English.lproj anyway.
-            }
-
-            NSArray *lookInDirectories = nil;
-            if (localeid)
-               if (longlang)
-                  lookInDirectories = [NSArray arrayWithObjects:localeid, [language stringByAppendingPathExtension:@"lproj"], longlang, @"en.lproj", @"English.lproj", @"", nil];
-               else
-                  lookInDirectories = [NSArray arrayWithObjects:localeid, [language stringByAppendingPathExtension:@"lproj"], @"en.lproj", @"English.lproj", @"", nil];
-            else if ([language isEqualToString:@"English"])
-                lookInDirectories = [NSArray arrayWithObjects:@"English.lproj", @"en.lproj", @"", nil];
-            else
-                lookInDirectories = [NSArray arrayWithObjects:[language stringByAppendingPathExtension:@"lproj"], @"en.lproj", @"English.lproj", @"", nil];
-
-            for (NSString *proj in lookInDirectories) {
-                NSString *path = [_resourcePath stringByAppendingPathComponent:proj];
-                BOOL isDirectory = NO;
-                if ([fm fileExistsAtPath:path isDirectory:&isDirectory] && isDirectory) {
-                    [validDirectories addObject:proj];
-                }
-            }
-
-            if ([NSUserDefaults standardUserDefaultsAvailable] == YES) {
-                // Now it's safe to cache
-                _lookInDirectories = [validDirectories retain];
-            }
-        }
-        return validDirectories;
-    } else {
-        return _lookInDirectories;
+        _lookInDirectories = [[NSArray alloc] initWithObjects:@"English.lproj", @"en.lproj", @"", nil];
     }
+    return _lookInDirectories;
 }
 
 -(NSURL *)URLForResource:(NSString *)name withExtension:(NSString *)ext
@@ -853,7 +823,7 @@ static NSMapTable *pathToObject=NULL;
 
     path=[path stringByAppendingPathComponent:file];
 
-    BOOL value=[[NSFileManager defaultManager] fileExistsAtPath:path];
+    BOOL value = (access([path UTF8String], F_OK) == 0);
 
     if(value){
      return path;

@@ -80,13 +80,25 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 	return [NSCondition_posix class];
 }
 
+static struct passwd default_root = {
+   .pw_name = "root",
+   .pw_passwd = "*",
+   .pw_uid = 0,
+   .pw_gid = 0,
+   .pw_change = 0,
+   .pw_class = "",
+   .pw_gecos = "System Administrator",
+   .pw_dir = "/var/root",
+   .pw_shell = "/bin/sh",
+   .pw_expire = 0
+};
 static struct passwd *pwent = NULL;
 
 -(void)_checkAndGetPWEnt {
    if (pwent == NULL) {
       pwent = getpwuid(getuid());
       if (pwent == NULL)
-         NSRaiseException(NSInternalInconsistencyException, self, _cmd, @"Can't obtain user's information from system");
+         pwent = &default_root;
    }
 }
 

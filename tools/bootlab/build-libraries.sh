@@ -837,6 +837,12 @@ if [ "${1:-}" = "--pwdgrp-only" ]; then
       "$BMAKE" -m "$MKMODULES" "${BMAKE_TARGET:-all}" )
     exit $?
 fi
+if [ "${1:-}" = "--libsystem-m-only" ]; then
+    echo "=== building Libraries/Libsystem/libsystem_m ==="
+    ( cd "$ROOT/Libraries/Libsystem/libsystem_m" && \
+      "$BMAKE" -m "$MKMODULES" "${BMAKE_TARGET:-all}" )
+    exit $?
+fi
 
 # --top <target ...>: drive the repository's top-level Makefile with this
 # environment.

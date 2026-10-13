@@ -1413,7 +1413,7 @@ void O2ImageBilinearFloatTranslate_largb8u_PRE(O2Image *self,int x, int y,O2argb
 void O2ImageIntegerTranslate_largb8u_PRE(O2Image *self,int x, int y,O2argb8u *span,int length, O2AffineTransform surfaceToImage){
    int du=x+surfaceToImage.tx;
    int dv=((y+0.5)*surfaceToImage.d+surfaceToImage.ty)-0.5;
-   
+
    O2ImageReadTileSpanExtendEdge_largb8u_PRE(self,du,dv,span,length);
 }
 

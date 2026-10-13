@@ -13,6 +13,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
     NSUInteger _selectedItemIndex;
     NSMutableArray *_visibleArray;
 }
++(NSFont *)menuFont;   /* never nil: falls back when menuFontOfSize: returns nil */
 
 + (float)menuHeight;
 

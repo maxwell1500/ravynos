@@ -50,24 +50,6 @@ static O2Image *wsZoom, *wsZoomUp, *wsZoomDown;
     self = [super initWithFrame:frame];
     pointer = NSZeroPoint;
 
-    // use singleton traffic light images
-    if(wsClose == nil) {
-        NSString *basepath = @"/System/Library/CoreServices/WindowServer.app/Contents/Resources";
-        NSString *path = [NSString stringWithFormat:@"%@/close.png", basepath];
-        wsClose = [[[NSBitmapImageRep alloc] initWithContentsOfFile:path] CGImage];
-        path = [NSString stringWithFormat:@"%@/closeHover.png", basepath];
-        wsCloseHover = [[[NSBitmapImageRep alloc] initWithContentsOfFile:path] CGImage];
-        path = [NSString stringWithFormat:@"%@/mini.png", basepath];
-        wsMini = [[[NSBitmapImageRep alloc] initWithContentsOfFile:path] CGImage];
-        path = [NSString stringWithFormat:@"%@/miniHover.png", basepath];
-        wsMiniHover = [[[NSBitmapImageRep alloc] initWithContentsOfFile:path] CGImage];
-        path = [NSString stringWithFormat:@"%@/zoom.png", basepath];
-        wsZoom = [[[NSBitmapImageRep alloc] initWithContentsOfFile:path] CGImage];
-        path = [NSString stringWithFormat:@"%@/zoomUpHover.png", basepath];
-        wsZoomUp = [[[NSBitmapImageRep alloc] initWithContentsOfFile:path] CGImage];
-        path = [NSString stringWithFormat:@"%@/zoomDownHover.png", basepath];
-        wsZoomDown = [[[NSBitmapImageRep alloc] initWithContentsOfFile:path] CGImage];
-    }
     return self;
 }
 
@@ -177,30 +159,18 @@ static O2Image *wsZoom, *wsZoomUp, *wsZoomDown;
     controls = NSMakeRect(_closeButtonRect.origin.x, _closeButtonRect.origin.y,
             3*NSWindowControlSpacing + 3*NSWindowControlDiameter, NSWindowControlDiameter);
 
-    if(NSPointInRect(pointer, controls)) {
-        [_context drawImage:wsCloseHover inRect:_closeButtonRect];
-        [_context drawImage:wsMiniHover inRect:_miniButtonRect];
-        [_context drawImage:wsZoomUp inRect:_zoomButtonRect];
-    } else {
-        [_context drawImage:wsClose inRect:_closeButtonRect];
-        [_context drawImage:wsMini inRect:_miniButtonRect];
-        [_context drawImage:wsZoom inRect:_zoomButtonRect];
-    }
+    // Draw traffic light controls (vector circles)
+    // Red (close)
+    O2ContextSetRGBFillColor(_context, 0.99, 0.38, 0.35, 1.0);
+    O2ContextFillEllipseInRect(_context, _closeButtonRect);
+    // Yellow (mini)
+    O2ContextSetRGBFillColor(_context, 0.99, 0.77, 0.19, 1.0);
+    O2ContextFillEllipseInRect(_context, _miniButtonRect);
+    // Green (zoom)
+    O2ContextSetRGBFillColor(_context, 0.17, 0.78, 0.28, 1.0);
+    O2ContextFillEllipseInRect(_context, _zoomButtonRect);
 
-    NSString *t = [[self window] title];
-    if(t) {
-        NSDictionary *attrs = @{
-            NSFontAttributeName : [NSFont titleBarFontOfSize:15.0],
-            NSForegroundColorAttributeName : [NSColor blackColor]
-        };
-        NSAttributedString *title = [[NSAttributedString alloc] initWithString:t attributes:attrs];
-        NSSize size = [title size];
-        NSRect titleRect = NSMakeRect(
-            _frame.size.width / 2 - size.width / 2,
-            _frame.size.height - NSWindowTitleHeight / 3 - size.height / 2,
-            size.width, size.height);
-        [title drawInRect:titleRect];
-    }
+    /* Title bar text drawing bypassed to avoid NSStringDrawer autorelease pool crash */
 }
 
 -(void)resizeSubviewsWithOldSize:(NSSize)oldSize {

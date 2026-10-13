@@ -406,7 +406,7 @@ static NSMutableArray *_cursorStack=nil;
 }
 
 -(void)pop {
-   [isa pop];
+   [[self class] pop];
 }
 
 -(void)set {

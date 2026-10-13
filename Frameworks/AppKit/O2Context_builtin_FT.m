@@ -60,9 +60,14 @@ static void drawFreeTypeBitmap(O2Context_builtin_FT *self,O2Surface *surface,FT_
    
    for(row=0;row<height;row++,y++){
    int        length=width;
+   /* dst/src must be re-anchored to the alloca'd row buffers each row: the
+    * loop below advances them by chunk, and on the next row they would start
+    * past the end of the buffers (or past the surface when direct!=NULL) and
+    * smear pixel data over adjacent stack/heap. */
     O2argb8u *dst=dstBuffer;
     O2argb8u *src=srcBuffer;
-    
+    int        rowX=x;
+
     O2argb8u *direct=surface->_read_argb8u(surface,x,y,dst,length);
 
     if(direct!=NULL)
@@ -93,7 +98,7 @@ static void drawFreeTypeBitmap(O2Context_builtin_FT *self,O2Surface *surface,FT_
       break;
 
     }
-    x-=width;
+    x=rowX;
    }
     
 }

@@ -953,6 +953,11 @@
       "comment": "Filer.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Filer.app)"
     },
     {
+      "path": "System/Library/CoreServices/Filer.app/Contents/Info.plist",
+      "file": "work/Filer.app/Contents/Info.plist",
+      "comment": "Filer.app bundle metadata; without it NSBundle has no CFBundleIconFile/CFBundleDisplayName, so the Dock's Filer tile drew no icon and no label"
+    },
+    {
       "path": "System/Library/CoreServices/Filer.app/Contents/Resources/filer.png",
       "file": "work/Filer.app/Contents/Resources/filer.png",
       "comment": "Filer.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Filer.app)"

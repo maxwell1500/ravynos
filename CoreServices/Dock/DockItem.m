@@ -132,7 +132,11 @@ kern_return_t _windowServerRPC(void *data, size_t len, void *replyBuf, int *repl
         }
     }
 
-    if(_icon == nil) {
+    // A tile whose bundle has no usable CFBundleIconFile (or whose app is not
+    // installed at all) still got an NSImageView from the branches above -- one
+    // with no image -- so testing _icon alone left such tiles blank and this
+    // fallback was dead code.  Test the image as well.
+    if(_icon == nil || [_icon image] == nil) {
         NSString *windowPNG = [[NSBundle mainBundle] pathForResource:@"window" ofType:@"png"];
         _icon = [[NSImageView alloc] initWithFrame:NSMakeRect(
             0,RUNMK_DIAMETER+2*RUNMK_SPACER,size,size)];

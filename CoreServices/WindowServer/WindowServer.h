@@ -45,9 +45,7 @@
 #import "message.h"
 #import "WSDisplay.h"
 #import "BSDFramebuffer.h"
-#if defined(__linux__)
- #import "WSInput.h"
-#endif
+#import "WSInput.h"
 #import "WSWindowRecord.h"
 #import "WSAppRecord.h"
 
@@ -70,9 +68,7 @@ extern pthread_mutex_t renderLock;
     NSRect _geometry;
     CGFontRef _titleFont;
 
-#if defined(__linux__)
-     WSInput *input;
-#endif
+    WSInput *input;
     int cursorHideCount;
 
     NSMutableArray *displays;
@@ -105,7 +101,7 @@ extern pthread_mutex_t renderLock;
 -(BOOL)sendEventToApp:(struct mach_event *)event;
 -(BOOL)sendInlineData:(void *)data length:(int)length withCode:(int)code toPort:(mach_port_t)port;
 -(void)watchForProcessExit:(unsigned int)pid;
--(WSAppRecord *)findAppByPID:(unsigned int)pid;
+-(WSAppRecord *)findAppByPID:(unsigned int)pid NS_RETURNS_RETAINED;
 -(void)signalQuit;
 -(CGFontRef)titleFont;
 -(NSSize)sizeOfTitleText:(NSString *)title;

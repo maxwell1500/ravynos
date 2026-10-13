@@ -527,33 +527,22 @@ CFStringRef CFCopyTypeIDDescription(CFTypeID type) {
 static CFTypeRef _CFRetain(CFTypeRef cf, Boolean tryR);
 
 CFTypeRef CFRetain(CFTypeRef cf) {
-    if (NULL == cf) { CRSetCrashLogMessage("*** CFRetain() called with NULL ***"); HALT; }
+    if (NULL == cf) return NULL;
     if (cf) __CFGenericAssertIsCF(cf);
     return _CFRetain(cf, false);
 }
 
 CFTypeRef CFAutorelease(CFTypeRef __attribute__((cf_consumed)) cf) {
-    if (NULL == cf) { CRSetCrashLogMessage("*** CFAutorelease() called with NULL ***"); HALT; }
+    if (NULL == cf) return NULL;
     return cf;
 }
 
 static void _CFRelease(CFTypeRef cf);
 
 void CFRelease(CFTypeRef cf) {
-    if (NULL == cf) { CRSetCrashLogMessage("*** CFRelease() called with NULL ***"); HALT; }
-#if 0
-    void **addrs[2] = {&&start, &&end};
-    start:;
-    if (addrs[0] <= __builtin_return_address(0) && __builtin_return_address(0) <= addrs[1]) {
-	CFLog(3, CFSTR("*** WARNING: Recursion in CFRelease(%p) : %p '%s' : 0x%08lx 0x%08lx 0x%08lx 0x%08lx 0x%08lx 0x%08lx"), cf, object_getClass(cf), object_getClassName(cf), ((uintptr_t *)cf)[0], ((uintptr_t *)cf)[1], ((uintptr_t *)cf)[2], ((uintptr_t *)cf)[3], ((uintptr_t *)cf)[4], ((uintptr_t *)cf)[5]);
-	HALT;
-    }
-#endif
+    if (NULL == cf) return;
     if (cf) __CFGenericAssertIsCF(cf);
     _CFRelease(cf);
-#if 0
-    end:;
-#endif
 }
 
 
@@ -644,7 +633,7 @@ static CFLock_t __CFRuntimeExternRefCountTableLock = CFLockInit;
 #endif
 
 static uint64_t __CFGetFullRetainCount(CFTypeRef cf) {
-    if (NULL == cf) { CRSetCrashLogMessage("*** __CFGetFullRetainCount() called with NULL ***"); HALT; }
+    if (NULL == cf) return 0;
 #if __LP64__
     uint32_t lowBits = ((CFRuntimeBase *)cf)->_rc;
     if (0 == lowBits) {
@@ -666,7 +655,7 @@ static uint64_t __CFGetFullRetainCount(CFTypeRef cf) {
 }
 
 CFIndex CFGetRetainCount(CFTypeRef cf) {
-    if (NULL == cf) { CRSetCrashLogMessage("*** CFGetRetainCount() called with NULL ***"); HALT; }
+    if (NULL == cf) return 0;
     uint32_t cfinfo = *(uint32_t *)&(((CFRuntimeBase *)cf)->_cfinfo);
     if (cfinfo & 0x800000) { // custom ref counting for object
         CFTypeID typeID = (cfinfo >> 8) & 0x03FF; // mask up to 0x0FFF
@@ -705,30 +694,31 @@ CFTypeRef CFMakeUncollectable(CFTypeRef cf) {
 }
 
 Boolean CFEqual(CFTypeRef cf1, CFTypeRef cf2) {
-    if (NULL == cf1) { CRSetCrashLogMessage("*** CFEqual() called with NULL first argument ***"); HALT; }
-    if (NULL == cf2) { CRSetCrashLogMessage("*** CFEqual() called with NULL second argument ***"); HALT; }
+    if (NULL == cf1 || NULL == cf2) return (cf1 == cf2);
     if (cf1 == cf2) return true;
     CFTYPE_OBJC_FUNCDISPATCH1(Boolean, cf1, isEqual:, cf2);
     CFTYPE_OBJC_FUNCDISPATCH1(Boolean, cf2, isEqual:, cf1);
-    __CFGenericAssertIsCF(cf1);
-    __CFGenericAssertIsCF(cf2);
-    if (__CFGenericTypeID_inline(cf1) != __CFGenericTypeID_inline(cf2)) return false;
-    if (NULL != __CFRuntimeClassTable[__CFGenericTypeID_inline(cf1)]->equal) {
-	return __CFRuntimeClassTable[__CFGenericTypeID_inline(cf1)]->equal(cf1, cf2);
+    CFTypeID tid1 = __CFGenericTypeID_inline(cf1);
+    CFTypeID tid2 = __CFGenericTypeID_inline(cf2);
+    if (tid1 != tid2) {
+        return [(id)cf1 isEqual:(id)cf2];
     }
-    return false;
+    const CFRuntimeClass *cls = (tid1 < __CFRuntimeClassTableSize) ? __CFRuntimeClassTable[tid1] : NULL;
+    if (NULL != cls && NULL != cls->equal) {
+        return cls->equal(cf1, cf2);
+    }
+    return [(id)cf1 isEqual:(id)cf2];
 }
 
 CFHashCode CFHash(CFTypeRef cf) {
-    if (NULL == cf) { CRSetCrashLogMessage("*** CFHash() called with NULL ***"); HALT; }
+    if (NULL == cf) return 0;
     CFTYPE_OBJC_FUNCDISPATCH0(CFHashCode, cf, hash);
-    __CFGenericAssertIsCF(cf);
-    CFHashCode (*hash)(CFTypeRef cf) = __CFRuntimeClassTable[__CFGenericTypeID_inline(cf)]->hash; 
-    if (NULL != hash) {
-	return hash(cf);
+    CFTypeID typeID = __CFGenericTypeID_inline(cf);
+    const CFRuntimeClass *cls = (typeID < __CFRuntimeClassTableSize) ? __CFRuntimeClassTable[typeID] : NULL;
+    if (NULL != cls && NULL != cls->hash) {
+        return cls->hash(cf);
     }
-    if (CF_IS_COLLECTABLE(cf)) return (CFHashCode)_object_getExternalHash((id)cf);
-    return (CFHashCode)cf;
+    return (CFHashCode)[(id)cf hash];
 }
 
 // definition: produces a normally non-NULL debugging description of the object

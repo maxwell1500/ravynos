@@ -63,6 +63,9 @@ pthread_mutex_t mtx;
      * so keep the font request and measure the attributed string; if no face
      * comes back, the fixed-width fallback below keeps the clock laid out. */
     NSFont *font = [NSFont systemFontOfSize:15];
+    /* systemFontOfSize resolves through CoreText's CTFontCreateUIFontForLanguage, which has no concrete subclass in this tree and returns nil.  With no NSFontAttributeName the attributed string draws nothing, which is why the clock never appeared on the bar. Resolve a real face the way +[NSMainMenuView menuFont] does. */
+    if(font == nil)
+        font = [NSFont fontWithName:@"Inter-Regular" size:15];
     if(font != nil)
         attributes = [NSDictionary dictionaryWithObjects:@[font, [NSColor blackColor]]
                                             forKeys:@[NSFontAttributeName,

@@ -70,6 +70,10 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
     [self setObject:[dictionary objectForKey:key] forKey:key];
 }
 
+-(void)addEntriesWithDictionary:(NSDictionary *)dictionary {
+   [self addEntriesFromDictionary:dictionary];
+}
+
 -(void)setDictionary:(NSDictionary *)dictionary {
    [self removeAllObjects];
    [self addEntriesFromDictionary:dictionary];

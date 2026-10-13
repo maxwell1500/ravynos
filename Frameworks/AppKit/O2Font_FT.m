@@ -52,9 +52,7 @@ FT_Library O2FontSharedFreeTypeLibrary(){
 FcConfig *O2FontSharedFontConfig() {
    static FcConfig *fontConfig=NULL;
    
-   if(fontConfig==NULL){
-    fontConfig=FcInitLoadConfigAndFonts();
-   }
+   if(fontConfig==NULL){    fontConfig=FcInitLoadConfigAndFonts();   }
    
    return fontConfig;
 }
@@ -85,9 +83,9 @@ FcConfig *O2FontSharedFontConfig() {
 -initWithFontName:(NSString *)name {
    self = [super initWithFontName:name];
 
-   NSString *filename=[isa filenameForPattern:name];
+   NSString *filename=[[self class] filenameForPattern:name];
    if(filename==nil) {
-    filename=[isa filenameForPattern:@""];
+    filename=[[self class] filenameForPattern:@""];
     
     if(filename==nil) {
       filename=@"/System/Library/Fonts/TTF/NimbusSans-Regular.ttf";

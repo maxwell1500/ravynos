@@ -56,7 +56,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
    _lineHeightMultiple=0;
    _lineSpacing=0;
    _defaultTabInterval=0;
-   _tabStops=[[isa _defaultTabStops] retain];
+   _tabStops=[[[self class] _defaultTabStops] retain];
    _hyphenationFactor=0;
    _tighteningFactorForTruncation=0;
 }

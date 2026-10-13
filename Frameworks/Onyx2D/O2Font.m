@@ -422,63 +422,64 @@ void      O2FontRelease(O2FontRef self) {
 }
 
 O2FontPlatformType O2FontGetPlatformType(O2Font *self) {
-   return self->_platformType;
+   return self ? self->_platformType : 0;
 }
 
 CFStringRef O2FontCopyFullName(O2FontRef self) {
-   return (CFStringRef)[self->_name copy];
+   return self ? (CFStringRef)[self->_name copy] : (CFStringRef)@"System";
 }
-
 int       O2FontGetUnitsPerEm(O2FontRef self) {
-   return self->_unitsPerEm;
+   return self ? self->_unitsPerEm : 1000;
 }
 
 int       O2FontGetAscent(O2FontRef self) {
-   return self->_ascent;
+   return self ? self->_ascent : 800;
 }
 
 int       O2FontGetDescent(O2FontRef self) {
-   return self->_descent;
+   return self ? self->_descent : -200;
 }
 
 int       O2FontGetLeading(O2FontRef self) {
-   return self->_leading;
+   return self ? self->_leading : 0;
 }
 
 int       O2FontGetCapHeight(O2FontRef self) {
-   return self->_capHeight;
+   return self ? self->_capHeight : 700;
 }
 
 int       O2FontGetXHeight(O2FontRef self) {
-   return self->_xHeight;
+   return self ? self->_xHeight : 500;
 }
 
 O2Float   O2FontGetItalicAngle(O2FontRef self){
-   return self->_italicAngle;
+   return self ? self->_italicAngle : 0;
 }
 
 O2Float   O2FontGetStemV(O2FontRef self) {
-   return self->_stemV;
+   return self ? self->_stemV : 0;
 }
-
 O2Rect    O2FontGetFontBBox(O2FontRef self) {
-   return self->_bbox;
+   return self ? self->_bbox : O2RectMake(0, -200, 1000, 1000);
 }
 
 NSCharacterSet *O2FontGetCoveredCharacterSet(O2FontRef self) {
-    return [self coveredCharacterSet];
+    return self ? [self coveredCharacterSet] : [NSCharacterSet alphanumericCharacterSet];
 }
 
 size_t    O2FontGetNumberOfGlyphs(O2FontRef self) {
-   return self->_numberOfGlyphs;
+   return self ? self->_numberOfGlyphs : 256;
 }
 
 BOOL O2FontGetGlyphAdvances(O2FontRef self,const O2Glyph *glyphs,size_t count,int *advances) {
+   if(self == NULL) {
+       if(advances) bzero(advances, count * sizeof(int));
+       return NO;
+   }
    size_t i;
    
    if(self->_advances==NULL)
     [self fetchAdvances];
-    
    for(i=0;i<count;i++){
     O2Glyph glyph=glyphs[i];
     
@@ -493,7 +494,7 @@ BOOL O2FontGetGlyphAdvances(O2FontRef self,const O2Glyph *glyphs,size_t count,in
 }
 
 O2Glyph   O2FontGetGlyphWithGlyphName(O2FontRef self,CFStringRef name) {
-   return [self glyphWithGlyphName:(NSString *)name];
+   return self ? [self glyphWithGlyphName:(NSString *)name] : 0;
 }
 
 NSString *O2FontCopyGlyphNameForGlyph(O2FontRef self,O2Glyph glyph) {

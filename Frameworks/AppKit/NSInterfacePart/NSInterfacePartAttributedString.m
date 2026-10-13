@@ -16,6 +16,16 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 -initWithCharacter:(unichar)character fontName:(NSString *)fontName pointSize:(float)pointSize color:(NSColor *)color {
    NSString     *string=[NSString stringWithCharacters:&character length:1];
    NSFont       *font=[NSFont fontWithName:fontName size:pointSize];
+   /* A glyph font that is not installed under this name makes
+    * -fontWithName:size: return nil, and a nil value in an attributes
+    * dictionary raises NSInvalidArgumentException.  Nothing catches it, so the
+    * UI server died the moment it drew a menu check mark or branch arrow (the
+    * corpse showed only the terminate path's NULL-stream crash three frames
+    * above this).  Note the name asked for is "Font Awesome 5 Free-Solid" while
+    * this tree ships Font Awesome 6, so nil is the normal case here.  Resolve a
+    * real face, as ClockView and +[NSMainMenuView menuFont] do. */
+   if(font == nil)
+     font=[NSFont fontWithName:@"Inter-Regular" size:pointSize];
    NSDictionary *attributes=[NSDictionary dictionaryWithObjectsAndKeys:
      font,NSFontAttributeName,
      color,NSForegroundColorAttributeName,
@@ -31,11 +41,11 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 }
 
 -initWithMarlettCharacter:(unichar)character {
-   return [self initWithCharacter:character fontName:@"Inter-Regular" pointSize:10 color:[isa textColor]];
+   return [self initWithCharacter:character fontName:@"Inter-Regular" pointSize:10 color:[[self class] textColor]];
 }
 
 -initWithFACharacter:(unichar)character {
-   return [self initWithCharacter:character fontName:@"Font Awesome 5 Free-Solid" pointSize:10 color:[isa textColor]];
+   return [self initWithCharacter:character fontName:@"Font Awesome 5 Free-Solid" pointSize:10 color:[[self class] textColor]];
 }
 
 -(void)dealloc {

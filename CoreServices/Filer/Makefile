@@ -37,4 +37,10 @@ LDFLAGS+=	-Wl,-rpath,'$$ORIGIN/../Resources' \
 
 .include <rvn.app.mk>
 
+# rvn.app.mk installs the executable and the RESOURCES but not the Info.plist,
+# so the Filer bundle shipped without one.  NSBundle then has no
+# CFBundleIconFile, CFBundleDisplayName or CFBundleIdentifier for it: the Dock's
+# Filer tile came up with no icon and no label, and LaunchServices had no
+# bundle metadata.  CoreServices/Dock/Makefile already copies it this way.
 all: obj
+	cp -fv ${.CURDIR}/Info.plist ${APP_DIR}/Contents/

@@ -236,6 +236,8 @@ typedef enum {
 - (void)_windowDidBecomeDeactive:(NSWindow *)window;
 
 - (mach_port_t)_wsServicePort;
+- (int)machEventPipeReadFd;
+- (int)_drainPipe;
 
 @end
 
