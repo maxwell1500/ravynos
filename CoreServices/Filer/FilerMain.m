@@ -499,7 +499,11 @@ static uint32_t termAnsiColor(int n) {
     write(2, "[Filer] window created\n", 23);
     [self.window setTitle:@"Terminal - /bin/sh (ttys000)"];
     [self.window setDelegate:self];
-    TerminalView *termView = [[TerminalView alloc] initWithFrame:NSMakeRect(0, 0, 800, 468)];
+        /* Grid is fixed (TERM_ROWS x TERM_COLS) and drawRect maps cells through
+     * [self bounds].size, so shrinking the frame rescales cell metrics rather
+     * than clipping text: keep the pane above the places strip so the two never
+     * fight for the same surface. */
+    TerminalView *termView = [[TerminalView alloc] initWithFrame:NSMakeRect(0, 56, 800, 412)];
     [[self.window contentView] addSubview:termView];
     [termView setNeedsDisplay:YES];
     [self.window setInitialFirstResponder:termView];
