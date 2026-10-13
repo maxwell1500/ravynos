@@ -516,7 +516,17 @@ static uint32_t termAnsiColor(int n) {
         write(2, "[Filer] makeFirstResponder refused\n", 35);
     /* Places live in the content view below the terminal pane: TerminalView
      * keeps its own frame so grid/scroll geometry stays as verified. */
-    NSString *res = [[NSBundle bundleWithPath:@"/System/Library/CoreServices/Dock.app"] resourcePath];
+    /* The image stages Dock under a volume-relative path (manifest entries read
+     * "System/Library/CoreServices/Dock.app/..."), so don't assume one mount root:
+     * probe the candidate locations and use whichever bundle actually resolves. */
+    NSString *res=nil;
+    for(NSString *cand in @[@"/System/Library/CoreServices",@"/Applications",@"/usr/local/share"]) {
+        NSString *c=[NSString stringWithFormat:@"%@/Dock.app",cand];
+        if([[NSFileManager defaultManager] fileExistsAtPath:[c stringByAppendingPathComponent:@"Contents/Info.plist"]]) {
+            res=[[NSBundle bundleWithPath:c] resourcePath];
+            if(res) break;
+        }
+    }
     DesktopPlaceView *boot=[ [DesktopPlaceView alloc] initWithFrame:NSMakeRect(8,4,150,52)];
     [boot setLabel:@"/ (boot volume)"];
     DesktopPlaceView *trash=[ [DesktopPlaceView alloc] initWithFrame:NSMakeRect(170,4,150,52)];
