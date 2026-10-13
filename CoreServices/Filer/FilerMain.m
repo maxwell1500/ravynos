@@ -23,6 +23,57 @@
 #define TERM_ROWS 26
 #define TERM_HEADER_H 24
 
+/* Desktop places: boot volume, Trash and Home as labelled tiles.  Items whose
+   bundle ships artwork draw their icon; the rest are label-only, which is why
+   the boot volume and Home have no image to load. */
+@interface DesktopPlaceView : NSView {
+    NSString *_label;
+    NSString *_iconPath;
+    NSImage  *_img;
+}
+-(void)setLabel:(NSString *)l;
+-(void)setIconPath:(NSString *)p;
+@end
+
+@implementation DesktopPlaceView
+
+-(void)setLabel:(NSString *)l { _label = [l copy]; }
+
+-(void)setIconPath:(NSString *)p {
+
+    _iconPath = [p copy];
+    if(_iconPath && [[NSFileManager defaultManager] fileExistsAtPath:_iconPath])
+        _img = [[NSImage alloc] initWithContentsOfFile:_iconPath];
+    else
+        _img = nil;
+}
+
+-(void)drawRect:(NSRect)dirty {
+    NSSize sz=[self bounds].size;
+    float x=8.0f;
+    if(_img){
+        NSSize isz=[_img size];
+        float side=(isz.height<36.0f)?(float)isz.height:36.0f;
+        [_img drawInRect:NSMakeRect(x,(sz.height-side)/2,side,side)
+            fromRect:NSMakeRect(0,0,isz.width,isz.height)
+            operation:NSCompositingOperationSourceOver fraction:1.0];
+        x+=side+6.0f;
+    }
+    if(_label==nil)
+        return;
+    NSFont *font=[NSFont fontWithName:@"Inter-Regular" size:12];
+    NSDictionary *attrs = (font!=nil)
+        ? [NSDictionary dictionaryWithObjects:@[font,[NSColor blackColor]]
+            forKeys:@[NSFontAttributeName,NSForegroundColorAttributeName]]
+        : [NSDictionary dictionaryWithObjects:@[[NSColor blackColor]]
+            forKeys:@[NSForegroundColorAttributeName]];
+    NSAttributedString *str=[[NSAttributedString alloc] initWithString:_label
+        attributes:attrs];
+    [str drawInRect:NSMakeRect(x,6,sz.width-x-8,sz.height-10)];
+}
+
+@end
+
 @interface TerminalView : NSView {
     int ptyMaster;
     pid_t shellPid;
@@ -453,6 +504,24 @@ static uint32_t termAnsiColor(int n) {
         write(2, "[Filer] TerminalView is first responder\n", 41);
     else
         write(2, "[Filer] makeFirstResponder refused\n", 35);
+    /* Places live in the content view below the terminal pane: TerminalView
+     * keeps its own frame so grid/scroll geometry stays as verified. */
+    NSString *res = [[NSBundle bundleWithPath:@"/Applications/Dock.app"] resourcePath];
+    DesktopPlaceView *boot=[ [DesktopPlaceView alloc] initWithFrame:NSMakeRect(8,4,150,52)];
+    [boot setLabel:@"/ (boot volume)"];
+    DesktopPlaceView *trash=[ [DesktopPlaceView alloc] initWithFrame:NSMakeRect(170,4,150,52)];
+    [trash setLabel:@"Trash"];
+    if(res)
+        [trash setIconPath:[NSString stringWithFormat:@"%@/Trash.app/Contents/Resources/Trash.png",res]];
+    DesktopPlaceView *home=[ [DesktopPlaceView alloc] initWithFrame:NSMakeRect(332,4,150,52)];
+    [home setLabel:[NSString stringWithFormat:@"Home (%@)",NSHomeDirectory()]];
+    [[self.window contentView] addSubview:boot];
+    [[self.window contentView] addSubview:trash];
+    [[self.window contentView] addSubview:home];
+    [boot setNeedsDisplay:YES];
+    [trash setNeedsDisplay:YES];
+    [home setNeedsDisplay:YES];
+
     [self.window makeKeyAndOrderFront:nil];
     write(2, "[Filer] window makeKeyAndOrderFront done\n", 41);
 
