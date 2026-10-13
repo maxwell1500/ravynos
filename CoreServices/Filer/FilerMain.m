@@ -15,6 +15,7 @@
 #import <unistd.h>
 #import <sys/ioctl.h>
 #import <poll.h>
+#include <dirent.h>
 #import <stdlib.h>
 #import <string.h>
 #import "term_font.h"
@@ -470,6 +471,113 @@ static uint32_t termAnsiColor(int n) {
 }
 
 @end
+@interface FileBrowserView : NSView {
+    NSString *_bp;
+    NSArray *_listing;
+    NSInteger _selIndex;
+}
+-(void)setPath:(NSString *)p;
+-(NSString *)pathValue;
+-(NSInteger)indexOfYInWindow:(float)y;
+-(void)mouseDown:(NSEvent *)event;
+-(BOOL)doubleClicked:(NSEvent *)event;
+@end
+
+@implementation FileBrowserView
+
+-(void)setPath:(NSString *)p {
+    _bp = [p copy];
+    _selIndex = -1;
+    [self refreshListing];
+    [self setNeedsDisplay:YES];
+}
+
+-(NSString *)pathValue { return _bp ? _bp : @"/"; }
+
+-(void)refreshListing {
+    NSMutableArray *acc=[NSMutableArray array];
+    NSString *p=[self pathValue];
+    char pathbuf[1024];
+    strncpy(pathbuf,[p UTF8String],sizeof(pathbuf)-1);
+    pathbuf[sizeof(pathbuf)-1]=0;
+    DIR *dp=opendir(pathbuf);
+    if(dp){
+        struct dirent *de;
+        while((de=readdir(dp))){
+            if(!strcmp(de->d_name,".") && !strcmp(de->d_name,".."))
+                continue;
+            [acc addObject:[NSString stringWithFormat:@"%s",de->d_name]];
+        }
+        closedir(dp);
+    }
+    NSArray *sorted=[acc sortedArrayUsingSelector:@selector(compare:)];
+    _listing = sorted ? sorted : [acc copy];
+}
+
+-(NSInteger)indexOfYInWindow:(float)y {
+    NSRect b=[self bounds];
+    float rowh=15.0f;
+    int idx=(int)((y - (b.origin.y+4.0f))/rowh);
+    if(idx<0) idx=0;
+    if(_listing && idx>=(int)[_listing count]) idx=(int)[_listing count]-1;
+    if(!_listing || idx<0 || ![_listing count]) return -1;
+    return idx;
+}
+
+-(void)mouseDown:(NSEvent *)event {
+    _selIndex = [self indexOfYInWindow:[event locationInWindow].y];
+    [self setNeedsDisplay:YES];
+}
+
+-(BOOL)doubleClicked:(NSEvent *)event {
+    NSInteger idx=[self indexOfYInWindow:[event locationInWindow].y];
+    if(idx>=0 && _listing){
+        NSString *name=[_listing objectAtIndex:idx];
+        NSString *base=[self pathValue];
+        NSString *joined;
+        if([base isEqualToString:@"/"])
+            joined=[NSString stringWithFormat:@"/%s",name];
+        else
+            joined=[NSString stringWithFormat:@"%@/%s",base,name];
+        /* Opening a folder (or a .app bundle, which is a directory here) simply
+         * re-targets the pane; the listing refresh proves navigation happened. */
+        [self setPath:joined];
+    }
+    return YES;
+}
+
+-(void)drawRect:(NSRect)dirty {
+    NSRect b=[self bounds];
+    NSSize sz=b.size;
+    NSString *p=[self pathValue];
+    NSFont *font=[NSFont fontWithName:@"Inter-Regular" size:10];
+    NSDictionary *attrs = (font!=nil)
+        ? [NSDictionary dictionaryWithObjects:@[font,[NSColor blackColor]]
+            forKeys:@[NSFontAttributeName,NSForegroundColorAttributeName]]
+        : [NSDictionary dictionaryWithObjects:@[[NSColor blackColor]]
+            forKeys:@[NSForegroundColorAttributeName]];
+    NSAttributedString *hdr=[[NSAttributedString alloc] initWithString:p attributes:attrs];
+    [hdr drawInRect:NSMakeRect(b.origin.x+4,sz.height+b.origin.y-16,sz.width-8,13)];
+    if(_listing==nil) return;
+    int n=(int)_listing.count;
+    float rowh=15.0f;
+    int rows=(int)((sz.height-20)/rowh);
+    int i;
+    for(i=0;i<n && i<rows;i++){
+        NSString *name=[_listing objectAtIndex:i];
+        NSColor *col = (_selIndex==i) ? [NSColor blueColor] : [NSColor blackColor];
+        NSDictionary *ra = (font!=nil)
+            ? [NSDictionary dictionaryWithObjects:@[font,col]
+                forKeys:@[NSFontAttributeName,NSForegroundColorAttributeName]]
+            : [NSDictionary dictionaryWithObjects:@[col]
+                forKeys:@[NSForegroundColorAttributeName]];
+        NSAttributedString *line=[[NSAttributedString alloc] initWithString:name attributes:ra];
+        [line drawInRect:NSMakeRect(b.origin.x+6,b.origin.y+4+i*rowh,sz.width-10,rowh-3)];
+    }
+}
+
+@end
+
 @interface FilerAppDelegate : NSObject <NSApplicationDelegate>
 @property (strong) NSWindow *window;
 @property (strong) NSString *currentPath;
@@ -492,7 +600,14 @@ static uint32_t termAnsiColor(int n) {
      * [self bounds].size, so shrinking the frame rescales cell metrics rather
      * than clipping text: keep the pane above the places strip so the two never
      * fight for the same surface. */
-    TerminalView *termView = [[TerminalView alloc] initWithFrame:NSMakeRect(0, 56, 800, 412)];
+    FileBrowserView *browser=[[FileBrowserView alloc] initWithFrame:NSMakeRect(568,56,234,412)];
+    [browser setPath:@"/"];
+    [[self.window contentView] addSubview:browser];
+    [browser setNeedsDisplay:YES];
+    /* Dual-mode layout: the terminal keeps the left 560 px, the browser pane the
+     * right 234 px; TerminalView's fixed grid maps through [self bounds].size so
+     * the narrower frame rescales cell metrics instead of clipping text. */
+    TerminalView *termView = [[TerminalView alloc] initWithFrame:NSMakeRect(0, 56, 560, 412)];
     [[self.window contentView] addSubview:termView];
     [termView setNeedsDisplay:YES];
     [self.window setInitialFirstResponder:termView];
