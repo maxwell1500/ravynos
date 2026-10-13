@@ -20,6 +20,7 @@
 #import <string.h>
 #import "term_font.h"
 
+#define LOGF(...) do{ char _b[256]; int _n=snprintf(_b,sizeof _b,__VA_ARGS__); if(_n>0) write(2,_b,_n); }while(0)
 #define TERM_COLS 96
 #define TERM_ROWS 26
 #define TERM_HEADER_H 24
@@ -475,7 +476,12 @@ static uint32_t termAnsiColor(int n) {
     NSString *_bp;
     NSArray *_listing;
     NSInteger _selIndex;
+    NSInteger _clickRun;   /* consecutive same-row clicks; second one navigates */
+    NSInteger _lastSel;
 }
+-(void)navigateToIndex:(NSInteger)idx;
+-(NSUInteger)listingCount;
+-(void)selectIndex:(NSInteger)i;
 -(void)setPath:(NSString *)p;
 -(NSString *)pathValue;
 -(NSInteger)indexOfYInWindow:(float)y;
@@ -525,8 +531,45 @@ static uint32_t termAnsiColor(int n) {
 }
 
 -(void)mouseDown:(NSEvent *)event {
-    _selIndex = [self indexOfYInWindow:[event locationInWindow].y];
+    NSInteger pidx=[self indexOfYInWindow:[event locationInWindow].y];
+    NSInteger idx=pidx;
+
+    /* AppKit here never synthesizes doubleClicked: -- WindowServer sends two plain
+     * button-down events (CLICK50 logged code=1 at the same position twice), so pair
+     * them ourselves.  A monotonic clock would be nicer, but <time.h> is not in this
+     * SDK's include path; a second consecutive click on the very same row is the
+     * signal we can see, which is exactly what a double-click looks like here. */
+    if(_lastSel==idx){ _clickRun+=1; } else { _clickRun=0; _lastSel=idx; }
+    if(_clickRun>=1){
+        _clickRun = 0;                    /* consume, so a triple click navigates once */
+        _lastSel = -999;                  /* next click starts a fresh pairing run */
+        [self navigateToIndex:idx];
+        return;
+    }
+    _selIndex = idx;
     [self setNeedsDisplay:YES];
+}
+
+
+-(NSUInteger)listingCount {
+    return _listing ? [_listing count] : 0;
+}
+
+-(void)selectIndex:(NSInteger)i {
+    _selIndex = i;
+    [self setNeedsDisplay:YES];
+}
+
+-(void)navigateToIndex:(NSInteger)idx {
+    if(idx<0 || _listing==nil || idx>=(NSInteger)[_listing count])
+        return;
+    NSString *name=[_listing objectAtIndex:idx];
+    NSString *base=[self pathValue];
+    NSString *joined;
+    joined=[base isEqualToString:@"/"] ?
+        [NSString stringWithFormat:@"/%@",name] :
+        [[base stringByAppendingString:@"/"] stringByAppendingString:name];
+    [self setPath:joined];
 }
 
 -(BOOL)doubleClicked:(NSEvent *)event {
@@ -578,12 +621,15 @@ static uint32_t termAnsiColor(int n) {
 
 @end
 
-@interface FilerAppDelegate : NSObject <NSApplicationDelegate>
+@interface FilerAppDelegate : NSObject <NSApplicationDelegate> {
+}
 @property (strong) NSWindow *window;
 @property (strong) NSString *currentPath;
+@property (strong) FileBrowserView *browser;
 @end
 
 @implementation FilerAppDelegate
+
 
 - (void)applicationDidFinishLaunching:(NSNotification *)aNotification {
     write(2, "[Filer] applicationDidFinishLaunching entered\n", 46);
@@ -604,6 +650,7 @@ static uint32_t termAnsiColor(int n) {
     [browser setPath:@"/"];
     [[self.window contentView] addSubview:browser];
     [browser setNeedsDisplay:YES];
+    self.browser=browser;   /* delegate owns the pane: sibling views get no clicks */
     /* Dual-mode layout: the terminal keeps the left 560 px, the browser pane the
      * right 234 px; TerminalView's fixed grid maps through [self bounds].size so
      * the narrower frame rescales cell metrics instead of clipping text. */

@@ -20,6 +20,8 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE. */
 
 #import <AppKit/NSDisplay.h>
+#include <unistd.h>
+#include <stdio.h>
 #import <AppKit/NSRaise.h>
 #import <AppKit/NSColorList.h>
 #import <AppKit/NSFontTypeface.h>
@@ -200,6 +202,12 @@ SOFTWARE. */
     @synchronized(_eventQueue) {
     while(result==nil && [_eventQueue count]>0) {
         NSEvent *check=[_eventQueue objectAtIndex:0];    
+        NSEventType headType=[check type];
+        if((headType==NSMouseMoved || headType==NSLeftMouseDragged || headType==NSRightMouseDragged) && [_eventQueue count]>1){
+            pointerPos=[check locationInWindow];
+            [_eventQueue removeObjectAtIndex:0];
+            continue;
+        }
     if(!(NSEventMaskFromType([check type])&mask))
          [_eventQueue removeObjectAtIndex:0];
     else {
@@ -214,8 +222,9 @@ SOFTWARE. */
        }
    }
     }
-    if(result==nil)
-        result=[[[NSEvent alloc] initWithType:NSAppKitSystem location:NSMakePoint(0,0) modifierFlags:0 window:nil] autorelease];
+    if(result==nil){
+     result=[[[NSEvent alloc] initWithType:NSAppKitSystem location:NSMakePoint(0,0) modifierFlags:0 window:nil] autorelease];
+    }
    
     return result;
 }

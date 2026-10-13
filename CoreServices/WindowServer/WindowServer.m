@@ -122,7 +122,14 @@ static NSString *_pathForPID(pid_t pid) {
     int n = proc_pidpath(pid, buf, sizeof(buf) - 1);
     if(n <= 0) {
         NSLog(@"proc_pidpath(%d): failed (n=%d errno=%d)", pid, n, errno);
-        return nil;
+        /* An app that registers its port and then exits before we look it up
+         * (ESRCH) is ordinary here, and every consumer of this path sends it as
+         * a C string: -[NSString UTF8String] is NULL for nil, and that NULL
+         * went straight into strncpy(msg.data, path, PATH_MAX) when a launched
+         * app was announced to the Dock -- strnlen(NULL, PATH_MAX) killed the
+         * WindowServer and took the Dock and the menu bar down with it.  An
+         * unknown path is an empty path, not a NULL one. */
+        return @"";
     }
     buf[n] = '\0';
     return [NSString stringWithCString:buf];
@@ -298,6 +305,10 @@ static struct kinfo_proc *_procForPID(pid_t pid) {
 }
 
 -(uint32_t)windowCreate:(struct wsRPCWindow *)data forApp:(WSAppRecord *)app {
+    fprintf(stderr, "[WS] CREATE app=%s win=%u level=%d frame=%d,%d %dx%d\n",
+        ([[app bundleID] UTF8String] != NULL) ? (const char *)[[app bundleID] UTF8String] : "(nil)",
+        (unsigned)data->windowID, (int)data->level,
+        (int)data->x, (int)data->y, (int)data->w, (int)data->h);
     struct kinfo_proc *kp;
 
     if(data->state < 0 || data->state >= WIN_STATE_MAX) {
@@ -366,6 +377,10 @@ static struct kinfo_proc *_procForPID(pid_t pid) {
 }
 
 -(void)windowModify:(struct wsRPCWindow *)data forApp:(WSAppRecord *)app {
+    fprintf(stderr, "[WS] MODIFY app=%s win=%u level=%d frame=%d,%d %dx%d\n",
+        ([[app bundleID] UTF8String] != NULL) ? (const char *)[[app bundleID] UTF8String] : "(nil)",
+        (unsigned)data->windowID, (int)data->level,
+        (int)data->x, (int)data->y, (int)data->w, (int)data->h);
     if(data->state < 0 || data->state >= WIN_STATE_MAX) {
         NSLog(@"windowModify called with invalid state");
         data->state = NORMAL;
@@ -439,7 +454,18 @@ static struct kinfo_proc *_procForPID(pid_t pid) {
 
 -(void)addWindowByLevel:(WSWindowRecord *)window {
     if(window == nil) return;
-    if(window.level < 0 || window.level >= kCGNumReservedWindowLevels) return;
+    if(logLevel < WS_INFO) fprintf(stderr,"[WS] ADD win=%u lvl=%d frame=%d,%d %dx%d\n",
+        (unsigned)window.number,(int)window.level,
+        (int)window.frame.origin.x,(int)window.frame.origin.y,
+        (int)window.frame.size.width,(int)window.frame.size.height);
+
+    if(window.level < 0 || window.level >= kCGNumReservedWindowLevels) {
+        /* A level outside the table means the window is invisible to hit-testing AND
+         * drawing -- a silent no-op that is very hard to diagnose from the app side. */
+        fprintf(stderr,"[WS] DROPPED window level=%d (table size %d)\n",
+            (int)window.level, kCGNumReservedWindowLevels);
+        return;
+    }
     pthread_mutex_lock(&renderLock);
     [_windows[window.level] addObject:window];
     pthread_mutex_unlock(&renderLock);
@@ -447,13 +473,29 @@ static struct kinfo_proc *_procForPID(pid_t pid) {
 
 -(void)removeWindowByLevel:(WSWindowRecord *)window {
     if(window == nil) return;
-    if(window.level < 0 || window.level >= kCGNumReservedWindowLevels) return;
+    if(logLevel < WS_INFO) fprintf(stderr,"[WS] REM win=%u lvl=%d frame=%d,%d %dx%d\n",
+        (unsigned)window.number,(int)window.level,
+        (int)window.frame.origin.x,(int)window.frame.origin.y,
+        (int)window.frame.size.width,(int)window.frame.size.height);
+
+    if(window.level < 0 || window.level >= kCGNumReservedWindowLevels) {
+        /* A level outside the table means the window is invisible to hit-testing AND
+         * drawing -- a silent no-op that is very hard to diagnose from the app side. */
+        fprintf(stderr,"[WS] DROPPED window level=%d (table size %d)\n",
+            (int)window.level, kCGNumReservedWindowLevels);
+        return;
+    }
     pthread_mutex_lock(&renderLock);
     [_windows[window.level] removeObject:window];
     pthread_mutex_unlock(&renderLock);
 }
 
 -(void)removeWindowFromAllLevels:(WSWindowRecord *)window {
+    fprintf(stderr,"[WS] DESTROY win=%u lvl=%d frame=%d,%d %dx%d\n",
+        (unsigned)window.number,(int)window.level,
+        (int)window.frame.origin.x,(int)window.frame.origin.y,
+        (int)window.frame.size.width,(int)window.frame.size.height);
+
     if(logLevel >= WS_INFO)
         NSLog(@"removeWindowFromAllLevels %@", window);
     pthread_mutex_lock(&renderLock);
@@ -2050,6 +2092,15 @@ static void *shellSvcLoop(void *arg) {
         event->windowID = curWindow.number;
     else
         window = [self windowUnderPointer:pos app:&app];
+
+    if(event->code == NSLeftMouseDown || event->code == NSLeftMouseUp ||
+            event->code == NSMouseMoved) {
+        NSRect f = window ? window.frame : NSZeroRect;
+        const char *bid = (app && [app bundleID]) ? [[app bundleID] UTF8String] : "(nil)";
+        fprintf(stderr, "[WS] ev code=%d pos=%d,%d win=%d frame=%d,%d %dx%d app=%s\n",
+            event->code, (int)pos.x, (int)pos.y, window ? window.number : -1,
+            (int)f.origin.x, (int)f.origin.y, (int)f.size.width, (int)f.size.height, bid);
+    }
 
     NSRect titleFrame = NSZeroRect;
     if(window != nil) {

@@ -1275,18 +1275,18 @@ static int _tagAllMenus(NSMenu *menu, int tag) {
 
     // This should happen before _makeSureIsOnAScreen so we don't reposition done windows
     [self _checkForReleasedWindows];
-
     [[NSApp windows] makeObjectsPerformSelector:@selector(_makeSureIsOnAScreen)];
-
     [self _checkForAppActivation];
      [self _displayAllWindowsIfNeeded];
 
      nextEvent=[_display nextEventMatchingMask:mask untilDate:untilDate inMode:mode dequeue:dequeue];
 
-     if([nextEvent type]==NSAppKitSystem){
-      [nextEvent release];
-      nextEvent=nil;
-     }
+    if([nextEvent type]==NSAppKitSystem){
+     /* _display already returned this one autorelease()d -- an extra release
+     * here double-frees it at the pool pop ("overreleased while already
+     * deallocating"), which killed Filer before its click was dequeued. */
+     nextEvent=nil;
+    }
 
    [pool release];
    }while(nextEvent==nil && [untilDate timeIntervalSinceNow]>0);

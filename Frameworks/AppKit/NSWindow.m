@@ -25,6 +25,7 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <unistd.h>
+#include <stdio.h>
 #include <sys/types.h>
 #include <sys/mman.h>
 
@@ -1866,10 +1867,10 @@ const float WSWindowEdgePad = 2;
 
 -(void)setViewsNeedDisplay:(BOOL)flag {
    if(flag && !_viewsNeedDisplay){
-    // NSApplication does a _displayAllWindowsIfNeeded before every event, but there are some things which wont generate
-    // an event such as performOnMainThread, so we do the callout here too. There is probably a better way to do this	   
-	   [[NSRunLoop currentRunLoop] cancelPerformSelector:@selector(_displayAllWindowsIfNeeded) target:NSApp argument:nil]; // Be sure we don't accumulate unneeded perform operations
-	   [[NSRunLoop currentRunLoop] performSelector:@selector(_displayAllWindowsIfNeeded) target:NSApp argument:nil order:0 modes:[NSArray arrayWithObjects:NSDefaultRunLoopMode, NSModalPanelRunLoopMode, NSEventTrackingRunLoopMode, nil]];
+    // The run-loop performSelector here re-enters limitDateForMode: from inside a
+    // scheduled block, which can starve event polling when redraws keep marking
+    // views dirty. NSApplication already calls _displayAllWindowsIfNeeded at the
+    // end of every poll, so just flag here and let the next iteration repaint.
    }
 	_viewsNeedDisplay=flag;
 }

@@ -31,6 +31,8 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 #import <AppKit/NSRaise.h>
 #import <AppKit/NSViewBackingLayer.h>
 #import <CoreGraphics/CGWindow.h>
+#include <unistd.h>
+#include <stdio.h>
 #import <QuartzCore/CALayerContext.h>
 #import <QuartzCore/CATransaction.h>
 
@@ -1770,7 +1772,8 @@ static NSGraphicsContext *graphicsContextForView(NSView *view){
     return result;
    }
    
-   return [[view window] graphicsContext];
+   NSGraphicsContext *cur=[NSGraphicsContext currentContext];
+   return cur!=nil ? cur : [[view window] graphicsContext];
 }
 
 -(void)_lockFocusInContext:(NSGraphicsContext *)context {
