@@ -29,7 +29,7 @@
 @interface DesktopPlaceView : NSView {
     NSString *_label;
     NSString *_iconPath;
-    NSImage  *_img;
+    NSImageView *_iv;
 }
 -(void)setLabel:(NSString *)l;
 -(void)setIconPath:(NSString *)p;
@@ -40,12 +40,21 @@
 -(void)setLabel:(NSString *)l { _label = [l copy]; }
 
 -(void)setIconPath:(NSString *)p {
-
     _iconPath = [p copy];
-    if(_iconPath && [[NSFileManager defaultManager] fileExistsAtPath:_iconPath])
-        _img = [[NSImage alloc] initWithContentsOfFile:_iconPath];
-    else
-        _img = nil;
+    /* Foundation's NSImage drawInRect: paints nothing for these PNGs in this tree,
+     * while the Dock tiles render the very same files through an NSImageView with
+     * explicit scaling -- so reuse that proven mechanism instead of drawing here. */
+    if(_iconPath && [[NSFileManager defaultManager] fileExistsAtPath:_iconPath]){
+        NSSize sz=[self bounds].size;
+        _iv=[[NSImageView alloc] initWithFrame:NSMakeRect(8,(sz.height-36)/2,36,36)];
+        [_iv setImage:[[NSImage alloc] initWithContentsOfFile:_iconPath]];
+        [[_iv image] setScalesWhenResized:YES];
+        [_iv setImageScaling:NSImageScaleProportionallyUpOrDown];
+        [self addSubview:_iv];
+        [_iv setNeedsDisplay:YES];
+    } else {
+        _iv=nil;
+    }
 }
 
 -(void)drawRect:(NSRect)dirty {
@@ -54,16 +63,8 @@
     if(ctx==NULL)
         return;
     float x=8.0f;
-    if(_img){
-        /* NSImage reports no intrinsic size for some PNGs here, which is why the
-         * Dock tiles set an explicit frame instead of trusting [img size]; draw at
-         * a fixed box and let fromRect NULL mean "whole image". */
-        float side=36.0f;
-        [_img drawInRect:NSMakeRect(x,(sz.height-side)/2,side,side)
-            fromRect:NSZeroRect
-            operation:NSCompositingOperationSourceOver fraction:1.0];
-        x+=side+6.0f;
-    }
+    if(_iv)
+        x+=42.0f;   /* the NSImageView subview paints the artwork itself */
     if(_label==nil)
         return;
     NSFont *font=[NSFont fontWithName:@"Inter-Regular" size:12];
