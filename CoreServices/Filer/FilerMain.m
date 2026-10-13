@@ -513,7 +513,7 @@ static uint32_t termAnsiColor(int n) {
         write(2, "[Filer] makeFirstResponder refused\n", 35);
     /* Places live in the content view below the terminal pane: TerminalView
      * keeps its own frame so grid/scroll geometry stays as verified. */
-    NSString *res = [[NSBundle bundleWithPath:@"/Applications/Dock.app"] resourcePath];
+    NSString *res = [[NSBundle bundleWithPath:@"/System/Library/CoreServices/Dock.app"] resourcePath];
     DesktopPlaceView *boot=[ [DesktopPlaceView alloc] initWithFrame:NSMakeRect(8,4,150,52)];
     [boot setLabel:@"/ (boot volume)"];
     DesktopPlaceView *trash=[ [DesktopPlaceView alloc] initWithFrame:NSMakeRect(170,4,150,52)];
