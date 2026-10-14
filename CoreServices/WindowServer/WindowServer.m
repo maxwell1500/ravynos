@@ -717,6 +717,32 @@ static void *shellSvcLoop(void *arg) {
  * KEEP THIS RUN LOOP EFFICIENT! It is called every frame to render the entire screen contents.
  */
 #define _cursor_height 24
+static char _pendingBundlePath[1024];
+static char _pendingBundleName[256];
+static char _pendingBundleID[128];
+static volatile int _pendingBundleReady = 0;
+
+/* Runs from the main loop, i.e. with no registry lock held, exactly like the
+ * DESKTOP stage that spawns Filer/Dock/SystemUIServer. */
+-(void)_spawnPendingBundle {
+    if(!_pendingBundleReady)
+        return;
+    _pendingBundleReady = 0;
+
+    pid_t pid = fork();
+    if(pid != 0) {
+        fprintf(stderr, "[WS] open bundle: forked pid %d (%s)\n", (int)pid, _pendingBundlePath);
+        return;
+    }
+
+    char idbuf[192];
+    snprintf(idbuf, sizeof(idbuf), "RAVYN_BUNDLE_ID=%s", _pendingBundleID);
+    char *argv[] = { _pendingBundleName, NULL };
+    char *envp[] = { idbuf, NULL };
+    execve(_pendingBundlePath, argv, envp);
+    _exit(1);
+}
+
 -(void)run {
     pthread_t shellThread;
     pthread_create(&shellThread, NULL, shellSvcLoop, (__bridge void *)self);
@@ -738,6 +764,7 @@ static void *shellSvcLoop(void *arg) {
     write(2, "[WS] run loop entered\n", 22);
     int frame_count = 0;
     while(ready == YES) {
+        [self _spawnPendingBundle];
         int nfds = (fds[0].fd >= 0) + (fds[1].fd >= 0);
         if(nfds > 0 && poll(fds, 2, 16) > 0) {
             [input run:self];
@@ -1977,47 +2004,23 @@ static void *shellSvcLoop(void *arg) {
                             fprintf(stderr, "[WS] open bundle: no executable for %s\n", path);
                             break;
                         }
-                        fprintf(stderr, "[WS] open bundle: spawning %s\n", exe);
-                        /* Ask launchd to run it, exactly the way the dock and the
-                         * menu bar do.  A client-spawned (fork/exec'd) child cannot
-                         * bootstrap_look_up the WindowServer service, because only
-                         * launchd's children can, so its window creation RPC fails
-                         * with MACH_SEND_INVALID_DEST_NAME. */
-                        launch_data_t job = launch_data_alloc(LAUNCH_DATA_DICTIONARY);
-                        launch_data_t args = launch_data_alloc(LAUNCH_DATA_ARRAY);
-                        launch_data_array_set_index(args,
-                            launch_data_new_string(exe), 0);
-                        launch_data_dict_insert(job, args, "ProgramArguments" );
-                        launch_data_dict_insert(job, launch_data_new_bool(true),
-                            "RunAtLoad" );
-                        launch_data_dict_insert(job, launch_data_new_bool(false),
-                            "KeepAlive" );
-                        launch_data_t envDict = launch_data_alloc(LAUNCH_DATA_DICTIONARY);
-                        launch_data_dict_insert(envDict,
-                            launch_data_new_string(targetID ?
-                                [targetID UTF8String] : "com.ravynos.unknown"),
-                            "RAVYN_BUNDLE_ID");
-                        launch_data_dict_insert(job, envDict,
-                            "EnvironmentVariables" );
-                        launch_data_dict_insert(job,
-                            launch_data_new_string([bundlePath UTF8String]),
-                            LAUNCH_JOBKEY_LABEL);
-
-                        launch_data_t request = launch_data_alloc(LAUNCH_DATA_DICTIONARY);
-                        launch_data_dict_insert(request, job, LAUNCH_KEY_SUBMITJOB);
-                        launch_data_t response = launch_msg(request);
-                        int lserr = launch_data_get_errno(response);
-                        if(lserr == EEXIST) {
-                            launch_data_t start = launch_data_alloc(LAUNCH_DATA_DICTIONARY);
-                            launch_data_dict_insert(start,
-                                launch_data_new_string([bundlePath UTF8String]),
-                                LAUNCH_KEY_STARTJOB);
-                            launch_msg(start);
-                            launch_data_free(start);
-                        }
-                        launch_data_free(request);
-                        fprintf(stderr, "[WS] open bundle: launchd submit label=%s err=%d\n",
-                                [bundlePath UTF8String], lserr);
+                        /* Do not fork from here.  This switch runs with
+                         * appsLock held: a child that inherits the locked mutex
+                         * never completes its launch handshake -- its
+                         * bootstrap_look_up for the WindowServer service fails
+                         * (measured: "Failed to locate WindowServer service"), so
+                         * every window-create RPC then dies with
+                         * MACH_SEND_INVALID_DEST_NAME.  The three shell apps
+                         * (Filer/Dock/SystemUIServer) are forked from the main loop
+                         * outside the lock, which is why they work.
+                         * Defer it instead and spawn after the unlock. */
+                        snprintf(_pendingBundlePath, sizeof(_pendingBundlePath), "%s", exe);
+                        snprintf(_pendingBundleName, sizeof(_pendingBundleName), "%s",
+                            [exeName UTF8String]);
+                        snprintf(_pendingBundleID, sizeof(_pendingBundleID), "%s",
+                            targetID ? [targetID UTF8String] : "com.ravynos.unknown");
+                        _pendingBundleReady = 1;
+                        fprintf(stderr, "[WS] open bundle: queued %s\n", exe);
                         break;
                     }
                     case CODE_APP_HIDE:

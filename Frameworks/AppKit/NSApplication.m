@@ -46,6 +46,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 /* bootstrap.h in SDK is an empty stub; declare what we need */
 #include <mach/mach.h>
 extern mach_port_t bootstrap_port;
+extern void bootstrap_init(void);
 extern kern_return_t bootstrap_look_up(mach_port_t bp, const char *service_name, mach_port_t *sp);
 
 #import <WindowServer/message.h>
@@ -566,24 +567,21 @@ static NSMenuItem *itemWithTag(NSMenu *root, int tag) {
    }
    aitrace("AI7 bundle ok\n");
    if(!([bundleID isEqualToString:@"com.ravynos.WindowServer"])) {
-        write(2, "[AppKit] looking up WindowServer service\n", 41);
-        if(bootstrap_look_up(bootstrap_port, WINDOWSERVER_SVC_NAME, &_wsSvcPort) != KERN_SUCCESS) {
-            /* A process spawned by WindowServer itself inherits a send right to
-             * the service port (fork copies the port namespace) but cannot
-             * bootstrap_look_up it, because only launchd's children can.  WindowServer
-             * therefore exports the port name in RAVYN_WS_PORT for such children. */
-            const char *envPort = getenv("RAVYN_WS_PORT");
-            mach_port_t inherited = envPort ? (mach_port_t)strtoul(envPort, NULL, 10) : MACH_PORT_NULL;
-            mach_port_urefs_t refs = 0;
-            if(inherited != MACH_PORT_NULL &&
-               mach_port_get_refs(mach_task_self(), inherited, MACH_PORT_RIGHT_SEND, &refs) == KERN_SUCCESS &&
-               refs > 0) {
-                _wsSvcPort = inherited;
-                write(2, "[AppKit] using inherited WindowServer port\n", 43);
-            }
-        }
-        if(_wsSvcPort == MACH_PORT_NULL) {
-            write(2, "[AppKit] Failed to locate WindowServer service\n", 47);
+        /* Every GUI app must resolve the launchd bootstrap port before it can
+         * look up the WindowServer service.  The shell apps do that in main()
+         * with bootstrap_init(); a freshly launched bundle (System Preferences,
+         * Install ravynOS) does not, and then bootstrap_port is 0 and every
+         * bootstrap_look_up fails with 0x10000003 -- the app connects to
+         * nothing and no window of it ever appears.  Do it here instead so any
+         * app works without per-app boilerplate. */
+        if(bootstrap_port == MACH_PORT_NULL)
+            bootstrap_init();
+        kern_return_t bpkr = bootstrap_look_up(bootstrap_port, WINDOWSERVER_SVC_NAME, &_wsSvcPort);
+        if(bpkr != KERN_SUCCESS) {
+            char ebuf[160];
+            int en = snprintf(ebuf, sizeof(ebuf), "[AppKit] Failed to locate WindowServer service: bp=%u kr=0x%x\n",
+                (unsigned)bootstrap_port, (unsigned)bpkr);
+            if (en > 0) write(2, ebuf, (size_t)en);
             return nil;
         }
         write(2, "[AppKit] WindowServer service located\n", 38);

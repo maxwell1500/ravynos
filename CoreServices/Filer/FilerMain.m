@@ -705,7 +705,8 @@ static uint32_t termAnsiColor(int n) {
 
 - (void)applicationDidFinishLaunching:(NSNotification *)aNotification {
     write(2, "[Filer] applicationDidFinishLaunching entered\n", 46);
-    self.currentPath = @"/Applications";
+    if(self.currentPath == nil)
+        self.currentPath = @"/Applications";
 
     NSRect frame = NSMakeRect(200, 200, 800, 500);
     NSUInteger style = NSTitledWindowMask | NSClosableWindowMask | NSMiniaturizableWindowMask | NSResizableWindowMask;
@@ -785,6 +786,18 @@ static uint32_t termAnsiColor(int n) {
     // Register drag and drop for application bundles and files
     [self.window registerForDraggedTypes:@[NSFilenamesPboardType, NSPasteboardTypeString]];
     write(2, "[Filer] window registered drag types\n", 37);
+
+    const char *openAtLaunch = getenv("RAVYN_FILER_OPEN");
+    if(openAtLaunch != NULL) {
+        NSString *target = [NSString stringWithUTF8String:openAtLaunch];
+        if([target hasSuffix:@".app"] || [target hasSuffix:@".APP"]) {
+            write(2, "[Filer] RAVYN_FILER_OPEN bundle\n", 32);
+            filerOpenBundle(target);
+        } else {
+            write(2, "[Filer] RAVYN_FILER_OPEN folder\n", 32);
+            [self.browser setPath:target];
+        }
+    }
 }
 
 - (BOOL)installBundleFromPath:(NSString *)sourcePath toDirectory:(NSString *)destDir {
@@ -850,6 +863,13 @@ int main(int argc, const char *argv[]) {
         write(2, "[Filer] creating FilerAppDelegate\n", 34);
         FilerAppDelegate *delegate = [FilerAppDelegate new];
         [app setDelegate:delegate];
+        /* RAVYN_FILER_OPEN lets a boot, a shell or a test harness exercise the
+         * bundle-opening path without driving pointer events: Filer opens that
+         * path once the window is up, exactly as a double-click would. */
+        const char *openAtLaunch = getenv("RAVYN_FILER_OPEN");
+        if(openAtLaunch != NULL) {
+            delegate.currentPath = [NSString stringWithUTF8String:openAtLaunch];
+        }
         write(2, "[Filer] calling app run\n", 24);
         [app run];
     }
