@@ -132,7 +132,12 @@ static void filerOpenBundle(NSString *path){
     char grid[TERM_ROWS][TERM_COLS];
     int curRow, curCol;
     BOOL pendingClear;
-}
+
+    unsigned char *_termBuf;   /* rasterised grid, blitted on redraw */
+    int _termW;
+    int _termH;
+    NSBitmapImageRep *_termRep;
+    BOOL _termDirty;}
 @end
 
 @implementation TerminalView
@@ -144,6 +149,10 @@ static void filerOpenBundle(NSString *path){
         shellPid = -1;
         logFd = open("/dev/console", O_WRONLY);
         pendingClear = NO;
+        _termBuf = NULL;
+        _termRep = nil;
+        _termW = _termH = 0;
+        _termDirty = YES;
         [self resetScreen];
 
         ptyMaster = open("/dev/ptmx", O_RDWR | O_NOCTTY | O_NONBLOCK);
@@ -193,6 +202,7 @@ static void filerOpenBundle(NSString *path){
     return self;
 }
 
+static int ravyn_fill_count = 0; /*TEMP*/
 static void drawChar8x16(CGContextRef ctx, int x, int y, char c, CGFloat r, CGFloat g, CGFloat b) {
     if(c < 32 || c > 126) c = ' ';
     const unsigned char *glyph = term_font_8x16[c - 32];
@@ -201,6 +211,7 @@ static void drawChar8x16(CGContextRef ctx, int x, int y, char c, CGFloat r, CGFl
         unsigned char mask = glyph[row];
         for(int col = 0; col < 8; col++) {
             if((mask >> (7 - col)) & 1) {
+                ravyn_fill_count++; /*TEMP*/
                 CGContextFillRect(ctx, NSMakeRect(x + col, y + (15 - row), 1, 1));
             }
         }
@@ -212,6 +223,62 @@ static void drawString8x16(CGContextRef ctx, int x, int y, const char *str, CGFl
         drawChar8x16(ctx, x, y, *str, r, g, b);
         x += 8;
         str++;
+    }
+}
+
+/* ravynOS: the terminal grid used to be drawn with one CGContextFillRect per
+ * glyph pixel -- 12k-21k calls, measured at 5-8.5 s per redraw on this tree.
+ * While a redraw runs the run loop cannot drain the event queue, so a
+ * double-click's second click never got processed.  The glyphs now go into a
+ * plain RGBA buffer (a few thousand memory writes) and the redraw is a single
+ * image blit. */
+static void blitChar8x16(unsigned char *buf, int stride, int w, int h,
+                         int x, int y, char c,
+                         unsigned char r, unsigned char g, unsigned char b) {
+    if(c < 32 || c > 126) c = ' ';
+    const unsigned char *glyph = term_font_8x16[c - 32];
+    for(int row = 0; row < 16; row++) {
+        int py = y + (15 - row);
+        if(py < 0 || py >= h)
+            continue;
+        unsigned char mask = glyph[row];
+        unsigned char *dst = buf + py * stride;
+        for(int col = 0; col < 8; col++) {
+            if(!((mask >> (7 - col)) & 1))
+                continue;
+            int px = x + col;
+            if(px < 0 || px >= w)
+                continue;
+            unsigned char *p = dst + px * 4;
+            /* CGImage on this tree reads the planes as A,B,G,R in memory. */
+            p[0] = 255; p[1] = b; p[2] = g; p[3] = r;
+        }
+    }
+}
+
+static void blitString8x16(unsigned char *buf, int stride, int w, int h,
+                           int x, int y, const char *str,
+                           unsigned char r, unsigned char g, unsigned char b) {
+    while(*str) {
+        blitChar8x16(buf, stride, w, h, x, y, *str, r, g, b);
+        x += 8;
+        str++;
+    }
+}
+
+static void blitFill(unsigned char *buf, int stride, int w, int h,
+                     int x, int y, int rw, int rh,
+                     unsigned char r, unsigned char g, unsigned char b) {
+    if(x < 0) { rw += x; x = 0; }
+    if(y < 0) { rh += y; y = 0; }
+    if(x + rw > w) rw = w - x;
+    if(y + rh > h) rh = h - y;
+    for(int py = y; py < y + rh; py++) {
+        unsigned char *dst = buf + py * stride + x * 4;
+        for(int px = 0; px < rw; px++) {
+            dst[0] = 255; dst[1] = b; dst[2] = g; dst[3] = r;
+            dst += 4;
+        }
     }
 }
 
@@ -410,6 +477,9 @@ static uint32_t termAnsiColor(int n) {
         close(logFd);
         logFd = -1;
     }
+    free(_termBuf);
+    _termBuf = NULL;
+    _termRep = nil;   /* ARC: assignment drops the retained reference */
 }
 
 - (void)keyDown:(NSEvent *)event {
@@ -481,49 +551,92 @@ static uint32_t termAnsiColor(int n) {
     }
 }
 
+/* Any caller that marks the terminal dirty must also invalidate the cached
+ * rasterisation, otherwise the blit would keep showing a stale grid. */
+-(void)setNeedsDisplay:(BOOL)flag {
+    if(flag)
+        _termDirty = YES;
+    [super setNeedsDisplay:flag];
+}
+
 - (void)drawRect:(NSRect)rect {
-    CGContextRef ctx = [[[self window] graphicsContext] graphicsPort];
+    /* One image blit instead of tens of thousands of fill rects: the grid is
+     * rasterised into a buffer only when the terminal state changed (drainPty
+     * marks it dirty), so a redraw costs a single drawImage. */
+    int w = (int)rect.size.width;
+    int h = (int)rect.size.height;
+    if(w <= 0 || h <= 0)
+        return;
 
-    CGContextSetRGBFillColor(ctx, 0.06, 0.07, 0.13, 1.0);
-    CGContextFillRect(ctx, rect);
-
-    CGFloat top = rect.size.height - TERM_HEADER_H;
-    CGContextSetRGBFillColor(ctx,
-        ((TERM_HEADER_BG >> 16) & 0xFF) / 255.0,
-        ((TERM_HEADER_BG >> 8) & 0xFF) / 255.0,
-        (TERM_HEADER_BG & 0xFF) / 255.0, 1.0);
-    CGContextFillRect(ctx, NSMakeRect(0, top, rect.size.width, TERM_HEADER_H));
-
-    int y = rect.size.height - TERM_HEADER_H - 6;
-    drawString8x16(ctx, 10, y, "ravynOS Terminal  -  /bin/sh on /dev/ptmx", 0.43, 0.60, 0.86);
-    const char *lip = "tty: ttys000";
-    drawString8x16(ctx, rect.size.width - 14 * 8, y, lip, 0.43, 0.60, 0.86);
-
-    for(int r = 0; r < TERM_ROWS; r++) {
-        int ry = rect.size.height - TERM_HEADER_H - 22 - r * 16;
-        if(ry < -16)
-            break;
-        for(int c = 0; c < TERM_COLS; c++) {
-            char ch = grid[r][c];
-            if(ch == 0)
-                continue;
-            uint32_t fg = cells[r][c];
-            drawChar8x16(ctx, 10 + c * 8, ry, ch,
-                ((fg >> 16) & 0xFF) / 255.0,
-                ((fg >> 8) & 0xFF) / 255.0,
-                (fg & 0xFF) / 255.0);
-        }
+    if(_termBuf == NULL || _termW != w || _termH != h) {
+        free(_termBuf);
+        _termW = w;
+        _termH = h;
+        _termBuf = malloc((size_t)w * h * 4);
+        _termRep = nil;
+        _termDirty = YES;
     }
 
-    /* block cursor */
-    if(curRow < TERM_ROWS) {
-        int cy = rect.size.height - TERM_HEADER_H - 22 - curRow * 16;
-        int cx = 10 + curCol * 8;
-        if(cy >= -16 && cy < rect.size.height) {
-            CGContextSetRGBFillColor(ctx, 0.30, 0.86, 0.52, 0.85);
-            CGContextFillRect(ctx, NSMakeRect(cx, cy, 8, 16));
+    /* AppKit's own dirty flag does not route through our -setNeedsDisplay:
+     * override, so "nothing rasterised yet" has to count as dirty too. */
+    if((_termDirty || _termRep == nil) && _termBuf != NULL) {
+        int stride = w * 4;
+        unsigned char *buf = _termBuf;
+
+        blitFill(buf, stride, w, h, 0, 0, w, h, 15, 18, 33);
+
+        blitFill(buf, stride, w, h, 0, h - TERM_HEADER_H, w, TERM_HEADER_H,
+            (TERM_HEADER_BG >> 16) & 0xFF,
+            (TERM_HEADER_BG >> 8) & 0xFF,
+            TERM_HEADER_BG & 0xFF);
+
+        int hy = h - TERM_HEADER_H - 6;
+        blitString8x16(buf, stride, w, h, 10, hy,
+            "ravynOS Terminal  -  /bin/sh on /dev/ptmx", 110, 153, 219);
+        blitString8x16(buf, stride, w, h, w - 14 * 8, hy, "tty: ttys000", 110, 153, 219);
+
+        for(int r = 0; r < TERM_ROWS; r++) {
+            int ry = h - TERM_HEADER_H - 22 - r * 16;
+            if(ry < -16)
+                break;
+            for(int c = 0; c < TERM_COLS; c++) {
+                char ch = grid[r][c];
+                if(ch == 0)
+                    continue;
+                uint32_t fg = cells[r][c];
+                blitChar8x16(buf, stride, w, h, 10 + c * 8, ry, ch,
+                    (fg >> 16) & 0xFF,
+                    (fg >> 8) & 0xFF,
+                    fg & 0xFF);
+            }
         }
+
+        if(curRow < TERM_ROWS) {
+            int cy = h - TERM_HEADER_H - 22 - curRow * 16;
+            int cx = 10 + curCol * 8;
+            if(cy >= -16 && cy < h)
+                blitFill(buf, stride, w, h, cx, cy, 8, 16, 77, 219, 133);
+        }
+
+        unsigned char *planes[1];
+        planes[0] = _termBuf;
+        NSBitmapImageRep *rep = [[NSBitmapImageRep alloc]
+            initWithBitmapDataPlanes:planes
+            pixelsWide:w
+            pixelsHigh:h
+            bitsPerSample:8
+            samplesPerPixel:4
+            hasAlpha:YES
+            isPlanar:NO
+            colorSpaceName:NSDeviceRGBColorSpace
+            bytesPerRow:stride
+            bitsPerPixel:32];
+        _termRep = rep;
+        _termDirty = NO;
     }
+
+    if(_termRep != nil)
+        [_termRep drawInRect:rect];
 }
 
 @end
