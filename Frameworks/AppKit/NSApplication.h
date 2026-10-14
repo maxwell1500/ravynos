@@ -226,6 +226,7 @@ typedef enum {
 - (NSDockTile *)dockTile;
 
 - (void)addRecentItem:(NSURL *)url;
+- (BOOL)openBundlePath:(NSString *)path;
 
 // private
 - (void)_addWindow:(NSWindow *)window;

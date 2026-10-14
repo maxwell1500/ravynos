@@ -73,6 +73,7 @@ enum {
 
     // Other
     CODE_APP_LAUNCHED,          // New app has launched
+    CODE_OPEN_BUNDLE,           // Ask WindowServer to spawn a bundle's executable
 };
 
 enum {

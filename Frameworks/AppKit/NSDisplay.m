@@ -208,8 +208,9 @@ SOFTWARE. */
             [_eventQueue removeObjectAtIndex:0];
             continue;
         }
-    if(!(NSEventMaskFromType([check type])&mask))
+    if(!(NSEventMaskFromType([check type])&mask)) {
          [_eventQueue removeObjectAtIndex:0];
+    }
     else {
          result=[[check retain] autorelease];
 
@@ -217,8 +218,9 @@ SOFTWARE. */
          if(_type == NSMouseMoved || _type == NSLeftMouseDragged || _type == NSRightMouseDragged)
              pointerPos = [result locationInWindow];
 
-        if(dequeue)
+        if(dequeue) {
             [_eventQueue removeObjectAtIndex:0];
+        }
        }
    }
     }

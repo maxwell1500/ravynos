@@ -26,6 +26,14 @@
 #include <fcntl.h>
 #include <unistd.h>
 
+#include <math.h>
+#ifndef MAXFLOAT
+#define MAXFLOAT __builtin_huge_valf()
+#endif
+#ifndef MIN
+#define MIN(a,b) ((a)<(b)?(a):(b))
+#endif
+
 int logfd = -1;
 
 void appendLog(NSData *data) {

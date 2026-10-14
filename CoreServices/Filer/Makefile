@@ -21,18 +21,15 @@ CFLAGS+=	-g -O0 -fobjc-arc -D__MACH__ -D__RAVYNOS__ -fPIC -pthread \
 		-I${RAVYN_SDKROOT}/usr/local/include/kernel \
 		-F${OBJTOP}/Frameworks/AppKit -F${OBJTOP}/Frameworks/Foundation \
 		-F${OBJTOP}/Frameworks/CoreGraphics \
-		-F${OBJTOP}/Frameworks/CoreServices/LaunchServices \
 		-F${RAVYN_SDKROOT}/System/Library/Frameworks
 
 LDFLAGS+=	-Wl,-rpath,'$$ORIGIN/../Resources' \
 		-F${OBJTOP}/Frameworks/AppKit -framework AppKit \
 		-F${OBJTOP}/Frameworks/Foundation -framework Foundation \
 		-F${OBJTOP}/Frameworks/CoreGraphics -framework CoreGraphics \
-		-F${OBJTOP}/Frameworks/CoreServices/LaunchServices -framework LaunchServices \
 		-Wl,-rpath,/System/Library/Frameworks/Foundation.framework/Versions/C \
 		-Wl,-rpath,/System/Library/Frameworks/AppKit.framework/Versions/A \
 		-Wl,-rpath,/System/Library/Frameworks/CoreGraphics.framework/Versions/A \
-		-Wl,-rpath,/System/Library/Frameworks/LaunchServices.framework/Versions/A \
 		-L${RAVYN_SDKROOT}/usr/lib -lobjc -lSystem
 
 .include <rvn.app.mk>

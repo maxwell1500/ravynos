@@ -114,7 +114,11 @@
     "var/log",
     "var/run",
     "var/tmp",
-    "tmp"
+    "tmp",
+    "System/Library/PreferencePanes",
+    "System/Library/PreferencePanes/General.prefsPane",
+    "System/Library/PreferencePanes/General.prefsPane/Contents",
+    "System/Library/PreferencePanes/General.prefsPane/Resources"
   ],
   "files": [
     {
@@ -1386,6 +1390,91 @@
       "path": "etc/rc",
       "text": "#!/bin/sh\n# ravynOS /etc/rc\n#\n# launchctl's System session runs this once the LaunchDaemons are loaded\n# (BSD/bin/launchctl/launchctl.c: runcom() -> execl(/bin/sh, \"sh\", \"/etc/rc\")).\n# It is the BSD \"runcom\" phase: post-daemon system configuration.\n#\n# On ravynOS the root is a pre-built image: the filesystems are already\n# mounted, there is no fsck, and hostname/network/console settings are applied\n# by launchd or compiled in.  There is genuinely nothing to configure at this\n# phase, so this script reports that it ran and returns success.  Add rc-time\n# setup here if ravynOS ever needs it; keep the exit status 0 so the System\n# session completes and the agent scan (Dock, Filer) runs.\necho \"-=- rc complete -=-\"\nexit 0\n",
       "comment": "system rc, run by launchctl's System session after LaunchDaemons"
+    },
+    {
+      "path": "System/Library/CoreServices/System Preferences.app/Contents/Info.plist",
+      "file": "work/System Preferences.app/Contents/Info.plist",
+      "comment": "repo-built SysApps bundle staged into the GUI image"
+    },
+    {
+      "path": "System/Library/CoreServices/System Preferences.app/Contents/Resources/Icon.png",
+      "file": "work/System Preferences.app/Contents/Resources/Icon.png",
+      "comment": "repo-built SysApps bundle staged into the GUI image"
+    },
+    {
+      "path": "System/Library/CoreServices/System Preferences.app/Contents/Resources/Info.plist",
+      "file": "work/System Preferences.app/Contents/Resources/Info.plist",
+      "comment": "repo-built SysApps bundle staged into the GUI image"
+    },
+    {
+      "path": "System/Library/CoreServices/System Preferences.app/Contents/ravynOS/System Preferences",
+      "file": "work/System Preferences.app/Contents/ravynOS/System Preferences",
+      "comment": "repo-built SysApps bundle staged into the GUI image"
+    },
+    {
+      "path": "System/Library/CoreServices/System Preferences.app/System Preferences",
+      "file": "work/System Preferences.app/Contents/ravynOS/System Preferences",
+      "comment": "bundle-root executable copy so LaunchServices/Dock can exec it directly"
+    },
+    {
+      "path": "System/Library/CoreServices/Install ravynOS.app/Contents/Info.plist",
+      "file": "work/Install ravynOS.app/Contents/Info.plist",
+      "comment": "repo-built SysApps bundle staged into the GUI image"
+    },
+    {
+      "path": "System/Library/CoreServices/Install ravynOS.app/Contents/Resources/Icon.png",
+      "file": "work/Install ravynOS.app/Contents/Resources/Icon.png",
+      "comment": "repo-built SysApps bundle staged into the GUI image"
+    },
+    {
+      "path": "System/Library/CoreServices/Install ravynOS.app/Contents/Resources/MarmosetLogo.tiff",
+      "file": "work/Install ravynOS.app/Contents/Resources/MarmosetLogo.tiff",
+      "comment": "repo-built SysApps bundle staged into the GUI image"
+    },
+    {
+      "path": "System/Library/CoreServices/Install ravynOS.app/Contents/Resources/header.rtf",
+      "file": "work/Install ravynOS.app/Contents/Resources/header.rtf",
+      "comment": "repo-built SysApps bundle staged into the GUI image"
+    },
+    {
+      "path": "System/Library/CoreServices/Install ravynOS.app/Contents/Resources/terms.rtf",
+      "file": "work/Install ravynOS.app/Contents/Resources/terms.rtf",
+      "comment": "repo-built SysApps bundle staged into the GUI image"
+    },
+    {
+      "path": "System/Library/CoreServices/Install ravynOS.app/Contents/ravynOS/Install ravynOS",
+      "file": "work/Install ravynOS.app/Contents/ravynOS/Install ravynOS",
+      "comment": "repo-built SysApps bundle staged into the GUI image"
+    },
+    {
+      "path": "System/Library/CoreServices/Install ravynOS.app/Install ravynOS",
+      "file": "work/Install ravynOS.app/Contents/ravynOS/Install ravynOS",
+      "comment": "bundle-root executable copy so LaunchServices/Dock can exec it directly"
+    },
+    {
+      "path": "System/Library/Frameworks/Cocoa.framework/Versions/A/Cocoa",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/Cocoa.framework/Versions/A/Cocoa",
+      "comment": "repo-built Cocoa shim (Frameworks/Cocoa); Install ravynOS.app links it"
+    },
+    {
+      "path": "System/Library/Frameworks/PreferencePanes.framework/Versions/A/PreferencePanes",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/PreferencePanes.framework/Versions/A/PreferencePanes",
+      "comment": "repo-built PreferencePanes framework; System Preferences.app links it and NSBundle pane loading resolves through it"
+    },
+    {
+      "path": "System/Library/LaunchAgents/com.ravynos.SystemPreferences.json",
+      "file": "../../SystemLibrary/LaunchAgents/com.ravynos.SystemPreferences.json",
+      "comment": "GUI LaunchAgent that opens System Preferences.app at boot so panes render on screen"
+    },
+    {
+      "path": "System/Library/PreferencePanes/General.prefsPane/Contents/Info.plist",
+      "file": "../../SysApps/Panes/General.prefsPane/Contents/Info.plist",
+      "comment": "sample preference pane bundle (repo SysApps/Panes) scanned by System Preferences.app"
+    },
+    {
+      "path": "System/Library/PreferencePanes/General.prefsPane/Resources/Icon.png",
+      "file": "../../SysApps/Panes/General.prefsPane/Resources/Icon.png",
+      "comment": "pane icon art reused from the Prefs app icon"
     }
   ]
 }

@@ -54,8 +54,7 @@ int main(int argc, const char *argv[]) {
     NSAutoreleasePool *pool = [NSAutoreleasePool new];
     write(2, "[WS] pool created\n", 18);
     int logLevel = WS_ERROR;
-    srandomdev();
-    int curShell = LOADING;
+    int curShell = DESKTOP; /* ravynOS: auto-login root, skip Loading/Login */
     WindowServer *ws = nil;
     [pool drain];
     write(2, "[WS] pool drained\n", 18);

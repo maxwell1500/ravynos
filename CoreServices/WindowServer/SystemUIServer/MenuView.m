@@ -103,7 +103,7 @@ extern int exitCode;
         if([item hasSubmenu] && [[[item submenu] _name] isEqualToString:@"NSAppleMenu"]) {
             NSFontManager *fontmgr = [NSFontManager sharedFontManager];
             NSDictionary *attr = [NSDictionary dictionaryWithObject:[fontmgr convertFont:
-                [NSFont menuFontOfSize:15] toHaveTrait:NSBoldFontMask] forKey:NSFontAttributeName];
+                [NSMainMenuView menuFont] toHaveTrait:NSBoldFontMask] forKey:NSFontAttributeName];
             [item setAttributedTitle:[[NSAttributedString alloc] initWithString:[item title]
                 attributes:attr]];
         }
@@ -114,6 +114,7 @@ extern int exitCode;
 }
 
 - (void)aboutThisComputer:(id)sender {
+    fprintf(stderr,"[SUI] about-this-computer\n");
     if(aboutWindow) {
         [aboutWindow orderFront:nil];
         return;

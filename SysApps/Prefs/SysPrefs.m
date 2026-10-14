@@ -21,7 +21,55 @@
  */
 
 #import "SysPrefs.h"
+#import <PreferencePanes/NSPreferencePane.h>
 
+
+@interface PanePanelView : NSView {
+    NSString *_title;
+}
+-(void)setTitle:(NSString *)inTitle;
+-(NSString *)paneTitleValue;
+-(void)drawRect:(NSRect)rect;
+@end
+
+@implementation PanePanelView
+
+-(void)setTitle:(NSString *)inTitle { _title = [inTitle copy]; }
+
+-(NSString *)paneTitleValue { return _title ? _title : @"Preferences"; }
+
+-(void)drawRect:(NSRect)rect {
+    NSGraphicsContext *context = [[self window] graphicsContext];
+    if(context == nil)
+        return;
+    CGContextRef port = [context graphicsPort];
+    NSSize size = [self frame].size;
+
+    /* flat panel so the chosen pane reads as one surface under the icon grid */
+    CGContextSetRGBFillColor(port, 0.93, 0.93, 0.95, 1.0);
+    CGContextFillRect(port, NSMakeRect(0, 0, size.width, size.height));
+    CGContextSetRGBStrokeColor(port, 0.62, 0.62, 0.66, 1.0);
+    CGContextSetLineWidth(port, 1.0);
+    CGContextAddRect(port, NSMakeRect(0.5, 0.5, size.width - 1, size.height - 1));
+    CGContextStrokePath(port);
+
+    /* title art via attributed string (Inter-Regular per repo text idiom) */
+    NSFont *font = [NSFont fontWithName:@"Inter-Regular" size:18];
+    if(font == nil)
+        font = [NSFont systemFontOfSize:18];
+    NSDictionary *attributes = [NSDictionary dictionaryWithObjects:@[font, [NSColor blackColor]]
+                                                        forKeys:@[NSFontAttributeName,
+                                                                  NSForegroundColorAttributeName]];
+    NSAttributedString *title = [[NSAttributedString alloc] initWithString:[self paneTitleValue]
+                                                             attributes:attributes];
+    NSSize measured = [title size];
+    float x = (size.width - measured.width)/2;
+    if(x < 12)
+        x = 12;
+    [title drawInRect:NSMakeRect(x, size.height - 46, measured.width + 24, 30)];
+}
+
+@end
 @implementation SystemPreferences
 
 const float windowWidth = 668; // Apple uses a fixed width and grows vertically
@@ -143,7 +191,36 @@ const float spacer = 8; // icon spacing
 }
 
 -(void)openPane:(int)tag {
-    NSLog(@"opening pane tag %d, %@", tag, [panes objectAtIndex:tag]);
+    if(tag < 0 || tag >= [panes count])
+        return;
+    NSBundle *bundle = [panes objectAtIndex:tag];
+    NSPreferencePane *pane = [[NSPreferencePane alloc] initWithBundle:bundle];
+    [pane setWindow:window];
+    NSString *label = [bundle objectForInfoDictionaryKey:@"CFBundleDisplayName"];
+    if(!label)
+        label = [bundle objectForInfoDictionaryKey:@"CFBundleName"];
+    if(!label)
+        label = @"Preferences";
+    NSView *main = [pane loadMainView];
+    if(main == nil)
+        main = [self panePanelForLabel:label];
+    if(main != nil){
+        NSRect content = [[window contentView] frame];
+        NSSize panelSize = [main frame].size;
+        float x = (content.size.width - panelSize.width)/2;
+        if(x < 0)
+            x = 0;
+        [main setFrameOrigin:NSMakePoint(x, content.size.height - panelSize.height - 48)];
+        [[window contentView] addSubview:main];
+        [[window contentView] setNeedsDisplay:YES];
+    }
+}
+
+-(NSView *)panePanelForLabel:(NSString *)label {
+    PanePanelView *panel = [PanePanelView alloc];
+    [panel setTitle:label];
+    [panel initWithFrame:NSMakeRect(0, 0, 360, 120)];
+    return panel;
 }
 
 @end

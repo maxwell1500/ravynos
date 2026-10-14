@@ -48,8 +48,21 @@ extern pthread_mutex_t mtx;
     [_contentView setAutoresizingMask:0];
 
     [self setAllowsToolTipsWhenApplicationIsInactive:YES];
-    
+
+    fprintf(stderr,"[SUI] mbw-up frame=%d,%d %dx%d level=%d num=%d\n",
+        (int)[self frame].origin.x, (int)[self frame].origin.y,
+        (int)[self frame].size.width, (int)[self frame].size.height,
+        (int)[self level], (int)[self windowNumber]);
     return self;
+}
+
+/* TEMP: does an event reach this window at all, and where does AppKit think
+ * the click was?  Integer formats only: this libc's printf does not implement
+ * %f/%g and prints <UNSUPPORTED-CONVERSION> instead. */
+-(void)sendEvent:(NSEvent *)event {
+        (int)[event type], (int)[event locationInWindow].x,
+        (int)[event locationInWindow].y, (int)[self windowNumber]);
+    [super sendEvent:event];
 }
 
 - (NSMenu *)menuForApp:(NSString *)bundleID {

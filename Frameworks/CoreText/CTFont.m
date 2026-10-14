@@ -14,7 +14,18 @@ CTFontRef CTFontCreateWithGraphicsFont(CGFontRef cgFont,CGFloat size,CGAffineTra
 }
 
 CTFontRef CTFontCreateUIFontForLanguage(CTFontUIFontType uiFontType,CGFloat size,NSString *language ) {
-   return [[KTFont alloc] initWithUIFontType:uiFontType size:size language:language];
+   /* KTFont is abstract: -initWithUIFontType: is O2InvalidAbstractInvocation()
+    * and there is no concrete KTFont subclass in this tree, so instantiating
+    * the base raises.  Wrapping that in a returnable path means the raised
+    * exception escapes out of the caller's [[... alloc] init] expression and
+    * the call never comes back, which is what hung the clock and the menu
+    * bar (SystemUIServer stopped at "[SUI] cv 4 font").  Report the absence
+    * instead, so AppKit's -_uiFontOfType:...fallbackName: takes its else
+    * branch and resolves a real font through O2Font. */
+   (void)uiFontType;
+   (void)size;
+   (void)language;
+   return NULL;
 }
 
 CFStringRef CTFontCopyFullName(CTFontRef self) {

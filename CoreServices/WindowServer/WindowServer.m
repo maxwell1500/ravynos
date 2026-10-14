@@ -173,6 +173,10 @@ static struct kinfo_proc *_procForPID(pid_t pid) {
         mach_port_insert_right(mach_task_self(), _servicePort, _servicePort, MACH_MSG_TYPE_MAKE_SEND);
     } else {
         write(2, "[WS] bootstrap_check_in OK\n", 27);
+        /* check_in hands us the receive right only.  Add a send right under the
+         * same name so that children forked from WindowServer inherit something
+         * usable as RAVYN_WS_PORT (see CODE_OPEN_BUNDLE). */
+        mach_port_insert_right(mach_task_self(), _servicePort, _servicePort, MACH_MSG_TYPE_MAKE_SEND);
     }
 
     _kq = kqueue();
@@ -791,11 +795,6 @@ static void *shellSvcLoop(void *arg) {
         }
         pthread_mutex_unlock(&renderLock);
         ++frame_count;
-        if((frame_count % 60) == 0) {
-            char tb[48];
-            int tn = snprintf(tb, sizeof(tb), "[WS] fb draw #%d\n", frame_count);
-            write(2, tb, tn);
-        }
     }
 }
 
@@ -1939,6 +1938,88 @@ static void *shellSvcLoop(void *arg) {
                     case CODE_ADD_RECENT_ITEM:
                         // FIXME: pass to SystemUIServer
                         break;
+                    case CODE_OPEN_BUNDLE:
+                    {
+                        /* A client (Filer) asked us to open a bundle.  Spawn it
+                         * from here rather than from the client process: children
+                         * forked from WindowServer inherit the launchd context
+                         * the GUI apps need to find com.ravynos.WindowServer,
+                         * which a client-spawned child cannot resolve. */
+                        char path[1024];
+                        size_t n = msg.msg.len;
+                        if(n > sizeof(path) - 1)
+                            n = sizeof(path) - 1;
+                        memcpy(path, msg.msg.data, n);
+                        path[n] = 0;
+                        NSString *bundlePath = [NSString stringWithUTF8String:path];
+                        NSBundle *bundle = [NSBundle bundleWithPath:bundlePath];
+                        if(bundle == nil) {
+                            fprintf(stderr, "[WS] open bundle: no bundle at %s\n", path);
+                            break;
+                        }
+                        NSString *exeName = [bundle objectForInfoDictionaryKey:@"CFBundleExecutable"];
+                        NSString *targetID = [bundle objectForInfoDictionaryKey:@"CFBundleIdentifier"];
+                        if(exeName == nil)
+                            exeName = [bundlePath lastPathComponent];
+                        NSString *cands[3];
+                        cands[0] = [NSString stringWithFormat:@"%@/Contents/ravynOS/%@", bundlePath, exeName];
+                        cands[1] = [NSString stringWithFormat:@"%@/Contents/MacOS/%@", bundlePath, exeName];
+                        cands[2] = [NSString stringWithFormat:@"%@/%@", bundlePath, exeName];
+                        const char *exe = NULL;
+                        for(int i = 0; i < 3; i++) {
+                            const char *c = [cands[i] UTF8String];
+                            if(c != NULL && access(c, X_OK) == 0) {
+                                exe = c;
+                                break;
+                            }
+                        }
+                        if(exe == NULL) {
+                            fprintf(stderr, "[WS] open bundle: no executable for %s\n", path);
+                            break;
+                        }
+                        fprintf(stderr, "[WS] open bundle: spawning %s\n", exe);
+                        /* Ask launchd to run it, exactly the way the dock and the
+                         * menu bar do.  A client-spawned (fork/exec'd) child cannot
+                         * bootstrap_look_up the WindowServer service, because only
+                         * launchd's children can, so its window creation RPC fails
+                         * with MACH_SEND_INVALID_DEST_NAME. */
+                        launch_data_t job = launch_data_alloc(LAUNCH_DATA_DICTIONARY);
+                        launch_data_t args = launch_data_alloc(LAUNCH_DATA_ARRAY);
+                        launch_data_array_set_index(args,
+                            launch_data_new_string(exe), 0);
+                        launch_data_dict_insert(job, args, "ProgramArguments" );
+                        launch_data_dict_insert(job, launch_data_new_bool(true),
+                            "RunAtLoad" );
+                        launch_data_dict_insert(job, launch_data_new_bool(false),
+                            "KeepAlive" );
+                        launch_data_t envDict = launch_data_alloc(LAUNCH_DATA_DICTIONARY);
+                        launch_data_dict_insert(envDict,
+                            launch_data_new_string(targetID ?
+                                [targetID UTF8String] : "com.ravynos.unknown"),
+                            "RAVYN_BUNDLE_ID");
+                        launch_data_dict_insert(job, envDict,
+                            "EnvironmentVariables" );
+                        launch_data_dict_insert(job,
+                            launch_data_new_string([bundlePath UTF8String]),
+                            LAUNCH_JOBKEY_LABEL);
+
+                        launch_data_t request = launch_data_alloc(LAUNCH_DATA_DICTIONARY);
+                        launch_data_dict_insert(request, job, LAUNCH_KEY_SUBMITJOB);
+                        launch_data_t response = launch_msg(request);
+                        int lserr = launch_data_get_errno(response);
+                        if(lserr == EEXIST) {
+                            launch_data_t start = launch_data_alloc(LAUNCH_DATA_DICTIONARY);
+                            launch_data_dict_insert(start,
+                                launch_data_new_string([bundlePath UTF8String]),
+                                LAUNCH_KEY_STARTJOB);
+                            launch_msg(start);
+                            launch_data_free(start);
+                        }
+                        launch_data_free(request);
+                        fprintf(stderr, "[WS] open bundle: launchd submit label=%s err=%d\n",
+                                [bundlePath UTF8String], lserr);
+                        break;
+                    }
                     case CODE_APP_HIDE:
                     {
                         pid_t pid;

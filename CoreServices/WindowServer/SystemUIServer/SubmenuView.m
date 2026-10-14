@@ -40,15 +40,20 @@ static NSRect boundsToTitleAreaRect(NSRect rect){
 @implementation SubmenuView
 
 -initWithMenu:(NSMenu *)menu {
+    fprintf(stderr,"[SUI] sv-enter menu=%p\n",menu);
     NSRect frame = NSZeroRect;
     self = [self initWithFrame:frame];
+    fprintf(stderr,"[SUI] sv-super=%p\n",self);
 
     _menu = menu;
     _selectedItemIndex = NSNotFound;
 
+    fprintf(stderr,"[SUI] sv-size-enter\n");
     frame.size = [self sizeForMenuItems:[self visibleItemArray]];
+    fprintf(stderr,"[SUI] sv-size=%d,%d\n",(int)frame.size.width,(int)frame.size.height);
     [self setFrame:frame];
 
+    fprintf(stderr,"[SUI] sv-done\n");
     return self;
 }
 

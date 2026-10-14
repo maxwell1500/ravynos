@@ -41,7 +41,18 @@ enum {
 @implementation NSMainMenuView
 
 +(NSFont *)menuFont {
-    return [NSFont menuFontOfSize:15.0];
+    NSFont *font=[NSFont menuFontOfSize:15.0];
+    /* -[NSFont menuFontOfSize:] resolves through CoreText's
+     * CTFontCreateUIFontForLanguage, which has no concrete subclass in this
+     * tree, so it returns nil.  A nil font in an attributes dictionary raises
+     * NSInvalidArgumentException ("Attempt to insert nil object for key
+     * NSFontAttributeName"); nothing catches it, so the server terminates
+     * while it is drawing a menu -- and the terminate path then dies writing
+     * to a NULL stream, which is what the corpse actually showed.  Resolve a
+     * real face instead, the way ClockView does. */
+    if(font == nil)
+        font=[NSFont fontWithName:@"Inter-Regular" size:15.0];
+    return font;
 }
 
 +(float)menuHeight {
@@ -376,6 +387,9 @@ enum {
       [self positionBranchForSelectedItem:branch screen:screen];
 
       [branch orderFront:nil];
+      { NSRect bf=[branch frame];
+        fprintf(stderr,"[SUI] branch frame=%d,%d %dx%d\n",
+            (int)bf.origin.x,(int)bf.origin.y,(int)bf.size.width,(int)bf.size.height); }
       return [branch menuView];
      }
     }
@@ -847,12 +861,22 @@ const float kMouseMovementThreshold = .001f;
 	return ([item isEnabled])?item:(NSMenuItem *)nil;
 }
 
+-(NSView *)hitTest:(NSPoint)point {
+   NSView *v=[super hitTest:point];
+   fprintf(stderr,"[SUI] mmv-hit %d,%d -> %s\n", (int)point.x, (int)point.y,
+       v ? [NSStringFromClass([v class]) UTF8String] : "nil");
+   return v;
+}
+
 -(void)mouseDown:(NSEvent *)event {
    BOOL        didAccept=[[self window] acceptsMouseMovedEvents];
    NSMenuItem *item;
 
+   fprintf(stderr,"[SUI] mb-down loc=%d,%d\n", (int)[event locationInWindow].x,
+       (int)[event locationInWindow].y);
    [[self window] setAcceptsMouseMovedEvents:YES];
    item=[self trackForEvent:event];
+   fprintf(stderr,"[SUI] mb-track item=%s\n", item?[[item title] UTF8String]:"(nil)");
    [[self window] setAcceptsMouseMovedEvents:didAccept];
    
    if(item!=nil)

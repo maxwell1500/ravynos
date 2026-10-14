@@ -568,6 +568,21 @@ static NSMenuItem *itemWithTag(NSMenu *root, int tag) {
    if(!([bundleID isEqualToString:@"com.ravynos.WindowServer"])) {
         write(2, "[AppKit] looking up WindowServer service\n", 41);
         if(bootstrap_look_up(bootstrap_port, WINDOWSERVER_SVC_NAME, &_wsSvcPort) != KERN_SUCCESS) {
+            /* A process spawned by WindowServer itself inherits a send right to
+             * the service port (fork copies the port namespace) but cannot
+             * bootstrap_look_up it, because only launchd's children can.  WindowServer
+             * therefore exports the port name in RAVYN_WS_PORT for such children. */
+            const char *envPort = getenv("RAVYN_WS_PORT");
+            mach_port_t inherited = envPort ? (mach_port_t)strtoul(envPort, NULL, 10) : MACH_PORT_NULL;
+            mach_port_urefs_t refs = 0;
+            if(inherited != MACH_PORT_NULL &&
+               mach_port_get_refs(mach_task_self(), inherited, MACH_PORT_RIGHT_SEND, &refs) == KERN_SUCCESS &&
+               refs > 0) {
+                _wsSvcPort = inherited;
+                write(2, "[AppKit] using inherited WindowServer port\n", 43);
+            }
+        }
+        if(_wsSvcPort == MACH_PORT_NULL) {
             write(2, "[AppKit] Failed to locate WindowServer service\n", 47);
             return nil;
         }
@@ -924,6 +939,36 @@ static int _tagAllMenus(NSMenu *menu, int tag) {
         NSLog(@"Failed to send menus to WS");
 
     [menuCopy release];
+}
+
+/* Ask WindowServer to launch a bundle.  Clients cannot exec a GUI app
+ * themselves: the child needs the launchd context that only WindowServer's own
+ * children inherit, so the actual fork/exec happens on the server side (see
+ * CODE_OPEN_BUNDLE in CoreServices/WindowServer/WindowServer.m). */
+-(BOOL)openBundlePath:(NSString *)path {
+    if(path == nil || _wsSvcPort == MACH_PORT_NULL)
+        return NO;
+
+    Message msg = {0};
+    msg.header.msgh_remote_port = _wsSvcPort;
+    msg.header.msgh_bits = MACH_MSGH_BITS_SET(MACH_MSG_TYPE_COPY_SEND, 0, 0, 0);
+    msg.header.msgh_id = MSG_ID_INLINE;
+    msg.header.msgh_size = sizeof(msg);
+    msg.code = CODE_OPEN_BUNDLE;
+    msg.pid = getpid();
+
+    const char *p = [path UTF8String];
+    size_t len = p ? strlen(p) + 1 : 0;
+    if(len > sizeof(msg.data))
+        len = sizeof(msg.data);
+    if(len) {
+        memcpy(msg.data, p, len);
+        msg.len = (unsigned int)len;
+    }
+
+    return mach_msg((mach_msg_header_t *)&msg, MACH_SEND_MSG|MACH_SEND_TIMEOUT,
+        sizeof(msg), 0, MACH_PORT_NULL,
+        1000 /* ms timeout */, MACH_PORT_NULL) == MACH_MSG_SUCCESS;
 }
 
 - (void)addRecentItem:(NSURL *)url {
@@ -1291,16 +1336,16 @@ static int _tagAllMenus(NSMenu *menu, int tag) {
    [pool release];
    }while(nextEvent==nil && [untilDate timeIntervalSinceNow]>0);
 
-   if(nextEvent!=nil){
-    nextEvent=[nextEvent retain];
+  if(nextEvent!=nil){
+   nextEvent=[nextEvent retain];
 
-    pthread_mutex_lock(_lock);
+   pthread_mutex_lock(_lock);
      [_currentEvent release];
      _currentEvent=nextEvent;
-    pthread_mutex_unlock(_lock);
-   }
+   pthread_mutex_unlock(_lock);
+  }
 
-   return [nextEvent autorelease];
+  return [nextEvent autorelease];
 }
 
 -(NSEvent *)currentEvent {

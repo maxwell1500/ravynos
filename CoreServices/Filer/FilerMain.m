@@ -1,7 +1,8 @@
 /*
  * FilerMain.m - ravynOS Desktop File Manager (Filer.app)
  *
- * Provides desktop file browsing, bundle execution via LaunchServices,
+ * Provides desktop file browsing and bundle execution via fork/exec of the
+ * bundle's executable (LaunchServices in this tree is not usable in process),
  * and drag-and-drop .app bundle installation into /Applications.
  *
  * Copyright (C) 2026 Jack Davenport. All rights reserved.
@@ -10,7 +11,6 @@
 
 #import <Cocoa/Cocoa.h>
 #import <CoreServices/CoreServices.h>
-#import <LaunchServices/LaunchServices.h>
 #import <fcntl.h>
 #import <unistd.h>
 #import <sys/ioctl.h>
@@ -20,11 +20,76 @@
 #import <string.h>
 #import "term_font.h"
 
+
 #define LOGF(...) do{ char _b[256]; int _n=snprintf(_b,sizeof _b,__VA_ARGS__); if(_n>0) write(2,_b,_n); }while(0)
 #define TERM_COLS 96
 #define TERM_ROWS 26
 #define TERM_HEADER_H 24
 
+/* ravynOS: opening a bundle spawns its own executable directly.
+ *
+ * LSOpenCFURLRef was tried first (resolved with dlopen so the framework's
+ * classes are not registered at image load), but in-process Resolution of the
+ * bundle through LaunchServices faults: right after the call Filer dies with
+ * EXC_CORPSE_NOTIFY and WindowServer destroys its window, so the click that was
+ * supposed to open the app took the desktop down with it.  The WindowServer
+ * already spawns the shell apps with fork/execve (see the DESKTOP stage of
+ * CoreServices/WindowServer/WindowServer.m), so do the same here: resolve the
+ * bundle's executable, export the same RAVYN_BUNDLE_ID the other apps get, and
+ * exec it. */
+static void filerOpenBundle(NSString *path){
+    if(!path)
+        return;
+
+    NSBundle *bundle=[NSBundle bundleWithPath:path];
+    if(bundle==nil){
+        return;
+    }
+    NSString *exeName=[bundle objectForInfoDictionaryKey:@"CFBundleExecutable"];
+    NSString *bundleID=[bundle objectForInfoDictionaryKey:@"CFBundleIdentifier"];
+    if(exeName==nil)
+        exeName=[path lastPathComponent];
+
+    NSString *cands[3];
+    cands[0]=[NSString stringWithFormat:@"%@/Contents/ravynOS/%@",path,exeName];
+    cands[1]=[NSString stringWithFormat:@"%@/Contents/MacOS/%@",path,exeName];
+    cands[2]=[NSString stringWithFormat:@"%@/%@",path,exeName];
+
+    const char *exe=NULL;
+    for(int i=0;i<3;i++){
+        const char *c=[cands[i] UTF8String];
+        if(c!=NULL && access(c,X_OK)==0){ exe=c; break; }
+    }
+    if(exe==NULL){
+        return;
+    }
+
+    /* Preferred route: WindowServer spawns the bundle for us.  A child forked
+     * from Filer cannot resolve com.ravynos.WindowServer (the bootstrap lookup
+     * that every GUI app performs at startup fails: "[AppKit] Failed to locate
+     * WindowServer service"), so the server does the exec. */
+    if([[NSApplication sharedApplication] openBundlePath:path]){
+        return;
+    }
+
+    if(!bundleID)
+        bundleID=@"com.ravynos.unknown";
+
+    pid_t pid=fork();
+    if(pid==0){
+        const char *bname=[exeName UTF8String];
+        char *argv[2];
+        argv[0]=(char *)bname;
+        argv[1]=NULL;
+        char envbuf[256];
+        snprintf(envbuf,sizeof envbuf,"RAVYN_BUNDLE_ID=%s",[bundleID UTF8String]);
+        char *envp[2];
+        envp[0]=envbuf;
+        envp[1]=NULL;
+        execve(exe,argv,envp);
+        _exit(1);
+    }
+}
 /* Desktop places: boot volume, Trash and Home as labelled tiles.  Items whose
    bundle ships artwork draw their icon; the rest are label-only, which is why
    the boot volume and Home have no image to load. */
@@ -569,6 +634,13 @@ static uint32_t termAnsiColor(int n) {
     joined=[base isEqualToString:@"/"] ?
         [NSString stringWithFormat:@"/%@",name] :
         [[base stringByAppendingString:@"/"] stringByAppendingString:name];
+    if([name hasSuffix:@".app"]){
+        NSBundle *bundle=[NSBundle bundleWithPath:joined];
+        if(bundle != nil){
+            filerOpenBundle(joined);
+            return;
+        }
+    }
     [self setPath:joined];
 }
 
@@ -738,8 +810,7 @@ static uint32_t termAnsiColor(int n) {
     BOOL isDir = NO;
     if ([[NSFileManager defaultManager] fileExistsAtPath:itemPath isDirectory:&isDir]) {
         if ([itemPath hasSuffix:@".app"] || [itemPath hasSuffix:@".APP"]) {
-            CFURLRef url = (__bridge CFURLRef)[NSURL fileURLWithPath:itemPath];
-            LSOpenCFURLRef(url, NULL);
+            filerOpenBundle(itemPath);
         }
     }
 }

@@ -1,0 +1,17 @@
+{
+  "EnvironmentVariables": {
+    "ASL_DISABLE": "1"
+  },
+  "MachServices": {
+    "com.ravynos.SystemPreferences": {
+      "HostSpecialPort": 13
+    }
+  },
+  "EnableTransactions": true,
+  "ProgramArguments": [
+    "/System/Library/CoreServices/System Preferences.app/Contents/ravynOS/System Preferences"
+  ],
+  "RunAtLoad": true,
+  "KeepAlive": true,
+  "Label": "com.ravynos.SystemPreferences"
+}

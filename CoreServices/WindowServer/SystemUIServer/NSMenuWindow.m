@@ -25,20 +25,23 @@ SOFTWARE. */
 @implementation NSMenuWindow
 
 -initWithMenu:(NSMenu *)menu {
+    fprintf(stderr,"[SUI] mwin-enter menu=%p\n",menu);
     SubmenuView *view=[[SubmenuView alloc] initWithMenu:menu];
+    fprintf(stderr,"[SUI] mwin-view=%p\n",view);
     NSRect contentRect=[view frame];
 
     self = [self initWithContentRect:contentRect
                            styleMask:NSBorderlessWindowMask
                              backing:NSBackingStoreBuffered
                                defer:NO];
-    [self setLevel:NSSubmenuWindowLevel];
+    [self setLevel:NSMainMenuWindowLevel+1]; /* 9: above the Dock (7) and menu bar (8), < 16 */
 
     _releaseWhenClosed=YES;
     _view=view;
 
     [[self contentView] addSubview:_view];
     [self setAcceptsMouseMovedEvents:YES];
+    fprintf(stderr,"[SUI] mwin-done\n");
     return self;
 }
 
@@ -51,7 +54,7 @@ SOFTWARE. */
                            styleMask:NSBorderlessWindowMask
                              backing:NSBackingStoreBuffered
                                defer:NO];
-    [self setLevel:NSSubmenuWindowLevel];
+    [self setLevel:NSMainMenuWindowLevel+1]; /* 9: above the Dock (7) and menu bar (8), < 16 */
 
     _releaseWhenClosed=YES;
     _view=view;
