@@ -1,5 +1,5 @@
 APP=	Downloads
-SRCS=	main.m Downloads.m
+SRCS=	DownloadsMain.m Downloads.m
 RESOURCES=	${.CURDIR}/Downloads.png
 
 Downloads.o: Downloads.m Downloads.h

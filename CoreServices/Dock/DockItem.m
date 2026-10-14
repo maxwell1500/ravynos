@@ -427,10 +427,56 @@ view does not need to draw the application or custom string badges.
     _windowServerRPC(&data, sizeof(data), NULL, NULL);
 }
 
+/* Launch a tile's bundle.  LaunchServices is deliberately not used: an
+   in-process LSOpenCFURLRef dlopens LaunchServices and crashes the client
+   (measured: EX_CORPSE_NOTIFY, followed by "[WS] DESTROY win=..." for the
+   Dock's own window).  WindowServer forks the bundle from its main loop
+   instead, which is the only context in which the child can resolve
+   com.ravynos.WindowServer for its startup handshake. */
+- (void)_launchBundle {
+    if(!_path)
+        return;
+
+    if([[NSApplication sharedApplication] openBundlePath:_path])
+        return;
+
+    /* Fallback for a bundle WindowServer cannot take: resolve the executable
+       from the bundle layout and run it locally.  NSBundle is not consulted --
+       on this tree bundleWithPath: returns nil for paths that are known-good,
+       which silently dropped every launch. */
+    NSString *name = [[_path lastPathComponent] stringByDeletingPathExtension];
+    NSArray *candidates = @[
+        [NSString stringWithFormat:@"%@/Contents/ravynOS/%@", _path, name],
+        [NSString stringWithFormat:@"%@/Contents/MacOS/%@", _path, name],
+        [NSString stringWithFormat:@"%@/%@", _path, name],
+    ];
+
+    const char *exe = NULL;
+    for(NSString *candidate in candidates) {
+        const char *c = [candidate UTF8String];
+        if(c != NULL && access(c, X_OK) == 0) {
+            exe = c;
+            break;
+        }
+    }
+    if(exe == NULL)
+        return;
+
+    pid_t pid = fork();
+    if(pid == 0) {
+        char argvbuf[512];
+        snprintf(argvbuf, sizeof argvbuf, "%s", [name UTF8String]);
+        char *argv[2];
+        argv[0] = argvbuf;
+        argv[1] = NULL;
+        execve(exe, argv, NULL);
+        _exit(1);
+    }
+}
+
 -(void)openApp:(id)sender {
     if(![self isRunning]) {
-        NSURL *url = [NSURL fileURLWithPath:_path];
-        LSOpenCFURLRef((__bridge_retained CFURLRef)url, NULL);
+        [self _launchBundle];
     } else {
         struct {
             struct wsRPCWindow win;

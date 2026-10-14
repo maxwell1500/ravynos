@@ -1,5 +1,5 @@
 APP=	Trash
-SRCS=	main.m Trash.m
+SRCS=	TrashMain.m Trash.m
 RESOURCES=	${.CURDIR}/Trash.png ${.CURDIR}/Trash_full.png
 
 Trash.o: Trash.m Trash.h

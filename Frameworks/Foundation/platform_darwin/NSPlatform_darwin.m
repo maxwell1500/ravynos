@@ -13,6 +13,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 #include <time.h>
 #import <sys/param.h>
 #include <netdb.h>
+#include <pwd.h>
 #include <unistd.h>
 #include <crt_externs.h>
 #import <sys/sysctl.h>
@@ -106,8 +107,8 @@ NSString * const NSPlatformLoadableObjectFilePrefix=@"";
 
 -(NSString *)operatingSystemVersionString {
   static NSString *operatingSystemVersionString = NULL;
-  
-  if(operatingSystemVersionString == NULL) {  
+
+  if(operatingSystemVersionString == NULL) {
     NSDictionary *operatingSystemVersionDictionary = [NSDictionary dictionaryWithContentsOfFile:@"/System/Library/CoreServices/SystemVersion.plist"];
     if(operatingSystemVersionDictionary == NULL) { operatingSystemVersionDictionary = [NSDictionary dictionaryWithContentsOfFile:@"/System/Library/CoreServices/ServerVersion.plist"]; }
     if(operatingSystemVersionDictionary != NULL) {
@@ -116,8 +117,43 @@ NSString * const NSPlatformLoadableObjectFilePrefix=@"";
       operatingSystemVersionString = [[NSString alloc] initWithFormat:@"%@ Version %@ (Build %@)", stringSysctlByName("kern.ostype"), stringSysctlByName("kern.osrelease"), stringSysctlByName("kern.osversion")];
     }
   }
-  
+
   return(operatingSystemVersionString);
+}
+
+// NSPlatform_posix answers these from the passwd database; NSPlatform_darwin
+// inherits from it but must say so itself, because the abstract NSPlatform
+// implementations raise NSInvalidAbstractInvocation and anything that asks for
+// a home directory (Downloads.app, NSHomeDirectory) would abort instead.
+// Declared in NSPlatform_ravynOS.h.
+-(NSString *)homeDirectory {
+  const char *home = getenv("HOME");
+
+  if(home != NULL && home[0] != '\0')
+    return([NSString stringWithUTF8String:home]);
+
+  struct passwd *pw = getpwuid(getuid());
+  if(pw != NULL && pw->pw_dir != NULL && pw->pw_dir[0] != '\0')
+    return([NSString stringWithUTF8String:pw->pw_dir]);
+
+  return(@"/");
+}
+
+-(NSString *)CPUModel {
+  static NSString *cpuModel = NULL;
+
+  if(cpuModel == NULL) {
+    // machdep.cpu.brand_string is a string sysctl on both Darwin and xnu.
+    NSString *brand = stringSysctlByName("machdep.cpu.brand_string");
+    NSCharacterSet *spaces = [NSCharacterSet whitespaceCharacterSet];
+    brand = [brand stringByTrimmingCharactersInSet:spaces];
+    if([brand length] == 0)
+      brand = stringSysctlByName("hw.model");
+    brand = [brand stringByTrimmingCharactersInSet:spaces];
+    cpuModel = [brand length] > 0 ? brand : @"unknown";
+  }
+
+  return(cpuModel);
 }
 
 @end
