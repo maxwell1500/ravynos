@@ -1106,20 +1106,8 @@ CFDictionaryRef CGSessionCopyCurrentDictionary(void) {
 CFMachPortRef CGWindowServerCFMachPort(void) {
     static CFMachPortRef wsPort = NULL;
     if(wsPort == NULL) {
-        mach_port_t p = MACH_PORT_NULL;
-        if(bootstrap_look_up(bootstrap_port, WINDOWSERVER_SVC_NAME, &p) != KERN_SUCCESS) {
-            /* Children forked from WindowServer hold a send right to the service
-             * port but cannot bootstrap_look_up it (only launchd's children can);
-             * WindowServer exports the port name in RAVYN_WS_PORT for them. */
-            const char *envPort = getenv("RAVYN_WS_PORT");
-            mach_port_t inherited = envPort ? (mach_port_t)strtoul(envPort, NULL, 10) : MACH_PORT_NULL;
-            mach_port_urefs_t refs = 0;
-            if(inherited != MACH_PORT_NULL &&
-               mach_port_get_refs(mach_task_self(), inherited, MACH_PORT_RIGHT_SEND, &refs) == KERN_SUCCESS &&
-               refs > 0)
-                p = inherited;
-        }
-        if(p != MACH_PORT_NULL) {
+        mach_port_t p;
+        if(bootstrap_look_up(bootstrap_port, WINDOWSERVER_SVC_NAME, &p) == KERN_SUCCESS) {
             Boolean shouldFree;
             CFMachPortContext context = {0};
             wsPort = CFMachPortCreateWithPort(NULL, p, NULL, &context, &shouldFree);

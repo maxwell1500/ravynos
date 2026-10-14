@@ -41,51 +41,41 @@ static void filerOpenBundle(NSString *path){
     if(!path)
         return;
 
-    NSBundle *bundle=[NSBundle bundleWithPath:path];
-    if(bundle==nil){
+    /* Preferred route: WindowServer spawns the bundle for us.  A child forked
+     * from Filer cannot resolve com.ravynos.WindowServer (the bootstrap lookup
+     * that every GUI app performs at startup fails: "[AppKit] Failed to locate
+     * WindowServer service"), so the server does the exec.  It resolves the
+     * bundle's executable itself, so nothing here has to read the Info.plist. */
+    if([[NSApplication sharedApplication] openBundlePath:path])
         return;
-    }
-    NSString *exeName=[bundle objectForInfoDictionaryKey:@"CFBundleExecutable"];
-    NSString *bundleID=[bundle objectForInfoDictionaryKey:@"CFBundleIdentifier"];
-    if(exeName==nil)
-        exeName=[path lastPathComponent];
 
+    /* Fallback: run it locally.  NSBundle is not consulted -- on this tree
+     * bundleWithPath: returns nil for paths that are known-good (measured:
+     * /System/Library/CoreServices/Filer.app), which silently dropped every
+     * bundle launch -- so resolve the executable from the bundle layout. */
+    NSString *name=[[path lastPathComponent] stringByDeletingPathExtension];
     NSString *cands[3];
-    cands[0]=[NSString stringWithFormat:@"%@/Contents/ravynOS/%@",path,exeName];
-    cands[1]=[NSString stringWithFormat:@"%@/Contents/MacOS/%@",path,exeName];
-    cands[2]=[NSString stringWithFormat:@"%@/%@",path,exeName];
+    cands[0]=[NSString stringWithFormat:@"%@/Contents/ravynOS/%@",path,name];
+    cands[1]=[NSString stringWithFormat:@"%@/Contents/MacOS/%@",path,name];
+    cands[2]=[NSString stringWithFormat:@"%@/%@",path,name];
 
     const char *exe=NULL;
     for(int i=0;i<3;i++){
         const char *c=[cands[i] UTF8String];
         if(c!=NULL && access(c,X_OK)==0){ exe=c; break; }
     }
-    if(exe==NULL){
+    if(exe==NULL)
         return;
-    }
-
-    /* Preferred route: WindowServer spawns the bundle for us.  A child forked
-     * from Filer cannot resolve com.ravynos.WindowServer (the bootstrap lookup
-     * that every GUI app performs at startup fails: "[AppKit] Failed to locate
-     * WindowServer service"), so the server does the exec. */
-    if([[NSApplication sharedApplication] openBundlePath:path]){
-        return;
-    }
-
-    if(!bundleID)
-        bundleID=@"com.ravynos.unknown";
 
     pid_t pid=fork();
     if(pid==0){
-        const char *bname=[exeName UTF8String];
+        char argvbuf[512];
+        snprintf(argvbuf,sizeof argvbuf,"%s",name?[name UTF8String]:"app");
         char *argv[2];
-        argv[0]=(char *)bname;
+        argv[0]=argvbuf;
         argv[1]=NULL;
-        char envbuf[256];
-        snprintf(envbuf,sizeof envbuf,"RAVYN_BUNDLE_ID=%s",[bundleID UTF8String]);
-        char *envp[2];
-        envp[0]=envbuf;
-        envp[1]=NULL;
+        char *envp[1];
+        envp[0]=NULL;
         execve(exe,argv,envp);
         _exit(1);
     }
@@ -588,7 +578,12 @@ static uint32_t termAnsiColor(int n) {
 -(NSInteger)indexOfYInWindow:(float)y {
     NSRect b=[self bounds];
     float rowh=15.0f;
-    int idx=(int)((y - (b.origin.y+4.0f))/rowh);
+    /* The event reports a *window* coordinate, so a pane that does not sit at
+     * the window origin has to convert it first -- without this the row index
+     * is measured from the window's bottom edge and every click lands on the
+     * wrong entry (measured: a click on row 0 selected the last row). */
+    NSPoint local=[self convertPoint:NSMakePoint(0.0f,y) fromView:nil];
+    int idx=(int)(((local.y - b.origin.y) - 4.0f)/rowh);
     if(idx<0) idx=0;
     if(_listing && idx>=(int)[_listing count]) idx=(int)[_listing count]-1;
     if(!_listing || idx<0 || ![_listing count]) return -1;
@@ -635,11 +630,8 @@ static uint32_t termAnsiColor(int n) {
         [NSString stringWithFormat:@"/%@",name] :
         [[base stringByAppendingString:@"/"] stringByAppendingString:name];
     if([name hasSuffix:@".app"]){
-        NSBundle *bundle=[NSBundle bundleWithPath:joined];
-        if(bundle != nil){
-            filerOpenBundle(joined);
-            return;
-        }
+        filerOpenBundle(joined);
+        return;
     }
     [self setPath:joined];
 }
@@ -650,12 +642,17 @@ static uint32_t termAnsiColor(int n) {
         NSString *name=[_listing objectAtIndex:idx];
         NSString *base=[self pathValue];
         NSString *joined;
-        if([base isEqualToString:@"/"])
-            joined=[NSString stringWithFormat:@"/%s",name];
-        else
-            joined=[NSString stringWithFormat:@"%@/%s",base,name];
-        /* Opening a folder (or a .app bundle, which is a directory here) simply
-         * re-targets the pane; the listing refresh proves navigation happened. */
+        joined=[base isEqualToString:@"/"] ?
+            [NSString stringWithFormat:@"/%@",name] :
+            [[base stringByAppendingString:@"/"] stringByAppendingString:name];
+        /* This is the double-click a user makes: a folder re-targets the pane,
+         * a .app bundle runs it.  AppKit sends clickCount 2 here rather than a
+         * second -mouseDown:, so the launch branch has to live in this method
+         * (measured: the paired -mouseDown: never saw the second click). */
+        if([name hasSuffix:@".app"] || [name hasSuffix:@".APP"]){
+            filerOpenBundle(joined);
+            return YES;
+        }
         [self setPath:joined];
     }
     return YES;

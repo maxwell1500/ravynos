@@ -1071,3 +1071,41 @@ Running `boot_g101.py` with QEMU TCG (`timeout 700`):
   - `t=60s`: Initial EFI scanout transition.
   - `t=120s` through `t=480s`: 100.0% non-black scanout across all 786,432 pixels with exact signature ravynOS background color `#264059` (RGB `38, 64, 89`).
   - System remained fully responsive, stable, and crash-free through the entire boot budget.
+
+## 14. First Hardware Mouse Input & Dynamic Cursor Motion Verified (g102)
+
+### 1. Architectural Challenge
+Prior to this milestone:
+1. `WindowServer`'s input subsystem (`CoreServices/WindowServer/WSInput.m`) was written strictly for Linux (`libinput` over `udev`). On Darwin, the entire class degraded to a no-op that hardcoded `cursorRect.origin` to the screen center `(512, 384)`.
+2. The XNU kernel had `/dev/fb0` for graphics output, but no character device or driver for mouse input. PureDarwin's `ApplePS2Controller` in `Kernel/Extensions/` implemented keyboard packet translation, but the mouse device driver was never implemented.
+
+### 2. Implementation: Kernel `/dev/mouse` & WindowServer Integration
+1. **Kernel Driver (`Kernel/xnu/bsd/dev/ps2mouse.c`)**:
+   - Created a BSD character device driver interfacing directly with the standard x86 i8042 controller on I/O ports `0x60` (data) and `0x64` (status).
+   - Implemented `open` to enable the auxiliary device (`0xa8`), configure command byte flags, set defaults (`0xf6`), and enable streaming reporting mode (`0xf4`).
+   - Implemented `read` and `select` with hardware port draining into an internal ring buffer, providing 3-byte standard PS/2 packets to userspace via `uiomove`.
+   - Registered as dynamic character device major `9` creating `/dev/mouse` and `/dev/psm0` in devfs.
+   - Wired `ps2mouse_init()` into `Kernel/xnu/bsd/kern/bsd_init.c` and `tools/bootlab/kernel_build.py`.
+2. **WindowServer Integration (`WSInput.m` & `WindowServer.m`)**:
+   - Added non-Linux support to `WSInput` to open `/dev/mouse` with non-blocking reads.
+   - Decoded 3-byte PS/2 motion/button packets: extracted `dx` and `dy`, updated `pointerX` and `pointerY`, and dispatched `NSMouseMoved`/`NSLeftMouseDown`/`NSLeftMouseUp` events.
+   - Enabled `WSInput` unconditionally on Darwin in `WindowServer.m`.
+   - Implemented crisp, high-contrast fallback cursor rendering (black frame with white core) using `O2ContextFillRect` to ensure zero recursion and zero dependence on optional image decoders.
+
+### 3. Verification & Observables (g102)
+Running `boot_g102.py` with QEMU monitor mouse commands:
+- **Kernel Device Registration**:
+  `ps2mouse: registered character device major 9 (/dev/mouse, /dev/psm0)`
+  `ps2mouse: opened and streaming enabled`
+- **WindowServer Startup**:
+  `[WS] creating WSInput`
+  `[WSInput] opened /dev/mouse successfully`
+- **Stability**:
+  - **0 CORPSES / 0 crashes** across the entire OS session.
+  - Over 20,800 active frame renders (`[WS] fb draw #20820`).
+- **Dynamic Cursor Tracking (Screendump Pixel Proof)**:
+  - At `t=120s`: 196 cursor pixels, bounding box `X=[512, 525], Y=[394, 407]`, center `(518, 400)` (default center of 1024x768 screen).
+  - At `t=180s`: 196 cursor pixels, bounding box `X=[512, 525], Y=[394, 407]`, center `(518, 400)` (stationary).
+  - At `t=240s` (after 10x `mouse_move 50 30` QEMU commands):
+    168 cursor pixels, bounding box `X=[1012, 1023], Y=[694, 707]`, center `(1017, 700)`!
+  - **Definitive proof**: The on-screen cursor physically travelled across the display from `(518, 400)` to `(1017, 700)` in response to hardware mouse packets delivered through `/dev/mouse`.
