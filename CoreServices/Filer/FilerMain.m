@@ -101,6 +101,9 @@ static void filerOpenBundle(NSString *path){
 }
 
 -(void)drawRect:(NSRect)dirty {
+    /* Same as FileBrowserView: without the super call the view's backing was
+     * never established and the whole pane came out blank. */
+    [super drawRect:dirty];
     NSSize sz=[self bounds].size;
     CGContextRef ctx=[[[self window] graphicsContext] graphicsPort];
     if(ctx==NULL)
@@ -770,6 +773,10 @@ static uint32_t termAnsiColor(int n) {
 }
 
 -(void)drawRect:(NSRect)dirty {
+    /* ClockView's text path works only because it lets the superclass set the
+     * view up first; this pane and TerminalView both omitted it and painted
+     * nothing. */
+    [super drawRect:dirty];
     NSRect b=[self bounds];
     NSSize sz=b.size;
     NSString *p=[self pathValue];
