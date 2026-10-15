@@ -202,7 +202,6 @@ static void filerOpenBundle(NSString *path){
     return self;
 }
 
-static int ravyn_fill_count = 0; /*TEMP*/
 static void drawChar8x16(CGContextRef ctx, int x, int y, char c, CGFloat r, CGFloat g, CGFloat b) {
     if(c < 32 || c > 126) c = ' ';
     const unsigned char *glyph = term_font_8x16[c - 32];
@@ -211,7 +210,6 @@ static void drawChar8x16(CGContextRef ctx, int x, int y, char c, CGFloat r, CGFl
         unsigned char mask = glyph[row];
         for(int col = 0; col < 8; col++) {
             if((mask >> (7 - col)) & 1) {
-                ravyn_fill_count++; /*TEMP*/
                 CGContextFillRect(ctx, NSMakeRect(x + col, y + (15 - row), 1, 1));
             }
         }
@@ -782,6 +780,10 @@ static uint32_t termAnsiColor(int n) {
         : [NSDictionary dictionaryWithObjects:@[[NSColor blackColor]]
             forKeys:@[NSForegroundColorAttributeName]];
     NSAttributedString *hdr=[[NSAttributedString alloc] initWithString:p attributes:attrs];
+    /* Header sits at the top-left, under the window's title bar, and every
+     * listing row flows downward from just below it.  The old code anchored
+     * rows at y+4 and never cleared the view, so the accumulated glyph coverage
+     * of earlier draws sat behind the first visible row. */
     [hdr drawInRect:NSMakeRect(b.origin.x+4,sz.height+b.origin.y-16,sz.width-8,13)];
     if(_listing==nil) return;
     int n=(int)_listing.count;
@@ -797,7 +799,12 @@ static uint32_t termAnsiColor(int n) {
             : [NSDictionary dictionaryWithObjects:@[col]
                 forKeys:@[NSForegroundColorAttributeName]];
         NSAttributedString *line=[[NSAttributedString alloc] initWithString:name attributes:ra];
-        [line drawInRect:NSMakeRect(b.origin.x+6,b.origin.y+4+i*rowh,sz.width-10,rowh-3)];
+        /* Use exactly the idiom the header above uses (rect height 13, origin
+         * derived from sz.height - not b.origin.y plus a height computed from
+         * the view's own size).  With rowh-3 and a y scaled from the view's
+         * own height the same string drew as a solid bar: the rect was tall
+         * enough that every glyph's coverage saturated and the rows merged. */
+        [line drawInRect:NSMakeRect(b.origin.x+6,sz.height+b.origin.y-31-i*rowh,sz.width-12,13)];
     }
 }
 

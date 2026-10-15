@@ -70,11 +70,70 @@
 }
 
 @end
+
+#define PANE_ICON_BOX 72
+
+/* NSButton keeps its artwork in an NSCell and this tree never paints
+ * cell-based views, so a button holding setImage:/setTitle: drew nothing at
+ * all -- that was the invisible Preference pane grid.  This cell composites
+ * the icon and the label itself, using the graphicsPort + drawInRect: idiom
+ * which does work on this tree (Filer rows, Dock tiles, PanePanelView). */
+@interface PaneButtonCell : NSButtonCell {
+    NSImage *_iconImage;
+}
+-(void)setImage:(NSImage *)image;
+-(void)drawInteriorWithFrame:(NSRect)cellFrame inView:(NSView *)controlView;
+@end
+
+@implementation PaneButtonCell
+
+/* NSCell has no public -image on this tree, so the button's image (stored via
+ * -setImage: on the button) is reached through the cell's NSAttributedCell
+ * family; hold a direct reference set alongside -setImage: below. */
+-(NSImage *)image { return _iconImage; }
+-(void)setImage:(NSImage *)image { _iconImage = image; }
+
+-(void)drawInteriorWithFrame:(NSRect)cellFrame inView:(NSView *)controlView {
+    CGContextRef port = [[[controlView window] graphicsContext] graphicsPort];
+    if(port == NULL)
+        return;
+    NSImage *img = [self image];
+    float w = cellFrame.size.width;
+    float iconBox = PANE_ICON_BOX;
+    float x = cellFrame.origin.x + (w - iconBox)/2;
+    if(img != nil)
+        [img drawInRect:NSMakeRect(x, cellFrame.origin.y + 24, iconBox, iconBox)
+               fromRect:NSZeroRect
+              operation:NSCompositingOperationSourceOver
+               fraction:1.0];
+
+    NSString *title = [self title];
+    if(title == nil)
+        return;
+    NSFont *titleFont = [self font];
+    if(titleFont == nil)
+        titleFont = [NSFont fontWithName:@"Inter-Regular" size:11];
+    NSDictionary *attributes = (titleFont != nil)
+        ? [NSDictionary dictionaryWithObjects:@[titleFont, [NSColor blackColor]]
+            forKeys:@[NSFontAttributeName, NSForegroundColorAttributeName]]
+        : [NSDictionary dictionaryWithObjects:@[[NSColor blackColor]]
+            forKeys:@[NSForegroundColorAttributeName]];
+    NSAttributedString *line = [[NSAttributedString alloc] initWithString:title
+                                                              attributes:attributes];
+    NSSize measured = [line size];
+    float tx = cellFrame.origin.x + (w - measured.width)/2;
+    if(tx < cellFrame.origin.x + 2)
+        tx = cellFrame.origin.x + 2;
+    [line drawInRect:NSMakeRect(tx, cellFrame.origin.y + 4, measured.width + 4, 20)];
+}
+
+@end
 @implementation SystemPreferences
 
 const float windowWidth = 668; // Apple uses a fixed width and grows vertically
 const float size = 96; // icon & label container size
 const float spacer = 8; // icon spacing
+
 
 -(void)applicationWillFinishLaunching:(NSNotification *)note {
     doubleClickInterval = [[NSDisplay currentDisplay] doubleClickInterval];
@@ -153,9 +212,15 @@ const float spacer = 8; // icon spacing
         [container setBordered:NO];
         [container setImagePosition:NSImageAbove];
         [container setAction:@selector(iconClicked:)];
+        /* See PaneButtonCell above: this tree paints no cell-based view, so the
+         * button's own cell is swapped for one that composites itself. */
+        PaneButtonCell *cell = [[PaneButtonCell alloc] initTextCell:@""];
+        [container setCell:cell];
 
-        [container setImage:[[NSImage alloc] initWithContentsOfFile:iconPath]];
-        [[container image] setScalesWhenResized:YES];
+        NSImage *img = [[NSImage alloc] initWithContentsOfFile:iconPath];
+        [container setImage:img];
+        [cell setImage:img];
+        [img setScalesWhenResized:YES];
         [[container image] setSize:NSMakeSize(size - 24, size - 24)];
 
         [container setFont:font];

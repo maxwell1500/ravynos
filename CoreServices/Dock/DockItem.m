@@ -220,9 +220,15 @@ kern_return_t _windowServerRPC(void *data, size_t len, void *replyBuf, int *repl
 
 -(void)setTileSize:(NSSize)size {
     NSSize framesize = size;
-    framesize.height += 16;
+    /* The run marker sits under the icon (RUNMK_DIAMETER + 2*RUNMK_SPACER,
+     * 12px) so the window is taller than the artwork.  Keep the icon centred in
+     * the strip between the marker and the top: `size` alone would push a 64px
+     * icon to y=12..76 of an 80px tile and clip its bottom edge against the
+     * rounded tray. */
+    framesize.height += RUNMK_DIAMETER+2*RUNMK_SPACER;
     [self setFrameSize:framesize];
     [_icon setFrameSize:size];
+    [_icon setFrameOrigin:NSMakePoint(0,RUNMK_DIAMETER+2*RUNMK_SPACER)];
     [self setNeedsDisplay:YES];
 }
 

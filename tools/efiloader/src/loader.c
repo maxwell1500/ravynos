@@ -817,8 +817,8 @@ static u64 find_block(const u8 *map, u64 n, u64 dsz,
 /* ------------------------------------------------------------------ */
 
 #define GOP_MAX_MODES  32      /* candidates we keep, best score first */
-#define GOP_PREF_W     1024
-#define GOP_PREF_H     768
+#define GOP_PREF_W     1920
+#define GOP_PREF_H     1080
 #define GOP_MAX_DIM    2048
 #define GOP_MISMATCH   1000000ULL   /* usable, but the pixel layout is not ours */
 
@@ -906,7 +906,14 @@ static u64 gop_score(const EFI_GRAPHICS_OUTPUT_MODE_INFORMATION *m)
 	dh = (h > GOP_PREF_H ? h - GOP_PREF_H : GOP_PREF_H - h);
 	s = dw + dh;
 	if (!gop_is_xrgb32(m)) s += GOP_MISMATCH;
-	return s ? s : 1;           /* an exact 1024x768x32 still has to rank */
+	/* Rank by area as well: of the modes still tied the desktop wants the
+	 * bigger one.  GOP_PREF_W/H is the target resolution; this only orders
+	 * the modes equidistant from it. */
+	if (s) {
+		u64 area = (u64)w * h;
+		s = s * 100000ULL + (100000000000ULL - area) / 1000ULL;
+	}
+	return s ? s : 1;
 }
 
 static EFI_GRAPHICS_OUTPUT_PROTOCOL *gop_find(EFI_BOOT_SERVICES *BS,

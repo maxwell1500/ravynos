@@ -53,12 +53,12 @@ SOFTWARE. */
     * CGDisplayCopyColorSpace() are all blocking Mach IPC calls to the
     * WindowServer, and the WindowServer is busy in its render loop and
     * does not respond in time.  Use hardcoded values matching the
-    * QEMU fb0 framebuffer (1024x768x32).  The display list is
+    * QEMU fb0 framebuffer (1920x1080x32).  The display list is
     * populated from the WindowServer's side anyway. */
    _eventQueue=[NSMutableArray new];
    _screens = [NSMutableArray new];
 
-   NSRect frame = NSMakeRect(0, 0, 1024, 768);
+   NSRect frame = NSMakeRect(0, 0, 1920, 1080);
    NSRect visFrame = frame;
    visFrame.size.height -= MENU_BAR_HEIGHT;
    NSScreen *screen = [[[NSScreen alloc] initWithFrame:frame visibleFrame:visFrame] retain];

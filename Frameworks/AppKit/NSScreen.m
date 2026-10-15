@@ -36,7 +36,7 @@ NSString * const NSScreenColorSpaceDidChangeNotification = @"NSScreenColorSpaceD
 -initWithFrame:(NSRect)frame visibleFrame:(NSRect)visibleFrame {
     _frame=frame;
     _visibleFrame=visibleFrame;
-    _backingScaleFactor = 1.0;
+    _backingScaleFactor = 2.0;
     _maximumPotentialExtendedDynamicRangeColorComponentsValue = 1.0;
     _maximumExtendedDynamicRangeColorComponentValue = 1.0;
     _maximumReferenceExtendedDynamicRangeColorComponentValue = 0;

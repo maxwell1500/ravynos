@@ -68,6 +68,13 @@ static void drawFreeTypeBitmap(O2Context_builtin_FT *self,O2Surface *surface,FT_
     O2argb8u *src=srcBuffer;
     int        rowX=x;
 
+    /* Same reason, for the glyph's own coverage rows: FreeType pads each row
+     * to bitmap->pitch, so advancing by the summed chunk widths drifts the
+     * coverage pointer by (pitch - width) per scanline and the rows after the
+     * first read whatever follows the bitmap -- saturated coverage, which
+     * paints the glyph as a solid block of the fill colour. */
+    coverage=bitmap->buffer+row*bitmap->pitch;
+
     O2argb8u *direct=surface->_read_argb8u(surface,x,y,dst,length);
 
     if(direct!=NULL)
@@ -76,12 +83,17 @@ static void drawFreeTypeBitmap(O2Context_builtin_FT *self,O2Surface *surface,FT_
     while(YES){
      int chunk=O2PaintReadSpan_argb8u_PRE(paint,x,y,src,length);
       
-     if(chunk<0)
+     if(chunk<0){
       chunk=-chunk;
+     }
      else {
 
-      self->_blend_argb8u_PRE(src,dst,chunk);
-      
+      /* The coverage blend below is the whole compositing step, exactly as
+       * O2RasterizeWriteCoverageSpan8888_Normal does it in Onyx2D's
+       * O2Context_builtin.m.  Blending src into dst at full opacity first
+       * (as this did) leaves dst holding the fill colour, so the coverage
+       * pass then has nothing left to modulate and every glyph cell lands
+       * as a solid block of paint. */
       applyCoverageToSpan_lRGBA8888_PRE(dst,coverage,src,chunk);
 
       if(direct==NULL)
@@ -115,6 +127,7 @@ static void drawFreeTypeBitmap(O2Context_builtin_FT *self,O2Surface *surface,FT_
    	NSMakePoint(_textMatrix.tx,_textMatrix.ty),transform);
 
    [self establishFontStateInDeviceIfDirty];
+
 
    O2Font_FT *font=(O2Font_FT *)gState->_font;
    FT_Face    face=[font face];

@@ -56,12 +56,7 @@ extern pthread_mutex_t mtx;
     return self;
 }
 
-/* TEMP: does an event reach this window at all, and where does AppKit think
- * the click was?  Integer formats only: this libc's printf does not implement
- * %f/%g and prints <UNSUPPORTED-CONVERSION> instead. */
 -(void)sendEvent:(NSEvent *)event {
-        (int)[event type], (int)[event locationInWindow].x,
-        (int)[event locationInWindow].y, (int)[self windowNumber]);
     [super sendEvent:event];
 }
 
