@@ -303,7 +303,9 @@ extern Dock *dock; // our singleton object in main.m
     NSPoint itemPos = NSMakePoint(8, 0);
     NSSize size = NSMakeSize(_tileSize, _tileSize);
 
-    for(int i = 0; i < maxItems - 1; ++i) {
+    /* maxItems already counts the items that fit, so the bound is < maxItems:
+     * < maxItems - 1 silently dropped the last tile. */
+    for(int i = 0; i < maxItems; ++i) {
         DockItem *item = [_items objectAtIndex:i];
 
         // Put a divider in the space between persistent and special tiles
