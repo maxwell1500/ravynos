@@ -164,6 +164,7 @@ kern_return_t _windowServerRPC(void *data, size_t len, void *replyBuf, int *repl
     }
 
     _origIcon = _icon;
+    [_icon setHidden:YES];
     [self addSubview:_icon];
 
     _flags = DIF_NORMAL;
@@ -215,6 +216,7 @@ kern_return_t _windowServerRPC(void *data, size_t len, void *replyBuf, int *repl
     [[_icon image] setScalesWhenResized:YES];
 
     _origIcon = _icon;
+    [_icon setHidden:YES];
     [self addSubview:_icon];
 
     if(appItem != nil) {
@@ -237,25 +239,7 @@ kern_return_t _windowServerRPC(void *data, size_t len, void *replyBuf, int *repl
 }
 
 -(void)drawRect:(NSRect)rect {
-    [super drawRect:rect];
-
-    // Composite the tile's icon with CoreGraphics.  This tree's control layer
-    // has no working draw path, so an NSImageView added as a subview never
-    // reliably puts pixels on screen; DockView paints the tray behind the
-    // tiles the same way this paints the artwork on top of it.
-    if(_iconImage == NULL || _icon == nil)
-        return;
-
-    // NB: DockItem declares its own -window returning the window *ID*, which
-    // shadows NSView's.  Reach past it for the NSWindow.
-    CGContextRef context = [[[super window] graphicsContext] graphicsPort];
-    if(context == NULL)
-        return;
-
-    NSRect box = [_icon frame];
-    CGContextDrawImage(context,
-        CGRectMake(box.origin.x, box.origin.y, box.size.width, box.size.height),
-        _iconImage);
+    // Tile icons are composited directly by DockView's drawRect: into the tray pass.
 }
 
 -(void)drawIconInContext:(CGContextRef)context {

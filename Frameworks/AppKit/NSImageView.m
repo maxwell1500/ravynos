@@ -140,13 +140,16 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
     NSPoint org;
     org.x=bnds.origin.x+(fsz.width-dsz.width)/2;
     org.y=bnds.origin.y+(fsz.height-dsz.height)/2;
-    CGContextRef port=[[[self window] graphicsContext] graphicsPort];
-    if(port==NULL)
+    NSGraphicsContext *winCtx = [[self window] graphicsContext];
+    if(winCtx == nil)
         return;
+    NSGraphicsContext *prev = [NSGraphicsContext currentContext];
+    [NSGraphicsContext setCurrentContext:winCtx];
     [img drawInRect:NSMakeRect(org.x,org.y,dsz.width,dsz.height)
         fromRect:NSZeroRect
         operation:NSCompositingOperationSourceOver
         fraction:1.0];
+    [NSGraphicsContext setCurrentContext:prev];
 }
 
 @end

@@ -493,15 +493,6 @@ extern Dock *dock; // our singleton object in main.m
 
 @implementation Divider
 -(void)drawRect:(NSRect)rect {
-    [[NSColor darkGrayColor] set];
-    NSBezierPath *line = [NSBezierPath bezierPath];
-    if (NSWidth(_bounds) > NSHeight(_bounds)) {
-        [line moveToPoint: NSMakePoint(NSMinX(_bounds), NSMidY(_bounds))];
-        [line lineToPoint: NSMakePoint(NSMaxX(_bounds), NSMidY(_bounds))];
-    } else {
-        [line moveToPoint: NSMakePoint(NSMidX(_bounds), NSMinY(_bounds))];
-        [line lineToPoint: NSMakePoint(NSMidX(_bounds), NSMaxY(_bounds))];
-    }
-    [line stroke];
+    // Divider is stroked directly by DockView's drawRect: in the tray pass.
 }
 @end
