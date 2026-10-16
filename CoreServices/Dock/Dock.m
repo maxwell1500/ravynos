@@ -268,6 +268,30 @@ extern Dock *dock; // our singleton object in main.m
 
 // size the window to our number of items. if it exceeds the screen size, shrink the tiles
 // until it fits or we reach the minimum tile size. truncate items if we can't display them.
+-(DockItem *)itemAtDisplayIndex:(int)idx ofTotal:(int)displayCount {
+    if(displayCount < [_items count] && idx == displayCount - 1)
+        return [_items objectAtIndex:[_items count] - 1];
+    return [_items objectAtIndex:idx];
+}
+
+-(int)calculateLengthForItems:(int)count {
+    if(count <= 0)
+        return 2 * END_CAP;
+    int len = 2 * END_CAP;
+    for(int i = 0; i < count; ++i) {
+        if(i > 0) {
+            DockItem *curr = [self itemAtDisplayIndex:i ofTotal:count];
+            DockItem *prev = [self itemAtDisplayIndex:i-1 ofTotal:count];
+            if([curr isSpecial] && ![prev isSpecial])
+                len += DIVIDER_SPACE;
+            else
+                len += CELL_SPACER;
+        }
+        len += _tileSize;
+    }
+    return len;
+}
+
 -(int)fitWindowToItems {
     NSSize scrSize = [[NSScreen mainScreen] visibleFrame].size;
 
@@ -276,15 +300,15 @@ extern Dock *dock; // our singleton object in main.m
     int needLength;
 
     do {
-        needLength = numItems * _tileSize + numItems * CELL_SPACER + 2 * END_CAP;
+        needLength = [self calculateLengthForItems:numItems];
         if(needLength > maxLength)
             _tileSize -= 8;
     } while(needLength > maxLength && _tileSize > TILESIZE_MIN);
-    
+
     int maxItems = numItems;
     while(needLength > maxLength && maxItems > 0) {
         --maxItems;
-        needLength = maxItems * _tileSize + maxItems * CELL_SPACER + 2 * END_CAP;
+        needLength = [self calculateLengthForItems:maxItems];
     }
 
     if(_location == LOCATION_BOTTOM) {
@@ -301,28 +325,43 @@ extern Dock *dock; // our singleton object in main.m
 -(void)placeItemsInWindow:(int)maxItems {
     if(maxItems < [_items count])
         NSLog(@"Warning: truncating some items to fit the screen");
-    NSPoint itemPos = NSMakePoint(8, 0);
+
+    NSArray *existing = [[[_window contentView] subviews] copy];
+    for(NSView *v in existing) {
+        [v removeFromSuperview];
+    }
+
+    NSPoint itemPos;
+    if(_location == LOCATION_BOTTOM)
+        itemPos = NSMakePoint(END_CAP, 0);
+    else
+        itemPos = NSMakePoint(0, END_CAP);
+
     NSSize size = NSMakeSize(_tileSize, _tileSize);
+    int count = (maxItems < [_items count]) ? maxItems : (int)[_items count];
 
-    /* maxItems already counts the items that fit, so the bound is < maxItems:
-     * < maxItems - 1 silently dropped the last tile. */
-    for(int i = 0; i < maxItems; ++i) {
-        DockItem *item = [_items objectAtIndex:i];
+    for(int i = 0; i < count; ++i) {
+        DockItem *item = [self itemAtDisplayIndex:i ofTotal:count];
 
-        // Put a divider in the space between persistent and special tiles
-        if([item isSpecial] && i > 0 && ![[_items objectAtIndex:i-1] isSpecial]) {
-            NSRect rect;
-            if(_location == LOCATION_BOTTOM) {
-                rect = NSMakeRect(itemPos.x, 8, CELL_SPACER, _tileSize);
-                itemPos.x += CELL_SPACER + 2;
+        if(i > 0) {
+            DockItem *prev = [self itemAtDisplayIndex:i-1 ofTotal:count];
+            if([item isSpecial] && ![prev isSpecial]) {
+                NSRect rect;
+                if(_location == LOCATION_BOTTOM) {
+                    rect = NSMakeRect(itemPos.x + (DIVIDER_SPACE - 2) / 2, 8, 2, _tileSize);
+                    itemPos.x += DIVIDER_SPACE;
+                } else {
+                    rect = NSMakeRect(8, itemPos.y + (DIVIDER_SPACE - 2) / 2, _tileSize, 2);
+                    itemPos.y += DIVIDER_SPACE;
+                }
+                Divider *divider = [[Divider alloc] initWithFrame:rect];
+                [[_window contentView] addSubview:divider];
             } else {
-                rect = NSMakeRect(8, itemPos.y, _tileSize, CELL_SPACER);
-                itemPos.y += CELL_SPACER + 2;
+                if(_location == LOCATION_BOTTOM)
+                    itemPos.x += CELL_SPACER;
+                else
+                    itemPos.y += CELL_SPACER;
             }
-
-            Divider *divider = [[Divider alloc] initWithFrame:rect];
-            [divider setNeedsDisplay:YES];
-            [[_window contentView] addSubview:divider];
         }
 
         [item setFrameOrigin:itemPos];
@@ -331,17 +370,11 @@ extern Dock *dock; // our singleton object in main.m
         [item _installTileClickProxy];
 
         if(_location == LOCATION_BOTTOM)
-            itemPos.x += _tileSize + CELL_SPACER / 2;
+            itemPos.x += _tileSize;
         else
-            itemPos.y += _tileSize + CELL_SPACER / 2;
+            itemPos.y += _tileSize;
     }
 
-    // make sure Trash comes last
-    DockItem *item = [_items objectAtIndex:[_items count] - 1];
-    [item setFrameOrigin:itemPos];
-    [item setTileSize:size];
-    [[_window contentView] addSubview:item];
-    [item _installTileClickProxy];
     [[_window contentView] setNeedsDisplay:YES];
 }
 
@@ -436,8 +469,22 @@ extern Dock *dock; // our singleton object in main.m
     // when it is itself dirty, so its artwork gets erased and never comes
     // back.  Composite the tile icons here, in the same pass as the tray.
     for(NSView *view in [self subviews]) {
-        if([view isKindOfClass:[DockItem class]])
+        if([view isKindOfClass:[DockItem class]]) {
             [(DockItem *)view drawIconInContext:context];
+        } else if([view isKindOfClass:[Divider class]]) {
+            NSRect df = [view frame];
+            CGContextSetRGBStrokeColor(context, 0.45, 0.45, 0.45, 0.85);
+            CGContextSetLineWidth(context, 1.5);
+            CGContextBeginPath(context);
+            if(df.size.width > df.size.height) {
+                CGContextMoveToPoint(context, df.origin.x + 4, df.origin.y + df.size.height/2);
+                CGContextAddLineToPoint(context, df.origin.x + df.size.width - 4, df.origin.y + df.size.height/2);
+            } else {
+                CGContextMoveToPoint(context, df.origin.x + df.size.width/2, df.origin.y + 8);
+                CGContextAddLineToPoint(context, df.origin.x + df.size.width/2, df.origin.y + df.size.height - 8);
+            }
+            CGContextStrokePath(context);
+        }
     }
 
     [self setNeedsDisplay:YES];

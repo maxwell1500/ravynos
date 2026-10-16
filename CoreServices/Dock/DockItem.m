@@ -268,6 +268,13 @@ kern_return_t _windowServerRPC(void *data, size_t len, void *replyBuf, int *repl
         CGRectMake(tile.origin.x + box.origin.x, tile.origin.y + box.origin.y,
                    box.size.width, box.size.height),
         _iconImage);
+
+    if(_isRunning) {
+        CGContextSetRGBFillColor(context, 0.95, 0.95, 0.95, 1.0);
+        float cx = tile.origin.x + tile.size.width / 2.0;
+        float cy = tile.origin.y + RUNMK_SPACER + RUNMK_DIAMETER / 2.0;
+        CGContextFillEllipseInRect(context, CGRectMake(cx - 2.5, cy - 2.5, 5.0, 5.0));
+    }
 }
 
 -(void)setTileSize:(NSSize)size {
