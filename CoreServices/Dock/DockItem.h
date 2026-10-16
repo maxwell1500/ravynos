@@ -58,6 +58,7 @@ typedef enum DockItemFlags DockItemFlags;
     NSString *_badgeText;
     NSImageView *_badge;    // small app icon badge for window items
     NSImageView *_icon;
+    CGImageRef _iconImage;  // icon composited by drawRect: (the control layer never paints)
     NSImageView *_origIcon; // original icon we found, to revert custom icons
     NSImageView *_runMarker;
     BOOL _isRunning;
@@ -71,6 +72,7 @@ typedef enum DockItemFlags DockItemFlags;
 -(DockItem *)initWithPath:(NSString *)path;
 -(DockItem *)initWithMinimizedWindow:(unsigned int)window forApp:(DockItem *)item;
 -(void)setTileSize:(NSSize)size;
+-(void)drawIconInContext:(CGContextRef)context;
 
 -(NSString *)path;
 -(NSString *)execPath;

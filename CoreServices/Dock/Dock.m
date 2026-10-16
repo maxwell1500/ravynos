@@ -26,6 +26,7 @@
 #import <AppKit/NSRaise.h>
 #import <CoreGraphics/CGWindowLevel.h>
 #import "Dock.h"
+#import "DockItem.h"
 #import "DockTileData.h"
 #import "DesktopWindow.h"
 #import "WindowServer/message.h"
@@ -429,6 +430,15 @@ extern Dock *dock; // our singleton object in main.m
     CGContextAddLineToPoint(context, _frame.origin.x, NSMaxY(_frame));
     CGContextClosePath(context);
     CGContextFillPath(context);
+
+    // The tiles are subviews, but this view marks itself dirty at the end of
+    // every draw and repaints the whole tray opaquely.  A tile only repaints
+    // when it is itself dirty, so its artwork gets erased and never comes
+    // back.  Composite the tile icons here, in the same pass as the tray.
+    for(NSView *view in [self subviews]) {
+        if([view isKindOfClass:[DockItem class]])
+            [(DockItem *)view drawIconInContext:context];
+    }
 
     [self setNeedsDisplay:YES];
 }

@@ -71,6 +71,7 @@ kern_return_t _windowServerRPC(void *data, size_t len, void *replyBuf, int *repl
     _label = nil;
     _type = DIT_INVALID;
     _icon = nil;
+    _iconImage = NULL;
     _bundleID = nil;
     _app = nil;
     _isRunning = NO;
@@ -145,6 +146,23 @@ kern_return_t _windowServerRPC(void *data, size_t len, void *replyBuf, int *repl
         [_icon setImageScaling:NSImageScaleProportionallyUpOrDown];
     }
 
+    // Whatever the branches above loaded, pull a CGImage out of it so
+    // drawRect: can composite the icon directly.  The control layer in this
+    // tree never paints -- an NSImageView has no working draw path -- so a
+    // tile that relies on one stays blank.  DockView paints the tray behind
+    // the tiles with raw CoreGraphics, and this does the same for the icon.
+    {
+        NSArray *reps = [[_icon image] representations];
+        NSUInteger i, count = [reps count];
+        for(i = 0; i < count; ++i) {
+            NSImageRep *rep = [reps objectAtIndex:i];
+            if([rep isKindOfClass:[NSBitmapImageRep class]]) {
+                _iconImage = CGImageRetain([(NSBitmapImageRep *)rep CGImage]);
+                break;
+            }
+        }
+    }
+
     _origIcon = _icon;
     [self addSubview:_icon];
 
@@ -216,6 +234,40 @@ kern_return_t _windowServerRPC(void *data, size_t len, void *replyBuf, int *repl
     [_icon setTarget:self];
     [_icon setAction:@selector(activateWindow:)];
     return self;
+}
+
+-(void)drawRect:(NSRect)rect {
+    [super drawRect:rect];
+
+    // Composite the tile's icon with CoreGraphics.  This tree's control layer
+    // has no working draw path, so an NSImageView added as a subview never
+    // reliably puts pixels on screen; DockView paints the tray behind the
+    // tiles the same way this paints the artwork on top of it.
+    if(_iconImage == NULL || _icon == nil)
+        return;
+
+    // NB: DockItem declares its own -window returning the window *ID*, which
+    // shadows NSView's.  Reach past it for the NSWindow.
+    CGContextRef context = [[[super window] graphicsContext] graphicsPort];
+    if(context == NULL)
+        return;
+
+    NSRect box = [_icon frame];
+    CGContextDrawImage(context,
+        CGRectMake(box.origin.x, box.origin.y, box.size.width, box.size.height),
+        _iconImage);
+}
+
+-(void)drawIconInContext:(CGContextRef)context {
+    if(_iconImage == NULL || _icon == nil || context == NULL)
+        return;
+
+    NSRect tile = [self frame];
+    NSRect box = [_icon frame];
+    CGContextDrawImage(context,
+        CGRectMake(tile.origin.x + box.origin.x, tile.origin.y + box.origin.y,
+                   box.size.width, box.size.height),
+        _iconImage);
 }
 
 -(void)setTileSize:(NSSize)size {
