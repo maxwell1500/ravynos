@@ -6,8 +6,13 @@
 Layout comes from the committed head/tail templates (verbatim golden bytes:
 MBR + GPT + BPB + FSInfo + reserved sectors, plus backup-GPT tail), so the
 firmware-visible geometry is bit-identical to the proven golden image.
+--size-mib N (N > 512) synthesizes larger templates from those same bytes.
 The tree itself is defined by a manifest: manifest.json for the standard
 image, manifest_dynamic.json for the dynamic-userland gate.
+
+Manifest entry sources: glob, asset, kernel, init, init_exec, file, text, and
+tree (stage a directory recursively; a path that collides with any other
+entry is a manifest error and aborts the build).
 
 Kernel selection (newest wins):
   --kernel PATH  >  work/stripped_kernel.development  >  assets/kernel.development
@@ -69,16 +74,34 @@ def main():
                          "conformant GPT the UEFI shell no longer maps fs0: "
                          "and the kernel never starts. See "
                          "gpt_conform.py and the report before enabling.")
+    ap.add_argument("--size-mib", type=int, default=512,
+                    help="image size in MiB (default 512). 512 uses the "
+                         "committed head/tail templates byte for byte; a "
+                         "larger size synthesizes templates from them with "
+                         "fat32img.synth_templates (grows the FAT and the "
+                         "partition, keeps the GPT/MBR/BPB layout).")
+    ap.add_argument("--skip-verify", action="store_true",
+                    help="stop after the write pass (skips read-back verify + "
+                         "digest sidecar; useful for iteration cycles where a "
+                         "separate targeted check is enough)")
     ap.add_argument("--manifest",
                     help="manifest file, relative to tools/bootlab or absolute "
                          "(default manifest.json)")
     args = ap.parse_args()
+
+    if args.size_mib < 512:
+        sys.exit("--size-mib below 512 is not supported (golden template floor)")
 
     mpath = args.manifest or "manifest.json"
     if not os.path.isabs(mpath):
         mpath = os.path.join(HERE, mpath)
     with open(mpath) as f:
         man = json.load(f)
+
+    sys.path.insert(0, HERE)
+    import fat32img
+    geom = None if args.size_mib == 512 else \
+        fat32img.geometry_for_size(args.size_mib * 1024 * 1024)
 
     kern = newest_kernel(args.kernel)
     init = ensure_init_exec() if needs_init_exec(man) else ensure_init()
@@ -106,14 +129,33 @@ def main():
     # every image the harness builds from now on.  gpt_conform.check() then
     # asserts the result on EVERY build, so this cannot regress silently.
     # ------------------------------------------------------------------
+    # Template sources: committed assets for 512 MiB, synthesized for a grown
+    # image (same GPT/MBR/BPB bytes with the size fields and CRCs rewired).
+    head_src = os.path.join(HERE, "assets", "template_head.bin")
+    tail_src = os.path.join(HERE, "assets", "template_tail.bin")
+    if geom is not None:
+        syn_head, syn_tail = fat32img.synth_templates(
+            geom, open(head_src, "rb").read(), open(tail_src, "rb").read())
+        head_src = os.path.join(HERE, "work",
+                                "template_head.%dmib.bin" % args.size_mib)
+        tail_src = os.path.join(HERE, "work",
+                                "template_tail.%dmib.bin" % args.size_mib)
+        os.makedirs(os.path.join(HERE, "work"), exist_ok=True)
+        open(head_src, "wb").write(syn_head)
+        open(tail_src, "wb").write(syn_tail)
+        print("geometry:       %d MiB  spf=%d  max_cluster=%d  data_off=0x%x  "
+              "partition LBA [%d, %d]"
+              % (args.size_mib, geom.spf_sectors, geom.max_cluster,
+                 geom.data_off, geom.part_first_lba, geom.part_last_lba))
+
     if args.gpt_conform:
       sys.path.insert(0, HERE)
       import gpt_conform
       os.makedirs(os.path.join(HERE, "work"), exist_ok=True)
       fixed_head = os.path.join(HERE, "work", "template_head.gptfix.bin")
       fixed_tail = os.path.join(HERE, "work", "template_tail.gptfix.bin")
-      head = bytearray(open(os.path.join(HERE, "assets", "template_head.bin"), "rb").read())
-      tail = bytearray(open(os.path.join(HERE, "assets", "template_tail.bin"), "rb").read())
+      head = bytearray(open(head_src, "rb").read())
+      tail = bytearray(open(tail_src, "rb").read())
       HEAD_ENTRY_OFF = 1024                        # primary entry array, LBA 2
       tail_hdr = tail.find(b"EFI PART")
       if tail_hdr < 0:
@@ -131,11 +173,10 @@ def main():
       open(fixed_head, "wb").write(bytes(head))
       open(fixed_tail, "wb").write(bytes(tail))
       b = ImageBuilder(fixed_head, fixed_tail, args.out,
-                       man.get("volume", "RAVYNOS"))
+                       man.get("volume", "RAVYNOS"), geom=geom)
     else:
-      b = ImageBuilder(os.path.join(HERE, "assets", "template_head.bin"),
-                       os.path.join(HERE, "assets", "template_tail.bin"),
-                       args.out, man.get("volume", "RAVYNOS"))
+      b = ImageBuilder(head_src, tail_src, args.out,
+                       man.get("volume", "RAVYNOS"), geom=geom)
 
     def mkdirs(path):
         node = b.root
@@ -200,14 +241,38 @@ def main():
             add(ent["path"], open(p, "rb").read())
         elif "text" in ent:
             add(ent["path"], ent["text"].encode("utf-8"))
+        elif "tree" in ent:
+            srcdir = ent["tree"]
+            if not os.path.isabs(srcdir):
+                srcdir = os.path.join(HERE, srcdir)
+            if not os.path.isdir(srcdir):
+                sys.exit("missing tree source: %s" % srcdir)
+            base = ent["path"].strip("/")
+            for root, dirs, files in os.walk(srcdir):
+                dirs.sort()
+                for name in sorted(files):
+                    fp = os.path.join(root, name)
+                    rel = os.path.relpath(fp, srcdir).replace(os.sep, "/")
+                    key = ((base + "/" + rel) if base else rel)
+                    if key.lower() in expected:
+                        sys.exit("tree %s: duplicate path %s" % (srcdir, key))
+                    add(key, open(fp, "rb").read())
         else:
             sys.exit("manifest entry with no source: %r" % ent)
 
+    import time
+    t_build = time.perf_counter()
     b.build()
-    print("wrote %s (%d clusters used of 130301)" % (args.out, b.payload_clusters()))
+    print("wrote %s (%d clusters used of %d); build pass %.1fs" %
+          (args.out, b.payload_clusters(), b.geom.max_cluster,
+           time.perf_counter() - t_build))
+    if args.skip_verify:
+        print("verify SKIPPED (--skip-verify)")
+        return
 
     # Self-verify: reopen, walk, compare content hash of every regular file.
     import hashlib
+    t_ver = time.perf_counter()
     img = b.verify()
     walked = img.walk()
     bad = []
@@ -233,8 +298,9 @@ def main():
         for m in bad:
             print("VERIFY FAIL:", m)
         sys.exit(1)
-    print("verify OK: %d files, %d tree entries, all content hashes match" %
-          (len(seen), len(walked)))
+    print("verify OK: %d files, %d tree entries, all content hashes match "
+          "(verify pass %.1fs)" % (len(seen), len(walked),
+                                   time.perf_counter() - t_ver))
 
     # -----------------------------------------------------------------------
     # RECORD WHAT WENT IN, so the image identifies its own contents.

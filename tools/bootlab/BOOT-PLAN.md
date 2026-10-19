@@ -3280,3 +3280,294 @@ this?" question should be answered by checking the binary's LC_BUILD_VERSION or
 `__comment` section, not by assuming the build script picked the right one. When
 a symbol appears that the repo's libc++ should not need, suspect the compiler
 version first.
+
+## 19. HVF: the handoff was right about the bytes and wrong about one decode (2026-10-18)
+
+**What changed.** The desktop now boots under `-accel hvf` on this Intel host.
+From typing the boot command at the UEFI shell to the menu bar drawing:
+**3.6 s** (9.6 s including the shell's startup.nsh countdown), against ~80-85 s
+under TCG for the same image. The same image still boots under TCG.
+
+**Two bugs, both in the mode switch, both invisible under QEMU TCG.**
+
+1. *The reference listing mis-decoded the CS reload.* The transfer at Apple's
+   0x15865 is `ff 28`. ModRM 0x28 = mod 00, reg 101 -> opcode-FF group 5 /5 =
+   **JMP FAR m16:32** -- the instruction *does* load CS, from the 6-byte
+   pointer at 0x1588A. `apple-boot32-modeswitch.S` annotated it "NEAR
+   indirect; cannot load CS", and on that reading the loader cleared CR0.PG
+   *from a 64-bit code segment* and reached the kernel with the UEFI CS still
+   cached. QEMU TCG tolerates that; real CPUs and hardware hypervisors do
+   not, and under HVF the machine reset on the first instruction after the
+   clear -- with no exception logged anywhere, which is what made it look
+   like a black box for so long. The handoff now does what the bytes say:
+   `lgdt`, flat data selectors, `jmp far [page+0x28]` into a 32-bit
+   compatibility descriptor, and only *then* -- in compatibility mode, the
+   only place it is legal -- clears CR0.PG and EFER.LME, then near-jumps to
+   `_pstart` with `eax = boot_args`. The trampoline lives in the low handoff
+   page, is entered with paging still on (its page is identity-mapped), and
+   every encoding in it is also a valid 64-bit encoding of the same
+   operation, so nothing depends on the assembler's idea of which mode the
+   bytes run in.
+
+2. *The GDT code descriptor was a 16-bit segment.* Its flags byte was 0x9F:
+   G=1 but **D/B=0**. In the descriptor's second flags byte, bit 6 (0x40) is
+   D/B and bit 4 (0x10) is AVL; the comment in the file had the two swapped
+   and "corrected" an earlier 0xCF down to 0x9F, turning the segment 16-bit.
+   It never mattered while CS was never loaded from this table (the old
+   near-jump design only used it for DS/ES/FS/GS). A far jump into selector
+   0x08 executes 16-bit garbage: the trampoline's first bytes happen to mean
+   the same thing in both modes, and the rest de-assembles into `add [si],al`
+   and stray port traffic, which reads as a silent machine reset. Fixed to
+   0xCF (G=1, D/B=1, L=0) for both code and data.
+
+**How it presents.** Before the fix, under HVF the guest reset ~1.1 s after
+the loader handed off, reproducibly, with `-d int` showing *no* exception and
+no triple-fault line -- the reset looked spontaneous. Adding `-no-reboot`
+turned it into a clean qemu exit (rc=0), the same signature as any guest
+reset. The gate build (BOOTX64.TRAMPOLINE.EFI) localized it: with breadcrumbs
+written to COM1 by the trampoline itself, the last byte on the wire before
+the reset moved from nothing, to 'T' (16-bit decode still reached the first
+print), to the full path with the probe echoing `EAXX=...` and no reset.
+
+**Open, cosmetic.** Diagnostic bytes printed *during* the mode-switch window
+do not all arrive as written: the gate build shows `J` then a stale-AL byte
+where 'T'/'K' were expected (e.g. `JJ\x00*EAXX=000QD`), identically under TCG
+and HVF, deterministically. The 32-bit echo that follows is byte-perfect, the
+kernel's own serial output is byte-perfect, and the machine state is correct
+in every measurable way; this is confined to the few bytes emitted in the
+handoff window and is off the critical path. Recorded so it is not
+rediscovered as a "regression".
+
+**Verification.** `launch_interactive.py` now defaults to HVF on macOS (it
+boots) and to all host CPUs under a hardware accelerator (TCG stays at one
+vCPU: two vCPUs measured slower -- menubar 90 s -> 128 s, settle 124 s ->
+170 s). Boot of the GUI image under HVF to a rendered desktop: wallpaper
+pixel (120,144,161) at (300,300), menu-bar text, dock icons, `mbw-up` at
++3.6 s from the boot command.
+
+## 20. HVF booted, and then the screen stayed black: QEMU's HVF dirty-log gap (2026-10-18)
+
+**The symptom.** With the handoff fixed, `-accel hvf` boots the desktop in
+3.6 s (menubar) -- and the QEMU window shows a black rectangle. The guest is
+fine: monitor `screendump` reads the live framebuffer (wallpaper, menubar,
+dock), and the user's mouse and keyboard reach the guest (`[WS] ev`,
+`[KBD] byte ...` in the serial log). Only the *display path* is dead, and it
+is dead for every frontend: the Cocoa window never updates, and a VNC client
+connected to the same VM receives no bytes at all, ever. The same image on
+`-accel tcg` updates normally.
+
+**Diagnosis, in the order it narrowed.** Host-side window screenshots
+(computer-use capture) confirmed the window was genuinely black, not a
+screencapture artifact. `screendump` and the window disagreed, so the guest
+surface was right and the frontends were not being fed. Reading QEMU 11.0.1's
+`hw/display/vga.c` showed the only two paths that push frames: a display
+*params* change, or the vram dirty bitmap
+(`memory_region_snapshot_and_clear_dirty` in `vga_draw_graphic`); when the
+snapshot is empty, nothing is ever pushed. `system/memory.c` then showed that
+the memory core emits `log_start` only when a section's dirty-log mask
+**grows** (or when a listener registers on a range that already exists) --
+and `vga_common_init()` calls `vga_dirty_log_start()` *before* the vram is in
+any address space, so when the PCI BAR later maps the vram the section
+appears with `region_add` alone and no `log_start` ever fires. QEMU's HVF
+trace (`-trace enable=hvf_*`) proved it on the wire: `hvf_vm_map
+paddr:0x80000000 size:0x1000000 flags:0x07/RWX` and **zero**
+`hvf_vm_protect` events. KVM is immune because `kvm_set_phys_mem()` creates
+the slot with `KVM_MEM_LOG_DIRTY_PAGES` at region_add time; HVF's
+`hvf_set_phys_mem()` did not do the equivalent. So under HVF the vram stayed
+writable, guest writes never faulted, no dirty bits were ever set, and the
+window kept whatever it painted the first time the mode was set -- black.
+
+**The fix** (`tools/bootlab/qemu-hvf-dirty-tracking.patch`, 6 lines of code):
+in `accel/hvf/hvf-all.c`, `hvf_set_phys_mem()` maps dirty-logged regions
+read-only (`HV_MEMORY_READ | HV_MEMORY_EXEC`, no WRITE). The existing cycle
+then closes: a guest write EPT-faults, `ept_emulation_fault()` marks the page
+dirty and unprotects it, the VGA's snapshot pushes the frame, and the
+`log_clear` path re-protects the range for the next cycle.
+
+**Build** (2 minutes of compile on this machine):
+
+    curl -O https://download.qemu.org/qemu-11.0.1.tar.xz && tar xf qemu-11.0.1.tar.xz
+    cd qemu-11.0.1 && patch -p1 < .../qemu-hvf-dirty-tracking.patch
+    export PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:/usr/local/share/pkgconfig
+    ./configure --target-list=x86_64-softmmu --enable-hvf --disable-werror \
+        --disable-docs --disable-tools --disable-guest-agent --disable-capstone \
+        --disable-gtk --disable-sdl --disable-gnutls --disable-nettle \
+        --disable-curses --disable-opengl --disable-spice --disable-pa --disable-libssh
+    ninja -C build qemu-system-x86_64
+
+Installed as `/usr/local/bin/qemu-system-x86_64-hvffix`; the stock brew QEMU
+stays in place for the TCG harnesses. `launch_interactive.py` prefers the
+patched binary when it is on PATH (`QEMU_BIN` overrides).
+
+**Verification.** With the patched binary the trace shows the vram mapped
+`R-X` and ~2000 `hvf_vm_protect` events (dirty/unprotect/re-protect cycling);
+a real VNC client (`vncdotool`) now receives a full 1920x1080 frame
+(wallpaper pixel (120,144,161), menubar text) where the stock build delivered
+zero bytes; moving the mouse through the monitor between two captures changes
+100k pixels -- live, not a frozen first frame. The interactive session runs
+`hvf, 16 cpus` with a live display.
+
+### 20.1 The rest of the fix: three more HVF display bugs behind the first (2026-10-18)
+
+The first patch (map dirty-logged regions read-only at `region_add`) made the
+vram fault and dirty -- but the screen still only refreshed when something
+took a *full* frame (a fresh VNC connection, or the user switching the QEMU
+console from vga to parallel0 and back, which is exactly what the user
+reported doing). Incremental updates -- the ones a live window actually needs
+-- still never arrived. Three more bugs, in the order they surfaced:
+
+1. **Nothing re-protected the pages.** The HVF design un-protects a page on
+   its first fault (so the guest does not fault on every store) and relies on
+   a "dirty bits were cleared" callback to re-protect it.  QEMU 11.0.1's hvf
+   listener implements `.log_clear`, but the vga never emits it:
+   `memory_region_snapshot_and_clear_dirty()` calls
+   `memory_region_sync_dirty_bitmap()` (which emits `log_sync`) and then
+   clears the RAM bitmap directly.  With no `log_sync` on the listener, every
+   page was dirtied exactly once per boot and never again.  Fix: implement
+   `.log_sync` to re-protect the pages the fault handler has un-protected
+   since the last sync (recorded in a small array, drained per sync) --
+   re-protecting the whole 16 MiB region on every 30 ms tick instead cost a
+   full CPU core.
+
+2. **The dirty bit was marked at the wrong offset.** `target/i386/hvf/hvf.c`,
+   `ept_emulation_fault()`:
+
+       memory_region_set_dirty(mr, gpa_page + xlat, page_size);
+
+   `address_space_translate()`'s `xlat` is *already* the offset within the
+   returned MemoryRegion (`addr - section->offset_within_address_space +
+   section->offset_within_region`), so adding `gpa_page` marks a bit
+   gigabytes past the end of the 16 MiB vram.  The vram's own bits were never
+   set, `vga_draw_graphic()`'s snapshot was always empty, and no incremental
+   update could ever fire.  Fix: `memory_region_set_dirty(mr, xlat,
+   page_size);`.
+
+3. **The page-record list raced the vcpu thread.** Appended by the EPT fault
+   handler (vcpu thread), drained by `log_sync` (main loop).  A lost entry is
+   a page left writable forever -- its region of the screen freezes.  Fix: a
+   `QemuMutex` around both sides.
+
+**Verified.** The user's session (hvf, 16 cpus, patched binary) updates its
+Cocoa window on every mouse move: host captures of the window after four
+`mouse_move` commands through the monitor all differ, with the cursor visible
+and moving; the desktop, menubar, Filer window and dock render correctly.
+The `tools/bootlab/qemu-hvf-dirty-tracking.patch` now carries all six hunks
+across `accel/hvf/hvf-all.c` and `target/i386/hvf/hvf.c`.
+
+**Still open (not display).** With HVF the guest's kernel idle loop does not
+halt (one host core spins at ~100% at idle; no framebuffer writes, no serial
+output).  That is a guest-kernel idle-path question under HVF, unrelated to
+the display, and worth its own investigation.
+
+## 21. Terminal keys, bundle launches, and Chrome's signature (2026-10-18)
+
+**Terminal: Tab was being eaten by AppKit.** `TerminalView -keyDown:` passed
+only printable ASCII, Enter, Backspace, arrows and Ctrl-C to the PTY; Tab fell
+through to `[super keyDown:]`, where AppKit treated it as key-view traversal,
+so the shell never saw `^I`. sh binds `^I` to libedit's "sh-complete", so tab
+completion was unreachable even though the shell has it.  Fixed: Tab (and the
+remaining control bytes, Ctrl-A/E/U/W/L/D/Z/Esc, plus Delete/Home/End/PageUp/
+PageDown) now go to the PTY.  Verified on screen: `ec` + Tab completes to
+`echo ` with a trailing space.
+
+**Bundle launches had no environment and no arguments.** The WindowServer's
+`_spawnPendingBundle()` exec'd the bundle binary with `argv = {name}` and
+`envp = {RAVYN_BUNDLE_ID}` -- no HOME, no TMPDIR, no PATH, no flags.  It now
+passes the WindowServer's own environment plus a per-bundle
+`RAVYNLaunchArguments` array from the bundle's Info.plist.  Chrome's staged
+Info.plist carries `--no-sandbox --disable-gpu --no-first-run
+--user-data-dir=/tmp/chrome-profile`.
+
+**Chrome was being SIGKILLed at exec, and the old "verified" check could not
+see it.** `work/chrome_thinned` (the staged Chrome binary) still carried
+Apple's original code signature: `flags=0x12a00(kill,restrict,library-
+validation,runtime)`.  Thinning the universal binary invalidated that
+signature, and the CS_KILL flag makes the kernel kill the process when
+validation fails -- `Killed: 9`, instantly, with no output, for `--version`
+as well as a GUI launch.  The Phase-7 checks never noticed because they ran
+`"Google Chrome" ... > /dev/console` and asserted on the *next* echo
+(`[CHROME] OK`), which the script prints whether Chrome ran or not.  Re-signing
+ad-hoc on the host (`codesign --force --sign - work/chrome_thinned`) yields
+`flags=0x2(adhoc)`, and Chrome now starts for real.
+
+**What Chrome does now.** It gets through dyld and aborts cleanly with:
+
+    dyld: could not find image .../Frameworks/Google Chrome Framework.framework/Versions/155.0.8059.82/Google Chrome Framework
+    dlopen(...): image not found      (Abort trap: 6)
+
+The image stages only Chrome's stub binary (`Contents/MacOS/Google Chrome`),
+not the framework that carries the actual browser.  Staging it is the next
+step of Phase 7 (it is hundreds of megabytes against a 512 MiB image, and
+whatever it links next -- IOSurface, Security, ... -- is the work the plan
+already anticipates).
+
+**Also fixed:** `launch_interactive.py` drained the serial socket once a
+second, so the boot storm overflowed the socket buffer and qemu dropped
+output -- the interactive log was losing most of `/etc/rc`'s output and the
+probe's.  A dedicated reader thread now drains it continuously.
+`bin/sleep` is built (`build_dynutils.sh sleep`) and staged; the image had no
+sleep at all.
+
+## 22. Chrome's whole framework tree, and where it stops being a packaging problem (2026-10-19)
+
+Phase 7 continued: stage Google Chrome 155.0.8059.82 (the real 414 MB x86_64+arm64
+bundle) into the grown image, not just its stub binary.
+
+**Fat32 geometry that scales.** fat32img.py hardcoded one 2 GiB layout, so growth was
+impossible; added geometry_for_size(mib) derived from the BPB (fatsz = ceil(clusters*4
+/spc)+2, data_off = part_first_lba + rsvd + nfats*fatsz). Verified against the on-disk
+BPB rather than the file's stale header comment: for 2 GiB the data area starts at LBA
+0x501400 (the comment said 0x501800 and was wrong). mkimage.py gained --size-mib; a 1
+GiB image carries the whole Chrome set -- 301 manifest entries, 145,307 clusters used
+of 261,118, geometry spf=2040 / data_off=0x302000. The build pass is 1.4 s; the hour-
+long runs people kept hitting were mkimage's own read-back verify (Fat32Img.read_clusters
+does one 4 KiB seek+read per cluster over an APFS sparse file -- under 1 MB/s: the largest
+payload file, 271,651,840 bytes = 66,322 clusters, took over 300 s just to read back).
+--skip-verify plus targeted checks replaced that pass, with boot evidence standing in for it.
+
+**Staging pipeline** tools/bootlab/chrome_stage.py: thin every payload Mach-O to x86_64 and
+ad-hoc re-sign each (codesign output must be merged with stderr or the check reads empty and
+"signing skipped" silently ships Apple's kill/require-signed flags; flags=0x2(adhoc) asserted,
+never skipped), walk Chrome's dependency closure against the staged image, generate side-shims
+for the frameworks this repo only stubs (/usr/lib/chrome/{CoreFoundation,CoreGraphics,CoreText,
+Foundation,QuartzCore}.dylib) plus /usr/lib/c/<n>.dylib re-export shims for umbrella libs, and
+rewrite 26 binaries' dep strings in place. Measured: 352 payload files / 25 Mach-O / 414.3 MiB,
+66 deps (10 occupied, 4 real missing families -- AVFoundation/Metal/IOBluetooth-style trees that
+are not in this repo), 62 shims/stubs. Chrome's own Versions/A path is kept as a symlink to the
+versioned directory because its linker_relative_address load command needs that exact string;
+"normalizing" it breaks the binary instead of the image.
+
+Three resolution bugs, each found from a real failure rather than by eye:
+
+* exports_of() has to union all three views of one export trie -- offset-bearing definitions,
+  "[re-export] _strcmp (indirect for ...)" lines from dyld_info -exports, and nm -gU. Honouring
+  only the first shape made every indirect export look missing, so it became a stub that SHADOWED
+  the real symbol: serial printed [CHROME-STUB] _strlen followed by a null-target fault and rc=139.
+* DATA globals must never become function stubs. ___stderrp is a D global inside libsystem_c;
+  binding Chrome's __got slot to text made stdio deref a garbage FILE* (movq 0x68(%rax),%rdi with
+  rax non-canonical, rip inside staged libsystem_c at _flockfile+0x12a). Staging now parses nm -o -g
+  kinds and excludes names some staged image really exports (31 of them); genuinely-absent data names
+  such as _OBJC_EHTYPE_$_NSException get plain .quad 0 slots.
+* ObjC class data exports must point at real ObjC class structures, and the ones Chrome needs are not in
+  this codebase at all. Chrome imports _OBJC_CLASS_$_NSArray / _NSDictionary / _NSData / _NSDate / _NSLocale
+  / ... from CoreFoundation, and Frameworks/CoreFoundation is pure C -- grep -rl "@implementation" finds no
+  ObjC classes there (libCoreFoundation.a exports zero OBJC_CLASS symbols), while Frameworks/AppKit does carry
+  255 .m files with NS* implementations. Our generated slots therefore stay zero, and Chrome's static
+  initializers hand those null pointers to libobjc, which faults inside its own code: rip at
+  /usr/lib/system/libobjc.dylib base+0x328ee = objc_class::isRealized calling objc_class::data()
+  (base+0x140b0) with rax=0. The two fixes that got the run this far were the export-trie union above
+  (serial had printed [CHROME-STUB] _strlen plus a null-target fault before it) and the DATA-kind rule,
+  whose signature failure was dyld "Symbol not found: _OBJC_EHTYPE_$_NSException ... Expected in
+  /usr/lib/chrome/CoreFoundation.dylib" (abort trap:6, rc=134) followed by stdio deref of a garbage FILE*
+  (_flockfile/_fgetln, SIGSEGV rc=139).
+
+**Wall.** M1 needs CF container classes (NSString/NSArray/NSDictionary/NSDate/NSData) that this repo does not
+implement; writing them is userland framework work -- a different phase than image staging -- and no further
+symbol-trap iteration can substitute for the missing implementations. What the shipped image does prove: the
+complete Chrome tree stages thinned and signed (271.7 MB "Google Chrome Framework", 22.9 MB libwidevinecdm.dylib,
+22.1 MB resources.pak), its whole dependency graph loads (serial prints every staged framework with UUIDs
+including /usr/lib/chrome/CoreFoundation.dylib), and the desktop runs live -- RAVYNOS_DESKTOP_READY, WindowServer
+recording apps, 1920x1080 screenshot captured from the VNC display. The final manifest carries no probe job or
+/bin/chromeprobe.sh; verified through Fat32Img with geometry_for_size(1 GiB) (data_off=0x302000, max_cluster=261118,
+1,317 entries). Reading that image with the module's default 512 MiB geometry returns an empty tree, which is what
+made a healthy image briefly look like a corrupt one -- pass the geometry, do not trust DEFAULT_GEOM.
