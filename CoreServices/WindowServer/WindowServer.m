@@ -1403,6 +1403,44 @@ static pthread_mutex_t _pendingLock = PTHREAD_MUTEX_INITIALIZER;
                     WSDrawArrowCursor(ctx, cursorRect.origin.x, cursorRect.origin.y);
                 }
                 O2ContextRestoreGState(ctx);
+                /* What the frame about to be presented puts on top, logged
+                 * with its damage rect.  This is the compositor's own answer
+                 * to "which window is frontmost", and it is the only way to
+                 * tell a z-order mistake from a stale frame: a screenshot that
+                 * disagrees with the last line before it was taken is a
+                 * present/scanout problem, one that agrees is a z-order
+                 * problem.  Throttled to a change or every 60 presents so a
+                 * repainting client cannot drown the console. */
+                {
+                    static char diagLast[128] = "";
+                    static int diagPresents = 0;
+                    NSArray *diagWins = _windows[kCGNormalWindowLevelKey];
+                    const char *diagFront = "(none)";
+                    for(NSInteger di = (NSInteger)[diagWins count] - 1; di >= 0; --di) {
+                        WSWindowRecord *dw = [diagWins objectAtIndex:(NSUInteger)di];
+
+                        if(dw.state == HIDDEN || dw.state == MINIMIZED || dw.state == CLOSED)
+                            continue;
+                        WSAppRecord *da = (dw.app != nil &&
+                                [dw.app isKindOfClass:[WSAppRecord class]]) ?
+                            (WSAppRecord *)dw.app : nil;
+                        NSString *db = (da != nil) ? [da bundleID] : nil;
+
+                        diagFront = (db != nil) ? [db UTF8String] : "unknown";
+                        break;
+                    }
+                    if(strcmp(diagFront, diagLast) != 0 || diagPresents >= 60) {
+                        fprintf(stderr, "[WS] PRESENT front=%s win=%u rect=%d,%d %dx%d\n",
+                                diagFront, (unsigned)frame_count,
+                                (int)damage.origin.x, (int)damage.origin.y,
+                                (int)damage.size.width, (int)damage.size.height);
+                        fflush(stderr);
+                        strncpy(diagLast, diagFront, sizeof(diagLast) - 1);
+                        diagLast[sizeof(diagLast) - 1] = '\0';
+                        diagPresents = 0;
+                    }
+                    ++diagPresents;
+                }
                 [fb drawRect:damage];
             }
         } else {

@@ -339,6 +339,12 @@ class HmpMonitor:
 # The launch marker the in-guest self test prints before every application.
 # The serial line can end in "\n", "\r\n" or "\r", so the marker is anchored
 # on any of them.
+# Wall budget for the in-guest fleet (13 applications, each activated and then
+# held until the harness has its frame).  Bigger than any planned run: 13 apps
+# at 60 s of hold plus six 30 s activation retries each is ~1170 s, and the
+# boot plus the settle pass add a few hundred more.
+FLEET_BUDGET = 7200
+
 MARKER_RE = re.compile(r"(?:^|[\r\n])\[ddtest\] launch (\d+) ([^\r\n]+)")
 
 
@@ -392,11 +398,22 @@ def capture_screen(monitor, outdir, name):
 def boot_and_collect(img, tag, timeout, screenshots_dir=None):
     """Boot the image and return the guest's serial output.
 
+    ``timeout`` is the wall budget for the guest to reach the desktop and for
+    the fleet to finish, so it must be positive: 0 (or a negative value) used
+    to become an already expired deadline and the fleet then got whatever the
+    300 s floor allowed, which is how a 200 s-per-app hold produced a run with
+    a single missing screenshot and no fleet-done.  Treat it as "no explicit
+    budget" instead of as "no time at all".
+
     The invocation is the one the window-manager harness uses: OVMF with the
     repository's variable store, the boot command typed into the firmware
     shell over the serial line, and the desktop detected by the SystemUI
     server's "mbw-up" trace.
     """
+    if timeout <= 0:
+        print("boot: --boot-timeout %d is not a budget; using %d s" % (timeout, FLEET_BUDGET))
+        timeout = FLEET_BUDGET
+
     serial_sock = os.path.join(WORK, "%s_dd_serial.sock" % tag)
     mon_sock = os.path.join(WORK, "%s_dd_mon.sock" % tag)
     out_log = os.path.join(WORK, "%s_dd_serial.log" % tag)
@@ -426,6 +443,15 @@ def boot_and_collect(img, tag, timeout, screenshots_dir=None):
         "-monitor", "unix:%s,server,nowait" % mon_sock,
         "-vga", "std", "-display", "none", "-no-reboot",
     ]
+    # With no display at all QEMU has nothing driving the VGA surface update,
+    # and screendump then returns whatever the last refresh left in the shadow
+    # copy: the frame lags the guest by minutes, which is what made each shot
+    # show an application from several activations earlier.  A VNC server is
+    # enough to keep the display refresh running; RAVYN_VNC=host:display or
+    # RAVYN_VNC=unix:/path selects it, and the default stays headless.
+    vnc = os.environ.get("RAVYN_VNC")
+    if vnc:
+        cmd += ["-vnc", vnc]
 
     proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL)
@@ -534,9 +560,20 @@ def boot_and_collect(img, tag, timeout, screenshots_dir=None):
     # one on the console; screendump the window that just came up.
     # The fleet needs its own budget: each application is activated (with up
     # to three 45 s paint retries), then held frontmost for 200 s.
-    fleet_deadline = max(deadline, time.time() + 7000)
+    fleet_deadline = max(deadline, time.time() + FLEET_BUDGET)
+    fleet_started = None
     while time.time() < fleet_deadline:
         text = sniffer.text()
+        if fleet_started is None and "[ddtest] launch " in text:
+            fleet_started = time.time()
+        # The self test announces its first launch within a minute of the desktop
+        # coming up.  If it never does, the guest's test died (a corpse on the
+        # console is the usual reason) and waiting the whole fleet budget only
+        # hides that: report it and stop, so the missing screenshots fail the
+        # gate instead of a 50-minute wait on a guest that is not running them.
+        if fleet_started is None and time.time() > deadline + 300:
+            print("boot: the in-guest fleet never announced a launch; stopping")
+            break
         if screenshots_dir:
             for marker, (name, offset) in sorted(find_markers(text).items(),
                                                  key=lambda kv: int(kv[0])):
@@ -570,12 +607,15 @@ def boot_and_collect(img, tag, timeout, screenshots_dir=None):
                         # let the gate fail instead of writing a wrong image.
                         abandoned.add(shot)
                         break
-                    # WindowServer has to recomposite the new z-order before the
-                    # scanout shows it: dump a comfortable distance into the
-                    # hold, after several of the guest's re-raises, not right on
-                    # the marker.
-                    time.sleep(40.0)
+                    # The scanout trails the guest by about 25 s (measured:
+                    # with a 20 s hold a dump 2 s after the marker showed the
+                    # previous application).  Dump 45 s into the hold: past
+                    # that trail, and far enough from the end of a 120 s hold
+                    # that a slow host still lands inside it.
+                    time.sleep(45.0)
+                t_capture = time.time()
                 path = capture_screen(monitor, screenshots_dir, shot)
+                print("boot: capture %s -> %s in %.1fs" % (shot, bool(path), time.time() - t_capture))
                 if path:
                     captured.add(shot)
                 else:
@@ -592,9 +632,12 @@ def boot_and_collect(img, tag, timeout, screenshots_dir=None):
             break
         done = "[ddtest] fleet-done" in sniffer.text()
         if screenshots_dir:
-            # Every application has to be on the screen before the guest is
-            # stopped: the last window would be a half drawn one.
-            done = done and len(captured) + len(abandoned) >= 13
+            # Every application the guest announced has to be accounted for
+            # before the guest is stopped: the last window would be a half
+            # drawn one.  Count the markers instead of hardcoding 13, so a
+            # short fleet (a diagnostic run) also terminates.
+            expected = len(find_markers(sniffer.text()))
+            done = done and len(captured) + len(abandoned) >= expected
         if done:
             break
         time.sleep(0.5)

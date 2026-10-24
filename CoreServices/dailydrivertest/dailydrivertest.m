@@ -470,7 +470,7 @@ int main(int argc, char **argv) {
                     int k;
                     fprintf(stderr, "[ddtest] holding %s 0\n", label);
                     fflush(stderr);
-                    for(k = 0; k < 100; k++) {
+                    for(k = 0; k < 60; k++) {
                         if(k > 0 && (k % 5) == 0) {
                             _openBundleOnWindowServer(path);
                         }
