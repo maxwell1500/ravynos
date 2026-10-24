@@ -137,3 +137,43 @@ Scratch from a standalone host compile, not part of any build system.
 /Libraries/libfirehose_kernel/*.o
 /Libraries/zlib/*.o
 /Libraries/zlib/*.a
+
+# In-tree build products of the CoreServices/SysApps makefiles.  Named paths,
+# not a global *.o rule: Libraries/dyld/unit-tests keeps tracked object files
+# (see the note at the top), so the ignore has to be as narrow as the problem.
+/CoreServices/Dock/*.o
+/CoreServices/Dock/.depend*
+/CoreServices/Dock/*.app/
+/CoreServices/Filer/*.o
+/CoreServices/Filer/.depend*
+/CoreServices/Filer/*.app/
+/CoreServices/WindowServer/SystemUIServer/*.o
+/CoreServices/WindowServer/SystemUIServer/.depend*
+/CoreServices/WindowServer/SystemUIServer/*.app/
+# make's rule for the OpenGL headers links this into the object directory.
+/CoreServices/WindowServer/SystemUIServer/OpenGL
+/SysApps/Prefs/*.o
+/SysApps/Prefs/.depend*
+/SysApps/Prefs/*.app/
+/thread_register_state.o
+
+# ICU's build output: the dylibs and the native/target object trees are made by
+# Libraries/ICU/Makefile, not checked in.
+/Libraries/ICU/libicucore.A.dylib
+/Libraries/ICU/native/
+/Libraries/ICU/target/
+
+# CLI test transcripts from the click harness (CLICKnn_harness.log).
+/tools/bootlab/CLICK*.log
+
+# The SDK's include and lib trees are INSTALL output: build-libraries.sh copies
+# Libraries/*/Headers and the built dylibs into them.  Many individual headers
+# are tracked (they are what this tree builds against), so the ignore only
+# stops new installs from showing up as untracked; edits to a tracked header
+# still appear in git status.
+/Developer/ravynOS.sdk/usr/include/
+/Developer/ravynOS.sdk/usr/lib/
+
+# An old copy of the bootlab work directory, left at the repo root by a script
+# run from there.  tools/bootlab/work/ is the live one (and is ignored).
+/work/
