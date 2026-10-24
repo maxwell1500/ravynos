@@ -42,7 +42,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 #include <sys/socket.h>
 #include <stdlib.h>
 #include <unistd.h>
-
+#include <fcntl.h>
 /* bootstrap.h in SDK is an empty stub; declare what we need */
 #include <mach/mach.h>
 extern mach_port_t bootstrap_port;
@@ -56,6 +56,7 @@ NSString * const NSModalPanelRunLoopMode=@"NSModalPanelRunLoopMode";
 NSString * const NSEventTrackingRunLoopMode=@"NSEventTrackingRunLoopMode";
 
 NSString * const NSApplicationWillFinishLaunchingNotification=@"NSApplicationWillFinishLaunchingNotification";
+NSString * const NSApplicationPreferencesChangedNotification=@"NSApplicationPreferencesChangedNotification";
 NSString * const NSApplicationDidFinishLaunchingNotification=@"NSApplicationDidFinishLaunchingNotification";
 
 NSString * const NSApplicationWillBecomeActiveNotification=@"NSApplicationWillBecomeActiveNotification";
@@ -91,19 +92,11 @@ NSString * const NSApplicationDidChangeScreenParametersNotification=@"NSApplicat
 
 id NSApp=nil;
 /* ravynOS: unconditional trace for GUI bring-up debugging. */
-static void aitrace(const char *s)
-{
-	size_t n = 0;
-	while (s[n]) n++;
-	(void)write(2, s, n);
-}
 
 +(NSApplication *)sharedApplication {
 
-   aitrace("AI-sa check\n");
    if(NSApp==nil){
       [[self alloc] init]; // NSApp must be nil inside init
-      aitrace("AI-sa init done\n");
    }
 
    return NSApp;
@@ -164,6 +157,153 @@ static NSMenuItem *itemWithTag(NSMenu *root, int tag) {
     return nil;
 }
 
+/* -- WindowServer state, performed on the main thread --------------------
+ * machServiceLoop: runs on a background thread; posting Dock notifications
+ * or mutating window state from there raced the main thread's drawing. */
+-(void)_postWindowStateEvent:(NSDictionary *)md {
+    [[NSNotificationCenter defaultCenter]
+        postNotificationName:@"WSWindowDidChangeState" object:nil userInfo:md];
+}
+
+-(void)_handleWindowStateUpdate:(NSData *)blob {
+    if([blob length] != sizeof(struct wsRPCWindow))
+        return;
+    struct wsRPCWindow data;
+    memcpy(&data, [blob bytes], sizeof(data));
+    NSWindow *window = [self windowWithWindowNumber:data.windowID];
+    if(window == nil) {
+        NSLog(@"WINDOW_STATE: ID %u, not found in window list!", data.windowID);
+        return;
+    }
+    [window processStateUpdate:&data];
+}
+-(void)_handleMenuForApp:(NSDictionary *)md {
+    [[NSNotificationCenter defaultCenter]
+        postNotificationName:@"NSMenuDidUpdate" object:nil
+        userInfo:md];
+}
+
+-(void)_handleAppExited:(NSDictionary *)md {
+    [[NSNotificationCenter defaultCenter]
+        postNotificationName:@"NSApplicationDidQuit" object:nil
+        userInfo:md];
+}
+
+-(void)_handleAppLaunched:(NSDictionary *)md {
+    [[NSNotificationCenter defaultCenter]
+        postNotificationName:@"NSApplicationDidLaunch" object:nil
+        userInfo:md];
+}
+
+-(void)_handleItemClicked:(NSNumber *)tagNum {
+    int itemID = [tagNum intValue];
+    NSMenuItem *item = itemWithTag(_mainMenu, itemID);
+    if(item != nil)
+        [self sendAction:[item action] to:[item target] from:item];
+    else
+        NSLog(@"Error: cannot find menu item with tag %d!", itemID);
+}
+
+-(void)_handleActivationState:(NSDictionary *)dict {
+    int active = [[dict objectForKey:@"Active"] intValue];
+    int windowID = [[dict objectForKey:@"WindowID"] intValue];
+    NSString *bundleID = [dict objectForKey:@"BundleID"];
+    NSNumber *pidNum = [dict objectForKey:@"PID"];
+
+    if(active == 1 && windowID != 0) {
+        NSWindow *win = [self windowWithWindowNumber:windowID];
+        if(win)
+            [win _showForActivation];
+    }
+    if(active && !_isActive)
+        [[NSNotificationCenter defaultCenter]
+            postNotificationName:NSApplicationWillBecomeActiveNotification
+                          object:self];
+    else if(!active && _isActive)
+        [[NSNotificationCenter defaultCenter]
+            postNotificationName:NSApplicationWillResignActiveNotification
+                          object:self];
+    _isActive = active;
+    [self _checkForAppActivation];
+
+    if([[[NSBundle mainBundle] bundleIdentifier] isEqualToString:@"com.ravynos.SystemUIServer"]) {
+        NSMutableDictionary *md = [NSMutableDictionary new];
+        [md setObject:pidNum forKey:@"ProcessID"];
+        [md setObject:bundleID forKey:@"BundleID"];
+
+        [[NSNotificationCenter defaultCenter]
+            postNotificationName: (_isActive ? NSApplicationDidBecomeActiveNotification
+                                             : NSApplicationDidResignActiveNotification)
+                          object:nil
+                        userInfo:md];
+    } else {
+        [[NSNotificationCenter defaultCenter]
+            postNotificationName: (_isActive ? NSApplicationDidBecomeActiveNotification
+                                             : NSApplicationDidResignActiveNotification)
+                          object:self];
+    }
+}
+
+
+/* The system preferences changed: post the notification the Dock, the menu
+ * bar and the open windows listen for. */
+-(void)_preferencesChanged:(id)ignored {
+    [[NSNotificationCenter defaultCenter]
+        postNotificationName:NSApplicationPreferencesChangedNotification
+                      object:self];
+
+    /* Repaint every window: titlebar chrome (Light/Dark) is drawn by
+     * NSThemeFrame from the preference file, and nothing else marks those
+     * regions dirty when only a preference changed. */
+    unsigned i, count = [_windows count];
+
+    for(i = 0; i < count; i++) {
+        NSWindow *window = [_windows objectAtIndex:i];
+
+        [window setNeedsDisplay:YES];
+        [[window contentView] setNeedsDisplay:YES];
+        [window displayIfNeeded];
+    }
+}
+
+/* Open a list of file paths.  The delegate gets first refusal (that is the
+ * macOS contract); otherwise the shared document controller opens them. */
+-(void)_openFiles:(NSArray *)paths {
+    [self _openFiles:paths useDelegate:YES];
+}
+
+-(void)_handleDragEvent:(NSData *)blob {
+    id manager = [[NSDisplay currentDisplay] draggingManager];
+
+    if(blob == nil || [blob length] < sizeof(struct mach_drag_event))
+        return;
+    if([manager respondsToSelector:@selector(handleRemoteDragEvent:)])
+        [manager handleRemoteDragEvent:(const struct mach_drag_event *)[blob bytes]];
+}
+
+-(void)_openFiles:(NSArray *)paths useDelegate:(BOOL)useDelegate {
+    unsigned i;
+
+    for(i = 0; i < [paths count]; i++) {
+        NSString *path = [paths objectAtIndex:i];
+
+        if(useDelegate) {
+            if([_delegate respondsToSelector:@selector(application:openFile:)]) {
+                if([_delegate application:self openFile:path])
+                    continue;
+            }
+            if([_delegate respondsToSelector:@selector(application:openFiles:)]) {
+                [_delegate application:self openFiles:paths];
+                return;
+            }
+        }
+        [[NSDocumentController sharedDocumentController]
+            openDocumentWithContentsOfURL:[NSURL fileURLWithPath:path]
+                                  display:YES
+                                    error:NULL];
+    }
+}
+
 -(void)machServiceLoop:(id)object {
     //NSLog(@"starting mach service loop");
     NSTimeInterval lastClickTime = 0;
@@ -191,6 +331,12 @@ static NSMenuItem *itemWithTag(NSMenu *root, int tag) {
                             struct wsRPCWindow *data = (struct wsRPCWindow *)msg.data;
                             int _id = data->windowID;
 
+                            /* This loop runs on a background thread, but
+                             * everything below mutates AppKit UI (Dock item
+                             * lists, window frames, drawing contexts), so it
+                             * must run on the main thread.  Copy the payload
+                             * first: msg is reused by the next receive. */
+
                             if([bundleID isEqualToString:@"com.ravynos.Dock"]) {
                                 NSMutableDictionary *md = [NSMutableDictionary new];
                                 [md setObject:[NSNumber numberWithInt:msg.pid] forKey:@"ProcessID"];
@@ -198,21 +344,57 @@ static NSMenuItem *itemWithTag(NSMenu *root, int tag) {
                                 [md setObject:[NSNumber numberWithInt:_id] forKey:@"WindowID"];
                                 [md setObject:[NSNumber numberWithInt:data->state] forKey:@"State"];
 
-                                [[NSNotificationCenter defaultCenter] 
-                                    postNotificationName:@"WSWindowDidChangeState" object:nil
-                                    userInfo:md];
+                                /* retained by the main-thread queue until run */
+                                [self performSelectorOnMainThread:@selector(_postWindowStateEvent:)
+                                       withObject:md waitUntilDone:NO];
+                                [md release];
 
                                 // We're done here if this message wasn't about Dock.
                                 if(strcmp(msg.bundleID, "com.ravynos.Dock"))
                                     break;
                             }
 
-                            NSWindow *window = [self windowWithWindowNumber:_id];
-                            if(window == nil) {
-                                NSLog(@"WINDOW_STATE: ID %u, not found in window list!", _id);
-                                break;
+                            NSData *blob = [[NSData alloc] initWithBytes:msg.data
+                                                length:sizeof(struct wsRPCWindow)];
+                            [self performSelectorOnMainThread:@selector(_handleWindowStateUpdate:)
+                                   withObject:blob waitUntilDone:NO];
+                            [blob release];
+                            break;
+                        }
+                        case CODE_PREFS_CHANGED: {
+                            /* The System Settings app changed a preference:
+                             * tell the app so it can reload it. */
+                            [self performSelectorOnMainThread:@selector(_preferencesChanged:)
+                                   withObject:nil waitUntilDone:NO];
+                            break;
+                        }
+                        case CODE_DRAG_EVENT: {
+                            /* Another app is dragging over one of our windows.
+                             * Hand the payload to the dragging manager on the
+                             * main thread, where the view hierarchy lives. */
+                            NSData *blob = [[NSData alloc] initWithBytes:msg.data
+                                                length:sizeof(struct mach_drag_event)];
+                            [self performSelectorOnMainThread:@selector(_handleDragEvent:)
+                                   withObject:blob waitUntilDone:NO];
+                            [blob release];
+                            break;
+                        }
+                        case CODE_OPEN_DOCUMENTS: {
+                            /* The WindowServer routed documents to this app.
+                             * The payload is a NUL separated list of paths. */
+                            NSMutableArray *paths = [NSMutableArray array];
+                            unsigned off = 0;
+
+                            while(off < msg.len && msg.data[off] != 0) {
+                                NSString *path = [NSString stringWithUTF8String:(const char *)&msg.data[off]];
+                                if(path == nil)
+                                    break;
+                                [paths addObject:path];
+                                off += [path length] + 1;
                             }
-                            [window processStateUpdate:data];
+                            if([paths count] > 0)
+                                [self performSelectorOnMainThread:@selector(_openFiles:)
+                                       withObject:paths waitUntilDone:NO];
                             break;
                         }
                         // and all of these should really use Quartz Event Services
@@ -353,6 +535,7 @@ static NSMenuItem *itemWithTag(NSMenu *root, int tag) {
 			    }
 			    memcpy(&handle, msg.data, sizeof(handle));
 			    NSLog(@"ZMK DEBUG: status item added with handle %u", handle);
+			    break;
 			}
                         case CODE_MENU_FOR_APP:
                         {
@@ -386,9 +569,9 @@ static NSMenuItem *itemWithTag(NSMenu *root, int tag) {
                                 [md setObject:[NSNumber numberWithInt:msg.pid] forKey:@"ProcessID"];
                                 [md setObject:[NSString stringWithCString:msg.bundleID] forKey:@"BundleID"];
 
-                                [[NSNotificationCenter defaultCenter] 
-                                    postNotificationName:@"NSMenuDidUpdate" object:nil
-                                    userInfo:md];
+                                [self performSelectorOnMainThread:@selector(_handleMenuForApp:)
+                                                       withObject:md
+                                                    waitUntilDone:NO];
                                 [o release];
                             }
                             break;
@@ -402,9 +585,9 @@ static NSMenuItem *itemWithTag(NSMenu *root, int tag) {
                                 [md setObject:[NSString stringWithCString:msg.bundleID] forKey:@"BundleID"];
                                 [md setObject:[NSString stringWithCString:msg.data] forKey:@"Path"];
 
-                                [[NSNotificationCenter defaultCenter] 
-                                    postNotificationName:@"NSApplicationDidQuit" object:nil
-                                    userInfo:md];
+                                [self performSelectorOnMainThread:@selector(_handleAppExited:)
+                                                       withObject:md
+                                                    waitUntilDone:NO];
                             }
                             break;
                         }
@@ -416,9 +599,9 @@ static NSMenuItem *itemWithTag(NSMenu *root, int tag) {
                                 [md setObject:[NSString stringWithCString:msg.bundleID] forKey:@"BundleID"];
                                 [md setObject:[NSString stringWithCString:msg.data] forKey:@"Path"];
 
-                                [[NSNotificationCenter defaultCenter] 
-                                    postNotificationName:@"NSApplicationDidLaunch" object:nil
-                                    userInfo:md];
+                                [self performSelectorOnMainThread:@selector(_handleAppLaunched:)
+                                                       withObject:md
+                                                    waitUntilDone:NO];
                             }
                             break;
                         }
@@ -430,11 +613,9 @@ static NSMenuItem *itemWithTag(NSMenu *root, int tag) {
                                 break;
                             }
                             memcpy(&itemID, msg.data, sizeof(itemID));
-                            NSMenuItem *item = itemWithTag(_mainMenu, itemID);
-                            if(item != nil)
-                                [self sendAction:[item action] to:[item target] from:item];
-                            else
-                                NSLog(@"Error: cannot find menu item with tag %d!", itemID);
+                            [self performSelectorOnMainThread:@selector(_handleItemClicked:)
+                                                   withObject:[NSNumber numberWithInt:itemID]
+                                                waitUntilDone:NO];
                             break;
                         }
                         case CODE_ACTIVATION_STATE:
@@ -445,43 +626,22 @@ static NSMenuItem *itemWithTag(NSMenu *root, int tag) {
                                 break;
                             }
                             memcpy(&data, msg.data, sizeof(data));
-                            if(data.active == 1 && data.windowID != 0) {
-                                NSWindow *win = [self windowWithWindowNumber:data.windowID];
-                                if(win)
-                                    [win showForActivation]; 
-                            }
-                            if(data.active && !_isActive)
-                                [[NSNotificationCenter defaultCenter]
-                                    postNotificationName:NSApplicationWillBecomeActiveNotification
-                                                  object:self];
-                            else if(!data.active && _isActive)
-                                [[NSNotificationCenter defaultCenter]
-                                    postNotificationName:NSApplicationWillResignActiveNotification
-                                                  object:self];
-                            _isActive = data.active;
-                            [self _checkForAppActivation];
-
-                            if([bundleID isEqualToString:@"com.ravynos.SystemUIServer"]) {
-                                NSMutableDictionary *md = [NSMutableDictionary new];
-                                [md setObject:[NSNumber numberWithInt:msg.pid] forKey:@"ProcessID"];
-                                [md setObject:[NSString stringWithCString:msg.bundleID] forKey:@"BundleID"];
-
-                                [[NSNotificationCenter defaultCenter] 
-                                    postNotificationName: (_isActive ? NSApplicationDidBecomeActiveNotification
-                                                                     : NSApplicationDidResignActiveNotification)
-                                                               object:nil
-                                                             userInfo:md];
-                            } else {
-                                [[NSNotificationCenter defaultCenter]
-                                    postNotificationName: (_isActive ? NSApplicationDidBecomeActiveNotification
-                                                                     : NSApplicationDidResignActiveNotification)
-                                                               object:self];
-                            }
+                            NSDictionary *info = [NSDictionary dictionaryWithObjectsAndKeys:
+                                [NSNumber numberWithInt:data.active], @"Active",
+                                [NSNumber numberWithInt:data.windowID], @"WindowID",
+                                [NSNumber numberWithInt:msg.pid], @"PID",
+                                [NSString stringWithCString:msg.bundleID], @"BundleID",
+                                nil];
+                            [self performSelectorOnMainThread:@selector(_handleActivationState:)
+                                                   withObject:info
+                                                waitUntilDone:NO];
                             break;
                         }
                         case CODE_APP_HIDE:
                         {
-                            [self hide:nil];
+                            [self performSelectorOnMainThread:@selector(hide:)
+                                                   withObject:nil
+                                                waitUntilDone:NO];
                             break;
                         }
                         default:
@@ -497,18 +657,13 @@ static NSMenuItem *itemWithTag(NSMenu *root, int tag) {
     }
 }
 
-/* Each event notification is 2 chars. Don't read more! */
 -(int)_drainPipe {
-    char junk[2];
-    fd_set fds;
-    struct timeval tv = {0};
-
-    FD_ZERO(&fds);
-    FD_SET(_machEventPipe[0], &fds);
-    if(select(_machEventPipe[0] + 1, &fds, NULL, NULL, &tv) == 1)
-        if(FD_ISSET(_machEventPipe[0], &fds))
-            return read(_machEventPipe[0], junk, sizeof(junk));
-    return 0;
+    char junk[64];
+    int total = 0;
+    ssize_t n;
+    while((n = read(_machEventPipe[0], junk, sizeof(junk))) > 0)
+        total += (int)n;
+    return total;
 }
 
 -(int)_wakeUp {
@@ -525,21 +680,30 @@ static NSMenuItem *itemWithTag(NSMenu *root, int tag) {
     if(NSApp)
         NSAssert(!NSApp, @"NSApplication is a singleton");
     NSApp=[self retain];
-   aitrace("AI0 NSApp set\n");
 
     if(pipe(_machEventPipe) != 0) {
         NSLog(@"pipe: %s", strerror(errno));
         exit(-1);
     }
-   aitrace("AI1 pipe ok\n");
+    fcntl(_machEventPipe[0], F_SETFL, O_NONBLOCK);
+    fcntl(_machEventPipe[1], F_SETFL, O_NONBLOCK);
     _inputSource = [[NSSelectInputSource socketInputSourceWithSocket:
             [[NSSocket_bsd socketWithDescriptor:_machEventPipe[0]] retain]] retain];
     [_inputSource setSelectEventMask:NSSelectReadEvent];
-   aitrace("AI2 inputSource ok\n");
 
     //[NSRunLoop mainRunLoop];
     [NSRunLoop currentRunLoop];
-   aitrace("AI3 runloop ok\n");
+
+    /* ravynOS: create the display singleton before starting the service
+     * thread.  NSDisplay/NSThreadSharedInstance take the process-wide thread
+     * registry lock; doing this while the new machServiceLoop thread is also
+     * in Foundation's thread setup deadlocked Terminal's launch (measured:
+     * a newly forked app stopped after "RL-done" and never reached its
+     * bundle-ID trace). */
+   _display=[[NSDisplay currentDisplay] retain];
+
+   _windows=[[NSMutableArray new] retain];
+   _mainMenu=nil;
 
     // Create a port with send/receive rights that communicates with WindowServer
     mach_port_t task = mach_task_self();
@@ -548,36 +712,53 @@ static NSMenuItem *itemWithTag(NSMenu *root, int tag) {
         NSLog(@"Failed to allocate mach_port _wsReplyPort");
         exit(1);
     }
-   aitrace("AI4 replyport ok\n");
     [NSThread detachNewThreadSelector:@selector(machServiceLoop:) toTarget:self withObject:nil];
-   aitrace("AI5 svc thread ok\n");
 
    _wsSvcPort = MACH_PORT_NULL;
 
-   _display=[[NSDisplay currentDisplay] retain];
-   aitrace("AI6 display set\n");
-
-   _windows=[[NSMutableArray new] retain];
-   _mainMenu=nil;
-
-   /* ravynOS: derive bundle ID from the executable name (avoids
-    * [NSBundle mainBundle], which stalls under TCG).  WindowServer
-    * identifies Dock/SUI clients by these IDs. */
+   /* ravynOS: derive the bundle ID from the executable path (avoids
+    * [NSBundle mainBundle], which stalls under TCG).  WindowServer,
+    * the Dock and the menu bar all key on this ID, so a hardcoded list
+    * of four apps made every other app register as "unix.<pid>". */
    { char exePath[512];
      uint32_t exeBufSize = sizeof(exePath);
      NSString *exeName = nil;
      if(_NSGetExecutablePath(exePath, &exeBufSize) == 0) {
          const char *slash = strrchr(exePath, '/');
          exeName = [NSString stringWithUTF8String:slash ? slash+1 : exePath];
+
+         /* Walk up to the enclosing .app and read its Info.plist. */
+         {
+             NSString *path = [NSString stringWithUTF8String:exePath];
+             NSString *component = path;
+             int depth;
+
+             for(depth = 0; depth < 6 && component != nil; depth++) {
+                 if([[component pathExtension] isEqualToString:@"app"]) {
+                     NSBundle *bundle = [NSBundle bundleWithPath:component];
+                     NSString *identifier = [bundle objectForInfoDictionaryKey:@"CFBundleIdentifier"];
+
+                     if(identifier != nil && [identifier length] > 0)
+                         bundleID = identifier;
+                     break;
+                 }
+                 component = [component stringByDeletingLastPathComponent];
+                 if([component isEqualToString:@"/"] || [component length] == 0)
+                     break;
+             }
+         }
      }
-     if([exeName isEqualToString:@"Filer"]) {
-         bundleID = @"com.ravynos.Filer";
-     } else if([exeName isEqualToString:@"Dock"]) {
-         bundleID = @"com.ravynos.Dock";
-     } else if([exeName isEqualToString:@"SystemUIServer"]) {
-         bundleID = @"com.ravynos.SystemUIServer";
-     } else {
-         bundleID = [NSString stringWithFormat:@"unix.%u", getpid()];
+     if(bundleID == nil || [bundleID length] == 0) {
+         if([exeName isEqualToString:@"Filer"])
+             bundleID = @"com.ravynos.Filer";
+         else if([exeName isEqualToString:@"Dock"])
+             bundleID = @"com.ravynos.Dock";
+         else if([exeName isEqualToString:@"SystemUIServer"])
+             bundleID = @"com.ravynos.SystemUIServer";
+         else if([exeName isEqualToString:@"Terminal"])
+             bundleID = @"com.ravynos.Terminal";
+         else
+             bundleID = [NSString stringWithFormat:@"unix.%u", getpid()];
      }
      char btrace[160];
      int bn = snprintf(btrace, sizeof(btrace), "[AppKit] exe=%s bundleID=%s\n",
@@ -585,7 +766,6 @@ static NSMenuItem *itemWithTag(NSMenu *root, int tag) {
          bundleID ? [bundleID UTF8String] : "(nil)");
      if (bn > 0) write(2, btrace, bn);
    }
-   aitrace("AI7 bundle ok\n");
    if(!([bundleID isEqualToString:@"com.ravynos.WindowServer"])) {
         /* Every GUI app must resolve the launchd bootstrap port before it can
          * look up the WindowServer service.  The shell apps do that in main()
@@ -1127,34 +1307,37 @@ static int _tagAllMenus(NSMenu *menu, int tag) {
 -(BOOL)openFiles
 {
    BOOL opened = NO;
-   if(_delegate) {
-      id nsOpen = [[NSUserDefaults standardUserDefaults] objectForKey:@"NSOpen"];
-      NSArray *openFiles = nil;
-      if ([nsOpen isKindOfClass:[NSString class]] && [nsOpen length]) {
-         openFiles = [NSArray arrayWithObject:nsOpen];
-      } else if ([nsOpen isKindOfClass:[NSArray class]]) {
-         openFiles = nsOpen;
-      }
-      if ([openFiles count] > 0) {
-         if ([openFiles count] == 1 && [_delegate respondsToSelector: @selector(application:openFile:)]) {
+   id nsOpen = [[NSUserDefaults standardUserDefaults] objectForKey:@"NSOpen"];
+   NSArray *openFiles = nil;
 
-            if([_delegate application: self openFile: [openFiles lastObject]]) {
-               opened = YES;
-            }
-         } else {
-            if ([_delegate respondsToSelector: @selector(application:openFiles:)]) {
-               [_delegate application: self openFiles: openFiles];
-               opened = YES;
+   if ([nsOpen isKindOfClass:[NSString class]] && [nsOpen length]) {
+      openFiles = [NSArray arrayWithObject:nsOpen];
+   } else if ([nsOpen isKindOfClass:[NSArray class]]) {
+      openFiles = nsOpen;
+   }
+   if ([openFiles count] > 0) {
+      if ([openFiles count] == 1 && [_delegate respondsToSelector: @selector(application:openFile:)]) {
 
-            } else if ([_delegate respondsToSelector: @selector(application:openFile:)]) {
-               for (NSString *aFile in openFiles) {
-                  opened |= [_delegate application: self openFile: aFile];
-               }
+         if([_delegate application: self openFile: [openFiles lastObject]]) {
+            opened = YES;
+         }
+      } else {
+         if ([_delegate respondsToSelector: @selector(application:openFiles:)]) {
+            [_delegate application: self openFiles: openFiles];
+            opened = YES;
+
+         } else if ([_delegate respondsToSelector: @selector(application:openFile:)]) {
+            for (NSString *aFile in openFiles) {
+               opened |= [_delegate application: self openFile: aFile];
             }
          }
       }
-      [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"NSOpen"];
+      /* The delegate did not take the files: the document controller opens
+       * them, so an app without an openFile: delegate still works. */
+      if (!opened)
+         [self _openFiles:openFiles useDelegate:NO];
    }
+   [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"NSOpen"];
    return opened;
 }
 
@@ -1256,8 +1439,12 @@ static int _tagAllMenus(NSMenu *menu, int tag) {
     }
    }
 
-   [self terminate:self];
+   if([_delegate respondsToSelector:@selector(applicationShouldTerminateAfterLastWindowClosed:)] &&
+      [_delegate applicationShouldTerminateAfterLastWindowClosed:self]) {
+       [self terminate:self];
+   }
 }
+
 
 -(void)_checkForAppActivation {
     if([self isActive])
@@ -1511,7 +1698,16 @@ static int _tagAllMenus(NSMenu *menu, int tag) {
 }
 
 -(void)activateIgnoringOtherApps:(BOOL)flag {
-   NSUnimplementedMethod();
+   if(_isHidden)
+     [self unhideWithoutActivation];
+
+   NSWindow *win=[self keyWindow];
+   if(win==nil)
+     win=[self mainWindow];
+   if(win==nil)
+     win=[_windows lastObject];
+   if(win!=nil)
+     [win makeKeyAndOrderFront:self];
 }
 
 -(void)deactivate {
@@ -1967,6 +2163,7 @@ standardAboutPanel] retain];
 
 -(void)_removeWindow:(NSWindow *)window {
     [_windows removeObject:window];
+    [self _checkForTerminate];
 }
 
 -(void)_windowWillBecomeActive:(NSWindow *)window {

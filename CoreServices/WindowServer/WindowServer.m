@@ -63,6 +63,33 @@ int proc_pidpath(pid_t pid, char *buf, uint32_t buffersize);
 #import "rpc.h"
 /* WindowServer RPC entry point, provided by libWindowServer on ravynOS. */
 kern_return_t _windowServerRPC(void *data, size_t len, void *replyBuf, int *replyLen);
+#include <errno.h>
+/* Cross-process "this window has painted content" channel: WindowServer's
+ * stderr only reaches the serial log, so dailydrivertest polls this file to
+ * learn when a launched bundle is on screen before launching the next one. */
+static void wsPaintedMarker(const char *bundleID) {
+    if(bundleID == NULL || bundleID[0] == 0 || strcmp(bundleID, "unknown") == 0)
+        return;
+    int fd = open("/var/log/ws-painted.log", O_WRONLY | O_CREAT | O_APPEND, 0644);
+    if(fd < 0) {
+        char errbuf[96];
+        int m = snprintf(errbuf, sizeof(errbuf), "[WS] painted-marker open failed errno %d\n", errno);
+        if(m > 0)
+            write(2, errbuf, (size_t)m);
+        return;
+    }
+    char line[128];
+    int n = snprintf(line, sizeof(line), "PAINTED %s\n", bundleID);
+    ssize_t wr = write(fd, line, (size_t)n);
+    if(wr < 0) {
+        char errbuf[96];
+        int m = snprintf(errbuf, sizeof(errbuf), "[WS] painted-marker write failed errno %d\n", errno);
+        if(m > 0)
+            write(2, errbuf, (size_t)m);
+    } else
+        fprintf(stderr, "[WS] MARK wrote %s\n", bundleID);
+    close(fd);
+}
 
 /* FreeBSD mmap hint flags the ravynOS sys/mman.h does not define. Both are
  * hints only, so 0 is the correct no-op value. */
@@ -78,6 +105,19 @@ kern_return_t _windowServerRPC(void *data, size_t len, void *replyBuf, int *repl
  * are in the rendering loop
  */
 pthread_mutex_t renderLock;
+
+/* Guards _sceneDirty/_damageRect: the mach service thread marks damage while the
+ * render thread snapshots and clears it.  Never taken while renderLock is held in
+ * the other order -- the render thread drops this lock before compositing.
+ */
+static pthread_mutex_t damageLock = PTHREAD_MUTEX_INITIALIZER;
+
+/* Last menu archive received per bundle ID.  At login an app usually sends its
+ * menu before SystemUIServer has registered, and the relay below drops it (the
+ * NSLog is the only trace and NSLog never reaches the serial console).  The
+ * menus are replayed from here when SUI registers -- see MSG_ID_PORT.  Only the
+ * mach receive thread touches this, so it needs no lock. */
+static NSMutableDictionary *stashedMenus = nil;
 
 /* The apps dictionary is shared between the mach service thread (lookups on
  * every RPC), the kqueue thread (removeObjectForKey when a child exits) and
@@ -95,7 +135,131 @@ static void appsLockInit(void) {
     pthread_mutex_init(&appsLock, &attr);
     pthread_mutexattr_destroy(&attr);
 }
+static BOOL sInDrag = NO;
+static WSWindowRecord *sDragWindow = nil;
 
+/* Paint bookkeeping.  A window announces itself with "[WS] PAINTED" once its
+ * surface holds real content, so the screenshot harness can wait for the
+ * window instead of guessing.  Window numbers are per app, so the key is
+ * (pid, window number).  "flushed" means the client sent its window state
+ * while the window was NORMAL, which happens right after it drew. */
+#define WS_PAINT_MAX 128
+typedef struct {
+    pid_t pid;
+    unsigned number;
+    int flushed;
+    int announced;
+} WSPaintEntry;
+
+static WSPaintEntry sPaintTable[WS_PAINT_MAX];
+static int sPaintCount = 0;
+static pthread_mutex_t sPaintLock = PTHREAD_MUTEX_INITIALIZER;
+
+/* A window with real content has non-zero bytes somewhere.  Sampling a few
+ * spots is enough and scanning the whole buffer every frame is not
+ * affordable on a single-vCPU guest. */
+static BOOL WSSurfaceHasContent(void *buf, size_t size) {
+    unsigned char *px = (unsigned char *)buf;
+    const int samples = 32;
+    if(px == NULL || size < 4)
+        return NO;
+    size_t step = size / (size_t)samples;
+    for(int i = 0; i < samples; i++) {
+        size_t off = step * (size_t)i;
+        if(off + 4 > size)
+            off = size - 4;
+        if(px[off] || px[off+1] || px[off+2] || px[off+3])
+            return YES;
+    }
+    return NO;
+}
+
+/* The client flushed this window while it was NORMAL. */
+static void WSPaintMarkFlushed(pid_t pid, unsigned number) {
+    pthread_mutex_lock(&sPaintLock);
+    for(int i = 0; i < sPaintCount; i++) {
+        if(sPaintTable[i].pid == pid && sPaintTable[i].number == number) {
+            sPaintTable[i].flushed = 1;
+            pthread_mutex_unlock(&sPaintLock);
+            return;
+        }
+    }
+    if(sPaintCount < WS_PAINT_MAX) {
+        sPaintTable[sPaintCount].pid = pid;
+        sPaintTable[sPaintCount].number = number;
+        sPaintTable[sPaintCount].flushed = 1;
+        sPaintTable[sPaintCount].announced = 0;
+        sPaintCount++;
+    }
+    pthread_mutex_unlock(&sPaintLock);
+}
+
+/* Did the client already flush this window while it was NORMAL? */
+static BOOL WSPaintWasFlushed(pid_t pid, unsigned number) {
+    BOOL flushed = NO;
+    pthread_mutex_lock(&sPaintLock);
+    for(int i = 0; i < sPaintCount; i++) {
+        if(sPaintTable[i].pid == pid && sPaintTable[i].number == number) {
+            flushed = sPaintTable[i].flushed ? YES : NO;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&sPaintLock);
+    return flushed;
+}
+
+static inline void WSAddRoundRectPath(O2ContextRef ctx, NSRect r, float radius) {
+    float x = r.origin.x;
+    float y = r.origin.y;
+    float w = r.size.width;
+    float h = r.size.height;
+    if(radius * 2.0f > w) radius = w / 2.0f;
+    if(radius * 2.0f > h) radius = h / 2.0f;
+    O2ContextBeginPath(ctx);
+    O2ContextMoveToPoint(ctx, x + radius, y);
+    O2ContextAddArcToPoint(ctx, x + w, y, x + w, y + h, radius);
+    O2ContextAddArcToPoint(ctx, x + w, y + h, x, y + h, radius);
+    O2ContextAddArcToPoint(ctx, x, y + h, x, y, radius);
+    O2ContextAddArcToPoint(ctx, x, y, x + w, y, radius);
+    O2ContextClosePath(ctx);
+}
+
+static void WSDrawArrowCursor(O2ContextRef ctx, float x, float y) {
+    O2ContextSaveGState(ctx);
+    // Outer black outline: classic macOS arrow
+    O2ContextBeginPath(ctx);
+    O2ContextMoveToPoint(ctx, x, y);
+    O2ContextAddLineToPoint(ctx, x, y - 17.0f);
+    O2ContextAddLineToPoint(ctx, x + 4.5f, y - 13.0f);
+    O2ContextAddLineToPoint(ctx, x + 7.5f, y - 19.0f);
+    O2ContextAddLineToPoint(ctx, x + 10.0f, y - 18.0f);
+    O2ContextAddLineToPoint(ctx, x + 7.0f, y - 12.0f);
+    O2ContextAddLineToPoint(ctx, x + 12.0f, y - 12.0f);
+    O2ContextClosePath(ctx);
+    O2ContextSetRGBFillColor(ctx, 0.0f, 0.0f, 0.0f, 1.0f);
+    O2ContextFillPath(ctx);
+
+    // Inner crisp white arrow
+    O2ContextBeginPath(ctx);
+    O2ContextMoveToPoint(ctx, x + 1.0f, y - 2.0f);
+    O2ContextAddLineToPoint(ctx, x + 1.0f, y - 14.5f);
+    O2ContextAddLineToPoint(ctx, x + 4.5f, y - 11.5f);
+    O2ContextAddLineToPoint(ctx, x + 7.5f, y - 17.5f);
+    O2ContextAddLineToPoint(ctx, x + 8.5f, y - 16.5f);
+    O2ContextAddLineToPoint(ctx, x + 5.5f, y - 11.0f);
+    O2ContextAddLineToPoint(ctx, x + 10.0f, y - 11.0f);
+    O2ContextClosePath(ctx);
+    O2ContextSetRGBFillColor(ctx, 1.0f, 1.0f, 1.0f, 1.0f);
+    O2ContextFillPath(ctx);
+    O2ContextRestoreGState(ctx);
+}
+
+/* Damage box for the vector arrow above: its tip is at (x,y) and the body
+ * extends +x and -y, so a box that only grew upward from the tip (which is
+ * what the cursor used to be clipped to) erased the whole arrow. */
+static NSRect WSCursorDamageRect(float x, float y) {
+    return NSMakeRect(x - 1.0f, y - 21.0f, 15.0f, 23.0f);
+}
 @implementation WindowServer
 
 static void notifyAppExited(mach_port_t port, pid_t pid, const char *bundleID, const char *path) {
@@ -178,6 +342,10 @@ static struct kinfo_proc *_procForPID(pid_t pid) {
          * usable as RAVYN_WS_PORT (see CODE_OPEN_BUNDLE). */
         mach_port_insert_right(mach_task_self(), _servicePort, _servicePort, MACH_MSG_TYPE_MAKE_SEND);
     }
+    mach_port_limits_t qlimits = {0};
+    qlimits.mpl_qlimit = 128;
+    mach_port_set_attributes(mach_task_self(), _servicePort, MACH_PORT_LIMITS_INFO,
+                             (mach_port_info_t)&qlimits, sizeof(qlimits));
 
     _kq = kqueue();
     if(_kq < 0) {
@@ -321,8 +489,10 @@ static struct kinfo_proc *_procForPID(pid_t pid) {
     }
 
     if([app windowWithID:data->windowID] != nil) {
-        NSLog(@"windowCreate cannot create existing window ID %u for %@", data->windowID, app);
-        return 0;
+        /* Re-sent create after a lost reply: the window already exists, so
+         * report it instead of failing the RPC, which would leave AppKit
+         * with a nil window over a live server record that never paints. */
+        return data->windowID;
     }
 
     WSWindowRecord *winrec = [WSWindowRecord new];
@@ -340,6 +510,15 @@ static struct kinfo_proc *_procForPID(pid_t pid) {
     winrec.title = [NSString stringWithCString:data->title length:len];
     winrec.icon = nil;
 
+    /* A client that computes its frame from a not-yet-laid-out view can ask
+     * for a nonsense size; mapping hundreds of MB of zeroed shm (and wrapping
+     * it in an O2Surface) then hangs the server under TCG.  Treat such a
+     * request as the smallest legal frame. */
+    if(data->w <= 0 || data->h <= 0 || data->w > 8192 || data->h > 8192) {
+        data->w = (data->w <= 0 || data->w > 8192) ? 1 : data->w;
+        data->h = (data->h <= 0 || data->h > 8192) ? 1 : data->h;
+        winrec.geometry = NSMakeRect(data->x, data->y, data->w, data->h);
+    }
     winrec.shmPath = [NSString stringWithFormat:@"/win_%u_%u", [app pid], winrec.number];
     winrec.bufSize = ([fb getDepth]/8) * data->w * data->h;
 
@@ -357,12 +536,11 @@ static struct kinfo_proc *_procForPID(pid_t pid) {
     winrec.surfaceBuf = mmap(NULL, winrec.bufSize, PROT_WRITE|PROT_READ, MAP_SHARED|MAP_NOCORE, shmfd, 0);
     close(shmfd);
 
-    if(winrec.surfaceBuf == NULL) {
+    if(winrec.surfaceBuf == MAP_FAILED) {
         winrec.bufSize = 0;
         NSLog(@"Cannot alloc surface memory! %s", strerror(errno));
         return 0;
     }
-
     winrec.surface = [[O2Surface alloc] initWithBytes:winrec.surfaceBuf width:data->w
             height:data->h bitsPerComponent:8 bytesPerRow:4*(data->w)
             colorSpace:[fb colorSpace]
@@ -399,32 +577,80 @@ static struct kinfo_proc *_procForPID(pid_t pid) {
     winrec.state = data->state;
     winrec.styleMask = data->style;
     NSRect oldFrame = winrec.geometry;
-    winrec.geometry = NSMakeRect(data->x, data->y, data->w, data->h); // FIXME: bounds check?
-    if(!NSEqualRects(winrec.geometry, oldFrame)) {
-        // it resized, so fix up our surface to match
+    if(!sInDrag || winrec != sDragWindow) {
+        winrec.geometry = NSMakeRect(data->x, data->y, data->w, data->h); // FIXME: bounds check?
+    }
+    if(!NSEqualSizes(winrec.geometry.size, oldFrame.size)) {
+        /* The window resized, so its shared surface buffer has to be rebuilt at the
+         * new size. Two things used to go wrong here and both left a live window
+         * pointing at memory that was no longer mapped -- Onyx2D then faulted in the
+         * middle of a drawImage span read:
+         *   1) munmap() was called with the NEW bufSize (it had already been
+         *      overwritten above), so shrinking only unmapped part of the old
+         *      mapping and growing failed with EINVAL, leaking the old mapping.
+         *   2) when the remap failed we bailed out early while winrec.surface still
+         *      wrapped the buffer we had just unmapped; the next frame drew it.
+         * So remember the OLD size for munmap(), and on any remap failure drop the
+         * surface (NULL means "not drawable", which the draw loop already honours). */
+        size_t oldBufSize = winrec.bufSize;
+        int oldW = (int)oldFrame.size.width, oldH = (int)oldFrame.size.height;
+
         pthread_mutex_lock(&renderLock);
         winrec.bufSize = ([fb getDepth]/8) * data->w * data->h;
 
-        int shmfd = shm_open([winrec.shmPath cString], O_RDWR|O_CREAT, 0666);
+        shm_unlink([winrec.shmPath cString]);
+        int shmfd = shm_open([winrec.shmPath cString], O_RDWR|O_CREAT|O_EXCL, 0666);
+        if(shmfd < 0)
+            shmfd = shm_open([winrec.shmPath cString], O_RDWR|O_CREAT, 0666);
         if(shmfd < 0) {
+            int err = errno;
+            pthread_mutex_unlock(&renderLock);
+            fprintf(stderr, "[WS] REMAP-FAIL win=%u %dx%d->%dx%d open errno=%d\n",
+                (unsigned)data->windowID, oldW, oldH, (int)data->w, (int)data->h, err);
             NSLog(@"Cannot open shm fd: %s", strerror(errno));
             return;
         }
 
-        if(ftruncate(shmfd, winrec.bufSize) < 0)
+        if(ftruncate(shmfd, winrec.bufSize) < 0) {
+            int err = errno;
+            close(shmfd);
+            /* The new mapping does not exist: the old surface wrapped memory we are
+             * about to unmap, so it has to stop being reachable before that happens. */
+            munmap(winrec.surfaceBuf, oldBufSize);
+            winrec.surfaceBuf = NULL;
+            winrec.surface = NULL;
+            winrec.bufSize = 0;
+            pthread_mutex_unlock(&renderLock);
+            fprintf(stderr, "[WS] REMAP-FAIL win=%u %dx%d->%dx%d ftrunc errno=%d\n",
+                (unsigned)data->windowID, oldW, oldH, (int)data->w, (int)data->h, err);
             NSLog(@"shmfd ftruncate failed: %s", strerror(errno));
+            return;
+        }
 
-        /* shm is already 0666, no need for fchown via failing sysctl */
+        if(winrec.surfaceBuf != NULL)
+            munmap(winrec.surfaceBuf, oldBufSize);
 
         winrec.surfaceBuf = mmap(NULL, winrec.bufSize, PROT_WRITE|PROT_READ,
                 MAP_SHARED|MAP_NOCORE, shmfd, 0);
+        int mapErr = (winrec.surfaceBuf == NULL) ? errno : 0;
         close(shmfd);
 
         if(winrec.surfaceBuf == NULL) {
+            /* No mapping: the OLD surface wrapped the region we just unmapped, so it
+             * must not stay reachable -- drawing it is what faulted before. */
+            winrec.surface = NULL;
             winrec.bufSize = 0;
+            pthread_mutex_unlock(&renderLock);
+            fprintf(stderr, "[WS] REMAP-FAIL win=%u %dx%d->%dx%d mmap errno=%d\n",
+                (unsigned)data->windowID, oldW, oldH, (int)data->w, (int)data->h, mapErr);
             NSLog(@"Cannot alloc surface memory! %s", strerror(errno));
             return;
         }
+
+        if(logLevel < WS_INFO)
+            fprintf(stderr, "[WS] REMAP win=%u %dx%d->%dx%d buf=0x%zx size=0x%zx\n",
+                (unsigned)data->windowID, oldW, oldH, (int)data->w, (int)data->h,
+                (size_t)winrec.surfaceBuf, (size_t)winrec.bufSize);
 
         winrec.surface = [[O2Surface alloc] initWithBytes:winrec.surfaceBuf width:data->w
             height:data->h bitsPerComponent:8 bytesPerRow:4*(data->w)
@@ -451,6 +677,29 @@ static struct kinfo_proc *_procForPID(pid_t pid) {
     if(logLevel >= WS_INFO)
         NSLog(@"windowModify %@ win %@", app, winrec);
 
+    /* A window that becomes visible again goes in front of the others: the
+     * compositor draws the windows of a level in array order, so the last one
+     * is the frontmost.  Only a window that just became visible (or one of
+     * the active app) is moved: a background app that merely repaints must
+     * not jump in front of the app the user is looking at. */
+    if(winrec.state == NORMAL && oldState != NORMAL) {
+        [self bringWindowToFront:winrec];
+        if(app != nil && ![app skipSwitcher]) {
+            curApp = app;
+            curWindow = winrec;
+        }
+    }
+
+    /* The client flushes its window (this very RPC) right after it drew, so
+     * the window holds content even if every pixel is black. */
+    if(winrec.state == NORMAL)
+        WSPaintMarkFlushed((pid_t)[app pid], (unsigned)winrec.number);
+
+    /* Anything a client can change through here (frame, level, state) changes
+     * what the compositor must paint; without this mark a client repaint that
+     * only moved/resized its window would leave the old pixels on screen. */
+    [self markDamageRect:NSInsetRect(NSUnionRect(oldFrame, winrec.geometry), -16, -16)];
+
     if(oldState == MINIMIZED && winrec.state != MINIMIZED)
         [self notifyDock:data length:sizeof(struct wsRPCWindow) 
                 withCode:CODE_WINDOW_STATE forApp:app];
@@ -473,6 +722,12 @@ static struct kinfo_proc *_procForPID(pid_t pid) {
     pthread_mutex_lock(&renderLock);
     [_windows[window.level] addObject:window];
     pthread_mutex_unlock(&renderLock);
+    if(window.level == kCGNormalWindowLevelKey && window.app != nil) {
+        const char *bid = [[window.app bundleID] UTF8String];
+        fprintf(stderr, "[WS] FRONT app=%s win=%u\n", bid ? bid : "unknown", (unsigned)window.number);
+        fflush(stderr);
+    }
+    [self markDamageRect:NSInsetRect(window.geometry, -16, -16)];
 }
 
 -(void)removeWindowByLevel:(WSWindowRecord *)window {
@@ -492,20 +747,23 @@ static struct kinfo_proc *_procForPID(pid_t pid) {
     pthread_mutex_lock(&renderLock);
     [_windows[window.level] removeObject:window];
     pthread_mutex_unlock(&renderLock);
+    [self markDamageRect:NSInsetRect(window.geometry, -16, -16)];
 }
 
 -(void)removeWindowFromAllLevels:(WSWindowRecord *)window {
-    fprintf(stderr,"[WS] DESTROY win=%u lvl=%d frame=%d,%d %dx%d\n",
-        (unsigned)window.number,(int)window.level,
+    const char *bid = (window.app && [window.app bundleID]) ? [[window.app bundleID] UTF8String] : "(nil)";
+    fprintf(stderr,"[WS] DESTROY win=%u app=%s lvl=%d frame=%d,%d %dx%d\n",
+        (unsigned)window.number, bid, (int)window.level,
         (int)window.frame.origin.x,(int)window.frame.origin.y,
         (int)window.frame.size.width,(int)window.frame.size.height);
-
     if(logLevel >= WS_INFO)
         NSLog(@"removeWindowFromAllLevels %@", window);
     pthread_mutex_lock(&renderLock);
     for(int i = 0; i < kCGNumReservedWindowLevels; ++i)
-        [_windows[window.level] removeObject:window];
+        [_windows[i] removeObject:window];
     pthread_mutex_unlock(&renderLock);
+    if(window != nil)
+        [self markDamageRect:NSInsetRect(window.geometry, -16, -16)];
 }
 
 -(void)setShell:(int)shell {
@@ -717,29 +975,260 @@ static void *shellSvcLoop(void *arg) {
  * KEEP THIS RUN LOOP EFFICIENT! It is called every frame to render the entire screen contents.
  */
 #define _cursor_height 24
-static char _pendingBundlePath[1024];
-static char _pendingBundleName[256];
-static char _pendingBundleID[128];
-static volatile int _pendingBundleReady = 0;
+/* Pending bundle launches.  Several clients ask for apps at once (the Dock,
+ * the self test, Filer) and the single slot that used to hold the request
+ * dropped all but the last one, so those apps never launched.  A small FIFO
+ * keeps every request.  The spawn itself happens in the main loop with no
+ * lock held: a child forked from a locked section inherits the locked mutex
+ * and never completes its launch handshake. */
+typedef struct {
+    char path[1024];
+    char name[256];
+    char bundleID[256];
+    char args[16][256];
+    int argc;
+} PendingBundleItem;
+
+#define WS_PENDING_QUEUE_SIZE 32
+static PendingBundleItem _pendingQueue[WS_PENDING_QUEUE_SIZE];
+static int _pendingHead = 0;
+static int _pendingTail = 0;
+static int _pendingCount = 0;
+static pthread_mutex_t _pendingLock = PTHREAD_MUTEX_INITIALIZER;
+
+/* Resolve a bundle's executable the way the desktop stage does:
+ * Contents/ravynOS/<name>, Contents/MacOS/<name> or <bundle>/<name>. */
+-(BOOL)resolveBundleExecutable:(NSString *)bundlePath into:(char *)out size:(size_t)size {
+    NSBundle *bundle = [NSBundle bundleWithPath:bundlePath];
+    NSString *exeName = [bundle objectForInfoDictionaryKey:@"CFBundleExecutable"];
+    if(exeName == nil || [exeName length] == 0)
+        exeName = [[bundlePath lastPathComponent] stringByDeletingPathExtension];
+    if([exeName hasSuffix:@".app"])
+        exeName = [exeName stringByDeletingPathExtension];
+
+    NSMutableArray *names = [NSMutableArray arrayWithObject:exeName];
+    NSString *underscore = [exeName stringByReplacingOccurrencesOfString:@" " withString:@"_"];
+    if(![names containsObject:underscore]) [names addObject:underscore];
+    NSString *spaced = [exeName stringByReplacingOccurrencesOfString:@"_" withString:@" "];
+    if(![names containsObject:spaced]) [names addObject:spaced];
+
+    for(NSString *name in names) {
+        NSString *cands[3] = {
+            [NSString stringWithFormat:@"%@/Contents/ravynOS/%@", bundlePath, name],
+            [NSString stringWithFormat:@"%@/Contents/MacOS/%@", bundlePath, name],
+            [NSString stringWithFormat:@"%@/%@", bundlePath, name]
+        };
+        for(int i = 0; i < 3; i++) {
+            const char *c = [cands[i] UTF8String];
+            if(c != NULL && access(c, X_OK) == 0) {
+                snprintf(out, size, "%s", c);
+                return YES;
+            }
+        }
+    }
+    return NO;
+}
+
+/* Move a window to the top of its level's stack.  The compositor draws the
+ * windows of a level in array order, so the last one is the frontmost. */
+-(void)bringWindowToFront:(WSWindowRecord *)winrec {
+    if(winrec == nil)
+        return;
+    if(winrec.level < 0 || winrec.level >= kCGNumReservedWindowLevels)
+        return;
+    pthread_mutex_lock(&renderLock);
+    NSMutableArray *list = _windows[winrec.level];
+    if([list containsObject:winrec]) {
+        [list removeObject:winrec];
+        [list addObject:winrec];
+        if(winrec.level == kCGNormalWindowLevelKey && winrec.app != nil) {
+            const char *bid = [[winrec.app bundleID] UTF8String];
+            fprintf(stderr, "[WS] FRONT app=%s win=%u\n", bid ? bid : "unknown", (unsigned)winrec.number);
+            fflush(stderr);
+        }
+    }
+    pthread_mutex_unlock(&renderLock);
+    /* The window now covers whatever was in front of it: repaint its area. */
+    [self markDamageRect:NSInsetRect(winrec.geometry, -16, -16)];
+}
+
+/* An app that is already running must not be forked a second time: the Dock
+ * and the self test both "open" apps that launchd already started, and the
+ * duplicate instance built a second desktop window and a second Filer window.
+ * Activate the existing instance instead (same effect as clicking its Dock
+ * tile), and only fork when nothing is registered under that bundle id. */
+-(BOOL)activateRunningAppWithBundleID:(NSString *)bundleID {
+    if(bundleID == nil)
+        return NO;
+    pthread_mutex_lock(&appsLock);
+    WSAppRecord *app = [apps objectForKey:bundleID];
+    if(app == nil || ![app isKindOfClass:[WSAppRecord class]]) {
+        pthread_mutex_unlock(&appsLock);
+        return NO;
+    }
+    /* Do not probe with kill(pid, 0): on this libc the empty signal op is not
+     * dependable.  The task-death notifier already drops dead app records, and
+     * a record without a reply port cannot receive events, so those are the
+     * only conditions worth treating as "not running". */
+    if([app port] == MACH_PORT_NULL) {
+        [apps removeObjectForKey:bundleID];
+        pthread_mutex_unlock(&appsLock);
+        return NO;
+    }
+    NSArray *wins = [app windows];
+    WSWindowRecord *winrec = nil, *restore = nil;
+    for(unsigned x = 0; x < [wins count]; ++x) {
+        WSWindowRecord *w = [wins objectAtIndex:x];
+        if(w.state != MINIMIZED && w.state != HIDDEN && w.state != CLOSED) { winrec = w; break; }
+        if(w.state == MINIMIZED) restore = w;
+    }
+    if(winrec == nil && restore != nil) {
+        restore.state = restore.prevState;
+        winrec = restore;
+    }
+    /* Activating an app shows its windows and puts them in front of the
+     * others, otherwise the launch request looks like it did nothing. */
+    for(unsigned x = 0; x < [wins count]; ++x) {
+        WSWindowRecord *w = [wins objectAtIndex:x];
+        if(w.state == CLOSED || w.state == HIDDEN)
+            continue;
+        if(w.state == MINIMIZED)
+            w.state = (w.prevState != MINIMIZED) ? w.prevState : NORMAL;
+        w.state = NORMAL;
+        [self bringWindowToFront:w];
+        /* The window was painted before the request (the app is running), so
+         * say so again: whoever asked for the app waits for this line to
+         * know the window is on screen. */
+        if(w.surfaceBuf != NULL &&
+           (WSPaintWasFlushed((pid_t)[app pid], (unsigned)w.number) ||
+            WSSurfaceHasContent(w.surfaceBuf, w.bufSize))) {
+            const char *bid = [[app bundleID] UTF8String];
+            fprintf(stderr, "[WS] PAINTED app=%s win=%u\n",
+                    bid != NULL ? bid : "unknown", (unsigned)w.number);
+            fflush(stderr);
+            wsPaintedMarker(bid);
+        }
+    }
+    WSAppRecord *oldApp = curApp;
+    curApp = app;
+    [self switchFromApp:oldApp toWindow:winrec];
+    if(winrec != nil)
+        [self updateClientWindowState:winrec];
+    struct wsRPCWindow data;
+    memset(&data, 0, sizeof(data));
+    data.windowID = winrec != nil ? winrec.number : 0;
+    data.state = winrec != nil ? winrec.state : 0;
+    [self notifyDock:&data length:sizeof(data) withCode:CODE_WINDOW_STATE forApp:app];
+    pthread_mutex_unlock(&appsLock);
+    fprintf(stderr, "[WS] open bundle: %s already running pid %d, activated\n",
+            [bundleID UTF8String], (int)[app pid]);
+    return YES;
+}
+
+/* Queue a bundle launch.  The spawn itself happens in the main loop, with
+ * no registry lock held: a child forked from a locked section inherits the
+ * locked mutex and never completes its launch handshake. */
+-(void)queueBundleLaunch:(NSString *)bundlePath bundleID:(NSString *)bundleID args:(NSArray *)args {
+    char exe[1024];
+    unsigned i;
+    PendingBundleItem item;
+
+    if(bundlePath == nil)
+        return;
+    /* An app that is already running is activated, not forked again. */
+    if(bundleID != nil && [bundleID length] > 0) {
+        if([self activateRunningAppWithBundleID:bundleID])
+            return;
+    }
+    if(![self resolveBundleExecutable:bundlePath into:exe size:sizeof(exe)]) {
+        fprintf(stderr, "[WS] open bundle: no executable for %s\n", [bundlePath UTF8String]);
+        return;
+    }
+
+    memset(&item, 0, sizeof(item));
+    snprintf(item.path, sizeof(item.path), "%s", exe);
+    const char *slash = strrchr(exe, '/');
+    snprintf(item.name, sizeof(item.name), "%s", slash ? slash + 1 : exe);
+    snprintf(item.bundleID, sizeof(item.bundleID), "%s",
+             bundleID != nil ? [bundleID UTF8String] : "com.ravynos.unknown");
+    for(i = 0; args != nil && i < [args count]; i++) {
+        NSString *a = [args objectAtIndex:i];
+        if(item.argc >= 16)
+            break;
+        if([a isKindOfClass:[NSString class]])
+            snprintf(item.args[item.argc], sizeof(item.args[0]), "%s", [a UTF8String]);
+        item.argc++;
+    }
+
+    pthread_mutex_lock(&_pendingLock);
+    if(_pendingCount >= WS_PENDING_QUEUE_SIZE) {
+        pthread_mutex_unlock(&_pendingLock);
+        fprintf(stderr, "[WS] open bundle: launch queue full, dropping %s\n", item.path);
+        return;
+    }
+    _pendingQueue[_pendingTail] = item;
+    _pendingTail = (_pendingTail + 1) % WS_PENDING_QUEUE_SIZE;
+    _pendingCount++;
+    pthread_mutex_unlock(&_pendingLock);
+    fprintf(stderr, "[WS] open bundle: queued %s\n", item.path);
+}
+
+/* Global screen capture shortcut (Cmd+Shift+3/4/5): launch Screenshot.app
+ * with the requested mode. */
+-(void)captureScreenshotWithMode:(int)mode {
+    NSString *bundlePath = @"/Applications/Utilities/Screenshot.app";
+    NSString *modeArg = mode == 3 ? @"full" : (mode == 4 ? @"rect" : @"hud");
+    [self queueBundleLaunch:bundlePath bundleID:@"com.ravynos.Screenshot"
+                        args:[NSArray arrayWithObjects:@"--mode", modeArg, nil]];
+}
 
 /* Runs from the main loop, i.e. with no registry lock held, exactly like the
- * DESKTOP stage that spawns Filer/Dock/SystemUIServer. */
+ * DESKTOP stage that spawns Filer/Dock/SystemUIServer.  One queued launch is
+ * taken from the FIFO per call, so a burst of requests all get their app. */
 -(void)_spawnPendingBundle {
-    if(!_pendingBundleReady)
+    PendingBundleItem item;
+
+    pthread_mutex_lock(&_pendingLock);
+    if(_pendingCount == 0) {
+        pthread_mutex_unlock(&_pendingLock);
         return;
-    _pendingBundleReady = 0;
+    }
+    item = _pendingQueue[_pendingHead];
+    _pendingHead = (_pendingHead + 1) % WS_PENDING_QUEUE_SIZE;
+    _pendingCount--;
+    pthread_mutex_unlock(&_pendingLock);
 
     pid_t pid = fork();
     if(pid != 0) {
-        fprintf(stderr, "[WS] open bundle: forked pid %d (%s)\n", (int)pid, _pendingBundlePath);
+        fprintf(stderr, "[WS] open bundle: forked pid %d (%s)\n", (int)pid, item.path);
         return;
     }
 
     char idbuf[192];
-    snprintf(idbuf, sizeof(idbuf), "RAVYN_BUNDLE_ID=%s", _pendingBundleID);
-    char *argv[] = { _pendingBundleName, NULL };
-    char *envp[] = { idbuf, NULL };
-    execve(_pendingBundlePath, argv, envp);
+    snprintf(idbuf, sizeof(idbuf), "RAVYN_BUNDLE_ID=%s", item.bundleID);
+
+    /* argv: the bundle name followed by the bundle's own launch arguments
+     * (Info.plist RAVYNLaunchArguments), so an app that needs flags gets
+     * them: Chrome dies without --no-sandbox on this kernel. */
+    char *argv[24];
+    int ac = 0;
+    argv[ac++] = item.name;
+    for(int i = 0; i < item.argc && ac < 23; i++)
+        argv[ac++] = item.args[i];
+    argv[ac] = NULL;
+
+    /* Environment: everything WindowServer itself has (HOME, PATH, TMPDIR
+     * from launchd) plus the bundle id.  The old one-variable environment
+     * left children with no HOME and no TMPDIR. */
+    static char *envp[128];
+    int ec = 0;
+    extern char **environ;
+    for(char **e = environ; e && *e && ec < 125; e++)
+        envp[ec++] = *e;
+    envp[ec++] = idbuf;
+    envp[ec] = NULL;
+
+    execve(item.path, argv, envp);
     _exit(1);
 }
 
@@ -753,7 +1242,19 @@ static volatile int _pendingBundleReady = 0;
     pthread_mutex_unlock(&renderLock);
 
     O2ImageRef cursor = NULL;
-    write(2, "[WS] using fallback vector cursor\n", 34);
+    NSString *cursorPath = [[NSBundle mainBundle] pathForResource:@"arrowCursor" ofType:@"png"];
+    if(!cursorPath)
+        cursorPath = @"/System/Library/CoreServices/WindowServer.app/Contents/Resources/arrowCursor.png";
+    if([[NSFileManager defaultManager] fileExistsAtPath:cursorPath]) {
+        O2ImageSourceRef is = [O2ImageSource newImageSourceWithURL:[NSURL fileURLWithPath:cursorPath] options:nil];
+        if(is) {
+            cursor = [is createImageAtIndex:0 options:nil];
+            fprintf(stderr, "[WS] loaded arrow cursor: %p (%zux%zu)\n",
+                cursor, O2ImageGetWidth(cursor), O2ImageGetHeight(cursor));
+        }
+    }
+    if(cursor == NULL)
+        write(2, "[WS] using fallback vector cursor\n", 34);
     NSRect cursorRect = NSMakeRect(0, 0, _cursor_height, _cursor_height);
 
     struct pollfd fds[2];
@@ -763,11 +1264,18 @@ static volatile int _pendingBundleReady = 0;
     fds[1].events = POLLIN;
     write(2, "[WS] run loop entered\n", 22);
     int frame_count = 0;
+    NSPoint lastCursorPos = cursorRect.origin;
+    BOOL haveCursorPos = NO;
+    [self markFullSceneDirty];
     while(ready == YES) {
         [self _spawnPendingBundle];
         int nfds = (fds[0].fd >= 0) + (fds[1].fd >= 0);
         if(nfds > 0 && poll(fds, 2, 16) > 0) {
-            [input run:self];
+            /* /dev/mouse reports itself readable even with no packet queued, so
+             * this branch fires every iteration.  Sleeping only when nothing
+             * was consumed stops the loop pinning a whole CPU. */
+            if([input run:self] == 0)
+                usleep(2000);
         } else {
             usleep(16666); // ~60 FPS
         }
@@ -776,13 +1284,35 @@ static volatile int _pendingBundleReady = 0;
         else
             cursorRect.origin = NSMakePoint(_geometry.size.width / 2, _geometry.size.height / 2);
 
+        /* Pointer movement invalidates only the old and new cursor boxes. Every
+         * other scene change (window create/move/resize/state, client content
+         * flush, cursor hide/show) marks its own damage.  Without this the
+         * compositor repainted all of 1080p and memcpy'd the whole scanout every
+         * iteration, leaving a single-vCPU TCG guest no cycles for the apps. */
+        if(!haveCursorPos || !NSEqualPoints(lastCursorPos, cursorRect.origin)) {
+            NSRect oldCursor = WSCursorDamageRect(lastCursorPos.x, lastCursorPos.y);
+            NSRect newCursor = WSCursorDamageRect(cursorRect.origin.x, cursorRect.origin.y);
+            [self markDamageRect:haveCursorPos ? NSUnionRect(oldCursor, newCursor) : newCursor];
+            lastCursorPos = cursorRect.origin;
+            haveCursorPos = YES;
+        }
+
         // FIXME: handle multiple displays here. Use a thread per display?
         pthread_mutex_lock(&renderLock);
         ctx = [fb context];
         pid_t capturedPID = [fb captured];
         if(capturedPID == 0) {
+            pthread_mutex_lock(&damageLock);
+            NSRect damage = NSIntersectionRect(_damageRect, _geometry);
+            _damageRect = NSZeroRect;
+            _sceneDirty = NO;
+            pthread_mutex_unlock(&damageLock);
+
+            if(!NSIsEmptyRect(damage)) {
+            O2ContextSaveGState(ctx);
+            O2ContextClipToRect(ctx, (O2Rect)damage);
             O2ContextSetRGBFillColor(ctx, 0.15, 0.25, 0.35, 1);
-            O2ContextFillRect(ctx, (O2Rect)_geometry);
+            O2ContextFillRect(ctx, (O2Rect)damage);
             for(int level = 0; level < kCGNumReservedWindowLevels; ++level) {
                 NSArray *wins = [_windows[level] copy];
                 NSInteger count = [wins count];
@@ -792,33 +1322,91 @@ static volatile int _pendingBundleReady = 0;
                         continue;
                     /* A window whose shm surface never mapped (shm_open or
                      * mmap failed) has a NULL surface; drawing it faults. */
-                    if(win.surface != NULL)
-                        [ctx drawImage:win.surface inRect:win.geometry];
+                    if(win.surface != NULL) {
+                        /* Paint readiness: announce a window once its surface
+                         * holds real content, so the screenshot harness can
+                         * wait for it instead of guessing.  A window whose
+                         * pixels are all zero is NOT announced unless the
+                         * client flushed it while NORMAL (which happens right
+                         * after it drew, even an all-black window). */
+                        if(win.surfaceBuf != NULL && win.state == NORMAL) {
+                            WSAppRecord *winApp = (win.app != nil &&
+                                    [win.app isKindOfClass:[WSAppRecord class]]) ?
+                                (WSAppRecord *)win.app : nil;
+                            pid_t winPid = winApp != nil ? (pid_t)[winApp pid] : 0;
+                            BOOL announce = NO;
+                            pthread_mutex_lock(&sPaintLock);
+                            int entry = -1;
+                            for(int z = 0; z < sPaintCount; z++) {
+                                if(sPaintTable[z].pid == winPid &&
+                                   sPaintTable[z].number == (unsigned)win.number) { entry = z; break; }
+                            }
+                            if(entry < 0 && sPaintCount < WS_PAINT_MAX) {
+                                entry = sPaintCount++;
+                                sPaintTable[entry].pid = winPid;
+                                sPaintTable[entry].number = (unsigned)win.number;
+                                sPaintTable[entry].flushed = 0;
+                                sPaintTable[entry].announced = 0;
+                            }
+                            if(entry >= 0 && !sPaintTable[entry].announced) {
+                                if(sPaintTable[entry].flushed ||
+                                   WSSurfaceHasContent(win.surfaceBuf, win.bufSize)) {
+                                    sPaintTable[entry].announced = 1;
+                                    announce = YES;
+                                }
+                            }
+                            pthread_mutex_unlock(&sPaintLock);
+                            if(announce) {
+                                NSString *bid = winApp != nil ? [winApp bundleID] : nil;
+                                const char *bidc = (bid != nil) ? [bid UTF8String] : NULL;
+                                fprintf(stderr, "[WS] PAINTED app=%s win=%u\n",
+                                        bidc != NULL ? bidc : "unknown",
+                                        (unsigned)win.number);
+                                fflush(stderr);
+                                wsPaintedMarker(bidc);
+                            }
+                        }
+                        if(level >= kCGNormalWindowLevelKey && level <= kCGFloatingWindowLevelKey) {
+                            for(int s = 3; s >= 1; --s) {
+                                float d = (float)s * 2.0f;
+                                float x = win.geometry.origin.x;
+                                float y = win.geometry.origin.y;
+                                float w = win.geometry.size.width;
+                                float h = win.geometry.size.height;
+                                O2ContextSetRGBFillColor(ctx, 0.0f, 0.0f, 0.0f, 0.10f);
+                                O2ContextFillRect(ctx, NSMakeRect(x - d, y - d, w + d * 2.0f, d));
+                                O2ContextFillRect(ctx, NSMakeRect(x - d, y + h, w + d * 2.0f, d));
+                                O2ContextFillRect(ctx, NSMakeRect(x - d, y, d, h));
+                                O2ContextFillRect(ctx, NSMakeRect(x + w, y, d, h));
+                            }
+                        }
+                        if(level == kCGNormalWindowLevelKey && (win.styleMask & NSTitledWindowMask) &&
+                           win.geometry.size.width > 20 && win.geometry.size.height > 20) {
+                            O2ContextSaveGState(ctx);
+                            WSAddRoundRectPath(ctx, win.geometry, 8.0f);
+                            O2ContextClip(ctx);
+                            [ctx drawImage:win.surface inRect:win.geometry];
+                            O2ContextRestoreGState(ctx);
+                            // Subtle 1px border stroke around normal titled windows
+                            O2ContextSetRGBStrokeColor(ctx, 0.0f, 0.0f, 0.0f, 0.22f);
+                            O2ContextSetLineWidth(ctx, 1.0f);
+                            WSAddRoundRectPath(ctx, NSInsetRect(win.geometry, 0.5f, 0.5f), 8.0f);
+                            O2ContextStrokePath(ctx);
+                        } else {
+                            [ctx drawImage:win.surface inRect:win.geometry];
+                        }
+                    }
                 }
             }
-        }
 
-        cursorRect.origin.y -= _cursor_height; // make sure point of arrow is on actual spot
-
-        if(capturedPID == 0) {
-            if(cursorHideCount == 0) {
-                if(cursor != NULL) {
-                    O2ContextSetBlendMode(ctx, kCGBlendModeNormal);
-                    O2ContextDrawImage(ctx, cursorRect, cursor);
-                } else {
-                    /* High-contrast fallback cursor: black frame with white center */
-                    O2ContextSetRGBFillColor(ctx, 0.0, 0.0, 0.0, 1.0);
-                    O2ContextFillRect(ctx, (O2Rect)NSMakeRect(cursorRect.origin.x, cursorRect.origin.y, 14, 14));
-                    O2ContextSetRGBFillColor(ctx, 1.0, 1.0, 1.0, 1.0);
-                    O2ContextFillRect(ctx, (O2Rect)NSMakeRect(cursorRect.origin.x + 2, cursorRect.origin.y + 2, 10, 10));
+                if(cursorHideCount == 0) {
+                    WSDrawArrowCursor(ctx, cursorRect.origin.x, cursorRect.origin.y);
                 }
+                O2ContextRestoreGState(ctx);
+                [fb drawRect:damage];
             }
-            [fb draw];
         } else {
-            if(cursorHideCount == 0 && cursor != NULL)
-                [fb drawWithCursor:cursor inRect:cursorRect];
-            else
-                [fb draw];
+            [fb draw];
         }
         pthread_mutex_unlock(&renderLock);
         ++frame_count;
@@ -1048,6 +1636,116 @@ static volatile int _pendingBundleReady = 0;
         if(img)
             O2ImageRelease(img);
     }
+    [self sendInlineData:&reply length:sizeof(reply) withCode:MSG_ID_RPC toPort:msg->descriptor.name];
+}
+
+/* Copy one window's surface into a SysV shared memory segment.  args->val1 is
+ * the window number, or 0 for the topmost visible normal window that is not
+ * the caller's own.  Reply: val1 = shmid (0 on failure), val2 = width,
+ * val3 = height, val4 = bytes per row. */
+-(void)rpcWindowCreateImage:(PortMessage *)msg {
+    struct wsRPCSimple *args = (struct wsRPCSimple *)msg->data;
+    struct wsRPCSimple reply = { {kWSWindowCreateImage, 16}, 0, 0, 0, 0 };
+    WSWindowRecord *target = nil;
+    int level, i;
+    pid_t callerPID = msg->pid;
+
+    pthread_mutex_lock(&renderLock);
+    for(level = kCGNumReservedWindowLevels - 1; level >= 0 && target == nil; --level) {
+        NSArray *wins = _windows[level];
+        NSInteger count = [wins count];
+
+        for(i = 0; i < count; ++i) {
+            WSWindowRecord *win = [wins objectAtIndex:i];
+
+            if(win.state == HIDDEN || win.state == MINIMIZED || win.state == CLOSED)
+                continue;
+            if(win.surface == NULL || win.surfaceBuf == NULL)
+                continue;
+            if(args->val1 != 0) {
+                if((uint32_t)[win number] == args->val1)
+                    target = win;
+            } else {
+                WSAppRecord *owner = win.app;
+                if(owner != nil && [owner pid] == callerPID)
+                    continue;
+                if(win.level >= kCGDockWindowLevelKey)
+                    continue;
+                target = win;
+            }
+            if(target != nil)
+                break;
+        }
+    }
+
+    if(target != nil) {
+        int w = (int)target.geometry.size.width;
+        int h = (int)target.geometry.size.height;
+        int bpr = (int)((size_t)w * 4);
+        size_t imglen = (size_t)bpr * (size_t)h;
+        int shmid = shmget(IPC_PRIVATE, imglen, IPC_CREAT | 0666);
+
+        if(shmid >= 0) {
+            uint8_t *p = shmat(shmid, NULL, 0);
+            if(p == NULL) {
+                shmctl(shmid, IPC_RMID, NULL);
+            } else {
+                /* The window surface is BGRA in window coordinates; copy the
+                 * live pixels straight out of the mapped buffer. */
+                size_t copyLen = imglen;
+                size_t surfaceBytes = (size_t)bpr * (size_t)h;
+
+                if(target.bufSize < copyLen)
+                    copyLen = MIN(surfaceBytes, (size_t)target.bufSize);
+                memcpy(p, target.surfaceBuf, copyLen);
+                shmdt(p);
+                reply.val1 = (uint32_t)shmid;
+                reply.val2 = (uint32_t)w;
+                reply.val3 = (uint32_t)h;
+                reply.val4 = (uint32_t)bpr;
+            }
+        }
+    }
+    pthread_mutex_unlock(&renderLock);
+
+    [self sendInlineData:&reply length:sizeof(reply) withCode:MSG_ID_RPC toPort:msg->descriptor.name];
+}
+
+/* Screen position of the pointer.  Clients need this to track the cursor
+ * outside their own windows (the Dock's autohide, for one); NSEvent only ever
+ * sees the last event delivered to the process. */
+-(void)rpcGetPointerPosition:(PortMessage *)msg {
+    struct wsRPCSimple reply = { {kWSGetPointerPosition, 8}, 0, 0, 0, 0 };
+
+    if(input != nil) {
+        NSPoint p = [input pointerPos];
+        reply.val1 = (uint32_t)(int32_t)p.x;
+        reply.val2 = (uint32_t)(int32_t)p.y;
+    }
+    [self sendInlineData:&reply length:sizeof(reply) withCode:MSG_ID_RPC toPort:msg->descriptor.name];
+}
+
+/* The topmost visible window under a screen point.  A drag session uses it
+ * to find the window that is under the cursor. */
+-(void)rpcDragHitTest:(PortMessage *)msg {
+    struct wsRPCDragHitTest *args = (struct wsRPCDragHitTest *)msg->data;
+    struct wsRPCDragHitTest reply;
+    WSAppRecord *app = nil;
+    WSWindowRecord *win;
+
+    memset(&reply, 0, sizeof(reply));
+    reply.base.code = kWSDragHitTest;
+    reply.base.len = 0;
+    reply.x = args->x;
+    reply.y = args->y;
+
+    win = [self windowUnderPointer:NSMakePoint(args->x, args->y) app:&app];
+    if(win != nil) {
+        reply.windowID = (uint32_t)[win number];
+        reply.pid = app != nil ? [app pid] : 0;
+        reply.found = 1;
+    }
+
     [self sendInlineData:&reply length:sizeof(reply) withCode:MSG_ID_RPC toPort:msg->descriptor.name];
 }
 
@@ -1303,9 +2001,14 @@ static volatile int _pendingBundleReady = 0;
     WSDisplay *display = [self displayWithID:args->val1];
     if(display) {
         struct CGDisplayMode *mode = &(args->val2);
-        if([display setMode:mode])
+        if([display setMode:mode]) {
             reply.val1 = kCGErrorSuccess;
-        else
+            /* Present the new logical size immediately: repaint everything and
+             * clear the scanout so stale pixels of the old size do not show. */
+            _geometry.size = NSMakeSize(mode->width, mode->height);
+            [self markFullSceneDirty];
+            [self markDamageRect:_geometry];
+        } else
             reply.val1 = kCGErrorFailure;
     }
     [self sendInlineData:&reply length:sizeof(reply) withCode:MSG_ID_RPC toPort:msg->descriptor.name];
@@ -1572,6 +2275,16 @@ static volatile int _pendingBundleReady = 0;
         cursorHideCount++;
         ret = kCGErrorSuccess;
     }
+    /* The cursor is drawn only when cursorHideCount == 0, so an unbalanced hide leaves
+     * the pointer invisible for every later frame -- exactly what the screendump cursor
+     * test reports as "no clusters". Log it because no screenshot reveals this state. */
+    fprintf(stderr, "[WS] HIDE pid=%u n=%d\n", msg->pid, cursorHideCount);
+    /* The cursor is part of the composited frame now that only damage is
+     * repainted, so hiding it has to repaint the box it occupied. */
+    if(input != nil) {
+        NSPoint cp = [input pointerPos];
+        [self markDamageRect:WSCursorDamageRect(cp.x, cp.y)];
+    }
     struct wsRPCSimple data;
     data.base.code = kCGDisplayHideCursor;
     data.base.len = 4;
@@ -1582,8 +2295,16 @@ static volatile int _pendingBundleReady = 0;
 -(void)rpcDisplayShowCursor:(PortMessage *)msg {
     int ret = kCGErrorCannotComplete;
     if(msg->pid == [curApp pid]) {
-        cursorHideCount--;
+        /* Never let an unbalanced show drive the counter negative: hides from a later
+         * app would otherwise be swallowed silently. */
+        if(cursorHideCount > 0)
+            cursorHideCount--;
         ret = kCGErrorSuccess;
+    }
+    fprintf(stderr, "[WS] SHOW pid=%u n=%d\n", msg->pid, cursorHideCount);
+    if(input != nil) {
+        NSPoint cp = [input pointerPos];
+        [self markDamageRect:WSCursorDamageRect(cp.x, cp.y)];
     }
     struct wsRPCSimple data;
     data.base.code = kCGDisplayShowCursor;
@@ -1755,6 +2476,9 @@ static volatile int _pendingBundleReady = 0;
             }
         }
 
+        if(winrec != nil)
+            [self markDamageRect:NSInsetRect(winrec.geometry, -16, -16)];
+
         curApp = app;
         [self switchFromApp:oldApp toWindow:winrec];
 
@@ -1771,6 +2495,37 @@ static volatile int _pendingBundleReady = 0;
     }
 }
 
+-(void)rpcApplicationList:(PortMessage *)msg {
+    WSAppRecord *dock = [apps objectForKey:@"com.ravynos.Dock"];
+    if(dock != nil && [dock port] != MACH_PORT_NULL) {
+        for(NSString *key in [apps allKeys]) {
+            if([key isEqualToString:@"com.ravynos.Dock"] ||
+               [key isEqualToString:@"com.ravynos.SystemUIServer"] ||
+               [key isEqualToString:@"com.ravynos.LoginWindow"])
+                continue;
+            WSAppRecord *rec = [apps objectForKey:key];
+            if(!rec || ![rec isKindOfClass:[WSAppRecord class]] || rec.pid <= 0)
+                continue;
+            Message note = {0};
+            note.header.msgh_remote_port = [dock port];
+            note.header.msgh_bits = MACH_MSGH_BITS_SET(MACH_MSG_TYPE_COPY_SEND, 0, 0, 0);
+            note.header.msgh_id = MSG_ID_INLINE;
+            note.header.msgh_size = sizeof(note) - sizeof(mach_msg_trailer_t);
+            note.code = CODE_APP_LAUNCHED;
+            note.pid = rec.pid;
+            note.len = [rec.path length];
+            strncpy(note.data, [rec.path UTF8String], PATH_MAX);
+            strncpy(note.bundleID, [rec.bundleID UTF8String], sizeof(note.bundleID));
+            mach_msg((mach_msg_header_t *)&note, MACH_SEND_MSG|MACH_SEND_TIMEOUT,
+                    sizeof(note) - sizeof(mach_msg_trailer_t),
+                    0, MACH_PORT_NULL, 100 /* ms timeout */, MACH_PORT_NULL);
+            fprintf(stderr, "[WS] replay CODE_APP_LAUNCHED to Dock for %s pid=%u\n",
+                [rec.bundleID UTF8String], rec.pid);
+        }
+    }
+    struct wsRPCSimple reply = { {kWSApplicationList, 4}, kWSErrorSuccess, 0, 0, 0 };
+    [self sendInlineData:&reply length:sizeof(reply) withCode:MSG_ID_RPC toPort:msg->descriptor.name];
+}
 - (void)receiveMachMessage {
     ReceiveMessage msg = {0};
     mach_msg_return_t result = mach_msg((mach_msg_header_t *)&msg, MACH_RCV_MSG, 0, sizeof(msg),
@@ -1825,6 +2580,8 @@ static volatile int _pendingBundleReady = 0;
                     case kCGReleaseAllDisplays: [self rpcReleaseAllDisplays:&msg.portMsg]; break;
                     case kCGDisplayGetDrawingContext: [self rpcDisplayGetDrawingContext:&msg.portMsg]; break;
                     case kCGDisplayCreateImageForRect: [self rpcDisplayCreateImageForRect:&msg.portMsg]; break;
+                    case kWSGetPointerPosition: [self rpcGetPointerPosition:&msg.portMsg]; break;
+                    case kWSWindowCreateImage: [self rpcWindowCreateImage:&msg.portMsg]; break;
                     case kCGDisplayBounds: [self rpcDisplayBounds:&msg.portMsg]; break;
                     case kCGDisplayStateFlags: [self rpcDisplayStateFlags:&msg.portMsg]; break; 
                     case kCGDisplayMirrorsDisplay: [self rpcDisplayMirrorsDisplay:&msg.portMsg]; break; 
@@ -1859,6 +2616,8 @@ static volatile int _pendingBundleReady = 0;
                     case kWSWindowModifyState: [self rpcWindowModifyState:&msg.portMsg]; break;
                     // App management (Dock)
                     case kWSApplicationActivate: [self rpcApplicationActivate:&msg.portMsg]; break;
+                    case kWSApplicationList: [self rpcApplicationList:&msg.portMsg]; break;
+                    case kWSDragHitTest: [self rpcDragHitTest:&msg.portMsg]; break;
                 }
                 pthread_mutex_unlock(&appsLock);
                 break;
@@ -1907,7 +2666,62 @@ static volatile int _pendingBundleReady = 0;
                             sizeof(msg) - sizeof(mach_msg_trailer_t),
                             0, MACH_PORT_NULL, 100 /* ms timeout */, MACH_PORT_NULL);
                 }
+
+                if([bundleID isEqualToString:@"com.ravynos.Dock"]) {
+                    for(NSString *key in [apps allKeys]) {
+                        if([key isEqualToString:@"com.ravynos.Dock"] ||
+                           [key isEqualToString:@"com.ravynos.SystemUIServer"] ||
+                           [key isEqualToString:@"com.ravynos.LoginWindow"])
+                            continue;
+                        WSAppRecord *other = [apps objectForKey:key];
+                        if(!other || ![other isKindOfClass:[WSAppRecord class]] || other.pid <= 0)
+                            continue;
+                        Message note = {0};
+                        note.header.msgh_remote_port = port;
+                        note.header.msgh_bits = MACH_MSGH_BITS_SET(MACH_MSG_TYPE_COPY_SEND, 0, 0, 0);
+                        note.header.msgh_id = MSG_ID_INLINE;
+                        note.header.msgh_size = sizeof(note) - sizeof(mach_msg_trailer_t);
+                        note.code = CODE_APP_LAUNCHED;
+                        note.pid = other.pid;
+                        note.len = [other.path length];
+                        strncpy(note.data, [other.path UTF8String], PATH_MAX);
+                        strncpy(note.bundleID, [other.bundleID UTF8String], sizeof(note.bundleID));
+                        mach_msg((mach_msg_header_t *)&note, MACH_SEND_MSG|MACH_SEND_TIMEOUT,
+                                sizeof(note) - sizeof(mach_msg_trailer_t),
+                                0, MACH_PORT_NULL, 100 /* ms timeout */, MACH_PORT_NULL);
+                        fprintf(stderr, "[WS] Dock registered: replayed launch for %s pid=%u\n",
+                            [other.bundleID UTF8String], other.pid);
+                    }
+                }
                 pthread_mutex_unlock(&appsLock);
+
+                if([bundleID isEqualToString:@"com.ravynos.SystemUIServer"] && [stashedMenus count] > 0) {
+                    fprintf(stderr, "[WS] SUI registered; stashed menus=%d\n", (int)[stashedMenus count]);
+                    /* The apps that sent menus before SUI came up.  Hand them over
+                     * so the menu bar has the frontmost app's menus at login
+                     * without requiring the user to click around first. */
+                    for(NSString *key in stashedMenus) {
+                        NSDictionary *entry = [stashedMenus objectForKey:key];
+                        NSData *blob = [entry objectForKey:@"Menu"];
+                        if(blob == nil)
+                            continue;
+                        Message menuMsg = {0};
+                        menuMsg.header.msgh_remote_port = port;
+                        menuMsg.header.msgh_bits = MACH_MSGH_BITS_SET(MACH_MSG_TYPE_COPY_SEND, 0, 0, 0);
+                        menuMsg.header.msgh_id = MSG_ID_INLINE;
+                        menuMsg.header.msgh_size = sizeof(menuMsg) - sizeof(mach_msg_trailer_t);
+                        menuMsg.code = CODE_MENU_FOR_APP;
+                        menuMsg.pid = [[entry objectForKey:@"PID"] intValue];
+                        strncpy(menuMsg.bundleID, [key UTF8String], sizeof(menuMsg.bundleID));
+                        memcpy(menuMsg.data, [blob bytes], [blob length]);
+                        menuMsg.len = (int)[blob length];
+                        mach_msg((mach_msg_header_t *)&menuMsg, MACH_SEND_MSG|MACH_SEND_TIMEOUT,
+                                sizeof(menuMsg) - sizeof(mach_msg_trailer_t),
+                                0, MACH_PORT_NULL, 100 /* ms timeout */, MACH_PORT_NULL);
+                        fprintf(stderr, "[WS] SUI registered: replayed menu for %s\n",
+                            [key UTF8String]);
+                    }
+                }
 
                 [self watchForProcessExit:pid];
 
@@ -1927,11 +2741,25 @@ static volatile int _pendingBundleReady = 0;
                     case CODE_MENU_FOR_APP:
                     {
                         Message menuMsg = {0};
+                        if(stashedMenus == nil)
+                            stashedMenus = [NSMutableDictionary new];
+                        if(msg.msg.len > 0 && (size_t)msg.msg.len <= sizeof(msg.msg.data)) {
+                            NSString *bid = [NSString stringWithCString:msg.msg.bundleID];
+                            NSData *blob = [NSData dataWithBytes:msg.msg.data length:msg.msg.len];
+                            if(bid != nil && blob != nil) {
+                                NSDictionary *entry = [NSDictionary dictionaryWithObjectsAndKeys:
+                                    blob, @"Menu",
+                                    [NSNumber numberWithInt:msg.msg.pid], @"PID",
+                                    nil];
+                                [stashedMenus setObject:entry forKey:bid];
+                            }
+                        }
                         pthread_mutex_lock(&appsLock);
                         WSAppRecord *app = [apps objectForKey:@"com.ravynos.SystemUIServer"];
                         if(app == nil || ![app isKindOfClass:[WSAppRecord class]]) {
                             pthread_mutex_unlock(&appsLock);
-                            NSLog(@"Cannot install menus for client - is SystemUIServer running?");
+                            fprintf(stderr, "[WS] MENU bundle=%s len=%d: SUI not registered, stashed\n",
+                                msg.msg.bundleID, msg.msg.len);
                             break;
                         }
                         mach_port_t suiPort = [app port];
@@ -1948,6 +2776,8 @@ static volatile int _pendingBundleReady = 0;
                         mach_msg((mach_msg_header_t *)&menuMsg, MACH_SEND_MSG|MACH_SEND_TIMEOUT,
                                 sizeof(menuMsg) - sizeof(mach_msg_trailer_t),
                                 0, MACH_PORT_NULL, 100 /* ms timeout */, MACH_PORT_NULL);
+                        fprintf(stderr, "[WS] MENU bundle=%s len=%d relayed to SUI\n",
+                            msg.msg.bundleID, msg.msg.len);
                         break;
                     }
                     case CODE_ITEM_CLICKED:
@@ -1980,47 +2810,183 @@ static volatile int _pendingBundleReady = 0;
                         path[n] = 0;
                         NSString *bundlePath = [NSString stringWithUTF8String:path];
                         NSBundle *bundle = [NSBundle bundleWithPath:bundlePath];
-                        if(bundle == nil) {
-                            fprintf(stderr, "[WS] open bundle: no bundle at %s\n", path);
-                            break;
-                        }
-                        NSString *exeName = [bundle objectForInfoDictionaryKey:@"CFBundleExecutable"];
                         NSString *targetID = [bundle objectForInfoDictionaryKey:@"CFBundleIdentifier"];
-                        if(exeName == nil)
-                            exeName = [bundlePath lastPathComponent];
-                        NSString *cands[3];
-                        cands[0] = [NSString stringWithFormat:@"%@/Contents/ravynOS/%@", bundlePath, exeName];
-                        cands[1] = [NSString stringWithFormat:@"%@/Contents/MacOS/%@", bundlePath, exeName];
-                        cands[2] = [NSString stringWithFormat:@"%@/%@", bundlePath, exeName];
-                        const char *exe = NULL;
-                        for(int i = 0; i < 3; i++) {
-                            const char *c = [cands[i] UTF8String];
-                            if(c != NULL && access(c, X_OK) == 0) {
-                                exe = c;
+                        if(targetID == nil && bundle == nil)
+                            fprintf(stderr, "[WS] open bundle: note: [NSBundle bundleWithPath:] nil for %s, continuing\n", path);
+                        NSArray *launchArgs =
+                            [bundle objectForInfoDictionaryKey:@"RAVYNLaunchArguments"];
+                        if(![launchArgs isKindOfClass:[NSArray class]])
+                            launchArgs = nil;
+                        /* Do not fork from here.  A child that inherits the
+                         * locked registry mutex never completes its launch
+                         * handshake -- its bootstrap_look_up for the WindowServer
+                         * service fails (measured: "Failed to locate WindowServer
+                         * service"), so every window-create RPC then dies with
+                         * MACH_SEND_INVALID_DEST_NAME.  Queue the launch and
+                         * spawn it from the main loop, outside the lock.  The
+                         * queue also deduplicates: an app that is already
+                         * running is activated instead of forked a second time. */
+                        [self queueBundleLaunch:bundlePath bundleID:targetID args:launchArgs];
+                        break;
+                    }
+                    case CODE_OPEN_DOCUMENTS:
+                    {
+                        /* Payload: NUL separated bundle path followed by the
+                         * document paths to open.  A running app with the same
+                         * bundle id receives the documents; otherwise the
+                         * bundle is launched with the paths as arguments. */
+                        NSMutableArray *parts = [NSMutableArray array];
+                        size_t off = 0;
+                        size_t maxlen = (size_t)msg.msg.len;
+
+                        if(maxlen > sizeof(msg.msg.data))
+                            maxlen = sizeof(msg.msg.data);
+                        while(off < maxlen && msg.msg.data[off] != 0) {
+                            NSString *s = [NSString stringWithUTF8String:(const char *)&msg.msg.data[off]];
+                            if(s == nil)
                                 break;
+                            [parts addObject:s];
+                            off += [s length] + 1;
+                        }
+                        if([parts count] == 0)
+                            break;
+
+                        {
+                            NSString *bundlePath = [parts objectAtIndex:0];
+                            NSArray *docPaths = [parts count] > 1 ?
+                                [parts subarrayWithRange:NSMakeRange(1, [parts count] - 1)] :
+                                [NSArray array];
+                            NSBundle *bundle = [NSBundle bundleWithPath:bundlePath];
+                            NSString *targetID = [bundle objectForInfoDictionaryKey:@"CFBundleIdentifier"];
+                            mach_port_t targetPort = MACH_PORT_NULL;
+                            WSAppRecord *existing = nil;
+
+                            if(targetID == nil)
+                                targetID = [[bundlePath lastPathComponent] stringByDeletingPathExtension];
+
+                            pthread_mutex_lock(&appsLock);
+                            existing = [apps objectForKey:targetID];
+                            if(existing != nil)
+                                targetPort = [existing port];
+                            pthread_mutex_unlock(&appsLock);
+
+                            if(targetPort != MACH_PORT_NULL) {
+                                Message docMsg = {0};
+                                size_t used = 0;
+                                unsigned i;
+
+                                docMsg.header.msgh_remote_port = targetPort;
+                                docMsg.header.msgh_bits = MACH_MSGH_BITS_SET(MACH_MSG_TYPE_COPY_SEND, 0, 0, 0);
+                                docMsg.header.msgh_id = MSG_ID_INLINE;
+                                docMsg.header.msgh_size = sizeof(docMsg) - sizeof(mach_msg_trailer_t);
+                                docMsg.code = CODE_OPEN_DOCUMENTS;
+                                docMsg.pid = msg.msg.pid;
+                                strncpy(docMsg.bundleID, msg.msg.bundleID, sizeof(docMsg.bundleID));
+                                for(i = 0; i < [docPaths count]; i++) {
+                                    const char *p = [[docPaths objectAtIndex:i] UTF8String];
+                                    size_t l = strlen(p) + 1;
+                                    if(used + l > sizeof(docMsg.data))
+                                        break;
+                                    memcpy(docMsg.data + used, p, l);
+                                    used += l;
+                                }
+                                docMsg.len = (unsigned)used;
+                                mach_msg((mach_msg_header_t *)&docMsg, MACH_SEND_MSG|MACH_SEND_TIMEOUT,
+                                        sizeof(docMsg) - sizeof(mach_msg_trailer_t),
+                                        0, MACH_PORT_NULL, 200 /* ms timeout */, MACH_PORT_NULL);
+                                fprintf(stderr, "[WS] open documents: routed %d file(s) to running %s\n",
+                                        (int)[docPaths count], [targetID UTF8String]);
+                                pthread_mutex_lock(&appsLock);
+                                curApp = existing;
+                                pthread_mutex_unlock(&appsLock);
+                                [self activateApp:existing];
+                            } else {
+                                [self queueBundleLaunch:bundlePath bundleID:targetID args:docPaths];
+                                fprintf(stderr, "[WS] open documents: queued launch of %s\n",
+                                        [targetID UTF8String]);
                             }
                         }
-                        if(exe == NULL) {
-                            fprintf(stderr, "[WS] open bundle: no executable for %s\n", path);
-                            break;
+                        break;
+                    }
+                    case CODE_DRAG_EVENT:
+                    {
+                        /* Route the drag event to the app that owns the
+                         * target window. */
+                        struct mach_drag_event ev;
+                        mach_port_t targetPort = MACH_PORT_NULL;
+                        WSAppRecord *owner = nil;
+                        NSString *key;
+                        NSEnumerator *keys;
+
+                        memset(&ev, 0, sizeof(ev));
+                        if((size_t)msg.msg.len >= sizeof(ev))
+                            memcpy(&ev, msg.msg.data, sizeof(ev));
+
+                        pthread_mutex_lock(&appsLock);
+                        keys = [apps keyEnumerator];
+                        while((key = [keys nextObject]) != nil) {
+                            WSAppRecord *rec = [apps objectForKey:key];
+                            NSArray *wins = [rec windows];
+                            unsigned i;
+                            for(i = 0; i < [wins count]; i++) {
+                                if([[wins objectAtIndex:i] number] == (int)ev.windowID) {
+                                    owner = rec;
+                                    targetPort = [rec port];
+                                    break;
+                                }
+                            }
+                            if(owner != nil)
+                                break;
                         }
-                        /* Do not fork from here.  This switch runs with
-                         * appsLock held: a child that inherits the locked mutex
-                         * never completes its launch handshake -- its
-                         * bootstrap_look_up for the WindowServer service fails
-                         * (measured: "Failed to locate WindowServer service"), so
-                         * every window-create RPC then dies with
-                         * MACH_SEND_INVALID_DEST_NAME.  The three shell apps
-                         * (Filer/Dock/SystemUIServer) are forked from the main loop
-                         * outside the lock, which is why they work.
-                         * Defer it instead and spawn after the unlock. */
-                        snprintf(_pendingBundlePath, sizeof(_pendingBundlePath), "%s", exe);
-                        snprintf(_pendingBundleName, sizeof(_pendingBundleName), "%s",
-                            [exeName UTF8String]);
-                        snprintf(_pendingBundleID, sizeof(_pendingBundleID), "%s",
-                            targetID ? [targetID UTF8String] : "com.ravynos.unknown");
-                        _pendingBundleReady = 1;
-                        fprintf(stderr, "[WS] open bundle: queued %s\n", exe);
+                        pthread_mutex_unlock(&appsLock);
+
+                        if(targetPort != MACH_PORT_NULL) {
+                            Message dragMsg = {0};
+                            dragMsg.header.msgh_remote_port = targetPort;
+                            dragMsg.header.msgh_bits = MACH_MSGH_BITS_SET(MACH_MSG_TYPE_COPY_SEND, 0, 0, 0);
+                            dragMsg.header.msgh_id = MSG_ID_INLINE;
+                            dragMsg.header.msgh_size = sizeof(dragMsg) - sizeof(mach_msg_trailer_t);
+                            dragMsg.code = CODE_DRAG_EVENT;
+                            dragMsg.pid = msg.msg.pid;
+                            strncpy(dragMsg.bundleID, msg.msg.bundleID, sizeof(dragMsg.bundleID));
+                            memcpy(dragMsg.data, &ev, sizeof(ev));
+                            dragMsg.len = sizeof(ev);
+                            mach_msg((mach_msg_header_t *)&dragMsg, MACH_SEND_MSG|MACH_SEND_TIMEOUT,
+                                    sizeof(dragMsg) - sizeof(mach_msg_trailer_t),
+                                    0, MACH_PORT_NULL, 200 /* ms timeout */, MACH_PORT_NULL);
+                        }
+                        break;
+                    }
+                    case CODE_PREFS_CHANGED:
+                    {
+                        /* Broadcast to every running app so the Dock, the menu
+                         * bar and the open windows can restyle themselves. */
+                        NSString *key;
+                        NSEnumerator *keys;
+
+                        pthread_mutex_lock(&appsLock);
+                        keys = [apps keyEnumerator];
+                        while((key = [keys nextObject]) != nil) {
+                            WSAppRecord *rec = [apps objectForKey:key];
+                            mach_port_t port = [rec port];
+                            if(port == MACH_PORT_NULL)
+                                continue;
+                            Message prefMsg = {0};
+                            prefMsg.header.msgh_remote_port = port;
+                            prefMsg.header.msgh_bits = MACH_MSGH_BITS_SET(MACH_MSG_TYPE_COPY_SEND, 0, 0, 0);
+                            prefMsg.header.msgh_id = MSG_ID_INLINE;
+                            prefMsg.header.msgh_size = sizeof(prefMsg) - sizeof(mach_msg_trailer_t);
+                            prefMsg.code = CODE_PREFS_CHANGED;
+                            prefMsg.pid = msg.msg.pid;
+                            strncpy(prefMsg.bundleID, msg.msg.bundleID, sizeof(prefMsg.bundleID));
+                            mach_msg((mach_msg_header_t *)&prefMsg, MACH_SEND_MSG|MACH_SEND_TIMEOUT,
+                                    sizeof(prefMsg) - sizeof(mach_msg_trailer_t),
+                                    0, MACH_PORT_NULL, 100 /* ms timeout */, MACH_PORT_NULL);
+                        }
+                        pthread_mutex_unlock(&appsLock);
+                        /* Keyboard and mouse preferences (tracking speed, modifiers, key repeat) apply immediately. */
+                        if(input != nil) [input reloadInputPreferences];
+                        fprintf(stderr, "[WS] preferences changed broadcast\n");
                         break;
                     }
                     case CODE_APP_HIDE:
@@ -2148,7 +3114,7 @@ static volatile int _pendingBundleReady = 0;
     for(int level = kCGNumReservedWindowLevels - 1; level >= 0; --level) {
         NSArray *wins = _windows[level];
         int count = [wins count];
-        for(int i = 0; i < count; ++i) {
+        for(int i = count - 1; i >= 0; --i) {
             WSWindowRecord *win = [wins objectAtIndex:i];
             if(win.state == HIDDEN || win.state == MINIMIZED || win.state == CLOSED)
                 continue;
@@ -2163,8 +3129,12 @@ static volatile int _pendingBundleReady = 0;
 }
 
 - (BOOL)sendEventToApp:(struct mach_event *)event {
-    static BOOL inDrag = NO;
-    static WSWindowRecord *dragWindow = nil;    NSPoint pos = NSMakePoint(event->x, event->y);
+    static BOOL inResize = NO;
+    static WSWindowRecord *resizeWindow = nil;
+    static NSPoint resizeStart = {0, 0};
+    static NSRect resizeOrigGeom = {{0, 0}, {0, 0}};
+    static int resizeEdge = 0;
+    NSPoint pos = NSMakePoint(event->x, event->y);
 
     /* Any key input goes to active window & app, even if pointer is over something else
      * Otherwise, identify the window (if any) that is under the pointer. Windows on macOS
@@ -2196,86 +3166,118 @@ static volatile int _pendingBundleReady = 0;
     // First, check if we want to handle this event ourselves!
     switch(event->code) {
         case NSLeftMouseDragged: {
-            // We are already dragging a window, so keep at it
-            if(inDrag && dragWindow != nil) {
-                [dragWindow moveByX:event->dx Y:event->dy];
-                [self updateClientWindowState:dragWindow];
+            if(inResize && resizeWindow != nil) {
+                float dx = pos.x - resizeStart.x;
+                float dy = pos.y - resizeStart.y;
+                float newW = resizeOrigGeom.size.width;
+                float newH = resizeOrigGeom.size.height;
+                float newOriginX = resizeOrigGeom.origin.x;
+                float newOriginY = resizeOrigGeom.origin.y;
+
+                if(resizeEdge & 2) newW += dx;
+                if(resizeEdge & 1) { newW -= dx; newOriginX += dx; }
+                if(resizeEdge & 4) { newH -= dy; newOriginY += dy; }
+                if(resizeEdge & 8) newH += dy;
+
+                if(newW < 200) newW = 200;
+                if(newH < 100) newH = 100;
+
+                if((int)newW != (int)resizeWindow.geometry.size.width ||
+                   (int)newH != (int)resizeWindow.geometry.size.height ||
+                   (int)newOriginY != (int)resizeWindow.geometry.origin.y) {
+                    [self resizeWindowSurface:resizeWindow width:(int)newW height:(int)newH];
+                    resizeWindow.geometry = NSMakeRect(newOriginX, newOriginY, newW, newH);
+                    resizeWindow.frame = resizeWindow.geometry;
+                    [self updateClientWindowState:resizeWindow];
+                }
                 return YES;
             }
 
-            // Are we dragging a window at all?
-            if(window == nil)
-                return YES;
-
-            // Are we dragging the titlebar?
-            if(NSPointInRect(pos, titleFrame)) {
-                [window moveByX:event->dx Y:event->dy];
-                [self updateClientWindowState:window];
-                inDrag = YES;
-                dragWindow = window;
+            if(sInDrag && sDragWindow != nil) {
+                NSRect oldGeom = sDragWindow.geometry;
+                [sDragWindow moveByX:event->dx Y:event->dy];
+                NSRect newGeom = sDragWindow.geometry;
+                NSRect dragDamage = NSInsetRect(NSUnionRect(oldGeom, newGeom), -16, -16);
+                [self markDamageRect:dragDamage];
                 return YES;
             }
-
-            // Handled all WS cases - send this to the window!
             break;
         }
         case NSLeftMouseDown: {
             if(window == nil)
                 return YES;
-            
+
+            if(window.level >= 0 && window.level < kCGNumReservedWindowLevels) {
+                pthread_mutex_lock(&renderLock);
+                [_windows[window.level] removeObject:window];
+                [_windows[window.level] addObject:window];
+                pthread_mutex_unlock(&renderLock);
+                [self draw];
+            }
+
+            if(app != nil && ![app skipSwitcher] && app != curApp) {
+                [self deactivateApp:curApp];
+                curApp = app;
+                curWindow = window;
+                [self activateApp:curApp];
+            } else if(app == curApp && window != curWindow) {
+                curWindow = window;
+            }
+
+            // Check for window border/corner resize (NSResizableWindowMask = 8)
+            if((window.styleMask & 8) != 0 && window.state == NORMAL) {
+                NSRect f = window.frame;
+                int edge = 0;
+                if(pos.x >= f.origin.x + f.size.width - 8 && pos.x <= f.origin.x + f.size.width) edge |= 2;
+                if(pos.x >= f.origin.x && pos.x <= f.origin.x + 8) edge |= 1;
+                if(pos.y >= f.origin.y && pos.y <= f.origin.y + 8) edge |= 4;
+                if(pos.y >= f.origin.y + f.size.height - 8 && pos.y <= f.origin.y + f.size.height) edge |= 8;
+
+                if(edge != 0) {
+                    inResize = YES;
+                    resizeWindow = window;
+                    resizeEdge = edge;
+                    resizeStart = pos;
+                    resizeOrigGeom = window.geometry;
+                    return YES;
+                }
+            }
+
             // Did we click in the titlebar but not a button?
             NSRect noControl = titleFrame;
             noControl.origin.x += NSWindowControlSpacing*3;
             noControl.origin.x += NSWindowControlDiameter*3;
-            if(window.state == NORMAL && NSPointInRect(pos, noControl)) {
-                [window moveByX:event->dx Y:event->dy];
-                //[self updateClientWindowState:window];
-                inDrag = YES;
-                dragWindow = window;
+            if(window.state == NORMAL && (window.styleMask & NSTitledWindowMask) && window.level == kCGNormalWindowLevelKey && NSPointInRect(pos, noControl)) {
+                sInDrag = YES;
+                sDragWindow = window;
                 return YES;
             }
-
-            // these are just requests - the client can ignore them, so we don't
-            // actually change the window until it sends us a new state message
-#if 0
-            } else if(NSPointInRect(pos, window.miniButtonRect)) {
-                if(window.state != MINIMIZED)
-                    window.prevState = window.state;
-                else
-                    window.prevState = NORMAL;
-                window.state = MINIMIZED;
-                [self updateClientWindowState:window];
-
-                // Are there other windows active for this app?
-                NSArray *wins = [app windows];
-                for(int i = 0; i < [wins count]; ++i) {
-                    curWindow = [wins objectAtIndex:i];
-                    if(curWindow.number != window.number)
-                        i = [wins count];
-                }
-                if(curWindow.number == window.number)
-                    curWindow = nil; // app stays active though
-            } else {
-#endif
-                // Handled all WS cases - send this to the window!
-                if(![app skipSwitcher]) {
-                    [self deactivateApp:curApp];
-                    curApp = app;
-                    curWindow = window;
-                    [self activateApp:curApp];
-                }
-#if 0
-            }
-#endif
             break;
         }
         case NSLeftMouseUp: {
-            if(inDrag) {
-                [self updateClientWindowState:dragWindow];
-                inDrag = NO;
-                dragWindow = nil;
+            if(inResize) {
+                if(resizeWindow != nil) {
+                    resizeWindow.frame = resizeWindow.geometry;
+                    [self updateClientWindowState:resizeWindow];
+                    [self draw];
+                }
+                inResize = NO;
+                resizeWindow = nil;
+                resizeEdge = 0;
                 return YES;
             }
+            if(sInDrag) {
+                if(sDragWindow != nil) {
+                    sDragWindow.frame = sDragWindow.geometry;
+                    [self updateClientWindowState:sDragWindow];
+                    [self markDamageRect:NSInsetRect(sDragWindow.geometry, -16, -16)];
+                    [self draw];
+                }
+                sInDrag = NO;
+                sDragWindow = nil;
+                return YES;
+            }
+            break;
         }
     }
 
@@ -2321,23 +3323,12 @@ static volatile int _pendingBundleReady = 0;
     data.state = window.state;
     // title is ignored - only client can set it
 
-    const char *appKey = [window.shmPath cString];
-    char *key = appKey + 1;
-    while(*key != '/' && *key != '\0')
-        key++;
-    int len = key - (appKey + 1);
-    key = malloc(len+1);
-    memcpy(key, appKey+1, len);
-    key[len] = 0;
-
-    pthread_mutex_lock(&appsLock);
-    WSAppRecord *app = [apps objectForKey:[NSString stringWithCString:key]];
+    WSAppRecord *app = (WSAppRecord *)window.app;
     if(app != nil && [app isKindOfClass:[WSAppRecord class]]) {
         mach_port_t appPort = [app port];
-        pthread_mutex_unlock(&appsLock);
-        [self sendInlineData:&data length:sizeof(data) withCode:CODE_WINDOW_STATE toPort:appPort];
+        if(appPort != MACH_PORT_NULL)
+            [self sendInlineData:&data length:sizeof(data) withCode:CODE_WINDOW_STATE toPort:appPort];
     } else {
-        pthread_mutex_unlock(&appsLock);
         NSLog(@"Cannot send window state update to app: not found. %@", window);
     }
 
@@ -2380,7 +3371,7 @@ static volatile int _pendingBundleReady = 0;
     return YES;
 }
 
-- (BOOL)sendInlineData:(void *)data length:(int)length withCode:(int)code toPort:(mach_port_t)port {
+- (BOOL)sendInlineData:(void *)data length:(int)length withCode:(int)code toPort:(mach_port_t)port timeout:(mach_msg_timeout_t)timeoutMs {
     Message msg = {0};
     msg.header.msgh_remote_port = port;
     msg.header.msgh_bits = MACH_MSGH_BITS_SET(MACH_MSG_TYPE_COPY_SEND, 0, 0, 0);
@@ -2390,22 +3381,35 @@ static volatile int _pendingBundleReady = 0;
     msg.pid = getpid();
     strncpy(msg.bundleID, WINDOWSERVER_SVC_NAME, sizeof(msg.bundleID)-1);
 
-    memcpy(msg.data, data, length);
+    if(length > 0 && data != NULL)
+        memcpy(msg.data, data, MIN(length, sizeof(msg.data)));
     msg.len = length;
 
-    int ret;
-    if((ret = mach_msg((mach_msg_header_t *)&msg, MACH_SEND_MSG|MACH_SEND_TIMEOUT,
-        sizeof(msg) - sizeof(mach_msg_trailer_t), 0, MACH_PORT_NULL, 2000 /* ms timeout */,
-        MACH_PORT_NULL)) != MACH_MSG_SUCCESS) {
+    /* Under QEMU TCG the receiving process is often mid-render; a single
+     * timed send loses the reply and the client then builds a window that
+     * never existed, so retry with escalating timeouts before giving up. */
+    mach_msg_timeout_t attempt = (timeoutMs > 0) ? timeoutMs : 2000;
+    int ret = MACH_MSG_SUCCESS;
+    for(int tryIdx = 0; tryIdx < 4; ++tryIdx) {
+        mach_msg_option_t opts = MACH_SEND_MSG | MACH_SEND_TIMEOUT;
+        ret = mach_msg((mach_msg_header_t *)&msg, opts,
+            sizeof(msg) - sizeof(mach_msg_trailer_t), 0, MACH_PORT_NULL, attempt,
+            MACH_PORT_NULL);
+        if(ret == MACH_MSG_SUCCESS)
+            break;
+        attempt *= 2;
+    }
+    if(ret != MACH_MSG_SUCCESS) {
         char errbuf[128];
         int n = snprintf(errbuf, sizeof(errbuf), "[WS] sendInlineData failed to port %u: 0x%x\n", port, ret);
         write(2, errbuf, n);
         return NO;
     }
-    char okbuf[128];
-    int n = snprintf(okbuf, sizeof(okbuf), "[WS] sendInlineData reply OK to port %u\n", port);
-    write(2, okbuf, n);
     return YES;
+}
+
+- (BOOL)sendInlineData:(void *)data length:(int)length withCode:(int)code toPort:(mach_port_t)port {
+    return [self sendInlineData:data length:length withCode:code toPort:port timeout:500];
 }
 
 - (void)watchForProcessExit:(unsigned int)pid {
@@ -2580,5 +3584,89 @@ static volatile int _pendingBundleReady = 0;
     ready = NO;
 }
 
+- (void)markFullSceneDirty {
+    pthread_mutex_lock(&damageLock);
+    _sceneDirty = YES;
+    _damageRect = _geometry;
+    pthread_mutex_unlock(&damageLock);
+}
+
+- (void)markDamageRect:(NSRect)rect {
+    if(NSIsEmptyRect(rect))
+        return;
+    pthread_mutex_lock(&damageLock);
+    _sceneDirty = YES;
+    if(NSIsEmptyRect(_damageRect))
+        _damageRect = rect;
+    else
+        _damageRect = NSUnionRect(_damageRect, rect);
+    pthread_mutex_unlock(&damageLock);
+}
+
+-(void)resizeWindowSurface:(WSWindowRecord *)winrec width:(int)w height:(int)h {
+    if(winrec == nil || w <= 0 || h <= 0) return;
+    /* Same discipline as windowModify:'s remap: munmap the OLD mapping with the OLD
+     * size, and if the new buffer cannot be mapped, drop winrec.surface -- leaving it
+     * set would keep an O2Image that wraps just-unmapped bytes alive, which is exactly
+     * what faulted inside Onyx2D's span reads. */
+    size_t oldBufSize = winrec.bufSize;
+    int oldW = (int)winrec.geometry.size.width, oldH = (int)winrec.geometry.size.height;
+
+    pthread_mutex_lock(&renderLock);
+    winrec.bufSize = ([fb getDepth]/8) * w * h;
+
+    shm_unlink([winrec.shmPath cString]);
+    int shmfd = shm_open([winrec.shmPath cString], O_RDWR|O_CREAT|O_EXCL, 0666);
+    if(shmfd < 0)
+        shmfd = shm_open([winrec.shmPath cString], O_RDWR|O_CREAT, 0666);
+    if(shmfd < 0) {
+        int err = errno;
+        pthread_mutex_unlock(&renderLock);
+        fprintf(stderr, "[WS] SURF-FAIL win=%u %dx%d->%dx%d open errno=%d\n",
+            (unsigned)winrec.number, oldW, oldH, w, h, err);
+        return;
+    }
+
+    if(ftruncate(shmfd, winrec.bufSize) < 0) {
+        int err = errno;
+        close(shmfd);
+        munmap(winrec.surfaceBuf, oldBufSize);
+        winrec.surfaceBuf = NULL;
+        winrec.surface = NULL;
+        winrec.bufSize = 0;
+        pthread_mutex_unlock(&renderLock);
+        fprintf(stderr, "[WS] SURF-FAIL win=%u %dx%d->%dx%d ftrunc errno=%d\n",
+            (unsigned)winrec.number, oldW, oldH, w, h, err);
+        return;
+    }
+
+    if(winrec.surfaceBuf != NULL)
+        munmap(winrec.surfaceBuf, oldBufSize);
+
+    winrec.surfaceBuf = mmap(NULL, winrec.bufSize, PROT_WRITE|PROT_READ,
+            MAP_SHARED|MAP_NOCORE, shmfd, 0);
+    int mapErr = (winrec.surfaceBuf == NULL) ? errno : 0;
+    close(shmfd);
+
+    if(winrec.surfaceBuf == NULL) {
+        winrec.surface = NULL;
+        winrec.bufSize = 0;
+        pthread_mutex_unlock(&renderLock);
+        fprintf(stderr, "[WS] SURF-FAIL win=%u %dx%d->%dx%d mmap errno=%d\n",
+            (unsigned)winrec.number, oldW, oldH, w, h, mapErr);
+        return;
+    }
+
+    if(logLevel < WS_INFO)
+        fprintf(stderr, "[WS] SURF win=%u %dx%d->%dx%d buf=0x%zx size=0x%zx\n",
+            (unsigned)winrec.number, oldW, oldH, w, h,
+            (size_t)winrec.surfaceBuf, (size_t)winrec.bufSize);
+
+    winrec.surface = [[O2Surface alloc] initWithBytes:winrec.surfaceBuf width:w
+        height:h bitsPerComponent:8 bytesPerRow:4*w
+        colorSpace:[fb colorSpace]
+        bitmapInfo:kCGBitmapByteOrderDefault|kCGImageAlphaPremultipliedFirst];
+    pthread_mutex_unlock(&renderLock);
+}
 @end
 

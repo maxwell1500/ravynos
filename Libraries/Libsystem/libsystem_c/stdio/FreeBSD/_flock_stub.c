@@ -43,6 +43,7 @@ __FBSDID("$FreeBSD: src/lib/libc/stdio/_flock_stub.c,v 1.16 2008/04/17 22:17:53 
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
+#include <unistd.h>
 #include "un-namespace.h"
 
 #include "local.h"
@@ -55,11 +56,45 @@ __weak_reference(_flockfile_debug_stub, _flockfile_debug);
 __weak_reference(_ftrylockfile, ftrylockfile);
 __weak_reference(_funlockfile, funlockfile);
 
+/* TEMPORARY diagnostic: something called a stdio function with a NULL
+ * FILE *, which lands here as &fp->_fl_mutex == NULL + 0x68.  Walk the
+ * frame-pointer chain and dump the return addresses so the caller can be
+ * symbolised against the process image bases.  Remove once found. */
+static void
+_flockfile_null_trace(void)
+{
+	char buf[32];
+	void **rbp = (void **)__builtin_frame_address(0);
+	int i;
+
+	for (i = 0; i < 20 && rbp != NULL; i++) {
+		void *ra = rbp[1];
+		void **next;
+		int n;
+
+		if (ra == NULL)
+			break;
+		n = snprintf(buf, sizeof(buf), "[FLOCKNULL] ra=%p\n", ra);
+		if (n > 0)
+			write(2, buf, (size_t)n);
+
+		next = (void **)rbp[0];
+		if (next <= rbp)
+			break;
+		rbp = next;
+	}
+	write(2, "[FLOCKNULL] end\n", 16);
+}
+
 void
 _flockfile(FILE *fp)
 {
 	// <rdar://problem/21533199> - preserve errno.
 	int save_errno = errno;
+
+	if (fp == NULL)
+		_flockfile_null_trace();
+
 	_pthread_mutex_lock(&fp->_fl_mutex);
 	errno = save_errno;
 }

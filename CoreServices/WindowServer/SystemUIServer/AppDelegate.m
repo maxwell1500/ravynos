@@ -42,6 +42,16 @@
     menuBar = [[MenuBarWindow alloc] initWithFrame:[mainDisplay frame]];
     [menuBar setDelegate:self];
     [[menuBar contentView] setNeedsDisplay:YES];
+
+    NSNotificationCenter *defaultCenter = [NSNotificationCenter defaultCenter];
+    [defaultCenter addObserver:self selector:@selector(menuDidUpdate:)
+        name:@"NSMenuDidUpdate" object:nil];
+    [defaultCenter addObserver:self selector:@selector(appDidQuit:)
+        name:@"NSApplicationDidQuit" object:nil];
+    [defaultCenter addObserver:self selector:@selector(appDidActivate:)
+        name:NSApplicationDidBecomeActiveNotification object:nil];
+    [defaultCenter addObserver:self selector:@selector(appDidDeactivate:)
+        name:NSApplicationDidResignActiveNotification object:nil];
     return self;
 }
 
@@ -88,20 +98,10 @@
 }
 #endif
 
--(void)applicationWillFinishLaunching:(NSNotification *)note {    /* The menu bar window is already built in -init.  Calling initWithFrame:
-     * again would register a second window record for the same NSWindow (same
-     * window number, new level), which crashes the compositor's window walk. */
+-(void)applicationWillFinishLaunching:(NSNotification *)note {
     [[menuBar contentView] setNeedsDisplay:YES];
-    [menuBar makeKeyAndOrderFront:self];    [menuBar makeMainWindow];
-    NSNotificationCenter *defaultCenter = [NSNotificationCenter defaultCenter];
-    [defaultCenter addObserver:self selector:@selector(menuDidUpdate:)
-        name:NSMenuDidUpdateNotification object:nil];
-    [defaultCenter addObserver:self selector:@selector(appDidQuit:)
-        name:NSApplicationDidQuitNotification object:nil];
-    [defaultCenter addObserver:self selector:@selector(appDidActivate:)
-        name:NSApplicationDidBecomeActiveNotification object:nil];
-    [defaultCenter addObserver:self selector:@selector(appDidDeactivate:)
-        name:NSApplicationDidResignActiveNotification object:nil];
+    [menuBar makeKeyAndOrderFront:self];
+    [menuBar makeMainWindow];
 }
 
 /* Recursively set all menu targets and delegates to our proxy */
@@ -124,6 +124,8 @@
     pid_t pid = [[dict objectForKey:@"ProcessID"] intValue];
     NSString *bundleID = [dict objectForKey:@"BundleID"];
     NSMenu *mainMenu = [dict objectForKey:@"MainMenu"];
+    fprintf(stderr, "[SUI] menuDidUpdate bundle=%s pid=%u items=%d\n",
+        bundleID ? [bundleID UTF8String] : "(nil)", pid, (int)[[mainMenu itemArray] count]);
     [self _menuEnumerateAndChange:mainMenu];
 
     [menuBar setMenu:mainMenu forApp:bundleID];
@@ -144,7 +146,8 @@
 -(void)appDidDeactivate:(NSNotification *)note {
     NSMutableDictionary *dict = (NSMutableDictionary *)[note userInfo];
     NSString *bundleID = [dict objectForKey:@"BundleID"];
-    [menuBar setMenu:nil];
+    if([bundleID isEqualToString:[menuBar activeApp]])
+        [menuBar activateApp:nil];
 }
 
 - (void)clicked:(NSMenuItem *)object {

@@ -34,6 +34,7 @@ double clipTo(double val, double min, double max);
 -(BOOL)sendEventToApp:(struct mach_event *)event;
 -(void)signalQuit;
 -(void)switchApp;
+-(void)captureScreenshotWithMode:(int)mode;
 @end
 
 @interface WSInput : NSObject {
@@ -49,6 +50,14 @@ double clipTo(double val, double min, double max);
     BOOL ctrlDown;
     BOOL altDown;
     BOOL capsLockOn;
+    BOOL cmdDown;
+    uint8_t packetBuf[3];
+    int packetBytes;
+    /* Live input preferences, re-read on CODE_PREFS_CHANGED. */
+    float trackingSpeed;
+    BOOL naturalScrolling;
+    BOOL swapCmdOpt;
+    int capsLockAction; /* 0 Caps Lock, 1 Control, 2 Escape, 3 No Action */
 #endif
     struct xkb_context *xkbCtx;
     struct xkb_keymap *xkb_keymap;
@@ -64,7 +73,7 @@ double clipTo(double val, double min, double max);
 
 -init;
 -(void)dealloc;
--(void)run:(NSObject *)target; /* target obj receives the events */
+-(int)run:(NSObject *)target; /* returns events consumed; 0 = fds readable but empty */
 #if defined(__linux__)
 -(void)processEvent:(struct libinput_event *)event target:(NSObject *)target;
 #endif
@@ -76,9 +85,10 @@ double clipTo(double val, double min, double max);
 -(NSPoint)setPointerPos:(NSPoint)pos;
 -(void)setGeometry:(NSRect)geom;
 -(int)fileDescriptor;
+-(void)reloadInputPreferences;
 #if !defined(__linux__)
 -(int)keyboardFileDescriptor;
--(void)runKeyboard:(NSObject *)target;
+-(int)runKeyboard:(NSObject *)target; /* returns raw bytes consumed */
 -(void)processKeyByte:(uint8_t)code target:(NSObject *)target;
 #endif
 

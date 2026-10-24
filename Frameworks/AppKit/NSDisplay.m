@@ -20,6 +20,13 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE. */
 
 #import <AppKit/NSDisplay.h>
+#import "WindowServer/rpc.h"
+
+extern kern_return_t _windowServerRPC(void *data, size_t len, void *replyBuf, int *replyLen);
+#import <AppKit/NSSavePanel.h>
+#import <AppKit/NSOpenPanel.h>
+#import <AppKit/NSPasteboard.h>
+#import <AppKit/NSDraggingManager.h>
 #include <unistd.h>
 #include <stdio.h>
 #import <AppKit/NSRaise.h>
@@ -31,6 +38,7 @@ SOFTWARE. */
 #import <poll.h>
 
 #define MENU_BAR_HEIGHT 24  // exclude from visibleFrame height
+#define DOCK_HEIGHT 60      // reserve the Dock strip at the bottom of visibleFrame
 
 @implementation NSDisplay
 
@@ -61,6 +69,8 @@ SOFTWARE. */
    NSRect frame = NSMakeRect(0, 0, 1920, 1080);
    NSRect visFrame = frame;
    visFrame.size.height -= MENU_BAR_HEIGHT;
+   visFrame.origin.y += DOCK_HEIGHT;
+   visFrame.size.height -= DOCK_HEIGHT;
    NSScreen *screen = [[[NSScreen alloc] initWithFrame:frame visibleFrame:visFrame] retain];
    [_screens addObject:screen];
 
@@ -86,6 +96,8 @@ SOFTWARE. */
                 NSRect frame = NSMakeRect(0, 0, CGDisplayModeGetWidth(mode), CGDisplayModeGetHeight(mode));
                 NSRect visFrame = frame;
                 visFrame.size.height -= MENU_BAR_HEIGHT;
+                visFrame.origin.y += DOCK_HEIGHT;
+                visFrame.size.height -= DOCK_HEIGHT;
                 NSScreen *screen = [[[NSScreen alloc] initWithFrame:frame visibleFrame:visFrame] retain];
                 [screen _propertiesFromMode:mode colorSpace:cs displayID:mainDisplay];
                 CGDisplayModeRelease(mode);
@@ -100,13 +112,13 @@ SOFTWARE. */
 -(uint32_t)depth { return _depth; }
 
 -(NSPasteboard *)pasteboardWithName:(NSString *)name {
-   NSUnimplementedMethod();
-   return nil;
+   return [[[NSPasteboard alloc] _initWithName:name] autorelease];
 }
 
 -(NSDraggingManager *)draggingManager {
-   NSUnimplementedMethod();
-   return nil;
+   /* One dragging manager per process: it owns the drag proxy window and the
+    * registry of windows that accept drops. */
+   return [NSDraggingManager draggingManager];
 }
 
 -(NSColor *)colorWithName:(NSString *)colorName {
@@ -153,21 +165,23 @@ SOFTWARE. */
 }
 
 -(void)hideCursor {
-   NSUnimplementedMethod();
+   /* The WindowServer owns cursor visibility. */
 }
 
 -(void)unhideCursor {
-   NSUnimplementedMethod();
+   /* The WindowServer owns cursor visibility. */
 }
 
 // Arrow, IBeam, HorizontalResize, VerticalResize
 -(id)cursorWithName:(NSString *)name {
-   NSUnimplementedMethod();
-   return nil;
+   /* The cursor is drawn by the WindowServer; a client-side cursor is only an
+    * opaque token here.  Raising NSUnimplementedMethod aborted every app that
+    * touched NSCursor (TextEdit sets the I-beam on its text view). */
+   return name != nil ? [[name copy] autorelease] : @"arrowCursor";
 }
 
 -(void)setCursor:(id)cursor {
-   NSUnimplementedMethod();
+   /* Drawn by the WindowServer from its pointer position. */
 }
 
 -(NSEvent *)nextEventMatchingMask:(unsigned)mask untilDate:(NSDate *)untilDate inMode:(NSString *)mode dequeue:(BOOL)dequeue {
@@ -369,16 +383,33 @@ SOFTWARE. */
 }
 
 -(int)savePanel:(NSSavePanel *)savePanel runModalForDirectory:(NSString *)directory file:(NSString *)file {
-   NSUnimplementedMethod();
-   return 0;
+   /* The panel owns its browser; the display only forwards to it. */
+   return [savePanel _runRavynModalForDirectory:directory file:file types:nil];
 }
 
 -(int)openPanel:(NSOpenPanel *)openPanel runModalForDirectory:(NSString *)directory file:(NSString *)file types:(NSArray *)types {
-   NSUnimplementedMethod();
-   return 0;
+   return [openPanel _runRavynModalForDirectory:directory file:file types:types];
 }
 
+/* Screen coordinates, as Cocoa defines it.  pointerPos only ever holds the
+ * last event's window-relative point, so ask the WindowServer for the real
+ * cursor position and fall back to the cached value when it cannot answer. */
 -(NSPoint)mouseLocation {
+    struct wsRPCSimple args;
+    struct wsRPCSimple reply;
+    int len = sizeof(reply);
+
+    memset(&args, 0, sizeof(args));
+    memset(&reply, 0, sizeof(reply));
+    args.base.code = kWSGetPointerPosition;
+    args.base.len = 0;
+
+    if(_windowServerRPC != NULL &&
+       _windowServerRPC(&args, sizeof(args), &reply, &len) == KERN_SUCCESS &&
+       reply.base.len >= 8) {
+        pointerPos = NSMakePoint((CGFloat)(int32_t)reply.val1,
+                                 (CGFloat)(int32_t)reply.val2);
+    }
     return pointerPos;
 }
 

@@ -23,19 +23,11 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 extern NSString *NSPlatformClassName;
 
 #include <unistd.h>
-static void cptrace(const char *s)
-{
-	size_t n = 0;
-	while (s[n]) n++;
-	(void)write(2, s, n);
-}
 
 @implementation NSPlatform
 
 +currentPlatform {
    {
-      static int cp_n = 0;
-      if (cp_n < 60) { cp_n++; cptrace("CP-enter\n"); }
       return NSThreadSharedInstance(NSPlatformClassName);
    }
 }

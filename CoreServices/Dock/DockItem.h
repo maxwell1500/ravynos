@@ -86,7 +86,9 @@ typedef enum DockItemFlags DockItemFlags;
 -(BOOL)isPersistent;
 -(BOOL)isSpecial;
 -(BOOL)needsAttention;
--(unsigned int)window;
+-(unsigned int)dockWindowID; // NOT -window: that shadows NSView's window and
+                             // returns a 32-bit value where callers (AppKit)
+                             // expect an NSWindow pointer.
 -(DockItem *)app;
 -(NSArray *)windows;
 -(NSImage *)icon;

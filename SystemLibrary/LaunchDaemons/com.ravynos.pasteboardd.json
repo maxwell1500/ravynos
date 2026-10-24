@@ -1,0 +1,15 @@
+{
+	"EnvironmentVariables": {
+		"ASL_DISABLE": "1",
+		"LANG": "C.UTF-8"
+	},
+	"Label": "com.ravynos.pasteboardd",
+	"MachServices": {
+		"com.ravynos.pasteboardd": true
+	},
+	"ProgramArguments": [
+		"/System/Library/CoreServices/pasteboardd"
+	],
+	"KeepAlive": true,
+	"RunAtLoad": true
+}

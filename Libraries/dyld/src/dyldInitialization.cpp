@@ -121,11 +121,6 @@ static void rebaseDyld(const dyld3::MachOLoaded* dyldMH)
 
 	ma->withChainStarts(diag, 0, ^(const dyld_chained_starts_in_image* starts) {
 		startsSeen = starts;
-		_simple_dprintf(2, "CHAINPROBE: block FIRED, starts=%p seg_count=%u "
-		                   "off0=%#x off1=%#x off2=%#x off3=%#x\n",
-		                (void*)starts, starts->seg_count,
-		                starts->seg_info_offset[0], starts->seg_info_offset[1],
-		                starts->seg_info_offset[2], starts->seg_info_offset[3]);
 		ma->fixupAllChainedFixups(diag, starts, slide, dyld3::Array<const void*>(), nullptr);
 
 		// The guard, folded into the same walk so it sees the same starts the
@@ -145,15 +140,6 @@ static void rebaseDyld(const dyld3::MachOLoaded* dyldMH)
 		});
 	});
 
-	if ( startsSeen == nullptr ) {
-		// leInfo.chainedFixups was null, so withChainStarts never invoked the
-		// block: no rebases, no binds, no diagnostics, and noError.  Say so.
-		_simple_dprintf(2, "CHAINPROBE: BLOCK NEVER FIRED - leInfo.chainedFixups is "
-		                   "null, so this loader applied NO chained fixups at all\n");
-	} else {
-		_simple_dprintf(2, "CHAINPROBE: %u of %u bind slots still unbound after the "
-		                   "fixup pass\n", unboundBinds, totalBinds);
-	}
 	diag.assertNoError();
 
 	// now that rebasing done, initialize mach/syscall layer
@@ -203,7 +189,6 @@ uintptr_t start(const dyld3::MachOLoaded* appsMachHeader, int argc, const char* 
 	// committed the same session. Recorded, not quietly corrected.
 	// fd 2, not fd 1: dyld's own _ZN4dyld3logEPKcz is _simple_dprintf(2,...)
 	// at glue.c:248.
-	_simple_dprintf(2, "DYLD-LOAD-BASE: 0x%lx\n", (unsigned long)dyldsMachHeader);
 	// if kernel had to slide dyld, we need to fix up load sensitive locations
 	// we have to do this before using any global variables
     rebaseDyld(dyldsMachHeader);

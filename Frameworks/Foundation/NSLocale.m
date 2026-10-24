@@ -51,7 +51,6 @@ static NSLocale *_sharedCurrentLocale = nil;
 
  +currentLocale {
    if(_sharedCurrentLocale==nil)
-      write(2,"LC-enter\n",9);
    if (_sharedCurrentLocale == nil)
    {
       /* ravynOS: skip performSelector:_platformCurrentLocaleIdentifier --

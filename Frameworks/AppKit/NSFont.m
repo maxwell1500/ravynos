@@ -200,9 +200,14 @@ static NSLock *_cacheLock=nil;
         
         [ctFont release];
         [name release];
-    } else {
-        result = [NSFont fontWithName:[O2Font postscriptNameForDisplayName:fallbackName] size:size];
     }
+    /* CTFontCreateUIFontForLanguage can return a non-NULL font whose name
+     * resolves to no face in this tree.  Returning nil then handed AppKit an
+     * attributes dictionary with no font at all, and every menu title and
+     * label drew as a single "?" glyph.  Fall back whenever the lookup
+     * failed, not only when CoreText returned nothing. */
+    if (result == nil)
+        result = [NSFont fontWithName:[O2Font postscriptNameForDisplayName:fallbackName] size:size];
     O2FontLog(@"asked for type: %d got font: %@", type, result);
     return result;
 }

@@ -11,7 +11,9 @@
 
 #include <mach/mach.h>
 #include <fcntl.h>
+#include <stdlib.h>
 #include <unistd.h>
+#include <math.h>
 #import "common.h"
 #import "message.h"
 #import "WSInput.h"
@@ -130,6 +132,13 @@ static void ws_unichar_to_utf8(unichar ch, char *out) {
     ctrlDown = NO;
     altDown = NO;
     capsLockOn = NO;
+    cmdDown = NO;
+    packetBytes = 0;
+    trackingSpeed = 1.0f;
+    naturalScrolling = NO;
+    swapCmdOpt = NO;
+    capsLockAction = 0;
+    [self reloadInputPreferences];
 #endif
 
 #if defined(__linux__)
@@ -165,6 +174,45 @@ static void ws_unichar_to_utf8(unichar ch, char *out) {
     logLevel = level;
 }
 
+/* Input preferences written by System Preferences (Keyboard & Mouse pane).
+ * Called at startup and again whenever WindowServer forwards
+ * CODE_PREFS_CHANGED, so tracking speed and modifier remapping take effect
+ * without restarting the session. */
+-(void)reloadInputPreferences {
+#if !defined(__linux__)
+    NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:
+        @"/Library/Preferences/com.ravynos.Input.plist"];
+    id value;
+
+    if(prefs == nil)
+        return;
+
+    value = [prefs objectForKey:@"TrackingSpeed"];
+    if(value != nil) {
+        float speed = [value floatValue];
+        if(speed < 0.25f) speed = 0.25f;
+        if(speed > 3.0f) speed = 3.0f;
+        trackingSpeed = speed;
+    }
+
+    value = [prefs objectForKey:@"NaturalScrolling"];
+    if(value != nil)
+        naturalScrolling = [value boolValue];
+
+    value = [prefs objectForKey:@"SwapCmdOpt"];
+    if(value != nil)
+        swapCmdOpt = [value boolValue];
+
+    {
+        NSString *action = [prefs objectForKey:@"CapsLockAction"];
+        if([action isEqualToString:@"Control"]) capsLockAction = 1;
+        else if([action isEqualToString:@"Escape"]) capsLockAction = 2;
+        else if([action isEqualToString:@"No Action"]) capsLockAction = 3;
+        else capsLockAction = 0;
+    }
+#endif
+}
+
 -(void)setDebugLevel:(int)level {
     logLevel = level;
 #if defined(__linux__)
@@ -179,15 +227,18 @@ static void ws_unichar_to_utf8(unichar ch, char *out) {
 
 #if defined(__linux__)
 
--(void)run:(id)target {
+-(int)run:(id)target {
     struct libinput_event *event = NULL;
+    int events = 0;
 
     libinput_dispatch(li);
     while((event = libinput_get_event(li)) != NULL) {
         [self processEvent:event target:target];
         libinput_event_destroy(event);
         libinput_dispatch(li);
+        ++events;
     }
+    return events;
 }
 
 /* event is destroyed after this function returns */
@@ -215,6 +266,20 @@ static void ws_unichar_to_utf8(unichar ch, char *out) {
             xkb_state_update_key(xkb_state, keycode, state == LIBINPUT_KEY_STATE_PRESSED
                     ? XKB_KEY_DOWN : XKB_KEY_UP);
             unichar nskey = translateKeySym(sym);
+        /* The keysym for the digit keys is XKB_KEY_3/4/5; with Shift held the
+         * server reports the shifted symbol (#, $, %).  Accept both. */
+        if((sym == XKB_KEY_3 || sym == XKB_KEY_numbersign ||
+            sym == XKB_KEY_4 || sym == XKB_KEY_dollar ||
+            sym == XKB_KEY_5 || sym == XKB_KEY_percent) &&
+           cmdDown && shiftDown) {
+            if(sym == XKB_KEY_3 || sym == XKB_KEY_numbersign)
+                [target captureScreenshotWithMode:0];
+            else if(sym == XKB_KEY_4 || sym == XKB_KEY_dollar)
+                [target captureScreenshotWithMode:1];
+            else
+                [target captureScreenshotWithMode:2];
+            return;
+        }
 
             me.code = (state == LIBINPUT_KEY_STATE_PRESSED ? NSKeyDown : NSKeyUp);
             me.keycode = keycode;
@@ -224,6 +289,13 @@ static void ws_unichar_to_utf8(unichar ch, char *out) {
             // Intercept keycodes reserved for WindowServer itself
             if(me.mods == (NSCommandKeyMask|NSShiftKeyMask) && nskey == 'Q') { // FIXME: remove
                 [target signalQuit];
+                return;
+            }
+            /* Global screen capture: Cmd+Shift+3 (whole display),
+             * Cmd+Shift+4 (selection) and Cmd+Shift+5 (HUD). */
+            if(me.mods == (NSCommandKeyMask | NSShiftKeyMask) && me.code == NSKeyDown &&
+               (nskey == '3' || nskey == '4' || nskey == '5')) {
+                [target captureScreenshotWithMode:(nskey - '0')];
                 return;
             }
             if((me.mods == NSCommandKeyMask) && sym == XKB_KEY_Tab) {
@@ -385,24 +457,65 @@ static void ws_unichar_to_utf8(unichar ch, char *out) {
         case 0x2A: // L shift
         case 0x36: // R shift
             shiftDown = !released;
-            break;
+            kbdExtended = NO;
+            return;
         case 0x1D: // ctrl (L, or R when 0xE0-prefixed)
             ctrlDown = !released;
-            break;
+            kbdExtended = NO;
+            return;
         case 0x38: // alt (L, or R when 0xE0-prefixed)
             altDown = !released;
-            break;
-        case 0x3A: // caps lock toggles on make only
-            if(!released)
-                capsLockOn = !capsLockOn;
+            kbdExtended = NO;
+            return;
+        case 0x5B: // L GUI / Command
+        case 0x5C: // R GUI / Command
+            cmdDown = !released;
+            kbdExtended = NO;
+            return;
+        case 0x3A: // caps lock
+            /* The Keyboard pane may remap Caps Lock.  Remap 0 toggles the
+             * modifier (the stock behaviour); the others synthesize the
+             * chosen key instead. */
+            if(capsLockAction == 0) {
+                if(!released)
+                    capsLockOn = !capsLockOn;
+                kbdExtended = NO;
+                return;
+            }
+            if(capsLockAction == 3) { /* No Action */
+                kbdExtended = NO;
+                return;
+            }
+            if(capsLockAction == 1) {
+                ctrlDown = !released;
+                kbdExtended = NO;
+                return;
+            }
+            /* Escape */
+            make = 0x01;
             break;
         default:
             break;
     }
     kbdExtended = NO;
 
-    if(released && make == 0x3A)
-        return; // lock key: no up event, we already toggled
+    /* Global capture shortcuts.  These must be handled before the event is
+     * forwarded: the focused app would otherwise receive Cmd+Shift+3/4/5 and
+     * the capture would never happen. */
+    if(!released && cmdDown && shiftDown) {
+        if(make == 0x04) { /* 3 */
+            [target captureScreenshotWithMode:0];
+            return;
+        }
+        if(make == 0x05) { /* 4 */
+            [target captureScreenshotWithMode:1];
+            return;
+        }
+        if(make == 0x06) { /* 5 */
+            [target captureScreenshotWithMode:2];
+            return;
+        }
+    }
 
     me.code = released ? NSKeyUp : NSKeyDown;
     me.keycode = make;
@@ -411,17 +524,19 @@ static void ws_unichar_to_utf8(unichar ch, char *out) {
     me.y = pointerY;
     me.mods = (shiftDown ? NSShiftKeyMask : 0)
         | (ctrlDown ? NSControlKeyMask : 0)
-        | (altDown ? NSAlternateKeyMask : 0)
+        | (((swapCmdOpt ? cmdDown : altDown)) ? NSAlternateKeyMask : 0)
+        | (((swapCmdOpt ? altDown : cmdDown)) ? NSCommandKeyMask : 0)
         | (capsLockOn ? NSAlphaShiftKeyMask : 0);
-
     unichar sym = kbd_arrowsym(make);
     if(sym != 0) {
         ws_unichar_to_utf8(sym, (char *)me.chars);
         memcpy(me.charsIg, me.chars, sizeof(me.charsIg));
     } else {
         char ch = 0;
+        char unshifted = 0;
         if(make < sizeof(kbd_unshifted)) {
-            ch = shiftDown ? kbd_shifted[make] : kbd_unshifted[make];
+            unshifted = kbd_unshifted[make];
+            ch = shiftDown ? kbd_shifted[make] : unshifted;
             // Caps Lock only affects letters
             if(capsLockOn && ch >= 'a' && ch <= 'z')
                 ch -= 32;
@@ -431,49 +546,81 @@ static void ws_unichar_to_utf8(unichar ch, char *out) {
         if(ch != 0) {
             me.chars[0] = ch;
             me.chars[1] = 0;
-            memcpy(me.charsIg, me.chars, sizeof(me.charsIg));
+            /* charactersIgnoringModifiers must not carry the shift result:
+             * Cmd+Shift+. arrives as '>' in chars and '.' here, and AppKit's
+             * hidden-file toggle matches on '.'. */
+            me.charsIg[0] = (unshifted != 0) ? unshifted : ch;
+            me.charsIg[1] = 0;
         }
     }
 
     [target sendEventToApp:&me];
 }
 
--(void)runKeyboard:(NSObject *)target {
+-(int)runKeyboard:(NSObject *)target {
+    int bytes = 0;
     if(kbdFd < 0)
-        return;
+        return 0;
 
     uint8_t buf[128];
     ssize_t n;
     while((n = read(kbdFd, buf, sizeof(buf))) > 0) {
-        { char kb[80]; int kn = snprintf(kb, sizeof(kb), "[KBD] read %zd byte(s): %d\n", n, buf[0]); if(kn>0) write(2, kb, kn); }
-        for(ssize_t i = 0; i < n; i++)
+        for(ssize_t i = 0; i < n; i++) {
+            char kb[64]; int kn = snprintf(kb, sizeof(kb), "[KBD] byte 0x%02x\n", buf[i]);
+            if(kn>0) write(2, kb, kn);
             [self processKeyByte:buf[i] target:target];
+        }
+        bytes += (int)n;
     }
+    return bytes;
 }
 
--(void)run:(id)target {
-    [self runKeyboard:target];
+-(int)run:(id)target {
+    int events = [self runKeyboard:target];
 
     if(mouseFd < 0)
-        return;
+        return events;
 
     uint8_t buf[64];
     ssize_t n;
-    while((n = read(mouseFd, buf, sizeof(buf))) > 0) {
-        write(2, "[WSInput] packet read\n", 22);
-        for(ssize_t i = 0; i + 2 < n; i += 3) {
-            uint8_t b0 = buf[i];
-            uint8_t b1 = buf[i+1];
-            uint8_t b2 = buf[i+2];
+    int accumDx = 0, accumDy = 0;
 
-            /* Standard PS/2 packet decoding: bit 3 should be 1 */
-            if (!(b0 & 0x08)) {
-                i -= 2; /* resync */
+    while((n = read(mouseFd, buf, sizeof(buf))) > 0) {
+        for(ssize_t i = 0; i < n; i++) {
+            uint8_t b = buf[i];
+            packetBuf[packetBytes++] = b;
+
+            /* Standard PS/2 packet decoding: bit 3 of first byte must be 1 */
+            if(packetBytes == 1 && !(b & 0x08)) {
+                packetBytes = 0;
                 continue;
             }
 
-            int dx = (int)b1 - ((b0 & 0x10) ? 256 : 0);
-            int dy = (int)b2 - ((b0 & 0x20) ? 256 : 0);
+            if(packetBytes < 3)
+                continue;
+
+            /* Full 3-byte packet received */
+            packetBytes = 0;
+            uint8_t b0 = packetBuf[0];
+            uint8_t b1 = packetBuf[1];
+            uint8_t b2 = packetBuf[2];
+
+            int rawDx = (int)b1 - ((b0 & 0x10) ? 256 : 0);
+            int rawDy = (int)b2 - ((b0 & 0x20) ? 256 : 0);
+
+            float speed = sqrtf((float)(rawDx * rawDx + rawDy * rawDy));
+            float scale = 2.5f * trackingSpeed;
+            if(naturalScrolling) {
+                rawDx = -rawDx;
+                rawDy = -rawDy;
+            }
+            if (speed > 5.0f) {
+                scale *= (1.0f + 0.1f * speed);
+                if (scale > 5.0f)
+                    scale = 5.0f;
+            }
+            int dx = (int)roundf(rawDx * scale);
+            int dy = (int)roundf(rawDy * scale);
 
             BOOL leftBtn = (b0 & 0x01) ? YES : NO;
             BOOL rightBtn = (b0 & 0x02) ? YES : NO;
@@ -481,39 +628,79 @@ static void ws_unichar_to_utf8(unichar ch, char *out) {
             pointerX = clipTo(pointerX + dx, geometry.origin.x, geometry.size.width);
             pointerY = clipTo(pointerY + dy, geometry.origin.y, geometry.size.height);
 
-            struct mach_event me;
-            memset(&me, 0, sizeof(struct mach_event));
-            me.x = pointerX;
-            me.y = pointerY;
-            me.dx = dx;
-            me.dy = dy;
+            BOOL leftEdge = (leftBtn != buttonDown[0]);
+            BOOL rightEdge = (rightBtn != buttonDown[1]);
 
-            if (leftBtn && !buttonDown[0]) {
-                me.code = NSLeftMouseDown;
-                buttonDown[0] = YES;
-            } else if (!leftBtn && buttonDown[0]) {
-                me.code = NSLeftMouseUp;
-                buttonDown[0] = NO;
-            } else if (rightBtn && !buttonDown[1]) {
-                me.code = NSRightMouseDown;
-                buttonDown[1] = YES;
-            } else if (!rightBtn && buttonDown[1]) {
-                me.code = NSRightMouseUp;
-                buttonDown[1] = NO;
-            } else if (dx != 0 || dy != 0) {
-                if (buttonDown[0])
-                    me.code = NSLeftMouseDragged;
-                else if (buttonDown[1])
-                    me.code = NSRightMouseDragged;
-                else
-                    me.code = NSMouseMoved;
-            }
+            if(leftEdge || rightEdge) {
+                /* Flush any accumulated motion before the button state change */
+                if(accumDx != 0 || accumDy != 0) {
+                    struct mach_event me;
+                    memset(&me, 0, sizeof(struct mach_event));
+                    me.x = pointerX - dx;
+                    me.y = pointerY - dy;
+                    me.dx = accumDx;
+                    me.dy = accumDy;
+                    me.mods = [self modifierFlagsForState:xkb_state];
+                    if (buttonDown[0])
+                        me.code = NSLeftMouseDragged;
+                    else if (buttonDown[1])
+                        me.code = NSRightMouseDragged;
+                    else
+                        me.code = NSMouseMoved;
+                    [target sendEventToApp:&me];
+                    ++events;
+                    accumDx = 0;
+                    accumDy = 0;
+                }
 
-            if (me.code != 0) {
-                [target sendEventToApp:&me];
+                if(leftEdge) {
+                    buttonDown[0] = leftBtn;
+                    struct mach_event me;
+                    memset(&me, 0, sizeof(struct mach_event));
+                    me.x = pointerX;
+                    me.y = pointerY;
+                    me.code = leftBtn ? NSLeftMouseDown : NSLeftMouseUp;
+                    me.mods = [self modifierFlagsForState:xkb_state];
+                    [target sendEventToApp:&me];
+                    ++events;
+                }
+                if(rightEdge) {
+                    buttonDown[1] = rightBtn;
+                    struct mach_event me;
+                    memset(&me, 0, sizeof(struct mach_event));
+                    me.x = pointerX;
+                    me.y = pointerY;
+                    me.code = rightBtn ? NSRightMouseDown : NSRightMouseUp;
+                    me.mods = [self modifierFlagsForState:xkb_state];
+                    [target sendEventToApp:&me];
+                    ++events;
+                }
+            } else {
+                accumDx += dx;
+                accumDy += dy;
             }
         }
     }
+
+    /* Emit any trailing coalesced motion */
+    if(accumDx != 0 || accumDy != 0) {
+        struct mach_event me;
+        memset(&me, 0, sizeof(struct mach_event));
+        me.x = pointerX;
+        me.y = pointerY;
+        me.dx = accumDx;
+        me.dy = accumDy;
+        me.mods = [self modifierFlagsForState:xkb_state];
+        if (buttonDown[0])
+            me.code = NSLeftMouseDragged;
+        else if (buttonDown[1])
+            me.code = NSRightMouseDragged;
+        else
+            me.code = NSMouseMoved;
+        [target sendEventToApp:&me];
+        ++events;
+    }
+    return events;
 }
 
 #endif /* __linux__ */
@@ -543,6 +730,16 @@ static void ws_unichar_to_utf8(unichar ch, char *out) {
 }
 
 -(unsigned int)modifierFlagsForState:(struct xkb_state *)state {
+#if !defined(__linux__)
+    unsigned int ret = 0;
+    if(shiftDown) ret |= NSShiftKeyMask;
+    if(ctrlDown)  ret |= NSControlKeyMask;
+    if(altDown)   ret |= NSAlternateKeyMask;
+    if(cmdDown)   ret |= NSCommandKeyMask;
+    if(capsLockOn) ret |= NSAlphaShiftKeyMask;
+    return ret;
+#else
+    if(!state) return 0;
     unsigned int ret=0;
     if(xkb_state_mod_name_is_active(state, XKB_MOD_NAME_SHIFT, XKB_STATE_MODS_EFFECTIVE))
         ret |= NSShiftKeyMask;
@@ -553,6 +750,7 @@ static void ws_unichar_to_utf8(unichar ch, char *out) {
     if(xkb_state_mod_name_is_active(state, XKB_MOD_NAME_ALT, XKB_STATE_MODS_EFFECTIVE))
         ret |= NSAlternateKeyMask;
     return ret;
+#endif
 }
 
 -(NSPoint)pointerPos {

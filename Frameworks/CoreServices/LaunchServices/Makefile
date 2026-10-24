@@ -22,7 +22,7 @@ RESOURCES_FILES = Info.plist InitDB.sql DBSchema_3_4.sql
 # exists or has a framework Makefile), but the header source is real and this
 # is exactly how AppKit and WindowServer already resolve it -- their build logs
 # show CFNetwork.h coming from ${ROOT_SOURCE_DIR}/Frameworks/CFNetwork/.
-CFLAGS = -fobjc-arc -I${.CURDIR:H} -I${.CURDIR} -I${ROOT_SOURCE_DIR}/Frameworks
+CFLAGS = -fobjc-arc -I${.CURDIR:H} -I${.CURDIR} -I${ROOT_SOURCE_DIR}/Frameworks -I${ROOT_SOURCE_DIR}/CoreServices
 LDFLAGS = -lsqlite3 -llaunch
 
 # Without this the framework was built into the object directory and never

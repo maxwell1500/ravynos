@@ -167,6 +167,73 @@ BOOL NSObjectIsKindOfClass(id object,Class kindOf) {
    return NSStringFromClass(object_getClass(self));
 }
 
+/* The root class comes from the objc4 runtime, where description and the
+ * method-signature entry points are deliberately left to CoreFoundation
+ * (Libraries/objc4/runtime/NSObject.mm:2230 returns nil, 2195/2201/2207 call
+ * _objc_fatal).  On this stack Foundation is the implementation, so supply
+ * them here: without +description every [[self class] description] is nil and
+ * +[NSControl cellClass] raises "insert object with nil key"; without
+ * methodSignatureForSelector: NSInvocation-based callers (undo, sheets,
+ * forwarding) abort the process. */
++(NSString *)description {
+   return NSStringFromClass(self);
+}
+
+static NSString *NSObjectDefaultDescription(id self) {
+   return [NSString stringWithFormat:@"<%@: %p>",
+       NSStringFromClass(object_getClass(self)), self];
+}
+
+-(NSString *)description {
+   return NSObjectDefaultDescription(self);
+}
+
++(NSMethodSignature *)instanceMethodSignatureForSelector:(SEL)selector {
+   Method method;
+
+   if(selector == NULL)
+    return nil;
+   method = class_getInstanceMethod(self, selector);
+   if(method == NULL)
+    return nil;
+   return [NSMethodSignature signatureWithObjCTypes:method_getTypeEncoding(method)];
+}
+
++(NSMethodSignature *)methodSignatureForSelector:(SEL)selector {
+   Method method;
+
+   if(selector == NULL)
+    return nil;
+   method = class_getClassMethod(self, selector);
+   if(method == NULL)
+    return nil;
+   return [NSMethodSignature signatureWithObjCTypes:method_getTypeEncoding(method)];
+}
+
+-(NSMethodSignature *)methodSignatureForSelector:(SEL)selector {
+   Method method;
+
+   if(selector == NULL)
+    return nil;
+   method = class_getInstanceMethod(object_getClass(self), selector);
+   if(method == NULL)
+    return nil;
+   return [NSMethodSignature signatureWithObjCTypes:method_getTypeEncoding(method)];
+}
+
++(void)doesNotRecognizeSelector:(SEL)selector {
+   [NSException raise:NSInvalidArgumentException
+               format:@"+[%@ %@]: unrecognized selector sent to class %p",
+                      NSStringFromClass(self), NSStringFromSelector(selector), self];
+}
+
+-(void)doesNotRecognizeSelector:(SEL)selector {
+   [NSException raise:NSInvalidArgumentException
+               format:@"-[%@ %@]: unrecognized selector sent to instance %p",
+                      NSStringFromClass(object_getClass(self)),
+                      NSStringFromSelector(selector), self];
+}
+
 @end
 
 

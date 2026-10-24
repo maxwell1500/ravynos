@@ -412,7 +412,11 @@ ONYX2D_STATIC_INLINE const void *directBytes(O2Image *self){
 }
 
 ONYX2D_STATIC_INLINE const void *scanlineAtY(O2Image *self,int y){
+   if(y < 0 || y >= self->_height)
+    return NULL;
    const void *bytes=directBytes(self);
+   if(bytes == NULL)
+    return NULL;
    int         offset=self->_bytesPerRow*y;
    int         max=offset+self->_bytesPerRow;
    
@@ -507,12 +511,11 @@ O2ImageRef O2ImageCreateWithMaskingColors(O2ImageRef self,const O2Float *compone
 }
 
 O2ImageRef O2ImageRetain(O2ImageRef self) {
-   return (self!=NULL)?(O2ImageRef)CFRetain(self):NULL;
+   return [self retain];
 }
 
 void O2ImageRelease(O2ImageRef self) {
-   if(self!=NULL)
-    CFRelease(self);
+   [self release];
 }
 
 BOOL O2ImageIsMask(O2ImageRef self) {
@@ -854,6 +857,8 @@ O2argb8u *O2ImageRead_ABGR8888_to_argb8u(O2Image *self,int x,int y,O2argb8u *spa
 }
 
 O2argb8u *O2ImageRead_BGRA8888_to_argb8u(O2Image *self,int x,int y,O2argb8u *span,int length) {
+   if(length <= 0 || x < 0 || x + length > self->_width)
+    return NULL;
    const uint8_t *scanline = scanlineAtY(self,y);
    int i;
    
@@ -1114,17 +1119,24 @@ ONYX2D_STATIC_INLINE void O2ImageReadTileSpanExtendEdge_largb8u_PRE(O2Image *sel
    }   
 
    int chunk=RI_MIN(length-i,self->_width-u);
-   direct=self->_read_argb8u(self,u,v,span+i,chunk);
-   if(direct!=NULL) {
-    int k;
+   if(chunk>0) {
+    /* Conversion readers (e.g. O2ImageRead_ABGR8888_to_argb8u) write the
+     * converted pixels into span and return NULL; native-format readers
+     * return a direct pointer instead.  Zero only *before* the read so a
+     * rejected request (guard in the reader) stays transparent, while a
+     * converted span keeps the pixels the reader just produced. */
+    memset(span+i, 0, chunk * sizeof(O2argb8u));
+    direct=self->_read_argb8u(self,u,v,span+i,chunk);
+    if(direct!=NULL) {
+     int k;
+     
+     for(k=0;k<chunk;k++)
+      span[i+k]=direct[k];
+    }
     
-    for(k=0;k<chunk;k++)
-     span[i+k]=direct[k];
+    i+=chunk;
+    u+=chunk;
    }
-   
-   i+=chunk;
-   u+=chunk;
-
    for(;i<length;i++){
     direct=self->_read_argb8u(self,self->_width-1,v,span+i,1);
     
@@ -1146,16 +1158,20 @@ void O2ImageReadTileSpanExtendEdge__largb32f_PRE(O2Image *self,int u, int v, O2a
    }
    
    int chunk=RI_MIN(length-i,self->_width-u);
-   direct=O2Image_read_argb32f(self,u,v,span+i,chunk);
-   if(direct!=NULL) {
-    int k;
-    
-    for(k=0;k<chunk;k++)
-     span[i+k]=direct[k];
+   if(chunk>0) {
+    /* See O2ImageReadTileSpanExtendEdge_largb8u_PRE: zero before the read so
+     * the reader's converted output survives. */
+    memset(span+i, 0, chunk * sizeof(O2argb32f));
+    direct=O2Image_read_argb32f(self,u,v,span+i,chunk);
+    if(direct!=NULL) {
+     int k;
+     
+     for(k=0;k<chunk;k++)
+      span[i+k]=direct[k];
+    }
+    i+=chunk;
+    u+=chunk;
    }
-   i+=chunk;
-   u+=chunk;
-
    for(;i<length;i++){
     direct=O2Image_read_argb32f(self,self->_width-1,v,span+i,1);
     if(direct!=NULL)

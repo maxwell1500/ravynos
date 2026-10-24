@@ -278,7 +278,21 @@ static NSUserDefaults* stdUserDefaults = nil;
    NSMutableDictionary *p = [self persistantDomain];
    if(p)
       [p synchronize];
-   return 0;
+
+   /* Pick up values other processes wrote to the same domain: callers use
+    * synchronize after a CODE_PREFS_CHANGED broadcast to reload state. */
+   NSEnumerator *names=[_domains keyEnumerator];
+   NSString     *name;
+
+   while((name=[names nextObject])!=nil) {
+    id domain=[_domains objectForKey:name];
+
+    if([domain respondsToSelector:@selector(reload)])
+     [domain reload];
+   }
+
+   _dictionaryRep=nil;
+   return YES;
 }
 
 -(NSMutableDictionary *)persistantDomain {

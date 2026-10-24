@@ -367,6 +367,16 @@ static int _nsmutablearraycompareindices(const void* v1, const void* v2)
    NSInvalidAbstractInvocation();
 }
 
+/* Objective-C subscripting (10.8+).  As on macOS, an index equal to the
+   count appends instead of raising. */
+-(void)setObject:(id)object atIndexedSubscript:(NSUInteger)index {
+   if (index == [self count]) {
+      [self addObject:object];
+   } else {
+      [self replaceObjectAtIndex:index withObject:object];
+   }
+}
+
 
 -(void)replaceObjectsInRange:(NSRange)range
         withObjectsFromArray:(NSArray *)array {

@@ -528,6 +528,10 @@ static CFTypeRef _CFRetain(CFTypeRef cf, Boolean tryR);
 
 CFTypeRef CFRetain(CFTypeRef cf) {
     if (NULL == cf) return NULL;
+    CFTYPE_OBJC_FUNCDISPATCH0(CFTypeRef, (id)cf, retain);
+    if (((const CFRuntimeBase *)cf)->_cfinfo[CF_INFO_BITS] == 0) {
+        return (CFTypeRef)objc_msgSend((id)cf, @selector(retain));
+    }
     if (cf) __CFGenericAssertIsCF(cf);
     return _CFRetain(cf, false);
 }
@@ -541,6 +545,11 @@ static void _CFRelease(CFTypeRef cf);
 
 void CFRelease(CFTypeRef cf) {
     if (NULL == cf) return;
+    CFTYPE_OBJC_FUNCDISPATCH0(void, (id)cf, release);
+    if (((const CFRuntimeBase *)cf)->_cfinfo[CF_INFO_BITS] == 0) {
+        objc_msgSend((id)cf, @selector(release));
+        return;
+    }
     if (cf) __CFGenericAssertIsCF(cf);
     _CFRelease(cf);
 }

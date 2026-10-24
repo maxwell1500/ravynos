@@ -9,7 +9,8 @@ SRCS=           SystemUIServer.m \
 		NSMainMenuView.m \
 		SubmenuView.m \
                 Label.m \
-                AboutWindow.m
+                AboutWindow.m \
+                ForceQuitWindow.m
 RELEASE_LOGO=	hyena.png
 RESOURCES=	${.CURDIR}/../Icon.png ${.CURDIR}/ravynos-mark-64.png \
 		${ROOT_SOURCE_DIR}/Logo_Assets/${RELEASE_LOGO} \

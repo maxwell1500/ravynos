@@ -1,0 +1,12 @@
+{
+	"EnvironmentVariables": {
+		"ASL_DISABLE": "1",
+		"LANG": "C.UTF-8"
+	},
+	"Label": "com.ravynos.dailydrivertest",
+	"ProgramArguments": [
+		"/System/Library/CoreServices/dailydrivertest"
+	],
+	"RunAtLoad": true,
+	"KeepAlive": false
+}

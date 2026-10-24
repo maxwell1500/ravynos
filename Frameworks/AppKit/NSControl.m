@@ -32,15 +32,34 @@ static NSMutableDictionary *cellClassDictionary = nil;
         cellClassDictionary = [[NSMutableDictionary alloc] init];
 }
 
+/* Subclasses that override +initialize without calling super (NSColorWell
+ * does) can reach these before NSControl's +initialize has run, and the old
+ * key was [[self class] description] -- which the objc4 root class returns as
+ * nil.  Lazily allocate the map and key it by class name so a nil key can
+ * never reach NSMutableDictionary. */
+static NSString *NSControlCellClassName(Class cls) {
+    NSString *name = NSStringFromClass(cls);
+    return name != nil ? name : @"NSControl";
+}
+
 +(Class)cellClass {
-    if ([cellClassDictionary objectForKey:[[self class] description]] == nil)
+    if (cellClassDictionary == nil)
+        [NSControl initialize];
+
+    NSString *key = NSControlCellClassName(self);
+    if ([cellClassDictionary objectForKey:key] == nil)
         [self setCellClass:[NSCell class]];
 
-    return [cellClassDictionary objectForKey:[[self class] description]];
+    return [cellClassDictionary objectForKey:key];
 }
 
 +(void)setCellClass:(Class)aClass {
-    [cellClassDictionary setObject:aClass forKey:[[self class] description]];
+    if (aClass == Nil)
+        return;
+    if (cellClassDictionary == nil)
+        [NSControl initialize];
+
+    [cellClassDictionary setObject:aClass forKey:NSControlCellClassName(self)];
 }
 
 -(void)encodeWithCoder:(NSCoder *)coder {

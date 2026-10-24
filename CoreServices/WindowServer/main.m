@@ -107,8 +107,16 @@ int main(int argc, const char *argv[]) {
     }
     [ws setLogLevel:logLevel];
 
-    svcThreadLive = pthread_create(&machSvcThread, NULL, machSvcLoop, (__bridge void *)ws) == 0;
-    kqThreadLive = pthread_create(&kqThread, NULL, kqSvcLoop, (__bridge void *)ws) == 0;
+    /* Message/RPC structs are 128 KB each and the receive path nests
+     * several of them (receiveMachMessage -> deactivateApp:/notifyDock: ...),
+     * so the service threads need far more than the pthread default or they
+     * die with a stack-overflow fault the moment an app registers. */
+    pthread_attr_t svcAttr;
+    pthread_attr_init(&svcAttr);
+    pthread_attr_setstacksize(&svcAttr, 8 * 1024 * 1024);
+    svcThreadLive = pthread_create(&machSvcThread, &svcAttr, machSvcLoop, (__bridge void *)ws) == 0;
+    kqThreadLive = pthread_create(&kqThread, &svcAttr, kqSvcLoop, (__bridge void *)ws) == 0;
+    pthread_attr_destroy(&svcAttr);
     [ws setShell:curShell];
     write(2, "[WS] entering ws run\n", 22);
     [ws run];

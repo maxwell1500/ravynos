@@ -25,9 +25,7 @@ SOFTWARE. */
 @implementation NSMenuWindow
 
 -initWithMenu:(NSMenu *)menu {
-    fprintf(stderr,"[SUI] mwin-enter menu=%p\n",menu);
     SubmenuView *view=[[SubmenuView alloc] initWithMenu:menu];
-    fprintf(stderr,"[SUI] mwin-view=%p\n",view);
     NSRect contentRect=[view frame];
 
     self = [self initWithContentRect:contentRect
@@ -36,12 +34,15 @@ SOFTWARE. */
                                defer:NO];
     [self setLevel:NSMainMenuWindowLevel+1]; /* 9: above the Dock (7) and menu bar (8), < 16 */
 
-    _releaseWhenClosed=YES;
+    /* This file is built with -fobjc-arc: the window is owned by the strong
+     * _menuWindow ivar on SubmenuView, so -close must not also release it.
+     * (releaseWhenClosed:YES here was an over-release: every menu popup left
+     * a window freed while still owned, which is the
+     * "NSWindow overreleased while already deallocating" crash.) */
     _view=view;
 
     [[self contentView] addSubview:_view];
     [self setAcceptsMouseMovedEvents:YES];
-    fprintf(stderr,"[SUI] mwin-done\n");
     return self;
 }
 

@@ -35,6 +35,29 @@
 #endif
 
 
+#include <math.h>
+#include <string.h>
+
+static int minInt(int a, int b) { return a < b ? a : b; }
+static int maxInt(int a, int b) { return a > b ? a : b; }
+static void blitRows(uint8_t *dst, const uint8_t *src, size_t stride, int bpp, int width, int height, int x0, int x1, int y0, int y1)
+{
+    if(!dst || !src || stride <= 0 || bpp <= 0 || width <= 0 || height <= 0)
+        return;
+    if(x0 < 0) x0 = 0;
+    if(y0 < 0) y0 = 0;
+    if(x1 > width) x1 = width;
+    if(y1 > height) y1 = height;
+    if(x1 <= x0 || y1 <= y0)
+        return;
+    size_t rowBytes = (size_t)(x1 - x0) * bpp;
+    for(int y = y0; y < y1; ++y) {
+        uint8_t *d = dst + (size_t)y * stride + (size_t)x0 * bpp;
+        const uint8_t *s = src + (size_t)y * stride + (size_t)x0 * bpp;
+        memcpy(d, s, rowBytes);
+    }
+}
+
 @implementation BSDFramebuffer
 
 - (id)init
@@ -81,10 +104,37 @@
     _currentMode->width = width;
     _currentMode->height = height;
     _currentMode->depth = depth;
-    _currentMode->refresh = 0; // FIXME: can we get this?
+    _currentMode->refresh = 60.0; // the emulated scanout runs at 60 Hz
     _currentMode->flags = 0;
 
     CFArrayAppendValue(_allModes, CGDisplayModeRetain(_currentMode));
+
+    /* Virtual modes the compositor can present at the scanout's size.  The
+     * mode is applied in software by scaling/scissoring the scene, so the
+     * Displays pane has real choices instead of a one-entry list. */
+    {
+        static const struct { uint32_t w, h; } virtualModes[] = {
+            { 1600, 900 }, { 1440, 900 }, { 1280, 800 },
+            { 1280, 720 }, { 1024, 768 },  { 800, 600 },
+        };
+        unsigned i;
+
+        for(i = 0; i < sizeof(virtualModes) / sizeof(virtualModes[0]); i++) {
+            if(virtualModes[i].w == width && virtualModes[i].h == height)
+                continue;
+            if(virtualModes[i].w > width || virtualModes[i].h > height)
+                continue;
+            {
+                struct CGDisplayMode *m = calloc(sizeof(struct CGDisplayMode), 1);
+                m->width = virtualModes[i].w;
+                m->height = virtualModes[i].h;
+                m->depth = depth;
+                m->refresh = 60.0;
+                m->flags = 0;
+                CFArrayAppendValue(_allModes, m);
+            }
+        }
+    }
 
     size_t pagemask = getpagesize() - 1;
     size = (stride * height + pagemask) & ~pagemask;
@@ -170,20 +220,34 @@
 
 - (void)draw
 {
-    void *pixels = 0;
+    [self drawRect:NSMakeRect(0, 0, width, height)];
+}
+
+- (void)drawRect:(NSRect)rect
+{
+    void *pixels = NULL;
     if(_captured)
         pixels = [[captureCtx surface] pixelBytes];
     else
         pixels = ctxPixels;
-
-    static int draw_count = 0;
-    if(draw_count < 5 || (draw_count % 60) == 0) {
-        char dbuf[32];
-        int dn = snprintf(dbuf, sizeof(dbuf), "[WS] fb draw #%d\n", draw_count);
-        write(2, dbuf, dn);
-    }
-    draw_count++;
-    memcpy(data, pixels, size); // FIXME: this is slooowwww
+    if(data == NULL || pixels == NULL || width <= 0 || height <= 0 || stride <= 0)
+        return;
+    int bpp = (depth > 0) ? (depth / 8) : 4;
+    if(bpp <= 0)
+        bpp = 4;
+    int x0 = (int)rect.origin.x;
+    int x1 = (int)(rect.origin.x + rect.size.width) + 1;
+    if(x0 < 0) x0 = 0;
+    if(x1 > width) x1 = width;
+    if(x1 <= x0)
+        return;
+    int y0 = (int)rect.origin.y;
+    int y1 = (int)(rect.origin.y + rect.size.height) + 1;
+    /* WS geometry is y-up with scanout row 0 at the top of the screen, so a
+     * WS-space rect maps to scanout rows [height - y1, height - y0).  Blitting
+     * the unflipped range too only duplicated rows for a sub-rect (it was a
+     * no-op for the full-screen draw, where both ranges coincide). */
+    blitRows((uint8_t *)data, (const uint8_t *)pixels, stride, bpp, width, height, x0, x1, height - y1, height - y0);
 }
 
 - (void)drawWithCursor:(O2Image *)cursor inRect:(O2Rect)rect {
@@ -260,9 +324,15 @@
     return 0xf07f0a10; // arbitrary ID
 }
 
-// we can't change resolutions without a drm driver so this will always fail
+/* Changing the hardware mode needs a DRM driver; this framebuffer has none.
+ * A virtual mode is accepted so the compositor can letterbox the scene at the
+ * requested logical size.  The base class stores it as _currentMode. */
 -(BOOL)setMode:(struct CGDisplayMode *)mode {
-    return NO;
+    if(mode == NULL)
+        return NO;
+    if(mode->width == 0 || mode->height == 0)
+        return NO;
+    return [super setMode:mode];
 }
 
 @end

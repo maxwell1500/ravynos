@@ -231,7 +231,7 @@ static NSRect boundsToTitleAreaRect(NSRect rect){
     }
 
     topLeft = [self convertPoint:topLeft toView:nil];
-    //topLeft = [[self window] convertBaseToScreen:topLeft];
+    topLeft = [[self window] convertBaseToScreen:topLeft];
 
     if(topLeft.y - branchFrame.size.height < NSMinY(screenVisible)) {
         topLeft = itemRect.origin;
@@ -241,7 +241,7 @@ static NSRect boundsToTitleAreaRect(NSRect rect){
         topLeft.y += WINDOW_BORDER_THICKNESS;
 
         topLeft = [self convertPoint:topLeft toView:nil];
-        //topLeft = [[self window] convertBaseToScreen:topLeft];
+        topLeft = [[self window] convertBaseToScreen:topLeft];
 
         topLeft.y += branchFrame.size.height;
     }
@@ -250,7 +250,7 @@ static NSRect boundsToTitleAreaRect(NSRect rect){
         NSPoint redo = itemRect.origin;
 
         redo = [self convertPoint:redo toView:nil];
-        //redo = [[self window] convertBaseToScreen:redo];
+        redo = [[self window] convertBaseToScreen:redo];
         redo.x -= branchFrame.size.width;
 
         topLeft.x = redo.x;

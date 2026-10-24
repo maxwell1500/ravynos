@@ -31,6 +31,8 @@ APPKIT_EXPORT NSString *const NSModalPanelRunLoopMode;
 APPKIT_EXPORT NSString *const NSEventTrackingRunLoopMode;
 
 APPKIT_EXPORT NSString *const NSApplicationWillFinishLaunchingNotification;
+/* Posted when the system preferences changed (System Settings app). */
+APPKIT_EXPORT NSString *const NSApplicationPreferencesChangedNotification;
 APPKIT_EXPORT NSString *const NSApplicationDidFinishLaunchingNotification;
 
 APPKIT_EXPORT NSString *const NSApplicationWillBecomeActiveNotification;

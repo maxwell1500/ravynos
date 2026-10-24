@@ -306,86 +306,6 @@ static void *nsThreadStartThread(void* t)
    NSUnimplementedMethod();
 }
 
-/* ravynOS: one-shot capture for the WindowServer corpse.  Static-once, and a
- * single raw write(2) -- never printf.  An inline print on this path has been
- * measured to change how far dyld gets (1 image without, 265 with), so the
- * only thing emitted is the buffer, once, from this non-hot path. */
-static char ravyn_capture_buf[512];
-static volatile int ravyn_capture_done = 0;
-
-static const char ravyn_hex[] = "0123456789abcdef";
-
-static void
-ravyn_put_hex16(char *dst, unsigned long x)
-{
-	int i;
-	for (i = 15; i >= 0; i--) {
-		dst[i] = ravyn_hex[x & 0xf];
-		x >>= 4;
-	}
-}
-
-/* ravynOS: unconditional trace helpers for GUI bring-up debugging. */
-static void ravyn_trace_s(const char *s)
-{
-	size_t n = 0;
-	while (s[n]) n++;
-	(void)write(2, s, n);
-}
-static void ravyn_trace_hex(const char *tag, unsigned long v)
-{
-	char buf[96];
-	char *p = buf;
-	const char *s = tag;
-	while (*s) *p++ = *s++;
-	*p++ = '=';
-	ravyn_put_hex16(p, v); p += 16;
-	*p++ = '\n';
-	(void)write(2, buf, (size_t)(p - buf));
-}
-static int ravyn_sh_trace_count = 0;
-static int ravyn_sh_ret_count = 0;
-void ravyn_capture_shared(const char *path, void *thread, void *shared,
-	void *lock, void *result);
-
-void
-ravyn_capture_shared(const char *path, void *thread, void *shared,
-    void *lock, void *result)
-{
-	char *p = ravyn_capture_buf;
-	const char *s;
-	unsigned long v;
-
-	if (ravyn_capture_done) {
-		return;
-	}
-	ravyn_capture_done = 1;
-
-	s = "RNSHARE "; while (*s) { *p++ = *s++; }
-	s = "path=";   while (*s) { *p++ = *s++; }
-	s = path;      while (*s) { *p++ = *s++; }
-	*p++ = ' ';
-
-	s = "thread=";  while (*s) { *p++ = *s++; }
-	v = (unsigned long)thread;   ravyn_put_hex16(p, v); p += 16; *p++ = ' ';
-
-	s = "shared=";  while (*s) { *p++ = *s++; }
-	v = (unsigned long)shared;   ravyn_put_hex16(p, v); p += 16; *p++ = ' ';
-
-	s = "lock=";    while (*s) { *p++ = *s++; }
-	v = (unsigned long)lock;     ravyn_put_hex16(p, v); p += 16; *p++ = ' ';
-
-	s = "result=";  while (*s) { *p++ = *s++; }
-	v = (unsigned long)result;   ravyn_put_hex16(p, v); p += 16; *p++ = ' ';
-
-	s = "isa=";     while (*s) { *p++ = *s++; }
-	v = result ? (unsigned long)*(void **)result : 0UL;
-	ravyn_put_hex16(p, v); p += 16;
-
-	*p++ = '\n';
-	(void)write(2, ravyn_capture_buf, (size_t)(p - ravyn_capture_buf));
-}
-
 -(NSMutableDictionary *)sharedDictionary {
    return _sharedObjects;
 }
@@ -396,20 +316,8 @@ ravyn_capture_shared(const char *path, void *thread, void *shared,
 static pthread_mutex_t _NSThreadSharedBootstrapLock = PTHREAD_MUTEX_INITIALIZER;
 
 static inline id _NSThreadSharedInstance(NSThread *thread,NSString *className,BOOL create) {
-   /* Entry capture: the exit capture at the end of this function is
-    * unreachable when the fault happens inside NSPlatformCurrentThread(),
-    * which re-enters Foundation during -[NSThread init].  Capture on entry
-    * so at least one invocation is always reported. */
-   ravyn_capture_shared("entry", (void *)thread, 0, 0, 0);
-   if (ravyn_sh_trace_count < 100) {
-      ravyn_sh_trace_count++;
-      ravyn_trace_hex("SH-thread", (unsigned long)thread);
-      ravyn_trace_hex("SH-shared", (unsigned long)thread->_sharedObjects);
-   }
-
    NSMutableDictionary *shared=thread->_sharedObjects;
    if(!shared) {
-      ravyn_trace_s("SH-nil-return\n");
       return nil;
    }
 	id result=nil;
@@ -438,14 +346,11 @@ static inline id _NSThreadSharedInstance(NSThread *thread,NSString *className,BO
     * `_sharedObjectLock` is left in place for its user-facing -lock/-unlock
     * semantics; it is simply no longer on the bootstrap path. */
    pthread_mutex_lock(&_NSThreadSharedBootstrapLock);
-   ravyn_trace_s("SH-locked\n");
    result=[shared objectForKey:className];
-   ravyn_trace_hex("SH-lookup", (unsigned long)result);
    if(result==nil && create){
       pthread_mutex_unlock(&_NSThreadSharedBootstrapLock);
       // do not hold lock during object allocation
       result=[NSClassFromString(className) new];
-   ravyn_trace_hex("SH-alloced", (unsigned long)result);
       pthread_mutex_lock(&_NSThreadSharedBootstrapLock);
       /* Another thread may have published the same class name while the
        * allocation ran without the lock held; keep whichever landed first so
@@ -459,22 +364,6 @@ static inline id _NSThreadSharedInstance(NSThread *thread,NSString *className,BO
       }
    }
    pthread_mutex_unlock(&_NSThreadSharedBootstrapLock);
-   if (ravyn_sh_ret_count < 200) {
-      ravyn_sh_ret_count++;
-      ravyn_trace_hex("SH-ret", (unsigned long)result);
-      const char *cn = [className cStringUsingEncoding:NSASCIIStringEncoding];
-      if (cn) {
-         char buf[128]; int n=0;
-         buf[n++]='c'; buf[n++]='l'; buf[n++]='a'; buf[n++]='s'; buf[n++]='s';
-         for (int i=0; cn[i] && n<120; i++) buf[n++]=cn[i];
-         buf[n++]='\n';
-         write(2, buf, (size_t)n);
-      }
-   } else {
-      ravyn_sh_ret_count++;
-   }
-   ravyn_capture_shared("A/B/C", (void *)thread, (void *)shared,
-       (void *)thread->_sharedObjectLock, (void *)result);
 
    return result;
 }
@@ -529,6 +418,21 @@ void NSThreadSetCurrentPool(NSAutoreleasePool *pool){
    [selectorAndArguments release];
 }
 
+/* The waitUntilDone:NO variant.  performSelectorOnMainThread:withObject: is
+ * documented to keep the object alive until the selector runs; the old code
+ * passed it to the runloop as a bare object, so a caller that released it
+ * after the call (the normal pattern) handed the target thread a pointer into
+ * freed memory.  The array holds the object for us and the helper releases the
+ * array once the selector has run. */
+-(void)_performSelectorOnThreadHelperNoWait:(NSArray *)selectorAndArguments {
+   SEL selector=NSSelectorFromString([selectorAndArguments objectAtIndex:0]);
+   id  object=[selectorAndArguments objectAtIndex:1];
+
+   [self performSelector:selector withObject:object];
+
+   [selectorAndArguments release];
+}
+
 - (void)performSelector:(SEL)selector onThread:(NSThread *)thread withObject:(id)object waitUntilDone:(BOOL)waitUntilDone modes:(NSArray *)modes
 {
    if(thread==nil){
@@ -548,10 +452,10 @@ void NSThreadSetCurrentPool(NSAutoreleasePool *pool){
 				[NSException raise:NSInvalidArgumentException format:@"thread %@ has no runloop in %@", thread, NSStringFromSelector(_cmd)];
 			NSConditionLock *waitingLock=[[NSConditionLock alloc] initWithCondition:0];
 
-         // array retain balanced in _performSelectorOnThreadHelper:
+         // array release balanced in _performSelectorOnThreadHelper:
 			[runloop performSelector:@selector(_performSelectorOnThreadHelper:)
 							  target:self
-							argument:[[NSArray arrayWithObjects:waitingLock, NSStringFromSelector(selector), [NSValue valueWithPointer:object], nil] retain]
+							argument:[[NSArray alloc] initWithObjects:waitingLock, NSStringFromSelector(selector), [NSValue valueWithPointer:object], nil]
 							   order:0
 							   modes:modes];
 
@@ -565,7 +469,12 @@ void NSThreadSetCurrentPool(NSAutoreleasePool *pool){
 		if(!runloop)
 			[NSException raise:NSInvalidArgumentException format:@"thread %@ has no runloop in %@", thread, NSStringFromSelector(_cmd)];
 
-		[runloop performSelector:selector target:self argument:object order:0 modes:modes];
+        // array release balanced in _performSelectorOnThreadHelperNoWait:
+		[runloop performSelector:@selector(_performSelectorOnThreadHelperNoWait:)
+						  target:self
+						argument:[[NSArray alloc] initWithObjects:NSStringFromSelector(selector), object, nil]
+						   order:0
+						   modes:modes];
 	}
 }
 

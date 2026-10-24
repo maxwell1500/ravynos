@@ -26,6 +26,7 @@
 #import <mach/mach.h>
 
 #import "Label.h"
+@class ForceQuitWindow;
 
 #define menuBarHeight 22
 #define menuBarVPad 2
@@ -57,6 +58,7 @@ extern const NSString *NSApplicationDidQuitNotification;
     NSMenu *recentItemsMenu;
     NSMainMenuView *appMenuView;
     NSWindow *aboutWindow;
+    ForceQuitWindow *forceQuitWindow;
     int _maxRecentItems;
 }
 
@@ -70,6 +72,7 @@ extern const NSString *NSApplicationDidQuitNotification;
 - (void)launchSystemPreferences:(id)sender;
 - (void)addRecentItem:(NSURL *)itemURL;
 - (void)launchRecentItem:(id)sender;
+- (void)forceQuit:(id)sender;
 @end
 
 // menu extras container
@@ -98,6 +101,7 @@ extern const NSString *NSApplicationDidQuitNotification;
 - (void)setMenu:(NSMenu *)menu forApp:(NSString *)bundleID;
 - (void)removeMenuForApp:(NSString *)bundleID;
 - (void)activateApp:(NSString *)bundleID;
+- (NSString *)activeApp;
 - (void)addRecentItem:(NSURL *)itemURL;
 - (void)addStatusItem:(NSStatusItem *)item pid:(unsigned int)pid;
 - (void)removeStatusItemsForPID:(unsigned int)pid;

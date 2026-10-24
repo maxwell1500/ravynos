@@ -51,6 +51,7 @@ extern pthread_mutex_t renderLock;
             return r;
         }
     }
+    return nil;
 }
 
 -(WSWindowRecord *)windowWithID:(int)number {

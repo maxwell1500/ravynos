@@ -43,6 +43,7 @@ void openInputPipe(NSString *path);
 void openOutputPipe(NSString *path, int fd);
 
 static NSString *textedit = @"/Applications/TextEdit.app";
+static NSString *filer = @"/System/Library/CoreServices/Filer.app";
 
 int main(int argc, const char **argv)
 {
@@ -157,8 +158,51 @@ int main(int argc, const char **argv)
     // now we are ready to launch!
 
     if(revealInFiler) {
-        LSRevealInFiler((CFArrayRef)itemURLs);
-        return 0;
+        /* Reveal: show the item's parent folder in the Filer. */
+        NSFileManager *fm = [NSFileManager defaultManager];
+        NSMutableArray *revealArgs = [NSMutableArray array];
+        NSEnumerator *revealItems = [itemURLs objectEnumerator];
+        NSURL *revealItem;
+
+        while((revealItem = [revealItems nextObject]) != nil) {
+            NSString *path = [revealItem path];
+            NSString *parent = [fm fileExistsAtPath:path isDirectory:NULL] ?
+                [[path stringByDeletingLastPathComponent] copy] : [path copy];
+            if(parent != nil && [parent length] > 0)
+                [revealArgs addObject:parent];
+        }
+        if([revealArgs count] == 0)
+            return 0;
+
+        spec.appURL = (CFURLRef)[NSURL fileURLWithPath:filer];
+        spec.itemURLs = (CFArrayRef)revealArgs;
+        spec.taskArgs = (CFArrayRef)[NSArray arrayWithObject:@"--reveal"];
+        spec.launchFlags = kLSLaunchDefaults|kLSALaunchTaskEnvIsValid;
+        return LSOpenFromURLSpec(&spec, NULL);
+    }
+
+    /* A directory is a folder, and the Filer is the app that shows folders. */
+    {
+        NSFileManager *fm = [NSFileManager defaultManager];
+        NSMutableArray *dirs = [NSMutableArray array];
+        NSMutableArray *others = [NSMutableArray array];
+        NSEnumerator *scan = [itemURLs objectEnumerator];
+        NSURL *candidate;
+
+        while((candidate = [scan nextObject]) != nil) {
+            BOOL isDir = NO;
+            if([[candidate pathExtension] isEqualToString:@"app"])
+                continue;
+            if([fm fileExistsAtPath:[candidate path] isDirectory:&isDir] && isDir)
+                [dirs addObject:candidate];
+            else
+                [others addObject:candidate];
+        }
+        if([dirs count] > 0 && [others count] == 0) {
+            spec.appURL = (CFURLRef)[NSURL fileURLWithPath:filer];
+            spec.itemURLs = (CFArrayRef)dirs;
+            return LSOpenFromURLSpec(&spec, NULL);
+        }
     }
 
     close(0);

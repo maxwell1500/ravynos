@@ -43,6 +43,22 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
     [super dealloc];
 }
 
+/* Re-read the plist from disk.  NSUserDefaults caches domains for the life of
+ * the process, so without this a preference written by System Preferences (or
+ * by another app in the same domain) is invisible until relaunch.  Kept as a
+ * merge: values already held in memory but absent on disk survive. */
+-(void)reload {
+    NSDictionary *serializedDictionary = nil;
+
+    if(access([_path UTF8String], R_OK) == 0)
+        serializedDictionary = [NSPropertyListReader dictionaryWithContentsOfFile:_path];
+
+    if(serializedDictionary != nil) {
+        [_mutableDomain release];
+        _mutableDomain = [serializedDictionary mutableCopy];
+    }
+}
+
 +(NSPersistantDomain_posix *)persistantDomainWithName:(NSString *)name {
     return [[[self allocWithZone:NULL] initWithName:name] autorelease];
 }

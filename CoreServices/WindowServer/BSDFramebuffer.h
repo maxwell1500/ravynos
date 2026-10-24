@@ -64,5 +64,7 @@
 - (O2Context *)context;
 - (CGColorSpaceRef)colorSpace;
 
+- (void)drawRect:(NSRect)rect;
+
 @end
 

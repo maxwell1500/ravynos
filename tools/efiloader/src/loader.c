@@ -417,6 +417,80 @@ static const char DEFAULT_CMDLINE[] =
 	"rd=disk0s1 rootdev=disk0s1 npci=0x2000 dart=0 -no_compat_check "
 	"cpus=1 quiet_boot=1";
 
+/*
+ * The kernel's processor count comes from the "cpus=" token in the command
+ * line we hand it.  That token used to be frozen at the DEFAULT_CMDLINE's
+ * "cpus=1": the shell was told "-no_compat_check cpus=16 ..." and the kernel
+ * still booted one CPU, because nothing read the loader's own arguments.
+ * Parse our LoadOptions for "cpus=<digits>" and substitute them below; an
+ * absent or unparsable token leaves the default in place, so nothing changes
+ * for callers that never said anything.
+ */
+static char g_cpus_digits[12];   /* "" = keep the default */
+
+static void fill_cmdline(char *dst)
+{
+	u32 cn = 0;
+	const char *src = DEFAULT_CMDLINE;
+
+	while (*src && cn < BOOT_LINE_LENGTH - 1) {
+		if (src[0] == 'c' && src[1] == 'p' && src[2] == 'u' &&
+		    src[3] == 's' && src[4] == '=') {
+			const char *rep = g_cpus_digits[0] ? g_cpus_digits
+							   : src + 5;
+			/* re-emit the token itself, then the digits */
+			dst[cn++] = 'c'; dst[cn++] = 'p';
+			dst[cn++] = 'u'; dst[cn++] = 's';
+			dst[cn++] = '=';
+			while (*rep && cn < BOOT_LINE_LENGTH - 1)
+				dst[cn++] = *rep++;
+			src += 5;
+			while (*src >= '0' && *src <= '9')
+				src++;
+			continue;
+		}
+		dst[cn++] = *src++;
+	}
+	dst[cn] = 0;
+}
+
+/*
+ * LoadOptions arrives as UCS-2 from the EFI shell (ASCII chars with a zero
+ * high byte) or as plain ASCII depending on the caller.  Fold it to ASCII by
+ * dropping the zero bytes: for UCS-2 that removes the high halves, for ASCII
+ * it removes padding after the terminator.  No printable byte is lost either
+ * way.
+ */
+static void parse_cpus_arg(void *opts, u32 len)
+{
+	char norm[512];
+	u32 on = 0;
+
+	for (u32 k = 0; k < len && on < sizeof(norm) - 1; k++) {
+		u8 c = ((u8 *)opts)[k];
+		if (c == 0)
+			continue;
+		norm[on++] = (char)c;
+	}
+	norm[on] = 0;
+
+	for (u32 i = 0; i + 5 < on; i++) {
+		if (norm[i] != 'c' || norm[i + 1] != 'p' || norm[i + 2] != 'u' ||
+		    norm[i + 3] != 's' || norm[i + 4] != '=')
+			continue;
+		if (i != 0 && norm[i - 1] != ' ')
+			continue;
+		u32 k = 0;
+		while (k < sizeof(g_cpus_digits) - 1 &&
+		       norm[i + 5 + k] >= '0' && norm[i + 5 + k] <= '9') {
+			g_cpus_digits[k] = norm[i + 5 + k];
+			k++;
+		}
+		g_cpus_digits[k] = 0;
+		return;
+	}
+}
+
 /* g_memmap is the loader's own scratch copy, used only here (find_block()
  * walks it).  The copy the KERNEL reads is written into the low handoff
  * block -- see the BLK_OFF_MEMMAP copy below, and why it must be low. */
@@ -495,20 +569,29 @@ static void s_dec(u64 v)
 /* ------------------------------------------------------------------ */
 /*
  * The handoff: 64-bit -> 32-bit protected mode, following Apple boot.efi's
- * sequence byte for byte (tools/efiloader/ref/apple-boot32-modeswitch.S,
- * extracted from the loader that actually boots this kernel):
+ * actual on-the-wire sequence (tools/efiloader/ref/apple-boot32-modeswitch.S):
  *
- *   lgdt [page]              ; GDT: null | 0x08 code | 0x10 data
+ *   lgdt [page]              ; GDT: null | 0x08 32-bit code | 0x10 data
  *   mov ax,0x10 ; ds/es/fs/gs
- *   mov cr0.PG = 0           ; leaves paging, so LMA = 0
+ *   jmp far [page+0x28]      ; FF /5 -- loads CS = 0x08 (32-bit compat),
+ *                            ; EIP = page+TRAMP32_OFF
+ *   (trampoline, still paged, now in compatibility mode:)
+ *   mov cr0.PG = 0           ; legal HERE: compat mode, not 64-bit mode
  *   EFER.LME = 0             ; leaves long mode
- *   jmp rdi                  ; NEAR jump; eax = boot_args, edi = entry
+ *   jmp [page+0x30]          ; near 32-bit jump; eax = boot_args
  *
- * There is deliberately NO far return and NO CS reload.  A far jump cannot
- * load a non-long CS (it raises #GP in 64-bit mode), and Apple never reloads
- * CS here: clearing LMA is what makes the cached CS execute as 32-bit.  The
- * far-return-through-a-32-bit-stub design this file used to have never once
- * produced the gate probe's output, i.e. it never worked at all.
+ * CORRECTION (this is what made HVF fail): the reference transfer at
+ * Apple's 0x15865 is `ff 28`, ModRM 0x28 = mod 00, reg 101 -> opcode-FF
+ * group 5 /5 = JMP FAR m16:32, and the 6-byte pointer at 0x1588A holds
+ * { offset = the code after it, selector = a 32-bit descriptor }.  It IS
+ * the CS reload.  An earlier reading annotated it "near jump" (/4), and
+ * on that reading this file cleared CR0.PG *from a 64-bit code segment*,
+ * which QEMU TCG tolerates but real CPUs and hardware hypervisors do not:
+ * under HVF the machine reset in the first instruction after the clear.
+ * A far jump can load a non-long CS -- that is exactly what compatibility
+ * mode is for -- as long as the target descriptor has L=0, D=1 (ours is
+ * 0x9F flags), which is what the old far-return attempt got wrong when it
+ * used 0xCF (D/B=0, a 16-bit segment).
  *
  * The kernel entry IS 32-bit code: __HIB at physical 0x1a8000 begins with
  * `pushal; jmp` into a COM1 routine that prints "EAX=<boot_args>".  That
@@ -550,6 +633,37 @@ __attribute__((noinline)) void rl_dump_gdtr(u64 base, u64 limit)
 	s_puts("\r\n");
 }
 
+/*
+ * The 32-bit trampoline, executed from the handoff page (offset TRAMP32_OFF)
+ * after a FAR jump through selector 0x08.  At entry: CS = 32-bit
+ * compatibility descriptor, EBX = page, paging still ON (the far jump needs
+ * it; CR3 identity-maps this page), LME still 1.
+ *
+ * It clears CR0.PG FIRST -- legal here, because 64-bit mode is the only mode
+ * that refuses it -- then clears EFER.LME (now legal, LMA is already 0), then
+ * jumps to page[0x30] with EAX = page[0x38] = boot_args, in legacy 32-bit
+ * protected mode with a real 32-bit CS, which is the state the kernel entry
+ * (__HIB `pushal; jmp`) is written for.
+ *
+ * Every encoding here is also a valid 64-bit-mode encoding of the same
+ * operation (no REX, no absolute addressing), so nothing depends on the
+ * assembler knowing which mode the bytes will run in.
+ */
+#define TRAMP32_OFF 0x100
+static const u8 TRAMP32[] = {
+	0x0F, 0x20, 0xC0,                            /* mov %cr0, %eax           */
+	0x0F, 0xBA, 0xF0, 0x1F,                      /* btr $31, %eax (CR0.PG=0) */
+	0x0F, 0x22, 0xC0,                            /* mov %eax, %cr0           */
+	0xB9, 0x80, 0x00, 0x00, 0xC0,                /* mov $0xC0000080, %ecx    */
+	0x0F, 0x32,                                  /* rdmsr                    */
+	0x0F, 0xBA, 0xF0, 0x08,                      /* btr $8, %eax (EFER.LME=0)*/
+	0x0F, 0x30,                                  /* wrmsr                    */
+	0x8B, 0x7B, 0x30,                            /* mov 0x30(%ebx), %edi     */
+	0x8B, 0x43, 0x38,                            /* mov 0x38(%ebx), %eax     */
+	0xFF, 0xE7,                                  /* jmp *%edi                */
+	0xF4,                                        /* hlt                      */
+};
+
 __attribute__((naked)) static void handoff(u32 page, u32 val)
 {
 	__asm__ volatile(
@@ -558,62 +672,67 @@ __attribute__((naked)) static void handoff(u32 page, u32 val)
 		"movl   %edx, 0x38(%rbx)                 \n\t"   /* page[0x38] = boot_args */
 		"movq   %rbx, %rcx                       \n\t"
 		"callq  rl_dump_far                      \n\t"
-		"lgdt   (%rbx)                           \n\t"   /* GDT at page+0x00 */
+		"lgdt   (%rbx)                           \n\t"   /* GDT at page+0x10 */
 		"movw   $0x0010, %ax                     \n\t"   /* flat data (0x10) */
 		"movw   %ax, %ds                         \n\t"
 		"movw   %ax, %es                         \n\t"
 		"movw   %ax, %fs                         \n\t"
 		"movw   %ax, %gs                         \n\t"
-		"movq   %cr0, %rax                       \n\t"
-		"btr    $31, %eax                        \n\t"   /* CR0.PG=0 -> LMA=0 */
-		"movq   %rax, %cr0                       \n\t"
-		"movl   $0xC0000080, %ecx                \n\t"   /* IA32_EFER        */
-		"rdmsr                                   \n\t"
-		"btr    $8, %eax                         \n\t"   /* EFER.LME=0       */
-		"wrmsr                                   \n\t"
-		"movl   0x30(%rbx), %edi                 \n\t"   /* edi = entry      */
-		"movl   0x38(%rbx), %eax                 \n\t"   /* eax = boot_args  */
-		"jmp    *%rdi                            \n\t"   /* NEAR: CS untouched */
+		/* 'J': reached the far jump with the new GDT live; hold long
+		 * enough that the byte is on the wire before anything can die. */
+		"movl   $0x3F8, %edx                     \n\t"
+		"movb   $0x4a, %al                       \n\t"
+		"outb   %al, %dx                         \n\t"
+		"movl   $0x04000000, %ecx                \n\t"
+		"1: loop 1b                              \n\t"
+		/* FF /5 = JMP FAR m16:32 [rbx+0x28]: loads CS = 0x08 (the
+		 * 32-bit descriptor) and EIP = page+TRAMP32_OFF.  This is the
+		 * CS reload; the CR0/EFER exit then happens in the trampoline,
+		 * in compatibility mode, which is the only place it is legal.
+		 * Raw bytes: the assembler must not "help" with operand size. */
+		".byte 0xff, 0x6b, 0x28                  \n\t"
 		"hlt                                     \n\t");
 }
 
-/* 32-bit probe: EBX = page, EAX = the value to echo.  cli;
- * mov %ebx,%esi; add $0xA0,%esi; mov %eax,%edi; mov $8,%cl;
- * 1: mov (%esi),%dl; mov %dl,%al; out $0x3f8,%al; inc %esi; dec %ecx; jnz 1b; hlt */
 /*
- * The 32-bit entry.  Its FIRST action is a single immediate port write, before
- * any segment or stack setup, so that seeing that one byte in the log proves
- * the CPU arrived in 32-bit mode with nothing else having to work.
+ * The 32-bit probe (gate builds only: it replaces the kernel entry as the
+ * trampoline's jump target, so it runs on the bare metal of the mode switch
+ * with no volume, no kernel and no firmware services left alive).
  *
- * `out $0x3f8, $0x2a` is E6 2A: port 0x3F8 truncated to 8 bits is 0xF8, so
- * the encoding is E6 <F8> <03> and the immediate payload is 0x2A.  We emit the
- * two bytes explicitly so the port is 0x3F8 and the character is '*'.
+ * EBX still holds the page.  First action is one port write so that a single
+ * byte on the wire proves 32-bit arrival; then it echoes the 8 hex digits
+ * the loader planted at page+0xA0, which proves data reads work too.
  *
- * After that, the routine writes a known byte to our own low page.  That is the
- * flag the 64-bit loader reads back and prints, which proves the 32-bit code
- * executed independently of whether the serial path works at all.
+ * `out %al, %dx` with DX = 0x3F8 is the correct encoding.  The previous
+ * version used the immediate form `out $0xF8, %al` -- there is no 10-bit
+ * immediate port form; E6 <imm8> writes to *port 0xF8*, so the "probe"
+ * was writing to an unassigned port and had never actually printed.
  */
 static const u8 CODE32_PROBE[] = {
 	0xFA,                                  /* cli                        */
+	0xBA, 0xF8, 0x03,                      /* mov $0x3F8, %dx            */
 	0xB0, 0x2A,                            /* mov $'*', %al              */
-	0xE6, 0xF8, 0x03,                      /* out $0x3f8, %al            */
-	/* Proof-of-execution flag: flip the marker byte in our own page. */
-	0xB0, 0x77,                            /* mov $0x77, %al              */
-	0x88, 0x83, (u8)0x00, (u8)0x02,        /* mov %al, 0x20083(%ebx) */
-	0xB0, 0x77,                            /* mov $'w', %al              */
-	0xE6, 0xF8, 0x03,                      /* out $0x3f8, %al            */
-	0xFA,                                  /* cli                        */
+	0xEE,                                  /* out %al, %dx               */
+	0x8D, 0xB3, 0xC0, 0x01, 0x00, 0x00,    /* lea 0x1C0(%ebx), %esi      */
+	0xB9, 0x08, 0x00, 0x00, 0x00,          /* mov $8, %ecx               */
+	0xAC,                                  /* lodsb                      */
+	0xEE,                                  /* out %al, %dx               */
+	0xE2, 0xFC,                            /* loop .-2                   */
 	0xF4,                                  /* hlt                        */
 };
 
-#define PROBE_OFF    0x80
-#define PROBE_STR_OFF 0xA0
+#define PROBE_OFF    0x180
+#define PROBE_STR_OFF 0x1C0
 
 /*
  * Handoff block layout (all offsets from g_hoff_page):
  *   0x00  GDT pointer   (limit u16, then 8-byte base = g_hoff_page + 0x10)
  *   0x10  GDT[3]        null | 0x08 32-bit code | 0x10 32-bit data
- *   0x30  near-jump target (u32): the kernel entry, or the gate's probe
+ *   0x28  far pointer   (u32 offset = page + TRAMP32_OFF, u16 selector = 8)
+ *   0x30  jump target (u32): the kernel entry, or the gate's probe.
+ *         Read by the TRAMPOLINE now, not by handoff() itself.
+ *   0x38  boot_args (u32, written by handoff())
+ *   0x40  TRAMP32       (32-bit mode-switch code, see above)
  *   0x80  32-bit probe (gate build only)
  *   0xA0  "EAXX=xxxxxxxx" (gate build only)
  */
@@ -631,26 +750,54 @@ static void build_handoff_block(u8 *p)
 	p[0x05] = (u8)((gbase >> 24) & 0xff);
 
 	/*
-	 * Flags byte = G<<7 | AVL<<6 | L<<5 | D/B<<4 | limit_hi.
-	 * For a flat 32-bit segment that is 0x80|0x00|0x00|0x10|0x0F = 0x9F.
+	 * Flags byte = G<<7 | D/B<<6 | L<<5 | AVL<<4 | limit_hi.
+	 * For a flat 32-bit segment that is 0x80|0x40|0x00|0x00|0x0F = 0xCF.
 	 *
-	 * It was 0xCF, which is 0x80|0x40|0x00|0x00|0x0F: AVL=1 and D/B=0.
-	 * D/B=0 makes the segment 16-bit, so CS:IP was limited to 64 KiB and
-	 * the target 0x20060 was out of range -> #GP on the transfer, every
-	 * time, with the GDT pointer and far pointer both reading back
-	 * perfectly correct.  A wrong flag bit, not a wrong address.
+	 * READ THE BIT ASSIGNMENT CAREFULLY -- this file had it wrong twice.
+	 * 0x40 is D/B (default operand size for code / big for data); 0x10 is
+	 * AVL, which does nothing.  The table used to carry 0x9F, and an
+	 * earlier comment justified it as "AVL=1, D/B=0": a 16-bit segment.
+	 * The GDT pointer, the far pointer and the target all read back
+	 * perfectly, and every far transfer into selector 0x08 decoded as
+	 * 16-bit garbage -- which is what derailed the first far-jump attempt
+	 * (misdiagnosed as "the target was out of range"), and again the
+	 * HVF far jump: the trampoline's first three bytes happen to mean the
+	 * same thing in both modes, so it printed 'T' and then executed
+	 * mid-instruction bytes as `add [si],al` / stray port writes, which
+	 * silently reset the machine with no exception logged anywhere.
 	 */
 	static const u8 gdt[24] = {
 		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, /* null           */
-		0xFF, 0xFF, 0x00, 0x00, 0x00, 0x9B, 0x9F, 0x00, /* 0x08 32b code  */
-		0xFF, 0xFF, 0x00, 0x00, 0x00, 0x93, 0x9F, 0x00, /* 0x10 32b data  */
+		0xFF, 0xFF, 0x00, 0x00, 0x00, 0x9B, 0xCF, 0x00, /* 0x08 flat 32b code */
+		0xFF, 0xFF, 0x00, 0x00, 0x00, 0x93, 0xCF, 0x00, /* 0x10 flat 32b data */
 	};
 	for (int i = 0; i < 24; i++) p[0x10 + i] = gdt[i];
 
 	{
 		/*
-		 * +0x30 the near-jump target, read back by handoff() as a 32-bit
-		 * immediate: the kernel entry, or the gate's 32-bit probe.
+		 * +0x28 the far pointer the FF /5 far jump consumes:
+		 * { u32 offset, u16 selector }.  The offset must be the address
+		 * the CPU itself will use; the selector is 0x08, the 32-bit
+		 * compatibility code descriptor just written.  Six bytes plus
+		 * two pad, so it reads the same either way it is decoded.
+		 */
+		u32 toff = g_hoff_page + TRAMP32_OFF;
+		for (int k = 0; k < 4; k++)
+			p[0x28 + k] = (u8)((toff >> (8 * k)) & 0xff);
+		p[0x2C] = 0x08;
+		p[0x2D] = 0x00;
+		p[0x2E] = 0x00;
+		p[0x2F] = 0x00;
+
+		/* +0x40 the trampoline that does the actual mode exit. */
+		for (unsigned i = 0; i < sizeof(TRAMP32); i++)
+			p[TRAMP32_OFF + i] = TRAMP32[i];
+	}
+
+	{
+		/*
+		 * +0x30 the jump target, read by the 32-bit trampoline as a
+		 * 32-bit immediate: the kernel entry, or the gate's probe.
 		 */
 		u32 t0 = TRAMPOLINE_TEST ? (u32)(g_hoff_page + PROBE_OFF)
 					 : g_entry_phys;
@@ -1254,6 +1401,10 @@ efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *ST)
 	s_puts(" dev=0x"); s_hex64((u64)li->DeviceHandle);
 	s_puts(" file=0x"); s_hex64((u64)li->FileHandle);
 	s_puts("\r\n");
+	parse_cpus_arg(li->LoadOptions, li->LoadOptionsSize);
+	if (g_cpus_digits[0]) {
+		s_puts("RL: cpus arg = "); s_puts(g_cpus_digits); s_puts("\r\n");
+	}
 	s_puts("RL: base=0x"); s_hex64((u64)li->ImageBase);
 	s_puts(" size=0x"); s_hex64(li->ImageSize);
 	s_puts(" codeT="); s_hex32(li->ImageCodeType);
@@ -1306,9 +1457,7 @@ efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *ST)
 			A->deviceTreeP = g_hoff_page + BLK_OFF_DEVTREE;
 			A->deviceTreeLength = BLK_DEVTREE_SIZE;
 			A->MemoryMap = (u32)(u64)g_memmap;
-			{ u32 cn = 0; const char *q = DEFAULT_CMDLINE;
-			  while (*q && cn < BOOT_LINE_LENGTH - 1) A->CommandLine[cn++] = *q++;
-			  A->CommandLine[cn] = 0; }
+			fill_cmdline(A->CommandLine);
 		}
 		/* A real memory-map key: ExitBootServices rejects a stale or zero
 		 * one with EFI_INVALID_PARAMETER and leaves boot services LIVE
@@ -1356,11 +1505,16 @@ efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *ST)
 			for (int i = 0; i < 8; i++)
 				s_hex32((u32)gp[0x20 + i]);
 			s_puts("\r\n");
-			/* 16 bytes so both the m16:32 and m16:64 readings are on
-			 * the wire, not just the six the instruction consumes. */
-			s_puts("RL: far[0x30..0x3f]:");
+			/* The far pointer the FF /5 far jump consumes, as the
+			 * CPU will read it: u32 offset then u16 selector. */
+			s_puts("RL: far[0x28..0x37]:");
 			for (int i = 0; i < 16; i++)
-				s_hex32((u32)gp[0x30 + i]);
+				s_hex32((u32)gp[0x28 + i]);
+			s_puts("\r\n");
+			/* And the trampoline the offset points at. */
+			s_puts("RL: tramp[0x40..0x5f]:");
+			for (int i = 0; i < 32; i++)
+				s_hex32((u32)gp[TRAMP32_OFF + i]);
 			s_puts("\r\n");
 		}
 		s_puts("RL: HANDOFF eax=0x"); s_hex32(g_bootargs_phys);
@@ -1616,13 +1770,7 @@ efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *ST)
 		 * "no video" and forces serial console.  Either way this is the
 		 * only write to any Video.* field in the loader. */
 		gop_fill_video(&A->Video);
-		{
-			u32 cn = 0;
-			const char *src = DEFAULT_CMDLINE;
-			while (*src && cn < BOOT_LINE_LENGTH - 1)
-				A->CommandLine[cn++] = *src++;
-			A->CommandLine[cn] = 0;
-		}
+		fill_cmdline(A->CommandLine);
 		s_puts("RL: kaddr=0x"); s_hex32(A->kaddr);
 		s_puts(" ksize=0x"); s_hex32(A->ksize);
 		s_puts(" physfree=0x");

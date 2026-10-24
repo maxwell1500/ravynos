@@ -85,6 +85,49 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
    return self;
 }
 
+/* The standard application menu: App / File / Edit with the usual key
+ * equivalents.  Every app in the fleet binds the same actions, so the
+ * shortcuts behave the same everywhere. */
++ (NSMenu *)standardApplicationMenuWithAppName:(NSString *)appName
+                             includeDocumentItems:(BOOL)docItems {
+   NSMenu *mainMenu = [[[NSMenu alloc] initWithTitle:@""] autorelease];
+   NSMenu *appMenu = [[[NSMenu alloc] initWithTitle:[appName length] > 0 ? appName : @"Application"] autorelease];
+   NSMenu *fileMenu = [[[NSMenu alloc] initWithTitle:@"File"] autorelease];
+   NSMenu *editMenu = [[[NSMenu alloc] initWithTitle:@"Edit"] autorelease];
+   NSMenuItem *item;
+
+   item = [[[NSMenuItem alloc] initWithTitle:[@"Quit " stringByAppendingString:
+                                              ([appName length] > 0 ? appName : @"Application")]
+                                         action:@selector(terminate:)
+                                  keyEquivalent:@"q"] autorelease];
+   [appMenu addItem:item];
+   [mainMenu addItem:[[[NSMenuItem alloc] initWithTitle:appName action:NULL keyEquivalent:@""] autorelease]];
+   [[mainMenu itemAtIndex:0] setSubmenu:appMenu];
+
+   if(docItems) {
+      [fileMenu addItem:[[[NSMenuItem alloc] initWithTitle:@"New" action:@selector(newDocument:) keyEquivalent:@"n"] autorelease]];
+      [fileMenu addItem:[[[NSMenuItem alloc] initWithTitle:@"Open..." action:@selector(openDocument:) keyEquivalent:@"o"] autorelease]];
+      [fileMenu addItem:[[[NSMenuItem alloc] initWithTitle:@"Save" action:@selector(saveDocument:) keyEquivalent:@"s"] autorelease]];
+      [fileMenu addItem:[[[NSMenuItem alloc] initWithTitle:@"Close" action:@selector(performClose:) keyEquivalent:@"w"] autorelease]];
+      [mainMenu addItem:[[[NSMenuItem alloc] initWithTitle:@"File" action:NULL keyEquivalent:@""] autorelease]];
+      [[mainMenu itemAtIndex:1] setSubmenu:fileMenu];
+   }
+
+   [editMenu addItem:[[[NSMenuItem alloc] initWithTitle:@"Undo" action:@selector(undo:) keyEquivalent:@"z"] autorelease]];
+   item = [[[NSMenuItem alloc] initWithTitle:@"Redo" action:@selector(redo:) keyEquivalent:@"Z"] autorelease];
+   [item setKeyEquivalentModifierMask:(NSCommandKeyMask | NSShiftKeyMask)];
+   [editMenu addItem:item];
+   [editMenu addItem:[[[NSMenuItem alloc] initWithTitle:@"Cut" action:@selector(cut:) keyEquivalent:@"x"] autorelease]];
+   [editMenu addItem:[[[NSMenuItem alloc] initWithTitle:@"Copy" action:@selector(copy:) keyEquivalent:@"c"] autorelease]];
+   [editMenu addItem:[[[NSMenuItem alloc] initWithTitle:@"Paste" action:@selector(paste:) keyEquivalent:@"v"] autorelease]];
+   [editMenu addItem:[[[NSMenuItem alloc] initWithTitle:@"Delete" action:@selector(delete:) keyEquivalent:@""] autorelease]];
+   [editMenu addItem:[[[NSMenuItem alloc] initWithTitle:@"Select All" action:@selector(selectAll:) keyEquivalent:@"a"] autorelease]];
+   [mainMenu addItem:[[[NSMenuItem alloc] initWithTitle:@"Edit" action:NULL keyEquivalent:@""] autorelease]];
+   [[mainMenu itemAtIndex:[mainMenu numberOfItems] - 1] setSubmenu:editMenu];
+
+   return mainMenu;
+}
+
 -(void)dealloc {
    [_title release];
    [_name release];

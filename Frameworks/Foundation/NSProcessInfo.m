@@ -38,12 +38,10 @@ const char * const *NSProcessInfoArgv=NULL;
 }
 
 +(NSProcessInfo *)processInfo {
-   write(2,"PI-procinfo\n",12);
    return NSThreadSharedInstance(@"NSProcessInfo");
 }
 
 -init {
-   write(2,"PI-init\n",6);
    _environment=nil;
    _arguments=nil;
    _hostName=nil;
@@ -187,7 +185,6 @@ const char * const *NSProcessInfoArgv=NULL;
 }
 
 -(NSDictionary *)environment {
-   write(2,"PI-env\n",5);
    if(_environment==nil)
     _environment=[[[NSPlatform currentPlatform] environment] retain];
 

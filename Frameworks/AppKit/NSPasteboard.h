@@ -1,15 +1,32 @@
 /* Copyright (c) 2006-2007 Christopher J. W. Lloyd
 
-Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
 
-The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. */
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE. */
 
 #import <Foundation/Foundation.h>
 #import <AppKit/AppKitExport.h>
 
-// New Pasteboard Types (added in 10.6) and interchangeable with the old pasteboard types in Cocotron
+/* New Pasteboard Types (added in 10.6) and interchangeable with the old pasteboard types in Cocotron.
+ *
+ * ravynOS: the values are the canonical uniform type identifiers, so a paste
+ * made with NSPasteboardTypeString is readable with the legacy
+ * NSStringPboardType and vice versa (see NSPasteboard.m's type mapping).
+ */
 APPKIT_EXPORT NSString *const NSPasteboardTypeString;
 APPKIT_EXPORT NSString *const NSPasteboardTypePDF;
 APPKIT_EXPORT NSString *const NSPasteboardTypeTIFF;
@@ -20,8 +37,10 @@ APPKIT_EXPORT NSString *const NSPasteboardTypeTabularText;
 APPKIT_EXPORT NSString *const NSPasteboardTypeFont;
 APPKIT_EXPORT NSString *const NSPasteboardTypeRuler;
 APPKIT_EXPORT NSString *const NSPasteboardTypeColor;
+APPKIT_EXPORT NSString *const NSPasteboardTypePNG;
+APPKIT_EXPORT NSString *const NSPasteboardTypeFileURL;
 
-// Old Pasteboard Types
+/* Old Pasteboard Types */
 APPKIT_EXPORT NSString *const NSColorPboardType;
 APPKIT_EXPORT NSString *const NSFileContentsPboardType;
 APPKIT_EXPORT NSString *const NSFilenamesPboardType;
@@ -43,10 +62,19 @@ APPKIT_EXPORT NSString *const NSFontPboard;
 APPKIT_EXPORT NSString *const NSGeneralPboard;
 APPKIT_EXPORT NSString *const NSRulerPboard;
 
-@interface NSPasteboard : NSObject
+@interface NSPasteboard : NSObject {
+    NSString *_name;
+    mach_port_t _serverPort;
+    /* Set while the file URL and the filename list are kept in sync: the two
+     * populate each other, so the fill-in must not recurse. */
+    BOOL _fillingFileTypes;
+}
 
 + (NSPasteboard *)generalPasteboard;
 + (NSPasteboard *)pasteboardWithName:(NSString *)name;
+
+/* Internal: used by NSDisplay to hand out named pasteboards. */
+- (id)_initWithName:(NSString *)name;
 
 - (int)changeCount;
 
@@ -57,12 +85,16 @@ APPKIT_EXPORT NSString *const NSRulerPboard;
 - (NSString *)stringForType:(NSString *)type;
 - propertyListForType:(NSString *)type;
 
-- (int)declareTypes:(NSArray *)types owner:owner;
+- (int)declareTypes:(NSArray *)types owner:(id)owner;
 - (int)addTypes:(NSArray *)types owner:(id)owner;
 
 - (BOOL)setData:(NSData *)data forType:(NSString *)type;
 - (BOOL)setString:(NSString *)string forType:(NSString *)type;
-- (BOOL)setPropertyList:plist forType:(NSString *)type;
+- (BOOL)setPropertyList:(id)plist forType:(NSString *)type;
+
+- (BOOL)clearContents;
+- (BOOL)writeObjects:(NSArray *)objects;
+- (NSArray *)readObjectsForClasses:(NSArray *)classArray options:(NSDictionary *)options;
 
 @end
 

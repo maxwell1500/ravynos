@@ -79,6 +79,8 @@ extern pthread_mutex_t renderLock;
 
     mach_port_name_t _servicePort;
     int _kq;
+    volatile BOOL _sceneDirty;
+    NSRect _damageRect;
 }
 
 -init;
@@ -100,6 +102,7 @@ extern pthread_mutex_t renderLock;
 -(void)receiveMachMessage;
 -(BOOL)sendEventToApp:(struct mach_event *)event;
 -(BOOL)sendInlineData:(void *)data length:(int)length withCode:(int)code toPort:(mach_port_t)port;
+-(BOOL)sendInlineData:(void *)data length:(int)length withCode:(int)code toPort:(mach_port_t)port timeout:(mach_msg_timeout_t)timeoutMs;
 -(void)watchForProcessExit:(unsigned int)pid;
 -(WSAppRecord *)findAppByPID:(unsigned int)pid NS_RETURNS_RETAINED;
 -(void)signalQuit;
@@ -108,5 +111,9 @@ extern pthread_mutex_t renderLock;
 -(void)addWindowByLevel:(WSWindowRecord *)window;
 -(void)removeWindowByLevel:(WSWindowRecord *)window;
 -(void)removeWindowFromAllLevels:(WSWindowRecord *)window;
+-(void)resizeWindowSurface:(WSWindowRecord *)winrec width:(int)w height:(int)h;
 -(void)setShell:(int)shell;
+- (void)markFullSceneDirty;
+- (void)markDamageRect:(NSRect)rect;
+
 @end

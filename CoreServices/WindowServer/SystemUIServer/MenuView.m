@@ -25,10 +25,34 @@
 #import "desktop.h"
 #import "../common.h"
 #import "AboutWindow.h"
+#import "ForceQuitWindow.h"
+#include <signal.h>
+#include <unistd.h>
 #import <LaunchServices/LaunchServices.h>
 
 extern const char **environ;
 extern int exitCode;
+
+/* Re-target app menu items at the SystemUIServer delegate. The archived copy
+ * from the client app arrives with nil targets, so without this a click would
+ * be a no-op. Item tags survive the archive, and -clicked: turns the tag back
+ * into CODE_ITEM_CLICKED for the owning app. */
+static void setItemTargets(NSMenuItem *item, id target) {
+    NSMenu *submenu;
+    NSArray *items;
+    int i;
+
+    [item setTarget:target];
+    [item setAction:@selector(clicked:)];
+
+    submenu = [item submenu];
+    if(submenu == nil)
+        return;
+
+    items = [submenu itemArray];
+    for(i = 0; i < [items count]; i++)
+        setItemTargets([items objectAtIndex:i], target);
+}
 
 @implementation MenuView
 - initWithFrame:(NSRect)frame {
@@ -109,8 +133,13 @@ extern int exitCode;
         }
         for(int i = 0; i < [menu numberOfItems]; ++i)
             [fullMenu addItem:[menu itemAtIndex:i]];
+
+        for(int i = 1; i < [fullMenu numberOfItems]; ++i)
+            setItemTargets([fullMenu itemAtIndex:i], [NSApp delegate]);
     }
+    [appMenuView setNeedsDisplay:YES];
     [self setNeedsDisplay:YES];
+    [[self window] displayIfNeeded];
 }
 
 - (void)aboutThisComputer:(id)sender {
@@ -134,6 +163,8 @@ extern int exitCode;
         @"Are you sure you want to restart your computer?",
         @"Restart", @"Cancel", nil);
     if(rc == 1) {
+        fprintf(stderr, "[SUI] restarting via PID 1 SIGINT\n");
+        kill(1, SIGINT);
         exitCode = EXIT_RESTART;
         [NSApp stop:self];
     }
@@ -144,6 +175,8 @@ extern int exitCode;
         @"Are you sure you want to shut down your computer?",
         @"Shut Down", @"Cancel", nil);
     if(rc == 1) {
+        fprintf(stderr, "[SUI] shutting down via PID 1 SIGUSR2\n");
+        kill(1, SIGUSR2);
         exitCode = EXIT_SHUTDOWN;
         [NSApp stop:self];
     }
@@ -160,14 +193,12 @@ extern int exitCode;
 }
 
 - (void)launchSystemPreferences:(id)sender {
-    NSLog(@"not implemented yet");
-    NSURL *sysprefs = [NSURL fileURLWithPath:
-        @"/System/Library/CoreServices/System Preferences.app"];
-    OSStatus res = LSOpenCFURLRef((__bridge CFURLRef)sysprefs, NULL);
-    if(res != 0) {
-        NSLog(@"LSOpenCFURLRef: error %d", res);
-        // FIXME: error handling
-    }
+    fprintf(stderr, "[SUI] launch system settings\n");
+    NSString *appPath = @"/Applications/System Settings.app";
+    if(![[NSFileManager defaultManager] fileExistsAtPath:appPath])
+        appPath = @"/System/Library/CoreServices/System Preferences.app";
+    NSURL *sysprefs = [NSURL fileURLWithPath:appPath];
+    LSOpenCFURLRef((__bridge CFURLRef)sysprefs, NULL);
 }
 
 - (void)addRecentItem:(NSURL *)itemURL {
@@ -203,7 +234,15 @@ extern int exitCode;
 }
 
 - (void)forceQuit:(id)sender {
-    NSLog(@"force quit (not implemented yet)");
+    fprintf(stderr, "[SUI] force quit dialog requested\n");
+    if(forceQuitWindow) {
+        [forceQuitWindow refreshApps];
+        [forceQuitWindow makeKeyAndOrderFront:nil];
+        return;
+    }
+    forceQuitWindow = [ForceQuitWindow new];
+    [forceQuitWindow setDelegate:self];
+    [forceQuitWindow makeKeyAndOrderFront:nil];
 }
 
 /* NSWindow delegate */
@@ -214,6 +253,8 @@ extern int exitCode;
 - (void)windowWillClose:(NSNotification *)note {
     if([[note object] isEqual:aboutWindow])
         aboutWindow = nil;
+    if([[note object] isEqual:forceQuitWindow])
+        forceQuitWindow = nil;
 }
 
 @end

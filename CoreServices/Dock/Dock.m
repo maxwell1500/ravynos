@@ -39,25 +39,67 @@
 @end
 
 extern Dock *dock; // our singleton object in main.m
+
+/* WindowServer RPC entry point, provided by libWindowServer on ravynOS. */
+kern_return_t _windowServerRPC(void *data, size_t len, void *replyBuf, int *replyLen);
+
 @implementation Dock
 
+/* The Dock's preferences are read from the same file System Preferences
+ * writes.  NSUserDefaults would resolve the "Dock" domain to
+ * $HOME/Library/Preferences/Dock.plist, which is not where the Preferences
+ * app puts them, so read the shared location explicitly and fall back to the
+ * per-domain path only when it is missing. */
+-(NSDictionary *)readDockPlist {
+    NSArray *paths = [NSArray arrayWithObjects:
+        @"/Library/Preferences/Dock.plist",
+        [@"~/Library/Preferences/Dock.plist" stringByExpandingTildeInPath],
+        [@"~/Library/Preferences/com.ravynos.Dock.plist" stringByExpandingTildeInPath],
+        nil];
+    unsigned i;
+
+    for(i = 0; i < [paths count]; i++) {
+        NSDictionary *dict = [NSDictionary dictionaryWithContentsOfFile:
+            [paths objectAtIndex:i]];
+
+        if(dict != nil)
+            return dict;
+    }
+    return nil;
+}
+
 -(id)init {
+    NSDictionary *plist;
+
     _PID = getpid();
     _prefs = [NSUserDefaults standardUserDefaults];
     _desktops = [NSMutableDictionary new];
     _currentSize = NSZeroSize;
     _window = nil;
+    _hidden = NO;
+    _hoverIndex = -1;
 
-    _tileSize = [_prefs integerForKey:INFOKEY_TILESIZE];
+    plist = [self readDockPlist];
+
+    _tileSize = [[plist objectForKey:INFOKEY_TILESIZE] intValue];
+    if(_tileSize < TILESIZE_MIN)
+        _tileSize = [_prefs integerForKey:INFOKEY_TILESIZE];
     if(_tileSize < TILESIZE_MIN)
         _tileSize = 64;
 
-    int pos = [_prefs integerForKey:INFOKEY_LOCATION];
+    int pos = [[plist objectForKey:INFOKEY_LOCATION] intValue];
+    if(plist == nil)
+        pos = [_prefs integerForKey:INFOKEY_LOCATION];
     _location = (Location)pos;
 
-    _alpha = [_prefs floatForKey:INFOKEY_OPACITY];
-    if(_alpha <= 1.0)
+    _alpha = [[plist objectForKey:INFOKEY_OPACITY] floatValue];
+    if(_alpha <= 0.0f)
+        _alpha = [_prefs floatForKey:INFOKEY_OPACITY];
+    if(_alpha <= 0.0f)
         _alpha = 0.85;
+
+    _autohide = [[plist objectForKey:INFOKEY_AUTOHIDE] boolValue];
+    _magnification = [[plist objectForKey:INFOKEY_MAGNIFICATION] boolValue];
 
     [self loadItems];
 
@@ -69,13 +111,21 @@ extern Dock *dock; // our singleton object in main.m
 }
 
 -(void)applicationWillFinishLaunching:(NSNotification *)note {
-    DesktopWindow *desktop = [[DesktopWindow alloc] initForScreen:[NSScreen mainScreen]];
-    [_desktops setObject:desktop forKey:@"NSMainScreen"]; // FIXME: use NSScreen deviceDescription dict for display ID
-    [desktop setDelegate:self];
-    [desktop orderBack:self];
+    NSScreen *screen = [NSScreen mainScreen];
+    DesktopWindow *desktop = nil;
+
+    /* A desktop window can fail to come up (no screen yet); the Dock still
+     * has to run, and -[NSMutableDictionary setObject:nil ...] aborted it. */
+    if(screen != nil)
+        desktop = [[DesktopWindow alloc] initForScreen:screen];
+    if(desktop != nil) {
+        [_desktops setObject:desktop forKey:@"NSMainScreen"]; // FIXME: use NSScreen deviceDescription dict for display ID
+        [desktop setDelegate:self];
+        [desktop orderBack:self];
+    }
 
     [_window makeKeyAndOrderFront:nil];
-    [[_window contentView] drawRect:[_window frame]];
+    [_window display];
 
     [self savePrefs];
     
@@ -85,6 +135,24 @@ extern Dock *dock; // our singleton object in main.m
         name:@"NSApplicationDidLaunch" object:nil];
     [[NSNotificationCenter defaultCenter] addObserver:self
          selector:@selector(windowDidChangeState:) name:@"WSWindowDidChangeState" object:nil];
+    /* The System Settings app changed the Dock's preferences. */
+    [[NSNotificationCenter defaultCenter] addObserver:self
+         selector:@selector(preferencesChanged:) name:NSApplicationPreferencesChangedNotification object:nil];
+
+    /* Autohide and magnification need the pointer position even when the
+     * Dock is off screen, so poll it rather than relying on tracking areas
+     * (a hidden window receives no mouse-moved events). */
+    _pollTimer = [NSTimer scheduledTimerWithTimeInterval:0.08 target:self
+        selector:@selector(pollMouse:) userInfo:nil repeats:YES];
+    [[NSRunLoop currentRunLoop] addTimer:_pollTimer forMode:NSRunLoopCommonModes];
+
+    /* WindowServer may have seen apps launch while this delegate was still
+     * being set up (Filer registers before we get here), so ask it to replay
+     * the launch announcements now that the observers above are in place.
+     * Without this the Filer tile never learns the app is running and
+     * clicking it forks a second instance. */
+    struct wsRPCBase data = { kWSApplicationList, 0 };
+    _windowServerRPC(&data, sizeof(data), NULL, NULL);
 }
 
 -(void)windowDidChangeState:(NSNotification *)note {
@@ -97,11 +165,13 @@ extern Dock *dock; // our singleton object in main.m
     // First, find the matching app owning this window
     DockItem *app = nil;
     for(int i = 0; i < [_items count]; ++i) {
-        app = [_items objectAtIndex:i];
-        if([app type] == DIT_WINDOW)
+        DockItem *candidate = [_items objectAtIndex:i];
+        if([candidate type] == DIT_WINDOW)
             continue;
-        if([[app bundleIdentifier] isEqualToString:bundleID])
+        if([[candidate bundleIdentifier] isEqualToString:bundleID]) {
+            app = candidate;
             break;
+        }
     }
 
     if(!app) {
@@ -123,7 +193,7 @@ extern Dock *dock; // our singleton object in main.m
                 DockItem *win = [_items objectAtIndex:i];
                 if([win type] != DIT_WINDOW)
                     continue;
-                if([win window] == windowID) {
+                if([win dockWindowID] == windowID) {
                     [app removeWindow:windowID];
                     [_items removeObject:win];
                     [self relocate];
@@ -215,6 +285,23 @@ extern Dock *dock; // our singleton object in main.m
             frame.origin.x = [mainScreen frame].size.width / 2 - frame.size.width / 2;
             frame.origin.y = 0;
     }
+
+    /* Autohide: leave a 4 px strip at the screen edge so the pointer can find
+     * the Dock again. */
+    if(_autohide && _hidden) {
+        NSSize screen = [mainScreen frame].size;
+        switch(_location) {
+            case LOCATION_LEFT:
+                frame.origin.x = -frame.size.width + 4;
+                break;
+            case LOCATION_RIGHT:
+                frame.origin.x = screen.width - 4;
+                break;
+            default:
+                frame.origin.y = -frame.size.height + 4;
+                break;
+        }
+    }
     return frame;
 }
 
@@ -257,13 +344,37 @@ extern Dock *dock; // our singleton object in main.m
     NSArray *values = [_desktops allValues];
     for(unsigned i = 0; i < [values count]; ++i) {
         DesktopWindow *dw = [values objectAtIndex:i];
-        [_wallpaper setObject:[dw wallpaperPath] forKey:@"NSMainScreen"]; // FIXME: CGDisplayID
+        NSString *path = [dw wallpaperPath];
+
+        /* A window that has not resolved its wallpaper yet has no path; an
+         * empty dictionary entry is what raised "insert nil object" here. */
+        if(path != nil)
+            [_wallpaper setObject:path forKey:@"NSMainScreen"]; // FIXME: CGDisplayID
     }
     [_prefs setObject:_wallpaper forKey:INFOKEY_WALLPAPER];
     [_prefs setObject:[self tileDataForAppItems] forKey:INFOKEY_PERSISTENT_APPS];
     //[_prefs setObject:[self tileDataForOtherItems] forKey:INFOKEY_PERSISTENT_OTHERS];
 
     [_prefs synchronize];
+
+    /* Mirror the settings the Preferences app owns into the shared file, so
+     * both apps read and write one place.  The Dock's own tile list still
+     * lives in its NSUserDefaults domain. */
+    {
+        NSMutableDictionary *shared = [NSMutableDictionary dictionaryWithDictionary:
+            ([NSDictionary dictionaryWithContentsOfFile:@"/Library/Preferences/Dock.plist"] ?: @{})];
+
+        [shared setObject:[NSNumber numberWithInt:_tileSize] forKey:INFOKEY_TILESIZE];
+        [shared setObject:[NSNumber numberWithInt:(int)_location] forKey:INFOKEY_LOCATION];
+        [shared setObject:[NSNumber numberWithFloat:_alpha] forKey:INFOKEY_OPACITY];
+        [shared setObject:[NSNumber numberWithBool:_autohide] forKey:INFOKEY_AUTOHIDE];
+        [shared setObject:[NSNumber numberWithBool:_magnification] forKey:INFOKEY_MAGNIFICATION];
+
+        if(![[NSFileManager defaultManager] fileExistsAtPath:@"/Library/Preferences"])
+            [[NSFileManager defaultManager] createDirectoryAtPath:@"/Library/Preferences"
+                withIntermediateDirectories:YES attributes:nil error:nil];
+        [shared writeToFile:@"/Library/Preferences/Dock.plist" atomically:YES];
+    }
 }
 
 // size the window to our number of items. if it exceeds the screen size, shrink the tiles
@@ -364,8 +475,20 @@ extern Dock *dock; // our singleton object in main.m
             }
         }
 
-        [item setFrameOrigin:itemPos];
-        [item setTileSize:size];
+        NSSize thisSize = size;
+        if(_magnification && _hoverIndex >= 0) {
+            int distance = i - _hoverIndex;
+            if(distance < 0) distance = -distance;
+            if(distance == 0)
+                thisSize = NSMakeSize(_tileSize * 1.35, _tileSize * 1.35);
+            else if(distance == 1)
+                thisSize = NSMakeSize(_tileSize * 1.15, _tileSize * 1.15);
+        }
+        /* Keep magnified tiles inside the dock window: the grown tile is
+         * centred on its normal slot. */
+        [item setFrameOrigin:NSMakePoint(itemPos.x - (thisSize.width - _tileSize) / 2,
+                                         itemPos.y - (thisSize.height - _tileSize) / 2)];
+        [item setTileSize:thisSize];
         [[_window contentView] addSubview:item];
         [item _installTileClickProxy];
 
@@ -386,10 +509,28 @@ extern Dock *dock; // our singleton object in main.m
     [pa addObjectsFromArray:[_prefs objectForKey:INFOKEY_PERSISTENT_APPS]];
 
     if(!pa || [pa count] == 0) {
-        // populate default apps
-        [pa addObject:dockTileData(@"/System/Library/CoreServices/Filer.app")];
-        [pa addObject:dockTileData(@"/Applications/Utilities/Terminal.app")];
-        //[pa addObject:dockTileData(@"/Applications/Utilities/Install ravynOS.app")];
+        /* The default tiles: the file manager, the terminal and the daily
+         * driver applications that are actually installed. */
+        NSFileManager *fm = [NSFileManager defaultManager];
+        NSString *defaults[] = {
+            @"/System/Library/CoreServices/Filer.app",
+            @"/Applications/Utilities/Terminal.app",
+            @"/Applications/TextEdit.app",
+            @"/Applications/Calculator.app",
+            @"/Applications/Preview.app",
+            @"/Applications/Font Book.app",
+            @"/Applications/Utilities/Screenshot.app",
+            @"/Applications/Utilities/Activity Monitor.app",
+            @"/Applications/Utilities/Disk Utility.app",
+            @"/Applications/Utilities/Console.app",
+            @"/Applications/Utilities/Keychain Access.app",
+            @"/System/Library/CoreServices/Archive Utility.app",
+            @"/System/Library/CoreServices/System Preferences.app",
+        };
+        for(int i = 0; i < (int)(sizeof(defaults) / sizeof(defaults[0])); i++) {
+            if([fm fileExistsAtPath:defaults[i]])
+                [pa addObject:dockTileData(defaults[i])];
+        }
     }
 
     for(int i = 0; i < [pa count]; ++i) {
@@ -410,22 +551,102 @@ extern Dock *dock; // our singleton object in main.m
     }
 }
 
-// FIXME: call this when _location changes
--(void)relocate {
-    if(_window) {
-        [_window orderOut:nil];
-        [_window performClose:nil];
-        _window = nil;
+-(void)pollMouse:(NSTimer *)timer {
+    NSPoint p = [NSEvent mouseLocation];
+    NSScreen *screen = [NSScreen mainScreen];
+    NSSize screenSize = [screen frame].size;
+    BOOL shouldShow = !_hidden;
+
+    if(_autohide) {
+        switch(_location) {
+            case LOCATION_LEFT:
+                shouldShow = _hidden ? (p.x <= 6) : (p.x <= _currentSize.width + 8);
+                break;
+            case LOCATION_RIGHT:
+                shouldShow = _hidden ? (p.x >= screenSize.width - 6)
+                                     : (p.x >= screenSize.width - _currentSize.width - 8);
+                break;
+            default:
+                shouldShow = _hidden ? (p.y <= 6) : (p.y <= _currentSize.height + 8);
+                break;
+        }
+        if(shouldShow == _hidden) {
+            _hidden = !shouldShow;
+            NSRect frame = [self positionWindowWithFrame:[_window frame]];
+            [_window setFrame:frame display:YES];
+        }
     }
 
+    if(_magnification) {
+        int hover = -1;
+
+        if(!_hidden && NSPointInRect(p, [_window frame])) {
+            NSArray *subviews = [[_window contentView] subviews];
+            NSRect frame = [_window frame];
+            NSPoint local = NSMakePoint(p.x - frame.origin.x, p.y - frame.origin.y);
+            int itemIndex = 0;
+            unsigned i;
+
+            for(i = 0; i < [subviews count]; i++) {
+                NSView *v = [subviews objectAtIndex:i];
+
+                if(![v isKindOfClass:[DockItem class]])
+                    continue;
+                if(NSPointInRect(local, [v frame])) {
+                    hover = itemIndex;
+                    break;
+                }
+                itemIndex++;
+            }
+        }
+        if(hover != _hoverIndex) {
+            _hoverIndex = hover;
+            [self relocate];
+        }
+    }
+}
+
+// FIXME: call this when _location changes
+-(void)relocate {
     int maxItems = [self fitWindowToItems];
-    NSRect frame = NSZeroRect;
-    frame.size = _currentSize;
-    [self createWindowWithFrame:frame];
+    NSRect frame = NSMakeRect(0, 0, _currentSize.width, _currentSize.height);
+    if(_window == nil) {
+        [self createWindowWithFrame:frame];
+    } else {
+        NSArray *subviews = [[[_window contentView] subviews] copy];
+        for(NSView *view in subviews)
+            [view removeFromSuperview];
+        NSRect positioned = [self positionWindowWithFrame:frame];
+        [_window setFrame:positioned display:NO];
+        [[_window contentView] setFrame:NSMakeRect(0, 0, _currentSize.width, _currentSize.height)];
+    }
     [self placeItemsInWindow:maxItems];
     [_window makeKeyAndOrderFront:nil];
-    [[_window contentView] drawRect:[_window frame]];
-    [self savePrefs];
+    [_window display];
+}
+
+/* The system preferences changed: pick up the new icon size, position and
+ * opacity and lay the Dock out again. */
+-(void)preferencesChanged:(NSNotification *)note {
+    NSDictionary *plist = [self readDockPlist];
+    int pos;
+
+    _tileSize = [[plist objectForKey:INFOKEY_TILESIZE] intValue];
+    if(_tileSize < TILESIZE_MIN)
+        _tileSize = [_prefs integerForKey:INFOKEY_TILESIZE];
+    if(_tileSize < TILESIZE_MIN)
+        _tileSize = 64;
+    pos = [[plist objectForKey:INFOKEY_LOCATION] intValue];
+    if(plist == nil)
+        pos = [_prefs integerForKey:INFOKEY_LOCATION];
+    _location = (Location)pos;
+    _alpha = [[plist objectForKey:INFOKEY_OPACITY] floatValue];
+    if(_alpha <= 0.0f)
+        _alpha = 0.85;
+    _autohide = [[plist objectForKey:INFOKEY_AUTOHIDE] boolValue];
+    _magnification = [[plist objectForKey:INFOKEY_MAGNIFICATION] boolValue];
+
+    [self relocate];
 }
 
 -(float)alpha {
@@ -487,7 +708,6 @@ extern Dock *dock; // our singleton object in main.m
         }
     }
 
-    [self setNeedsDisplay:YES];
 }
 @end
 

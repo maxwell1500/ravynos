@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>Font Book.app</string>
+	<key>CFBundleDisplayName</key>
+	<string>Font Book</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.ravynos.FontBook</string>
+	<key>CFBundleVersion</key>
+	<string>1.0</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleSignature</key>
+	<string>fntb</string>
+	<key>CFBundleExecutable</key>
+	<string>Font Book</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0.0</string>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>Font</string>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>public.truetype-ttf-font</string>
+				<string>public.opentype-font</string>
+				<string>public.truetype-collection-font</string>
+			</array>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>ttf</string>
+				<string>otf</string>
+				<string>ttc</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

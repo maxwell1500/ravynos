@@ -29,8 +29,11 @@ RULES (each is load-bearing; see BOOT-PLAN.md 22)
     silently nil).  A missing symbol must never abort the launch.
 """
 import collections
+import hashlib
+import io
 import json
 import os
+import plistlib
 import posixpath
 import re
 import shutil
@@ -40,8 +43,6 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir))
 APP = "/Applications/Google Chrome.app"
-VER = "155.0.8059.82"
-OLD_VER = "155.0.8059.41"
 BUILD = os.environ.get("RAVYN_BUILD_DIR", "/Users/max/Projects/build")
 SDK = os.path.join(REPO, "Developer", "ravynOS.sdk")
 BUILD_SDK = os.path.join(BUILD, "Developer", "Platforms", "ravynOS.platform",
@@ -60,15 +61,68 @@ MAIN_REL = "MacOS/Google Chrome"
 CONTENTS_STAGE = "Applications/Google Chrome.app/Contents"
 MAIN_STAGE = CONTENTS_STAGE + "/" + MAIN_REL
 INFO_STAGE = CONTENTS_STAGE + "/Info.plist"
-OLD_VERSION_PREFIX = "Frameworks/Google Chrome Framework.framework/Versions/" + OLD_VER
+FRAMEWORK_REL = "Frameworks/Google Chrome Framework.framework"
 REAL_DIR = "/usr/lib/chrome/real"
 SIDE_DIR = "/usr/lib/chrome"
+
+
+def chrome_version():
+    """The framework version the installed launcher actually loads.
+
+    Chrome's launcher binary hardcodes the framework path
+    ("../Frameworks/Google Chrome Framework.framework/Versions/<v>/Google
+    Chrome Framework"), and the updater leaves the previous version's
+    directory behind.  Staging the wrong version means the launcher cannot
+    find the framework at all, so the version is read from the launcher
+    instead of being pinned in this script."""
+    launcher = os.path.join(APP, "Contents", MAIN_REL)
+    try:
+        with open(launcher, "rb") as f:
+            blob = f.read()
+    except OSError:
+        blob = b""
+    m = re.search(rb"Google Chrome Framework\.framework/Versions/"
+                   rb"([0-9][0-9A-Za-z._-]*)/", blob)
+    if m:
+        return m.group(1).decode()
+    cur = os.path.join(APP, "Contents", FRAMEWORK_REL, "Versions", "Current")
+    if os.path.islink(cur):
+        return os.path.basename(os.readlink(cur))
+    die("cannot determine the installed Chrome framework version")
+
+
+VER = chrome_version()
+
+
+def stale_version_prefixes():
+    """Framework version directories that are NOT the one the launcher loads.
+
+    Chrome's updater leaves the previous version's directory in place.
+    Staging it would double the payload and put two frameworks with the same
+    class names into the guest."""
+    base = os.path.join(APP, "Contents", FRAMEWORK_REL, "Versions")
+    out = []
+    try:
+        names = sorted(os.listdir(base))
+    except OSError:
+        return out
+    for v in names:
+        if v in (VER, "Current"):
+            continue
+        out.append(FRAMEWORK_REL + "/Versions/" + v)
+    return out
+
 
 MACHO_MAGICS = (b"\xcf\xfa\xed\xfe", b"\xfe\xed\xfa\xcf", b"\xca\xfe\xba\xbe",
                 b"\xbe\xba\xfe\xca", b"\xce\xfa\xed\xfe", b"\xfe\xed\xfa\xce")
 
 FUNC_SECTIONS = {"__got", "__auth_got", "__stubs", "__la_symbol_ptr"}
 WORKLIST_CAP = 40               # trap symbols printed per dep in the report
+# Max staged provider images a dependency may re-export.  The measured worst
+# case is 4 (CoreFoundation); the cap exists only so a pathological closure
+# cannot produce an unbounded link line, and exceeding it is a hard error
+# rather than a silent truncation.
+PROVIDER_EDGE_CAP = 8
 
 # Session-measured missing-symbol counts for the framework binary (the numbers
 # this script's import/export walk must reproduce; a diff is reported loudly).
@@ -103,6 +157,15 @@ def sh_both(cmd):
 
 def codesign_dv(path):
     return sh_both(["codesign", "-dv", path])[1]
+
+
+def is_dylib(path):
+    """True for a shared library Mach-O -- the only file types ld64 accepts as
+    a -reexport_library operand.  Staged app bundles carry MH_EXECUTABLE images
+    (WindowServer, Dock, ...) that export ObjC class names too; offering one as
+    a provider makes ld die with "unsupported mach-o filetype"."""
+    r = subprocess.run(["file", "-b", path], capture_output=True, text=True)
+    return "dynamically linked shared library" in (r.stdout or "")
 
 
 def is_macho(path):
@@ -149,7 +212,10 @@ def otool_path(path):
 
 def parse_lcs(path):
     """[(kind, name)] for LC_LOAD_DYLIB / LC_REEXPORT_DYLIB /
-    LC_LOAD_UPWARD_DYLIB, self-install-names dropped.
+    LC_LOAD_WEAK_DYLIB / LC_LOAD_UPWARD_DYLIB, self-install-names dropped.  Weak load commands still
+    need a real image in this guest: Chrome's framework weak-links SkyLight and ScreenCaptureKit, and the staged
+    dyld2 printed "could not find image <path>" for exactly those two before crashing (rc=139), so they get trap-only
+    stubs like any other absent dep -- only their *weak import symbols* may stay unresolved, never the image itself.
 
     Parsed one "Load command" block at a time: a whole-output regex matches
     across command boundaries when an install name contains a space (Chrome's
@@ -158,7 +224,7 @@ def parse_lcs(path):
     out = sh(["otool", "-arch", "x86_64", "-l", otool_path(path)])
     entries = []
     for block in re.split(r"\n(?=Load command \d+)", out):
-        m = re.search(r"cmd (LC_(?:LOAD|REEXPORT|LOAD_UPWARD|ID)_DYLIB)\b", block)
+        m = re.search(r"cmd (LC_(?:LOAD_WEAK|LOAD_UPWARD|REEXPORT|LOAD|ID)_DYLIB)\b", block)
         if not m:
             continue
         n = re.search(r"\n\s*name (.+?) \(offset \d+\)", block)
@@ -295,15 +361,17 @@ def build_payload(staged):
     os.makedirs(PAYLOAD)
     root = os.path.join(APP, "Contents")
     machos, files = [], []
+    stale = stale_version_prefixes()
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = sorted(d for d in dirnames
                              if d != "_CodeSignature"
-                             and not os.path.join(dirpath, d).endswith(OLD_VERSION_PREFIX))
+                             and not any(os.path.join(dirpath, d).endswith(p)
+                                         for p in stale))
         for name in sorted(filenames):
             src = os.path.join(dirpath, name)
             rel = os.path.relpath(src, root).replace(os.sep, "/")
-            if rel.startswith(OLD_VERSION_PREFIX):
-                continue
+            if any(rel.startswith(p) for p in stale):
+                continue                    # previous Chrome version's tree
             if name == "CodeResources" or name.endswith(".sig") \
                     or name == "embedded.provisionprofile":
                 continue
@@ -349,12 +417,65 @@ def build_payload(staged):
 
 
 def ensure_thinned_main():
-    if os.path.isfile(THINNED_MAIN) and \
-            "flags=0x2(adhoc)" in codesign_dv(THINNED_MAIN):
-        return
+    """Re-thin the launcher when the installed one changed.
+
+    Chrome's updater replaces Contents/MacOS/Google Chrome, and that binary
+    hardcodes the framework version it loads
+    ("../Frameworks/Google Chrome Framework.framework/Versions/<v>/Google
+    Chrome Framework").  A stale staged launcher therefore asks the guest for
+    a version directory that was never staged, and the run dies with
+    "dyld: could not find image .../Versions/<old-v>/Google Chrome Framework"
+    before any of the closure work matters.  The source's digest is recorded
+    next to the copy so the check survives an equal-mtime copy."""
     src = os.path.join(APP, "Contents", MAIN_REL)
+    stamp = THINNED_MAIN + ".src.md5"
+    try:
+        with open(src, "rb") as f:
+            want = hashlib.md5(f.read()).hexdigest()
+    except OSError:
+        want = None
+    have = None
+    if os.path.isfile(stamp):
+        with open(stamp) as f:
+            have = f.read().strip()
+    if (want is not None and have == want and os.path.isfile(THINNED_MAIN)
+            and "flags=0x2(adhoc)" in codesign_dv(THINNED_MAIN)):
+        return
     log("rebuilding work/chrome_thinned from %s" % src)
     thin_and_sign(src, THINNED_MAIN)
+    if want is not None:
+        with open(stamp, "w") as f:
+            f.write(want + "\n")
+
+
+def ensure_info_plist():
+    """Regenerate work/chrome_info.plist from the installed app's Info.plist.
+
+    The guest needs one thing the host plist does not have:
+    RAVYNLaunchArguments -- the launch arguments this guest can actually
+    honour (no sandbox, no GPU, no first-run wizard, a writable profile
+    directory).  Everything else is the host's, so the app's own metadata
+    (version, bundle identifiers, capabilities) stays true; a stale copy
+    would report a version the staged framework does not have."""
+    src = os.path.join(APP, "Contents", "Info.plist")
+    dst = os.path.join(WORK, "chrome_info.plist")
+    with open(src, "rb") as f:
+        pl = plistlib.load(f)
+    pl["RAVYNLaunchArguments"] = ["--no-sandbox", "--disable-gpu",
+                                  "--no-first-run",
+                                  "--user-data-dir=/tmp/chrome-profile"]
+    buf = io.BytesIO()
+    plistlib.dump(pl, buf)
+    new = buf.getvalue()
+    old = None
+    if os.path.isfile(dst):
+        with open(dst, "rb") as f:
+            old = f.read()
+    if old == new:
+        return
+    log("regenerating work/chrome_info.plist from %s" % src)
+    with open(dst, "wb") as f:
+        f.write(new)
 
 
 # ------------------------------------------------------------------ dep graph
@@ -563,7 +684,8 @@ class Closure:
             for hf in self.payload_paths.values():
                 if is_macho(hf):
                     files.append(hf)
-            for f in dict.fromkeys(files):
+            files = [f for f in dict.fromkeys(files) if is_dylib(f)]
+            for f in files:
                 try:
                     for nm in exports_of(f):
                         m.setdefault(nm, []).append(f)
@@ -792,6 +914,235 @@ OBJC_META_PREFIX = "_OBJC_METACLASS_$_"
 # data slots -- a function stub hands back an address that gets dereferenced.
 OBJC_EHTYPE_PREFIX = "_OBJC_EHTYPE_$_"
 
+# ------------------------------------------------------ objc class provider
+
+# Chrome's __objc_classrefs bind to the ADDRESS of _OBJC_CLASS_$_X, and the
+# modern Objective-C ABI requires that address to BE the objc_class structure
+# (its *value* is the class's isa slot).  A data slot -- the old ".quad 0" trap
+# -- can never satisfy that: the runtime reads isa == 0 and bits == 0, so
+# data() is null and objc_class::isRealized() faults.  The class trap and the
+# objc_allocateClassPair constructor are therefore replaced by ONE shared
+# provider image that defines the missing classes as real modern-ABI classes.
+#
+# One image, not one per dependency: NSURLSession and NSURLSessionConfiguration
+# are trapped by two deps (CFNetwork and Foundation), and two class objects
+# with one name make the runtime's addNamedClass warn and keep the OLD mapping
+# -- so one of the two binds would silently point at the wrong object.
+#
+# Every dependency Chrome binds a class symbol from re-exports the provider:
+# Chrome's binds are library-scoped (two-level namespace), so dyld resolves
+# them against the NAMED library's export list and walks that library's
+# libReExported chain.  A symbol exported only by an unrelated image in the
+# same process does not satisfy them.
+PROVIDER_INSTALL = "/usr/lib/chrome/ObjCClassProvider.dylib"
+PROVIDER_REL = PROVIDER_INSTALL.lstrip("/")
+
+# The provider's classes are structural placeholders: they fix class lookup
+# and realization, not behaviour (the real implementations are the existing
+# framework-growth work in USERLAND-PLAN.md section A).
+#
+# -fobjc-runtime is deliberately NOT passed: the default modern ABI output is
+# already byte-identical to macosx-10.8/10.15/11.0/13.0, and the gnustep-2.0
+# modes do not compile on Mach-O at all.
+PROVIDER_DEFINES = ["-DAPPLE_RUNTIME_4", "-DDARWIN", "-DNULL=0",
+                    "-DTARGET_OS_IOSMAC=0", "-DPLATFORM_IS_POSIX",
+                    "-DPLATFORM_USES_BSD_SOCKETS", "-DTOLL_FREE_BRIDGING"]
+
+
+def provider_includes():
+    return ["-I" + os.path.join(REPO, "Developer", "ravynOS.sdk", "usr", "local",
+                                 "include", "kernel"),
+            "-I" + os.path.join(REPO, "Developer", "ravynOS.sdk", "System",
+                                 "Library", "Frameworks", "Foundation.framework",
+                                 "Headers"),
+            "-I" + os.path.join(REPO, "Libraries", "objc4"),
+            "-I" + os.path.join(REPO, "Frameworks", "Foundation")]
+
+
+def platform_clang():
+    """The compiler that can build this tree's Objective-C.
+
+    The host's xcrun clang (21) segfaults on it -- see the build-libraries.sh
+    header -- so the platform toolchain's clang-17 is pinned explicitly.  The
+    provider must not be built by the host compiler: the host's ObjC headers
+    and runtime are a different ABI generation."""
+    cands = []
+    env = os.environ.get("PLATFORM_TOOLCHAIN_BIN")
+    if env:
+        cands += [os.path.join(env, "clang-17"), os.path.join(env, "clang")]
+    tc = os.path.join(BUILD, "Developer", "Platforms", "ravynOS.platform",
+                      "Developer", "Toolchains", "Default.xctoolchain",
+                      "usr", "bin")
+    cands += [os.path.join(tc, "clang-17"), os.path.join(tc, "clang")]
+    for c in cands:
+        if os.path.isfile(c):
+            return [c]
+    return sh(["xcrun", "-f", "clang"]).split()
+
+
+def gen_provider_source(names, path):
+    """One @interface/@implementation pair per synthesized class.
+
+    Empty bodies are correct and sufficient: the runtime needs a REALIZABLE
+    class object, not behaviour."""
+    src = ["/* generated by chrome_stage.py -- Objective-C class provider.",
+           " *",
+           " * Each class below is a real modern-ABI class object: the exported",
+           " * symbol's ADDRESS is the objc_class structure, which is exactly",
+           " * what Chrome's __objc_classrefs binds expect.  The bodies are empty",
+           " * on purpose -- the runtime needs a realizable class, behaviour",
+           " * belongs to the repo frameworks (USERLAND-PLAN.md section A).",
+           " */",
+           "#import <objc/NSObject.h>",
+           ""]
+    for n in names:
+        src.append("@interface %s : NSObject" % n)
+        src.append("@end")
+        src.append("")
+        src.append("@implementation %s" % n)
+        src.append("@end")
+        src.append("")
+    with open(path, "w") as f:
+        f.write("\n".join(src) + "\n")
+
+
+def provider_export_names(names):
+    """The symbol names the provider exports for `names`.
+
+    A class definition emits BOTH the class and its metaclass, which is why
+    the five metaclass-only traps (CAMetalLayer, CAOpenGLLayer,
+    NSAccessibilityElement, NSTitlebarAccessoryViewController,
+    ASAuthorizationController) need no separate stub."""
+    out = set()
+    for n in names:
+        out.add(OBJC_CLASS_PREFIX + n)
+        out.add(OBJC_META_PREFIX + n)
+    return out
+
+
+def synth_class_names(cl):
+    """The class names the provider must define.
+
+    A name is synthesized when some dependency TRAPS it (imports it and no
+    image in that dependency's own closure provides it) AND no staged image
+    exports it.  The names a staged image really defines -- Foundation's 21
+    (NSArray, NSDictionary, NSDate, NSURL, NSUserDefaults, ...) and
+    QuartzCore's CIImage -- keep resolving through the existing provider-edge
+    rule instead: redefining them here would put two class objects with one
+    name into the process, and the runtime's addNamedClass then warns and
+    keeps the OLD mapping, so one bind would silently point at the wrong
+    object."""
+    trapped = set()
+    for rec in cl.deps.values():
+        for s in rec.get("traps") or ():
+            if s.startswith(OBJC_CLASS_PREFIX):
+                trapped.add(s[len(OBJC_CLASS_PREFIX):])
+    exported = set()
+    for sym in cl.staged_export_files():
+        if sym.startswith(OBJC_CLASS_PREFIX):
+            exported.add(sym[len(OBJC_CLASS_PREFIX):])
+    return sorted(trapped - exported)
+
+
+def sign_artifact(path):
+    """Adhoc-sign one staged image and assert the signature really is adhoc."""
+    sh(["codesign", "--force", "--sign", "-", path])
+    if "flags=0x2(adhoc)" not in codesign_dv(path):
+        die("%s: adhoc signature did not take" % path)
+
+
+def verify_provider(path, names):
+    """Gate the provider image.
+
+    nm -g must show every class and metaclass symbol as S-type (the symbol's
+    address IS the class object), otool -ov must show the canonical modern
+    layout, and the ObjC sections must be present.  dyld_info -fixups is
+    deliberately NOT a gate: it does not faithfully decode staged images'
+    bind streams (BOOT-PLAN.md 22, class-provider plan section 8)."""
+    syms = {}
+    for line in sh(["nm", "-g", path]).splitlines():
+        p = line.split(maxsplit=2)
+        if len(p) == 3:
+            syms[p[2]] = p[1]
+    bad = []
+    for n in names:
+        for sym in (OBJC_CLASS_PREFIX + n, OBJC_META_PREFIX + n):
+            if syms.get(sym) != "S":
+                bad.append("%s=%s" % (sym, syms.get(sym)))
+    if bad:
+        die("provider: %d class/metaclass symbols are not S-type: %s"
+            % (len(bad), ", ".join(bad[:6])))
+    # exactly one class and one metaclass symbol per class, and nothing else
+    got_cls = sorted(s for s in syms if s.startswith(OBJC_CLASS_PREFIX))
+    got_meta = sorted(s for s in syms if s.startswith(OBJC_META_PREFIX))
+    if len(got_cls) != len(names) or len(got_meta) != len(names):
+        die("provider: exported %d class and %d metaclass symbols, wanted %d "
+            "and %d" % (len(got_cls), len(got_meta), len(names), len(names)))
+    secs = sh(["otool", "-l", path])
+    for want in ("__objc_classlist", "__objc_imageinfo", "__objc_data"):
+        if want not in secs:
+            die("provider: section %s missing" % want)
+    lines = sh(["otool", "-ov", path]).splitlines()
+    for sample in (names[0], names[-1]):
+        idx = None
+        for i, ln in enumerate(lines):
+            if ln.endswith("_OBJC_CLASS_$_" + sample):
+                idx = i
+                break
+        if idx is None:
+            die("provider: otool -ov has no classlist entry for %s" % sample)
+        blk = "\n".join(lines[idx:idx + 6])
+        if (OBJC_META_PREFIX + sample) not in blk:
+            die("provider: %s isa is not its own metaclass:\n%s" % (sample, blk))
+        if "_OBJC_CLASS_$_NSObject" not in blk:
+            die("provider: %s superclass is not NSObject:\n%s" % (sample, blk))
+        if "__objc_empty_cache" not in blk:
+            die("provider: %s has no empty cache:\n%s" % (sample, blk))
+
+
+def build_class_provider(names):
+    """Build the shared ObjC class provider image.
+
+    Returns (host path, set of exported symbol names)."""
+    if not names:
+        die("provider: no classes to synthesize")
+    odir = os.path.join(OBJ, "objc-class-provider")
+    shutil.rmtree(odir, ignore_errors=True)
+    os.makedirs(odir)
+    src = os.path.join(odir, "provider.m")
+    gen_provider_source(names, src)
+    cc = platform_clang()
+    log("provider: %d classes, compiled by %s" % (len(names), cc[0]))
+    cflags = ["-c", "-arch", "x86_64", "-isysroot", BUILD_SDK,
+              "-mmacos-version-min=15.0", "-fPIC"] + PROVIDER_DEFINES \
+        + provider_includes()
+    obj = os.path.join(odir, "provider.o")
+    sh(cc + cflags + ["-o", obj, src])
+    lflags = ["-arch", "x86_64", "-isysroot", BUILD_SDK, "-dynamiclib",
+              "-mmacos-version-min=15.0", "-nostdlib", "-nodefaultlibs",
+              "-install_name", PROVIDER_INSTALL,
+              # dyld2 refuses an image whose compatibility version is lower than
+              # the importer's requirement, and Chrome demands real macOS
+              # versions (150.0.0, 1195.14.4, ...).  65535.255.255 is the
+              # packed 0xFFFFFFFF wildcard.
+              "-Wl,-compatibility_version,65535.255.255",
+              "-Wl,-current_version,65535.255.255",
+              # libobjc must come from $SDK/usr/lib: that is the one whose
+              # LC_ID_DYLIB is /usr/lib/system/libobjc.dylib, which is what the
+              # guest loads.  The other path does not exist in this SDK.
+              "-L%s/usr/lib" % BUILD_SDK, "-lobjc", "-lSystem"]
+    out = os.path.join(SHIMS, PROVIDER_REL)
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    sh(cc + lflags + ["-o", out, obj])
+    idn = install_name(out)
+    if idn != PROVIDER_INSTALL:
+        die("provider: LC_ID_DYLIB is %r, wanted %r" % (idn, PROVIDER_INSTALL))
+    sign_artifact(out)
+    verify_provider(out, names)
+    log("provider: %s (%d bytes)" % (PROVIDER_INSTALL,
+                                     os.path.getsize(out)))
+    return out, provider_export_names(names)
+
 
 def gen_stub(path, traps, sections, rec):
     """Build one shim/stub dylib at work/chrome-shims/<install path>."""
@@ -819,12 +1170,20 @@ def gen_stub(path, traps, sections, rec):
     c_src = ["/* generated by chrome_stage.py -- trap stubs for %s */" % install,
              "#include <stdio.h>"]
     asm_src = []
-    if classes or funcs:
-        c_src.append("typedef void *ID;")
-        c_src.append("extern ID objc_getClass(const char *);")
-        c_src.append("extern ID object_getClass(ID);")
-        c_src.append("extern ID objc_allocateClassPair(ID, const char *, unsigned long);")
-        c_src.append("extern void objc_registerClassPair(ID);")
+    # An Objective-C class symbol must NEVER become a data slot here.  Chrome
+    # binds __objc_classrefs to the ADDRESS of _OBJC_CLASS_$_X, and the modern
+    # ABI requires that address to BE the objc_class structure; a ".quad 0"
+    # slot makes the runtime read isa == 0 and bits == 0, so data() is null
+    # and objc_class::isRealized() faults.  The old objc_allocateClassPair
+    # constructor had the same defect (it stored a runtime class in a slot
+    # instead of making the symbol's address the class object).  Every class
+    # symbol must therefore arrive already satisfied -- by a staged image that
+    # really defines it, or by the shared class provider -- and the caller
+    # drops those names from the trap set before reaching here.
+    if classes:
+        die("%s: %d Objective-C class symbols reached the stub generator: %s"
+            % (install, len(classes),
+               ", ".join(sorted(classes)[:6])))
     # Every trap needs an asm label: a plain C definition of `_foo` emits the
     # Mach-O symbol `__foo` (the C decoration is a second underscore), so dyld
     # would never find it under the name the importer asked for.
@@ -834,24 +1193,6 @@ def gen_stub(path, traps, sections, rec):
         c_src.append('long trap_%d(void) { if (!s%d++) fprintf(stderr, '
                      '"[CHROME-STUB] %%s\\n", "%s"); return 0; }'
                      % (i, i, sym))
-    for i, name in enumerate(sorted(classes)):
-        cls_sym = OBJC_CLASS_PREFIX + name
-        meta_sym = OBJC_META_PREFIX + name
-        # Both slots are always emitted: the runtime stores the class and its
-        # metaclass through them, and Chrome may import either symbol.
-        c_src.append('extern void *cslot_%d __asm__("%s");' % (i, cls_sym))
-        c_src.append('extern void *mslot_%d __asm__("%s");' % (i, meta_sym))
-        c_src.append("__attribute__((constructor)) static void mk_%d(void) {"
-                     % i)
-        c_src.append("  ID c = objc_allocateClassPair(objc_getClass(\"NSObject\"),"
-                     " \"%s\", 0);" % name)
-        c_src.append("  if (c) { objc_registerClassPair(c); cslot_%d = c; "
-                     "mslot_%d = object_getClass(c); }" % (i, i))
-        c_src.append("  fprintf(stderr, \"[CHROME-STUB] class %s\\n\"); }" % name)
-        asm_src.append(".globl %s" % cls_sym)
-        asm_src.append("%s: .quad 0" % cls_sym)
-        asm_src.append(".globl %s" % meta_sym)
-        asm_src.append("%s: .quad 0" % meta_sym)
     if asm_funcs:
         asm_src += [".text"] + [
             ".globl %s\n%s:\n\txorl %%eax, %%eax\n\tretq" % (s, s)
@@ -908,18 +1249,27 @@ def gen_stub(path, traps, sections, rec):
             mf = find_real(mdep)
             if mf and is_macho(mf):
                 lflags += ["-Wl,-reexport_library,%s" % mf]
+    # A staged image elsewhere in the graph already defines these names (Foundation
+    # defines _OBJC_CLASS_$_NSArray/_NSDictionary/..., which real macOS reaches
+    # through CoreFoundation's own REEXPORT edge to Foundation).  Link a full-path
+    # re-export edge -- dyld2 resolves imports only through an importer's NEEDED
+    # images plus their re-export chains, so an unrelated staged library helps
+    # exactly when we add that edge.  -Wl,-reexport_library,<path> is the spelling
+    # this repo proves works on umbrella libs; -reexport-l<stem> silently does not.
     for extra in rec.get("data_provider_files") or ():
-        base = os.path.basename(extra)
-        stem = base[:-6] if base.endswith(".dylib") else base
-        if stem.startswith("lib"):
-            stem = stem[3:]
-        ld_dir = os.path.dirname(os.path.abspath(extra))
-        lflags += ["-L%s" % ld_dir, "-Wl,-reexport-l%s" % stem,
-                   "-l%s" % stem]
+        lflags += ["-Wl,-reexport_library,%s" % os.path.abspath(extra)]
+    # The shared Objective-C class provider.  Chrome's class binds are
+    # library-scoped (two-level namespace), so dyld resolves
+    # Metal/_OBJC_CLASS_$_MTLTextureDescriptor against the NAMED library's
+    # export list and walks that library's libReExported chain.  A class object
+    # that merely exists elsewhere in the process does not satisfy the bind:
+    # the dependency Chrome names has to re-export the provider.  ld64 records
+    # the provider's LC_ID_DYLIB (/usr/lib/chrome/ObjCClassProvider.dylib),
+    # not the host path it was linked from.
+    if rec.get("provider_file"):
+        lflags += ["-Wl,-reexport_library,%s" % os.path.abspath(rec["provider_file"])]
     lflags += ["-L%s/usr/lib" % BUILD_SDK, "-L%s/usr/lib/system" % BUILD_SDK,
                "-lSystem"]
-    if classes:
-        lflags += ["-lobjc"]
     sh(CLANG + lflags + ["-o", out] + objs)
 
     # verify the artifact
@@ -991,6 +1341,7 @@ def main():
     if MAIN_STAGE.lower() not in staged or INFO_STAGE.lower() not in staged:
         die("manifest_gui.json no longer stages %s and %s" % (MAIN_STAGE, INFO_STAGE))
     ensure_thinned_main()
+    ensure_info_plist()
     files, machos = build_payload(staged)
 
     cl = Closure(staged, sources, files, machos)
@@ -1001,6 +1352,7 @@ def main():
         cl.reexport(path)
 
     log("")
+    log("chrome version staged: %s (the launcher's own framework path)" % VER)
     log("deps: %d (%d occupied by the guest, %d with a real file)"
         % (len(cl.deps),
            sum(1 for r in cl.deps.values() if r["occupied"]),
@@ -1025,16 +1377,64 @@ def main():
     log("")
 
     # generate
+    #
+    # The Objective-C class provider is built FIRST: every dependency that
+    # traps a class symbol links a re-export edge to it, and ld64 records the
+    # provider's LC_ID_DYLIB (/usr/lib/chrome/ObjCClassProvider.dylib), which
+    # is the path the guest loads it from.
+    synth_names = synth_class_names(cl)
+    provider_file, provider_syms = build_class_provider(synth_names)
+    log("provider: %d class names synthesized, %d symbols exported"
+        % (len(synth_names), len(provider_syms)))
+    log("")
+
     built = []
     for path in sorted(cl.deps):
         rec = cl.deps[path]
         if rec["mode"] in (None, "occupied-complete"):
             continue
-            rec["data_provider_files"] = cl.data_providers(
-            path, [t for t in rec["traps"] if t in cl.data_syms]) if \
-            rec.get("traps") else []
-        out = gen_stub(path, rec["traps"], cl.sections_for(path), rec)
-        built.append((rec["mode"], path, rec["shim_at"], len(rec["traps"]), out))
+        traps = list(rec["traps"])
+        provs = cl.data_providers(path, traps) if traps else []
+        # The cap is a safety valve against a pathological number of provider
+        # images; it must never silently drop one, because a dropped provider
+        # means a name that no staged image defines stays trapped -- and a
+        # trapped class symbol is a zero-quad slot, i.e. the crash this whole
+        # provider exists to remove.
+        if len(provs) > PROVIDER_EDGE_CAP:
+            die("%s: %d staged provider images exceed the cap of %d"
+                % (path, len(provs), PROVIDER_EDGE_CAP))
+        rec["data_provider_files"] = provs[:PROVIDER_EDGE_CAP]
+        if provs:
+            provided = set()
+            for f in provs[:PROVIDER_EDGE_CAP]:
+                provided |= exports_of(f)
+            kept = [t for t in traps if t not in provided]
+            dropped = sorted(set(traps) - set(kept))
+            if dropped:
+                log("closure: %s: %d trapped names come from staged providers (%s); "
+                    "re-exported instead of stubbed"
+                    % (path, len(dropped), ", ".join(dropped[:8])))
+            traps = kept
+        # Objective-C class symbols are satisfied by the shared provider: the
+        # dependency re-exports it and Chrome's library-scoped bind resolves
+        # through that chain to a REAL class object.
+        covered = [t for t in traps if t in provider_syms]
+        if covered:
+            traps = [t for t in traps if t not in provider_syms]
+            rec["provider_covered"] = sorted(covered)
+            rec["provider_file"] = provider_file
+        # Nothing may reach the stub generator as a class symbol: every one is
+        # either provided by a staged image (re-export edge) or covered by the
+        # provider (re-export edge).
+        leftover = [t for t in traps
+                    if t.startswith(OBJC_CLASS_PREFIX) or t.startswith(OBJC_META_PREFIX)]
+        if leftover:
+            die("%s: %d Objective-C class symbols are neither staged-provided "
+                "nor provider-covered: %s"
+                % (path, len(leftover), ", ".join(sorted(leftover)[:6])))
+        rec["traps_effective"] = list(traps)
+        out = gen_stub(path, traps, cl.sections_for(path), rec)
+        built.append((rec["mode"], path, rec["shim_at"], len(traps), out))
     log("generated %d shims/stubs under work/chrome-shims" % len(built))
 
     changed = rewrite_binaries(cl)
@@ -1077,7 +1477,19 @@ def main():
             "shim_at": rec["shim_at"], "reexport": rec.get("reexport"),
             "real_copy": rec.get("real_copy"),
             "traps": sorted(rec["traps"]),
+            # traps_effective is what the shim actually traps: the class and
+            # metaclass names that a staged image or the class provider
+            # satisfies are NOT in it, so a non-empty ObjC entry here would
+            # mean a zero-quad class slot went back into the image.
+            "traps_effective": sorted(rec.get("traps_effective") or []),
+            "provider_covered": sorted(rec.get("provider_covered") or []),
         }
+    plan["class_provider"] = {
+        "install_name": PROVIDER_INSTALL,
+        "host_path": provider_file,
+        "classes": synth_names,
+        "symbols": sorted(provider_syms),
+    }
     # codesign re-creates _CodeSignature/CodeResources sidecars every time a
     # .app binary is re-signed, and the rewrite phase runs after build_payload's
     # cleanup pass -- so prune once more here: make_chrome_manifest walks these
@@ -1089,6 +1501,14 @@ def main():
         shutil.rmtree(dp)
     if strays:
         log("closure: pruned %d codesign _CodeSignature dirs after signing" % len(strays))
+    # The class provider is a new guest file, so it carries an adhoc signature
+    # like every other staged image.  Re-sign it after the prune above so the
+    # signature cannot have been taken away with a stray _CodeSignature dir,
+    # and re-assert the flag (never skip the check: codesign writes its
+    # report to stderr).
+    sign_artifact(provider_file)
+    if "flags=0x2(adhoc)" not in codesign_dv(provider_file):
+        die("%s: provider is not adhoc-signed" % provider_file)
 
     with open(PLAN_JSON, "w") as f:
         json.dump(plan, f, indent=1, sort_keys=True)

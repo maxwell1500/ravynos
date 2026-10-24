@@ -369,7 +369,32 @@ NSString * const NSUndoManagerDidRedoChangeNotification=@"NSUndoManagerDidRedoCh
 }
 
 -(NSMethodSignature *)methodSignatureForSelector:(SEL)selector {
-    return [_preparedTarget methodSignatureForSelector:selector];
+    NSMethodSignature *signature = [_preparedTarget methodSignatureForSelector:selector];
+
+    /* No prepared target: the runtime would abort with "no message forward
+     * handler" when an invocation is replayed after the target went away.
+     * Report a plausible void signature so forwardInvocation: can no-op. */
+    if(signature == nil)
+        signature = [NSMethodSignature signatureWithObjCTypes:"v@:@"];
+    return signature;
+}
+
+/* Direct entry point for NSUndoTextOperation, which sends -undoRedo: to the
+ * object prepareWithInvocationTarget: returned.  That return is the manager
+ * itself and normally relies on message forwarding, which this runtime does
+ * not provide (no objc_setForwardHandler), so record explicitly. */
+- (void)undoRedo:(id)object
+{
+    NSMethodSignature *signature = [_preparedTarget methodSignatureForSelector:_cmd];
+    NSInvocation *invocation;
+
+    if (_preparedTarget == nil || signature == nil)
+        return;
+    invocation = [NSInvocation invocationWithMethodSignature:signature];
+    [invocation setSelector:_cmd];
+    [invocation setTarget:_preparedTarget];
+    [invocation setArgument:&object atIndex:2];
+    [self forwardInvocation:invocation];
 }
 
 - (void)forwardInvocation:(NSInvocation *)invocation

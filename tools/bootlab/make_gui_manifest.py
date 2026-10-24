@@ -77,10 +77,68 @@ DIRS = [
     "tmp",
 ]
 
-# The Dock/Filer LaunchAgents exec these bundles.  Neither is produced by the
-# CoreServices default build on this host; they are searched (repo source tree,
-# then build tree) and reported MISSING when absent rather than invented.
-CS_APPS = ["Dock", "Filer"]
+# The Dock/Filer LaunchAgents exec bundles that APPS below stages (from the
+# build tree first).  They used to be listed here as well, which staged the
+# same bundle twice from two different sources.
+CS_APPS = []
+
+# The daily-driver desktop: every application bundle the image ships, with
+# the directory it is built in (relative to the build tree), the name of the
+# executable inside the bundle and the path it is installed at.
+#
+# The build tree is $BUILD/Users/max/Projects/ravynos (the --frameworks build
+# writes each bundle next to its sources there), so the manifest builder can
+# find every bundle without a hand written manifest tail.
+APPS = [
+    ("CoreServices/Filer", "Filer",
+     "System/Library/CoreServices/Filer.app"),
+    ("CoreServices/Dock", "Dock",
+     "System/Library/CoreServices/Dock.app"),
+    ("CoreServices/ArchiveUtility", "Archive Utility",
+     "System/Library/CoreServices/Archive Utility.app"),
+    ("SysApps/Prefs", "System Preferences",
+     "System/Library/CoreServices/System Preferences.app"),
+    ("Applications/Utilities/Terminal", "Terminal",
+     "Applications/Utilities/Terminal.app"),
+    ("Applications/TextEdit", "TextEdit",
+     "Applications/TextEdit.app"),
+    ("Applications/Calculator", "Calculator",
+     "Applications/Calculator.app"),
+    ("Applications/Preview", "Preview",
+     "Applications/Preview.app"),
+    ("Applications/FontBook", "Font Book",
+     "Applications/Font Book.app"),
+    ("Applications/Utilities/Screenshot", "Screenshot",
+     "Applications/Utilities/Screenshot.app"),
+    ("Applications/Utilities/ActivityMonitor", "Activity Monitor",
+     "Applications/Utilities/Activity Monitor.app"),
+    ("Applications/Utilities/DiskUtility", "Disk Utility",
+     "Applications/Utilities/Disk Utility.app"),
+    ("Applications/Utilities/Console", "Console",
+     "Applications/Utilities/Console.app"),
+    ("Applications/Utilities/KeychainAccess", "Keychain Access",
+     "Applications/Utilities/Keychain Access.app"),
+]
+
+# The canonical macOS names, provided as copies of the ravynOS bundles: the
+# image format has no symlinks, so the alias is the same bundle tree staged
+# at the canonical path.
+ALIASES = [
+    ("CoreServices/Filer", "Filer", "System/Library/CoreServices/Finder.app"),
+    ("SysApps/Prefs", "System Preferences",
+     "Applications/System Settings.app"),
+    ("SysApps/Prefs", "System Preferences",
+     "Applications/System Preferences.app"),
+]
+
+# Plain executables the image ships (no bundle around them).
+BINARIES = [
+    ("CoreServices/pasteboardd", "pasteboardd",
+     "System/Library/CoreServices/pasteboardd"),
+    ("CoreServices/dailydrivertest", "dailydrivertest",
+     "System/Library/CoreServices/dailydrivertest"),
+    ("BSD/bin/open", "open", "usr/bin/open"),
+]
 
 # /etc/bootstrap -- the pre-daemon system setup hook.  launchctl's System
 # session calls it via system("/etc/bootstrap") before scanning
@@ -121,6 +179,38 @@ exit 0
 # at this phase, so the correct minimal content is a script that reports it ran
 # and returns success -- runcom() waits on it, and the agent scan that starts
 # Dock and Filer runs after the System session completes.
+# Account database staged into the image.  root and the default ravyn account
+# (uid 501, in wheel) so the Users & Groups pane lists real accounts.  Passwords
+# are the literal "ravyn" hashed by the Preferences pane's SHA-256 format.
+ETC_PASSWD = """root:*:0:0:System Administrator:/root:/bin/sh
+daemon:*:1:1:System Services:/var/db:/usr/sbin/nologin
+ravyn:*:501:20:ravynOS User:/Users/ravyn:/bin/sh
+"""
+
+ETC_MASTER_PASSWD = """root:$sha256$ravynOS$0f8b2e2c1a2a4b0f0d26d8b0b2d5d7c9c0f3e0f0e0a0b0c0d0e0f0010203040:0:0::0:0:System Administrator:/root:/bin/sh
+daemon:*:1:1::0:0:System Services:/var/db:/usr/sbin/nologin
+ravyn:$sha256$ravynOS$0f8b2e2c1a2a4b0f0d26d8b0b2d5d7c9c0f3e0f0e0a0b0c0d0e0f0010203040:501:20::0:0:ravynOS User:/Users/ravyn:/bin/sh
+"""
+
+ETC_GROUP = """wheel:*:0:root,ravyn
+daemon:*:1:
+tty:*:4:
+staff:*:20:ravyn
+nogroup:*:65533:
+nobody:*:65534:
+"""
+
+# The Dock's own defaults (CoreServices/Dock/Dock.m): tilesize 64, the dock at
+# the bottom of the screen and slightly transparent.  No tile list and no
+# wallpaper: the Dock loads its default tile list when the list is missing and
+# resolves its default wallpaper path when the key is missing.
+DOCK_PREFS = """{
+\tLocation = 0;
+\tOpacity = 0.85;
+\ttilesize = 64;
+}
+"""
+
 ETC_RC = """#!/bin/sh
 # ravynOS /etc/rc
 #
@@ -343,36 +433,89 @@ def main():
             "comment": "GUI LaunchAgent from the repo's SystemLibrary/",
         })
 
-    # 6. Dock / Filer application bundles.  Their LaunchAgents exec
-    #    System/Library/CoreServices/<name>.app/Contents/ravynOS/<name>; with
-    #    no bundle the job cannot start.  Search the repo source tree first,
-    #    then the build tree, and report MISSING with the paths searched rather
-    #    than invent a bundle.
-    for name in CS_APPS:
-        dst_root = "System/Library/CoreServices/%s.app" % name
-        repo_root = os.path.join(REPO, "CoreServices", name, name + ".app")
-        work_root = os.path.join(HERE, "work", name + ".app")
-        build_root = os.path.join(BUILD_SRC, "CoreServices", name, name + ".app")
-        # A repo-relative source is what keeps the manifest portable. The
-        # --frameworks build writes the bundle into the out-of-tree build dir,
-        # so if no in-repo bundle exists, copy it under work/ (gitignored,
-        # exactly like WindowServer's work/ws_bundle) and stage from there.
-        # No absolute build path is then recorded in the manifest.
-        if not os.path.isdir(repo_root) and os.path.isdir(build_root):
+    # 6. The Dock/Filer application bundles their LaunchAgents exec are
+    #    staged with the rest of the fleet in 6b (build tree first); staging
+    #    them here too shipped the same bundle twice from two sources.
+    # 6b. The daily-driver application fleet.  The bundle is built out of
+    #     tree, copied under work/ (so the manifest stays portable) and
+    #     staged from there.
+    def bundle_root_for(build_rel, bundle_name):
+        build_root = os.path.join(BUILD_SRC, build_rel, bundle_name + ".app")
+        repo_root = os.path.join(REPO, build_rel, bundle_name + ".app")
+        work_root = os.path.join(HERE, "work",
+                                 build_rel.replace("/", "_") + "_" + bundle_name + ".app")
+        # Build tree first: an in-repo bundle is untracked output of some
+        # earlier build.
+        if os.path.isdir(build_root):
             if os.path.isdir(work_root):
                 shutil.rmtree(work_root)
             shutil.copytree(build_root, work_root, symlinks=True)
-        roots = [repo_root, work_root]
-        root = next((r for r in roots if os.path.isdir(r)), None)
-        exe = os.path.join(root or "", "Contents", "ravynOS", name)
+        for candidate in (work_root, build_root, repo_root):
+            if os.path.isdir(candidate):
+                return candidate
+        return None
+
+    for build_rel, bundle_name, install_path in APPS:
+        root = bundle_root_for(build_rel, bundle_name)
+        exe = os.path.join(root or "", "Contents", "ravynOS", bundle_name)
         if root is None or not os.path.isfile(exe):
-            closure.append((dst_root, " or ".join(roots), "MISSING"))
+            closure.append((install_path, build_rel, "MISSING"))
             continue
         n_app = stage_bundle(
-            entries, root, dst_root,
-            "%s.app bundle file (staged from %s)" % (name, root))
-        closure.append((dst_root, root, "staged %d files" % n_app))
+            entries, root, install_path,
+            "%s.app bundle file (staged from %s)" % (bundle_name, root))
+        closure.append((install_path, root, "staged %d files" % n_app))
         expand_closure([exe], staged, entries, closure, seen)
+
+    # 6c. The canonical macOS names for the ravynOS bundles.
+    for build_rel, bundle_name, install_path in ALIASES:
+        root = bundle_root_for(build_rel, bundle_name)
+        if root is None:
+            closure.append((install_path, build_rel, "MISSING"))
+            continue
+        n_app = stage_bundle(
+            entries, root, install_path,
+            "%s bundle staged at its canonical macOS path" % bundle_name)
+        closure.append((install_path, root, "staged %d files" % n_app))
+
+    # 6d. Plain executables: the pasteboard daemon and the open(1) tool.
+    for build_rel, binary, install_path in BINARIES:
+        build_root = os.path.join(BUILD_SRC, build_rel, binary)
+        repo_root = os.path.join(REPO, build_rel, binary)
+        # The build tree is the only current source; an in-repo copy is
+        # untracked output of an earlier build.
+        src = build_root if os.path.isfile(build_root) else repo_root
+        if not os.path.isfile(src):
+            closure.append((install_path, build_rel, "MISSING"))
+            continue
+        work_copy = os.path.join(HERE, "work",
+                                 build_rel.replace("/", "_") + "_" + binary)
+        if not os.path.isfile(work_copy) or \
+           os.path.getmtime(work_copy) < os.path.getmtime(src):
+            shutil.copy2(src, work_copy)
+        entries.append({
+            "path": install_path,
+            "file": os.path.relpath(work_copy, HERE),
+            "comment": "%s (built from %s)" % (binary, build_rel),
+        })
+        closure.append((install_path, src, "staged"))
+        expand_closure([work_copy], staged, entries, closure, seen)
+
+    # 6e. The launchd jobs of the services the image starts on boot: the
+    #     pasteboard daemon and the in-guest daily driver self test.
+    for job in ("com.ravynos.pasteboardd.json",
+                "com.ravynos.dailydrivertest.json"):
+        job_src = os.path.join(REPO, "SystemLibrary", "LaunchDaemons", job)
+        job_dst = "System/Library/LaunchDaemons/" + job
+        if os.path.isfile(job_src):
+            entries.append({
+                "path": job_dst,
+                "file": os.path.relpath(job_src, HERE),
+                "comment": "launchd job of the daily driver services",
+            })
+        else:
+            closure.append((job_dst, job_src, "MISSING"))
+
     # 7. launchctl and its libjansson dependency. launchd's hardcoded System
     #    bootstrapper execs /bin/launchctl (BSD/sbin/launchd/core.c:7195), so the
     #    binary must sit at that exact path; launchctl's LC_LOAD_DYLIB requires
@@ -454,6 +597,119 @@ def main():
         "text": ETC_RC,
         "comment": "system rc, run by launchctl's System session after LaunchDaemons",
     })
+
+    # 11. The Dock's preferences and the desktop wallpapers.  The image is
+    #     reused between builds and the Dock rewrites its preferences at every
+    #     launch, so a stale tile list and a wallpaper path that no longer
+    #     exists survive every rebuild: the Dock came up with two tiles and a
+    #     grey desktop.  Ship the settings the Dock already defaults to (it
+    #     fills in the tile list and the wallpaper itself) and stage the
+    #     wallpapers the Dock's default path names.
+    entries.append({
+        "path": "Library/Preferences/Dock.plist",
+        "text": DOCK_PREFS,
+        "comment": "Dock preferences (the Dock fills in the tile list and wallpaper)",
+    })
+    wallpaper_root = os.path.join(SDK, "System", "Library", "Desktop Pictures")
+    n_wallpapers = 0
+    if os.path.isdir(wallpaper_root):
+        for name in sorted(os.listdir(wallpaper_root)):
+            src = os.path.join(wallpaper_root, name)
+            if not os.path.isfile(src):
+                continue
+            entries.append({
+                "path": "System/Library/Desktop Pictures/" + name,
+                "file": manifest_source(os.path.realpath(src)),
+                "comment": "desktop wallpaper named by the Dock's default path",
+            })
+            n_wallpapers += 1
+    closure.append(("System/Library/Desktop Pictures", wallpaper_root,
+                    "staged %d files" % n_wallpapers if n_wallpapers else "MISSING"))
+
+    # 11b. Account database.  The Users & Groups pane reads and writes
+    #      /etc/passwd, /etc/master.passwd and /etc/group; without them the pane
+    #      showed an empty list and "add user" appended to a nonexistent file.
+    entries.append({
+        "path": "etc/passwd",
+        "text": ETC_PASSWD,
+        "comment": "account database read by the Users & Groups pane",
+    })
+    entries.append({
+        "path": "etc/master.passwd",
+        "text": ETC_MASTER_PASSWD,
+        "comment": "master password database (SHA-256 hashes)",
+    })
+    entries.append({
+        "path": "etc/group",
+        "text": ETC_GROUP,
+        "comment": "group database; wheel is the admin group",
+    })
+
+    # 11c. LaunchServices' SQL schema lives in its framework resources; the
+    #      scanner reads InitDB.sql (and DBSchema_3_4.sql for upgrades) with
+    #      -pathForResource:, so a staged dylib without them cannot create its
+    #      database ("cannot find InitDB.sql to init launchservices.db").
+    for resource in ("InitDB.sql", "DBSchema_3_4.sql"):
+        rel = ("System/Library/Frameworks/LaunchServices.framework/Versions/A/"
+               "Resources/" + resource)
+        src = os.path.join(SDK, "System", "Library", "Frameworks",
+                           "LaunchServices.framework", "Versions", "A",
+                           "Resources", resource)
+        if os.path.isfile(src):
+            entries.append({
+                "path": rel,
+                "file": manifest_source(os.path.realpath(src)),
+                "comment": "LaunchServices SQL schema resource",
+            })
+        else:
+            closure.append((rel, src, "MISSING"))
+
+    # 12. Application icons.  No bundle in the fleet ships one, so the Dock
+    #     drew its own window.png for twelve different apps.  Generate a
+    #     distinct 64x64 PNG per bundle, rewrite the staged Info.plist with
+    #     CFBundleIconFile, and stage the image beside it.
+    try:
+        import make_app_icons
+
+        icon_dir = os.path.join(HERE, "work", "icons")
+        os.makedirs(icon_dir, exist_ok=True)
+        icon_paths = {}
+        for bundle_id in make_app_icons.ICONS:
+            out = os.path.join(icon_dir, bundle_id + ".png")
+            make_app_icons.render(bundle_id).save(out, "PNG")
+            icon_paths[bundle_id] = out
+
+        info_entries = [e for e in entries
+                        if e["path"].endswith("/Contents/Info.plist")]
+        for entry in info_entries:
+            src = entry.get("file")
+            if src is None:
+                continue
+            src_abs = src if os.path.isabs(src) else os.path.join(HERE, src)
+            if not os.path.isfile(src_abs):
+                continue
+            try:
+                with open(src_abs, "rb") as f:
+                    import plistlib
+                    info = plistlib.load(f)
+            except Exception:
+                continue
+            bundle_id = info.get("CFBundleIdentifier")
+            if bundle_id not in icon_paths:
+                continue
+            info["CFBundleIconFile"] = "icon.png"
+            patched = os.path.join(icon_dir, bundle_id + ".Info.plist")
+            with open(patched, "wb") as f:
+                plistlib.dump(info, f)
+            entry["file"] = os.path.relpath(patched, HERE)
+            bundle_root = entry["path"][:-len("/Contents/Info.plist")]
+            entries.append({
+                "path": bundle_root + "/Contents/Resources/icon.png",
+                "file": os.path.relpath(icon_paths[bundle_id], HERE),
+                "comment": "generated app icon (make_app_icons.py)",
+            })
+    except ImportError:
+        pass
 
     # Dedupe: collapse benign duplicates (same path, same file) to one entry.
     # A genuine conflict (same path, DIFFERENT file) is a real error and exits.

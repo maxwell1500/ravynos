@@ -62,6 +62,12 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
    //NSInvalidAbstractInvocation();
 }
 
+/* Objective-C subscripting (10.8+).  The key is copied by the concrete
+   dictionary's own -setObject:forKey:, exactly as it is there. */
+-(void)setObject:(id)object forKeyedSubscript:(id)key {
+   [self setObject:object forKey:key];
+}
+
 -(void)addEntriesFromDictionary:(NSDictionary *)dictionary {
    NSEnumerator *keyEnum=[dictionary keyEnumerator];
    id key;

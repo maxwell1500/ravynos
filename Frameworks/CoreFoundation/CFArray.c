@@ -550,6 +550,7 @@ CFMutableArrayRef CFArrayCreateMutableCopy(CFAllocatorRef allocator, CFIndex cap
 #endif
 
 CFIndex CFArrayGetCount(CFArrayRef array) {
+    if (!array) return 0;
     CF_OBJC_FUNCDISPATCHV(CFArrayGetTypeID(), CFIndex, (NSArray *)array, count);
     __CFGenericValidateType(array, CFArrayGetTypeID());
     CHECK_FOR_MUTATION(array);
@@ -588,6 +589,7 @@ Boolean CFArrayContainsValue(CFArrayRef array, CFRange range, const void *value)
 }
 
 const void *CFArrayGetValueAtIndex(CFArrayRef array, CFIndex idx) {
+    if (!array) return NULL;
     CF_OBJC_FUNCDISPATCHV(CFArrayGetTypeID(), const void *, (NSArray *)array, objectAtIndex:idx);
     __CFGenericValidateType(array, CFArrayGetTypeID());
     CFAssert2(0 <= idx && idx < __CFArrayGetCount(array), __kCFLogAssertion, "%s(): index (%d) out of bounds", __PRETTY_FUNCTION__, idx);

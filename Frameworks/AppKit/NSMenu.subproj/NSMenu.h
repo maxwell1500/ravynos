@@ -24,6 +24,10 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 + (void)popUpContextMenu:(NSMenu *)menu withEvent:(NSEvent *)event forView:(NSView *)view;
 
+/* The standard App / File / Edit menu with the usual key equivalents. */
++ (NSMenu *)standardApplicationMenuWithAppName:(NSString *)appName
+                             includeDocumentItems:(BOOL)docItems;
+
 - initWithTitle:(NSString *)title;
 
 - (NSMenu *)supermenu;

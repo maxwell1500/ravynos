@@ -108,11 +108,42 @@ kern_return_t _windowServerRPC(void *data, size_t len, void *replyBuf, int *repl
             @"CFBundleIconFile"];
         if(!iconFile)
             iconFile = [b objectForInfoDictionaryKey:@"NSIcon"];
-        NSString *iconPath = [NSString stringWithFormat:@"%@/Contents/Resources/%@",path,iconFile];
+
+        /* Resolve the icon the way Cocoa does: the declared name, then the
+         * name with an extension, then the bundle's conventional icon.png.
+         * The old code built ".../Resources/(null)" whenever the key was
+         * missing, which is every app in the fleet, so each tile fell back
+         * to the Dock's own window.png. */
+        NSString *iconPath = nil;
+        if(iconFile != nil && [iconFile length] > 0) {
+            NSArray *candidates = [NSArray arrayWithObjects:
+                [NSString stringWithFormat:@"%@/Contents/Resources/%@", path, iconFile],
+                [NSString stringWithFormat:@"%@/Contents/Resources/%@.png", path, iconFile],
+                [NSString stringWithFormat:@"%@/Contents/Resources/%@.icns", path, iconFile],
+                nil];
+            unsigned c;
+
+            for(c = 0; c < [candidates count]; c++) {
+                NSString *candidate = [candidates objectAtIndex:c];
+
+                if([[NSFileManager defaultManager] fileExistsAtPath:candidate]) {
+                    iconPath = candidate;
+                    break;
+                }
+            }
+        }
+        if(iconPath == nil) {
+            NSString *fallback = [NSString stringWithFormat:
+                @"%@/Contents/Resources/icon.png", path];
+
+            if([[NSFileManager defaultManager] fileExistsAtPath:fallback])
+                iconPath = fallback;
+        }
 
         _icon = [[NSImageView alloc] initWithFrame:NSMakeRect(
             0,RUNMK_DIAMETER+2*RUNMK_SPACER,size,size)];
-        [_icon setImage:[[NSImage alloc] initWithContentsOfFile:iconPath]];
+        if(iconPath != nil)
+            [_icon setImage:[[NSImage alloc] initWithContentsOfFile:iconPath]];
         [[_icon image] setScalesWhenResized:YES];
         [_icon setImageScaling:NSImageScaleProportionallyUpOrDown];
 
@@ -208,33 +239,26 @@ kern_return_t _windowServerRPC(void *data, size_t len, void *replyBuf, int *repl
     int size = [DockItem iconSize];
     self = [super initWithFrame:NSMakeRect(0,0,size,size+16)];
 
-    NSString *windowPNG = [[NSBundle mainBundle] pathForResource:@"window" ofType:@"png"];
-    _icon = [[NSImageView alloc] initWithFrame:NSMakeRect(
-        size*0.2, RUNMK_DIAMETER+2*RUNMK_SPACER, size-(size*0.2), size-RUNMK_DIAMETER-RUNMK_SPACER)];
-    [_icon setImageScaling:NSImageScaleProportionallyUpOrDown];
-    [_icon setImage:[[NSImage alloc] initWithContentsOfFile:windowPNG]];
-    [[_icon image] setScalesWhenResized:YES];
-
-    _origIcon = _icon;
-    [_icon setHidden:YES];
-    [self addSubview:_icon];
-
-    if(appItem != nil) {
-        _badge = [[NSImageView alloc] initWithFrame:
-            NSMakeRect(0,RUNMK_DIAMETER+2*RUNMK_SPACER,size*0.55,size*0.55)];
-        [_badge setImageScaling:NSImageScaleProportionallyUpOrDown];
-        [_badge setImage:[appItem icon]];
-        [[_badge image] setScalesWhenResized:YES];
-        [self addSubview:_badge];
-    }
+    /* Share the application tile's already-decoded icon.
+     *
+     * This tile used to decode Dock.app/Resources/window.png into a fresh
+     * NSImageView (plus an app-icon badge view).  That path is new code --
+     * before this work the Dock was never told about minimized windows, so it
+     * had never run -- and building those image views here corrupts the Dock's
+     * heap: the very next malloc dies with "Incorrect checksum for freed
+     * object" and the Dock is killed.  Bisected: {window.png decode + views}
+     * alone reproduces it, with or without the badge.
+     *
+     * Compositing the app tile's CGImage directly (which DockView does for
+     * every tile anyway, and which the application tiles prove safe) leaves
+     * the tile visible and clickable without touching that path. */
+    if(appItem != nil && appItem->_iconImage != NULL)
+        _iconImage = CGImageRetain(appItem->_iconImage);
 
     _bundleID = nil;
     _flags = DIF_NORMAL;
     _windows = [NSMutableArray new];
     [_windows addObject:[NSNumber numberWithInteger:window]];
-
-    [_icon setTarget:self];
-    [_icon setAction:@selector(activateWindow:)];
     return self;
 }
 
@@ -243,11 +267,13 @@ kern_return_t _windowServerRPC(void *data, size_t len, void *replyBuf, int *repl
 }
 
 -(void)drawIconInContext:(CGContextRef)context {
-    if(_iconImage == NULL || _icon == nil || context == NULL)
+    if(_iconImage == NULL || context == NULL)
         return;
 
+    /* Window tiles have no _icon view: they composite the application's
+     * CGImage over the whole tile. */
     NSRect tile = [self frame];
-    NSRect box = [_icon frame];
+    NSRect box = (_icon != nil) ? [_icon frame] : [self bounds];
     CGContextDrawImage(context,
         CGRectMake(tile.origin.x + box.origin.x, tile.origin.y + box.origin.y,
                    box.size.width, box.size.height),
@@ -323,7 +349,7 @@ kern_return_t _windowServerRPC(void *data, size_t len, void *replyBuf, int *repl
     return _special;
 }
 
--(unsigned int)window {
+-(unsigned int)dockWindowID {
     if(_windows && [_windows count])
         return [[_windows firstObject] intValue];
     return 0;
@@ -524,6 +550,10 @@ view does not need to draw the application or custom string badges.
 }
 
 -(void)openApp:(id)sender {
+    if(_type == DIT_WINDOW) {
+        [self activateWindow:sender];
+        return;
+    }
     if(![self isRunning]) {
         [self _launchBundle];
     } else {
@@ -549,6 +579,11 @@ view does not need to draw the application or custom string badges.
 }
 
 -(void)_installTileClickProxy {
+    NSView *last = [[self subviews] lastObject];
+    if([last isKindOfClass:[NSTileClickProxy class]]) {
+        [last setFrame:[self bounds]];
+        return;
+    }
     NSMutableArray *ordered = [NSMutableArray new];
     NSArray *subs = [[self subviews] copy];
     for(NSView *v in subs) {

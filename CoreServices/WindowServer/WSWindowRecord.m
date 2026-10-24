@@ -39,8 +39,14 @@
 }
 
 -(void)dealloc {
-    if(_surfaceBuf != NULL)
+    /* Logging this is what makes surface-lifetime bugs visible on the serial console:
+     * if a munmap here is followed by a draw of the same window, the fault address in
+     * the corpse report lands inside bytes that were just unmapped. */
+    if(_surfaceBuf != NULL) {
+        fprintf(stderr, "[WR] MUNMAP path=%s buf=0x%zx size=0x%zx\n",
+            _shmPath ? [_shmPath cString] : "(none)", (size_t)_surfaceBuf, (size_t)_bufSize);
         munmap(_surfaceBuf, _bufSize);
+    }
     if(shm_unlink([_shmPath cString]) != 0)
         perror("shm_unlink");
 }

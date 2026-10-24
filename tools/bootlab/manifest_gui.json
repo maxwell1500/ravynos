@@ -114,11 +114,7 @@
     "var/log",
     "var/run",
     "var/tmp",
-    "tmp",
-    "System/Library/PreferencePanes",
-    "System/Library/PreferencePanes/General.prefsPane",
-    "System/Library/PreferencePanes/General.prefsPane/Contents",
-    "System/Library/PreferencePanes/General.prefsPane/Resources"
+    "tmp"
   ],
   "files": [
     {
@@ -837,109 +833,34 @@
       "comment": "GUI LaunchAgent from the repo's SystemLibrary/"
     },
     {
-      "path": "System/Library/CoreServices/Dock.app/Dock",
-      "file": "work/Dock.app/Contents/ravynOS/Dock",
-      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Dock.app)"
+      "path": "System/Library/CoreServices/Filer.app/Filer",
+      "file": "work/CoreServices_Filer_Filer.app/Contents/ravynOS/Filer",
+      "comment": "Filer.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/CoreServices_Filer_Filer.app)"
     },
     {
-      "path": "System/Library/CoreServices/Dock.app/Contents/Info.plist",
-      "file": "work/Dock.app/Contents/Info.plist",
-      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Dock.app)"
+      "path": "System/Library/CoreServices/Filer.app/Contents/Info.plist",
+      "file": "work/CoreServices_Filer_Filer.app/Contents/Info.plist",
+      "comment": "Filer.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/CoreServices_Filer_Filer.app)"
     },
     {
-      "path": "System/Library/CoreServices/Dock.app/Contents/Resources/Dock.png",
-      "file": "work/Dock.app/Contents/Resources/Dock.png",
-      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Dock.app)"
+      "path": "System/Library/CoreServices/Filer.app/Contents/Resources/filer.png",
+      "file": "work/CoreServices_Filer_Filer.app/Contents/Resources/filer.png",
+      "comment": "Filer.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/CoreServices_Filer_Filer.app)"
     },
     {
-      "path": "System/Library/CoreServices/Dock.app/Contents/Resources/running.png",
-      "file": "work/Dock.app/Contents/Resources/running.png",
-      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Dock.app)"
+      "path": "System/Library/CoreServices/Filer.app/Contents/ravynOS/Filer",
+      "file": "work/CoreServices_Filer_Filer.app/Contents/ravynOS/Filer",
+      "comment": "Filer.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/CoreServices_Filer_Filer.app)"
     },
     {
-      "path": "System/Library/CoreServices/Dock.app/Contents/Resources/window.png",
-      "file": "work/Dock.app/Contents/Resources/window.png",
-      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Dock.app)"
+      "path": "System/Library/CoreServices/Filer.app/Contents/ravynOS/Filer.debug",
+      "file": "work/CoreServices_Filer_Filer.app/Contents/ravynOS/Filer.debug",
+      "comment": "Filer.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/CoreServices_Filer_Filer.app)"
     },
     {
-      "path": "System/Library/CoreServices/Dock.app/Contents/Resources/Downloads.app/Downloads",
-      "file": "work/Dock.app/Contents/Resources/Downloads.app/Contents/ravynOS/Downloads",
-      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Dock.app)"
-    },
-    {
-      "path": "System/Library/CoreServices/Dock.app/Contents/Resources/Downloads.app/Contents/Info.plist",
-      "file": "work/Dock.app/Contents/Resources/Downloads.app/Contents/Info.plist",
-      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Dock.app)"
-    },
-    {
-      "path": "System/Library/CoreServices/Dock.app/Contents/Resources/Downloads.app/Contents/Resources/Downloads.png",
-      "file": "work/Dock.app/Contents/Resources/Downloads.app/Contents/Resources/Downloads.png",
-      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Dock.app)"
-    },
-    {
-      "path": "System/Library/CoreServices/Dock.app/Contents/Resources/Downloads.app/Contents/ravynOS/Downloads",
-      "file": "work/Dock.app/Contents/Resources/Downloads.app/Contents/ravynOS/Downloads",
-      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Dock.app)"
-    },
-    {
-      "path": "System/Library/CoreServices/Dock.app/Contents/Resources/Downloads.app/Contents/ravynOS/Downloads.debug",
-      "file": "work/Dock.app/Contents/Resources/Downloads.app/Contents/ravynOS/Downloads.debug",
-      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Dock.app)"
-    },
-    {
-      "path": "System/Library/CoreServices/Dock.app/Contents/Resources/Downloads.app/Contents/ravynOS/Downloads.full",
-      "file": "work/Dock.app/Contents/Resources/Downloads.app/Contents/ravynOS/Downloads.full",
-      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Dock.app)"
-    },
-    {
-      "path": "System/Library/CoreServices/Dock.app/Contents/Resources/Trash.app/Trash",
-      "file": "work/Dock.app/Contents/Resources/Trash.app/Contents/ravynOS/Trash",
-      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Dock.app)"
-    },
-    {
-      "path": "System/Library/CoreServices/Dock.app/Contents/Resources/Trash.app/Contents/Info.plist",
-      "file": "work/Dock.app/Contents/Resources/Trash.app/Contents/Info.plist",
-      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Dock.app)"
-    },
-    {
-      "path": "System/Library/CoreServices/Dock.app/Contents/Resources/Trash.app/Contents/Resources/Trash.png",
-      "file": "work/Dock.app/Contents/Resources/Trash.app/Contents/Resources/Trash.png",
-      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Dock.app)"
-    },
-    {
-      "path": "System/Library/CoreServices/Dock.app/Contents/Resources/Trash.app/Contents/Resources/Trash_full.png",
-      "file": "work/Dock.app/Contents/Resources/Trash.app/Contents/Resources/Trash_full.png",
-      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Dock.app)"
-    },
-    {
-      "path": "System/Library/CoreServices/Dock.app/Contents/Resources/Trash.app/Contents/ravynOS/Trash",
-      "file": "work/Dock.app/Contents/Resources/Trash.app/Contents/ravynOS/Trash",
-      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Dock.app)"
-    },
-    {
-      "path": "System/Library/CoreServices/Dock.app/Contents/Resources/Trash.app/Contents/ravynOS/Trash.debug",
-      "file": "work/Dock.app/Contents/Resources/Trash.app/Contents/ravynOS/Trash.debug",
-      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Dock.app)"
-    },
-    {
-      "path": "System/Library/CoreServices/Dock.app/Contents/Resources/Trash.app/Contents/ravynOS/Trash.full",
-      "file": "work/Dock.app/Contents/Resources/Trash.app/Contents/ravynOS/Trash.full",
-      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Dock.app)"
-    },
-    {
-      "path": "System/Library/CoreServices/Dock.app/Contents/ravynOS/Dock",
-      "file": "work/Dock.app/Contents/ravynOS/Dock",
-      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Dock.app)"
-    },
-    {
-      "path": "System/Library/CoreServices/Dock.app/Contents/ravynOS/Dock.debug",
-      "file": "work/Dock.app/Contents/ravynOS/Dock.debug",
-      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Dock.app)"
-    },
-    {
-      "path": "System/Library/CoreServices/Dock.app/Contents/ravynOS/Dock.full",
-      "file": "work/Dock.app/Contents/ravynOS/Dock.full",
-      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Dock.app)"
+      "path": "System/Library/CoreServices/Filer.app/Contents/ravynOS/Filer.full",
+      "file": "work/CoreServices_Filer_Filer.app/Contents/ravynOS/Filer.full",
+      "comment": "Filer.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/CoreServices_Filer_Filer.app)"
     },
     {
       "path": "System/Library/Frameworks/LaunchServices.framework/Versions/A/LaunchServices",
@@ -952,34 +873,564 @@
       "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
     },
     {
-      "path": "System/Library/CoreServices/Filer.app/Filer",
-      "file": "work/Filer.app/Contents/ravynOS/Filer",
-      "comment": "Filer.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Filer.app)"
+      "path": "System/Library/CoreServices/Dock.app/Dock",
+      "file": "work/CoreServices_Dock_Dock.app/Contents/ravynOS/Dock",
+      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/CoreServices_Dock_Dock.app)"
     },
     {
-      "path": "System/Library/CoreServices/Filer.app/Contents/Info.plist",
-      "file": "work/Filer.app/Contents/Info.plist",
-      "comment": "Filer.app bundle metadata; without it NSBundle has no CFBundleIconFile/CFBundleDisplayName, so the Dock's Filer tile drew no icon and no label"
+      "path": "System/Library/CoreServices/Dock.app/Contents/Info.plist",
+      "file": "work/CoreServices_Dock_Dock.app/Contents/Info.plist",
+      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/CoreServices_Dock_Dock.app)"
     },
     {
-      "path": "System/Library/CoreServices/Filer.app/Contents/Resources/filer.png",
-      "file": "work/Filer.app/Contents/Resources/filer.png",
-      "comment": "Filer.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Filer.app)"
+      "path": "System/Library/CoreServices/Dock.app/Contents/Resources/Dock.png",
+      "file": "work/CoreServices_Dock_Dock.app/Contents/Resources/Dock.png",
+      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/CoreServices_Dock_Dock.app)"
     },
     {
-      "path": "System/Library/CoreServices/Filer.app/Contents/ravynOS/Filer",
-      "file": "work/Filer.app/Contents/ravynOS/Filer",
-      "comment": "Filer.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Filer.app)"
+      "path": "System/Library/CoreServices/Dock.app/Contents/Resources/running.png",
+      "file": "work/CoreServices_Dock_Dock.app/Contents/Resources/running.png",
+      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/CoreServices_Dock_Dock.app)"
     },
     {
-      "path": "System/Library/CoreServices/Filer.app/Contents/ravynOS/Filer.debug",
-      "file": "work/Filer.app/Contents/ravynOS/Filer.debug",
-      "comment": "Filer.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Filer.app)"
+      "path": "System/Library/CoreServices/Dock.app/Contents/Resources/window.png",
+      "file": "work/CoreServices_Dock_Dock.app/Contents/Resources/window.png",
+      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/CoreServices_Dock_Dock.app)"
     },
     {
-      "path": "System/Library/CoreServices/Filer.app/Contents/ravynOS/Filer.full",
-      "file": "work/Filer.app/Contents/ravynOS/Filer.full",
-      "comment": "Filer.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Filer.app)"
+      "path": "System/Library/CoreServices/Dock.app/Contents/Resources/Downloads.app/Downloads",
+      "file": "work/CoreServices_Dock_Dock.app/Contents/Resources/Downloads.app/Contents/ravynOS/Downloads",
+      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/CoreServices_Dock_Dock.app)"
+    },
+    {
+      "path": "System/Library/CoreServices/Dock.app/Contents/Resources/Downloads.app/Contents/Info.plist",
+      "file": "work/CoreServices_Dock_Dock.app/Contents/Resources/Downloads.app/Contents/Info.plist",
+      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/CoreServices_Dock_Dock.app)"
+    },
+    {
+      "path": "System/Library/CoreServices/Dock.app/Contents/Resources/Downloads.app/Contents/Resources/Downloads.png",
+      "file": "work/CoreServices_Dock_Dock.app/Contents/Resources/Downloads.app/Contents/Resources/Downloads.png",
+      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/CoreServices_Dock_Dock.app)"
+    },
+    {
+      "path": "System/Library/CoreServices/Dock.app/Contents/Resources/Downloads.app/Contents/ravynOS/Downloads",
+      "file": "work/CoreServices_Dock_Dock.app/Contents/Resources/Downloads.app/Contents/ravynOS/Downloads",
+      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/CoreServices_Dock_Dock.app)"
+    },
+    {
+      "path": "System/Library/CoreServices/Dock.app/Contents/Resources/Downloads.app/Contents/ravynOS/Downloads.debug",
+      "file": "work/CoreServices_Dock_Dock.app/Contents/Resources/Downloads.app/Contents/ravynOS/Downloads.debug",
+      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/CoreServices_Dock_Dock.app)"
+    },
+    {
+      "path": "System/Library/CoreServices/Dock.app/Contents/Resources/Downloads.app/Contents/ravynOS/Downloads.full",
+      "file": "work/CoreServices_Dock_Dock.app/Contents/Resources/Downloads.app/Contents/ravynOS/Downloads.full",
+      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/CoreServices_Dock_Dock.app)"
+    },
+    {
+      "path": "System/Library/CoreServices/Dock.app/Contents/Resources/Trash.app/Trash",
+      "file": "work/CoreServices_Dock_Dock.app/Contents/Resources/Trash.app/Contents/ravynOS/Trash",
+      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/CoreServices_Dock_Dock.app)"
+    },
+    {
+      "path": "System/Library/CoreServices/Dock.app/Contents/Resources/Trash.app/Contents/Info.plist",
+      "file": "work/CoreServices_Dock_Dock.app/Contents/Resources/Trash.app/Contents/Info.plist",
+      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/CoreServices_Dock_Dock.app)"
+    },
+    {
+      "path": "System/Library/CoreServices/Dock.app/Contents/Resources/Trash.app/Contents/Resources/Trash.png",
+      "file": "work/CoreServices_Dock_Dock.app/Contents/Resources/Trash.app/Contents/Resources/Trash.png",
+      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/CoreServices_Dock_Dock.app)"
+    },
+    {
+      "path": "System/Library/CoreServices/Dock.app/Contents/Resources/Trash.app/Contents/Resources/Trash_full.png",
+      "file": "work/CoreServices_Dock_Dock.app/Contents/Resources/Trash.app/Contents/Resources/Trash_full.png",
+      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/CoreServices_Dock_Dock.app)"
+    },
+    {
+      "path": "System/Library/CoreServices/Dock.app/Contents/Resources/Trash.app/Contents/ravynOS/Trash",
+      "file": "work/CoreServices_Dock_Dock.app/Contents/Resources/Trash.app/Contents/ravynOS/Trash",
+      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/CoreServices_Dock_Dock.app)"
+    },
+    {
+      "path": "System/Library/CoreServices/Dock.app/Contents/Resources/Trash.app/Contents/ravynOS/Trash.debug",
+      "file": "work/CoreServices_Dock_Dock.app/Contents/Resources/Trash.app/Contents/ravynOS/Trash.debug",
+      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/CoreServices_Dock_Dock.app)"
+    },
+    {
+      "path": "System/Library/CoreServices/Dock.app/Contents/Resources/Trash.app/Contents/ravynOS/Trash.full",
+      "file": "work/CoreServices_Dock_Dock.app/Contents/Resources/Trash.app/Contents/ravynOS/Trash.full",
+      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/CoreServices_Dock_Dock.app)"
+    },
+    {
+      "path": "System/Library/CoreServices/Dock.app/Contents/ravynOS/Dock",
+      "file": "work/CoreServices_Dock_Dock.app/Contents/ravynOS/Dock",
+      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/CoreServices_Dock_Dock.app)"
+    },
+    {
+      "path": "System/Library/CoreServices/Dock.app/Contents/ravynOS/Dock.debug",
+      "file": "work/CoreServices_Dock_Dock.app/Contents/ravynOS/Dock.debug",
+      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/CoreServices_Dock_Dock.app)"
+    },
+    {
+      "path": "System/Library/CoreServices/Dock.app/Contents/ravynOS/Dock.full",
+      "file": "work/CoreServices_Dock_Dock.app/Contents/ravynOS/Dock.full",
+      "comment": "Dock.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/CoreServices_Dock_Dock.app)"
+    },
+    {
+      "path": "System/Library/CoreServices/Archive Utility.app/Archive Utility",
+      "file": "work/CoreServices_ArchiveUtility_Archive Utility.app/Contents/ravynOS/Archive Utility",
+      "comment": "Archive Utility.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/CoreServices_ArchiveUtility_Archive Utility.app)"
+    },
+    {
+      "path": "System/Library/CoreServices/Archive Utility.app/Contents/Info.plist",
+      "file": "work/icons/com.ravynos.ArchiveUtility.Info.plist",
+      "comment": "Archive Utility.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/CoreServices_ArchiveUtility_Archive Utility.app)"
+    },
+    {
+      "path": "System/Library/CoreServices/Archive Utility.app/Contents/PkgInfo",
+      "file": "work/CoreServices_ArchiveUtility_Archive Utility.app/Contents/PkgInfo",
+      "comment": "Archive Utility.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/CoreServices_ArchiveUtility_Archive Utility.app)"
+    },
+    {
+      "path": "System/Library/CoreServices/Archive Utility.app/Contents/ravynOS/Archive Utility",
+      "file": "work/CoreServices_ArchiveUtility_Archive Utility.app/Contents/ravynOS/Archive Utility",
+      "comment": "Archive Utility.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/CoreServices_ArchiveUtility_Archive Utility.app)"
+    },
+    {
+      "path": "System/Library/CoreServices/Archive Utility.app/Contents/ravynOS/Archive_Utility.debug",
+      "file": "work/CoreServices_ArchiveUtility_Archive Utility.app/Contents/ravynOS/Archive_Utility.debug",
+      "comment": "Archive Utility.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/CoreServices_ArchiveUtility_Archive Utility.app)"
+    },
+    {
+      "path": "System/Library/CoreServices/Archive Utility.app/Contents/ravynOS/Archive_Utility.full",
+      "file": "work/CoreServices_ArchiveUtility_Archive Utility.app/Contents/ravynOS/Archive_Utility.full",
+      "comment": "Archive Utility.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/CoreServices_ArchiveUtility_Archive Utility.app)"
+    },
+    {
+      "path": "System/Library/CoreServices/System Preferences.app/System Preferences",
+      "file": "work/SysApps_Prefs_System Preferences.app/Contents/ravynOS/System Preferences",
+      "comment": "System Preferences.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/SysApps_Prefs_System Preferences.app)"
+    },
+    {
+      "path": "System/Library/CoreServices/System Preferences.app/Contents/Info.plist",
+      "file": "work/icons/com.ravynos.Preferences.Info.plist",
+      "comment": "System Preferences.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/SysApps_Prefs_System Preferences.app)"
+    },
+    {
+      "path": "System/Library/CoreServices/System Preferences.app/Contents/ravynOS/System Preferences",
+      "file": "work/SysApps_Prefs_System Preferences.app/Contents/ravynOS/System Preferences",
+      "comment": "System Preferences.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/SysApps_Prefs_System Preferences.app)"
+    },
+    {
+      "path": "Applications/Utilities/Terminal.app/Terminal",
+      "file": "work/Applications_Utilities_Terminal_Terminal.app/Contents/ravynOS/Terminal",
+      "comment": "Terminal.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Utilities_Terminal_Terminal.app)"
+    },
+    {
+      "path": "Applications/Utilities/Terminal.app/Contents/Info.plist",
+      "file": "work/icons/com.ravynos.Terminal.Info.plist",
+      "comment": "Terminal.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Utilities_Terminal_Terminal.app)"
+    },
+    {
+      "path": "Applications/Utilities/Terminal.app/Contents/ravynOS/Terminal",
+      "file": "work/Applications_Utilities_Terminal_Terminal.app/Contents/ravynOS/Terminal",
+      "comment": "Terminal.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Utilities_Terminal_Terminal.app)"
+    },
+    {
+      "path": "Applications/Utilities/Terminal.app/Contents/ravynOS/Terminal.debug",
+      "file": "work/Applications_Utilities_Terminal_Terminal.app/Contents/ravynOS/Terminal.debug",
+      "comment": "Terminal.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Utilities_Terminal_Terminal.app)"
+    },
+    {
+      "path": "Applications/Utilities/Terminal.app/Contents/ravynOS/Terminal.full",
+      "file": "work/Applications_Utilities_Terminal_Terminal.app/Contents/ravynOS/Terminal.full",
+      "comment": "Terminal.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Utilities_Terminal_Terminal.app)"
+    },
+    {
+      "path": "Applications/TextEdit.app/TextEdit",
+      "file": "work/Applications_TextEdit_TextEdit.app/Contents/ravynOS/TextEdit",
+      "comment": "TextEdit.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_TextEdit_TextEdit.app)"
+    },
+    {
+      "path": "Applications/TextEdit.app/Contents/Info.plist",
+      "file": "work/icons/com.ravynos.TextEdit.Info.plist",
+      "comment": "TextEdit.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_TextEdit_TextEdit.app)"
+    },
+    {
+      "path": "Applications/TextEdit.app/Contents/PkgInfo",
+      "file": "work/Applications_TextEdit_TextEdit.app/Contents/PkgInfo",
+      "comment": "TextEdit.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_TextEdit_TextEdit.app)"
+    },
+    {
+      "path": "Applications/TextEdit.app/Contents/ravynOS/TextEdit",
+      "file": "work/Applications_TextEdit_TextEdit.app/Contents/ravynOS/TextEdit",
+      "comment": "TextEdit.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_TextEdit_TextEdit.app)"
+    },
+    {
+      "path": "Applications/TextEdit.app/Contents/ravynOS/TextEdit.debug",
+      "file": "work/Applications_TextEdit_TextEdit.app/Contents/ravynOS/TextEdit.debug",
+      "comment": "TextEdit.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_TextEdit_TextEdit.app)"
+    },
+    {
+      "path": "Applications/TextEdit.app/Contents/ravynOS/TextEdit.full",
+      "file": "work/Applications_TextEdit_TextEdit.app/Contents/ravynOS/TextEdit.full",
+      "comment": "TextEdit.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_TextEdit_TextEdit.app)"
+    },
+    {
+      "path": "Applications/Calculator.app/Calculator",
+      "file": "work/Applications_Calculator_Calculator.app/Contents/ravynOS/Calculator",
+      "comment": "Calculator.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Calculator_Calculator.app)"
+    },
+    {
+      "path": "Applications/Calculator.app/Contents/Info.plist",
+      "file": "work/icons/com.ravynos.Calculator.Info.plist",
+      "comment": "Calculator.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Calculator_Calculator.app)"
+    },
+    {
+      "path": "Applications/Calculator.app/Contents/PkgInfo",
+      "file": "work/Applications_Calculator_Calculator.app/Contents/PkgInfo",
+      "comment": "Calculator.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Calculator_Calculator.app)"
+    },
+    {
+      "path": "Applications/Calculator.app/Contents/ravynOS/Calculator",
+      "file": "work/Applications_Calculator_Calculator.app/Contents/ravynOS/Calculator",
+      "comment": "Calculator.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Calculator_Calculator.app)"
+    },
+    {
+      "path": "Applications/Calculator.app/Contents/ravynOS/Calculator.debug",
+      "file": "work/Applications_Calculator_Calculator.app/Contents/ravynOS/Calculator.debug",
+      "comment": "Calculator.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Calculator_Calculator.app)"
+    },
+    {
+      "path": "Applications/Calculator.app/Contents/ravynOS/Calculator.full",
+      "file": "work/Applications_Calculator_Calculator.app/Contents/ravynOS/Calculator.full",
+      "comment": "Calculator.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Calculator_Calculator.app)"
+    },
+    {
+      "path": "Applications/Preview.app/Preview",
+      "file": "work/Applications_Preview_Preview.app/Contents/ravynOS/Preview",
+      "comment": "Preview.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Preview_Preview.app)"
+    },
+    {
+      "path": "Applications/Preview.app/Contents/Info.plist",
+      "file": "work/icons/com.ravynos.Preview.Info.plist",
+      "comment": "Preview.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Preview_Preview.app)"
+    },
+    {
+      "path": "Applications/Preview.app/Contents/PkgInfo",
+      "file": "work/Applications_Preview_Preview.app/Contents/PkgInfo",
+      "comment": "Preview.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Preview_Preview.app)"
+    },
+    {
+      "path": "Applications/Preview.app/Contents/ravynOS/Preview",
+      "file": "work/Applications_Preview_Preview.app/Contents/ravynOS/Preview",
+      "comment": "Preview.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Preview_Preview.app)"
+    },
+    {
+      "path": "Applications/Preview.app/Contents/ravynOS/Preview.debug",
+      "file": "work/Applications_Preview_Preview.app/Contents/ravynOS/Preview.debug",
+      "comment": "Preview.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Preview_Preview.app)"
+    },
+    {
+      "path": "Applications/Preview.app/Contents/ravynOS/Preview.full",
+      "file": "work/Applications_Preview_Preview.app/Contents/ravynOS/Preview.full",
+      "comment": "Preview.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Preview_Preview.app)"
+    },
+    {
+      "path": "Applications/Font Book.app/Font Book",
+      "file": "work/Applications_FontBook_Font Book.app/Contents/ravynOS/Font Book",
+      "comment": "Font Book.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_FontBook_Font Book.app)"
+    },
+    {
+      "path": "Applications/Font Book.app/Contents/Info.plist",
+      "file": "work/icons/com.ravynos.FontBook.Info.plist",
+      "comment": "Font Book.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_FontBook_Font Book.app)"
+    },
+    {
+      "path": "Applications/Font Book.app/Contents/PkgInfo",
+      "file": "work/Applications_FontBook_Font Book.app/Contents/PkgInfo",
+      "comment": "Font Book.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_FontBook_Font Book.app)"
+    },
+    {
+      "path": "Applications/Font Book.app/Contents/ravynOS/Font Book",
+      "file": "work/Applications_FontBook_Font Book.app/Contents/ravynOS/Font Book",
+      "comment": "Font Book.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_FontBook_Font Book.app)"
+    },
+    {
+      "path": "Applications/Font Book.app/Contents/ravynOS/Font_Book.debug",
+      "file": "work/Applications_FontBook_Font Book.app/Contents/ravynOS/Font_Book.debug",
+      "comment": "Font Book.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_FontBook_Font Book.app)"
+    },
+    {
+      "path": "Applications/Font Book.app/Contents/ravynOS/Font_Book.full",
+      "file": "work/Applications_FontBook_Font Book.app/Contents/ravynOS/Font_Book.full",
+      "comment": "Font Book.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_FontBook_Font Book.app)"
+    },
+    {
+      "path": "Applications/Utilities/Screenshot.app/Screenshot",
+      "file": "work/Applications_Utilities_Screenshot_Screenshot.app/Contents/ravynOS/Screenshot",
+      "comment": "Screenshot.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Utilities_Screenshot_Screenshot.app)"
+    },
+    {
+      "path": "Applications/Utilities/Screenshot.app/Contents/Info.plist",
+      "file": "work/icons/com.ravynos.Screenshot.Info.plist",
+      "comment": "Screenshot.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Utilities_Screenshot_Screenshot.app)"
+    },
+    {
+      "path": "Applications/Utilities/Screenshot.app/Contents/PkgInfo",
+      "file": "work/Applications_Utilities_Screenshot_Screenshot.app/Contents/PkgInfo",
+      "comment": "Screenshot.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Utilities_Screenshot_Screenshot.app)"
+    },
+    {
+      "path": "Applications/Utilities/Screenshot.app/Contents/ravynOS/Screenshot",
+      "file": "work/Applications_Utilities_Screenshot_Screenshot.app/Contents/ravynOS/Screenshot",
+      "comment": "Screenshot.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Utilities_Screenshot_Screenshot.app)"
+    },
+    {
+      "path": "Applications/Utilities/Screenshot.app/Contents/ravynOS/Screenshot.debug",
+      "file": "work/Applications_Utilities_Screenshot_Screenshot.app/Contents/ravynOS/Screenshot.debug",
+      "comment": "Screenshot.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Utilities_Screenshot_Screenshot.app)"
+    },
+    {
+      "path": "Applications/Utilities/Screenshot.app/Contents/ravynOS/Screenshot.full",
+      "file": "work/Applications_Utilities_Screenshot_Screenshot.app/Contents/ravynOS/Screenshot.full",
+      "comment": "Screenshot.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Utilities_Screenshot_Screenshot.app)"
+    },
+    {
+      "path": "Applications/Utilities/Activity Monitor.app/Activity Monitor",
+      "file": "work/Applications_Utilities_ActivityMonitor_Activity Monitor.app/Contents/ravynOS/Activity Monitor",
+      "comment": "Activity Monitor.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Utilities_ActivityMonitor_Activity Monitor.app)"
+    },
+    {
+      "path": "Applications/Utilities/Activity Monitor.app/Activity_Monitor.app/Activity Monitor",
+      "file": "work/Applications_Utilities_ActivityMonitor_Activity Monitor.app/Activity_Monitor.app/Contents/ravynOS/Activity Monitor",
+      "comment": "Activity Monitor.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Utilities_ActivityMonitor_Activity Monitor.app)"
+    },
+    {
+      "path": "Applications/Utilities/Activity Monitor.app/Activity_Monitor.app/Contents/Info.plist",
+      "file": "work/icons/com.ravynos.ActivityMonitor.Info.plist",
+      "comment": "Activity Monitor.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Utilities_ActivityMonitor_Activity Monitor.app)"
+    },
+    {
+      "path": "Applications/Utilities/Activity Monitor.app/Activity_Monitor.app/Contents/PkgInfo",
+      "file": "work/Applications_Utilities_ActivityMonitor_Activity Monitor.app/Activity_Monitor.app/Contents/PkgInfo",
+      "comment": "Activity Monitor.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Utilities_ActivityMonitor_Activity Monitor.app)"
+    },
+    {
+      "path": "Applications/Utilities/Activity Monitor.app/Activity_Monitor.app/Contents/ravynOS/Activity Monitor",
+      "file": "work/Applications_Utilities_ActivityMonitor_Activity Monitor.app/Activity_Monitor.app/Contents/ravynOS/Activity Monitor",
+      "comment": "Activity Monitor.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Utilities_ActivityMonitor_Activity Monitor.app)"
+    },
+    {
+      "path": "Applications/Utilities/Activity Monitor.app/Activity_Monitor.app/Contents/ravynOS/Activity_Monitor.debug",
+      "file": "work/Applications_Utilities_ActivityMonitor_Activity Monitor.app/Activity_Monitor.app/Contents/ravynOS/Activity_Monitor.debug",
+      "comment": "Activity Monitor.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Utilities_ActivityMonitor_Activity Monitor.app)"
+    },
+    {
+      "path": "Applications/Utilities/Activity Monitor.app/Activity_Monitor.app/Contents/ravynOS/Activity_Monitor.full",
+      "file": "work/Applications_Utilities_ActivityMonitor_Activity Monitor.app/Activity_Monitor.app/Contents/ravynOS/Activity_Monitor.full",
+      "comment": "Activity Monitor.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Utilities_ActivityMonitor_Activity Monitor.app)"
+    },
+    {
+      "path": "Applications/Utilities/Activity Monitor.app/Contents/Info.plist",
+      "file": "work/icons/com.ravynos.ActivityMonitor.Info.plist",
+      "comment": "Activity Monitor.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Utilities_ActivityMonitor_Activity Monitor.app)"
+    },
+    {
+      "path": "Applications/Utilities/Activity Monitor.app/Contents/PkgInfo",
+      "file": "work/Applications_Utilities_ActivityMonitor_Activity Monitor.app/Contents/PkgInfo",
+      "comment": "Activity Monitor.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Utilities_ActivityMonitor_Activity Monitor.app)"
+    },
+    {
+      "path": "Applications/Utilities/Activity Monitor.app/Contents/ravynOS/Activity Monitor",
+      "file": "work/Applications_Utilities_ActivityMonitor_Activity Monitor.app/Contents/ravynOS/Activity Monitor",
+      "comment": "Activity Monitor.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Utilities_ActivityMonitor_Activity Monitor.app)"
+    },
+    {
+      "path": "Applications/Utilities/Activity Monitor.app/Contents/ravynOS/Activity_Monitor.debug",
+      "file": "work/Applications_Utilities_ActivityMonitor_Activity Monitor.app/Contents/ravynOS/Activity_Monitor.debug",
+      "comment": "Activity Monitor.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Utilities_ActivityMonitor_Activity Monitor.app)"
+    },
+    {
+      "path": "Applications/Utilities/Activity Monitor.app/Contents/ravynOS/Activity_Monitor.full",
+      "file": "work/Applications_Utilities_ActivityMonitor_Activity Monitor.app/Contents/ravynOS/Activity_Monitor.full",
+      "comment": "Activity Monitor.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Utilities_ActivityMonitor_Activity Monitor.app)"
+    },
+    {
+      "path": "Applications/Utilities/Disk Utility.app/Disk Utility",
+      "file": "work/Applications_Utilities_DiskUtility_Disk Utility.app/Contents/ravynOS/Disk Utility",
+      "comment": "Disk Utility.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Utilities_DiskUtility_Disk Utility.app)"
+    },
+    {
+      "path": "Applications/Utilities/Disk Utility.app/Contents/Info.plist",
+      "file": "work/icons/com.ravynos.DiskUtility.Info.plist",
+      "comment": "Disk Utility.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Utilities_DiskUtility_Disk Utility.app)"
+    },
+    {
+      "path": "Applications/Utilities/Disk Utility.app/Contents/PkgInfo",
+      "file": "work/Applications_Utilities_DiskUtility_Disk Utility.app/Contents/PkgInfo",
+      "comment": "Disk Utility.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Utilities_DiskUtility_Disk Utility.app)"
+    },
+    {
+      "path": "Applications/Utilities/Disk Utility.app/Contents/ravynOS/Disk Utility",
+      "file": "work/Applications_Utilities_DiskUtility_Disk Utility.app/Contents/ravynOS/Disk Utility",
+      "comment": "Disk Utility.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Utilities_DiskUtility_Disk Utility.app)"
+    },
+    {
+      "path": "Applications/Utilities/Disk Utility.app/Contents/ravynOS/Disk_Utility.debug",
+      "file": "work/Applications_Utilities_DiskUtility_Disk Utility.app/Contents/ravynOS/Disk_Utility.debug",
+      "comment": "Disk Utility.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Utilities_DiskUtility_Disk Utility.app)"
+    },
+    {
+      "path": "Applications/Utilities/Disk Utility.app/Contents/ravynOS/Disk_Utility.full",
+      "file": "work/Applications_Utilities_DiskUtility_Disk Utility.app/Contents/ravynOS/Disk_Utility.full",
+      "comment": "Disk Utility.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Utilities_DiskUtility_Disk Utility.app)"
+    },
+    {
+      "path": "Applications/Utilities/Console.app/Console",
+      "file": "work/Applications_Utilities_Console_Console.app/Contents/ravynOS/Console",
+      "comment": "Console.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Utilities_Console_Console.app)"
+    },
+    {
+      "path": "Applications/Utilities/Console.app/Contents/Info.plist",
+      "file": "work/icons/com.ravynos.Console.Info.plist",
+      "comment": "Console.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Utilities_Console_Console.app)"
+    },
+    {
+      "path": "Applications/Utilities/Console.app/Contents/PkgInfo",
+      "file": "work/Applications_Utilities_Console_Console.app/Contents/PkgInfo",
+      "comment": "Console.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Utilities_Console_Console.app)"
+    },
+    {
+      "path": "Applications/Utilities/Console.app/Contents/ravynOS/Console",
+      "file": "work/Applications_Utilities_Console_Console.app/Contents/ravynOS/Console",
+      "comment": "Console.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Utilities_Console_Console.app)"
+    },
+    {
+      "path": "Applications/Utilities/Console.app/Contents/ravynOS/Console.debug",
+      "file": "work/Applications_Utilities_Console_Console.app/Contents/ravynOS/Console.debug",
+      "comment": "Console.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Utilities_Console_Console.app)"
+    },
+    {
+      "path": "Applications/Utilities/Console.app/Contents/ravynOS/Console.full",
+      "file": "work/Applications_Utilities_Console_Console.app/Contents/ravynOS/Console.full",
+      "comment": "Console.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Utilities_Console_Console.app)"
+    },
+    {
+      "path": "Applications/Utilities/Keychain Access.app/Keychain Access",
+      "file": "work/Applications_Utilities_KeychainAccess_Keychain Access.app/Contents/ravynOS/Keychain Access",
+      "comment": "Keychain Access.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Utilities_KeychainAccess_Keychain Access.app)"
+    },
+    {
+      "path": "Applications/Utilities/Keychain Access.app/Contents/Info.plist",
+      "file": "work/icons/com.ravynos.KeychainAccess.Info.plist",
+      "comment": "Keychain Access.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Utilities_KeychainAccess_Keychain Access.app)"
+    },
+    {
+      "path": "Applications/Utilities/Keychain Access.app/Contents/PkgInfo",
+      "file": "work/Applications_Utilities_KeychainAccess_Keychain Access.app/Contents/PkgInfo",
+      "comment": "Keychain Access.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Utilities_KeychainAccess_Keychain Access.app)"
+    },
+    {
+      "path": "Applications/Utilities/Keychain Access.app/Contents/ravynOS/Keychain Access",
+      "file": "work/Applications_Utilities_KeychainAccess_Keychain Access.app/Contents/ravynOS/Keychain Access",
+      "comment": "Keychain Access.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Utilities_KeychainAccess_Keychain Access.app)"
+    },
+    {
+      "path": "Applications/Utilities/Keychain Access.app/Contents/ravynOS/Keychain_Access.debug",
+      "file": "work/Applications_Utilities_KeychainAccess_Keychain Access.app/Contents/ravynOS/Keychain_Access.debug",
+      "comment": "Keychain Access.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Utilities_KeychainAccess_Keychain Access.app)"
+    },
+    {
+      "path": "Applications/Utilities/Keychain Access.app/Contents/ravynOS/Keychain_Access.full",
+      "file": "work/Applications_Utilities_KeychainAccess_Keychain Access.app/Contents/ravynOS/Keychain_Access.full",
+      "comment": "Keychain Access.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Utilities_KeychainAccess_Keychain Access.app)"
+    },
+    {
+      "path": "System/Library/CoreServices/Finder.app/Filer",
+      "file": "work/CoreServices_Filer_Filer.app/Contents/ravynOS/Filer",
+      "comment": "Filer bundle staged at its canonical macOS path"
+    },
+    {
+      "path": "System/Library/CoreServices/Finder.app/Contents/Info.plist",
+      "file": "work/CoreServices_Filer_Filer.app/Contents/Info.plist",
+      "comment": "Filer bundle staged at its canonical macOS path"
+    },
+    {
+      "path": "System/Library/CoreServices/Finder.app/Contents/Resources/filer.png",
+      "file": "work/CoreServices_Filer_Filer.app/Contents/Resources/filer.png",
+      "comment": "Filer bundle staged at its canonical macOS path"
+    },
+    {
+      "path": "System/Library/CoreServices/Finder.app/Contents/ravynOS/Filer",
+      "file": "work/CoreServices_Filer_Filer.app/Contents/ravynOS/Filer",
+      "comment": "Filer bundle staged at its canonical macOS path"
+    },
+    {
+      "path": "System/Library/CoreServices/Finder.app/Contents/ravynOS/Filer.debug",
+      "file": "work/CoreServices_Filer_Filer.app/Contents/ravynOS/Filer.debug",
+      "comment": "Filer bundle staged at its canonical macOS path"
+    },
+    {
+      "path": "System/Library/CoreServices/Finder.app/Contents/ravynOS/Filer.full",
+      "file": "work/CoreServices_Filer_Filer.app/Contents/ravynOS/Filer.full",
+      "comment": "Filer bundle staged at its canonical macOS path"
+    },
+    {
+      "path": "Applications/System Settings.app/System Preferences",
+      "file": "work/SysApps_Prefs_System Preferences.app/Contents/ravynOS/System Preferences",
+      "comment": "System Preferences bundle staged at its canonical macOS path"
+    },
+    {
+      "path": "Applications/System Settings.app/Contents/Info.plist",
+      "file": "work/icons/com.ravynos.Preferences.Info.plist",
+      "comment": "System Preferences bundle staged at its canonical macOS path"
+    },
+    {
+      "path": "Applications/System Settings.app/Contents/ravynOS/System Preferences",
+      "file": "work/SysApps_Prefs_System Preferences.app/Contents/ravynOS/System Preferences",
+      "comment": "System Preferences bundle staged at its canonical macOS path"
+    },
+    {
+      "path": "Applications/System Preferences.app/System Preferences",
+      "file": "work/SysApps_Prefs_System Preferences.app/Contents/ravynOS/System Preferences",
+      "comment": "System Preferences bundle staged at its canonical macOS path"
+    },
+    {
+      "path": "Applications/System Preferences.app/Contents/Info.plist",
+      "file": "work/icons/com.ravynos.Preferences.Info.plist",
+      "comment": "System Preferences bundle staged at its canonical macOS path"
+    },
+    {
+      "path": "Applications/System Preferences.app/Contents/ravynOS/System Preferences",
+      "file": "work/SysApps_Prefs_System Preferences.app/Contents/ravynOS/System Preferences",
+      "comment": "System Preferences bundle staged at its canonical macOS path"
+    },
+    {
+      "path": "System/Library/CoreServices/pasteboardd",
+      "file": "work/CoreServices_pasteboardd_pasteboardd",
+      "comment": "pasteboardd (built from CoreServices/pasteboardd)"
+    },
+    {
+      "path": "System/Library/CoreServices/dailydrivertest",
+      "file": "work/CoreServices_dailydrivertest_dailydrivertest",
+      "comment": "dailydrivertest (built from CoreServices/dailydrivertest)"
+    },
+    {
+      "path": "usr/bin/open",
+      "file": "work/BSD_bin_open_open",
+      "comment": "open (built from BSD/bin/open)"
+    },
+    {
+      "path": "System/Library/LaunchDaemons/com.ravynos.pasteboardd.json",
+      "file": "../../SystemLibrary/LaunchDaemons/com.ravynos.pasteboardd.json",
+      "comment": "launchd job of the daily driver services"
+    },
+    {
+      "path": "System/Library/LaunchDaemons/com.ravynos.dailydrivertest.json",
+      "file": "../../SystemLibrary/LaunchDaemons/com.ravynos.dailydrivertest.json",
+      "comment": "launchd job of the daily driver services"
     },
     {
       "path": "bin/launchctl",
@@ -1382,99 +1833,129 @@
       "comment": "system bootstrap, run by launchctl's System session before LaunchDaemons"
     },
     {
-      "path": "etc/passwd",
-      "text": "root:*:0:0:Charlie &:/root:/bin/sh\ndaemon:*:1:1:Daemon:/var/db:/usr/sbin/nologin\n",
-      "comment": "passwd database for libsystem_pwdgrp. Without it, setpwent()'s fopen() fails and leaves _pw_fp NULL, so getpwnam()/getpwuid() can never resolve any user; SystemUIServer's clock asks for the current user during init and spins in the getpwent/setpwent cycle holding up the whole menu bar."
-    },
-    {
       "path": "etc/rc",
       "text": "#!/bin/sh\n# ravynOS /etc/rc\n#\n# launchctl's System session runs this once the LaunchDaemons are loaded\n# (BSD/bin/launchctl/launchctl.c: runcom() -> execl(/bin/sh, \"sh\", \"/etc/rc\")).\n# It is the BSD \"runcom\" phase: post-daemon system configuration.\n#\n# On ravynOS the root is a pre-built image: the filesystems are already\n# mounted, there is no fsck, and hostname/network/console settings are applied\n# by launchd or compiled in.  There is genuinely nothing to configure at this\n# phase, so this script reports that it ran and returns success.  Add rc-time\n# setup here if ravynOS ever needs it; keep the exit status 0 so the System\n# session completes and the agent scan (Dock, Filer) runs.\necho \"-=- rc complete -=-\"\nexit 0\n",
       "comment": "system rc, run by launchctl's System session after LaunchDaemons"
     },
     {
-      "path": "System/Library/CoreServices/System Preferences.app/Contents/Info.plist",
-      "file": "work/System Preferences.app/Contents/Info.plist",
-      "comment": "repo-built SysApps bundle staged into the GUI image"
+      "path": "Library/Preferences/Dock.plist",
+      "text": "{\n\tLocation = 0;\n\tOpacity = 0.85;\n\ttilesize = 64;\n}\n",
+      "comment": "Dock preferences (the Dock fills in the tile list and wallpaper)"
     },
     {
-      "path": "System/Library/CoreServices/System Preferences.app/Contents/Resources/Icon.png",
-      "file": "work/System Preferences.app/Contents/Resources/Icon.png",
-      "comment": "repo-built SysApps bundle staged into the GUI image"
+      "path": "System/Library/Desktop Pictures/ravynos_dunes.png",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Desktop Pictures/ravynos_dunes.png",
+      "comment": "desktop wallpaper named by the Dock's default path"
     },
     {
-      "path": "System/Library/CoreServices/System Preferences.app/Contents/Resources/Info.plist",
-      "file": "work/System Preferences.app/Contents/Resources/Info.plist",
-      "comment": "repo-built SysApps bundle staged into the GUI image"
+      "path": "System/Library/Desktop Pictures/ravynos_silk.png",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Desktop Pictures/ravynos_silk.png",
+      "comment": "desktop wallpaper named by the Dock's default path"
     },
     {
-      "path": "System/Library/CoreServices/System Preferences.app/Contents/ravynOS/System Preferences",
-      "file": "work/System Preferences.app/Contents/ravynOS/System Preferences",
-      "comment": "repo-built SysApps bundle staged into the GUI image"
+      "path": "System/Library/Desktop Pictures/ravynos_sunset.png",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Desktop Pictures/ravynos_sunset.png",
+      "comment": "desktop wallpaper named by the Dock's default path"
     },
     {
-      "path": "System/Library/CoreServices/System Preferences.app/System Preferences",
-      "file": "work/System Preferences.app/Contents/ravynOS/System Preferences",
-      "comment": "bundle-root executable copy so LaunchServices/Dock can exec it directly"
+      "path": "etc/passwd",
+      "text": "root:*:0:0:System Administrator:/root:/bin/sh\ndaemon:*:1:1:System Services:/var/db:/usr/sbin/nologin\nravyn:*:501:20:ravynOS User:/Users/ravyn:/bin/sh\n",
+      "comment": "account database read by the Users & Groups pane"
     },
     {
-      "path": "System/Library/CoreServices/Install ravynOS.app/Contents/Info.plist",
-      "file": "work/Install ravynOS.app/Contents/Info.plist",
-      "comment": "repo-built SysApps bundle staged into the GUI image"
+      "path": "etc/master.passwd",
+      "text": "root:$sha256$ravynOS$0f8b2e2c1a2a4b0f0d26d8b0b2d5d7c9c0f3e0f0e0a0b0c0d0e0f0010203040:0:0::0:0:System Administrator:/root:/bin/sh\ndaemon:*:1:1::0:0:System Services:/var/db:/usr/sbin/nologin\nravyn:$sha256$ravynOS$0f8b2e2c1a2a4b0f0d26d8b0b2d5d7c9c0f3e0f0e0a0b0c0d0e0f0010203040:501:20::0:0:ravynOS User:/Users/ravyn:/bin/sh\n",
+      "comment": "master password database (SHA-256 hashes)"
     },
     {
-      "path": "System/Library/CoreServices/Install ravynOS.app/Contents/Resources/Icon.png",
-      "file": "work/Install ravynOS.app/Contents/Resources/Icon.png",
-      "comment": "repo-built SysApps bundle staged into the GUI image"
+      "path": "etc/group",
+      "text": "wheel:*:0:root,ravyn\ndaemon:*:1:\ntty:*:4:\nstaff:*:20:ravyn\nnogroup:*:65533:\nnobody:*:65534:\n",
+      "comment": "group database; wheel is the admin group"
     },
     {
-      "path": "System/Library/CoreServices/Install ravynOS.app/Contents/Resources/MarmosetLogo.tiff",
-      "file": "work/Install ravynOS.app/Contents/Resources/MarmosetLogo.tiff",
-      "comment": "repo-built SysApps bundle staged into the GUI image"
+      "path": "System/Library/Frameworks/LaunchServices.framework/Versions/A/Resources/InitDB.sql",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/LaunchServices.framework/Versions/A/Resources/InitDB.sql",
+      "comment": "LaunchServices SQL schema resource"
     },
     {
-      "path": "System/Library/CoreServices/Install ravynOS.app/Contents/Resources/header.rtf",
-      "file": "work/Install ravynOS.app/Contents/Resources/header.rtf",
-      "comment": "repo-built SysApps bundle staged into the GUI image"
+      "path": "System/Library/Frameworks/LaunchServices.framework/Versions/A/Resources/DBSchema_3_4.sql",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/LaunchServices.framework/Versions/A/Resources/DBSchema_3_4.sql",
+      "comment": "LaunchServices SQL schema resource"
     },
     {
-      "path": "System/Library/CoreServices/Install ravynOS.app/Contents/Resources/terms.rtf",
-      "file": "work/Install ravynOS.app/Contents/Resources/terms.rtf",
-      "comment": "repo-built SysApps bundle staged into the GUI image"
+      "path": "System/Library/CoreServices/Archive Utility.app/Contents/Resources/icon.png",
+      "file": "work/icons/com.ravynos.ArchiveUtility.png",
+      "comment": "generated app icon (make_app_icons.py)"
     },
     {
-      "path": "System/Library/CoreServices/Install ravynOS.app/Contents/ravynOS/Install ravynOS",
-      "file": "work/Install ravynOS.app/Contents/ravynOS/Install ravynOS",
-      "comment": "repo-built SysApps bundle staged into the GUI image"
+      "path": "System/Library/CoreServices/System Preferences.app/Contents/Resources/icon.png",
+      "file": "work/icons/com.ravynos.Preferences.png",
+      "comment": "generated app icon (make_app_icons.py)"
     },
     {
-      "path": "System/Library/CoreServices/Install ravynOS.app/Install ravynOS",
-      "file": "work/Install ravynOS.app/Contents/ravynOS/Install ravynOS",
-      "comment": "bundle-root executable copy so LaunchServices/Dock can exec it directly"
+      "path": "Applications/Utilities/Terminal.app/Contents/Resources/icon.png",
+      "file": "work/icons/com.ravynos.Terminal.png",
+      "comment": "generated app icon (make_app_icons.py)"
     },
     {
-      "path": "System/Library/Frameworks/Cocoa.framework/Versions/A/Cocoa",
-      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/Cocoa.framework/Versions/A/Cocoa",
-      "comment": "repo-built Cocoa shim (Frameworks/Cocoa); Install ravynOS.app links it"
+      "path": "Applications/TextEdit.app/Contents/Resources/icon.png",
+      "file": "work/icons/com.ravynos.TextEdit.png",
+      "comment": "generated app icon (make_app_icons.py)"
     },
     {
-      "path": "System/Library/Frameworks/PreferencePanes.framework/Versions/A/PreferencePanes",
-      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/PreferencePanes.framework/Versions/A/PreferencePanes",
-      "comment": "repo-built PreferencePanes framework; System Preferences.app links it and NSBundle pane loading resolves through it"
+      "path": "Applications/Calculator.app/Contents/Resources/icon.png",
+      "file": "work/icons/com.ravynos.Calculator.png",
+      "comment": "generated app icon (make_app_icons.py)"
     },
     {
-      "path": "System/Library/LaunchAgents/com.ravynos.SystemPreferences.json",
-      "file": "../../SystemLibrary/LaunchAgents/com.ravynos.SystemPreferences.json",
-      "comment": "GUI LaunchAgent that opens System Preferences.app at boot so panes render on screen"
+      "path": "Applications/Preview.app/Contents/Resources/icon.png",
+      "file": "work/icons/com.ravynos.Preview.png",
+      "comment": "generated app icon (make_app_icons.py)"
     },
     {
-      "path": "System/Library/PreferencePanes/General.prefsPane/Contents/Info.plist",
-      "file": "../../SysApps/Panes/General.prefsPane/Contents/Info.plist",
-      "comment": "sample preference pane bundle (repo SysApps/Panes) scanned by System Preferences.app"
+      "path": "Applications/Font Book.app/Contents/Resources/icon.png",
+      "file": "work/icons/com.ravynos.FontBook.png",
+      "comment": "generated app icon (make_app_icons.py)"
     },
     {
-      "path": "System/Library/PreferencePanes/General.prefsPane/Resources/Icon.png",
-      "file": "../../SysApps/Panes/General.prefsPane/Resources/Icon.png",
-      "comment": "pane icon art reused from the Prefs app icon"
+      "path": "Applications/Utilities/Screenshot.app/Contents/Resources/icon.png",
+      "file": "work/icons/com.ravynos.Screenshot.png",
+      "comment": "generated app icon (make_app_icons.py)"
+    },
+    {
+      "path": "Applications/Utilities/Activity Monitor.app/Activity_Monitor.app/Contents/Resources/icon.png",
+      "file": "work/icons/com.ravynos.ActivityMonitor.png",
+      "comment": "generated app icon (make_app_icons.py)"
+    },
+    {
+      "path": "Applications/Utilities/Activity Monitor.app/Contents/Resources/icon.png",
+      "file": "work/icons/com.ravynos.ActivityMonitor.png",
+      "comment": "generated app icon (make_app_icons.py)"
+    },
+    {
+      "path": "Applications/Utilities/Disk Utility.app/Contents/Resources/icon.png",
+      "file": "work/icons/com.ravynos.DiskUtility.png",
+      "comment": "generated app icon (make_app_icons.py)"
+    },
+    {
+      "path": "Applications/Utilities/Console.app/Contents/Resources/icon.png",
+      "file": "work/icons/com.ravynos.Console.png",
+      "comment": "generated app icon (make_app_icons.py)"
+    },
+    {
+      "path": "Applications/Utilities/Keychain Access.app/Contents/Resources/icon.png",
+      "file": "work/icons/com.ravynos.KeychainAccess.png",
+      "comment": "generated app icon (make_app_icons.py)"
+    },
+    {
+      "path": "Applications/System Settings.app/Contents/Resources/icon.png",
+      "file": "work/icons/com.ravynos.Preferences.png",
+      "comment": "generated app icon (make_app_icons.py)"
+    },
+    {
+      "path": "Applications/System Preferences.app/Contents/Resources/icon.png",
+      "file": "work/icons/com.ravynos.Preferences.png",
+      "comment": "generated app icon (make_app_icons.py)"
     }
   ]
 }

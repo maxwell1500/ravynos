@@ -334,12 +334,11 @@ O2ColorRef O2ContextFillColor(O2ContextRef self) {
 }
 
 O2ContextRef O2ContextRetain(O2ContextRef self) {
-   return (self!=NULL)?(O2ContextRef)CFRetain(self):NULL;
+   return [self retain];
 }
 
 void O2ContextRelease(O2ContextRef self) {
-   if(self!=NULL)
-    CFRelease(self);
+   [self release];
 }
 
 // context state

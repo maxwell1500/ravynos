@@ -14,6 +14,7 @@ WARNS=		1
 # source tree), so -I${ROOT_SOURCE_DIR}/Frameworks is load-bearing.
 CFLAGS+=	-g -O0 -fobjc-arc -D__MACH__ -D__RAVYNOS__ -fPIC -pthread \
 		-I${.CURDIR} -I${MAKEOBJDIR} \
+		-I${ROOT_SOURCE_DIR}/Frameworks/CoreServices/LaunchServices \
 		-I${ROOT_SOURCE_DIR}/Frameworks \
 		-I${OBJTOP}/Frameworks/Foundation/Headers \
 		-I${OBJTOP}/Frameworks/AppKit/Headers \
@@ -24,6 +25,7 @@ CFLAGS+=	-g -O0 -fobjc-arc -D__MACH__ -D__RAVYNOS__ -fPIC -pthread \
 		-F${RAVYN_SDKROOT}/System/Library/Frameworks
 
 LDFLAGS+=	-Wl,-rpath,'$$ORIGIN/../Resources' \
+		-F${RAVYN_SDKROOT}/System/Library/Frameworks -framework LaunchServices \
 		-F${OBJTOP}/Frameworks/AppKit -framework AppKit \
 		-F${OBJTOP}/Frameworks/Foundation -framework Foundation \
 		-F${OBJTOP}/Frameworks/CoreGraphics -framework CoreGraphics \

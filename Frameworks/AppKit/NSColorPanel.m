@@ -36,9 +36,16 @@ static NSUInteger    _pickerMask=0;
 
 +(NSColorPanel *)sharedColorPanel {
    if(_colorPanel==nil){
-    if(![NSBundle loadNibNamed:@"NSColorPanel" owner:self])
-     NSLog(@"Cannot load NSColorPanel.nib");
-    
+    if(![NSBundle loadNibNamed:@"NSColorPanel" owner:self]) {
+     /* The nib is not in the image.  Build an equivalent window in code so
+      * every NSColorWell still gets a panel it can talk to instead of nil
+      * (which aborted later drawing). */
+     /* No window is created: NSWindow's shared-memory surface would need a
+      * real frame here, and the well only needs an object to hold the colour. */
+     NSLog(@"NSColorPanel.nib is absent; using a headless color panel");
+     _colorPanel = [[NSColorPanel alloc] init];
+    }
+
     if(![_colorPanel setFrameUsingName:@"NSColorPanel"])
      [_colorPanel center];
 

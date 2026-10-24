@@ -4673,9 +4673,17 @@ bool dladdrFromCache(const void* address, Dl_info* info)
 // malloc, no _simple_salloc, no _simple_vsprintf, no printf of any kind -- the
 // only work done is a bounded copy and an unsigned-long-to-hex loop over
 // caller-supplied bytes. Nothing here can reach an allocator.
+// ---- ravynOS: diagnostic gate -------------------------------------------------
+// These prints exist to turn a crash address into an image name.
+// Silenced by default so guest terminal commands and tools run without dyld output flooding.
+// Set RAVYN_DYLD_DIAG=1 or DYLD_PRINT_LIBRARIES=1 to re-enable them.
+static bool sRavynDiag = false;
+
 static void
 _ravyn_emit(const char* pre, const char* path, const char* mid, unsigned long val, int hasVal)
 {
+	if(!sRavynDiag)
+		return;
 	char buf[1024];
 	unsigned long i = 0, n = 0;
 	#define RAVYN_PUT(c) do { if (i < sizeof(buf)-1) buf[i++] = (char)(c); } while (0)
@@ -6290,6 +6298,9 @@ _main(const macho_header* mainExecutableMH, uintptr_t mainExecutableSlide,
 		int argc, const char* argv[], const char* envp[], const char* apple[], 
 		uintptr_t* startGlue)
 {
+	sRavynDiag = (_simple_getenv(envp, "RAVYN_DYLD_DIAG") != NULL) ||
+	             (_simple_getenv(envp, "DYLD_PRINT_LIBRARIES") != NULL);
+
 	/* ravynOS: first statement of _main, ahead of every other thing.
 	 *
 	 * One line that answers the question the last three sessions could not:

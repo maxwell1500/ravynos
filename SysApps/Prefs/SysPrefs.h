@@ -1,36 +1,86 @@
 /*
- * Copyright (C) 2024-2025 Zoe Knox <zoe@ravynsoft.com>
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in
- * all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
- * THE SOFTWARE.
+ * Copyright (C) 2024-2026 ravynOS Project
  */
 
+#pragma once
 #import <AppKit/AppKit.h>
+#import <CoreGraphics/CGDirectDisplay.h>
 
-@interface SystemPreferences : NSApplication {
+ @interface SystemPreferences : NSApplication <NSApplicationDelegate> {
     NSWindow *window;
-    NSMutableArray *panes;
-    NSFont *font;
-    NSTimeInterval doubleClickInterval;
-    NSTimeInterval lastClickTime;
-    NSButton *lastClickObject;
-    unsigned clickCount;
+    NSTableView *sidebarView;
+    NSView *detailContainer;
+    NSArray *categories;
+    NSView *currentPaneView;
+
+    // Displays
+    CGDirectDisplayID displayID;
+    NSMutableArray *displayModeTitles;
+    NSMutableArray *displayModeRefs;
+    int selectedDisplayMode;
+    NSPopUpButton *dispRefreshPopup;
+    NSPopUpButton *dispScalePopup;
+    NSPopUpButton *dispRotationPopup;
+    NSTextField *dispCurrentLabel;
+
+    // Network
+    NSPopUpButton *netIfacePopup;
+    NSTextField *netStatusField;
+    NSPopUpButton *netConfigPopup;
+    NSTextField *netIPField;
+    NSTextField *netMaskField;
+    NSTextField *netRouterField;
+    NSTextField *netDNSField;
+    NSMutableArray *netIfaceNames;
+
+    // Users
+    NSTableView *usersTable;
+    NSMutableArray *usersList;
+    NSButton *autoLoginToggle;
+    NSPopUpButton *autoLoginPopup;
+    NSTableView *loginItemsTable;
+    NSMutableArray *loginItemsList;
+
+    // Appearance
+    NSButton *appearanceLightBtn;
+    NSButton *appearanceDarkBtn;
+    NSSlider *dockSizeSlider;
+    NSButton *dockMagnifyCheck;
+    NSButton *dockAutoHideCheck;
+    NSButton *dockPosBottom;
+    NSButton *dockPosLeft;
+    NSButton *dockPosRight;
+
+    // Keyboard
+    NSSlider *keyRepeatSlider;
+    NSSlider *keyDelaySlider;
+    NSPopUpButton *capsLockPopup;
+    NSButton *swapCmdOptCheck;
+    NSSlider *trackingSlider;
+    NSButton *naturalScrollCheck;
+
+    // Sound
+    NSTableView *soundOutTable;
+    NSMutableArray *soundOutDevices;
+    NSSlider *soundVolSlider;
+    NSButton *soundMuteCheck;
+    NSPopUpButton *alertSoundPopup;
+    NSTableView *soundInTable;
+    NSMutableArray *soundInDevices;
+    NSSlider *soundInputVolSlider;
+    NSTextField *soundLevelField;
+    NSTextField *soundNoDeviceLabel;
 }
 
-@end
+- (void)selectCategoryAtIndex:(int)index;
+- (NSView *)createDisplaysPane;
+- (NSView *)createNetworkPane;
+- (NSView *)createUsersPane;
+- (NSView *)createAppearancePane;
+- (NSView *)createKeyboardPane;
+- (NSView *)createSoundPane;
 
+- (void)broadcastPrefsChanged;
+- (void)writePlist:(NSDictionary *)dict toPath:(NSString *)path;
+
+@end

@@ -3548,26 +3548,140 @@ Three resolution bugs, each found from a real failure rather than by eye:
   rax non-canonical, rip inside staged libsystem_c at _flockfile+0x12a). Staging now parses nm -o -g
   kinds and excludes names some staged image really exports (31 of them); genuinely-absent data names
   such as _OBJC_EHTYPE_$_NSException get plain .quad 0 slots.
-* ObjC class data exports must point at real ObjC class structures, and the ones Chrome needs are not in
-  this codebase at all. Chrome imports _OBJC_CLASS_$_NSArray / _NSDictionary / _NSData / _NSDate / _NSLocale
-  / ... from CoreFoundation, and Frameworks/CoreFoundation is pure C -- grep -rl "@implementation" finds no
-  ObjC classes there (libCoreFoundation.a exports zero OBJC_CLASS symbols), while Frameworks/AppKit does carry
-  255 .m files with NS* implementations. Our generated slots therefore stay zero, and Chrome's static
-  initializers hand those null pointers to libobjc, which faults inside its own code: rip at
-  /usr/lib/system/libobjc.dylib base+0x328ee = objc_class::isRealized calling objc_class::data()
-  (base+0x140b0) with rax=0. The two fixes that got the run this far were the export-trie union above
-  (serial had printed [CHROME-STUB] _strlen plus a null-target fault before it) and the DATA-kind rule,
-  whose signature failure was dyld "Symbol not found: _OBJC_EHTYPE_$_NSException ... Expected in
-  /usr/lib/chrome/CoreFoundation.dylib" (abort trap:6, rc=134) followed by stdio deref of a garbage FILE*
-  (_flockfile/_fgetln, SIGSEGV rc=139).
+* ObjC class data exports must resolve to real class objects, and they already exist in this repo -- my first
+  measurement of that used the wrong tool. `nm -gU` lists UNDEFINED globals only, so it printed "zero OBJC_CLASS
+  exports" for both CoreFoundation and Foundation and I concluded the classes were missing outright; plain
+  `nm -g` on the staged Foundation dylib shows it defines _OBJC_CLASS_$_NSArray / _NSDictionary / _NSData /
+  _NSDate / _NSSet / _NSURL / _NSUserDefaults, plus _OBJC_EHTYPE_$_NSException and _OBJC_METACLASS_$_NSInputStream
+  (642 ObjC class refs total). 24 of CoreFoundation's 51 trapped names are Foundation's, which is exactly how
+  real macOS reaches them -- CoreFoundation carries a REEXPORT edge to Foundation. The closure rule now encodes
+  that: for any trapped name another staged image defines, drop our stub and add
+  -Wl,-reexport_library,<that image> (full-path spelling; the -Wl,-reexport-l<stem> form I tried first silently
+  does nothing). Frameworks/CoreFoundation itself is still pure C (no @implementation), so the classes come from
+  Foundation, not CF -- an accurate attribution matters because it decides which image the edge points at.
+* Crash chain across iterations, as measured: dyld "Symbol not found: _OBJC_EHTYPE_$_NSException ... Expected
+  in /usr/lib/chrome/CoreFoundation.dylib" (abort trap:6, rc=134) -> stdio deref of a garbage FILE* (_flockfile/
+  _fgetln, SIGSEGV rc=139) -> rip at /usr/lib/system/libobjc.dylib base+0x328ee = objc_class::isRealized calling
+  objc_class::data() (base+0x140b0) with rax=0 -- the null came from our zero class slots, not from an absent
+  framework. Two staging bugs hid behind that: exports_of() ignored "[re-export] _strcmp (indirect for ...)" trie
+  lines so every indirect export looked missing and a generated stub SHADOWED the real symbol ([CHROME-STUB]
+  _strlen plus a null-target fault), and DATA globals (___stderrp is D inside libsystem_c) were emitted as
+  function stubs, binding Chrome's __got slot to text.
 
-**Wall.** M1 needs CF container classes (NSString/NSArray/NSDictionary/NSDate/NSData) that this repo does not
-implement; writing them is userland framework work -- a different phase than image staging -- and no further
-symbol-trap iteration can substitute for the missing implementations. What the shipped image does prove: the
-complete Chrome tree stages thinned and signed (271.7 MB "Google Chrome Framework", 22.9 MB libwidevinecdm.dylib,
-22.1 MB resources.pak), its whole dependency graph loads (serial prints every staged framework with UUIDs
-including /usr/lib/chrome/CoreFoundation.dylib), and the desktop runs live -- RAVYNOS_DESKTOP_READY, WindowServer
-recording apps, 1920x1080 screenshot captured from the VNC display. The final manifest carries no probe job or
-/bin/chromeprobe.sh; verified through Fat32Img with geometry_for_size(1 GiB) (data_off=0x302000, max_cluster=261118,
-1,317 entries). Reading that image with the module's default 512 MiB geometry returns an empty tree, which is what
-made a healthy image briefly look like a corrupt one -- pass the geometry, do not trust DEFAULT_GEOM.
+**Where this session stopped**: after the provider-edge rule the CoreFoundation shim re-exports Foundation, so
+Chrome's class slots point at real Foundation classes; --version rc=0 was not observed before the session ended,
+so no M1 claim is made here. What the shipped image does prove: the complete Chrome tree staged thinned + adhoc
+re-signed (271.7 MB "Google Chrome Framework", 22.9 MB libwidevinecdm.dylib, 22.1 MB resources.pak), its whole
+dependency graph loads (serial prints every staged framework with UUIDs including /usr/lib/chrome/CoreFoundation
+.dylib and /usr/lib/c/56.dylib), and the desktop runs live (RAVYNOS_DESKTOP_READY, WindowServer recording apps,
+1920x1080 VNC screenshot). The final manifest carries no probe job or /bin/chromeprobe.sh; verified through Fat32Img
+with geometry_for_size(1 GiB) (data_off=0x302000, max_cluster=261118, 1,317 entries). Reading that image with the
+module's default 512 MiB DEFAULT_GEOM returns an empty tree -- pass the geometry, or a healthy image looks corrupt.
+
+### 22.1 Chrome's `__objc_classrefs` are real class objects now: the shared class provider (2026-10-20)
+
+The one defect in §22 that was NOT a packaging defect is closed. Chrome's `__objc_classrefs` bind to the
+**address** of `_OBJC_CLASS_$_X`, and the modern Objective-C ABI requires that address to **be** the
+`objc_class` structure (its value is the class's isa slot). `chrome_stage.py` emitted class traps as
+**`.quad 0` data slots** plus a constructor calling `objc_allocateClassPair`/`objc_registerClassPair`, so the
+runtime read `isa == 0` and `bits == 0`, `data()` returned null, and `objc_class::isRealized()` faulted at
+libobjc `base+0x328ee` — the crash chain §22 recorded. A data slot can never satisfy that ABI, so the stubs
+are gone and the missing classes are now REAL class objects.
+
+**One shared provider image, not one per dependency.** `NSURLSession` and `NSURLSessionConfiguration` are
+trapped by two deps (CFNetwork and Foundation); two class objects with one name make the runtime's
+`addNamedClass` warn and keep the OLD mapping, so one of the two binds would silently point at the wrong
+object. One image, re-exported by every dependency Chrome binds a class symbol from, gives one class object
+per name.
+
+**What `tools/bootlab/chrome_stage.py` does now**
+
+- `build_class_provider()` generates one `@interface`/`@implementation` pair per synthesized class (superclass
+  `NSObject`, empty bodies — the runtime needs a *realizable* class, not behaviour), compiles it with the
+  platform toolchain's `clang-17` (the host's clang 21 segfaults on this tree's ObjC; see
+  `build-libraries.sh`'s header) and links it `-nostdlib -nodefaultlibs -lobjc -lSystem`,
+  `-install_name /usr/lib/chrome/ObjCClassProvider.dylib`, `-Wl,-compatibility_version,65535.255.255`.
+  `-fobjc-runtime` is deliberately NOT passed: the default modern-ABI output is byte-identical to
+  macosx-10.8/10.15/11.0/13.0, and the gnustep-2.0 modes do not compile on Mach-O at all.
+- The synthesis set is **computed, not hardcoded**: a name is synthesized when some dependency TRAPS it and no
+  staged image exports it — **145** names. The **22** names a staged image really defines (Foundation's 21 and
+  QuartzCore's `CIImage`) keep resolving through the existing provider-edge rule and are deliberately NOT
+  redefined; the two images agree with `nm -g` and with a whole-image census (2,951 class names over the 126
+  staged images, 3,681 over Chrome's 25 payload images — intersection with the synthesis set empty).
+- `gen_stub` no longer emits class or metaclass slots **at all**: a class symbol that reaches the stub
+  generator is now a hard error, because a `.quad 0` slot is exactly the thing that cannot work.
+- Each of the **29** Objective-C-trapping dependencies links `-Wl,-reexport_library,<provider>`. This is
+  required, not convenient: Chrome's binds are library-scoped (two-level namespace), so dyld resolves
+  `Metal/_OBJC_CLASS_$_MTLTextureDescriptor` against the NAMED library's export list and walks that library's
+  `libReExported` chain (`ImageLoaderMachO.cpp:1690-1713`). A class object that merely exists elsewhere in the
+  process does not satisfy the bind — which is also why staged Foundation's 21 classes never helped Chrome's
+  AppKit binds.
+- The provider is adhoc-signed (`flags=0x2(adhoc)`) after the `_CodeSignature` prune, and the manifest stages
+  it at `/usr/lib/chrome/ObjCClassProvider.dylib`, which is the path the shims' `LC_REEXPORT_DYLIB` records.
+
+**Measured**
+
+|measurement|value|
+|---|---|
+|provider image|120,672 bytes, `/usr/lib/chrome/ObjCClassProvider.dylib`|
+|exported symbols|145 class + 145 metaclass, **all S-type** (the symbol's address IS the class object)|
+|trapped symbols|1,353 → **1,130** effective (223 class/metaclass slots became re-export edges)|
+|dependencies carrying the provider edge|**29** (every ObjC-trapping dep)|
+|static gates|`tools/bootlab/verify_class_provider.py` → **6/6 PASS**|
+
+The new gate script is the reproducible form of the plan's static checks: G1 symbol count and S-type, G2 the
+ObjC sections and `otool -ov`'s canonical modern layout (isa → its own metaclass, superclass → libobjc's
+`NSObject`, cache → `__objc_empty_cache`), G3 no shim traps a class symbol any more, G4 all 29 deps re-export
+the provider, G5 no synthesized name collides with a staged or payload class. `otool -ov` and `nm -g` are the
+gates; `dyld_info -fixups` is not — it does not faithfully decode staged images' bind streams (see below).
+
+**Boot** (`work/CHROME_final_serial.log`, probe job, `Google Chrome --version`). Note the difference from §22's
+shipped image: this manifest DOES carry the `com.ravynos.chromeprobe` job and `/bin/chromeprobe.sh`, because that
+job is the M1 measurement vehicle (it runs `Google Chrome --version` at boot and prints the exit status to
+`/dev/console`). Without it there is no in-guest way to measure M1 at all.
+
+|gate|verdict|evidence|
+|---|---|---|
+|V1 no libobjc CORPSE / `isRealized` fault|**PASS**|no CORPSE at the class-lookup site any more: the old fault was libobjc `base+0x328ee` (`objc_class::data()` from `isRealized()`); the process now dies later, at `objc_msgSend+41` (`base+0x5169`), which is a different fault (see V3)|
+|V2 no unresolved class symbols|**PASS**|0 × `Symbol not found:`|
+|V3 M1 `--version` exits rc=0|**FAIL**|rc=139 (SIGSEGV) at libobjc `base+0x5169` = `objc_msgSend+41`, the inline-cache load — not the class-lookup path (see below)|
+|V4 provider classes realized, no duplicates|**PASS**|no duplicate-class warning; **0** × `[CHROME-STUB] class X` (the old trap constructor's announcements are gone)|
+
+Supporting evidence: `DYLD-IMAGE-LOADING: /usr/lib/chrome/ObjCClassProvider.dylib` in the serial log — the
+provider really loads, and it loads before the framework binary.
+
+**V3 is still open, and it is a different defect.** The class lookup now succeeds; what fails next is the
+repo's own framework surface. Two gaps were closed on the way (both are standard macOS API the repo never
+implemented, and both are now in `Frameworks/Foundation`): Objective-C subscripting
+(`-[NSDictionary objectForKeyedSubscript:]`, `-[NSMutableDictionary setObject:forKeyedSubscript:]`,
+`-[NSArray objectAtIndexedSubscript:]`, `-[NSMutableArray setObject:atIndexedSubscript:]`) and
+`+[NSBundle bundleWithURL:]`. Before those, Chrome died with
+`objc[9]: -[NSDictionary_mapTable objectForKeyedSubscript:]: unrecognized selector`; after them it dies in
+the runtime's inline-cache fast path (`objc_msgSend+41` = libobjc `base+0x5169`: it loads the receiver's class
+cache, whose bucket pointer is not a usable class cache) with the last stubbed API it called being Security's
+`_SecTaskCreateFromSelf` — i.e. the next blocker is the trap-only Security family, which is §A item 3's top
+entry, not the class provider. Nothing in that path involves the provider: the runtime realized 122 classes in
+Chrome's process and **none** of them was a provider class, and no provider class produced an
+"unrecognized selector" abort. (The log also carries one `Text page corruption detected for pid 9` line: that
+is the guest VM's *diagnostic* for an instruction fault — it compares the faulting text page with the file
+backing it — so it is a symptom of the fault above, not a separate defect.)
+
+**Two staging bugs found on the way, both from the environment moving under the plan.** Chrome auto-updated
+(155.0.8059.82 → 155.0.8059.85) between sessions, and the staging pinned the version, so the guest asked for
+a framework version that was never staged: `dyld: could not find image .../Versions/155.0.8059.82/Google
+Chrome Framework`, abort trap 6, before any of the closure work mattered. `chrome_stage.py` now derives the
+version from the launcher's own hardcoded framework path, re-thins the launcher when the installed one
+changed (source digest sidecar), and regenerates `work/chrome_info.plist` from the host plist with
+`RAVYNLaunchArguments` injected — so the staged launcher, the staged framework and the staged metadata always
+agree.
+
+**Measurement caveat, restated because it bit twice.** `dyld_info -fixups` and `otool -ov` disagree about the
+slot contents of staged images: `dyld_info` reports Foundation's `__objc_data` binds to
+`libobjc/_OBJC_EHTYPE_id`/`_objc_ehtype_vtable`/`___objc_personality_v0` where `otool -ov` prints the ordinary
+modern shape. The arithmetic settles it: Foundation declares `bind_size = 1096` and `rebase_size = 5112`, but
+`dyld_info` reports **1,979** bind rows and **9,450** rebase rows from those streams — 1,979 binds cannot fit in
+1,096 bytes. `dyld_info`'s output for that image is not a faithful decode of its own bind stream. **Gate on
+`otool -ov` and `nm -g`, not on `dyld_info -fixups` target names.** (Same reason the class-name census reads
+`__objc_classlist` entries: `__objc_classrefs` uses the same `<addr> <ptr> <symbol>` line format and holds
+references to classes defined elsewhere — scraping it as "defined classes" reports Chrome's own 250 class
+REFERENCES as definitions.)

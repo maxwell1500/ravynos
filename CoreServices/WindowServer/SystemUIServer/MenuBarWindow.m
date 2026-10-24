@@ -92,6 +92,10 @@ extern pthread_mutex_t mtx;
     [menuView setMenu:menu];
     [menuView setNeedsDisplay:YES];
 }
+- (NSString *)activeApp {
+    return activeApp;
+}
+
 
 - (void)addRecentItem:(NSURL *)itemURL {
     [menuView addRecentItem:itemURL];

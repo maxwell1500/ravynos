@@ -14,8 +14,17 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 #import <Foundation/NSRaise.h>
 #import <Foundation/NSPlatform.h>
 #import <Foundation/NSAutoreleasePool-private.h>
+#import <Foundation/NSString.h>
 
 #import "NSString/NSString_cString.h"
+
+#include <fcntl.h>
+#include <stdio.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <sys/time.h>
+#include <time.h>
+#include <unistd.h>
 
 typedef void (*NSLogCStringFunc)(const char *string, unsigned length, BOOL withSyslogBanner);
 
@@ -41,16 +50,68 @@ static void NSLogFormat(NSString *format,...) {
    [string release];
 }
 
+/* Append one line to /var/log/system.log with raw POSIX calls.
+ *
+ * Deliberately no Foundation objects in here: NSLog is called from message-
+ * formatting and allocation paths, and an NSLog that allocates can re-enter
+ * itself (a formatter or file manager that logs).  The thread-local guard
+ * makes that a no-op instead of unbounded recursion, and gettimeofday +
+ * localtime_r + snprintf keep the whole path allocation-free. */
+static void NSLogAppendToSystemLog(const char *string, unsigned length) {
+   static __thread int inLog = 0;
+   struct timeval tv;
+   struct tm tm;
+   time_t secs;
+   char prefix[128];
+   char line[1200];
+   int plen, total;
+   int fd;
+
+   if(inLog)
+      return;
+   inLog = 1;
+
+   gettimeofday(&tv, NULL);
+   secs = tv.tv_sec;
+   localtime_r(&secs, &tm);
+   plen = snprintf(prefix, sizeof(prefix),
+       "%04d-%02d-%02d %02d:%02d:%02d.%03d %s[%d] <Default>: ",
+       tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
+       tm.tm_hour, tm.tm_min, tm.tm_sec, (int)(tv.tv_usec / 1000),
+       [[[NSProcessInfo processInfo] processName] UTF8String],
+       (int)getpid());
+
+   if(plen > 0 && (unsigned)plen < sizeof(prefix)) {
+      if(length > sizeof(line) - (unsigned)plen - 2)
+         length = (unsigned)(sizeof(line) - (unsigned)plen - 2);
+      memcpy(line, prefix, (size_t)plen);
+      memcpy(line + plen, string, length);
+      total = plen + (int)length;
+      line[total++] = '\n';
+
+      mkdir("/var/log", 0755);
+      fd = open("/var/log/system.log", O_WRONLY | O_CREAT | O_APPEND, 0644);
+      if(fd >= 0) {
+         ssize_t written = 0;
+         while(written < total) {
+            ssize_t n = write(fd, line + written, (size_t)(total - written));
+            if(n <= 0)
+               break;
+            written += n;
+         }
+         close(fd);
+      }
+   }
+
+   inLog = 0;
+}
+
 static void NSLogDefaultCStringFunction(const char *string, unsigned length, BOOL withSyslogBanner) {
    NSString *message = [[NSString alloc] initWithBytes:string length:length encoding:[NSString defaultCStringEncoding]];
    if (withSyslogBanner)
    {
-      NSString *date=[[NSDate date]
-                      descriptionWithCalendarFormat:@"%Y-%m-%d %H:%M:%S.%F"
-                      timeZone:[NSTimeZone systemTimeZone] locale:nil];
-      NSString *process=[[NSProcessInfo processInfo] processName];
-
-      NSLogFormat(@"%@ %@[%d:%lx] %@",date,process,NSPlatformProcessID(),NSPlatformThreadID(),message);
+      NSLogFormat(@"%s", string);
+      NSLogAppendToSystemLog(string, length);
    }
    else
    {
@@ -150,4 +211,3 @@ NSString *NSStringFromClass(Class class) {
     const char *name = class_getName(class);
     return NSAutorelease(NSString_anyCStringNewWithBytes(NSASCIIStringEncoding, NULL,name, strlen(name)));
 }
-

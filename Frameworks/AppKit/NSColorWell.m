@@ -67,10 +67,8 @@ NSString *_NSColorWellDidBecomeExclusiveNotification=@"_NSColorWellDidBecomeExcl
     _isBordered=YES;
     _color=[[NSColor whiteColor] copy];
     
-        [[NSNotificationCenter defaultCenter] addObserver:self
-                                                 selector:@selector(colorPanelWillClose:)
-                                                     name:NSWindowWillCloseNotification
-                                                   object:[NSColorPanel sharedColorPanel]];
+        /* Do not touch NSColorPanel here: constructing it opened a color
+         * panel for every window that merely had a color well in its toolbar. */
         [[NSNotificationCenter defaultCenter] addObserver:self
                                                  selector:@selector(colorWellDidBecomeExclusive:)
                                                      name:_NSColorWellDidBecomeExclusiveNotification
@@ -83,10 +81,8 @@ NSString *_NSColorWellDidBecomeExclusiveNotification=@"_NSColorWellDidBecomeExcl
 
 -(void)awakeFromNib {
 // this should be moved the nib initWithCoder:
-    [[NSNotificationCenter defaultCenter] addObserver:self
-                                             selector:@selector(colorPanelWillClose:)
-                                                 name:NSWindowWillCloseNotification
-                                               object:[NSColorPanel sharedColorPanel]];
+    /* Do not touch NSColorPanel here: constructing it opened a color panel
+     * for every window that merely had a color well in its toolbar. */
     [[NSNotificationCenter defaultCenter] addObserver:self
                                              selector:@selector(colorWellDidBecomeExclusive:)
                                                  name:_NSColorWellDidBecomeExclusiveNotification

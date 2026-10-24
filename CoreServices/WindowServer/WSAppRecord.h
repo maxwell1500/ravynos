@@ -36,6 +36,7 @@
 @property unsigned int pid;             // process ID
 @property mach_port_t port;             // reply port for events
 @property NSImage *icon;                // Shown in task switcher 
+@property NSData *menuData;             // Serialized MainMenu dictionary
 
 -init;
 -(void)addWindow:(WSWindowRecord *)window;

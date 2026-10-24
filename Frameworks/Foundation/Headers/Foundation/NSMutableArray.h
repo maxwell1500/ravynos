@@ -33,6 +33,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 - (void)setArray:(NSArray *)array;
 - (void)replaceObjectAtIndex:(NSUInteger)index withObject:object;
+- (void)setObject:(id)object atIndexedSubscript:(NSUInteger)index;
 - (void)replaceObjectsInRange:(NSRange)range withObjectsFromArray:(NSArray *)array;
 - (void)replaceObjectsInRange:(NSRange)range withObjectsFromArray:(NSArray *)array range:(NSRange)otherRange;
 - (void)replaceObjectsAtIndexes:(NSIndexSet *)indexes withObjects:(NSArray *)objects;

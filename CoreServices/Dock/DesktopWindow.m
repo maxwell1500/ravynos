@@ -34,6 +34,35 @@
 -(void)mouseDown:(NSEvent *)event {
     NSLog(@"clickity click");
 }
+
+-(void)drawRect:(NSRect)dirtyRect {
+    NSImage *image = [self image];
+    NSRect bounds = [self bounds];
+
+    if (image == nil || bounds.size.width <= 0.0 || bounds.size.height <= 0.0) {
+        [[NSColor blackColor] setFill];
+        NSRectFill(dirtyRect);
+        return;
+    }
+
+    NSSize imageSize = [image size];
+    if (imageSize.width <= 0.0 || imageSize.height <= 0.0) {
+        [[NSColor blackColor] setFill];
+        NSRectFill(dirtyRect);
+        return;
+    }
+
+    float scaleX = bounds.size.width / imageSize.width;
+    float scaleY = bounds.size.height / imageSize.height;
+    float scale = (scaleX > scaleY) ? scaleX : scaleY;
+
+    NSSize scaledSize = NSMakeSize(imageSize.width * scale, imageSize.height * scale);
+    NSRect destination = NSMakeRect(bounds.origin.x + (bounds.size.width - scaledSize.width) / 2.0,
+                                    bounds.origin.y + (bounds.size.height - scaledSize.height) / 2.0,
+                                    scaledSize.width, scaledSize.height);
+
+    [image drawInRect:destination fromRect:NSZeroRect operation:NSCompositeCopy fraction:1.0];
+}
 @end
 
 @implementation DesktopWindow
@@ -46,6 +75,7 @@
                               backing:NSBackingStoreBuffered
                                 defer:NO
                                screen:screen];
+    if(!self) return nil;
     [self setLevel:kCGDesktopWindowLevelKey];
     [self setMovableByWindowBackground:NO];
 
@@ -81,9 +111,12 @@
     NSDictionary *dict = [prefs objectForKey:INFOKEY_WALLPAPER];
     _wallpaperPath = [dict objectForKey:@"NSMainScreen"]; // FIXME: use CGDisplayID from NSScreen deviceDescription
     if(!_wallpaperPath)
-        _wallpaperPath = @"/System/Library/Desktop Pictures/sunsetbridge.jpg";
+        _wallpaperPath = @"/System/Library/Desktop Pictures/ravynos_dunes.png";
 
     NSImage *image = [[NSImage alloc] initWithContentsOfFile:_wallpaperPath];
+    NSLog(@"[DesktopWindow] wallpaper %@ image %@ size %dx%d",
+          _wallpaperPath, image ? @"loaded" : @"nil",
+          (int)[image size].width, (int)[image size].height);
     [image setScalesWhenResized:YES];
     [view setImage:image];
     [view setNeedsDisplay:YES];

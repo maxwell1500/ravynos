@@ -819,6 +819,42 @@ NSString * const NSOldSelectedCharacterRange=@"NSOldSelectedCharacterRange";
     [self setSelectedRange:NSMakeRange(0,[[self string] length])];
 }
 
+/* Delete the selection (or the character behind the caret). */
+-(void)delete:sender {
+    NSRange range = [self selectedRange];
+
+    if(range.length == 0) {
+        if(range.location == 0)
+            return;
+        range = NSMakeRange(range.location - 1, 1);
+    }
+    if (! [self _delegateChangeTextInRange: range replacementString: @""])
+        return;
+    [self _replaceCharactersInRange:range withString:@""];
+    [self setSelectedRange:NSMakeRange(range.location, 0)];
+    [self didChangeText];
+}
+
+/* Undo and redo go through the window's undo manager, which registers the
+ * text edits made by this view. */
+-(void)undo:sender {
+    NSUndoManager *manager = [[self window] undoManager];
+
+    if(manager == nil)
+        return;
+    if([manager canUndo])
+        [manager undo];
+}
+
+-(void)redo:sender {
+    NSUndoManager *manager = [[self window] undoManager];
+
+    if(manager == nil)
+        return;
+    if([manager canRedo])
+        [manager redo];
+}
+
 -(void)_textDidEndWithMovement:(NSInteger)movement {
     if ([_delegate respondsToSelector:@selector(textShouldEndEditing:)]) {
         if ([_delegate textShouldEndEditing:self] == NO) {
@@ -2116,6 +2152,8 @@ NSString * const NSOldSelectedCharacterRange=@"NSOldSelectedCharacterRange";
 // Add attributes with undo support
 -(void)_addAttributes:(NSDictionary *)attributes range:(NSRange)range
 {
+    if(attributes == nil)
+        return;
     if (_allowsUndo && self.undoManager) {
         [self breakUndoCoalescing];
         
@@ -2128,8 +2166,12 @@ NSString * const NSOldSelectedCharacterRange=@"NSOldSelectedCharacterRange";
 
 -(void)_addAttribute:(NSString *)key value:(id)value range:(NSRange)range
 {
-    NSDictionary *attributes = [NSDictionary dictionaryWithObject:value forKey:key];
-    [self _addAttributes:attributes range:range];
+    /* A nil value is not an attribute change: building the dictionary with it
+     * raised "insert nil object" (a font lookup that failed, for instance). */
+    if(key == nil || value == nil)
+        return;
+    [self _addAttributes:[NSDictionary dictionaryWithObject:value forKey:key]
+                   range:range];
 }
 
 // Remove attributes with undo support

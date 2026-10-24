@@ -32,6 +32,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 - (NSUInteger)count;
 - objectAtIndex:(NSUInteger)index;
+- (id)objectAtIndexedSubscript:(NSUInteger)index;
 
 - (void)getObjects:(id *)objects;
 - (void)getObjects:(id *)objects range:(NSRange)range;

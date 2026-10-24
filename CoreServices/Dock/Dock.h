@@ -47,6 +47,7 @@
 #define INFOKEY_PERSISTENT_OTHERS @"persistent-others" // array (of tile data?)
 #define INFOKEY_TILESIZE @"tilesize" // int
 #define INFOKEY_AUTOHIDE @"autohide" // BOOL
+#define INFOKEY_MAGNIFICATION @"magnification" // BOOL
 #define INFOKEY_AUTOHIDE_DELAY @"autohide-delay" // float
 #define INFOKEY_AUTOHIDE_TIME_MODIFIER @"autohide-time-modifier" // float
 
@@ -90,9 +91,15 @@ typedef enum Location Location;
     NSSize _currentSize;
     int _tileSize;
     float _alpha;
+    BOOL _autohide;
+    BOOL _magnification;
+    BOOL _hidden;
+    int _hoverIndex;
+    NSTimer *_pollTimer;
 }
 
 -(id)init;
+-(NSDictionary *)readDockPlist;
 -(void)updateBackground;
 -(int)fitWindowToItems;
 -(void)placeItemsInWindow:(int)maxItems;

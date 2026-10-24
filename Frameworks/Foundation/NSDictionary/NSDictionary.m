@@ -277,6 +277,13 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
    return nil;
 }
 
+/* Objective-C subscripting (10.8+).  Chrome sends this to the dictionary
+   subclass that backs an NSDictionary, so the base class has to implement it:
+   the subclass inherits it from here. */
+-(id)objectForKeyedSubscript:(id)key {
+   return [self objectForKey:key];
+}
+
 -(NSUInteger)count {
    //NSInvalidAbstractInvocation();
    return 0;

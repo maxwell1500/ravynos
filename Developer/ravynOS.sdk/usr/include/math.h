@@ -1,1666 +1,524 @@
-// -*- C++ -*-
-//===----------------------------------------------------------------------===//
-//
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
-//===----------------------------------------------------------------------===//
-
-#ifndef _LIBCPP_MATH_H
-#define _LIBCPP_MATH_H
+/*
+ * ====================================================
+ * Copyright (C) 1993 by Sun Microsystems, Inc. All rights reserved.
+ *
+ * Developed at SunPro, a Sun Microsystems, Inc. business.
+ * Permission to use, copy, modify, and distribute this
+ * software is freely granted, provided that this notice
+ * is preserved.
+ * ====================================================
+ */
 
 /*
-    math.h synopsis
-
-Macros:
-
-    HUGE_VAL
-    HUGE_VALF               // C99
-    HUGE_VALL               // C99
-    INFINITY                // C99
-    NAN                     // C99
-    FP_INFINITE             // C99
-    FP_NAN                  // C99
-    FP_NORMAL               // C99
-    FP_SUBNORMAL            // C99
-    FP_ZERO                 // C99
-    FP_FAST_FMA             // C99
-    FP_FAST_FMAF            // C99
-    FP_FAST_FMAL            // C99
-    FP_ILOGB0               // C99
-    FP_ILOGBNAN             // C99
-    MATH_ERRNO              // C99
-    MATH_ERREXCEPT          // C99
-    math_errhandling        // C99
-
-Types:
-
-    float_t                 // C99
-    double_t                // C99
-
-// C90
-
-floating_point abs(floating_point x);
-
-floating_point acos (arithmetic x);
-float          acosf(float x);
-long double    acosl(long double x);
-
-floating_point asin (arithmetic x);
-float          asinf(float x);
-long double    asinl(long double x);
-
-floating_point atan (arithmetic x);
-float          atanf(float x);
-long double    atanl(long double x);
-
-floating_point atan2 (arithmetic y, arithmetic x);
-float          atan2f(float y, float x);
-long double    atan2l(long double y, long double x);
-
-floating_point ceil (arithmetic x);
-float          ceilf(float x);
-long double    ceill(long double x);
-
-floating_point cos (arithmetic x);
-float          cosf(float x);
-long double    cosl(long double x);
-
-floating_point cosh (arithmetic x);
-float          coshf(float x);
-long double    coshl(long double x);
-
-floating_point exp (arithmetic x);
-float          expf(float x);
-long double    expl(long double x);
-
-floating_point fabs (arithmetic x);
-float          fabsf(float x);
-long double    fabsl(long double x);
-
-floating_point floor (arithmetic x);
-float          floorf(float x);
-long double    floorl(long double x);
-
-floating_point fmod (arithmetic x, arithmetic y);
-float          fmodf(float x, float y);
-long double    fmodl(long double x, long double y);
-
-floating_point frexp (arithmetic value, int* exp);
-float          frexpf(float value, int* exp);
-long double    frexpl(long double value, int* exp);
-
-floating_point ldexp (arithmetic value, int exp);
-float          ldexpf(float value, int exp);
-long double    ldexpl(long double value, int exp);
-
-floating_point log (arithmetic x);
-float          logf(float x);
-long double    logl(long double x);
-
-floating_point log10 (arithmetic x);
-float          log10f(float x);
-long double    log10l(long double x);
-
-floating_point modf (floating_point value, floating_point* iptr);
-float          modff(float value, float* iptr);
-long double    modfl(long double value, long double* iptr);
-
-floating_point pow (arithmetic x, arithmetic y);
-float          powf(float x, float y);
-long double    powl(long double x, long double y);
-
-floating_point sin (arithmetic x);
-float          sinf(float x);
-long double    sinl(long double x);
-
-floating_point sinh (arithmetic x);
-float          sinhf(float x);
-long double    sinhl(long double x);
-
-floating_point sqrt (arithmetic x);
-float          sqrtf(float x);
-long double    sqrtl(long double x);
-
-floating_point tan (arithmetic x);
-float          tanf(float x);
-long double    tanl(long double x);
-
-floating_point tanh (arithmetic x);
-float          tanhf(float x);
-long double    tanhl(long double x);
-
-//  C99
-
-bool signbit(arithmetic x);
-
-int fpclassify(arithmetic x);
-
-bool isfinite(arithmetic x);
-bool isinf(arithmetic x);
-bool isnan(arithmetic x);
-bool isnormal(arithmetic x);
-
-bool isgreater(arithmetic x, arithmetic y);
-bool isgreaterequal(arithmetic x, arithmetic y);
-bool isless(arithmetic x, arithmetic y);
-bool islessequal(arithmetic x, arithmetic y);
-bool islessgreater(arithmetic x, arithmetic y);
-bool isunordered(arithmetic x, arithmetic y);
-
-floating_point acosh (arithmetic x);
-float          acoshf(float x);
-long double    acoshl(long double x);
-
-floating_point asinh (arithmetic x);
-float          asinhf(float x);
-long double    asinhl(long double x);
-
-floating_point atanh (arithmetic x);
-float          atanhf(float x);
-long double    atanhl(long double x);
-
-floating_point cbrt (arithmetic x);
-float          cbrtf(float x);
-long double    cbrtl(long double x);
-
-floating_point copysign (arithmetic x, arithmetic y);
-float          copysignf(float x, float y);
-long double    copysignl(long double x, long double y);
-
-floating_point erf (arithmetic x);
-float          erff(float x);
-long double    erfl(long double x);
-
-floating_point erfc (arithmetic x);
-float          erfcf(float x);
-long double    erfcl(long double x);
-
-floating_point exp2 (arithmetic x);
-float          exp2f(float x);
-long double    exp2l(long double x);
-
-floating_point expm1 (arithmetic x);
-float          expm1f(float x);
-long double    expm1l(long double x);
-
-floating_point fdim (arithmetic x, arithmetic y);
-float          fdimf(float x, float y);
-long double    fdiml(long double x, long double y);
-
-floating_point fma (arithmetic x, arithmetic y, arithmetic z);
-float          fmaf(float x, float y, float z);
-long double    fmal(long double x, long double y, long double z);
-
-floating_point fmax (arithmetic x, arithmetic y);
-float          fmaxf(float x, float y);
-long double    fmaxl(long double x, long double y);
-
-floating_point fmin (arithmetic x, arithmetic y);
-float          fminf(float x, float y);
-long double    fminl(long double x, long double y);
-
-floating_point hypot (arithmetic x, arithmetic y);
-float          hypotf(float x, float y);
-long double    hypotl(long double x, long double y);
-
-int ilogb (arithmetic x);
-int ilogbf(float x);
-int ilogbl(long double x);
-
-floating_point lgamma (arithmetic x);
-float          lgammaf(float x);
-long double    lgammal(long double x);
-
-long long llrint (arithmetic x);
-long long llrintf(float x);
-long long llrintl(long double x);
-
-long long llround (arithmetic x);
-long long llroundf(float x);
-long long llroundl(long double x);
-
-floating_point log1p (arithmetic x);
-float          log1pf(float x);
-long double    log1pl(long double x);
-
-floating_point log2 (arithmetic x);
-float          log2f(float x);
-long double    log2l(long double x);
-
-floating_point logb (arithmetic x);
-float          logbf(float x);
-long double    logbl(long double x);
-
-long lrint (arithmetic x);
-long lrintf(float x);
-long lrintl(long double x);
-
-long lround (arithmetic x);
-long lroundf(float x);
-long lroundl(long double x);
-
-double      nan (const char* str);
-float       nanf(const char* str);
-long double nanl(const char* str);
-
-floating_point nearbyint (arithmetic x);
-float          nearbyintf(float x);
-long double    nearbyintl(long double x);
-
-floating_point nextafter (arithmetic x, arithmetic y);
-float          nextafterf(float x, float y);
-long double    nextafterl(long double x, long double y);
-
-floating_point nexttoward (arithmetic x, long double y);
-float          nexttowardf(float x, long double y);
-long double    nexttowardl(long double x, long double y);
-
-floating_point remainder (arithmetic x, arithmetic y);
-float          remainderf(float x, float y);
-long double    remainderl(long double x, long double y);
-
-floating_point remquo (arithmetic x, arithmetic y, int* pquo);
-float          remquof(float x, float y, int* pquo);
-long double    remquol(long double x, long double y, int* pquo);
-
-floating_point rint (arithmetic x);
-float          rintf(float x);
-long double    rintl(long double x);
-
-floating_point round (arithmetic x);
-float          roundf(float x);
-long double    roundl(long double x);
-
-floating_point scalbln (arithmetic x, long ex);
-float          scalblnf(float x, long ex);
-long double    scalblnl(long double x, long ex);
-
-floating_point scalbn (arithmetic x, int ex);
-float          scalbnf(float x, int ex);
-long double    scalbnl(long double x, int ex);
-
-floating_point tgamma (arithmetic x);
-float          tgammaf(float x);
-long double    tgammal(long double x);
-
-floating_point trunc (arithmetic x);
-float          truncf(float x);
-long double    truncl(long double x);
-
-*/
-
-#include <__config>
-
-#if !defined(_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER)
-#  pragma GCC system_header
+ */
+
+#ifndef _MATH_H_
+#define	_MATH_H_
+
+#include <sys/cdefs.h>
+#include <sys/_types.h>
+#include <machine/_limits.h>
+
+/*
+ * ANSI/POSIX
+ */
+extern const union __infinity_un {
+	unsigned char	__uc[8];
+	double		__ud;
+} __infinity;
+
+extern const union __nan_un {
+	unsigned char	__uc[sizeof(float)];
+	float		__uf;
+} __nan;
+
+#define	__MATH_BUILTIN_CONSTANTS
+#define	__MATH_BUILTIN_RELOPS
+
+#ifdef __MATH_BUILTIN_CONSTANTS
+#define	HUGE_VAL	__builtin_huge_val()
+#else
+#define	HUGE_VAL	(__infinity.__ud)
 #endif
 
-#  if __has_include_next(<math.h>)
-#    include_next <math.h>
-#  endif
-
-#ifdef __cplusplus
-
-// We support including .h headers inside 'extern "C"' contexts, so switch
-// back to C++ linkage before including these C++ headers.
-extern "C++" {
-
-#include <__type_traits/enable_if.h>
-#include <__type_traits/is_floating_point.h>
-#include <__type_traits/is_integral.h>
-#include <__type_traits/is_same.h>
-#include <__type_traits/promote.h>
-#include <limits>
-#include <stdlib.h>
-
-
-#    ifdef fpclassify
-#      undef fpclassify
-#    endif
-
-#    ifdef signbit
-#      undef signbit
-#    endif
-
-#    ifdef isfinite
-#      undef isfinite
-#    endif
-
-#    ifdef isinf
-#      undef isinf
-#    endif
-
-#    ifdef isnan
-#      undef isnan
-#    endif
-
-#    ifdef isnormal
-#      undef isnormal
-#    endif
-
-#    ifdef isgreater
-#      undef isgreater
-#    endif
-
-#    ifdef isgreaterequal
-#      undef isgreaterequal
-#    endif
-
-#    ifdef isless
-#      undef isless
-#    endif
-
-#    ifdef islessequal
-#      undef islessequal
-#    endif
-
-#    ifdef islessgreater
-#      undef islessgreater
-#    endif
-
-#    ifdef isunordered
-#      undef isunordered
-#    endif
-
-// signbit
-
-template <class _A1, std::__enable_if_t<std::is_floating_point<_A1>::value, int> = 0>
-_LIBCPP_NODISCARD_EXT inline _LIBCPP_HIDE_FROM_ABI bool signbit(_A1 __x) _NOEXCEPT {
-  return __builtin_signbit(__x);
-}
-
-template <class _A1, std::__enable_if_t<std::is_integral<_A1>::value && std::is_signed<_A1>::value, int> = 0>
-_LIBCPP_NODISCARD_EXT inline _LIBCPP_HIDE_FROM_ABI bool signbit(_A1 __x) _NOEXCEPT {
-  return __x < 0;
-}
-
-template <class _A1, std::__enable_if_t<std::is_integral<_A1>::value && !std::is_signed<_A1>::value, int> = 0>
-_LIBCPP_NODISCARD_EXT inline _LIBCPP_HIDE_FROM_ABI bool signbit(_A1) _NOEXCEPT {
-  return false;
-}
-
-// fpclassify
-
-template <class _A1, std::__enable_if_t<std::is_floating_point<_A1>::value, int> = 0>
-_LIBCPP_NODISCARD_EXT inline _LIBCPP_HIDE_FROM_ABI int fpclassify(_A1 __x) _NOEXCEPT {
-  return __builtin_fpclassify(FP_NAN, FP_INFINITE, FP_NORMAL, FP_SUBNORMAL, FP_ZERO, __x);
-}
-
-template <class _A1, std::__enable_if_t<std::is_integral<_A1>::value, int> = 0>
-_LIBCPP_NODISCARD_EXT inline _LIBCPP_HIDE_FROM_ABI int fpclassify(_A1 __x) _NOEXCEPT {
-  return __x == 0 ? FP_ZERO : FP_NORMAL;
-}
-
-// The MSVC runtime already provides these functions as templates
-#ifndef _LIBCPP_MSVCRT
-
-// isfinite
-
-template <class _A1,
-          std::__enable_if_t<std::is_arithmetic<_A1>::value && std::numeric_limits<_A1>::has_infinity, int> = 0>
-_LIBCPP_NODISCARD_EXT _LIBCPP_CONSTEXPR_SINCE_CXX23 _LIBCPP_HIDE_FROM_ABI bool isfinite(_A1 __x) _NOEXCEPT {
-  return __builtin_isfinite((typename std::__promote<_A1>::type)__x);
-}
-
-template <class _A1,
-          std::__enable_if_t<std::is_arithmetic<_A1>::value && !std::numeric_limits<_A1>::has_infinity, int> = 0>
-_LIBCPP_NODISCARD_EXT _LIBCPP_CONSTEXPR_SINCE_CXX23 _LIBCPP_HIDE_FROM_ABI bool isfinite(_A1) _NOEXCEPT {
-  return true;
-}
-
-// isinf
-
-template <class _A1,
-          std::__enable_if_t<std::is_arithmetic<_A1>::value && std::numeric_limits<_A1>::has_infinity, int> = 0>
-_LIBCPP_NODISCARD_EXT _LIBCPP_CONSTEXPR_SINCE_CXX23 _LIBCPP_HIDE_FROM_ABI bool isinf(_A1 __x) _NOEXCEPT {
-  return __builtin_isinf((typename std::__promote<_A1>::type)__x);
-}
-
-template <class _A1>
-_LIBCPP_NODISCARD_EXT _LIBCPP_CONSTEXPR_SINCE_CXX23 _LIBCPP_HIDE_FROM_ABI
-    typename std::enable_if< std::is_arithmetic<_A1>::value && !std::numeric_limits<_A1>::has_infinity, bool>::type
-    isinf(_A1) _NOEXCEPT {
-  return false;
-}
-
-#      ifdef _LIBCPP_PREFERRED_OVERLOAD
-_LIBCPP_NODISCARD_EXT inline _LIBCPP_CONSTEXPR_SINCE_CXX23 _LIBCPP_HIDE_FROM_ABI bool isinf(float __x) _NOEXCEPT {
-  return __builtin_isinf(__x);
-}
-
-_LIBCPP_NODISCARD_EXT inline _LIBCPP_CONSTEXPR_SINCE_CXX23 _LIBCPP_HIDE_FROM_ABI _LIBCPP_PREFERRED_OVERLOAD bool isinf(double __x) _NOEXCEPT {
-  return __builtin_isinf(__x);
-}
-
-_LIBCPP_NODISCARD_EXT inline _LIBCPP_CONSTEXPR_SINCE_CXX23 _LIBCPP_HIDE_FROM_ABI bool isinf(long double __x) _NOEXCEPT {
-  return __builtin_isinf(__x);
-}
-#      endif
-
-// isnan
-
-template <class _A1, std::__enable_if_t<std::is_floating_point<_A1>::value, int> = 0>
-_LIBCPP_NODISCARD_EXT _LIBCPP_CONSTEXPR_SINCE_CXX23 _LIBCPP_HIDE_FROM_ABI bool isnan(_A1 __x) _NOEXCEPT {
-  return __builtin_isnan(__x);
-}
-
-template <class _A1, std::__enable_if_t<std::is_integral<_A1>::value, int> = 0>
-_LIBCPP_NODISCARD_EXT _LIBCPP_CONSTEXPR_SINCE_CXX23 _LIBCPP_HIDE_FROM_ABI bool isnan(_A1) _NOEXCEPT {
-  return false;
-}
-
-#      ifdef _LIBCPP_PREFERRED_OVERLOAD
-_LIBCPP_NODISCARD_EXT inline _LIBCPP_CONSTEXPR_SINCE_CXX23 _LIBCPP_HIDE_FROM_ABI bool isnan(float __x) _NOEXCEPT {
-  return __builtin_isnan(__x);
-}
-
-_LIBCPP_NODISCARD_EXT inline _LIBCPP_CONSTEXPR_SINCE_CXX23 _LIBCPP_HIDE_FROM_ABI _LIBCPP_PREFERRED_OVERLOAD bool isnan(double __x) _NOEXCEPT {
-  return __builtin_isnan(__x);
-}
-
-_LIBCPP_NODISCARD_EXT inline _LIBCPP_CONSTEXPR_SINCE_CXX23 _LIBCPP_HIDE_FROM_ABI bool isnan(long double __x) _NOEXCEPT {
-  return __builtin_isnan(__x);
-}
-#      endif
-
-// isnormal
-
-template <class _A1, std::__enable_if_t<std::is_floating_point<_A1>::value, int> = 0>
-_LIBCPP_NODISCARD_EXT _LIBCPP_CONSTEXPR_SINCE_CXX23 _LIBCPP_HIDE_FROM_ABI bool isnormal(_A1 __x) _NOEXCEPT {
-  return __builtin_isnormal(__x);
-}
-
-template <class _A1, std::__enable_if_t<std::is_integral<_A1>::value, int> = 0>
-_LIBCPP_NODISCARD_EXT _LIBCPP_CONSTEXPR_SINCE_CXX23 _LIBCPP_HIDE_FROM_ABI bool isnormal(_A1 __x) _NOEXCEPT {
-  return __x != 0;
-}
-
-// isgreater
-
-template <class _A1,
-          class _A2,
-          std::__enable_if_t<std::is_arithmetic<_A1>::value && std::is_arithmetic<_A2>::value, int> = 0>
-_LIBCPP_NODISCARD_EXT inline _LIBCPP_HIDE_FROM_ABI bool isgreater(_A1 __x, _A2 __y) _NOEXCEPT {
-  typedef typename std::__promote<_A1, _A2>::type type;
-  return __builtin_isgreater((type)__x, (type)__y);
-}
-
-// isgreaterequal
-
-template <class _A1,
-          class _A2,
-          std::__enable_if_t<std::is_arithmetic<_A1>::value && std::is_arithmetic<_A2>::value, int> = 0>
-_LIBCPP_NODISCARD_EXT inline _LIBCPP_HIDE_FROM_ABI bool isgreaterequal(_A1 __x, _A2 __y) _NOEXCEPT {
-  typedef typename std::__promote<_A1, _A2>::type type;
-  return __builtin_isgreaterequal((type)__x, (type)__y);
-}
-
-// isless
-
-template <class _A1,
-          class _A2,
-          std::__enable_if_t<std::is_arithmetic<_A1>::value && std::is_arithmetic<_A2>::value, int> = 0>
-_LIBCPP_NODISCARD_EXT inline _LIBCPP_HIDE_FROM_ABI bool isless(_A1 __x, _A2 __y) _NOEXCEPT {
-  typedef typename std::__promote<_A1, _A2>::type type;
-  return __builtin_isless((type)__x, (type)__y);
-}
-
-// islessequal
-
-template <class _A1,
-          class _A2,
-          std::__enable_if_t<std::is_arithmetic<_A1>::value && std::is_arithmetic<_A2>::value, int> = 0>
-_LIBCPP_NODISCARD_EXT inline _LIBCPP_HIDE_FROM_ABI bool islessequal(_A1 __x, _A2 __y) _NOEXCEPT {
-  typedef typename std::__promote<_A1, _A2>::type type;
-  return __builtin_islessequal((type)__x, (type)__y);
-}
-
-// islessgreater
-
-template <class _A1,
-          class _A2,
-          std::__enable_if_t<std::is_arithmetic<_A1>::value && std::is_arithmetic<_A2>::value, int> = 0>
-_LIBCPP_NODISCARD_EXT inline _LIBCPP_HIDE_FROM_ABI bool islessgreater(_A1 __x, _A2 __y) _NOEXCEPT {
-  typedef typename std::__promote<_A1, _A2>::type type;
-  return __builtin_islessgreater((type)__x, (type)__y);
-}
-
-// isunordered
-
-template <class _A1,
-          class _A2,
-          std::__enable_if_t<std::is_arithmetic<_A1>::value && std::is_arithmetic<_A2>::value, int> = 0>
-_LIBCPP_NODISCARD_EXT inline _LIBCPP_HIDE_FROM_ABI bool isunordered(_A1 __x, _A2 __y) _NOEXCEPT {
-  typedef typename std::__promote<_A1, _A2>::type type;
-  return __builtin_isunordered((type)__x, (type)__y);
-}
-
-#endif // _LIBCPP_MSVCRT
-
-// abs
-//
-// handled in stdlib.h
-
-// div
-//
-// handled in stdlib.h
-
-// We have to provide double overloads for <math.h> to work on platforms that don't provide the full set of math
-// functions. To make the overload set work with multiple functions that take the same arguments, we make our overloads
-// templates. Functions are preferred over function templates during overload resolution, which means that our overload
-// will only be selected when the C library doesn't provide one.
-
-// acos
-
-inline _LIBCPP_HIDE_FROM_ABI float       acos(float __x) _NOEXCEPT       {return __builtin_acosf(__x);}
-
-template <class = int>
-_LIBCPP_HIDE_FROM_ABI double acos(double __x) _NOEXCEPT {
-  return __builtin_acos(__x);
-}
-
-inline _LIBCPP_HIDE_FROM_ABI long double acos(long double __x) _NOEXCEPT {return __builtin_acosl(__x);}
-
-template <class _A1>
-inline _LIBCPP_HIDE_FROM_ABI
-typename std::enable_if<std::is_integral<_A1>::value, double>::type
-acos(_A1 __x) _NOEXCEPT {return __builtin_acos((double)__x);}
-
-// asin
-
-inline _LIBCPP_HIDE_FROM_ABI float       asin(float __x) _NOEXCEPT       {return __builtin_asinf(__x);}
-
-template <class = int>
-_LIBCPP_HIDE_FROM_ABI double asin(double __x) _NOEXCEPT {
-  return __builtin_asin(__x);
-}
-
-inline _LIBCPP_HIDE_FROM_ABI long double asin(long double __x) _NOEXCEPT {return __builtin_asinl(__x);}
-
-template <class _A1>
-inline _LIBCPP_HIDE_FROM_ABI
-typename std::enable_if<std::is_integral<_A1>::value, double>::type
-asin(_A1 __x) _NOEXCEPT {return __builtin_asin((double)__x);}
-
-// atan
-
-inline _LIBCPP_HIDE_FROM_ABI float       atan(float __x) _NOEXCEPT       {return __builtin_atanf(__x);}
-
-template <class = int>
-_LIBCPP_HIDE_FROM_ABI double atan(double __x) _NOEXCEPT {
-  return __builtin_atan(__x);
-}
-
-inline _LIBCPP_HIDE_FROM_ABI long double atan(long double __x) _NOEXCEPT {return __builtin_atanl(__x);}
-
-template <class _A1>
-inline _LIBCPP_HIDE_FROM_ABI
-typename std::enable_if<std::is_integral<_A1>::value, double>::type
-atan(_A1 __x) _NOEXCEPT {return __builtin_atan((double)__x);}
-
-// atan2
-
-inline _LIBCPP_HIDE_FROM_ABI float       atan2(float __y, float __x) _NOEXCEPT             {return __builtin_atan2f(__y, __x);}
-
-template <class = int>
-_LIBCPP_HIDE_FROM_ABI double atan2(double __x, double __y) _NOEXCEPT {
-  return __builtin_atan2(__x, __y);
-}
-
-inline _LIBCPP_HIDE_FROM_ABI long double atan2(long double __y, long double __x) _NOEXCEPT {return __builtin_atan2l(__y, __x);}
-
-template <class _A1, class _A2>
-inline _LIBCPP_HIDE_FROM_ABI
-typename std::__enable_if_t
-<
-    std::is_arithmetic<_A1>::value &&
-    std::is_arithmetic<_A2>::value,
-    std::__promote<_A1, _A2>
->::type
-atan2(_A1 __y, _A2 __x) _NOEXCEPT
-{
-    typedef typename std::__promote<_A1, _A2>::type __result_type;
-    static_assert((!(std::_IsSame<_A1, __result_type>::value &&
-                     std::_IsSame<_A2, __result_type>::value)), "");
-    return ::atan2((__result_type)__y, (__result_type)__x);
-}
-
-// ceil
-
-_LIBCPP_NODISCARD_EXT inline _LIBCPP_HIDE_FROM_ABI float       ceil(float __x) _NOEXCEPT       {return __builtin_ceilf(__x);}
-
-template <class = int>
-_LIBCPP_NODISCARD_EXT _LIBCPP_HIDE_FROM_ABI double ceil(double __x) _NOEXCEPT {
-  return __builtin_ceil(__x);
-}
-
-_LIBCPP_NODISCARD_EXT inline _LIBCPP_HIDE_FROM_ABI long double ceil(long double __x) _NOEXCEPT {return __builtin_ceill(__x);}
-
-template <class _A1>
-_LIBCPP_NODISCARD_EXT inline _LIBCPP_HIDE_FROM_ABI
-typename std::enable_if<std::is_integral<_A1>::value, double>::type
-ceil(_A1 __x) _NOEXCEPT {return __builtin_ceil((double)__x);}
-
-// cos
-
-inline _LIBCPP_HIDE_FROM_ABI float       cos(float __x) _NOEXCEPT       {return __builtin_cosf(__x);}
-
-template <class = int>
-_LIBCPP_HIDE_FROM_ABI double cos(double __x) _NOEXCEPT {
-  return __builtin_cos(__x);
-}
-
-inline _LIBCPP_HIDE_FROM_ABI long double cos(long double __x) _NOEXCEPT {return __builtin_cosl(__x);}
-
-template <class _A1>
-inline _LIBCPP_HIDE_FROM_ABI
-typename std::enable_if<std::is_integral<_A1>::value, double>::type
-cos(_A1 __x) _NOEXCEPT {return __builtin_cos((double)__x);}
-
-// cosh
-
-inline _LIBCPP_HIDE_FROM_ABI float       cosh(float __x) _NOEXCEPT       {return __builtin_coshf(__x);}
-
-template <class = int>
-_LIBCPP_HIDE_FROM_ABI double cosh(double __x) _NOEXCEPT {
-  return __builtin_cosh(__x);
-}
-
-inline _LIBCPP_HIDE_FROM_ABI long double cosh(long double __x) _NOEXCEPT {return __builtin_coshl(__x);}
-
-template <class _A1>
-inline _LIBCPP_HIDE_FROM_ABI
-typename std::enable_if<std::is_integral<_A1>::value, double>::type
-cosh(_A1 __x) _NOEXCEPT {return __builtin_cosh((double)__x);}
-
-// exp
-
-inline _LIBCPP_HIDE_FROM_ABI float       exp(float __x) _NOEXCEPT       {return __builtin_expf(__x);}
-
-template <class = int>
-_LIBCPP_HIDE_FROM_ABI double exp(double __x) _NOEXCEPT {
-  return __builtin_exp(__x);
-}
-
-inline _LIBCPP_HIDE_FROM_ABI long double exp(long double __x) _NOEXCEPT {return __builtin_expl(__x);}
-
-template <class _A1>
-inline _LIBCPP_HIDE_FROM_ABI
-typename std::enable_if<std::is_integral<_A1>::value, double>::type
-exp(_A1 __x) _NOEXCEPT {return __builtin_exp((double)__x);}
-
-// fabs
-
-_LIBCPP_NODISCARD_EXT inline _LIBCPP_HIDE_FROM_ABI float       fabs(float __x) _NOEXCEPT       {return __builtin_fabsf(__x);}
-
-template <class = int>
-_LIBCPP_NODISCARD_EXT _LIBCPP_HIDE_FROM_ABI double fabs(double __x) _NOEXCEPT {
-  return __builtin_fabs(__x);
-}
-
-_LIBCPP_NODISCARD_EXT inline _LIBCPP_HIDE_FROM_ABI long double fabs(long double __x) _NOEXCEPT {return __builtin_fabsl(__x);}
-
-template <class _A1>
-_LIBCPP_NODISCARD_EXT inline _LIBCPP_HIDE_FROM_ABI
-typename std::enable_if<std::is_integral<_A1>::value, double>::type
-fabs(_A1 __x) _NOEXCEPT {return __builtin_fabs((double)__x);}
-
-// floor
-
-_LIBCPP_NODISCARD_EXT inline _LIBCPP_HIDE_FROM_ABI float       floor(float __x) _NOEXCEPT       {return __builtin_floorf(__x);}
-
-template <class = int>
-_LIBCPP_NODISCARD_EXT _LIBCPP_HIDE_FROM_ABI double floor(double __x) _NOEXCEPT {
-  return __builtin_floor(__x);
-}
-
-_LIBCPP_NODISCARD_EXT inline _LIBCPP_HIDE_FROM_ABI long double floor(long double __x) _NOEXCEPT {return __builtin_floorl(__x);}
-
-template <class _A1>
-_LIBCPP_NODISCARD_EXT inline _LIBCPP_HIDE_FROM_ABI
-typename std::enable_if<std::is_integral<_A1>::value, double>::type
-floor(_A1 __x) _NOEXCEPT {return __builtin_floor((double)__x);}
-
-// fmod
-
-inline _LIBCPP_HIDE_FROM_ABI float       fmod(float __x, float __y) _NOEXCEPT             {return __builtin_fmodf(__x, __y);}
-
-template <class = int>
-_LIBCPP_HIDE_FROM_ABI double fmod(double __x, double __y) _NOEXCEPT {
-  return __builtin_fmod(__x, __y);
-}
-
-inline _LIBCPP_HIDE_FROM_ABI long double fmod(long double __x, long double __y) _NOEXCEPT {return __builtin_fmodl(__x, __y);}
-
-template <class _A1, class _A2>
-inline _LIBCPP_HIDE_FROM_ABI
-typename std::__enable_if_t
-<
-    std::is_arithmetic<_A1>::value &&
-    std::is_arithmetic<_A2>::value,
-    std::__promote<_A1, _A2>
->::type
-fmod(_A1 __x, _A2 __y) _NOEXCEPT
-{
-    typedef typename std::__promote<_A1, _A2>::type __result_type;
-    static_assert((!(std::_IsSame<_A1, __result_type>::value &&
-                     std::_IsSame<_A2, __result_type>::value)), "");
-    return ::fmod((__result_type)__x, (__result_type)__y);
-}
-
-// frexp
-
-inline _LIBCPP_HIDE_FROM_ABI float       frexp(float __x, int* __e) _NOEXCEPT       {return __builtin_frexpf(__x, __e);}
-
-template <class = int>
-_LIBCPP_HIDE_FROM_ABI double frexp(double __x, int* __e) _NOEXCEPT {
-  return __builtin_frexp(__x, __e);
-}
-
-inline _LIBCPP_HIDE_FROM_ABI long double frexp(long double __x, int* __e) _NOEXCEPT {return __builtin_frexpl(__x, __e);}
-
-template <class _A1>
-inline _LIBCPP_HIDE_FROM_ABI
-typename std::enable_if<std::is_integral<_A1>::value, double>::type
-frexp(_A1 __x, int* __e) _NOEXCEPT {return __builtin_frexp((double)__x, __e);}
-
-// ldexp
-
-inline _LIBCPP_HIDE_FROM_ABI float       ldexp(float __x, int __e) _NOEXCEPT       {return __builtin_ldexpf(__x, __e);}
-
-template <class = int>
-_LIBCPP_HIDE_FROM_ABI double ldexp(double __x, int __e) _NOEXCEPT {
-  return __builtin_ldexp(__x, __e);
-}
-
-inline _LIBCPP_HIDE_FROM_ABI long double ldexp(long double __x, int __e) _NOEXCEPT {return __builtin_ldexpl(__x, __e);}
-
-template <class _A1>
-inline _LIBCPP_HIDE_FROM_ABI
-typename std::enable_if<std::is_integral<_A1>::value, double>::type
-ldexp(_A1 __x, int __e) _NOEXCEPT {return __builtin_ldexp((double)__x, __e);}
-
-// log
-
-inline _LIBCPP_HIDE_FROM_ABI float       log(float __x) _NOEXCEPT       {return __builtin_logf(__x);}
-
-template <class = int>
-_LIBCPP_HIDE_FROM_ABI double log(double __x) _NOEXCEPT {
-  return __builtin_log(__x);
-}
-
-inline _LIBCPP_HIDE_FROM_ABI long double log(long double __x) _NOEXCEPT {return __builtin_logl(__x);}
-
-template <class _A1>
-inline _LIBCPP_HIDE_FROM_ABI
-typename std::enable_if<std::is_integral<_A1>::value, double>::type
-log(_A1 __x) _NOEXCEPT {return __builtin_log((double)__x);}
-
-// log10
-
-inline _LIBCPP_HIDE_FROM_ABI float       log10(float __x) _NOEXCEPT       {return __builtin_log10f(__x);}
-
-
-template <class = int>
-_LIBCPP_HIDE_FROM_ABI double log10(double __x) _NOEXCEPT {
-  return __builtin_log10(__x);
-}
-
-inline _LIBCPP_HIDE_FROM_ABI long double log10(long double __x) _NOEXCEPT {return __builtin_log10l(__x);}
-
-template <class _A1>
-inline _LIBCPP_HIDE_FROM_ABI
-typename std::enable_if<std::is_integral<_A1>::value, double>::type
-log10(_A1 __x) _NOEXCEPT {return __builtin_log10((double)__x);}
-
-// modf
-
-inline _LIBCPP_HIDE_FROM_ABI float       modf(float __x, float* __y) _NOEXCEPT             {return __builtin_modff(__x, __y);}
-
-template <class = int>
-_LIBCPP_HIDE_FROM_ABI double modf(double __x, double* __y) _NOEXCEPT {
-  return __builtin_modf(__x, __y);
-}
-
-inline _LIBCPP_HIDE_FROM_ABI long double modf(long double __x, long double* __y) _NOEXCEPT {return __builtin_modfl(__x, __y);}
-
-// pow
-
-inline _LIBCPP_HIDE_FROM_ABI float       pow(float __x, float __y) _NOEXCEPT             {return __builtin_powf(__x, __y);}
-
-template <class = int>
-_LIBCPP_HIDE_FROM_ABI double pow(double __x, double __y) _NOEXCEPT {
-  return __builtin_pow(__x, __y);
-}
-
-inline _LIBCPP_HIDE_FROM_ABI long double pow(long double __x, long double __y) _NOEXCEPT {return __builtin_powl(__x, __y);}
-
-template <class _A1, class _A2>
-inline _LIBCPP_HIDE_FROM_ABI
-typename std::__enable_if_t
-<
-    std::is_arithmetic<_A1>::value &&
-    std::is_arithmetic<_A2>::value,
-    std::__promote<_A1, _A2>
->::type
-pow(_A1 __x, _A2 __y) _NOEXCEPT
-{
-    typedef typename std::__promote<_A1, _A2>::type __result_type;
-    static_assert((!(std::_IsSame<_A1, __result_type>::value &&
-                     std::_IsSame<_A2, __result_type>::value)), "");
-    return ::pow((__result_type)__x, (__result_type)__y);
-}
-
-// sin
-
-inline _LIBCPP_HIDE_FROM_ABI float       sin(float __x) _NOEXCEPT       {return __builtin_sinf(__x);}
-
-template <class = int>
-_LIBCPP_HIDE_FROM_ABI double sin(double __x) _NOEXCEPT {
-  return __builtin_sin(__x);
-}
-
-inline _LIBCPP_HIDE_FROM_ABI long double sin(long double __x) _NOEXCEPT {return __builtin_sinl(__x);}
-
-template <class _A1>
-inline _LIBCPP_HIDE_FROM_ABI
-typename std::enable_if<std::is_integral<_A1>::value, double>::type
-sin(_A1 __x) _NOEXCEPT {return __builtin_sin((double)__x);}
-
-// sinh
-
-inline _LIBCPP_HIDE_FROM_ABI float       sinh(float __x) _NOEXCEPT       {return __builtin_sinhf(__x);}
-
-template <class = int>
-_LIBCPP_HIDE_FROM_ABI double sinh(double __x) _NOEXCEPT {
-  return __builtin_sinh(__x);
-}
-
-inline _LIBCPP_HIDE_FROM_ABI long double sinh(long double __x) _NOEXCEPT {return __builtin_sinhl(__x);}
-
-template <class _A1>
-inline _LIBCPP_HIDE_FROM_ABI
-typename std::enable_if<std::is_integral<_A1>::value, double>::type
-sinh(_A1 __x) _NOEXCEPT {return __builtin_sinh((double)__x);}
-
-// sqrt
-
-inline _LIBCPP_HIDE_FROM_ABI float       sqrt(float __x) _NOEXCEPT       {return __builtin_sqrtf(__x);}
-
-template <class = int>
-_LIBCPP_HIDE_FROM_ABI double sqrt(double __x) _NOEXCEPT {
-  return __builtin_sqrt(__x);
-}
-
-inline _LIBCPP_HIDE_FROM_ABI long double sqrt(long double __x) _NOEXCEPT {return __builtin_sqrtl(__x);}
-
-template <class _A1>
-inline _LIBCPP_HIDE_FROM_ABI
-typename std::enable_if<std::is_integral<_A1>::value, double>::type
-sqrt(_A1 __x) _NOEXCEPT {return __builtin_sqrt((double)__x);}
-
-// tan
-
-inline _LIBCPP_HIDE_FROM_ABI float       tan(float __x) _NOEXCEPT       {return __builtin_tanf(__x);}
-
-template <class = int>
-_LIBCPP_HIDE_FROM_ABI double tan(double __x) _NOEXCEPT {
-  return __builtin_tan(__x);
-}
-
-inline _LIBCPP_HIDE_FROM_ABI long double tan(long double __x) _NOEXCEPT {return __builtin_tanl(__x);}
-
-template <class _A1>
-inline _LIBCPP_HIDE_FROM_ABI
-typename std::enable_if<std::is_integral<_A1>::value, double>::type
-tan(_A1 __x) _NOEXCEPT {return __builtin_tan((double)__x);}
-
-// tanh
-
-inline _LIBCPP_HIDE_FROM_ABI float       tanh(float __x) _NOEXCEPT       {return __builtin_tanhf(__x);}
-
-template <class = int>
-_LIBCPP_HIDE_FROM_ABI double tanh(double __x) _NOEXCEPT {
-  return __builtin_tanh(__x);
-}
-
-inline _LIBCPP_HIDE_FROM_ABI long double tanh(long double __x) _NOEXCEPT {return __builtin_tanhl(__x);}
-
-template <class _A1>
-inline _LIBCPP_HIDE_FROM_ABI
-typename std::enable_if<std::is_integral<_A1>::value, double>::type
-tanh(_A1 __x) _NOEXCEPT {return __builtin_tanh((double)__x);}
-
-// acosh
-
-inline _LIBCPP_HIDE_FROM_ABI float       acosh(float __x) _NOEXCEPT       {return __builtin_acoshf(__x);}
-
-template <class = int>
-_LIBCPP_HIDE_FROM_ABI double acosh(double __x) _NOEXCEPT {
-  return __builtin_acosh(__x);
-}
-
-inline _LIBCPP_HIDE_FROM_ABI long double acosh(long double __x) _NOEXCEPT {return __builtin_acoshl(__x);}
-
-template <class _A1>
-inline _LIBCPP_HIDE_FROM_ABI
-typename std::enable_if<std::is_integral<_A1>::value, double>::type
-acosh(_A1 __x) _NOEXCEPT {return __builtin_acosh((double)__x);}
-
-// asinh
-
-inline _LIBCPP_HIDE_FROM_ABI float       asinh(float __x) _NOEXCEPT       {return __builtin_asinhf(__x);}
-
-template <class = int>
-_LIBCPP_HIDE_FROM_ABI double asinh(double __x) _NOEXCEPT {
-  return __builtin_asinh(__x);
-}
-
-inline _LIBCPP_HIDE_FROM_ABI long double asinh(long double __x) _NOEXCEPT {return __builtin_asinhl(__x);}
-
-template <class _A1>
-inline _LIBCPP_HIDE_FROM_ABI
-typename std::enable_if<std::is_integral<_A1>::value, double>::type
-asinh(_A1 __x) _NOEXCEPT {return __builtin_asinh((double)__x);}
-
-// atanh
-
-inline _LIBCPP_HIDE_FROM_ABI float       atanh(float __x) _NOEXCEPT       {return __builtin_atanhf(__x);}
-
-template <class = int>
-_LIBCPP_HIDE_FROM_ABI double atanh(double __x) _NOEXCEPT {
-  return __builtin_atanh(__x);
-}
-
-inline _LIBCPP_HIDE_FROM_ABI long double atanh(long double __x) _NOEXCEPT {return __builtin_atanhl(__x);}
-
-template <class _A1>
-inline _LIBCPP_HIDE_FROM_ABI
-typename std::enable_if<std::is_integral<_A1>::value, double>::type
-atanh(_A1 __x) _NOEXCEPT {return __builtin_atanh((double)__x);}
-
-// cbrt
-
-_LIBCPP_NODISCARD_EXT inline _LIBCPP_HIDE_FROM_ABI float       cbrt(float __x) _NOEXCEPT       {return __builtin_cbrtf(__x);}
-
-template <class = int>
-_LIBCPP_NODISCARD_EXT _LIBCPP_HIDE_FROM_ABI double cbrt(double __x) _NOEXCEPT {
-  return __builtin_cbrt(__x);
-}
-
-_LIBCPP_NODISCARD_EXT inline _LIBCPP_HIDE_FROM_ABI long double cbrt(long double __x) _NOEXCEPT {return __builtin_cbrtl(__x);}
-
-template <class _A1>
-_LIBCPP_NODISCARD_EXT inline _LIBCPP_HIDE_FROM_ABI
-typename std::enable_if<std::is_integral<_A1>::value, double>::type
-cbrt(_A1 __x) _NOEXCEPT {return __builtin_cbrt((double)__x);}
-
-// copysign
-
-_LIBCPP_NODISCARD_EXT inline _LIBCPP_HIDE_FROM_ABI float copysign(float __x, float __y) _NOEXCEPT {
-  return ::__builtin_copysignf(__x, __y);
-}
-
-_LIBCPP_NODISCARD_EXT inline _LIBCPP_HIDE_FROM_ABI long double copysign(long double __x, long double __y) _NOEXCEPT {
-  return ::__builtin_copysignl(__x, __y);
-}
-
-template <class _A1, class _A2>
-_LIBCPP_NODISCARD_EXT inline _LIBCPP_HIDE_FROM_ABI
-typename std::__enable_if_t
-<
-    std::is_arithmetic<_A1>::value &&
-    std::is_arithmetic<_A2>::value,
-    std::__promote<_A1, _A2>
->::type
-    copysign(_A1 __x, _A2 __y) _NOEXCEPT {
-  return ::__builtin_copysign(__x, __y);
-}
-
-// erf
-
-inline _LIBCPP_HIDE_FROM_ABI float       erf(float __x) _NOEXCEPT       {return __builtin_erff(__x);}
-
-template <class = int>
-_LIBCPP_HIDE_FROM_ABI double erf(double __x) _NOEXCEPT {
-  return __builtin_erf(__x);
-}
-
-inline _LIBCPP_HIDE_FROM_ABI long double erf(long double __x) _NOEXCEPT {return __builtin_erfl(__x);}
-
-template <class _A1>
-inline _LIBCPP_HIDE_FROM_ABI
-typename std::enable_if<std::is_integral<_A1>::value, double>::type
-erf(_A1 __x) _NOEXCEPT {return __builtin_erf((double)__x);}
-
-// erfc
-
-inline _LIBCPP_HIDE_FROM_ABI float       erfc(float __x) _NOEXCEPT       {return __builtin_erfcf(__x);}
-
-template <class = int>
-_LIBCPP_HIDE_FROM_ABI double erfc(double __x) _NOEXCEPT {
-  return __builtin_erfc(__x);
-}
-
-inline _LIBCPP_HIDE_FROM_ABI long double erfc(long double __x) _NOEXCEPT {return __builtin_erfcl(__x);}
-
-template <class _A1>
-inline _LIBCPP_HIDE_FROM_ABI
-typename std::enable_if<std::is_integral<_A1>::value, double>::type
-erfc(_A1 __x) _NOEXCEPT {return __builtin_erfc((double)__x);}
-
-// exp2
-
-inline _LIBCPP_HIDE_FROM_ABI float       exp2(float __x) _NOEXCEPT       {return __builtin_exp2f(__x);}
-
-template <class = int>
-_LIBCPP_HIDE_FROM_ABI double exp2(double __x) _NOEXCEPT {
-  return __builtin_exp2(__x);
-}
-
-inline _LIBCPP_HIDE_FROM_ABI long double exp2(long double __x) _NOEXCEPT {return __builtin_exp2l(__x);}
-
-template <class _A1>
-inline _LIBCPP_HIDE_FROM_ABI
-typename std::enable_if<std::is_integral<_A1>::value, double>::type
-exp2(_A1 __x) _NOEXCEPT {return __builtin_exp2((double)__x);}
-
-// expm1
-
-inline _LIBCPP_HIDE_FROM_ABI float       expm1(float __x) _NOEXCEPT       {return __builtin_expm1f(__x);}
-
-template <class = int>
-_LIBCPP_HIDE_FROM_ABI double expm1(double __x) _NOEXCEPT {
-  return __builtin_expm1(__x);
-}
-
-inline _LIBCPP_HIDE_FROM_ABI long double expm1(long double __x) _NOEXCEPT {return __builtin_expm1l(__x);}
-
-template <class _A1>
-inline _LIBCPP_HIDE_FROM_ABI
-typename std::enable_if<std::is_integral<_A1>::value, double>::type
-expm1(_A1 __x) _NOEXCEPT {return __builtin_expm1((double)__x);}
-
-// fdim
-
-inline _LIBCPP_HIDE_FROM_ABI float       fdim(float __x, float __y) _NOEXCEPT             {return __builtin_fdimf(__x, __y);}
-
-template <class = int>
-_LIBCPP_HIDE_FROM_ABI double fdim(double __x, double __y) _NOEXCEPT {
-  return __builtin_fdim(__x, __y);
-}
-
-inline _LIBCPP_HIDE_FROM_ABI long double fdim(long double __x, long double __y) _NOEXCEPT {return __builtin_fdiml(__x, __y);}
-
-template <class _A1, class _A2>
-inline _LIBCPP_HIDE_FROM_ABI
-typename std::__enable_if_t
-<
-    std::is_arithmetic<_A1>::value &&
-    std::is_arithmetic<_A2>::value,
-    std::__promote<_A1, _A2>
->::type
-fdim(_A1 __x, _A2 __y) _NOEXCEPT
-{
-    typedef typename std::__promote<_A1, _A2>::type __result_type;
-    static_assert((!(std::_IsSame<_A1, __result_type>::value &&
-                     std::_IsSame<_A2, __result_type>::value)), "");
-    return ::fdim((__result_type)__x, (__result_type)__y);
-}
-
-// fma
-
-inline _LIBCPP_HIDE_FROM_ABI float       fma(float __x, float __y, float __z) _NOEXCEPT
-{
-    return __builtin_fmaf(__x, __y, __z);
-}
-
-
-template <class = int>
-_LIBCPP_HIDE_FROM_ABI double fma(double __x, double __y, double __z) _NOEXCEPT {
-  return __builtin_fma(__x, __y, __z);
-}
-
-inline _LIBCPP_HIDE_FROM_ABI long double fma(long double __x, long double __y, long double __z) _NOEXCEPT
-{
-    return __builtin_fmal(__x, __y, __z);
-}
-
-template <class _A1, class _A2, class _A3>
-inline _LIBCPP_HIDE_FROM_ABI
-typename std::__enable_if_t
-<
-    std::is_arithmetic<_A1>::value &&
-    std::is_arithmetic<_A2>::value &&
-    std::is_arithmetic<_A3>::value,
-    std::__promote<_A1, _A2, _A3>
->::type
-fma(_A1 __x, _A2 __y, _A3 __z) _NOEXCEPT
-{
-    typedef typename std::__promote<_A1, _A2, _A3>::type __result_type;
-    static_assert((!(std::_IsSame<_A1, __result_type>::value &&
-                     std::_IsSame<_A2, __result_type>::value &&
-                     std::_IsSame<_A3, __result_type>::value)), "");
-    return __builtin_fma((__result_type)__x, (__result_type)__y, (__result_type)__z);
-}
-
-// fmax
-
-_LIBCPP_NODISCARD_EXT inline _LIBCPP_HIDE_FROM_ABI float       fmax(float __x, float __y) _NOEXCEPT             {return __builtin_fmaxf(__x, __y);}
-
-template <class = int>
-_LIBCPP_NODISCARD_EXT _LIBCPP_HIDE_FROM_ABI double fmax(double __x, double __y) _NOEXCEPT {
-  return __builtin_fmax(__x, __y);
-}
-
-_LIBCPP_NODISCARD_EXT inline _LIBCPP_HIDE_FROM_ABI long double fmax(long double __x, long double __y) _NOEXCEPT {return __builtin_fmaxl(__x, __y);}
-
-template <class _A1, class _A2>
-_LIBCPP_NODISCARD_EXT inline _LIBCPP_HIDE_FROM_ABI
-typename std::__enable_if_t
-<
-    std::is_arithmetic<_A1>::value &&
-    std::is_arithmetic<_A2>::value,
-    std::__promote<_A1, _A2>
->::type
-fmax(_A1 __x, _A2 __y) _NOEXCEPT
-{
-    typedef typename std::__promote<_A1, _A2>::type __result_type;
-    static_assert((!(std::_IsSame<_A1, __result_type>::value &&
-                     std::_IsSame<_A2, __result_type>::value)), "");
-    return ::fmax((__result_type)__x, (__result_type)__y);
-}
-
-// fmin
-
-_LIBCPP_NODISCARD_EXT inline _LIBCPP_HIDE_FROM_ABI float       fmin(float __x, float __y) _NOEXCEPT             {return __builtin_fminf(__x, __y);}
-
-template <class = int>
-_LIBCPP_NODISCARD_EXT _LIBCPP_HIDE_FROM_ABI double fmin(double __x, double __y) _NOEXCEPT {
-  return __builtin_fmin(__x, __y);
-}
-
-_LIBCPP_NODISCARD_EXT inline _LIBCPP_HIDE_FROM_ABI long double fmin(long double __x, long double __y) _NOEXCEPT {return __builtin_fminl(__x, __y);}
-
-template <class _A1, class _A2>
-_LIBCPP_NODISCARD_EXT inline _LIBCPP_HIDE_FROM_ABI
-typename std::__enable_if_t
-<
-    std::is_arithmetic<_A1>::value &&
-    std::is_arithmetic<_A2>::value,
-    std::__promote<_A1, _A2>
->::type
-fmin(_A1 __x, _A2 __y) _NOEXCEPT
-{
-    typedef typename std::__promote<_A1, _A2>::type __result_type;
-    static_assert((!(std::_IsSame<_A1, __result_type>::value &&
-                     std::_IsSame<_A2, __result_type>::value)), "");
-    return ::fmin((__result_type)__x, (__result_type)__y);
-}
-
-// hypot
-
-inline _LIBCPP_HIDE_FROM_ABI float       hypot(float __x, float __y) _NOEXCEPT             {return __builtin_hypotf(__x, __y);}
-
-template <class = int>
-_LIBCPP_HIDE_FROM_ABI double hypot(double __x, double __y) _NOEXCEPT {
-  return __builtin_hypot(__x, __y);
-}
-
-inline _LIBCPP_HIDE_FROM_ABI long double hypot(long double __x, long double __y) _NOEXCEPT {return __builtin_hypotl(__x, __y);}
-
-template <class _A1, class _A2>
-inline _LIBCPP_HIDE_FROM_ABI
-typename std::__enable_if_t
-<
-    std::is_arithmetic<_A1>::value &&
-    std::is_arithmetic<_A2>::value,
-    std::__promote<_A1, _A2>
->::type
-hypot(_A1 __x, _A2 __y) _NOEXCEPT
-{
-    typedef typename std::__promote<_A1, _A2>::type __result_type;
-    static_assert((!(std::_IsSame<_A1, __result_type>::value &&
-                     std::_IsSame<_A2, __result_type>::value)), "");
-    return ::hypot((__result_type)__x, (__result_type)__y);
-}
-
-// ilogb
-
-inline _LIBCPP_HIDE_FROM_ABI int ilogb(float __x) _NOEXCEPT       {return __builtin_ilogbf(__x);}
-
-template <class = int>
-_LIBCPP_HIDE_FROM_ABI double ilogb(double __x) _NOEXCEPT {
-  return __builtin_ilogb(__x);
-}
-
-inline _LIBCPP_HIDE_FROM_ABI int ilogb(long double __x) _NOEXCEPT {return __builtin_ilogbl(__x);}
-
-template <class _A1>
-inline _LIBCPP_HIDE_FROM_ABI
-typename std::enable_if<std::is_integral<_A1>::value, int>::type
-ilogb(_A1 __x) _NOEXCEPT {return __builtin_ilogb((double)__x);}
-
-// lgamma
-
-inline _LIBCPP_HIDE_FROM_ABI float       lgamma(float __x) _NOEXCEPT       {return __builtin_lgammaf(__x);}
-
-template <class = int>
-_LIBCPP_HIDE_FROM_ABI double lgamma(double __x) _NOEXCEPT {
-  return __builtin_lgamma(__x);
-}
-
-inline _LIBCPP_HIDE_FROM_ABI long double lgamma(long double __x) _NOEXCEPT {return __builtin_lgammal(__x);}
-
-template <class _A1>
-inline _LIBCPP_HIDE_FROM_ABI
-typename std::enable_if<std::is_integral<_A1>::value, double>::type
-lgamma(_A1 __x) _NOEXCEPT {return __builtin_lgamma((double)__x);}
-
-// llrint
-
-inline _LIBCPP_HIDE_FROM_ABI long long llrint(float __x) _NOEXCEPT
-{
-    return __builtin_llrintf(__x);
-}
-
-template <class = int>
-_LIBCPP_HIDE_FROM_ABI long long llrint(double __x) _NOEXCEPT {
-  return __builtin_llrint(__x);
-}
-
-inline _LIBCPP_HIDE_FROM_ABI long long llrint(long double __x) _NOEXCEPT
-{
-    return __builtin_llrintl(__x);
-}
-
-template <class _A1>
-inline _LIBCPP_HIDE_FROM_ABI
-typename std::enable_if<std::is_integral<_A1>::value, long long>::type
-llrint(_A1 __x) _NOEXCEPT
-{
-    return __builtin_llrint((double)__x);
-}
-
-// llround
-
-inline _LIBCPP_HIDE_FROM_ABI long long llround(float __x) _NOEXCEPT
-{
-    return __builtin_llroundf(__x);
-}
-
-template <class = int>
-_LIBCPP_HIDE_FROM_ABI long long llround(double __x) _NOEXCEPT {
-  return __builtin_llround(__x);
-}
-
-inline _LIBCPP_HIDE_FROM_ABI long long llround(long double __x) _NOEXCEPT
-{
-    return __builtin_llroundl(__x);
-}
-
-template <class _A1>
-inline _LIBCPP_HIDE_FROM_ABI
-typename std::enable_if<std::is_integral<_A1>::value, long long>::type
-llround(_A1 __x) _NOEXCEPT
-{
-    return __builtin_llround((double)__x);
-}
-
-// log1p
-
-inline _LIBCPP_HIDE_FROM_ABI float       log1p(float __x) _NOEXCEPT       {return __builtin_log1pf(__x);}
-
-template <class = int>
-_LIBCPP_HIDE_FROM_ABI double log1p(double __x) _NOEXCEPT {
-  return __builtin_log1p(__x);
-}
-
-inline _LIBCPP_HIDE_FROM_ABI long double log1p(long double __x) _NOEXCEPT {return __builtin_log1pl(__x);}
-
-template <class _A1>
-inline _LIBCPP_HIDE_FROM_ABI
-typename std::enable_if<std::is_integral<_A1>::value, double>::type
-log1p(_A1 __x) _NOEXCEPT {return __builtin_log1p((double)__x);}
-
-// log2
-
-inline _LIBCPP_HIDE_FROM_ABI float       log2(float __x) _NOEXCEPT       {return __builtin_log2f(__x);}
-
-template <class = int>
-_LIBCPP_HIDE_FROM_ABI double log2(double __x) _NOEXCEPT {
-  return __builtin_log2(__x);
-}
-
-inline _LIBCPP_HIDE_FROM_ABI long double log2(long double __x) _NOEXCEPT {return __builtin_log2l(__x);}
-
-template <class _A1>
-inline _LIBCPP_HIDE_FROM_ABI
-typename std::enable_if<std::is_integral<_A1>::value, double>::type
-log2(_A1 __x) _NOEXCEPT {return __builtin_log2((double)__x);}
-
-// logb
-
-inline _LIBCPP_HIDE_FROM_ABI float       logb(float __x) _NOEXCEPT       {return __builtin_logbf(__x);}
-
-template <class = int>
-_LIBCPP_HIDE_FROM_ABI double logb(double __x) _NOEXCEPT {
-  return __builtin_logb(__x);
-}
-
-inline _LIBCPP_HIDE_FROM_ABI long double logb(long double __x) _NOEXCEPT {return __builtin_logbl(__x);}
-
-template <class _A1>
-inline _LIBCPP_HIDE_FROM_ABI
-typename std::enable_if<std::is_integral<_A1>::value, double>::type
-logb(_A1 __x) _NOEXCEPT {return __builtin_logb((double)__x);}
-
-// lrint
-
-inline _LIBCPP_HIDE_FROM_ABI long lrint(float __x) _NOEXCEPT
-{
-    return __builtin_lrintf(__x);
-}
-
-template <class = int>
-_LIBCPP_HIDE_FROM_ABI long lrint(double __x) _NOEXCEPT {
-  return __builtin_lrint(__x);
-}
-
-inline _LIBCPP_HIDE_FROM_ABI long lrint(long double __x) _NOEXCEPT
-{
-    return __builtin_lrintl(__x);
-}
-
-template <class _A1>
-inline _LIBCPP_HIDE_FROM_ABI
-typename std::enable_if<std::is_integral<_A1>::value, long>::type
-lrint(_A1 __x) _NOEXCEPT
-{
-    return __builtin_lrint((double)__x);
-}
-
-// lround
-
-inline _LIBCPP_HIDE_FROM_ABI long lround(float __x) _NOEXCEPT
-{
-    return __builtin_lroundf(__x);
-}
-
-template <class = int>
-_LIBCPP_HIDE_FROM_ABI long lround(double __x) _NOEXCEPT {
-  return __builtin_lround(__x);
-}
-
-inline _LIBCPP_HIDE_FROM_ABI long lround(long double __x) _NOEXCEPT
-{
-    return __builtin_lroundl(__x);
-}
-
-template <class _A1>
-inline _LIBCPP_HIDE_FROM_ABI
-typename std::enable_if<std::is_integral<_A1>::value, long>::type
-lround(_A1 __x) _NOEXCEPT
-{
-    return __builtin_lround((double)__x);
-}
-
-// nan
-
-// nearbyint
-
-_LIBCPP_NODISCARD_EXT inline _LIBCPP_HIDE_FROM_ABI float       nearbyint(float __x) _NOEXCEPT       {return __builtin_nearbyintf(__x);}
-
-template <class = int>
-_LIBCPP_NODISCARD_EXT _LIBCPP_HIDE_FROM_ABI double nearbyint(double __x) _NOEXCEPT {
-  return __builtin_nearbyint(__x);
-}
-
-_LIBCPP_NODISCARD_EXT inline _LIBCPP_HIDE_FROM_ABI long double nearbyint(long double __x) _NOEXCEPT {return __builtin_nearbyintl(__x);}
-
-template <class _A1>
-_LIBCPP_NODISCARD_EXT inline _LIBCPP_HIDE_FROM_ABI
-typename std::enable_if<std::is_integral<_A1>::value, double>::type
-nearbyint(_A1 __x) _NOEXCEPT {return __builtin_nearbyint((double)__x);}
-
-// nextafter
-
-inline _LIBCPP_HIDE_FROM_ABI float       nextafter(float __x, float __y) _NOEXCEPT             {return __builtin_nextafterf(__x, __y);}
-
-template <class = int>
-_LIBCPP_HIDE_FROM_ABI double nextafter(double __x, double __y) _NOEXCEPT {
-  return __builtin_nextafter(__x, __y);
-}
-
-inline _LIBCPP_HIDE_FROM_ABI long double nextafter(long double __x, long double __y) _NOEXCEPT {return __builtin_nextafterl(__x, __y);}
-
-template <class _A1, class _A2>
-inline _LIBCPP_HIDE_FROM_ABI
-typename std::__enable_if_t
-<
-    std::is_arithmetic<_A1>::value &&
-    std::is_arithmetic<_A2>::value,
-    std::__promote<_A1, _A2>
->::type
-nextafter(_A1 __x, _A2 __y) _NOEXCEPT
-{
-    typedef typename std::__promote<_A1, _A2>::type __result_type;
-    static_assert((!(std::_IsSame<_A1, __result_type>::value &&
-                     std::_IsSame<_A2, __result_type>::value)), "");
-    return ::nextafter((__result_type)__x, (__result_type)__y);
-}
-
-// nexttoward
-
-inline _LIBCPP_HIDE_FROM_ABI float       nexttoward(float __x, long double __y) _NOEXCEPT       {return __builtin_nexttowardf(__x, __y);}
-
-template <class = int>
-_LIBCPP_HIDE_FROM_ABI double nexttoward(double __x, long double __y) _NOEXCEPT {
-  return __builtin_nexttoward(__x, __y);
-}
-
-inline _LIBCPP_HIDE_FROM_ABI long double nexttoward(long double __x, long double __y) _NOEXCEPT {return __builtin_nexttowardl(__x, __y);}
-
-template <class _A1>
-inline _LIBCPP_HIDE_FROM_ABI
-typename std::enable_if<std::is_integral<_A1>::value, double>::type
-nexttoward(_A1 __x, long double __y) _NOEXCEPT {return __builtin_nexttoward((double)__x, __y);}
-
-// remainder
-
-inline _LIBCPP_HIDE_FROM_ABI float       remainder(float __x, float __y) _NOEXCEPT             {return __builtin_remainderf(__x, __y);}
-
-template <class = int>
-_LIBCPP_HIDE_FROM_ABI double remainder(double __x, double __y) _NOEXCEPT {
-  return __builtin_remainder(__x, __y);
-}
-
-inline _LIBCPP_HIDE_FROM_ABI long double remainder(long double __x, long double __y) _NOEXCEPT {return __builtin_remainderl(__x, __y);}
-
-template <class _A1, class _A2>
-inline _LIBCPP_HIDE_FROM_ABI
-typename std::__enable_if_t
-<
-    std::is_arithmetic<_A1>::value &&
-    std::is_arithmetic<_A2>::value,
-    std::__promote<_A1, _A2>
->::type
-remainder(_A1 __x, _A2 __y) _NOEXCEPT
-{
-    typedef typename std::__promote<_A1, _A2>::type __result_type;
-    static_assert((!(std::_IsSame<_A1, __result_type>::value &&
-                     std::_IsSame<_A2, __result_type>::value)), "");
-    return ::remainder((__result_type)__x, (__result_type)__y);
-}
-
-// remquo
-
-inline _LIBCPP_HIDE_FROM_ABI float       remquo(float __x, float __y, int* __z) _NOEXCEPT             {return __builtin_remquof(__x, __y, __z);}
-
-template <class = int>
-_LIBCPP_HIDE_FROM_ABI double remquo(double __x, double __y, int* __z) _NOEXCEPT {
-  return __builtin_remquo(__x, __y, __z);
-}
-
-inline _LIBCPP_HIDE_FROM_ABI long double remquo(long double __x, long double __y, int* __z) _NOEXCEPT {return __builtin_remquol(__x, __y, __z);}
-
-template <class _A1, class _A2>
-inline _LIBCPP_HIDE_FROM_ABI
-typename std::__enable_if_t
-<
-    std::is_arithmetic<_A1>::value &&
-    std::is_arithmetic<_A2>::value,
-    std::__promote<_A1, _A2>
->::type
-remquo(_A1 __x, _A2 __y, int* __z) _NOEXCEPT
-{
-    typedef typename std::__promote<_A1, _A2>::type __result_type;
-    static_assert((!(std::_IsSame<_A1, __result_type>::value &&
-                     std::_IsSame<_A2, __result_type>::value)), "");
-    return ::remquo((__result_type)__x, (__result_type)__y, __z);
-}
-
-// rint
-
-_LIBCPP_NODISCARD_EXT inline _LIBCPP_HIDE_FROM_ABI float       rint(float __x) _NOEXCEPT
-{
-    return __builtin_rintf(__x);
-}
-
-template <class = int>
-_LIBCPP_NODISCARD_EXT _LIBCPP_HIDE_FROM_ABI double rint(double __x) _NOEXCEPT {
-  return __builtin_rint(__x);
-}
-
-_LIBCPP_NODISCARD_EXT inline _LIBCPP_HIDE_FROM_ABI long double rint(long double __x) _NOEXCEPT
-{
-    return __builtin_rintl(__x);
-}
-
-template <class _A1>
-_LIBCPP_NODISCARD_EXT inline _LIBCPP_HIDE_FROM_ABI
-typename std::enable_if<std::is_integral<_A1>::value, double>::type
-rint(_A1 __x) _NOEXCEPT
-{
-    return __builtin_rint((double)__x);
-}
-
-// round
-
-_LIBCPP_NODISCARD_EXT inline _LIBCPP_HIDE_FROM_ABI float       round(float __x) _NOEXCEPT
-{
-    return __builtin_round(__x);
-}
-
-template <class = int>
-_LIBCPP_NODISCARD_EXT _LIBCPP_HIDE_FROM_ABI double round(double __x) _NOEXCEPT {
-  return __builtin_round(__x);
-}
-
-_LIBCPP_NODISCARD_EXT inline _LIBCPP_HIDE_FROM_ABI long double round(long double __x) _NOEXCEPT
-{
-    return __builtin_roundl(__x);
-}
-
-template <class _A1>
-_LIBCPP_NODISCARD_EXT inline _LIBCPP_HIDE_FROM_ABI
-typename std::enable_if<std::is_integral<_A1>::value, double>::type
-round(_A1 __x) _NOEXCEPT
-{
-    return __builtin_round((double)__x);
-}
-
-// scalbln
-
-inline _LIBCPP_HIDE_FROM_ABI float       scalbln(float __x, long __y) _NOEXCEPT       {return __builtin_scalblnf(__x, __y);}
-
-template <class = int>
-_LIBCPP_HIDE_FROM_ABI double scalbln(double __x, long __y) _NOEXCEPT {
-  return __builtin_scalbln(__x, __y);
-}
-
-inline _LIBCPP_HIDE_FROM_ABI long double scalbln(long double __x, long __y) _NOEXCEPT {return __builtin_scalblnl(__x, __y);}
-
-template <class _A1>
-inline _LIBCPP_HIDE_FROM_ABI
-typename std::enable_if<std::is_integral<_A1>::value, double>::type
-scalbln(_A1 __x, long __y) _NOEXCEPT {return __builtin_scalbln((double)__x, __y);}
-
-// scalbn
-
-inline _LIBCPP_HIDE_FROM_ABI float       scalbn(float __x, int __y) _NOEXCEPT       {return __builtin_scalbnf(__x, __y);}
-
-template <class = int>
-_LIBCPP_HIDE_FROM_ABI double scalbn(double __x, int __y) _NOEXCEPT {
-  return __builtin_scalbn(__x, __y);
-}
-
-inline _LIBCPP_HIDE_FROM_ABI long double scalbn(long double __x, int __y) _NOEXCEPT {return __builtin_scalbnl(__x, __y);}
-
-template <class _A1>
-inline _LIBCPP_HIDE_FROM_ABI
-typename std::enable_if<std::is_integral<_A1>::value, double>::type
-scalbn(_A1 __x, int __y) _NOEXCEPT {return __builtin_scalbn((double)__x, __y);}
-
-// tgamma
-
-inline _LIBCPP_HIDE_FROM_ABI float       tgamma(float __x) _NOEXCEPT       {return __builtin_tgammaf(__x);}
-
-template <class = int>
-_LIBCPP_HIDE_FROM_ABI double tgamma(double __x) _NOEXCEPT {
-  return __builtin_tgamma(__x);
-}
-
-inline _LIBCPP_HIDE_FROM_ABI long double tgamma(long double __x) _NOEXCEPT {return __builtin_tgammal(__x);}
-
-template <class _A1>
-inline _LIBCPP_HIDE_FROM_ABI
-typename std::enable_if<std::is_integral<_A1>::value, double>::type
-tgamma(_A1 __x) _NOEXCEPT {return __builtin_tgamma((double)__x);}
-
-// trunc
-
-_LIBCPP_NODISCARD_EXT inline _LIBCPP_HIDE_FROM_ABI float       trunc(float __x) _NOEXCEPT
-{
-    return __builtin_trunc(__x);
-}
-
-template <class = int>
-_LIBCPP_NODISCARD_EXT _LIBCPP_HIDE_FROM_ABI double trunc(double __x) _NOEXCEPT {
-  return __builtin_trunc(__x);
-}
-
-_LIBCPP_NODISCARD_EXT inline _LIBCPP_HIDE_FROM_ABI long double trunc(long double __x) _NOEXCEPT
-{
-    return __builtin_truncl(__x);
-}
-
-template <class _A1>
-_LIBCPP_NODISCARD_EXT inline _LIBCPP_HIDE_FROM_ABI
-typename std::enable_if<std::is_integral<_A1>::value, double>::type
-trunc(_A1 __x) _NOEXCEPT
-{
-    return __builtin_trunc((double)__x);
-}
-
-} // extern "C++"
-
-#endif // __cplusplus
-
-#else // _LIBCPP_MATH_H
-
-// This include lives outside the header guard in order to support an MSVC
-// extension which allows users to do:
-//
-// #define _USE_MATH_DEFINES
-// #include <math.h>
-//
-// and receive the definitions of mathematical constants, even if <math.h>
-// has previously been included.
-#if defined(_LIBCPP_MSVCRT) && defined(_USE_MATH_DEFINES)
-#include_next <math.h>
+#if __ISO_C_VISIBLE >= 1999
+#define	FP_ILOGB0	(-__INT_MAX)
+#define	FP_ILOGBNAN	__INT_MAX
+
+#ifdef __MATH_BUILTIN_CONSTANTS
+#define	HUGE_VALF	__builtin_huge_valf()
+#define	HUGE_VALL	__builtin_huge_vall()
+#define	INFINITY	__builtin_inff()
+#define	NAN		__builtin_nanf("")
+#else
+#define	HUGE_VALF	(float)HUGE_VAL
+#define	HUGE_VALL	(long double)HUGE_VAL
+#define	INFINITY	HUGE_VALF
+#define	NAN		(__nan.__uf)
+#endif /* __MATH_BUILTIN_CONSTANTS */
+
+#define	MATH_ERRNO	1
+#define	MATH_ERREXCEPT	2
+#define	math_errhandling	MATH_ERREXCEPT
+
+#define	FP_FAST_FMAF	1
+
+/* Symbolic constants to classify floating point numbers. */
+#define	FP_INFINITE	0x01
+#define	FP_NAN		0x02
+#define	FP_NORMAL	0x04
+#define	FP_SUBNORMAL	0x08
+#define	FP_ZERO		0x10
+
+#if __STDC_VERSION__ >= 201112L || __has_extension(c_generic_selections)
+#define	__fp_type_select(x, f, d, ld) __extension__ _Generic((x),	\
+    float: f,								\
+    double: d,								\
+    long double: ld)(x)
+#elif !defined(__cplusplus)
+#define	__fp_type_select(x, f, d, ld) __builtin_choose_expr(		\
+    __builtin_types_compatible_p(__typeof(x), long double), ld(x),	\
+    __builtin_choose_expr(						\
+    __builtin_types_compatible_p(__typeof(x), double), d(x),		\
+    __builtin_choose_expr(						\
+    __builtin_types_compatible_p(__typeof(x), float), f(x), (void)0)))
+#else
+#define	 __fp_type_select(x, f, d, ld)					\
+    ((sizeof(x) == sizeof(float)) ? f(x)				\
+    : (sizeof(x) == sizeof(double)) ? d(x)				\
+    : ld(x))
 #endif
 
-#endif // _LIBCPP_MATH_H
+#define	fpclassify(x) \
+	__fp_type_select(x, __fpclassifyf, __fpclassifyd, __fpclassifyl)
+#define	isfinite(x) __fp_type_select(x, __isfinitef, __isfinite, __isfinitel)
+#define	isinf(x) __fp_type_select(x, __isinff, __isinf, __isinfl)
+#define	isnan(x) \
+	__fp_type_select(x, __inline_isnanf, __inline_isnan, __inline_isnanl)
+#define	isnormal(x) __fp_type_select(x, __isnormalf, __isnormal, __isnormall)
+
+#ifdef __MATH_BUILTIN_RELOPS
+#define	isgreater(x, y)		__builtin_isgreater((x), (y))
+#define	isgreaterequal(x, y)	__builtin_isgreaterequal((x), (y))
+#define	isless(x, y)		__builtin_isless((x), (y))
+#define	islessequal(x, y)	__builtin_islessequal((x), (y))
+#define	islessgreater(x, y)	__builtin_islessgreater((x), (y))
+#define	isunordered(x, y)	__builtin_isunordered((x), (y))
+#else
+#define	isgreater(x, y)		(!isunordered((x), (y)) && (x) > (y))
+#define	isgreaterequal(x, y)	(!isunordered((x), (y)) && (x) >= (y))
+#define	isless(x, y)		(!isunordered((x), (y)) && (x) < (y))
+#define	islessequal(x, y)	(!isunordered((x), (y)) && (x) <= (y))
+#define	islessgreater(x, y)	(!isunordered((x), (y)) && \
+					((x) > (y) || (y) > (x)))
+#define	isunordered(x, y)	(isnan(x) || isnan(y))
+#endif /* __MATH_BUILTIN_RELOPS */
+
+#define	signbit(x) __fp_type_select(x, __signbitf, __signbit, __signbitl)
+
+typedef	__double_t	double_t;
+typedef	__float_t	float_t;
+#endif /* __ISO_C_VISIBLE >= 1999 */
+
+/*
+ * XOPEN/SVID
+ */
+#if __BSD_VISIBLE || __XSI_VISIBLE
+#define	M_E		2.7182818284590452354	/* e */
+#define	M_LOG2E		1.4426950408889634074	/* log 2e */
+#define	M_LOG10E	0.43429448190325182765	/* log 10e */
+#define	M_LN2		0.69314718055994530942	/* log e2 */
+#define	M_LN10		2.30258509299404568402	/* log e10 */
+#define	M_PI		3.14159265358979323846	/* pi */
+#define	M_PI_2		1.57079632679489661923	/* pi/2 */
+#define	M_PI_4		0.78539816339744830962	/* pi/4 */
+#define	M_1_PI		0.31830988618379067154	/* 1/pi */
+#define	M_2_PI		0.63661977236758134308	/* 2/pi */
+#define	M_2_SQRTPI	1.12837916709551257390	/* 2/sqrt(pi) */
+#define	M_SQRT2		1.41421356237309504880	/* sqrt(2) */
+#define	M_SQRT1_2	0.70710678118654752440	/* 1/sqrt(2) */
+
+#if __BSD_VISIBLE || __XSI_VISIBLE >= 800
+#define	M_El		2.718281828459045235360287471352662498L	/* e */
+#define	M_LOG2El	1.442695040888963407359924681001892137L	/* log_2 e */
+#define	M_LOG10El	0.434294481903251827651128918916605082L	/* log_10 e */
+#define	M_LN2l		0.693147180559945309417232121458176568L	/* log_e 2 */
+#define	M_LN10l		2.302585092994045684017991454684364208L	/* log_e 10 */
+#define	M_PIl		3.141592653589793238462643383279502884L	/* pi */
+#define	M_PI_2l		1.570796326794896619231321691639751442L	/* pi/2 */
+#define	M_PI_4l		0.785398163397448309615660845819875721L	/* pi/4 */
+#define	M_1_PIl		0.318309886183790671537767526745028724L	/* 1/pi */
+#define	M_2_PIl		0.636619772367581343075535053490057448L	/* 2/pi */
+#define	M_2_SQRTPIl	1.128379167095512573896158903121545172L	/* 2/sqrt(pi) */
+#define	M_SQRT2l	1.414213562373095048801688724209698079L	/* sqrt(2) */
+#define	M_SQRT1_2l	0.707106781186547524400844362104849039L	/* 1/sqrt(2) */
+#endif /* __BSD_VISIBLE || __XSI_VISIBLE >= 800 */
+
+#define	MAXFLOAT	((float)3.40282346638528860e+38)
+extern int signgam;
+#endif /* __BSD_VISIBLE || __XSI_VISIBLE */
+
+#if __BSD_VISIBLE
+#if 0
+/* Old value from 4.4BSD-Lite math.h; this is probably better. */
+#define	HUGE		HUGE_VAL
+#else
+#define	HUGE		MAXFLOAT
+#endif
+#endif /* __BSD_VISIBLE */
+
+/*
+ * Most of these functions depend on the rounding mode and have the side
+ * effect of raising floating-point exceptions, so they are not declared
+ * as __pure2.  In C99, FENV_ACCESS affects the purity of these functions.
+ */
+__BEGIN_DECLS
+/*
+ * ANSI/POSIX
+ */
+int	__fpclassifyd(double) __pure2;
+int	__fpclassifyf(float) __pure2;
+int	__fpclassifyl(long double) __pure2;
+int	__isfinitef(float) __pure2;
+int	__isfinite(double) __pure2;
+int	__isfinitel(long double) __pure2;
+int	__isinff(float) __pure2;
+int	__isinf(double) __pure2;
+int	__isinfl(long double) __pure2;
+int	__isnormalf(float) __pure2;
+int	__isnormal(double) __pure2;
+int	__isnormall(long double) __pure2;
+int	__signbit(double) __pure2;
+int	__signbitf(float) __pure2;
+int	__signbitl(long double) __pure2;
+
+static __inline int
+__inline_isnan(const double __x)
+{
+
+	return (__x != __x);
+}
+
+static __inline int
+__inline_isnanf(const float __x)
+{
+
+	return (__x != __x);
+}
+
+static __inline int
+__inline_isnanl(const long double __x)
+{
+
+	return (__x != __x);
+}
+
+/*
+ * Define the following aliases, for compatibility with glibc and CUDA.
+ */
+#define __isnan __inline_isnan
+#define __isnanf __inline_isnanf
+
+/*
+ * Version 2 of the Single UNIX Specification (UNIX98) defined isnan() and
+ * isinf() as functions taking double.  C99, and the subsequent POSIX revisions
+ * (SUSv3, POSIX.1-2001, define it as a macro that accepts any real floating
+ * point type.  If we are targeting SUSv2 and C99 or C11 (or C++11) then we
+ * expose the newer definition, assuming that the language spec takes
+ * precedence over the operating system interface spec.
+ */
+#if	__XSI_VISIBLE > 0 && __XSI_VISIBLE < 600 && __ISO_C_VISIBLE < 1999
+#undef isinf
+#undef isnan
+int	isinf(double);
+int	isnan(double);
+#endif
+
+double	acos(double);
+double	asin(double);
+double	atan(double);
+double	atan2(double, double);
+double	cos(double);
+double	sin(double);
+double	tan(double);
+
+double	cosh(double);
+double	sinh(double);
+double	tanh(double);
+
+double	exp(double);
+double	frexp(double, int *);	/* fundamentally !__pure2 */
+double	ldexp(double, int);
+double	log(double);
+double	log10(double);
+double	modf(double, double *);	/* fundamentally !__pure2 */
+
+double	pow(double, double);
+double	sqrt(double);
+
+double	ceil(double);
+double	fabs(double) __pure2;
+double	floor(double);
+double	fmod(double, double);
+
+/*
+ * These functions are not in C90.
+ */
+#if __BSD_VISIBLE || __ISO_C_VISIBLE >= 1999 || __XSI_VISIBLE
+double	acosh(double);
+double	asinh(double);
+double	atanh(double);
+double	cbrt(double);
+double	erf(double);
+double	erfc(double);
+double	exp2(double);
+double	expm1(double);
+double	fma(double, double, double);
+double	hypot(double, double);
+int	ilogb(double) __pure2;
+double	lgamma(double);
+long long llrint(double);
+long long llround(double);
+double	log1p(double);
+double	log2(double);
+double	logb(double);
+long	lrint(double);
+long	lround(double);
+double	nan(const char *) __pure2;
+double	nextafter(double, double);
+double	remainder(double, double);
+double	remquo(double, double, int *);
+double	rint(double);
+#endif /* __BSD_VISIBLE || __ISO_C_VISIBLE >= 1999 || __XSI_VISIBLE */
+
+#if __BSD_VISIBLE || __XSI_VISIBLE
+double	j0(double);
+double	j1(double);
+double	jn(int, double);
+double	y0(double);
+double	y1(double);
+double	yn(int, double);
+
+#if __XSI_VISIBLE <= 500 || __BSD_VISIBLE
+double	gamma(double);
+#endif
+
+#if __XSI_VISIBLE <= 600 || __BSD_VISIBLE
+double	scalb(double, double);
+#endif
+#endif /* __BSD_VISIBLE || __XSI_VISIBLE */
+
+#if __BSD_VISIBLE || __ISO_C_VISIBLE >= 1999
+double	copysign(double, double) __pure2;
+double	fdim(double, double);
+double	fmax(double, double) __pure2;
+double	fmin(double, double) __pure2;
+double	nearbyint(double);
+double	round(double);
+double	scalbln(double, long);
+double	scalbn(double, int);
+double	tgamma(double);
+double	trunc(double);
+#endif
+
+/*
+ * BSD math library entry points
+ */
+#if __BSD_VISIBLE
+double	drem(double, double);
+int	finite(double) __pure2;
+int	isnanf(float) __pure2;
+
+/*
+ * Reentrant version of gamma & lgamma; passes signgam back by reference
+ * as the second argument; user must allocate space for signgam.
+ */
+double	gamma_r(double, int *);
+double	lgamma_r(double, int *);
+
+/*
+ * IEEE Test Vector
+ */
+double	significand(double);
+#endif /* __BSD_VISIBLE */
+
+/* float versions of ANSI/POSIX functions */
+#if __ISO_C_VISIBLE >= 1999
+float	acosf(float);
+float	asinf(float);
+float	atanf(float);
+float	atan2f(float, float);
+float	cosf(float);
+float	sinf(float);
+float	tanf(float);
+
+float	coshf(float);
+float	sinhf(float);
+float	tanhf(float);
+
+float	exp2f(float);
+float	expf(float);
+float	expm1f(float);
+float	frexpf(float, int *);	/* fundamentally !__pure2 */
+int	ilogbf(float) __pure2;
+float	ldexpf(float, int);
+float	log10f(float);
+float	log1pf(float);
+float	log2f(float);
+float	logf(float);
+float	modff(float, float *);	/* fundamentally !__pure2 */
+
+float	powf(float, float);
+float	sqrtf(float);
+
+float	ceilf(float);
+float	fabsf(float) __pure2;
+float	floorf(float);
+float	fmodf(float, float);
+float	roundf(float);
+
+float	erff(float);
+float	erfcf(float);
+float	hypotf(float, float);
+float	lgammaf(float);
+float	tgammaf(float);
+
+float	acoshf(float);
+float	asinhf(float);
+float	atanhf(float);
+float	cbrtf(float);
+float	logbf(float);
+float	copysignf(float, float) __pure2;
+long long llrintf(float);
+long long llroundf(float);
+long	lrintf(float);
+long	lroundf(float);
+float	nanf(const char *) __pure2;
+float	nearbyintf(float);
+float	nextafterf(float, float);
+float	remainderf(float, float);
+float	remquof(float, float, int *);
+float	rintf(float);
+float	scalblnf(float, long);
+float	scalbnf(float, int);
+float	truncf(float);
+
+float	fdimf(float, float);
+float	fmaf(float, float, float);
+float	fmaxf(float, float) __pure2;
+float	fminf(float, float) __pure2;
+#endif
+
+/*
+ * float versions of BSD math library entry points
+ */
+#if __BSD_VISIBLE
+float	dremf(float, float);
+int	finitef(float) __pure2;
+float	gammaf(float);
+float	j0f(float);
+float	j1f(float);
+float	jnf(int, float);
+float	scalbf(float, float);
+float	y0f(float);
+float	y1f(float);
+float	ynf(int, float);
+
+/*
+ * Float versions of reentrant version of gamma & lgamma; passes
+ * signgam back by reference as the second argument; user must
+ * allocate space for signgam.
+ */
+float	gammaf_r(float, int *);
+float	lgammaf_r(float, int *);
+
+/*
+ * float version of IEEE Test Vector
+ */
+float	significandf(float);
+#endif	/* __BSD_VISIBLE */
+
+/*
+ * long double versions of ISO/POSIX math functions
+ */
+#if __ISO_C_VISIBLE >= 1999
+long double	acoshl(long double);
+long double	acosl(long double);
+long double	asinhl(long double);
+long double	asinl(long double);
+long double	atan2l(long double, long double);
+long double	atanhl(long double);
+long double	atanl(long double);
+long double	cbrtl(long double);
+long double	ceill(long double);
+long double	copysignl(long double, long double) __pure2;
+long double	coshl(long double);
+long double	cosl(long double);
+long double	erfcl(long double);
+long double	erfl(long double);
+long double	exp2l(long double);
+long double	expl(long double);
+long double	expm1l(long double);
+long double	fabsl(long double) __pure2;
+long double	fdiml(long double, long double);
+long double	floorl(long double);
+long double	fmal(long double, long double, long double);
+long double	fmaxl(long double, long double) __pure2;
+long double	fminl(long double, long double) __pure2;
+long double	fmodl(long double, long double);
+long double	frexpl(long double, int *); /* fundamentally !__pure2 */
+long double	hypotl(long double, long double);
+int		ilogbl(long double) __pure2;
+long double	ldexpl(long double, int);
+long double	lgammal(long double);
+long long	llrintl(long double);
+long long	llroundl(long double);
+long double	log10l(long double);
+long double	log1pl(long double);
+long double	log2l(long double);
+long double	logbl(long double);
+long double	logl(long double);
+long		lrintl(long double);
+long		lroundl(long double);
+long double	modfl(long double, long double *); /* fundamentally !__pure2 */
+long double	nanl(const char *) __pure2;
+long double	nearbyintl(long double);
+long double	nextafterl(long double, long double);
+double		nexttoward(double, long double);
+float		nexttowardf(float, long double);
+long double	nexttowardl(long double, long double);
+long double	powl(long double, long double);
+long double	remainderl(long double, long double);
+long double	remquol(long double, long double, int *);
+long double	rintl(long double);
+long double	roundl(long double);
+long double	scalblnl(long double, long);
+long double	scalbnl(long double, int);
+long double	sinhl(long double);
+long double	sinl(long double);
+long double	sqrtl(long double);
+long double	tanhl(long double);
+long double	tanl(long double);
+long double	tgammal(long double);
+long double	truncl(long double);
+#endif /* __ISO_C_VISIBLE >= 1999 */
+
+#if __BSD_VISIBLE
+long double	lgammal_r(long double, int *);
+void		sincos(double, double *, double *);
+void		sincosf(float, float *, float *);
+void		sincosl(long double, long double *, long double *);
+double		cospi(double);
+float		cospif(float);
+long double 	cospil(long double);
+double		sinpi(double);
+float		sinpif(float);
+long double 	sinpil(long double);
+double		tanpi(double);
+float		tanpif(float);
+long double	tanpil(long double);
+#endif
+
+__END_DECLS
+
+#endif /* !_MATH_H_ */

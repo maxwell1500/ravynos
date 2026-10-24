@@ -26,6 +26,12 @@ enum {
 
     BOOL _treatsFilePackagesAsDirectories;
     NSView *_accessoryView;
+
+    BOOL _canCreateDirectories;
+    BOOL _allowsOtherFileTypes;
+    BOOL _showsHiddenFiles;
+    NSArray *_allowedFileTypes;
+    NSString *_nameFieldStringValue;
 }
 
 + (NSSavePanel *)savePanel;
@@ -49,8 +55,26 @@ enum {
 
 - (void)setAccessoryView:(NSView *)view;
 - (void)setCanCreateDirectories:(BOOL)value;
+- (BOOL)canCreateDirectories;
 - (void)setAllowedFileTypes:(NSArray *)value;
+- (NSArray *)allowedFileTypes;
 - (void)setAllowsOtherFileTypes:(BOOL)value;
+- (BOOL)allowsOtherFileTypes;
+- (void)setShowsHiddenFiles:(BOOL)value;
+- (BOOL)showsHiddenFiles;
+- (void)setNameFieldStringValue:(NSString *)value;
+- (NSString *)nameFieldStringValue;
+
+/* Internal: runs the file browser for this panel. */
+- (int)_runRavynModalForDirectory:(NSString *)directory file:(NSString *)file types:(NSArray *)types;
+
+/* Internal: the browser asks the panel how it has to behave.  NSOpenPanel
+ * overrides these to enable directory and multiple selection. */
+- (BOOL)_panelIsOpenPanel;
+- (BOOL)_panelCanChooseFiles;
+- (BOOL)_panelCanChooseDirectories;
+- (BOOL)_panelAllowsMultipleSelection;
+- (void)_panelDidChoosePaths:(NSArray *)paths;
 
 - (void)setMessage:(NSString *)message;
 - (NSString *)message;

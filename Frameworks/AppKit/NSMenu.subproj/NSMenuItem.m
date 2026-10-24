@@ -68,7 +68,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
    _target=nil;
    _action=action;
    _keyEquivalent=[keyEquivalent copy];
-   _keyEquivalentModifierMask=0;
+   _keyEquivalentModifierMask=NSCommandKeyMask;
    _mnemonic=@"";
    _mnemonicLocation=0;
    _submenu=nil;

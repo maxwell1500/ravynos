@@ -58,7 +58,7 @@ OBJDIR="$HERE/work/dynutils"
 # ("xcrun clang"), and a scalar would make "$CC" a single bogus filename.
 CC=(${CLANG:-xcrun clang})
 
-ALL="sh echo ls cat mkdir rm test cp mv launchctl"
+ALL="sh echo ls cat mkdir rm test cp mv sleep launchctl"
 
 # ---------------------------------------------------------------- SRCS table
 # Read from BSD/bin/<u>/Makefile SRCS/ the implicit PROG sources; listed here
@@ -78,6 +78,7 @@ srcs_for() {
         # and the rest of the shell's globals, which test must not own.
         test)  echo "test.c" ;;
         mv)    echo "mv.c" ;;
+        sleep) echo "sleep.c" ;;
         # launchctl is the only utility here that is not self-contained: it
         # includes vproc.h / vproc_priv.h / vproc_internal.h and <bootstrap.h>
         # from the liblaunch sources, and it links -llaunch -lutil -ljansson.

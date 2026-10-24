@@ -1,0 +1,170 @@
+--- a/accel/hvf/hvf-all.c
++++ b/accel/hvf/hvf-all.c
+@@ -72,10 +72,68 @@
+     do_hv_vm_protect(addr, size, HV_MEMORY_READ | HV_MEMORY_EXEC);
+ }
+ 
++/*
++ * Pages the EPT fault handler has un-protected since the last dirty-bitmap
++ * sync.  Each of them was write-protected by dirty tracking, faulted once,
++ * and was then made writable again so the guest does not fault on every
++ * store; hvf_log_sync() re-protects exactly these pages when the dirty
++ * bitmap is cleared.  Recording them (instead of re-protecting the whole
++ * region) keeps the idle cost at zero and the busy cost proportional to the
++ * damage: re-protecting a 16 MiB vram region on every 30 ms display tick
++ * cost a full core.
++ */
++#define HVF_DIRTY_MAX 65536
++static struct { hwaddr addr; size_t size; } hvf_dirty_pages[HVF_DIRTY_MAX];
++static unsigned hvf_dirty_count;
++static bool hvf_dirty_overflow;
++/*
++ * Appended by the EPT fault handler on the vcpu thread, drained by
++ * hvf_log_sync() on the main loop thread.  A lost entry means a page that
++ * is left writable forever: it never faults again, never sets a dirty bit
++ * again, and its part of the screen freezes.
++ */
++static QemuMutex hvf_dirty_lock;
++static bool hvf_dirty_lock_init;
++
++static void hvf_dirty_lock_ensure(void)
++{
++    if (!hvf_dirty_lock_init) {
++        qemu_mutex_init(&hvf_dirty_lock);
++        hvf_dirty_lock_init = true;
++    }
++}
++
+ void hvf_unprotect_dirty_range(hwaddr addr, size_t size)
+ {
+     do_hv_vm_protect(addr, size,
+                      HV_MEMORY_READ | HV_MEMORY_WRITE | HV_MEMORY_EXEC);
++
++    /* Called from the EPT fault handler (one page) and from log_stop()
++     * (whole region, logging being turned off -- in which case there is no
++     * sync coming and the record is dropped below in hvf_log_stop). */
++    hvf_dirty_lock_ensure();
++    qemu_mutex_lock(&hvf_dirty_lock);
++    if (hvf_dirty_count < HVF_DIRTY_MAX) {
++        hvf_dirty_pages[hvf_dirty_count].addr = addr;
++        hvf_dirty_pages[hvf_dirty_count].size = size;
++        hvf_dirty_count++;
++    } else {
++        hvf_dirty_overflow = true;
++    }
++    qemu_mutex_unlock(&hvf_dirty_lock);
++}
++
++static void hvf_reprotect_recorded_pages(void)
++{
++    hvf_dirty_lock_ensure();
++    qemu_mutex_lock(&hvf_dirty_lock);
++    for (unsigned i = 0; i < hvf_dirty_count; i++) {
++        hvf_protect_clean_range(hvf_dirty_pages[i].addr,
++                                hvf_dirty_pages[i].size);
++    }
++    hvf_dirty_count = 0;
++    hvf_dirty_overflow = false;
++    qemu_mutex_unlock(&hvf_dirty_lock);
+ }
+ 
+ static void hvf_set_phys_mem(MemoryRegionSection *section, bool add)
+@@ -114,6 +172,26 @@
+         return;
+     }
+ 
++    /*
++     * Dirty-logged regions must start out write-protected.
++     *
++     * The memory core emits log_start only when a section's dirty-log mask
++     * GROWS, or when a listener registers on a range that already exists.
++     * A device that turns logging on before its BAR is mapped -- vga does
++     * exactly that: vga_common_init() calls vga_dirty_log_start() before
++     * the vram is ever in an address space -- therefore never gets a
++     * log_start for the mapped section, and the section appears with
++     * region_add alone.  KVM handles this inside kvm_set_phys_mem() by
++     * creating the slot with KVM_MEM_LOG_DIRTY_PAGES; do the same here.
++     *
++     * Without this, the guest's framebuffer writes never fault, never set
++     * dirty bits, and the display never refreshes: the window stays on the
++     * first frame forever (observed as a black screen under -accel hvf
++     * while the same image is fine under tcg).
++     */
++    if (writable && memory_region_get_dirty_log_mask(area)) {
++        writable = false;
++    }
+     flags = HV_MEMORY_READ | HV_MEMORY_EXEC | (writable ? HV_MEMORY_WRITE : 0);
+     mem = memory_region_get_ram_ptr(area) + section->offset_within_region;
+ 
+@@ -142,6 +220,12 @@
+     if (new == 0) {
+         hvf_unprotect_dirty_range(section->offset_within_address_space,
+                                   int128_get64(section->size));
++        /* No more syncs are coming for this range; drop the record. */
++        hvf_dirty_lock_ensure();
++        qemu_mutex_lock(&hvf_dirty_lock);
++        hvf_dirty_count = 0;
++        hvf_dirty_overflow = false;
++        qemu_mutex_unlock(&hvf_dirty_lock);
+     }
+ }
+ 
+@@ -157,6 +241,28 @@
+                             int128_get64(section->size));
+ }
+ 
++static void hvf_log_sync(MemoryListener *listener,
++                         MemoryRegionSection *section)
++{
++    /*
++     * Called by memory_region_sync_dirty_bitmap() right before a consumer
++     * snapshots and clears the dirty bitmap -- which is how vga refreshes
++     * the display (memory_region_snapshot_and_clear_dirty() in
++     * vga_draw_graphic()).  Re-protect the range here: every page dirtied
++     * since the last cycle was un-protected by ept_emulation_fault(), and
++     * without this hook those pages never fault again, never set a dirty
++     * bit again, and the display stops updating after each page's first
++     * write.  log_clear() alone is not enough: the vga clear path never
++     * emits it.
++     */
++    if (hvf_dirty_overflow) {
++        hvf_protect_clean_range(section->offset_within_address_space,
++                                int128_get64(section->size));
++    } else {
++        hvf_reprotect_recorded_pages();
++    }
++}
++
+ static void hvf_region_add(MemoryListener *listener,
+                            MemoryRegionSection *section)
+ {
+@@ -176,6 +282,7 @@
+     .region_del = hvf_region_del,
+     .log_start = hvf_log_start,
+     .log_stop = hvf_log_stop,
++    .log_sync = hvf_log_sync,
+     .log_clear = hvf_log_clear,
+ };
+ 
+--- a/target/i386/hvf/hvf.c
++++ b/target/i386/hvf/hvf.c
+@@ -146,7 +146,18 @@
+     if (write && memory_region_get_dirty_log_mask(mr)) {
+         uintptr_t page_size = qemu_real_host_page_size();
+ 
+-        memory_region_set_dirty(mr, gpa_page + xlat, page_size);
++        /*
++         * xlat is the offset within mr (address_space_translate_internal
++         * computes it as addr - section->offset_within_address_space +
++         * section->offset_within_region), so it is exactly the offset
++         * memory_region_set_dirty() wants.  Adding gpa_page to it -- which
++         * this line used to do -- marks a bit gigabytes past the end of a
++         * 16 MiB vga vram, so the vram's own dirty bits are never set and
++         * the display only ever refreshes when a consumer takes a full
++         * frame (a fresh vnc client, a console switch), never
++         * incrementally.
++         */
++        memory_region_set_dirty(mr, xlat, page_size);
+         hvf_unprotect_dirty_range(gpa_page, page_size);
+     }
+ 

@@ -74,6 +74,27 @@ enum {
     // Other
     CODE_APP_LAUNCHED,          // New app has launched
     CODE_OPEN_BUNDLE,           // Ask WindowServer to spawn a bundle's executable
+    CODE_OPEN_DOCUMENTS,        // Open documents with an app (bundle path + NUL separated paths)
+    CODE_DRAG_EVENT,            // Cross process drag and drop event
+    CODE_PREFS_CHANGED,         // System preferences changed
+};
+
+/* Drag and drop sub events (CODE_DRAG_EVENT) */
+enum {
+    DRAG_ENTER = 1,
+    DRAG_MOVE = 2,
+    DRAG_EXIT = 3,
+    DRAG_DROP = 4
+};
+
+/* Payload of CODE_DRAG_EVENT: the WindowServer routes it to the app that
+ * owns the target window. */
+struct mach_drag_event {
+    uint32_t subcode;      /* DRAG_ENTER / DRAG_MOVE / DRAG_EXIT / DRAG_DROP */
+    uint32_t windowID;     /* target window */
+    uint32_t operationMask;/* accepted drag operations */
+    double x;              /* screen coordinates */
+    double y;
 };
 
 enum {

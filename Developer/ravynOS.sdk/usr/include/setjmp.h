@@ -1,46 +1,61 @@
-// -*- C++ -*-
-//===----------------------------------------------------------------------===//
-//
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
-// See https://llvm.org/LICENSE.txt for license information.
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
-//===----------------------------------------------------------------------===//
+/*-
+ * SPDX-License-Identifier: BSD-3-Clause
+ *
+ * Copyright (c) 1990, 1993
+ *	The Regents of the University of California.  All rights reserved.
+ * (c) UNIX System Laboratories, Inc.
+ * All or some portions of this file are derived from material licensed
+ * to the University of California by American Telephone and Telegraph
+ * Co. or Unix System Laboratories, Inc. and are reproduced herein with
+ * the permission of UNIX System Laboratories, Inc.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ * 3. Neither the name of the University nor the names of its contributors
+ *    may be used to endorse or promote products derived from this software
+ *    without specific prior written permission.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS ``AS IS'' AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.
+ */
 
-#ifndef _LIBCPP_SETJMP_H
-#define _LIBCPP_SETJMP_H
+#ifndef _SETJMP_H_
+#define _SETJMP_H_
 
-/*
-    setjmp.h synopsis
+#include <sys/cdefs.h>
 
-Macros:
+/* The size of the jmp_buf is machine dependent: */
+#include <machine/setjmp.h>
 
-    setjmp
-
-Types:
-
-    jmp_buf
-
-void longjmp(jmp_buf env, int val);
-
-*/
-
-#include <__config>
-
-#if !defined(_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER)
-#  pragma GCC system_header
+__BEGIN_DECLS
+#if __XSI_VISIBLE >= 600
+void	_longjmp(jmp_buf, int) __dead2;
+int	_setjmp(jmp_buf) __returns_twice;
 #endif
-
-#if __has_include_next(<setjmp.h>)
-#  include_next <setjmp.h>
+void	longjmp(jmp_buf, int) __dead2;
+#if __BSD_VISIBLE
+void	longjmperror(void);
 #endif
-
-#ifdef __cplusplus
-
-#ifndef setjmp
-#define setjmp(env) setjmp(env)
+int	setjmp(jmp_buf) __returns_twice;
+#if __POSIX_VISIBLE || __XSI_VISIBLE
+void	siglongjmp(sigjmp_buf, int) __dead2;
+int	sigsetjmp(sigjmp_buf, int) __returns_twice;
 #endif
+__END_DECLS
 
-#endif // __cplusplus
-
-#endif // _LIBCPP_SETJMP_H
+#endif /* !_SETJMP_H_ */

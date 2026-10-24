@@ -240,6 +240,11 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
    return nil;
 }
 
+/* Objective-C subscripting (10.8+). */
+-(id)objectAtIndexedSubscript:(NSUInteger)index {
+   return [self objectAtIndex:index];
+}
+
 -(void)getObjects:(id *)objects {
    NSUInteger i,count=[self count];
 

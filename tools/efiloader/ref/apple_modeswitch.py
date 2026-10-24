@@ -31,7 +31,7 @@ CLAIMS = [
     (0x15858, b'\x8e\xc0', 'mov es,eax'),
     (0x1585a, b'\x8e\xe8', 'mov gs,eax'),
     (0x1585c, b'\x8e\xe0', 'mov fs,eax'),
-    (0x15865, b'\xff\x28', 'jmp [rax]  <- NEAR indirect; cannot load CS'),
+    (0x15865, b'\xff\x28', 'jmp FAR m16:32 [rax] (FF /5): loads CS from the 6-byte pointer at 0x1588A'),
     (0x15867, b'\x0f\x20\xc0', 'mov rax,cr0'),
     (0x1586a, b'\x0f\xba\xf0\x1f', 'btr eax,0x1f  (clear CR0.PG)'),
     (0x1586e, b'\x0f\x22\xc0', 'mov cr0,rax'),

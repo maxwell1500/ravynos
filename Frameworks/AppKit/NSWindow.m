@@ -28,7 +28,7 @@
 #include <stdio.h>
 #include <sys/types.h>
 #include <sys/mman.h>
-
+#include <sys/stat.h>
 #import <CoreGraphics/CGDirectDisplay.h>
 #import <Onyx2D/O2Surface.h>
 #import <Onyx2D/O2GraphicsState.h>
@@ -306,7 +306,14 @@ const float WSWindowEdgePad = 2;
    _isDeferred=defer;
    _isOneShot=NO;
    _useOptimizedDrawing=NO;
-   _releaseWhenClosed=YES;
+   /* ARC callers (Dock, Filer, SystemUIServer) hold windows in strong refs.
+    * -close does 'if(_releaseWhenClosed) [self autorelease]', which is the
+    * classic MRR contract but releases a window ARC is still owning -- the
+    * object is freed and the next access trips 'overreleased while already
+    * deallocating'.  Default to NO; the few AppKit windows that really do
+    * want close to be the release (combo/popup boxes, the splash) set it
+    * explicitly. */
+   _releaseWhenClosed=NO;
    _hidesOnDeactivate=NO;
    _viewsNeedDisplay=YES;
    _flushNeeded=YES;
@@ -398,26 +405,47 @@ const float WSWindowEdgePad = 2;
          * which releases its O2Surface; O2Surface's dealloc only drops the
          * cached pixelBytes pointer for externally-supplied storage, it never
          * frees it, so unmapping after the release is safe. */
+        NSValue *curKey = [NSValue valueWithPointer:[NSThread currentThread]];
+        [_threadToContext removeObjectForKey:curKey];
         [_context release];
         _context = nil;
 
         if(buffer != NULL && bufsize > 0)
             munmap(buffer, bufsize);
 
-        int depth = [_display depth] / 8;
-        bufsize = depth * _frame.size.width * _frame.size.height;
+        /* The WindowServer owns this segment: it created it with the
+         * window's pixel geometry and reads the client's pixels out of it.
+         * Unlinking it here destroyed the server's file and split the surface
+         * in two -- the client drew into a segment the server never saw.
+         * Size the mapping from the integer window geometry so it matches
+         * the server's 4 bytes-per-pixel buffer exactly. */
+        int w = (int)_frame.size.width;
+        int h = (int)_frame.size.height;
+        bufsize = (int)((size_t)4 * (size_t)w * (size_t)h);
         int shmfd = shm_open([shmPath cString], O_RDWR | O_CREAT, 0666);
         if(shmfd >= 0) {
-            ftruncate(shmfd, bufsize);
+            struct stat st;
+            if(fstat(shmfd, &st) != 0 || st.st_size < bufsize)
+                ftruncate(shmfd, bufsize);
             buffer = mmap(NULL, bufsize, PROT_WRITE|PROT_READ, MAP_SHARED|MAP_NOCORE, shmfd, 0);
             close(shmfd);
         } else {
             buffer = NULL;
         }
+        if(buffer == MAP_FAILED || buffer == NULL) {
+            /* Never build a surface over a failed mapping -- the first draw
+             * would fault in the rasteriser.  Leaving the window without a
+             * context is a stale frame, not a crash. */
+            NSLog(@"NSWindow %@: shm mapping failed for %d bytes: %s",
+                  shmPath, (int)bufsize, strerror(errno));
+            buffer = NULL;
+            _context = nil;
+            return nil;
+        }
         O2ColorSpaceRef colorSpace = O2ColorSpaceCreateDeviceRGB();
         O2Surface *surface = [[O2Surface alloc] initWithBytes:buffer
-                width:_frame.size.width height:_frame.size.height
-                bitsPerComponent:8 bytesPerRow:4*_frame.size.width colorSpace:colorSpace
+                width:w height:h
+                bitsPerComponent:8 bytesPerRow:4*w colorSpace:colorSpace
                 bitmapInfo:kO2BitmapByteOrderDefault|kCGImageAlphaPremultipliedFirst];
         _context = [[O2Context_builtin_FT alloc] initWithSurface:surface flipped:NO];
         [surface release];
@@ -899,7 +927,12 @@ const float WSWindowEdgePad = 2;
 
     if(!NSEqualSizes(_frame.size,size) || forceRebuild) {
         _frame.size = size;
-        [self _updateWSState];
+
+        /* No _updateWSState here: setFrame:... drives the WS sync itself
+         * when tellWS:YES, and processStateUpdate: applies server geometry
+         * with tellWS:NO.  An unconditional call here bounced a modify RPC
+         * back to WindowServer in the middle of the client applying that
+         * very state -- a full extra round trip per resize step. */
 
         /* Drop the context that spanned the old geometry.  Releasing it here
          * (rather than leaving it dangling for createCGContextIfNeeded to
@@ -907,6 +940,8 @@ const float WSWindowEdgePad = 2;
          * drawing into a surface the WindowServer has already re-mapped at a
          * different size.  The shm segment itself is unlinked only in -dealloc
          * so any late flusher still maps valid bytes. */
+        NSValue *invKey = [NSValue valueWithPointer:[NSThread currentThread]];
+        [_threadToContext removeObjectForKey:invKey];
         [_context release];
         _context = nil;
         [self createCGContextIfNeeded];
@@ -959,6 +994,15 @@ const float WSWindowEdgePad = 2;
     _frame=newFrame;
     _makeSureIsOnAScreen=YES;
 
+    /* Tell WindowServer FIRST when the geometry changed: it owns the shm
+     * surface, and because a POSIX shm object can only be ftruncated once,
+     * a resize REPLACES the object.  The context rebuild below remaps by
+     * name at the new size -- doing that before WS has replaced the object
+     * maps the old, smaller object with the new, larger length, the mmap
+     * fails, and the first draw crashes. */
+    if(tellWS)
+        [self _updateWSState];
+
     if(didSize) {
         NSSize oldSize = [_backgroundView frame].size;
         [_backgroundView setFrameSize:_frame.size];
@@ -973,10 +1017,6 @@ const float WSWindowEdgePad = 2;
         [self saveFrameUsingName:_autosaveFrameName];
         [self postNotificationName:NSWindowDidMoveNotification];
     }
-
-    // Sync WS to our new geometry & position before redisplaying
-    if(tellWS)
-        [self _updateWSState];
 
     // If you setFrame:display:YES before rearranging views with only setFrame:
     // calls (which do not mark the view for display) Cocoa will properly
@@ -1591,20 +1631,27 @@ const float WSWindowEdgePad = 2;
 
 -(NSRect)constrainFrameRect:(NSRect)rect toScreen:(NSScreen *)screen {
    if ( !screen) return rect;
+
+   /* Only titled windows have a titlebar to keep on screen; borderless
+    * windows (Dock, menus, desktop, loading screen) set their own frames. */
+   if (([self styleMask] & NSTitledWindowMask) == 0)
+    return rect;
+
    NSRect visRect = [screen visibleFrame];
 
-   if (NSMaxX(rect) > NSMaxX(visRect)) {
-    rect.origin.x = NSMaxX(visRect) - rect.size.width;
-   }
-   if (NSMaxY(rect) > NSMaxY(visRect)) {
+   /* Keep the titlebar reachable: never above the menu bar, never so low that
+    * it disappears under the Dock. */
+   if (NSMaxY(rect) > NSMaxY(visRect))
     rect.origin.y = NSMaxY(visRect) - rect.size.height;
-   }
-   if (NSMinX(rect) < NSMinX(visRect)) {
-    rect.origin.x = NSMinX(visRect);
-   }
-   if (NSMinY(rect) < NSMinY(visRect)) {
-    rect.origin.y = NSMinY(visRect);
-   }
+   if (NSMaxY(rect) < NSMinY(visRect) + 50.0f)
+    rect.origin.y = NSMinY(visRect) + 50.0f - rect.size.height;
+
+   /* Keep at least 60px of the titlebar horizontally on screen. */
+   if (NSMaxX(rect) < NSMinX(visRect) + 60.0f)
+    rect.origin.x = NSMinX(visRect) + 60.0f - rect.size.width;
+   if (NSMinX(rect) > NSMaxX(visRect) - 60.0f)
+    rect.origin.x = NSMaxX(visRect) - 60.0f;
+
    return rect;
 }
 
@@ -1888,6 +1935,11 @@ const float WSWindowEdgePad = 2;
     else {
         _flushNeeded=NO;
         O2ContextFlush(_context);
+        /* Dirty-rect compositing: WindowServer only recomposites windows it
+         * believes changed, and there is no content RPC, so tell it the
+         * window's surface was just updated. */
+        if(_isVisible)
+            [self _updateWSState];
     }
 }
 
@@ -1910,7 +1962,7 @@ const float WSWindowEdgePad = 2;
 	}
 
 	[NSGraphicsContext setQuartzDebugMode: NO];
-	   
+
     [self disableFlushWindow];
     [_backgroundView displayIfNeeded];
     [self enableFlushWindow];
@@ -2068,7 +2120,7 @@ const float WSWindowEdgePad = 2;
         _frame.size.width, _frame.size.height, _styleMask, 0, {'\0'}, _level
     };
     _windowServerRPC(&data, sizeof(data), NULL, NULL);
-
+    [NSApp _removeWindow:self];
     if(_releaseWhenClosed)
         [self autorelease];
 }
@@ -2099,27 +2151,27 @@ const float WSWindowEdgePad = 2;
      [self update];
 
      _isVisible=YES;
-     [self displayIfNeeded];
+     [_backgroundView setNeedsDisplay:YES];
+     [self setViewsNeedDisplay:YES];
+     [self display];
      [self _updateWSState];
-     // this is here since it would seem that doing this any earlier will not work.
      if(![self isKindOfClass:[NSPanel class]] && ![self isExcludedFromWindowsMenu]) {
          [NSApp changeWindowsItem:self title:_title filename:NO];
      }
-     
      break;
 
     case NSWindowBelow:
      [self update];
 
      _isVisible=YES;
-     [self displayIfNeeded];
+     [_backgroundView setNeedsDisplay:YES];
+     [self setViewsNeedDisplay:YES];
+     [self display];
      [self _updateWSState];
-     // this is here since it would seem that doing this any earlier will not work.
      if(![self isKindOfClass:[NSPanel class]] && ![self isExcludedFromWindowsMenu]) {
        [NSApp changeWindowsItem:self title:_title filename:NO];
      }
      break;
-
     case NSWindowOut:   
      _isVisible=NO;
      [self _updateWSState];
@@ -2495,7 +2547,12 @@ const float WSWindowEdgePad = 2;
 
 -(void)zoom:sender {
 	NSRect zoomedFrame = [self zoomedFrame];
-	if (NSEqualRects( _frame, zoomedFrame )) zoomedFrame = _savedFrame;
+	if (_isZoomed || NSEqualRects(_frame, zoomedFrame)) {
+		if (!NSEqualRects(_savedFrame, NSZeroRect) && !NSEqualRects(_savedFrame, zoomedFrame))
+			zoomedFrame = _savedFrame;
+	} else {
+		_savedFrame = [self frame];
+	}
 	
 	// Make sure we obey our minimums
 	NSSize minSize = [self minSize];
@@ -2514,7 +2571,7 @@ const float WSWindowEdgePad = 2;
 	}
 	
 	if (shouldZoom) {
-		_savedFrame = [self frame];
+		_isZoomed = !_isZoomed;
 		[self setFrame: zoomedFrame display: YES];
 	}
 }
@@ -3167,8 +3224,14 @@ const float WSWindowEdgePad = 2;
 
     if(_styleMask != data->style)
         [self setStyleMask:data->style];
-    if(!NSEqualPoints(geom.origin, _frame.origin) || !NSEqualSizes(geom.size, _frame.size))
-        [self setFrame:geom display:NO animate:NO tellWS:NO];
+    BOOL didSize = !NSEqualSizes(geom.size, _frame.size);
+    if(!NSEqualPoints(geom.origin, _frame.origin) || didSize) {
+        /* A pure move changes no window contents: skip the full-window
+         * redisplay so dragging stays fluid. */
+        [self setFrame:geom display:didSize animate:NO tellWS:NO];
+        if(didSize)
+            [_backgroundView displayIfNeeded];
+    }
 }
 
 -(void)addEntriesToDeviceDictionary:(NSDictionary *)entries {

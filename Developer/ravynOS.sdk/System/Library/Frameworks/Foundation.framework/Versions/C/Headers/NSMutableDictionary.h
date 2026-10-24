@@ -15,6 +15,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 + dictionaryWithCapacity:(NSUInteger)capacity;
 
 - (void)setObject:object forKey:key;
+- (void)setObject:(id)object forKeyedSubscript:(id)key;
 - (void)addEntriesFromDictionary:(NSDictionary *)dictionary;
 - (void)setDictionary:(NSDictionary *)dictionary;
 

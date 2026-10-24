@@ -45,6 +45,15 @@
 #import <stdlib.h>
 #import <limits.h>
 
+#import <WindowServer/message.h>
+#include <mach/mach.h>
+#include <servers/bootstrap.h>
+
+extern "C" {
+extern mach_port_t bootstrap_port;
+extern void bootstrap_init(void);
+}
+
 #ifndef _XOPEN_SOURCE
 #define _XOPEN_SOURCE 500
 #endif
@@ -55,14 +64,31 @@
 #define _NET_WM_STATE_ADD 1
 #define _NET_WM_STATE_TOGGLE 2
 
+static NSString *_LSSQLResourcePath(NSString *base);
+
 @implementation LaunchServices
 +database {
     static NSString *db = nil;
 
-    if(db == nil)
-        db = [NSString stringWithFormat:
-        @"/var/db/launchd/com.apple.launchd.peruser.%u/launchservices.db",
-        getuid()];
+    if(db == nil) {
+        /* The per-user directory does not exist on a freshly imaged system,
+         * and /var/db is not writable for an ordinary user: create the
+         * directory, and fall back to /var/tmp when that is impossible. */
+        NSFileManager *fm = [NSFileManager defaultManager];
+        NSString *dir = [NSString stringWithFormat:
+            @"/var/db/launchd/com.apple.launchd.peruser.%u", getuid()];
+        NSString *path = [dir stringByAppendingPathComponent:@"launchservices.db"];
+
+        if(![fm fileExistsAtPath:dir])
+            [fm createDirectoryAtPath:dir withIntermediateDirectories:YES
+                            attributes:nil error:NULL];
+
+        if(![fm fileExistsAtPath:dir] || ![fm isWritableFileAtPath:dir]) {
+            NSString *fallback = [NSString stringWithFormat:@"/var/tmp/launchservices_%u.db", getuid()];
+            path = fallback;
+        }
+        db = path;
+    }
     return db;
 }
 @end
@@ -106,12 +132,17 @@ static BOOL _LSCheckAndUpdateSchema()
     // Iterate the schema updates until we are at the latest
     while(currentSchema < desiredSchema) {
         NSString *schemaFile = [NSString stringWithFormat:@"DBSchema_%d_%d", currentSchema, currentSchema+1];
-        NSString *sqlPath = [[NSBundle bundleForClass:[LaunchServices class]] pathForResource:schemaFile ofType:@"sql"];
+        NSString *sqlPath = _LSSQLResourcePath(schemaFile);
         if(sqlPath == nil) {
     	    NSLog(@"ERROR: cannot find %@.sql to update launchservices.db schema", schemaFile);
         } else {
             FILE *sql = fopen([sqlPath UTF8String], "r");
-	        char *line = fgetln(sql, &length);
+	        char *line;
+            if(sql == NULL) {
+                sqlite3_close(pDB);
+                return false;
+            }
+            line = fgetln(sql, &length);
 
         	while(length > 0) {
 	            if(sqlite3_prepare_v2(pDB, line, length, &stmt, &tail) != SQLITE_OK) {
@@ -131,11 +162,160 @@ static BOOL _LSCheckAndUpdateSchema()
     return true;
 }
 
+static BOOL _LSAddRecordToDatabase(const LSAppRecord *appRecord, BOOL isUpdate);
+
+/* Register one bundle: the applications row plus the typemap rows that
+ * make it the handler for the types it declares. */
+static void _LSRegisterBundle(NSString *path)
+{
+    NSURL *appURL = [NSURL fileURLWithPath:path];
+    LSAppRecord *record = [[LSAppRecord alloc] initWithURL:appURL];
+    NSArray *docTypes = [record documentTypes];
+    sqlite3 *pDB = NULL;
+    unsigned i;
+
+    if(record == nil)
+        return;
+
+    _LSAddRecordToDatabase(record, NO);
+
+    if(sqlite3_open([[LaunchServices database] UTF8String], &pDB) != SQLITE_OK) {
+        sqlite3_close(pDB);
+        return;
+    }
+
+    for(i = 0; i < [docTypes count]; i++) {
+        NSDictionary *docType = [docTypes objectAtIndex:i];
+        NSMutableArray *utis = [NSMutableArray array];
+        NSArray *declared = [docType objectForKey:@"LSItemContentTypes"];
+        NSArray *extensions = [docType objectForKey:@"CFBundleTypeExtensions"];
+        unsigned j;
+
+        if(declared != nil)
+            [utis addObjectsFromArray:declared];
+
+        /* The legacy key: an extension is turned into its uniform type. */
+        for(j = 0; extensions != nil && j < [extensions count]; j++) {
+            NSString *ext = [extensions objectAtIndex:j];
+            CFStringRef uti = UTTypeCreatePreferredIdentifierForTag(kUTTagClassFilenameExtension,
+                                                                   (__bridge CFStringRef)ext, NULL);
+            if(uti != NULL) {
+                NSString *s = (__bridge_transfer NSString *)uti;
+                if(![utis containsObject:s])
+                    [utis addObject:s];
+            }
+        }
+
+        for(j = 0; j < [utis count]; j++) {
+            NSString *uti = [utis objectAtIndex:j];
+            sqlite3_stmt *stmt = NULL;
+            if(sqlite3_prepare_v2(pDB,
+                    "INSERT OR IGNORE INTO typemap (uti, application, rank) VALUES (?1,?2,?3)",
+                    -1, &stmt, NULL) != SQLITE_OK)
+                continue;
+            sqlite3_bind_text(stmt, 1, [uti UTF8String], [uti length], SQLITE_STATIC);
+            sqlite3_bind_text(stmt, 2, [[appURL absoluteString] UTF8String],
+                              [[appURL absoluteString] length], SQLITE_STATIC);
+            sqlite3_bind_int(stmt, 3, 100);
+            sqlite3_step(stmt);
+            sqlite3_finalize(stmt);
+        }
+    }
+
+    sqlite3_close(pDB);
+}
+
+/* Scan the standard application directories and register every bundle that
+ * is not in the database yet.  Runs once per database: the applications
+ * table is empty on a freshly imaged system. */
+static BOOL _LSEnsureDatabasePopulated(void)
+{
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSArray *searchDirs = [NSArray arrayWithObjects:@"/Applications",
+                            @"/Applications/Utilities",
+                            @"/System/Library/CoreServices", nil];
+    sqlite3 *pDB = NULL;
+    int count = 0;
+    unsigned i;
+
+    if(sqlite3_open([[LaunchServices database] UTF8String], &pDB) != SQLITE_OK) {
+        sqlite3_close(pDB);
+        return NO;
+    }
+
+    {
+        sqlite3_stmt *stmt = NULL;
+        if(sqlite3_prepare_v2(pDB, "SELECT count(*) FROM applications", -1, &stmt, NULL) == SQLITE_OK) {
+            if(sqlite3_step(stmt) == SQLITE_ROW)
+                count = sqlite3_column_int(stmt, 0);
+            sqlite3_finalize(stmt);
+        }
+    }
+    if(count > 0) {
+        sqlite3_close(pDB);
+        return YES;
+    }
+
+    for(i = 0; i < [searchDirs count]; i++) {
+        NSString *dir = [searchDirs objectAtIndex:i];
+        NSArray *entries = [fm contentsOfDirectoryAtPath:dir error:NULL];
+        unsigned j;
+
+        if(entries == nil)
+            continue;
+        for(j = 0; j < [entries count]; j++) {
+            NSString *name = [entries objectAtIndex:j];
+            NSString *path;
+
+            if(![name hasSuffix:@".app"])
+                continue;
+            path = [dir stringByAppendingPathComponent:name];
+            if(![fm fileExistsAtPath:path])
+                continue;
+            _LSRegisterBundle(path);
+        }
+    }
+
+    sqlite3_close(pDB);
+    return YES;
+}
+
+/* Resources of a framework live under Versions/A/Resources.  This image has
+ * no symlinks (the FAT32 boot volume cannot hold them), so the framework's
+ * top-level Resources/Contents link does not exist and -pathForResource:
+ * fails.  Fall back to the versioned directory explicitly. */
+static NSString *_LSSQLResourcePath(NSString *base)
+{
+    NSString *name = [base stringByAppendingPathExtension:@"sql"];
+    NSString *path = [[NSBundle bundleForClass:[LaunchServices class]]
+                      pathForResource:base ofType:@"sql"];
+
+    if(path != nil)
+        return path;
+
+    {
+        NSArray *candidates = [NSArray arrayWithObjects:
+            [@"/System/Library/Frameworks/LaunchServices.framework/Versions/A/Resources/" stringByAppendingString:name],
+            [@"/System/Library/Frameworks/LaunchServices.framework/Resources/" stringByAppendingString:name],
+            nil];
+        unsigned i;
+
+        for(i = 0; i < [candidates count]; i++)
+            if([[NSFileManager defaultManager] fileExistsAtPath:[candidates objectAtIndex:i]])
+                return [candidates objectAtIndex:i];
+    }
+    return nil;
+}
+
 static BOOL _LSInitializeDatabase()
 {
     NSFileManager *fm = [NSFileManager defaultManager];
-    if([fm fileExistsAtPath:[LaunchServices database]])
-        return _LSCheckAndUpdateSchema();
+    if([fm fileExistsAtPath:[LaunchServices database]]) {
+        BOOL ok = _LSCheckAndUpdateSchema();
+        if(ok)
+            _LSEnsureDatabasePopulated();
+        return ok;
+    }
 
     [fm createFileAtPath:[LaunchServices database] contents:[NSData new] attributes:[NSDictionary new]];
 
@@ -146,9 +326,13 @@ static BOOL _LSInitializeDatabase()
     }
 
     // Create and populate the DB from our resource file
-    NSString *sqlPath = [[NSBundle bundleForClass:[LaunchServices class]] pathForResource:@"InitDB" ofType:@"sql"];
+    NSString *sqlPath = _LSSQLResourcePath(@"InitDB");
     if(sqlPath == nil) {
     	NSLog(@"ERROR: cannot find InitDB.sql to init launchservices.db");
+        /* Without the schema every later query fails; report the database as
+         * unusable instead of querying tables that do not exist. */
+        sqlite3_close(pDB);
+        return false;
     } else {
         sqlite3_stmt *stmt;
         const char *tail;
@@ -577,6 +761,61 @@ NSArray *_LSCleanFileURLs(NSArray *inItemURLs)
     return outItemURLs;
 }
 
+/* Hand the documents to the WindowServer, which routes them to the running
+ * instance of the app (or launches it with the documents as arguments).
+ * That is the single place that knows about the running applications, so
+ * every launch shares one document-routing path. */
+static BOOL _LSOpenDocumentsWithWindowServer(NSString *bundlePath, NSArray *itemURLs)
+{
+    mach_port_t port = MACH_PORT_NULL;
+    Message msg;
+    size_t used = 0;
+    unsigned i;
+    const char *bundle = [bundlePath UTF8String];
+
+    if(bootstrap_port == MACH_PORT_NULL)
+        bootstrap_init();
+    if(bootstrap_look_up(bootstrap_port, WINDOWSERVER_SVC_NAME, &port) != KERN_SUCCESS)
+        return NO;
+
+    memset(&msg, 0, sizeof(msg));
+    msg.header.msgh_remote_port = port;
+    msg.header.msgh_bits = MACH_MSGH_BITS_SET(MACH_MSG_TYPE_COPY_SEND, 0, 0, 0);
+    msg.header.msgh_id = MSG_ID_INLINE;
+    msg.header.msgh_size = sizeof(msg) - sizeof(mach_msg_trailer_t);
+    msg.code = CODE_OPEN_DOCUMENTS;
+    msg.pid = getpid();
+    strncpy(msg.bundleID, "com.ravynos.launchservices", sizeof(msg.bundleID) - 1);
+
+    if(bundle != NULL) {
+        size_t l = strlen(bundle) + 1;
+        if(l > sizeof(msg.data))
+            return NO;
+        memcpy(msg.data, bundle, l);
+        used = l;
+    }
+    for(i = 0; i < [itemURLs count]; i++) {
+        NSString *path = [[itemURLs objectAtIndex:i] path];
+        const char *p = [path UTF8String];
+        size_t l;
+        if(p == NULL)
+            continue;
+        l = strlen(p) + 1;
+        if(used + l > sizeof(msg.data))
+            break;
+        memcpy(msg.data + used, p, l);
+        used += l;
+    }
+    msg.len = (unsigned)used;
+
+    if(mach_msg((mach_msg_header_t *)&msg, MACH_SEND_MSG | MACH_SEND_TIMEOUT,
+                sizeof(msg) - sizeof(mach_msg_trailer_t), 0, MACH_PORT_NULL,
+                200 /* ms timeout */, MACH_PORT_NULL) != MACH_MSG_SUCCESS)
+        return NO;
+
+    return YES;
+}
+
 static OSStatus _LSOpenAllWithSpecifiedApp(const LSLaunchURLSpec *inLaunchSpec, CFURLRef _Nullable *outLaunchedURL)
 {
     const NSURL *appURL = (__bridge NSURL *)inLaunchSpec->appURL;
@@ -600,6 +839,12 @@ static OSStatus _LSOpenAllWithSpecifiedApp(const LSLaunchURLSpec *inLaunchSpec, 
 
         if(outLaunchedURL != NULL)
             *outLaunchedURL = (__bridge_retained CFURLRef)[NSURL fileURLWithPath:[app executablePath]];
+
+        /* The WindowServer owns the running applications: let it route the
+         * documents to the app (starting it when it is not running). */
+        if(_LSOpenDocumentsWithWindowServer(appPath,
+                                            (__bridge NSArray *)inLaunchSpec->itemURLs))
+            return 0;
 
         NSMutableArray *args = [NSMutableArray new];
         if(inLaunchSpec->taskArgs)

@@ -753,6 +753,15 @@ static inline void buildTransformsIfNeeded(NSView *self) {
     [self resizeSubviewsWithOldSize:oldSize];
    }
 
+   /* A resized view must repaint.  Applications create their hierarchy while
+    * the window is still 0x0 (Filer's browser view is built from
+    * [[win contentView] bounds] before the window is laid out) and then rely
+    * on autoresizing to give it a real size; without this the one
+    * setNeedsDisplay: issued at zero size is the last invalidation the view
+    * ever gets and its content stays invisible. */
+   if(!NSEqualSizes(oldSize, _bounds.size) && _window != nil)
+    [self setNeedsDisplay:YES];
+
     NSRect layerFrame=_frame;
     
     if(_superview!=nil)
@@ -792,6 +801,8 @@ static inline void buildTransformsIfNeeded(NSView *self) {
 	if (!NSEqualRects(bounds, _bounds)) {
 		_bounds=bounds;
 		invalidateTransform(self);
+		if(_window != nil)
+			[self setNeedsDisplay:YES];
 		
 		[_window invalidateCursorRectsForView:self]; // this also invalidates tracking areas
 		
@@ -880,6 +891,11 @@ static inline void buildTransformsIfNeeded(NSView *self) {
    invalidateTransform(view);
 
    [self setNeedsDisplayInRect:[view frame]];
+
+   /* A subview added after the window was on screen is never painted unless
+    * both it and the window are marked dirty. */
+   [view setNeedsDisplay:YES];
+   [[self window] setViewsNeedDisplay:YES];
 
    [view viewDidMoveToSuperview];
     
@@ -1772,8 +1788,9 @@ static NSGraphicsContext *graphicsContextForView(NSView *view){
     return result;
    }
    
-   NSGraphicsContext *cur=[NSGraphicsContext currentContext];
-   return cur!=nil ? cur : [[view window] graphicsContext];
+   if([view window] != nil)
+      return [[view window] graphicsContext];
+   return [NSGraphicsContext currentContext];
 }
 
 -(void)_lockFocusInContext:(NSGraphicsContext *)context {

@@ -1205,7 +1205,6 @@ static uint32_t CGDisplayStateFlags(CGDirectDisplayID display) {
 kern_return_t _windowServerRPC(void *data, size_t len, void *replyBuf, int *replyLen) {
     static mach_port_t replyPort = MACH_PORT_NULL;
     static mach_port_t wsPort = MACH_PORT_NULL;
-    write(2, "[CG] rpc enter\n", 14);
 
     // Get WindowServer's service port
     if(wsPort == MACH_PORT_NULL) {
@@ -1215,7 +1214,6 @@ kern_return_t _windowServerRPC(void *data, size_t len, void *replyBuf, int *repl
         if(wsPort == MACH_PORT_NULL)
             return KERN_FAILURE;
     }
-    { char _tb[128]; int _tn = snprintf(_tb, sizeof(_tb), "[CG] rpc wsPort=0x%x\n", wsPort); write(2, _tb, _tn); }
 
     // Create a port with send/receive rights for us to use
     if(replyPort == MACH_PORT_NULL) {
@@ -1225,7 +1223,6 @@ kern_return_t _windowServerRPC(void *data, size_t len, void *replyBuf, int *repl
         if(ret != KERN_SUCCESS)
             return ret;
     }
-    { char _tb[128]; int _tn = snprintf(_tb, sizeof(_tb), "[CG] rpc replyPort=0x%x\n", replyPort); write(2, _tb, _tn); }
 
     // OK, we seem to have ports set up... do the RPC. This is a blocking call until WS responds.
     PortMessage msg = {0};
@@ -1240,7 +1237,6 @@ kern_return_t _windowServerRPC(void *data, size_t len, void *replyBuf, int *repl
         msg.descriptor.disposition = MACH_MSG_TYPE_MAKE_SEND;
     }
     msg.pid = getpid();
-    write(2, "[CG] rpc pre-bundleID\n", 19);
     /* The WindowServer always hands us RAVYN_BUNDLE_ID in the environment.
      * Prefer it: calling +[NSBundle mainBundle] triggers NSBundle class
      * initialization, which walks the executable's bundle and hangs on the
@@ -1260,7 +1256,6 @@ kern_return_t _windowServerRPC(void *data, size_t len, void *replyBuf, int *repl
                 snprintf(msg.bundleID, sizeof(msg.bundleID), "unix.%u", getpid());
         }
     }
-    write(2, "[CG] rpc post-bundleID\n", 20);
 
     if(len > sizeof(msg.data))
         return MACH_SEND_TOO_LARGE;
@@ -1268,25 +1263,64 @@ kern_return_t _windowServerRPC(void *data, size_t len, void *replyBuf, int *repl
     msg.len = len;
 
     int flags = 0;
-    if(replyBuf != NULL && replyLen != NULL)
+    if(replyBuf != NULL && replyLen != NULL) {
+        /* Drain anything left over from an earlier timed-out RPC before we
+         * send, otherwise the stale message is mistaken for this reply. */
+        Message stale;
+        while(mach_msg((mach_msg_header_t *)&stale, MACH_RCV_MSG | MACH_RCV_TIMEOUT,
+                       0, sizeof(stale), replyPort, 1, MACH_PORT_NULL) == MACH_MSG_SUCCESS) {}
         flags = MACH_RCV_MSG | MACH_RCV_TIMEOUT;
-
-    char logbuf[128];
-    int logn = snprintf(logbuf, sizeof(logbuf), "[CG] _windowServerRPC code %u sending to port %u\n", *(uint32_t*)data, wsPort);
-    write(2, logbuf, logn);
+    }
 
     kern_return_t ret = KERN_SUCCESS;
-    ret = mach_msg((mach_msg_header_t *)&msg, MACH_SEND_MSG|MACH_SEND_TIMEOUT|flags, sizeof(msg),
-            sizeof(msg), replyPort, 2000, MACH_PORT_NULL);
-    logn = snprintf(logbuf, sizeof(logbuf), "[CG] _windowServerRPC mach_msg returned 0x%x\n", ret);
-    write(2, logbuf, logn);
-    if(ret == KERN_SUCCESS && replyBuf != NULL) {
+    int replyArrived = 0, sendAccepted = 0;
+    /* QEMU TCG makes WindowServer's single-threaded service loop slow, and its
+     * reply can be dropped when the client's port queue is momentarily full.
+     * A single failed attempt used to leave AppKit with a nil window while the
+     * server already had a record for it -- an orphan that never paints. So
+     * retry the whole RPC, draining any late reply first: WindowServer keys
+     * windows by id, so re-sending the same create is not a second window. */
+    for(int attempt = 0; attempt < 6; ++attempt) {
+        if(replyBuf != NULL && replyLen != NULL) {
+            Message stale;
+            while(mach_msg((mach_msg_header_t *)&stale, MACH_RCV_MSG | MACH_RCV_TIMEOUT,
+                           0, sizeof(stale), replyPort, 1, MACH_PORT_NULL) == MACH_MSG_SUCCESS) {}
+        }
+        ret = mach_msg((mach_msg_header_t *)&msg, MACH_SEND_MSG | MACH_SEND_TIMEOUT | flags,
+                sizeof(msg), sizeof(msg), replyPort,
+                (flags & MACH_RCV_MSG) ? 8000 : 3000, MACH_PORT_NULL);
+        if(ret == MACH_MSG_SUCCESS) {
+            replyArrived = 1;
+            break;
+        }
+        if(ret == MACH_RCV_TIMED_OUT)
+            sendAccepted = 1;
+    }
+    if(replyArrived && replyBuf != NULL) {
         Message *rmsg = (Message *)&msg;
         if(*replyLen >= rmsg->len) {
             *replyLen = rmsg->len;
             memmove(replyBuf, rmsg->data, *replyLen);
         } else {
             *replyLen = -1;
+        }
+    } else if(sendAccepted && replyBuf != NULL && replyLen != NULL) {
+        /* WindowServer accepted the request (the send landed) but its reply
+         * never reached us. For window state ops the client owns the window
+         * record and the server already has one under the same id, so report
+         * success instead of failing: a failed RPC here hands AppKit a nil
+         * window sitting over a live server record that then never paints. */
+        struct wsRPCSimple *ask = (struct wsRPCSimple *)msg.data;
+        if(ask->base.code == kWSWindowCreate || ask->base.code == kWSWindowModifyState ||
+           ask->base.code == kWSWindowDestroy) {
+            int copyLen = (*replyLen < (int)msg.len) ? *replyLen : (int)msg.len;
+            memset(replyBuf, 0, (size_t)copyLen);
+            if(*replyLen >= (int)sizeof(struct wsRPCSimple)) {
+                struct wsRPCSimple *got = (struct wsRPCSimple *)replyBuf;
+                got->base.code = ask->base.code;
+                got->val1 = kWSErrorSuccess;
+            }
+            return KERN_SUCCESS;
         }
     }
     return ret;

@@ -100,11 +100,10 @@ enum {
 -(NSRect)titleRectForItem:(NSMenuItem *)item previousBorderRect:(NSRect)previousBorderRect
 {
     NSRect result;
-    NSSize titleSize = NSZeroSize;
-    if([item hasSubmenu] && [[[item submenu] _name] isEqualToString:@"NSAppleMenu"])
-        titleSize = [[self graphicsStyle] menuItemAttributedTextSize:[item attributedTitle]];
-    else
-        titleSize = [[self graphicsStyle] menuItemTextSize:[item title]];
+    /* Always measure from the plain title.  The attributed path renders with
+     * the item's own (bold) font, which is not in the image: the app menu
+     * title came out as a lone "?" glyph. */
+    NSSize titleSize = [[self graphicsStyle] menuItemTextSize:[item title]];
     NSImage *img = [item image];
     if(img) {
         titleSize.width += [img size].width;
@@ -226,12 +225,8 @@ enum {
                     [[item image] compositeToPoint:pt operation:NSCompositeSourceOver];
                 }
 
-                if([item hasSubmenu] && [[[item submenu] _name] isEqualToString:@"NSAppleMenu"]) 
-                    [[self graphicsStyle] drawAttributedMenuItemText:[item attributedTitle]
-                        inRect:titleRect enabled:YES selected:(i==_selectedItemIndex)];
-                else
-                    [[self graphicsStyle] drawMenuItemText:title inRect:titleRect
-                        enabled:YES selected:(i==_selectedItemIndex)];
+                [[self graphicsStyle] drawMenuItemText:title inRect:titleRect
+                    enabled:YES selected:(i==_selectedItemIndex)];
 		
 		previousBorderRect=borderRect;
 		

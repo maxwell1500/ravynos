@@ -588,7 +588,11 @@ static int untitled_document_number = 0;
 	NSString * path = [_fileURL path];
 	NSString * extension = [path pathExtension];
 	if([extension length] == 0) {
-		extension=[[[NSDocumentController sharedDocumentController] fileExtensionsFromType:[self fileType]] objectAtIndex:0];
+		NSArray *exts=[[NSDocumentController sharedDocumentController] fileExtensionsFromType:[self fileType]];
+		/* An untitled document whose type has no registered extensions (or no
+		 * type at all) leaves this array empty; objectAtIndex:0 on it raised
+		 * NSRangeException on the first Cmd-S. */
+		extension = ([exts count] > 0) ? [exts objectAtIndex:0] : @"txt";
 	}
 	NSSavePanel * savePanel = [NSSavePanel savePanel];
 	[savePanel setRequiredFileType:extension];

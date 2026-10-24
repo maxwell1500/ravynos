@@ -103,8 +103,12 @@ typedef enum WSRPC {
     kWSWindowCreate = 8000,
     kWSWindowDestroy,
     kWSWindowModifyState,
+    kWSWindowCreateImage = 8010,   // capture a window's pixels
     // App management
     kWSApplicationActivate = 8100,
+    kWSApplicationList,          // replay CODE_APP_LAUNCHED for running apps
+    kWSDragHitTest = 8200,       // topmost visible window under (x, y)
+    kWSGetPointerPosition = 8300, // screen position of the pointer (val1 x, val2 y)
 } WSRPC;
 
 typedef enum : uint32_t {
@@ -126,6 +130,17 @@ struct wsRPCSimple {
     uint32_t val2;
     uint32_t val3;
     uint32_t val4;
+};
+
+/* Arguments and reply of kWSDragHitTest: the topmost visible window under
+ * a screen point, and the pid that owns it. */
+struct wsRPCDragHitTest {
+    struct wsRPCBase base;
+    double x, y;
+    uint32_t windowID;
+    uint32_t pid;
+    uint32_t found;
+    uint32_t reserved;
 };
 
 struct wsRPCWindow {
