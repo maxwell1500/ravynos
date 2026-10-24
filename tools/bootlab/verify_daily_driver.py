@@ -443,15 +443,6 @@ def boot_and_collect(img, tag, timeout, screenshots_dir=None):
         "-monitor", "unix:%s,server,nowait" % mon_sock,
         "-vga", "std", "-display", "none", "-no-reboot",
     ]
-    # With no display at all QEMU has nothing driving the VGA surface update,
-    # and screendump then returns whatever the last refresh left in the shadow
-    # copy: the frame lags the guest by minutes, which is what made each shot
-    # show an application from several activations earlier.  A VNC server is
-    # enough to keep the display refresh running; RAVYN_VNC=host:display or
-    # RAVYN_VNC=unix:/path selects it, and the default stays headless.
-    vnc = os.environ.get("RAVYN_VNC")
-    if vnc:
-        cmd += ["-vnc", vnc]
 
     proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL)
