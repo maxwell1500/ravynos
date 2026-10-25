@@ -19,6 +19,8 @@
 @property (nonatomic, strong) NSPopUpButton *destPopup;
 - (instancetype)initWithMode:(NSString *)mode;
 - (void)startRectMode;
+- (void)startWindowMode;
+- (void)startOverlayMode:(int)mode;
 - (void)doFullCapture;
 @end
 @implementation ScreenshotAppDelegate
@@ -43,11 +45,29 @@
         [self startRectMode];
         return;
     }
+    if ([_mode isEqualToString:@"window"]) {
+        [self startWindowMode];
+        return;
+    }
+    if ([_mode isEqualToString:@"topmost"]) {
+        [self doWindowCapture];
+        return;
+    }
     /* default: hud */
     [self showHUD];
 }
 
 - (void)startRectMode {
+    [self startOverlayMode:0];
+}
+
+/* "Capture Selected Window" used to grab whatever was frontmost, which is not
+ * what the button says: the user picks the window with a click. */
+- (void)startWindowMode {
+    [self startOverlayMode:1];
+}
+
+- (void)startOverlayMode:(int)mode {
     CGDirectDisplayID display = CGMainDisplayID();
     CGRect bounds = CGDisplayBounds(display);
     CGImageRef img = CGDisplayCreateImageForRect(display, bounds);
@@ -65,7 +85,8 @@
 
     ScreenshotOverlayView *view = [[ScreenshotOverlayView alloc] initWithFrame:(NSRect)bounds
                                                                    frozenImage:img
-                                                                   destination:[self destinationIndex]];
+                                                                   destination:[self destinationIndex]
+                                                                          mode:mode];
     [win setContentView:view];
     [win makeKeyAndOrderFront:nil];
     [[NSCursor crosshairCursor] push];
@@ -161,9 +182,9 @@
 
     [self.hudWindow orderOut:nil];
     if (delay <= 0)
-        [self doWindowCapture];
+        [self startWindowMode];
     else
-        [self performSelector:@selector(doWindowCapture) withObject:nil afterDelay:delay];
+        [self performSelector:@selector(startWindowMode) withObject:nil afterDelay:delay];
 }
 
 /* Capture the topmost application window through the WindowServer RPC; fall

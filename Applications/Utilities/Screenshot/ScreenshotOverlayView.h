@@ -15,6 +15,10 @@ NSString *ScreenshotCaptureFull(void);
 CGImageRef ScreenshotCaptureFullImage(void);
 CGImageRef ScreenshotCaptureTopWindow(void);
 
+/* Capture the window under a screen point, using the same hit test dragging
+ * uses.  NULL when the point is over no capturable window. */
+CGImageRef ScreenshotCaptureWindowAtPoint(CGPoint point);
+
 /* dest: 0 = Desktop + Clipboard, 1 = Clipboard only, 2 = Desktop + Preview. */
 NSString *ScreenshotWriteImageWithDestination(CGImageRef image, int destination);
 
@@ -25,5 +29,9 @@ NSString *ScreenshotWriteImageWithDestination(CGImageRef image, int destination)
 @property (nonatomic, assign) BOOL selecting;
 - (instancetype)initWithFrame:(NSRect)frame frozenImage:(CGImageRef)image
                   destination:(int)destination;
+
+/* mode: 0 = drag a rectangle, 1 = click a window. */
+- (instancetype)initWithFrame:(NSRect)frame frozenImage:(CGImageRef)image
+                  destination:(int)destination mode:(int)mode;
 
 @end

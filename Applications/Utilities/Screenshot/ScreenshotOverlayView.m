@@ -83,7 +83,7 @@ CGImageRef ScreenshotCaptureFullImage(void) {
 /* Ask the WindowServer for the topmost visible application window and wrap
  * the returned shared-memory pixels in a CGImage.  Returns NULL when the RPC
  * fails, so callers can fall back to a full capture. */
-CGImageRef ScreenshotCaptureTopWindow(void) {
+CGImageRef ScreenshotCaptureWindow(uint32_t windowNumber) {
     extern kern_return_t _windowServerRPC(void *data, size_t len, void *replyBuf, int *replyLen);
     struct wsRPCSimple args;
     struct wsRPCSimple reply;
@@ -94,7 +94,7 @@ CGImageRef ScreenshotCaptureTopWindow(void) {
     memset(&reply, 0, sizeof(reply));
     args.base.code = kWSWindowCreateImage;
     args.base.len = 0;
-    args.val1 = 0; /* topmost other-app window */
+    args.val1 = windowNumber; /* 0 = the topmost window owned by another app */
 
     if(_windowServerRPC(&args, sizeof(args), &reply, &len) != KERN_SUCCESS)
         return NULL;
@@ -124,17 +124,52 @@ CGImageRef ScreenshotCaptureTopWindow(void) {
     return result;
 }
 
+CGImageRef ScreenshotCaptureTopWindow(void) {
+    return ScreenshotCaptureWindow(0);
+}
+
+/* Which window a click lands on is the WindowServer's answer, not ours: the
+ * same hit test dragging uses (kWSDragHitTest) returns the topmost visible
+ * window under a screen point.  This is what makes "Capture Selected Window"
+ * select the window the user clicked instead of whatever happens to be
+ * frontmost at the moment the timer fires. */
+CGImageRef ScreenshotCaptureWindowAtPoint(CGPoint point) {
+    extern kern_return_t _windowServerRPC(void *data, size_t len, void *replyBuf, int *replyLen);
+    struct wsRPCDragHitTest args;
+    struct wsRPCDragHitTest reply;
+    int len = sizeof(reply);
+
+    memset(&args, 0, sizeof(args));
+    memset(&reply, 0, sizeof(reply));
+    args.base.code = kWSDragHitTest;
+    args.base.len = 0;
+    args.x = point.x;
+    args.y = point.y;
+
+    if(_windowServerRPC(&args, sizeof(args), &reply, &len) != KERN_SUCCESS)
+        return NULL;
+    if(reply.found == 0 || reply.windowID == 0)
+        return NULL;
+    return ScreenshotCaptureWindow(reply.windowID);
+}
+
 @implementation ScreenshotOverlayView {
     NSPoint _mouseLocation;
     int _destination;
+    int _mode;
 }
 
 - (instancetype)initWithFrame:(NSRect)frame frozenImage:(CGImageRef)image {
-    return [self initWithFrame:frame frozenImage:image destination:0];
+    return [self initWithFrame:frame frozenImage:image destination:0 mode:0];
 }
 
 - (instancetype)initWithFrame:(NSRect)frame frozenImage:(CGImageRef)image
                   destination:(int)destination {
+    return [self initWithFrame:frame frozenImage:image destination:destination mode:0];
+}
+
+- (instancetype)initWithFrame:(NSRect)frame frozenImage:(CGImageRef)image
+                  destination:(int)destination mode:(int)mode {
     self = [super initWithFrame:frame];
     if (self) {
         if (image) CFRetain(image);
@@ -146,6 +181,7 @@ CGImageRef ScreenshotCaptureTopWindow(void) {
          * the HUD offered Save to Clipboard and Preview and this path ignored
          * both. */
         _destination = destination;
+        _mode = mode;
     }
     return self;
 }
@@ -188,6 +224,27 @@ CGImageRef ScreenshotCaptureTopWindow(void) {
 }
 
 - (void)mouseUp:(NSEvent *)event {
+    if (_mode == 1) {
+        /* Click a window.  Hide the overlay first: it covers the whole screen
+         * at screen-saver level, so an unhidden overlay is what the hit test
+         * would find.  The order-out RPC is answered by the WindowServer, so
+         * by the time it returns the overlay is out of the hit test. */
+        NSPoint click = [event locationInWindow];
+        CGImageRef shot = NULL;
+
+        [[self window] orderOut:nil];
+        shot = ScreenshotCaptureWindowAtPoint(click);
+        if (shot != NULL) {
+            ScreenshotWriteImageWithDestination(shot, _destination);
+            CGImageRelease(shot);
+        } else {
+            fprintf(stderr, "Screenshot: no window at %.0f,%.0f\n",
+                    click.x, click.y);
+            fflush(stderr);
+        }
+        [NSApp terminate:nil];
+        return;
+    }
     if (_selectionRect.size.width < 4 || _selectionRect.size.height < 4) {
     } else {
         CGImageRef full = _frozenImage;
@@ -226,6 +283,15 @@ CGImageRef ScreenshotCaptureTopWindow(void) {
     } else {
         [[NSColor blackColor] setFill];
         NSRectFill(self.bounds);
+    }
+
+    if (_mode == 1) {
+        NSDictionary *hint = @{NSFontAttributeName: [NSFont systemFontOfSize:15],
+                               NSForegroundColorAttributeName: [NSColor whiteColor]};
+        [@"Click a window to capture it   \u00b7   Esc to cancel"
+            drawAtPoint:NSMakePoint(24, self.bounds.size.height - 34)
+          withAttributes:hint];
+        return;
     }
 
     /* Crosshair */
