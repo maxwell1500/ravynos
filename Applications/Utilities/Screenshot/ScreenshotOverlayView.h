@@ -23,6 +23,7 @@ NSString *ScreenshotWriteImageWithDestination(CGImageRef image, int destination)
 @property (nonatomic, assign) NSPoint selStart;
 @property (nonatomic, assign) NSRect selectionRect;
 @property (nonatomic, assign) BOOL selecting;
-- (instancetype)initWithFrame:(NSRect)frame frozenImage:(CGImageRef)image;
+- (instancetype)initWithFrame:(NSRect)frame frozenImage:(CGImageRef)image
+                  destination:(int)destination;
 
 @end

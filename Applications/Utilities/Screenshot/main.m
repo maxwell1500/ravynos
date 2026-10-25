@@ -63,7 +63,9 @@
     [win setBackgroundColor:[NSColor blackColor]];
     [win setCollectionBehavior:NSWindowCollectionBehaviorCanJoinAllSpaces | NSWindowCollectionBehaviorStationary];
 
-    ScreenshotOverlayView *view = [[ScreenshotOverlayView alloc] initWithFrame:(NSRect)bounds frozenImage:img];
+    ScreenshotOverlayView *view = [[ScreenshotOverlayView alloc] initWithFrame:(NSRect)bounds
+                                                                   frozenImage:img
+                                                                   destination:[self destinationIndex]];
     [win setContentView:view];
     [win makeKeyAndOrderFront:nil];
     [[NSCursor crosshairCursor] push];

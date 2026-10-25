@@ -64,13 +64,9 @@ NSString *ScreenshotWriteImageWithDestination(CGImageRef image, int destination)
     return path;
 }
 
-static NSString *ScreenshotWriteImage(CGImageRef image) {
-    return ScreenshotWriteImageWithDestination(image, 0);
-}
-
 NSString *ScreenshotCaptureRect(CGRect rect) {
     CGImageRef img = CGDisplayCreateImageForRect(CGMainDisplayID(), rect);
-    NSString *path = ScreenshotWriteImage(img);
+    NSString *path = ScreenshotWriteImageWithDestination(img, 0);
     if (img) CFRelease(img);
     return path;
 }
@@ -130,9 +126,15 @@ CGImageRef ScreenshotCaptureTopWindow(void) {
 
 @implementation ScreenshotOverlayView {
     NSPoint _mouseLocation;
+    int _destination;
 }
 
 - (instancetype)initWithFrame:(NSRect)frame frozenImage:(CGImageRef)image {
+    return [self initWithFrame:frame frozenImage:image destination:0];
+}
+
+- (instancetype)initWithFrame:(NSRect)frame frozenImage:(CGImageRef)image
+                  destination:(int)destination {
     self = [super initWithFrame:frame];
     if (self) {
         if (image) CFRetain(image);
@@ -140,6 +142,10 @@ CGImageRef ScreenshotCaptureTopWindow(void) {
         _selecting = NO;
         _selectionRect = NSZeroRect;
         _mouseLocation = NSZeroPoint;
+        /* A portion used to be written with the hardcoded Desktop default:
+         * the HUD offered Save to Clipboard and Preview and this path ignored
+         * both. */
+        _destination = destination;
     }
     return self;
 }
@@ -197,7 +203,7 @@ CGImageRef ScreenshotCaptureTopWindow(void) {
                                     _selectionRect.size.height * sy);
             CGImageRef cropped = CGImageCreateWithImageInRect(full, crop);
             if (cropped) {
-                ScreenshotWriteImage(cropped);
+                ScreenshotWriteImageWithDestination(cropped, _destination);
                 CFRelease(cropped);
             }
         }
