@@ -226,6 +226,25 @@ static BOOL WSPaintWasFlushed(pid_t pid, unsigned number) {
     return flushed;
 }
 
+/* Sticky version: has this window ever been announced as painted?  Activating
+ * a window puts the frame the client last drew back on the screen, so an idle
+ * client is not evidence that there is nothing to show.  Without this, a
+ * second activation of an app that painted once and then went quiet (Filer,
+ * whose window never repaints while it is behind others) announced nothing,
+ * and the self test's wait for a fresh paint timed out for 180 s. */
+static BOOL WSPaintWasAnnounced(pid_t pid, unsigned number) {
+    BOOL announced = NO;
+    pthread_mutex_lock(&sPaintLock);
+    for(int i = 0; i < sPaintCount; i++) {
+        if(sPaintTable[i].pid == pid && sPaintTable[i].number == number) {
+            announced = sPaintTable[i].announced ? YES : NO;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&sPaintLock);
+    return announced;
+}
+
 static inline void WSAddRoundRectPath(O2ContextRef ctx, NSRect r, float radius) {
     float x = r.origin.x;
     float y = r.origin.y;
@@ -1119,6 +1138,7 @@ static pthread_mutex_t _pendingLock = PTHREAD_MUTEX_INITIALIZER;
          * know the window is on screen. */
         if(w.surfaceBuf != NULL &&
            (WSPaintWasFlushed((pid_t)[app pid], (unsigned)w.number) ||
+            WSPaintWasAnnounced((pid_t)[app pid], (unsigned)w.number) ||
             WSSurfaceHasContent(w.surfaceBuf, w.bufSize))) {
             const char *bid = [[app bundleID] UTF8String];
             fprintf(stderr, "[WS] PAINTED app=%s win=%u\n",

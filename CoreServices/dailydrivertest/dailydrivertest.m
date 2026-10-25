@@ -198,8 +198,17 @@ static int _countPainted(const char *bundleID) {
     FILE *f = fopen("/var/log/ws-painted.log", "r");
     if(f == NULL)
         return 0;
-    static char buf[8192];
-    size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+    /* Read the END of the file, not the first 8 KB: the log is append-only
+     * and the fleet's re-raises grow it, so a fixed prefix would stop seeing
+     * new lines exactly when the count is being watched. */
+    static char buf[65536];
+    long size, start;
+    size_t n;
+    fseek(f, 0, SEEK_END);
+    size = ftell(f);
+    start = (size > (long)sizeof(buf) - 1) ? size - ((long)sizeof(buf) - 1) : 0;
+    fseek(f, start, SEEK_SET);
+    n = fread(buf, 1, sizeof(buf) - 1, f);
     fclose(f);
     buf[n] = '\0';
     int count = 0;
@@ -223,8 +232,14 @@ static int _countAppLog(const char *verb, const char *bundleID) {
     FILE *f = fopen("/var/log/ws-apps.log", "r");
     if(f == NULL)
         return 0;
-    static char buf[32768];
-    size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+    static char buf[65536];
+    long size, start;
+    size_t n;
+    fseek(f, 0, SEEK_END);
+    size = ftell(f);
+    start = (size > (long)sizeof(buf) - 1) ? size - ((long)sizeof(buf) - 1) : 0;
+    fseek(f, start, SEEK_SET);
+    n = fread(buf, 1, sizeof(buf) - 1, f);
     fclose(f);
     buf[n] = '\0';
     int count = 0;
