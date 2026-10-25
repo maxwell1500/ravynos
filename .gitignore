@@ -177,3 +177,12 @@ Scratch from a standalone host compile, not part of any build system.
 # An old copy of the bootlab work directory, left at the repo root by a script
 # run from there.  tools/bootlab/work/ is the live one (and is ignored).
 /work/
+
+# Framework bundles the install hooks copy into the in-repo SDK
+# (fmwk-install-hook in Frameworks/{Cocoa,IOSurface,PreferencePanes}).  They
+# are built output, byte-identical to the object tree, and are what
+# tools/bootlab/make_gui_manifest.py stages from when the repo SDK has them.
+# Named one by one because the rest of this SDK is tracked.
+/Developer/ravynOS.sdk/System/Library/Frameworks/Cocoa.framework/
+/Developer/ravynOS.sdk/System/Library/Frameworks/IOSurface.framework/
+/Developer/ravynOS.sdk/System/Library/Frameworks/PreferencePanes.framework/
