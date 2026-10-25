@@ -91,6 +91,24 @@ static void wsPaintedMarker(const char *bundleID) {
     close(fd);
 }
 
+/* Launch and activation bookkeeping in the same cross-process file channel as
+ * the painted marker.  "The canonical macOS path is the same application" is
+ * a claim about processes, not about paths: opening Filer.app and then
+ * Finder.app must activate one process, never fork a second copy.  The guest
+ * self test can only see that if WindowServer writes it down. */
+static void wsAppMarker(const char *verb, const char *bundleID, pid_t pid) {
+    if(bundleID == NULL || bundleID[0] == 0 || strcmp(bundleID, "unknown") == 0)
+        return;
+    int fd = open("/var/log/ws-apps.log", O_WRONLY | O_CREAT | O_APPEND, 0644);
+    if(fd < 0)
+        return;
+    char line[160];
+    int n = snprintf(line, sizeof(line), "%s %s %d\n", verb, bundleID, (int)pid);
+    if(n > 0 && write(fd, line, (size_t)n) > 0)
+        fprintf(stderr, "[WS] %s app=%s pid=%d\n", verb, bundleID, (int)pid);
+    close(fd);
+}
+
 /* FreeBSD mmap hint flags the ravynOS sys/mman.h does not define. Both are
  * hints only, so 0 is the correct no-op value. */
 #ifndef MAP_NOCORE
@@ -1122,6 +1140,7 @@ static pthread_mutex_t _pendingLock = PTHREAD_MUTEX_INITIALIZER;
     pthread_mutex_unlock(&appsLock);
     fprintf(stderr, "[WS] open bundle: %s already running pid %d, activated\n",
             [bundleID UTF8String], (int)[app pid]);
+    wsAppMarker("ACTIVATE", [bundleID UTF8String], (pid_t)[app pid]);
     return YES;
 }
 
@@ -1201,6 +1220,8 @@ static pthread_mutex_t _pendingLock = PTHREAD_MUTEX_INITIALIZER;
     pid_t pid = fork();
     if(pid != 0) {
         fprintf(stderr, "[WS] open bundle: forked pid %d (%s)\n", (int)pid, item.path);
+        if(pid > 0)
+            wsAppMarker("SPAWN", item.bundleID, pid);
         return;
     }
 

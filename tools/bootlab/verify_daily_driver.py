@@ -258,6 +258,73 @@ def check_bundle_ids(phase, results, index):
                       "" if found else "identifier not found in the plist")
 
 
+# make_gui_manifest.py's ALIASES table: the image format has no symlinks, so
+# the canonical macOS path is staged as a copy of the ravynOS bundle.  A copy
+# is only an alias while it is still the same bundle.  Rebuild one side and not
+# the other and the image ships two versions of one application under two
+# names, with every "is a complete bundle" check still passing.
+ALIAS_BUNDLES = [
+    ("System/Library/CoreServices/Filer.app",
+     "System/Library/CoreServices/Finder.app"),
+    ("System/Library/CoreServices/System Preferences.app",
+     "Applications/System Settings.app"),
+    ("System/Library/CoreServices/System Preferences.app",
+     "Applications/System Preferences.app"),
+]
+
+
+def _bundle_files(index, bundle):
+    """relative path inside the bundle -> manifest entry"""
+    prefix = bundle + "/"
+    return {p[len(prefix):]: e for p, e in index.items() if p.startswith(prefix)}
+
+
+def _same_file(entry_a, entry_b):
+    a = os.path.normpath(os.path.join(HERE, entry_a.get("file", "")))
+    b = os.path.normpath(os.path.join(HERE, entry_b.get("file", "")))
+    try:
+        with open(a, "rb") as fa, open(b, "rb") as fb:
+            return fa.read() == fb.read()
+    except OSError:
+        return False
+
+
+def check_aliases(results, index):
+    for canonical, alias in ALIAS_BUNDLES:
+        a = _bundle_files(index, canonical)
+        b = _bundle_files(index, alias)
+        if not a and not b:
+            continue
+        if not a or not b:
+            results.check("alias: %s is a copy of %s" % (alias, canonical), False,
+                          "only %s is staged" % (canonical if a else alias))
+            continue
+        missing = sorted(set(a) - set(b))
+        extra = sorted(set(b) - set(a))
+        differing = [rel for rel in sorted(set(a) & set(b))
+                     if not _same_file(a[rel], b[rel])]
+        ok = not (missing or extra or differing)
+        detail = "missing=%d extra=%d differing=%d" % (
+            len(missing), len(extra), len(differing))
+        if not ok:
+            detail += " (%s)" % ", ".join(
+                sorted(set(missing + extra + differing))[:3])
+        results.check("alias: %s is a byte copy of %s" % (alias, canonical),
+                      ok, detail)
+
+
+def check_alias_agents(results, index):
+    """One agent per application: an alias must not bring its own."""
+    agents = set(p for p in index
+                 if "/LaunchAgents/" in p and p.endswith(".json"))
+    for name, expected in (("Filer", 1), ("Finder", 0)):
+        staged = sorted(p for p in agents
+                        if p.endswith("/com.ravynos.%s.json" % name))
+        results.check("alias: %d launch agent(s) for %s" % (expected, name),
+                      len(staged) == expected,
+                      ", ".join(staged) if staged else "none")
+
+
 # --------------------------------------------------------------------------
 # Boot
 # --------------------------------------------------------------------------
@@ -708,6 +775,10 @@ def check_guest_report(results, img, serial=None):
              "a paste crosses process boundaries"),
             ("a file URL paste written by one process is read by another",
              "a file URL paste crosses process boundaries"),
+            ("Finder.app and Filer.app carry one bundle identifier",
+             "the canonical macOS path is the same bundle"),
+            ("opening Finder.app activates that process instead of forking a second copy",
+             "Finder.app activates Filer instead of forking a second copy"),
     ):
         results.check("guest: %s" % description, needle in text,
                       "" if needle in text else "not in the report")
@@ -808,6 +879,8 @@ def main():
         check_image(phase, results, index)
         if phase == 7:
             check_current_build(results, index)
+            check_aliases(results, index)
+            check_alias_agents(results, index)
         check_bundle_ids(phase, results, index)
         if args.boot or args.all:
             text = check_boot(phase, results, args.img, "%s%d" % (args.tag, phase),

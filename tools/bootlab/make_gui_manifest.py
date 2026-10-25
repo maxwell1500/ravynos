@@ -122,7 +122,11 @@ APPS = [
 
 # The canonical macOS names, provided as copies of the ravynOS bundles: the
 # image format has no symlinks, so the alias is the same bundle tree staged
-# at the canonical path.
+# at the canonical path.  A copy is only an alias while it stays a copy:
+# verify_daily_driver.check_aliases compares every file of both trees, and
+# check_alias_agents requires one Filer agent and no Finder one, so a rebuild
+# that refreshes only the ravynOS name fails the gate instead of shipping two
+# versions of one application under two names.
 ALIASES = [
     ("CoreServices/Filer", "Filer", "System/Library/CoreServices/Finder.app"),
     ("SysApps/Prefs", "System Preferences",

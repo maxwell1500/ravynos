@@ -44,6 +44,28 @@ static void _say(NSMutableString *report, NSString *line, BOOL ok) {
     fflush(stderr);
 }
 
+/* The count is generated, not stored: the report is written once before the
+ * fleet starts (so a hang still leaves a report) and again at the end, and
+ * both copies have to state the failures known at that moment. */
+static void _writeReport(NSString *body) {
+    NSMutableString *out = [NSMutableString stringWithString:body];
+    NSString *reportPath = @"/var/log/daily-driver-selftest.txt";
+    NSData *data;
+
+    [out appendFormat:@"%d failure(s)\n", _failures];
+    data = [out dataUsingEncoding:NSUTF8StringEncoding];
+    FILE *f = fopen([reportPath fileSystemRepresentation], "wb");
+    if(f != NULL) {
+        fwrite([data bytes], 1, [data length], f);
+        fflush(f);
+        /* The harness reads the report out of the image after the guest is
+         * stopped: the data has to be on the disk, not in the file system's
+         * cache. */
+        fsync(fileno(f));
+        fclose(f);
+    }
+}
+
 /* Run this program again with a mode and return what it printed. */
 static NSString *_runChild(const char *mode, const char *argument) {
     int fds[2];
@@ -189,6 +211,60 @@ static int _countPainted(const char *bundleID) {
     return count;
 }
 
+static kern_return_t _openBundleOnWindowServer(NSString *bundlePath);
+
+/* WindowServer records every launch and activation in /var/log/ws-apps.log:
+ *   SPAWN <bundleID> <pid>
+ *   ACTIVATE <bundleID> <pid>
+ * verb == NULL counts every line for the bundle.  Counting is what makes
+ * "Finder.app is the same app as Filer.app" checkable: the alias may activate
+ * the running process, and must never add a second SPAWN. */
+static int _countAppLog(const char *verb, const char *bundleID) {
+    FILE *f = fopen("/var/log/ws-apps.log", "r");
+    if(f == NULL)
+        return 0;
+    static char buf[32768];
+    size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+    fclose(f);
+    buf[n] = '\0';
+    int count = 0;
+    char *line = buf;
+    while(line != NULL && *line != '\0') {
+        char *end = strchr(line, '\n');
+        if(end != NULL)
+            *end = '\0';
+        if(strstr(line, bundleID) != NULL &&
+           (verb == NULL || strncmp(line, verb, strlen(verb)) == 0))
+            count++;
+        line = (end != NULL) ? end + 1 : NULL;
+    }
+    return count;
+}
+
+static BOOL _waitForAppLog(const char *bundleID, int atLeast, int seconds) {
+    int i;
+    for(i = 0; i < seconds * 4; i++) {
+        if(_countAppLog(NULL, bundleID) >= atLeast)
+            return YES;
+        usleep(250000);
+    }
+    return NO;
+}
+
+/* Ask the WindowServer to open a bundle until its app log grows past target.
+ * The first calls can land before the server is answering, so a failed open
+ * is retried rather than counted. */
+static BOOL _openAndWait(NSString *path, const char *bundleID, int target, int seconds) {
+    int waited = 0;
+    while(waited < seconds) {
+        _openBundleOnWindowServer(path);
+        if(_waitForAppLog(bundleID, target, 5))
+            return YES;
+        waited += 5;
+    }
+    return NO;
+}
+
 static kern_return_t _openBundleOnWindowServer(NSString *bundlePath) {
     mach_port_t port = MACH_PORT_NULL;
     Message msg;
@@ -305,22 +381,7 @@ int main(int argc, char **argv) {
         /* The report goes to the disk before the fleet starts: the fleet
          * takes a minute and a half, and the host harness reads the report
          * out of the image once the guest is stopped. */
-        [report appendFormat:@"%d failure(s)\n", _failures];
-
-        {
-            NSString *reportPath = @"/var/log/daily-driver-selftest.txt";
-            NSData *data = [report dataUsingEncoding:NSUTF8StringEncoding];
-            FILE *f = fopen([reportPath fileSystemRepresentation], "wb");
-            if(f != NULL) {
-                fwrite([data bytes], 1, [data length], f);
-                fflush(f);
-                /* The harness reads the report out of the image after the
-                 * guest is stopped: the data has to be on the disk, not in
-                 * the file system's cache. */
-                fsync(fileno(f));
-                fclose(f);
-            }
-        }
+        _writeReport(report);
 
         fprintf(stderr, "dailydrivertest: %d failure(s)\n", _failures);
         fflush(stderr);
@@ -481,6 +542,42 @@ int main(int argc, char **argv) {
                 }
             }
 
+            /* One application, two names.  The image format has no symlinks,
+             * so /System/Library/CoreServices/Finder.app is staged as a copy
+             * of Filer.app (make_gui_manifest.py's ALIASES table) and the
+             * canonical macOS path must resolve to the same running process.
+             * Reached after the fleet so it cannot disturb a screenshot. */
+            {
+                NSString *filerPath = @"/System/Library/CoreServices/Filer.app";
+                NSString *finderPath = @"/System/Library/CoreServices/Finder.app";
+                NSString *filerID = _bundleIdentifierOfBundle(filerPath);
+                NSString *finderID = _bundleIdentifierOfBundle(finderPath);
+                BOOL sameID = filerID != nil && finderID != nil &&
+                              [filerID isEqualToString:finderID];
+                const char *bid = (filerID != nil) ? [filerID UTF8String]
+                                                  : "com.ravynos.Filer";
+                int base = _countAppLog(NULL, bid);
+                BOOL launched = _openAndWait(filerPath, bid, base + 1, 90);
+                int mark = _countAppLog(NULL, bid);
+                int spawns = _countAppLog("SPAWN", bid);
+                BOOL activated = _openAndWait(finderPath, bid, mark + 1, 90);
+                int after = _countAppLog("SPAWN", bid);
+
+                _say(report, @"Finder.app and Filer.app carry one bundle identifier",
+                     sameID);
+                _say(report, @"opening Filer.app reaches the WindowServer", launched);
+                _say(report, @"opening Finder.app activates that process instead of forking a second copy",
+                     activated && after == spawns);
+                if(!activated || after != spawns)
+                    fprintf(stderr, "[ddtest] alias: activated=%d spawns %d->%d\n",
+                            (int)activated, spawns, after);
+            }
+
+            _writeReport(report);
+
+            /* Last: the harness stops the guest as soon as it reads this, so
+             * everything above has to be on the disk and in the console by
+             * the time it is printed. */
             fprintf(stderr, "[ddtest] fleet-done %u\n", (unsigned)[fleet count]);
             fflush(stderr);
         }
