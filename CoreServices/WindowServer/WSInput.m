@@ -295,7 +295,7 @@ static void ws_unichar_to_utf8(unichar ch, char *out) {
              * Cmd+Shift+4 (selection) and Cmd+Shift+5 (HUD). */
             if(me.mods == (NSCommandKeyMask | NSShiftKeyMask) && me.code == NSKeyDown &&
                (nskey == '3' || nskey == '4' || nskey == '5')) {
-                [target captureScreenshotWithMode:(nskey - '0')];
+                [target captureScreenshotWithMode:(int)(nskey - '3')];
                 return;
             }
             if((me.mods == NSCommandKeyMask) && sym == XKB_KEY_Tab) {

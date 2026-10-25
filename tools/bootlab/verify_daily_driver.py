@@ -775,6 +775,8 @@ def check_guest_report(results, img, serial=None):
              "a paste crosses process boundaries"),
             ("a file URL paste written by one process is read by another",
              "a file URL paste crosses process boundaries"),
+            ("a global capture writes a screenshot file",
+             "a global capture writes a screenshot file"),
             ("Finder.app and Filer.app carry one bundle identifier",
              "the canonical macOS path is the same bundle"),
             ("opening Finder.app activates that process instead of forking a second copy",

@@ -35,16 +35,21 @@ NSString *ScreenshotWriteImageWithDestination(CGImageRef image, int destination)
         }
     }
 
-    /* In-memory PNG for the pasteboard (same bytes as the file). */
-    CFMutableDataRef data = CFDataCreateMutable(kCFAllocatorDefault, 0);
-    CGImageDestinationRef d2 = CGImageDestinationCreateWithData(data, CFSTR("public.png"), 1, NULL);
-    if (d2) {
-        CGImageDestinationAddImage(d2, image, NULL);
-        CGImageDestinationFinalize(d2);
-        CFRelease(d2);
+    /* In-memory PNG for the pasteboard (reuse file bytes if written, encode to NSMutableData otherwise). */
+    NSData *pngData = nil;
+    if (path != nil) {
+        pngData = [NSData dataWithContentsOfFile:path];
     }
-    NSData *pngData = [NSData dataWithBytes:CFDataGetBytePtr(data) length:(NSUInteger)CFDataGetLength(data)];
-    CFRelease(data);
+    if (pngData == nil) {
+        NSMutableData *mdata = [NSMutableData data];
+        CGImageDestinationRef d2 = CGImageDestinationCreateWithData((__bridge CFMutableDataRef)mdata, CFSTR("public.png"), 1, NULL);
+        if (d2) {
+            CGImageDestinationAddImage(d2, image, NULL);
+            CGImageDestinationFinalize(d2);
+            CFRelease(d2);
+        }
+        pngData = mdata;
+    }
 
     NSPasteboard *pb = [NSPasteboard generalPasteboard];
     [pb clearContents];

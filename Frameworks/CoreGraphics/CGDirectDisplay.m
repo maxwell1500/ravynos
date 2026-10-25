@@ -26,6 +26,7 @@
 #import <sys/shm.h>
 #import <sys/mman.h>
 #import <CoreGraphics/CGDirectDisplay.h>
+#import <CoreGraphics/CGBitmapContext.h>
 #import <CoreGraphics/CGError.h>
 #import <Onyx2D/O2Context_builtin.h>
 #import <CoreFoundation/CFMachPort.h>
@@ -382,17 +383,30 @@ CGImageRef CGDisplayCreateImageForRect(CGDirectDisplayID display, CGRect rect) {
     int len = sizeof(data);
     kern_return_t ret = _windowServerRPC(&data, sizeof(data), &data, &len);
     if(ret == KERN_SUCCESS) {
+        int shmid;
+        uint8_t *p;
+
+        /* The reply encodes the segment as shmid + 1, because segment 0 is a
+         * valid id and 0 means "no segment" here. */
         if(data.val1 == 0)
             return NULL;
-        uint8_t *p = shmat(data.val1, NULL, 0);
-        CFDataRef cfd = CFDataCreate(NULL, p, h*w*4);
-        shmctl(data.val1, IPC_RMID, 0);
+        shmid = (int)data.val1 - 1;
+        p = shmat(shmid, NULL, 0);
+        if(p == NULL || p == (uint8_t *)-1) {
+            shmctl(shmid, IPC_RMID, 0);
+            return NULL;
+        }
+        CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
+        CGContextRef ctx = CGBitmapContextCreate(p, w, h, 8, w * 4,
+            space, kCGImageAlphaPremultipliedFirst);
+        CGColorSpaceRelease(space);
+        CGImageRef img = NULL;
+        if(ctx != NULL) {
+            img = CGBitmapContextCreateImage(ctx);
+            CGContextRelease(ctx);
+        }
         shmdt(p);
-        CGDataProviderRef d = CGDataProviderCreateWithCFData(cfd);
-        CFRelease(cfd);
-        CGImageRef img = CGImageCreate(w, h, 8, 32, w*4, CGColorSpaceCreateDeviceRGB(),
-            kCGBitmapByteOrderDefault|kCGImageAlphaPremultipliedFirst, d, NULL, 0, kCGRenderingIntentDefault);
-        CFRelease(d);
+        shmctl(shmid, IPC_RMID, 0);
         return img;
     }
     return NULL;

@@ -11,7 +11,10 @@
  *      daemon is the only shared state),
  *   3. the same for a file URL payload,
  *   4. the canonical macOS paths (Finder.app, /Applications/System Settings.app)
- *      and the daily-driver applications are present in the image.
+ *      and the daily-driver applications are present in the image,
+ *   5. a global capture produces a screenshot file (the same path the
+ *      Cmd+Shift+3 shortcut uses), and Finder.app and Filer.app are one
+ *      process.
  *
  * The report is written to /var/log/daily-driver-selftest.txt.
  */
@@ -19,6 +22,7 @@
 #import <Foundation/Foundation.h>
 #import <AppKit/AppKit.h>
 #import "WindowServer/message.h"
+#import "WindowServer/rpc.h"
 
 #include <mach/mach.h>
 #include <servers/bootstrap.h>
@@ -27,6 +31,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/wait.h>
+#include <sys/stat.h>
 
 extern mach_port_t bootstrap_port;
 extern void bootstrap_init(void);
@@ -220,6 +225,16 @@ static int _countPainted(const char *bundleID) {
     return count;
 }
 
+/* Screenshot files a capture wrote into a directory. */
+static NSSet *_screenShotNames(NSString *dir) {
+    NSMutableSet *set = [NSMutableSet set];
+    NSArray *names = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:dir error:NULL];
+    for(NSString *name in names)
+        if([name hasPrefix:@"Screen Shot "] && [name hasSuffix:@".png"])
+            [set addObject:name];
+    return set;
+}
+
 static kern_return_t _openBundleOnWindowServer(NSString *bundlePath);
 
 /* WindowServer records every launch and activation in /var/log/ws-apps.log:
@@ -393,6 +408,61 @@ int main(int argc, char **argv) {
             }
         }
 
+        /* 5. a global capture.  The Cmd+Shift+3 shortcut and the RPC used
+         * here share captureScreenshotWithMode:, so this exercises the
+         * launch, the capture and the file it writes; only the chord matching
+         * itself is left untested. */
+        {
+            NSArray *dirs = [NSArray arrayWithObjects:
+                [NSHomeDirectory() stringByAppendingPathComponent:@"Desktop"],
+                @"/var/root/Desktop", @"/root/Desktop", @"/Desktop", nil];
+            NSMutableDictionary *before = [NSMutableDictionary dictionary];
+            NSString *found = nil;
+            unsigned i;
+            int attempt;
+
+            for(i = 0; i < [dirs count]; i++) {
+                NSString *dir = [dirs objectAtIndex:i];
+                [before setObject:_screenShotNames(dir) forKey:dir];
+            }
+            {
+                extern kern_return_t _windowServerRPC(void *, size_t, void *, int *);
+                struct wsRPCSimple args;
+                struct wsRPCSimple reply;
+                int len = sizeof(reply);
+
+                memset(&args, 0, sizeof(args));
+                memset(&reply, 0, sizeof(reply));
+                args.base.code = kWSRequestCapture;
+                args.val1 = 0; /* whole display */
+                if(_windowServerRPC(&args, sizeof(args), &reply, &len) != KERN_SUCCESS)
+                    fprintf(stderr, "[ddtest] capture request failed\n");
+            }
+            unsigned long long size = 0;
+            for(attempt = 0; attempt < 160 && size <= 10000; attempt++) {
+                usleep(250000);
+                for(i = 0; i < [dirs count]; i++) {
+                    NSString *dir = [dirs objectAtIndex:i];
+                    NSMutableSet *now = [NSMutableSet setWithSet:_screenShotNames(dir)];
+
+                    [now minusSet:[before objectForKey:dir]];
+                    if([now count] > 0) {
+                        found = [dir stringByAppendingPathComponent:[now anyObject]];
+                        struct stat st;
+                        if(stat([found fileSystemRepresentation], &st) == 0)
+                            size = (unsigned long long)st.st_size;
+                        if(size > 10000)
+                            break;
+                    }
+                }
+            }
+            _say(report, @"a global capture writes a screenshot file",
+                 found != nil && size > 10000);
+            if(found != nil)
+                fprintf(stderr, "[ddtest] capture %s (%llu bytes)\n",
+                        [found UTF8String], size);
+        }
+
         /* The report goes to the disk before the fleet starts: the fleet
          * takes a minute and a half, and the host harness reads the report
          * out of the image once the guest is stopped. */
@@ -466,7 +536,7 @@ int main(int argc, char **argv) {
              * before touching the z-order at all. */
             {
                 int settle;
-                for(settle = 0; settle < 300; settle++) {
+                for(settle = 0; settle < 600; settle++) {
                     unsigned pending = 0;
 
                     for(i = 0; i < [fleet count]; i++) {

@@ -21,6 +21,7 @@
  */
 
 #import <unistd.h>
+#import <sys/sysctl.h>
 #import "common.h"
 #import "WindowServer.h"
 #import <sys/event.h>
@@ -30,6 +31,16 @@
 extern void bootstrap_init(void);
 extern int optopt;
 static jmp_buf jb;
+
+static void initSysvShmLimits(void) {
+    /* XNU defaults shmmax to 4MB and shmall to 1024 pages (4MB total), which
+     * rejects any full-screen capture segment for 1920x1080 (8.29MB).
+     * Bump to 64MB / 32768 pages (128MB) so captures succeed. */
+    int64_t max = 64 * 1024 * 1024;
+    int64_t all = (128 * 1024 * 1024) / 4096;
+    sysctlbyname("kern.sysv.shmmax", NULL, NULL, &max, sizeof(max));
+    sysctlbyname("kern.sysv.shmall", NULL, NULL, &all, sizeof(all));
+}
 
 void *machSvcLoop(void *arg) {
     WindowServer *ws = (__bridge WindowServer *)arg;
@@ -51,6 +62,7 @@ int main(int argc, const char *argv[]) {
     write(2, "[WS] main entered\n", 18);
     bootstrap_init();
     write(2, "[WS] bootstrap_init done\n", 25);
+    initSysvShmLimits();
     NSAutoreleasePool *pool = [NSAutoreleasePool new];
     write(2, "[WS] pool created\n", 18);
     int logLevel = WS_ERROR;

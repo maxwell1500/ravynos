@@ -109,6 +109,7 @@ typedef enum WSRPC {
     kWSApplicationList,          // replay CODE_APP_LAUNCHED for running apps
     kWSDragHitTest = 8200,       // topmost visible window under (x, y)
     kWSGetPointerPosition = 8300, // screen position of the pointer (val1 x, val2 y)
+    kWSRequestCapture = 8400,    // launch Screenshot.app, val1 = mode 0/1/2
 } WSRPC;
 
 typedef enum : uint32_t {

@@ -1213,12 +1213,29 @@ static pthread_mutex_t _pendingLock = PTHREAD_MUTEX_INITIALIZER;
 }
 
 /* Global screen capture shortcut (Cmd+Shift+3/4/5): launch Screenshot.app
- * with the requested mode. */
+ * with the requested mode.  0 = whole display, 1 = drag a portion, 2 = HUD.
+ * The two input paths already disagreed about this (the libinput path passed
+ * 0/1/2 and the legacy path passed 3/4/5), and the mapping only understood
+ * 3/4/5 - so every libinput chord opened the HUD whatever was pressed. */
 -(void)captureScreenshotWithMode:(int)mode {
     NSString *bundlePath = @"/Applications/Utilities/Screenshot.app";
-    NSString *modeArg = mode == 3 ? @"full" : (mode == 4 ? @"rect" : @"hud");
+    NSString *modeArg = mode == 0 ? @"full" : (mode == 1 ? @"rect" : @"hud");
     [self queueBundleLaunch:bundlePath bundleID:@"com.ravynos.Screenshot"
                         args:[NSArray arrayWithObjects:@"--mode", modeArg, nil]];
+}
+
+/* Launch a capture on request, through exactly the path the global shortcuts
+ * use.  Without it the shortcuts can only be tested by pressing keys, which
+ * the guest self test cannot do; with it the launch, the capture and the file
+ * the app writes are all exercised, and only the chord matching itself is
+ * left untested. */
+-(void)rpcRequestCapture:(PortMessage *)msg {
+    struct wsRPCSimple *args = (struct wsRPCSimple *)msg->data;
+    struct wsRPCSimple reply = { {kWSRequestCapture, 4}, 0, 0, 0, 0 };
+
+    [self captureScreenshotWithMode:(int)args->val1];
+    reply.val1 = 1;
+    [self sendInlineData:&reply length:sizeof(reply) withCode:MSG_ID_RPC toPort:msg->descriptor.name];
 }
 
 /* Runs from the main loop, i.e. with no registry lock held, exactly like the
@@ -1692,28 +1709,75 @@ static pthread_mutex_t _pendingLock = PTHREAD_MUTEX_INITIALIZER;
     struct wsRPCSimple reply = { {kCGDisplayCreateImageForRect, 4}, 0 };
     WSDisplay *display = [self displayWithID:args->val1];
     if(display) {
-        O2Rect rect;
-        rect.origin.x = (args->val2 & 0xFFFF0000) >> 16;
-        rect.origin.y = (args->val2 & 0xFFFF);
-        rect.size.width = (args->val3 & 0xFFFF0000) >> 16;
-        rect.size.height = (args->val3 & 0xFFFF);
-        O2ImageRef img = [display imageForRect:rect];
-        int imglen = 0;
-        if(img) {
-            imglen = O2ImageGetBytesPerRow(img) * O2ImageGetHeight(img);
-            reply.val1 = shmget(args->val1 ^ random(), imglen, IPC_CREAT|0666);
-        }
-        if(reply.val1) {
-            uint8_t *p = shmat(reply.val1, NULL, 0);
-            if(!p)
-                shmctl(reply.val1, IPC_RMID, NULL);
-            else {
-                memcpy(p, [img directBytes], imglen);
-                shmdt(p);
+        /* Copy rows straight out of the surface the compositor draws into.
+         * This used to go through O2ImageCreateWithImageInRect(), which took
+         * the whole WindowServer down (CORPSE pid 5) on the first capture: the
+         * first real user of this RPC was the global-capture self test, so
+         * every full-screen capture killed the desktop instead of failing.
+         * The surface is bottom-up (Quartz), the request is top-down (CG). */
+        O2ImageRef surface = [[display context] surface];
+        int x = (args->val2 & 0xFFFF0000) >> 16;
+        int y = (args->val2 & 0xFFFF);
+        int w = (args->val3 & 0xFFFF0000) >> 16;
+        int h = (args->val3 & 0xFFFF);
+        int sw = surface != NULL ? (int)O2ImageGetWidth(surface) : 0;
+        int sh = surface != NULL ? (int)O2ImageGetHeight(surface) : 0;
+        int sstride = surface != NULL ? (int)O2ImageGetBytesPerRow(surface) : 0;
+        int rowbytes;
+
+        if(x < 0) { w += x; x = 0; }
+        if(y < 0) { h += y; y = 0; }
+        if(x + w > sw) w = sw - x;
+        if(y + h > sh) h = sh - y;
+        rowbytes = w * 4;
+        if(surface == NULL || w <= 0 || h <= 0 || rowbytes <= 0 ||
+           sstride < rowbytes) {
+            reply.val1 = 0;
+        } else {
+            size_t imglen = (size_t)rowbytes * (size_t)h;
+            const uint8_t *src = [surface directBytes];
+            int y0 = sh - (y + h);   /* top-down -> bottom-up */
+
+            /* Segment 0 is a valid id and the reply uses 0 for "none", so
+             * the id on the wire is shmid + 1.  The first full-screen capture
+             * was handed segment 0, the server read that as a failure and the
+             * client got nothing. */
+            {
+                int shmid = shmget(IPC_PRIVATE, imglen, IPC_CREAT | 0666);
+                if(shmid < 0) {
+                    int64_t max = ((int64_t)imglen + 0xfff) & ~0xfffULL;
+                    if(max < 64 * 1024 * 1024) max = 64 * 1024 * 1024;
+                    int64_t all = (max * 2) / 4096;
+                    sysctlbyname("kern.sysv.shmmax", NULL, NULL, &max, sizeof(max));
+                    sysctlbyname("kern.sysv.shmall", NULL, NULL, &all, sizeof(all));
+                    shmid = shmget(IPC_PRIVATE, imglen, IPC_CREAT | 0666);
+                }
+
+                reply.val1 = (shmid >= 0) ? (uint32_t)(shmid + 1) : 0;
+            }
+            reply.val2 = (uint32_t)w;
+            reply.val3 = (uint32_t)h;
+            if(reply.val1) {
+                uint8_t *p = shmat((int)reply.val1 - 1, NULL, 0);
+                if(!p || p == (uint8_t *)-1) {
+                    shmctl((int)reply.val1 - 1, IPC_RMID, NULL);
+                    reply.val1 = 0;
+                } else {
+                    if(src != NULL) {
+                        for(int row = 0; row < h; ++row)
+                            memcpy(p + (size_t)row * rowbytes,
+                                   src + (size_t)(y0 + row) * sstride + (size_t)x * 4,
+                                   (size_t)rowbytes);
+                    } else {
+                        memset(p, 0, imglen);
+                    }
+                    shmdt(p);
+                }
             }
         }
-        if(img)
-            O2ImageRelease(img);
+        fprintf(stderr, "[WS] capture requ=%d,%d %dx%d surface=%p size=%dx%d stride=%d shmid=%d\n",
+                x, y, w, h, surface, sw, sh, sstride, (int)reply.val1);
+        fflush(stderr);
     }
     [self sendInlineData:&reply length:sizeof(reply) withCode:MSG_ID_RPC toPort:msg->descriptor.name];
 }
@@ -2697,6 +2761,7 @@ static pthread_mutex_t _pendingLock = PTHREAD_MUTEX_INITIALIZER;
                     case kWSApplicationActivate: [self rpcApplicationActivate:&msg.portMsg]; break;
                     case kWSApplicationList: [self rpcApplicationList:&msg.portMsg]; break;
                     case kWSDragHitTest: [self rpcDragHitTest:&msg.portMsg]; break;
+                    case kWSRequestCapture: [self rpcRequestCapture:&msg.portMsg]; break;
                 }
                 pthread_mutex_unlock(&appsLock);
                 break;
