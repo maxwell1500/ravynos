@@ -1203,36 +1203,6 @@
       "comment": "Activity Monitor.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Utilities_ActivityMonitor_Activity Monitor.app)"
     },
     {
-      "path": "Applications/Utilities/Activity Monitor.app/Activity_Monitor.app/Activity Monitor",
-      "file": "work/Applications_Utilities_ActivityMonitor_Activity Monitor.app/Activity_Monitor.app/Contents/ravynOS/Activity Monitor",
-      "comment": "Activity Monitor.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Utilities_ActivityMonitor_Activity Monitor.app)"
-    },
-    {
-      "path": "Applications/Utilities/Activity Monitor.app/Activity_Monitor.app/Contents/Info.plist",
-      "file": "work/icons/com.ravynos.ActivityMonitor.Info.plist",
-      "comment": "Activity Monitor.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Utilities_ActivityMonitor_Activity Monitor.app)"
-    },
-    {
-      "path": "Applications/Utilities/Activity Monitor.app/Activity_Monitor.app/Contents/PkgInfo",
-      "file": "work/Applications_Utilities_ActivityMonitor_Activity Monitor.app/Activity_Monitor.app/Contents/PkgInfo",
-      "comment": "Activity Monitor.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Utilities_ActivityMonitor_Activity Monitor.app)"
-    },
-    {
-      "path": "Applications/Utilities/Activity Monitor.app/Activity_Monitor.app/Contents/ravynOS/Activity Monitor",
-      "file": "work/Applications_Utilities_ActivityMonitor_Activity Monitor.app/Activity_Monitor.app/Contents/ravynOS/Activity Monitor",
-      "comment": "Activity Monitor.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Utilities_ActivityMonitor_Activity Monitor.app)"
-    },
-    {
-      "path": "Applications/Utilities/Activity Monitor.app/Activity_Monitor.app/Contents/ravynOS/Activity_Monitor.debug",
-      "file": "work/Applications_Utilities_ActivityMonitor_Activity Monitor.app/Activity_Monitor.app/Contents/ravynOS/Activity_Monitor.debug",
-      "comment": "Activity Monitor.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Utilities_ActivityMonitor_Activity Monitor.app)"
-    },
-    {
-      "path": "Applications/Utilities/Activity Monitor.app/Activity_Monitor.app/Contents/ravynOS/Activity_Monitor.full",
-      "file": "work/Applications_Utilities_ActivityMonitor_Activity Monitor.app/Activity_Monitor.app/Contents/ravynOS/Activity_Monitor.full",
-      "comment": "Activity Monitor.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Utilities_ActivityMonitor_Activity Monitor.app)"
-    },
-    {
       "path": "Applications/Utilities/Activity Monitor.app/Contents/Info.plist",
       "file": "work/icons/com.ravynos.ActivityMonitor.Info.plist",
       "comment": "Activity Monitor.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Utilities_ActivityMonitor_Activity Monitor.app)"
@@ -1923,11 +1893,6 @@
       "comment": "generated app icon (make_app_icons.py)"
     },
     {
-      "path": "Applications/Utilities/Activity Monitor.app/Activity_Monitor.app/Contents/Resources/icon.png",
-      "file": "work/icons/com.ravynos.ActivityMonitor.png",
-      "comment": "generated app icon (make_app_icons.py)"
-    },
-    {
       "path": "Applications/Utilities/Activity Monitor.app/Contents/Resources/icon.png",
       "file": "work/icons/com.ravynos.ActivityMonitor.png",
       "comment": "generated app icon (make_app_icons.py)"
@@ -1956,6 +1921,96 @@
       "path": "Applications/System Preferences.app/Contents/Resources/icon.png",
       "file": "work/icons/com.ravynos.Preferences.png",
       "comment": "generated app icon (make_app_icons.py)"
+    },
+    {
+      "path": "Applications/SDLBlocks.app/Contents/Info.plist",
+      "file": "work/ports/sdl2-blocks/Applications/SDLBlocks.app/Contents/Info.plist",
+      "comment": "source port staged by tools/ports/build_port.py"
+    },
+    {
+      "path": "Applications/SDLBlocks.app/Contents/MacOS/SDLBlocks",
+      "file": "work/ports/sdl2-blocks/Applications/SDLBlocks.app/Contents/MacOS/SDLBlocks",
+      "comment": "source port staged by tools/ports/build_port.py"
+    },
+    {
+      "path": "usr/bin/SDLBlocks",
+      "file": "work/ports/sdl2-blocks/usr/bin/SDLBlocks",
+      "comment": "source port staged by tools/ports/build_port.py"
+    },
+    {
+      "path": "usr/lib/libSDL2-2.0.0.dylib",
+      "file": "../../Developer/ravynOS.sdk/usr/lib/libSDL2-2.0.0.dylib",
+      "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
+    },
+    {
+      "path": "Applications/MacOSIntakeProbe.app/Contents/Info.plist",
+      "file": "work/app-intake/Applications/MacOSIntakeProbe.app/Contents/Info.plist",
+      "comment": "imported macOS bundle staged by tools/bootlab/app_stage.py"
+    },
+    {
+      "path": "Applications/MacOSIntakeProbe.app/Contents/Frameworks/MacIntakeCore.dylib",
+      "file": "work/app-intake/Applications/MacOSIntakeProbe.app/Contents/Frameworks/MacIntakeCore.dylib",
+      "comment": "imported macOS bundle staged by tools/bootlab/app_stage.py"
+    },
+    {
+      "path": "Applications/MacOSIntakeProbe.app/Contents/MacOS/MacOSIntakeProbe",
+      "file": "work/app-intake/Applications/MacOSIntakeProbe.app/Contents/MacOS/MacOSIntakeProbe",
+      "comment": "imported macOS bundle staged by tools/bootlab/app_stage.py"
+    },
+    {
+      "path": "Applications/MacOSIntakeProbe.app/Contents/_CodeSignature/CodeResources",
+      "file": "work/app-intake/Applications/MacOSIntakeProbe.app/Contents/_CodeSignature/CodeResources",
+      "comment": "imported macOS bundle staged by tools/bootlab/app_stage.py"
+    },
+    {
+      "path": "System/Library/Frameworks/Cocoa.framework/Versions/A/Cocoa",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/Cocoa.framework/Versions/A/Cocoa",
+      "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
+    },
+    {
+      "path": "System/Library/Frameworks/Security.framework/Versions/A/Security",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/Security.framework/Versions/A/Security",
+      "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
+    },
+    {
+      "path": "System/Library/Frameworks/IOKit.framework/Versions/A/IOKit",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/IOKit.framework/Versions/A/IOKit",
+      "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
+    },
+    {
+      "path": "System/Library/Frameworks/CoreVideo.framework/Versions/A/CoreVideo",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/CoreVideo.framework/Versions/A/CoreVideo",
+      "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
+    },
+    {
+      "path": "System/Library/Frameworks/SystemConfiguration.framework/Versions/A/SystemConfiguration",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/SystemConfiguration.framework/Versions/A/SystemConfiguration",
+      "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
+    },
+    {
+      "path": "System/Library/Frameworks/CoreServices.framework/Versions/A/CoreServices",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/CoreServices.framework/Versions/A/CoreServices",
+      "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
+    },
+    {
+      "path": "System/Library/Frameworks/ApplicationServices.framework/Versions/A/ApplicationServices",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/ApplicationServices.framework/Versions/A/ApplicationServices",
+      "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
+    },
+    {
+      "path": "usr/lib/libobjc.A.dylib",
+      "file": "../../Developer/ravynOS.sdk/usr/lib/libobjc.A.dylib",
+      "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
+    },
+    {
+      "path": "System/Library/Frameworks/AppKit.framework/Versions/C/AppKit",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/AppKit.framework/Versions/C/AppKit",
+      "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
+    },
+    {
+      "path": "System/Library/Frameworks/CFNetwork.framework/Versions/A/CFNetwork",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/CFNetwork.framework/Versions/A/CFNetwork",
+      "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
     }
   ]
 }

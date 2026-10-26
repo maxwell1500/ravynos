@@ -88,6 +88,20 @@ PHASE_IMAGE_CHECKS = {
         ("System/Library/CoreServices/WindowServer.app", "app"),
         ("System/Library/CoreServices/Dock.app", "app"),
         ("System/Library/CoreServices/Filer.app", "app"),
+        # The macOS runtime frameworks a bundled application links against.
+        # Each one has to be a real staged dylib, not just a framework
+        # directory: staging the directory without the binary is exactly the
+        # failure this check exists to catch.
+        ("System/Library/Frameworks/Security.framework/Versions/A/Security", "file"),
+        ("System/Library/Frameworks/IOKit.framework/Versions/A/IOKit", "file"),
+        ("System/Library/Frameworks/CoreVideo.framework/Versions/A/CoreVideo", "file"),
+        ("System/Library/Frameworks/SystemConfiguration.framework/Versions/A/SystemConfiguration", "file"),
+        ("System/Library/Frameworks/CFNetwork.framework/Versions/A/CFNetwork", "file"),
+        ("System/Library/Frameworks/ApplicationServices.framework/Versions/A/ApplicationServices", "file"),
+        ("usr/lib/libSDL2-2.0.0.dylib", "file"),
+        # The two intake proof targets.
+        ("Applications/MacOSIntakeProbe.app", "app"),
+        ("Applications/SDLBlocks.app", "app"),
     ],
 }
 

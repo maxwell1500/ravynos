@@ -1,0 +1,59 @@
+#!/bin/sh
+# Standalone cross C / Objective-C compiler wrapper for ravynOS (x86_64-apple-darwin24).
+# Can be invoked from any directory, CMake toolchain, ./configure, or Makefile.
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+REPO="$(cd "$HERE/../../.." && pwd)"
+BUILD="${RAVYN_BUILD_DIR:-/Users/max/Projects/build}"
+
+if [ -n "${RAVYN_SDKROOT:-}" ] && [ -d "$RAVYN_SDKROOT" ]; then
+    SDK="$RAVYN_SDKROOT"
+elif [ -d "$REPO/Developer/ravynOS.sdk" ]; then
+    SDK="$REPO/Developer/ravynOS.sdk"
+else
+    SDK="$BUILD/Developer/Platforms/ravynOS.platform/Developer/SDKs/ravynOS.sdk"
+fi
+
+PLATFORM_TOOLCHAIN_BIN="$BUILD/Developer/Platforms/ravynOS.platform/Developer/Toolchains/Default.xctoolchain/usr/bin"
+if [ -z "${REAL_CC:-}" ] && [ -x "$PLATFORM_TOOLCHAIN_BIN/clang-17" ]; then
+    REAL_CC="$PLATFORM_TOOLCHAIN_BIN/clang-17"
+elif [ -z "${REAL_CC:-}" ] && [ -x "$PLATFORM_TOOLCHAIN_BIN/clang" ]; then
+    REAL_CC="$PLATFORM_TOOLCHAIN_BIN/clang"
+fi
+REAL_CC="${REAL_CC:-$(xcrun -f clang 2>/dev/null || echo /usr/bin/clang)}"
+
+export REAL_CC
+export ROOT_SOURCE_DIR="$REPO"
+export ROOT_BINARY_DIR="$BUILD"
+export RAVYN_SDKROOT="$SDK"
+export SYSROOT_DIR="$SDK"
+export EXTRA_DEFINES="${EXTRA_DEFINES:--DXNU_PLATFORM_MacOSX -D__RAVYNOS__=1}"
+
+# Detect whether this invocation is compile/preprocess only or linking
+linking=yes
+has_sysroot=no
+has_arch=no
+has_minver=no
+
+for arg in "$@"; do
+    case "$arg" in
+        -c|-E|-S|-M|-MM) linking=no ;;
+        --sysroot=*|-isysroot) has_sysroot=yes ;;
+        -arch) has_arch=yes ;;
+        -mmacos-version-min=*|-mmacosx-version-min=*) has_minver=yes ;;
+    esac
+done
+
+extra_flags="-Wno-incompatible-sysroot"
+[ "$has_sysroot" = no ] && extra_flags="$extra_flags --sysroot=$SDK"
+[ "$has_arch" = no ] && extra_flags="$extra_flags -arch x86_64"
+[ "$has_minver" = no ] && extra_flags="$extra_flags -mmacos-version-min=${MACOS_VERSION_MIN:-15.0}"
+extra_flags="$extra_flags -F$SDK/System/Library/Frameworks -I$SDK/usr/include"
+
+link_tail=""
+if [ "$linking" = yes ]; then
+    link_tail="-L$SDK/usr/lib -L$SDK/usr/lib/system -Wl,-L,$SDK/usr/lib -Wl,-L,$SDK/usr/lib/system -F$SDK/System/Library/Frameworks"
+fi
+
+# shellcheck disable=SC2086
+exec "$REPO/tools/bootlab/isysroot-cc" $extra_flags "$@" $link_tail

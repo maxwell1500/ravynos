@@ -1,78 +1,32 @@
-
 MK_WERROR = no
-
 FRAMEWORK = CFNetwork
 FMWK_VERSION = A
-VERSION = 7
+FMWK_COMPAT_VERSION = 1.0.0
+FMWK_CURRENT_VERSION = 1493.0.3
 INFO_PLIST = Info.plist
 
-HEADERS = CFFTPStream.h CFHost.h CFHTTPAuthentication.h CFHTTPMessage.h \
-	CFHTTPStream.h CFNetDiagnostics.h CFNetServices.h CFNetwork.h \
-	CFNetworkDefs.h CFSocketStream.h
+# Apple's CFNetwork sources in this tree (the CFHTTPConnection stream stack,
+# SPNEGO/NTLM filters, CFNetServices, CFFTPStream, CFNetDiagnostics) do not
+# build here and duplicate transport work this tree already does in
+# Foundation.  CFNetworkRuntime.m implements the surface a bundled application
+# links against -- proxy queries, CFHost resolution, CFHTTPMessage -- and the
+# public header declares only that, so nothing links that is not implemented.
+SRCS = CFNetworkRuntime.m
+HEADERS = Headers/CFNetwork.h
 
-PRIVATE_HEADERS = CFFTPStreamPriv.h CFHostPriv.h CFHTTPConnectionPriv.h \
-	CFHTTPMessagePriv.h CFHTTPServerPriv.h CFHTTPStreamPriv.h \
-	CFNetDiagnosticsPriv.h CFNetServicesPriv.h CFNetworkPriv.h \
-	CFServerPriv.h CFSocketStreamPriv.h
+CFLAGS += -I${.CURDIR}/Headers -I${ROOT_SOURCE_DIR}/Frameworks/CoreFoundation \
+	-I${RAVYN_SDKROOT}/System/Library/Frameworks/CoreFoundation.framework/Headers \
+	-I${RAVYN_SDKROOT}/usr/include
 
-SLF = /System/Library/Frameworks
-INSTALL_NAME_DIR = ${SLF}/${FRAMEWORK}.framework/Versions/${FMWK_VERSION}
+LDFLAGS += -F${RAVYN_SDKROOT}/System/Library/Frameworks \
+	-Wl,-framework,CoreFoundation -lSystem
 
-SRCS = CFNetwork.c SharedCode/CFServer.c SharedCode/CFNetConnection.c \
-	SharedCode/CFNetworkSchedule.c SharedCode/CFNetworkThreadSupport.c \
-	FTP/CFFTPStream.c Host/CFHost.c \
-	HTTP/CFHTTPAuthentication.c HTTP/CFHTTPConnection.c \
-	HTTP/CFHTTPFilter.c HTTP/CFHTTPMessage.c HTTP/CFHTTPServer.c \
-	HTTP/CFHTTPStream.c NetDiagnostics/CFNetDiagnosticPing.c \
-	NetDiagnostics/CFNetDiagnostics.c \
-	NetDiagnostics/CFNetDiagnosticsProtocolUser.c \
-	NetServices/CFNetServices.c NetServices/CFNetServiceBrowser.c \
-	NetServices/CFNetServiceMonitor.c \
-	NetServices/DeprecatedDNSServiceDiscovery.c Proxies/ProxySupport.c \
-	Stream/CFSocketStream.c URL/_CFURLAccess.c JavaScriptGlue.c \
-	libresolv.c HTTP/SPNEGO/spnegoBlob.cpp HTTP/SPNEGO/spnegoDER.cpp \
-	HTTP/SPNEGO/spnegoKrb.cpp HTTP/NTLM/ntlmBlobPriv.cpp \
-	HTTP/NTLM/NtlmGenerator.cpp
-
-LDFLAGS = -framework CoreFoundation -Wl,-compatibility_version,1
-#-framework Security -framework SystemConfiguration \
-	-F/usr/local/SecurityPieces/Frameworks -framework security_cdsa_utils
-
-# The SDK's usr/include must come before the wrapper's own -I of
-# Kernel/xnu/libkern (appended by isysroot-cc), or <libkern/OSAtomic.h>
-# resolves to the kernel's copy, which declares no OSSpinLock* (the userspace
-# SDK copy does). CFNetworkThreadSupport.h uses OSSpinLockTry/Lock/Unlock.
-INCLUDES = -I${RAVYN_SDKROOT}/usr/include -I${.CURDIR:H} \
-	-I${ROOT_SOURCE_DIR}/Libraries/Libsystem/liblaunch \
-	-I${.CURDIR}/SharedCode -I${.CURDIR}/Proxies -I${.CURDIR}/HTTP \
-	-I${.CURDIR} -I${ROOT_SOURCE_DIR}/Kernel/kext_tools/FILES/3rd
-DEFS = -DCF_ASSUME_NONNULL_BEGIN="" -DCF_ASSUME_NONNULL_END=""
-
-CFLAGS += -F${RAVYN_SDKROOT}${SLF}/CoreServices.framework/Frameworks \
-	-Wmissing-prototypes -Wpointer-arith -Wcast-align \
-	-Wno-unknown-pragmas -Wmissing-declarations -Wbad-function-cast \
-	-Wno-incompatible-function-pointer-types ${DEFS} ${INCLUDES}
-CPPFLAGS += -F${RAVYN_SDKROOT}${SLF}/CoreServices.framework/Frameworks \
-	-Wmissing-prototypes -Wpointer-arith -Wcast-align -Wno-unknown-pragmas \
-	-Wno-incompatible-function-pointer-types ${DEFS} ${INCLUDES}
-
-
-# CFNetwork had no install hook, so it built into the object directory and was
-# never copied into either SDK. Foundation.h -> CoreServices.h -> CFNetwork.h,
-# so every framework that imports Foundation (LaunchServices, Dock, Filer,
-# AppKit) fails to compile with "'CFNetwork/CFNetwork.h' file not found" until
-# CFNetwork.framework is on the SDK framework search path. Install it the way
-# CoreFoundation/CoreGraphics do.
 fmwk-install-hook:
-	# ravynOS: RAVYN_REPO_SDKROOT is the in-repo SDK that
-# tools/bootlab/make_gui_manifest.py stages from, and it PREFERS it over
-# the build tree (repo-first candidate order). It used to be written only
-# by hand, so a framework built today left the staged copy stale and the
-# image silently shipped an old binary. Additive: the build-tree copies
-# are what subsequent links resolve against and must be preserved.
-.for dir in ${RAVYN_SDKROOT}/System/Library/Frameworks/ ${SYSROOT_DIR}/System/Library/Frameworks/ ${RAVYN_REPO_SDKROOT}/System/Library/Frameworks/
-	mkdir -p ${dir}
-	cp -Rfp ${.OBJDIR}/${FRAMEWORK}.framework ${dir}
+.for dir in ${RAVYN_SDKROOT} ${SYSROOT_DIR} ${RAVYN_REPO_SDKROOT}
+	@if [ -n "${dir}" ]; then \
+		mkdir -p "${dir}/System/Library/Frameworks" && \
+		cp -Rfp ${.OBJDIR}/${FRAMEWORK}.framework "${dir}/System/Library/Frameworks/"; \
+	fi
 .endfor
 
 .include <rvn.framework.mk>

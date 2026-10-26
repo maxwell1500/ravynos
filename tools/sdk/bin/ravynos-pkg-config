@@ -1,0 +1,301 @@
+#!/usr/bin/env python3
+"""Self-contained pkg-config for the ravynOS SDK sysroot.
+
+Resolves .pc files from Developer/ravynOS.sdk/usr/lib/pkgconfig (and
+usr/share/pkgconfig) and rewrites /usr prefixes into the SDK sysroot so
+CMake (FindPkgConfig), Meson, autotools, and Makefiles get exact flags
+without leaking host Homebrew/macOS paths.
+"""
+
+import os
+import re
+import shlex
+import sys
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+REPO = os.path.abspath(os.path.join(HERE, os.pardir, os.pardir, os.pardir))
+SDK = os.environ.get("RAVYN_SDKROOT", os.path.join(REPO, "Developer", "ravynOS.sdk"))
+PC_DIRS = [
+    os.path.join(SDK, "usr", "lib", "pkgconfig"),
+    os.path.join(SDK, "usr", "share", "pkgconfig"),
+]
+
+
+def find_pc(name: str):
+    if name.endswith(".pc") and os.path.isfile(name):
+        return name
+    fname = name if name.endswith(".pc") else f"{name}.pc"
+    for d in PC_DIRS:
+        p = os.path.join(d, fname)
+        if os.path.isfile(p):
+            return p
+    return None
+
+
+def parse_pc(path: str):
+    vars_map = {"pcfiledir": os.path.dirname(path)}
+    fields = {}
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        for raw_line in f:
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "=" in line and (":" not in line or line.index("=") < line.index(":")):
+                k, v = line.split("=", 1)
+                vars_map[k.strip()] = expand_vars(v.strip(), vars_map)
+            elif ":" in line:
+                k, v = line.split(":", 1)
+                fields[k.strip().lower()] = expand_vars(v.strip(), vars_map)
+    # Rewrite /usr prefix in vars and fields to point inside SDK
+    for k in list(vars_map.keys()):
+        if vars_map[k].startswith("/usr"):
+            vars_map[k] = SDK + vars_map[k]
+    # Re-parse with SDK-prefixed vars
+    fields = {}
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        for raw_line in f:
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if "=" in line and (":" not in line or line.index("=") < line.index(":")):
+                k, v = line.split("=", 1)
+                val = expand_vars(v.strip(), vars_map)
+                if val.startswith("/usr"):
+                    val = SDK + val
+                vars_map[k.strip()] = val
+            elif ":" in line:
+                k, v = line.split(":", 1)
+                fields[k.strip().lower()] = expand_vars(v.strip(), vars_map)
+    return vars_map, fields
+
+
+def expand_vars(text: str, vars_map: dict) -> str:
+    def repl(m):
+        key = m.group(1)
+        return vars_map.get(key, "")
+
+    prev = None
+    cur = text
+    for _ in range(8):
+        if cur == prev:
+            break
+        prev = cur
+        cur = re.sub(r"\$\{([^}]+)\}", repl, cur)
+    return cur
+
+
+def split_reqs(req_str: str):
+    if not req_str:
+        return []
+    tokens = [t.strip() for t in re.split(r"[,\s]+", req_str) if t.strip()]
+    pkgs = []
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok in ("=", "<", ">", "<=", ">=", "!="):
+            i += 2
+            continue
+        pkgs.append(tok)
+        i += 1
+    return pkgs
+
+
+def collect_closure(pkg_names, include_private=False):
+    visited = []
+    seen = set()
+
+    def visit(pkg):
+        if pkg in seen:
+            return True
+        pc = find_pc(pkg)
+        if not pc:
+            return False
+        seen.add(pkg)
+        vars_map, fields = parse_pc(pc)
+        visited.append((pkg, vars_map, fields))
+        reqs = split_reqs(fields.get("requires", ""))
+        if include_private:
+            reqs += split_reqs(fields.get("requires.private", ""))
+        for r in reqs:
+            if not visit(r):
+                return False
+        return True
+
+    for p in pkg_names:
+        if not visit(p):
+            return None
+    return visited
+
+
+def dedup_flags(flag_str_list):
+    out = []
+    seen = set()
+    for s in flag_str_list:
+        for tok in shlex.split(s):
+            if tok.startswith(("-I", "-L", "-l", "-D")) and tok in seen:
+                continue
+            if tok.startswith(("-I", "-L", "-l", "-D")):
+                seen.add(tok)
+            out.append(tok)
+    return " ".join(out)
+
+
+def main() -> int:
+    args = sys.argv[1:]
+    if not args:
+        return 1
+
+    want_version = False
+    want_modversion = False
+    want_exists = False
+    want_cflags = False
+    want_cflags_only_I = False
+    want_cflags_only_other = False
+    want_libs = False
+    want_libs_only_L = False
+    want_libs_only_l = False
+    want_libs_only_other = False
+    want_static = False
+    want_list_all = False
+    variable_query = None
+    pkgs = []
+
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--version":
+            want_version = True
+        elif a == "--modversion":
+            want_modversion = True
+        elif a == "--exists":
+            want_exists = True
+        elif a == "--cflags":
+            want_cflags = True
+        elif a == "--cflags-only-I":
+            want_cflags_only_I = True
+        elif a == "--cflags-only-other":
+            want_cflags_only_other = True
+        elif a == "--libs":
+            want_libs = True
+        elif a == "--libs-only-L":
+            want_libs_only_L = True
+        elif a == "--libs-only-l":
+            want_libs_only_l = True
+        elif a == "--libs-only-other":
+            want_libs_only_other = True
+        elif a == "--static":
+            want_static = True
+        elif a == "--list-all":
+            want_list_all = True
+        elif a.startswith("--variable="):
+            variable_query = a.split("=", 1)[1]
+        elif a == "--variable" and i + 1 < len(args):
+            variable_query = args[i + 1]
+            i += 1
+        elif a in ("--atleast-pkgconfig-version", "--atleast-version", "--exact-version", "--max-version"):
+            i += 1
+            if a == "--atleast-pkgconfig-version":
+                return 0
+        elif a.startswith("--atleast-pkgconfig-version="):
+            return 0
+        elif a.startswith("--"):
+            pass
+        elif a in ("=", "<", ">", "<=", ">=", "!="):
+            i += 1
+        else:
+            pkgs.append(a)
+        i += 1
+
+    if want_version:
+        print("0.29.2")
+        return 0
+
+    if want_list_all:
+        for d in PC_DIRS:
+            if not os.path.isdir(d):
+                continue
+            for fn in sorted(os.listdir(d)):
+                if fn.endswith(".pc"):
+                    name = fn[:-3]
+                    _, fields = parse_pc(os.path.join(d, fn))
+                    print(f"{name:20s} {fields.get('name', name)} - {fields.get('description', '')}")
+        return 0
+
+    if not pkgs:
+        return 0
+
+    closure = collect_closure(pkgs, include_private=want_static)
+    if closure is None:
+        return 1
+
+    if want_exists and not (
+        want_modversion
+        or want_cflags
+        or want_cflags_only_I
+        or want_cflags_only_other
+        or want_libs
+        or want_libs_only_L
+        or want_libs_only_l
+        or want_libs_only_other
+        or variable_query
+    ):
+        return 0
+
+    if want_modversion:
+        for p in pkgs:
+            pc = find_pc(p)
+            if not pc:
+                return 1
+            _, fields = parse_pc(pc)
+            print(fields.get("version", "0.0.0"))
+        return 0
+
+    if variable_query is not None:
+        vals = []
+        for p in pkgs:
+            pc = find_pc(p)
+            if not pc:
+                return 1
+            vars_map, _ = parse_pc(pc)
+            if variable_query in vars_map:
+                vals.append(vars_map[variable_query])
+        print(" ".join(vals))
+        return 0
+
+    out_parts = []
+    if want_cflags or want_cflags_only_I or want_cflags_only_other:
+        raw_c = [fields.get("cflags", "") for _, _, fields in closure if fields.get("cflags")]
+        tokens = shlex.split(dedup_flags(raw_c))
+        if want_cflags:
+            out_parts.extend(tokens)
+        else:
+            if want_cflags_only_I:
+                out_parts.extend([t for t in tokens if t.startswith("-I")])
+            if want_cflags_only_other:
+                out_parts.extend([t for t in tokens if not t.startswith("-I")])
+
+    if want_libs or want_libs_only_L or want_libs_only_l or want_libs_only_other:
+        raw_l = []
+        for _, _, fields in closure:
+            if fields.get("libs"):
+                raw_l.append(fields["libs"])
+            if want_static and fields.get("libs.private"):
+                raw_l.append(fields["libs.private"])
+        tokens = shlex.split(dedup_flags(raw_l))
+        if want_libs:
+            out_parts.extend(tokens)
+        else:
+            if want_libs_only_L:
+                out_parts.extend([t for t in tokens if t.startswith("-L")])
+            if want_libs_only_l:
+                out_parts.extend([t for t in tokens if t.startswith("-l")])
+            if want_libs_only_other:
+                out_parts.extend([t for t in tokens if not t.startswith(("-L", "-l"))])
+
+    if out_parts:
+        print(" ".join(out_parts))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

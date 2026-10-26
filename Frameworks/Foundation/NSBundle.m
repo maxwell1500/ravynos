@@ -780,7 +780,15 @@ static NSMapTable *pathToObject=NULL;
 
 -(NSArray *)lookInDirectories {
     if (_lookInDirectories == nil) {
-        _lookInDirectories = [[NSArray alloc] initWithObjects:@"English.lproj", @"en.lproj", @"", nil];
+        /* Base.lproj first: Xcode has placed unlocalized resources there since
+         * Xcode 4.5, and a bundle built by any current toolchain has nothing
+         * under English.lproj.  Without this, -pathForResource:ofType: returns
+         * nil for MainMenu.nib and the application starts with no menu bar at
+         * all -- which looks like a nib-loading failure and is not one.  The
+         * empty string keeps the Resources root in the list for hand-built
+         * bundles that place files directly there. */
+        _lookInDirectories = [[NSArray alloc] initWithObjects:@"Base.lproj",
+                                      @"English.lproj", @"en.lproj", @"", nil];
     }
     return _lookInDirectories;
 }

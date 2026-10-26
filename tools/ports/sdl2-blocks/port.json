@@ -1,0 +1,17 @@
+{
+  "name": "sdl2-blocks",
+  "version": "1.0",
+  "src": ".",
+  "build_system": "cmake",
+  "prefix": "/usr",
+  "cmake_args": ["-DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=BOTH"],
+  "bundle": {
+    "name": "SDLBlocks",
+    "id": "org.libsdl.SDLBlocks",
+    "executable": "SDLBlocks",
+    "info_extra": {
+      "NSHighResolutionCapable": true,
+      "LSApplicationCategoryType": "public.app-category.games"
+    }
+  }
+}

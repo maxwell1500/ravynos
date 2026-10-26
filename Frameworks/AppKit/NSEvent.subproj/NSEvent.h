@@ -192,6 +192,7 @@ enum {
 - (NSString *)characters;
 - (NSString *)charactersIgnoringModifiers;
 - (unsigned short)keyCode;
+- (BOOL)isARepeat;
 
 + (void)startPeriodicEventsAfterDelay:(NSTimeInterval)delay withPeriod:(NSTimeInterval)period;
 + (void)stopPeriodicEvents;

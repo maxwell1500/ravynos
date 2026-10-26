@@ -1,17 +1,33 @@
-#
-# Makefile for generating the SCSchemaDefinitions.[ch] files
-#
+MK_WERROR = no
+FRAMEWORK = SystemConfiguration
+FMWK_VERSION = A
+FMWK_COMPAT_VERSION = 1.0.0
+FMWK_CURRENT_VERSION = 1300.6.4
+INFO_PLIST = Info.plist
 
-all: SCSchemaDefinitions.h SCSchemaDefinitionsPrivate.h SCSchemaDefinitions.c
+# The tree carries Apple's full SystemConfiguration sources -- SCD (the configd
+# client), the SCNetworkConfiguration editors, VPN/PPP/DHCP/CaptiveNetwork
+# support -- and none of it builds or applies here: all of it is a client of a
+# configd daemon this system does not ship.  What applications actually link
+# against is the dynamic store, SCPreferences and SCNetworkReachability, so
+# this framework implements those against a process-local store and a real
+# routing-table probe, and does not pretend to provide the rest.
+SRCS = SystemConfigurationRuntime.c
+HEADERS = Headers/SystemConfiguration.h
 
-/tmp/genSCPreferences:	genSCPreferences.c Makefile
-	xcrun --sdk macosx.internal cc -g -o /tmp/genSCPreferences genSCPreferences.c
+CFLAGS += -I${.CURDIR}/Headers -I${ROOT_SOURCE_DIR}/Frameworks/CoreFoundation \
+	-I${RAVYN_SDKROOT}/System/Library/Frameworks/CoreFoundation.framework/Headers \
+	-I${RAVYN_SDKROOT}/usr/include
 
-SCSchemaDefinitions.h:	/tmp/genSCPreferences
-	/tmp/genSCPreferences header	> SCSchemaDefinitions.h
+LDFLAGS += -F${RAVYN_SDKROOT}/System/Library/Frameworks \
+	-Wl,-framework,CoreFoundation -lSystem
 
-SCSchemaDefinitionsPrivate.h:	/tmp/genSCPreferences
-	/tmp/genSCPreferences private	> SCSchemaDefinitionsPrivate.h
+fmwk-install-hook:
+.for dir in ${RAVYN_SDKROOT} ${SYSROOT_DIR} ${RAVYN_REPO_SDKROOT}
+	@if [ -n "${dir}" ]; then \
+		mkdir -p "${dir}/System/Library/Frameworks" && \
+		cp -Rfp ${.OBJDIR}/${FRAMEWORK}.framework "${dir}/System/Library/Frameworks/"; \
+	fi
+.endfor
 
-SCSchemaDefinitions.c:	/tmp/genSCPreferences
-	/tmp/genSCPreferences cfile	> SCSchemaDefinitions.c
+.include <rvn.framework.mk>

@@ -1,0 +1,32 @@
+#!/bin/sh
+# sdl2-config for the ravynOS SDK sysroot.
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+REPO="$(cd "$HERE/../../.." && pwd)"
+SDK="${RAVYN_SDKROOT:-$REPO/Developer/ravynOS.sdk}"
+
+if [ $# -eq 0 ]; then
+    echo "Usage: sdl2-config [--prefix] [--exec-prefix] [--version] [--cflags] [--libs] [--static-libs]" >&2
+    exit 1
+fi
+
+out=""
+for arg in "$@"; do
+    case "$arg" in
+        --prefix|--exec-prefix)
+            out="$out $SDK/usr"
+            ;;
+        --version)
+            echo "2.32.10"
+            exit 0
+            ;;
+        --cflags)
+            out="$out -I$SDK/usr/include/SDL2 -I$SDK/usr/include -D_REENTRANT -D__RAVYNOS__=1"
+            ;;
+        --libs|--static-libs)
+            out="$out -L$SDK/usr/lib -lSDL2 -Wl,-framework,AppKit -Wl,-framework,Foundation -Wl,-framework,CoreGraphics -Wl,-framework,Onyx2D -Wl,-framework,CoreFoundation -lobjc -lpthread -lm"
+            ;;
+    esac
+done
+
+echo "${out# }"

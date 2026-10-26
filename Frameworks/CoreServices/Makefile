@@ -1,5 +1,8 @@
 MK_WERROR = no
 FRAMEWORK = CoreServices
+# Apple's compatibility version; dyld refuses to load this framework for a
+# binary that recorded a higher one, so it has to match at least.
+FMWK_COMPAT_VERSION = 1.0.0
 FMWK_VERSION = A
 SRCS = CoreServices.c
 HEADERS = CoreServices.h 

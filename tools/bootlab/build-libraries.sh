@@ -882,8 +882,15 @@ fi
 if [ "${1:-}" = "--frameworks" ]; then
     shift
     DIRS=("$@")
+    # Security, IOKit, CoreVideo, SystemConfiguration, CFNetwork and
+    # ApplicationServices are what a bundled macOS application loads before it
+    # draws anything; SDL2 is the porting target.  Listing them here means a
+    # plain `--frameworks` run stages them into the SDK alongside the GUI
+    # frameworks instead of needing a hand-written second command.
     [ ${#DIRS[@]} -eq 0 ] && DIRS=(CoreFoundation Foundation CoreServices \
-        Onyx2D CoreGraphics AppKit CoreText)
+        Onyx2D CoreGraphics AppKit CoreText \
+        Security IOKit CoreVideo SystemConfiguration CFNetwork \
+        ApplicationServices SDL2)
     rc=0
     # ---------------------------------------------------------------------
     # Framework staging paths.
@@ -991,6 +998,7 @@ if [ "${1:-}" = "--frameworks" ]; then
             echo "--- staging: $name UPDATED    $before -> $after"
         fi
     done
+    python3 "$HERE/sync_sdk.py" || rc=1
     exit $rc
 elif [ "${1:-}" = "--bsd" ]; then
     shift
@@ -1040,4 +1048,5 @@ for d in "${DIRS[@]}"; do
     echo "=== building Libraries/$d ==="
     ( cd "$ROOT/Libraries/$d" && "$BMAKE" -m "$MKMODULES" "${BMAKE_TARGET:-all}" ) || rc=1
 done
+python3 "$HERE/sync_sdk.py" || rc=1
 exit $rc

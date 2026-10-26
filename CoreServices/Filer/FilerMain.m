@@ -25,6 +25,20 @@ typedef enum {
 
 static void filerOpenBundle(NSString *path) {
     if(!path) return;
+
+    /* Ask WindowServer to launch it.  A GUI child has to inherit launchd's
+     * bootstrap context, which only WindowServer's own children get; a fork
+     * from Filer inherits Filer's, and the application comes up unable to
+     * reach the window server.  WindowServer also reads CFBundleExecutable
+     * from Info.plist, so a bundle whose executable is not named after the
+     * bundle still launches (this used to guess three fixed paths). */
+    if([[NSApplication sharedApplication] openBundlePath:path])
+        return;
+
+    /* Fallback for a Filer with no window-server connection (for example one
+     * started from a terminal by hand): exec the bundle's executable, and
+     * pass the environment through instead of an empty one, or the child
+     * inherits nothing it needs to find its own frameworks. */
     NSString *name = [[path lastPathComponent] stringByDeletingPathExtension];
     NSString *cands[3];
     cands[0] = [NSString stringWithFormat:@"%@/Contents/ravynOS/%@", path, name];
@@ -41,8 +55,8 @@ static void filerOpenBundle(NSString *path) {
         char argvbuf[512];
         snprintf(argvbuf, sizeof(argvbuf), "%s", name ? [name UTF8String] : "app");
         char *argv[2] = { argvbuf, NULL };
-        char *envp[1] = { NULL };
-        execve(exe, argv, envp);
+        extern char **environ;
+        execve(exe, argv, environ);
         _exit(1);
     }
 }

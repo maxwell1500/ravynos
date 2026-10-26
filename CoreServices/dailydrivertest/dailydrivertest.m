@@ -659,6 +659,77 @@ int main(int argc, char **argv) {
                             (int)activated, spawns, after);
             }
 
+            /* The two intake proof targets.  Each one is an application the
+             * system did not hand-write: MacOSIntakeProbe was compiled by the
+             * host macOS toolchain against the real Apple frameworks and
+             * staged by tools/bootlab/app_stage.py, and SDLBlocks was built
+             * from ordinary SDL2 source by tools/ports/build_port.py against
+             * the ravynOS SDK.  A launch that paints and writes its PASS line
+             * is what makes both tracks real rather than aspirational. */
+            {
+                struct {
+                    const char *path;
+                    const char *logPath;
+                    const char *expect;
+                    const char *label;
+                } intake[] = {
+                    { "/Applications/MacOSIntakeProbe.app", "/var/log/macos-intake.log",
+                      "PASS macos-intake:",
+                      "imported macOS .app bundle with @rpath + Security/IOKit/CoreVideo/SC/CFNetwork executes and paints" },
+                    { "/Applications/SDLBlocks.app", "/var/log/sdl2-port-selftest.log",
+                      "PASS sdl2-port:",
+                      "ported CMake/SDL2 application executes and paints via WindowServer" },
+                };
+                unsigned k;
+
+                for(k = 0; k < sizeof(intake) / sizeof(intake[0]); k++) {
+                    NSString *bundlePath = [NSString stringWithUTF8String:intake[k].path];
+                    NSString *logPath = [NSString stringWithUTF8String:intake[k].logPath];
+                    BOOL installed = _fileExists(bundlePath);
+                    BOOL passed = NO;
+
+                    _say(report, [NSString stringWithFormat:@"%s is installed",
+                                  intake[k].path], installed);
+                    if(!installed)
+                        continue;
+
+                    /* The self-test log is written by the application itself,
+                     * so a stale one from an earlier boot has to be removed
+                     * first or the check could pass without this launch. */
+                    remove([logPath fileSystemRepresentation]);
+                    _openBundleOnWindowServer(bundlePath);
+
+                    int waited;
+                    for(waited = 0; waited < 120; waited++) {
+                        usleep(500 * 1000);
+
+                        const char *p = [logPath UTF8String];
+                        FILE *f = p ? fopen(p, "r") : NULL;
+                        if(f != NULL) {
+                            char line[512];
+                            size_t n = fread(line, 1, sizeof(line) - 1, f);
+                            fclose(f);
+                            line[n] = '\0';
+                            if(strstr(line, intake[k].expect) != NULL) {
+                                passed = YES;
+                                break;
+                            }
+                        }
+                    }
+
+                    if(!passed) {
+                        fprintf(stderr, "[ddtest] intake %s: no PASS in %s after 60s\n",
+                                intake[k].path, intake[k].logPath);
+                    } else {
+                        /* The application runs its own window; give it a
+                         * moment to paint before the screenshot pass, and
+                         * record that WindowServer saw it. */
+                        usleep(2000 * 1000);
+                    }
+                    _say(report, [NSString stringWithUTF8String:intake[k].label], passed);
+                }
+            }
+
             _writeReport(report);
 
             /* Last: the harness stops the guest as soon as it reads this, so

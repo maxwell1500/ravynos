@@ -715,6 +715,69 @@ def main():
     except ImportError:
         pass
 
+    # 13. Ported and imported applications.  Two intake tracks produce trees
+    #     under work/: build_port.py writes work/ports/<name>/ (a staging root
+    #     shaped like an image root), and app_stage.py writes
+    #     work/app-intake/<App>.app/ for a prebuilt macOS bundle.  Staging
+    #     whatever is there means the proof targets ride the normal image build
+    #     instead of needing a hand-edited manifest, and a run with no ports
+    #     staged simply adds nothing.
+    #     work/ports/<port>/ is one image root per port (build_port.py writes
+    #     usr/ and Applications/ inside it); work/app-intake/ is a single image
+    #     root that app_stage.py fills with Applications/<App>.app.
+    for tree_name, comment_prefix, per_child in (
+            ("ports", "source port", True),
+            ("app-intake", "imported macOS bundle", False)):
+        tree_root = os.path.join(HERE, "work", tree_name)
+        if not os.path.isdir(tree_root):
+            continue
+        roots = []
+        if per_child:
+            for child in sorted(os.listdir(tree_root)):
+                candidate = os.path.join(tree_root, child)
+                if os.path.isdir(candidate):
+                    roots.append(candidate)
+        else:
+            roots.append(tree_root)
+        n_tree = 0
+        for root in roots:
+            n_root = 0
+            for dirpath, dirnames, filenames in os.walk(root):
+                dirnames.sort()
+                for name in sorted(filenames):
+                    src = os.path.join(dirpath, name)
+                    if os.path.islink(src):
+                        continue
+                    rel = os.path.relpath(src, root).replace(os.sep, "/")
+                    entries.append({
+                        "path": rel,
+                        "file": os.path.relpath(src, HERE),
+                        "comment": "%s staged by %s" % (
+                            comment_prefix,
+                            "tools/ports/build_port.py" if tree_name == "ports"
+                            else "tools/bootlab/app_stage.py"),
+                    })
+                    n_root += 1
+            # Pull in what the staged binaries load.  Without this the port and
+            # the imported bundle reference frameworks and dylibs the image
+            # does not stage, which is a launch-time failure the manifest has
+            # to catch rather than pass along.
+            for dirpath, _dirnames, filenames in os.walk(root):
+                for name in filenames:
+                    src = os.path.join(dirpath, name)
+                    if os.path.islink(src):
+                        continue
+                    try:
+                        with open(src, "rb") as f:
+                            magic = f.read(4)
+                    except OSError:
+                        continue
+                    if magic in (b"\xcf\xfa\xed\xfe", b"\xce\xfa\xed\xfe"):
+                        expand_closure([src], staged, entries, closure, seen)
+            n_tree += n_root
+        if n_tree:
+            closure.append((tree_name, tree_root, "staged %d files" % n_tree))
+
     # Dedupe: collapse benign duplicates (same path, same file) to one entry.
     # A genuine conflict (same path, DIFFERENT file) is a real error and exits.
     by_path = {}

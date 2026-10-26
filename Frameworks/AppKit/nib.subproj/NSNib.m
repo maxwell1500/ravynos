@@ -30,9 +30,31 @@ NSString * const NSNibTopLevelObjects=@"NSNibTopLevelObjects";
    NSString *keyedobjects=path;
    BOOL      isDirectory=NO;
 
-	if([[NSFileManager defaultManager] fileExistsAtPath:path isDirectory:&isDirectory] && isDirectory)
-    keyedobjects=[[path stringByAppendingPathComponent:@"keyedobjects"] stringByAppendingPathExtension:@"nib"];
-   
+	if([[NSFileManager defaultManager] fileExistsAtPath:path isDirectory:&isDirectory] && isDirectory){
+       /* A compiled .nib is a directory.  Which file inside it holds the
+        * archive depends on the toolchain that produced it: ibtool writes
+        * keyedobjects.nib for older deployment targets, and
+        * keyedobjects-101300.nib / keyedobjects-110000.nib for newer ones.
+        * Checking only the unversioned name made every nib built by a current
+        * Xcode fail to load, so try the versioned names too, newest first. */
+       NSArray *names=[NSArray arrayWithObjects:@"keyedobjects.nib",
+                                               @"keyedobjects-110000.nib",
+                                               @"keyedobjects-101300.nib",nil];
+       NSInteger i,count=[names count];
+
+       keyedobjects=nil;
+       for(i=0;i<count;i++){
+        NSString *candidate=[path stringByAppendingPathComponent:[names objectAtIndex:i]];
+
+        if([[NSFileManager defaultManager] fileExistsAtPath:candidate]){
+         keyedobjects=candidate;
+         break;
+        }
+       }
+       if(keyedobjects==nil)
+        keyedobjects=[path stringByAppendingPathComponent:@"keyedobjects.nib"];
+   }
+
    if(!keyedobjects && !isDirectory)
       keyedobjects=path; // assume new-style compiled xib
    

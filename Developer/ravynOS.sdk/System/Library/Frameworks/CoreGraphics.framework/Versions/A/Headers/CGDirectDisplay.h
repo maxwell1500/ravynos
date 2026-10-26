@@ -252,6 +252,11 @@ COREGRAPHICS_EXPORT void CGGetLastMouseDelta(int32_t *deltaX, int32_t *deltaY);
 
 // WindowServer info
 COREGRAPHICS_EXPORT CFDictionaryRef CGSessionCopyCurrentDictionary(void);
+/* CoreFoundation's CFMachPort.h only declares CFMachPortRef inside
+ * `#if TARGET_OS_MAC`, which is not set when building for ravynOS, so the type
+ * has to be spelled out here.  A duplicate typedef of an identical type is
+ * legal in C11 and clang accepts it, so this stays valid on a host build too. */
+typedef struct __CFMachPort *CFMachPortRef;
 COREGRAPHICS_EXPORT CFMachPortRef CGWindowServerCFMachPort(void); // Deprecated in 10.8 but we use it internally
 COREGRAPHICS_EXPORT CGWindowLevel CGWindowLevelForKey(CGWindowLevelKey key);
 

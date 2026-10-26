@@ -60,6 +60,21 @@ LDFLAGS += -Wl,-install_name,${INSTALL_NAME_DIR}/${FRAMEWORK}
 LDFLAGS += -Wl,-install_name,${INSTALL_NAME}
 .endif
 .endif
+FMWK_COMPAT_VERSION ?= 1.0.0
+FMWK_CURRENT_VERSION ?= 65535.255.255
+.if empty(LDFLAGS:M*-compatibility_version*)
+LDFLAGS += -Wl,-compatibility_version,${FMWK_COMPAT_VERSION}
+.endif
+.if empty(LDFLAGS:M*-current_version*)
+LDFLAGS += -Wl,-current_version,${FMWK_CURRENT_VERSION}
+.endif
+
+.if !defined(HEADERS) && defined(INCS)
+HEADERS = ${INCS}
+.endif
+.if !defined(RESOURCES_FILES) && defined(RESOURCES)
+RESOURCES_FILES = ${RESOURCES}
+.endif
 
 .if defined(SRCS) && !empty(SRCS)
 LIBMODE ?= 0555
@@ -119,7 +134,12 @@ ${FRAMEWORK}: _resource_files
 
 _resource_files: ${RESOURCES_DIR}
 .for rsc in ${RESOURCES_FILES}
-	cp -fv ${.CURDIR}/${rsc} ${RESOURCES_DIR}
+	@if [ -d "${.CURDIR}/${rsc}" ]; then \
+		${ECHO} "cp -Rf ${rsc} -> ${RESOURCES_DIR}/"; \
+		cp -Rfp "${.CURDIR}/${rsc}" ${RESOURCES_DIR}/; \
+	else \
+		cp -fv "${.CURDIR}/${rsc}" ${RESOURCES_DIR}; \
+	fi
 .endfor
 .endif
 
@@ -165,7 +185,7 @@ ${FRAMEWORK_DIR}:
 		ln -sf Versions/${FMWK_VERSION}/${FRAMEWORK} ${FRAMEWORK})
 .endif
 	(cd "${FRAMEWORK_DIR}/Versions"; ln -sf ${FMWK_VERSION} Current)
-	touch "${FRAMEWORK_DIR}/Versions/${FMWK_VERSION}/Resources/Info.plist"
+	[ -f "${FRAMEWORK_DIR}/Versions/${FMWK_VERSION}/Resources/Info.plist" ] || touch "${FRAMEWORK_DIR}/Versions/${FMWK_VERSION}/Resources/Info.plist"
 
 .include <bsd.subdir.mk>
 .include <bsd.lib.mk>

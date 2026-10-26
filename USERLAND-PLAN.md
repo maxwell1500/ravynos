@@ -157,3 +157,90 @@ The Objective-C block runtime on x86_64 Darwin 24 is now fully operational and v
 - Verified in guest: `Objective-C blocks execute and support copy/release` passes cleanly with 0 crashes.
 - Global screen capture (`kWSRequestCapture`, Cmd+Shift+3/4/5) and window picking (`kWSDragHitTest`) are implemented and verified.
 - Daily-driver verification gate: 91/91 checks pass, 0 CORPSE, 0 uncaught exceptions, all 14 fleet application screenshots verified frontmost.
+
+## F. Application Intake & Source Porting (2026-10-26)
+
+Two permanent intake tracks replace hand-writing applications. Both are verified end-to-end in the guest by
+`verify_daily_driver.py --all --boot` (100 checks, 0 failed), and each proof target writes its own PASS line
+that the gate reads back out of the image.
+
+### F1. SDK sysroot, cross-toolchain, CMake, pkg-config
+- `tools/bootlab/sync_sdk.py` makes `Developer/ravynOS.sdk` self-contained: `/usr/lib/system/*`, `libobjc`,
+  `libz`, `libc++`, `libedit`, the Onyx2D static archives (freetype, libpng16, libjpeg, libtiff), public
+  headers for zlib/expat/sqlite3/fontconfig/freetype2/libpng/libjpeg/libtiff, Linux userland shims
+  (`sys/endian.h`, `byteswap.h`, `sys/epoll.h`, `sys/eventfd.h`, `linux/input*.h`), and `usr/lib/pkgconfig/*.pc`.
+  It runs at the end of `build-libraries.sh` and standalone. CoreServices and LaunchServices are copied from the
+  build-tree SDK so the image manifest stays repo-relative.
+- `tools/sdk/bin/{ravynos-cc,ravynos-c++,ravynos-pkg-config,sdl2-config}` are standalone wrappers usable from
+  any source tree, `./configure`, or CMake. `ravynos-c++` links `libc++.a`/`libc++abi.a` directly because the
+  SDK's `libc++.1.dylib` is a zero-byte stub.
+- `Developer/cmake/ravynos.toolchain.cmake` plus the `Version/Paths/Tools/framework` modules that
+  `PrivateFrameworks/CMakeLists.txt` already included but did not have.
+- `SDKSettings.json` now reports 15.0, matching `SDKSettings.plist`.
+
+### F2. SDL2.framework (2.32.10 ABI) on AppKit/Onyx2D
+`Frameworks/SDL2` implements the SDL 2.32 C ABI against `NSWindow` + the window's Onyx2D shared-memory surface:
+core/error/hints/log, video/window/display, surfaces and blits, a software 2D renderer, events/keyboard/mouse/
+clipboard, timers/threads/sync/RWops/dlfcn, and a pacing audio backend. Device subsystems (joystick, game
+controller, sensor, haptic) are generated from the public headers by `tools/bootlab/gen_sdl_device_stubs.py`,
+so the entry points exist with exactly the declared signatures instead of drifting by hand.
+
+Two AppKit findings that came out of building it, both fixed at the source:
+- `-[NSEvent isARepeat]` had an ivar and no accessor; it is now declared and implemented.
+- A process that drives its own event loop must call `-[NSApplication finishLaunching]` before ordering a
+  window, and a *titled* window's ordering pass (NSThemeFrame display) does not complete for such a process:
+  the window appears and the process stops inside `-orderFront:`. Borderless windows work. SDL2 therefore
+  creates borderless windows for its own surfaces, and the limitation is recorded here rather than papered over.
+
+### F3. The six macOS runtime frameworks
+`Security`, `IOKit`, `CoreVideo`, `SystemConfiguration`, `CFNetwork` and `ApplicationServices` are real
+framework dylibs in the SDK, built by `build-libraries.sh --frameworks` (now in the default list).
+Each declares only what it implements, so a missing facility fails to compile instead of returning a plausible
+zero at run time:
+- **Security**: SecTask entitlements/signing identity, SecCode/SecStaticCode/SecRequirement, SecItem on a
+  process-local generic-password store, SecTrust/SecPolicy, SecRandomCopyBytes, Authorization. No keychain
+  daemon, so `SecItemCopyMatching` reports `errSecItemNotFound` and entitlements are honestly absent.
+- **IOKit**: registry iteration and notification with an empty registry (a valid empty iterator, never a
+  bogus handle), IOServiceOpen/IOConnect*, power assertions, plus the IOFireWire/IOUSB/IONetwork plugin headers.
+- **CoreVideo**: CVBuffer/CVPixelBuffer/PixelBufferPool as CF objects with real storage, and CVDisplayLink.
+- **SystemConfiguration**: a dynamic store with a process-local backing dictionary (set/copy round-trips),
+  SCPreferences, and `SCNetworkReachabilityGetFlags` answered by a real UDP route lookup.
+- **CFNetwork**: proxy settings and `CFNetworkCopyProxiesForURL`, `CFHost` resolution through `getaddrinfo`,
+  and `CFHTTPMessage` request/response building and parsing.
+- **ApplicationServices**: Process Manager identity/foregrounding, accessibility (reports "not trusted"),
+  PrintCore and HIShape stubs.
+- `BSD/share/mk/rvn.framework.mk` now defaults `-compatibility_version`/`-current_version`, copies resource
+  *directories* as well as files, and accepts `INCS`/`RESOURCES` spellings. Every framework an imported
+  application links carries at least Apple's compatibility version (AppKit 45.0.0, CoreVideo 1.2.0, the rest
+  1.0.0) -- dyld refuses to load an image whose library reports a lower one, and most of the tree reported 0.0.0.
+
+### F4. Generic macOS bundle intake
+`tools/bootlab/app_stage.py` generalizes `chrome_stage.py`: it reads `CFBundleExecutable` instead of assuming
+the bundle name, parses `LC_RPATH` and resolves `@rpath/`, `@executable_path/` and `@loader_path/`
+dependencies, flattens framework symlinks onto the file they point at, thins to x86_64, ad-hoc signs, rewrites
+load commands, and emits flat manifest entries. A dependency neither the bundle nor the SDK can satisfy is
+reported as a failure rather than silently staged as a trap. `--dry-run` on `/Applications/Transmission.app`
+resolves the real bundle's frameworks and names its genuine gaps (libc++, UserNotifications, Carbon, WebKit).
+
+Bundle-launch bugs fixed for imported applications:
+- `NSBundle -lookInDirectories` now searches `Base.lproj` first; without it a nib built by any current Xcode is
+  not found and the application starts with no menu bar.
+- `NSNib` accepts `keyedobjects-110000.nib` and `keyedobjects-101300.nib`, not only the unversioned name.
+- `Filer` opens bundles through `WindowServer` (`openBundlePath:`), so the child inherits launchd's bootstrap
+  context; the fork/exec fallback now passes the environment instead of an empty one.
+- `AppKit.framework/Versions/C` exists as an install-time alias of `A`, because every prebuilt macOS binary
+  records AppKit at `Versions/C`.
+
+Proof target: `tools/bootlab/host-macos-app` compiles `MacOSIntakeProbe.app` with the *host* macOS SDK,
+linking `@rpath/MacIntakeCore.dylib` through `LC_RPATH @executable_path/../Frameworks` and the real
+Security/IOKit/CoreVideo/SystemConfiguration/CFNetwork/ApplicationServices/Cocoa frameworks. Staged by
+`app_stage.py`, it launches, resolves the rpath dylib, exercises all seven frameworks and writes
+`PASS macos-intake: rpath=1 sec=1 iokit=1 cv=1 sc=1 cfnet=1 apps=1`.
+
+### F5. Source porting
+`tools/ports/build_port.py` builds a port from its own build system (cmake, autotools or make) against the SDK,
+strips, signs, and packages the result as an `.app`. `tools/ports/sdl2-blocks` is an ordinary CMake + pkg-config
+SDL2 program with no ravynOS-specific code; it builds with `cmake --toolchain ravynos.toolchain.cmake`, finds
+SDL2 and zlib through `ravynos-pkg-config`, and in the guest creates a 640x480 window, renders a block grid
+through the software renderer, presents three frames and writes
+`PASS sdl2-port: video=ravynOS renderer=software surface=640x480 zlib=1.3.2`.

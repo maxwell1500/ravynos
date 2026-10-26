@@ -3,6 +3,9 @@
 
 MK_WERROR = no
 FRAMEWORK=AppKit
+# Apple's compatibility version; dyld refuses to load this framework for a
+# binary that recorded a higher one, so it has to match at least.
+FMWK_COMPAT_VERSION = 45.0.0
 MK_AUTO_OBJ=yes
 
 #SUBDIR+=	xkeyboard-config
@@ -637,6 +640,21 @@ fmwk-install-hook:
 .for dir in ${RAVYN_SDKROOT}/System/Library/Frameworks/ ${SYSROOT_DIR}/System/Library/Frameworks/ ${RAVYN_REPO_SDKROOT}/System/Library/Frameworks/
 	mkdir -p ${dir}
 	cp -Rfp ${.OBJDIR}/${FRAMEWORK}.framework ${dir}
+.endfor
+	# macOS puts AppKit at Versions/C, not Versions/A, and every prebuilt
+	# macOS binary records that path in its LC_LOAD_DYLIB.  Without a C copy
+	# the most common dependency of every imported application is "missing"
+	# even though the framework is present.  This is an install-time alias, not
+	# a second build: the file is the same binary, and Current still points at
+	# A so in-tree links are unaffected.
+.for dir in ${RAVYN_SDKROOT} ${SYSROOT_DIR} ${RAVYN_REPO_SDKROOT}
+	@if [ -n "${dir}" ] && [ -d "${dir}/System/Library/Frameworks/${FRAMEWORK}.framework/Versions/A" ]; then \
+		mkdir -p "${dir}/System/Library/Frameworks/${FRAMEWORK}.framework/Versions/C" && \
+		cp -fp "${dir}/System/Library/Frameworks/${FRAMEWORK}.framework/Versions/A/${FRAMEWORK}" \
+			"${dir}/System/Library/Frameworks/${FRAMEWORK}.framework/Versions/C/${FRAMEWORK}" && \
+		cp -Rfp "${dir}/System/Library/Frameworks/${FRAMEWORK}.framework/Versions/A/Headers/." \
+			"${dir}/System/Library/Frameworks/${FRAMEWORK}.framework/Versions/C/Headers/" 2>/dev/null || true; \
+	fi
 .endfor
 
 clean-deps:

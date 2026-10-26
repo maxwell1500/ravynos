@@ -38,4 +38,11 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
    return _keyCode;
 }
 
+/* Third-party macOS applications and SDL2 both ask the event whether it is a
+ * key-repeat; the ivar existed but no accessor declared or implemented it, so
+ * the message fell through to a forwarding failure at runtime. */
+-(BOOL)isARepeat {
+   return _isARepeat;
+}
+
 @end
