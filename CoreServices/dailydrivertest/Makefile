@@ -27,6 +27,6 @@ LDFLAGS+=	-F${RAVYN_SDKROOT}/System/Library/Frameworks -framework LaunchServices
 		-F${OBJTOP}/Frameworks/Foundation -framework Foundation \
 		-Wl,-rpath,/System/Library/Frameworks/AppKit.framework/Versions/A \
 		-Wl,-rpath,/System/Library/Frameworks/Foundation.framework/Versions/C \
-		-L${RAVYN_SDKROOT}/usr/lib -lobjc -lSystem
+		-L${RAVYN_SDKROOT}/usr/lib -L${RAVYN_SDKROOT}/usr/lib/system -lobjc -lSystem
 
 .include <bsd.prog.mk>

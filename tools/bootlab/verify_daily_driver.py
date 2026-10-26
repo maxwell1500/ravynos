@@ -781,6 +781,8 @@ def check_guest_report(results, img, serial=None):
              "the canonical macOS path is the same bundle"),
             ("opening Finder.app activates that process instead of forking a second copy",
              "Finder.app activates Filer instead of forking a second copy"),
+            ("Objective-C blocks execute and support copy/release",
+             "Objective-C blocks execute and support copy/release"),
     ):
         results.check("guest: %s" % description, needle in text,
                       "" if needle in text else "not in the report")

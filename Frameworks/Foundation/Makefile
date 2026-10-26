@@ -11,7 +11,8 @@ HEADERS != cd ${.CURDIR}; echo Headers/Foundation/* Headers/*.h
 SLF = /System/Library/Frameworks
 INSTALL_NAME_DIR = ${SLF}/${FRAMEWORK}.framework/Versions/${FMWK_VERSION}
 
-SRCS = 	NSFormatter.m \
+SRCS = 	NSBlocks.m \
+	NSFormatter.m \
 	NSDictionary/NSEnumerator_dictionaryObjects.m \
 	NSDictionary/NSMutableDictionary.m \
 	NSDictionary/NSEnumerator_dictionaryKeys.m \
@@ -355,6 +356,7 @@ CFLAGS.forwarding.o = -I${ROOT_SOURCE_DIR}/Libraries/objc4 \
 	-I${RAVYN_SDKROOT}${SLF}/System.framework/Versions/B/PrivateHeaders \
 	-I/nest/ravynos/Libraries/Libsystem/private \
         -include${.CURDIR:H}/CoreFoundation/ForFoundationOnly.h
+CFLAGS.NSBlocks.o = -fblocks
 SUBDIR =
 
 fmwk-install-hook:

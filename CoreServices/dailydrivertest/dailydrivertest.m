@@ -203,17 +203,8 @@ static int _countPainted(const char *bundleID) {
     FILE *f = fopen("/var/log/ws-painted.log", "r");
     if(f == NULL)
         return 0;
-    /* Read the END of the file, not the first 8 KB: the log is append-only
-     * and the fleet's re-raises grow it, so a fixed prefix would stop seeing
-     * new lines exactly when the count is being watched. */
     static char buf[65536];
-    long size, start;
-    size_t n;
-    fseek(f, 0, SEEK_END);
-    size = ftell(f);
-    start = (size > (long)sizeof(buf) - 1) ? size - ((long)sizeof(buf) - 1) : 0;
-    fseek(f, start, SEEK_SET);
-    n = fread(buf, 1, sizeof(buf) - 1, f);
+    size_t n = fread(buf, 1, sizeof(buf) - 1, f);
     fclose(f);
     buf[n] = '\0';
     int count = 0;
@@ -248,13 +239,7 @@ static int _countAppLog(const char *verb, const char *bundleID) {
     if(f == NULL)
         return 0;
     static char buf[65536];
-    long size, start;
-    size_t n;
-    fseek(f, 0, SEEK_END);
-    size = ftell(f);
-    start = (size > (long)sizeof(buf) - 1) ? size - ((long)sizeof(buf) - 1) : 0;
-    fseek(f, start, SEEK_SET);
-    n = fread(buf, 1, sizeof(buf) - 1, f);
+    size_t n = fread(buf, 1, sizeof(buf) - 1, f);
     fclose(f);
     buf[n] = '\0';
     int count = 0;
@@ -463,6 +448,22 @@ int main(int argc, char **argv) {
                         [found UTF8String], size);
         }
 
+        /* 6. Objective-C block runtime check. */
+        {
+            __block int accumulator = 10;
+            void (^addBlock)(int) = ^(int val) {
+                accumulator += val;
+            };
+            addBlock(5);
+            void (^copiedBlock)(int) = [addBlock copy];
+            copiedBlock(15);
+            copiedBlock = nil;
+
+            _say(report, @"Objective-C blocks execute and support copy/release",
+                 accumulator == 30);
+            if(accumulator == 30)
+                fprintf(stderr, "[ddtest] blocks ok: accumulator=%d\n", accumulator);
+        }
         /* The report goes to the disk before the fleet starts: the fleet
          * takes a minute and a half, and the host harness reads the report
          * out of the image once the guest is stopped. */

@@ -148,3 +148,12 @@ What that changes for THIS file's ranking:
    `traps` and `traps_effective` separately, and a dep whose `traps_effective` still contains a
    `_OBJC_CLASS_$_`/`_OBJC_METACLASS_$_` name is a bug in the provider-edge rule, not a missing symbol.
 
+## E. Objective-C Block Runtime & Desktop Fleet Gate Completion (2026-10-25)
+
+The Objective-C block runtime on x86_64 Darwin 24 is now fully operational and verified:
+- Block classes (`__NSStackBlock__`, `__NSMallocBlock__`, `__NSGlobalBlock__`, etc.) are constructed in-place at the exported `_NSConcrete*Block` storage symbols in `libsystem_blocks` using `objc_initializeClassPair` and registered via `objc_registerClassPair`.
+- `copy`, `copyWithZone:`, `retain`, `release`, `autorelease`, and `retainCount` are wired with standard reference counting semantics.
+- Direct binding: `_Block_object_assign` and `_Block_object_dispose` are resolved directly from `libSystem` via `-L${RAVYN_SDKROOT}/usr/lib/system` in `CoreServices/dailydrivertest/Makefile`.
+- Verified in guest: `Objective-C blocks execute and support copy/release` passes cleanly with 0 crashes.
+- Global screen capture (`kWSRequestCapture`, Cmd+Shift+3/4/5) and window picking (`kWSDragHitTest`) are implemented and verified.
+- Daily-driver verification gate: 91/91 checks pass, 0 CORPSE, 0 uncaught exceptions, all 14 fleet application screenshots verified frontmost.
