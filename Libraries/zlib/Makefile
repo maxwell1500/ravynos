@@ -24,12 +24,33 @@ MAN = ${.CURDIR}/zlib.3
 ZINC=
 ZINCOUT=-I.
 
-all: lib${LIB}.a 
-	$(AR) $(ARFLAGS) $@ $(OBJS)
-	-@ ($(RANLIB) $@ || true) >/dev/null 2>&1
+# Every macOS binary records /usr/lib/libz.1.dylib (Transmission, Godot,
+# Blender, LibreOffice, Word), and until now this tree only produced libz.a.
+# The dylib is linked from that archive with Apple's install name and ABI
+# version, and installed into every SDK root the build can see.
+LIBZ_DYLIB = lib${LIB}.1.dylib
+
+all: lib${LIB}.a ${LIBZ_DYLIB}
+	$(AR) $(ARFLAGS) lib${LIB}.a $(OBJS)
+	-@ ($(RANLIB) lib${LIB}.a || true) >/dev/null 2>&1
 	mkdir -p ${RAVYN_SDKROOT}/usr/lib ${RAVYN_SDKROOT}/usr/share/man/man3
 	cp -f ${.OBJDIR}/lib${LIB}.a ${RAVYN_SDKROOT}/usr/lib/
 	cp -f ${MAN} ${RAVYN_SDKROOT}/usr/share/man/man3/
+
+${LIBZ_DYLIB}: lib${LIB}.a
+	${CC} -shared -dylib -o ${.TARGET} \
+	  -Wl,-force_load,${.OBJDIR}/lib${LIB}.a -nodefaultlibs \
+	  -undefined dynamic_lookup -Wl,-not_for_dyld_shared_cache \
+	  -Wl,-install_name,/usr/lib/libz.1.dylib \
+	  -Wl,-compatibility_version,1.0.0 -Wl,-current_version,1.3.1 \
+	  -L${RAVYN_SDKROOT}/usr/lib/system -L${RAVYN_SDKROOT}/usr/lib -ldyld
+	@for sdk in "${RAVYN_SDKROOT}" "${SYSROOT_DIR}" "${RAVYN_REPO_SDKROOT}"; do \
+	  [ -n "$$sdk" ] && [ -d "$$sdk" ] || continue; \
+	  mkdir -p "$$sdk/usr/lib"; \
+	  cp -f ${.TARGET} "$$sdk/usr/lib/libz.1.dylib"; \
+	  ln -sf libz.1.dylib "$$sdk/usr/lib/libz.dylib"; \
+	  ln -sf libz.1.dylib "$$sdk/usr/lib/libz.1.3.1.dylib"; \
+	done
 
 match.o: match.S
 	$(CPP) match.S > _match.s

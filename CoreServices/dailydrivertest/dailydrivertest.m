@@ -730,6 +730,64 @@ int main(int argc, char **argv) {
                 }
             }
 
+            /* The C++ runtime is a plain executable rather than a bundle: what
+             * is being tested is dyld resolving /usr/lib/libc++.1.dylib and the
+             * runtime's own exit paths, not WindowServer.  A fork/exec of a
+             * missing or unloadable image fails here as a recorded check rather
+             * than taking down this process with it.  The two destructor lines
+             * are written after main() returns, so reading the log after
+             * waitpid() proves __cxa_atexit and __cxa_thread_atexit_impl ran
+             * rather than merely being exported. */
+            {
+                const char *probe = "/usr/bin/cxxprobe";
+                const char *log = "/var/log/cxx-runtime.log";
+                BOOL ok = NO;
+
+                if(_fileExists([NSString stringWithUTF8String:probe])) {
+                    int fds[2];
+                    pid_t pid;
+                    int status = 0;
+
+                    remove(log);
+                    if(pipe(fds) == 0) {
+                        pid = fork();
+                        if(pid == 0) {
+                            close(fds[0]);
+                            dup2(fds[1], 1);
+                            dup2(fds[1], 2);
+                            close(fds[1]);
+                            execl(probe, probe, (char *)NULL);
+                            _exit(127);
+                        }
+                        close(fds[1]);
+                        {
+                            char buf[512];
+                            while(read(fds[0], buf, sizeof(buf)) > 0) { }
+                        }
+                        close(fds[0]);
+                        waitpid(pid, &status, 0);
+                    }
+
+                    if(WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+                        FILE *f = fopen(log, "r");
+                        if(f != NULL) {
+                            char text[4096];
+                            size_t n = fread(text, 1, sizeof(text) - 1, f);
+                            fclose(f);
+                            text[n] = '\0';
+                            ok = strstr(text, "PASS cxx-runtime:") != NULL
+                                 && strstr(text, "static-dtor") != NULL
+                                 && strstr(text, "tls-dtor") != NULL;
+                        }
+                    }
+                    if(!ok) {
+                        fprintf(stderr, "[ddtest] cxxprobe: exit=%d log=%s\n",
+                                WIFEXITED(status) ? WEXITSTATUS(status) : -1, log);
+                    }
+                }
+                _say(report, @"the C++ runtime dylib loads, throws, threads, and runs both atexit hooks", ok);
+            }
+
             _writeReport(report);
 
             /* Last: the harness stops the guest as soon as it reads this, so

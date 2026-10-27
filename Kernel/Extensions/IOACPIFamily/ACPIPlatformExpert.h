@@ -52,6 +52,23 @@ struct RSDP
     uint8_t reserved[3];
 } __attribute__((packed));
 
+/* ACPI 1.0 RSDT: same header as XSDT, but 32-bit table pointers.  Firmware
+ * that predates ACPI 2.0 (and some virtual firmware that reports revision 0)
+ * publishes only this table. */
+struct RSDT
+{
+    uint8_t signature[4];
+    uint32_t length;
+    uint8_t revision;
+    uint8_t checksum;
+    char OEMID[6];
+    char OEMTableID[8];
+    uint32_t OEMRevision;
+    uint32_t creatorID;
+    uint32_t creatorRevision;
+    uint32_t tables[0];
+} __attribute__((packed));
+
 struct XSDT
 {
     uint8_t signature[4];
@@ -113,6 +130,7 @@ class ACPIPlatformExpert : public IOPlatformExpert {
     const OSSymbol *_interruptControllerName;
     OSArray * cpuArray = NULL;
     AppleAPIC * _apic = NULL;
+    bool      _sawMCFG = false;
 
     void PE_Log(const char *fmt, ...);
     bool parseACPI(IOService *provider);

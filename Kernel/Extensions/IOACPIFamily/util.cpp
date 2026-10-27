@@ -275,12 +275,31 @@ ACPIPlatformExpert::parseMCFG(void * table, IOService * nub)
     businfo.u_bus.s.configMethod1 = true;
     businfo.u_bus.s.configMethod2 = true;
 
+    _sawMCFG = true;
+
     OSDictionary * dict = OSDictionary::withCapacity(8);
     dict->setObject("compatible", OSString::withCString("pci"));
     dict->setObject("name", OSString::withCString("pci"));
     dict->setObject("device_type", OSString::withCString("pci"));
     dict->setObject("pci-bus-info", 
                 OSData::withBytes(&businfo, sizeof(businfo)));
+
+    /* ACPIPCIBridge.comloadProviderInfo() requires these four properties; with
+     * them the bridge can address ECAM space from the MCFG entry it was given,
+     * and AppleI386PCI keeps using pci-bus-info for the legacy mechanism. */
+    uint64_t mcfgBase = entry[0].baseAddress;
+    uint32_t startBus = entry[0].startBus;
+    uint32_t endBus = entry[0].endBus;
+    IOPCIAddressSpace bridgeSpace;
+    memset(&bridgeSpace, 0, sizeof(bridgeSpace));
+    dict->setObject("acpi-mcfg-base",
+                    OSData::withBytes(&mcfgBase, sizeof(mcfgBase)));
+    dict->setObject("acpi-mcfg-start-bus",
+                    OSData::withBytes(&startBus, sizeof(startBus)));
+    dict->setObject("acpi-mcfg-end-bus",
+                    OSData::withBytes(&endBus, sizeof(endBus)));
+    dict->setObject("reg",
+                    OSData::withBytes(&bridgeSpace, sizeof(bridgeSpace)));
 
     IOService *aNub = createNub(dict);
 

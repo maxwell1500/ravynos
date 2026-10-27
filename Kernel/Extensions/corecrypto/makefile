@@ -35,7 +35,7 @@ SRCS = \
     algorithms/pdcrypto_digest_update.c \
     algorithms/pdcrypto_dummy.c
 
-CFLAGS = -DXNU_KERNEL_PRIVATE=1 -DPRIVATE=1 -DCC_KERNEL=1 \
+CFLAGS = -DXNU_KERNEL_PRIVATE=1 -DPRIVATE=1 -DCC_KERNEL=1 -D__WORDSIZE=64 \
 	-Wno-sign-conversion -Wno-int-conversion \
 	-Wno-implicit-function-declaration \
 	-Wno-incompatible-library-redeclaration \

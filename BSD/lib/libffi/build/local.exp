@@ -1,0 +1,3 @@
+set CC_FOR_TARGET "/Users/max/Projects/ravynos/BSD/lib/libffi/compile /Users/max/Projects/ravynos/tools/bootlab/isysroot-cc"
+set CXX_FOR_TARGET "/Users/max/Projects/ravynos/tools/sdk/bin/ravynos-c++"
+set compiler_vendor "clang"

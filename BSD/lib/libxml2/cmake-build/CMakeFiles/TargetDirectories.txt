@@ -1,0 +1,9 @@
+/Users/max/Projects/ravynos/BSD/lib/libxml2/cmake-build/CMakeFiles/LibXml2.dir
+/Users/max/Projects/ravynos/BSD/lib/libxml2/cmake-build/CMakeFiles/package.dir
+/Users/max/Projects/ravynos/BSD/lib/libxml2/cmake-build/CMakeFiles/package_source.dir
+/Users/max/Projects/ravynos/BSD/lib/libxml2/cmake-build/CMakeFiles/edit_cache.dir
+/Users/max/Projects/ravynos/BSD/lib/libxml2/cmake-build/CMakeFiles/rebuild_cache.dir
+/Users/max/Projects/ravynos/BSD/lib/libxml2/cmake-build/CMakeFiles/list_install_components.dir
+/Users/max/Projects/ravynos/BSD/lib/libxml2/cmake-build/CMakeFiles/install.dir
+/Users/max/Projects/ravynos/BSD/lib/libxml2/cmake-build/CMakeFiles/install/local.dir
+/Users/max/Projects/ravynos/BSD/lib/libxml2/cmake-build/CMakeFiles/install/strip.dir

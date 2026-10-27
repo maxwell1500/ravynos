@@ -72,11 +72,13 @@ ${.OBJDIR}/lib${LIB}.dylib: ${.OBJDIR}/lib${LIB}.a
 	  -Wl,-force_load,${.OBJDIR}/lib${LIB}.a -nodefaultlibs \
 	  -undefined dynamic_lookup -Wl,-not_for_dyld_shared_cache \
 	  -Wl,-install_name,/usr/lib/lib${LIB}.dylib \
-	  -Wl,-current_version,1 -Wl,-compatibility_version,1.0.0 \
+	  -Wl,-current_version,346.0.0 -Wl,-compatibility_version,9.0.0 \
 	  -L${RAVYN_SDKROOT}/usr/lib/system -L${RAVYN_SDKROOT}/usr/lib -ldyld
-	mkdir -p ${RAVYN_SDKROOT}/usr/lib ${SYSROOT_DIR}/usr/lib
-	cp -f ${.TARGET} ${RAVYN_SDKROOT}/usr/lib/
-	cp -f ${.TARGET} ${SYSROOT_DIR}/usr/lib/
+	for sdk in "${RAVYN_SDKROOT}" "${SYSROOT_DIR}" "${RAVYN_REPO_SDKROOT}"; do \
+	  [ -n "$$sdk" ] && [ -d "$$sdk" ] || continue; \
+	  mkdir -p "$$sdk/usr/lib"; \
+	  cp -f ${.TARGET} "$$sdk/usr/lib/lib${LIB}.dylib"; \
+	done
 	# INCS are the public headers bsd.incs.mk would install; with the dylib
 	# staged by hand they must be staged here too, or a client that does
 	# `#include <sqlite3.h>` (LaunchServices.mm does) finds no header: the

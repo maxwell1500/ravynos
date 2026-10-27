@@ -809,12 +809,17 @@
     },
     {
       "path": "usr/lib/libexpat.dylib",
-      "file": "../../Developer/ravynOS.sdk/usr/lib/libexpat.dylib",
+      "file": "../../Developer/ravynOS.sdk/usr/lib/libexpat.1.dylib",
       "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
     },
     {
       "path": "usr/lib/libicucore.A.dylib",
       "file": "../../Developer/ravynOS.sdk/usr/lib/libicucore.A.dylib",
+      "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
+    },
+    {
+      "path": "usr/lib/libexpat.1.dylib",
+      "file": "../../Developer/ravynOS.sdk/usr/lib/libexpat.1.dylib",
       "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
     },
     {
@@ -1411,6 +1416,96 @@
       "path": "usr/lib/libjansson.dylib",
       "file": "../../Developer/ravynOS.sdk/usr/lib/libjansson.dylib",
       "comment": "libjansson required by launchctl's LC_LOAD_DYLIB"
+    },
+    {
+      "path": "usr/lib/libc++.1.dylib",
+      "file": "../../Developer/ravynOS.sdk/usr/lib/libc++.1.dylib",
+      "comment": "C++ runtime named by every clang++ binary's LC_LOAD_DYLIB"
+    },
+    {
+      "path": "usr/bin/cxxprobe",
+      "file": "work/cxxprobe/cxxprobe",
+      "comment": "C++ runtime self test, run by dailydrivertest"
+    },
+    {
+      "path": "usr/lib/libz.1.dylib",
+      "file": "../../Developer/ravynOS.sdk/usr/lib/libz.1.dylib",
+      "comment": "zlib, recorded by Transmission/Godot/Blender"
+    },
+    {
+      "path": "usr/lib/libbz2.1.0.dylib",
+      "file": "../../Developer/ravynOS.sdk/usr/lib/libbz2.1.0.dylib",
+      "comment": "bzip2, recorded by Chrome/Blender/VLC"
+    },
+    {
+      "path": "usr/lib/libedit.3.dylib",
+      "file": "../../Developer/ravynOS.sdk/usr/lib/libedit.3.dylib",
+      "comment": "libedit, recorded by readline-style clients"
+    },
+    {
+      "path": "usr/lib/libfontconfig.1.dylib",
+      "file": "../../Developer/ravynOS.sdk/usr/lib/libfontconfig.1.dylib",
+      "comment": "fontconfig, recorded by CoreText clients"
+    },
+    {
+      "path": "usr/lib/libiconv.2.dylib",
+      "file": "../../Developer/ravynOS.sdk/usr/lib/libiconv.2.dylib",
+      "comment": "iconv, recorded by Transmission/Blender/VLC"
+    },
+    {
+      "path": "usr/lib/libxml2.2.dylib",
+      "file": "../../Developer/ravynOS.sdk/usr/lib/libxml2.2.dylib",
+      "comment": "libxml2, recorded by LibreOffice"
+    },
+    {
+      "path": "usr/lib/libcurl.4.dylib",
+      "file": "../../Developer/ravynOS.sdk/usr/lib/libcurl.4.dylib",
+      "comment": "libcurl, recorded by Transmission/OBS/OpenRCT2"
+    },
+    {
+      "path": "usr/lib/libcompression.dylib",
+      "file": "../../Developer/ravynOS.sdk/usr/lib/libcompression.dylib",
+      "comment": "libcompression, recorded by Pages and AppKit clients"
+    },
+    {
+      "path": "usr/lib/libresolv.9.dylib",
+      "file": "../../Developer/ravynOS.sdk/usr/lib/libresolv.9.dylib",
+      "comment": "libresolv, recorded by Chrome"
+    },
+    {
+      "path": "usr/lib/libbsm.0.dylib",
+      "file": "../../Developer/ravynOS.sdk/usr/lib/libbsm.0.dylib",
+      "comment": "libbsm, recorded by Chrome"
+    },
+    {
+      "path": "usr/lib/libcups.2.dylib",
+      "file": "../../Developer/ravynOS.sdk/usr/lib/libcups.2.dylib",
+      "comment": "CUPS, recorded by Chrome and print dialogs"
+    },
+    {
+      "path": "usr/lib/libsandbox.1.dylib",
+      "file": "../../Developer/ravynOS.sdk/usr/lib/libsandbox.1.dylib",
+      "comment": "sandbox, recorded by Chrome helpers"
+    },
+    {
+      "path": "usr/lib/libpam.2.dylib",
+      "file": "../../Developer/ravynOS.sdk/usr/lib/libpam.2.dylib",
+      "comment": "PAM, recorded by authentication clients"
+    },
+    {
+      "path": "usr/lib/libncurses.6.dylib",
+      "file": "../../Developer/ravynOS.sdk/usr/lib/libncurses.6.dylib",
+      "comment": "ncurses 6, built by its own configure"
+    },
+    {
+      "path": "usr/lib/libcharset.1.dylib",
+      "file": "../../Developer/ravynOS.sdk/usr/lib/libcharset.1.dylib",
+      "comment": "libcharset, companion of libiconv"
+    },
+    {
+      "path": "usr/lib/libffi.dylib",
+      "file": "../../Developer/ravynOS.sdk/usr/lib/libffi.dylib",
+      "comment": "libffi, recorded by scripting runtimes"
     },
     {
       "path": "System/Library/Fonts/Inter.ttc",

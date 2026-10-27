@@ -534,6 +534,61 @@ def main():
         "file": "../../Developer/ravynOS.sdk/usr/lib/libjansson.dylib",
         "comment": "libjansson required by launchctl's LC_LOAD_DYLIB",
     })
+    # Every binary built with clang++ records /usr/lib/libc++.1.dylib, and so
+    # does every imported macOS application.  Built by
+    # tools/bootlab/make_libcxx_dylib.py from the SDK's libc++.a and
+    # libc++abi.a; see that script for why one definition per symbol has to be
+    # chosen.  The probe next to it is the guest-side check that a C++ program
+    # actually runs: containers, exceptions, std::thread and both atexit hooks.
+    entries.append({
+        "path": "usr/lib/libc++.1.dylib",
+        "file": "../../Developer/ravynOS.sdk/usr/lib/libc++.1.dylib",
+        "comment": "C++ runtime named by every clang++ binary's LC_LOAD_DYLIB",
+    })
+    entries.append({
+        "path": "usr/bin/cxxprobe",
+        "file": "work/cxxprobe/cxxprobe",
+        "comment": "C++ runtime self test, run by dailydrivertest",
+    })
+    # The versioned /usr/lib names macOS clients record.  A client records the
+    # install name of the library it linked, so /usr/lib/libz.dylib is not a
+    # substitute for /usr/lib/libz.1.dylib: dyld opens the recorded path.  The
+    # list is filtered by existence, so a manifest build never fails on a
+    # library that has not been built yet, and each library appears in the
+    # image as soon as it exists in the SDK.
+    for name, comment in (
+            ("libz.1.dylib", "zlib, recorded by Transmission/Godot/Blender"),
+            ("libbz2.1.0.dylib", "bzip2, recorded by Chrome/Blender/VLC"),
+            ("libexpat.1.dylib", "expat, recorded by libxml2 and fontconfig clients"),
+            ("libedit.3.dylib", "libedit, recorded by readline-style clients"),
+            ("libfontconfig.1.dylib", "fontconfig, recorded by CoreText clients"),
+            ("libiconv.2.dylib", "iconv, recorded by Transmission/Blender/VLC"),
+            ("libxml2.2.dylib", "libxml2, recorded by LibreOffice"),
+            ("libxslt.1.dylib", "libxslt, recorded by LibreOffice"),
+            ("libexslt.0.dylib", "libexslt, recorded by LibreOffice"),
+            ("libcurl.4.dylib", "libcurl, recorded by Transmission/OBS/OpenRCT2"),
+            ("liblzma.5.dylib", "liblzma, filter chain for libarchive"),
+            ("libzstd.1.dylib", "libzstd, filter chain for libarchive"),
+            ("libarchive.2.dylib", "libarchive, recorded by Archive Utility class apps"),
+            ("libcompression.dylib", "libcompression, recorded by Pages and AppKit clients"),
+            ("libresolv.9.dylib", "libresolv, recorded by Chrome"),
+            ("libbsm.0.dylib", "libbsm, recorded by Chrome"),
+            ("libcups.2.dylib", "CUPS, recorded by Chrome and print dialogs"),
+            ("libsandbox.1.dylib", "sandbox, recorded by Chrome helpers"),
+            ("libpam.2.dylib", "PAM, recorded by authentication clients"),
+            ("libncurses.6.dylib", "ncurses 6, built by its own configure"),
+            ("libcharset.1.dylib", "libcharset, companion of libiconv"),
+            ("libffi.dylib", "libffi, recorded by scripting runtimes"),
+            ("libpmenergy.dylib", "power metrics stub, recorded by Chrome"),
+            ("libpmsample.dylib", "power metrics stub, recorded by Chrome"),
+            ("libDiagnosticMessagesClient.dylib", "diagnostics stub, recorded by Pages")):
+        src = os.path.join(REPO, "Developer", "ravynOS.sdk", "usr", "lib", name)
+        if os.path.isfile(src):
+            entries.append({
+                "path": "usr/lib/" + name,
+                "file": "../../Developer/ravynOS.sdk/usr/lib/" + name,
+                "comment": comment,
+            })
     # 8. Fonts. CoreText/AppKit resolve fonts through fontconfig, whose
     #    Frameworks/CoreText/fontconfig/fonts.conf searches /System/Library/Fonts
     #    (plus /Library/Fonts, ~/Library/Fonts, xdg fonts, ~/.fonts), and AppKit's

@@ -521,6 +521,7 @@ SUBDIR = copyfile removefile libdispatch libsystem_blocks libsystem_kernel \
 	libsystem_info libsystem_c libsystem_asl libsystem_trace \
 	libsystem_dnssd libxpc liblaunch libsystem_m libsystem_darwin \
 	libsystem_coreservices libmacho libsystem_pwdgrp libsystem_termcap \
+	libresolv
 	#CommonCrypto
 
 # Why libsystem_termcap is wired the same way libsystem_pwdgrp is, and the one

@@ -1000,6 +1000,76 @@ if [ "${1:-}" = "--frameworks" ]; then
     done
     python3 "$HERE/sync_sdk.py" || rc=1
     exit $rc
+elif [ "${1:-}" = "--kexts" ]; then
+    # Kext and prelinked-kernel build.
+    #
+    # Kernel/Extensions had a Makefile but nothing drove it: the top-level
+    # world target does not descend into it, so no driver kext was ever built
+    # and every IOKit personality in this tree was unreachable at runtime.
+    # This mode builds libkmod.a (the kext-side start/stop shim the kexts
+    # link), then every kext named (default: all of Kernel/Extensions), with
+    # the same environment the framework and library builds use.
+    shift
+    KEXT_DIRS=("$@")
+    if [ ${#KEXT_DIRS[@]} -eq 0 ]; then
+        KEXT_DIRS=(IOACPIFamily AppleAPIC IOPCIFamily AppleI386PCI IOStorageFamily \
+                   IOATAFamily AppleIntelPIIXATA RavynAHCIPort IOUSBFamily \
+                   RavynXHCIPort IOHIDFamily ApplePS2Controller IOGraphics \
+                   AppleFileSystemDriver hfs corecrypto pthread)
+    fi
+    rc=0
+
+    # Kexts compile against the kernel's headers, not the userspace ones.  The
+    # mach compat shim this script force-includes for userland (RAVYN_COMPAT_
+    # MAC_AUX) pulls usr/include/mach/*, which redefines ipc_port_t differently
+    # from the kernel's own mach/port.h; unset it for kernel code.
+    unset RAVYN_COMPAT_MAC_AUX
+    export EXTRA_INCLUDES=""
+    # The exported XNU headers use Apple-clang builtins that the ravynOS
+    # toolchain's clang-17 does not implement (__builtin_xnu_type_summary and
+    # the kalloc typed-operators machinery).  The host clang implements both,
+    # and a kext links no libc, so using it as the compiler does not leak host
+    # code into the output.
+    export REAL_CC="${KEXT_REAL_CC:-/usr/bin/clang}"
+
+    # libkmod.a: four small translation units providing the kext-side
+    # start/stop entry points.  Built once, installed into every SDK root.
+    if [ ! -f "$RAVYN_SDKROOT/usr/local/lib/kernel/libkmod.a" ]; then
+        echo "=== building libkmod ==="
+        KMOD_BUILD="$BUILD$ROOT/Kernel/xnu/libkern/kmod"
+        mkdir -p "$KMOD_BUILD" "$RAVYN_SDKROOT/usr/local/lib/kernel"
+        for src in c_start.c c_stop.c cplus_start.c cplus_stop.c; do
+            "$CC" -c -DKERNEL --sysroot="$RAVYN_SDKROOT" -arch x86_64 \
+                -mmacos-version-min="$MACOS_VERSION_MIN" -fPIC \
+                -I"$RAVYN_SDKROOT/usr/include" \
+                -I"$RAVYN_SDKROOT/usr/local/include/kernel" \
+                -o "$KMOD_BUILD/${src%.c}.o" "$ROOT/Kernel/xnu/libkern/kmod/$src" || rc=1
+        done
+        if [ $rc -eq 0 ]; then
+            /usr/bin/ar rcs "$KMOD_BUILD/libkmod.a" "$KMOD_BUILD"/c_start.o \
+                "$KMOD_BUILD"/c_stop.o "$KMOD_BUILD"/cplus_start.o \
+                "$KMOD_BUILD"/cplus_stop.o
+            for sdk in "$RAVYN_SDKROOT" "$SYSROOT_DIR" "$RAVYN_REPO_SDKROOT"; do
+                [ -n "$sdk" ] && [ -d "$sdk" ] || continue
+                mkdir -p "$sdk/usr/local/lib/kernel"
+                cp -f "$KMOD_BUILD/libkmod.a" "$sdk/usr/local/lib/kernel/libkmod.a"
+            done
+        fi
+    fi
+
+    for d in "${KEXT_DIRS[@]}"; do
+        base="$ROOT/Kernel/Extensions/$d"
+        if [ ! -d "$base" ]; then
+            echo "no such kext dir: $d" >&2
+            rc=1
+            continue
+        fi
+        echo "=== building Kernel/Extensions/$d ==="
+        ( cd "$ROOT" && MAKEOBJDIR="$BUILD$base" \
+          "$BMAKE" -m "$MKMODULES" -C "$base" "${BMAKE_TARGET:-all}" ) || rc=1
+    done
+    python3 "$HERE/sync_sdk.py" || rc=1
+    exit $rc
 elif [ "${1:-}" = "--bsd" ]; then
     shift
     DIRS=("$@")

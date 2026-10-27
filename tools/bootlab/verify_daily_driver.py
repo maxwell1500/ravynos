@@ -99,6 +99,23 @@ PHASE_IMAGE_CHECKS = {
         ("System/Library/Frameworks/CFNetwork.framework/Versions/A/CFNetwork", "file"),
         ("System/Library/Frameworks/ApplicationServices.framework/Versions/A/ApplicationServices", "file"),
         ("usr/lib/libSDL2-2.0.0.dylib", "file"),
+        # The macOS runtime libraries every imported binary names.  Each is
+        # the versioned path a client records, not a convenience alias.
+        ("usr/lib/libc++.1.dylib", "file"),
+        ("usr/lib/libz.1.dylib", "file"),
+        ("usr/lib/libbz2.1.0.dylib", "file"),
+        ("usr/lib/libexpat.1.dylib", "file"),
+        ("usr/lib/libedit.3.dylib", "file"),
+        ("usr/lib/libiconv.2.dylib", "file"),
+        ("usr/lib/libxml2.2.dylib", "file"),
+        ("usr/lib/libcurl.4.dylib", "file"),
+        ("usr/lib/libcompression.dylib", "file"),
+        ("usr/lib/libsandbox.1.dylib", "file"),
+        ("usr/lib/libpam.2.dylib", "file"),
+        ("usr/lib/libresolv.9.dylib", "file"),
+        ("usr/lib/libbsm.0.dylib", "file"),
+        ("usr/lib/libffi.dylib", "file"),
+        ("usr/lib/libcups.2.dylib", "file"),
         # The two intake proof targets.
         ("Applications/MacOSIntakeProbe.app", "app"),
         ("Applications/SDLBlocks.app", "app"),
@@ -797,6 +814,8 @@ def check_guest_report(results, img, serial=None):
              "Finder.app activates Filer instead of forking a second copy"),
             ("Objective-C blocks execute and support copy/release",
              "Objective-C blocks execute and support copy/release"),
+            ("the C++ runtime dylib loads, throws, threads, and runs both atexit hooks",
+             "the C++ runtime loads and runs both atexit hooks"),
     ):
         results.check("guest: %s" % description, needle in text,
                       "" if needle in text else "not in the report")

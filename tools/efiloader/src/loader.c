@@ -157,6 +157,58 @@ typedef struct {
 	void *ConfigurationTable;
 } EFI_SYSTEM_TABLE;
 
+/* UEFI 2.10 section 4.6: the configuration table array.  The ACPI tables are
+ * published here, not in the device tree, and the kernel's ACPI platform
+ * expert needs the RSDP physical address to find them. */
+typedef struct {
+	EFI_GUID VendorGuid;
+	void *VendorTable;
+} EFI_CONFIGURATION_TABLE;
+
+#define GUID_ACPI_20_TABLE GUID(0x8868E871, 0xE4F1, 0x11D3, \
+	0xBC, 0x22, 0x00, 0x80, 0xC7, 0x3C, 0x88, 0x81)
+#define GUID_ACPI_10_TABLE GUID(0xEB9D2D30, 0x2D88, 0x11D3, \
+	0x9A, 0x16, 0x00, 0x90, 0x27, 0x3F, 0xC1, 0x4D)
+
+static u64 g_acpi_rsdp_phys;
+
+static int guid_equal(const EFI_GUID *a, const EFI_GUID *b)
+{
+	const u8 *pa = (const u8 *)a, *pb = (const u8 *)b;
+	for (int i = 0; i < 16; i++) {
+		if (pa[i] != pb[i]) {
+			return 0;
+		}
+	}
+	return 1;
+}
+
+/* Find the RSDP in the configuration table: ACPI 2.0 first (it carries the
+ * XSDT), then 1.0 (RSDT only).  Returns 0 when neither is present. */
+static u64 find_acpi_rsdp(EFI_SYSTEM_TABLE *st)
+{
+	EFI_CONFIGURATION_TABLE *ct;
+	EFI_GUID acpi20 = GUID_ACPI_20_TABLE;
+	EFI_GUID acpi10 = GUID_ACPI_10_TABLE;
+
+	if (st == 0 || st->ConfigurationTable == 0) {
+		return 0;
+	}
+	ct = (EFI_CONFIGURATION_TABLE *)st->ConfigurationTable;
+	for (u64 i = 0; i < st->NumberOfTableEntries; i++) {
+		if (guid_equal(&ct[i].VendorGuid, &acpi20)) {
+			return (u64)(unsigned long long)ct[i].VendorTable;
+		}
+	}
+	for (u64 i = 0; i < st->NumberOfTableEntries; i++) {
+		if (guid_equal(&ct[i].VendorGuid, &acpi10)) {
+			return (u64)(unsigned long long)ct[i].VendorTable;
+		}
+	}
+	return 0;
+}
+
+
 typedef struct EFI_FILE_PROTOCOL EFI_FILE_PROTOCOL;
 struct EFI_FILE_PROTOCOL {
 	u64 Revision;
@@ -371,7 +423,7 @@ __attribute__((used)) static const char RL_BUILD_TAG[] =
 #define BLK_OFF_BOOTARGS 0x1000
 #define BLK_OFF_DEVTREE  0x200   /* minimal Apple DeviceTreeNode blob */
 #define BLK_OFF_MEMMAP   0x2000  /* the EFI map the KERNEL reads */
-#define BLK_DEVTREE_SIZE 0x1A0   /* root + /chosen + 3 properties */
+#define BLK_DEVTREE_SIZE 0x600   /* root + /chosen + /ACPI + /efi/platform */
 
 static u64 rdtsc(void)
 {
@@ -835,8 +887,15 @@ static void build_handoff_block(u8 *p)
 
 		for (int i = 0; i < BLK_DEVTREE_SIZE; i++) d[i] = 0;
 
-		q = dt_node(d, 1, 1);                /* root: 1 property, 1 child */
+		/* Root: name + compatible, three children.  compatible must say
+		 * "ACPI": IOACPIFamily's ACPIPlatformExpert personality matches
+		 * IONameMatch = ACPI on IOPlatformExpertDevice, and
+		 * IOPlatformExpertDevice::compareName() goes through
+		 * IODTCompareNubName(), which compares this property. */
+		q = dt_node(d, 2, 3);
 		q = dt_str(q, "name", "device-tree");
+		q = dt_str(q, "compatible", "ACPI");
+
 		q = dt_node(q, 2, 0);                /* /chosen: 2 properties     */
 		q = dt_str(q, "name", "chosen");
 		{
@@ -848,6 +907,34 @@ static void build_handoff_block(u8 *p)
 			}
 		}
 		q = dt_prop(q, "random-seed", seed, sizeof(seed));
+
+		/* /ACPI carries the RSDP physical address.  Without it
+		 * ACPIPlatformExpert::parseACPI() returns false at
+		 * "ACPI-compatible node not found in DT!", no ACPI device is
+		 * published, and IOPCIFamily/AppleAPIC/AppleIntelPIIXATA can
+		 * never match. */
+		q = dt_node(q, 2, 0);
+		q = dt_str(q, "name", "ACPI");
+		q = dt_prop(q, "RSDP", &g_acpi_rsdp_phys, sizeof(g_acpi_rsdp_phys));
+
+		/* /efi/platform.  IOPlatformExpertDevice::generatePlatformUUID()
+		 * hashes this node's system-id on x86_64; with no node the
+		 * platform UUID is never published. */
+		q = dt_node(q, 1, 1);
+		q = dt_str(q, "name", "efi");
+		q = dt_node(q, 2, 0);
+		q = dt_str(q, "name", "platform");
+		{
+			u8 system_id[16];
+			u64 x = rdtsc() ^ ((u64)g_acpi_rsdp_phys << 11);
+			for (int i = 0; i < 2; i++) {
+				for (int j = 0; j < 8; j++) {
+					x ^= x << 13; x ^= x >> 7; x ^= x << 17;
+					system_id[i * 8 + j] = (u8)(x >> (8 * j));
+				}
+			}
+			q = dt_prop(q, "system-id", system_id, sizeof(system_id));
+		}
 	}
 
 	if (TRAMPOLINE_TEST) {
@@ -1429,6 +1516,12 @@ efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *ST)
 	 * is the behaviour this loader had before GOP existed.
 	 */
 	gop_setup(BS, ImageHandle, ST);
+
+	/* ACPI tables live in the configuration table.  Resolve the RSDP now,
+	 * while boot services are still up; the value is written into the
+	 * device tree by build_handoff_block(). */
+	g_acpi_rsdp_phys = find_acpi_rsdp(ST);
+	s_puts("RL: ACPI RSDP=0x"); s_hex64(g_acpi_rsdp_phys); s_puts("\r\n");
 
 
 	/*

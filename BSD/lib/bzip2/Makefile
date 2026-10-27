@@ -38,16 +38,7 @@ MLINKS = src/bzip2.1 bunzip2.1 bzcat.1 bzip2recover.1
 MLINKS += src/bzdiff.1 bzcmp.1
 MLINKS += src/bzmore.1 bzless.1
 
-.if "${.MAKE.OS}" == "Darwin"
-all:
-	@echo "stub bzip2 for Darwin host"
-	mkdir -p ${SYSROOT_DIR}/usr/lib ${SYSROOT_DIR}/usr/bin
-	touch ${SYSROOT_DIR}/usr/lib/libbz2.a ${SYSROOT_DIR}/usr/lib/libbz2.dylib
-	touch ${SYSROOT_DIR}/usr/bin/bzip2 ${SYSROOT_DIR}/usr/bin/bunzip2 ${SYSROOT_DIR}/usr/bin/bzcat ${SYSROOT_DIR}/usr/bin/bzip2recover
-	touch ${SYSROOT_DIR}/usr/bin/bzdiff ${SYSROOT_DIR}/usr/bin/bzcmp ${SYSROOT_DIR}/usr/bin/bzmore ${SYSROOT_DIR}/usr/bin/bzless
-.else
-all: lib${LIB}.dylib bzip2 bzip2recover bzdiff bzmore
-.endif
+all: lib${LIB}.${MAJMIN}.dylib bzip2 bzip2recover bzdiff bzmore
 bzip2: ${.CURDIR}/src/bzip2.c
 	mkdir -p ${SYSROOT_DIR}/usr/bin
 	${CC} ${CFLAGS} -o ${.TARGET}.o -c ${.CURDIR}/src/bzip2.c
@@ -72,12 +63,31 @@ bzip2recover: ${.CURDIR}/src/bzip2recover.c
 	${CC} ${PROG_LDFLAGS} -o ${SYSROOT_DIR}/usr/bin/${.TARGET} \
 	    ${.CURDIR}/src/bzip2recover.c
 
-lib${LIB}.dylib: lib${LIB}.a
-	${CC} ${LDFLAGS} -o ${.TARGET} -shared -Wl,-force_load,lib${LIB}.a \
-          -Wl,-current_version,${VERSION} -Wl,-install_name,/usr/lib/${.TARGET}
-	cp -f ${.TARGET} ${SYSROOT_DIR}${LIBDIR}
-	ln -fs libbz2.dylib ${SYSROOT_DIR}/usr/lib/libbz2.${MAJMIN}.dylib
-	ln -fs libbz2.dylib ${SYSROOT_DIR}/usr/lib/libbz2.${VERSION}.dylib
+# The Darwin branch of this Makefile used to `touch` a 0-byte libbz2.a and
+# libbz2.dylib.  A zero-byte dylib links and loads and then does nothing, which
+# is how a client that records /usr/lib/libbz2.1.0.dylib (Chrome, Blender, VLC)
+# ends up with silent failures instead of a load error.  It also left
+# compatibility_version at 0.0.0, which dyld2 rejects for a client that
+# requests 1.0.0.  Both are fixed here: the archive is built by bsd.lib.mk on
+# every host, and the dylib carries Apple's versioned name and ABI versions.
+LIBBZ2 = lib${LIB}.${MAJMIN}.dylib
+
+${LIBBZ2}: lib${LIB}.a
+	${CC} -shared -dylib -o ${.TARGET} \
+	  -Wl,-force_load,${.OBJDIR}/lib${LIB}.a -nodefaultlibs \
+	  -undefined dynamic_lookup -Wl,-not_for_dyld_shared_cache \
+	  -Wl,-install_name,/usr/lib/${LIBBZ2} \
+	  -Wl,-current_version,${VERSION} -Wl,-compatibility_version,1.0.0 \
+	  -L${RAVYN_SDKROOT}/usr/lib/system -L${RAVYN_SDKROOT}/usr/lib -ldyld
+	@for sdk in "${RAVYN_SDKROOT}" "${SYSROOT_DIR}" "${RAVYN_REPO_SDKROOT}"; do \
+	  [ -n "$$sdk" ] && [ -d "$$sdk" ] || continue; \
+	  mkdir -p "$$sdk/usr/lib" "$$sdk/usr/include"; \
+	  cp -f ${.OBJDIR}/lib${LIB}.a "$$sdk/usr/lib/lib${LIB}.a"; \
+	  cp -f ${.TARGET} "$$sdk/usr/lib/${LIBBZ2}"; \
+	  ln -sf ${LIBBZ2} "$$sdk/usr/lib/lib${LIB}.dylib"; \
+	  ln -sf ${LIBBZ2} "$$sdk/usr/lib/lib${LIB}.${VERSION}.dylib"; \
+	  cp -f ${.CURDIR}/src/bzlib.h "$$sdk/usr/include/bzlib.h"; \
+	done
 
 .include <bsd.lib.mk>
 

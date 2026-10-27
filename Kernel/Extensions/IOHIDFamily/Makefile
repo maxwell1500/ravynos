@@ -32,6 +32,7 @@ CFLAGS = -Wno-implicit-int-conversion -Wno-sign-conversion \
 	-DAVAILABLE_MAC_OS_X_VERSION_10_13_AND_LATER="" -DPRIVATE \
         -DOMITPENDINGKEYCAPS \
 	-I${.CURDIR}/IOHIDSystem -I${.CURDIR} -I${.CURDIR}/IOHIDFamily \
+	-I${.CURDIR:H}/IOGraphics/IOGraphicsFamily \
 	-I${.CURDIR}/IOHIDSystem/IOKit/hidsystem \
         -I${RAVYN_SDKROOT}/usr/local/include/kernel \
 	-I${ROOT_BINARY_DIR}${ROOT_SOURCE_DIR}/Kernel/xnu/EXPORT_HDRS/iokit \

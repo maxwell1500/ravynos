@@ -29,6 +29,7 @@ CFLAGS = -DKERNEL -DPRIVATE \
         -Wno-implicit-int-conversion -Wno-sign-conversion \
 	-Wno-c++11-narrowing \
         -I${.CURDIR}/IOGraphicsFamily \
+        -I${.CURDIR:H}/IOHIDFamily/IOHIDSystem \
         -I${.CURDIR}/IOGraphicsFamily/IOKit/graphics/tl \
 	-I${ROOT_SOURCE_DIR}/Kernel/xnu/iokit \
 	-I${ROOT_SOURCE_DIR}/Kernel/xnu/osfmk \

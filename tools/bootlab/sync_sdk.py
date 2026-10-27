@@ -11,6 +11,7 @@ Developer/ravynOS.sdk out of the box.
 
 import os
 import shutil
+import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -155,6 +156,51 @@ def sync_libraries() -> None:
         for target, link_name in symlinks:
             if os.path.exists(os.path.join(lib_dir, target)):
                 ensure_symlink(target, os.path.join(lib_dir, link_name))
+
+
+def ensure_versioned_aliases() -> None:
+    """Give staged libraries the names and identities macOS clients record.
+
+    A client records the install name of the library it linked, so the file
+    has to exist at that exact path inside the image.  Two of the libraries
+    the SDK carries were built with the wrong identity:
+
+      libobjc.A.dylib   id /usr/lib/libobjc.dylib, while every prebuilt macOS
+                        binary records /usr/lib/libobjc.A.dylib;
+      libfontconfig     unversioned id, while clients record
+                        /usr/lib/libfontconfig.1.dylib.
+
+    The objc binary is retagged in place (the code is unchanged and both
+    paths keep existing), and fontconfig gets a retagged copy.  Neither is a
+    symlink: dyld loads the file named by the client, and a copy keeps that
+    name's LC_ID_DYLIB honest.
+    """
+    for target_sdk in (REPO_SDK, BUILD_SDK):
+        lib_dir = os.path.join(target_sdk, "usr", "lib")
+        if not os.path.isdir(lib_dir):
+            continue
+
+        # libobjc is deliberately NOT retagged.  Its LC_ID_DYLIB stays
+        # /usr/lib/libobjc.dylib on both the usr/lib and usr/lib/system copies:
+        # dyld2 identifies an image by the install name it records, and giving
+        # the two copies the same *new* name made every process load both
+        # (/usr/lib/system/libobjc.dylib for the executable,
+        # /usr/lib/libobjc.A.dylib for the frameworks) and abort with
+        # "Class NSObject is implemented in both".  A file simply existing at
+        # /usr/lib/libobjc.A.dylib is what imported binaries need.
+
+        fontconfig_src = None
+        for candidate in ("libfontconfig.A.dylib", "libfontconfig.dylib"):
+            path = os.path.join(lib_dir, candidate)
+            if os.path.isfile(path) and not os.path.islink(path):
+                fontconfig_src = path
+                break
+        if fontconfig_src:
+            alias = os.path.join(lib_dir, "libfontconfig.1.dylib")
+            if not os.path.isfile(alias) or os.path.getsize(alias) == 0:
+                shutil.copyfile(fontconfig_src, alias)
+                subprocess.run(["install_name_tool", "-id", "/usr/lib/libfontconfig.1.dylib", alias],
+                               capture_output=True)
 
 
 def sync_missing_frameworks() -> None:
@@ -519,6 +565,30 @@ static inline int epoll_wait(int epfd, struct epoll_event *events, int maxevents
         write_text_if_changed(os.path.join(inc, "sys", "epoll.h"), epoll_h)
 
 
+def build_libcxx_dylib() -> None:
+    """Produce usr/lib/libc++.1.dylib next to the C++ archives.
+
+    Imported macOS binaries link /usr/lib/libc++.1.dylib by name, and the
+    in-tree C++ toolchain cannot link against libc++.a and libc++abi.a
+    together (both define std::terminate).  The script is the only place that
+    knows how the two archives are recombined; running it here means a synced
+    SDK is always complete for C++.
+    """
+    script = os.path.join(HERE, "make_libcxx_dylib.py")
+    if not os.path.exists(script):
+        return
+    result = subprocess.run(
+        [sys.executable, script, "--sdk", REPO_SDK, "--also-build-sdk"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        # Loud, but not fatal for the rest of the sync: the SDK is still usable
+        # for C, and a silent skip is how a broken C++ runtime ships.
+        sys.stderr.write(result.stdout)
+        sys.stderr.write(result.stderr)
+        print("[sync_sdk] WARNING: libc++.1.dylib could not be built")
+
+
 def write_pkgconfig_files() -> None:
     pcs = {
         "zlib.pc": """prefix=/usr
@@ -685,9 +755,11 @@ Cflags: -I${includedir}/SDL2 -I${includedir} -D_REENTRANT -D__RAVYNOS__=1
 
 def main() -> int:
     sync_libraries()
+    ensure_versioned_aliases()
     sync_missing_frameworks()
     sync_headers()
     install_linux_compat_headers()
+    build_libcxx_dylib()
     write_pkgconfig_files()
     print(f"[sync_sdk] Synchronized SDK at {REPO_SDK}")
     return 0

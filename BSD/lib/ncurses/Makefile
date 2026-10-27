@@ -18,37 +18,37 @@
 # anywhere in the SDK or the staged bootlab closure. (The one reference in the
 # tree, assets/bin/ls -> /usr/lib/libncurses.5.4.dylib, is a THIRD name that
 # neither stub ever provided, and that file is not in the clean closure.)
-.if "${.MAKE.OS}" == "Darwin"
-all:
-	@echo "FATAL: BSD/lib/ncurses was not built." >&2
-	@echo "       This target no longer touches 0-byte stub dylibs into" >&2
-	@echo "       \$$RAVYN_SDKROOT/usr/lib. A 0-byte dylib links and loads" >&2
-	@echo "       but does nothing, which is a silent failure at run time." >&2
-	@echo "       Build it for real -- the .else branch below runs ncurses'" >&2
-	@echo "       own configure and gmake -- or, if nothing links -lncurses," >&2
-	@echo "       drop ncurses from the SUBDIR list in BSD/lib/Makefile." >&2
-	@echo "       A loud failure here beats a silent stub. See" >&2
-	@echo "       Libraries/check_sdk_stubs.sh." >&2
-	@false
-.else
-all: ${.OBJDIR}/lib/libncurses.6.dylib
-	CFLAGS="--sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSION_MIN}" \
-	CXXFLAGS="--sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSION_MIN}" \
-	LDFLAGS="--sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSION_MIN} -fuse-ld=${LD}" \
-	${.CURDIR}/configure --prefix=/usr \
-        --sysconfdir=/private/etc \
-        --localstatedir=/private/var \
-        --target=${CpuArch}-apple-darwin19 \
-        --host=${CpuArch}-apple-darwin19 \
-	--with-strip-program=${TOOLS}/strip \
-        --without-ada --without-tests --enable-pc-files \
-        --with-shared --with-normal --with-debug \
-        --enable-rpath --without-dlsym --disable-lib-suffixes \
-        --enable-termcap --enable-symlinks --enable-ext-colors \
-        --enable-rgb-color --with-pthread --enable-pthreads-eintr \
-        --enable-reentrant
-	MAKEFLAGS="" ${TOOLS}/gmake
-	MAKEFLAGS="" ${TOOLS}/gmake install DESTDIR=${RAVYN_SDKROOT}
-	MAKEFLAGS="" ${TOOLS}/gmake install DESTDIR=${SYSROOT_DIR}
-	ln -sf ${CpuArch}-apple-darwin19-${prog} ${SYSROOT_DIR}/usr/bin/${prog}
-.endif
+# Darwin-host build: ncurses' own configure and gmake, with the ravynOS
+# compiler.  The previous branch touched zero-byte stubs; this one produces a
+# real libncurses.6.dylib (ncurses 6 ABI).  It is installed under its own ABI
+# name: presenting a 6.x library as libncurses.5.4.dylib would claim an ABI
+# this build does not implement.
+BUILD=		${.OBJDIR}/build
+STAGE=		${.OBJDIR}/stage
+
+all: ${.OBJDIR}/libncurses.6.dylib
+
+${.OBJDIR}/libncurses.6.dylib:
+	mkdir -p ${BUILD} ${STAGE}
+	cd ${BUILD} && \
+	  env -i PATH=$$PATH HOME=$$HOME CC=${CC} CPP="${CC} -E" CFLAGS="--sysroot=${RAVYN_SDKROOT} -arch x86_64 -mmacos-version-min=${MACOS_VERSION_MIN} -Wno-incompatible-sysroot" \
+	  /bin/sh ${.CURDIR}/configure --host=x86_64-apple-darwin --prefix=/usr \
+	    --without-ada --without-tests --with-shared --without-normal \
+	    --without-debug --disable-lib-suffixes --enable-termcap \
+	    --enable-symlinks --with-pthread --enable-pthreads-eintr \
+	    --enable-reentrant
+	env -i PATH=$$PATH HOME=$$HOME ${MAKE} -C ${BUILD}
+	env -i PATH=$$PATH HOME=$$HOME ${MAKE} -C ${BUILD} DESTDIR=${STAGE} install
+	@for sdk in "${RAVYN_SDKROOT}" "${SYSROOT_DIR}" "${RAVYN_REPO_SDKROOT}"; do \
+	  [ -n "$$sdk" ] && [ -d "$$sdk" ] || continue; \
+	  mkdir -p "$$sdk/usr/lib"; \
+	  cp -f ${BUILD}/lib/libncurses.6.dylib "$$sdk/usr/lib/libncurses.6.dylib"; \
+	  ln -sf libncurses.6.dylib "$$sdk/usr/lib/libncurses.dylib"; \
+	  ln -sf libncurses.6.dylib "$$sdk/usr/lib/libcurses.dylib"; \
+	  cp -f ${BUILD}/lib/libtic.6.dylib "$$sdk/usr/lib/libtic.6.dylib" 2>/dev/null || true; \
+	  cp -f ${BUILD}/lib/libtic.dylib "$$sdk/usr/lib/libtic.dylib" 2>/dev/null || true; \
+	  mkdir -p "$$sdk/usr/include"; \
+	  cp -f ${.CURDIR}/include/curses.h "$$sdk/usr/include/curses.h" 2>/dev/null || true; \
+	  cp -f ${.CURDIR}/include/unctrl.h "$$sdk/usr/include/unctrl.h" 2>/dev/null || true; \
+	done
+	touch ${.TARGET}

@@ -251,25 +251,43 @@ ACPIPlatformExpert::parseACPI(IOService *provider) {
 
     if (memcmp(rsdp->signature, RSDP_SIGNATURE, 7)) {
         PE_Log("RSDP table is not valid");
+        map->release();
+        desc->release();
         return false;
     }
 
-    struct XSDT * xsdt = (struct XSDT *) rsdp->xsdtAddress;
-    PE_Log("v%d XSDT %p", rsdp->revision, xsdt);
+    /* Prefer the XSDT when ACPI 2.0+ describes one; otherwise fall back to
+     * the 32-bit RSDT.  Firmware in the wild does both, and a machine whose
+     * RSDP reports revision 2 but has xsdtAddress == 0 (or the reverse) must
+     * still boot: the table that exists is the one used. */
+    uint64_t tablePointer = 0;
+    bool useXSDT = false;
+
+    if (rsdp->revision >= 2 && rsdp->xsdtAddress != 0) {
+        tablePointer = rsdp->xsdtAddress;
+        useXSDT = true;
+    } else if (rsdp->rsdtAddress != 0) {
+        tablePointer = rsdp->rsdtAddress;
+        useXSDT = false;
+    } else if (rsdp->xsdtAddress != 0) {
+        tablePointer = rsdp->xsdtAddress;
+        useXSDT = true;
+    } else {
+        PE_Log("RSDP has neither RSDT nor XSDT");
+        map->release();
+        desc->release();
+        return false;
+    }
 
     map->release();
     desc->release();
 
-    if (!xsdt) {
-        PE_Log("XSDT is missing");
-        return false;
-    }
+    PE_Log("v%d %s @ 0x%llx", rsdp->revision, useXSDT ? "XSDT" : "RSDT",
+           (unsigned long long)tablePointer);
 
-    /* We're not going to care much about error checking or cleaning up
-     * resources. If this fails, we're going to panic immediately anyway.
-     */
-    desc = IOMemoryDescriptor::withPhysicalAddress((IOPhysicalAddress)xsdt,
-                                                   1024,
+    /* Map only the table header first: the length lives in it. */
+    desc = IOMemoryDescriptor::withPhysicalAddress((IOPhysicalAddress)tablePointer,
+                                                   sizeof(struct XSDT),
                                                    kIODirectionInOut);
     if (!desc) return false;
     map = desc->map(0);
@@ -277,42 +295,122 @@ ACPIPlatformExpert::parseACPI(IOService *provider) {
         desc->release();
         return false;
     }
-    xsdt = (struct XSDT *) map->getVirtualAddress();
 
-    if (memcmp(xsdt->signature, "XSDT", 4)) {
-        PE_Log("XSDT is not valid");
+    struct XSDT *header = (struct XSDT *) map->getVirtualAddress();
+    uint32_t signature = *(uint32_t *)header->signature;
+    uint32_t tableLength = header->length;
+
+    map->release();
+    desc->release();
+
+    if (useXSDT && signature != 0x54445358 /* 'XSDT' */) {
+        PE_Log("XSDT signature is not valid");
+        return false;
+    }
+    if (!useXSDT && signature != 0x54445352 /* 'RSDT' */) {
+        PE_Log("RSDT signature is not valid");
+        return false;
+    }
+    if (tableLength < sizeof(struct XSDT) || tableLength > (1u << 20)) {
+        PE_Log("ACPI table length is implausible: %u", tableLength);
         return false;
     }
 
-    int tableCount = (xsdt->length - sizeof(struct XSDT)) / 8;
-    for (int i = 0; i < tableCount; ++i) {
-        IOMemoryDescriptor *tdesc
-            = IOMemoryDescriptor::withPhysicalAddress((IOPhysicalAddress)(xsdt->tables[i]),
-                                                      1024, kIODirectionInOut);
-        if (!tdesc) continue;
-        IOMemoryMap *tmap = tdesc->map(0);
-        if (!tmap) {
-            tdesc->release();
-            continue;
-        }
-
-        /* SDT all have the same header */
-        XSDT *p = (XSDT *) tmap->getVirtualAddress();
-        char name[5] = {0};
-        memcpy(name, p->signature, 4);
-
-        if (!strcmp(name, "APIC"))
-            parseAPIC(p, this);
-        else if (!strcmp(name, "MCFG"))
-            parseMCFG(p, this);
-
-        tmap->release();
-        tdesc->release();
+    /* Now map the whole table. */
+    desc = IOMemoryDescriptor::withPhysicalAddress((IOPhysicalAddress)tablePointer,
+                                                  tableLength,
+                                                  kIODirectionInOut);
+    if (!desc) return false;
+    map = desc->map(0);
+    if (!map) {
+        desc->release();
+        return false;
     }
 
-     map->release();
-     desc->release();
-     return true;
+    void *tableBody = (void *)(uintptr_t)map->getVirtualAddress();
+    int tableCount;
+    if (useXSDT) {
+        struct XSDT *xsdt = (struct XSDT *)tableBody;
+        tableCount = (int)((tableLength - sizeof(struct XSDT)) / 8);
+        for (int i = 0; i < tableCount; ++i) {
+            uint64_t phys = xsdt->tables[i];
+            if (phys == 0) continue;
+            IOMemoryDescriptor *tdesc
+                = IOMemoryDescriptor::withPhysicalAddress((IOPhysicalAddress)phys,
+                                                          1024, kIODirectionInOut);
+            if (!tdesc) continue;
+            IOMemoryMap *tmap = tdesc->map(0);
+            if (!tmap) { tdesc->release(); continue; }
+            XSDT *p = (XSDT *) tmap->getVirtualAddress();
+            char name[5] = {0};
+            memcpy(name, p->signature, 4);
+            if (!strcmp(name, "APIC")) parseAPIC(p, this);
+            else if (!strcmp(name, "MCFG")) parseMCFG(p, this);
+            tmap->release();
+            tdesc->release();
+        }
+    } else {
+        struct RSDT *rsdt = (struct RSDT *)tableBody;
+        tableCount = (int)((tableLength - sizeof(struct RSDT)) / 4);
+        for (int i = 0; i < tableCount; ++i) {
+            uint32_t phys = rsdt->tables[i];
+            if (phys == 0) continue;
+            IOMemoryDescriptor *tdesc
+                = IOMemoryDescriptor::withPhysicalAddress((IOPhysicalAddress)phys,
+                                                          1024, kIODirectionInOut);
+            if (!tdesc) continue;
+            IOMemoryMap *tmap = tdesc->map(0);
+            if (!tmap) { tdesc->release(); continue; }
+            XSDT *p = (XSDT *) tmap->getVirtualAddress();
+            char name[5] = {0};
+            memcpy(name, p->signature, 4);
+            if (!strcmp(name, "APIC")) parseAPIC(p, this);
+            else if (!strcmp(name, "MCFG")) parseMCFG(p, this);
+            tmap->release();
+            tdesc->release();
+        }
+    }
+
+    map->release();
+    desc->release();
+
+    /* A machine whose firmware has no MCFG still has PCI, configured through
+     * mechanism #1 (0xCF8/0xCFC).  Publish the bus nub anyway so AppleI386PCI
+     * and IOATAFamily have a provider; without it a legacy Mac has no PCI at
+     * all even though the hardware is there. */
+    if (!_sawMCFG) {
+        typedef struct {
+            uint8_t  maxBusNum;
+            uint8_t  majorVersion;
+            uint8_t  minorVersion;
+            uint8_t  BIOSPresent;
+            uint8_t  configMethod1;
+            uint8_t  configMethod2;
+            uint8_t  specialCycle1;
+            uint8_t  specialCycle2;
+        } __attribute__((packed)) PCI_bus_info_legacy_t;
+
+        PCI_bus_info_legacy_t businfo = {};
+        businfo.maxBusNum = 255;
+        businfo.majorVersion = 2;
+        businfo.configMethod1 = 1;
+        businfo.configMethod2 = 1;
+
+        OSDictionary *dict = OSDictionary::withCapacity(4);
+        dict->setObject("compatible", OSString::withCString("pci"));
+        dict->setObject("name", OSString::withCString("pci"));
+        dict->setObject("device_type", OSString::withCString("pci"));
+        dict->setObject("pci-bus-info", OSData::withBytes(&businfo, sizeof(businfo)));
+        IOService *nub = createNub(dict);
+        if (nub) {
+            nub->setName("pci");
+            nub->attach(this);
+            nub->registerService();
+            nub->release();
+        }
+        dict->release();
+    }
+    return true;
 }
 
 bool ACPIPlatformExpert::configure(IOService *provider) {

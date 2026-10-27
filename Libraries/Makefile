@@ -145,13 +145,17 @@ compiler_rt: runtime libunwind libcxx
 # We want a combined libc++ and libc++abi as our dylib. It needs libSystem
 # for _dlopen and _dlsym. We do not link directly to libdyld.
 
+# This target used to `touch` a zero-byte ${CXXLIB} -- the same defect the
+# libunwind and compiler-rt recipes above had, in the one place where it is
+# most damaging: every prebuilt macOS binary records
+# /usr/lib/libc++.1.dylib, so a zero-byte file there is a load failure with no
+# diagnostic.  It now links the real dylib from libc++.a and libc++abi.a,
+# choosing one definition per symbol (they overlap) and supplying the two libc
+# hooks __cxa_atexit and __cxa_thread_atexit_impl that libSystem lacks.
 CXXOBJ = ${.OBJDIR}/llvm_target/libcxx/lib/libc++.a
 libcxx_dylib: libcxx
-	mkdir -p ${CXXLIB:H} ${CXXOBJ:H}
-	touch ${.OBJDIR}/libc++.1.dylib
-	cp -f ${.OBJDIR}/libc++.1.dylib ${CXXLIB} 2>/dev/null || true
-	ln -sf libc++.1.dylib ${RAVYN_SDKROOT}/usr/lib/libc++.dylib 2>/dev/null || true
-	@echo "stubbed libc++ dylib for Darwin host"
+	python3 ${ROOT_SOURCE_DIR}/tools/bootlab/make_libcxx_dylib.py \
+		--sdk ${RAVYN_SDKROOT} --force -v
 
 
 .include <bsd.subdir.mk>

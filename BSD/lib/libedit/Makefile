@@ -121,15 +121,23 @@ ${.OBJDIR}/help.h: ${ASRC}
 
 ${.OBJDIR}/func.h: ${AHDR}
 	AWK=${AWK} sh ${.CURDIR}/src/makelist -fc ${AHDR} > ${.TARGET}
-all: ${.OBJDIR}/lib${LIB}.a ${.OBJDIR}/lib${LIB}.dylib
+all: ${.OBJDIR}/lib${LIB}.a ${.OBJDIR}/lib${LIB}.3.dylib
 
-${.OBJDIR}/lib${LIB}.dylib: ${.OBJDIR}/lib${LIB}.a
+# macOS clients record /usr/lib/libedit.3.dylib (compatibility 3.0.0), not
+# the unversioned name, and dyld2 refuses an image whose library reports a
+# lower compatibility version than the client recorded.  Emit the versioned
+# name and keep the unversioned one as an alias.
+${.OBJDIR}/lib${LIB}.3.dylib: ${.OBJDIR}/lib${LIB}.a
 	${CC} ${LDFLAGS} -shared -o ${.TARGET} \
-	  -Wl,-install_name,/usr/lib/libedit.dylib \
-	  -Wl,-current_version,3.1 -Wl,-compatibility_version,1.0 \
+	  -Wl,-install_name,/usr/lib/libedit.3.dylib \
+	  -Wl,-current_version,3.1.0 -Wl,-compatibility_version,3.0.0 \
 	  -nodefaultlibs -Wl,-not_for_dyld_shared_cache \
 	  -Wl,-force_load,${.OBJDIR}/lib${LIB}.a -L${RAVYN_SDKROOT}/usr/lib -lSystem
-	mkdir -p ${RAVYN_SDKROOT}/usr/lib ${SYSROOT_DIR}/usr/lib
-	cp -f ${.TARGET} ${RAVYN_SDKROOT}/usr/lib/
-	cp -f ${.TARGET} ${SYSROOT_DIR}/usr/lib/
+	for sdk in "${RAVYN_SDKROOT}" "${SYSROOT_DIR}" "${RAVYN_REPO_SDKROOT}"; do \
+	  [ -n "$$sdk" ] && [ -d "$$sdk" ] || continue; \
+	  mkdir -p "$$sdk/usr/lib"; \
+	  cp -f ${.TARGET} "$$sdk/usr/lib/libedit.3.dylib"; \
+	  ln -sf libedit.3.dylib "$$sdk/usr/lib/libedit.dylib"; \
+	  ln -sf libedit.3.dylib "$$sdk/usr/lib/libedit.2.dylib"; \
+	done
 

@@ -1,6 +1,10 @@
 #!/bin/sh
 # Standalone cross C++ / Objective-C++ compiler wrapper for ravynOS (x86_64-apple-darwin24).
-# Links static libc++.a + libc++abi.a from the ravynOS SDK automatically when linking.
+# Links /usr/lib/libc++.1.dylib from the ravynOS SDK when it is present, and
+# falls back to the libc++.a + libc++abi.a pair otherwise.  The dylib is what a
+# macOS binary expects, and it is the only combination that links: the two
+# archives both define std::terminate, so naming both is a duplicate-symbol
+# error.  tools/bootlab/make_libcxx_dylib.py builds the dylib.
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/../../.." && pwd)"
@@ -34,8 +38,8 @@ has_sysroot=no
 has_arch=no
 has_minver=no
 
-# Filter out -lc++ / -lc++abi when linking since libc++.1.dylib is a 0-byte stub
-# in the SDK and we link libc++.a + libc++abi.a statically.
+# Filter out -lc++ / -lc++abi and add exactly one of them back below, so the
+# choice between the dylib and the archives is made in one place.
 filtered_args=""
 for arg in "$@"; do
     case "$arg" in
@@ -58,8 +62,13 @@ extra_flags="$extra_flags -F$SDK/System/Library/Frameworks -isystem $SDK/usr/inc
 link_tail=""
 if [ "$linking" = yes ]; then
     link_tail="-nostdlib++ -L$SDK/usr/lib -L$SDK/usr/lib/system -Wl,-L,$SDK/usr/lib -Wl,-L,$SDK/usr/lib/system -F$SDK/System/Library/Frameworks"
-    [ -f "$SDK/usr/lib/libc++.a" ] && link_tail="$link_tail $SDK/usr/lib/libc++.a"
-    [ -f "$SDK/usr/lib/libc++abi.a" ] && link_tail="$link_tail $SDK/usr/lib/libc++abi.a"
+    if [ -f "$SDK/usr/lib/libc++.1.dylib" ]; then
+        # The dylib already contains the libc++abi objects it needs.
+        link_tail="$link_tail $SDK/usr/lib/libc++.1.dylib"
+    else
+        [ -f "$SDK/usr/lib/libc++.a" ] && link_tail="$link_tail $SDK/usr/lib/libc++.a"
+        [ -f "$SDK/usr/lib/libc++abi.a" ] && link_tail="$link_tail $SDK/usr/lib/libc++abi.a"
+    fi
 fi
 
 eval "set -- $filtered_args"

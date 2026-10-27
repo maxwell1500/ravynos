@@ -69,6 +69,23 @@ extern const union __nan_un {
 #define	FP_NORMAL	0x04
 #define	FP_SUBNORMAL	0x08
 #define	FP_ZERO		0x10
+#endif /* __ISO_C_VISIBLE >= 1999 */
+
+/* <cmath> requires the classification constants in every C++ dialect, but
+ * <sys/cdefs.h> reports __ISO_C_VISIBLE 0 for a strict-ANSI C++ compile
+ * (-std=c++17 defines __STRICT_ANSI__), so the block above leaves them
+ * undefined and libc++'s <math.h> fails on FP_NAN.  Repeat them here for that
+ * case only; the C definitions stay where the standard puts them.
+ */
+#if defined(__cplusplus) && !defined(FP_NAN)
+#define	FP_INFINITE	0x01
+#define	FP_NAN		0x02
+#define	FP_NORMAL	0x04
+#define	FP_SUBNORMAL	0x08
+#define	FP_ZERO		0x10
+#endif
+
+#if __ISO_C_VISIBLE >= 1999
 
 #if __STDC_VERSION__ >= 201112L || __has_extension(c_generic_selections)
 #define	__fp_type_select(x, f, d, ld) __extension__ _Generic((x),	\

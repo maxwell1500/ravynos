@@ -46,7 +46,12 @@ SRCS = core/hfs_resize.c \
 	core/hfs_iokit.cpp
 
 SLF = /System/Library/Frameworks
+# nspace_snapshot_event() belongs to XNU's APFS namespace layer; this kernel
+# has no such layer, and hfs calls it only to notify snapshots.  Drop the call
+# at compile time rather than inventing a function that pretends to notify.
 CFLAGS = -DPRIVATE=1 -DKERNEL=1 -D__APPLE_API_PRIVATE=1 \
+	-D'nspace_snapshot_event(...)=0' \
+	-D'resolve_nspace_item(...)=0' \
 	-Wno-implicit-int-conversion -Wno-sign-conversion \
 	-I${.CURDIR}/core \
 	-I${ROOT_SOURCE_DIR}/Kernel \
