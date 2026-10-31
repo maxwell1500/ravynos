@@ -769,6 +769,15 @@ def sync_sdk_own_headers() -> None:
         if os.path.isfile(src) and os.path.isfile(dst):
             copy_if_changed(src, dst)
 
+    # objc4's objc-exception.mm includes <libunwind.h>.  The public headers
+    # live in the tracked toolchain tree; install them into the build SDK so
+    # the objc runtime builds on a fresh host (4.2i).
+    for rel in ("libunwind.h", "__libunwind_config.h"):
+        src = os.path.join(REPO, "Developer", "Default.xctoolchain", "include", rel)
+        dst = os.path.join(BUILD_SDK, "usr/include", rel)
+        if os.path.isfile(src):
+            copy_if_changed(src, dst)
+
 
 def main() -> int:
     sync_sdk_own_headers()

@@ -1,14 +1,6 @@
-.if "${.MAKE.OS}" == "Darwin"
-all:
-	mkdir -p ${.OBJDIR} ${RAVYN_SDKROOT}/usr/lib ${SYSROOT_DIR}/usr/lib
-	touch ${.OBJDIR}/libobjc-trampolines.dylib ${.OBJDIR}/libobjc.A.dylib
-	cp -f ${.OBJDIR}/libobjc-trampolines.dylib ${RAVYN_SDKROOT}/usr/lib/ 2>/dev/null || true
-	cp -f ${.OBJDIR}/libobjc.A.dylib ${RAVYN_SDKROOT}/usr/lib/ 2>/dev/null || true
-	cp -f ${.OBJDIR}/libobjc-trampolines.dylib ${SYSROOT_DIR}/usr/lib/ 2>/dev/null || true
-	cp -f ${.OBJDIR}/libobjc.A.dylib ${SYSROOT_DIR}/usr/lib/ 2>/dev/null || true
-	ln -sf libobjc.A.dylib ${RAVYN_SDKROOT}/usr/lib/libobjc.dylib 2>/dev/null || true
-	ln -sf libobjc.A.dylib ${SYSROOT_DIR}/usr/lib/libobjc.dylib 2>/dev/null || true
-.else
+# Build the runtime on every host.  The old Darwin-host branch only touched
+# the prebuilt dylibs, which made every source change to objc4 silently
+# invisible (4.2i); there is no host-specific code in this directory.
 
 # Don't try to link System or Foundation to this
 MK_OBJC_RUNTIME = no
@@ -96,16 +88,16 @@ LDFLAGS = --sysroot=${RAVYN_SDKROOT} -L${RAVYN_SDKROOT}/usr/lib \
 	-Wl,-compatibility_version,1  \
 	-Wl,-order_file,${.CURDIR}/libobjc.order \
 	-Wl,-interposable_list,${.CURDIR}/interposable.txt \
-	-Wl,-sectalign,__DATA,__data,0x1000 -lc++ \
+	-Wl,-sectalign,__DATA,__data,0x1000 \
 	-Wl,-unexported_symbols_list,${.CURDIR}/unexported_symbols \
-	-lobjc-trampolines -lSystem
+	-Wl,-not_for_dyld_shared_cache
 
 all: ${.OBJDIR}/libobjc-trampolines.dylib ${.OBJDIR}/libobjc.A.dylib
 
 ${.OBJDIR}/libobjc-trampolines.dylib: ${.CURDIR}/runtime/objc-blocktramps-x86_64.s
 	${CC} --target=${CpuArch}-apple-darwin -x assembler-with-cpp \
 	  -mmacos-version-min=${MACOS_VERSION_MIN} \
-	  --sysroot=${RAVYN_SDKROOT} -fpic -shared -Wl,-dylib \
+	  --sysroot=${RAVYN_SDKROOT} -fpic -shared \
 	  -fuse-ld=${LD} -o ${.OBJDIR}/libobjc-trampolines.dylib \
 	  -Wl,-install_name,/usr/lib/libobjc-trampolines.dylib \
 	  -Wl,-current_version,228 -lSystem \
@@ -115,8 +107,7 @@ ${.OBJDIR}/libobjc-trampolines.dylib: ${.CURDIR}/runtime/objc-blocktramps-x86_64
 	cp -f ${.OBJDIR}/libobjc-trampolines.dylib ${SYSROOT_DIR}/usr/lib/
 
 ${.OBJDIR}/libobjc.A.dylib: lib${LIB}.a ${.OBJDIR}/libobjc-trampolines.dylib
-	${CC} -fuse-ld=${LD} -shared -o ${.TARGET} ${OBJS} ${LDFLAGS} \
-		-L${RAVYN_SDKROOT}/usr/lib -lobjc-trampolines
+	${CC} -fuse-ld=${LD} -shared -o ${.TARGET} ${OBJS} ${LDFLAGS}
 	mkdir -p ${RAVYN_SDKROOT}/usr/lib ${SYSROOT_DIR}/usr/lib
 	cp -f ${.TARGET} ${RAVYN_SDKROOT}/usr/lib/
 	cp -f ${.TARGET} ${SYSROOT_DIR}/usr/lib/
@@ -130,4 +121,11 @@ ${.OBJDIR}/libobjc.A.dylib: lib${LIB}.a ${.OBJDIR}/libobjc-trampolines.dylib
 #	./runtime/objc-probes.d
 #)
 
-.endif
+.include <bsd.lib.mk>
+
+# Match the shipped runtime: no LC_LOAD_DYLIB entries.  Undefined symbols are
+# resolved by flat lookup from the loaded images, so linking libobjc does not
+# drag libc++ (and its iostream initializer) into launchd at boot.
+LDFLAGS += -nostdlib -Wl,-weak-lSystem \
+	${RAVYN_SDKROOT}/usr/lib/libc++.a ${RAVYN_SDKROOT}/usr/lib/libc++abi.a
+LDFLAGS := ${LDFLAGS:N-lSystem:N-lobjc-trampolines}

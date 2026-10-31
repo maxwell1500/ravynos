@@ -366,30 +366,47 @@ It now returns a singleton and accepts `setEventHandler:andSelector:
 forEventClass:andEventID:` (registration is recorded and logged; WindowServer
 does not deliver Apple Events yet).  Firefox then reached its main startup.
 
-## Blocker 9 — over-release in the autorelease pool (open)
+## Blocker 9 — use-after-free during pool drain (open)
 
 Current failure, after the Apple Event registration:
 
-    CORPSE: tid 335 rip ... fault 0x000065e5e5e5e5e600
-    frame[0] libobjc _objc_release + 0x6f
-    frame[1] libobjc AutoreleasePoolPage::releaseUntil + 0xad
+    CORPSE: tid 335 rip ... fault 0x000065e5e5e5e600
+    regs rdi 0x000065e5e5e5e600
+    rdi->[0] 0xe5e5e5e5e5e5e5e5 (isa)
+    frame[0] libobjc _objc_release
+    frame[1] libobjc AutoreleasePoolPage::releaseUntil
     frame[2] libobjc AutoreleasePoolPage::popPage
-    frame[3] libobjc AutoreleasePoolPage::pop + 0xfe
-    frame[4] libobjc _objc_autoreleasePoolPop + 0x15
+    frame[3] libobjc AutoreleasePoolPage::pop
+    frame[4] libobjc _objc_autoreleasePoolPop
 
-The faulting pointer is not an object with a poisoned isa: `rdi` at the
-fault is already `0x000065e5e5e5e600`, so the autorelease pool's own slot
-holds the junk fill.  That means a pool *page* was freed or reused while the
-pool still walked it (premature `kill()` of a page, or a double pop), and
-jemalloc's 0xe5 fill replaced the entry.  It is a pool lifetime bug in
-libobjc's AutoreleasePoolPage, not a single over-retained application object.
+`releaseUntil` calls `objc_release` on an object whose memory has already
+been freed and filled with jemalloc's 0xe5 pattern; the release path reads
+that poisoned isa and faults.  It is a dangling object in the pool (owner
+released it while it was still autoreleased), not a corrupted pool page and
+not a junk pointer handed to `objc_release`: an entry-pointer range guard in
+`objc_release`/`objc_autorelease` never fired on either crash (pid 55
+`-CreateProfile` and pid 67 `-profile`), because the pointer itself is a
+normal heap address.
 
-Instrumenting libobjc to prove this is currently blocked by the build:
-`Libraries/objc4/Makefile` has a Darwin-host branch whose `all` target only
-`touch`es the existing `libobjc.A.dylib`/`libobjc-trampolines.dylib`, and the
-real branch defines `all`/`libobjc.A.dylib` but never includes `bsd.lib.mk`,
-so `libobjc.A.a` is an unknown target ("don't know how to make
-libobjc.A.a").  `build-libraries.sh objc4` therefore reuses the prebuilt
-1.6 MB dylib; any source change to the runtime is silently not compiled.
-Fixing the objc4 build (or using the driver path that includes bsd.lib.mk)
-comes before the pool fix.
+### The runtime build is now real (4.2i, fixed)
+
+`Libraries/objc4/Makefile` no longer has the Darwin-host branch that only
+`touch`ed the prebuilt dylibs, and it includes `bsd.lib.mk`, so
+`build-libraries.sh objc4` compiles the runtime and produces a fresh
+`libobjc.A.dylib`.  Two host-specific requirements were measured:
+
+- `libunwind.h` and `__libunwind_config.h` must be present in the SDK
+  (`Developer/Default.xctoolchain/include`); `objc-exception.mm` includes
+  them.
+- The dylib must not record an `LC_LOAD_DYLIB` on libc++ (the shipped
+  1.6 MB runtime records none).  A build that links `-lc++` dynamically
+  makes launchd load libc++ at boot, and libc++'s `run_libcxx_init`
+  constructor calls `__libcxx_init` too early: it dies in
+  `std::__stdinbuf<char>::imbue` with a null `codecvt` facet before
+  launchd reaches `main`.  The working link is `-nostdlib -weak-lSystem`
+  plus the static archives `libc++.a` and `libc++abi.a`, which is also how
+  the shipped runtime carries `__cxa_throw`, `std::terminate` and
+  `std::nothrow` internally.
+
+With that build the desktop boots normally (Filer and WindowServer present);
+the Firefox job still dies at this blocker.
