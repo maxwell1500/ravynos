@@ -424,3 +424,30 @@ just-freed object** (isa == 0x000065e5e5e5e600, pointing at 0xe5-filled
 memory), and the next instrument must check the isa at the point
 `objc_msgSend`/`hasCustomRR` consumes it, or watch the isa word of the
 specific pool entry rather than the entry pointer.
+
+### Third measurement (e5-fill guard + class ring)
+
+Guarding the raw isa for the jemalloc fill `0xe5e5e5e5e5e5e5e5` (and only
+that pattern; non-pointer isa encodings are legitimate) fires on the real
+case and names the object:
+
+    [objc] release of freed object 0x10884aa90 isa=0xe5e5e5e5e5e5e5e5
+           (ret0 releaseUntil, ret1 popPage)
+    [objc]   autoreleased at 0x10848808f class NSData_concrete
+    [objc]   autoreleased at 0x108498125 class NSMutableArray_concrete
+
+The autorelease site resolves to `-[NSString UTF8String]` (Foundation);
+the NSMutableArray record is the same address reused after the NSData was
+freed, so the ring match there is stale.  The NSData was autoreleased
+**once** and then released **twice**: an inner pool drain frees it, and a
+later `AutoreleasePoolPage::releaseUntil` releases the same entry again.
+Skipping the duplicate release lets the `-profile` process get past the
+crash (`exec rc=1` instead of 139), which confirms the second release is
+spurious.
+
+That points at the pool bookkeeping, not at Foundation's retain balance:
+the same object appears in two pools, or a page is walked by two pops.
+The next step is a deterministic fixture with nested pools (including
+enough autoreleases to allocate a child page) that asserts one dealloc per
+autorelease; then fix `AutoreleasePoolPage::pop`/`releaseUntil`/`kill`
+page ownership.
