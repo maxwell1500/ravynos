@@ -833,6 +833,35 @@
 #define __STDC_WANT_LIB_EXT1__ 1
 #endif
 
+/* Pointer-ABI annotations.  Apple's cdefs defines these as no-ops on
+ * platforms without the pointer-ABI checker; this SDK's sys/protosw.h uses
+ * them, so without the definitions any translation unit that includes it
+ * fails.  Kept empty on purpose: they describe bounds-checking intent, not
+ * code generation.
+ */
+#if !defined(__ASSUME_PTR_ABI_SINGLE_BEGIN)
+#define __ASSUME_PTR_ABI_SINGLE_BEGIN
+#define __ASSUME_PTR_ABI_SINGLE_END
+#endif
+#if !defined(__ASSUME_PTR_ABI_SINGLE_TRUE)
+#define __ASSUME_PTR_ABI_SINGLE_TRUE  1
+#define __ASSUME_PTR_ABI_SINGLE_FALSE 0
+#endif
+
+/* The BSD headers in this SDK (grp.h, pwd.h) guard the traditional BSD
+ * extensions -- user_from_uid(), group_from_gid() and friends -- with
+ * __BSD_VISIBLE, which nothing defined.  An undefined macro is 0 in #if, so
+ * those declarations vanished and callers compiled against an implicit
+ * `int` return.  FreeBSD's own cdefs.h defines it exactly this way.
+ */
+#if !defined(__BSD_VISIBLE)
+#if defined(_ANSI_SOURCE) || defined(_POSIX_C_SOURCE)
+#define __BSD_VISIBLE 0
+#else
+#define __BSD_VISIBLE 1
+#endif
+#endif
+
 /*
  * long long is not supported in c89 (__STRICT_ANSI__), but g++ -ansi and
  * c99 still want long longs.  While not perfect, we allow long longs for

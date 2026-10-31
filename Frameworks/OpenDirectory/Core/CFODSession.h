@@ -34,6 +34,12 @@
 CF_EXPORT
 ODSessionRef kODSessionDefault __OSX_AVAILABLE_STARTING(__MAC_10_6, __IPHONE_NA);
 
+CF_EXPORT const CFStringRef kODSessionProxyAddress __OSX_AVAILABLE_STARTING(__MAC_10_6, __IPHONE_NA);
+CF_EXPORT const CFStringRef kODSessionProxyPort __OSX_AVAILABLE_STARTING(__MAC_10_6, __IPHONE_NA);
+CF_EXPORT const CFStringRef kODSessionProxyUsername __OSX_AVAILABLE_STARTING(__MAC_10_6, __IPHONE_NA);
+CF_EXPORT const CFStringRef kODSessionProxyPassword __OSX_AVAILABLE_STARTING(__MAC_10_6, __IPHONE_NA);
+CF_EXPORT const CFStringRef kODSessionLocalPath __OSX_AVAILABLE_STARTING(__MAC_10_6, __IPHONE_NA);
+
 __BEGIN_DECLS
 
 /*!

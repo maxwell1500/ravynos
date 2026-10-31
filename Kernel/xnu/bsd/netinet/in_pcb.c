@@ -1628,6 +1628,34 @@ in_pcbladdr(struct inpcb *inp, struct sockaddr *nam, struct in_addr *laddr,
 	}
 
 	/*
+	 * Limited broadcast.  A DHCP client sends to 255.255.255.255 before it
+	 * has an address, so there is no route to derive a source address from;
+	 * source selection must not fail here or the client can never send its
+	 * first DISCOVER.  Take the address of an up, broadcast-capable
+	 * interface (ip_output installs the egress route for the broadcast).
+	 */
+	if (SIN(nam)->sin_addr.s_addr == INADDR_BROADCAST) {
+		struct in_ifaddr *cand;
+
+		lck_rw_lock_shared(&in_ifaddr_rwlock);
+		TAILQ_FOREACH(cand, &in_ifaddrhead, ia_link) {
+			if ((cand->ia_ifp->if_flags &
+			    (IFF_UP | IFF_BROADCAST)) !=
+			    (IFF_UP | IFF_BROADCAST)) {
+				continue;
+			}
+			/* DHCP is defined to originate from 0.0.0.0: the client
+			 * does not own an address yet.  ip_output fills the
+			 * source in only if a route supplies one, so leaving
+			 * this zero is exactly what the protocol expects. */
+			laddr->s_addr = INADDR_ANY;
+			lck_rw_done(&in_ifaddr_rwlock);
+			return 0;
+		}
+		lck_rw_done(&in_ifaddr_rwlock);
+	}
+
+	/*
 	 * If the ifscope is specified by the caller (e.g. IP_PKTINFO)
 	 * then it overrides the sticky ifscope set for the socket.
 	 */
@@ -1686,7 +1714,9 @@ in_pcbladdr(struct inpcb *inp, struct sockaddr *nam, struct in_addr *laddr,
 		if (ia == NULL) {
 			ia = ifatoia(ifa_ifwithnet_scoped(SA(&sin), ifscope));
 		}
-		error = ((ia == NULL) ? ENETUNREACH : 0);
+		if (ia == NULL) {
+		error = ENETUNREACH;
+	}
 
 		if (apn_fallback_required(proc, inp->inp_socket,
 		    (void *)nam)) {

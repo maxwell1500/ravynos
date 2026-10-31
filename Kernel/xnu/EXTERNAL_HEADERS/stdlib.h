@@ -9,7 +9,9 @@
 #endif
 __BEGIN_DECLS
 void *malloc(size_t);
+void *calloc(size_t, size_t);
 void free(void *);
-unsigned long strtoul(const char *__restrict, char **__restrict, unsigned);
+void abort(void);
+unsigned long strtoul(const char *__restrict, char **__restrict, int);
 __END_DECLS
 #endif

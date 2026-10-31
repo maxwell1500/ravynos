@@ -771,6 +771,7 @@ static inline int idx(TerminalView *v, int r, int c) { return r * v->_cols + c; 
         login_tty(sl);
         setenv("TERM", "xterm-256color", 1);
         setenv("LANG", "en_US.UTF-8", 1);
+        setenv("PATH", "/opt/local/bin:/opt/local/sbin:/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin:/usr/local/sbin", 1);
         char *name = strdup(shell);
         char *base = strrchr(name, '/');
         base = base ? base + 1 : name;
@@ -954,7 +955,7 @@ static inline int idx(TerminalView *v, int r, int c) { return r * v->_cols + c; 
             dup2(fds[1], 1);
             dup2(fds[1], 2);
             if (fds[1] > 2) close(fds[1]);
-            setenv("PATH", "/bin:/sbin:/usr/bin:/usr/sbin", 1);
+            setenv("PATH", "/opt/local/bin:/opt/local/sbin:/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin:/usr/local/sbin", 1);
             execl("/bin/sh", "sh", "-c", [trimmed UTF8String], (char *)NULL);
             /* /bin/sh -c may be unavailable in this image; fall back to
              * executing the program directly. */

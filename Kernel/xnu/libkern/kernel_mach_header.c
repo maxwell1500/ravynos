@@ -91,7 +91,9 @@ getcommandfromheader(kernel_mach_header_t *mhp, uint32_t cmd)
 {
 	struct load_command *lcp;
 	unsigned long i;
-
+	if (!mhp || (mhp->magic != MH_MAGIC_KERNEL && mhp->magic != MH_MAGIC)) {
+		return NULL;
+	}
 	lcp = (struct load_command *) (mhp + 1);
 	for (i = 0; i < mhp->ncmds; i++) {
 		if (lcp->cmd == cmd) {
@@ -245,7 +247,9 @@ getsectbynamefromheader(
 	kernel_segment_command_t *sgp;
 	kernel_section_t *sp;
 	unsigned long i;
-
+	if (!mhp || (mhp->magic != MH_MAGIC_KERNEL && mhp->magic != MH_MAGIC)) {
+		return (kernel_section_t *)NULL;
+	}
 	sgp = (kernel_segment_command_t *)
 	    ((uintptr_t)mhp + sizeof(kernel_mach_header_t));
 	for (i = 0; i < mhp->ncmds; i++) {
@@ -273,7 +277,9 @@ getsegbynamefromheader(
 {
 	kernel_segment_command_t *sgp;
 	unsigned long i;
-
+	if (!header || (header->magic != MH_MAGIC_KERNEL && header->magic != MH_MAGIC)) {
+		return (kernel_segment_command_t *)NULL;
+	}
 	sgp = (kernel_segment_command_t *)
 	    ((uintptr_t)header + sizeof(kernel_mach_header_t));
 	for (i = 0; i < header->ncmds; i++) {
@@ -299,7 +305,11 @@ kernel_segment_command_t *
 firstsegfromheader(kernel_mach_header_t *header)
 {
 	u_int i = 0;
-	kernel_segment_command_t *sgp = (kernel_segment_command_t *)
+	kernel_segment_command_t *sgp;
+	if (!header || (header->magic != MH_MAGIC_KERNEL && header->magic != MH_MAGIC)) {
+		return (kernel_segment_command_t *)NULL;
+	}
+	sgp = (kernel_segment_command_t *)
 	    ((uintptr_t)header + sizeof(*header));
 
 	for (i = 0; i < header->ncmds; i++) {
@@ -322,7 +332,11 @@ nextsegfromheader(
 	kernel_segment_command_t        *seg)
 {
 	u_int i = 0;
-	kernel_segment_command_t *sgp = (kernel_segment_command_t *)
+	kernel_segment_command_t *sgp;
+	if (!header || (header->magic != MH_MAGIC_KERNEL && header->magic != MH_MAGIC) || !seg) {
+		return (kernel_segment_command_t *)NULL;
+	}
+	sgp = (kernel_segment_command_t *)
 	    ((uintptr_t)header + sizeof(*header));
 
 	/* Find the index of the passed-in segment */

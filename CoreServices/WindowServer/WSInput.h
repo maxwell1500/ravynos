@@ -51,7 +51,7 @@ double clipTo(double val, double min, double max);
     BOOL altDown;
     BOOL capsLockOn;
     BOOL cmdDown;
-    uint8_t packetBuf[3];
+    uint8_t packetBuf[4];   /* flags, dx, dy, dz: /dev/mouse emits 4-byte records */
     int packetBytes;
     /* Live input preferences, re-read on CODE_PREFS_CHANGED. */
     float trackingSpeed;

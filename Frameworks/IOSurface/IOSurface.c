@@ -134,3 +134,24 @@ void *CVPixelBufferCreateWithIOSurface(CFAllocatorRef allocator, IOSurfaceRef su
 IOSurfaceRef CVPixelBufferGetIOSurface(void *pixelBuffer) {
     return (IOSurfaceRef)pixelBuffer;
 }
+
+/*
+ * Symbols Firefox's XUL imports that this framework did not yet export.
+ * IOSurfaceLookup() resolves an IOSurface by global id; ravynOS has no
+ * cross-process surface registry, so it returns NULL rather than inventing a
+ * surface. IOSurfaceGetPropertyMaximum() reports a bound on a property value;
+ * with no surface implementation behind it, 0 (no maximum known) is the
+ * truthful answer. kIOSurfaceIsGlobal is a real property key -- the string
+ * the constant stands for -- so a caller can use it in a dictionary.
+ */
+IOSurfaceRef IOSurfaceLookup(IOSurfaceID csid) {
+    (void)csid;
+    return NULL;
+}
+
+size_t IOSurfaceGetPropertyMaximum(CFStringRef property) {
+    (void)property;
+    return 0;
+}
+
+const CFStringRef kIOSurfaceIsGlobal = CFSTR("IOSurfaceIsGlobal");

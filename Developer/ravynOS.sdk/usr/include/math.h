@@ -19,6 +19,21 @@
 #include <sys/_types.h>
 #include <machine/_limits.h>
 
+#ifndef __ISO_C_VISIBLE
+# if (defined(__STDC_VERSION__) && __STDC_VERSION__ >= 199901L) || defined(__cplusplus)
+#  define __ISO_C_VISIBLE 1999
+# else
+#  define __ISO_C_VISIBLE 1990
+# endif
+#endif
+
+#ifndef __BSD_VISIBLE
+# define __BSD_VISIBLE 1
+#endif
+
+#ifndef __XSI_VISIBLE
+# define __XSI_VISIBLE 700
+#endif
 /*
  * ANSI/POSIX
  */
@@ -133,8 +148,8 @@ extern const union __nan_un {
 
 #define	signbit(x) __fp_type_select(x, __signbitf, __signbit, __signbitl)
 
-typedef	__double_t	double_t;
-typedef	__float_t	float_t;
+typedef	double	double_t;
+typedef	float	float_t;
 #endif /* __ISO_C_VISIBLE >= 1999 */
 
 /*

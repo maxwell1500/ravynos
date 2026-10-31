@@ -27,8 +27,13 @@
 static void dictIterator(const launch_data_t lval, const char *key, void *ctx)
 {
     NSMutableDictionary *dict = (__bridge NSMutableDictionary *)ctx;
-    [dict setObject:objectWithLaunchData(lval)
-        forKey:[NSString stringWithUTF8String:key]];
+    /* Either side can be nil (invalid UTF-8, or an unsupported launch data
+     * type -- LAUNCH_DATA_ERRNO maps to nil), and setObject:forKey: raises on
+     * nil. Skip the pair instead of crashing launchd's client. */
+    id obj = objectWithLaunchData(lval);
+    NSString *k = [NSString stringWithUTF8String:key];
+    if(obj != nil && k != nil)
+        [dict setObject:obj forKey:k];
 }
 
 id objectWithLaunchData(launch_data_t data) {
@@ -43,9 +48,11 @@ id objectWithLaunchData(launch_data_t data) {
         {
             NSMutableArray *array = [NSMutableArray arrayWithCapacity:
                 launch_data_array_get_count(data)];
-            for(int i = 0; i < launch_data_array_get_count(data); ++i)
-                [array addObject:
-                    objectWithLaunchData(launch_data_array_get_index(data, i))];
+            for(int i = 0; i < launch_data_array_get_count(data); ++i) {
+                id v = objectWithLaunchData(launch_data_array_get_index(data, i));
+                if(v != nil)
+                    [array addObject:v];
+            }
             return array;
         }
         case LAUNCH_DATA_DICTIONARY:

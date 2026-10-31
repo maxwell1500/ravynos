@@ -129,9 +129,11 @@ extern int __mb_cur_max;
 #define	MB_CUR_MAX_L(x)	(___mb_cur_max_l(x))
 #endif
 //Begin-Libc
+#if __has_include("libc_private.h")
 #include "libc_private.h"
 /* f must be a literal string */
 #define LIBC_ABORT(f,...)	abort_report_np("%s:%s:%u: " f, __FILE__, __func__, __LINE__, ## __VA_ARGS__)
+#endif
 //End-Libc
 
 #ifndef UNIFDEF_DRIVERKIT

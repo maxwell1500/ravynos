@@ -13,6 +13,7 @@ Layout constants (golden image, BPB at byte 0x100000):
   fat1=0x104000  fat2=0x183400  data=0x202800
   130301 clusters usable, image = 512 MiB, backup GPT in last 34 sectors.
 """
+import os
 import struct
 from collections import namedtuple
 
@@ -173,7 +174,15 @@ class Fat32Img:
     """Random-access reader over a raw GPT+FAT32 image."""
 
     def __init__(self, path, geom=None):
-        self.geom = geom or DEFAULT_GEOM
+        # DEFAULT_GEOM describes the committed 512 MiB template.  A grown
+        # image has different FAT and data offsets, and reading it with the
+        # 512 MiB offsets returns garbage (measured: every read_path() on a
+        # 1 GiB image returned None while the same calls worked on 512 MiB).
+        if geom is None:
+            size = os.path.getsize(path)
+            geom = DEFAULT_GEOM if size == DEFAULT_GEOM.image_bytes \
+                else geometry_for_size(size)
+        self.geom = geom
         self.f = open(path, "rb")
 
     def close(self):

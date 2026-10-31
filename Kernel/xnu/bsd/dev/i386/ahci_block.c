@@ -29,6 +29,116 @@ extern addr64_t kvtophys(vm_offset_t addr);
 static int ahci_major = -1;
 static vm_offset_t ahci_abar_virt = 0;
 
+/*
+ * Geometry, parsed from the disk's own GPT at attach time.  These were
+ * hardcoded to the 512 MiB development template (1048576 sectors, partition
+ * at LBA 2048), which was harmless only while every image was that size:
+ * msdosfs asks DKIOCGETBLOCKCOUNT, pins pm_maxcluster to the answer, and then
+ * finds no free cluster above the files that mkimage wrote.  Every write then
+ * failed with ENOSPC on a grown image even though the FAT had hundreds of
+ * megabytes free.  Parse instead of assume; the fallback keeps the old
+ * template working and says so.
+ */
+static uint64_t ahci_disk_sectors = 1048576;
+static uint64_t ahci_part_lba = 2048;
+static uint64_t ahci_part_sectors = 1044480;
+
+static uint64_t
+ahci_le64(const uint8_t *p)
+{
+	return (uint64_t)p[0] | ((uint64_t)p[1] << 8) | ((uint64_t)p[2] << 16) |
+	    ((uint64_t)p[3] << 24) | ((uint64_t)p[4] << 32) |
+	    ((uint64_t)p[5] << 40) | ((uint64_t)p[6] << 48) |
+	    ((uint64_t)p[7] << 56);
+}
+
+static uint32_t
+ahci_le32(const uint8_t *p)
+{
+	return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) |
+	    ((uint32_t)p[3] << 24);
+}
+
+static int ahci_transfer_sectors(uint64_t lba, uint32_t sec_count, void *buf, int is_write);
+
+/*
+ * Read the GPT and take the first non-empty partition as disk0s1.  Called
+ * after the port is started and before bdevsw registration, so no other I/O
+ * can race for the bounce buffer.
+ */
+static void
+ahci_read_geometry(void)
+{
+	static uint8_t sector[512];
+	uint64_t entry_lba, last_lba, first, last;
+	uint32_t nentries, entry_size, i, loaded;
+	int err;
+
+	err = ahci_transfer_sectors(1, 1, sector, 0);
+	if (err != 0 || memcmp(sector, "EFI PART", 8) != 0) {
+		printf("AHCI: no GPT at LBA 1 (err %d); assuming %llu sectors,"
+		    " partition at LBA %llu\n", err, ahci_disk_sectors,
+		    ahci_part_lba);
+		return;
+	}
+
+	/*
+	 * GPT header layout: 0x20 BackupLBA (the last LBA on the disk),
+	 * 0x48 PartitionEntryLBA, 0x50 NumberOfPartitionEntries,
+	 * 0x54 SizeOfPartitionEntry.  Getting these wrong reads the entry
+	 * count as an LBA and the CRC as an entry size, so check the values
+	 * instead of trusting the layout.
+	 */
+	last_lba = ahci_le64(sector + 0x20);	/* BackupLBA = last LBA */
+	entry_lba = ahci_le64(sector + 0x48);
+	nentries = ahci_le32(sector + 0x50);
+	entry_size = ahci_le32(sector + 0x54);
+	if (entry_size < 128 || entry_size > 512 || nentries == 0) {
+		printf("AHCI: GPT has unusable entry size %u / count %u;"
+		    " keeping the template geometry\n", entry_size, nentries);
+		return;
+	}
+
+	loaded = 0xffffffff;
+	for (i = 0; i < 4 && i < nentries; i++) {
+		uint32_t off = i * entry_size;
+		uint32_t sec_off = off / 512;
+		uint32_t in_sec = off % 512;
+
+		if (in_sec + 128 > 512) {
+			break;	/* entry straddles a sector; not produced by mkimage */
+		}
+		if (sec_off != loaded) {
+			err = ahci_transfer_sectors(entry_lba + sec_off, 1,
+			    sector, 0);
+			if (err != 0) {
+				printf("AHCI: GPT entry read failed (%d);"
+				    " keeping the template geometry\n", err);
+				return;
+			}
+			loaded = sec_off;
+		}
+		if (memcmp(sector + in_sec, "\0\0\0\0\0\0\0\0", 8) == 0) {
+			continue;
+		}
+		first = ahci_le64(sector + in_sec + 0x20);
+		last = ahci_le64(sector + in_sec + 0x28);
+		if (last < first) {
+			continue;
+		}
+		ahci_part_lba = first;
+		ahci_part_sectors = last - first + 1;
+		ahci_disk_sectors = last_lba + 1;
+		printf("AHCI: GPT partition at LBA %llu, %llu sectors;"
+		    " disk %llu sectors\n", ahci_part_lba, ahci_part_sectors,
+		    ahci_disk_sectors);
+		return;
+	}
+
+	printf("AHCI: GPT has no usable partition; keeping the template"
+	    " geometry\n");
+}
+
 static uint8_t __attribute__((aligned(4096))) ahci_bounce[65536];
 static uint64_t ahci_bounce_phys = 0;
 static uint8_t __attribute__((aligned(1024))) ahci_clb[1024];
@@ -92,11 +202,10 @@ ahci_ioctl(dev_t dev, u_long cmd, caddr_t data,
 		return 0;
 
 	case DKIOCGETBLOCKCOUNT:
-		/* Partition 1 (disk0s1) has 1044480 sectors (LBA 2048 to 1046527), disk0 has 1048576 sectors */
 		if (d == 1) {
-			*o = 1044480;
+			*o = ahci_part_sectors;
 		} else {
-			*o = 1048576;
+			*o = ahci_disk_sectors;
 		}
 		return 0;
 
@@ -219,6 +328,9 @@ ahci_init(void)
 	pxcmd |= (1U << 0);
 	port[0x18 / 4] = pxcmd;
 
+	/* Learn the real geometry before anything asks for it. */
+	ahci_read_geometry();
+
 	/* Register bdevsw */
 	ahci_major = bdevsw_add(-1, &ahci_bdevsw);
 	printf("AHCI: Port 0 ready, bdevsw registered at major %d\n", ahci_major);
@@ -338,7 +450,7 @@ ahci_strategy(struct buf *bp)
 	int err;
 
 	if (d == 1) {
-		lba += 2048; /* Partition 1 is disk0s1 at LBA 2048! */
+		lba += ahci_part_lba;
 	}
 
 	if (buf_map(bp, &vaddr)) {

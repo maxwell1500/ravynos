@@ -1,0 +1,15 @@
+{
+	"EnvironmentVariables": {
+		"ASL_DISABLE": "1",
+		"LANG": "C.UTF-8"
+	},
+	"Label": "com.ravynos.compat",
+	"ProgramArguments": [
+		"/bin/sh",
+		"/usr/local/compat/run-fixtures.sh"
+	],
+	"RunAtLoad": true,
+	"KeepAlive": false,
+	"StandardOutPath": "/var/log/compat.log",
+	"StandardErrorPath": "/var/log/compat.log"
+}

@@ -32,6 +32,7 @@
 
 #include <sqlite3.h>
 #include <stdio.h>
+#include <stdarg.h>
 #include <unistd.h>
 #include <cstddef>
 #ifdef _REWRITE_ME_
@@ -772,6 +773,7 @@ static BOOL _LSOpenDocumentsWithWindowServer(NSString *bundlePath, NSArray *item
     size_t used = 0;
     unsigned i;
     const char *bundle = [bundlePath UTF8String];
+    BOOL ok = NO;
 
     if(bootstrap_port == MACH_PORT_NULL)
         bootstrap_init();
@@ -789,8 +791,12 @@ static BOOL _LSOpenDocumentsWithWindowServer(NSString *bundlePath, NSArray *item
 
     if(bundle != NULL) {
         size_t l = strlen(bundle) + 1;
-        if(l > sizeof(msg.data))
+        if(l > sizeof(msg.data)) {
+            /* bootstrap_look_up added a send right to this task; every exit
+             * path has to give it back. */
+            mach_port_deallocate(mach_task_self(), port);
             return NO;
+        }
         memcpy(msg.data, bundle, l);
         used = l;
     }
@@ -808,12 +814,11 @@ static BOOL _LSOpenDocumentsWithWindowServer(NSString *bundlePath, NSArray *item
     }
     msg.len = (unsigned)used;
 
-    if(mach_msg((mach_msg_header_t *)&msg, MACH_SEND_MSG | MACH_SEND_TIMEOUT,
-                sizeof(msg) - sizeof(mach_msg_trailer_t), 0, MACH_PORT_NULL,
-                200 /* ms timeout */, MACH_PORT_NULL) != MACH_MSG_SUCCESS)
-        return NO;
-
-    return YES;
+    ok = (mach_msg((mach_msg_header_t *)&msg, MACH_SEND_MSG | MACH_SEND_TIMEOUT,
+                   sizeof(msg) - sizeof(mach_msg_trailer_t), 0, MACH_PORT_NULL,
+                   200 /* ms timeout */, MACH_PORT_NULL) == MACH_MSG_SUCCESS);
+    mach_port_deallocate(mach_task_self(), port);
+    return ok;
 }
 
 static OSStatus _LSOpenAllWithSpecifiedApp(const LSLaunchURLSpec *inLaunchSpec, CFURLRef _Nullable *outLaunchedURL)
@@ -840,9 +845,14 @@ static OSStatus _LSOpenAllWithSpecifiedApp(const LSLaunchURLSpec *inLaunchSpec, 
         if(outLaunchedURL != NULL)
             *outLaunchedURL = (__bridge_retained CFURLRef)[NSURL fileURLWithPath:[app executablePath]];
 
-        /* The WindowServer owns the running applications: let it route the
-         * documents to the app (starting it when it is not running). */
-        if(_LSOpenDocumentsWithWindowServer(appPath,
+        /* Documents go to an app the WindowServer already knows about.  A
+         * plain launch does not: measured 2026-10-30, the WindowServer
+         * message is sent successfully (mach_msg returns MACH_MSG_SUCCESS)
+         * but never arrives at the server's receive port, so waiting for it
+         * to spawn the app silently launched nothing.  Spawn it here, and
+         * leave the WindowServer routing to the document case. */
+        if([(__bridge NSArray *)inLaunchSpec->itemURLs count] > 0 &&
+           _LSOpenDocumentsWithWindowServer(appPath,
                                             (__bridge NSArray *)inLaunchSpec->itemURLs))
             return 0;
 

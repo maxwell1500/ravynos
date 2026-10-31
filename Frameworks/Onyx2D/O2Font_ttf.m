@@ -57,6 +57,8 @@ static const FontEntry knownFonts[] = {
    { "Monaco",              "/System/Library/Fonts/TTF/NimbusMonoPS-Regular.ttf" },
    { "Menlo",               "/System/Library/Fonts/TTF/NimbusMonoPS-Regular.ttf" },
    { "Menlo-Regular",       "/System/Library/Fonts/TTF/NimbusMonoPS-Regular.ttf" },
+   { "Source Code Pro-Regular", "/System/Library/Fonts/TTF/NimbusMonoPS-Regular.ttf" },
+   { "SourceCodePro-Regular",   "/System/Library/Fonts/TTF/NimbusMonoPS-Regular.ttf" },
    { "Courier-Bold",        "/System/Library/Fonts/TTF/NimbusMonoPS-Bold.ttf" },
    { "Menlo-Bold",          "/System/Library/Fonts/TTF/NimbusMonoPS-Bold.ttf" },
    { "Times",               "/System/Library/Fonts/TTF/NimbusRoman-Regular.ttf" },

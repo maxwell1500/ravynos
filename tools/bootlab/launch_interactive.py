@@ -38,6 +38,7 @@ def supported_accels():
 parser = argparse.ArgumentParser(description="Launch interactive ravynOS desktop session in QEMU")
 parser.add_argument("--accel", choices=("auto", "tcg", "hvf", "kvm"), default="auto", help="QEMU accelerator; auto prefers HVF on macOS when available")
 parser.add_argument("--cpus", type=int, default=None, help="number of CPU cores to expose to the kernel and QEMU (default: all host CPUs when accelerated, 1 under TCG, where extra vCPUs measured slower)")
+parser.add_argument("--mem", type=int, default=8192, help="memory in MB (default: 8192 MB = 8 GB)")
 args = parser.parse_args()
 
 accels = supported_accels()
@@ -85,7 +86,7 @@ qemu_cmd = [
     # only one that produces no "host doesn't support requested feature"
     # warnings); TCG keeps the fixed model it was tuned with.
     "-cpu", ("host" if accel != "tcg" else "Skylake-Client"),
-    "-m", "4096",
+    "-m", str(args.mem),
     "-smp", str(cpus),
     "-drive", f"if=pflash,format=raw,readonly=on,file={OVMF}",
     "-drive", f"if=pflash,format=raw,readonly=off,file={VARS}",
@@ -93,6 +94,12 @@ qemu_cmd = [
     "-device", "ide-hd,bus=ide.0,drive=drive0",
     "-serial", f"unix:{serial_sock_path},server,nowait",
     "-monitor", f"unix:{monitor_sock_path},server,nowait",
+    # A NIC for the network stack: e1000 is the driver the PCI work targets,
+    # and slirp gives it DHCP/DNS without touching the host network.
+    "-netdev", "user,id=n0",
+    "-device", "e1000,netdev=n0",
+    # Packet capture of the emulated link, so a driver that claims to have
+    # sent something can be checked against what actually crossed the wire.
     "-vga", "std",
     "-display", "cocoa",
     "-vnc", "127.0.0.1:0",
@@ -163,8 +170,8 @@ else:
 boot_cmd = (
     "fs0:\\System\\Library\\CoreServices\\boot.efi -v serial=3 "
     "debug=0x14e keepsyms=1 slide=0 kcsuffix=development "
-    "rd=disk0s1 rootdev=disk0s1 npci=0x2000 dart=0 "
-    f"-no_compat_check cpus={cpus} quiet_boot=1\r\n"
+    "rd=disk0s1 rootdev=disk0s1 dart=0 kextlog=0x1f "
+    f"-no_compat_check cpus={cpus} nofleet=1 interactive=1\r\n"
 )
 serial_sock.sendall(boot_cmd.encode("ascii"))
 

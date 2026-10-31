@@ -73,7 +73,7 @@ CPU_SUBTYPE_X86_64_ALL = 3
 MH_EXECUTE = 0x2
 MH_DYLINKER = 0x7
 MH_DYLIB = 0x6
-
+MH_KEXT_BUNDLE = 0xB
 FILETYPE_NAMES = {
     0x1: "MH_OBJECT",
     MH_EXECUTE: "MH_EXECUTE",
@@ -1232,8 +1232,9 @@ def main():
         #     run initializers first, and it is libSystem.
         #   - dyld (MH_DYLINKER): loaded by the kernel, not by dyld, so its
         #     initializer walk never sees the libSystemInitialized gate.
-        if (node.filetype == MH_DYLINKER
-                or "libSystem" in os.path.basename(p)):
+        if (node.filetype in (MH_DYLINKER, MH_KEXT_BUNDLE)
+                or "libSystem" in os.path.basename(p)
+                or p.startswith("System/Library/Extensions/")):
             continue
         if not node.libsystem_linked():
             no_libsystem.append((p, inits,

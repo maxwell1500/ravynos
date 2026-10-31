@@ -6,6 +6,7 @@ FRAMEWORK=CoreGraphics
 FMWK_COMPAT_VERSION = 1.0.0
 
 SRCS= \
+	CGConstants.m \
 	CGAffineTransform.m \
 	CGBitmapContext.m \
 	CGColor.m \

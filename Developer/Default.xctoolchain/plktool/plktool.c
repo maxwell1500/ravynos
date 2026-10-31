@@ -240,14 +240,20 @@ CreatePrelinkedKernel(CFDataRef  kernelImage,
     }
 
 
-    baseLoadAddr = (textLoadAddr + textVMSize + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
-    if (baseLoadAddr < __kOSKextMaxDisplacement)
-    {
-        fprintf(stderr, "Kext base load address underflow\n");
-        goto failed;
-    }
-    baseLoadAddr -= __kOSKextMaxDisplacement; /* Kext VMA base */
-    
+    /* Link kexts into the kext VM window, not above the kernel image.
+     *
+     * The packed copy (baseSrcAddr, above the kernel image) stays where the
+     * booter put it and is what the kernel reads at prelink-load time.  The
+     * link address is what the kernel sees as _PrelinkExecutableLoadAddr, and
+     * when the two differ OSKext allocates the kext in the kext map and
+     * memcpy()s it out of the packed copy.  Aliasing the two -- the old
+     * layout -- left the kext text mapped only by the boot page tables above
+     * the kernel image, where kernel VM later installed its own zero page
+     * over it, so every kext started with a NULL kmod_info->start.
+     *
+     * 0xffffff7f81000000 sits inside the kext window that kext_alloc_init()
+     * carves below VM_MIN_KERNEL_ADDRESS. */
+    baseLoadAddr = 0xffffff7f81000000ULL;
     loadList = __OSKextPrelinkKexts(kextArray,
                                     kernelImage,
                                     baseLoadAddr, // where we load kexts: 2GB from top of __TEXT
@@ -365,11 +371,7 @@ CreatePrelinkedKernel(CFDataRef  kernelImage,
         int segmentSize = 0;
 
         seg = macho_get_segment_by_name_64(mach_header, "__BUILTIN");
-        if (!seg) {
-            fprintf(stderr, "no __BUILTIN seg\n");
-            goto failed;
-        }
-
+        if (seg) {
         seg->vmaddr = srcAddr;
         seg->fileoff = fileOffset;
         
@@ -399,10 +401,10 @@ CreatePrelinkedKernel(CFDataRef  kernelImage,
 
         seg->vmsize = segmentSize;
         seg->filesize = segmentSize;
-        printf("Added Platform Expert kext to __BUILTIN: %p %d %d %d\n",
-               seg->vmaddr, seg->vmsize, seg->fileoff, seg->filesize);
+            printf("Added Platform Expert kext to __BUILTIN: %p %d %d %d\n",
+                   seg->vmaddr, seg->vmsize, seg->fileoff, seg->filesize);
+        }
     } /* gBuiltin */
-    
     result = CFRetain(prelinkImage);
 
 failed:
@@ -531,9 +533,20 @@ main(int argc, char **argv)
         0                     /* data */
     };
 
-    size_t bytes = write(fd_out, &pkh, sizeof(pkh));
+    int is_raw = 0;
+    const char *out_name = argv[1];
+    size_t out_len = strlen(out_name);
+    if ((out_len > 12 && strcmp(out_name + out_len - 12, ".development") == 0) ||
+        (out_len > 11 && strcmp(out_name + out_len - 11, "kernelcache") == 0) ||
+        getenv("PLKTOOL_RAW_MACHO")) {
+        is_raw = 1;
+    }
 
-    bytes = write(fd_out, CFDataGetBytePtr(prelinkImage), CFDataGetLength(prelinkImage));
+    size_t bytes = 0;
+    if (!is_raw) {
+        bytes += write(fd_out, &pkh, sizeof(pkh));
+    }
+    bytes += write(fd_out, CFDataGetBytePtr(prelinkImage), CFDataGetLength(prelinkImage));
     close(fd_out);
 
     fprintf(stdout, "Wrote %d bytes to %s\nFinished!\n", bytes, argv[1]);

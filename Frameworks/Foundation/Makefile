@@ -12,6 +12,7 @@ SLF = /System/Library/Frameworks
 INSTALL_NAME_DIR = ${SLF}/${FRAMEWORK}.framework/Versions/${FMWK_VERSION}
 
 SRCS = 	NSBlocks.m \
+	FoundationClasses.m \
 	NSFormatter.m \
 	NSDictionary/NSEnumerator_dictionaryObjects.m \
 	NSDictionary/NSMutableDictionary.m \
@@ -75,6 +76,9 @@ SRCS = 	NSBlocks.m \
 	NSHashTable.m \
 	NSDirectoryEnumerator.m \
 	NSProcessInfo.m \
+	NSProgressCompat.m \
+	NSEmptyCollections.m \
+	NSConstantsCompat.m \
 	NSData/NSData.m \
 	NSData/NSData_mapped.m \
 	NSData/NSData_concrete.m \

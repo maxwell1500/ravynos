@@ -753,7 +753,25 @@ Cflags: -I${includedir}/SDL2 -I${includedir} -D_REENTRANT -D__RAVYNOS__=1
             write_text_if_changed(os.path.join(pc_dir, name), body)
 
 
+def sync_sdk_own_headers() -> None:
+    """Keep the build-tree SDK's own headers identical to the repo SDK.
+
+    Developer/ravynOS.sdk is the committed source of truth for headers this
+    project owns, but the build-tree SDK is a separate copy and nothing
+    refreshed it, so a header fix made in the repo never reached a compile.
+    Only files that already exist in the build SDK are refreshed; this never
+    invents headers.
+    """
+    for rel in ("usr/include/sys/cdefs.h",
+                "usr/include/sys/sockio.h"):
+        src = os.path.join(REPO_SDK, rel)
+        dst = os.path.join(BUILD_SDK, rel)
+        if os.path.isfile(src) and os.path.isfile(dst):
+            copy_if_changed(src, dst)
+
+
 def main() -> int:
+    sync_sdk_own_headers()
     sync_libraries()
     ensure_versioned_aliases()
     sync_missing_frameworks()

@@ -35,7 +35,8 @@ def newest_kernel(explicit):
     if explicit:
         cands.append(explicit)
     else:
-        cands += [os.path.join(HERE, "work", "stripped_kernel.development"),
+        cands += [os.path.join(HERE, "work", "prelinked_kernel.development"),
+                  os.path.join(HERE, "work", "stripped_kernel.development"),
                   os.path.join(HERE, "assets", "kernel.development")]
     cands = [c for c in cands if os.path.isfile(c)]
     if not cands:

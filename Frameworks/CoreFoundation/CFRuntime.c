@@ -81,7 +81,17 @@ typedef char * SEL;
 #endif
 extern id objc_msgSend(id, SEL, ...);
 
-#define CFTYPE_IS_OBJC(obj) (obj && *(uintptr_t *)obj == \
+/*
+ * An object whose first word is NULL cannot be an Objective-C object: no
+ * class has address 0.  Without this check CFTYPE_IS_OBJC compares 0
+ * against __CFRuntimeObjCClassTable[0], which is 0 until Foundation
+ * registers the toll-free bridging classes, so every static CF object
+ * (kCFBooleanTrue, constant strings) looked like an ObjC object and
+ * CFRetain/CFRelease sent -retain/-release to a pointer with isa 0 --
+ * faulting at objc_msgSend+0x1d (0x18(%r10)) when Firefox parsed a plist
+ * boolean with no Foundation loaded.
+ */
+#define CFTYPE_IS_OBJC(obj) (obj && *(uintptr_t *)obj != 0 && *(uintptr_t *)obj == \
     __CFRuntimeObjCClassTable[(*((uintptr_t *)obj+1) & 0xff00) >> 8])
 #define CFTYPE_OBJC_FUNCDISPATCH0(rettype, obj, sel) \
     if (CFTYPE_IS_OBJC(obj)) \
@@ -529,7 +539,7 @@ static CFTypeRef _CFRetain(CFTypeRef cf, Boolean tryR);
 CFTypeRef CFRetain(CFTypeRef cf) {
     if (NULL == cf) return NULL;
     CFTYPE_OBJC_FUNCDISPATCH0(CFTypeRef, (id)cf, retain);
-    if (((const CFRuntimeBase *)cf)->_cfinfo[CF_INFO_BITS] == 0) {
+    if ((((const CFRuntimeBase *)cf)->_cfinfo[CF_INFO_BITS] == 0) && (*(const uintptr_t *)cf != 0)) {
         return (CFTypeRef)objc_msgSend((id)cf, @selector(retain));
     }
     if (cf) __CFGenericAssertIsCF(cf);
@@ -546,7 +556,7 @@ static void _CFRelease(CFTypeRef cf);
 void CFRelease(CFTypeRef cf) {
     if (NULL == cf) return;
     CFTYPE_OBJC_FUNCDISPATCH0(void, (id)cf, release);
-    if (((const CFRuntimeBase *)cf)->_cfinfo[CF_INFO_BITS] == 0) {
+    if ((((const CFRuntimeBase *)cf)->_cfinfo[CF_INFO_BITS] == 0) && (*(const uintptr_t *)cf != 0)) {
         objc_msgSend((id)cf, @selector(release));
         return;
     }
@@ -920,6 +930,29 @@ void __CFInitialize(void) {
 #endif
 	// move this next line up into the #if above after Foundation gets off this symbol
         _CFMainPThread = pthread_self();
+
+        /*
+         * Constant CFStrings take their isa from __CFConstantStringClassReference,
+         * which is zero-filled in the image. Foundation fills it in
+         * __NSInitializeProcess, but CoreFoundation has to be usable on its own:
+         * Firefox parses an XML plist through CFPropertyList before Foundation
+         * is initialized, every CFSTR then has isa == 0, and the first
+         * objc_msgSend on one faults at +0x1d (andl 0x18(%r10),%r11d) with
+         * fault 0x18 inside _parseXMLElement. Copy the class object the way
+         * Foundation does, so &__CFConstantStringClassReference looks like a
+         * class whose isa is the metaclass.
+         */
+        if (__CFConstantStringClassReference[0] == 0) {
+            Class cls = objc_getClass("__NSCFConstantString");
+
+            if (cls == Nil) {
+                cls = objc_getClass("NSCFString");
+            }
+            if (cls != Nil) {
+                memcpy(&__CFConstantStringClassReference, cls,
+                    sizeof(__CFConstantStringClassReference));
+            }
+        }
 
 #if DEPLOYMENT_TARGET_WINDOWS
         // Must not call any CF functions

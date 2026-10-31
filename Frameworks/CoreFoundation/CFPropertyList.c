@@ -2151,6 +2151,17 @@ static Boolean parseXMLElement(_CFXMLPlistParseInfo *pInfo, Boolean *isKey, CFTy
             if (pInfo->skip) {
                 *out = NULL;
             } else {
+                /*
+                 * kCFBooleanTrue is a static object whose CFRuntimeBase info
+                 * bits stay 0 until CFBooleanGetTypeID() registers the class.
+                 * CFRetain() reads that field to tell a CF object from an ObjC
+                 * one, so retaining the boolean before its type is initialized
+                 * sends -retain to it -- isa 0 -- and faults in
+                 * objc_msgSend+0x1d (fault 0x18). Firefox hit this parsing a
+                 * plist boolean, with no Foundation loaded to initialize CF's
+                 * statics. Register the type first.
+                 */
+                (void)CFBooleanGetTypeID();
                 *out = CFRetain(kCFBooleanTrue);
             }
             return true;
@@ -2164,6 +2175,7 @@ static Boolean parseXMLElement(_CFXMLPlistParseInfo *pInfo, Boolean *isKey, CFTy
             if (pInfo->skip) {
                 *out = NULL;
             } else {
+                (void)CFBooleanGetTypeID();	/* see TRUE_IX above */
                 *out = CFRetain(kCFBooleanFalse);
             }
             return true;

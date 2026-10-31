@@ -23,6 +23,7 @@
 #include <sys/time.h>
 #include <unistd.h>
 
+#define BUILDING_LIBCURL 1
 #include "curl.h"
 
 #define CURL_VERSION_STRING "libcurl/9.0.0-ravynos"
@@ -30,7 +31,7 @@
 
 typedef size_t (*curl_write_cb)(char *, size_t, size_t, void *);
 
-struct RavynCurl {
+struct Curl_easy {
     char *url;
     char *useragent;
     char *custom_request;
@@ -72,6 +73,11 @@ static char *xstrdup(const char *s)
     return p;
 }
 
+void curl_free(void *p)
+{
+    free(p);
+}
+
 CURLcode curl_global_init(long flags)
 {
     (void)flags;
@@ -91,7 +97,7 @@ char *curl_version(void)
     return version;
 }
 
-curl_version_info_data *curl_version_info(int age)
+curl_version_info_data *curl_version_info(CURLversion age)
 {
     static const char *const protocols[] = { "http", NULL };
     (void)age;
@@ -211,7 +217,7 @@ CURL *curl_easy_duphandle(CURL *c)
     }
     return copy;
 }
-
+#undef curl_easy_setopt
 CURLcode curl_easy_setopt(CURL *c, CURLoption option, ...)
 {
     va_list ap;
@@ -935,7 +941,7 @@ CURLMcode curl_multi_perform(CURLM *multi, int *running_handles)
     return CURLM_OK;
 }
 
-CURLMcode curl_multi_poll(CURLM *multi, void *extra_fds, unsigned int extra_nfds,
+CURLMcode curl_multi_poll(CURLM *multi, struct curl_waitfd extra_fds[], unsigned int extra_nfds,
                           int timeout_ms, int *numfds)
 {
     (void)multi; (void)extra_fds; (void)extra_nfds; (void)timeout_ms;
@@ -945,19 +951,25 @@ CURLMcode curl_multi_poll(CURLM *multi, void *extra_fds, unsigned int extra_nfds
     return CURLM_OK;
 }
 
-CURLMcode curl_multi_wait(CURLM *multi, void *extra_fds, unsigned int extra_nfds,
+CURLMcode curl_multi_wait(CURLM *multi, struct curl_waitfd extra_fds[], unsigned int extra_nfds,
                           int timeout_ms, int *numfds)
 {
     return curl_multi_poll(multi, extra_fds, extra_nfds, timeout_ms, numfds);
 }
 
-CURLMcode curl_multi_fdset(CURLM *multi, void *read_fd_set, void *write_fd_set,
-                           void *exc_fd_set, int *max_fd)
+CURLMcode curl_multi_fdset(CURLM *multi, fd_set *read_fd_set, fd_set *write_fd_set,
+                           fd_set *exc_fd_set, int *max_fd)
 {
     (void)multi; (void)read_fd_set; (void)write_fd_set; (void)exc_fd_set;
     if (max_fd) {
         *max_fd = -1;
     }
+    return CURLM_OK;
+}
+
+CURLMcode curl_multi_wakeup(CURLM *multi)
+{
+    (void)multi;
     return CURLM_OK;
 }
 
@@ -994,5 +1006,132 @@ CURLMsg *curl_multi_info_read(CURLM *multi, int *msgs_in_queue)
 CURLMcode curl_multi_cleanup(CURLM *multi)
 {
     free(multi);
+    return CURLM_OK;
+}
+
+struct RavynCURLU {
+    char *url;
+    char *scheme;
+    char *user;
+    char *password;
+    char *options;
+    char *host;
+    char *port;
+    char *path;
+    char *query;
+    char *fragment;
+    char *zoneid;
+};
+
+CURLU *curl_url(void)
+{
+    return (CURLU *)calloc(1, sizeof(struct RavynCURLU));
+}
+
+void curl_url_cleanup(CURLU *handle)
+{
+    struct RavynCURLU *u = (struct RavynCURLU *)handle;
+    if (!u) return;
+    free(u->url);
+    free(u->scheme);
+    free(u->user);
+    free(u->password);
+    free(u->options);
+    free(u->host);
+    free(u->port);
+    free(u->path);
+    free(u->query);
+    free(u->fragment);
+    free(u->zoneid);
+    free(u);
+}
+
+CURLU *curl_url_dup(const CURLU *in)
+{
+    const struct RavynCURLU *u = (const struct RavynCURLU *)in;
+    struct RavynCURLU *out;
+    if (!u) return NULL;
+    out = (struct RavynCURLU *)calloc(1, sizeof(struct RavynCURLU));
+    if (!out) return NULL;
+    if (u->url) out->url = strdup(u->url);
+    if (u->scheme) out->scheme = strdup(u->scheme);
+    if (u->user) out->user = strdup(u->user);
+    if (u->password) out->password = strdup(u->password);
+    if (u->options) out->options = strdup(u->options);
+    if (u->host) out->host = strdup(u->host);
+    if (u->port) out->port = strdup(u->port);
+    if (u->path) out->path = strdup(u->path);
+    if (u->query) out->query = strdup(u->query);
+    if (u->fragment) out->fragment = strdup(u->fragment);
+    if (u->zoneid) out->zoneid = strdup(u->zoneid);
+    return (CURLU *)out;
+}
+
+CURLUcode curl_url_get(const CURLU *handle, CURLUPart what, char **part, unsigned int flags)
+{
+    const struct RavynCURLU *u = (const struct RavynCURLU *)handle;
+    const char *src = NULL;
+    (void)flags;
+    if (!u || !part) return CURLUE_BAD_HANDLE;
+    switch (what) {
+    case CURLUPART_URL: src = u->url; break;
+    case CURLUPART_SCHEME: src = u->scheme; break;
+    case CURLUPART_USER: src = u->user; break;
+    case CURLUPART_PASSWORD: src = u->password; break;
+    case CURLUPART_OPTIONS: src = u->options; break;
+    case CURLUPART_HOST: src = u->host; break;
+    case CURLUPART_PORT: src = u->port; break;
+    case CURLUPART_PATH: src = u->path; break;
+    case CURLUPART_QUERY: src = u->query; break;
+    case CURLUPART_FRAGMENT: src = u->fragment; break;
+    case CURLUPART_ZONEID: src = u->zoneid; break;
+    default: return CURLUE_UNKNOWN_PART;
+    }
+    if (!src) return CURLUE_NO_HOST;
+    *part = strdup(src);
+    return *part ? CURLUE_OK : CURLUE_OUT_OF_MEMORY;
+}
+
+CURLUcode curl_url_set(CURLU *handle, CURLUPart what, const char *part, unsigned int flags)
+{
+    struct RavynCURLU *u = (struct RavynCURLU *)handle;
+    char **dst = NULL;
+    (void)flags;
+    if (!u) return CURLUE_BAD_HANDLE;
+    switch (what) {
+    case CURLUPART_URL: dst = &u->url; break;
+    case CURLUPART_SCHEME: dst = &u->scheme; break;
+    case CURLUPART_USER: dst = &u->user; break;
+    case CURLUPART_PASSWORD: dst = &u->password; break;
+    case CURLUPART_OPTIONS: dst = &u->options; break;
+    case CURLUPART_HOST: dst = &u->host; break;
+    case CURLUPART_PORT: dst = &u->port; break;
+    case CURLUPART_PATH: dst = &u->path; break;
+    case CURLUPART_QUERY: dst = &u->query; break;
+    case CURLUPART_FRAGMENT: dst = &u->fragment; break;
+    case CURLUPART_ZONEID: dst = &u->zoneid; break;
+    default: return CURLUE_UNKNOWN_PART;
+    }
+    free(*dst);
+    *dst = part ? strdup(part) : NULL;
+    return CURLUE_OK;
+}
+
+const char *curl_url_strerror(CURLUcode error)
+{
+    (void)error;
+    return "URL error";
+}
+
+CURLMcode curl_multi_setopt(CURLM *multi, CURLMoption option, ...)
+{
+    (void)multi; (void)option;
+    return CURLM_OK;
+}
+
+CURLMcode curl_multi_socket_action(CURLM *multi, curl_socket_t s, int ev_bitmask, int *running_handles)
+{
+    (void)multi; (void)s; (void)ev_bitmask;
+    if (running_handles) *running_handles = 0;
     return CURLM_OK;
 }

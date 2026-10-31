@@ -114,7 +114,7 @@ kxld_vtable_init(KXLDVTable *vtable, const KXLDSym *vtable_sym,
 			    kxld_log(kKxldLogPatching, kKxldLogErr,
 			    kKxldLogMalformedVTable,
 			    kxld_demangle(vtable->name,
-			    &demangled_name, &demangled_length)));
+			    &demangled_name, &demangled_length), 115));
 
 			rval = init_by_entries_and_relocs(vtable, vtable_sym,
 			    relocator, extrelocs, defined_cxx_symbols);
@@ -125,7 +125,7 @@ kxld_vtable_init(KXLDVTable *vtable, const KXLDSym *vtable_sym,
 			    kxld_log(kKxldLogPatching, kKxldLogErr,
 			    kKxldLogMalformedVTable,
 			    kxld_demangle(vtable->name,
-			    &demangled_name, &demangled_length)));
+			    &demangled_name, &demangled_length), 126));
 
 			rval = init_by_relocs(vtable, vtable_sym, vtable_sect, relocator);
 			require_noerr(rval, finish);
@@ -413,8 +413,7 @@ init_by_entries_and_relocs(KXLDVTable *vtable, const KXLDSym *vtable_sym,
 			    kxld_log(kKxldLogPatching, kKxldLogErr,
 			    kKxldLogMalformedVTable,
 			    kxld_demangle(vtable->name, &demangled_name1,
-			    &demangled_length1)));
-
+			    &demangled_length1), 414));
 			sym = kxld_reloc_get_symbol(relocator, reloc, /* data */ NULL);
 		}
 
@@ -508,8 +507,7 @@ kxld_vtable_patch(KXLDVTable *vtable, const KXLDVTable *super_vtable,
 	require_action(vtable->entries.nitems >= super_vtable->entries.nitems, finish,
 	    rval = KERN_FAILURE;
 	    kxld_log(kKxldLogPatching, kKxldLogErr, kKxldLogMalformedVTable,
-	    kxld_demangle(vtable->name, &demangled_name1, &demangled_length1)));
-
+	    kxld_demangle(vtable->name, &demangled_name1, &demangled_length1), 510));
 	for (i = 0; i < super_vtable->entries.nitems; ++i) {
 		child_entry = kxld_array_get_item(&vtable->entries, i);
 		parent_entry = kxld_array_get_item(&super_vtable->entries, i);

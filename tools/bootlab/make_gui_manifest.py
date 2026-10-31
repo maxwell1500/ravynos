@@ -75,6 +75,12 @@ DIRS = [
     "var/run",
     "var/tmp",
     "tmp",
+    # Account homes.  /etc/passwd named /Users/ravyn but the directory never
+    # existed, so the first login had no home to enter; the ravynos account
+    # gets the same skeleton.
+    "Users",
+    "Users/ravyn",
+    "Users/ravyn/Desktop",
 ]
 
 # The Dock/Filer LaunchAgents exec bundles that APPS below stages (from the
@@ -118,6 +124,8 @@ APPS = [
      "Applications/Utilities/Console.app"),
     ("Applications/Utilities/KeychainAccess", "Keychain Access",
      "Applications/Utilities/Keychain Access.app"),
+    ("Applications/AppStore", "AppStore",
+     "Applications/App Store.app"),
 ]
 
 # The canonical macOS names, provided as copies of the ravynOS bundles: the
@@ -142,6 +150,12 @@ BINARIES = [
     ("CoreServices/dailydrivertest", "dailydrivertest",
      "System/Library/CoreServices/dailydrivertest"),
     ("BSD/bin/open", "open", "usr/bin/open"),
+    # MacPorts' mportinit runs `exec id -u`; BSD/usr.bin/id ships only a
+    # Makefile and man pages in this tree, so id.c was written here.  The
+    # Makefile's LINKS lines make groups(1) and whoami(1) the same binary.
+    ("BSD/usr.bin/id", "id", "usr/bin/id"),
+    ("BSD/usr.bin/id", "id", "usr/bin/groups"),
+    ("BSD/usr.bin/id", "id", "usr/bin/whoami"),
 ]
 
 # /etc/bootstrap -- the pre-daemon system setup hook.  launchctl's System
@@ -184,16 +198,18 @@ exit 0
 # and returns success -- runcom() waits on it, and the agent scan that starts
 # Dock and Filer runs after the System session completes.
 # Account database staged into the image.  root and the default ravyn account
-# (uid 501, in wheel) so the Users & Groups pane lists real accounts.  Passwords
-# are the literal "ravyn" hashed by the Preferences pane's SHA-256 format.
+# (uid 501, in wheel) so the Users & Groups pane lists real accounts.  Both are
+# LOCKED ("*"): no password in this image is verifiable, so the login window
+# refuses them until a password is set in Preferences -> Users & Groups, which
+# writes a DES crypt(3) hash that the same pane and the login window verify.
 ETC_PASSWD = """root:*:0:0:System Administrator:/root:/bin/sh
 daemon:*:1:1:System Services:/var/db:/usr/sbin/nologin
 ravyn:*:501:20:ravynOS User:/Users/ravyn:/bin/sh
 """
 
-ETC_MASTER_PASSWD = """root:$sha256$ravynOS$0f8b2e2c1a2a4b0f0d26d8b0b2d5d7c9c0f3e0f0e0a0b0c0d0e0f0010203040:0:0::0:0:System Administrator:/root:/bin/sh
+ETC_MASTER_PASSWD = """root:*:0:0::0:0:System Administrator:/root:/bin/sh
 daemon:*:1:1::0:0:System Services:/var/db:/usr/sbin/nologin
-ravyn:$sha256$ravynOS$0f8b2e2c1a2a4b0f0d26d8b0b2d5d7c9c0f3e0f0e0a0b0c0d0e0f0010203040:501:20::0:0:ravynOS User:/Users/ravyn:/bin/sh
+ravyn:*:501:20::0:0:ravynOS User:/Users/ravyn:/bin/sh
 """
 
 ETC_GROUP = """wheel:*:0:root,ravyn
@@ -471,6 +487,39 @@ def main():
         closure.append((install_path, root, "staged %d files" % n_app))
         expand_closure([exe], staged, entries, closure, seen)
 
+    # 6b2. Firefox ESR, the binary-compatibility oracle.  Staged exactly as
+    #      Mozilla ships it: no patch, no re-sign, no strip.  If the bundle is
+    #      absent the closure records MISSING rather than silently skipping,
+    #      because Phase 4's gate cannot run without it.
+    #     Opt-in: the bundle is 367 MB, which does not fit the 512 MiB
+    #     template, and a grown image currently exposes a guest bug where
+    #     every file written after boot is zero bytes (measured: SYSTEM.LOG,
+    #     WS-APPS.LOG and COMPAT.LOG all existed with size 0 on a 1 GiB
+    #     image).  Until that is fixed, a normal build must not carry it.
+    firefox_root = os.path.join(REPO, "tests", "apps", "Firefox ESR.app")
+    if os.environ.get("RAVYN_FIREFOX") == "1" and os.path.isdir(firefox_root):
+        n_ff = stage_bundle(
+            entries, firefox_root, "Applications/Firefox.app",
+            "unmodified Firefox ESR (Mozilla build, compatibility oracle)")
+        closure.append(("Applications/Firefox.app", firefox_root,
+                        "staged %d files" % n_ff))
+        ff_job = os.path.join(REPO, "SystemLibrary", "LaunchDaemons",
+                              "com.ravynos.firefoxtest.json")
+        ff_job_dst = "System/Library/LaunchDaemons/com.ravynos.firefoxtest.json"
+        if os.path.isfile(ff_job):
+            entries.append({
+                "path": ff_job_dst,
+                "file": os.path.relpath(ff_job, HERE),
+                "comment": "launchd job that starts Firefox for triage",
+            })
+        else:
+            closure.append((ff_job_dst, ff_job, "MISSING"))
+    elif os.environ.get("RAVYN_FIREFOX") == "1":
+        closure.append(("Applications/Firefox.app", firefox_root, "MISSING"))
+    else:
+        closure.append(("Applications/Firefox.app", firefox_root,
+                        "not staged (set RAVYN_FIREFOX=1 to include)"))
+
     # 6c. The canonical macOS names for the ravynOS bundles.
     for build_rel, bundle_name, install_path in ALIASES:
         root = bundle_root_for(build_rel, bundle_name)
@@ -519,6 +568,99 @@ def main():
             })
         else:
             closure.append((job_dst, job_src, "MISSING"))
+
+    # 6f. ABI conformance fixtures (tests/compat).  They are built on the
+    #     host by Apple's toolchain (tests/compat/build-fixtures.sh) and
+    #     staged from the work/compat copy tests/compat/install.sh makes, so
+    #     the closure gate compares the staged binary with its source and a
+    #     stale fixture is refused instead of being run silently.
+    compat_files = [
+        ("posix", "usr/local/compat/posix"),
+        ("tcp", "usr/local/compat/tcp"),
+        ("pasteboard", "usr/local/compat/pasteboard"),
+        ("malloczone", "usr/local/compat/malloczone"),
+        ("passwd", "usr/local/compat/passwd"),
+        ("bootstrap_probe", "usr/local/compat/bootstrap_probe"),
+        ("runas", "usr/local/compat/runas"),
+        ("run-fixtures.sh", "usr/local/compat/run-fixtures.sh"),
+        ("CocoaProbe.app/Contents/MacOS/CocoaProbe",
+         "usr/local/compat/CocoaProbe.app/Contents/MacOS/CocoaProbe"),
+        ("CocoaProbe.app/Contents/Info.plist",
+         "usr/local/compat/CocoaProbe.app/Contents/Info.plist"),
+    ]
+    for src_rel, dst in compat_files:
+        # The guest runner is a script, not a build product: stage it straight
+        # from tests/compat.  Copying work/compat/run-fixtures.sh shipped a
+        # stale runner once already (an added ping step never ran, and the net
+        # fixture still reported success because the old checks passed).
+        if src_rel == "run-fixtures.sh":
+            src = os.path.join(REPO, "tests", "compat", src_rel)
+        else:
+            src = os.path.join(HERE, "work", "compat", src_rel)
+        if os.path.isfile(src):
+            entries.append({
+                "path": dst,
+                "file": os.path.relpath(src, HERE),
+                "comment": "ABI conformance fixture (tests/compat)",
+            })
+        else:
+            closure.append((dst, src, "MISSING"))
+
+    compat_job = os.path.join(REPO, "SystemLibrary", "LaunchDaemons",
+                              "com.ravynos.compat.json")
+    compat_job_dst = "System/Library/LaunchDaemons/com.ravynos.compat.json"
+    if os.path.isfile(compat_job):
+        entries.append({
+            "path": compat_job_dst,
+            "file": os.path.relpath(compat_job, HERE),
+            "comment": "launchd job that runs the ABI conformance fixtures",
+        })
+    else:
+        closure.append((compat_job_dst, compat_job, "MISSING"))
+
+    # 6g. Network configuration tools, built from the tree's BSD sources by
+    #     tools/bootlab/build-libraries.sh --bsd.  Without them a driver can
+    #     attach an interface but nothing can give it an address.
+    for tool in ("ifconfig", "dhclient", "ping", "grep"):
+        if tool == "grep":
+            src = os.path.join(BUILD_SRC, "BSD", "usr.bin", tool, tool)
+            dst_path = "usr/bin/" + tool
+        else:
+            src = os.path.join(BUILD_SRC, "BSD", "sbin", tool, tool)
+            dst_path = "sbin/" + tool
+        dst_work = os.path.join(HERE, "work", tool)
+        if os.path.isfile(src):
+            shutil.copy2(src, dst_work)
+            entries.append({
+                "path": dst_path,
+                "file": os.path.relpath(dst_work, HERE),
+                "comment": "%s (built from BSD/sbin/%s)" % (tool, tool),
+            })
+        else:
+            closure.append(("sbin/" + tool, src, "MISSING"))
+
+    # 6h. Account management tools.  usermgmt is one binary installed under
+    #     the four names a regular Unix system provides; it edits
+    #     /etc/master.passwd, /etc/passwd and /etc/group under a lock and
+    #     creates home directories.  Built with build-libraries.sh --bsd.
+    um_src = os.path.join(BUILD_SRC, "BSD", "usr.sbin", "usermgmt", "usermgmt")
+    for name, dst_path in (("useradd", "usr/sbin/useradd"),
+                           ("usermod", "usr/sbin/usermod"),
+                           ("userdel", "usr/sbin/userdel"),
+                           ("groupadd", "usr/sbin/groupadd"),
+                           ("groupmod", "usr/sbin/groupmod"),
+                           ("groupdel", "usr/sbin/groupdel"),
+                           ("passwd", "usr/bin/passwd")):
+        dst_work = os.path.join(HERE, "work", name)
+        if os.path.isfile(um_src):
+            shutil.copy2(um_src, dst_work)
+            entries.append({
+                "path": dst_path,
+                "file": os.path.relpath(dst_work, HERE),
+                "comment": "account management (BSD/usr.sbin/usermgmt)",
+            })
+        else:
+            closure.append((dst_path, um_src, "MISSING"))
 
     # 7. launchctl and its libjansson dependency. launchd's hardcoded System
     #    bootstrapper execs /bin/launchctl (BSD/sbin/launchd/core.c:7195), so the
@@ -589,6 +731,89 @@ def main():
                 "file": "../../Developer/ravynOS.sdk/usr/lib/" + name,
                 "comment": comment,
             })
+    for fmwk in ("OpenDirectory", "DirectoryService"):
+        fmwk_path = "System/Library/Frameworks/%s.framework/Versions/A/%s" % (fmwk, fmwk)
+        src = os.path.join(REPO, "Developer", "ravynOS.sdk", fmwk_path)
+        if os.path.isfile(src):
+            entries.append({
+                "path": fmwk_path,
+                "file": "../../Developer/ravynOS.sdk/" + fmwk_path,
+                "comment": "%s.framework" % fmwk,
+            })
+    # 7b. Kernel extension bundles (.kext) under System/Library/Extensions/
+    kext_work_dir = os.path.join(HERE, "work", "Extensions")
+    os.makedirs(kext_work_dir, exist_ok=True)
+    kext_base = os.path.join(BUILD_SRC, "Kernel", "Extensions")
+    # Kexts that duplicate a driver the kernel already serves in-tree.  Loading
+    # both hands one device to two drivers: ApplePS2Controller re-initialises
+    # the i8042 that the kernel's ps2mouse/ps2kbd own (measured: pid 1 then dies
+    # in dyld, "Data/Stack execution not permitted ... protections were
+    # read-only"), and IOATAFamily/AppleIntelPIIXATA claim the IDE channel the
+    # kernel's ATA driver is serving.  Stage them only once reconciled.
+    # RavynAHCIPort is in the same class: the kernel's own AHCI driver
+    # (bsd/dev/i386/ahci_block.c) serves the boot volume, and the kext resets
+    # that controller during start, so launchd's Mach-O header is read back
+    # corrupted and pid 1 dies with EXIT_REASON_DECRYPT (namespace 2 0xb).
+    kext_skip = {"ApplePS2Controller.kext", "IOATAFamily.kext",
+                 "AppleIntelPIIXATA.kext", "RavynAHCIPort.kext"}
+    if os.path.isdir(kext_base):
+        for root, dirs, files in os.walk(kext_base):
+            for d in list(dirs):
+                if d.endswith(".kext"):
+                    if d in kext_skip:
+                        dirs.remove(d)
+                        continue
+                    src_kext = os.path.join(root, d)
+                    dst_work = os.path.join(kext_work_dir, d)
+                    if os.path.isdir(dst_work):
+                        shutil.rmtree(dst_work)
+                    shutil.copytree(src_kext, dst_work, symlinks=True)
+                    stage_bundle(
+                        entries, dst_work, "System/Library/Extensions/" + d,
+                        "Kernel extension bundle: " + d
+                    )
+                    dirs.remove(d)
+    sys_kext_src = os.path.join(REPO, "Kernel", "xnu", "config", "System.kext")
+    if os.path.isdir(sys_kext_src):
+        dst_work = os.path.join(kext_work_dir, "System.kext")
+        if os.path.isdir(dst_work):
+            shutil.rmtree(dst_work)
+        shutil.copytree(sys_kext_src, dst_work, symlinks=True)
+        stage_bundle(
+            entries, dst_work, "System/Library/Extensions/System.kext",
+            "Kernel extension bundle: System.kext"
+        )
+    fakesmc_src = os.path.join(REPO, "clover_extracted", "CloverV2", "ThirdParty", "kexts", "Other", "FakeSMC.kext")
+    if os.path.isdir(fakesmc_src):
+        dst_work = os.path.join(kext_work_dir, "FakeSMC.kext")
+        if os.path.isdir(dst_work):
+            shutil.rmtree(dst_work)
+        shutil.copytree(fakesmc_src, dst_work, symlinks=True)
+        stage_bundle(
+            entries, dst_work, "System/Library/Extensions/FakeSMC.kext",
+            "Kernel extension bundle: FakeSMC.kext"
+        )
+
+    # 7c. MacPorts base system in /opt/local
+    opt_local_root = os.path.join(HERE, "work", "opt", "local")
+    if os.path.isdir(opt_local_root):
+        n_mp = stage_bundle(
+            entries, opt_local_root, "opt/local",
+            "MacPorts base system staged from work/opt/local"
+        )
+        closure.append(("opt/local", opt_local_root, "staged %d files" % n_mp))
+        # Pextlib/MacPorts/darwintrace/machista link libcommonCrypto for
+        # CC_MD5/CC_SHA1/CC_SHA256; without it dyld refuses to load them and
+        # "port" never runs.  Nothing else in the manifest pulls it in, because
+        # the /opt/local tree is staged as files, not walked as a dylib closure.
+        for lib in ("libcommonCrypto.dylib",):
+            src = os.path.join(SDK, "usr", "lib", "system", lib)
+            if os.path.isfile(src):
+                entries.append({
+                    "path": "usr/lib/system/" + lib,
+                    "file": manifest_source(os.path.realpath(src)),
+                    "comment": "MacPorts binary dependency (CommonCrypto)",
+                })
     # 8. Fonts. CoreText/AppKit resolve fonts through fontconfig, whose
     #    Frameworks/CoreText/fontconfig/fonts.conf searches /System/Library/Fonts
     #    (plus /Library/Fonts, ~/Library/Fonts, xdg fonts, ~/.fonts), and AppKit's
@@ -622,9 +847,43 @@ def main():
     #    needs at load time.  (Onyx2D is already staged by the WindowServer
     #    closure and its entry already points at the repo SDK, so adding it here
     #    would duplicate the path.)
-    for fw in ("CoreData", "QuartzCore"):
+    # IOSurface is what Firefox's XUL names first when it cannot load XPCOM:
+    #   Library not loaded: /System/Library/Frameworks/IOSurface.framework/Versions/A/IOSurface
+    #   Referenced from: XUL. Reason: image not found
+    # dyld loads the versioned path from LC_LOAD_DYLIB, so the binary at
+    # Versions/A is what has to exist; the top-level symlinks are not needed.
+    #
+    # The compatibility frameworks: each exists because a stock binary links
+    # it by name and dyld refuses to load the application when the dylib is
+    # absent.  Their sources are Frameworks/<Name>/<Name>.c; see the header
+    # there for what is implemented and what logs "not implemented".
+    for fw in ("CoreData", "QuartzCore", "IOSurface",
+               "AudioToolbox", "AudioUnit", "CoreAudio", "CoreMIDI",
+               "CoreMedia", "VideoToolbox", "AVFoundation", "Carbon",
+               "OpenGL", "ServiceManagement", "ImageIO", "AddressBook",
+               "CoreLocation", "LocalAuthentication", "MediaPlayer",
+               "Metal", "Vision"):
         rel = "System/Library/Frameworks/%s.framework/Versions/A/%s" % (fw, fw)
         src = os.path.join(SDK, "System", "Library", "Frameworks",
+                           fw + ".framework", "Versions", "A", fw)
+        if not os.path.isfile(src):
+            closure.append((rel, src, "MISSING"))
+            continue
+        entries.append({
+            "path": rel,
+            "file": manifest_source(os.path.realpath(src)),
+            "comment": "%s from the repo SDK" % fw,
+        })
+        closure.append((rel, src, "staged"))
+
+    # Private frameworks that a stock bundle links by absolute path.  dyld
+    # names the next one it cannot find; these are the two Firefox's XUL
+    # records (CoreUI imports only CUIDraw, CoreSymbolication imports
+    # nothing -- see Frameworks/<Name>/<Name>.c).
+    for fw in ("CoreUI", "CoreSymbolication"):
+        rel = ("System/Library/PrivateFrameworks/%s.framework/Versions/A/%s"
+               % (fw, fw))
+        src = os.path.join(SDK, "System", "Library", "PrivateFrameworks",
                            fw + ".framework", "Versions", "A", fw)
         if not os.path.isfile(src):
             closure.append((rel, src, "MISSING"))
@@ -696,7 +955,7 @@ def main():
     entries.append({
         "path": "etc/master.passwd",
         "text": ETC_MASTER_PASSWD,
-        "comment": "master password database (SHA-256 hashes)",
+        "comment": "master password database (accounts are locked with '*'; Preferences writes a DES crypt(3) hash)",
     })
     entries.append({
         "path": "etc/group",

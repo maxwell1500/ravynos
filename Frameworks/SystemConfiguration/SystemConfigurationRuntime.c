@@ -75,6 +75,9 @@ CFStringRef kSCPropNetProxiesHTTPPort = NULL;
 CFStringRef kSCPropNetProxiesHTTPSEnable = NULL;
 CFStringRef kSCPropNetProxiesHTTPSProxy = NULL;
 CFStringRef kSCPropNetProxiesHTTPSPort = NULL;
+CFStringRef kSCPropNetProxiesFTPEnable = NULL;
+CFStringRef kSCPropNetProxiesFTPProxy = NULL;
+CFStringRef kSCPropNetProxiesFTPPort = NULL;
 CFStringRef kSCPropNetProxiesSOCKSEnable = NULL;
 CFStringRef kSCPropNetProxiesSOCKSProxy = NULL;
 CFStringRef kSCPropNetProxiesSOCKSPort = NULL;
@@ -103,6 +106,9 @@ static struct SCConstantEntry g_constants[] = {
     { &kSCPropNetProxiesHTTPSEnable, "HTTPSEnable" },
     { &kSCPropNetProxiesHTTPSProxy, "HTTPSProxy" },
     { &kSCPropNetProxiesHTTPSPort, "HTTPSPort" },
+    { &kSCPropNetProxiesFTPEnable, "FTPEnable" },
+    { &kSCPropNetProxiesFTPProxy, "FTPProxy" },
+    { &kSCPropNetProxiesFTPPort, "FTPPort" },
     { &kSCPropNetProxiesSOCKSEnable, "SOCKSEnable" },
     { &kSCPropNetProxiesSOCKSProxy, "SOCKSProxy" },
     { &kSCPropNetProxiesSOCKSPort, "SOCKSPort" },

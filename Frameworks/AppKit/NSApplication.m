@@ -8,6 +8,7 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. */
 
 #import <Foundation/NSSocket_bsd.h>
+#include <string.h>   /* strnlen, used by the document-path parser */
 #import <Foundation/NSSelectInputSource.h>
 #import <AppKit/NSApplication.h>
 #import <AppKit/NSWindow-Private.h>
@@ -260,7 +261,7 @@ static NSMenuItem *itemWithTag(NSMenu *root, int tag) {
     for(i = 0; i < count; i++) {
         NSWindow *window = [_windows objectAtIndex:i];
 
-        [window setNeedsDisplay:YES];
+        [window setViewsNeedDisplay:YES];
         [[window contentView] setNeedsDisplay:YES];
         [window displayIfNeeded];
     }
@@ -385,12 +386,18 @@ static NSMenuItem *itemWithTag(NSMenu *root, int tag) {
                             NSMutableArray *paths = [NSMutableArray array];
                             unsigned off = 0;
 
+                            /* The payload is UTF-8, so advance in bytes: -length
+                             * counts characters and would desynchronise off. */
                             while(off < msg.len && msg.data[off] != 0) {
-                                NSString *path = [NSString stringWithUTF8String:(const char *)&msg.data[off]];
+                                const char *s = (const char *)&msg.data[off];
+                                size_t l = strnlen(s, (size_t)msg.len - off);
+                                if(l == (size_t)msg.len - off)
+                                    break;             /* no NUL inside the buffer */
+                                NSString *path = [NSString stringWithUTF8String:s];
                                 if(path == nil)
                                     break;
                                 [paths addObject:path];
-                                off += [path length] + 1;
+                                off += (unsigned)(l + 1);
                             }
                             if([paths count] > 0)
                                 [self performSelectorOnMainThread:@selector(_openFiles:)
@@ -435,6 +442,18 @@ static NSMenuItem *itemWithTag(NSMenu *root, int tag) {
                                                       clickCount:0
                                                       deltaX:me.dx
                                                       deltaY:me.dy];
+                                    [_display postEvent:e atStart:NO];
+                                    break;
+                                }
+                                case NSScrollWheel: {
+                                    /* me.scroll already carries the natural
+                                     * scrolling preference: WSInput applies it
+                                     * where the wheel notch is decoded. */
+                                    NSEvent *e = [NSEvent mouseEventWithType:NSScrollWheel
+                                                    location:NSMakePoint(me.x, me.y)
+                                               modifierFlags:me.mods
+                                                      window:window
+                                                      deltaY:me.scroll];
                                     [_display postEvent:e atStart:NO];
                                     break;
                                 }
@@ -1695,6 +1714,25 @@ static int _tagAllMenus(NSMenu *menu, int tag) {
 
 -(void)updateWindows {
    [_windows makeObjectsPerformSelector:@selector(update)];
+}
+
+-(NSApplicationActivationPolicy)activationPolicy {
+   return _activationPolicy;
+}
+
+-(BOOL)setActivationPolicy:(NSApplicationActivationPolicy)policy {
+   if(policy!=NSApplicationActivationPolicyRegular &&
+      policy!=NSApplicationActivationPolicyAccessory &&
+      policy!=NSApplicationActivationPolicyProhibited)
+     return NO;
+   _activationPolicy=policy;
+   /* A regular app is the one that owns the menu bar and appears in the
+    * Dock; ask the window server for activation once it is running.  An
+    * accessory app is allowed to have windows but no Dock tile, and a
+    * prohibited app is a background process. */
+   if(policy==NSApplicationActivationPolicyRegular && _isRunning)
+     [self activateIgnoringOtherApps:YES];
+   return YES;
 }
 
 -(void)activateIgnoringOtherApps:(BOOL)flag {

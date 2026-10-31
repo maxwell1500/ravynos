@@ -2429,7 +2429,7 @@ static vm_object_size_t corpse_vma_objsize(vm_map_t, vm_map_offset_t);
 /* ravynOS: filled in osfmk/kern/exception.c:962 at exception time, read by
  * task_deliver_crash_notification() at corpse time. See the comment there for
  * why the capture cannot live in the reader. */
-uint64_t ravyn_last_ret[2];
+uint64_t ravyn_last_ret[8];
 
 /*
  * task_deliver_crash_notification:
@@ -2588,6 +2588,26 @@ task_deliver_crash_notification(
 			    (unsigned long long)ss->r8,
 			    (unsigned long long)ss->r9);
 			/*
+			 * ravynOS: the receiver's first word, which for an
+			 * Objective-C or CoreFoundation object is its isa. When
+			 * objc_msgSend faults at +0x1d (`andl 0x18(%r10),%r11d`,
+			 * the isa fast path) this one qword separates "class
+			 * pointer was never bound" (isa == 0) from "the object
+			 * was overwritten" (isa == junk), and both from a
+			 * tagged/non-object receiver. Best effort: the map may
+			 * already be tearing down, in which case nothing prints.
+			 */
+			if (ss->rdi != 0) {
+				vm_map_t rm = get_task_map(corpse);
+				uint64_t isa = 0;
+
+				if (copyinmap(rm, (vm_map_offset_t)ss->rdi, &isa,
+				    sizeof(isa)) == 0) {
+					printf("CORPSE:   rdi->[0] 0x%016llx (isa)\n",
+					    (unsigned long long)isa);
+				}
+			}
+			/*
 			 * ravynOS: the return address at [rsp] and the slot above it.
 			 * _objc_msgSend is a leaf function -- it pushes nothing before
 			 * the faulting `andl 0x18(%r10),%r11d` -- so [rsp] on entry is
@@ -2609,17 +2629,31 @@ task_deliver_crash_notification(
 			 * therefore happens in task_exception_notify()
 			 * (osfmk/kern/exception.c:962) while the thread is still live.
 			 */
-			if (ravyn_last_ret[0] != 0 || ravyn_last_ret[1] != 0) {
+			if (ravyn_last_ret[0] != 0) {
 				vm_map_t m = get_task_map(corpse);
-				printf("CORPSE:   ret0 0x%016llx (vma 0x%016llx-0x%016llx) ret1 0x%016llx (vma 0x%016llx-0x%016llx) from-rsp-saved\n",
-				    (unsigned long long)ravyn_last_ret[0],
-				    corpse_vma(m, (vm_map_offset_t)ravyn_last_ret[0]),
-				    corpse_vma_end(m, (vm_map_offset_t)ravyn_last_ret[0]),
-				    (unsigned long long)ravyn_last_ret[1],
-				    corpse_vma(m, (vm_map_offset_t)ravyn_last_ret[1]),
-				    corpse_vma_end(m, (vm_map_offset_t)ravyn_last_ret[1]));
+				int f;
+
+				/*
+				 * A frame-pointer walk captured in
+				 * task_exception_notify(). Index 0 is the return
+				 * address of the function that was executing (its
+				 * caller), index 1 that caller's caller, and so on.
+				 * Printing the VMA range lets each address be
+				 * matched against the DYLD-IMAGE base lines by
+				 * arithmetic; without it a corpse names nothing.
+				 */
+				for (f = 0; f < 8; f++) {
+					if (ravyn_last_ret[f] == 0) {
+						break;
+					}
+					printf("CORPSE:   frame[%d] 0x%016llx (vma 0x%016llx-0x%016llx)\n",
+					    f,
+					    (unsigned long long)ravyn_last_ret[f],
+					    corpse_vma(m, (vm_map_offset_t)ravyn_last_ret[f]),
+					    corpse_vma_end(m, (vm_map_offset_t)ravyn_last_ret[f]));
+				}
 			} else {
-				printf("CORPSE:   ret0 (unavailable) ret1 (unavailable)\n");
+				printf("CORPSE:   backtrace (unavailable)\n");
 			}
 			/*
 			 * ravynOS: resolve both addresses against the corpse's

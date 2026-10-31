@@ -260,7 +260,13 @@ static NSLock *_cacheLock=nil;
 }
 
 +(NSFont *)userFixedPitchFontOfSize:(float)size {
-   return [NSFont fontWithName:[O2Font postscriptNameForDisplayName:@"Source Code Pro-Regular"] size:(size==0)?12.0:size];
+   /* A nil font here reaches an attributes dictionary as a nil value and
+    * raises, so this must always resolve.  Source Code Pro is not staged;
+    * Nimbus Mono is, and O2Font maps the canonical mono names to it. */
+   NSFont *font = [NSFont fontWithName:[O2Font postscriptNameForDisplayName:@"Source Code Pro-Regular"] size:(size==0)?12.0:size];
+   if(font == nil)
+      font = [NSFont fontWithName:@"Menlo" size:(size==0)?12.0:size];
+   return font;
 }
 
 +(void)setUserFont:(NSFont *)value {

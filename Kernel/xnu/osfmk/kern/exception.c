@@ -990,28 +990,55 @@ task_exception_notify(exception_type_t exception,
 	 * reader who thinks "it is just two loads" needs to see this line.
 	 */
 	{
-		extern uint64_t ravyn_last_ret[2];
+		extern uint64_t ravyn_last_ret[8];
 		x86_saved_state64_t *ravyn_ss = NULL;
+		int i;
 
-		ravyn_last_ret[0] = 0;
-		ravyn_last_ret[1] = 0;
+		for (i = 0; i < 8; i++) {
+			ravyn_last_ret[i] = 0;
+		}
 		thread_t ravyn_t = current_thread();
 		if (ravyn_t != THREAD_NULL && thread_is_64bit_addr(ravyn_t)) {
 			ravyn_ss = USER_REGS64(ravyn_t);
 		}
-		if (ravyn_ss != NULL && ravyn_ss->isf.rsp != 0) {
-			uint64_t rsp = (uint64_t)ravyn_ss->isf.rsp;
-			uint64_t slots[2] = { 0, 0 };
+		if (ravyn_ss != NULL && ravyn_ss->rbp != 0) {
+			uint64_t rbp = (uint64_t)ravyn_ss->rbp;
 
-			/* Returns errno: 0 on success, EFAULT on a bad address. The
-			 * current thread's map is current, so this is the plain
-			 * copyin() and NOT copyinmap(). */
-			if (copyin((user_addr_t)rsp, (void *)slots, sizeof(slots)) == 0) {
-				ravyn_last_ret[0] = slots[0];
-				ravyn_last_ret[1] = slots[1];
+			/*
+			 * Walk the frame chain instead of reading [rsp]. The crash
+			 * that motivated this (Firefox in libmozglue's _free) has
+			 * already pushed a frame by the time it faults, so [rsp] is
+			 * scratch and the caller's return address is at [rbp+8].
+			 * Following [rbp] yields the caller of the caller; both
+			 * native builds and Mozilla's own code keep frame pointers,
+			 * so this produces a real backtrace for them.
+			 *
+			 * copyin(), never a dereference: the kernel runs with SMAP
+			 * and a user address read from the kernel is a fault (see
+			 * the CR2 0x00007ff7b6093b08 note above). A frame that is
+			 * unmapped, misaligned or outside the user range ends the
+			 * walk; a diagnostic must never fault the kernel.
+			 */
+			for (i = 0; i < 8; i++) {
+				uint64_t frame[2];
+
+				if (rbp == 0 || (rbp & 0x7) != 0 ||
+				    rbp < 0x1000 || rbp >= 0x0000800000000000ULL) {
+					break;
+				}
+				if (copyin((user_addr_t)rbp, (void *)frame,
+				    sizeof(frame)) != 0) {
+					break;
+				}
+				if (frame[1] < 0x1000) {
+					break;
+				}
+				ravyn_last_ret[i] = frame[1];
+				if (frame[0] <= rbp) {
+					break;	/* not a stack-growing-up chain */
+				}
+				rbp = frame[0];
 			}
-			/* On failure both stay 0, which the corpse dump prints as
-			 * "(unavailable)". A diagnostic must never fault the kernel. */
 		}
 	}
 

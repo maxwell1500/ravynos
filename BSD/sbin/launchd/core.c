@@ -9133,9 +9133,18 @@ jobmgr_lookup_per_user_context_internal(job_t j, uid_t which_user, mach_port_t *
 #endif
 				ji->asid = auinfo.ai_asid;
 			} else {
-				job_log(ji, LOG_WARNING, "Could not set audit session!");
-				job_remove(ji);
-				return NULL;
+				/*
+				 * Auditing is not implemented in this kernel yet
+				 * (setaudit_addr returns ENOSYS).  Refusing to create
+				 * the per-user launchd in that case made every
+				 * non-root bootstrap lookup hang: the client asked
+				 * for the per-user context, got a null port, and then
+				 * waited forever in a MIG call to MACH_PORT_NULL.
+				 * Without an audit session is exactly how this tree
+				 * runs until Phase 5.6.
+				 */
+				job_log(ji, LOG_WARNING, "Could not set audit session (%s); "
+				    "continuing without one", strerror(errno));
 			}
 
 			ji->mach_uid = which_user;
@@ -9382,7 +9391,19 @@ job_mig_look_up2(job_t j, mach_port_t srp, name_t servicename, mach_port_t *serv
 
 	// 5641783 for the embedded hack
 #if !TARGET_OS_EMBEDDED
-	if (unlikely(pid1_magic && j->anonymous && j->mgr->parentmgr == NULL && ldc->uid != 0 && ldc->euid != 0)) {
+	/*
+	 * Non-root requests used to be redirected to a per-user launchd here.
+	 * That path is not usable yet: the per-user launchd is spawned but does
+	 * not answer MIG requests, so every non-root bootstrap_look_up() hung
+	 * forever (AppKit never got past launching the WindowServer lookup,
+	 * and Firefox stopped silently after "[AppKit] exe=firefox").
+	 *
+	 * ravynOS currently runs a single system bootstrap.  Serve non-root
+	 * lookups from it; per-user domains come with the loginwindow/session
+	 * work (plan 5.3).  A service that is genuinely absent still returns
+	 * BOOTSTRAP_UNKNOWN_SERVICE below, so this does not fabricate one.
+	 */
+	if (0 && unlikely(pid1_magic && j->anonymous && j->mgr->parentmgr == NULL && ldc->uid != 0 && ldc->euid != 0)) {
 		return VPROC_ERR_TRY_PER_USER;
 	}
 #endif

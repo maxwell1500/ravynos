@@ -441,6 +441,7 @@ APPKIT_EXPORT NSString *const NSWindowDidEndLiveResizeNotification;
 - (void)useOptimizedDrawing:(BOOL)flag;
 - (BOOL)viewsNeedDisplay;
 - (void)setViewsNeedDisplay:(BOOL)flag;
+- (void)setNeedsDisplay:(BOOL)flag;
 - (void)disableFlushWindow;
 - (void)enableFlushWindow;
 - (void)flushWindow;

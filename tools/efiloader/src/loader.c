@@ -479,6 +479,7 @@ static const char DEFAULT_CMDLINE[] =
  * for callers that never said anything.
  */
 static char g_cpus_digits[12];   /* "" = keep the default */
+static int g_nofleet = 0;
 
 static void fill_cmdline(char *dst)
 {
@@ -502,6 +503,11 @@ static void fill_cmdline(char *dst)
 			continue;
 		}
 		dst[cn++] = *src++;
+	}
+	if (g_nofleet && cn + 12 < BOOT_LINE_LENGTH - 1) {
+		const char *nf = " nofleet=1";
+		while (*nf)
+			dst[cn++] = *nf++;
 	}
 	dst[cn] = 0;
 }
@@ -539,7 +545,15 @@ static void parse_cpus_arg(void *opts, u32 len)
 			k++;
 		}
 		g_cpus_digits[k] = 0;
-		return;
+		break;
+	}
+	for (u32 j = 0; j + 7 <= on; j++) {
+		if (norm[j] == 'n' && norm[j + 1] == 'o' && norm[j + 2] == 'f' &&
+		    norm[j + 3] == 'l' && norm[j + 4] == 'e' && norm[j + 5] == 'e' &&
+		    norm[j + 6] == 't') {
+			g_nofleet = 1;
+			break;
+		}
 	}
 }
 
@@ -663,6 +677,7 @@ static void s_dec(u64 v)
  * selector of 0x38 in an earlier run.  pack.py now REFUSES such a
  * relocation; this change removes the cause.
  */
+
 /* Dumped from inside the handoff stub, with the address the CPU will actually
  * dereference, immediately before the transfer. */
 __attribute__((noinline)) void rl_dump_far(void *p)
@@ -973,6 +988,7 @@ struct load_cmd { u32 cmd, cmdsize; };
 #define MAXSEGS 32
 static struct segment_command_64 g_segs[MAXSEGS];
 static int g_nsegs;
+
 static u64 g_entry_vaddr;
 
 static int macho_parse(const u8 *hdr, u64 len)

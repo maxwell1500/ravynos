@@ -426,7 +426,7 @@ void NSThreadSetCurrentPool(NSAutoreleasePool *pool){
  * array once the selector has run. */
 -(void)_performSelectorOnThreadHelperNoWait:(NSArray *)selectorAndArguments {
    SEL selector=NSSelectorFromString([selectorAndArguments objectAtIndex:0]);
-   id  object=[selectorAndArguments objectAtIndex:1];
+   id  object=([selectorAndArguments count] > 1) ? [selectorAndArguments objectAtIndex:1] : nil;
 
    [self performSelector:selector withObject:object];
 

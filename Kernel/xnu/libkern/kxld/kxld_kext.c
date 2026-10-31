@@ -1100,8 +1100,8 @@ validate_symbols(KXLDKext *kext)
 			kxld_log(kKxldLogLinking, kKxldLogErr,
 			    "The following symbols are unresolved for this kext:");
 		}
-		kxld_log(kKxldLogLinking, kKxldLogErr, "\t%s",
-		    kxld_demangle(sym->name, &demangled_name, &demangled_length));
+		kxld_log(kKxldLogLinking, kKxldLogErr, "\t%s (raw: %s)",
+		    kxld_demangle(sym->name, &demangled_name, &demangled_length), sym->name);
 	}
 	require_noerr_action(error, finish, rval = KERN_FAILURE);
 

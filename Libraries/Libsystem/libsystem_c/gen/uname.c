@@ -52,24 +52,32 @@ uname(name)
 	if (sysctl(mib, 2, &name->sysname, &len, NULL, 0) == -1)
 		rval = -1;
 
+	/* Only KERN_OSTYPE is load-bearing: POSIX uname() reports the identity of
+	 * the system, and every other field is best effort.  ravynOS's platform
+	 * expert does not implement hw.machine (kern_mib.c returns EINVAL from
+	 * PEGetMachineName), so the FreeBSD habit of failing the whole call made
+	 * uname() return -1 there -- which left tcl_platform(os) empty and made
+	 * MacPorts reject the platform as " ".  Each of the fields below is
+	 * filled only when its sysctl answers. */
+
 	mib[0] = CTL_KERN;
 	mib[1] = KERN_HOSTNAME;
 	len = sizeof(name->nodename);
 	if (sysctl(mib, 2, &name->nodename, &len, NULL, 0) == -1)
-		rval = -1;
+		name->nodename[0] = '\0';
 
 	mib[0] = CTL_KERN;
 	mib[1] = KERN_OSRELEASE;
 	len = sizeof(name->release);
 	if (sysctl(mib, 2, &name->release, &len, NULL, 0) == -1)
-		rval = -1;
+		name->release[0] = '\0';
 
 	/* The version may have newlines in it, turn them into spaces. */
 	mib[0] = CTL_KERN;
 	mib[1] = KERN_VERSION;
 	len = sizeof(name->version);
 	if (sysctl(mib, 2, &name->version, &len, NULL, 0) == -1)
-		rval = -1;
+		name->version[0] = '\0';
 	else
 		for (p = name->version; len--; ++p)
 			if (*p == '\n' || *p == '\t') {
@@ -82,7 +90,13 @@ uname(name)
 	mib[0] = CTL_HW;
 	mib[1] = HW_MACHINE;
 	len = sizeof(name->machine);
-	if (sysctl(mib, 2, &name->machine, &len, NULL, 0) == -1)
-		rval = -1;
+	if (sysctl(mib, 2, &name->machine, &len, NULL, 0) == -1) {
+		name->machine[0] = '\0';
+		/* No platform-expert machine name: report the CPU we build for so
+		 * callers that compare against a build arch still see x86_64. */
+#if defined(__x86_64__)
+		strlcpy(name->machine, "x86_64", sizeof(name->machine));
+#endif
+	}
 	return (rval);
 }

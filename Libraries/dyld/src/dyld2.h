@@ -95,6 +95,7 @@ namespace dyld {
 	extern ImageLoader*			findLoadedImageByInstallPath(const char* path);
 	extern bool					flatFindExportedSymbol(const char* name, const ImageLoader::Symbol** sym, const ImageLoader** image);
 	extern bool					flatFindExportedSymbolWithHint(const char* name, const char* librarySubstring, const ImageLoader::Symbol** sym, const ImageLoader** image);
+	extern bool					flatFindExportedSymbolInSystem(const char* name, const ImageLoader::Symbol** sym, const ImageLoader** image);
 	extern ImageLoader*			load(const char* path, const LoadContext& context, unsigned& cacheIndex);
 	extern ImageLoader*			loadFromMemory(const uint8_t* mem, uint64_t len, const char* moduleName);
 	extern void					removeImage(ImageLoader* image);

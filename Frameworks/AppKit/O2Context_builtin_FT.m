@@ -51,37 +51,51 @@ static void applyCoverageToSpan_lRGBA8888_PRE(O2argb8u *dst,unsigned char *cover
 
 
 static void drawFreeTypeBitmap(O2Context_builtin_FT *self,O2Surface *surface,FT_Bitmap *bitmap,int x,int y,O2Paint *paint){
-// FIXME: clipping
+/* The only clip this backend rasterizes is the device viewport rectangle
+ * (O2Context_builtin _vpx/_vpy/_vpwidth/_vpheight).  Text that ignored it
+ * painted glyphs outside the dirty rect of a partial redraw, smearing one
+ * window title over the next. */
    int            width=bitmap->width;
    int            row,height=bitmap->rows;
-   O2argb8u      *dstBuffer=__builtin_alloca(width*sizeof(O2argb8u));
-   O2argb8u      *srcBuffer=__builtin_alloca(width*sizeof(O2argb8u));
-   unsigned char *coverage=bitmap->buffer;
-   
-   for(row=0;row<height;row++,y++){
-   int        length=width;
+   int            clipX0=self->_vpx, clipY0=self->_vpy;
+   int            clipX1=clipX0+self->_vpwidth, clipY1=clipY0+self->_vpheight;
+   int            x0=MAX(x,clipX0), x1=MIN(x+width,clipX1);
+   int            rowStart=MAX(0,clipY0-y), rowEnd=MIN(height,clipY1-y);
+
+   if(x1<=x0 || rowEnd<=rowStart)
+    return;
+
+   int            colStart=x0-x;
+   int            spanLen=x1-x0;
+   O2argb8u      *dstBuffer=__builtin_alloca(spanLen*sizeof(O2argb8u));
+   O2argb8u      *srcBuffer=__builtin_alloca(spanLen*sizeof(O2argb8u));
+   unsigned char *coverage;
+
+   for(row=rowStart;row<rowEnd;row++){
+   int        gy=y+row;
+   int        length=spanLen;
    /* dst/src must be re-anchored to the alloca'd row buffers each row: the
     * loop below advances them by chunk, and on the next row they would start
     * past the end of the buffers (or past the surface when direct!=NULL) and
     * smear pixel data over adjacent stack/heap. */
     O2argb8u *dst=dstBuffer;
     O2argb8u *src=srcBuffer;
-    int        rowX=x;
+    int        rowX=x0;
 
     /* Same reason, for the glyph's own coverage rows: FreeType pads each row
      * to bitmap->pitch, so advancing by the summed chunk widths drifts the
      * coverage pointer by (pitch - width) per scanline and the rows after the
      * first read whatever follows the bitmap -- saturated coverage, which
      * paints the glyph as a solid block of the fill colour. */
-    coverage=bitmap->buffer+row*bitmap->pitch;
+    coverage=bitmap->buffer+row*bitmap->pitch+colStart;
 
-    O2argb8u *direct=surface->_read_argb8u(surface,x,y,dst,length);
+    O2argb8u *direct=surface->_read_argb8u(surface,x0,gy,dst,length);
 
     if(direct!=NULL)
      dst=direct;
 
     while(YES){
-     int chunk=O2PaintReadSpan_argb8u_PRE(paint,x,y,src,length);
+     int chunk=O2PaintReadSpan_argb8u_PRE(paint,x0,gy,src,length);
       
      if(chunk<0){
       chunk=-chunk;
@@ -97,12 +111,12 @@ static void drawFreeTypeBitmap(O2Context_builtin_FT *self,O2Surface *surface,FT_
       applyCoverageToSpan_lRGBA8888_PRE(dst,coverage,src,chunk);
 
       if(direct==NULL)
-       O2SurfaceWriteSpan_argb8u_PRE(surface,x,y,dst,chunk);
+       O2SurfaceWriteSpan_argb8u_PRE(surface,x0,gy,dst,chunk);
      }
      coverage+=chunk;
 
      length-=chunk;     
-     x+=chunk;
+     x0+=chunk;
      src+=chunk;
      dst+=chunk;
 
@@ -110,7 +124,7 @@ static void drawFreeTypeBitmap(O2Context_builtin_FT *self,O2Surface *surface,FT_
       break;
 
     }
-    x=rowX;
+    x0=rowX;
    }
     
 }

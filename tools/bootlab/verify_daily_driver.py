@@ -119,6 +119,8 @@ PHASE_IMAGE_CHECKS = {
         # The two intake proof targets.
         ("Applications/MacOSIntakeProbe.app", "app"),
         ("Applications/SDLBlocks.app", "app"),
+        ("Applications/App Store.app", "app"),
+        ("opt/local/bin/port", "file"),
     ],
 }
 
@@ -135,7 +137,8 @@ PHASE_BUNDLE_IDS = {
         ("Applications/Utilities/Disk Utility.app", "com.ravynos.DiskUtility"),
         ("Applications/Utilities/Console.app", "com.ravynos.Console")],
     5: [("Applications/Utilities/Keychain Access.app", "com.ravynos.KeychainAccess"),
-        ("System/Library/CoreServices/Archive Utility.app", "com.ravynos.ArchiveUtility")],
+        ("System/Library/CoreServices/Archive Utility.app", "com.ravynos.ArchiveUtility"),
+        ("Applications/App Store.app", "com.ravynos.AppStore")],
     6: [("System/Library/CoreServices/System Preferences.app", "com.ravynos.Preferences")],
 }
 
@@ -816,10 +819,11 @@ def check_guest_report(results, img, serial=None):
              "Objective-C blocks execute and support copy/release"),
             ("the C++ runtime dylib loads, throws, threads, and runs both atexit hooks",
              "the C++ runtime loads and runs both atexit hooks"),
+            ("MacPorts base engine and App Store.app are installed in the system",
+             "MacPorts base engine and App Store.app are present"),
     ):
         results.check("guest: %s" % description, needle in text,
                       "" if needle in text else "not in the report")
-
 
 def check_boot(phase, results, img, tag, timeout, booted=None, screenshots_dir=None):
     """Check the guest's log.  `booted` carries the serial output of an

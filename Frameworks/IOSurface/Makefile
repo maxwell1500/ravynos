@@ -8,7 +8,7 @@ FMWK_VERSION = A
 SRCS = IOSurface.c
 HEADERS = IOSurface.h
 
-CFLAGS = -I${.CURDIR} -I${RAVYN_SDKROOT}/usr/include -I${ROOT_SOURCE_DIR}/Frameworks
+CFLAGS = -fconstant-cfstrings -I${.CURDIR} -I${RAVYN_SDKROOT}/usr/include -I${ROOT_SOURCE_DIR}/Frameworks
 LDFLAGS = -F${RAVYN_SDKROOT}/System/Library/Frameworks -framework CoreFoundation -lSystem
 
 # The in-repo SDK is an install product, not a source tree.  Copy the bundle

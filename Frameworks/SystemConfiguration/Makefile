@@ -12,10 +12,10 @@ INFO_PLIST = Info.plist
 # against is the dynamic store, SCPreferences and SCNetworkReachability, so
 # this framework implements those against a process-local store and a real
 # routing-table probe, and does not pretend to provide the rest.
-SRCS = SystemConfigurationRuntime.c
+SRCS = SystemConfigurationRuntime.c SCCompSymbols.c
 HEADERS = Headers/SystemConfiguration.h
 
-CFLAGS += -I${.CURDIR}/Headers -I${ROOT_SOURCE_DIR}/Frameworks/CoreFoundation \
+CFLAGS += -fconstant-cfstrings -I${.CURDIR}/Headers -I${ROOT_SOURCE_DIR}/Frameworks/CoreFoundation \
 	-I${RAVYN_SDKROOT}/System/Library/Frameworks/CoreFoundation.framework/Headers \
 	-I${RAVYN_SDKROOT}/usr/include
 

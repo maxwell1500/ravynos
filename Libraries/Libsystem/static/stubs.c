@@ -208,7 +208,9 @@ int notify_monitor_file(const char *token, int flags)
  * the point it happens.
  */
 i64 mach_msg2(void) { return -1; }
-i64 mach_msg2_trap(void) { return -1; }
+/* mach_msg2_trap is NOT stubbed here: libsystem_kernel.a[mach_traps.o]
+ * defines it for real. A residue stub made every static link fail with
+ * "duplicate symbol '_mach_msg2_trap'". */
 
 i64 voucher_mach_msg_adopt(i64 voucher)
 {

@@ -4190,7 +4190,7 @@ kmem_init(
 		    VM_MAP_KERNEL_FLAGS_FIXED(.vmkf_no_pmap_check = true),
 		    VM_OBJECT_NULL,
 		    (vm_object_offset_t) 0, FALSE,
-		    VM_PROT_NONE, VM_PROT_NONE,
+		    VM_PROT_ALL, VM_PROT_ALL,
 		    VM_INHERIT_DEFAULT);
 
 		if (kr != KERN_SUCCESS) {

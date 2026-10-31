@@ -35,6 +35,9 @@ extern void bootstrap_init(void);
 #define PBOARD_MAX_TYPES  32
 #define PBOARD_TYPE_LEN   128
 #define PBOARD_NAME_LEN   64
+/* A client stages large payloads in a shared segment it creates; without a
+ * ceiling one client can make this daemon malloc and copy unbounded bytes. */
+#define PBOARD_MAX_PAYLOAD (64u * 1024u * 1024u)
 
 typedef struct {
     char     type[PBOARD_TYPE_LEN];
@@ -112,6 +115,17 @@ static int publishData(PBoardItem *it, const uint8_t *bytes, uint32_t len,
 
     if (it->shmName[0])
         shm_unlink(it->shmName);
+    /* The old segment is gone: forget its name and length now, so every
+     * failure path below leaves the item naming nothing instead of naming a
+     * segment that no longer exists. */
+    it->shmName[0] = 0;
+    it->len = 0;
+
+    /* An empty payload is stored as "no payload".  A zero length object can
+     * never be mmap'ed (the map request is one byte from a zero byte object),
+     * and handleGetData already treats len == 0 as nothing to read. */
+    if (len == 0)
+        return 0;
 
     snprintf(name, sizeof(name), "/pboard_%s_%u_%d", board, generation, index);
     fd = shm_open(name, O_CREAT | O_EXCL | O_RDWR, 0600);
@@ -125,16 +139,15 @@ static int publishData(PBoardItem *it, const uint8_t *bytes, uint32_t len,
         shm_unlink(name);
         return -1;
     }
-    map = mmap(NULL, len ? len : 1, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    map = mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     if (map == MAP_FAILED) {
         logmsg("[pboardd] mmap(%s) failed: %d", name, errno);
         close(fd);
         shm_unlink(name);
         return -1;
     }
-    if (len)
-        memcpy(map, bytes, len);
-    munmap(map, len ? len : 1);
+    memcpy(map, bytes, len);
+    munmap(map, len);
     close(fd);
 
     snprintf(it->shmName, sizeof(it->shmName), "%s", name);
@@ -219,11 +232,22 @@ static void handleSetData(PBoard *b, PBoardMessage *m) {
          * not fit in the message.  Copy it into the board's segment, then
          * release the client's.  A missing or short segment leaves the item
          * unpublished rather than storing a truncated value. */
-        uint8_t *buf = (uint8_t *)malloc(m->totalLen);
+        uint8_t *buf;
         uint32_t got = 0;
 
-        if (buf != NULL &&
-            readSegment(m->shmName, buf, m->totalLen, &got) == 0 &&
+        if (m->totalLen > PBOARD_MAX_PAYLOAD) {
+            logmsg("[pboardd] rejecting %u byte upload (max %u)",
+                   m->totalLen, PBOARD_MAX_PAYLOAD);
+            shm_unlink(m->shmName);
+            return;
+        }
+        buf = (uint8_t *)malloc(m->totalLen);
+        if (buf == NULL) {
+            shm_unlink(m->shmName);
+            return;
+        }
+
+        if (readSegment(m->shmName, buf, m->totalLen, &got) == 0 &&
             got == m->totalLen) {
             publishData(it, buf, got, b->name, b->generation,
                         (int)(it - b->items));
@@ -243,7 +267,10 @@ static void handleGetData(PBoard *b, PBoardMessage *m) {
     m->dataLen = 0;
     m->flags = 0;
     m->shmName[0] = 0;
-    if (!it || it->len == 0)
+    /* shmName is the marker that a payload is published: publishData clears
+     * both fields before it creates a new segment and leaves them clear if it
+     * fails. */
+    if (!it || it->shmName[0] == 0)
         return;
     snprintf(m->shmName, sizeof(m->shmName), "%s", it->shmName);
     m->totalLen = it->len;

@@ -11,6 +11,8 @@ MK_AUTO_OBJ=yes
 #SUBDIR+=	xkeyboard-config
 
 SRCS= \
+	AppKitClasses.m \
+	NSAccessibilityCompat.m \
     CoreData_/NSPersistentDocument.m \
     CoreData_/_NSManagedProxy.m \
     NSAccessibility.m \

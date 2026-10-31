@@ -103,6 +103,24 @@ CFStringRef kSecOIDOrganizationName = NULL;
 CFStringRef kSecOIDOrganizationalUnitName = NULL;
 CFStringRef kSecOIDCountryName = NULL;
 
+CFStringRef kSecAttrKeySizeInBits = NULL;
+CFStringRef kSecAttrKeyType = NULL;
+CFStringRef kSecAttrKeyTypeECSECPrimeRandom = NULL;
+CFStringRef kSecAttrKeyTypeRSA = NULL;
+CFStringRef kSecDigestLengthAttribute = NULL;
+CFStringRef kSecDigestSHA2 = NULL;
+CFStringRef kSecDigestTypeAttribute = NULL;
+CFStringRef kSecKeyAlgorithmECDSASignatureDigestX962SHA1 = NULL;
+CFStringRef kSecKeyAlgorithmECDSASignatureDigestX962SHA256 = NULL;
+CFStringRef kSecKeyAlgorithmECDSASignatureDigestX962SHA384 = NULL;
+CFStringRef kSecKeyAlgorithmECDSASignatureDigestX962SHA512 = NULL;
+CFStringRef kSecKeyAlgorithmRSASignatureDigestPKCS1v15Raw = NULL;
+CFStringRef kSecKeyAlgorithmRSASignatureDigestPKCS1v15SHA1 = NULL;
+CFStringRef kSecKeyAlgorithmRSASignatureDigestPKCS1v15SHA256 = NULL;
+CFStringRef kSecKeyAlgorithmRSASignatureDigestPKCS1v15SHA384 = NULL;
+CFStringRef kSecKeyAlgorithmRSASignatureDigestPKCS1v15SHA512 = NULL;
+CFStringRef kSecMatchPolicy = NULL;
+
 static void SecCreateConstantStrings(void) {
     struct { CFStringRef *slot; const char *text; } table[] = {
         { &kSecClass, "class" },
@@ -160,6 +178,23 @@ static void SecCreateConstantStrings(void) {
         { &kSecOIDOrganizationName, "2.5.4.10" },
         { &kSecOIDOrganizationalUnitName, "2.5.4.11" },
         { &kSecOIDCountryName, "2.5.4.6" },
+        { &kSecAttrKeySizeInBits, "kSecAttrKeySizeInBits" },
+        { &kSecAttrKeyType, "kSecAttrKeyType" },
+        { &kSecAttrKeyTypeECSECPrimeRandom, "kSecAttrKeyTypeECSECPrimeRandom" },
+        { &kSecAttrKeyTypeRSA, "kSecAttrKeyTypeRSA" },
+        { &kSecDigestLengthAttribute, "kSecDigestLengthAttribute" },
+        { &kSecDigestSHA2, "kSecDigestSHA2" },
+        { &kSecDigestTypeAttribute, "kSecDigestTypeAttribute" },
+        { &kSecKeyAlgorithmECDSASignatureDigestX962SHA1, "kSecKeyAlgorithmECDSASignatureDigestX962SHA1" },
+        { &kSecKeyAlgorithmECDSASignatureDigestX962SHA256, "kSecKeyAlgorithmECDSASignatureDigestX962SHA256" },
+        { &kSecKeyAlgorithmECDSASignatureDigestX962SHA384, "kSecKeyAlgorithmECDSASignatureDigestX962SHA384" },
+        { &kSecKeyAlgorithmECDSASignatureDigestX962SHA512, "kSecKeyAlgorithmECDSASignatureDigestX962SHA512" },
+        { &kSecKeyAlgorithmRSASignatureDigestPKCS1v15Raw, "kSecKeyAlgorithmRSASignatureDigestPKCS1v15Raw" },
+        { &kSecKeyAlgorithmRSASignatureDigestPKCS1v15SHA1, "kSecKeyAlgorithmRSASignatureDigestPKCS1v15SHA1" },
+        { &kSecKeyAlgorithmRSASignatureDigestPKCS1v15SHA256, "kSecKeyAlgorithmRSASignatureDigestPKCS1v15SHA256" },
+        { &kSecKeyAlgorithmRSASignatureDigestPKCS1v15SHA384, "kSecKeyAlgorithmRSASignatureDigestPKCS1v15SHA384" },
+        { &kSecKeyAlgorithmRSASignatureDigestPKCS1v15SHA512, "kSecKeyAlgorithmRSASignatureDigestPKCS1v15SHA512" },
+        { &kSecMatchPolicy, "m_Policy" },
     };
     for (size_t i = 0; i < sizeof(table) / sizeof(table[0]); i++) {
         if (*table[i].slot == NULL) {
@@ -1087,4 +1122,30 @@ OSStatus AuthorizationFreeItemSet(AuthorizationItemSet *set) {
         free(set->items);
     }
     return errAuthorizationSuccess;
+}
+
+/* ------------------------------------------------------------------ */
+/* Imported by Firefox's XUL; ravynOS has no certificate->key or identity
+ * support, so each of these returns NULL rather than a fabricated object. */
+
+SecKeyRef SecCertificateCopyPublicKey(SecCertificateRef certificate) {
+    (void)certificate;
+    return NULL;
+}
+
+SecCertificateRef SecIdentityCopyCertificate(SecIdentityRef identity) {
+    (void)identity;
+    return NULL;
+}
+
+SecIdentityRef SecIdentityCopyPreferred(CFStringRef name, CFArrayRef keychainCertificates, CFDictionaryRef options) {
+    (void)name;
+    (void)keychainCertificates;
+    (void)options;
+    return NULL;
+}
+
+SecKeyRef SecIdentityCopyPrivateKey(SecIdentityRef identity) {
+    (void)identity;
+    return NULL;
 }

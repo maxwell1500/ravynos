@@ -34,4 +34,12 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 - (void)setTitleWithMnemonic:(NSString *)value;
 
+/* Placeholder text lives on the cell (it already draws it when the value is
+ * empty); the control-level accessors macOS exposes were missing, so
+ * -[NSSearchField setPlaceholderString:] aborted App Store at launch. */
+- (NSString *)placeholderString;
+- (void)setPlaceholderString:(NSString *)string;
+- (NSAttributedString *)placeholderAttributedString;
+- (void)setPlaceholderAttributedString:(NSAttributedString *)string;
+
 @end

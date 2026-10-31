@@ -52,6 +52,20 @@
 #ifndef _RAVYN_PASSWD_FILE
 #define	_RAVYN_PASSWD_FILE "/etc/passwd"
 #endif
+/*
+ * The shadow database.  /etc/passwd carries "*" in the password field; the
+ * crypt(3) setting lives only in /etc/master.passwd, which is readable by
+ * root alone.  WindowServer's login window calls getpwnam() as root and then
+ * crypt(pass, pw_passwd), so without this file every password login fails --
+ * that is exactly what the passwd fixture measured before this lookup was
+ * added ("stored field is "*"").
+ *
+ * Non-root callers keep reading /etc/passwd and therefore see "*"; only a
+ * privileged lookup can obtain a hash.
+ */
+#ifndef _RAVYN_MASTER_PASSWD_FILE
+#define	_RAVYN_MASTER_PASSWD_FILE "/etc/master.passwd"
+#endif
 #ifndef _RAVYN_GROUP_FILE
 #define	_RAVYN_GROUP_FILE "/etc/group"
 #endif
@@ -217,14 +231,27 @@ static struct passwd _pw_ent;
 
 static FILE *_pw_fp;
 static int _pw_rewind;
+static int _pw_shadow;		/* the open stream is master.passwd */
 
 void
 setpwent(void)
 {
-	if (_pw_fp != NULL)
+	if (_pw_fp != NULL) {
 		rewind(_pw_fp);
-	else
-		_pw_fp = fopen(_RAVYN_PASSWD_FILE, "r");
+	} else {
+		/*
+		 * Root reads the shadow file: it is the only place the hash
+		 * exists, and the login window authenticates as root.  Every
+		 * other caller reads /etc/passwd, where the field is "*".
+		 */
+		_pw_shadow = (geteuid() == 0);
+		_pw_fp = fopen(_pw_shadow ? _RAVYN_MASTER_PASSWD_FILE
+		    : _RAVYN_PASSWD_FILE, "r");
+		if (_pw_fp == NULL && _pw_shadow) {
+			_pw_shadow = 0;
+			_pw_fp = fopen(_RAVYN_PASSWD_FILE, "r");
+		}
+	}
 	_pw_rewind = 0;
 }
 
@@ -243,6 +270,7 @@ endpwent(void)
 		(void)fclose(_pw_fp);
 		_pw_fp = NULL;
 	}
+	_pw_shadow = 0;
 	_pw_rewind = 0;
 }
 
@@ -311,6 +339,55 @@ _pw_parse(char *line)
 }
 
 /*
+ * master.passwd: name:passwd:uid:gid:class:change:expire:gecos:dir:shell.
+ * It is the same entry with three extra fields between gid and gecos.  Only
+ * this shape supplies a real password field.
+ */
+static int
+_pw_parse_master(char *line)
+{
+	char *p = line;
+	char classbuf[_RAV_LINEMAX], changebuf[_RAV_LINEMAX];
+	char expirebuf[_RAV_LINEMAX];
+	uid_t uid;
+	gid_t gid;
+
+	if (*p == '#' || *p == '\0' || *p == '+' || *p == '-')
+		return -1;
+	if (_rav_ncolons(line) < 9)
+		return -1;
+
+	_rav_field(&p, _pw_name, sizeof(_pw_name));
+	_rav_field(&p, _pw_passwd, sizeof(_pw_passwd));
+	_rav_field(&p, _pw_uid, sizeof(_pw_uid));
+	_rav_field(&p, _pw_gid, sizeof(_pw_gid));
+	_rav_field(&p, classbuf, sizeof(classbuf));
+	_rav_field(&p, changebuf, sizeof(changebuf));
+	_rav_field(&p, expirebuf, sizeof(expirebuf));
+	_rav_field(&p, _pw_gecos, sizeof(_pw_gecos));
+	_rav_field(&p, _pw_dir, sizeof(_pw_dir));
+	_rav_field(&p, _pw_shell, sizeof(_pw_shell));
+
+	if (_pw_name[0] == '\0')
+		return -1;
+	if (_rav_uid(_pw_uid, &uid) != 0 || _rav_gid(_pw_gid, &gid) != 0)
+		return -1;
+
+	strlcpy(_pw_class, classbuf, sizeof(_pw_class));
+	_pw_ent.pw_name = _pw_name;
+	_pw_ent.pw_passwd = _pw_passwd;
+	_pw_ent.pw_uid = uid;
+	_pw_ent.pw_gid = gid;
+	_pw_ent.pw_change = (time_t)strtoll(changebuf, NULL, 10);
+	_pw_ent.pw_class = _pw_class;
+	_pw_ent.pw_gecos = _pw_gecos;
+	_pw_ent.pw_dir = _pw_dir;
+	_pw_ent.pw_shell = _pw_shell;
+	_pw_ent.pw_expire = (time_t)strtoll(expirebuf, NULL, 10);
+	return 0;
+}
+
+/*
  * The next entry, or NULL at end of file. A call made after a NULL return
  * starts the database over: POSIX specifies that behaviour and callers
  * depend on it, so the stream is kept open and rewound rather than being
@@ -337,7 +414,8 @@ getpwent(void)
 			_pw_rewind = 1;
 			return NULL;
 		}
-		if (_pw_parse(_pw_line) == 0)
+		if ((_pw_shadow ? _pw_parse_master(_pw_line)
+		    : _pw_parse(_pw_line)) == 0)
 			return &_pw_ent;
 	}
 }
@@ -890,7 +968,7 @@ user_from_uid(uid_t uid, int nouser)
 	return buf;
 }
 
-char *
+const char *
 group_from_gid(gid_t gid, int nogroup)
 {
 	struct group *gr;

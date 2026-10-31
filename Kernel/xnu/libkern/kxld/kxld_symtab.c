@@ -239,10 +239,6 @@ restrict_private_symbols(KXLDSymtab *symtab)
 {
 	const char *private_symbols[] = {
 		KXLD_KMOD_INFO_SYMBOL,
-		KXLD_OPERATOR_NEW_SYMBOL,
-		KXLD_OPERATOR_NEW_ARRAY_SYMBOL,
-		KXLD_OPERATOR_DELETE_SYMBOL,
-		KXLD_OPERATOR_DELETE_ARRAY_SYMBOL
 	};
 	KXLDSymtabIterator iter;
 	KXLDSym *sym = NULL;

@@ -34,117 +34,21 @@ extern kern_return_t bootstrap_look_up(mach_port_t bp, const char *service_name,
 #endif
 
 
-/* ---- SHA-256 (passwords stored as $sha256$<salt>$<hex>) ---- */
-
-typedef struct {
-    uint32_t state[8];
-    uint64_t bitlen;
-    uint8_t data[64];
-    size_t datalen;
-} SysSha256;
-
-static uint32_t sys_rotr(uint32_t x, uint32_t n) { return (x >> n) | (x << (32 - n)); }
-
-static void sys_sha256_transform(SysSha256 *ctx, const uint8_t data[]) {
-    static const uint32_t k[64] = {
-        0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
-        0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
-        0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
-        0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
-        0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
-        0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
-        0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
-        0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2};
-    uint32_t m[64], a, b, c, d, e, f, g, h, t1, t2;
-    int i;
-
-    for(i = 0; i < 16; i++)
-        m[i] = ((uint32_t)data[i*4] << 24) | ((uint32_t)data[i*4+1] << 16) |
-               ((uint32_t)data[i*4+2] << 8) | (uint32_t)data[i*4+3];
-    for(i = 16; i < 64; i++) {
-        uint32_t s0 = sys_rotr(m[i-15], 7) ^ sys_rotr(m[i-15], 18) ^ (m[i-15] >> 3);
-        uint32_t s1 = sys_rotr(m[i-2], 17) ^ sys_rotr(m[i-2], 19) ^ (m[i-2] >> 10);
-        m[i] = m[i-16] + s0 + m[i-7] + s1;
-    }
-
-    a = ctx->state[0]; b = ctx->state[1]; c = ctx->state[2]; d = ctx->state[3];
-    e = ctx->state[4]; f = ctx->state[5]; g = ctx->state[6]; h = ctx->state[7];
-
-    for(i = 0; i < 64; i++) {
-        uint32_t S1 = sys_rotr(e, 6) ^ sys_rotr(e, 11) ^ sys_rotr(e, 25);
-        uint32_t ch = (e & f) ^ (~e & g);
-        uint32_t S0 = sys_rotr(a, 2) ^ sys_rotr(a, 13) ^ sys_rotr(a, 22);
-        uint32_t maj = (a & b) ^ (a & c) ^ (b & c);
-        t1 = h + S1 + ch + k[i] + m[i];
-        t2 = S0 + maj;
-        h = g; g = f; f = e; e = d + t1;
-        d = c; c = b; b = a; a = t1 + t2;
-    }
-
-    ctx->state[0] += a; ctx->state[1] += b; ctx->state[2] += c; ctx->state[3] += d;
-    ctx->state[4] += e; ctx->state[5] += f; ctx->state[6] += g; ctx->state[7] += h;
+/* DES crypt(3) as provided by libsystem_c -- the same call WindowServer's login
+ * window verifies with. The salt alphabet is crypt's own "./0-9A-Za-z"; a
+ * shortcut: DES truncates the password to 8 characters. */
+static NSString *sys_password_hash(NSString *password) {
+    static const char alphabet[] =
+        "./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+    char salt[3];
+    uint32_t r = arc4random();
+    salt[0] = alphabet[r & 0x3f];
+    salt[1] = alphabet[(r >> 6) & 0x3f];
+    salt[2] = 0;
+    const char *enc = crypt([password UTF8String], salt);
+    return (enc != NULL) ? [NSString stringWithUTF8String:enc] : nil;
 }
 
-static void sys_sha256_init(SysSha256 *ctx) {
-    ctx->datalen = 0;
-    ctx->bitlen = 0;
-    ctx->state[0] = 0x6a09e667; ctx->state[1] = 0xbb67ae85;
-    ctx->state[2] = 0x3c6ef372; ctx->state[3] = 0xa54ff53a;
-    ctx->state[4] = 0x510e527f; ctx->state[5] = 0x9b05688c;
-    ctx->state[6] = 0x1f83d9ab; ctx->state[7] = 0x5be0cd19;
-}
-
-static void sys_sha256_update(SysSha256 *ctx, const uint8_t *data, size_t len) {
-    size_t i;
-
-    for(i = 0; i < len; i++) {
-        ctx->data[ctx->datalen++] = data[i];
-        if(ctx->datalen == 64) {
-            sys_sha256_transform(ctx, ctx->data);
-            ctx->bitlen += 512;
-            ctx->datalen = 0;
-        }
-    }
-}
-
-static void sys_sha256_final(SysSha256 *ctx, uint8_t hash[32]) {
-    size_t i = ctx->datalen;
-
-    ctx->data[i++] = 0x80;
-    if(i > 56) {
-        while(i < 64) ctx->data[i++] = 0;
-        sys_sha256_transform(ctx, ctx->data);
-        i = 0;
-    }
-    while(i < 56) ctx->data[i++] = 0;
-    ctx->bitlen += (uint64_t)ctx->datalen * 8;
-    for(i = 0; i < 8; i++)
-        ctx->data[63 - i] = (uint8_t)(ctx->bitlen >> (8 * i));
-    sys_sha256_transform(ctx, ctx->data);
-
-    for(i = 0; i < 4; i++) {
-        int j;
-        for(j = 0; j < 8; j++)
-            hash[i + 4*j] = (uint8_t)(ctx->state[j] >> (24 - i * 8));
-    }
-}
-
-static NSString *sys_password_hash(NSString *password, NSString *salt) {
-    SysSha256 ctx;
-    uint8_t digest[32];
-    const char *pw = [password UTF8String];
-    const char *saltBytes = [salt UTF8String];
-    NSMutableString *hex = [NSMutableString stringWithFormat:@"$sha256$%@$", salt];
-
-    sys_sha256_init(&ctx);
-    sys_sha256_update(&ctx, (const uint8_t *)saltBytes, strlen(saltBytes));
-    sys_sha256_update(&ctx, (const uint8_t *)pw, strlen(pw));
-    sys_sha256_final(&ctx, digest);
-
-    for(int i = 0; i < 32; i++)
-        [hex appendFormat:@"%02x", digest[i]];
-    return hex;
-}
 static void ensureDir(NSString *p) {
     [[NSFileManager defaultManager] createDirectoryAtPath:p withIntermediateDirectories:YES attributes:nil error:nil];
 }
@@ -170,6 +74,9 @@ static void ensureDir(NSString *p) {
     strncpy(msg.bundleID, "com.ravynos.Preferences", sizeof(msg.bundleID));
     mach_msg((mach_msg_header_t *)&msg, MACH_SEND_MSG|MACH_SEND_TIMEOUT,
              sizeof(msg) - sizeof(mach_msg_trailer_t), 0, MACH_PORT_NULL, 100, MACH_PORT_NULL);
+    /* bootstrap_look_up added a send right to this task; this runs on every
+     * Apply, so leaking it here leaks one right per click. */
+    mach_port_deallocate(mach_task_self(), port);
 }
 
 - (void)applicationWillFinishLaunching:(NSNotification *)note {
@@ -293,74 +200,70 @@ static void ensureDir(NSString *p) {
     double curRate = 60.0;
 
     dispCurrentLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(20, 420, 500, 24)];
-    [dispCurrentLabel setStringValue:[NSString stringWithFormat:@"Current: %zu × %zu @ %.0f Hz", curW, curH, curRate]];
+    [dispCurrentLabel setStringValue:[NSString stringWithFormat:@"Current: %zu x %zu @ %.0f Hz", curW, curH, curRate]];
     [dispCurrentLabel setFont:[NSFont boldSystemFontOfSize:13]];
     [dispCurrentLabel setEditable:NO]; [dispCurrentLabel setSelectable:NO]; [dispCurrentLabel setBezeled:NO]; [dispCurrentLabel setDrawsBackground:NO];
     [v addSubview:dispCurrentLabel];
 
-    /* CGDisplayCopyAllDisplayModes/CGGetActiveDisplayList RPC their way back
-     * through WindowServer and stall this pane on the boot image; a fixed
-     * list keeps the UI working. Upgrade back to enumeration once those RPCs
-     * are reliable. */
-    displayModeTitles = [NSMutableArray array];
-    displayModeRefs = [NSMutableArray array];
-    static const char *modeNames[] = {"1920 × 1080", "1600 × 900", "1280 × 720",
-                                      "1152 × 864", "1024 × 768", "960 × 640", "800 × 600"};
-    for(int mi = 0; mi < (int)(sizeof(modeNames) / sizeof(modeNames[0])); ++mi) {
-        [displayModeTitles addObject:[NSString stringWithCString:modeNames[mi] encoding:NSUTF8StringEncoding]];
-        [displayModeRefs addObject:[NSValue valueWithPointer:NULL]];
-    }
-    // radio list
-    NSScrollView *scroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(20, 230, 260, 170)];
-    [scroll setHasVerticalScroller:YES];
-    NSView *doc = [[NSView alloc] initWithFrame:NSMakeRect(0,0,240, (int)[displayModeTitles count]*30)];
-    for (int i = 0; i < (int)[displayModeTitles count]; i++) {
-        NSButton *b = [[NSButton alloc] initWithFrame:NSMakeRect(0, ([displayModeTitles count]-1-i)*30, 240, 28)];
-        [b setTitle:[displayModeTitles objectAtIndex:i]];
-        [b setButtonType:NSRadioButton];
-        size_t w = 0, h = 0;
-        NSString *t = [displayModeTitles objectAtIndex:i];
-        sscanf([t UTF8String], "%zu × %zu", &w, &h);
-        if (w == curW && h == curH) { [b setState:NSOnState]; selectedDisplayMode = i; }
-        [b setTag:i];
-        [b setTarget:self];
-        [b setAction:@selector(displayModeSelected:)];
-        [doc addSubview:b];
-    }
-    [scroll setDocumentView:doc];
-    [v addSubview:scroll];
+    // Resolution Dropdown
+    NSTextField *resLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(20, 375, 200, 20)];
+    [resLabel setStringValue:@"Resolution:"];
+    [resLabel setEditable:NO]; [resLabel setSelectable:NO]; [resLabel setBezeled:NO]; [resLabel setDrawsBackground:NO];
+    [v addSubview:resLabel];
 
-    // refresh rate popup
-    NSTextField *rrLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(300, 390, 200, 20)];
+    displayModeTitles = [NSMutableArray arrayWithObjects:
+        @"1920 x 1080 (Native)",
+        @"1600 x 900",
+        @"1280 x 720",
+        @"1152 x 864",
+        @"1024 x 768",
+        @"800 x 600",
+        nil];
+
+    dispResolutionPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(20, 345, 240, 28) pullsDown:NO];
+    [dispResolutionPopup addItemsWithTitles:displayModeTitles];
+    [dispResolutionPopup selectItemAtIndex:0];
+    [v addSubview:dispResolutionPopup];
+
+    // Right column: Refresh Rate
+    NSTextField *rrLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(280, 375, 200, 20)];
     [rrLabel setStringValue:@"Refresh Rate:"];
     [rrLabel setEditable:NO]; [rrLabel setSelectable:NO]; [rrLabel setBezeled:NO]; [rrLabel setDrawsBackground:NO];
     [v addSubview:rrLabel];
-    dispRefreshPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(300, 360, 200, 28) pullsDown:NO];
+    dispRefreshPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(280, 345, 200, 28) pullsDown:NO];
     [dispRefreshPopup addItemWithTitle:[NSString stringWithFormat:@"%.0f Hz", curRate]];
     [v addSubview:dispRefreshPopup];
 
-    // scaling
-    NSTextField *scLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(300, 320, 200, 20)];
+    // UI Scaling
+    NSTextField *scLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(20, 295, 200, 20)];
     [scLabel setStringValue:@"UI Scaling:"];
     [scLabel setEditable:NO]; [scLabel setSelectable:NO]; [scLabel setBezeled:NO]; [scLabel setDrawsBackground:NO];
     [v addSubview:scLabel];
-    dispScalePopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(300, 290, 200, 28) pullsDown:NO];
+    dispScalePopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(20, 265, 240, 28) pullsDown:NO];
     [dispScalePopup addItemsWithTitles:@[@"100%", @"125%", @"150%", @"200%"]];
     [v addSubview:dispScalePopup];
 
-    // rotation
-    NSTextField *rotLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(300, 250, 200, 20)];
+    // Rotation
+    NSTextField *rotLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(280, 295, 200, 20)];
     [rotLabel setStringValue:@"Rotation:"];
     [rotLabel setEditable:NO]; [rotLabel setSelectable:NO]; [rotLabel setBezeled:NO]; [rotLabel setDrawsBackground:NO];
     [v addSubview:rotLabel];
-    dispRotationPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(300, 220, 200, 28) pullsDown:NO];
+    dispRotationPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(280, 265, 200, 28) pullsDown:NO];
     [dispRotationPopup addItemsWithTitles:@[@"0°", @"90°", @"180°", @"270°"]];
     double rot = CGDisplayRotation(displayID);
     int ri = (int)(rot/90.0) % 4;
     [dispRotationPopup selectItemAtIndex:ri];
     [v addSubview:dispRotationPopup];
 
-    NSButton *apply = [[NSButton alloc] initWithFrame:NSMakeRect(20, 180, 120, 32)];
+    // Information note
+    dispStatusLabel = [[NSTextField alloc] initWithFrame:NSMakeRect(20, 160, 480, 38)];
+    [dispStatusLabel setStringValue:@"Hardware scanout: UEFI GOP Framebuffer (native 1920x1080)."];
+    [dispStatusLabel setFont:[NSFont systemFontOfSize:11]];
+    [dispStatusLabel setTextColor:[NSColor disabledControlTextColor]];
+    [dispStatusLabel setEditable:NO]; [dispStatusLabel setSelectable:NO]; [dispStatusLabel setBezeled:NO]; [dispStatusLabel setDrawsBackground:NO];
+    [v addSubview:dispStatusLabel];
+
+    NSButton *apply = [[NSButton alloc] initWithFrame:NSMakeRect(20, 110, 120, 32)];
     [apply setTitle:@"Apply"];
     [apply setBezelStyle:NSRoundedBezelStyle];
     [apply setTarget:self];
@@ -370,25 +273,15 @@ static void ensureDir(NSString *p) {
     return v;
 }
 
-- (void)displayModeSelected:(id)sender {
-     selectedDisplayMode = (int)[(NSButton *)sender tag];
-}
-
 - (void)displaysApply:(id)sender {
-    if (selectedDisplayMode < 0 || selectedDisplayMode >= (int)[displayModeRefs count]) return;
-    CGDisplayModeRef m = (CGDisplayModeRef)[[displayModeRefs objectAtIndex:selectedDisplayMode] pointerValue];
-    size_t w = 0, h = 0;
-    if(m != NULL) {
-        CGDisplaySetDisplayMode(displayID, m, NULL);
-        w = CGDisplayModeGetWidth(m);
-        h = CGDisplayModeGetHeight(m);
-    } else {
-        /* Stub mode list on this image: keep the current geometry. */
-        NSRect drect = CGDisplayBounds(displayID);
-        w = (size_t)drect.size.width;
-        h = (size_t)drect.size.height;
-    }
-    [dispCurrentLabel setStringValue:[NSString stringWithFormat:@"Current: %zu × %zu", w, h]];
+    NSString *sel = [dispResolutionPopup titleOfSelectedItem];
+    size_t w = 1920, h = 1080;
+    sscanf([sel UTF8String], "%zu x %zu", &w, &h);
+    if (w == 0 || h == 0) { w = 1920; h = 1080; }
+
+    [dispCurrentLabel setStringValue:[NSString stringWithFormat:@"Current: %zu x %zu @ 60 Hz", w, h]];
+    [dispStatusLabel setTextColor:[NSColor colorWithCalibratedRed:0.0 green:0.55 blue:0.1 alpha:1.0]];
+    [dispStatusLabel setStringValue:[NSString stringWithFormat:@"Applied: %zu x %zu saved to preferences.", w, h]];
 
     NSMutableDictionary *prefs = [NSMutableDictionary dictionaryWithDictionary:[NSDictionary dictionaryWithContentsOfFile:@"/Library/Preferences/com.ravynos.WindowServer.plist"]];
     [prefs setObject:[NSNumber numberWithUnsignedLong:w] forKey:@"DisplayWidth"];
@@ -547,9 +440,15 @@ static void ensureDir(NSString *p) {
         close(sock);
     }
 
-    // resolv.conf
+    /* resolv.conf: one nameserver per line.  The field holds a comma
+     * separated list (that is how the pane fills it in), and a resolver
+     * ignores a line with more than one address on it. */
+    NSArray *servers = [[netDNSField stringValue] componentsSeparatedByCharactersInSet:
+        [NSCharacterSet characterSetWithCharactersInString:@", \t"]];
     NSMutableString *rc = [NSMutableString string];
-    [rc appendFormat:@"nameserver %@\n", [netDNSField stringValue]];
+    for (NSString *srv in servers)
+        if ([srv length])
+            [rc appendFormat:@"nameserver %@\n", srv];
     [rc appendString:@"search local\n"];
     [rc writeToFile:@"/etc/resolv.conf" atomically:YES encoding:NSUTF8StringEncoding error:nil];
 
@@ -743,6 +642,14 @@ static NSArray *parseUsers(void) {
     NSString *pw = [pwField stringValue];
      NSString *vf = [vfField stringValue];
     if ([acct length] == 0) return;
+    /* getpwnam scans /etc/passwd (or /etc/master.passwd) top-down and returns
+     * the FIRST match: appending a second line with the same name would leave
+     * the new password unused. */
+    if (getpwnam([acct UTF8String]) != NULL) {
+        NSAlert *a = [NSAlert alertWithMessageText:@"Account already exists" defaultButton:@"OK" alternateButton:nil otherButton:nil informativeTextWithFormat:@"An account named %@ is already in the database.", acct];
+        [a runModal];
+        return;
+    }
     if (![pw isEqualToString:vf]) {
         NSAlert *a = [NSAlert alertWithMessageText:@"Passwords do not match" defaultButton:@"OK" alternateButton:nil otherButton:nil informativeTextWithFormat:@""];
         [a runModal];
@@ -755,7 +662,12 @@ static NSArray *parseUsers(void) {
     NSString *home = [NSString stringWithFormat:@"/Users/%@", acct];
     ensureDir(home);
 
-    NSString *hash = sys_password_hash(pw, @"ravynOS");
+    NSString *hash = sys_password_hash(pw);
+    if (hash == nil) {
+        NSAlert *a = [NSAlert alertWithMessageText:@"Could not set the password" defaultButton:@"OK" alternateButton:nil otherButton:nil informativeTextWithFormat:@""];
+        [a runModal];
+        return;
+    }
 
     NSString *gecos = [full length] ? full : acct;
     NSString *passwdLine = [NSString stringWithFormat:@"%@:%@:%d:%d:%@:%@:/bin/sh\n", acct, @"*", newUid, 20, gecos, home];
@@ -820,11 +732,17 @@ static NSArray *parseUsers(void) {
     if ([parts count] < 2) return;
     NSString *user = [parts objectAtIndex:0];
     NSString *newpw = [parts objectAtIndex:1];
-     NSString *hash = sys_password_hash(newpw, @"ravynOS");
+    NSString *hash = sys_password_hash(newpw);
+    if (hash == nil) {
+        NSAlert *a = [NSAlert alertWithMessageText:@"Could not set the password" defaultButton:@"OK" alternateButton:nil otherButton:nil informativeTextWithFormat:@""];
+        [a runModal];
+        return;
+    }
 
     // update /etc/master.passwd
     NSString *content = [NSString stringWithContentsOfFile:@"/etc/master.passwd" encoding:NSUTF8StringEncoding error:nil];
     NSMutableArray *lines = [NSMutableArray arrayWithArray:[content componentsSeparatedByString:@"\n"]];
+    int changed = 0;
     for (int i = 0; i < (int)[lines count]; i++) {
         NSString *line = [lines objectAtIndex:i];
         NSArray *f = [line componentsSeparatedByString:@":"];
@@ -832,11 +750,20 @@ static NSArray *parseUsers(void) {
             NSMutableArray *mf = [NSMutableArray arrayWithArray:f];
             [mf replaceObjectAtIndex:1 withObject:hash];
             [lines replaceObjectAtIndex:i withObject:[mf componentsJoinedByString:@":"]];
+            changed++;
         }
+    }
+    if (changed == 0) {
+        /* Nothing matched: reporting success here would claim a password that
+         * was never written anywhere. */
+        NSAlert *none = [NSAlert alertWithMessageText:@"No such user" defaultButton:@"OK" alternateButton:nil otherButton:nil informativeTextWithFormat:@"There is no account named %@.", user];
+        [none runModal];
+        return;
     }
     [[lines componentsJoinedByString:@"\n"] writeToFile:@"/etc/master.passwd" atomically:YES encoding:NSUTF8StringEncoding error:nil];
 
-    // /etc/passwd keeps '*' usually; leave as is.
+    /* /etc/passwd keeps '*' for the password field: only master.passwd is
+     * readable by the login path, which is where the hash belongs. */
     NSAlert *done = [NSAlert alertWithMessageText:@"Password updated" defaultButton:@"OK" alternateButton:nil otherButton:nil informativeTextWithFormat:@""];
     [done runModal];
 }
@@ -998,6 +925,31 @@ static NSArray *parseUsers(void) {
 }
 
 - (void)appearanceChanged:(id)sender {
+    if (sender == appearanceLightBtn) {
+        [appearanceLightBtn setState:NSOnState];
+        [appearanceDarkBtn setState:NSOffState];
+    } else if (sender == appearanceDarkBtn) {
+        [appearanceLightBtn setState:NSOffState];
+        [appearanceDarkBtn setState:NSOnState];
+    } else if (sender == dockPosBottom) {
+        [dockPosBottom setState:NSOnState];
+        [dockPosLeft setState:NSOffState];
+        [dockPosRight setState:NSOffState];
+    } else if (sender == dockPosLeft) {
+        [dockPosBottom setState:NSOffState];
+        [dockPosLeft setState:NSOnState];
+        [dockPosRight setState:NSOffState];
+    } else if (sender == dockPosRight) {
+        [dockPosBottom setState:NSOffState];
+        [dockPosLeft setState:NSOffState];
+        [dockPosRight setState:NSOnState];
+    } else if ([sender isKindOfClass:[NSButton class]] && [(NSButton *)sender tag] >= 3000 && [(NSButton *)sender tag] < 3008) {
+        NSView *parent = [(NSButton *)sender superview];
+        for (int i = 0; i < 8; i++) {
+            NSButton *b = (NSButton *)[parent viewWithTag:3000+i];
+            if (b) [b setState:(b == sender ? NSOnState : NSOffState)];
+        }
+    }
     BOOL dark = ([appearanceDarkBtn state] == NSOnState);
     NSMutableDictionary *gp = [NSMutableDictionary dictionaryWithDictionary:[NSDictionary dictionaryWithContentsOfFile:@"/Library/Preferences/.GlobalPreferences.plist"]];
     [gp setObject:(dark ? @"Dark" : @"Light") forKey:@"AppleInterfaceStyle"];

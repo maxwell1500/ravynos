@@ -97,17 +97,14 @@ int main() {
         append(s.c_str());
         append("stage=ostringstream-ok");
     }
-    /* std::cout is intentionally NOT used here.  On this system a write to
-     * the global stdout stream crashes inside libc++'s FILE-backed streambuf
-     * (ostringstream, above, is fine; printf, below, is fine).  The runtime
-     * archives this dylib was linked from were built by the host toolchain
-     * against Apple's stdio, and the stdout streambuf is the one place where
-     * libc++ reaches into FILE internals this libc does not share.  Rebuilding
-     * libc++ against this libc is the fix; until then the probe proves the
-     * parts that do work instead of hiding the ones that do not. */
-    std::printf("PASS cxx-runtime: string=ok vector=3 exception=%s thread=ok cout=unsupported\n",
+    /* Standard stream output (cout). Now initialized via libc++.1.dylib constructor. */
+    append("stage=before-cout");
+    std::cout << "cxx-cout: ok" << std::endl;
+    append("stage=after-cout");
+
+    std::printf("PASS cxx-runtime: string=ok vector=3 exception=%s thread=ok cout=ok\n",
                 caught ? "caught" : "missed");
-    append("PASS cxx-runtime: string=ok vector=3 exception=caught thread=ok cout=unsupported");
+    append("PASS cxx-runtime: string=ok vector=3 exception=caught thread=ok cout=ok");
     append("stage=end");
 
     if (!caught) {

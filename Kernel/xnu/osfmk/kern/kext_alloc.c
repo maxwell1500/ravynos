@@ -68,6 +68,7 @@ __startup_func
 void
 kext_alloc_init(void)
 {
+
 #if CONFIG_KEXT_BASEMENT
 	kernel_segment_command_t *text = NULL;
 	kernel_segment_command_t *prelinkTextSegment = NULL;

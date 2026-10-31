@@ -309,7 +309,7 @@ for a in "$@"; do
 done
 
 [ "$dylib" = yes ] && [ "$compile_only" = yes ] && dylib=no
-if [ "$dylib" = yes ]; then
+if [ "$dylib" = yes ] && [ "${ALLOW_LIBSYSTEM:-0}" != "1" ]; then
     inject=yes
 else
     inject=no

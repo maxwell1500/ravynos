@@ -113,6 +113,7 @@ CFLAGS = -DOMITPENDINGKEYCAPS \
         -Wno-elaborated-enum-base -Wno-nullability-completeness \
 	-DAVAILABLE_MAC_OS_X_VERSION_10_13_AND_LATER="" \
 	-I${.CURDIR} -I${.CURDIR:H} -I${.CURDIR:H}/IOHIDFamily \
+	-I${.CURDIR:H:H}/IOGraphics/IOGraphicsFamily \
 	-I${.CURDIR}/IOKit/hidsystem \
         -I${RAVYN_SDKROOT}/usr/local/include/kernel \
 	-I${ROOT_BINARY_DIR}${ROOT_SOURCE_DIR}/Kernel/xnu/EXPORT_HDRS/iokit \

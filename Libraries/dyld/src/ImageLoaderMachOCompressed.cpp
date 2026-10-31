@@ -629,6 +629,34 @@ uintptr_t ImageLoaderMachOCompressed::resolveFlat(const LinkContext& context, co
 													bool runResolver, const ImageLoader** foundIn)
 {
 	const Symbol* sym;
+
+	/*
+	 * Our own system dylibs are built without LC_LOAD_DYLIB (libobjc is
+	 * the one that matters today), so every undefined symbol gets a
+	 * flat-lookup ordinal.  Flat lookup searches images in load order,
+	 * which puts an application's own dylibs -- Firefox's libmozglue
+	 * exports malloc/free -- ahead of libSystem.  libobjc then calls
+	 * jemalloc's free() on a pointer jemalloc never allocated and dies at
+	 * libmozglue + 0x16168, which is exactly what a stock Firefox did here.
+	 *
+	 * For a library that lives in /usr/lib or /usr/lib/system, the C
+	 * library is the intended definition of a libc symbol, the same
+	 * binding a two-level library would have.  Consult libSystem first and
+	 * fall back to the normal flat search, so an app dylib can still
+	 * interpose for its own flat references.
+	 */
+	const char* path = this->getPath();
+	if ( (strncmp(path, "/usr/lib/", 9) == 0) ||
+	     (strncmp(path, "/System/Library/", 16) == 0) ) {
+		const ImageLoader* systemImage = NULL;
+		if ( dyld::flatFindExportedSymbolInSystem(symbolName,
+		     &sym, &systemImage) && systemImage != NULL && sym != NULL ) {
+			if ( systemImage != this )
+				context.addDynamicReference(this, const_cast<ImageLoader*>(systemImage));
+			return systemImage->getExportedSymbolAddress(sym, context, this, runResolver);
+		}
+	}
+
 	if ( context.flatExportFinder(symbolName, &sym, foundIn) ) {
 		if ( *foundIn != this )
 			context.addDynamicReference(this, const_cast<ImageLoader*>(*foundIn));
@@ -750,6 +778,28 @@ uintptr_t ImageLoaderMachOCompressed::resolveTwolevel(const LinkContext& context
 	uintptr_t address;
 	if ( definedInImage->findExportedSymbolAddress(context, symbolName, requestorImage, requestorOrdinalOfDef, runResolver, foundIn, &address) )
 		return address;
+
+	// Apple's frameworks do not draw the ObjC class boundary where ours do:
+	// on macOS many Foundation classes (NSTimer, NSNumber, ...) are exported
+	// by CoreFoundation, so a stock binary's two-level bind names
+	// CoreFoundation/_OBJC_CLASS_$_NSTimer while ravynOS implements the class
+	// in Foundation.  Rather than fail the launch, look the class up in the
+	// flat namespace and record the substitution.  Scoped to ObjC class
+	// symbols: methods, ivars and C symbols still obey their ordinals.
+	if ( (strncmp(symbolName, "_OBJC_CLASS_$_", 14) == 0) ||
+	     (strncmp(symbolName, "_OBJC_METACLASS_$_", 18) == 0) ) {
+		const Symbol* flatSym = NULL;
+		const ImageLoader* flatImage = NULL;
+		if ( context.flatExportFinder(symbolName, &flatSym, &flatImage) && flatImage && flatSym ) {
+			static int sClassFallbackLogs = 0;
+			if ( sClassFallbackLogs < 32 ) {
+				++sClassFallbackLogs;
+				dyld::log("dyld: %s not in %s; using %s\n", symbolName,
+				          definedInImage->getPath(), flatImage->getPath());
+			}
+			return flatImage->getExportedSymbolAddress(flatSym, context, requestorImage, runResolver, symbolName);
+		}
+	}
 
 	if ( weak_import ) {
 		// definition can't be found anywhere, ok because it is weak, just return 0

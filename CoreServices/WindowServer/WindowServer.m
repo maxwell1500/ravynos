@@ -498,7 +498,7 @@ static struct kinfo_proc *_procForPID(pid_t pid) {
     asprintf(&envp[1], "SHELL=%s", pw->pw_shell);
     asprintf(&envp[2], "USER=%s", pw->pw_name);
     asprintf(&envp[3], "LOGNAME=%s", pw->pw_name);
-    asprintf(&envp[4], "PATH=/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin:/usr/local/sbin");
+    asprintf(&envp[4], "PATH=/opt/local/bin:/opt/local/sbin:/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin:/usr/local/sbin");
     asprintf(&envp[6], "TERM=xterm");
     envp[entries - 1] = NULL;
     return YES;
@@ -930,8 +930,14 @@ static void *shellSvcLoop(void *arg) {
                             write(fds[0], "FAIL", 5);
                             continue;
                         }
-                        char *enc = crypt(pass, pw->pw_passwd);
-                        if(strcmp(enc, pw->pw_passwd)) {
+                        /* crypt() returns NULL for a setting it cannot use --
+                         * notably "*" (locked) and the "!" prefix -- and
+                         * strcmp(NULL, ...) would crash the login window. */
+                        char *enc = NULL;
+                        if(pw->pw_passwd != NULL && pw->pw_passwd[0] != 0 &&
+                           pw->pw_passwd[0] != '*' && pw->pw_passwd[0] != '!')
+                            enc = crypt(pass, pw->pw_passwd);
+                        if(enc == NULL || strcmp(enc, pw->pw_passwd) != 0) {
                             if(logLevel >= WS_WARNING)
                                 NSLog(@"Bad username or password (%s)", credbuf);
                             write(fds[0], "FAIL", 5);
@@ -1257,8 +1263,12 @@ static pthread_mutex_t _pendingLock = PTHREAD_MUTEX_INITIALIZER;
     pid_t pid = fork();
     if(pid != 0) {
         fprintf(stderr, "[WS] open bundle: forked pid %d (%s)\n", (int)pid, item.path);
-        if(pid > 0)
+        if(pid > 0) {
             wsAppMarker("SPAWN", item.bundleID, pid);
+            /* Watch it even though it has not registered yet, so a child that
+             * dies before registering still yields a kevent and gets reaped. */
+            [self watchForProcessExit:(unsigned)pid];
+        }
         return;
     }
 
@@ -2985,12 +2995,19 @@ static pthread_mutex_t _pendingLock = PTHREAD_MUTEX_INITIALIZER;
 
                         if(maxlen > sizeof(msg.msg.data))
                             maxlen = sizeof(msg.msg.data);
+                        /* Advance in BYTES, not in NSString characters: the
+                         * payload is UTF-8, where one character can be up to
+                         * four bytes. */
                         while(off < maxlen && msg.msg.data[off] != 0) {
-                            NSString *s = [NSString stringWithUTF8String:(const char *)&msg.msg.data[off]];
-                            if(s == nil)
+                            const char *s = (const char *)&msg.msg.data[off];
+                            size_t l = strnlen(s, maxlen - off);
+                            if(l == maxlen - off)
+                                break;                 /* no NUL inside the buffer */
+                            NSString *str = [NSString stringWithUTF8String:s];
+                            if(str == nil)
                                 break;
-                            [parts addObject:s];
-                            off += [s length] + 1;
+                            [parts addObject:str];
+                            off += l + 1;
                         }
                         if([parts count] == 0)
                             break;
@@ -3194,26 +3211,38 @@ static pthread_mutex_t _pendingLock = PTHREAD_MUTEX_INITIALIZER;
         switch(out[i].filter) {
             case EVFILT_PROC:
                 if((out[i].fflags & NOTE_EXIT)) {
+                    /* Reap unconditionally: every child this process forks gets a
+                     * kevent (see _spawnPendingBundle) and SIGCHLD stays at its
+                     * default, so without this a child that dies before it
+                     * registers becomes a zombie. LoadingWindow and the login
+                     * child are never passed to watchForProcessExit:, so they
+                     * cannot produce a kevent here and their status is safe. */
+                    while(waitpid((pid_t)out[i].ident, NULL, WNOHANG) < 0 && errno == EINTR) { }
+
                     //NSLog(@"PID %lu exited", out[i].ident);
+                    /* findAppByPID returns an unowned pointer, so everything we
+                     * need is copied BEFORE removing the app from the dictionary:
+                     * removeObjectForKey: releases the record, leaving any later
+                     * use of it a use-after-free. */
                     pthread_mutex_lock(&appsLock);
-                    /* findAppByPID returns an unowned pointer. Capture everything
-                     * we need and take our own reference BEFORE removing the app
-                     * from the dictionary: removeObjectForKey: releases the record,
-                     * leaving any later use of it a use-after-free. */
                     WSAppRecord *app = [self findAppByPID:out[i].ident];
-                    if(app == nil) {
-                        pthread_mutex_unlock(&appsLock);
-                        NSLog(@"PID %u exited, but no matching app record", out[i].ident);
-                        break;
-                    }
+                    BOOL found = (app != nil);
+                    BOOL wasCurrent = (curApp == app);   /* compare before unlock */
                     NSString *deadBundleID = [app.bundleID copy];
                     NSString *deadPath = [app.path copy];
                     NSArray *deadWins = [app.windows copy];
                     pthread_mutex_unlock(&appsLock);
 
-                    if(curApp == app) {
+                    if(!found) {
+                        NSLog(@"PID %u exited, but no matching app record", out[i].ident);
+                        break;
+                    }
+
+                    if(wasCurrent) {
                         [self switchApp];
-                        if(curApp == app) {
+                        /* Compare by pid: the record itself may be gone once we
+                         * unlock, and switchApp may have already moved on. */
+                        if(curApp != nil && curApp.pid == (int)out[i].ident) {
                             curApp = nil; // there was nothing to switch to
                             curWindow = nil;
                         }
@@ -3241,7 +3270,6 @@ static pthread_mutex_t _pendingLock = PTHREAD_MUTEX_INITIALIZER;
                     deadWins = nil;
                     deadPath = nil;
                     deadBundleID = nil;
-                    app = nil;
                 }
                 break;
             default:
@@ -3290,15 +3318,6 @@ static pthread_mutex_t _pendingLock = PTHREAD_MUTEX_INITIALIZER;
         event->windowID = curWindow.number;
     else
         window = [self windowUnderPointer:pos app:&app];
-
-    if(event->code == NSLeftMouseDown || event->code == NSLeftMouseUp ||
-            event->code == NSMouseMoved) {
-        NSRect f = window ? window.frame : NSZeroRect;
-        const char *bid = (app && [app bundleID]) ? [[app bundleID] UTF8String] : "(nil)";
-        fprintf(stderr, "[WS] ev code=%d pos=%d,%d win=%d frame=%d,%d %dx%d app=%s\n",
-            event->code, (int)pos.x, (int)pos.y, window ? window.number : -1,
-            (int)f.origin.x, (int)f.origin.y, (int)f.size.width, (int)f.size.height, bid);
-    }
 
     NSRect titleFrame = NSZeroRect;
     if(window != nil) {
@@ -3435,9 +3454,6 @@ static pthread_mutex_t _pendingLock = PTHREAD_MUTEX_INITIALIZER;
         event->windowID = window.number;
 
     mach_port_t destPort = [app port];
-    if(destPort == MACH_PORT_NULL) {
-        return YES;
-    }
     if(destPort == MACH_PORT_NULL)
         return YES;
 
@@ -3526,8 +3542,10 @@ static pthread_mutex_t _pendingLock = PTHREAD_MUTEX_INITIALIZER;
     strncpy(msg.bundleID, WINDOWSERVER_SVC_NAME, sizeof(msg.bundleID)-1);
 
     if(length > 0 && data != NULL)
-        memcpy(msg.data, data, MIN(length, sizeof(msg.data)));
-    msg.len = length;
+        memcpy(msg.data, data, MIN(length, (int)sizeof(msg.data)));
+    /* Receivers size their reads from msg.len, so it must never exceed what
+     * was copied into msg.data. */
+    msg.len = (unsigned)MIN(length, (int)sizeof(msg.data));
 
     /* Under QEMU TCG the receiving process is often mid-render; a single
      * timed send loses the reply and the client then builds a window that
@@ -3562,8 +3580,8 @@ static pthread_mutex_t _pendingLock = PTHREAD_MUTEX_INITIALIZER;
     kevent(_kq, kev, 1, NULL, 0, NULL);
 }
 
-/* Returns a +1 reference: callers keep the record alive across
- * removeObjectForKey:, which releases the dictionary's own reference. */
+/* Returns an unowned pointer. The caller must hold appsLock, and must not use
+ * the pointer after unlocking. */
 - (WSAppRecord *)findAppByPID:(unsigned int)pid {
     NSEnumerator *apprecs = [apps objectEnumerator];
     id record;
@@ -3572,7 +3590,7 @@ static pthread_mutex_t _pendingLock = PTHREAD_MUTEX_INITIALIZER;
             continue;
         WSAppRecord *app = record;
         if(app.pid == pid)
-            return (WSAppRecord *)CFRetain((CFTypeRef)app);
+            return (WSAppRecord *)app;
     }
     return nil;
 }

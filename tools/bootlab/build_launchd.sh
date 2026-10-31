@@ -305,6 +305,25 @@ make_force_compat() {
  *    reason: the latter also comes from <sys/_endian.h>.
  */
 #if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+/* The SDK's sandbox.h predates the filter-type constants launchd's
+ * sandbox_check() calls name (and the SANDBOX_NAMED flag).  Values are the
+ * published libsandbox ABI; sandbox enforcement is a no-op in this tree. */
+#ifndef SANDBOX_NAMED
+#define SANDBOX_NAMED 0x0001
+#endif
+#ifndef SANDBOX_FILTER_NONE
+#define SANDBOX_FILTER_NONE 0
+#endif
+#ifndef SANDBOX_FILTER_PATH
+#define SANDBOX_FILTER_PATH 1
+#endif
+#ifndef SANDBOX_FILTER_GLOBAL_NAME
+#define SANDBOX_FILTER_GLOBAL_NAME 2
+#endif
+#ifndef SANDBOX_FILTER_LOCAL_NAME
+#define SANDBOX_FILTER_LOCAL_NAME 3
+#endif
+
 #define __launchd_be16toh(x) __builtin_bswap16(x)
 #define __launchd_be32toh(x) __builtin_bswap32(x)
 #define __launchd_be64toh(x) __builtin_bswap64(x)
@@ -544,6 +563,12 @@ for s in $SRCS_MIG; do compile_one "$s.c" || true; done
 echo
 echo "compiling openbsm (libbsm + libauditd):"
 compile_openbsm || die "openbsm failed to compile"
+echo "compiling sandbox compat:"
+"${CC[@]}" "${CFLAGS_COMMON[@]}" \
+    -o "$WORK/sandbox_stub.o" \
+    "$REPO/tools/bootlab/launchd-compat/sandbox_stub.c" \
+    || die "sandbox compat failed to compile"
+OBJS+=("$WORK/sandbox_stub.o")
 echo
 echo "objects: ${#OBJS[@]}"
 [ ${#OBJS[@]} -gt 0 ] || die "nothing compiled"

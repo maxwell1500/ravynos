@@ -122,7 +122,7 @@ __attribute__((visibility("hidden"), format(printf, 3, 4)));
 #define kKxldLogFiletypeNotSupported    "The Mach-O filetype 0x%x is not supported on the target architecture."
 #define kKxldLogTruncatedMachO          "The Mach-O file has been truncated. Make sure the Mach-O header structures are correct."
 #define kKxldLogMalformedMachO          "The Mach-O file is malformed: "
-#define kKxldLogMalformedVTable         "The vtable '%s' is malformed. Make sure your kext has been built against the correct headers."
+#define kKxldLogMalformedVTable          "The vtable '%s' is malformed (line %d). Make sure your kext has been built against the correct headers."
 #define kKxldLogMissingVtable           "Cannot find the vtable '%s' for class '%s'. This vtable symbol is required for binary compatibility, and it may have been stripped."
 #define kKxldLogDirectPureVirtualCall   "This kext calls a pure virtual function. Make sure your kext's OSObject-derived classes implement all pure virtual functions."
 #define kKxldLogParentOutOfDate         "The super class vtable '%s' for vtable '%s' is out of date. Make sure your kext has been built against the correct headers."

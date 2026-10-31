@@ -279,10 +279,14 @@ ACPIPlatformExpert::parseACPI(IOService *provider) {
         return false;
     }
 
+    /* rsdp points into the mapping; take the revision before the unmap, or
+     * the log below faults on an address the descriptor just released. */
+    uint8_t rsdpRevision = rsdp->revision;
+
     map->release();
     desc->release();
 
-    PE_Log("v%d %s @ 0x%llx", rsdp->revision, useXSDT ? "XSDT" : "RSDT",
+    PE_Log("v%d %s @ 0x%llx", rsdpRevision, useXSDT ? "XSDT" : "RSDT",
            (unsigned long long)tablePointer);
 
     /* Map only the table header first: the length lives in it. */

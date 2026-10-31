@@ -4,8 +4,16 @@
  * /dev/mouse (and /dev/psm0) -- PS/2 mouse character device driver.
  *
  * Communicates with the standard x86 i8042 keyboard/aux controller on
- * ports 0x60 (data) and 0x64 (command/status). Provides standard 3-byte
- * PS/2 mouse motion and button packets to userspace (e.g. WindowServer).
+ * ports 0x60 (data) and 0x64 (command/status). Provides PS/2 mouse motion and
+ * button packets to userspace (e.g. WindowServer) as fixed 4-byte records:
+ *
+ *     flags, dx, dy, dz
+ *
+ * The device is asked for IntelliMouse mode on open (the documented
+ * sample-rate magic sequence); when the mouse answers with device id 3 or 4
+ * the fourth byte carries the wheel, otherwise dz is always 0 and the wire
+ * format is still 4 bytes so readers never have to care which mouse is
+ * attached.
  */
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -41,8 +49,12 @@ extern void ps2mouse_init(void);
 #define MOUSE_CMD_SET_DEFAULTS   0xf6
 #define MOUSE_CMD_ENABLE_STREAM  0xf4
 #define MOUSE_CMD_DISABLE_STREAM 0xf5
+#define MOUSE_CMD_SET_SAMPLE_RATE 0xf3
+#define MOUSE_CMD_GET_ID         0xf2
 
-#define MOUSE_RING_SIZE 1024
+/* flags, dx, dy, dz -- see the file comment. */
+#define MOUSE_RECORD_SIZE 4
+#define MOUSE_RING_SIZE (1024 * MOUSE_RECORD_SIZE)
 
 static inline uint8_t
 inb_port(uint16_t port)
@@ -122,20 +134,69 @@ static LCK_GRP_DECLARE(mouse_lck_grp, "ps2mouse");
 static int       ps2mouse_major = -1;
 static boolean_t ps2mouse_initialized = FALSE;
 
+/* Set by ps2mouse_open when the device answered the IntelliMouse magic. */
+static boolean_t mouse_wheel = FALSE;
+/* Packet being assembled from the controller's byte stream. */
+static uint8_t   mouse_pkt[MOUSE_RECORD_SIZE];
+static int       mouse_pktlen;
+
+/* Send one byte to the aux device and report whether it was ACKed (0xfa). */
+static int
+ps2_write_aux_acked(uint8_t cmd)
+{
+	ps2_write_aux(cmd);
+	return ps2_read_data() == 0xfa;
+}
+
+/* Append one normalized 4-byte record to the ring.  */
+
+static void
+ps2mouse_push_record(const uint8_t *pkt)
+{
+	uint8_t rec[MOUSE_RECORD_SIZE];
+	uint32_t i;
+
+	rec[0] = pkt[0];
+	rec[1] = pkt[1];
+	rec[2] = pkt[2];
+	if (mouse_wheel) {
+		/* The wheel is a 4-bit two's complement field in bits 0-3 with its
+		 * sign duplicated in bit 3; extend it to a signed byte. */
+		rec[3] = (uint8_t)((pkt[3] & 0x08) ? (pkt[3] | 0x80) : pkt[3]);
+	} else {
+		rec[3] = 0;
+	}
+
+	for (i = 0; i < MOUSE_RECORD_SIZE; i++) {
+		uint32_t next_head = (mouse_head + 1) % MOUSE_RING_SIZE;
+		if (next_head == mouse_tail)
+			return;                 /* ring full: drop the record */
+		mouse_ring[mouse_head] = rec[i];
+		mouse_head = next_head;
+	}
+}
+
 static void
 ps2mouse_drain_hardware(void)
 {
-	/* Drain any pending mouse bytes from the i8042 controller into ring */
+	/* Drain any pending mouse bytes from the i8042 controller and assemble
+	 * them into records.  A packet always starts with bit 3 set in its first
+	 * byte, which is how a half packet left over from a previous read is
+	 * discarded. */
 	int count = 64;
 	while (count-- > 0) {
 		uint8_t status = inb_port(I8042_CMD_PORT);
 		if ((status & (I8042_STATUS_OUTBUF_FULL | I8042_STATUS_AUX_DATA)) ==
 		    (I8042_STATUS_OUTBUF_FULL | I8042_STATUS_AUX_DATA)) {
 			uint8_t byte = inb_port(I8042_DATA_PORT);
-			uint32_t next_head = (mouse_head + 1) % MOUSE_RING_SIZE;
-			if (next_head != mouse_tail) {
-				mouse_ring[mouse_head] = byte;
-				mouse_head = next_head;
+			int pkt_size = mouse_wheel ? 4 : 3;
+
+			if (mouse_pktlen == 0 && !(byte & 0x08))
+				continue;       /* not a packet start: resync */
+			mouse_pkt[mouse_pktlen++] = byte;
+			if (mouse_pktlen == pkt_size) {
+				ps2mouse_push_record(mouse_pkt);
+				mouse_pktlen = 0;
 			}
 		} else {
 			break;
@@ -178,7 +239,34 @@ ps2mouse_open(__unused dev_t dev, __unused int flags, __unused int devtype, __un
 	ps2_write_aux(MOUSE_CMD_SET_DEFAULTS);
 	(void)ps2_read_data(); /* ACK 0xFA */
 
-	/* 5. Enable data reporting (streaming mode) */
+	/* 5. Ask for IntelliMouse mode: the 200/100/80 sample-rate sequence is
+	 * the documented handshake, and the id read back says whether it took.
+	 * Device id 3 is a wheel, 4 adds the 5th button. */
+	ps2_write_aux_acked(MOUSE_CMD_SET_SAMPLE_RATE);
+	ps2_write_aux_acked(200);
+	ps2_write_aux_acked(MOUSE_CMD_SET_SAMPLE_RATE);
+	ps2_write_aux_acked(100);
+	ps2_write_aux_acked(MOUSE_CMD_SET_SAMPLE_RATE);
+	ps2_write_aux_acked(80);
+	/* GET_ID is answered with an ACK *then* the id byte, so the first read
+	 * is the ACK (measured: reading once returned 0xfa and reported
+	 * "device id 250").  Skip ACKs and take the first other byte. */
+	ps2_write_aux(MOUSE_CMD_GET_ID);
+	int devid = 0;
+	for (int i = 0; i < 4; i++) {
+		int b = ps2_read_data();
+		if (b != 0xfa) {
+			devid = b;
+			break;
+		}
+	}
+	mouse_wheel = (devid == 0x03 || devid == 0x04);
+	mouse_pktlen = 0;
+	printf("ps2mouse: device id %d (%s)\n", devid,
+	       mouse_wheel ? "IntelliMouse, 4-byte records with wheel"
+	                   : "3-byte, wheel absent");
+
+	/* 6. Enable data reporting (streaming mode) */
 	ps2_write_aux(MOUSE_CMD_ENABLE_STREAM);
 	(void)ps2_read_data(); /* ACK 0xFA */
 
@@ -228,7 +316,21 @@ ps2mouse_read(__unused dev_t dev, struct uio *uio, __unused int ioflag)
 
 	size_t to_read = MIN(requested, available);
 	uint8_t temp_buf[256];
-	size_t chunk = MIN(to_read, sizeof(temp_buf));
+	size_t chunk;
+
+	/* Never split a record: a reader that got half of one would misread the
+	 * next packet's flags as its own. */
+	to_read -= to_read % MOUSE_RECORD_SIZE;
+	if (to_read == 0) {
+		lck_mtx_unlock(&mouse_lock);
+		return 0;
+	}
+	chunk = MIN(to_read, sizeof(temp_buf));
+	chunk -= chunk % MOUSE_RECORD_SIZE;
+	if (chunk == 0) {
+		lck_mtx_unlock(&mouse_lock);
+		return 0;
+	}
 
 	for (size_t i = 0; i < chunk; i++) {
 		temp_buf[i] = mouse_ring[mouse_tail];

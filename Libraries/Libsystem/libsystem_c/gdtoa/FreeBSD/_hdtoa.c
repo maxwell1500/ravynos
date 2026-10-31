@@ -33,6 +33,13 @@ __FBSDID("$FreeBSD: src/lib/libc/gdtoa/_hdtoa.c,v 1.5 2007/05/08 02:59:37 das Ex
 #include "fpmath.h"
 #include "gdtoaimp.h"
 
+/* FreeBSD's fpclassify has a category for x87 pseudo-denormals that Darwin's
+ * does not.  6 collides with none of the Darwin values (NAN 1, INFINITE 2,
+ * ZERO 3, NORMAL 4, SUBNORMAL 5), so the grouped case never matches here. */
+#ifndef FP_SUPERNORMAL
+#define FP_SUPERNORMAL 6
+#endif
+
 /* Strings values used by dtoa() */
 #define	INFSTR	"Infinity"
 #define	NANSTR	"NaN"

@@ -83,8 +83,6 @@
 		<string>2.9</string>
 		<key>com.apple.driver.AppleAPIC</key>
                 <string>1.4</string>
-                <key>com.apple.driver.ApplePS2Controller</key>
-                <string>1.1.0</string>
 	</dict>
 	<key>OSBundleRequired</key>
 	<string>Root</string>

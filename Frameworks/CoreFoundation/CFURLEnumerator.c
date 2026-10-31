@@ -173,10 +173,20 @@ CFURLEnumeratorGetNextURL(CFURLEnumeratorRef enumerator,
                                          error);
     }
     
-    struct dirent *d = readdir(enumerator->_dirp);
-    
-    if (!d)
+    /*
+     * opendir() may have failed (a missing directory, or one this process may
+     * not read) and _dirp is then NULL.  Calling readdir(NULL) dereferences
+     * NULL inside libsystem_c (readdir locks dir+0x40) and killed Firefox
+     * while it enumerated a directory: frame chain
+     * CFURLEnumeratorGetNextURL -> readdir -> SIGSEGV.
+     */
+    if (enumerator->_dirp == NULL)
         return kCFURLEnumeratorError;
+
+    struct dirent *d = readdir(enumerator->_dirp);
+
+    if (!d)
+        return kCFURLEnumeratorEnd;
 
     memcpy(&enumerator->_entry, d, sizeof(struct dirent));
 
@@ -196,6 +206,13 @@ CFURLEnumeratorGetNextURL(CFURLEnumeratorRef enumerator,
                                                        strlen(pathbuf),
                                                        d->d_type == DT_DIR);
     }
+
+    /*
+     * This function had no return statement at all, so every successful call
+     * returned whatever happened to be in the return register.  The header
+     * documents kCFURLEnumeratorSuccess for a returned entry.
+     */
+    return kCFURLEnumeratorSuccess;
 }
 
 /* deprecated from macOS 10.7 */

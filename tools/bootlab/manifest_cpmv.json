@@ -329,6 +329,11 @@
       "comment": "dynamic mv (BSD/bin/mv: mv.c) linked against libSystem.B.dylib, rebuilt Libsystem"
     },
     {
+      "path": "bin/sleep",
+      "file": "work/sleep_dyn",
+      "comment": "dynamic sleep (BSD/bin/sleep: sleep.c); the conformance runner and any script that paces work needs it, and the image shipped none"
+    },
+    {
       "path": "System/Library/CoreServices/WindowServer.app",
       "file": "work/WindowServer.app.tar.gz",
       "comment": "WindowServer app bundle built by CoreServices/WindowServer/Makefile; Mach-O 64-bit executable x86_64; staged as tar.gz archive"

@@ -18,11 +18,12 @@
     NSMutableArray *displayModeTitles;
     NSMutableArray *displayModeRefs;
     int selectedDisplayMode;
+    NSPopUpButton *dispResolutionPopup;
     NSPopUpButton *dispRefreshPopup;
     NSPopUpButton *dispScalePopup;
     NSPopUpButton *dispRotationPopup;
     NSTextField *dispCurrentLabel;
-
+    NSTextField *dispStatusLabel;
     // Network
     NSPopUpButton *netIfacePopup;
     NSTextField *netStatusField;

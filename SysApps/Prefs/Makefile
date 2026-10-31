@@ -31,10 +31,6 @@ all: obj
 	mv -f ${APP_DIR}/Contents/ravynOS/${APP} "${APP_DIR}/Contents/ravynOS/${APP:S/_/ /}"
 	mv -f ${APP_DIR} "${APP_DIR:S/_/ /}"
 
-clean:
-	rm -rf ${APP_DIR} "${APP_DIR:S/_/ /}"
-	rm -f *.o
-
 makedirs:
 	mkdir -p ${MAKEOBJDIR}
 

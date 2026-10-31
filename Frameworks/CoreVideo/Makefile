@@ -5,7 +5,7 @@ FMWK_COMPAT_VERSION = 1.2.0
 FMWK_CURRENT_VERSION = 1605.1
 INFO_PLIST = Info.plist
 
-SRCS = CVDisplayLink.m CVPixelBuffer.m
+SRCS = CVDisplayLink.m CVPixelBuffer.m CVImageBufferKeys.m
 HEADERS = Headers/CoreVideo.h
 
 CFLAGS += -I${.CURDIR}/Headers -I${ROOT_SOURCE_DIR}/Frameworks/CoreFoundation \

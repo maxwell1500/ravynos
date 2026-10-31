@@ -12,6 +12,8 @@ SRCS = \
 	gen/clock_gettime.c \
 	gen/confstr.c \
 	gen/crypt.c \
+	gen/crypt_sha512.c \
+	gen/sha512.c \
 	gen/devname.c \
 	gen/disklabel.c \
 	gen/errlst.c \

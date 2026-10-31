@@ -6,6 +6,8 @@ MK_WERROR = no
 .include "../framework.common.mk"
 
 SRCS= \
+	QuartzCoreClasses.m \
+	QuartzCoreCompat.m \
 	CAAnimation.m \
 	CAAnimationGroup.m \
 	CABase.m \
@@ -74,7 +76,7 @@ CFLAGS+= ${FMWK_CFLAGS} -I${.CURDIR:H} \
 
 
 
-LDFLAGS+= ${FMWK_LDFLAGS} \
+LDFLAGS+= ${FMWK_LDFLAGS} -Wl,-all_load
 
 
 

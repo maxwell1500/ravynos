@@ -36,8 +36,13 @@
 #define API_AVAILABLE(...)
 #endif
 
+#if defined(__APPLE__)
+#include <CommonCrypto/CommonDigest.h>
+#define SHA256_DIGEST_LENGTH CC_SHA256_DIGEST_LENGTH
+#else
 #include <openssl/evp.h>
 #include <openssl/sha.h>
+#endif
 #include <strings.h>
 #include <stdio.h>
 #include <libgen.h>
@@ -52,8 +57,35 @@
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <CoreFoundation/CoreFoundation.h>
+#if defined(__APPLE__)
+typedef struct __CFRuntimeBase {
+    uintptr_t _cfisa;
+    uint8_t _cfinfo[4];
+    uint32_t _rc;
+} CFRuntimeBase;
+
+typedef struct __CFRuntimeClass {
+    CFIndex version;
+    const char *className;
+    void (*init)(CFTypeRef cf);
+    CFTypeRef (*copy)(CFTypeRef cf);
+    void (*finalize)(CFTypeRef cf);
+    Boolean (*equal)(CFTypeRef cf1, CFTypeRef cf2);
+    CFHashCode (*hash)(CFTypeRef cf);
+    CFStringRef (*copyFormattingDesc)(CFTypeRef cf, CFDictionaryRef formatOpts);
+    CFStringRef (*copyDebugDesc)(CFTypeRef cf);
+    void (*reclaim)(CFTypeRef cf);
+    uint32_t (*refcount)(intptr_t op, CFTypeRef cf);
+} CFRuntimeClass;
+
+#define _kCFRuntimeNotATypeID 0
+
+extern CFTypeID _CFRuntimeRegisterClass(const CFRuntimeClass * const cls);
+extern CFTypeRef _CFRuntimeCreateInstance(CFAllocatorRef allocator, CFTypeID typeID, CFIndex extraBytes, unsigned char *category);
+#else
 #include <CoreFoundation/CFRuntime.h>
 #include <CoreFoundation/CFBundlePriv.h>
+#endif
 #include <OSKext.h>
 #include <OSKextPrivate.h>
 #include <IOKit/IOCFSerialize.h>

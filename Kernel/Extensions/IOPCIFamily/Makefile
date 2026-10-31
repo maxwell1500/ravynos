@@ -15,23 +15,20 @@ SRCS = IOPCIBridge.cpp \
 	IOPCIMessagedInterruptController.cpp
 #	PCIDriverKit/IOPCIDevice.iig
 
-CFLAGS = -DPRIVATE=1 -DXNU_KERNEL_PRIVATE -DACPI_SUPPORT=1 \
+CFLAGS = -DPRIVATE=1 -DACPI_SUPPORT=1 \
 	-Wno-implicit-int-conversion \
 	-Wno-inconsistent-missing-override \
 	-Wno-sign-conversion -Wno-shadow \
-	-I${.CURDIR} -I${.CURDIR}/../../xnu/osfmk \
-	-I${.CURDIR}/../../xnu/pexpert \
+	-I${.CURDIR} \
 	-I${ROOT_BINARY_DIR}${ROOT_SOURCE_DIR}/Kernel/xnu/EXPORT_HDRS/osfmk \
 	-I${ROOT_BINARY_DIR}${ROOT_SOURCE_DIR}/Kernel/xnu/EXPORT_HDRS/pexpert \
-	-I${.CURDIR}/../../xnu/bsd \
-	-I${.CURDIR}/../../xnu/iokit \
-	-I${.CURDIR}/../../xnu/libkern \
-	-I${.CURDIR}/../../xnu \
-	-I${.CURDIR:H}/IOACPIFamily/include \
+	-I${ROOT_BINARY_DIR}${ROOT_SOURCE_DIR}/Kernel/xnu/EXPORT_HDRS/iokit \
+	-I${ROOT_BINARY_DIR}${ROOT_SOURCE_DIR}/Kernel/xnu/EXPORT_HDRS/bsd \
 	-I${ROOT_BINARY_DIR}${ROOT_SOURCE_DIR}/Kernel/xnu/EXPORT_HDRS/libkern \
+	-I${.CURDIR:H}/IOACPIFamily/include \
+	-I${ROOT_SOURCE_DIR}/Kernel/xnu/iokit \
 	-I${ROOT_SOURCE_DIR}/Kernel/xnu/EXTERNAL_HEADERS ${CFLAGS.${.TARGET:T}}
 
-CXXSTD = gnu++11
 CSTD = gnu11
 
 CFLAGS.IOPCIDevice.o = -include${.CURDIR}/iig_shims.h

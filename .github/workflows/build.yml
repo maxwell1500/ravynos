@@ -1,0 +1,71 @@
+name: build
+
+# The bootlab build links against the ravynOS platform toolchain that
+# Developer/Default.xctoolchain plus tools/build.sh produce on a prepared
+# macOS host, and it stages scratch files under $RAVYN_BUILD_DIR.  A stock
+# GitHub macOS runner has neither, so this workflow runs on a self-hosted
+# macOS runner that has one prepared build tree.  The "prepare" job fails
+# with the exact missing path instead of letting a half-configured build
+# produce an image that cannot boot.
+#
+# Required runner state:
+#   - Xcode command line tools (xcrun, clang, SDKs)
+#   - RAVYN_BUILD_DIR, default /Users/max/Projects/build
+#   - $RAVYN_BUILD_DIR/Developer/Platforms/ravynOS.platform/Developer/Toolchains/Default.xctoolchain/usr/bin/clang-17
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  image:
+    runs-on: [self-hosted, macOS]
+    timeout-minutes: 120
+    env:
+      RAVYN_BUILD_DIR: ${{ vars.RAVYN_BUILD_DIR || '/Users/max/Projects/build' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare
+        run: |
+          set -euo pipefail
+          TC="$RAVYN_BUILD_DIR/Developer/Platforms/ravynOS.platform/Developer/Toolchains/Default.xctoolchain/usr/bin/clang-17"
+          test -x "$TC" || { echo "missing toolchain: $TC" >&2; exit 1; }
+          xcodebuild -version
+          xcrun --sdk macosx --show-sdk-path
+
+      - name: Build kernel and kexts
+        run: |
+          set -euo pipefail
+          tools/bootlab/build-libraries.sh --kexts IOACPIFamily AppleAPIC IOPCIFamily AppleI386PCI
+
+      - name: Build compatibility fixtures
+        run: |
+          set -euo pipefail
+          tests/compat/build-fixtures.sh
+          tests/compat/install.sh
+
+      - name: Manifest and closure gate
+        working-directory: tools/bootlab
+        run: |
+          set -euo pipefail
+          python3 make_gui_manifest.py
+          python3 closure_gate.py manifest_gui.json
+
+      - name: Build image
+        working-directory: tools/bootlab
+        run: python3 mkimage.py work/boot.img --manifest manifest_gui.json
+
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: boot-image
+          path: |
+            tools/bootlab/work/boot.img
+            tools/bootlab/work/boot.img.digests
+            tools/bootlab/work/prelinked_kernel.development
+            tests/compat/out
+          retention-days: 14

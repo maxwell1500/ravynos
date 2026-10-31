@@ -384,6 +384,24 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
    [self setStringValue:value];
 }
 
+-(NSString *)placeholderString {
+   return [(NSTextFieldCell *)_cell placeholderString];
+}
+
+-(void)setPlaceholderString:(NSString *)string {
+   [(NSTextFieldCell *)_cell setPlaceholderString:string];
+   [self setNeedsDisplay:YES];
+}
+
+-(NSAttributedString *)placeholderAttributedString {
+   return [(NSTextFieldCell *)_cell placeholderAttributedString];
+}
+
+-(void)setPlaceholderAttributedString:(NSAttributedString *)string {
+   [(NSTextFieldCell *)_cell setPlaceholderAttributedString:string];
+   [self setNeedsDisplay:YES];
+}
+
 @end
 
 @implementation NSTextField (Bindings)

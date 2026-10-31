@@ -35,6 +35,10 @@ __FBSDID("$FreeBSD: src/lib/libc/gdtoa/_ldtoa.c,v 1.5 2007/12/09 19:48:57 das Ex
 #include "fpmath.h"
 #include "gdtoaimp.h"
 
+#ifndef FP_SUPERNORMAL
+#define FP_SUPERNORMAL 6
+#endif
+
 /*
  * ldtoa() is a wrapper for gdtoa() that makes it smell like dtoa(),
  * except that the floating point argument is passed by reference.

@@ -596,24 +596,23 @@ static void ws_unichar_to_utf8(unichar ch, char *out) {
                 continue;
             }
 
-            if(packetBytes < 3)
+            if(packetBytes < 4)
                 continue;
 
-            /* Full 3-byte packet received */
+            /* Full 4-byte record: flags, dx, dy, dz (ps2mouse.c). */
             packetBytes = 0;
             uint8_t b0 = packetBuf[0];
             uint8_t b1 = packetBuf[1];
             uint8_t b2 = packetBuf[2];
+            int8_t  dz = (int8_t)packetBuf[3];
 
             int rawDx = (int)b1 - ((b0 & 0x10) ? 256 : 0);
             int rawDy = (int)b2 - ((b0 & 0x20) ? 256 : 0);
 
+            /* The pointer follows the hand; natural scrolling only reverses
+             * the wheel, which is applied where the scroll event is built. */
             float speed = sqrtf((float)(rawDx * rawDx + rawDy * rawDy));
             float scale = 2.5f * trackingSpeed;
-            if(naturalScrolling) {
-                rawDx = -rawDx;
-                rawDy = -rawDy;
-            }
             if (speed > 5.0f) {
                 scale *= (1.0f + 0.1f * speed);
                 if (scale > 5.0f)
@@ -678,6 +677,47 @@ static void ws_unichar_to_utf8(unichar ch, char *out) {
             } else {
                 accumDx += dx;
                 accumDy += dy;
+            }
+
+            /* Wheel: the mouse reports one notch per event and a notch must not
+             * be coalesced with motion, or a slow roll is lost. */
+            if(dz != 0) {
+                if(accumDx != 0 || accumDy != 0) {
+                    struct mach_event me;
+                    memset(&me, 0, sizeof(struct mach_event));
+                    me.x = pointerX;
+                    me.y = pointerY;
+                    me.dx = accumDx;
+                    me.dy = accumDy;
+                    me.mods = [self modifierFlagsForState:xkb_state];
+                    if (buttonDown[0])
+                        me.code = NSLeftMouseDragged;
+                    else if (buttonDown[1])
+                        me.code = NSRightMouseDragged;
+                    else
+                        me.code = NSMouseMoved;
+                    [target sendEventToApp:&me];
+                    ++events;
+                    accumDx = 0;
+                    accumDy = 0;
+                }
+
+                struct mach_event me;
+                memset(&me, 0, sizeof(struct mach_event));
+                me.code = NSScrollWheel;
+                me.x = pointerX;
+                me.y = pointerY;
+                me.mods = [self modifierFlagsForState:xkb_state];
+                /* The PS/2 wheel byte is negative for a roll away from the
+                 * user: Linux reports -((signed char)packet[3]) as REL_WHEEL,
+                 * and QEMU encodes WHEEL_UP the same way (measured: a wheel-up
+                 * notch arrives here as dz == -1).
+                 * AppKit's deltaY is positive for "scroll up", so with natural
+                 * scrolling off deltaY = -dz; with it on the content follows
+                 * the hand and the sign flips. */
+                me.scroll = naturalScrolling ? (double)dz : -(double)dz;
+                [target sendEventToApp:&me];
+                ++events;
             }
         }
     }

@@ -23,6 +23,12 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
 BUILD="${RAVYN_BUILD_DIR:-/Users/max/Projects/build}"
 SDK="$BUILD/Developer/Platforms/ravynOS.platform/Developer/SDKs/ravynOS.sdk"
+# Toolchain root that ships host tools such as plktool.  This used to be
+# referenced by the --kexts prelink step without ever being assigned, so the
+# test below read "/bin/plktool" and "/usr/bin/plktool", neither of which
+# exists: the prelinked kernel was then never rebuilt and the boot image kept
+# whatever copy was last written by hand.
+BUILD_TOOLCHAIN="${RAVYN_TOOLCHAIN_DIR:-$BUILD/Developer/Platforms/ravynOS.platform/Developer/Toolchains/Default.xctoolchain}"
 BMAKE="${BMAKE:-/usr/local/bin/bmake}"
 # The compiler this build targets is the ravynOS platform toolchain's clang,
 # NOT the host's.  These are different compilers and the difference is not
@@ -1011,11 +1017,27 @@ elif [ "${1:-}" = "--kexts" ]; then
     # the same environment the framework and library builds use.
     shift
     KEXT_DIRS=("$@")
+    KEXT_EXPLICIT=0
+    [ ${#KEXT_DIRS[@]} -gt 0 ] && KEXT_EXPLICIT=1
     if [ ${#KEXT_DIRS[@]} -eq 0 ]; then
+        # ApplePS2Controller, IOATAFamily, AppleIntelPIIXATA and RavynAHCIPort
+        # are left out on purpose: each duplicates a driver the kernel already
+        # serves in-tree (ps2mouse/ps2kbd, and the in-kernel ATA/AHCI driver in
+        # bsd/dev/i386/ahci_block.c).  Loading both hands one device to two
+        # drivers -- measured: ApplePS2Controller corrupts launchd's first
+        # exec, and RavynAHCIPort resets the AHCI controller the kernel is
+        # reading the boot volume through, so launchd's Mach-O header comes
+        # back wrong and pid 1 exits with EXIT_REASON_DECRYPT (namespace 2,
+        # subcode 0xb).  Bisected 2026-10-30: min, +hfs, +IOStorageFamily and
+        # +IOHIDFamily all reach the desktop; +IOStorageFamily+RavynAHCIPort
+        # does not.  Stage either only once the kernel driver is retired.
         KEXT_DIRS=(IOACPIFamily AppleAPIC IOPCIFamily AppleI386PCI IOStorageFamily \
-                   IOATAFamily AppleIntelPIIXATA RavynAHCIPort IOUSBFamily \
-                   RavynXHCIPort IOHIDFamily ApplePS2Controller IOGraphics \
-                   AppleFileSystemDriver hfs corecrypto pthread)
+                   IOUSBFamily RavynXHCIPort IOHIDFamily IOGraphics \
+                   AppleFileSystemDriver hfs)
+        # corecrypto and pthread are not in the default set: neither builds
+        # yet (pthread needs kern/smp.h, corecrypto fails in sha256.cc) and
+        # nothing else declares a dependency on them.  Name them explicitly to
+        # build them once their own failures are fixed.
     fi
     rc=0
 
@@ -1068,6 +1090,132 @@ elif [ "${1:-}" = "--kexts" ]; then
         ( cd "$ROOT" && MAKEOBJDIR="$BUILD$base" \
           "$BMAKE" -m "$MKMODULES" -C "$base" "${BMAKE_TARGET:-all}" ) || rc=1
     done
+    # A kext that was asked for by name and produced no executable is a build
+    # failure, not something to skip: the prelink would silently leave it out
+    # and the image would boot without the driver the caller believes is in it.
+    if [ "$KEXT_EXPLICIT" = 1 ]; then
+        for d in "${KEXT_DIRS[@]}"; do
+            bdir="$BUILD$ROOT/Kernel/Extensions/$d"
+            bundle="$(find "$bdir" -maxdepth 2 -name '*.kext' -type d 2>/dev/null | head -1)"
+            [ -n "$bundle" ] || bundle="$bdir"
+            if [ -z "$(find "$bundle/Contents/MacOS" -maxdepth 1 -type f -perm -u+x 2>/dev/null | head -1)" ]; then
+                echo "--- kext build FAILED: Kernel/Extensions/$d produced no executable" >&2
+                rc=1
+            fi
+        done
+    fi
+    PLKTOOL=""
+    for cand in "$BUILD_TOOLCHAIN/bin/plktool" "$BUILD_TOOLCHAIN/usr/bin/plktool" \
+                "$HERE/work/plktool" "$(command -v plktool 2>/dev/null)"; do
+        if [ -n "$cand" ] && [ -x "$cand" ]; then
+            PLKTOOL="$cand"
+            break
+        fi
+    done
+    if [ $rc -eq 0 ] && [ -n "$PLKTOOL" ]; then
+        echo "=== creating prelinked kernel with $PLKTOOL ==="
+        KERNEL_SRC="$HERE/work/stripped_kernel.development"
+        [ -f "$KERNEL_SRC" ] || KERNEL_SRC="$HERE/assets/kernel.development"
+        PRELINK_OUT="$HERE/work/prelinked_kernel.development"
+        # Never leave a previous run's prelink in place: a boot that silently
+        # uses yesterday's kexts has already cost a debugging cycle.
+        rm -f "$PRELINK_OUT"
+        KEXT_BUNDLE_LIST=(
+            "$ROOT/Kernel/xnu/config/System.kext"
+            "$ROOT/Kernel/xnu/config/System.kext"/PlugIns/*.kext
+        )
+        # Prelink exactly what was requested.  The glob over every built bundle
+        # meant a driver held out for an experiment came back the moment some
+        # other kext was rebuilt, so an image could never be pinned to a set.
+        KEXT_CANDIDATES=()
+        if [ "$KEXT_EXPLICIT" = 1 ]; then
+            for d in "${KEXT_DIRS[@]}"; do
+                KEXT_CANDIDATES+=("$BUILD$ROOT/Kernel/Extensions/$d"/*.kext)
+            done
+        else
+            KEXT_CANDIDATES=("$BUILD$ROOT"/Kernel/Extensions/*/*.kext)
+        fi
+        # Bundles that must never enter a prelink, whatever is on disk: each
+        # duplicates a driver the kernel already serves and hands one device
+        # to two drivers.  The explicit-dirs list cannot cover the default glob,
+        # which is how RavynAHCIPort came back after being removed from
+        # KEXT_DIRS and killed pid 1 again.
+        KEXT_NEVER=" ApplePS2Controller.kext IOATAFamily.kext AppleIntelPIIXATA.kext RavynAHCIPort.kext "
+        KEXT_FILTERED=()
+        for kdir in "${KEXT_CANDIDATES[@]}"; do
+            [ -d "$kdir" ] || continue
+            case "$KEXT_NEVER" in
+            *" $(basename "$kdir") "*)
+                echo "--- prelink: skipping $(basename "$kdir") (duplicates an in-kernel driver)"
+                continue
+                ;;
+            esac
+            KEXT_FILTERED+=("$kdir")
+        done
+        KEXT_CANDIDATES=("${KEXT_FILTERED[@]}")
+        for kdir in "${KEXT_CANDIDATES[@]}"; do
+            [ -d "$kdir" ] || continue
+            # A kext whose sources failed to build leaves an empty bundle
+            # behind, and plktool then dies on "failed stat on executable" and
+            # writes NO prelinked kernel at all -- so the image silently kept an
+            # old one.  Skip such a bundle loudly instead.
+            if [ -z "$(find "$kdir/Contents/MacOS" -maxdepth 1 -type f -perm -u+x 2>/dev/null | head -1)" ]; then
+                echo "--- prelink: skipping ${kdir#$BUILD$ROOT/} (no executable: its build failed)"
+                continue
+            fi
+            KEXT_BUNDLE_LIST+=("$kdir")
+        done
+        # plktool aborts the WHOLE prelink on the first kext it cannot resolve,
+        # and then writes no output at all -- the image silently kept an older
+        # prelinked kernel.  Drop the offending bundle by identifier and retry,
+        # so one broken driver costs one driver, not the whole prelink.
+        rm -f "$PRELINK_OUT"
+        attempt=0
+        while [ $attempt -lt 20 ]; do
+            attempt=$((attempt + 1))
+            plog="$(mktemp)"
+            if "$PLKTOOL" "$PRELINK_OUT" "$KERNEL_SRC" "${KEXT_BUNDLE_LIST[@]}" >"$plog" 2>&1; then
+                rm -f "$plog"
+                break
+            fi
+            failed_id="$(sed -n 's/^Prelink failed at //p' "$plog" | head -1)"
+            keep=()
+            dropped=""
+            for kdir in "${KEXT_BUNDLE_LIST[@]}"; do
+                kplist="$kdir/Contents/Info.plist"
+                [ -f "$kplist" ] || kplist="$kdir/Info.plist"
+                kid="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$kplist" 2>/dev/null)"
+                if [ -n "$failed_id" ] && [ "$kid" = "$failed_id" ] && [ -z "$dropped" ]; then
+                    dropped="$kdir"
+                    continue
+                fi
+                keep+=("$kdir")
+            done
+            if [ -z "$dropped" ]; then
+                echo "--- prelink FAILED at '${failed_id:-unknown}' and no bundle matched:" >&2
+                tail -5 "$plog" >&2
+                rm -f "$plog"
+                rc=1
+                break
+            fi
+            echo "--- prelink: dropping ${dropped#$BUILD$ROOT/} (plktool: $failed_id)"
+            rm -f "$plog"
+            KEXT_BUNDLE_LIST=("${keep[@]}")
+        done
+        if [ ! -f "$PRELINK_OUT" ]; then
+            echo "--- prelink: no prelinked kernel was produced" >&2
+            rc=1
+        elif [ "$(find "$PRELINK_OUT" -newer "$KERNEL_SRC" | head -1)" = "" ]; then
+            echo "--- prelink: $PRELINK_OUT is OLDER than $KERNEL_SRC" >&2
+            rc=1
+        else
+            echo "--- prelinked kernel: $PRELINK_OUT ($(ls -lh "$PRELINK_OUT" | awk '{print $5}'))"
+        fi
+    else
+        echo "--- prelink: skipped (a kext failed to build or no plktool); refusing to leave a prelink" >&2
+        rm -f "$HERE/work/prelinked_kernel.development"
+        rc=1
+    fi
     python3 "$HERE/sync_sdk.py" || rc=1
     exit $rc
 elif [ "${1:-}" = "--bsd" ]; then

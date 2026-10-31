@@ -32,7 +32,9 @@
 
 /* Usage Pages */
 enum {
+#ifndef _IOHIDUSAGETABLES_H
     kHIDPage_AppleVendor                        = 0xFF00,
+#endif
     kHIDPage_AppleVendorKeyboard                = 0xFF01,
     kHIDPage_AppleVendorMouse                   = 0xFF02,
     kHIDPage_AppleVendorAccelerometer           = 0xFF03,

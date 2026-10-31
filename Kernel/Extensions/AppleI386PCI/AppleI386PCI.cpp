@@ -176,6 +176,33 @@ bool AppleI386PCI::start( IOService * provider )
 	return( false);
     ioMemory->setMapping( kernel_task, 0 );	/* mapped to zero in IO space */
 
+    /* Walk the bus and log what answered.  IOPCIFamily only creates device
+     * nubs for children someone describes, and the ACPI path that would do it
+     * for a PC is not here, so without this a driver has no way to know the
+     * bus even responds -- and no IOPCIDevice to match on. */
+    for( UInt8 bus = 0; bus < 2; bus++)
+    {
+	for( UInt8 dev = 0; dev < 32; dev++)
+	{
+	    for( UInt8 fn = 0; fn < 8; fn++)
+	    {
+		IOPCIAddressSpace space;
+		space.bits = 0;
+		space.s.busNum = bus;
+		space.s.deviceNum = dev;
+		space.s.functionNum = fn;
+		UInt32 id = configRead32( space, 0x00);
+		if( (id & 0xffff) == 0xffff)
+		    continue;
+		IOLog("[PCI] %02x:%02x.%x vendor=%04x device=%04x class=%06x\n",
+		    bus, dev, fn, id & 0xffff, (id >> 16) & 0xffff,
+		    configRead32( space, 0x08) >> 8);
+		if( fn == 0 && !(configRead32( space, 0x0c) & 0x00800000))
+		    break;	/* not a multi-function device */
+	    }
+	}
+    }
+
     return( super::start( provider));
 }
 

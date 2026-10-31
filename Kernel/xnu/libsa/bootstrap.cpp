@@ -219,6 +219,30 @@ KLDBootstrap::readStartupExtensions(void)
 	readBuiltinPersonalities();
 	OSKext::sendAllKextPersonalitiesToCatalog(true);
 
+	/* One line so the boot log records whether the prelink carried kexts at
+	 * all; the registry is the only place that knows. */
+	/* Nothing starts the extensions that were just read: in XNU that is
+	 * kextd's job, and this image has no kextd (NO_KEXTD).  Start them here,
+	 * dependencies first, so a prelinked kernel brings its own drivers up by
+	 * itself instead of loading them into a registry nobody starts. */
+	OSPtr<OSDictionary> allKexts = OSKext::copyKexts();
+	unsigned int kextCount = allKexts ? (unsigned int)allKexts->getCount() : 0u;
+	kprintf("[kext] startup: prelinkInfo=%lu kexts=%u\n",
+	    (unsigned long)prelinkInfoSect->size, kextCount);
+	if (kextCount) {
+		OSPtr<OSCollectionIterator> iter =
+		    OSCollectionIterator::withCollection(allKexts.get());
+		OSKext *aKext;
+		while (iter && (aKext = OSDynamicCast(OSKext, iter->getNextObject()))) {
+			/* OSKext::start() reports its own outcome in the
+			 * "[kext] <id> started|did not start (0x..)" line; its
+			 * declared bool return is the raw OSReturn converted,
+			 * so 0 (kOSReturnSuccess) converts to false and cannot
+			 * be used as a success test here. */
+			aKext->start(/* startDependencies */ true);
+		}
+	}
+
 	return;
 }
 

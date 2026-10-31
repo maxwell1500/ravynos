@@ -27,6 +27,8 @@ INSTALL_NAME_DIR = ${SLF}/${FRAMEWORK}.framework/Versions/${FMWK_VERSION}
 .include "MakefileVersion"
 
 SRCS = CFApplicationPreferences.c \
+	CompatSymbols.c \
+	SpecialExceptions.m \
 	CFArray.c \
 	CFBag.c \
 	CFBase.c \
@@ -115,7 +117,7 @@ unicode_data_file_name = CFUnicodeData-L.mapping
 unicode_data_file_name = CFUnicodeData-B.mapping
 .endif
 
-CFLAGS = -ObjC -DCF_BUILDING_CF -DU_SHOW_CPLUSPLUS_API -DU_SHOW_DRAFT_API \
+CFLAGS = -ObjC -fobjc-exceptions -DCF_BUILDING_CF -DU_SHOW_CPLUSPLUS_API -DU_SHOW_DRAFT_API \
 	-DDEPLOYMENT_TARGET_MACOSX -D"MAC_OS_X_VERSION_MAX_ALLOWED=0x0D0100" \
 	-DVERSION=${VERSION} -DTARGET_OS_BRIDGE=0 -fconstant-cfstrings \
         -DINCLUDE_OBJC -DUSE_STRING_ROM -DTARGET_OS_IOSMAC=0 \

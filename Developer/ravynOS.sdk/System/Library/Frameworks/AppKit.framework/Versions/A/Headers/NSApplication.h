@@ -86,6 +86,15 @@ typedef enum {
     NSPrintingFailure,
 } NSApplicationPrintReply;
 
+/* Apple's AppKit defines this enum in NSApplication.h; stock macOS binaries
+ * call -setActivationPolicy: before -run, so both the type and the methods
+ * must exist for them to launch. */
+typedef NS_ENUM(NSInteger, NSApplicationActivationPolicy) {
+    NSApplicationActivationPolicyRegular = 0,
+    NSApplicationActivationPolicyAccessory = 1,
+    NSApplicationActivationPolicyProhibited = 2,
+};
+
 @interface NSApplication : NSResponder {
     NSString *bundleID;
     NSDisplay *_display;
@@ -114,6 +123,7 @@ typedef enum {
 
     int _machEventPipe[2];
     NSSelectInputSource *_inputSource;
+    NSApplicationActivationPolicy _activationPolicy;
 }
 
 @property(strong) NSMenu *helpMenu;
@@ -157,6 +167,8 @@ typedef enum {
 - (void)updateWindowsItem:(NSWindow *)window;
 
 - (void)finishLaunching;
+- (NSApplicationActivationPolicy)activationPolicy;
+- (BOOL)setActivationPolicy:(NSApplicationActivationPolicy)policy;
 - (void)run;
 
 - (void)sendEvent:(NSEvent *)event;

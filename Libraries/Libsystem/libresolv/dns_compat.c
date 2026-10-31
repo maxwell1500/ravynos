@@ -29,3 +29,11 @@ dns_configuration_notify_key(void)
 {
 	return "com.apple.system.config.network_change";
 }
+
+int h_errno = 0;
+
+int *
+__h_errno(void)
+{
+	return &h_errno;
+}

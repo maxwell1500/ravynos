@@ -279,3 +279,10 @@ CF_EXTERN_C_END
 
 #endif /* ! __COREFOUNDATION_CFRUNTIME__ */
 
+
+#ifndef CF_CLASSIMPLEMENTATION
+#define CF_CLASSIMPLEMENTATION(className) \
+- (id)retain { return (id)CFRetain((CFTypeRef)self); } \
+- (oneway void)release { CFRelease((CFTypeRef)self); } \
+- (NSUInteger)retainCount { return (NSUInteger)CFGetRetainCount((CFTypeRef)self); }
+#endif

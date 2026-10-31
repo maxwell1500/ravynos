@@ -89,6 +89,7 @@
 #include <libkern/OSByteOrder.h>
 
 #include <net/if.h>
+#include <net/if_var_private.h>
 #include <net/if_dl.h>
 #include <net/if_types.h>
 #include <net/route.h>
@@ -830,6 +831,68 @@ loopit:
 			}
 		}
 
+		/*
+		 * A DHCP client has to send to INADDR_BROADCAST before it has an
+		 * address, so there is no connected route to inherit and no
+		 * default route to clone from.  Install an interface route for
+		 * 255.255.255.255 on an up, broadcast-capable interface (the
+		 * socket's bound interface when it has one) instead of failing
+		 * the bootstrap protocol with EHOSTUNREACH.  Measured: without
+		 * this, dhclient's first DISCOVER fails with ENETUNREACH and no
+		 * DHCP exchange can ever start.
+		 */
+		if (ro->ro_rt == NULL &&
+		    dst->sin_addr.s_addr == INADDR_BROADCAST) {
+			struct ifnet *bifp = NULL;
+
+			if (ifscope != IFSCOPE_NONE &&
+			    ifscope < ifindex2ifnetcount) {
+				bifp = ifindex2ifnet[ifscope];
+			}
+			if (bifp == NULL) {
+				uint32_t i;
+
+				for (i = 1; i < ifindex2ifnetcount; i++) {
+					struct ifnet *cand = ifindex2ifnet[i];
+
+					if (cand != NULL &&
+					    (cand->if_flags &
+					    (IFF_UP | IFF_BROADCAST)) ==
+					    (IFF_UP | IFF_BROADCAST)) {
+						bifp = cand;
+						break;
+					}
+				}
+			}
+			if (bifp != NULL) {
+				struct sockaddr_in bdst;
+				struct sockaddr_dl sdl;
+
+				bzero(&bdst, sizeof(bdst));
+				bdst.sin_len = sizeof(bdst);
+				bdst.sin_family = AF_INET;
+				bdst.sin_addr.s_addr = INADDR_BROADCAST;
+
+				bzero(&sdl, sizeof(sdl));
+				sdl.sdl_len = sizeof(sdl);
+				sdl.sdl_family = AF_LINK;
+				sdl.sdl_index = bifp->if_index;
+				/* The gateway's link address is the destination
+				 * MAC; for a broadcast route it must be the
+				 * Ethernet broadcast address, otherwise the
+				 * frame goes to 00:00:00:00:00:00 and the
+				 * emulated network drops it. */
+				sdl.sdl_alen = ETHER_ADDR_LEN;
+				memset(LLADDR(&sdl), 0xff, ETHER_ADDR_LEN);
+
+				if (rtrequest(RTM_ADD, sintosa(&bdst),
+				    (struct sockaddr *)&sdl, NULL,
+				    RTF_UP | RTF_HOST | RTF_BROADCAST, NULL) == 0) {
+					rtalloc_scoped_ign(ro, 0, ifscope);
+				}
+			}
+		}
+
 		if (ro->ro_rt == NULL) {
 			OSAddAtomic(1, &ipstat.ips_noroute);
 			error = EHOSTUNREACH;
@@ -1068,9 +1131,19 @@ loopit:
 	 * of outgoing interface.
 	 */
 	if (ip->ip_src.s_addr == INADDR_ANY) {
-		IFA_LOCK_SPIN(&ia->ia_ifa);
-		ip->ip_src = IA_SIN(ia)->sin_addr;
-		IFA_UNLOCK(&ia->ia_ifa);
+		/*
+		 * A DHCP client's DISCOVER must leave with source 0.0.0.0: it
+		 * has no address yet, and its UDP checksum was computed over
+		 * that zero source.  Substituting the interface address here
+		 * rewrites the header after the checksum is sealed, which is
+		 * exactly how a well-formed DISCOVER ended up on the wire with
+		 * "bad udp cksum" and every server ignored it.
+		 */
+		if (dst->sin_addr.s_addr != INADDR_BROADCAST) {
+			IFA_LOCK_SPIN(&ia->ia_ifa);
+			ip->ip_src = IA_SIN(ia)->sin_addr;
+			IFA_UNLOCK(&ia->ia_ifa);
+		}
 	}
 
 	/*

@@ -52,7 +52,7 @@ extra_flags="$extra_flags -F$SDK/System/Library/Frameworks -I$SDK/usr/include"
 
 link_tail=""
 if [ "$linking" = yes ]; then
-    link_tail="-L$SDK/usr/lib -L$SDK/usr/lib/system -Wl,-L,$SDK/usr/lib -Wl,-L,$SDK/usr/lib/system -F$SDK/System/Library/Frameworks"
+    link_tail="-L$SDK/usr/lib -L$SDK/usr/lib/system -Wl,-L,$SDK/usr/lib -Wl,-L,$SDK/usr/lib/system -F$SDK/System/Library/Frameworks -lSystem -lcommonCrypto"
 fi
 
 # shellcheck disable=SC2086

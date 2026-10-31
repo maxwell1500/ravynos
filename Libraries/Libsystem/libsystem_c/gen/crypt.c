@@ -531,12 +531,29 @@ static char	cryptresult[1+4+4+11+1];	/* encrypted result */
  * Return a pointer to static data consisting of the "setting"
  * followed by an encryption produced by the "key" and "setting".
  */
+int crypt_sha512(const char *pw, const char *salt, char *buf);
+
 char *
 crypt(key, setting)
 	register const char *key;
 	register const char *setting;
 {
 	register char *encp;
+
+	/*
+	 * $6$ is SHA-512 crypt.  DES is the fallback below, kept for the
+	 * hashes this tree wrote before SHA-512 existed; the login window
+	 * calls crypt(pass, stored_hash) and gets whichever the stored hash
+	 * names.
+	 */
+	if (setting != NULL && setting[0] == '$' && setting[1] == '6' &&
+	    setting[2] == '$') {
+		static char sha512result[128];
+
+		if (crypt_sha512(key, setting, sha512result) == 0)
+			return (sha512result);
+		return (NULL);
+	}
 	register long i;
 	register int t;
 	long salt;

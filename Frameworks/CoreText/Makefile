@@ -3,7 +3,7 @@ FRAMEWORK=CoreText
 # binary that recorded a higher one, so it has to match at least.
 FMWK_COMPAT_VERSION = 1.0.0
 
-SRCS= CTFont.m KTFont.m
+SRCS= CTFont.m KTFont.m CoreTextCompat.m
 HEADERS= CoreText.h CoreTextExport.h CTFont.h KTFont.h
 RESOURCES=Info.plist 
 LDFLAGS+= -F${OBJTOP}/Frameworks/Onyx2D -framework Onyx2D \

@@ -97,7 +97,7 @@ int main(int argc, char *argv[]) {
      * use for a title bar, and it keeps the port from depending on the theme
      * frame's display path -- the part of AppKit this system is least sure of
      * for a process that runs its own event loop. */
-    SDL_Window *window = SDL_CreateWindow("SDL2 Port \xE2\x80\x94 ravynOS",
+    SDL_Window *window = SDL_CreateWindow("SDL2 Port - ravynOS",
                                           SDL_WINDOWPOS_CENTERED,
                                           SDL_WINDOWPOS_CENTERED,
                                           width, height,

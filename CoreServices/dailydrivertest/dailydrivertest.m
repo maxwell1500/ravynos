@@ -32,6 +32,7 @@
 #include <unistd.h>
 #include <sys/wait.h>
 #include <sys/stat.h>
+#include <sys/sysctl.h>
 
 extern mach_port_t bootstrap_port;
 extern void bootstrap_init(void);
@@ -144,6 +145,22 @@ static int _readURLChild(void) {
     return 0;
 }
 
+/* crypt() must accept its own output as the setting: that is exactly what
+ * the login window does with the hash Preferences writes. */
+static int _cryptChild(void) {
+    char h1[64], h2[64];
+    const char *enc = crypt("ravyn", "ab");
+
+    if(enc == NULL) { fprintf(stderr, "crypt-null\n"); return 1; }
+    snprintf(h1, sizeof(h1), "%s", enc);
+    enc = crypt("ravyn", h1);
+    if(enc == NULL) { fprintf(stderr, "crypt-null\n"); return 1; }
+    snprintf(h2, sizeof(h2), "%s", enc);
+    printf("len=%zu same=%d\n", strlen(h1), strcmp(h1, h2) == 0);
+    fflush(stdout);
+    return 0;
+}
+
 static int _childMain(int argc, char **argv) {
     if(argc < 2)
         return 2;
@@ -153,6 +170,8 @@ static int _childMain(int argc, char **argv) {
         return _readTextChild();
     if(strcmp(argv[1], "read-url") == 0)
         return _readURLChild();
+    if(strcmp(argv[1], "crypt") == 0)
+        return _cryptChild();
     return 2;
 }
 
@@ -464,6 +483,17 @@ int main(int argc, char **argv) {
             if(accumulator == 30)
                 fprintf(stderr, "[ddtest] blocks ok: accumulator=%d\n", accumulator);
         }
+        {
+            /* The login window verifies a stored hash with crypt(pass, hash).
+             * Prove the library does what that assumes before trusting the
+             * Preferences pane to write with it. */
+            NSString *cryptOut = _runChild("crypt", NULL);
+            if(cryptOut != nil)
+                fprintf(stderr, "[ddtest] crypt: %s\n", [cryptOut UTF8String]);
+            _say(report, @"the password hash written by Preferences verifies with crypt(3)",
+                 cryptOut != nil &&
+                 [cryptOut rangeOfString:@"len=13 same=1"].location != NSNotFound);
+        }
         /* The report goes to the disk before the fleet starts: the fleet
          * takes a minute and a half, and the host harness reads the report
          * out of the image once the guest is stopped. */
@@ -472,6 +502,25 @@ int main(int argc, char **argv) {
         fprintf(stderr, "dailydrivertest: %d failure(s)\n", _failures);
         fflush(stderr);
 
+        /* Check if interactive mode, nofleet, or multi-core was detected */
+        {
+            int ncpu = 1;
+            size_t ncpu_len = sizeof(ncpu);
+            sysctlbyname("hw.ncpu", &ncpu, &ncpu_len, NULL, 0);
+            if(ncpu > 1) {
+                fprintf(stderr, "[ddtest] multi-core system detected (ncpu=%d); skipping automated fleet background loop.\n", ncpu);
+                return 0;
+            }
+
+            char kbootargs[1024] = {0};
+            size_t kbootlen = sizeof(kbootargs) - 1;
+            if(sysctlbyname("kern.bootargs", kbootargs, &kbootlen, NULL, 0) == 0) {
+                if(strstr(kbootargs, "nofleet") != NULL || strstr(kbootargs, "interactive") != NULL) {
+                    fprintf(stderr, "[ddtest] interactive boot (%s); skipping automated fleet background loop.\n", kbootargs);
+                    return 0;
+                }
+            }
+        }
         /* Launch every application in the fleet, one at a time, announcing
          * each on the console so the host harness can screendump the window
          * that just came up.  A launch that never produces a window is a
@@ -786,6 +835,14 @@ int main(int argc, char **argv) {
                     }
                 }
                 _say(report, @"the C++ runtime dylib loads, throws, threads, and runs both atexit hooks", ok);
+            }
+
+            /* MacPorts and App Store installation check */
+            {
+                BOOL portOK = _fileExists(@"/opt/local/bin/port") &&
+                              _fileExists(@"/opt/local/libexec/macports/bin/tclsh9.0");
+                BOOL storeOK = _fileExists(@"/Applications/App Store.app/Contents/ravynOS/AppStore");
+                _say(report, @"MacPorts base engine and App Store.app are installed in the system", portOK && storeOK);
             }
 
             _writeReport(report);

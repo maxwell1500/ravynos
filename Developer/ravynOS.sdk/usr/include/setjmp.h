@@ -38,7 +38,12 @@
 #define _SETJMP_H_
 
 #include <sys/cdefs.h>
-
+#ifndef __dead2
+#define __dead2 __attribute__((__noreturn__))
+#endif
+#ifndef __returns_twice
+#define __returns_twice __attribute__((__returns_twice__))
+#endif
 /* The size of the jmp_buf is machine dependent: */
 #include <machine/setjmp.h>
 

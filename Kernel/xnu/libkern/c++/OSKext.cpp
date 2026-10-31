@@ -963,6 +963,7 @@ OSKext::allocAndInitFakeKext(kmod_info_t *kmod_info)
 void
 OSKext::initialize(void)
 {
+
 	OSSharedPtr<OSData>     kernelExecutable   = NULL;// do not release
 	IORegistryEntry * registryRoot       = NULL;// do not release
 	OSSharedPtr<OSNumber> kernelCPUType;
@@ -7118,9 +7119,10 @@ OSKext::slidePrelinkedExecutable(bool doCoalescedSlides)
 					 * by xnu.
 					 * Doing so may result in panics like rdar://85419651
 					 */
-					if (PE_get_kc_format(kc_type, &format) && (format == KCFormatFileset)) {
+					if ((PE_get_kc_format(kc_type, &format) && (format == KCFormatFileset)) ||
+					    kext_get_vm_map(kmod_info) == kernel_map) {
 						new_osdata->setDeallocFunction(NULL);
-					} else { // Not from a Fileset KC
+					} else {
 #if VM_MAPPED_KEXTS
 						new_osdata->setDeallocFunction(osdata_kext_free);
 #else
@@ -7130,11 +7132,13 @@ OSKext::slidePrelinkedExecutable(bool doCoalescedSlides)
 					linkedExecutable->setDeallocFunction(NULL);
 					linkedExecutable = os::move(new_osdata);
 
+					if (kext_get_vm_map(kmod_info) != kernel_map) {
 #if VM_MAPPED_KEXTS
-					kext_free(new_endofkext, (endofkext - new_endofkext));
+						kext_free(new_endofkext, (endofkext - new_endofkext));
 #else
-					ml_static_mfree(new_endofkext, (endofkext - new_endofkext));
+						ml_static_mfree(new_endofkext, (endofkext - new_endofkext));
 #endif
+					}
 				}
 			}
 			dysymtab->nlocrel = 0;
@@ -7935,11 +7939,8 @@ OSKext_protect(
 	if (start == end) {         // 10538581
 		return KERN_SUCCESS;
 	}
-	if (kernel_mach_header_is_in_fileset(kext_mh) && kc_type == KCKindPrimary) {
-		/*
-		 * XXX: This will probably need to be different for AuxKC and
-		 * pageableKC!
-		 */
+	if (map == kernel_map || (kernel_mach_header_is_in_fileset(kext_mh) && kc_type == KCKindPrimary)) {
+		if (set_max) return KERN_SUCCESS;
 		return ml_static_protect(start, size, new_prot);
 	}
 	return mach_vm_protect(map, start, size, set_max, new_prot);
@@ -7955,8 +7956,7 @@ OSKext_wire(
 	boolean_t       user_wire,
 	kc_kind_t       kc_type)
 {
-	if (kernel_mach_header_is_in_fileset(kext_mh) && kc_type == KCKindPrimary) {
-		/* TODO: we may need to hook this for the pageableKC */
+	if (map == kernel_map || (kernel_mach_header_is_in_fileset(kext_mh) && kc_type == KCKindPrimary)) {
 		return KERN_SUCCESS;
 	}
 	return vm_map_wire_kernel(map, start, end, access_type, VM_KERN_MEMORY_KEXT, user_wire);
@@ -7975,7 +7975,7 @@ OSKext::setVMAttributes(bool protect, bool wire)
 	vm_map_offset_t             end_wire        = 0;
 	OSReturn                    result          = kOSReturnError;
 
-	if (isInterface() || !declaresExecutable() || flags.builtin) {
+	if (isInterface() || !declaresExecutable() || flags.builtin || isPrelinked() || !kmod_info || !kmod_info->address) {
 		result = kOSReturnSuccess;
 		goto finish;
 	}
@@ -8480,6 +8480,12 @@ OSKext::start(bool startDependenciesFlag)
 	}
 
 finish:
+	/* One line per kext start, so a boot log records what the loader did
+	 * without needing kextlog= and without a panic to reveal the list. */
+	if (!isInterface() && !isKernelComponent()) {
+		kprintf("[kext] %s %s (0x%x)\n", getIdentifierCString(),
+		    (result == kOSReturnSuccess) ? "started" : "did not start", result);
+	}
 	return result;
 }
 

@@ -4426,6 +4426,33 @@ bool findCoalescedExportedSymbol(const char* name, const ImageLoader::Symbol** s
 }
 
 
+/*
+ * flatFindExportedSymbolInSystem -- flat lookup restricted to the OS's own
+ * libraries (/usr/lib and below).  See the call site in resolveFlat: our
+ * system dylibs are built without LC_LOAD_DYLIB, so their undefined symbols
+ * get flat-lookup ordinals, and an application dylib loaded earlier would
+ * otherwise win the search.  Firefox's libmozglue exports malloc/free, which
+ * made libobjc call jemalloc's free() on its own pointer and die at
+ * libmozglue + 0x16168.
+ */
+bool flatFindExportedSymbolInSystem(const char* name, const ImageLoader::Symbol** sym, const ImageLoader** image)
+{
+	// search system images in load order
+	const size_t imageCount = sAllImages.size();
+	for(size_t i=0; i < imageCount; ++i){
+		ImageLoader* anImage = sAllImages[i];
+		if ( anImage->isBundle() )
+			continue;
+		const char* path = anImage->getPath();
+		if ( (strncmp(path, "/usr/lib/", 9) != 0) && (strncmp(path, "/System/Library/", 16) != 0) )
+			continue;
+		*sym = anImage->findExportedSymbol(name, false, image);
+		if ( *sym != NULL )
+			return true;
+	}
+	return false;
+}
+
 bool flatFindExportedSymbolWithHint(const char* name, const char* librarySubstring, const ImageLoader::Symbol** sym, const ImageLoader** image)
 {
 	// search all images in order

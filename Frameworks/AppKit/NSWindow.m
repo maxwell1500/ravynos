@@ -364,7 +364,7 @@ const float WSWindowEdgePad = 2;
         [_context release];
     if(buffer && bufsize)
         munmap(buffer, bufsize);
-    shm_unlink([shmPath cString]);
+    shm_unlink([shmPath UTF8String]);
     [shmPath release];
     //if(_cglContext)
     //    [_cglContext release];
@@ -422,7 +422,7 @@ const float WSWindowEdgePad = 2;
         int w = (int)_frame.size.width;
         int h = (int)_frame.size.height;
         bufsize = (int)((size_t)4 * (size_t)w * (size_t)h);
-        int shmfd = shm_open([shmPath cString], O_RDWR | O_CREAT, 0666);
+        int shmfd = shm_open([shmPath UTF8String], O_RDWR | O_CREAT, 0666);
         if(shmfd >= 0) {
             struct stat st;
             if(fstat(shmfd, &st) != 0 || st.st_size < bufsize)
@@ -1146,6 +1146,10 @@ const float WSWindowEdgePad = 2;
         winTitle=[@"* " stringByAppendingString:_title];
     else
         winTitle = _title; 
+
+    /* The titlebar is drawn by NSThemeFrame; without this the bar keeps the
+     * previous title until some unrelated redraw happens to cover it. */
+    [_backgroundView setNeedsDisplay:YES];
 
     [self _updateWSState];
 
@@ -1920,6 +1924,10 @@ const float WSWindowEdgePad = 2;
     // end of every poll, so just flag here and let the next iteration repaint.
    }
 	_viewsNeedDisplay=flag;
+}
+
+-(void)setNeedsDisplay:(BOOL)flag {
+   [self setViewsNeedDisplay:flag];
 }
 
 -(void)disableFlushWindow {
@@ -3260,7 +3268,7 @@ const float WSWindowEdgePad = 2;
         _frame.size.width, _frame.size.height, _styleMask, 0, {'\0'}, _level
     };
     if(_title) {
-        const char *ts = [_title cString];
+        const char *ts = [_title UTF8String];
         if(ts)
             strncpy(data.title, ts, sizeof(data.title) - 1);
     }

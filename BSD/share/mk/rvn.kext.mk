@@ -115,13 +115,16 @@ ${_KEXT_LIB}: ${SDKROOT}/usr/local/lib/kernel/libkmod.a
 kmod_info.c: ${.OBJDIR}/kmod_info.c
 ${.OBJDIR}/kmod_info.c:
 	(echo '#include <mach/kmod.h>'; \
-	 echo 'extern kern_return_t _start(kmod_info_t *ki, void *data);'; \
-	 echo 'extern kern_return_t _stop(kmod_info_t *ki, void *data);'; \
 	 echo '${MAIN_FUNCTION_DECL}'; \
 	 echo '${ANTIMAIN_FUNCTION_DECL}'; \
-	 echo '__attribute__((visibility("default"))) KMOD_EXPLICIT_DECL(${BUNDLE_IDENTIFIER}, "${BUNDLE_VERSION}", _start, _stop)'; \
 	 echo '__private_extern__ kmod_start_func_t *_realmain = ${MAIN_FUNCTION};'; \
 	 echo '__private_extern__ kmod_stop_func_t *_antimain = ${ANTIMAIN_FUNCTION};'; \
+	 echo '__private_extern__ kern_return_t _start(kmod_info_t *ki, void *data) { return _realmain ? (*_realmain)(ki, data) : 0; }'; \
+	 echo '__private_extern__ kern_return_t _stop(kmod_info_t *ki, void *data) { return _antimain ? (*_antimain)(ki, data) : 0; }'; \
+	 echo '__attribute__((visibility("default"))) KMOD_EXPLICIT_DECL(${BUNDLE_IDENTIFIER}, "${BUNDLE_VERSION}", _start, _stop)'; \
+	 echo '__private_extern__ uint32_t OSKextGetCurrentLoadTag(void) { return kmod_info.id; }'; \
+	 echo '__private_extern__ const char *OSKextGetCurrentIdentifier(void) { return kmod_info.name; }'; \
+	 echo '__private_extern__ const char *OSKextGetCurrentVersionString(void) { return kmod_info.version; }'; \
 	 echo '__private_extern__ int _kext_apple_cc = __APPLE_CC__;') >${.TARGET}
 
 .include <bsd.lib.mk>

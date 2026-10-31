@@ -4,7 +4,7 @@ FRAMEWORK = CoreServices
 # binary that recorded a higher one, so it has to match at least.
 FMWK_COMPAT_VERSION = 1.0.0
 FMWK_VERSION = A
-SRCS = CoreServices.c
+SRCS = CoreServices.c LSSymbols.c FileManagerCompat.c
 HEADERS = CoreServices.h 
 
 RESOURCES=Info.plist English.lproj
