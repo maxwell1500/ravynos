@@ -410,3 +410,17 @@ normal heap address.
 
 With that build the desktop boots normally (Filer and WindowServer present);
 the Firefox job still dies at this blocker.
+
+### Second measurement (isa guard + autorelease ring)
+
+A guard that reads the isa word in `objc_release` and rejects a class pointer
+above 16 TB, plus a 1024-entry ring of `(object, caller)` recorded in
+`objc_autorelease`, also never fired on either crash.  The faulting
+instruction is `class_data_bits_t::getBit` (libobjc offset 0x2ad2f), not
+`objc_release`; the pool-drain frames below it are real, but the poisoned
+value reaches class-bit inspection without passing through the guarded
+entry.  The crash is therefore a **class pointer overwritten on a live or
+just-freed object** (isa == 0x000065e5e5e5e600, pointing at 0xe5-filled
+memory), and the next instrument must check the isa at the point
+`objc_msgSend`/`hasCustomRR` consumes it, or watch the isa word of the
+specific pool entry rather than the entry pointer.
