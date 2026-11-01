@@ -833,6 +833,46 @@ cmd_passwd(int argc, char **argv)
 			errx(1, "only root can change another user's password");
 	}
 
+	/* Read the shadow database before prompting: a self-change must
+	 * verify the old password against the stored hash, and only root can
+	 * read master.passwd (this binary is installed setuid root). */
+	char *mtext = read_file(MASTERPASSWD);
+	if (mtext == NULL)
+		err(1, "cannot read %s", MASTERPASSWD);
+	int mn;
+	char **mlines = split_lines(mtext, &mn);
+
+	int found = 0;
+	char stored[256] = "";
+	for (int i = 0; i < mn; i++) {
+		if (!line_is_user(mlines[i], name))
+			continue;
+		char *passfield = field(mlines[i], 1);
+		if (passfield == NULL)
+			continue;
+		char *colon = strchr(passfield, ':');
+		if (colon == NULL)
+			continue;
+		size_t len = (size_t)(colon - passfield);
+		if (len >= sizeof(stored))
+			len = sizeof(stored) - 1;
+		memcpy(stored, passfield, len);
+		stored[len] = '\0';
+		found = 1;
+		break;
+	}
+	if (!found)
+		errx(1, "no such user: %s", name);
+
+	if (self) {
+		if (stored[0] == '\0' || strcmp(stored, "*") == 0)
+			errx(1, "account %s has no password to verify", name);
+		char *old = getpass("Old password: ");
+		char *check = crypt(old, stored);
+		if (check == NULL || strcmp(check, stored) != 0)
+			errx(1, "incorrect password");
+	}
+
 	char *hash;
 	if (newhash != NULL) {
 		hash = strdup(newhash);
@@ -846,13 +886,6 @@ cmd_passwd(int argc, char **argv)
 			errx(1, "crypt failed");
 	}
 
-	char *mtext = read_file(MASTERPASSWD);
-	if (mtext == NULL)
-		err(1, "cannot read %s", MASTERPASSWD);
-	int mn;
-	char **mlines = split_lines(mtext, &mn);
-
-	int found = 0;
 	for (int i = 0; i < mn; i++) {
 		if (!line_is_user(mlines[i], name))
 			continue;
@@ -868,10 +901,7 @@ cmd_passwd(int argc, char **argv)
 		strcpy(line + prefix, hash);
 		strcat(line, colon);
 		mlines[i] = line;
-		found = 1;
 	}
-	if (!found)
-		errx(1, "no such user: %s", name);
 
 	if (write_file(MASTERPASSWD, join_lines(mlines, mn)) != 0)
 		err(1, "cannot update %s", MASTERPASSWD);

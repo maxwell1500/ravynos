@@ -23,6 +23,20 @@
 #include <WindowServer/message.h>
 
 extern void bootstrap_init(void);
+
+/* The Users & Groups pane is a client of the same account tools a shell
+ * uses; it must not edit master.passwd behind usermgmt's lock. */
+static int
+runAccountTool(NSString *tool, NSArray *arguments)
+{
+    NSTask *task = [[NSTask alloc] init];
+    [task setLaunchPath:[@"/usr/sbin" stringByAppendingPathComponent:tool]];
+    [task setArguments:arguments];
+    [task launch];
+    [task waitUntilExit];
+    int status = [task terminationStatus];
+    return status;
+}
 extern kern_return_t bootstrap_look_up(mach_port_t bp, const char *service_name, mach_port_t *sp);
 
 /* OSS mixer ioctls -- <sys/soundcard.h> is not available in the SDK */
@@ -659,8 +673,6 @@ static NSArray *parseUsers(void) {
     int maxUid = 500;
     for (NSDictionary *u in usersList) if ([[u objectForKey:@"uid"] intValue] > maxUid) maxUid = [[u objectForKey:@"uid"] intValue];
     int newUid = maxUid + 1;
-    NSString *home = [NSString stringWithFormat:@"/Users/%@", acct];
-    ensureDir(home);
 
     NSString *hash = sys_password_hash(pw);
     if (hash == nil) {
@@ -670,21 +682,15 @@ static NSArray *parseUsers(void) {
     }
 
     NSString *gecos = [full length] ? full : acct;
-    NSString *passwdLine = [NSString stringWithFormat:@"%@:%@:%d:%d:%@:%@:/bin/sh\n", acct, @"*", newUid, 20, gecos, home];
-    NSString *masterLine = [NSString stringWithFormat:@"%@:%@:%d:%d::0:0:%@:%@:/bin/sh\n", acct, hash, newUid, 20, gecos, home];
-
-    // append
-    NSData *d1 = [passwdLine dataUsingEncoding:NSUTF8StringEncoding];
-    // Use NSFileManager append via fileHandleForUpdating
-    NSFileHandle *h = [NSFileHandle fileHandleForUpdatingAtPath:@"/etc/passwd"];
-    [h seekToEndOfFile];
-    [h writeData:d1];
-    [h closeFile];
-
-    NSFileHandle *h2 = [NSFileHandle fileHandleForUpdatingAtPath:@"/etc/master.passwd"];
-    [h2 seekToEndOfFile];
-    [h2 writeData:[masterLine dataUsingEncoding:NSUTF8StringEncoding]];
-    [h2 closeFile];
+    int rc = runAccountTool(@"useradd", [NSArray arrayWithObjects:
+        @"-m", @"-u", [NSString stringWithFormat:@"%d", newUid],
+        @"-g", @"staff", @"-c", gecos, @"-s", @"/bin/sh",
+        @"-p", hash, acct, nil]);
+    if (rc != 0) {
+        NSAlert *a = [NSAlert alertWithMessageText:@"Could not create the account" defaultButton:@"OK" alternateButton:nil otherButton:nil informativeTextWithFormat:@"useradd exited with status %d.", rc];
+        [a runModal];
+        return;
+    }
 
     if([adminCheck state] == NSOnState) {
         /* Administrators are members of wheel. */
@@ -739,28 +745,13 @@ static NSArray *parseUsers(void) {
         return;
     }
 
-    // update /etc/master.passwd
-    NSString *content = [NSString stringWithContentsOfFile:@"/etc/master.passwd" encoding:NSUTF8StringEncoding error:nil];
-    NSMutableArray *lines = [NSMutableArray arrayWithArray:[content componentsSeparatedByString:@"\n"]];
-    int changed = 0;
-    for (int i = 0; i < (int)[lines count]; i++) {
-        NSString *line = [lines objectAtIndex:i];
-        NSArray *f = [line componentsSeparatedByString:@":"];
-        if ([f count] >= 2 && [[f objectAtIndex:0] isEqualToString:user]) {
-            NSMutableArray *mf = [NSMutableArray arrayWithArray:f];
-            [mf replaceObjectAtIndex:1 withObject:hash];
-            [lines replaceObjectAtIndex:i withObject:[mf componentsJoinedByString:@":"]];
-            changed++;
-        }
-    }
-    if (changed == 0) {
-        /* Nothing matched: reporting success here would claim a password that
-         * was never written anywhere. */
-        NSAlert *none = [NSAlert alertWithMessageText:@"No such user" defaultButton:@"OK" alternateButton:nil otherButton:nil informativeTextWithFormat:@"There is no account named %@.", user];
+    int rc = runAccountTool(@"passwd", [NSArray arrayWithObjects:
+        @"-p", hash, user, nil]);
+    if (rc != 0) {
+        NSAlert *none = [NSAlert alertWithMessageText:@"Could not change the password" defaultButton:@"OK" alternateButton:nil otherButton:nil informativeTextWithFormat:@"passwd exited with status %d.", rc];
         [none runModal];
         return;
     }
-    [[lines componentsJoinedByString:@"\n"] writeToFile:@"/etc/master.passwd" atomically:YES encoding:NSUTF8StringEncoding error:nil];
 
     /* /etc/passwd keeps '*' for the password field: only master.passwd is
      * readable by the login path, which is where the hash belongs. */
