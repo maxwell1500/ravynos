@@ -42,6 +42,26 @@ extern char *crypt(const char *, const char *);
 #define MASTERPASSWD "/etc/master.passwd"
 #define PASSWDFILE   "/etc/passwd"
 #define GROUPFILE    "/etc/group"
+#define SECURELOG    "/var/log/secure"
+
+/* One line per account event, rotated at 1 MB.  loginwindow, sudo and su
+ * write the same format; this is the account-management half of the trail. */
+static void
+audit(const char *user, const char *action, int ok)
+{
+	struct stat st;
+	FILE *f;
+
+	if (stat(SECURELOG, &st) == 0 && st.st_size > 1024 * 1024)
+		rename(SECURELOG, SECURELOG ".0");
+
+	f = fopen(SECURELOG, "a");
+	if (f == NULL)
+		return;
+	fprintf(f, "AUDIT user=%s action=%s result=%s pid=%d\n",
+	    user, action, ok ? "ok" : "fail", (int)getpid());
+	fclose(f);
+}
 
 #define DEFAULT_GID  20          /* staff */
 #define DEFAULT_SHELL "/bin/sh"
@@ -518,6 +538,7 @@ cmd_useradd(int argc, char **argv)
 	if (create_home && make_home(home, uid, gid) != 0)
 		err(1, "cannot create home directory %s", home);
 
+	audit(name, "useradd", 1);
 	printf("useradd: added user %s (uid %u, gid %u, home %s)\n",
 	    name, (unsigned)uid, (unsigned)gid, home);
 	return (0);
@@ -705,6 +726,7 @@ cmd_usermod(int argc, char **argv)
 	    write_file(GROUPFILE, join_lines(glines, gn)) != 0)
 		err(1, "cannot update the account database");
 
+	audit(newname ? newname : name, "usermod", 1);
 	printf("usermod: modified user %s\n", newname ? newname : name);
 	return (0);
 }
@@ -789,6 +811,7 @@ cmd_userdel(int argc, char **argv)
 			    HOME_ROOT, home);
 		remove_tree(home);
 	}
+	audit(name, "userdel", 1);
 	printf("userdel: removed user %s\n", name);
 	return (0);
 }
@@ -869,8 +892,10 @@ cmd_passwd(int argc, char **argv)
 			errx(1, "account %s has no password to verify", name);
 		char *old = getpass("Old password: ");
 		char *check = crypt(old, stored);
-		if (check == NULL || strcmp(check, stored) != 0)
+		if (check == NULL || strcmp(check, stored) != 0) {
+			audit(name, "passwd", 0);
 			errx(1, "incorrect password");
+		}
 	}
 
 	char *hash;
@@ -906,6 +931,7 @@ cmd_passwd(int argc, char **argv)
 	if (write_file(MASTERPASSWD, join_lines(mlines, mn)) != 0)
 		err(1, "cannot update %s", MASTERPASSWD);
 
+	audit(name, "passwd", 1);
 	printf("passwd: password updated for %s\n", name);
 	return (0);
 }
