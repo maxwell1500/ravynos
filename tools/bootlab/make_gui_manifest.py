@@ -733,6 +733,19 @@ def main():
     else:
         closure.append(("usr/bin/tmutil", tm_src, "MISSING"))
 
+    # 6m. sysctl: kernel MIB reader used by the observability gate.
+    sc_src = os.path.join(BUILD_SRC, "BSD", "usr.sbin", "sysctl", "sysctl")
+    sc_work = os.path.join(HERE, "work", "sysctl")
+    if os.path.isfile(sc_src):
+        shutil.copy2(sc_src, sc_work)
+        entries.append({
+            "path": "usr/sbin/sysctl",
+            "file": os.path.relpath(sc_work, HERE),
+            "comment": "kernel sysctl client (BSD/usr.sbin/sysctl)",
+        })
+    else:
+        closure.append(("usr/sbin/sysctl", sc_src, "MISSING"))
+
     # 7. launchctl and its libjansson dependency. launchd's hardcoded System
     #    bootstrapper execs /bin/launchctl (BSD/sbin/launchd/core.c:7195), so the
     #    binary must sit at that exact path; launchctl's LC_LOAD_DYLIB requires

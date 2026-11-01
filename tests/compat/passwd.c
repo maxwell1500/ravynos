@@ -154,6 +154,17 @@ main(void)
 	if (!saw_en0)
 		return fail("netstat -i did not list en0");
 
+	/* sysctl must read the kernel's own MIB, not a hardcoded string. */
+	FILE *sf = popen("/usr/sbin/sysctl -n kern.ostype", "r");
+	if (sf == NULL)
+		return fail("could not run sysctl");
+	char osline[64] = "";
+	if (fgets(osline, sizeof(osline), sf) == NULL)
+		osline[0] = '\0';
+	pclose(sf);
+	if (strstr(osline, "Darwin") == NULL)
+		return fail("sysctl kern.ostype is not Darwin");
+
 	printf("passwd: ravynos uid=%u gid=%u home=%s hash=%s verified\n",
 	       (unsigned)pw->pw_uid, (unsigned)pw->pw_gid, pw->pw_dir,
 	       stored);

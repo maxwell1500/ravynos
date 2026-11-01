@@ -1611,6 +1611,11 @@
       "comment": "backup/restore/verify (BSD/usr.sbin/tmutil)"
     },
     {
+      "path": "usr/sbin/sysctl",
+      "file": "work/sysctl",
+      "comment": "kernel sysctl client (BSD/usr.sbin/sysctl)"
+    },
+    {
       "path": "bin/launchctl",
       "file": "work/launchctl_dyn",
       "comment": "launchd's hardcoded /bin/launchctl (BSD/sbin/launchd/core.c:7195)"
