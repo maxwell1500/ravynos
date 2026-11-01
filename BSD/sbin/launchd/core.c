@@ -3640,6 +3640,27 @@ systemstats_is_enabled(void)
 }
 #endif // HAVE_SYSTEMSTATS
 
+/* A crash is a durable event, not only a console line: leave a report the
+ * user (and ReportCrash) can read after the job is gone.  The kernel's
+ * CORPSE backtrace still goes to the serial console; this is the userland
+ * record launchd owns. */
+static void
+job_write_crash_report(job_t j, int sig)
+{
+	char path[1024];
+	FILE *f;
+
+	mkdir("/var/log/DiagnosticReports", 0755);
+	snprintf(path, sizeof(path), "/var/log/DiagnosticReports/%s-%d.crash",
+	    j->label, (int)j->p);
+	f = fopen(path, "w");
+	if (f == NULL)
+		return;
+	fprintf(f, "Process: %s\nPID: %d\nSignal: %d (%s)\nTime: %ld\n",
+	    j->label, (int)j->p, sig, strsignal(sig), (long)time(NULL));
+	fclose(f);
+}
+
 void
 job_reap(job_t j)
 {
@@ -3829,6 +3850,7 @@ job_reap(job_t j)
 			 */
 			case SIGTRAP:
 				j->crashed = true;
+				job_write_crash_report(j, s);
 				job_log(j, LOG_WARNING, "Job appears to have crashed: %s", strsignal(s));
 				break;
 			default:
