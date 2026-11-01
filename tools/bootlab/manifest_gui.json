@@ -1631,6 +1631,11 @@
       "comment": "filesystem usage (BSD/bin/df)"
     },
     {
+      "path": "usr/bin/login",
+      "file": "work/login",
+      "comment": "console login (BSD/bin/login)"
+    },
+    {
       "path": "bin/launchctl",
       "file": "work/launchctl_dyn",
       "comment": "launchd's hardcoded /bin/launchctl (BSD/sbin/launchd/core.c:7195)"

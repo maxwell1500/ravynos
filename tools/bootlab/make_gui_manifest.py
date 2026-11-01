@@ -775,6 +775,19 @@ def main():
     else:
         closure.append(("bin/df", df_src, "MISSING"))
 
+    # 6p. login: console crypt(3) verifier with AUDIT action=login.
+    lg_src = os.path.join(BUILD_SRC, "BSD", "bin", "login", "login")
+    lg_work = os.path.join(HERE, "work", "login")
+    if os.path.isfile(lg_src):
+        shutil.copy2(lg_src, lg_work)
+        entries.append({
+            "path": "usr/bin/login",
+            "file": os.path.relpath(lg_work, HERE),
+            "comment": "console login (BSD/bin/login)",
+        })
+    else:
+        closure.append(("usr/bin/login", lg_src, "MISSING"))
+
     # 7. launchctl and its libjansson dependency. launchd's hardcoded System
     #    bootstrapper execs /bin/launchctl (BSD/sbin/launchd/core.c:7195), so the
     #    binary must sit at that exact path; launchctl's LC_LOAD_DYLIB requires
