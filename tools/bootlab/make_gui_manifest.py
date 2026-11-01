@@ -801,6 +801,19 @@ def main():
     else:
         closure.append(("sbin/mount", mt_src, "MISSING"))
 
+    # 6r. kill: local signal table (libc has no sig2str).
+    kl_src = os.path.join(BUILD_SRC, "BSD", "bin", "kill", "kill")
+    kl_work = os.path.join(HERE, "work", "kill")
+    if os.path.isfile(kl_src):
+        shutil.copy2(kl_src, kl_work)
+        entries.append({
+            "path": "bin/kill",
+            "file": os.path.relpath(kl_work, HERE),
+            "comment": "signal sender (BSD/bin/kill)",
+        })
+    else:
+        closure.append(("bin/kill", kl_src, "MISSING"))
+
     # 7. launchctl and its libjansson dependency. launchd's hardcoded System
     #    bootstrapper execs /bin/launchctl (BSD/sbin/launchd/core.c:7195), so the
     #    binary must sit at that exact path; launchctl's LC_LOAD_DYLIB requires

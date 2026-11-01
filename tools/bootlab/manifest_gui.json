@@ -1641,6 +1641,11 @@
       "comment": "mount table view (BSD/sbin/mount)"
     },
     {
+      "path": "bin/kill",
+      "file": "work/kill",
+      "comment": "signal sender (BSD/bin/kill)"
+    },
+    {
       "path": "bin/launchctl",
       "file": "work/launchctl_dyn",
       "comment": "launchd's hardcoded /bin/launchctl (BSD/sbin/launchd/core.c:7195)"

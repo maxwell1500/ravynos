@@ -18,6 +18,7 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <unistd.h>
 
 extern char *crypt(const char *, const char *);
@@ -187,6 +188,23 @@ main(void)
 	pclose(dfp);
 	if (!saw_mount)
 		return fail("df listed no mounted filesystem");
+
+	/* /bin/kill must deliver a named signal to a child. */
+	pid_t victim = fork();
+	if (victim == 0) {
+		pause();
+		_exit(0);
+	}
+	if (victim < 0)
+		return fail("fork for kill fixture");
+	char pidbuf[16];
+	snprintf(pidbuf, sizeof(pidbuf), "%d", (int)victim);
+	char *kargv[] = { "/bin/kill", "-TERM", pidbuf, NULL };
+	int krc = run_tool(kargv);
+	int kstatus = 0;
+	waitpid(victim, &kstatus, 0);
+	if (krc != 0 || !WIFSIGNALED(kstatus) || WTERMSIG(kstatus) != SIGTERM)
+		return fail("/bin/kill did not deliver SIGTERM");
 
 	printf("passwd: ravynos uid=%u gid=%u home=%s hash=%s verified\n",
 	       (unsigned)pw->pw_uid, (unsigned)pw->pw_gid, pw->pw_dir,
