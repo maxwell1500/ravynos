@@ -788,6 +788,19 @@ def main():
     else:
         closure.append(("usr/bin/login", lg_src, "MISSING"))
 
+    # 6q. mount: read-only mount table view.
+    mt_src = os.path.join(BUILD_SRC, "BSD", "sbin", "mount", "mount")
+    mt_work = os.path.join(HERE, "work", "mount")
+    if os.path.isfile(mt_src):
+        shutil.copy2(mt_src, mt_work)
+        entries.append({
+            "path": "sbin/mount",
+            "file": os.path.relpath(mt_work, HERE),
+            "comment": "mount table view (BSD/sbin/mount)",
+        })
+    else:
+        closure.append(("sbin/mount", mt_src, "MISSING"))
+
     # 7. launchctl and its libjansson dependency. launchd's hardcoded System
     #    bootstrapper execs /bin/launchctl (BSD/sbin/launchd/core.c:7195), so the
     #    binary must sit at that exact path; launchctl's LC_LOAD_DYLIB requires

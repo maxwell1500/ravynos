@@ -1636,6 +1636,11 @@
       "comment": "console login (BSD/bin/login)"
     },
     {
+      "path": "sbin/mount",
+      "file": "work/mount",
+      "comment": "mount table view (BSD/sbin/mount)"
+    },
+    {
       "path": "bin/launchctl",
       "file": "work/launchctl_dyn",
       "comment": "launchd's hardcoded /bin/launchctl (BSD/sbin/launchd/core.c:7195)"
