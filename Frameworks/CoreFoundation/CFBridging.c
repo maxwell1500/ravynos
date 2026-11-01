@@ -39,7 +39,7 @@ NSRange NSMakeRange(NSUInteger location, NSUInteger length) {
 
 CF_EXPORT int _CFRuntimeRegisterObjCClass(CFTypeID typeID, uintptr_t cls)
 {
-    if (typeID < 0 && typeID >= __CFRuntimeClassTableSize)
+    if (typeID >= __CFRuntimeClassTableSize)
         return -1;
     TRACE("Registering ObjC class 0x%lx for type ID %d\n", cls, typeID);
     __CFRuntimeObjCClassTable[typeID] = cls;

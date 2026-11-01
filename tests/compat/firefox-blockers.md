@@ -523,3 +523,25 @@ its `_string` before dereferencing; the fault is gone, but
 `-CreateProfile` now stays alive instead of returning.  The next step is
 to find which constructor/owner produces the URL with `_string` 0x4,
 rather than papering over it with a NULL path.
+
+### String passed where a CFURL is expected
+
+With the URL field guarded, the remaining `-CreateProfile` stall logs the
+real classes: one caller passes an **NSCFString** (a POSIX path) and one
+passes an **NSURL whose `_string` is NULL**.  Both reach
+`_retainedComponentString` through `CFURLCopyPath`; on a stock system
+this is a caller type error, so the producer, not the consumer, is wrong.
+
+Trying to make `CFURLCopyPath` accept the string is not enough by
+itself.  `CFStringCreateCopy` treats the ObjC string as a CF object and
+corrupts it; converting through `-[NSString UTF8String]` gets past that
+call but the next Foundation frame still faults on a freed object
+(`rdi=0xe5e5…`).  A direct `object_getClassName` is also unsafe because a
+CF object's first word is `_cfinfo`, not an isa, and one caller passes a
+code pointer.
+
+The tree is back at the last good state (guards only, no string
+acceptance) so the fixture gate stays green.  The next attempt needs a
+real CF/ObjC bridge: register `NSURL`/`NSCFString` under their live
+`CF*GetTypeID()` values, implement `-_cfTypeID`/`-_cfurl` on them, and
+then delete the guards rather than growing them.
