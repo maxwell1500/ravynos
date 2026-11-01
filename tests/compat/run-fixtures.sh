@@ -187,6 +187,11 @@ run_fixture passwd /usr/local/compat/passwd
 
 run_fixture malloczone /usr/local/compat/malloczone
 
+# Pool bookkeeping: nested pools must release each object exactly once.
+# Firefox's NSData was released twice by a drain; this isolates that from
+# the framework that created the object.
+run_fixture autorelease /usr/local/compat/autorelease
+
 # Pasteboard: a string written by one process must be visible to another.
 # The writer and reader are separate execs, so nothing but the pasteboard
 # server can carry the value between them.

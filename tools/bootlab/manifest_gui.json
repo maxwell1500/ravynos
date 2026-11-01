@@ -821,6 +821,11 @@
       "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
     },
     {
+      "path": "usr/lib/libobjc.dylib",
+      "file": "../../Developer/ravynOS.sdk/usr/lib/libobjc.A.dylib",
+      "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
+    },
+    {
       "path": "usr/lib/libicucore.A.dylib",
       "file": "../../Developer/ravynOS.sdk/usr/lib/libicucore.A.dylib",
       "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
@@ -2033,6 +2038,11 @@
     {
       "path": "usr/local/compat/malloczone",
       "file": "work/compat/malloczone",
+      "comment": "ABI conformance fixture (tests/compat)"
+    },
+    {
+      "path": "usr/local/compat/autorelease",
+      "file": "work/compat/autorelease",
       "comment": "ABI conformance fixture (tests/compat)"
     },
     {

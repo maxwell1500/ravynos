@@ -164,7 +164,8 @@ id _NSRaiseException(id exception) {
    for(int i = 0; i < [stackTrace count]; ++i)
     NSCLog("  %u. %s", i, [[stackTrace objectAtIndex:i] UTF8String]);
    NSCLog("");
-   [stackTrace release];
+   // stackTrace is autoreleased by +[NSThread callStackSymbols];
+   // releasing it here frees an object the pool still owns.
    //NSRaiseException(_name, self, nil, _reason);
    objc_exception_throw(self);
 }

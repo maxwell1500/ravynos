@@ -508,6 +508,17 @@ static BOOL scanURL(urlScanner *scanner,NSURL *url){
    return [[[self alloc] initFileURLWithPath:path] autorelease];
 }
 
++fileURLWithPath:(NSString *)path isDirectory:(BOOL)isDirectory {
+   return [[[self alloc] initFileURLWithPath:path isDirectory:isDirectory] autorelease];
+}
+
+-initFileURLWithPath:(NSString *)path isDirectory:(BOOL)isDirectory {
+   // The directory flag does not change the path we store; it only tells
+   // Cocoa whether the URL denotes a directory when the path is ambiguous.
+   (void)isDirectory;
+   return [self initFileURLWithPath:path];
+}
+
 +URLWithString:(NSString *)string {
    return [[[self alloc] initWithString:string] autorelease];
 }

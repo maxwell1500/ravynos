@@ -451,3 +451,35 @@ The next step is a deterministic fixture with nested pools (including
 enough autoreleases to allocate a child page) that asserts one dealloc per
 autorelease; then fix `AutoreleasePoolPage::pop`/`releaseUntil`/`kill`
 page ownership.
+
+### Root cause and fix (4.2h)
+
+The fixture (`tests/compat/autorelease.m`, now part of the gate) passes:
+nested pools and child pages release each object exactly once, so the pool
+bookkeeping is sound.  A release ring on the failing address named the
+culprit:
+
+    seq=34 autoreleased class NSMutableArray_concrete
+    seq=56 autoreleased class NSData_concrete
+    release seq=39 at Foundation+0x144fd
+
+The first release, five releases after the array was autoreleased, is in
+`-[NSException raise]`, which did:
+
+    NSArray *stackTrace = [NSThread callStackSymbols];
+    ...
+    [stackTrace release];
+
+`+[NSThread callStackSymbols]` returns `[NSMutableArray array]`, already
+autoreleased.  The explicit release freed the array while its pool entry
+remained; the address was then reused by an NSData, and the pool drain
+released the stale entry and crashed in `class_data_bits_t::getBit`.
+
+Fix: remove the `[stackTrace release]` (`Frameworks/Foundation/NSException/
+NSException.m`).  Firefox `-CreateProfile` now returns 1 instead of dying
+with SIGSEGV, and the browser process no longer crashes in the pool.
+
+The next selector gap exposed by the same run,
+`+[NSURL fileURLWithPath:isDirectory:]`, is implemented in
+`Frameworks/Foundation/NSURL/NSURL.m`; `-CreateProfile` no longer aborts
+with `rc=134`.

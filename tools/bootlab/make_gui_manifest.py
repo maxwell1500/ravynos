@@ -579,6 +579,7 @@ def main():
         ("tcp", "usr/local/compat/tcp"),
         ("pasteboard", "usr/local/compat/pasteboard"),
         ("malloczone", "usr/local/compat/malloczone"),
+        ("autorelease", "usr/local/compat/autorelease"),
         ("passwd", "usr/local/compat/passwd"),
         ("bootstrap_probe", "usr/local/compat/bootstrap_probe"),
         ("runas", "usr/local/compat/runas"),
