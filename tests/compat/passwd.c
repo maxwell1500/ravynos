@@ -165,6 +165,16 @@ main(void)
 	if (strstr(osline, "Darwin") == NULL)
 		return fail("sysctl kern.ostype is not Darwin");
 
+	FILE *uf = popen("/usr/bin/uname -s", "r");
+	if (uf == NULL)
+		return fail("could not run uname");
+	char unline[64] = "";
+	if (fgets(unline, sizeof(unline), uf) == NULL)
+		unline[0] = '\0';
+	pclose(uf);
+	if (strstr(unline, "Darwin") == NULL)
+		return fail("uname -s is not Darwin");
+
 	printf("passwd: ravynos uid=%u gid=%u home=%s hash=%s verified\n",
 	       (unsigned)pw->pw_uid, (unsigned)pw->pw_gid, pw->pw_dir,
 	       stored);

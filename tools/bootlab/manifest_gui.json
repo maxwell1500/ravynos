@@ -1616,6 +1616,16 @@
       "comment": "kernel sysctl client (BSD/usr.sbin/sysctl)"
     },
     {
+      "path": "bin/ps",
+      "file": "work/ps",
+      "comment": "ps (BSD/BSD/bin/ps)"
+    },
+    {
+      "path": "usr/bin/uname",
+      "file": "work/uname",
+      "comment": "uname (BSD/BSD/usr.bin/uname)"
+    },
+    {
       "path": "bin/launchctl",
       "file": "work/launchctl_dyn",
       "comment": "launchd's hardcoded /bin/launchctl (BSD/sbin/launchd/core.c:7195)"

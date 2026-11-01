@@ -746,6 +746,22 @@ def main():
     else:
         closure.append(("usr/sbin/sysctl", sc_src, "MISSING"))
 
+    # 6n. ps and uname: process table and kernel identity.
+    for tool, srcpath, dstpath in (
+            ("ps", ("BSD", "bin", "ps", "ps"), "bin/ps"),
+            ("uname", ("BSD", "usr.bin", "uname", "uname"), "usr/bin/uname")):
+        src = os.path.join(BUILD_SRC, *srcpath)
+        work = os.path.join(HERE, "work", tool)
+        if os.path.isfile(src):
+            shutil.copy2(src, work)
+            entries.append({
+                "path": dstpath,
+                "file": os.path.relpath(work, HERE),
+                "comment": "%s (BSD/%s)" % (tool, "/".join(srcpath[:-1])),
+            })
+        else:
+            closure.append((dstpath, src, "MISSING"))
+
     # 7. launchctl and its libjansson dependency. launchd's hardcoded System
     #    bootstrapper execs /bin/launchctl (BSD/sbin/launchd/core.c:7195), so the
     #    binary must sit at that exact path; launchctl's LC_LOAD_DYLIB requires
