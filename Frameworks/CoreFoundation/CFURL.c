@@ -2842,6 +2842,12 @@ static CFStringRef _retainedComponentString(CFURLRef url, UInt32 compFlag, Boole
     if (removePercentEscapes) {
         fromOriginalString = true;
     }
+    if (url == NULL || (uintptr_t)url < 4096 ||
+        (uintptr_t)url->_string < 4096) {
+        fprintf(stderr, "[CF] _retainedComponentString invalid url=%p string=%p flag=%u\n",
+                url, url ? (void *)url->_string : NULL, (unsigned)compFlag);
+        return NULL;
+    }
     rg = _rangeForComponent(url->_flags, url->_ranges, compFlag);
     if (rg.location == kCFNotFound) {
         comp = NULL;
@@ -4195,6 +4201,10 @@ CFURLRef CFURLCreateFromFSRef(CFAllocatorRef allocator, const struct FSRef *fsRe
 Boolean CFURLGetFSRef(CFURLRef url, struct FSRef *fsRef)
 {
     CFStringRef path;
+
+    if (url == NULL || (uintptr_t)url < 4096 ||
+        CFGetTypeID(url) != CFURLGetTypeID())
+        return false;
     char buffer[80];
     size_t length;
 

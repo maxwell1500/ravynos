@@ -507,3 +507,19 @@ With the pool crash fixed, Firefox exposed its platform checks:
 After these, `-CreateProfile` no longer aborts in the version check and
 the browser process reaches its event loop instead of dying in dyld; it
 was still running when the 190-second probe ended.
+
+### Corrupt CFURL reaching CFURLCopyFileSystemPath
+
+`-CreateProfile` next faulted at `_CFGetTypeID+0x1b` (fault 0xc): a call
+to `CFStringCreateWithSubstring` received `str=0x4` and a garbage range.
+`dladdr` named the caller as CoreFoundation's own
+`_retainedComponentString`, reached from `CFURLCopyFileSystemPath` with a
+CFURL whose `_string` field was `0x4` or NULL.  The URL object itself was
+otherwise plausible, so the field was either never set by a failed
+constructor or the URL was freed and its slot reused.
+
+`_retainedComponentString` and `CFURLGetFSRef` now validate the URL and
+its `_string` before dereferencing; the fault is gone, but
+`-CreateProfile` now stays alive instead of returning.  The next step is
+to find which constructor/owner produces the URL with `_string` 0x4,
+rather than papering over it with a NULL path.

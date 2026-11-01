@@ -44,6 +44,7 @@
 #endif
 #include <stdarg.h>
 #include <stdio.h>
+#include <dlfcn.h>
 #include <string.h>
 #if INCLUDE_OBJC
 #include <Foundation/NSMutableString.h>
@@ -1642,6 +1643,38 @@ CFStringRef  CFStringCreateWithFormat(CFAllocatorRef alloc, CFDictionaryRef form
 
 CFStringRef CFStringCreateWithSubstring(CFAllocatorRef alloc, CFStringRef str, CFRange range) {
 //      CF_OBJC_FUNCDISPATCHV(__kCFStringTypeID, CFStringRef , (NSString *)str, _createSubstringWithRange:NSMakeRange(range.location, range.length));
+
+    /* Gecko calls this with a string produced by an earlier CF API.  A
+     * NULL or non-CFString here used to fault at offset 0xc inside the
+     * assert; log the actual arguments and return NULL instead. */
+    if (str == NULL || (uintptr_t)str < 4096) {
+        void *caller = __builtin_return_address(0);
+        Dl_info info;
+        if (dladdr(caller, &info) && info.dli_fname) {
+            fprintf(stderr, "[CF] CFStringCreateWithSubstring(str=%p caller=%s+0x%lx %s, %ld,%ld)\n",
+                    str, info.dli_fname,
+                    (unsigned long)((char *)caller - (char *)info.dli_fbase),
+                    info.dli_sname ? info.dli_sname : "?",
+                    (long)range.location, (long)range.length);
+        } else {
+            fprintf(stderr, "[CF] CFStringCreateWithSubstring(str=%p caller=%p, %ld,%ld)\n",
+                    str, caller, (long)range.location, (long)range.length);
+        }
+        return NULL;
+    }
+    if (CFGetTypeID(str) != CFStringGetTypeID()) {
+        fprintf(stderr, "[CF] CFStringCreateWithSubstring(non-string %p type %lu, %ld,%ld)\n",
+                str, (unsigned long)CFGetTypeID(str),
+                (long)range.location, (long)range.length);
+        return NULL;
+    }
+    if (range.location < 0 || range.length < 0 ||
+        range.location + range.length > CFStringGetLength(str)) {
+        fprintf(stderr, "[CF] CFStringCreateWithSubstring(range %ld,%ld len %ld)\n",
+                (long)range.location, (long)range.length,
+                (long)CFStringGetLength(str));
+        return NULL;
+    }
 
     __CFAssertIsString(str);
     __CFAssertRangeIsInStringBounds(str, range.location, range.length);
