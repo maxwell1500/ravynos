@@ -1596,6 +1596,11 @@
       "comment": "interface/route summary (BSD/usr.bin/netstat)"
     },
     {
+      "path": "usr/bin/route",
+      "file": "work/route",
+      "comment": "routing table client (BSD/usr.bin/route)"
+    },
+    {
       "path": "bin/launchctl",
       "file": "work/launchctl_dyn",
       "comment": "launchd's hardcoded /bin/launchctl (BSD/sbin/launchd/core.c:7195)"

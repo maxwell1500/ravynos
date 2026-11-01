@@ -706,6 +706,19 @@ def main():
     else:
         closure.append(("usr/bin/netstat", ns_src, "MISSING"))
 
+    # 6k. route: PF_ROUTE client for get/add/delete.
+    rt_src = os.path.join(BUILD_SRC, "BSD", "usr.bin", "route", "route")
+    rt_work = os.path.join(HERE, "work", "route")
+    if os.path.isfile(rt_src):
+        shutil.copy2(rt_src, rt_work)
+        entries.append({
+            "path": "usr/bin/route",
+            "file": os.path.relpath(rt_work, HERE),
+            "comment": "routing table client (BSD/usr.bin/route)",
+        })
+    else:
+        closure.append(("usr/bin/route", rt_src, "MISSING"))
+
     # 7. launchctl and its libjansson dependency. launchd's hardcoded System
     #    bootstrapper execs /bin/launchctl (BSD/sbin/launchd/core.c:7195), so the
     #    binary must sit at that exact path; launchctl's LC_LOAD_DYLIB requires
