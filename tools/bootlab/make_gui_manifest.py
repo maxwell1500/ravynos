@@ -596,6 +596,7 @@ def main():
         ("pasteboard", "usr/local/compat/pasteboard"),
         ("malloczone", "usr/local/compat/malloczone"),
         ("autorelease", "usr/local/compat/autorelease"),
+        ("backup", "usr/local/compat/backup"),
         ("passwd", "usr/local/compat/passwd"),
         ("bootstrap_probe", "usr/local/compat/bootstrap_probe"),
         ("runas", "usr/local/compat/runas"),
@@ -718,6 +719,19 @@ def main():
         })
     else:
         closure.append(("usr/bin/route", rt_src, "MISSING"))
+
+    # 6l. tmutil: verified tree copy/restore used by the backup gate.
+    tm_src = os.path.join(BUILD_SRC, "BSD", "usr.sbin", "tmutil", "tmutil")
+    tm_work = os.path.join(HERE, "work", "tmutil")
+    if os.path.isfile(tm_src):
+        shutil.copy2(tm_src, tm_work)
+        entries.append({
+            "path": "usr/bin/tmutil",
+            "file": os.path.relpath(tm_work, HERE),
+            "comment": "backup/restore/verify (BSD/usr.sbin/tmutil)",
+        })
+    else:
+        closure.append(("usr/bin/tmutil", tm_src, "MISSING"))
 
     # 7. launchctl and its libjansson dependency. launchd's hardcoded System
     #    bootstrapper execs /bin/launchctl (BSD/sbin/launchd/core.c:7195), so the

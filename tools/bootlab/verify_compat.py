@@ -25,7 +25,7 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 WORK = os.path.join(HERE, "work")
-FIXTURES = ("posix", "malloczone", "autorelease", "passwd", "accounts", "cocoa", "launch",
+FIXTURES = ("posix", "malloczone", "autorelease", "backup", "passwd", "accounts", "cocoa", "launch",
             "pasteboard", "net", "icmp", "tcp")
 TCP_PORT = 8123
 TCP_MARKER = "RAVYN-TCP-OK"

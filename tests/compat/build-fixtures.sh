@@ -50,6 +50,9 @@ echo "building pasteboard fixture ($TARGET)"
 "$CC" -target "$TARGET" -isysroot "$SDK" -O1 -Wall \
     -o "$OUT/pasteboard" "$HERE/pasteboard.m" -framework Cocoa
 
+echo "building backup fixture ($TARGET)"
+$CC -target $TARGET -isysroot "$SDK" -O2 -Wall -o "$OUT/backup" "$HERE/backup.c"
+
 echo "building autorelease fixture ($TARGET)"
 "$CC" -target "$TARGET" -isysroot "$SDK" -O1 -Wall \
     -o "$OUT/autorelease" "$HERE/autorelease.m" -framework Foundation

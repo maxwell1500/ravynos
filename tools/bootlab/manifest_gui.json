@@ -1496,6 +1496,11 @@
       "comment": "ABI conformance fixture (tests/compat)"
     },
     {
+      "path": "usr/local/compat/backup",
+      "file": "work/compat/backup",
+      "comment": "ABI conformance fixture (tests/compat)"
+    },
+    {
       "path": "usr/local/compat/passwd",
       "file": "work/compat/passwd",
       "comment": "ABI conformance fixture (tests/compat)"
@@ -1599,6 +1604,11 @@
       "path": "usr/bin/route",
       "file": "work/route",
       "comment": "routing table client (BSD/usr.bin/route)"
+    },
+    {
+      "path": "usr/bin/tmutil",
+      "file": "work/tmutil",
+      "comment": "backup/restore/verify (BSD/usr.sbin/tmutil)"
     },
     {
       "path": "bin/launchctl",

@@ -192,6 +192,9 @@ run_fixture malloczone /usr/local/compat/malloczone
 # the framework that created the object.
 run_fixture autorelease /usr/local/compat/autorelease
 
+# Backup/restore must copy a tree, detect a changed file and restore it.
+run_fixture backup /usr/local/compat/backup
+
 # Pasteboard: a string written by one process must be visible to another.
 # The writer and reader are separate execs, so nothing but the pasteboard
 # server can carry the value between them.
