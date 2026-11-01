@@ -132,6 +132,15 @@ main(void)
 	if (stat("/Users/fixtureuser", &st) == 0)
 		return fail("userdel -r left the home directory behind");
 
+	/* su runs as root here, so it must not prompt; the child exits 7 and
+	 * su must preserve that status through setgid/setuid/exec. */
+	char *suargv[] = { "/usr/bin/su", "-c", "exit 7", "ravynos", NULL };
+	if (run_tool(suargv) != 7)
+		return fail("su did not preserve the child exit status");
+	if (!file_contains("/var/log/secure",
+	    "AUDIT user=ravynos action=su result=ok"))
+		return fail("su did not write the audit line");
+
 	printf("passwd: ravynos uid=%u gid=%u home=%s hash=%s verified\n",
 	       (unsigned)pw->pw_uid, (unsigned)pw->pw_gid, pw->pw_dir,
 	       stored);

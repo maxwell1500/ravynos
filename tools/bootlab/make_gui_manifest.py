@@ -679,6 +679,20 @@ def main():
         else:
             closure.append((dst_path, um_src, "MISSING"))
 
+    # 6i. su: the same crypt()/master.passwd path loginwindow uses, with
+    #     AUDIT lines in /var/log/secure.
+    su_src = os.path.join(BUILD_SRC, "BSD", "usr.bin", "su", "su")
+    su_work = os.path.join(HERE, "work", "su")
+    if os.path.isfile(su_src):
+        shutil.copy2(su_src, su_work)
+        entries.append({
+            "path": "usr/bin/su",
+            "file": os.path.relpath(su_work, HERE),
+            "comment": "substitute user (BSD/usr.bin/su)",
+        })
+    else:
+        closure.append(("usr/bin/su", su_src, "MISSING"))
+
     # 7. launchctl and its libjansson dependency. launchd's hardcoded System
     #    bootstrapper execs /bin/launchctl (BSD/sbin/launchd/core.c:7195), so the
     #    binary must sit at that exact path; launchctl's LC_LOAD_DYLIB requires
