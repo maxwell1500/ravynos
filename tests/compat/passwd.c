@@ -141,6 +141,19 @@ main(void)
 	    "AUDIT user=ravynos action=su result=ok"))
 		return fail("su did not write the audit line");
 
+	/* netstat reads NET_RT_IFLIST; en0 must be visible after DHCP. */
+	FILE *nf = popen("/usr/bin/netstat -i", "r");
+	if (nf == NULL)
+		return fail("could not run netstat");
+	char line[256];
+	int saw_en0 = 0;
+	while (fgets(line, sizeof(line), nf) != NULL)
+		if (strstr(line, "en0") != NULL)
+			saw_en0 = 1;
+	pclose(nf);
+	if (!saw_en0)
+		return fail("netstat -i did not list en0");
+
 	printf("passwd: ravynos uid=%u gid=%u home=%s hash=%s verified\n",
 	       (unsigned)pw->pw_uid, (unsigned)pw->pw_gid, pw->pw_dir,
 	       stored);

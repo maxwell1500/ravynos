@@ -693,6 +693,19 @@ def main():
     else:
         closure.append(("usr/bin/su", su_src, "MISSING"))
 
+    # 6j. netstat: interface and route summary from the BSD routing sysctl.
+    ns_src = os.path.join(BUILD_SRC, "BSD", "usr.bin", "netstat", "netstat")
+    ns_work = os.path.join(HERE, "work", "netstat")
+    if os.path.isfile(ns_src):
+        shutil.copy2(ns_src, ns_work)
+        entries.append({
+            "path": "usr/bin/netstat",
+            "file": os.path.relpath(ns_work, HERE),
+            "comment": "interface/route summary (BSD/usr.bin/netstat)",
+        })
+    else:
+        closure.append(("usr/bin/netstat", ns_src, "MISSING"))
+
     # 7. launchctl and its libjansson dependency. launchd's hardcoded System
     #    bootstrapper execs /bin/launchctl (BSD/sbin/launchd/core.c:7195), so the
     #    binary must sit at that exact path; launchctl's LC_LOAD_DYLIB requires

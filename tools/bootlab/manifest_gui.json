@@ -1591,6 +1591,11 @@
       "comment": "substitute user (BSD/usr.bin/su)"
     },
     {
+      "path": "usr/bin/netstat",
+      "file": "work/netstat",
+      "comment": "interface/route summary (BSD/usr.bin/netstat)"
+    },
+    {
       "path": "bin/launchctl",
       "file": "work/launchctl_dyn",
       "comment": "launchd's hardcoded /bin/launchctl (BSD/sbin/launchd/core.c:7195)"
