@@ -39,7 +39,7 @@ jobs:
       - name: Build kernel and kexts
         run: |
           set -euo pipefail
-          tools/bootlab/build-libraries.sh --kexts IOACPIFamily AppleAPIC IOPCIFamily AppleI386PCI
+          tools/bootlab/build-libraries.sh --kexts IOACPIFamily AppleAPIC IOPCIFamily AppleI386PCI IntelE1000 IONetworkFamily
 
       - name: Build compatibility fixtures
         run: |
@@ -59,6 +59,14 @@ jobs:
         run: python3 mkimage.py work/boot.img --manifest manifest_gui.json
 
 
+      - name: Release manifest
+        run: |
+          set -euo pipefail
+          shasum -a 256 tools/bootlab/work/boot.img \
+            tools/bootlab/work/prelinked_kernel.development \
+            tests/compat/out/posix tests/compat/out/passwd \
+            > release-manifest.sha256
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -68,4 +76,6 @@ jobs:
             tools/bootlab/work/boot.img.digests
             tools/bootlab/work/prelinked_kernel.development
             tests/compat/out
+            tests/compat/matrix.md
+            release-manifest.sha256
           retention-days: 14
