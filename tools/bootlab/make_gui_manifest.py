@@ -569,6 +569,22 @@ def main():
         else:
             closure.append((job_dst, job_src, "MISSING"))
 
+    # 6e2. The version applications parse.  Firefox's minimum-OS check
+    #      reads ProductVersion; the ravynOS release number (0.7.x) is not
+    #      a macOS version and would make every stock app refuse to start.
+    sysver = os.path.join(REPO, "SystemLibrary", "SystemVersion.plist")
+    if os.path.isfile(sysver):
+        entries.append({
+            "path": "System/Library/CoreServices/SystemVersion.plist",
+            "file": os.path.relpath(sysver, HERE),
+            "comment": "compatibility ProductVersion read by stock apps",
+        })
+        closure.append(("System/Library/CoreServices/SystemVersion.plist",
+                        sysver, "staged"))
+    else:
+        closure.append(("System/Library/CoreServices/SystemVersion.plist",
+                        sysver, "MISSING"))
+
     # 6f. ABI conformance fixtures (tests/compat).  They are built on the
     #     host by Apple's toolchain (tests/compat/build-fixtures.sh) and
     #     staged from the work/compat copy tests/compat/install.sh makes, so

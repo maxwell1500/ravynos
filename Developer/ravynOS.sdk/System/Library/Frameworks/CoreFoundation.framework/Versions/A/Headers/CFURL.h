@@ -239,6 +239,10 @@ CFStringRef CFURLCopyStrictPath(CFURLRef anURL, Boolean *isAbsolute);
 CF_EXPORT
 CFStringRef CFURLCopyFileSystemPath(CFURLRef anURL, CFURLPathStyle pathStyle);
 
+struct FSRef;
+CF_EXPORT Boolean CFURLGetFSRef(CFURLRef url, struct FSRef *fsRef);
+CF_EXPORT CFURLRef CFURLCreateFromFSRef(CFAllocatorRef allocator, const struct FSRef *fsRef);
+
 /* Returns whether anURL's path represents a directory */
 /* (true returned) or a simple file (false returned) */
 CF_EXPORT

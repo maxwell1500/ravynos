@@ -60,7 +60,8 @@ CFLAGS += -I${IOKIT_INC} -I${.CURDIR} -I${IOKITUSER} \
 	-I${RAVYN_SDKROOT}/usr/include
 
 LDFLAGS += -F${RAVYN_SDKROOT}/System/Library/Frameworks \
-	-Wl,-framework,CoreFoundation
+	-Wl,-framework,CoreFoundation \
+	-Wl,-reexport_framework,SystemConfiguration
 
 all: ${IOKIT_INC}/.stamp
 

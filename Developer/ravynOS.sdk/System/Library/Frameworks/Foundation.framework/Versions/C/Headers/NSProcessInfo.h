@@ -32,9 +32,17 @@ enum {
 - (NSUInteger)activeProcessorCount;
 - (uint64_t)physicalMemory;
 
+typedef struct {
+    NSInteger majorVersion;
+    NSInteger minorVersion;
+    NSInteger patchVersion;
+} NSOperatingSystemVersion;
+
 - (NSUInteger)operatingSystem;
 - (NSString *)operatingSystemName;
 - (NSString *)operatingSystemVersionString;
+- (NSOperatingSystemVersion)operatingSystemVersion;
+- (BOOL)isOperatingSystemAtLeastVersion:(NSOperatingSystemVersion)version;
 
 - (NSString *)hostName;
 

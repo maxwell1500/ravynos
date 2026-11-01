@@ -4164,7 +4164,62 @@ static Boolean _pathHasFileIDPrefix( CFStringRef path )
 }
 
 
-CF_EXPORT CFStringRef CFURLCopyFileSystemPath(CFURLRef anURL, CFURLPathStyle pathStyle) {
+CF_EXPORT /* CoreServices defines FSRef as 80 opaque bytes holding the POSIX path;
+ * keep the same encoding here so an FSRef made by CoreFoundation is accepted
+ * by FSPathMakeRef/FSRefMakePath without a CoreServices dependency. */
+struct RavynFSRef { unsigned char opaque[80]; };
+
+CFURLRef CFURLCreateFromFSRef(CFAllocatorRef allocator, const struct FSRef *fsRef)
+{
+    const char *path;
+    CFStringRef string;
+    CFURLRef url;
+
+    if (fsRef == NULL)
+        return NULL;
+
+    path = (const char *)((const struct RavynFSRef *)fsRef)->opaque;
+    if (path[0] == '\0')
+        return NULL;
+
+    string = CFStringCreateWithCString(allocator, path, kCFStringEncodingUTF8);
+    if (string == NULL)
+        return NULL;
+
+    url = CFURLCreateWithFileSystemPath(allocator, string,
+                                        kCFURLPOSIXPathStyle, false);
+    CFRelease(string);
+    return url;
+}
+
+Boolean CFURLGetFSRef(CFURLRef url, struct FSRef *fsRef)
+{
+    CFStringRef path;
+    char buffer[80];
+    size_t length;
+
+    if (url == NULL || fsRef == NULL)
+        return false;
+
+    path = CFURLCopyFileSystemPath(url, kCFURLPOSIXPathStyle);
+    if (path == NULL)
+        return false;
+
+    if (!CFStringGetCString(path, buffer, sizeof(buffer), kCFStringEncodingUTF8)) {
+        CFRelease(path);
+        return false;
+    }
+    CFRelease(path);
+
+    length = strlen(buffer);
+    if (length == 0 || length >= sizeof(buffer))
+        return false;
+
+    memcpy(((struct RavynFSRef *)fsRef)->opaque, buffer, length + 1);
+    return true;
+}
+
+CFStringRef CFURLCopyFileSystemPath(CFURLRef anURL, CFURLPathStyle pathStyle) {
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdeprecated"
     CFAssert2(pathStyle == kCFURLPOSIXPathStyle || pathStyle == kCFURLHFSPathStyle || pathStyle == kCFURLWindowsPathStyle, __kCFLogAssertion, "%s(): Encountered unknown path style %d", __PRETTY_FUNCTION__, pathStyle);

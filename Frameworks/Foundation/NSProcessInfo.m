@@ -76,6 +76,24 @@ const char * const *NSProcessInfoArgv=NULL;
    return 0;
 }
 
+/* The ABI target is macOS 10.13.6 (Firefox ESR 115's minimum).  The
+ * product version in SystemVersion.plist is ravynOS's own 0.7.x, which
+ * applications must not mistake for the compatibility level they are
+ * running against. */
+-(NSOperatingSystemVersion)operatingSystemVersion {
+   NSOperatingSystemVersion version = { 10, 13, 6 };
+   return version;
+}
+
+-(BOOL)isOperatingSystemAtLeastVersion:(NSOperatingSystemVersion)version {
+   NSOperatingSystemVersion current = [self operatingSystemVersion];
+   if (current.majorVersion != version.majorVersion)
+       return current.majorVersion > version.majorVersion;
+   if (current.minorVersion != version.minorVersion)
+       return current.minorVersion > version.minorVersion;
+   return current.patchVersion >= version.patchVersion;
+}
+
 -(NSString *)operatingSystemVersionString {
 #ifdef __WINDOWS__
 	OSVERSIONINFOEX osVersion;
@@ -135,8 +153,10 @@ const char * const *NSProcessInfoArgv=NULL;
 			break;
 	}
 #else
-    NSUnimplementedMethod();
-    return 0;
+    /* The ABI target is macOS 10.13.6.  Applications compare this string
+     * (and -operatingSystemVersion) against LSMinimumSystemVersion; the
+     * ravynOS product version is deliberately not reported here. */
+    return @"Version 10.13.6 (ravynOS)";
 #endif
 }
 

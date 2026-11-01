@@ -483,3 +483,27 @@ The next selector gap exposed by the same run,
 `+[NSURL fileURLWithPath:isDirectory:]`, is implemented in
 `Frameworks/Foundation/NSURL/NSURL.m`; `-CreateProfile` no longer aborts
 with `rc=134`.
+
+### Version reporting and the next library gaps (4.2h follow-up)
+
+With the pool crash fixed, Firefox exposed its platform checks:
+
+* `Minimum OS version requirement not met!` came from the compatibility
+  version, not from the kernel: `SystemVersion.plist` carried ravynOS
+  0.7.1, and `NSProcessInfo` had no `-operatingSystemVersion`.  The image
+  now installs `SystemVersion.plist` with `ProductVersion 10.13.6`, the
+  kernel defaults `kern.osproductversion` to `10.13.6`, and
+  `NSProcessInfo` implements `operatingSystemVersion`,
+  `isOperatingSystemAtLeastVersion:` and the Darwin version string.
+* `_SCDynamicStoreCreate` was imported from **IOKit**, which re-exports
+  SystemConfiguration on macOS.  IOKit now links with
+  `-reexport_framework,SystemConfiguration`.
+* `_CFURLGetFSRef` / `_CFURLCreateFromFSRef` are implemented in
+  CoreFoundation using the same 80-byte path encoding as CoreServices.
+* `_CFNotificationCenterGetLocalCenter` and the observer API are now a
+  real in-process notification center; distributed/Darwin centers alias
+  it and do not claim cross-process delivery.
+
+After these, `-CreateProfile` no longer aborts in the version check and
+the browser process reaches its event loop instead of dying in dyld; it
+was still running when the 190-second probe ended.

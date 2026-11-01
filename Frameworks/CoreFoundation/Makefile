@@ -11,6 +11,7 @@ HEADERS = CFArray.h CFBag.h CFBase.h CFBinaryHeap.h CFBitVector.h CFBundle.h \
 	CFPreferences.h CFPropertyList.h CFRunLoop.h CFSet.h CFSocket.h \
 	CFStream.h CFString.h CFStringEncodingExt.h CFTimeZone.h CFTree.h \
 	CFURL.h CFURLAccess.h CFURLEnumerator.h CFUUID.h CFUserNotification.h \
+	CFNotificationCenter.h \
 	CFXMLNode.h CFXMLParser.h CFXPCBridge.h CFAvailability.h CFUtilities.h \
 	CoreFoundation.h
 
@@ -98,6 +99,7 @@ SRCS = CFApplicationPreferences.c \
 	CFUnicodeDecomposition.c \
 	CFUnicodePrecomposition.c \
 	CFUserNotification.c \
+	CFNotificationCenter.c \
 	CFUtilities.c \
 	CFVersion.c \
 	CFWindowsUtilities.c \

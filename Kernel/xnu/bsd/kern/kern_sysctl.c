@@ -2012,7 +2012,12 @@ SYSCTL_PROC(_kern, OID_AUTO, osproductversioncompat,
     sysctl_osproductversioncompat, "A", "The ProductVersion from SystemVersionCompat.plist");
 #endif
 
-char osproductversion[48] = { '\0' };
+/* The product version reported to applications is the macOS ABI level
+ * this kernel implements, not the ravynOS release number: Gecko and other
+ * apps parse kern.osproductversion against LSMinimumSystemVersion and
+ * refuse to start on an unparseable or too-old value.  launchd may
+ * overwrite it from SystemVersion.plist. */
+char osproductversion[48] = "10.13.6";
 
 static char iossupportversion_string[48] = { '\0' };
 

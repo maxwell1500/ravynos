@@ -2021,6 +2021,11 @@
       "comment": "launchd job of the daily driver services"
     },
     {
+      "path": "System/Library/CoreServices/SystemVersion.plist",
+      "file": "../../SystemLibrary/SystemVersion.plist",
+      "comment": "compatibility ProductVersion read by stock apps"
+    },
+    {
       "path": "usr/local/compat/posix",
       "file": "work/compat/posix",
       "comment": "ABI conformance fixture (tests/compat)"

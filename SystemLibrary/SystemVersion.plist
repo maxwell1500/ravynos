@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>ProductName</key>
+    <string>ravynOS</string>
+    <key>ProductFamily</key>
+    <string>Mac OS X</string>
+    <key>ProductCopyright</key>
+    <string>2021-2026 Zoe Knox</string>
+    <!-- The version applications parse for compatibility.  ravynOS's own
+         release number is not a macOS version and must not be reported
+         here; the ABI target is macOS 10.13.6. -->
+    <key>ProductVersion</key>
+    <string>10.13.6</string>
+    <key>ProductUserVisibleVersion</key>
+    <string>10.13.6</string>
+    <key>ProductBuildVersion</key>
+    <string>17G14042</string>
+    <key>iOSSupportVersion</key>
+    <string>11.4</string>
+</dict>
+</plist>
