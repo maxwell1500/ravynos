@@ -1626,6 +1626,11 @@
       "comment": "uname (BSD/BSD/usr.bin/uname)"
     },
     {
+      "path": "bin/df",
+      "file": "work/df",
+      "comment": "filesystem usage (BSD/bin/df)"
+    },
+    {
       "path": "bin/launchctl",
       "file": "work/launchctl_dyn",
       "comment": "launchd's hardcoded /bin/launchctl (BSD/sbin/launchd/core.c:7195)"

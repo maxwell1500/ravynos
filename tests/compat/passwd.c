@@ -175,6 +175,19 @@ main(void)
 	if (strstr(unline, "Darwin") == NULL)
 		return fail("uname -s is not Darwin");
 
+	FILE *dfp = popen("/bin/df", "r");
+	if (dfp == NULL)
+		return fail("could not run df");
+	char dfline[256];
+	int saw_mount = 0;
+	while (fgets(dfline, sizeof(dfline), dfp) != NULL)
+		if (strstr(dfline, "Mounted on") != NULL ||
+		    strstr(dfline, " /") != NULL)
+			saw_mount = 1;
+	pclose(dfp);
+	if (!saw_mount)
+		return fail("df listed no mounted filesystem");
+
 	printf("passwd: ravynos uid=%u gid=%u home=%s hash=%s verified\n",
 	       (unsigned)pw->pw_uid, (unsigned)pw->pw_gid, pw->pw_dir,
 	       stored);

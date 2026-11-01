@@ -762,6 +762,19 @@ def main():
         else:
             closure.append((dstpath, src, "MISSING"))
 
+    # 6o. df: mounted filesystem usage from getmntinfo.
+    df_src = os.path.join(BUILD_SRC, "BSD", "bin", "df", "df")
+    df_work = os.path.join(HERE, "work", "df")
+    if os.path.isfile(df_src):
+        shutil.copy2(df_src, df_work)
+        entries.append({
+            "path": "bin/df",
+            "file": os.path.relpath(df_work, HERE),
+            "comment": "filesystem usage (BSD/bin/df)",
+        })
+    else:
+        closure.append(("bin/df", df_src, "MISSING"))
+
     # 7. launchctl and its libjansson dependency. launchd's hardcoded System
     #    bootstrapper execs /bin/launchctl (BSD/sbin/launchd/core.c:7195), so the
     #    binary must sit at that exact path; launchctl's LC_LOAD_DYLIB requires
