@@ -36,6 +36,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <dlfcn.h>
 #if DEPLOYMENT_TARGET_MACOSX || DEPLOYMENT_TARGET_EMBEDDED || DEPLOYMENT_TARGET_EMBEDDED_MINI || DEPLOYMENT_TARGET_LINUX
 #if DEPLOYMENT_TARGET_MACOSX
 #include <CoreFoundation/CFNumberFormatter.h>
@@ -2844,8 +2845,21 @@ static CFStringRef _retainedComponentString(CFURLRef url, UInt32 compFlag, Boole
     }
     if (url == NULL || (uintptr_t)url < 4096 ||
         (uintptr_t)url->_string < 4096) {
-        fprintf(stderr, "[CF] _retainedComponentString invalid url=%p string=%p flag=%u\n",
-                url, url ? (void *)url->_string : NULL, (unsigned)compFlag);
+        void *caller = __builtin_return_address(0);
+        Dl_info info;
+        const char *cls = (url && (uintptr_t)url >= 4096)
+            ? object_getClassName((id)url) : "?";
+        if (dladdr(caller, &info) && info.dli_fname) {
+            fprintf(stderr, "[CF] invalid url=%p class=%s string=%p flag=%u caller=%s+0x%lx %s\n",
+                    url, cls, url ? (void *)url->_string : NULL,
+                    (unsigned)compFlag, info.dli_fname,
+                    (unsigned long)((char *)caller - (char *)info.dli_fbase),
+                    info.dli_sname ? info.dli_sname : "?");
+        } else {
+            fprintf(stderr, "[CF] invalid url=%p class=%s string=%p flag=%u caller=%p\n",
+                    url, cls, url ? (void *)url->_string : NULL,
+                    (unsigned)compFlag, caller);
+        }
         return NULL;
     }
     rg = _rangeForComponent(url->_flags, url->_ranges, compFlag);
@@ -4237,6 +4251,7 @@ CFStringRef CFURLCopyFileSystemPath(CFURLRef anURL, CFURLPathStyle pathStyle) {
     
     CFStringRef result = NULL;
     CFAllocatorRef alloc = CFGetAllocator(anURL);
+
 #if DEPLOYMENT_TARGET_MACOSX || DEPLOYMENT_TARGET_EMBEDDED || DEPLOYMENT_TARGET_EMBEDDED_MINI || DEPLOYMENT_TARGET_LINUX
     Boolean isCanonicalFileURL = false;
     
