@@ -16,9 +16,46 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
+#include <fcntl.h>
 #include <unistd.h>
 
 extern char *crypt(const char *, const char *);
+
+
+static int
+run_tool(char *const argv[])
+{
+	pid_t pid = fork();
+	int status;
+
+	if (pid < 0)
+		return -1;
+	if (pid == 0) {
+		execv(argv[0], argv);
+		_exit(127);
+	}
+	if (waitpid(pid, &status, 0) != pid)
+		return -1;
+	return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+}
+
+static int
+file_contains(const char *path, const char *needle)
+{
+	char buf[8192];
+	int fd = open(path, O_RDONLY);
+	ssize_t n;
+
+	if (fd < 0)
+		return 0;
+	n = read(fd, buf, sizeof(buf) - 1);
+	close(fd);
+	if (n <= 0)
+		return 0;
+	buf[n] = '\0';
+	return strstr(buf, needle) != NULL;
+}
 
 static int
 fail(const char *what)
@@ -74,6 +111,26 @@ main(void)
 	enc = crypt("definitely-not-the-password", stored);
 	if (enc != NULL && strcmp(enc, stored) == 0)
 		return fail("a wrong password also verifies");
+
+	/* Exercise the account tools themselves, not just the lookup path:
+	 * useradd must create the home and write an audit line, and userdel -r
+	 * must remove it again. */
+	char *addargv[] = { "/usr/sbin/useradd", "-m", "-u", "599", "-g",
+	    "staff", "-c", "Compat Fixture", "-s", "/bin/sh", "-p", stored,
+	    "fixtureuser", NULL };
+	if (run_tool(addargv) != 0)
+		return fail("useradd fixtureuser failed");
+	if (stat("/Users/fixtureuser", &st) != 0 || !S_ISDIR(st.st_mode))
+		return fail("useradd did not create /Users/fixtureuser");
+	if (!file_contains("/var/log/secure",
+	    "AUDIT user=fixtureuser action=useradd result=ok"))
+		return fail("useradd did not write the audit line");
+
+	char *delargv[] = { "/usr/sbin/userdel", "-r", "fixtureuser", NULL };
+	if (run_tool(delargv) != 0)
+		return fail("userdel fixtureuser failed");
+	if (stat("/Users/fixtureuser", &st) == 0)
+		return fail("userdel -r left the home directory behind");
 
 	printf("passwd: ravynos uid=%u gid=%u home=%s hash=%s verified\n",
 	       (unsigned)pw->pw_uid, (unsigned)pw->pw_gid, pw->pw_dir,
