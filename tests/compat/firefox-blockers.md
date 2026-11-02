@@ -757,3 +757,16 @@ CF container is built with Objective-C callbacks and receives a CF
 run-loop observer as a key.  That is the same bridging question one level
 down — the callbacks for CF collections must either handle CF objects or
 the observers must be ObjC objects.
+
+### Static symbol inventory (2026-11-02)
+
+`tests/compat/symbol-coverage.py` walks every Mach-O image in the bundle,
+takes the undefined symbols and subtracts what the bundle itself and the
+ravynOS SDK export.  Firefox ESR today: 20 images, 3,245 undefined, 242
+not provided.  By owner: CoreText 63, CoreGraphics 57, IOKit 31 (HID
+manager, power sources), LaunchServices 12, PrintCore 12, CoreFoundation
+16, Accessibility 7, Carbon 5, Pasteboard 3, plus CUPS, Metal,
+VideoToolbox, QuartzCore.  The baseline is `firefox-symbol-gap.json`;
+`--baseline` fails when a bundle starts needing a symbol we still lack.
+This replaces one-400-second-boot-per-symbol discovery with a host-side
+list, the way Wine's conformance report drives its API work.
