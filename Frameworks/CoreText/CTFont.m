@@ -32,6 +32,21 @@ CFStringRef CTFontCopyFullName(CTFontRef self) {
    return [self copyName];
 }
 
+/* This tree carries one name per face -- the name the font was created
+ * with, which is its PostScript name.  Family and display name requests
+ * answer with it rather than inventing a different string. */
+CFStringRef CTFontCopyFamilyName(CTFontRef self) {
+   return [self copyName];
+}
+
+CFStringRef CTFontCopyPostScriptName(CTFontRef self) {
+   return [self copyName];
+}
+
+CFStringRef CTFontCopyDisplayName(CTFontRef self) {
+   return [self copyName];
+}
+
 CGFloat CTFontGetSize(CTFontRef self) {
    return [self pointSize];
 }
