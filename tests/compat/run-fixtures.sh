@@ -209,6 +209,7 @@ run_fixture sandbox /usr/local/compat/sandbox
 
 # Mode bits are enforced: uid 501 cannot write a 0600 file or list a 0700 dir.
 run_fixture perms /usr/local/compat/perms
+run_fixture spinkill /usr/local/compat/spinkill
 
 # Pasteboard: a string written by one process must be visible to another.
 # The writer and reader are separate execs, so nothing but the pasteboard

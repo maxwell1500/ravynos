@@ -545,3 +545,67 @@ acceptance) so the fixture gate stays green.  The next attempt needs a
 real CF/ObjC bridge: register `NSURL`/`NSCFString` under their live
 `CF*GetTypeID()` values, implement `-_cfTypeID`/`-_cfurl` on them, and
 then delete the guards rather than growing them.
+
+## 2026-11-01 — crash resolved; scheduler stops ~90 s into startup
+
+Fixed in `ef8477385d`, `cf0b2f8307`:
+
+- `__CFISAForTypeID` stamped C-allocated CF instances with the bridge
+  class (NSURL).  `CF_IS_OBJC` then said "ObjC" for C structs and
+  `CFURLCopyAbsoluteURL` returned NULL through the `CF_OBJC_CALLV` `(0)`
+  stub, so `_CFBundleCopyResolvedURLForExecutableURL` produced no bundle
+  URL and `CFBundleGetBundleWithIdentifier` released a stale entry
+  (fault 0x4, `CFRelease(4)`).
+- x86_64 objc4 uses packed isas, so `*(uintptr_t*)obj` is the class
+  pointer OR'd with extra_rc/magic bits.  CF now masks with ISA_MASK
+  before comparing in `CF_IS_OBJC` and `_CFIsRegisteredObjCClass`.
+- The NSURL-accessor ObjC branches (`CFURLCopyAbsoluteURL`, `GetString`,
+  scheme/host/port/user/password/parameterString/query/fragment,
+  `IsFileReferenceURL`) send the message explicitly; `CF_OBJC_CALLV` is
+  still a `(0)` stub for the multi-argument callers elsewhere.
+
+Result: 0 CORPSE, `[AppKit] exe=firefox bundleID=org.mozilla.firefox`,
+WindowServer activates the app, `[CF] invalid url` guard hits gone.
+
+### Next blocker: vCPU0 spins in `_lapic_send_ipi`, no CPU is woken
+
+Reproduced on the 2048 MiB Firefox image (8 vCPUs, HVF).  At ~75 s into
+`firefox -CreateProfile` the guest stops scheduling: serial output stops,
+Firefox stays state `R` forever, `kill(SIGKILL)` returns 0 but the
+process never dies, and no CORPSE prints (killed by signal, not faulted).
+
+QEMU monitor `info registers -a` sampled five times, two seconds apart:
+
+```
+CPU#0  RIP=ffffff800040dff7  CPL=0 HLT=0   (inside _lapic_send_ipi)
+CPU#1..7  RIP=000000007ed65af1  HLT=1     (halted, never wake)
+```
+
+`ffffff800040dff7` is the x2APIC MSR-write helper (`0x800 + index`) called
+from `_lapic_send_ipi` (`ffffff800040db40`).  The boot prints
+`x2APIC supported and will be enabled` / `x2APIC mode enabled`.  The IPI
+targets stay halted across every sample, i.e. the interrupts are not being
+delivered; anything waiting on an IPI ACK (TLB shootdown, AST poke) waits
+forever with interrupts disabled, which also explains why SIGKILL cannot
+land and why the desktop stops repainting.
+
+Not the cause: the twelve
+`vm_map_locate_space_anywhere: KERN_NO_SPACE (max <= hint ...)` lines.
+Checked on the macOS host: `mmap()` with those hints maps elsewhere, but
+`mach_vm_map(ANYWHERE, hint > max)` also returns `KERN_NO_SPACE` (kr=3),
+so the guest matches Darwin here and Firefox tolerates it.
+
+Fixed during this investigation (kept):
+
+- `tests/compat/spinkill.c` — a userspace spinner with no syscalls is
+  SIGKILLed and must report `FIXTURE spinkill rc=0`; it passes, so the
+  signal path itself is healthy and the Firefox thread is stuck in kernel.
+- `runas -t` now forks a root watcher that SIGABRTs then SIGKILLs the
+  target (alarm/SIGALRM never fired: Gecko handles or masks it) and logs
+  the target pid and kill results.
+
+Next: compare `_lapic_send_ipi` against Darwin's (destination/ICR write,
+delivery-status poll, `is_x2apic` gate) and check whether QEMU/HVF's
+userspace APIC accepts the x2APIC ICR MSR here; a boot with
+`-accel tcg` (x2APIC MSR handling differs) or with x2APIC disabled is
+the cheap A/B.

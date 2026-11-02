@@ -42,6 +42,10 @@ echo "building passwd fixture ($TARGET)"
 "$CC" -target "$TARGET" -isysroot "$SDK" -O1 -Wall \
     -o "$OUT/passwd" "$HERE/passwd.c"
 
+echo "building spinkill fixture ($TARGET)"
+"$CC" -target "$TARGET" -isysroot "$SDK" -O1 -Wall \
+    -o "$OUT/spinkill" "$HERE/spinkill.c"
+
 echo "building runas fixture ($TARGET)"
 "$CC" -target "$TARGET" -isysroot "$SDK" -O1 -Wall \
     -o "$OUT/runas" "$HERE/runas.c"

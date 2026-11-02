@@ -9,12 +9,14 @@
  *
  *   runas [-t seconds] <uid> <gid> <program> [args...]
  *
- * -t arms alarm(3) before exec, so a process that hangs in startup is
- * terminated by SIGALRM and the kernel prints its user stack.  The shell's
- * kill builtin is not reliable in this image, and a watchdog that waits
- * forever never reports anything.
+ * -t forks a watcher that SIGKILLs the exec'd program after the timeout,
+ *   so a process that hangs in startup is terminated even if it installs
+ *   its own signal handlers (alarm/SIGALRM did not work: Gecko catches or
+ *   masks it).  The shell's kill builtin is not reliable in this image, and
+ *   a watchdog that waits forever never reports anything.
  */
 #include <errno.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -24,11 +26,37 @@ int
 main(int argc, char *argv[])
 {
 	if (argc >= 2 && strcmp(argv[1], "-t") == 0) {
+		int secs;
+		pid_t watcher;
 		if (argc < 3) {
 			fprintf(stderr, "usage: runas [-t seconds] uid gid program [args...]\n");
 			return 2;
 		}
-		alarm((unsigned)atoi(argv[2]));
+		secs = atoi(argv[2]);
+		watcher = fork();
+		if (watcher < 0) {
+			perror("runas: fork");
+			return 1;
+		}
+		if (watcher == 0) {
+			/* root watcher: survives the parent's setuid and the
+			 * exec'd program's signal masks; SIGKILL cannot be caught */
+			pid_t target = getppid();
+			fprintf(stderr, "[runas] watchdog armed: self=%d target=%d secs=%d\n",
+			    (int)getpid(), (int)target, secs);
+			sleep(secs > 0 ? secs : 1);
+			fprintf(stderr, "[runas] watchdog: target %d alive=%d\n",
+			    (int)target, kill(target, 0) == 0 ? 1 : 0);
+			/* SIGABRT makes the kernel print the stuck process's
+			 * user stack (CORPSE frames); SIGKILL then guarantees
+			 * the job completes. */
+			fprintf(stderr, "[runas] watchdog: SIGABRT pid %d -> %d\n",
+			    (int)target, kill(target, SIGABRT));
+			sleep(2);
+			fprintf(stderr, "[runas] watchdog: SIGKILL pid %d -> %d errno=%d\n",
+			    (int)target, kill(target, SIGKILL), errno);
+			_exit(0);
+		}
 		argv += 2;
 		argc -= 2;
 	}
@@ -49,6 +77,7 @@ main(int argc, char *argv[])
 		perror("runas: setuid");
 		return 1;
 	}
+	fprintf(stderr, "[runas] pid %d exec %s\n", (int)getpid(), argv[3]);
 	execv(argv[3], &argv[3]);
 	perror("runas: exec");
 	return 1;

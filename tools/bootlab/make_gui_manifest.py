@@ -599,6 +599,7 @@ def main():
         ("backup", "usr/local/compat/backup"),
         ("sandbox", "usr/local/compat/sandbox"),
         ("perms", "usr/local/compat/perms"),
+        ("spinkill", "usr/local/compat/spinkill"),
         ("passwd", "usr/local/compat/passwd"),
         ("bootstrap_probe", "usr/local/compat/bootstrap_probe"),
         ("runas", "usr/local/compat/runas"),

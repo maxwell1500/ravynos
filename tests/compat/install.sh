@@ -29,7 +29,7 @@ STAGE="$ROOT/tools/bootlab/work/compat"
 [ -x "$OUT/CocoaProbe.app/Contents/MacOS/CocoaProbe" ] || {
     echo "missing CocoaProbe -- run build-fixtures.sh" >&2; exit 1; }
 
-for f in "$OUT/posix" "$OUT/tcp" "$OUT/malloczone" "$OUT/autorelease" "$OUT/backup" "$OUT/sandbox" "$OUT/perms" "$OUT/runas" "$OUT/passwd" "$OUT/bootstrap_probe" "$OUT/CocoaProbe.app/Contents/MacOS/CocoaProbe"; do
+for f in "$OUT/posix" "$OUT/tcp" "$OUT/malloczone" "$OUT/autorelease" "$OUT/backup" "$OUT/sandbox" "$OUT/perms" "$OUT/spinkill" "$OUT/runas" "$OUT/passwd" "$OUT/bootstrap_probe" "$OUT/CocoaProbe.app/Contents/MacOS/CocoaProbe"; do
     if ! file "$f" | grep -q "Mach-O 64-bit executable x86_64"; then
         echo "$f is not an x86_64 Mach-O executable" >&2
         exit 1
@@ -46,6 +46,7 @@ cp -p "$OUT/autorelease" "$STAGE/autorelease"
 cp -p "$OUT/backup" "$STAGE/backup"
 cp -p "$OUT/sandbox" "$STAGE/sandbox"
 cp -p "$OUT/perms" "$STAGE/perms"
+cp -p "$OUT/spinkill" "$STAGE/spinkill"
 cp -p "$OUT/runas" "$STAGE/runas"
 cp -p "$OUT/passwd" "$STAGE/passwd"
 cp -p "$OUT/bootstrap_probe" "$STAGE/bootstrap_probe"
