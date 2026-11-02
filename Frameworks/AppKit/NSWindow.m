@@ -1184,7 +1184,6 @@ static BOOL _allowsAutomaticWindowTabbing = YES;
 
 -(void)setContentMinSize:(NSSize)value {
    _contentMinSize=value;
-   NSUnimplementedMethod();
 }
 
 -(void)setContentMaxSize:(NSSize)value {
@@ -1424,7 +1423,7 @@ static BOOL _allowsAutomaticWindowTabbing = YES;
 }
 
 -(void)setCollectionBehavior:(NSWindowCollectionBehavior)behavior {
-   NSUnimplementedMethod();
+   _collectionBehavior=behavior;
 }
 
 -(void)setOpaque:(BOOL)value {
@@ -1702,8 +1701,7 @@ static BOOL _allowsAutomaticWindowTabbing = YES;
 }
 
 -(NSWindowCollectionBehavior)collectionBehavior {
-   NSUnimplementedMethod();
-   return 0;
+   return _collectionBehavior;
 }
 
 -(NSPoint)convertBaseToScreen:(NSPoint)point {

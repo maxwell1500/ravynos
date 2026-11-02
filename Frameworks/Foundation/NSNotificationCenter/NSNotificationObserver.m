@@ -8,6 +8,8 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 // Original - Christopher Lloyd <cjwl@objc.net>
 #import <Foundation/NSNotificationObserver.h>
+#import <objc/runtime.h>
+#include <stdio.h>
 
 @implementation NSNotificationObserver
 
@@ -26,6 +28,8 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 -observer { return _observer; }
 
 -(void)postNotification:(NSNotification *)note {
+   if (_observer == nil)
+      return;
    [_observer performSelector:_selector withObject:note];
 }
 

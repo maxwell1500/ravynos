@@ -18,6 +18,28 @@ NSString * const NSWorkspaceRecycleOperation=@"NSWorkspaceRecycleOperation";
    return NSThreadSharedInstance(@"NSWorkspace");
 }
 
+/* Accessibility display preferences (10.12+).  There is no accessibility
+ * preferences domain in this tree; the system defaults are all NO. */
+-(BOOL)accessibilityDisplayShouldIncreaseContrast {
+   return NO;
+}
+
+-(BOOL)accessibilityDisplayShouldReduceTransparency {
+   return NO;
+}
+
+-(BOOL)accessibilityDisplayShouldReduceMotion {
+   return NO;
+}
+
+-(BOOL)accessibilityDisplayShouldInvertColors {
+   return NO;
+}
+
+-(BOOL)accessibilityDisplayShouldDifferentiateWithoutColor {
+   return NO;
+}
+
 -init {
    _notificationCenter=[[NSNotificationCenter alloc] init];
    return self;

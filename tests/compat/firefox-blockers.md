@@ -814,3 +814,13 @@ wild callback messaged address 8.  CFCopyDescription and
 __CFCopyFormattingDescription now use -description when _CFIsObjCType()
 says the argument is ObjC.  NSWindow also stops mapping a 0x0 window:
 mmap(0) is EINVAL, the window gets its context on the first real resize.
+
+### Window behaviors and NSWorkspace accessibility (2026-11-02)
+
+Two more AppKit gaps from the runtime oracle, both after the window is
+created: `-[NSWorkspace accessibilityDisplayShouldReduceMotion]` (and the
+contrast/transparency/invert/differentiate flags) did not exist; they
+now answer NO, the system defaults.  `-[NSWindow collectionBehavior]`
+and `setCollectionBehavior:` were stubs that set nothing and logged
+through NSUnimplementedMethod; they now store the value, as does
+setContentMinSize: (which set the value and then logged anyway).
