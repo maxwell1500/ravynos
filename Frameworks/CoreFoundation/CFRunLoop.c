@@ -1574,16 +1574,6 @@ void CFRunLoopAddCommonMode(CFRunLoopRef rl, CFStringRef modeName) {
     if (__CFRunLoopIsDeallocating(rl)) return;
     __CFRunLoopLock(rl);
     if (!CFSetContainsValue(rl->_commonModes, modeName)) {
-	{
-	    static int logged = 0;
-	    if (!logged) {
-		logged = 1;
-		fprintf(stderr, "[CF] AddCommonMode rl=%p pthread=%p perRun=%p items=%p modes=%p main=%p\n",
-		    (void *)rl, (void *)rl->_pthread, (void *)rl->_perRunData,
-		    (void *)rl->_commonModeItems, (void *)rl->_commonModes,
-		    (void *)_CFRunLoopGet0b(pthread_main_thread_np()));
-	    }
-	}
 	CFSetRef set = rl->_commonModeItems ? CFSetCreateCopy(kCFAllocatorSystemDefault, rl->_commonModeItems) : NULL;
 	CFSetAddValue(rl->_commonModes, modeName);
 	if (NULL != set) {
