@@ -15,10 +15,79 @@
 #import "NSView.h"
 #import "NSViewController.h"
 
-@interface NSAppearance : NSObject
+@interface NSAppearance : NSObject {
+    NSString *_name;
+}
+- (instancetype)initWithName:(NSString *)name;
 @end
 
 @implementation NSAppearance
+/* Gecko resolves NSAppearanceNameAqua and asks for it by name.  This tree
+ * renders one (light) appearance; requesting a known appearance returns
+ * an object carrying that name so -name and equality behave, requesting an
+ * unknown one returns nil exactly as AppKit does. */
+- (instancetype)initWithName:(NSString *)name {
+    self = [super init];
+    if (self != nil)
+        _name = [name copy];
+    return self;
+}
+
+- (void)dealloc {
+    [_name release];
+    [super dealloc];
+}
+
++ (NSAppearance *)appearanceNamed:(NSString *)name {
+    static NSString * const known[] = {
+        @"NSAppearanceNameAqua",
+        @"NSAppearanceNameDarkAqua",
+        @"NSAppearanceNameVibrantLight",
+        @"NSAppearanceNameVibrantDark",
+        @"NSAppearanceNameAccessibilityHighContrastAqua",
+        @"NSAppearanceNameAccessibilityHighContrastDarkAqua",
+        @"NSAppearanceNameAccessibilityHighContrastVibrantLight",
+        @"NSAppearanceNameAccessibilityHighContrastVibrantDark",
+        nil
+    };
+    int i;
+    if (name == nil)
+        return nil;
+    for (i = 0; known[i] != nil; i++)
+        if ([name isEqualToString:known[i]])
+            return [[[NSAppearance alloc] initWithName:name] autorelease];
+    return nil;
+}
+
++ (NSAppearance *)currentAppearance {
+    return [self appearanceNamed:@"NSAppearanceNameAqua"];
+}
+
+/* Called with a list of appearance names a view could adopt; return the
+ * one that matches this system's (only) appearance. */
++ (NSString *)bestMatchFromAppearancesWithNames:(NSArray *)names {
+    NSUInteger i, count = [names count];
+    for (i = 0; i < count; i++) {
+        NSString *name = [names objectAtIndex:i];
+        if ([name isEqualToString:@"NSAppearanceNameAqua"])
+            return name;
+    }
+    return count > 0 ? [names objectAtIndex:0] : nil;
+}
+
+- (NSString *)name {
+    return _name;
+}
+
+- (BOOL)isEqual:(id)other {
+    if (![other isKindOfClass:[NSAppearance class]])
+        return NO;
+    return [_name isEqualToString:[(NSAppearance *)other name]];
+}
+
+- (NSUInteger)hash {
+    return [_name hash];
+}
 @end
 
 @interface NSCustomTouchBarItem : NSObject

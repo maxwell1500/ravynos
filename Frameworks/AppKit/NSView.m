@@ -119,6 +119,25 @@ NSString * const NSViewFocusDidChangeNotification=@"NSViewFocusDidChangeNotifica
    return (orientation == 0) ? _compressionPriorityHorizontal : _compressionPriorityVertical;
 }
 
+-(id)appearance {
+   return _appearance;
+}
+
+-(void)setAppearance:(id)appearance {
+   if (_appearance != appearance) {
+      [_appearance release];
+      _appearance = [appearance retain];
+   }
+}
+
+-(id)effectiveAppearance {
+   if (_appearance != nil)
+      return _appearance;
+   if (_window != nil)
+      return [_window effectiveAppearance];
+   return [NSAppearance currentAppearance];
+}
+
 -(NSInteger)userInterfaceLayoutDirection {
    return _userInterfaceLayoutDirection;
 }
