@@ -200,6 +200,35 @@ const float WSWindowEdgePad = 2;
    _titleVisibility = visibility;
 }
 
+/* Titlebar accessory view controllers (10.10+).  The window server has no
+ * titlebar layout for them yet; keep the list so Gecko's fullscreen
+ * titlebar tracker can be added, queried and removed. */
+-(void)addTitlebarAccessoryViewController:(id)controller {
+   if (controller == nil) return;
+   if (_titlebarAccessoryViewControllers == nil)
+      _titlebarAccessoryViewControllers = [[NSMutableArray alloc] init];
+   [_titlebarAccessoryViewControllers addObject:controller];
+}
+
+-(void)insertTitlebarAccessoryViewController:(id)controller atIndex:(NSInteger)index {
+   if (controller == nil) return;
+   if (_titlebarAccessoryViewControllers == nil)
+      _titlebarAccessoryViewControllers = [[NSMutableArray alloc] init];
+   if (index < 0 || index > (NSInteger)[_titlebarAccessoryViewControllers count])
+      index = (NSInteger)[_titlebarAccessoryViewControllers count];
+   [_titlebarAccessoryViewControllers insertObject:controller atIndex:(NSUInteger)index];
+}
+
+-(void)removeTitlebarAccessoryViewControllerAtIndex:(NSInteger)index {
+   if (index < 0 || index >= (NSInteger)[_titlebarAccessoryViewControllers count])
+      return;
+   [_titlebarAccessoryViewControllers removeObjectAtIndex:(NSUInteger)index];
+}
+
+-(NSArray *)titlebarAccessoryViewControllers {
+   return _titlebarAccessoryViewControllers != nil ? _titlebarAccessoryViewControllers : [NSArray array];
+}
+
 -(BOOL)isRestorable {
    return _restorable;
 }

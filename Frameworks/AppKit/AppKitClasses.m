@@ -93,10 +93,42 @@
 @implementation NSTextInputContext
 @end
 
-@interface NSTitlebarAccessoryViewController : NSViewController
+@interface NSTitlebarAccessoryViewController : NSViewController {
+    BOOL _accessoryHidden;
+    NSInteger _layoutAttribute;
+    CGFloat _fullScreenMinHeight;
+}
 @end
 
 @implementation NSTitlebarAccessoryViewController
+/* Gecko's FullscreenTitlebarTracker subclasses this controller and sends
+ * -setHidden:, which is the hidden property macOS gives the class.  The
+ * controller is not laid out into the titlebar yet, so the flag is
+ * remembered and the view is hidden from its superview when present. */
+-(BOOL)isHidden {
+   return _accessoryHidden;
+}
+
+-(void)setHidden:(BOOL)hidden {
+   _accessoryHidden = hidden ? YES : NO;
+   [[self view] setHidden:_accessoryHidden];
+}
+
+-(NSInteger)layoutAttribute {
+   return _layoutAttribute;
+}
+
+-(void)setLayoutAttribute:(NSInteger)attribute {
+   _layoutAttribute = attribute;
+}
+
+-(CGFloat)fullScreenMinHeight {
+   return _fullScreenMinHeight;
+}
+
+-(void)setFullScreenMinHeight:(CGFloat)height {
+   _fullScreenMinHeight = height;
+}
 @end
 
 @interface NSTouchBar : NSObject
