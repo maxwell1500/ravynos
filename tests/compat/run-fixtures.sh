@@ -207,6 +207,9 @@ run_fixture backup /usr/local/compat/backup
 # Sandbox profiles are accepted and audited, not enforced (Phase 5.4).
 run_fixture sandbox /usr/local/compat/sandbox
 
+# Mode bits are enforced: uid 501 cannot write a 0600 file or list a 0700 dir.
+run_fixture perms /usr/local/compat/perms
+
 # Pasteboard: a string written by one process must be visible to another.
 # The writer and reader are separate execs, so nothing but the pasteboard
 # server can carry the value between them.

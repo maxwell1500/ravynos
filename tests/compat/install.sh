@@ -22,13 +22,14 @@ STAGE="$ROOT/tools/bootlab/work/compat"
 [ -x "$OUT/autorelease" ] || { echo "missing $OUT/autorelease -- run build-fixtures.sh" >&2; exit 1; }
 [ -x "$OUT/backup" ] || { echo "missing $OUT/backup -- run build-fixtures.sh" >&2; exit 1; }
 [ -x "$OUT/sandbox" ] || { echo "missing $OUT/sandbox -- run build-fixtures.sh" >&2; exit 1; }
+[ -x "$OUT/perms" ] || { echo "missing $OUT/perms -- run build-fixtures.sh" >&2; exit 1; }
 [ -x "$OUT/runas" ] || { echo "missing $OUT/runas -- run build-fixtures.sh" >&2; exit 1; }
 [ -x "$OUT/passwd" ] || { echo "missing $OUT/passwd -- run build-fixtures.sh" >&2; exit 1; }
 [ -x "$OUT/bootstrap_probe" ] || { echo "missing $OUT/bootstrap_probe -- run build-fixtures.sh" >&2; exit 1; }
 [ -x "$OUT/CocoaProbe.app/Contents/MacOS/CocoaProbe" ] || {
     echo "missing CocoaProbe -- run build-fixtures.sh" >&2; exit 1; }
 
-for f in "$OUT/posix" "$OUT/tcp" "$OUT/malloczone" "$OUT/autorelease" "$OUT/backup" "$OUT/sandbox" "$OUT/runas" "$OUT/passwd" "$OUT/bootstrap_probe" "$OUT/CocoaProbe.app/Contents/MacOS/CocoaProbe"; do
+for f in "$OUT/posix" "$OUT/tcp" "$OUT/malloczone" "$OUT/autorelease" "$OUT/backup" "$OUT/sandbox" "$OUT/perms" "$OUT/runas" "$OUT/passwd" "$OUT/bootstrap_probe" "$OUT/CocoaProbe.app/Contents/MacOS/CocoaProbe"; do
     if ! file "$f" | grep -q "Mach-O 64-bit executable x86_64"; then
         echo "$f is not an x86_64 Mach-O executable" >&2
         exit 1
@@ -44,6 +45,7 @@ cp -p "$OUT/malloczone" "$STAGE/malloczone"
 cp -p "$OUT/autorelease" "$STAGE/autorelease"
 cp -p "$OUT/backup" "$STAGE/backup"
 cp -p "$OUT/sandbox" "$STAGE/sandbox"
+cp -p "$OUT/perms" "$STAGE/perms"
 cp -p "$OUT/runas" "$STAGE/runas"
 cp -p "$OUT/passwd" "$STAGE/passwd"
 cp -p "$OUT/bootstrap_probe" "$STAGE/bootstrap_probe"

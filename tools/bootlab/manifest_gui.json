@@ -1506,6 +1506,11 @@
       "comment": "ABI conformance fixture (tests/compat)"
     },
     {
+      "path": "usr/local/compat/perms",
+      "file": "work/compat/perms",
+      "comment": "ABI conformance fixture (tests/compat)"
+    },
+    {
       "path": "usr/local/compat/passwd",
       "file": "work/compat/passwd",
       "comment": "ABI conformance fixture (tests/compat)"
