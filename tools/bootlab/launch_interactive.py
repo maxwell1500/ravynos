@@ -171,7 +171,9 @@ boot_cmd = (
     "fs0:\\System\\Library\\CoreServices\\boot.efi -v serial=3 "
     "debug=0x14e keepsyms=1 slide=0 kcsuffix=development "
     "rd=disk0s1 rootdev=disk0s1 dart=0 kextlog=0x1f "
-    f"-no_compat_check cpus={cpus} nofleet=1 interactive=1\r\n"
+    f"-no_compat_check cpus={cpus} nofleet=1 interactive=1"
+    + ((" " + os.environ["RAVYN_BOOT_ARGS"]) if os.environ.get("RAVYN_BOOT_ARGS") else "")
+    + "\r\n"
 )
 serial_sock.sendall(boot_cmd.encode("ascii"))
 

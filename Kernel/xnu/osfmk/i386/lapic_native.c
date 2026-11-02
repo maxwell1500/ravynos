@@ -392,13 +392,14 @@ lapic_init(void)
 	 */
 	if (!is_x2apic && (cpuid_features() & CPUID_FEATURE_x2APIC)) {
 		/*
-		 * If no x2apic boot-arg was set and if we're running under a VMM,
-		 * autoenable x2APIC mode.
+		 * Do not autoenable x2APIC under a virtual machine: QEMU/HVF
+		 * emulates the local APIC in userspace and drops x2APIC ICR MSR
+		 * writes, so every IPI (TLB shootdown, AST poke, CPU wake) is
+		 * lost and the machine wedges with interrupts disabled on the
+		 * sending CPU.  Legacy MMIO LAPIC works everywhere; a caller who
+		 * wants x2APIC asks for it with x2apic=1.
 		 */
-		if (PE_parse_boot_argn("x2apic", &is_x2apic, sizeof(is_x2apic)) == FALSE &&
-		    cpuid_vmm_info()->cpuid_vmm_family != CPUID_VMM_FAMILY_NONE) {
-			is_x2apic = TRUE;
-		}
+		(void)PE_parse_boot_argn("x2apic", &is_x2apic, sizeof(is_x2apic));
 		kprintf("x2APIC supported %s be enabled\n",
 		    is_x2apic ? "and will" : "but will not");
 	}
