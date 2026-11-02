@@ -440,6 +440,12 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
    return [NSColor_CGColor colorWithRed:red green:green blue:blue alpha:alpha spaceName:NSDeviceRGBColorSpace];
 }
 
+/* sRGB is the rendering space of the display pipeline here, so an sRGB
+ * request produces the same device-RGB color as the device constructor. */
++(NSColor *)colorWithSRGBRed:(CGFloat)red green:(CGFloat)green blue:(CGFloat)blue alpha:(CGFloat)alpha {
+   return [NSColor_CGColor colorWithRed:red green:green blue:blue alpha:alpha spaceName:NSDeviceRGBColorSpace];
+}
+
 +(NSColor *)colorWithDeviceHue:(CGFloat)hue saturation:(CGFloat)saturation brightness:(CGFloat)brightness alpha:(CGFloat)alpha {
    return [NSColor_CGColor colorWithHue:hue saturation:saturation brightness:brightness alpha:alpha spaceName:NSDeviceRGBColorSpace];
 }
