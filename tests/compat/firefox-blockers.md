@@ -609,3 +609,29 @@ delivery-status poll, `is_x2apic` gate) and check whether QEMU/HVF's
 userspace APIC accepts the x2APIC ICR MSR here; a boot with
 `-accel tcg` (x2APIC MSR handling differs) or with x2APIC disabled is
 the cheap A/B.
+
+### A/B: x2APIC is not the cause
+
+The guest boots with x2APIC enabled (CPUID advertises it and the kernel
+auto-enabled it under any VMM).  Forcing legacy MMIO LAPIC
+(`x2APIC supported but will not be enabled`, commit `4f3584bec2`) and
+booting the same Firefox image gives an identical wedge: `-CreateProfile`
+reaches `[AppKit] exe=firefox`, ps shows pid `R` at 45 s and 75 s, the
+watchdog's SIGABRT and SIGKILL are accepted (`-> 0`) and the process
+never dies, no CORPSE and no rc line.  So IPI delivery is not what stops
+the system, and the earlier `_lapic_send_ipi` sample was the normal
+legacy-timer/IPI traffic of the one running vCPU.
+
+What is proven so far about the wedge:
+
+- Signal delivery to a busy userspace process works (`spinkill`).
+- The wedged process has at least one thread that never reaches a
+  userspace AST; killing the process cannot complete until that thread
+  exits the kernel.
+- The rest of the system stays alive (WindowServer traffic continues),
+  so it is not a global kernel deadlock.
+
+Next probe: `ps -M`/per-thread wait channel is not implemented in the
+tree's ps (no `wmesg` keyword), so either add that keyword (thread state
+and wait message from `proc_info`) or add a temporary kernel printf in
+`wait4`/`task_terminate` naming the thread that refuses to exit.
