@@ -112,6 +112,29 @@ extern id objc_msgSend(id, SEL, ...);
  * registered bridge class), rather than a C CF instance whose first word is
  * the CF class? */
 static bool _CFIsRegisteredObjCClass(uintptr_t isa);
+extern CFRuntimeClass *__CFRuntimeClassTable[];
+
+/* True only for a C-allocated CF instance: its first word is one of the
+ * registered CFRuntimeClass records.  A plain ObjC object's isa is not in
+ * that table, so dictionary code can use this to decide between CF and
+ * Objective-C lifetime handling without trusting _cfinfo at offset 8. */
+CF_EXPORT Boolean
+_CFIsCFInstance(CFTypeRef cf)
+{
+    uintptr_t isa;
+    CFIndex i;
+
+    if (cf == NULL)
+        return false;
+    isa = __CFMaskIsa(*(const uintptr_t *)cf);
+    if (isa == 0)
+        return false;
+    for (i = 0; i < __CFRuntimeClassTableSize; i++) {
+        if ((uintptr_t)__CFRuntimeClassTable[i] == isa)
+            return true;
+    }
+    return false;
+}
 
 CF_EXPORT Boolean
 _CFIsObjCType(CFTypeRef cf)

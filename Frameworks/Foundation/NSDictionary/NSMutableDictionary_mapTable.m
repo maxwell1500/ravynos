@@ -84,10 +84,13 @@ BOOL NSNextDictionaryEnumeratorPair(CFDictionaryEnumerator *state,void **key,voi
  * isa (C CF objects store _cfinfo, a small integer, in the first word).
  */
 extern Boolean _CFIsObjCType(CFTypeRef cf);
+extern Boolean _CFIsCFInstance(CFTypeRef cf);
 
+/* Ordinary Foundation and application objects are not in CF's bridge-class
+ * table, so "is it ObjC" means "is it not a C CF instance". */
 static int ravyn_value_is_objc(const void *value)
 {
-   return _CFIsObjCType((CFTypeRef)value) ? 1 : 0;
+   return _CFIsCFInstance((CFTypeRef)value) ? 0 : 1;
 }
 
 static const void *ravyn_bridge_retain(const void *value)

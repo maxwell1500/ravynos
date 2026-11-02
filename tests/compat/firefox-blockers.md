@@ -850,3 +850,15 @@ CFSetCreateCopy faulted dereferencing it.  getCFRunLoop now returns
 CFRunLoopGetCurrent(), the loop CoreFoundation actually runs for the
 thread.  (The earlier null-per-run guard stays: it is correct for a loop
 whose thread has exited.)
+
+### Container bridging must not guess (2026-11-02)
+
+The first CF/NSDictionary bridge asked `_CFIsObjCType`, which only knows
+CF's *bridge* classes.  Ordinary Foundation and application objects are
+not in that table, so they were treated as C CF objects: CFGetTypeID read
+an ivar as `_cfinfo`, and CFRetain then crashed on a pointer whose "isa"
+was the object's own interior (Foundation `objectRetainCallBack` ->
+`ravyn_bridge_retain` -> `__CFRetain+0x6c`).  `_CFIsCFInstance()` answers
+the question directly: the first word is one of the registered
+CFRuntimeClass records.  The dictionary callbacks use CF lifetime only
+for such instances; everything else is an Objective-C object.
