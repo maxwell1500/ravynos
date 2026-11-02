@@ -66,6 +66,8 @@ APPKIT_EXPORT NSString *const NSViewFrameDidChangeNotification;
 APPKIT_EXPORT NSString *const NSViewBoundsDidChangeNotification;
 APPKIT_EXPORT NSString *const NSViewFocusDidChangeNotification;
 
+@class NSAppearance;
+
 @interface NSView : NSResponder <NSAnimatablePropertyContainer> {
     NSRect _frame;
     NSRect _bounds;
@@ -85,6 +87,18 @@ APPKIT_EXPORT NSString *const NSViewFocusDidChangeNotification;
     NSArray *_draggedTypes;
     NSMutableArray *_trackingAreas;
     BOOL _needsDisplay;
+    NSInteger _material;
+    NSInteger _blendingMode;
+    NSInteger _visualEffectState;
+    BOOL _emphasized;
+    id _maskImage;
+    BOOL _translatesAutoresizingMaskIntoConstraints;
+    CGFloat _huggingPriorityHorizontal;
+    CGFloat _huggingPriorityVertical;
+    CGFloat _compressionPriorityHorizontal;
+    CGFloat _compressionPriorityVertical;
+    NSInteger _userInterfaceLayoutDirection;
+    id _appearance;
     NSUInteger _invalidRectCount;
     NSRect *_invalidRects;
     NSRect *_rectsBeingRedrawn;

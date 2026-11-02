@@ -102,6 +102,8 @@ APPKIT_EXPORT NSString *const NSWindowWillCloseNotification;
 APPKIT_EXPORT NSString *const NSWindowWillStartLiveResizeNotification;
 APPKIT_EXPORT NSString *const NSWindowDidEndLiveResizeNotification;
 
+@class NSAppearance;
+
 @interface NSWindow : NSResponder {
     int _number;
     //CGLContextObj _cglContext;
@@ -116,6 +118,10 @@ APPKIT_EXPORT NSString *const NSWindowDidEndLiveResizeNotification;
     NSInteger _titleVisibility;
     BOOL _restorable;
     NSInteger _titlebarSeparatorStyle;
+    NSMutableArray *_titlebarAccessoryViewControllers;
+    NSInteger _animationBehavior;
+    NSUInteger _collectionBehavior;
+    id _appearance;
 
     NSString *shmPath;
     NSString *bundleID;
