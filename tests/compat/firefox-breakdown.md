@@ -112,6 +112,14 @@ Foundation callers treat the result as autoreleased, or a CFURL result is
 released by both the bridge and its creator. A standalone fixture must assert
 retain counts before this is committed.
 
+A later attempt removed the `_cfurl` cache entirely (return a +1 CFURL and
+leak it) and converted the path through UTF-8. The `CFURL` layer then worked:
+no invalid-URL lines, and the crash moved to Foundation
+`Foundation+0x52e9` (`_NSDictInsert`/`_objectReleaseCallBack`), fault
+`0x52080a00`, with a valid isa. That is progress but still a crash, so the
+no-cache bridge is not committed. It points at the next shared bug:
+CFString/CFDictionary bridging, not URL parsing.
+
 ## A second bridge bug: `CF_OBJC_FUNCDISPATCHV` discards results
 
 `Frameworks/CoreFoundation/CFInternal.h` defines:
