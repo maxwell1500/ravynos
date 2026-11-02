@@ -81,6 +81,40 @@ typedef struct IORavynObject {
 
 static uint32_t g_next_entry_id = 1;
 
+/* io_object_t and io_iterator_t are mach_port_t, a 32-bit name.  The real
+ * objects are heap pointers, so handing the pointer out truncated the top
+ * 32 bits and every later IOIteratorNext read that half-address as a
+ * struct (measured: IOIteratorNext+0xc with rdi=0x07462e40).  Handles are
+ * small integers into this table instead. */
+#define RAVYN_MAX_HANDLES 512
+static void *g_handles[RAVYN_MAX_HANDLES];
+
+static uint32_t handle_register(void *pointer) {
+    uint32_t i;
+    for (i = 0; i < RAVYN_MAX_HANDLES; i++) {
+        if (g_handles[i] == NULL) {
+            g_handles[i] = pointer;
+            return i + 1;
+        }
+    }
+    return 0;
+}
+
+static void *handle_lookup(uint32_t handle) {
+    if (handle == 0 || handle > RAVYN_MAX_HANDLES) return NULL;
+    return g_handles[handle - 1];
+}
+
+static void handle_unregister(void *pointer) {
+    uint32_t i;
+    for (i = 0; i < RAVYN_MAX_HANDLES; i++) {
+        if (g_handles[i] == pointer) {
+            g_handles[i] = NULL;
+            return;
+        }
+    }
+}
+
 static IORavynIterator *iterator_create(CFIndex capacity) {
     IORavynIterator *it = (IORavynIterator *)calloc(1, sizeof(IORavynIterator));
     if (!it) return NULL;
@@ -96,8 +130,12 @@ static IORavynObject *object_create(const char *className, const char *name) {
     if (!obj) return NULL;
     obj->magic = RAVYN_OBJECT_MAGIC;
     obj->retainCount = 1;
-    obj->id = g_next_entry_id++;
-    obj->entryID = obj->id;
+    obj->id = handle_register(obj);
+    if (obj->id == 0) {
+        free(obj);
+        return NULL;
+    }
+    obj->entryID = g_next_entry_id++;
     if (className) {
         strncpy(obj->className, className, sizeof(obj->className) - 1);
     }
@@ -108,9 +146,8 @@ static IORavynObject *object_create(const char *className, const char *name) {
 }
 
 static IORavynObject *object_for(io_object_t object) {
-    if (object == 0) return NULL;
-    IORavynObject *obj = (IORavynObject *)(uintptr_t)object;
-    if (obj->magic != RAVYN_OBJECT_MAGIC) return NULL;
+    IORavynObject *obj = (IORavynObject *)handle_lookup(object);
+    if (obj == NULL || obj->magic != RAVYN_OBJECT_MAGIC) return NULL;
     return obj;
 }
 
@@ -122,23 +159,36 @@ kern_return_t IOObjectRetain(io_object_t object) {
 }
 
 kern_return_t IOObjectRelease(io_object_t object) {
+    void *pointer;
     if (object == 0) return KERN_SUCCESS;
-    IORavynObject *obj = (IORavynObject *)(uintptr_t)object;
-    if (obj->magic != RAVYN_OBJECT_MAGIC) return kIOReturnBadArgument;
-    if (obj->retainCount > 0) {
-        obj->retainCount--;
+    pointer = handle_lookup(object);
+    if (pointer == NULL) return kIOReturnBadArgument;
+    if (((IORavynObject *)pointer)->magic == RAVYN_OBJECT_MAGIC) {
+        IORavynObject *obj = (IORavynObject *)pointer;
+        if (obj->retainCount > 0) {
+            obj->retainCount--;
+        }
+        if (obj->retainCount == 0) {
+            obj->magic = 0;
+            handle_unregister(obj);
+            free(obj);
+        }
+        return KERN_SUCCESS;
     }
-    if (obj->retainCount == 0) {
-        obj->magic = 0;
-        free(obj);
+    if (((IORavynIterator *)pointer)->magic == RAVYN_ITERATOR_MAGIC) {
+        IORavynIterator *it = (IORavynIterator *)pointer;
+        it->magic = 0;
+        handle_unregister(it);
+        free(it->objects);
+        free(it);
+        return KERN_SUCCESS;
     }
-    return KERN_SUCCESS;
+    return kIOReturnBadArgument;
 }
 
 io_object_t IOIteratorNext(io_iterator_t iterator) {
-    if (iterator == 0) return 0;
-    IORavynIterator *it = (IORavynIterator *)(uintptr_t)iterator;
-    if (it->magic != RAVYN_ITERATOR_MAGIC) return 0;
+    IORavynIterator *it = (IORavynIterator *)handle_lookup(iterator);
+    if (it == NULL || it->magic != RAVYN_ITERATOR_MAGIC) return 0;
     if (it->index >= it->count) return 0;
     io_object_t result = it->objects[it->index++];
     if (result) IOObjectRetain(result);
@@ -146,16 +196,14 @@ io_object_t IOIteratorNext(io_iterator_t iterator) {
 }
 
 void IOIteratorReset(io_iterator_t iterator) {
-    if (iterator == 0) return;
-    IORavynIterator *it = (IORavynIterator *)(uintptr_t)iterator;
-    if (it->magic != RAVYN_ITERATOR_MAGIC) return;
+    IORavynIterator *it = (IORavynIterator *)handle_lookup(iterator);
+    if (it == NULL || it->magic != RAVYN_ITERATOR_MAGIC) return;
     it->index = 0;
 }
 
 boolean_t IOIteratorIsValid(io_iterator_t iterator) {
-    if (iterator == 0) return false;
-    IORavynIterator *it = (IORavynIterator *)(uintptr_t)iterator;
-    return (it->magic == RAVYN_ITERATOR_MAGIC) ? true : false;
+    IORavynIterator *it = (IORavynIterator *)handle_lookup(iterator);
+    return (it != NULL && it->magic == RAVYN_ITERATOR_MAGIC) ? true : false;
 }
 
 kern_return_t IOIteratorRetain(io_iterator_t iterator) {
@@ -173,7 +221,7 @@ kern_return_t IOServiceGetMatchingServices(mach_port_t masterPort, CFDictionaryR
     if (matching) CFRelease(matching);
     IORavynIterator *it = iterator_create(0);
     if (!it) return kIOReturnNoMemory;
-    *existing = (io_iterator_t)(uintptr_t)it;
+    *existing = (io_iterator_t)handle_register(it);
     return KERN_SUCCESS;
 }
 
@@ -265,7 +313,7 @@ kern_return_t IORegistryEntryGetChildIterator(io_registry_entry_t entry, const i
     if (iterator == NULL) return kIOReturnBadArgument;
     IORavynIterator *it = iterator_create(0);
     if (!it) return kIOReturnNoMemory;
-    *iterator = (io_iterator_t)(uintptr_t)it;
+    *iterator = (io_iterator_t)handle_register(it);
     return KERN_SUCCESS;
 }
 
@@ -399,7 +447,7 @@ kern_return_t IORegistryCreateEnumerator(mach_port_t masterPort, io_iterator_t *
     if (iterator == NULL) return kIOReturnBadArgument;
     IORavynIterator *it = iterator_create(0);
     if (!it) return kIOReturnNoMemory;
-    *iterator = (io_iterator_t)(uintptr_t)it;
+    *iterator = (io_iterator_t)handle_register(it);
     return KERN_SUCCESS;
 }
 
@@ -618,7 +666,7 @@ kern_return_t IOServiceAddMatchingNotification(IONotificationPortRef notifyPort,
      * immediately. */
     IORavynIterator *it = iterator_create(0);
     if (!it) return kIOReturnNoMemory;
-    *notification = (io_iterator_t)(uintptr_t)it;
+    *notification = (io_iterator_t)handle_register(it);
     return KERN_SUCCESS;
 }
 
@@ -833,7 +881,7 @@ kern_return_t IORegistryEntryCreateIterator(io_registry_entry_t entry,
     *iterator = 0;
     it = iterator_create(0);
     if (!it) return kIOReturnNoMemory;
-    *iterator = (io_iterator_t)(uintptr_t)it;
+    *iterator = (io_iterator_t)handle_register(it);
     return KERN_SUCCESS;
 }
 
