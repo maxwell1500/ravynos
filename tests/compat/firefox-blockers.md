@@ -635,3 +635,20 @@ Next probe: `ps -M`/per-thread wait channel is not implemented in the
 tree's ps (no `wmesg` keyword), so either add that keyword (thread state
 and wait message from `proc_info`) or add a temporary kernel printf in
 `wait4`/`task_terminate` naming the thread that refuses to exit.
+
+### Profile creation never starts
+
+With probes in the job (`ls` at 60 s, `ps` at 75 s), the wedge is before
+any file work: `/var/tmp/ff` contains only `.` and `..` and
+`/var/tmp/ff/profile` does not exist.  Firefox has consumed AppKit
+(`[AppKit] exe=firefox`), run the Carbon modifier query, produced the
+twelve `KERN_NO_SPACE` diagnostics from its allocator probes, and then
+spins at 100% CPU without touching the filesystem.  ps at 75 s shows it
+`R`; the zombie `/bin/sh` entries are just the job's finished background
+probes waiting for a shell that is blocked in `wait`.
+
+So the stuck work is pre-profile: allocator/JIT setup right after toolkit
+initialization.  The next probe must show which thread never leaves the
+kernel — the tree's ps has no per-thread or wait-channel output, so add
+`ps -M`/`wmesg` from `proc_info(PROC_PIDLISTTHREADS)`/`PROC_PIDTHREADINFO`
+first (it is also a Phase 7 tool gap).

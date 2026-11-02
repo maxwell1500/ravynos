@@ -8,7 +8,7 @@
  "ProgramArguments": [
   "/bin/sh",
   "-c",
-  "echo '[fftest] shell='$$; echo '[fftest] start'; mkdir -p /var/tmp/ff; cd /var/tmp/ff; ( sleep 45; echo '[fftest] ps@45s:'; ps -ax -o pid,stat,comm | grep -E 'firefox|runas|sh' ) & ( sleep 75; echo '[fftest] ps@75s:'; ps -ax -o pid,stat,comm | grep -E 'firefox|runas|sh' ) & echo '[fftest] create profile'; /usr/local/compat/runas -t 90 501 20 /Applications/Firefox.app/Contents/MacOS/firefox -CreateProfile 'ravyntest /var/tmp/ff/profile' 2>&1; echo '[fftest] create rc='$?; echo '[fftest] launching'; /usr/local/compat/runas -t 90 501 20 /Applications/Firefox.app/Contents/MacOS/firefox -profile /var/tmp/ff/profile -no-remote -new-instance about:blank 2>&1; echo '[fftest] exec returned rc='$?"
+  "echo '[fftest] shell='$$; echo '[fftest] start'; mkdir -p /var/tmp/ff; cd /var/tmp/ff; ( sleep 45; echo '[fftest] ps@45s:'; ps -ax -o pid,stat,comm | grep -E 'firefox|runas|sh' ) & ( sleep 75; echo '[fftest] ps@75s:'; ps -ax -o pid,stat,comm | grep -E 'firefox|runas|sh' ) & ( sleep 60; echo '[fftest] ls ff:'; ls -la /var/tmp/ff /var/tmp/ff/profile 2>&1 ) & ( sleep 85; echo '[fftest] dmesg:'; dmesg 2>&1 ) & echo '[fftest] create profile'; /usr/local/compat/runas -t 90 501 20 /Applications/Firefox.app/Contents/MacOS/firefox -CreateProfile 'ravyntest /var/tmp/ff/profile' 2>&1; echo '[fftest] create rc='$?; echo '[fftest] launching'; /usr/local/compat/runas -t 90 501 20 /Applications/Firefox.app/Contents/MacOS/firefox -profile /var/tmp/ff/profile -no-remote -new-instance about:blank 2>&1; echo '[fftest] exec returned rc='$?"
  ],
  "RunAtLoad": true,
  "KeepAlive": false
