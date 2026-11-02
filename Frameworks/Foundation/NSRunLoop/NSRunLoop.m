@@ -148,7 +148,13 @@ static void rltrace(const char *s)
 }
 
 - (CFRunLoopRef)getCFRunLoop {
-	return (CFRunLoopRef)self;
+	/* NSRunLoop is not toll-free bridged to CFRunLoop in this tree: it is
+	 * a separate NSObject with its own modes and performs.  Handing back
+	 * self made every CFRunLoop* call in a stock application read this
+	 * object as a run loop (and fault on its fields).  Callers that ask
+	 * for the CF run loop want the one CoreFoundation runs for this
+	 * thread. */
+	return CFRunLoopGetCurrent();
 }
 
 -(void)_wakeUp {

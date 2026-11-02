@@ -837,3 +837,16 @@ effectiveAppearance] with stored appearance, NSWorkspace's five
 accessibilityDisplayShould* flags (all NO, the system defaults),
 +[NSColor currentControlTint] (blue), windowFrameTextColor (control text
 color), and sRGB/controlAccent/link/systemPurple constructors.
+
+### The fake CFRunLoopRef (2026-11-02, root cause)
+
+`-[NSRunLoop getCFRunLoop]` answered `self`, but this tree's NSRunLoop is a
+plain NSObject with its own mode/perform ivars, not a toll-free bridged
+CFRunLoop.  Gecko asks its NSRunLoop for the CF run loop and passes the
+result to CFRunLoopAddSource/CFRunLoopWakeUp, so CoreFoundation read an
+NSRunLoop's fields as a run loop: `CFRunLoopWakeUp` saw a null per-run
+pointer, `CFRunLoopAddCommonMode` saw `_commonModeItems == 1`, and
+CFSetCreateCopy faulted dereferencing it.  getCFRunLoop now returns
+CFRunLoopGetCurrent(), the loop CoreFoundation actually runs for the
+thread.  (The earlier null-per-run guard stays: it is correct for a loop
+whose thread has exited.)
