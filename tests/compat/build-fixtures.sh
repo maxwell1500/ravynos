@@ -57,6 +57,10 @@ echo "building autorelease fixture ($TARGET)"
 "$CC" -target "$TARGET" -isysroot "$SDK" -O1 -Wall \
     -o "$OUT/autorelease" "$HERE/autorelease.m" -framework Foundation
 
+echo "building sandbox fixture ($TARGET)"
+"$CC" -target "$TARGET" -isysroot "$SDK" -O1 -Wall \
+    -o "$OUT/sandbox" "$HERE/sandbox.c"
+
 echo "building tcp fixture ($TARGET)"
 "$CC" -target "$TARGET" -isysroot "$SDK" -O1 -Wall -Wextra \
     -o "$OUT/tcp" "$HERE/tcp.c"

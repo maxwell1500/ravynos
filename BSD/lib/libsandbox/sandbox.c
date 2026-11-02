@@ -7,8 +7,10 @@
  * every answer is a documented one.
  */
 #include <errno.h>
+#include <fcntl.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <sys/stat.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -35,6 +37,34 @@ static char *dup_error(const char *message)
     return copy;
 }
 
+
+/* Record every accepted profile.  There is no policy engine yet, so the
+ * audit line is the only evidence of what an application asked to confine. */
+static void
+sandbox_audit(const char *profile)
+{
+    char line[512];
+    char safe[256];
+    size_t i;
+    int fd;
+
+    for (i = 0; profile[i] != '\0' && i < sizeof(safe) - 1; i++) {
+        unsigned char c = (unsigned char)profile[i];
+        safe[i] = (c >= 0x20 && c < 0x7f) ? (char)c : '_';
+    }
+    safe[i] = '\0';
+
+    fd = open("/var/log/secure", O_WRONLY | O_APPEND | O_CREAT, 0600);
+    if (fd < 0) {
+        return;
+    }
+    snprintf(line, sizeof(line),
+        "AUDIT user=%d action=sandbox profile=%s result=ok pid=%d\n",
+        (int)getuid(), safe, (int)getpid());
+    (void)write(fd, line, strlen(line));
+    close(fd);
+}
+
 int sandbox_init(const char *profile, uint64_t flags, char **errorbuf)
 {
     (void)flags;
@@ -49,7 +79,8 @@ int sandbox_init(const char *profile, uint64_t flags, char **errorbuf)
         return -1;
     }
     /* Accepting the profile is the whole implementation: there is no policy
-     * engine to install it into. */
+     * engine to install it into.  Leave the audit trail anyway. */
+    sandbox_audit(profile);
     return 0;
 }
 

@@ -1501,6 +1501,11 @@
       "comment": "ABI conformance fixture (tests/compat)"
     },
     {
+      "path": "usr/local/compat/sandbox",
+      "file": "work/compat/sandbox",
+      "comment": "ABI conformance fixture (tests/compat)"
+    },
+    {
       "path": "usr/local/compat/passwd",
       "file": "work/compat/passwd",
       "comment": "ABI conformance fixture (tests/compat)"

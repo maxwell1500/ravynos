@@ -204,6 +204,9 @@ run_fixture autorelease /usr/local/compat/autorelease
 # Backup/restore must copy a tree, detect a changed file and restore it.
 run_fixture backup /usr/local/compat/backup
 
+# Sandbox profiles are accepted and audited, not enforced (Phase 5.4).
+run_fixture sandbox /usr/local/compat/sandbox
+
 # Pasteboard: a string written by one process must be visible to another.
 # The writer and reader are separate execs, so nothing but the pasteboard
 # server can carry the value between them.

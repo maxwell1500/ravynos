@@ -597,6 +597,7 @@ def main():
         ("malloczone", "usr/local/compat/malloczone"),
         ("autorelease", "usr/local/compat/autorelease"),
         ("backup", "usr/local/compat/backup"),
+        ("sandbox", "usr/local/compat/sandbox"),
         ("passwd", "usr/local/compat/passwd"),
         ("bootstrap_probe", "usr/local/compat/bootstrap_probe"),
         ("runas", "usr/local/compat/runas"),
