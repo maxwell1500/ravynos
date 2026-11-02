@@ -7,6 +7,7 @@
  * documented name; behaviour behind them is CoreText's own.
  */
 #import <Foundation/Foundation.h>
+#import <Onyx2D/O2Font.h>
 
 NSString * const kCTFontAttributeName = @"kCTFontAttributeName";
 NSString * const kCTFontCollectionRemoveDuplicatesOption = @"kCTFontCollectionRemoveDuplicatesOption";
@@ -94,4 +95,27 @@ CTFontManagerUnregisterFontsForURLs(CFArrayRef fontURLs, CTFontManagerScope scop
 	if (errors)
 		*errors = NULL;
 	return false;
+}
+
+/*
+ * The families this platform can resolve, from the same name table the
+ * font lookup uses (O2FontKnownFontNames).  A face name is PostScript
+ * style ("Helvetica-Bold"); the part before the dash is the family.
+ */
+CFArrayRef
+CTFontManagerCopyAvailableFontFamilyNames(void)
+{
+    NSArray *names = O2FontKnownFontNames();
+    NSMutableArray *families = [NSMutableArray array];
+    NSUInteger i, count = [names count];
+
+    for (i = 0; i < count; i++) {
+        NSString *name = [names objectAtIndex:i];
+        NSRange dash = [name rangeOfString:@"-"];
+        NSString *family = (dash.location == NSNotFound)
+            ? name : [name substringToIndex:dash.location];
+        if (![families containsObject:family])
+            [families addObject:family];
+    }
+    return (CFArrayRef)[families copy];
 }
