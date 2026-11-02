@@ -254,6 +254,12 @@ const float WSWindowEdgePad = 2;
    _animationBehavior = behavior;
 }
 
+/* Private NSWindow counterpart: is this window the one whose modal
+ * session is running? */
+-(BOOL)_isRunningModal {
+   return ([NSApp modalWindow] == self) ? YES : NO;
+}
+
 -(BOOL)isRestorable {
    return _restorable;
 }

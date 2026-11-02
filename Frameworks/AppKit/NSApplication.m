@@ -1752,6 +1752,12 @@ static int _tagAllMenus(NSMenu *menu, int tag) {
    NSUnimplementedMethod();
 }
 
+/* Private AppKit query used by applications that run nested event loops:
+ * is a modal session currently executing? */
+-(BOOL)_isRunningAppModal {
+   return [_modalStack count] > 0 ? YES : NO;
+}
+
 -(NSWindow *)modalWindow {
    return [[_modalStack lastObject] modalWindow];
 }
