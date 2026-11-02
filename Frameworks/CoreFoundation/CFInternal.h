@@ -587,10 +587,12 @@ extern uintptr_t __CFRuntimeObjCClassTable[__CFRuntimeClassTableSize];
 #define CF_IS_OBJC(typeID, obj) (obj && (*(uintptr_t *)obj) \
     && (typeID < __CFRuntimeClassTableSize) \
     && (*(uintptr_t *)obj == __CFRuntimeObjCClassTable[typeID]))
+/* C-allocated CF instances must always get the CF class isa, never the
+   bridged ObjC class: CF_IS_OBJC then distinguishes real ObjC objects
+   (isa == bridge class) from C structs, and CFURLCopyAbsoluteURL etc.
+   take the C path.  Only the ObjC runtime sets the ObjC isa. */
 #define __CFISAForTypeID(t) (t < __CFRuntimeClassTableSize \
-    ? __CFRuntimeObjCClassTable[t] \
-        ? (uintptr_t)__CFRuntimeObjCClassTable[t] \
-        : (uintptr_t)_CFRuntimeGetClassWithTypeID(t) \
+    ? (uintptr_t)_CFRuntimeGetClassWithTypeID(t) \
     : 0)
 
 /* See comments in CFBase.c

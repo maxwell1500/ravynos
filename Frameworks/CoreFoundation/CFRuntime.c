@@ -102,6 +102,25 @@ extern id objc_msgSend(id, SEL, ...);
         return (rettype)objc_msgSend(obj, @selector(sel), a1)
 
 
+/* CFTYPE_IS_OBJC guesses the type ID from the object's second word, which is
+ * only valid for CF objects (_cfinfo/_cfisa).  An NSURL's second word is an
+ * ivar, so CFRelease(nsurl) fell through to _CFRelease and crashed in
+ * objc_msgSend's cache lookup.  Match the isa against the registered bridge
+ * classes instead; a CF object's first word is _cfinfo, never a class
+ * pointer. */
+static bool
+_CFIsRegisteredObjCClass(uintptr_t isa)
+{
+    CFIndex i;
+    if (isa == 0)
+        return false;
+    for (i = 0; i < __CFRuntimeClassTableSize; i++) {
+        if (__CFRuntimeObjCClassTable[i] == isa)
+            return true;
+    }
+    return false;
+}
+
 bool __CFOASafe = false;
 
 void (*__CFObjectAllocRecordAllocationFunction)(int, void *, int64_t , uint64_t, const char *) = NULL;
@@ -522,6 +541,9 @@ CFTypeID CFGetTypeID(CFTypeRef cf) {
 #if defined(DEBUG)
     if (NULL == cf) { CRSetCrashLogMessage("*** CFGetTypeID() called with NULL ***"); HALT; }
 #endif
+    if (cf != NULL && _CFIsRegisteredObjCClass(*(uintptr_t *)cf)) {
+        return (CFTypeID)objc_msgSend((id)cf, @selector(_cfTypeID));
+    }
     CFTYPE_OBJC_FUNCDISPATCH0(CFTypeID, cf, _cfTypeID);
     __CFGenericAssertIsCF(cf);
     return __CFGenericTypeID_inline(cf);
@@ -538,6 +560,9 @@ static CFTypeRef _CFRetain(CFTypeRef cf, Boolean tryR);
 
 CFTypeRef CFRetain(CFTypeRef cf) {
     if (NULL == cf) return NULL;
+    if (_CFIsRegisteredObjCClass(*(uintptr_t *)cf)) {
+        return (CFTypeRef)objc_msgSend((id)cf, @selector(retain));
+    }
     CFTYPE_OBJC_FUNCDISPATCH0(CFTypeRef, (id)cf, retain);
     if ((((const CFRuntimeBase *)cf)->_cfinfo[CF_INFO_BITS] == 0) && (*(const uintptr_t *)cf != 0)) {
         return (CFTypeRef)objc_msgSend((id)cf, @selector(retain));
@@ -554,7 +579,11 @@ CFTypeRef CFAutorelease(CFTypeRef __attribute__((cf_consumed)) cf) {
 static void _CFRelease(CFTypeRef cf);
 
 void CFRelease(CFTypeRef cf) {
-    if (NULL == cf) return;
+    if (NULL == cf || (uintptr_t)cf < 4096) return;
+    if (_CFIsRegisteredObjCClass(*(uintptr_t *)cf)) {
+        objc_msgSend((id)cf, @selector(release));
+        return;
+    }
     CFTYPE_OBJC_FUNCDISPATCH0(void, (id)cf, release);
     if ((((const CFRuntimeBase *)cf)->_cfinfo[CF_INFO_BITS] == 0) && (*(const uintptr_t *)cf != 0)) {
         objc_msgSend((id)cf, @selector(release));
@@ -1363,7 +1392,7 @@ Boolean _CFIsDeallocating(CFTypeRef cf) {
 }
 
 static void _CFRelease(CFTypeRef cf) {
-
+    if ((uintptr_t)cf < 4096) return;
     uint32_t cfinfo = *(uint32_t *)&(((CFRuntimeBase *)cf)->_cfinfo);
     if (cfinfo & 0x200000) return; // deallocated, or not a cf object
     CFTypeID typeID = (cfinfo >> 8) & 0x03FF; // mask up to 0x0FFF

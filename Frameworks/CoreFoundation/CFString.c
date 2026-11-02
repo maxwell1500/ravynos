@@ -39,6 +39,9 @@
 #include <CoreFoundation/CFNumber.h>
 #include <CoreFoundation/CFNumberFormatter.h>
 #include "CFInternal.h"
+#include "CFBridging.h"
+
+extern Boolean __CFInitialized;
 #if DEPLOYMENT_TARGET_MACOSX || DEPLOYMENT_TARGET_EMBEDDED || DEPLOYMENT_TARGET_EMBEDDED_MINI || DEPLOYMENT_TARGET_WINDOWS || DEPLOYMENT_TARGET_LINUX
 #include "CFLocaleInternal.h"
 #endif
@@ -960,17 +963,20 @@ static void __CFStringDeallocate(CFTypeRef cf) {
 	    } else {
 		if (__CFStrHasContentsDeallocator(str)) {
                     CFAllocatorRef allocator = __CFStrContentsDeallocator(str);
-		    CFAllocatorDeallocate(allocator, contents);
-		    if (!(0 || 0 )) CFRelease(allocator);
+		    if ((uintptr_t)allocator >= 4096) {
+		        CFAllocatorDeallocate(allocator, contents);
+		        if (!(0 || 0 )) CFRelease(allocator);
+		    }
 		} else {
 		    CFAllocatorRef alloc = __CFGetAllocator(str);
-		    CFAllocatorDeallocate(alloc, contents);
+		    if ((uintptr_t)alloc >= 4096)
+		        CFAllocatorDeallocate(alloc, contents);
 		}
 	    }
 	}
 	if (isMutable && __CFStrHasContentsAllocator(str)) {
             CFAllocatorRef allocator = __CFStrContentsAllocator((CFMutableStringRef)str);
-            if (!(0 || 0)) CFRelease(allocator);
+            if (!(0 || 0) && (uintptr_t)allocator >= 4096) CFRelease(allocator);
         }
     }
 }
@@ -1217,6 +1223,14 @@ CF_PRIVATE void __CFStringInitialize(void) {
 
 
 CFTypeID CFStringGetTypeID(void) {
+    static Boolean nscfRegistered = false;
+    if (!nscfRegistered && __kCFStringTypeID != 0 && __CFInitialized) {
+        Class nscf = objc_lookUpClass("NSCFString");
+        if (nscf != Nil) {
+            _CFRuntimeRegisterObjCClass(__kCFStringTypeID, (uintptr_t)nscf);
+            nscfRegistered = true;
+        }
+    }
     return __kCFStringTypeID;
 }
 
@@ -1992,6 +2006,8 @@ CF_PRIVATE void _CFStrSetDesiredCapacity(CFMutableStringRef str, CFIndex len) {
 /* This one is for CF
 */
 CFIndex CFStringGetLength(CFStringRef str) {
+    if (str != NULL && CF_IS_OBJC(__kCFStringTypeID, str))
+        return [(NSString *)str length];
     CF_OBJC_FUNCDISPATCHV(__kCFStringTypeID, CFIndex, (NSString *)str, length);
 
     __CFAssertIsString(str);
@@ -2025,6 +2041,8 @@ CF_INLINE UniChar __CFStringGetCharacterAtIndexGuts(CFStringRef str, CFIndex idx
 /* This one is for the CF API
 */
 UniChar CFStringGetCharacterAtIndex(CFStringRef str, CFIndex idx) {
+    if (str != NULL && CF_IS_OBJC(__kCFStringTypeID, str))
+        return [(NSString *)str characterAtIndex:(NSUInteger)idx];
     CF_OBJC_FUNCDISPATCHV(__kCFStringTypeID, UniChar, (NSString *)str, characterAtIndex:(NSUInteger)idx);
 
     __CFAssertIsString(str);
@@ -2056,6 +2074,11 @@ CF_INLINE void __CFStringGetCharactersGuts(CFStringRef str, CFRange range, UniCh
 /* This one is for the CF API
 */
 void CFStringGetCharacters(CFStringRef str, CFRange range, UniChar *buffer) {
+    if (str != NULL && CF_IS_OBJC(__kCFStringTypeID, str)) {
+        [(NSString *)str getCharacters:buffer
+            range:NSMakeRange((NSUInteger)range.location, (NSUInteger)range.length)];
+        return;
+    }
     CF_OBJC_FUNCDISPATCHV(__kCFStringTypeID, void, (NSString *)str, getCharacters:(unichar *)buffer range:NSMakeRange(range.location, range.length));
 
     __CFAssertIsString(str);
@@ -2208,7 +2231,9 @@ Boolean CFStringGetCString(CFStringRef str, char *buffer, CFIndex bufferSize, CF
     __CFAssertIsNotNegative(bufferSize);
     if (bufferSize < 1) return false;
 
-    CF_OBJC_FUNCDISPATCHV(__kCFStringTypeID, Boolean, (NSString *)str, _getCString:buffer maxLength:(NSUInteger)bufferSize - 1 encoding:encoding);
+    if (str != NULL && CF_IS_OBJC(__kCFStringTypeID, str))
+        return [(NSString *)str getCString:buffer
+            maxLength:(NSUInteger)bufferSize - 1 encoding:encoding];
 
     __CFAssertIsString(str);
 

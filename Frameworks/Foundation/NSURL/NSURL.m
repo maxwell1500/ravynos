@@ -7,6 +7,7 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. */
 
 #import <Foundation/Foundation.h>
+#import <CoreFoundation/CoreFoundation.h>
 #import <Foundation/NSKeyedUnarchiver.h>
 #import <Foundation/NSKeyedArchiver.h>
 #import <Foundation/NSRaise.h>
@@ -525,6 +526,28 @@ static BOOL scanURL(urlScanner *scanner,NSURL *url){
 
 +URLWithString:(NSString *)string relativeToURL:(NSURL *)parent {
    return [[[self alloc] initWithString:string relativeToURL:parent] autorelease];
+}
+
+-(unsigned)_cfTypeID {
+    return (unsigned)CFURLGetTypeID();
+}
+
+-(void *)_cfurl {
+    NSString *path = [self isFileURL] ? [self path] : [self absoluteString];
+    if (path == nil) path = @"/";
+    const char *utf8 = [path UTF8String];
+    if (utf8 == NULL) return NULL;
+    CFStringRef cfPath = CFStringCreateWithCString(kCFAllocatorDefault, utf8, kCFStringEncodingUTF8);
+    if (cfPath == NULL) return NULL;
+    CFURLRef url;
+    if ([self isFileURL])
+        url = CFURLCreateWithFileSystemPath(kCFAllocatorDefault, cfPath, kCFURLPOSIXPathStyle, [path hasSuffix:@"/"]);
+    else
+        url = CFURLCreateWithString(kCFAllocatorDefault, cfPath, NULL);
+    if (url == NULL)
+        url = CFURLCreateWithFileSystemPath(kCFAllocatorDefault, cfPath, kCFURLPOSIXPathStyle, [path hasSuffix:@"/"]);
+    CFRelease(cfPath);
+    return (void *)url;
 }
 
 -(void)dealloc {

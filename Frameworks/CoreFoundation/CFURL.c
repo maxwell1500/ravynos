@@ -31,6 +31,9 @@
 #include <CoreFoundation/CFCharacterSetPriv.h>
 #include <CoreFoundation/CFNumber.h>
 #include "CFInternal.h"
+#include "CFBridging.h"
+
+extern Boolean __CFInitialized;
 #include <CoreFoundation/CFStringEncodingConverter.h>
 #include <limits.h>
 #include <stdlib.h>
@@ -1623,13 +1626,22 @@ static const CFRuntimeClass __CFURLClass = {
 
 /* Toll-free bridging support; get the true CFURL from an NSURL */
 CF_INLINE CFURLRef _CFURLFromNSURL(CFURLRef url) {
-    CF_OBJC_FUNCDISPATCHV(CFURLGetTypeID(), CFURLRef, (NSURL *)url, _cfurl);
+    if (url != NULL && CF_IS_OBJC(CFURLGetTypeID(), url))
+        return (CFURLRef)[(NSURL *)url _cfurl];
     return url;
 }
 
 CFTypeID CFURLGetTypeID(void) {
     static dispatch_once_t initOnce;
+    static Boolean nsurlRegistered = false;
     dispatch_once(&initOnce, ^{ __kCFURLTypeID = _CFRuntimeRegisterClass(&__CFURLClass); });
+    if (!nsurlRegistered && __CFInitialized) {
+        Class nsurl = objc_lookUpClass("NSURL");
+        if (nsurl != Nil) {
+            _CFRuntimeRegisterObjCClass(__kCFURLTypeID, (uintptr_t)nsurl);
+            nsurlRegistered = true;
+        }
+    }
     return __kCFURLTypeID;
 }
 
@@ -2818,7 +2830,9 @@ CFIndex CFURLGetBytes(CFURLRef url, UInt8 *buffer, CFIndex bufferLength) {
 }
 
 CFURLRef  CFURLGetBaseURL(CFURLRef  anURL) {
-    CF_OBJC_FUNCDISPATCHV(CFURLGetTypeID(), CFURLRef, (NSURL *)anURL, baseURL);
+    if (anURL == NULL) return NULL;
+    if (CF_IS_OBJC(CFURLGetTypeID(), anURL))
+        return (CFURLRef)[(NSURL *)anURL baseURL];
     return anURL->_base;
 }
 
@@ -2839,12 +2853,12 @@ static CFRange _rangeForComponent(UInt32 flags, const CFRange *ranges, UInt32 co
 static CFStringRef _retainedComponentString(CFURLRef url, UInt32 compFlag, Boolean fromOriginalString, Boolean removePercentEscapes) {
     CFRange rg;
     CFStringRef comp;
+    if (url == NULL || (uintptr_t)url < 4096) return NULL;
     CFAllocatorRef alloc = CFGetAllocator(url);
     if (removePercentEscapes) {
         fromOriginalString = true;
     }
-    if (url == NULL || (uintptr_t)url < 4096 ||
-        (uintptr_t)url->_string < 4096) {
+    if ((uintptr_t)url->_string < 4096) {
         void *caller = __builtin_return_address(0);
         Dl_info info;
         const char *cls = (url && (uintptr_t)url >= 4096)
@@ -3021,7 +3035,9 @@ CFStringRef CFURLCopyNetLocation(CFURLRef  anURL) {
 
 // NOTE - if you want an absolute path, you must first get the absolute URL.  If you want a file system path, use the file system methods above.
 CFStringRef  CFURLCopyPath(CFURLRef  anURL) {
+    if (anURL == NULL) return NULL;
     anURL = _CFURLFromNSURL(anURL);
+    if (anURL == NULL) return NULL;
     return _retainedComponentString(anURL, HAS_PATH, false, false);
 }
 
@@ -4244,6 +4260,9 @@ Boolean CFURLGetFSRef(CFURLRef url, struct FSRef *fsRef)
 }
 
 CFStringRef CFURLCopyFileSystemPath(CFURLRef anURL, CFURLPathStyle pathStyle) {
+    if (anURL == NULL) return NULL;
+    anURL = _CFURLFromNSURL(anURL);
+    if (anURL == NULL) return NULL;
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdeprecated"
     CFAssert2(pathStyle == kCFURLPOSIXPathStyle || pathStyle == kCFURLHFSPathStyle || pathStyle == kCFURLWindowsPathStyle, __kCFLogAssertion, "%s(): Encountered unknown path style %d", __PRETTY_FUNCTION__, pathStyle);
@@ -4281,6 +4300,9 @@ CFStringRef CFURLCopyFileSystemPath(CFURLRef anURL, CFURLPathStyle pathStyle) {
 
 // There is no matching ObjC method for this functionality; because this function sits on top of the CFURL primitives, it's o.k. not to check for the need to dispatch an ObjC method instead, but this means care must be taken that this function never call anything that will result in dereferencing anURL without first checking for an ObjC dispatch.  -- REW, 10/29/98
 CFStringRef CFURLCreateStringWithFileSystemPath(CFAllocatorRef allocator, CFURLRef anURL, CFURLPathStyle fsType, Boolean resolveAgainstBase) {
+    if (anURL == NULL) return NULL;
+    anURL = _CFURLFromNSURL(anURL);
+    if (anURL == NULL) return NULL;
     CFURLRef base = resolveAgainstBase ? CFURLGetBaseURL(anURL) : NULL;
     CFStringRef basePath = base ? CFURLCreateStringWithFileSystemPath(allocator, base, fsType, false) : NULL;
     CFStringRef relPath = NULL;
