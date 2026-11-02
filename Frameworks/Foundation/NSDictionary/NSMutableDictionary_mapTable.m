@@ -74,6 +74,39 @@ BOOL NSNextDictionaryEnumeratorPair(CFDictionaryEnumerator *state,void **key,voi
 
 @implementation NSMutableDictionary_CF
 
+/*
+ * A CoreFoundation object can reach a Foundation container through CF's own
+ * APIs (CFBundle hands back CFStrings for Info.plist keys, for example).  A
+ * CF object has no -retain/-copyWithZone: and messaging it faults in
+ * objc_msgSend's cache lookup, so bridge at the container boundary: a
+ * CFString becomes the NSString a macOS toll-free bridge would hand over,
+ * anything else keeps its CF lifetime.  ObjC objects are recognised by their
+ * isa (C CF objects store _cfinfo, a small integer, in the first word).
+ */
+extern Boolean _CFIsObjCType(CFTypeRef cf);
+
+static int ravyn_value_is_objc(const void *value)
+{
+   return _CFIsObjCType((CFTypeRef)value) ? 1 : 0;
+}
+
+static const void *ravyn_bridge_retain(const void *value)
+{
+   if (value == NULL) return NULL;
+   if (ravyn_value_is_objc(value))
+    return (const void *)[(id)value retain];
+   if (CFGetTypeID(value) == CFStringGetTypeID()) {
+    CFIndex length = CFStringGetLength((CFStringRef)value);
+    unichar *characters = (unichar *)malloc((length + 1) * sizeof(unichar));
+    if (characters == NULL) return CFRetain(value);
+    CFStringGetCharacters((CFStringRef)value, CFRangeMake(0, length), characters);
+    id string = [[NSString alloc] initWithCharacters:characters length:(NSUInteger)length];
+    free(characters);
+    return (const void *)string;
+   }
+   return CFRetain(value);
+}
+
 const void *objectRetainCallBack(CFAllocatorRef allocator,const void *value) {
    /* These objects are NSObject-derived (dicts/numbers/strings created via
     * NSAllocateObject), so their lifetime is the ObjC refcount.  Using CFRetain
@@ -81,14 +114,30 @@ const void *objectRetainCallBack(CFAllocatorRef allocator,const void *value) {
     * so the container neither keeps the value alive nor releases it correctly.
     * Retain/release via the ObjC API to match how the object is created and how
     * the key callback (copyWithZone:) retains. */
-   return (const void *)[(id)value retain];
+   return ravyn_bridge_retain(value);
 }
 
 const void *objectCopyCallBack(CFAllocatorRef allocator,const void *value) {
+   if (value != NULL && !ravyn_value_is_objc(value)) {
+    if (CFGetTypeID(value) == CFStringGetTypeID()) {
+     CFIndex length = CFStringGetLength((CFStringRef)value);
+     unichar *characters = (unichar *)malloc((length + 1) * sizeof(unichar));
+     if (characters == NULL) return CFRetain(value);
+     CFStringGetCharacters((CFStringRef)value, CFRangeMake(0, length), characters);
+     id string = [[NSString alloc] initWithCharacters:characters length:(NSUInteger)length];
+     free(characters);
+     return (const void *)string;
+    }
+    return CFRetain(value);
+   }
    return [(id <NSCopying>)value copyWithZone:NULL];
 }
 
 static void objectReleaseCallBack(CFAllocatorRef allocator,const void *value) {
+   if (value != NULL && !ravyn_value_is_objc(value)) {
+    CFRelease(value);
+    return;
+   }
    [(id)value release];
 }
 

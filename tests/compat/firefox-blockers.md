@@ -736,3 +736,24 @@ half of the toll-free bridge: either CF's classes must become real ObjC
 classes (allocateClassPair-based, as on macOS) or every Foundation call
 site that messages a CFString/CFURL must go through the CF functions.
 The nib loader path exercises the first option via `NSNib`/`NSKeyedUnarchiver`.
+
+### Container boundary bridging and the CFBasicHash crash
+
+Foundation containers used ObjC callbacks (`objectKeyCallBacks`,
+`objectValueCallbacks`) whose retain/copy callbacks message the value, so
+a CoreFoundation object that reached a Foundation dictionary through CF
+(CFBundle Info.plist keys, for example) crashed in `objc_msgSend` on
+`-copyWithZone:`/`-retain`.  `objectCopyCallBack`/`objectRetainCallBack`/
+`objectReleaseCallBack` now bridge: a C CFString becomes a real
+`NSString` (characters copied through `CFStringGetCharacters`), other CF
+objects keep their CF lifetime.  "Is this ObjC?" comes from the new
+`_CFIsObjCType()` (CF's registered-class table) — the first-word-pointer
+heuristic is wrong because C CF instances carry the CF class in `_cfisa`
+as well.
+
+The crash then moves to `__CFBasicHashFindBucket_Linear` calling an ObjC
+method on a `__CFRunLoopObserver` (isa `___CFRunLoopObserverClass`): some
+CF container is built with Objective-C callbacks and receives a CF
+run-loop observer as a key.  That is the same bridging question one level
+down — the callbacks for CF collections must either handle CF objects or
+the observers must be ObjC objects.

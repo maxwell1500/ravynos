@@ -108,6 +108,17 @@ extern id objc_msgSend(id, SEL, ...);
  * objc_msgSend's cache lookup.  Match the isa against the registered bridge
  * classes instead; a CF object's first word is _cfinfo, never a class
  * pointer. */
+/* Public to Foundation: is this pointer a real ObjC object (its isa is a
+ * registered bridge class), rather than a C CF instance whose first word is
+ * the CF class? */
+static bool _CFIsRegisteredObjCClass(uintptr_t isa);
+
+CF_EXPORT Boolean
+_CFIsObjCType(CFTypeRef cf)
+{
+    return cf != NULL && _CFIsRegisteredObjCClass(*(const uintptr_t *)cf);
+}
+
 static bool
 _CFIsRegisteredObjCClass(uintptr_t isa)
 {
