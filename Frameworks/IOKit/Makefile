@@ -36,14 +36,14 @@ XNU_IOKIT_HDRS = ${ROOT_SOURCE_DIR}/Kernel/xnu/BUILD/dst/System/Library/Framewor
 IOKIT_INC = ${.OBJDIR}/inc
 
 ${IOKIT_INC}/.stamp:
-	@mkdir -p "${IOKIT_INC}/IOKit/pwr_mgt"
+	@mkdir -p "${IOKIT_INC}/IOKit/pwr_mgt" "${IOKIT_INC}/IOKit/hid"
 	@ln -sfn "${IOKITUSER}/IOKitLib.h" "${IOKIT_INC}/IOKit/IOKitLib.h"
 	@ln -sfn "${IOKITUSER}/IOKitLibPrivate.h" "${IOKIT_INC}/IOKit/IOKitLibPrivate.h"
 	@ln -sfn "${IOKITUSER}/IOCFPlugIn.h" "${IOKIT_INC}/IOKit/IOCFPlugIn.h"
 	@ln -sfn "${IOKITUSER}/pwr_mgt.subproj/IOPMLib.h" "${IOKIT_INC}/IOKit/pwr_mgt/IOPMLib.h"
 	@ln -sfn "${IOKITUSER}/pwr_mgt.subproj/IOPMKeys.h" "${IOKIT_INC}/IOKit/pwr_mgt/IOPMKeys.h"
 	@ln -sfn "${IOKITUSER}/pwr_mgt.subproj/IOPMLibDefs.h" "${IOKIT_INC}/IOKit/pwr_mgt/IOPMLibDefs.h"
-	@ln -sfn "${IOKITUSER}/hid.subproj/IOHIDLib.h" "${IOKIT_INC}/IOKit/hid/IOHIDLib.h" 2>/dev/null || true
+	@for h in "${IOKITUSER}"/hid.subproj/*.h; do ln -sfn "$$h" "${IOKIT_INC}/IOKit/hid/$$(basename "$$h")"; done
 	@ln -sfn "${XNU_IOKIT_HDRS}/IOReturn.h" "${IOKIT_INC}/IOKit/IOReturn.h"
 	@ln -sfn "${XNU_IOKIT_HDRS}/IOTypes.h" "${IOKIT_INC}/IOKit/IOTypes.h"
 	@ln -sfn "${XNU_IOKIT_HDRS}/IOKitKeys.h" "${IOKIT_INC}/IOKit/IOKitKeys.h"
@@ -52,7 +52,6 @@ ${IOKIT_INC}/.stamp:
 	@ln -sfn "${XNU_IOKIT_HDRS}/IOMapTypes.h" "${IOKIT_INC}/IOKit/IOMapTypes.h"
 	@ln -sfn "${XNU_IOKIT_HDRS}/IODataQueueShared.h" "${IOKIT_INC}/IOKit/IODataQueueShared.h"
 	@ln -sfn "${XNU_IOKIT_HDRS}/IOSerialStreamSync.h" "${IOKIT_INC}/IOKit/IOSerialStreamSync.h" 2>/dev/null || true
-	@mkdir -p "${IOKIT_INC}/IOKit/hid"
 	@touch "${IOKIT_INC}/.stamp"
 
 CFLAGS += -I${IOKIT_INC} -I${.CURDIR} -I${IOKITUSER} \

@@ -731,3 +731,227 @@ CFStringRef IOPMAssertionCopyName(IOPMAssertionID assertionID) {
  * declares no IOHIDManager API, so there is nothing to implement here.  A
  * caller that needs them fails at link time with a named symbol rather than
  * running against a stub whose signature disagrees with its own header. */
+
+/* ------------------------------------------------------------------ */
+/* System power                                                        */
+/* ------------------------------------------------------------------ */
+
+/*
+ * XUL binds _IORegisterForSystemPower on its first call and dyld aborts
+ * the process when the symbol is absent.  There is no IOPMrootDomain in
+ * the kernel yet, so registration fails the way it does on a Mac without
+ * a root power domain: no connection, no notification port, no notifier.
+ * Gecko treats that as "sleep notifications unavailable" and continues.
+ */
+io_connect_t IORegisterForSystemPower(void *refcon,
+                                      IONotificationPortRef *thePortRef,
+                                      IOServiceInterestCallback callback,
+                                      io_object_t *notifier) {
+    static int logged;
+    (void)refcon;
+    (void)callback;
+    if (thePortRef != NULL) *thePortRef = NULL;
+    if (notifier != NULL) *notifier = IO_OBJECT_NULL;
+    if (!logged) {
+        static const char message[] =
+            "[compat] IOKit: IORegisterForSystemPower: no power domain\n";
+        logged = 1;
+        write(2, message, sizeof(message) - 1);
+    }
+    return IO_OBJECT_NULL;
+}
+
+IOReturn IODeregisterForSystemPower(io_object_t *notifier) {
+    if (notifier != NULL) *notifier = IO_OBJECT_NULL;
+    return kIOReturnSuccess;
+}
+
+IOReturn IOAllowPowerChange(io_connect_t kernelPort, long notificationID) {
+    (void)kernelPort;
+    (void)notificationID;
+    return kIOReturnSuccess;
+}
+
+IOReturn IOCancelPowerChange(io_connect_t kernelPort, long notificationID) {
+    return IOAllowPowerChange(kernelPort, notificationID);
+}
+
+#define kIOPSPowerSourcesKey CFSTR("Power Source Information")
+#define kIOPSPowerSourceStateKey CFSTR("Power Source State")
+#define kIOPSBatteryPowerValue CFSTR("Battery Power")
+#define kIOPSACPowerValue CFSTR("AC Power")
+
+/* No battery or UPS is enumerated, so the snapshot is an empty dictionary
+ * holding an empty source list; the description lookup then returns NULL,
+ * which callers treat as "no such source". */
+CFTypeRef IOPSCopyPowerSourcesInfo(void) {
+    CFMutableDictionaryRef info = CFDictionaryCreateMutable(kCFAllocatorDefault, 0,
+        &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    CFMutableArrayRef sources = CFArrayCreateMutable(kCFAllocatorDefault, 0,
+        &kCFTypeArrayCallBacks);
+    if (sources != NULL) {
+        CFDictionarySetValue(info, kIOPSPowerSourcesKey, sources);
+        CFRelease(sources);
+    }
+    return info;
+}
+
+CFArrayRef IOPSCopyPowerSourcesList(CFTypeRef blob) {
+    if (blob == NULL) return CFArrayCreate(kCFAllocatorDefault, NULL, 0, &kCFTypeArrayCallBacks);
+    CFTypeRef sources = CFDictionaryGetValue((CFDictionaryRef)blob, kIOPSPowerSourcesKey);
+    if (sources != NULL && CFGetTypeID(sources) == CFArrayGetTypeID())
+        return CFRetain(sources);
+    return CFArrayCreate(kCFAllocatorDefault, NULL, 0, &kCFTypeArrayCallBacks);
+}
+
+CFDictionaryRef IOPSGetPowerSourceDescription(CFTypeRef blob, CFTypeRef ps) {
+    (void)blob;
+    (void)ps;
+    return NULL;
+}
+
+typedef void (*IOPowerSourceCallbackType)(void *context);
+
+CFRunLoopSourceRef IOPSNotificationCreateRunLoopSource(IOPowerSourceCallbackType callback,
+                                                       void *context) {
+    (void)callback;
+    (void)context;
+    return NULL;
+}
+
+/* The registry exists only as the userland object table above, which is
+ * empty, so every request for children yields a valid empty iterator. */
+kern_return_t IORegistryEntryCreateIterator(io_registry_entry_t entry,
+                                            const io_name_t plane,
+                                            IOOptionBits options,
+                                            io_iterator_t *iterator) {
+    IORavynIterator *it;
+    (void)entry;
+    (void)plane;
+    (void)options;
+    if (iterator == NULL) return kIOReturnBadArgument;
+    *iterator = 0;
+    it = iterator_create(0);
+    if (!it) return kIOReturnNoMemory;
+    *iterator = (io_iterator_t)(uintptr_t)it;
+    return KERN_SUCCESS;
+}
+
+/* ------------------------------------------------------------------ */
+/* HID                                                                 */
+/* ------------------------------------------------------------------ */
+
+/*
+ * There is no HID event system reachable from userland yet, so creating a
+ * manager fails the way it does on a machine with no IOHIDSystem: NULL.
+ * Every operation below is then a no-op on that NULL handle.  Gecko treats
+ * a nil manager as "gamepads and raw HID unavailable" and carries on; the
+ * alternative (a fake manager with no devices) would make it wait for
+ * matching callbacks that can never arrive.
+ */
+/* The SDK's IOKit headers do not carry the complete HID include graph
+ * (IOHIDKeys.h asks for IOKit/hidsystem/IOHIDParameter.h, which the SDK
+ * does not ship), so the manager types are declared here with Apple's
+ * ABI: opaque reference and callback signatures. */
+typedef struct __IOHIDManager *IOHIDManagerRef;
+typedef struct __IOHIDDevice *IOHIDDeviceRef;
+typedef struct __IOHIDValue *IOHIDValueRef;
+typedef uint32_t IOHIDReportType;
+typedef void (*IOHIDDeviceCallback)(void *context, IOReturn result, void *sender, IOHIDDeviceRef device);
+typedef void (*IOHIDReportCallback)(void *context, IOReturn result, void *sender,
+    IOHIDReportType type, uint32_t reportID, uint8_t *report, CFIndex reportLength);
+typedef void (*IOHIDValueCallback)(void *context, IOReturn result, void *sender, IOHIDValueRef value);
+
+IOHIDManagerRef IOHIDManagerCreate(CFAllocatorRef allocator, IOOptionBits options) {
+    static int logged;
+    (void)allocator;
+    (void)options;
+    if (!logged) {
+        static const char message[] =
+            "[compat] IOKit: IOHIDManagerCreate: no HID event system\n";
+        logged = 1;
+        write(2, message, sizeof(message) - 1);
+    }
+    return NULL;
+}
+
+IOReturn IOHIDManagerOpen(IOHIDManagerRef manager, IOOptionBits options) {
+    (void)manager;
+    (void)options;
+    return kIOReturnNotReady;
+}
+
+IOReturn IOHIDManagerClose(IOHIDManagerRef manager, IOOptionBits options) {
+    (void)manager;
+    (void)options;
+    return kIOReturnSuccess;
+}
+
+CFTypeRef IOHIDManagerGetProperty(IOHIDManagerRef manager, CFStringRef key) {
+    (void)manager;
+    (void)key;
+    return NULL;
+}
+
+void IOHIDManagerScheduleWithRunLoop(IOHIDManagerRef manager, CFRunLoopRef runLoop,
+                                     CFStringRef runLoopMode) {
+    (void)manager;
+    (void)runLoop;
+    (void)runLoopMode;
+}
+
+void IOHIDManagerUnscheduleFromRunLoop(IOHIDManagerRef manager, CFRunLoopRef runLoop,
+                                       CFStringRef runLoopMode) {
+    (void)manager;
+    (void)runLoop;
+    (void)runLoopMode;
+}
+
+void IOHIDManagerSetDeviceMatching(IOHIDManagerRef manager, CFDictionaryRef matching) {
+    (void)manager;
+    if (matching != NULL) CFRelease(matching);
+}
+
+void IOHIDManagerSetDeviceMatchingMultiple(IOHIDManagerRef manager, CFArrayRef multiple) {
+    (void)manager;
+    if (multiple != NULL) CFRelease(multiple);
+}
+
+void IOHIDManagerSetInputValueMatching(IOHIDManagerRef manager, CFDictionaryRef matching) {
+    (void)manager;
+    if (matching != NULL) CFRelease(matching);
+}
+
+void IOHIDManagerSetInputValueMatchingMultiple(IOHIDManagerRef manager, CFArrayRef multiple) {
+    (void)manager;
+    if (multiple != NULL) CFRelease(multiple);
+}
+
+CFSetRef IOHIDManagerCopyDevices(IOHIDManagerRef manager) {
+    (void)manager;
+    return CFSetCreate(kCFAllocatorDefault, NULL, 0, &kCFTypeSetCallBacks);
+}
+
+void IOHIDManagerRegisterDeviceMatchingCallback(IOHIDManagerRef manager,
+                                                IOHIDDeviceCallback callback,
+                                                void *context) {
+    (void)manager; (void)callback; (void)context;
+}
+
+void IOHIDManagerRegisterDeviceRemovalCallback(IOHIDManagerRef manager,
+                                               IOHIDDeviceCallback callback,
+                                               void *context) {
+    (void)manager; (void)callback; (void)context;
+}
+
+void IOHIDManagerRegisterInputReportCallback(IOHIDManagerRef manager,
+                                             IOHIDReportCallback callback,
+                                             void *context) {
+    (void)manager; (void)callback; (void)context;
+}
+
+void IOHIDManagerRegisterInputValueCallback(IOHIDManagerRef manager,
+                                            IOHIDValueCallback callback,
+                                            void *context) {
+    (void)manager; (void)callback; (void)context;
+}

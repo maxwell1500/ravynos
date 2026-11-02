@@ -764,8 +764,14 @@ Boolean CFEqual(CFTypeRef cf1, CFTypeRef cf2) {
         return [(id)cf1 isEqual:(id)cf2];
     }
     const CFRuntimeClass *cls = (tid1 < __CFRuntimeClassTableSize) ? __CFRuntimeClassTable[tid1] : NULL;
-    if (NULL != cls && NULL != cls->equal) {
-        return cls->equal(cf1, cf2);
+    if (NULL != cls) {
+        if (NULL != cls->equal) {
+            return cls->equal(cf1, cf2);
+        }
+        /* A CF class may omit equal (CFRunLoopObserver does); its instances
+         * are then compared by identity.  Messaging the C instance would
+         * fault in objc_msgSend. */
+        return false;
     }
     return [(id)cf1 isEqual:(id)cf2];
 }
@@ -775,8 +781,12 @@ CFHashCode CFHash(CFTypeRef cf) {
     CFTYPE_OBJC_FUNCDISPATCH0(CFHashCode, cf, hash);
     CFTypeID typeID = __CFGenericTypeID_inline(cf);
     const CFRuntimeClass *cls = (typeID < __CFRuntimeClassTableSize) ? __CFRuntimeClassTable[typeID] : NULL;
-    if (NULL != cls && NULL != cls->hash) {
-        return cls->hash(cf);
+    if (NULL != cls) {
+        if (NULL != cls->hash) {
+            return cls->hash(cf);
+        }
+        /* Identity hash for classes without one (CFRunLoopObserver, ...). */
+        return (CFHashCode)(uintptr_t)cf;
     }
     return (CFHashCode)[(id)cf hash];
 }

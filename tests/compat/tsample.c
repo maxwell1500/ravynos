@@ -43,11 +43,17 @@ main(int argc, char **argv)
 	int nimages = 0;
 	int pid;
 
-	if (argc != 2) {
-		fprintf(stderr, "usage: tsample <pid>\n");
+	int images_only = 0;
+	int argi = 1;
+	if (argc >= 2 && strcmp(argv[1], "-i") == 0) {
+		images_only = 1;
+		argi = 2;
+	}
+	if (argc <= argi) {
+		fprintf(stderr, "usage: tsample [-i] <pid>\n");
 		return 2;
 	}
-	pid = atoi(argv[1]);
+	pid = atoi(argv[argi]);
 
 	kern_return_t kr = task_for_pid(mach_task_self(), pid, &task);
 	if (kr != KERN_SUCCESS) {
@@ -77,6 +83,18 @@ main(int argc, char **argv)
 	if (kr != KERN_SUCCESS) {
 		fprintf(stderr, "tsample: task_threads kr=0x%x\n", kr);
 		return 1;
+	}
+	if (images_only) {
+		printf("tsample: pid %d images=%d\n", pid, nimages);
+		for (int k = 0; k < nimages; k++) {
+			char path[256];
+			memset(path, 0, sizeof(path));
+			if (read_mem(task, (uint64_t)(uintptr_t)images[k].imageFilePath,
+			    path, sizeof(path) - 1) != 0)
+				strcpy(path, "?");
+			printf("  base 0x%016llx %s\n", (unsigned long long)bases[k], path);
+		}
+		goto out;
 	}
 	printf("tsample: pid %d threads=%u images=%d\n", pid, count, nimages);
 	for (mach_msg_type_number_t i = 0; i < count; i++) {
@@ -115,6 +133,7 @@ main(int argc, char **argv)
 		    where, (unsigned long long)off);
 	}
 
+out:
 	for (mach_msg_type_number_t i = 0; i < count; i++)
 		mach_port_deallocate(mach_task_self(), threads[i]);
 	mach_port_deallocate(mach_task_self(), task);

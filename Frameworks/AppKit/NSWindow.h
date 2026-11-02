@@ -112,6 +112,10 @@ APPKIT_EXPORT NSString *const NSWindowDidEndLiveResizeNotification;
     NSMutableDictionary *_deviceDictionary;
     BOOL _isZoomed;
     BOOL _isMiniaturized;
+    BOOL _titlebarAppearsTransparent;
+    NSInteger _titleVisibility;
+    BOOL _restorable;
+    NSInteger _titlebarSeparatorStyle;
 
     NSString *shmPath;
     NSString *bundleID;

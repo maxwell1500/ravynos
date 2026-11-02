@@ -181,6 +181,65 @@ const float WSWindowEdgePad = 2;
 
 @implementation NSWindow
 
+/* Titlebar appearance (10.10+).  The window server draws our titlebar, so
+ * these are remembered for -titlebarAppearsTransparent/-titleVisibility
+ * queries; there is no translucent titlebar rendering yet. */
+-(BOOL)titlebarAppearsTransparent {
+   return _titlebarAppearsTransparent;
+}
+
+-(void)setTitlebarAppearsTransparent:(BOOL)flag {
+   _titlebarAppearsTransparent = flag ? YES : NO;
+}
+
+-(NSInteger)titleVisibility {
+   return _titleVisibility;
+}
+
+-(void)setTitleVisibility:(NSInteger)visibility {
+   _titleVisibility = visibility;
+}
+
+-(BOOL)isRestorable {
+   return _restorable;
+}
+
+-(void)setRestorable:(BOOL)restorable {
+   _restorable = restorable ? YES : NO;
+}
+
+-(NSInteger)titlebarSeparatorStyle {
+   return _titlebarSeparatorStyle;
+}
+
+-(void)setTitlebarSeparatorStyle:(NSInteger)style {
+   _titlebarSeparatorStyle = style;
+}
+
+/* Full-screen presentation is not implemented; zooming keeps the window
+ * usable instead of leaving a green button that does nothing. */
+-(void)toggleFullScreen:(id)sender {
+   static int logged = 0;
+   if (!logged) {
+      logged = 1;
+      fprintf(stderr, "[compat] AppKit: toggleFullScreen: is not implemented (zooming)\n");
+   }
+   [self zoom:sender];
+}
+
+static BOOL _allowsAutomaticWindowTabbing = YES;
+
+/* Automatic window tabbing (macOS 10.12).  There is no tabbing UI here
+ * yet; the flag is remembered so applications that disable it for their
+ * own windows see a consistent answer. */
++(BOOL)allowsAutomaticWindowTabbing {
+   return _allowsAutomaticWindowTabbing;
+}
+
++(void)setAllowsAutomaticWindowTabbing:(BOOL)allow {
+   _allowsAutomaticWindowTabbing = allow ? YES : NO;
+}
+
 +(NSWindowDepth)defaultDepthLimit {
    return 0;
 }
