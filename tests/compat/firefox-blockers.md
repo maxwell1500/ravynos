@@ -708,3 +708,20 @@ Fixes:
 Result: `gethostuuid` returns promptly, Firefox no longer wedges there
 (`[runas] watchdog: target 11 alive=0`), and the next blocker is a plain
 SIGABRT (`create rc=134`) inside XUL after the font manager call.
+
+### Modern nib loader and the next crash
+
+`objc[16]: -[NSBundle loadNibNamed:owner:topLevelObjects:]: unrecognized
+selector` killed the process next.  AppKit's NSBundle nib category only
+had the 10.7 `+loadNibNamed:owner:` and the `NSNib` instance methods, so
+the 10.8 API is now implemented on top of
+`-[NSNib instantiateNibWithOwner:topLevelObjects:]`.
+
+With that in place the abort becomes a SIGSEGV (`create rc=139`) in
+`objc_msgSend+0x29`: receiver 0x7ff3e1407be0 has isa 0x10bb7c850, and the
+cache lookup faults at 0x8281ab00.  Frames below it are Foundation
+(+0x5421, +0x4a65, +0x4344) called from XUL, i.e. the nib load path
+sends a message to an object whose class is not a realized ObjC class.
+The next step is to identify 0x10bb7c850 in the image list (it is in
+Foundation's data range) and make that class a real objc class, the same
+class of fix as the packed-isa work in CoreFoundation.

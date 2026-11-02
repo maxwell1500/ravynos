@@ -80,5 +80,37 @@
 	return result;
 }
 
+/*
+ * The 10.8+ nib loader.  Firefox's widget code calls it, and the default
+ * forward handler aborted the whole process with
+ * "-[NSBundle loadNibNamed:owner:topLevelObjects:]: unrecognized selector".
+ * The top-level objects come back through the out parameter, autoreleased as
+ * the API documents.
+ */
+-(BOOL)loadNibNamed:(NSString *)name owner:(id)owner topLevelObjects:(NSArray **)topLevelObjects {
+	NSString *path = nil;
+
+	if ([[name stringByDeletingLastPathComponent] length] == 0) {
+		NSString *nibName = [[name copy] autorelease];
+		nibName = [nibName stringByDeletingPathExtension];
+		NSString *platformName = [nibName stringByAppendingFormat:@"-%@", NSPlatformResourceNameSuffix];
+
+		path = [self pathForResource:platformName ofType:@"nib"];
+		if (path == nil)
+			path = [[NSBundle mainBundle] pathForResource:platformName ofType:@"nib"];
+		if (path == nil)
+			path = [self pathForResource:nibName ofType:@"nib"];
+		if (path == nil)
+			path = [[NSBundle mainBundle] pathForResource:nibName ofType:@"nib"];
+	} else {
+		path = name;
+	}
+	if (path == nil)
+		return NO;
+
+	NSNib *nib = [[[NSNib alloc] initWithContentsOfFile:path] autorelease];
+	return [nib instantiateNibWithOwner:owner topLevelObjects:topLevelObjects];
+}
+
 @end
 
