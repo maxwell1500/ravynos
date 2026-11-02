@@ -725,3 +725,14 @@ sends a message to an object whose class is not a realized ObjC class.
 The next step is to identify 0x10bb7c850 in the image list (it is in
 Foundation's data range) and make that class a real objc class, the same
 class of fix as the packed-isa work in CoreFoundation.
+
+Follow-up on the SIGSEGV after the nib fix: the receiver's isa resolves
+to `___CFStringClass` (CoreFoundation+0x190850), i.e. Foundation's nib
+path sends a message straight to a CoreFoundation string.  On macOS that
+is legal because CF's classes are ObjC classes; here a CF instance's isa
+is the `CFRuntimeClass` record, so `objc_msgSend` faults in the cache
+lookup (fault 0x8281ab00, `objc_msgSend+0x29`).  This is the remaining
+half of the toll-free bridge: either CF's classes must become real ObjC
+classes (allocateClassPair-based, as on macOS) or every Foundation call
+site that messages a CFString/CFURL must go through the CF functions.
+The nib loader path exercises the first option via `NSNib`/`NSKeyedUnarchiver`.
