@@ -683,3 +683,28 @@ firing.  The next triage step is this abort, not the scheduler.
 New tools (staged in the image): `tdump <pid>` prints per-thread run
 state/CPU time/name via `proc_info`, `tsample <pid>` prints each thread's
 user RIP resolved to `image+offset`; both are wired into the Firefox job.
+
+### Platform UUID: gethostuuid could never return
+
+With the enumerator fixed, the main thread was the last stuck one, in
+`__gethostuuid` (`libsystem_kernel+0x4b88a`) in state 4
+(`TH_STATE_UNINTERRUPTIBLE`), which is why SIGKILL never completed.  The
+kernel path is `gethostuuid(2)` -> `IOBSDGetPlatformUUID()` ->
+`IOService::waitForService(resourceMatching(IOPlatformUUID))`.
+
+`IOPlatformExpertDevice::generatePlatformUUID()` only produced a UUID
+when the firmware supplied `system-id` (x86) or `platform-uuid`; QEMU's
+EFI platform has neither, so nothing was ever published, and a zero
+timeout made `waitForService` wait forever.
+
+Fixes:
+- `generatePlatformUUID()` falls back to a UUID derived (SHA-1) from the
+  platform `serial-number`, or a random one when no serial exists, and
+  sets the property on the provider as well (the publisher reads it
+  there).
+- `IOBSDGetPlatformUUID()` reads the property directly first; a zero
+  timeout no longer waits forever — it reports the missing UUID.
+
+Result: `gethostuuid` returns promptly, Firefox no longer wedges there
+(`[runas] watchdog: target 11 alive=0`), and the next blocker is a plain
+SIGABRT (`create rc=134`) inside XUL after the font manager call.

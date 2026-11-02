@@ -1098,15 +1098,39 @@ IOBSDGetPlatformUUID( uuid_t uuid, mach_timespec_t timeout )
 	IOService * resources;
 	OSString *  string;
 
-	resources = IOService::waitForService( IOService::resourceMatching( kIOPlatformUUIDKey ), (timeout.tv_sec || timeout.tv_nsec) ? &timeout : NULL );
-	if (resources == NULL) {
-		return KERN_OPERATION_TIMED_OUT;
+	/*
+	 * Read the platform UUID directly.  waitForService() on the resource
+	 * never completed in this kernel even after the UUID was published, and
+	 * gethostuuid(2) then blocked in an uninterruptible wait (Firefox's
+	 * main thread, which could not even be killed).  A missing UUID is
+	 * reported to the caller instead of waiting for a notification that
+	 * does not arrive.
+	 */
+	IOService * platform = IOService::getPlatform();
+	string = platform ? (OSString *) platform->getProvider()->getProperty( kIOPlatformUUIDKey ) : NULL;
+	if (string == NULL && platform != NULL) {
+		string = (OSString *) platform->getProperty( kIOPlatformUUIDKey );
 	}
-
-	string = (OSString *) IOService::getPlatform()->getProvider()->getProperty( kIOPlatformUUIDKey );
+	if (string == NULL) {
+		IOLog("IOBSDGetPlatformUUID: platform UUID property missing\n");
+		/* A zero timeout used to mean "wait forever" here.  The resource
+		 * notification never arrives in this kernel, so that turned
+		 * gethostuuid(2) into an uninterruptible wait that blocked the
+		 * calling thread for good.  Report the absence instead. */
+		if (timeout.tv_sec == 0 && timeout.tv_nsec == 0) {
+			return KERN_NOT_SUPPORTED;
+		}
+		resources = IOService::waitForService( IOService::resourceMatching( kIOPlatformUUIDKey ),
+		    &timeout );
+		if (resources == NULL) {
+			return KERN_OPERATION_TIMED_OUT;
+		}
+		string = (OSString *) IOService::getPlatform()->getProvider()->getProperty( kIOPlatformUUIDKey );
+	}
 	if (string == NULL) {
 		return KERN_NOT_SUPPORTED;
 	}
+	IOLog("IOBSDGetPlatformUUID: platform UUID found\n");
 
 	uuid_parse( string->getCStringNoCopy(), uuid );
 

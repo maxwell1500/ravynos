@@ -2278,8 +2278,56 @@ IOPlatformExpertDevice::generatePlatformUUID( void )
 	}
 #endif /* defined(__x86_64__) */
 
+	if (!string) {
+		/*
+		 * No firmware-supplied UUID (QEMU's EFI platform has no
+		 * system-id).  Publish one anyway: gethostuuid(2) waits in
+		 * IOBSDGetPlatformUUID -> IOService::waitForService() for this
+		 * resource, and with nothing published that wait never returns
+		 * (Firefox's main thread sat there in an uninterruptible wait and
+		 * the process could not even be killed).  Derive it from the
+		 * platform serial number so it is stable across boots; fall back
+		 * to a random UUID only when no serial is present.
+		 */
+		OSData * serial = OSDynamicCast(OSData, getProperty("serial-number"));
+		if (serial == NULL) {
+			serial = OSDynamicCast(OSData, getProperty(kIOPlatformSerialNumberKey));
+		}
+		if (serial != NULL && serial->getLength() != 0) {
+			SHA1_CTX     context;
+			uint8_t      digest[SHA_DIGEST_LENGTH];
+			const uuid_t space = { 0x2A, 0x06, 0x19, 0x90, 0xD3, 0x8D, 0x44, 0x40,
+				0xA1, 0x39, 0xC4, 0x97, 0x70, 0x37, 0x65, 0xAC };
+
+			SHA1Init(&context);
+			SHA1Update(&context, space, sizeof(space));
+			SHA1Update(&context, serial->getBytesNoCopy(), serial->getLength());
+			SHA1Final(digest, &context);
+
+			digest[6] = (digest[6] & 0x0F) | 0x50;
+			digest[8] = (digest[8] & 0x3F) | 0x80;
+
+			uuid_unparse(digest, uuid);
+			string = OSString::withCString(uuid);
+		} else {
+			uuid_t rnd;
+
+			uuid_generate_early_random(rnd);
+			rnd[6] = (rnd[6] & 0x0F) | 0x40;
+			rnd[8] = (rnd[8] & 0x3F) | 0x80;
+			uuid_unparse(rnd, uuid);
+			string = OSString::withCString(uuid);
+		}
+	}
+
 	if (string) {
 		setProperty( kIOPlatformUUIDKey, string );
+		/* publishPlatformUUIDAndSerial() reads the property from the
+		 * provider, so put it there as well; otherwise the resource is
+		 * published with a marker and gethostuuid cannot answer. */
+		if (getProvider() != NULL) {
+			getProvider()->setProperty( kIOPlatformUUIDKey, string );
+		}
 		gIOPlatformUUIDAndSerialDone = true;
 
 		string->release();

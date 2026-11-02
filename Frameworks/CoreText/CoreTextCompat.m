@@ -37,3 +37,61 @@ NSString * const kCTFontVariationAxisMinimumValueKey = @"kCTFontVariationAxisMin
 NSString * const kCTFontWeightTrait = @"kCTFontWeightTrait";
 NSString * const kCTFontWidthTrait = @"kCTFontWidthTrait";
 NSString * const kCTWritingDirectionAttributeName = @"kCTWritingDirectionAttributeName";
+
+/*
+ * Font manager entry points.  XUL binds _CTFontManagerRegisterFontsForURLs at
+ * load ("dyld: Symbol not found: _CTFontManagerRegisterFontsForURLs"), and
+ * without the symbol the process aborts before it can draw anything.
+ *
+ * Registration itself is not implemented: the honest answer is "no", with the
+ * error dictionaries left empty the way CoreText leaves them when nothing was
+ * registered.  Callers keep running (Firefox merely loses the supplementary
+ * fonts it wanted to add), and the log names the gap exactly once.
+ */
+typedef CFIndex CTFontManagerScope;
+
+static void
+_ravyn_font_manager_gap(const char *symbol)
+{
+	static Boolean logged = false;
+	if (!logged) {
+		logged = true;
+		fprintf(stderr, "[compat] CoreText: %s is not implemented\n", symbol);
+	}
+}
+
+bool
+CTFontManagerRegisterFontsForURL(CFURLRef fontURL, CTFontManagerScope scope,
+    CFErrorRef *error)
+{
+	(void)fontURL;
+	(void)scope;
+	_ravyn_font_manager_gap("CTFontManagerRegisterFontsForURL");
+	if (error)
+		*error = NULL;
+	return false;
+}
+
+bool
+CTFontManagerRegisterFontsForURLs(CFArrayRef fontURLs, CTFontManagerScope scope,
+    CFArrayRef *errors)
+{
+	(void)fontURLs;
+	(void)scope;
+	_ravyn_font_manager_gap("CTFontManagerRegisterFontsForURLs");
+	if (errors)
+		*errors = NULL;
+	return false;
+}
+
+bool
+CTFontManagerUnregisterFontsForURLs(CFArrayRef fontURLs, CTFontManagerScope scope,
+    CFArrayRef *errors)
+{
+	(void)fontURLs;
+	(void)scope;
+	_ravyn_font_manager_gap("CTFontManagerUnregisterFontsForURLs");
+	if (errors)
+		*errors = NULL;
+	return false;
+}
