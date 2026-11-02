@@ -68,6 +68,16 @@ NSString * const NSFontSlantTrait = @"NSFontSlantTrait";
    return [[[self allocWithZone:NULL] initWithFontAttributes:attributes] autorelease];
 }
 
+/* The descriptor's name attribute is the PostScript name of the face it
+ * describes; the family attribute is the family. */
+-(NSString *)postscriptName {
+   return [_attributes objectForKey:NSFontNameAttribute];
+}
+
+-(NSString *)familyName {
+   return [_attributes objectForKey:NSFontFamilyAttribute];
+}
+
 -(NSDictionary *)fontAttributes {
    return _attributes;
 }
