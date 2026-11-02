@@ -761,7 +761,14 @@ Boolean CFEqual(CFTypeRef cf1, CFTypeRef cf2) {
     CFTypeID tid1 = __CFGenericTypeID_inline(cf1);
     CFTypeID tid2 = __CFGenericTypeID_inline(cf2);
     if (tid1 != tid2) {
-        return [(id)cf1 isEqual:(id)cf2];
+        /* Two DIFFERENT CF types are never equal, and messaging a C CF
+         * instance would fault; only a real ObjC object on either side
+         * gets the toll-free-bridge comparison. */
+        if (_CFIsObjCType(cf1))
+            return [(id)cf1 isEqual:(id)cf2];
+        if (_CFIsObjCType(cf2))
+            return [(id)cf2 isEqual:(id)cf1];
+        return false;
     }
     const CFRuntimeClass *cls = (tid1 < __CFRuntimeClassTableSize) ? __CFRuntimeClassTable[tid1] : NULL;
     if (NULL != cls) {
