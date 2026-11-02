@@ -351,6 +351,14 @@ void CFPreferencesSetMultiple(CFDictionaryRef keysToSet, CFArrayRef keysToRemove
     if(keys) CFAllocatorDeallocate(alloc, keys);
 }
 
+/* A value is forced when a managed configuration profile overrides it.
+ * There is no managed-preferences domain in this tree, so nothing is. */
+Boolean CFPreferencesAppValueIsForced(CFStringRef key, CFStringRef appName) {
+    (void)key;
+    (void)appName;
+    return false;
+}
+
 Boolean CFPreferencesSynchronize(CFStringRef  appName, CFStringRef  user, CFStringRef  host) {
     CFPreferencesDomainRef domain;
     CFAssert1(appName != NULL && user != NULL && host != NULL, __kCFLogAssertion, "%s(): Cannot access preferences for a NULL application name, user, or host", __PRETTY_FUNCTION__);
