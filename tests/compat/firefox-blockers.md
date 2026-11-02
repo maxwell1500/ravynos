@@ -802,3 +802,15 @@ NSVisualEffectView materials; the value is stored, compositing is not
 implemented).  `-FSGetVolumeInfo` was missing from CoreServices and made
 dyld abort the process; it is implemented over `statfs` in
 FileManagerCompat.c with the CarbonCore FSVolumeInfo layout.
+
+### %@ on Objective-C objects (2026-11-02)
+
+Firefox now creates its browser window.  The next crash was in the
+shm-failure NSLog: CFString's %@ formatting called
+__CFCopyFormattingDescription, which read a CF type ID out of the
+object's second word.  That word is _cfinfo in a CF object but the first
+ivar in an ObjC object, so the class lookup went out of range and the
+wild callback messaged address 8.  CFCopyDescription and
+__CFCopyFormattingDescription now use -description when _CFIsObjCType()
+says the argument is ObjC.  NSWindow also stops mapping a 0x0 window:
+mmap(0) is EINVAL, the window gets its context on the first real resize.

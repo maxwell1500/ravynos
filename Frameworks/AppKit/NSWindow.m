@@ -517,6 +517,14 @@ static BOOL _allowsAutomaticWindowTabbing = YES;
          * the server's 4 bytes-per-pixel buffer exactly. */
         int w = (int)_frame.size.width;
         int h = (int)_frame.size.height;
+        /* A window that is still 0x0 has no pixels; mmap(0) is EINVAL.
+         * Give it a context once its first resize assigns a size. */
+        if (w <= 0 || h <= 0) {
+            buffer = NULL;
+            bufsize = 0;
+            _context = nil;
+            return nil;
+        }
         bufsize = (int)((size_t)4 * (size_t)w * (size_t)h);
         int shmfd = shm_open([shmPath UTF8String], O_RDWR | O_CREAT, 0666);
         if(shmfd >= 0) {
@@ -532,8 +540,8 @@ static BOOL _allowsAutomaticWindowTabbing = YES;
             /* Never build a surface over a failed mapping -- the first draw
              * would fault in the rasteriser.  Leaving the window without a
              * context is a stale frame, not a crash. */
-            NSLog(@"NSWindow %@: shm mapping failed for %d bytes: %s",
-                  shmPath, (int)bufsize, strerror(errno));
+            NSLog(@"NSWindow %s: shm mapping failed for %d bytes: %s",
+                  [shmPath UTF8String], (int)bufsize, strerror(errno));
             buffer = NULL;
             _context = nil;
             return nil;

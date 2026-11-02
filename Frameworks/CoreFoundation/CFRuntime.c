@@ -794,7 +794,12 @@ CFHashCode CFHash(CFTypeRef cf) {
 // definition: produces a normally non-NULL debugging description of the object
 CFStringRef CFCopyDescription(CFTypeRef cf) {
     if (NULL == cf) return NULL;
-    // CFTYPE_OBJC_FUNCDISPATCH0(CFStringRef, cf, _copyDescription);  // XXX returns 0 refcounted item under GC
+    /* An ObjC object has no _cfinfo word; reading a type ID out of its
+     * first ivar yields an out-of-range class and a wild callback. */
+    if (_CFIsObjCType(cf)) {
+        CFTypeRef description = [(id)cf description];
+        return description ? (CFStringRef)CFRetain(description) : NULL;
+    }
     __CFGenericAssertIsCF(cf);
     if (NULL != __CFRuntimeClassTable[__CFGenericTypeID_inline(cf)]->copyDebugDesc) {
 	CFStringRef result = __CFRuntimeClassTable[__CFGenericTypeID_inline(cf)]->copyDebugDesc(cf);
@@ -806,6 +811,11 @@ CFStringRef CFCopyDescription(CFTypeRef cf) {
 // Definition: if type produces a formatting description, return that string, otherwise NULL
 CF_PRIVATE CFStringRef __CFCopyFormattingDescription(CFTypeRef cf, CFDictionaryRef formatOptions) {
     if (NULL == cf) return NULL;
+    /* %@ on an NSString reaches this with a real ObjC object. */
+    if (_CFIsObjCType(cf)) {
+        CFTypeRef description = [(id)cf description];
+        return description ? (CFStringRef)CFRetain(description) : NULL;
+    }
     __CFGenericAssertIsCF(cf);
     if (NULL != __CFRuntimeClassTable[__CFGenericTypeID_inline(cf)]->copyFormattingDesc) {
 	return __CFRuntimeClassTable[__CFGenericTypeID_inline(cf)]->copyFormattingDesc(cf, formatOptions);
