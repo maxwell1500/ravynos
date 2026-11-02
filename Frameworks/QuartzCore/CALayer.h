@@ -46,6 +46,14 @@ CA_EXPORT NSString *const kCAFilterTrilinear;
     BOOL _needsDisplay;
     NSMutableDictionary *_animations;
     NSNumber *_textureId;
+
+    NSString *_contentsGravity;
+    CGFloat _contentsScale;
+    BOOL _masksToBounds;
+    BOOL _contentsOpaque;
+    BOOL _geometryFlipped;
+    unsigned _edgeAntialiasingMask;
+    CGRect _contentsRect;
 }
 
 + layer;
@@ -58,6 +66,13 @@ CA_EXPORT NSString *const kCAFilterTrilinear;
 @property CGRect bounds;
 @property CGRect frame;
 @property float opacity;
+@property(copy) NSString *contentsGravity;
+@property CGFloat contentsScale;
+@property BOOL masksToBounds;
+@property BOOL contentsOpaque;
+@property BOOL geometryFlipped;
+@property unsigned edgeAntialiasingMask;
+@property CGRect contentsRect;
 @property BOOL opaque;
 @property(retain) id contents;
 //@property CATransform3D transform;

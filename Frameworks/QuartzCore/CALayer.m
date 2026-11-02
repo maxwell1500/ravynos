@@ -33,6 +33,67 @@ NSString * const kCAFilterTrilinear=@"trilinear";
 }
 #endif
 
+static NSString * const kCAGravityResizeDefault = @"resize";
+
+-(NSString *)contentsGravity {
+   return _contentsGravity != nil ? _contentsGravity : kCAGravityResizeDefault;
+}
+
+-(void)setContentsGravity:(NSString *)gravity {
+   if (_contentsGravity != gravity) {
+      [_contentsGravity release];
+      _contentsGravity = [gravity copy];
+   }
+}
+
+-(CGFloat)contentsScale {
+   return _contentsScale == 0.0 ? 1.0 : _contentsScale;
+}
+
+-(void)setContentsScale:(CGFloat)scale {
+   _contentsScale = scale;
+}
+
+-(BOOL)masksToBounds {
+   return _masksToBounds;
+}
+
+-(void)setMasksToBounds:(BOOL)flag {
+   _masksToBounds = flag ? YES : NO;
+}
+
+-(BOOL)contentsOpaque {
+   return _contentsOpaque;
+}
+
+-(void)setContentsOpaque:(BOOL)flag {
+   _contentsOpaque = flag ? YES : NO;
+}
+
+-(BOOL)geometryFlipped {
+   return _geometryFlipped;
+}
+
+-(void)setGeometryFlipped:(BOOL)flag {
+   _geometryFlipped = flag ? YES : NO;
+}
+
+-(unsigned)edgeAntialiasingMask {
+   return _edgeAntialiasingMask;
+}
+
+-(void)setEdgeAntialiasingMask:(unsigned)mask {
+   _edgeAntialiasingMask = mask;
+}
+
+-(CGRect)contentsRect {
+   return _contentsRect;
+}
+
+-(void)setContentsRect:(CGRect)rect {
+   _contentsRect = rect;
+}
+
 -(CALayer *)superlayer {
    return _superlayer;
 }
