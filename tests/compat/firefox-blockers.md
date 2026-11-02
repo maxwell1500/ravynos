@@ -788,3 +788,17 @@ plist parse is caught) and CFRunLoopWakeUp.  Two more gaps surfaced:
   run loop pushes that state around every `CFRunLoopRunSpecific`, and the
   owning thread may already have exited).  WakeUp now ignores such a
   loop and logs `[CF] CFRunLoopWakeUp: rl=... not running` once.
+
+### Window surface (2026-11-02, later)
+
+Firefox's own window classes are NSWindow/NSView subclasses, so every
+AppKit method they inherit must exist on the superclass or the message
+aborts the process.  Fixed in order, each found by the runtime oracle:
+`+[NSWindow setAllowsAutomaticWindowTabbing:]` (remembered statically),
+`-[NSWindow setTitlebarAppearsTransparent:]` plus `titleVisibility`,
+`restorable`, `titlebarSeparatorStyle` and a `toggleFullScreen:` that
+zooms, and `-[NSView setMaterial:]` (Gecko's MOZTitlebarView uses
+NSVisualEffectView materials; the value is stored, compositing is not
+implemented).  `-FSGetVolumeInfo` was missing from CoreServices and made
+dyld abort the process; it is implemented over `statfs` in
+FileManagerCompat.c with the CarbonCore FSVolumeInfo layout.

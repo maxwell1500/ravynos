@@ -85,6 +85,7 @@ APPKIT_EXPORT NSString *const NSViewFocusDidChangeNotification;
     NSArray *_draggedTypes;
     NSMutableArray *_trackingAreas;
     BOOL _needsDisplay;
+    NSInteger _material;
     NSUInteger _invalidRectCount;
     NSRect *_invalidRects;
     NSRect *_rectsBeingRedrawn;

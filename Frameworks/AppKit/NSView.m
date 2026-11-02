@@ -49,6 +49,18 @@ NSString * const NSViewFocusDidChangeNotification=@"NSViewFocusDidChangeNotifica
 
 @implementation NSView
 
+/* Private AppKit surface used by Gecko's titlebar views (NSVisualEffectView
+ * materials).  The window server does not composite materials yet, so the
+ * value is remembered and reported back; drawing is unchanged. */
+-(NSInteger)material {
+   return _material;
+}
+
+-(void)setMaterial:(NSInteger)material {
+   _material = material;
+}
+
+
 static BOOL NSViewLayersEnabled=NO;
 
 +(void)initialize {
