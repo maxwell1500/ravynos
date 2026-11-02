@@ -22,6 +22,8 @@
  */
 #include <stdio.h>
 
+#include <CoreFoundation/CoreFoundation.h>
+
 static void
 carbon_unimplemented(const char *name)
 {
@@ -34,17 +36,23 @@ carbon_unimplemented(const char *name)
 }
 
 
-long kTISNotifySelectedKeyboardInputSourceChanged __attribute__((visibility("default"))) = 0;
-long kTISPropertyBundleID __attribute__((visibility("default"))) = 0;
-long kTISPropertyInputSourceID __attribute__((visibility("default"))) = 0;
-long kTISPropertyInputSourceIsASCIICapable __attribute__((visibility("default"))) = 0;
-long kTISPropertyInputSourceIsEnabled __attribute__((visibility("default"))) = 0;
-long kTISPropertyInputSourceLanguages __attribute__((visibility("default"))) = 0;
-long kTISPropertyInputSourceType __attribute__((visibility("default"))) = 0;
-long kTISPropertyLocalizedName __attribute__((visibility("default"))) = 0;
-long kTISPropertyUnicodeKeyLayoutData __attribute__((visibility("default"))) = 0;
-long kTISTypeKeyboardInputMode __attribute__((visibility("default"))) = 0;
-long kTISTypeKeyboardLayout __attribute__((visibility("default"))) = 0;
+/*
+ * Text Input Sources constants.  These are CFStringRef data symbols, not
+ * zero: Gecko reads the symbol and passes the string to CFStringCompare,
+ * and a NULL there faults in CFStringGetLength.  The values are the names
+ * HIToolbox uses for the same constants.
+ */
+CFStringRef kTISNotifySelectedKeyboardInputSourceChanged __attribute__((visibility("default"))) = CFSTR("TISNotifySelectedKeyboardInputSourceChanged");
+CFStringRef kTISPropertyBundleID __attribute__((visibility("default"))) = CFSTR("TISPropertyBundleID");
+CFStringRef kTISPropertyInputSourceID __attribute__((visibility("default"))) = CFSTR("TISPropertyInputSourceID");
+CFStringRef kTISPropertyInputSourceIsASCIICapable __attribute__((visibility("default"))) = CFSTR("TISPropertyInputSourceIsASCIICapable");
+CFStringRef kTISPropertyInputSourceIsEnabled __attribute__((visibility("default"))) = CFSTR("TISPropertyInputSourceIsEnabled");
+CFStringRef kTISPropertyInputSourceLanguages __attribute__((visibility("default"))) = CFSTR("TISPropertyInputSourceLanguages");
+CFStringRef kTISPropertyInputSourceType __attribute__((visibility("default"))) = CFSTR("TISPropertyInputSourceType");
+CFStringRef kTISPropertyLocalizedName __attribute__((visibility("default"))) = CFSTR("TISPropertyLocalizedName");
+CFStringRef kTISPropertyUnicodeKeyLayoutData __attribute__((visibility("default"))) = CFSTR("TISPropertyUnicodeKeyLayoutData");
+CFStringRef kTISTypeKeyboardInputMode __attribute__((visibility("default"))) = CFSTR("TISTypeKeyboardInputMode");
+CFStringRef kTISTypeKeyboardLayout __attribute__((visibility("default"))) = CFSTR("TISTypeKeyboardLayout");
 void
 AcquireFirstMatchingEventInQueue(void)
 {
