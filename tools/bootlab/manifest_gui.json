@@ -1611,6 +1611,11 @@
       "comment": "backup/restore/verify (BSD/usr.sbin/tmutil)"
     },
     {
+      "path": "usr/sbin/dmesg",
+      "file": "work/dmesg",
+      "comment": "kernel message buffer (BSD/usr.sbin/dmesg)"
+    },
+    {
       "path": "usr/sbin/sysctl",
       "file": "work/sysctl",
       "comment": "kernel sysctl client (BSD/usr.sbin/sysctl)"

@@ -174,6 +174,15 @@ echo "--- tcp: GET 10.0.2.2:8123/marker.txt" >> "$LOG"
 /usr/local/compat/tcp 10.0.2.2 8123 RAVYN-TCP-OK >> "$LOG" 2>&1
 report tcp $?
 
+# Kernel message buffer: dmesg must return the boot log, not an empty file.
+# It is root-only by design (proc_info KERNMSGBUF calls suser).
+echo "--- dmesg: kernel buffer" >> "$LOG"
+if /usr/sbin/dmesg 2>>"$LOG" | grep -q 'ravynOS\|\[kext\]\|CORPSE'; then
+    report dmesg 0
+else
+    report dmesg 1
+fi
+
 run_fixture posix /usr/local/compat/posix
 
 # Zone dispatch: free() must return each pointer to the zone that owns it.

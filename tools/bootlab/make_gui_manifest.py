@@ -733,6 +733,19 @@ def main():
     else:
         closure.append(("usr/bin/tmutil", tm_src, "MISSING"))
 
+    # 6l. dmesg: kernel message buffer through proc_info(KERNMSGBUF).
+    dm_src = os.path.join(BUILD_SRC, "BSD", "usr.sbin", "dmesg", "dmesg")
+    dm_work = os.path.join(HERE, "work", "dmesg")
+    if os.path.isfile(dm_src):
+        shutil.copy2(dm_src, dm_work)
+        entries.append({
+            "path": "usr/sbin/dmesg",
+            "file": os.path.relpath(dm_work, HERE),
+            "comment": "kernel message buffer (BSD/usr.sbin/dmesg)",
+        })
+    else:
+        closure.append(("usr/sbin/dmesg", dm_src, "MISSING"))
+
     # 6m. sysctl: kernel MIB reader used by the observability gate.
     sc_src = os.path.join(BUILD_SRC, "BSD", "usr.sbin", "sysctl", "sysctl")
     sc_work = os.path.join(HERE, "work", "sysctl")
