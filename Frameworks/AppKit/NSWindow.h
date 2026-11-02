@@ -117,6 +117,7 @@ APPKIT_EXPORT NSString *const NSWindowDidEndLiveResizeNotification;
     BOOL _restorable;
     NSInteger _titlebarSeparatorStyle;
     NSMutableArray *_titlebarAccessoryViewControllers;
+    NSInteger _animationBehavior;
 
     NSString *shmPath;
     NSString *bundleID;

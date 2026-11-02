@@ -229,6 +229,14 @@ const float WSWindowEdgePad = 2;
    return _titlebarAccessoryViewControllers != nil ? _titlebarAccessoryViewControllers : [NSArray array];
 }
 
+-(NSInteger)animationBehavior {
+   return _animationBehavior;
+}
+
+-(void)setAnimationBehavior:(NSInteger)behavior {
+   _animationBehavior = behavior;
+}
+
 -(BOOL)isRestorable {
    return _restorable;
 }

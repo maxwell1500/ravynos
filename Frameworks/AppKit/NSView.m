@@ -90,6 +90,43 @@ NSString * const NSViewFocusDidChangeNotification=@"NSViewFocusDidChangeNotifica
    return _maskImage;
 }
 
+/* Auto layout's constraint engine is not implemented; views keep their
+ * autoresizing behavior and the priorities round-trip so clients that set
+ * and read them see consistent values. */
+-(BOOL)translatesAutoresizingMaskIntoConstraints {
+   return _translatesAutoresizingMaskIntoConstraints;
+}
+
+-(void)setTranslatesAutoresizingMaskIntoConstraints:(BOOL)flag {
+   _translatesAutoresizingMaskIntoConstraints = flag ? YES : NO;
+}
+
+-(void)setContentHuggingPriority:(CGFloat)priority forOrientation:(NSInteger)orientation {
+   if (orientation == 0) _huggingPriorityHorizontal = priority;
+   else _huggingPriorityVertical = priority;
+}
+
+-(CGFloat)contentHuggingPriorityForOrientation:(NSInteger)orientation {
+   return (orientation == 0) ? _huggingPriorityHorizontal : _huggingPriorityVertical;
+}
+
+-(void)setContentCompressionResistancePriority:(CGFloat)priority forOrientation:(NSInteger)orientation {
+   if (orientation == 0) _compressionPriorityHorizontal = priority;
+   else _compressionPriorityVertical = priority;
+}
+
+-(CGFloat)contentCompressionResistancePriorityForOrientation:(NSInteger)orientation {
+   return (orientation == 0) ? _compressionPriorityHorizontal : _compressionPriorityVertical;
+}
+
+-(NSInteger)userInterfaceLayoutDirection {
+   return _userInterfaceLayoutDirection;
+}
+
+-(void)setUserInterfaceLayoutDirection:(NSInteger)direction {
+   _userInterfaceLayoutDirection = direction;
+}
+
 -(void)setMaskImage:(id)image {
    if (_maskImage != image) {
       [_maskImage release];
@@ -192,6 +229,7 @@ static BOOL NSViewLayersEnabled=NO;
    _postsNotificationOnBoundsChange=YES;
    _autoresizesSubviews=YES;
    _autoresizingMask=NSViewNotSizable;
+   _translatesAutoresizingMaskIntoConstraints=YES;
    _tag=-1; // according to the docs - loading from a nib gets a default of 0.
    _needsDisplay=YES;
    _invalidRectCount=0;
