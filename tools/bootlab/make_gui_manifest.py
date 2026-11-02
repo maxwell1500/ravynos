@@ -600,6 +600,8 @@ def main():
         ("sandbox", "usr/local/compat/sandbox"),
         ("perms", "usr/local/compat/perms"),
         ("spinkill", "usr/local/compat/spinkill"),
+        ("tdump", "usr/local/compat/tdump"),
+        ("tsample", "usr/local/compat/tsample"),
         ("passwd", "usr/local/compat/passwd"),
         ("bootstrap_probe", "usr/local/compat/bootstrap_probe"),
         ("runas", "usr/local/compat/runas"),

@@ -652,3 +652,34 @@ initialization.  The next probe must show which thread never leaves the
 kernel — the tree's ps has no per-thread or wait-channel output, so add
 `ps -M`/`wmesg` from `proc_info(PROC_PIDLISTTHREADS)`/`PROC_PIDTHREADINFO`
 first (it is also a Phase 7 tool gap).
+
+### Root cause of the wedge: CFURLEnumerator never finished
+
+tsample (task_for_pid + task_threads + thread_get_state, RIP resolved via
+the target's dyld_all_image_infos) showed the 100% CPU thread inside
+`CFURLEnumeratorGetNextURL`, at the same instruction across samples, while
+the main thread sat in `kevent`.
+
+Two bugs in the enumerator:
+
+1. Descend was a one-shot: after returning a directory the parent kept
+   `_entry` pointing at it, so every call re-descended and returned the
+   *first* entry of that subdirectory forever.  The sub-enumerator was
+   never stored.  The enumerator now keeps a `_child` cursor, returns the
+   directory itself, descends on the next call, releases the child when it
+   ends, and skips `.` and `..` (descending into them recursed forever).
+2. A directory that `opendir()` could not open returned
+   `kCFURLEnumeratorError` on every call.  Firefox enumerating a missing
+   font directory (fresh HOME) loops until End, so it never terminated.
+   A missing directory has no URLs: the enumerator now returns
+   `kCFURLEnumeratorEnd`.
+
+Result on the Firefox image: the process no longer wedges; it exits by
+itself within seconds with `[fftest] create rc=134` (a normal SIGABRT in
+libobjc, the classic "message sent to a code pointer" signature
+`rdi->[0]=0x56415741e5894855`), and the watchdog reports `alive=0` before
+firing.  The next triage step is this abort, not the scheduler.
+
+New tools (staged in the image): `tdump <pid>` prints per-thread run
+state/CPU time/name via `proc_info`, `tsample <pid>` prints each thread's
+user RIP resolved to `image+offset`; both are wired into the Firefox job.

@@ -40,6 +40,9 @@ struct __CFURLEnumerator {
     DIR* _dirp;
     struct dirent _entry;
     CFStringRef _path;
+    char _dirpath[PATH_MAX];
+    Boolean _pendingDescend;
+    struct __CFURLEnumerator* _child;
 };
 
 static CFTypeID __kCFURLEnumeratorTypeID = _kCFRuntimeNotATypeID;
@@ -75,10 +78,14 @@ CFURLEnumeratorCreateForDirectoryURL(CFAllocatorRef alloc,
     ref->_level = 1;
 
     ref->_dirp = NULL;
+    ref->_dirpath[0] = 0;
+    ref->_pendingDescend = false;
+    ref->_child = NULL;
     if (path) {
         char pathbuf[PATH_MAX];
         CFStringGetCString(path, pathbuf, PATH_MAX - 1, kCFStringEncodingUTF8);
         ref->_path = path;
+        snprintf(ref->_dirpath, sizeof(ref->_dirpath), "%s", pathbuf);
         ref->_dirp = opendir(pathbuf);
     }
     
@@ -136,83 +143,90 @@ CFURLEnumeratorGetNextURL(CFURLEnumeratorRef enumerator,
                           CFURLRef* url,
                           CFErrorRef* error)
 {
-    CFMutableStringRef path;
     struct __CFURLEnumerator* ref = (struct __CFURLEnumerator*)enumerator;
+    Boolean hadChild = false;
 
-    /* We descend if we last returned a directory and have not been 
-     * told to skip it since the last call to this function
-     */
-    if (enumerator->_entry.d_name[0] != 0
-        && enumerator->_entry.d_type == DT_DIR
-        && !enumerator->_skipDir) {
-        ref->_skipDir = false;
+    if (url) *url = NULL;
+    if (error) *error = NULL;
 
-        path = CFStringCreateMutableCopy(enumerator->_alloc,
-                                         PATH_MAX,
-                                         enumerator->_path);
-        CFStringAppendCString(path, "/", kCFStringEncodingUTF8);
-        CFStringAppendCString(path,
-                              enumerator->_entry.d_name,
-                              kCFStringEncodingUTF8);
-        CFURLRef subdirURL
-            = CFURLCreateFromFileSystemRepresentation(enumerator->_alloc,
-                                                      path,
-                                                      strlen(path),
-                                                      true /* isDir */);
-        if (url)
-            *url = subdirURL;
+    for (;;) {
+        /* Finish the subdirectory started for the directory returned by the
+         * previous call.  Without this cursor the parent re-descended into the
+         * same directory on every call and returned its first entry forever:
+         * Firefox's font thread spun in this function and never finished
+         * enumerating /System/Library/Fonts. */
+        if (ref->_child) {
+            CFURLEnumeratorResult r =
+                CFURLEnumeratorGetNextURL(ref->_child, url, error);
+            if (r != kCFURLEnumeratorEnd)
+                return r;
+            CFRelease(ref->_child);
+            ref->_child = NULL;
+            hadChild = true;
+            continue;
+        }
 
-        struct __CFURLEnumerator* subdir
-            = CFURLEnumeratorCreateForDirectoryURL(enumerator->_alloc,
-                                                   subdirURL,
-                                                   enumerator->_options,
-                                                   enumerator->_propertyKeys);
-        subdir->_level++;
-        return CFURLEnumeratorGetNextURL((CFURLEnumeratorRef)subdir,
-                                         url,
-                                         error);
+        /* A directory that could not be opened (missing, or not readable) has
+         * no URLs.  Returning Error here made every subsequent call return
+         * Error again, and a caller that loops until End (Firefox enumerating
+         * a font directory under a fresh HOME) never terminated. */
+        if (enumerator->_dirp == NULL)
+            return kCFURLEnumeratorEnd;
+
+        /* Descend into the directory that the previous call returned. */
+        if (ref->_pendingDescend) {
+            ref->_pendingDescend = false;
+            if (!ref->_skipDir &&
+                (enumerator->_options & kCFURLEnumeratorDescendRecursively)) {
+                char pathbuf[PATH_MAX];
+                CFURLRef subdirURL;
+                CFURLEnumeratorRef subdir;
+
+                snprintf(pathbuf, sizeof(pathbuf), "%s/%s",
+                         ref->_dirpath, ref->_entry.d_name);
+                subdirURL = CFURLCreateFromFileSystemRepresentation(
+                    enumerator->_alloc, pathbuf, strlen(pathbuf), true);
+                subdir = subdirURL
+                    ? CFURLEnumeratorCreateForDirectoryURL(enumerator->_alloc,
+                        subdirURL, enumerator->_options, enumerator->_propertyKeys)
+                    : NULL;
+                if (subdirURL)
+                    CFRelease(subdirURL);
+                ref->_skipDir = false;
+                if (subdir) {
+                    ((struct __CFURLEnumerator*)subdir)->_level =
+                        ref->_level + 1;
+                    ref->_child = (struct __CFURLEnumerator*)subdir;
+                    continue;
+                }
+            }
+            ref->_skipDir = false;
+        }
+
+        struct dirent *d = readdir(enumerator->_dirp);
+        if (!d)
+            return kCFURLEnumeratorEnd;
+        memcpy(&enumerator->_entry, d, sizeof(struct dirent));
+
+        /* "." and ".." are directories too; descending into them recursed
+         * forever (".", then "..", then ...). */
+        if (strcmp(d->d_name, ".") == 0 || strcmp(d->d_name, "..") == 0)
+            continue;
+
+        if (url) {
+            char pathbuf[PATH_MAX];
+            snprintf(pathbuf, sizeof(pathbuf), "%s/%s",
+                     ref->_dirpath, d->d_name);
+            *url = CFURLCreateFromFileSystemRepresentation(enumerator->_alloc,
+                                                           pathbuf,
+                                                           strlen(pathbuf),
+                                                           d->d_type == DT_DIR);
+        }
+
+        if (d->d_type == DT_DIR)
+            ref->_pendingDescend = true;
+        return kCFURLEnumeratorSuccess;
     }
-    
-    /*
-     * opendir() may have failed (a missing directory, or one this process may
-     * not read) and _dirp is then NULL.  Calling readdir(NULL) dereferences
-     * NULL inside libsystem_c (readdir locks dir+0x40) and killed Firefox
-     * while it enumerated a directory: frame chain
-     * CFURLEnumeratorGetNextURL -> readdir -> SIGSEGV.
-     */
-    if (enumerator->_dirp == NULL)
-        return kCFURLEnumeratorError;
-
-    struct dirent *d = readdir(enumerator->_dirp);
-
-    if (!d)
-        return kCFURLEnumeratorEnd;
-
-    memcpy(&enumerator->_entry, d, sizeof(struct dirent));
-
-    path = CFStringCreateMutableCopy(enumerator->_alloc,
-                                     PATH_MAX,
-                                     enumerator->_path);
-    CFStringAppendCString(path, "/", kCFStringEncodingUTF8);
-    CFStringAppendCString(path,
-                          enumerator->_entry.d_name,
-                          kCFStringEncodingUTF8);    
-    
-    if (url) {
-        char pathbuf[PATH_MAX];
-        CFStringGetCString(path, pathbuf, PATH_MAX - 1, kCFStringEncodingUTF8);
-        *url = CFURLCreateFromFileSystemRepresentation(enumerator->_alloc,
-                                                       pathbuf,
-                                                       strlen(pathbuf),
-                                                       d->d_type == DT_DIR);
-    }
-
-    /*
-     * This function had no return statement at all, so every successful call
-     * returned whatever happened to be in the return register.  The header
-     * documents kCFURLEnumeratorSuccess for a returned entry.
-     */
-    return kCFURLEnumeratorSuccess;
 }
 
 /* deprecated from macOS 10.7 */
