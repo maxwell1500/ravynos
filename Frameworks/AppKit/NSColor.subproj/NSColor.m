@@ -331,6 +331,23 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
    return [NSColor colorWithCatalogName:@"System" colorName:@"selectedKnobColor"];
 }
 
+/* The titlebar text follows the control text color in this theme. */
++(NSColor *)windowFrameTextColor {
+   return [NSColor controlTextColor];
+}
+
++(NSColor *)controlAccentColor {
+   return [NSColor colorWithSRGBRed:0.0 green:0.478 blue:1.0 alpha:1.0];
+}
+
++(NSColor *)linkColor {
+   return [NSColor colorWithSRGBRed:0.0 green:0.478 blue:1.0 alpha:1.0];
+}
+
++(NSColor *)systemPurpleColor {
+   return [NSColor colorWithSRGBRed:0.686 green:0.322 blue:0.871 alpha:1.0];
+}
+
 +(NSColor *)windowBackgroundColor {
    return [NSColor colorWithCatalogName:@"System" colorName:@"windowBackgroundColor"];
 }

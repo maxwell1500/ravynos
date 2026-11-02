@@ -824,3 +824,16 @@ now answer NO, the system defaults.  `-[NSWindow collectionBehavior]`
 and `setCollectionBehavior:` were stubs that set nothing and logged
 through NSUnimplementedMethod; they now store the value, as does
 setContentMinSize: (which set the value and then logged anyway).
+
+### Native theme surface (2026-11-02, continuing)
+
+After the window is up, Gecko's nsNativeThemeCocoa asks AppKit for theme
+data: NSAppearance (named lookups, current appearance, effective
+appearance down the view hierarchy), NSWorkspace accessibility display
+flags, and system colors.  Implemented from the runtime oracle:
++[NSAppearance appearanceNamed:]/currentAppearance/setCurrentAppearance:
+and bestMatchFromAppearancesWithNames:, -[NSView/NSWindow
+effectiveAppearance] with stored appearance, NSWorkspace's five
+accessibilityDisplayShould* flags (all NO, the system defaults),
++[NSColor currentControlTint] (blue), windowFrameTextColor (control text
+color), and sRGB/controlAccent/link/systemPurple constructors.
