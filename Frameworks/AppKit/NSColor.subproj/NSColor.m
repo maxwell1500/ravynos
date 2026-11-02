@@ -27,6 +27,11 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 @implementation NSColor
 
+/* Deprecated control tint: the system default is blue. */
++(NSControlTint)currentControlTint {
+   return 1; /* NSBlueControlTint */
+}
+
 -(void)encodeWithCoder:(NSCoder *)coder {
 
    if([coder allowsKeyedCoding]){

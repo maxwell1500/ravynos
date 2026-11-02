@@ -21,6 +21,8 @@
 - (instancetype)initWithName:(NSString *)name;
 @end
 
+static NSAppearance *sCurrentAppearance = nil;
+
 @implementation NSAppearance
 /* Gecko resolves NSAppearanceNameAqua and asks for it by name.  This tree
  * renders one (light) appearance; requesting a known appearance returns
@@ -60,7 +62,28 @@
 }
 
 + (NSAppearance *)currentAppearance {
+    if (sCurrentAppearance != nil)
+        return sCurrentAppearance;
     return [self appearanceNamed:@"NSAppearanceNameAqua"];
+}
+
++ (void)setCurrentAppearance:(NSAppearance *)appearance {
+    if (sCurrentAppearance != appearance) {
+        [sCurrentAppearance release];
+        sCurrentAppearance = [appearance retain];
+    }
+}
+
+- (NSString *)bestMatchFromAppearancesWithNames:(NSArray *)names {
+    NSUInteger i, count = [names count];
+    NSString *current = [_name isEqualToString:@"NSAppearanceNameDarkAqua"]
+        ? @"NSAppearanceNameDarkAqua" : @"NSAppearanceNameAqua";
+    for (i = 0; i < count; i++) {
+        NSString *candidate = [names objectAtIndex:i];
+        if ([candidate isEqualToString:current])
+            return candidate;
+    }
+    return count > 0 ? [names objectAtIndex:0] : nil;
 }
 
 /* Called with a list of appearance names a view could adopt; return the
