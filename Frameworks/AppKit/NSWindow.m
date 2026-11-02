@@ -1107,7 +1107,12 @@ static BOOL _allowsAutomaticWindowTabbing = YES;
     if(tellWS)
         [self _updateWSState];
 
-    if(didSize) {
+    /* A 0x0 frame is an initialization placeholder, not a user-visible
+     * resize; posting delegate notifications for it calls back into
+     * clients that have not finished setting their window up. */
+    BOOL meaningfulGeometry = (_frame.size.width > 0 && _frame.size.height > 0);
+
+    if(didSize && meaningfulGeometry) {
         NSSize oldSize = [_backgroundView frame].size;
         [_backgroundView setFrameSize:_frame.size];
         [_backgroundView resizeSubviewsWithOldSize:oldSize];
@@ -1117,7 +1122,7 @@ static BOOL _allowsAutomaticWindowTabbing = YES;
         [self postNotificationName:NSWindowDidResizeNotification];
     }
 
-    if(didMove) {
+    if(didMove && meaningfulGeometry) {
         [self saveFrameUsingName:_autosaveFrameName];
         [self postNotificationName:NSWindowDidMoveNotification];
     }
