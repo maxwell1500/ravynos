@@ -293,3 +293,205 @@ FSFindFolder(SInt16 vRefNum, OSType folderType, Boolean createFolder,
 
 	return (FSPathMakeRef((const UInt8 *)path, foundRef, NULL));
 }
+
+/*
+ * Volume information.  XUL binds _FSGetVolumeInfo lazily while reading
+ * its profile directory and dyld aborts on the bind if CoreServices lacks
+ * the symbol.  The layout below is CarbonCore's Files.h: 128 bytes with
+ * UTCDateTime as a packed 2+4+2 triple and 32-bit allocation-block counts,
+ * so the caller's struct is filled byte for byte.
+ */
+#include <sys/mount.h>
+
+typedef unsigned short UInt16;
+typedef unsigned short UniChar;
+typedef unsigned short UniCharCount;
+typedef unsigned long long UInt64;
+/* FSIORefNum is a 16-bit field; the file's SInt16 typedef is int. */
+typedef short FSIORefNum;
+
+typedef struct {
+	UInt16	highSeconds;
+	UInt32	lowSeconds;
+	SInt16	fraction;
+} UTCDateTime;
+
+typedef struct {
+	UInt16		length;
+	UniChar		unicode[255];
+} HFSUniStr255;
+
+typedef struct {
+	UTCDateTime	createDate;
+	UTCDateTime	modifyDate;
+	UTCDateTime	backupDate;
+	UTCDateTime	checkedDate;
+	UInt32		fileCount;
+	UInt32		folderCount;
+	UInt64		totalBytes;
+	UInt64		freeBytes;
+	UInt32		blockSize;
+	UInt32		totalBlocks;
+	UInt32		freeBlocks;
+	UInt32		nextAllocation;
+	UInt32		rsrcClumpSize;
+	UInt32		dataClumpSize;
+	UInt32		nextCatalogID;
+	UInt8		finderInfo[32];
+	UInt16		flags;
+	UInt16		filesystemID;
+	UInt16		signature;
+	UInt16		driveNumber;
+	FSIORefNum	driverRefNum;
+} FSVolumeInfo;
+
+enum {
+	kFSVolInfoCreateDate	= 0x0001,
+	kFSVolInfoModDate	= 0x0002,
+	kFSVolInfoBackupDate	= 0x0004,
+	kFSVolInfoCheckedDate	= 0x0008,
+	kFSVolInfoFileCount	= 0x0010,
+	kFSVolInfoDirCount	= 0x0020,
+	kFSVolInfoSizes		= 0x0040,
+	kFSVolInfoBlocks	= 0x0080,
+	kFSVolInfoNextAlloc	= 0x0100,
+	kFSVolInfoRsrcClump	= 0x0200,
+	kFSVolInfoDataClump	= 0x0400,
+	kFSVolInfoNextID	= 0x0800,
+	kFSVolInfoFinderInfo	= 0x1000,
+	kFSVolInfoFlags		= 0x2000,
+	kFSVolInfoFSInfo	= 0x4000,
+	kFSVolInfoDriveInfo	= 0x8000
+};
+
+#define nsvErr		(-35)
+#define kFSInvalidVolumeRefNum ((FSIORefNum)-1)
+
+static int
+volume_is_root(FSIORefNum volume, unsigned long volumeIndex)
+{
+	if (volumeIndex > 1)
+		return (0);
+	if (volumeIndex == 1)
+		return (1);
+	return (volume == kFSInvalidVolumeRefNum || volume == 0 || volume == 1);
+}
+
+static void
+volume_name_for(const struct statfs *fs, HFSUniStr255 *name)
+{
+	const char *base;
+	size_t i, len;
+
+	memset(name, 0, sizeof(*name));
+	base = fs->f_mntonname;
+	len = strlen(base);
+	i = len;
+	while (i > 1 && base[i - 1] == '/')
+		i--;
+	while (i > 1 && base[i - 1] != '/')
+		i--;
+	if (i >= len) {
+		name->length = 0;
+		return;
+	}
+	base += i;
+	len = strlen(base);
+	if (len > 255)
+		len = 255;
+	for (i = 0; i < len; i++)
+		name->unicode[i] = (unsigned char)base[i];
+	name->length = (UniCharCount)len;
+}
+
+OSStatus
+FSGetVolumeInfo(FSIORefNum volume, unsigned long volumeIndex,
+    FSIORefNum *actualVolume, UInt32 whichInfo, FSVolumeInfo *info,
+    HFSUniStr255 *volumeName, FSRef *rootDirectory)
+{
+	struct statfs fs;
+
+	if (!volume_is_root(volume, volumeIndex))
+		return (nsvErr);
+	if (statfs("/", &fs) != 0)
+		return (fnfErr);
+
+	if (actualVolume != NULL)
+		*actualVolume = 1;
+
+	if (info != NULL) {
+		memset(info, 0, sizeof(*info));
+		if (whichInfo & kFSVolInfoSizes) {
+			info->blockSize = (UInt32)fs.f_bsize;
+			info->totalBytes = (UInt64)fs.f_blocks * (UInt64)fs.f_bsize;
+			info->freeBytes = (UInt64)fs.f_bavail * (UInt64)fs.f_bsize;
+		}
+		if (whichInfo & kFSVolInfoBlocks) {
+			info->blockSize = (UInt32)fs.f_bsize;
+			info->totalBlocks = (UInt32)((UInt64)fs.f_blocks * (UInt64)fs.f_bsize / (UInt64)fs.f_bsize);
+			info->freeBlocks = (UInt32)((UInt64)fs.f_bavail * (UInt64)fs.f_bsize / (UInt64)fs.f_bsize);
+			info->nextAllocation = 0;
+		}
+		if (whichInfo & kFSVolInfoFSInfo) {
+			info->filesystemID = 0;
+			info->signature = 0;
+		}
+		if (whichInfo & kFSVolInfoDriveInfo) {
+			info->driveNumber = 0;
+			info->driverRefNum = 0;
+		}
+	}
+
+	if (volumeName != NULL)
+		volume_name_for(&fs, volumeName);
+
+	if (rootDirectory != NULL)
+		ref_set_path(rootDirectory, "/");
+
+	return (noErr);
+}
+
+/*
+ * Two references are the same object when their (device, inode) pair is the
+ * same; comparing the stored paths alone would say a symlink and its target
+ * differ.  errFSRefsDifferent is MacErrors.h's -1420.
+ */
+#define errFSRefsDifferent	(-1420)
+
+OSStatus
+FSCompareFSRefs(const FSRef *ref1, const FSRef *ref2)
+{
+	struct stat st1, st2;
+
+	if (ref1 == NULL || ref2 == NULL)
+		return (paramErr);
+	if (ref1 == ref2 || strcmp(ref_path(ref1), ref_path(ref2)) == 0)
+		return (noErr);
+	if (stat(ref_path(ref1), &st1) != 0 || stat(ref_path(ref2), &st2) != 0)
+		return (fnfErr);
+	if (st1.st_dev == st2.st_dev && st1.st_ino == st2.st_ino)
+		return (noErr);
+	return (errFSRefsDifferent);
+}
+
+/*
+ * FSResolveAlias on a plain file simply hands the reference back, which is
+ * what the callers in XUL ask for (profile and cache paths).  Alias files
+ * themselves are not decoded here; a file that does not exist is fnfErr.
+ */
+OSStatus
+FSResolveAlias(const FSRef *fromFile, Boolean resolveAliasChains,
+    FSRef *target, Boolean *wasAliased)
+{
+	struct stat st;
+
+	(void)resolveAliasChains;
+	if (fromFile == NULL || target == NULL)
+		return (paramErr);
+	if (stat(ref_path(fromFile), &st) != 0)
+		return (fnfErr);
+	*target = *fromFile;
+	if (wasAliased != NULL)
+		*wasAliased = 0;
+	return (noErr);
+}

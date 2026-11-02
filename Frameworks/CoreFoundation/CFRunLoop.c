@@ -2710,8 +2710,23 @@ Boolean CFRunLoopIsWaiting(CFRunLoopRef rl) {
 
 void CFRunLoopWakeUp(CFRunLoopRef rl) {
     CHECK_FOR_FORK();
+    if (NULL == rl) return;
     // This lock is crucial to ignorable wakeups, do not remove it.
     __CFRunLoopLock(rl);
+    /* A loop with no per-run data is not running (CFRunLoopRunSpecific
+     * pushes it around every run), so there is nothing to wake.  Gecko
+     * reaches this with a loop whose owning thread has gone away; the
+     * port send below would dereference the null per-run data. */
+    if (NULL == rl->_perRunData) {
+        static int logged = 0;
+        if (!logged) {
+            logged = 1;
+            fprintf(stderr, "[CF] CFRunLoopWakeUp: rl=%p not running (pthread=%p current=%p); ignored\n",
+                (void *)rl, (void *)rl->_pthread, (void *)pthread_self());
+        }
+        __CFRunLoopUnlock(rl);
+        return;
+    }
     if (__CFRunLoopIsIgnoringWakeUps(rl)) {
         __CFRunLoopUnlock(rl);
         return;

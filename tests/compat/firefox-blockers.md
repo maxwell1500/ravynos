@@ -770,3 +770,21 @@ VideoToolbox, QuartzCore.  The baseline is `firefox-symbol-gap.json`;
 `--baseline` fails when a bundle starts needing a symbol we still lack.
 This replaces one-400-second-boot-per-symbol discovery with a host-side
 list, the way Wine's conformance report drives its API work.
+
+### Volume info, aliases, and wakeup of a dead run loop
+
+After the run-loop observer crash, dyld stopped aborting on missing
+symbols and Firefox got as far as NSUserDefaults (the argument-domain
+plist parse is caught) and CFRunLoopWakeUp.  Two more gaps surfaced:
+
+- `_FSGetVolumeInfo` was missing from CoreServices, so dyld's lazy bind
+  aborted the process (SIGABRT after printing "Symbol not found").
+  `FileManagerCompat.c` now implements it over `statfs("/")` with the
+  CarbonCore 128-byte FSVolumeInfo layout, plus `FSCompareFSRefs`
+  ((device, inode) identity, `errFSRefsDifferent` = -1420) and
+  `FSResolveAlias` (plain files resolve to themselves).
+- `CFRunLoopWakeUp` crashed reading `_perRunData->ignoreWakeUps`: the
+  loop passed by Gecko has no per-run data, i.e. it is not running (the
+  run loop pushes that state around every `CFRunLoopRunSpecific`, and the
+  owning thread may already have exited).  WakeUp now ignores such a
+  loop and logs `[CF] CFRunLoopWakeUp: rl=... not running` once.
