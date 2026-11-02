@@ -10,6 +10,14 @@ HEADERS = CoreServices.h
 RESOURCES=Info.plist English.lproj
 
 CFLAGS = -I${.CURDIR:H}
+# CoreServices re-exports LaunchServices, as it does on macOS: a stock
+# binary records _UTTypeCreatePreferredIdentifierForTag against
+# CoreServices.framework and dyld's two-level lookup does not fall back to
+# the separate LaunchServices dylib.  The subframework is built first by
+# tools/bootlab/build-libraries.sh.
+.if exists(${.OBJDIR}/LaunchServices/LaunchServices.framework/Versions/A/LaunchServices)
+LDFLAGS += -Wl,-reexport_library,${.OBJDIR}/LaunchServices/LaunchServices.framework/Versions/A/LaunchServices
+.endif
 SUBDIR =
 
 fmwk-install-hook:

@@ -897,6 +897,14 @@ if [ "${1:-}" = "--frameworks" ]; then
         Onyx2D CoreGraphics AppKit CoreText \
         Security IOKit CoreVideo SystemConfiguration CFNetwork \
         ApplicationServices SDL2)
+    # CoreServices re-exports LaunchServices (XUL binds UTType* against
+    # CoreServices), so the subframework has to exist when CoreServices is
+    # linked.  Build it first, once.
+    case " ${DIRS[*]} " in
+    *" CoreServices "*)
+        DIRS=(Frameworks/CoreServices/LaunchServices "${DIRS[@]}")
+        ;;
+    esac
     rc=0
     # ---------------------------------------------------------------------
     # Framework staging paths.
