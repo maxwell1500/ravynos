@@ -980,7 +980,16 @@ if [ "${1:-}" = "--frameworks" ]; then
     mkdir -p "$REPO_SDK/System/Library/Frameworks"
     for d in "${DIRS[@]}"; do
         name="$(basename "${d%.app}")"
+        # Prefer the framework the build just produced.  Some framework
+        # Makefiles install into the build-tree SDK on `all` and some do
+        # not; taking $SDK unconditionally staged a stale binary for
+        # QuartzCore even though its build had succeeded (the framework
+        # then lacked methods the source had implemented).
         src="$SDK/System/Library/Frameworks/$name.framework"
+        built="$BUILD$ROOT/Frameworks/$name.framework"
+        if [ -d "$built" ]; then
+            src="$built"
+        fi
         if [ ! -d "$src" ]; then
             echo "--- staging: $name: no framework at ${src#$BUILD/}, skipped"
             continue
