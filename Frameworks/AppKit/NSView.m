@@ -60,6 +60,43 @@ NSString * const NSViewFocusDidChangeNotification=@"NSViewFocusDidChangeNotifica
    _material = material;
 }
 
+/* The rest of NSVisualEffectView's surface, inherited by Gecko's titlebar
+ * view.  Materials are not composited yet; the values round-trip. */
+-(NSInteger)blendingMode {
+   return _blendingMode;
+}
+
+-(void)setBlendingMode:(NSInteger)mode {
+   _blendingMode = mode;
+}
+
+-(NSInteger)state {
+   return _visualEffectState;
+}
+
+-(void)setState:(NSInteger)state {
+   _visualEffectState = state;
+}
+
+-(BOOL)isEmphasized {
+   return _emphasized;
+}
+
+-(void)setEmphasized:(BOOL)emphasized {
+   _emphasized = emphasized ? YES : NO;
+}
+
+-(id)maskImage {
+   return _maskImage;
+}
+
+-(void)setMaskImage:(id)image {
+   if (_maskImage != image) {
+      [_maskImage release];
+      _maskImage = [image retain];
+   }
+}
+
 
 static BOOL NSViewLayersEnabled=NO;
 
