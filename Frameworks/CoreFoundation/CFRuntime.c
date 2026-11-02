@@ -114,6 +114,7 @@ _CFIsRegisteredObjCClass(uintptr_t isa)
     CFIndex i;
     if (isa == 0)
         return false;
+    isa = __CFMaskIsa(isa);
     for (i = 0; i < __CFRuntimeClassTableSize; i++) {
         if (__CFRuntimeObjCClassTable[i] == isa)
             return true;

@@ -2729,7 +2729,7 @@ CFURLRef CFURLCopyAbsoluteURL(CFURLRef  relativeURL) {
     
     CFAssert1(relativeURL != NULL, __kCFLogAssertion, "%s(): Cannot create an absolute URL from a NULL relative URL", __PRETTY_FUNCTION__);
     if (CF_IS_OBJC(CFURLGetTypeID(), relativeURL)) {
-        anURL = (CFURLRef) CF_OBJC_CALLV((NSURL *)relativeURL, absoluteURL);
+        anURL = (CFURLRef)[(NSURL *)relativeURL absoluteURL];
         if (anURL) CFRetain(anURL);
         return anURL;
     } 
@@ -2798,7 +2798,8 @@ Boolean CFURLCanBeDecomposed(CFURLRef  anURL) {
 }
 
 CFStringRef  CFURLGetString(CFURLRef  url) {
-    CF_OBJC_FUNCDISPATCHV(CFURLGetTypeID(), CFStringRef, (NSURL *)url, relativeString);
+    if (url != NULL && CF_IS_OBJC(CFURLGetTypeID(), url))
+        return (CFStringRef)[(NSURL *)url relativeString];
     if (!_haveTestedOriginalString(url)) {
         computeSanitizedString(url);
     }
@@ -2940,7 +2941,7 @@ static CFStringRef _retainedComponentString(CFURLRef url, UInt32 compFlag, Boole
 CFStringRef  CFURLCopyScheme(CFURLRef  anURL) {
     CFStringRef scheme;
     if (CF_IS_OBJC(CFURLGetTypeID(), anURL)) {
-        scheme = (CFStringRef) CF_OBJC_CALLV((NSURL *)anURL, scheme);
+        scheme = (CFStringRef)[(NSURL *)anURL scheme];
         if ( scheme ) {
             CFRetain(scheme);
         }
@@ -3174,7 +3175,7 @@ CFStringRef  CFURLCopyResourceSpecifier(CFURLRef  anURL) {
 CFStringRef  CFURLCopyHostName(CFURLRef  anURL) {
     CFStringRef tmp;
     if (CF_IS_OBJC(CFURLGetTypeID(), anURL)) {
-        tmp = (CFStringRef) CF_OBJC_CALLV((NSURL *)anURL, host);
+        tmp = (CFStringRef)[(NSURL *)anURL host];
         if (tmp) CFRetain(tmp);
         return tmp;
     } 
@@ -3200,7 +3201,7 @@ CFStringRef  CFURLCopyHostName(CFURLRef  anURL) {
 SInt32 CFURLGetPortNumber(CFURLRef  anURL) {
     CFStringRef port;
     if (CF_IS_OBJC(CFURLGetTypeID(), anURL)) {
-        CFNumberRef cfPort = (CFNumberRef) CF_OBJC_CALLV((NSURL *)anURL, port);
+        CFNumberRef cfPort = (CFNumberRef)[(NSURL *)anURL port];
         SInt32 num;
         if (cfPort && CFNumberGetValue(cfPort, kCFNumberSInt32Type, &num)) return num;
         return -1;
@@ -3227,7 +3228,7 @@ SInt32 CFURLGetPortNumber(CFURLRef  anURL) {
 CFStringRef  CFURLCopyUserName(CFURLRef  anURL) {
     CFStringRef user;
     if (CF_IS_OBJC(CFURLGetTypeID(), anURL)) {
-        user = (CFStringRef) CF_OBJC_CALLV((NSURL *)anURL, user);
+        user = (CFStringRef)[(NSURL *)anURL user];
         if (user) CFRetain(user);
         return user;
     } 
@@ -3245,7 +3246,7 @@ CFStringRef  CFURLCopyUserName(CFURLRef  anURL) {
 CFStringRef  CFURLCopyPassword(CFURLRef  anURL) {
     CFStringRef passwd;
     if (CF_IS_OBJC(CFURLGetTypeID(), anURL)) {
-        passwd = (CFStringRef) CF_OBJC_CALLV((NSURL *)anURL, password);
+        passwd = (CFStringRef)[(NSURL *)anURL password];
         if (passwd) CFRetain(passwd);
         return passwd;
     } 
@@ -3265,7 +3266,7 @@ CFStringRef  CFURLCopyPassword(CFURLRef  anURL) {
 static CFStringRef  _unescapedParameterString(CFURLRef  anURL) {
     CFStringRef str;
     if (CF_IS_OBJC(CFURLGetTypeID(), anURL)) {
-        str = (CFStringRef) CF_OBJC_CALLV((NSURL *)anURL, parameterString);
+        str = (CFStringRef)[(NSURL *)anURL parameterString];
         if (str) CFRetain(str);
         return str;
     } 
@@ -3298,7 +3299,7 @@ CFStringRef  CFURLCopyParameterString(CFURLRef  anURL, CFStringRef charactersToL
 static CFStringRef  _unescapedQueryString(CFURLRef  anURL) {
     CFStringRef str;
     if (CF_IS_OBJC(CFURLGetTypeID(), anURL)) {
-        str = (CFStringRef) CF_OBJC_CALLV((NSURL *)anURL, query);
+        str = (CFStringRef)[(NSURL *)anURL query];
         if (str) CFRetain(str);
         return str;
     } 
@@ -3331,7 +3332,7 @@ CFStringRef  CFURLCopyQueryString(CFURLRef  anURL, CFStringRef  charactersToLeav
 static CFStringRef  _unescapedFragment(CFURLRef  anURL) {
     CFStringRef str;
     if (CF_IS_OBJC(CFURLGetTypeID(), anURL)) {
-        str = (CFStringRef) CF_OBJC_CALLV((NSURL *)anURL, fragment);
+        str = (CFStringRef)[(NSURL *)anURL fragment];
         if (str) CFRetain(str);
         return str;
     } 
@@ -4934,7 +4935,7 @@ Boolean CFURLIsFileReferenceURL(CFURLRef url)
     }
     else {
         if ( CF_IS_OBJC(CFURLGetTypeID(), url) ) {
-            result = (Boolean) CF_OBJC_CALLV((NSURL *)url, isFileReferenceURL);
+            result = (Boolean)[(NSURL *)url isFileReferenceURL];
         }
         else {
             result = ((_getSchemeTypeFromFlags(url->_flags) == kHasFileScheme) && ((url->_flags & PATH_HAS_FILE_ID) != 0));

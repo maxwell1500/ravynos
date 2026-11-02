@@ -584,9 +584,21 @@ extern uintptr_t __CFRuntimeObjCClassTable[__CFRuntimeClassTableSize];
 #define CF_OBJC_FUNCDISPATCHV(typeID, rettype, obj, ...) do { } while(0)
 #endif
 #define CF_OBJC_CALLV(obj, ...) (0)
+/* ObjC nonpointer isas pack extra bits (extra_rc, has_assoc, magic, ...)
+   around the class pointer.  Strip them before comparing against a
+   registered bridge class; raw-pointer isas pass through unchanged.
+   Constants mirror Libraries/objc4/runtime/isa.h (__x86_64__ ISA_MASK /
+   ISA_MAGIC_MASK / ISA_MAGIC_VALUE). */
+static inline uintptr_t __CFMaskIsa(uintptr_t raw) {
+#if defined(__x86_64__)
+    if ((raw & 0x001f800000000001ULL) == 0x001d800000000001ULL)
+        return raw & 0x00007ffffffffff8ULL;
+#endif
+    return raw;
+}
 #define CF_IS_OBJC(typeID, obj) (obj && (*(uintptr_t *)obj) \
     && (typeID < __CFRuntimeClassTableSize) \
-    && (*(uintptr_t *)obj == __CFRuntimeObjCClassTable[typeID]))
+    && (__CFMaskIsa(*(uintptr_t *)obj) == __CFRuntimeObjCClassTable[typeID]))
 /* C-allocated CF instances must always get the CF class isa, never the
    bridged ObjC class: CF_IS_OBJC then distinguishes real ObjC objects
    (isa == bridge class) from C structs, and CFURLCopyAbsoluteURL etc.
