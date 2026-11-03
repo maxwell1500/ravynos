@@ -900,3 +900,30 @@ thread busy with four threads and still no window, so single-process
 mode is not a route around it.  Next: a `posix_spawn`/Mach-rendezvous
 fixture to determine whether the child is not spawned, exits before
 sending, or the port handoff is dropped.
+
+### The child's Mach port set was a missing export (2026-11-02)
+
+The rendezvous timeout had a concrete cause, found with the spawnprobe
+fixture: a plain `posix_spawn` worked, but a spawn with a registered
+receive right died in the child at dyld's first lazy bind:
+
+    dyld: lazy symbol binding failed: Symbol not found: _mach_ports_lookup
+
+`task.c` in xnu's libsyscall implements `mach_ports_lookup`,
+`mach_ports_register` and `mach_task_is_self`, but it was not in
+libsystem_kernel's SRCS, so only the `_kernelrpc_*` traps were exported.
+With `task.c` built, the child sends and the parent receives its port
+(the probe now reports `id=7`; the parent asked for a 24-byte buffer and
+gets MACH_RCV_TOO_LARGE, so the probe now uses a 512-byte buffer), and
+`GeckoChildProcessHost` no longer logs `MachReceivePortSendRight failed`
+— the IPC/socket child threads come up.  The browser still creates no
+window: it finishes launching and idles with 19 threads (HTML5 Parser,
+Socket Thread, IPC I/O Parent, StreamTrans), which is the next problem.
+
+Building all of `Libraries/Libsystem` also regenerated
+`libSystem.B.dylib` as a 35 KB reexport stub whose initializer never
+runs; images staged with it panicked before initproc (`initializer in
+image (/usr/lib/libc++.1.dylib) that does not link with
+libSystem.dylib`).  The full ~1.1 MB stub is kept as
+`tools/bootlab/assets/libSystem.B.dylib` and build-libraries.sh puts it
+back after (and again after sync_sdk) a Libsystem build.

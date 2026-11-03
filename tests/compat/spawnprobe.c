@@ -78,6 +78,7 @@ main(int argc, char **argv)
 	int err, status = 0;
 	kern_return_t kr;
 	mach_msg_header_t msg;
+	char receive_buffer[512];
 
 	if (argc > 1 && strcmp(argv[1], "--child") == 0)
 		return run_child(argc, argv);
@@ -142,9 +143,11 @@ main(int argc, char **argv)
 	if (err != 0)
 		return 1;
 
-	memset(&msg, 0, sizeof(msg));
-	kr = mach_msg(&msg, MACH_RCV_MSG | MACH_RCV_TIMEOUT, 0, sizeof(msg),
+	memset(receive_buffer, 0, sizeof(receive_buffer));
+	kr = mach_msg((mach_msg_header_t *)receive_buffer,
+	    MACH_RCV_MSG | MACH_RCV_TIMEOUT, 0, sizeof(receive_buffer),
 	    receive, 5000, MACH_PORT_NULL);
+	memcpy(&msg, receive_buffer, sizeof(msg));
 	printf("spawnprobe: rendezvous recv kr=0x%x id=%u\n", (unsigned)kr,
 	    (unsigned)msg.msgh_id);
 

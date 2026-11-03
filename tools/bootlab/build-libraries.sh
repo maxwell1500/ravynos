@@ -1283,5 +1283,30 @@ for d in "${DIRS[@]}"; do
     echo "=== building Libraries/$d ==="
     ( cd "$ROOT/Libraries/$d" && "$BMAKE" -m "$MKMODULES" "${BMAKE_TARGET:-all}" ) || rc=1
 done
+# The in-tree Libsystem build regenerates libSystem.B.dylib as a small
+# reexport stub.  An image staged with it panics in dyld before initproc:
+#   initializer in image (/usr/lib/libc++.1.dylib) that does not link
+#   with libSystem.dylib
+# because libSystem's own initializer/helpers never run.  The full stub the
+# tree ships is ~1.1 MB; keep a copy of it and put it back after a Libsystem
+# build so a rebuilt libsystem_kernel can be staged without breaking boot.
+LIBSTUB_ASSET="$HERE/assets/libSystem.B.dylib"
+if [ -f "$LIBSTUB_ASSET" ]; then
+    for d in "${DIRS[@]}"; do
+        if [ "$d" = "Libsystem" ] && [ -f "$ROOT/Libraries/Libsystem/libSystem.B.dylib" ]; then
+            if [ "$(stat -f%z "$ROOT/Libraries/Libsystem/libSystem.B.dylib")" -lt 100000 ]; then
+                cp -f "$LIBSTUB_ASSET" "$ROOT/Libraries/Libsystem/libSystem.B.dylib"
+                [ -f "$RAVYN_SDKROOT/usr/lib/libSystem.B.dylib" ] && cp -f "$LIBSTUB_ASSET" "$RAVYN_SDKROOT/usr/lib/libSystem.B.dylib"
+                echo "note: restored full libSystem.B.dylib after Libsystem build"
+            fi
+        fi
+    done
+fi
 python3 "$HERE/sync_sdk.py" || rc=1
+# sync_sdk may have pushed the small stub back over the SDK copy.
+if [ -f "$LIBSTUB_ASSET" ] && [ -f "$ROOT/Libraries/Libsystem/libSystem.B.dylib" ] && [ "$(stat -f%z "$ROOT/Libraries/Libsystem/libSystem.B.dylib")" -lt 100000 ]; then
+    cp -f "$LIBSTUB_ASSET" "$ROOT/Libraries/Libsystem/libSystem.B.dylib"
+    [ -f "$RAVYN_SDKROOT/usr/lib/libSystem.B.dylib" ] && cp -f "$LIBSTUB_ASSET" "$RAVYN_SDKROOT/usr/lib/libSystem.B.dylib"
+    echo "note: restored full libSystem.B.dylib after sync"
+fi
 exit $rc
