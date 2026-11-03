@@ -982,3 +982,16 @@ Next: capture the bytes at the faulting PC from the corpse dump (to confirm
 whether the page really differs from the file), or make dyld verify XUL's
 chained-fixup stubs against the file; the mid-instruction PC points at code
 corruption rather than a bad C++ vtable alone.
+
+### The crash is a null-`this` call with a host name in rsi
+
+The corpse dump now prints the bytes at the faulting PC and a printable string
+at rsi.  The bytes match XUL's file image exactly (runtime address maps to
+file offset 0x26e159e with XUL's __TEXT fileoff 0x1000), so this is not text
+corruption: the PC sits at the start of a null-object virtual call sequence
+(`mov rax,[rbx]` with rbx=0), and **rsi points at the string "example.org"**.
+Nothing in the app bundle or profile contains that literal, so it is a
+runtime-built host name passed to a networking object that is null.  The next
+step is to identify which XPCOM/networking object should have handled it
+(the caller frames are all in XUL, so symbolization of XUL+0x… is still the
+missing tool).

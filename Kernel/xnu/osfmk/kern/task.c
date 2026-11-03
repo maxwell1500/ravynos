@@ -2580,6 +2580,25 @@ task_deliver_crash_notification(
 			 * (osfmk/mach/i386/thread_status.h:440-447 for rdi/rsi/rdx/r10/
 			 * r8/r9); rax and rbx are further down the same struct.
 			 */
+			/*
+			 * ravynOS: bytes around the faulting PC.  A crash PC that
+			 * lands in the middle of an instruction is either a bad
+			 * control transfer or a page whose contents differ from
+			 * the file; these bytes distinguish the two.
+			 */
+			{
+				uint8_t code[48];
+				vm_map_t cm = get_task_map(corpse);
+
+				if (copyinmap(cm, (vm_map_offset_t)(ss->isf.rip - 16),
+				    code, sizeof(code)) == 0) {
+					int bi;
+					printf("CORPSE:   code@rip-16:");
+					for (bi = 0; bi < (int)sizeof(code); bi++)
+						printf(" %02x", code[bi]);
+					printf("\n");
+				}
+			}
 			printf("CORPSE:   regs rdi 0x%016llx rsi 0x%016llx rax 0x%016llx rbx 0x%016llx r8 0x%016llx r9 0x%016llx\n",
 			    (unsigned long long)ss->rdi,
 			    (unsigned long long)ss->rsi,
@@ -2597,6 +2616,26 @@ task_deliver_crash_notification(
 			 * tagged/non-object receiver. Best effort: the map may
 			 * already be tearing down, in which case nothing prints.
 			 */
+			/*
+			 * ravynOS: if rsi points at a C string (selector name, type
+			 * name or literal), print it; null-this crashes usually have
+			 * the selector still in rsi.
+			 */
+			if (ss->rsi != 0) {
+				char sbuf[65];
+				vm_map_t sm = get_task_map(corpse);
+
+				if (copyinmap(sm, (vm_map_offset_t)ss->rsi, sbuf,
+				    sizeof(sbuf) - 1) == 0) {
+					int si, printable = 1;
+					sbuf[sizeof(sbuf) - 1] = 0;
+					for (si = 0; si < (int)sizeof(sbuf) - 1 && sbuf[si]; si++)
+						if (sbuf[si] < 0x20 || sbuf[si] > 0x7e)
+							printable = 0;
+					if (printable && sbuf[0])
+						printf("CORPSE:   rsi->\"%s\"\n", sbuf);
+				}
+			}
 			if (ss->rdi != 0) {
 				vm_map_t rm = get_task_map(corpse);
 				uint64_t isa = 0;
