@@ -878,3 +878,25 @@ another uid, which is now consistent.  `runas` still arms the 90 s
 watchdog.  The per-user run (`501:20`) remains the gate for the
 installed HFS+ system, where the profile lives in a home the user owns
 and write permission comes from real per-file ownership.
+
+### The content process never reaches the rendezvous (2026-11-02)
+
+With the profile fixed, the browser itself launches and stays alive for
+the full watchdog window (20 threads, run loop idle).  No window is
+created because the first `GeckoChildProcessHost` launch never
+completes:
+
+    [Parent 58, IPC Launch #1] WARNING: parent MachReceivePortSendRight
+      failed: 0x10004003 (ipc/rcv) timed out
+    xpc_pipe_try_receive: reply send failed, kr=268435472
+    [Parent 58, IPC I/O Parent] WARNING: Failed to launch socket subprocess
+
+`0x10004003` is `MACH_RCV_TIMED_OUT`: the parent waits for the child's
+Mach port handoff and the child never sends it.  XUL binds `posix_spawnp`
+and the spawn attr calls, not `posix_spawnattr_set*ports*`, so the
+handoff is not the registered-ports path.  Forcing
+`MOZ_FORCE_DISABLE_E10S=1 MOZ_DISABLE_SOCKET_PROCESS=1` leaves the main
+thread busy with four threads and still no window, so single-process
+mode is not a route around it.  Next: a `posix_spawn`/Mach-rendezvous
+fixture to determine whether the child is not spawned, exits before
+sending, or the port handoff is dropped.
