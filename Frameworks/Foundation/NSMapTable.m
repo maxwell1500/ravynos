@@ -10,6 +10,12 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 #import <Foundation/NSString.h>
 #import <Foundation/NSZone.h>
 #import <Foundation/NSEnumerator_dictionaryKeys.h>
+#import <CoreFoundation/CoreFoundation.h>
+
+/* CoreFoundation's registered-class table is the only reliable test for a
+ * C CF instance (Foundation dictionaries already use it for the same
+ * reason). */
+extern Boolean _CFIsCFInstance(CFTypeRef object);
 
 @implementation NSMapTable
 
@@ -26,7 +32,46 @@ static NSUInteger _NSMapPointerHash(NSMapTable *table,const void *object){
    return (NSUInteger)object>>5;
 }
 
+/* A map keyed by objects routinely sees CF strings: Gecko hands
+ * NSRunLoop the kCFRunLoop*Mode constants, which are C CFString
+ * instances, while the modes already in the map are NSStrings.  Sending
+ * -hash/-isEqual:/-retain to a CF class is a message to a class with no
+ * Objective-C cache; objc_msgSend faults in the cache lookup.  Treat a
+ * CF string as its characters for hashing and equality, and use CF
+ * lifetime for any CF instance. */
+static BOOL _NSMapIsCFString(const void *object){
+   return object != NULL && _CFIsCFInstance((CFTypeRef)object) &&
+          CFGetTypeID((CFTypeRef)object) == CFStringGetTypeID();
+}
+
+static NSString *_NSMapString(const void *object){
+   if(!_NSMapIsCFString(object))
+    return (id)object;
+
+   CFStringRef string=(CFStringRef)object;
+   CFIndex length=CFStringGetLength(string);
+   unichar stackBuffer[128];
+   unichar *buffer=stackBuffer;
+
+   if(length>(CFIndex)(sizeof(stackBuffer)/sizeof(stackBuffer[0])))
+    buffer=NSZoneMalloc(NULL,(NSUInteger)length*sizeof(unichar));
+
+   CFStringGetCharacters(string,CFRangeMake(0,length),buffer);
+   NSString *result=[NSString stringWithCharacters:buffer length:(NSUInteger)length];
+
+   if(buffer!=stackBuffer)
+    NSZoneFree(NULL,buffer);
+
+   return result;
+}
+
 static NSUInteger _NSMapObjectHash(NSMapTable *table,const void *object){
+   if(_NSMapIsCFString(object))
+    return [_NSMapString(object) hash];
+
+   if(_CFIsCFInstance((CFTypeRef)object))
+    return (NSUInteger)CFHash((CFTypeRef)object);
+
    return [(id)object hash];
 }
 
@@ -37,23 +82,43 @@ static BOOL _NSMapPointerIsEqual(NSMapTable *table,const void *object1,
 
 static BOOL _NSMapObjectIsEqual(NSMapTable *table,const void *object1,
   const void *object2){
-   BOOL result=[(id)object1 isEqual:(id)object2];
+   if(object1==object2)
+    return YES;
+   if(object1==NULL || object2==NULL)
+    return NO;
 
-   return result;
+   if(_NSMapIsCFString(object1) || _NSMapIsCFString(object2)){
+    return [_NSMapString(object1) isEqualToString:_NSMapString(object2)];
+   }
+
+   BOOL object1IsCF=_CFIsCFInstance((CFTypeRef)object1);
+   BOOL object2IsCF=_CFIsCFInstance((CFTypeRef)object2);
+
+   if(object1IsCF || object2IsCF)
+    return (object1IsCF && object2IsCF) ?
+           (CFEqual((CFTypeRef)object1,(CFTypeRef)object2)?YES:NO) : NO;
+
+   return [(id)object1 isEqual:(id)object2];
 }
 
 static void _NSMapEmptyRetain(NSMapTable *table,const void *object){
 }
 
 static void _NSMapObjectRetain(NSMapTable *table,const void *object){
-   [(id)object retain];
+   if(_CFIsCFInstance((CFTypeRef)object))
+    CFRetain((CFTypeRef)object);
+   else
+    [(id)object retain];
 }
 
 static void _NSMapEmptyRelease(NSMapTable *table,void *object){
 }
 
 static void _NSMapObjectRelease(NSMapTable *table,void *object){
-   [(id)object release];
+   if(_CFIsCFInstance((CFTypeRef)object))
+    CFRelease((CFTypeRef)object);
+   else
+    [(id)object release];
 }
 
 static void _NSMapPointerRelease(NSMapTable *table,void *object){
