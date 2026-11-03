@@ -995,3 +995,8 @@ runtime-built host name passed to a networking object that is null.  The next
 step is to identify which XPCOM/networking object should have handled it
 (the caller frames are all in XUL, so symbolization of XUL+0x… is still the
 missing tool).
+
+Disabling onboarding and the new tab (`browser.aboutwelcome.enabled`,
+`browser.newtabpage.enabled`, `browser.startup.page=0`, homepage
+`about:blank`) does not change the crash or the rsi string, so "example.org"
+comes from a core startup path rather than the first-run page.
