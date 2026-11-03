@@ -937,6 +937,9 @@ int msdosfs_mount(vnode_t devvp, struct mount *mp, vfs_context_t context)
 	vfsstatfs->f_fsid.val[0] = dev;
 	vfsstatfs->f_fsid.val[1] = vfs_typenum(mp);
 
+	/* Ownership is a property of the mount, not of the FAT entry; publish
+	 * it so vnode_authattr_new defaults new files to the volume owner. */
+	vfs_setowner(mp, pmp->pm_uid, pmp->pm_gid);
 	vfs_setflags(mp, MNT_IGNORE_OWNERSHIP);
 	
 

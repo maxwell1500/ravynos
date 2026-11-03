@@ -455,8 +455,8 @@ int msdosfs_vnop_getattr(struct vnop_getattr_args *ap)
 	VATTR_RETURN(vap, va_data_size, dep->de_FileSize);
 	VATTR_RETURN(vap, va_data_alloc, vap->va_total_alloc);
 	VATTR_RETURN(vap, va_iosize, pmp->pm_iosize);
-	VATTR_RETURN(vap, va_uid, 99);
-	VATTR_RETURN(vap, va_gid, 99);
+	VATTR_RETURN(vap, va_uid, pmp->pm_uid);
+	VATTR_RETURN(vap, va_gid, pmp->pm_gid);
 	VATTR_RETURN(vap, va_mode, ALLPERMS & pmp->pm_mask);
 	if (VATTR_IS_ACTIVE(vap, va_flags)) {
 		vap->va_flags = 0;

@@ -135,6 +135,10 @@ for rel in ["iokit/DEVELOPMENT/IOPlatformExpert.cpo.json",
             # fork1() calls kern_protect()/proc_* helpers; keep it in step
             # with kern_fork.c.
             "bsd/DEVELOPMENT/kern_prot.o.json",
+            # vnode_authorize()/vnode_authattr_new() live in vfs_subr.c.  An
+            # edit there was silently dropped: the object was never rebuilt,
+            # so mount-ownership and permission fixes never reached a boot.
+            "bsd/DEVELOPMENT/vfs_subr.o.json",
             # mig_init() builds the MIG dispatch table in ipc_kobject.c.
             # Without this the descriptor-stride fix never reached the
             # kernel, so mig_table_max_displ stayed at its broken value.

@@ -865,13 +865,16 @@ for such instances; everything else is an Objective-C object.
 
 ### The FAT dev image has one owner (2026-11-02)
 
-The bring-up image is FAT: msdosfs reports every node as `99:99` with
-mode `0755` (`pm_mask`, no on-disk mode or owner).  A process running as
-`ravyn` (501) therefore cannot create `/var/tmp/ff/profile` — `mkdir`
-returns `EACCES` — and the oracle sat in its normal event loop because it
-could not write a profile.  Until the HFS+ install path provides real
-ownership, the Firefox job runs as uid 99, the uid every node on the
-volume reports; it is still an unprivileged process, and the watchdog
-still bounds it.  The per-user run (`501:20`) remains the gate for the
-installed system, where the profile lives in a home directory the user
-owns.
+The bring-up image is FAT: msdosfs has no on-disk owner or mode, so every
+node reports the mount owner (`pm_uid`/`pm_gid`) and the mount mask
+(`0755`).  With the mount owned by root, a process running as `ravyn`
+(501) cannot create `/var/tmp/ff/profile` — `mkdir` returns `EACCES` —
+and the oracle sat in its normal event loop because it could not write a
+profile.  Rendering every node as `99:99` did not help either: the
+authorization path still saw uid 0 and denied non-root writes.  The
+Firefox job therefore runs as root with a root-owned `$HOME` on this
+image; Firefox itself refuses to start as root when `$HOME` belongs to
+another uid, which is now consistent.  `runas` still arms the 90 s
+watchdog.  The per-user run (`501:20`) remains the gate for the
+installed HFS+ system, where the profile lives in a home the user owns
+and write permission comes from real per-file ownership.
