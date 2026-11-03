@@ -735,12 +735,14 @@ Boolean SCNetworkReachabilitySetCallback(SCNetworkReachabilityRef target,
     if (target == NULL) return false;
     target->callback = callout;
     target->callbackInfo = context ? context->info : NULL;
-    if (callout) {
-        SCNetworkReachabilityFlags flags = 0;
-        if (reachabilityProbe(target, &flags)) {
-            callout(target, flags, target->callbackInfo);
-        }
-    }
+    /*
+     * Do NOT invoke the callback here.  SCNetworkReachabilitySetCallback only
+     * registers it; reachability changes are delivered later, from the run
+     * loop or dispatch queue.  Calling it synchronously re-enters the client
+     * before it has finished constructing the object it associates with the
+     * reachability target (Gecko crashes this way inside its network link
+     * service while creating the "example.org" target).
+     */
     return true;
 }
 

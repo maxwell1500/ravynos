@@ -1754,6 +1754,13 @@ static BOOL _allowsAutomaticWindowTabbing = YES;
     return result;
 }
 
+-(NSRect)contentLayoutRect {
+   NSRect result = [self contentRectForFrameRect:[self frame]];
+
+   result.origin = NSZeroPoint;
+   return result;
+}
+
 -(NSRect)contentRectForFrameRect:(NSRect)frameRect {
    NSRect result=CGInsetRectForNativeWindowBorder(frameRect,[self styleMask]);
        

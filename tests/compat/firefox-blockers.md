@@ -1000,3 +1000,17 @@ Disabling onboarding and the new tab (`browser.aboutwelcome.enabled`,
 `browser.newtabpage.enabled`, `browser.startup.page=0`, homepage
 `about:blank`) does not change the crash or the rsi string, so "example.org"
 comes from a core startup path rather than the first-run page.
+
+### SCNetworkReachability called its callback re-entrantly (fixed)
+
+The "example.org" crash was SystemConfiguration: Gecko creates a
+reachability target for that host and registers a callback.  Our
+`SCNetworkReachabilitySetCallback` invoked the callback synchronously, before
+Gecko had finished constructing the object the callback uses, so Gecko
+null-dereferenced with `frame[6]` in SystemConfiguration.  The callback is
+now only registered, as on macOS.
+
+The next crash is a different one: Gecko messages an object with selector
+`"frame"` and the receiver is not a live view (`rax=0`, rdi points at a
+stack temporary).  `-[NSWindow contentLayoutRect]` was added on the way; the
+next step is identifying which view Gecko expects to still be alive.

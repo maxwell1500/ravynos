@@ -2422,6 +2422,7 @@ out_no_lock:
  * and without these they are implicitly declared non-static and the
  * definitions collide ("static declaration follows non-static declaration"). */
 static vm_map_offset_t corpse_vma(vm_map_t, vm_map_offset_t);
+static void corpse_vma_path(vm_map_t, vm_map_offset_t, char *, vm_size_t);
 static vm_map_offset_t corpse_vma_end(vm_map_t, vm_map_offset_t);
 static int corpse_vma_prot(vm_map_t, vm_map_offset_t);
 static vm_object_size_t corpse_vma_objsize(vm_map_t, vm_map_offset_t);
@@ -2685,11 +2686,15 @@ task_deliver_crash_notification(
 					if (ravyn_last_ret[f] == 0) {
 						break;
 					}
-					printf("CORPSE:   frame[%d] 0x%016llx (vma 0x%016llx-0x%016llx)\n",
+					char fpath[256];
+
+					corpse_vma_path(m, (vm_map_offset_t)ravyn_last_ret[f], fpath, sizeof(fpath));
+					printf("CORPSE:   frame[%d] 0x%016llx (vma 0x%016llx-0x%016llx) %s\n",
 					    f,
 					    (unsigned long long)ravyn_last_ret[f],
 					    corpse_vma(m, (vm_map_offset_t)ravyn_last_ret[f]),
-					    corpse_vma_end(m, (vm_map_offset_t)ravyn_last_ret[f]));
+					    corpse_vma_end(m, (vm_map_offset_t)ravyn_last_ret[f]),
+					    fpath[0] ? fpath : "?");
 				}
 			} else {
 				printf("CORPSE:   backtrace (unavailable)\n");
@@ -10749,6 +10754,42 @@ extern const char *proc_best_name(struct proc *p);
  * address is not mapped, or when the entry is a submap -- VME_OBJECT()
  * asserts on a submap, so that case must be filtered before it is called.
  */
+extern kern_return_t vnode_pager_get_object_name(memory_object_t, char *,
+    vm_size_t, char *, vm_size_t, boolean_t *);
+
+static void
+corpse_vma_path(vm_map_t map, vm_map_offset_t addr, char *buf, vm_size_t len)
+{
+	vm_map_entry_t entry = NULL;
+
+	if (len == 0) {
+		return;
+	}
+	buf[0] = '\0';
+	if (map == NULL) {
+		return;
+	}
+	vm_map_lock_read(map);
+	if (vm_map_lookup_entry(map, addr, &entry) && !entry->is_sub_map) {
+		vm_object_t obj = VME_OBJECT(entry);
+
+		while (obj != NULL && obj->pager == NULL && obj->shadow != NULL) {
+			obj = obj->shadow;
+		}
+		if (obj != NULL && obj->pager != NULL) {
+			char filename[128];
+			boolean_t truncated = FALSE;
+
+			if (vnode_pager_get_object_name(obj->pager, buf, len,
+			    filename, sizeof(filename), &truncated) != KERN_SUCCESS) {
+				buf[0] = '\0';
+			}
+		}
+	}
+	vm_map_unlock_read(map);
+	buf[len - 1] = '\0';
+}
+
 static vm_map_offset_t
 corpse_vma(vm_map_t map, vm_map_offset_t addr)
 {
