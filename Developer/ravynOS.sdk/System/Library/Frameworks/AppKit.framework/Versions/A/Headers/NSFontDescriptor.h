@@ -41,6 +41,8 @@ APPKIT_EXPORT NSString *const NSFontSlantTrait;
 
 - objectForKey:(NSString *)attributeKey;
 
+- (NSString *)postscriptName;
+- (NSString *)familyName;
 - (float)pointSize;
 - (NSAffineTransform *)matrix;
 - (NSFontSymbolicTraits)symbolicTraits;
