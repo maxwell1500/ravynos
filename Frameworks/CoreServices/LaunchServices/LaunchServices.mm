@@ -32,6 +32,7 @@
 
 #include <sqlite3.h>
 #include <stdio.h>
+#include <dlfcn.h>
 #include <stdarg.h>
 #include <unistd.h>
 #include <cstddef>
@@ -1216,3 +1217,56 @@ OSStatus LSCanURLAcceptURL(CFURLRef inItemURL, CFURLRef inTargetURL, LSRolesMask
     return 0;
 }
 
+
+/*
+ * Scheme handler lookup (10.3+).  There is no URL-scheme handler registry in
+ * this LaunchServices yet: the database records bundle URL schemes, but no
+ * default-handler preference.  Return the honest answer -- an empty handler
+ * list and no default -- instead of a fabricated bundle path.  Firefox binds
+ * these lazily while opening a window, so they have to exist as real symbols.
+ */
+extern "C" CFArrayRef LSCopyAllHandlersForURLScheme(CFStringRef inURLScheme)
+{
+    static int logged = 0;
+    if (!logged) {
+        logged = 1;
+        fprintf(stderr, "[compat] LaunchServices: LSCopyAllHandlersForURLScheme has no handler registry; returning empty\n");
+    }
+    return CFArrayCreate(kCFAllocatorDefault, NULL, 0, &kCFTypeArrayCallBacks);
+}
+
+extern "C" CFStringRef LSCopyDefaultHandlerForURLScheme(CFStringRef inURLScheme)
+{
+    static int logged = 0;
+    if (!logged) {
+        logged = 1;
+        fprintf(stderr, "[compat] LaunchServices: LSCopyDefaultHandlerForURLScheme has no handler registry; returning NULL\n");
+    }
+    return NULL;
+}
+
+/* 10.6+: default application for a URL (scheme handler lookup). */
+extern "C" CFURLRef LSCopyDefaultApplicationURLForURL(CFURLRef inURL, LSRolesMask inRoleMask, CFErrorRef *outError)
+{
+    static int logged = 0;
+    if (!logged) {
+        logged = 1;
+        fprintf(stderr, "[compat] LaunchServices: LSCopyDefaultApplicationURLForURL has no handler registry; returning NULL\n");
+    }
+    if (outError)
+        *outError = NULL;
+    return NULL;
+}
+
+/* 10.6+: default application for a content type. */
+extern "C" CFURLRef LSCopyDefaultApplicationURLForContentType(CFStringRef inContentType, LSRolesMask inRoleMask, CFErrorRef *outError)
+{
+    static int logged = 0;
+    if (!logged) {
+        logged = 1;
+        fprintf(stderr, "[compat] LaunchServices: LSCopyDefaultApplicationURLForContentType has no handler registry; returning NULL\n");
+    }
+    if (outError)
+        *outError = NULL;
+    return NULL;
+}

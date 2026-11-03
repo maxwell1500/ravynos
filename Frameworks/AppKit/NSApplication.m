@@ -43,6 +43,8 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 #include <sys/socket.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <stdio.h>
+#include <objc/runtime.h>
 #include <fcntl.h>
 /* bootstrap.h in SDK is an empty stub; declare what we need */
 #include <mach/mach.h>
@@ -1365,6 +1367,9 @@ static int _tagAllMenus(NSMenu *menu, int tag) {
    BOOL               needsUntitled=YES;
 
     [[NSNotificationCenter defaultCenter] postNotificationName: NSApplicationWillFinishLaunchingNotification object:self];
+   if(_delegate && [_delegate respondsToSelector:@selector(applicationWillFinishLaunching:)])
+       [_delegate applicationWillFinishLaunching:
+           [NSNotification notificationWithName:NSApplicationWillFinishLaunchingNotification object:self]];
 
    write(2,"[NSApp] finishLaunching: willFinish posted\n",43);
 	// Load the application icon if we have one
@@ -1421,6 +1426,9 @@ static int _tagAllMenus(NSMenu *menu, int tag) {
    
    write(2,"[NSApp] finishLaunching: posting didFinish\n",43);
     [[NSNotificationCenter defaultCenter] postNotificationName:NSApplicationDidFinishLaunchingNotification object:self];
+   if(_delegate && [_delegate respondsToSelector:@selector(applicationDidFinishLaunching:)])
+       [_delegate applicationDidFinishLaunching:
+           [NSNotification notificationWithName:NSApplicationDidFinishLaunchingNotification object:self]];
 
    [pool release];
 }
@@ -1547,6 +1555,13 @@ static int _tagAllMenus(NSMenu *menu, int tag) {
     [[NSApp windows] makeObjectsPerformSelector:@selector(_makeSureIsOnAScreen)];
     [self _checkForAppActivation];
      [self _displayAllWindowsIfNeeded];
+
+     /* Gecko (and any app that drives its own XPCOM/CFRunLoop event queue)
+      * expects this method to run the current run loop, not just the display
+      * pipe: native event callbacks are CFRunLoop sources.  Without this,
+      * startup code waiting in ProcessNextNativeEvent never sees its own
+      * queued events and the browser hangs before creating a window. */
+     CFRunLoopRunInMode((CFStringRef)mode, 0.02, true);
 
      nextEvent=[_display nextEventMatchingMask:mask untilDate:untilDate inMode:mode dequeue:dequeue];
 

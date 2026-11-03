@@ -23,6 +23,16 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
    return [[NSDisplay currentDisplay] scrollerWidth];
 }
 
+/* 10.7+.  This tree draws legacy (always visible) scrollbars, so report
+ * that style; Gecko asks before it lays out a scrollable view. */
++(NSInteger)preferredScrollerStyle {
+   return 0; /* NSScrollerStyleLegacy */
+}
+
++(void)setPreferredScrollerStyle:(NSInteger)style {
+   /* No global overlay-scrollbar support yet. */
+}
+
 /* OS X has a global default "AppleScrollBarVariant" with the values: Single, DoubleMin, DoubleMax, and DoubleBoth
  This controls the default position of the scroller. This should be controlling the positioning.
  */

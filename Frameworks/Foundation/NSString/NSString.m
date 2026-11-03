@@ -652,6 +652,12 @@ static inline BOOL isEqualString(NSString *str1,NSString *str2){
    return isEqualString(self,other);
 }
 
+-(BOOL)containsString:(NSString *)other {
+    if(other==nil)
+        return NO;
+    return [self rangeOfString:other].location!=NSNotFound;
+}
+
 -(BOOL)hasPrefix:(NSString *)prefix {
     NSUInteger i,selfLength=[self length], prefixLength=[prefix length];
     unichar  *selfBuf = NSZoneMalloc(NULL, sizeof(unichar) * selfLength);

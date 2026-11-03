@@ -927,3 +927,34 @@ image (/usr/lib/libc++.1.dylib) that does not link with
 libSystem.dylib`).  The full ~1.1 MB stub is kept as
 `tools/bootlab/assets/libSystem.B.dylib` and build-libraries.sh puts it
 back after (and again after sync_sdk) a Libsystem build.
+
+### The event loop never ran the run loop (2026-11-02)
+
+`-[NSApplication nextEventMatchingMask:untilDate:inMode:dequeue:]` polled the
+WindowServer pipe and the display queue, but never executed the current
+CFRunLoop.  Gecko drives its own XPCOM event queue from a CFRunLoop source and
+its startup waits in `ProcessNextNativeEvent`; with the source never fired,
+the browser sat in `nextEventMatchingMask:distantFuture` forever, never called
+`-[NSApplication run]`, never ran `finishLaunching`, and created no window.
+Running `CFRunLoopRunInMode(mode, 0.02, true)` once per poll iteration fixed
+startup: Firefox now calls `-run`, completes `finishLaunching`, sends its
+menu, and creates windows.
+
+Also fixed on the way: `-[NSString containsString:]` (unrecognized selector),
+`+[NSScroller preferredScrollerStyle]`, and the LaunchServices scheme-handler
+entry points (`LSCopyAllHandlersForURLScheme`,
+`LSCopyDefaultHandlerForURLScheme`, `LSCopyDefaultApplicationURLForURL`,
+`LSCopyDefaultApplicationURLForContentType`), exported from both
+LaunchServices and the CoreServices umbrella with C linkage.
+
+`finishLaunching` now also calls the delegate's
+`applicationWillFinishLaunching:` / `applicationDidFinishLaunching:` methods;
+previously it only posted the notifications.
+
+Current first crash: after `finishLaunching` and menu registration, Firefox
+builds a small 2x32 window, then dies with SIGSEGV whose backtrace is entirely
+inside XUL (`rip 0x...` in the 123 MB XUL text segment).  The kernel's
+"Text page corruption detected" line is the exit-time code-signature
+revalidation failing on unsigned images, not evidence of real corruption.
+Next: symbolize that address or bisect Gecko's post-launch window setup; the
+0-width window frames (0x3, 0x176) suggest a widget/size path is also wrong.
