@@ -34,8 +34,23 @@
 }
 
 -(void)displayLinkTimer:(NSTimer *)timer {
-    if(_callback!=NULL)
-        _callback(self,NULL,NULL,0,NULL,_userInfo);
+    if(_callback!=NULL){
+        CVTimeStamp now;
+        CVOptionFlags flagsOut=0;
+
+        /* Gecko reads hostTime and videoTime out of the output timestamp;
+         * a NULL timestamp is dereferenced at offset 0x10.  Fill both
+         * stamps with the same current-time value. */
+        memset(&now,0,sizeof(now));
+        now.version=0;
+        now.videoTimeScale=600;
+        now.videoTime=(int64_t)([NSDate timeIntervalSinceReferenceDate]*600.0);
+        now.hostTime=mach_absolute_time();
+        now.rateScalar=1.0;
+        now.videoRefreshPeriod=10;   /* 600 / 60 */
+
+        _callback(self,&now,&now,0,&flagsOut,_userInfo);
+    }
 }
 
 -(void)start {
