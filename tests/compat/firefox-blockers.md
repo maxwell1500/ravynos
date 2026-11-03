@@ -862,3 +862,16 @@ was the object's own interior (Foundation `objectRetainCallBack` ->
 the question directly: the first word is one of the registered
 CFRuntimeClass records.  The dictionary callbacks use CF lifetime only
 for such instances; everything else is an Objective-C object.
+
+### The FAT dev image has one owner (2026-11-02)
+
+The bring-up image is FAT: msdosfs reports every node as `99:99` with
+mode `0755` (`pm_mask`, no on-disk mode or owner).  A process running as
+`ravyn` (501) therefore cannot create `/var/tmp/ff/profile` — `mkdir`
+returns `EACCES` — and the oracle sat in its normal event loop because it
+could not write a profile.  Until the HFS+ install path provides real
+ownership, the Firefox job runs as uid 99, the uid every node on the
+volume reports; it is still an unprivileged process, and the watchdog
+still bounds it.  The per-user run (`501:20`) remains the gate for the
+installed system, where the profile lives in a home directory the user
+owns.
