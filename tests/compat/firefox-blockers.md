@@ -958,3 +958,27 @@ inside XUL (`rip 0x...` in the 123 MB XUL text segment).  The kernel's
 revalidation failing on unsigned images, not evidence of real corruption.
 Next: symbolize that address or bisect Gecko's post-launch window setup; the
 0-width window frames (0x3, 0x176) suggest a widget/size path is also wrong.
+
+### First SIGSEGV after the window exists (2026-11-02)
+
+With `-run` and `finishLaunching` finally reached, Firefox creates
+`BorderlessWindow` (0x3), `MOZCellDrawWindow` (0x176) and `ToolbarWindow`
+(style 0x800f), sets their content views, sends its menu, and then dies with
+SIGSEGV.  The crash PC is consistently at XUL __TEXT + `0x26e059e`; that
+offset is two bytes into a `jmp rel32` stub when the file image is
+disassembled, and the saved frame pointer chain is not a valid call chain, so
+the process is executing from corrupt or misaligned code.  The kernel's
+exit-time "Text page corruption detected" is the code-signature revalidation
+failing on these unsigned images, not proof of the fault.
+
+Ruled out by test: socket process and e10s disabled
+(`MOZ_DISABLE_SOCKET_PROCESS=1 MOZ_FORCE_DISABLE_E10S=1`), SpiderMonkey JIT
+off, WebRender software, native animations off (prefs verified present in
+`user.js`, 285 bytes).  The socket subprocess still times out separately
+(`parent MachReceivePortSendRight failed 0x10004003`) even though
+`mach_ports_lookup` is exported by the image's libsystem_kernel.
+
+Next: capture the bytes at the faulting PC from the corpse dump (to confirm
+whether the page really differs from the file), or make dyld verify XUL's
+chained-fixup stubs against the file; the mid-instruction PC points at code
+corruption rather than a bad C++ vtable alone.
