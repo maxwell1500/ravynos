@@ -19,6 +19,35 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 #import <Foundation/NSPlatform.h>
 #import <Foundation/NSSelectInputSource.h>
 #import <Foundation/NSRaise.h>
+#import <CoreFoundation/CoreFoundation.h>
+
+/* Gecko and CoreFoundation hand NSRunLoop the kCFRunLoop*Mode constants,
+ * which are C CFString instances here (CF classes are not Objective-C
+ * classes in this tree).  A message to one -- even -retain -- faults in
+ * objc_msgSend's cache lookup, so convert at every mode boundary. */
+extern Boolean _CFIsCFInstance(CFTypeRef object);
+
+static NSString *NSRunLoopStringMode(NSString *mode) {
+   if(mode==nil || !_CFIsCFInstance((CFTypeRef)mode) ||
+      CFGetTypeID((CFTypeRef)mode)!=CFStringGetTypeID())
+    return mode;
+
+   CFStringRef string=(CFStringRef)mode;
+   CFIndex length=CFStringGetLength(string);
+   unichar stackBuffer[128];
+   unichar *buffer=stackBuffer;
+
+   if(length>(CFIndex)(sizeof(stackBuffer)/sizeof(stackBuffer[0])))
+    buffer=NSZoneMalloc(NULL,(NSUInteger)length*sizeof(unichar));
+
+   CFStringGetCharacters(string,CFRangeMake(0,length),buffer);
+   NSString *result=[NSString stringWithCharacters:buffer length:(NSUInteger)length];
+
+   if(buffer!=stackBuffer)
+    NSZoneFree(NULL,buffer);
+
+   return result;
+}
 
 NSString * const NSDefaultRunLoopMode=@"kCFRunLoopDefaultMode";
 NSString * const NSRunLoopCommonModes=@"kCFRunLoopCommonModes";
@@ -73,6 +102,7 @@ static void rltrace(const char *s)
 }
 
 -(NSRunLoopState *)stateForMode:(NSString *)mode {
+   mode=NSRunLoopStringMode(mode);
    NSRunLoopState *state=NSMapGet(_modes,mode);
 
    if(state==nil){
@@ -85,6 +115,8 @@ static void rltrace(const char *s)
 
 -(NSArray *)statesForMode:(NSString *)mode {
    NSMutableArray *result=[NSMutableArray array];
+
+   mode=NSRunLoopStringMode(mode);
 
    if([mode isEqualToString:NSRunLoopCommonModes]){
     for(NSString *common in _commonModes)
@@ -164,6 +196,7 @@ static void rltrace(const char *s)
 
 - (NSDate *)limitDateForMode:(NSString *)mode
 {
+    mode=NSRunLoopStringMode(mode);
     NSRunLoopState *state = [self stateForMode:mode];
 
     mode = [mode retain];
@@ -185,6 +218,7 @@ static void rltrace(const char *s)
 
 
 -(void)acceptInputForMode:(NSString *)mode beforeDate:(NSDate *)date {
+   mode=NSRunLoopStringMode(mode);
    NSRunLoopState *state=[self stateForMode:mode];
 
    if([[NSNotificationQueue defaultQueue] hasIdleNotificationsInMode:mode]){
@@ -209,6 +243,8 @@ static void rltrace(const char *s)
 
 -(BOOL)runMode:(NSString *)mode beforeDate:(NSDate *)date {
    BOOL didProcessAnything=NO;
+
+   mode=NSRunLoopStringMode(mode);
 
    do {
    NSAutoreleasePool *pool=[NSAutoreleasePool new];
@@ -275,6 +311,7 @@ static void rltrace(const char *s)
 }
 
 -(void)addInputSource:(NSInputSource *)source forMode:(NSString *)mode {
+   mode=NSRunLoopStringMode(mode);
    NSArray *modeStates=[self statesForMode:mode];
 
    for(NSRunLoopState *state in modeStates)
@@ -283,6 +320,7 @@ static void rltrace(const char *s)
 }
 
 -(void)removeInputSource:(NSInputSource *)source forMode:(NSString *)mode {
+   mode=NSRunLoopStringMode(mode);
    NSArray *modeStates=[self statesForMode:mode];
 
    for(NSRunLoopState *state in modeStates)
@@ -290,6 +328,7 @@ static void rltrace(const char *s)
 }
 
 -(void)addTimer:(NSTimer *)timer forMode:(NSString *)mode {
+   mode=NSRunLoopStringMode(mode);
    NSArray *modeStates=[self statesForMode:mode];
 
    for(NSRunLoopState *state in modeStates)
@@ -299,11 +338,13 @@ static void rltrace(const char *s)
 -(NSArray *)resolveCommonModes:(NSArray *)modes {
    NSMutableArray *result=[NSMutableArray array];
 
-   for(NSString *check in modes)
+   for(NSString *check in modes){
+    check=NSRunLoopStringMode(check);
     if([check isEqualToString:NSRunLoopCommonModes])
      [result addObjectsFromArray:_commonModes];
     else
      [result addObject:check];
+   }
 
    return result;
 }
