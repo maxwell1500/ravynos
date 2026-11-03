@@ -38,6 +38,10 @@ echo "building bootstrap probe ($TARGET)"
 "$CC" -target "$TARGET" -isysroot "$SDK" -O1 -Wall \
     -o "$OUT/bootstrap_probe" "$HERE/bootstrap_probe.c"
 
+echo "building spawn rendezvous probe ($TARGET)"
+"$CC" -target "$TARGET" -isysroot "$SDK" -O1 -Wall \
+    -o "$OUT/spawnprobe" "$HERE/spawnprobe.c"
+
 echo "building passwd fixture ($TARGET)"
 "$CC" -target "$TARGET" -isysroot "$SDK" -O1 -Wall \
     -o "$OUT/passwd" "$HERE/passwd.c"

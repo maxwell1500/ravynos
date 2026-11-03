@@ -52,6 +52,7 @@ cp -p "$OUT/tsample" "$STAGE/tsample"
 cp -p "$OUT/runas" "$STAGE/runas"
 cp -p "$OUT/passwd" "$STAGE/passwd"
 cp -p "$OUT/bootstrap_probe" "$STAGE/bootstrap_probe"
+cp -p "$OUT/spawnprobe" "$STAGE/spawnprobe"
 cp -p "$OUT/CocoaProbe.app/Contents/MacOS/CocoaProbe" \
       "$STAGE/CocoaProbe.app/Contents/MacOS/CocoaProbe"
 cp -p "$OUT/CocoaProbe.app/Contents/Info.plist" \

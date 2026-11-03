@@ -264,6 +264,7 @@ SRCS += \
 	mach_error.c \
 	mach_init.c \
 	mach_msg.c \
+	task.c \
 	mach_traps.s \
 	mig_allocate.c \
 	mig_deallocate.c \

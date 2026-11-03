@@ -604,6 +604,7 @@ def main():
         ("tsample", "usr/local/compat/tsample"),
         ("passwd", "usr/local/compat/passwd"),
         ("bootstrap_probe", "usr/local/compat/bootstrap_probe"),
+        ("spawnprobe", "usr/local/compat/spawnprobe"),
         ("runas", "usr/local/compat/runas"),
         ("run-fixtures.sh", "usr/local/compat/run-fixtures.sh"),
         ("CocoaProbe.app/Contents/MacOS/CocoaProbe",
