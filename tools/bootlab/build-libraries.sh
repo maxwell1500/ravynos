@@ -994,9 +994,11 @@ if [ "${1:-}" = "--frameworks" ]; then
         # QuartzCore even though its build had succeeded (the framework
         # then lacked methods the source had implemented).
         src="$SDK/System/Library/Frameworks/$name.framework"
-        built="$BUILD$ROOT/Frameworks/$name.framework"
+        built="$BUILD$ROOT/Frameworks/$name/$name.framework"
         if [ -d "$built" ]; then
             src="$built"
+            mkdir -p "$SDK/System/Library/Frameworks/$name.framework"
+            cp -Rf "$built/." "$SDK/System/Library/Frameworks/$name.framework/"
         fi
         if [ ! -d "$src" ]; then
             echo "--- staging: $name: no framework at ${src#$BUILD/}, skipped"

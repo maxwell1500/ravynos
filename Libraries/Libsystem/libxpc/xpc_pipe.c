@@ -238,8 +238,8 @@ xpc_pipe_try_receive(mach_port_t port_set, xpc_object_t *message,
 		 * wants to answer always can.
 		 */
 		reply_port = MACH_PORT_NULL;
-		if (MACH_PORT_VALID(request->msgh_local_port)) {
-			reply_port = request->msgh_local_port;
+		if (MACH_PORT_VALID(request->msgh_remote_port)) {
+			reply_port = request->msgh_remote_port;
 		} else if (mach_port_allocate(mach_task_self(),
 		    MACH_PORT_RIGHT_RECEIVE, &reply_port) != KERN_SUCCESS ||
 		    mach_port_insert_right(mach_task_self(), reply_port,
@@ -257,6 +257,10 @@ xpc_pipe_try_receive(mach_port_t port_set, xpc_object_t *message,
 			return (ENOMEM);
 		}
 		xo->xo_reply->xrc_reply_port = reply_port;
+		xo->xo_reply->xrc_reply_type =
+		    MACH_MSGH_BITS_REMOTE(request->msgh_bits);
+		if (!MACH_MSG_TYPE_PORT_ANY_SEND(xo->xo_reply->xrc_reply_type))
+			xo->xo_reply->xrc_reply_type = MACH_MSG_TYPE_COPY_SEND;
 		xo->xo_reply->xrc_id = frame->id;
 		xo->xo_flags |= _XPC_FROM_WIRE;
 		xo->xo_audit_token = malloc(sizeof(audit_token_t));
@@ -283,17 +287,31 @@ xpc_pipe_try_receive(mach_port_t port_set, xpc_object_t *message,
 			return (ENOMEM);
 		}
 		if (demux(request, reply)) {
-			kr = mach_msg_send(reply);
-			if (kr != MACH_MSG_SUCCESS)
-				debugf("reply send failed, kr=%d", kr);
+			mig_reply_error_t *err = (mig_reply_error_t *)reply;
+			if (!(reply->msgh_bits & MACH_MSGH_BITS_COMPLEX) &&
+			    err->RetCode == MIG_NO_REPLY) {
+				reply->msgh_remote_port = MACH_PORT_NULL;
+			}
+			if (MACH_PORT_VALID(reply->msgh_remote_port) &&
+			    MACH_MSGH_BITS_REMOTE(reply->msgh_bits) != 0) {
+				kr = mach_msg_send(reply);
+				if (kr != MACH_MSG_SUCCESS)
+					debugf("mig reply send failed kr=%d bits=0x%x remote=%u size=%u id=%u",
+					    kr, reply->msgh_bits,
+					    reply->msgh_remote_port,
+					    reply->msgh_size, reply->msgh_id);
+			}
+			free(reply);
+			free(request);
+			return (0);
 		}
 		free(reply);
 	}
 
 	/* The request's reply port has no further use. */
-	if (MACH_PORT_VALID(request->msgh_local_port))
+	if (MACH_PORT_VALID(request->msgh_remote_port))
 		mach_port_deallocate(mach_task_self(),
-		    request->msgh_local_port);
+		    request->msgh_remote_port);
 	free(request);
 	return (ret);
 }
@@ -333,7 +351,8 @@ xpc_pipe_routine_reply(xpc_object_t reply)
 
 	memset(message, 0, sizeof(*message) + size);
 	message->header.msgh_size = sizeof(*message) + size;
-	message->header.msgh_bits = MACH_MSGH_BITS(MACH_MSG_TYPE_COPY_SEND, 0);
+	message->header.msgh_bits = MACH_MSGH_BITS(
+	    xo->xo_reply->xrc_reply_type, 0);
 	message->header.msgh_remote_port = xo->xo_reply->xrc_reply_port;
 	message->header.msgh_local_port = MACH_PORT_NULL;
 	message->header.msgh_id = XPC_MESSAGE_ID;
@@ -341,7 +360,10 @@ xpc_pipe_routine_reply(xpc_object_t reply)
 
 	kr = mach_msg_send(&message->header);
 	if (kr != MACH_MSG_SUCCESS) {
-		debugf("reply send failed, kr=%d", kr);
+		debugf("xpc reply send failed kr=%d bits=0x%x remote=%u size=%u",
+		    kr, message->header.msgh_bits,
+		    message->header.msgh_remote_port,
+		    message->header.msgh_size);
 		switch (kr) {
 		case MACH_SEND_INVALID_DEST:
 		case MACH_SEND_INVALID_MEMORY:

@@ -133,6 +133,7 @@ struct xpc_frame_header {
  */
 struct xpc_reply_context {
 	mach_port_t	xrc_reply_port;	/* the peer's reply port */
+	mach_msg_type_name_t xrc_reply_type; /* disposition of that right */
 	uint64_t	xrc_id;		/* XPC sequence number to answer */
 };
 
