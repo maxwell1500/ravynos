@@ -332,19 +332,26 @@ extern kern_return_t _windowServerRPC(void *data, size_t len, void *replyBuf, in
 
 -(NSArray *)fontTypefacesForFamilyName:(NSString *)familyName {
    NSMutableArray *ret=[NSMutableArray array];
-   NSString       *prefix=[familyName stringByAppendingString:@"-"];
    NSEnumerator   *next=[O2FontKnownFontNames() objectEnumerator];
    NSString       *name;
+   NSString       *normalizedFamily=[[familyName stringByReplacingOccurrencesOfString:@" " withString:@""] lowercaseString];
 
    /* Same reasoning as -allFontFamilyNames: no fontconfig. */
    while((name=[next nextObject])!=nil){
     NSString        *traitName;
     NSFontTraitMask  traits=0;
+    NSRange          dash=[name rangeOfString:@"-"];
+    NSString        *familyPart=(dash.location==NSNotFound)?name:[name substringToIndex:dash.location];
+    NSString        *normalizedPart=[[familyPart stringByReplacingOccurrencesOfString:@" " withString:@""] lowercaseString];
 
-    if(![name hasPrefix:prefix])
+    /* Match the family part case- and space-insensitively: Gecko asks for
+     * "Hiragino Kaku Gothic Pro" while the face is registered as
+     * "HiraginoKakuGothicPro-W3".  A face with no dash is the regular
+     * face of its family ("Arial", "Helvetica", "Monaco", "System"). */
+    if(![normalizedPart isEqualToString:normalizedFamily])
      continue;
 
-    traitName=[name substringFromIndex:[prefix length]];
+    traitName=(dash.location==NSNotFound)?@"Regular":[name substringFromIndex:dash.location+1];
 
     if([traitName rangeOfString:@"Bold"].location!=NSNotFound)
      traits|=NSBoldFontMask;

@@ -10,6 +10,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 #import <AppKit/NSFontPanel.h>
 #import <AppKit/NSFont.h>
 #import <AppKit/NSFontFamily.h>
+#import <AppKit/NSDisplay.h>
 #import <AppKit/NSFontTypeface.h>
 #import <AppKit/NSNibLoading.h>
 #import <AppKit/NSApplication.h>
@@ -146,17 +147,29 @@ static Class _fontPanelFactory;
 
 -(NSArray *)availableMembersOfFontFamily:(NSString *)familyName {
    NSMutableArray *result=[NSMutableArray array];
-   NSFontFamily   *family=[NSFontFamily fontFamilyWithName:familyName];
-   NSArray        *typefaces=[family typefaces];
-   int             i,count=[typefaces count];
+   NSArray        *typefaces=[[NSDisplay currentDisplay] fontTypefacesForFamilyName:familyName];
+   int             i,count;
 
+   /* The family cache is built once and can predate the directory scan
+    * that discovers the fonts on this image.  Query the display first so
+    * a face list handed out by CoreText always resolves to real faces;
+    * fall back to the cached family only if that produced nothing. */
+   if([typefaces count]==0){
+    NSFontFamily *family=[NSFontFamily fontFamilyWithName:familyName];
+    typefaces=[family typefaces];
+   }
+   count=[typefaces count];
    for(i=0;i<count;i++){
     NSFontTypeface *typeface=[typefaces objectAtIndex:i];
     NSString       *name=[typeface name];
     NSString       *traitName=[typeface traitName];
+    NSFontTraitMask traits=[typeface traits];
+    int             weight=(traits&NSBoldFontMask)?9:5;
 
 	   // Callers expect an array of four objects
-    [result addObject:[NSArray arrayWithObjects:name,traitName, [NSNumber numberWithInt: 0], [NSNumber numberWithInt: 0], nil]];
+    [result addObject:[NSArray arrayWithObjects:name,traitName,
+        [NSNumber numberWithInt:weight],
+        [NSNumber numberWithInt:(int)traits], nil]];
    }
 
    return result;

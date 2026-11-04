@@ -89,9 +89,28 @@ static inline int integerFromCFUID(id object){
 
    // TODO: decode class version
 
-   if((result=[_nameToReplacementClass objectForKey:className])==Nil)
-    if((result=NSClassFromString(className))==Nil)
-     [NSException raise:NSInvalidArgumentException format:@"Unable to find class named %@",className];
+   if((result=[_nameToReplacementClass objectForKey:className])==Nil) {
+    result=NSClassFromString(className);
+    if(result==Nil) {
+     /* The archive names the concrete class and its superclass chain in
+      * $classes.  A menu relayed from another process can name a private
+      * subclass this process does not link (Firefox's
+      * GeckoServicesNSMenu in SystemUIServer).  Decode as the nearest
+      * superclass that exists instead of failing the whole menu. */
+     NSArray *classNames=[profile objectForKey:@"$classes"];
+     NSUInteger i,classCount=[classNames count];
+
+     for(i=0;i<classCount;i++){
+      NSString *candidate=[classNames objectAtIndex:i];
+
+      if((result=NSClassFromString(candidate))!=Nil)
+       break;
+     }
+    }
+   }
+
+   if(result==Nil)
+    [NSException raise:NSInvalidArgumentException format:@"Unable to find class named %@",className];
 
    return result;
 }

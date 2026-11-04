@@ -78,6 +78,23 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
     if([[check name] isEqualToString:name])
      return check;
    }
+
+   /* Fonts discovered after the family cache was built (the dynamic
+    * directory scan in O2FontKnownFontNames) are not in the cache yet.
+    * Build the family on demand so a name handed out by CoreText is
+    * always resolvable here. */
+   {
+    NSArray *typefaces=[[NSDisplay currentDisplay] fontTypefacesForFamilyName:name];
+
+    if([typefaces count]>0){
+     NSFontFamily *family=[[[NSFontFamily alloc] initWithName:name] autorelease];
+
+     [family addTypefaces:typefaces];
+     [[self fontFamilies] addObject:family];
+     return family;
+    }
+   }
+
    return nil;
 }
 
