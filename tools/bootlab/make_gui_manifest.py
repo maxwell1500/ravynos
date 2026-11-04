@@ -412,6 +412,16 @@ def main():
     staged = {e["path"] for e in base["files"]}
 
     # 1. Extract the bundle fresh so re-runs are deterministic.
+    # Repack from the build tree when it exists.  The tarball used to be a
+    # hand-made artifact, so rebuilding WindowServer left the image booting a
+    # days-old binary (observed as a black screen after the CGFloat ABI
+    # change).  The build tree is authoritative when present.
+    ws_build_bundle = os.path.join(BUILD_SRC, "CoreServices", "WindowServer",
+                                   "WindowServer.app")
+    if os.path.isdir(ws_build_bundle):
+        subprocess.run(["tar", "-czf", BUNDLE_TAR, "-C",
+                        os.path.dirname(ws_build_bundle), "WindowServer.app"],
+                       check=True)
     if not os.path.isfile(BUNDLE_TAR):
         sys.exit("missing bundle tarball: %s" % BUNDLE_TAR)
     if os.path.isdir(BUNDLE_EXTRACT):
