@@ -401,22 +401,39 @@ static BOOL initFunctionsForParameters(O2Surface *self,size_t bitsPerComponent,s
           break;
           
          case kO2ImageAlphaPremultipliedFirst:
+         case kO2ImageAlphaFirst:
+         case kO2ImageAlphaNoneSkipFirst:
           switch(bitmapInfo&kO2BitmapByteOrderMask){
            case kO2BitmapByteOrderDefault:
            case kO2BitmapByteOrder16Little:
            case kO2BitmapByteOrder32Little:
+            self->_writeargb32f=O2SurfaceWrite_argb32f_to_ABGR8888;
             self->_writeargb8u=O2SurfaceWrite_argb8u_to_BGRA8888;
+            return YES;
+
+           case kO2BitmapByteOrder16Big:
+           case kO2BitmapByteOrder32Big:
+            self->_writeargb32f=O2SurfaceWrite_argb32f_to_argb8u;
+            self->_writeargb8u=O2SurfaceWrite_argb8u_to_argb8u;
             return YES;
           }
           break;
-                    
-         case kO2ImageAlphaFirst:
-          break;
-          
+
          case kO2ImageAlphaNoneSkipLast:
-          break;
-          
-         case kO2ImageAlphaNoneSkipFirst:
+          switch(bitmapInfo&kO2BitmapByteOrderMask){
+           case kO2BitmapByteOrderDefault:
+           case kO2BitmapByteOrder16Little:
+           case kO2BitmapByteOrder32Little:
+            self->_writeargb32f=O2SurfaceWrite_argb32f_to_ABGR8888;
+            self->_writeargb8u=O2SurfaceWrite_argb8u_to_ABGR8888;
+            return YES;
+
+           case kO2BitmapByteOrder16Big:
+           case kO2BitmapByteOrder32Big:
+            self->_writeargb32f=O2SurfaceWrite_argb32f_to_argb8u;
+            self->_writeargb8u=O2SurfaceWrite_argb8u_to_argb8u;
+            return YES;
+          }
           break;
         }
        }
@@ -514,7 +531,9 @@ static BOOL initFunctionsForParameters(O2Surface *self,size_t bitsPerComponent,s
     _pixelBytes=(void *)[provider bytes];
 
    if(!initFunctionsForParameters(self,bitsPerComponent,_bitsPerPixel,colorSpace,bitmapInfo))
-    NSLog(@"O2Surface -init error, return");
+    NSLog(@"O2Surface -init error, return bpc=%zu bpp=%d model=%d info=0x%x",
+        bitsPerComponent,(int)_bitsPerPixel,(int)[colorSpace type],
+        (unsigned)bitmapInfo);
 
    _clampExternalPixels=NO; // only set to yes if premultiplied
    pthread_mutex_init(&_lock,NULL);
