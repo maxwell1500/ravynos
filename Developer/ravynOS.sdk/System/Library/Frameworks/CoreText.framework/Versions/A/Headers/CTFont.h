@@ -11,10 +11,17 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 #import <CoreGraphics/CGAffineTransform.h>
 #import <CoreGraphics/CGFont.h>
 #import <CoreGraphics/CGPath.h>
+#import <CoreFoundation/CoreFoundation.h>
 
 @class KTFont;
 
 typedef KTFont *CTFontRef;
+typedef struct __CTFontDescriptor *CTFontDescriptorRef;
+typedef struct __CTFontCollection *CTFontCollectionRef;
+#ifndef RAVYN_CTFONTSYMBOLICTRAITS_DEFINED
+#define RAVYN_CTFONTSYMBOLICTRAITS_DEFINED
+typedef uint32_t CTFontSymbolicTraits;
+#endif
 
 typedef enum {
     kCTFontSystemFontType = 2,
@@ -64,3 +71,32 @@ CORETEXT_EXPORT CGFloat CTFontGetSlantAngle(CTFontRef self);
 CORETEXT_EXPORT CGFloat CTFontGetXHeight(CTFontRef self);
 CORETEXT_EXPORT CGFloat CTFontGetCapHeight(CTFontRef self);
 CORETEXT_EXPORT CGPathRef CTFontCreatePathForGlyph(CTFontRef self, CGGlyph glyph, CGAffineTransform *xform);
+
+
+/* Font descriptor attributes.  These are real CFString keys: callers
+ * compare them by pointer or contents. */
+extern NSString * const kCTFontNameAttribute;
+extern NSString * const kCTFontSizeAttribute;
+extern NSString * const kCTFontFamilyNameAttribute;
+
+CTFontDescriptorRef CTFontDescriptorCreateWithAttributes(CFDictionaryRef attributes);
+CTFontDescriptorRef CTFontDescriptorCreateWithNameAndSize(CFStringRef name, CGFloat size);
+CTFontDescriptorRef CTFontDescriptorCreateCopyWithAttributes(CTFontDescriptorRef descriptor, CFDictionaryRef attributes);
+CFDictionaryRef CTFontDescriptorCopyAttributes(CTFontDescriptorRef descriptor);
+CFTypeRef CTFontDescriptorCopyAttribute(CTFontDescriptorRef descriptor, CFStringRef attribute);
+CFArrayRef CTFontDescriptorCreateMatchingFontDescriptors(CTFontDescriptorRef descriptor, CFSetRef mandatoryAttributes);
+CFTypeID CTFontDescriptorGetTypeID(void);
+
+CTFontRef CTFontCreateWithName(CFStringRef name, CGFloat size, const CGAffineTransform *matrix);
+CTFontRef CTFontCreateWithFontDescriptor(CTFontDescriptorRef descriptor, CGFloat size, const CGAffineTransform *matrix);
+CTFontRef CTFontCreateCopyWithAttributes(CTFontRef font, CGFloat size, const CGAffineTransform *matrix, CTFontDescriptorRef attributes);
+CTFontRef CTFontCreateCopyWithSymbolicTraits(CTFontRef font, CGFloat size, const CGAffineTransform *matrix, CTFontSymbolicTraits symTraitValue, CTFontSymbolicTraits symTraitMask);
+CTFontDescriptorRef CTFontCopyFontDescriptor(CTFontRef font);
+CFTypeRef CTFontCopyAttribute(CTFontRef font, CFStringRef attribute);
+
+
+CTFontCollectionRef CTFontCollectionCreateFromAvailableFonts(CFDictionaryRef options);
+CTFontCollectionRef CTFontCollectionCreateWithFontDescriptors(CFArrayRef descriptors, CFDictionaryRef options);
+CFArrayRef CTFontCollectionCreateMatchingFontDescriptors(CTFontCollectionRef collection, CFSetRef mandatoryAttributes);
+CFTypeID CTFontCollectionGetTypeID(void);
+CFArrayRef CTFontManagerCopyAvailablePostScriptNames(void);

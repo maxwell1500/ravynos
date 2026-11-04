@@ -488,6 +488,32 @@ map_images_nolock(unsigned mhCount, const char * const mhPaths[],
                 // no objc data in this entry
                 continue;
             }
+
+            /*
+             * Modern Mach-O images place class metadata in __DATA_CONST,
+             * which dyld maps read-only.  The runtime writes the class's
+             * isa/bits during realization (changeInfo, setData), so the
+             * segment has to be made writable first.  Without this, the
+             * first message to any unrealized class in such an image
+             * SIGBUSes on the read-only page.
+             */
+            {
+                const char *segnames[] = { "__DATA_CONST", "__DATA_DIRTY" };
+                for (size_t si = 0; si < sizeof(segnames)/sizeof(segnames[0]); si++) {
+                    unsigned long segsize = 0;
+                    uint8_t *seg = getsegmentdata(mhdr, segnames[si], &segsize);
+                    if (seg != NULL && segsize != 0) {
+                        kern_return_t kr = vm_protect(mach_task_self(),
+                            (vm_address_t)seg, (vm_size_t)segsize, FALSE,
+                            VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY);
+
+                        if (kr != KERN_SUCCESS) {
+                            dprintf(2, "[objc] vm_protect %s %p+%lx failed %d\n",
+                                segnames[si], seg, segsize, kr);
+                        }
+                    }
+                }
+            }
             
             if (mhdr->filetype == MH_EXECUTE) {
                 // Size some data structures based on main executable's size

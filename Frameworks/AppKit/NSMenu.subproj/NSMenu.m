@@ -16,6 +16,14 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 @implementation NSMenu
 
+-(NSInteger)userInterfaceLayoutDirection {
+   return 0; /* NSUserInterfaceLayoutDirectionLeftToRight */
+}
+
+-(void)setUserInterfaceLayoutDirection:(NSInteger)direction {
+   (void)direction;
+}
+
 +(void)popUpContextMenu:(NSMenu *)menu withEvent:(NSEvent *)event forView:(NSView *)view {
 #if 0
    [menu update];

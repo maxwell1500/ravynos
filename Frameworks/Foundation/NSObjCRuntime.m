@@ -110,7 +110,7 @@ static void NSLogDefaultCStringFunction(const char *string, unsigned length, BOO
    NSString *message = [[NSString alloc] initWithBytes:string length:length encoding:[NSString defaultCStringEncoding]];
    if (withSyslogBanner)
    {
-      NSLogFormat(@"%s", string);
+      fprintf(stderr, "%.*s\n", (int)length, string);
       NSLogAppendToSystemLog(string, length);
    }
    else
@@ -128,11 +128,21 @@ void NSLogv(NSString *format,va_list arguments) {
    char    *bytes;
 
    [string getCharacters:unicode];
-   bytes=NSString_cStringFromCharacters(unicode,length,YES,&byteLength,NULL,NO);
+   /*
+    * NSLog hands the buffer to a C-string function, so it must be
+    * NUL-terminated.  With zeroTerminate=NO the buffer ended exactly at the
+    * last character; NSLogDefaultCStringFunction then formatted it with %s and
+    * strlen walked into adjacent heap until a chance zero (JS logs showed
+    * "%C%C..." garbage), eventually faulting at a page boundary.
+    */
+   bytes=NSString_cStringFromCharacters(unicode,length,YES,&byteLength,NULL,YES);
    [string release];
    if (bytes == NULL) return;
+   if (byteLength > 0 && bytes[byteLength - 1] == '\0') {
+      byteLength--;
+   }
 
-   sNSLogCString(bytes,byteLength,YES);
+   sNSLogCString(bytes,(unsigned)byteLength,YES);
    NSZoneFree(NULL,bytes);
 }
 

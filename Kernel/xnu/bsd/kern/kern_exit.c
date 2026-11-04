@@ -1404,6 +1404,26 @@ abort_with_payload_internal(proc_t p,
 		}
 		os_reason_free(exit_reason);
 	} else {
+		char abuf[512];
+
+		/*
+		 * dyld and libsystem report fatal errors through this call.  The
+		 * message lives in the exit reason, which nothing prints on a
+		 * console-only system, so surface it here before the process dies.
+		 */
+		abuf[0] = '\0';
+		if (reason_string != 0) {
+			size_t alen = 0;
+
+			if (copyinstr(reason_string, abuf, sizeof(abuf) - 1, &alen) != 0) {
+				abuf[0] = '\0';
+			} else {
+				abuf[sizeof(abuf) - 1] = '\0';
+			}
+		}
+		printf("CORPSE: pid %d abort_with_payload ns=%u code=%llu reason=\"%s\"\n",
+		    proc_getpid(p), reason_namespace,
+		    (unsigned long long)reason_code, abuf);
 		/*
 		 * We use SIGABRT (rather than calling exit directly from here) so that
 		 * the debugger can catch abort_with_{reason,payload} calls.

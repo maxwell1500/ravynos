@@ -2600,13 +2600,34 @@ task_deliver_crash_notification(
 					printf("\n");
 				}
 			}
-			printf("CORPSE:   regs rdi 0x%016llx rsi 0x%016llx rax 0x%016llx rbx 0x%016llx r8 0x%016llx r9 0x%016llx\n",
+			printf("CORPSE:   regs rdi 0x%016llx rsi 0x%016llx rdx 0x%016llx rcx 0x%016llx rax 0x%016llx rbx 0x%016llx r8 0x%016llx r9 0x%016llx r10 0x%016llx r11 0x%016llx\n",
 			    (unsigned long long)ss->rdi,
 			    (unsigned long long)ss->rsi,
+			    (unsigned long long)ss->rdx,
+			    (unsigned long long)ss->rcx,
 			    (unsigned long long)ss->rax,
 			    (unsigned long long)ss->rbx,
 			    (unsigned long long)ss->r8,
-			    (unsigned long long)ss->r9);
+			    (unsigned long long)ss->r9,
+			    (unsigned long long)ss->r10,
+			    (unsigned long long)ss->r11);
+			{
+				vm_map_t cm = get_task_map(corpse);
+				char rdxpath[256], r10path[256];
+
+				corpse_vma_path(cm, (vm_map_offset_t)ss->rdx,
+				    rdxpath, sizeof(rdxpath));
+				corpse_vma_path(cm, (vm_map_offset_t)ss->r10,
+				    r10path, sizeof(r10path));
+				printf("CORPSE:   rdx vma 0x%016llx-0x%016llx %s\n",
+				    (unsigned long long)corpse_vma(cm, (vm_map_offset_t)ss->rdx),
+				    (unsigned long long)corpse_vma_end(cm, (vm_map_offset_t)ss->rdx),
+				    rdxpath[0] ? rdxpath : "?");
+				printf("CORPSE:   r10 vma 0x%016llx-0x%016llx %s\n",
+				    (unsigned long long)corpse_vma(cm, (vm_map_offset_t)ss->r10),
+				    (unsigned long long)corpse_vma_end(cm, (vm_map_offset_t)ss->r10),
+				    r10path[0] ? r10path : "?");
+			}
 			/*
 			 * ravynOS: the receiver's first word, which for an
 			 * Objective-C or CoreFoundation object is its isa. When

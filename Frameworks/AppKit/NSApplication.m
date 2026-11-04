@@ -93,6 +93,14 @@ NSString * const NSApplicationDidChangeScreenParametersNotification=@"NSApplicat
 
 @implementation NSApplication
 
+-(NSInteger)userInterfaceLayoutDirection {
+   return 0; /* NSUserInterfaceLayoutDirectionLeftToRight */
+}
+
+-(void)setUserInterfaceLayoutDirection:(NSInteger)direction {
+   (void)direction;
+}
+
 id NSApp=nil;
 /* ravynOS: unconditional trace for GUI bring-up debugging. */
 

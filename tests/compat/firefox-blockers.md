@@ -1014,3 +1014,30 @@ The next crash is a different one: Gecko messages an object with selector
 `"frame"` and the receiver is not a live view (`rax=0`, rdi points at a
 stack temporary).  `-[NSWindow contentLayoutRect]` was added on the way; the
 next step is identifying which view Gecko expects to still be alive.
+
+### The CGFloat ABI (2026-11-03)
+
+`CGFloat` was `float` in `CGGeometry.h`.  On x86_64 macOS it is `double`,
+so `CGRect`/`NSRect` were 16 bytes instead of 32 and every struct-returning
+method used the register-return convention.  Stock binaries (Firefox) use
+`objc_msgSend_stret`; the mismatch made Gecko pass a stack return buffer as
+`self` and AppKit write 32 bytes over it.  `CGFloat` is now `double` on
+LP64, and every framework and app bundle was rebuilt.  This is a binary
+compatibility fix, not a Firefox workaround: it applies to every stock app.
+
+### __DATA_CONST is read-only
+
+Modern Mach-O images put class metadata in `__DATA_CONST`.  The objc4
+runtime never changed the protection of those segments, so the first
+message to an unrealized class SIGBUSed in `changeInfo`.  `map_images_nolock`
+now `vm_protect`s `__DATA_CONST`/`__DATA_DIRTY` writable (VM_PROT_COPY).
+
+### Font enumeration
+
+CoreText had no `CTFontDescriptor` or `CTFontCollection` at all, and
+`CTFontManagerCopyAvailableFontFamilyNames` returned `NSString` objects that
+Gecko could not read with `CFStringGetCString`.  Descriptors, collections,
+name/size constructors, family matching, and the PostScript-name list are
+now implemented.  The family array is an ObjC wrapper registered as the
+ObjC class for `kNSCFTypeArray` so Gecko can both use CFArray accessors and
+fast-enumerate it.

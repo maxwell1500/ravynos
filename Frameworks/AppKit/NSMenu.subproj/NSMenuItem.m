@@ -15,6 +15,14 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 @implementation NSMenuItem
 
+-(NSView *)view {
+   return nil;
+}
+
+-(void)setView:(NSView *)view {
+   (void)view;
+}
+
 +(NSMenuItem *)separatorItem {
    return [[[self alloc] initWithTitle:nil action:NULL keyEquivalent:nil] autorelease];
 }

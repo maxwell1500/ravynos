@@ -10,11 +10,27 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 #import <CoreFoundation/CFBase.h>
 #include <stdbool.h>
 #include <math.h>
+#include <float.h>
 
+/*
+ * 64-bit macOS uses double.  The tree was built for years with float here,
+ * which made CGRect 16 bytes instead of 32 and gave every NSRect-returning
+ * method the register-return ABI; stock binaries call those through
+ * objc_msgSend_stret and the two conventions cannot interoperate.
+ */
+#if defined(__LP64__) || defined(__x86_64__) || defined(__arm64__)
+typedef double CGFloat;
+#define CGFLOAT_MIN DBL_MIN
+#define CGFLOAT_MAX DBL_MAX
+#define CGFLOAT_SCAN "%lg"
+#define CGFLOAT_IS_DOUBLE 1
+#else
 typedef float CGFloat;
 #define CGFLOAT_MIN FLT_MIN
 #define CGFLOAT_MAX FLT_MAX
 #define CGFLOAT_SCAN "%g"
+#define CGFLOAT_IS_DOUBLE 0
+#endif
 
 typedef struct CGPoint {
     CGFloat x;

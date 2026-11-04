@@ -1754,6 +1754,11 @@ static BOOL _allowsAutomaticWindowTabbing = YES;
     return result;
 }
 
+-(NSInteger)windowTitlebarLayoutDirection {
+   /* The titlebar has no RTL variant here; report the system default. */
+   return 0; /* NSUserInterfaceLayoutDirectionLeftToRight */
+}
+
 -(NSRect)contentLayoutRect {
    NSRect result = [self contentRectForFrameRect:[self frame]];
 

@@ -368,6 +368,14 @@ LExit$0:
 	//
 LLookupStart$2:
 
+	// A class whose cache has never been filled has a NULL bucket array.
+	// The old code added the (zero) mask offset to that NULL pointer and
+	// dereferenced it.  Treat an empty cache as a cache miss; the slow path
+	// fills it.  This is reachable for classes registered at runtime by dyld
+	// or objc_registerClassPair before their first message.
+	cmpq	$$0, 16(%r10)		// class->cache.buckets == NULL?
+	je	LCacheMiss$2
+
 .if $0 != STRET
 	movq	%a2, %r11		// r11 = _cmd
 .else

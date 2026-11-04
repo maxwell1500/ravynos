@@ -23,6 +23,7 @@ clean:
 .include <rvn.framework.mk>
 
 CFLAGS+= -I${.CURDIR:H} -I${.CURDIR:H}/libobjc2 -I${.CURDIR:H}/Foundation/Headers \
+	 -I${.CURDIR:H}/CoreFoundation \
 	 -I${.CURDIR}/fontconfig/fontconfig \
 	 -F${OBJTOP}/Frameworks/OpenGL
 

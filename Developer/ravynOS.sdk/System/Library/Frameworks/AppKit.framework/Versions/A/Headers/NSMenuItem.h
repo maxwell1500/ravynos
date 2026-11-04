@@ -11,6 +11,8 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 @class NSMenu, NSImage, NSAttributedString;
 
+@class NSView;
+
 @interface NSMenuItem : NSObject <NSCopying, NSValidatedUserInterfaceItem> {
     NSMenu *_menu;
     NSString *_title;
@@ -36,6 +38,9 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 }
 
 + (NSMenuItem *)separatorItem;
+
+- (NSView *)view;
+- (void)setView:(NSView *)view;
 
 - initWithTitle:(NSString *)title action:(SEL)action keyEquivalent:(NSString *)keyEquivalent;
 

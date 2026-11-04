@@ -801,6 +801,11 @@
       "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
     },
     {
+      "path": "usr/lib/libobjc.dylib",
+      "file": "../../Developer/ravynOS.sdk/usr/lib/libobjc.A.dylib",
+      "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
+    },
+    {
       "path": "System/Library/Frameworks/QuartzCore.framework/Versions/A/QuartzCore",
       "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/QuartzCore.framework/Versions/A/QuartzCore",
       "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
@@ -818,11 +823,6 @@
     {
       "path": "usr/lib/libexpat.1.dylib",
       "file": "../../Developer/ravynOS.sdk/usr/lib/libexpat.1.dylib",
-      "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
-    },
-    {
-      "path": "usr/lib/libobjc.dylib",
-      "file": "../../Developer/ravynOS.sdk/usr/lib/libobjc.A.dylib",
       "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
     },
     {
@@ -1221,6 +1221,36 @@
       "comment": "Activity Monitor.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Utilities_ActivityMonitor_Activity Monitor.app)"
     },
     {
+      "path": "Applications/Utilities/Activity Monitor.app/Activity_Monitor.app/Activity Monitor",
+      "file": "work/Applications_Utilities_ActivityMonitor_Activity Monitor.app/Activity_Monitor.app/Contents/ravynOS/Activity Monitor",
+      "comment": "Activity Monitor.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Utilities_ActivityMonitor_Activity Monitor.app)"
+    },
+    {
+      "path": "Applications/Utilities/Activity Monitor.app/Activity_Monitor.app/Contents/Info.plist",
+      "file": "work/icons/com.ravynos.ActivityMonitor.Info.plist",
+      "comment": "Activity Monitor.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Utilities_ActivityMonitor_Activity Monitor.app)"
+    },
+    {
+      "path": "Applications/Utilities/Activity Monitor.app/Activity_Monitor.app/Contents/PkgInfo",
+      "file": "work/Applications_Utilities_ActivityMonitor_Activity Monitor.app/Activity_Monitor.app/Contents/PkgInfo",
+      "comment": "Activity Monitor.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Utilities_ActivityMonitor_Activity Monitor.app)"
+    },
+    {
+      "path": "Applications/Utilities/Activity Monitor.app/Activity_Monitor.app/Contents/ravynOS/Activity Monitor",
+      "file": "work/Applications_Utilities_ActivityMonitor_Activity Monitor.app/Activity_Monitor.app/Contents/ravynOS/Activity Monitor",
+      "comment": "Activity Monitor.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Utilities_ActivityMonitor_Activity Monitor.app)"
+    },
+    {
+      "path": "Applications/Utilities/Activity Monitor.app/Activity_Monitor.app/Contents/ravynOS/Activity_Monitor.debug",
+      "file": "work/Applications_Utilities_ActivityMonitor_Activity Monitor.app/Activity_Monitor.app/Contents/ravynOS/Activity_Monitor.debug",
+      "comment": "Activity Monitor.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Utilities_ActivityMonitor_Activity Monitor.app)"
+    },
+    {
+      "path": "Applications/Utilities/Activity Monitor.app/Activity_Monitor.app/Contents/ravynOS/Activity_Monitor.full",
+      "file": "work/Applications_Utilities_ActivityMonitor_Activity Monitor.app/Activity_Monitor.app/Contents/ravynOS/Activity_Monitor.full",
+      "comment": "Activity Monitor.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Utilities_ActivityMonitor_Activity Monitor.app)"
+    },
+    {
       "path": "Applications/Utilities/Activity Monitor.app/Contents/Info.plist",
       "file": "work/icons/com.ravynos.ActivityMonitor.Info.plist",
       "comment": "Activity Monitor.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_Utilities_ActivityMonitor_Activity Monitor.app)"
@@ -1511,6 +1541,21 @@
       "comment": "ABI conformance fixture (tests/compat)"
     },
     {
+      "path": "usr/local/compat/spinkill",
+      "file": "work/compat/spinkill",
+      "comment": "ABI conformance fixture (tests/compat)"
+    },
+    {
+      "path": "usr/local/compat/tdump",
+      "file": "work/compat/tdump",
+      "comment": "ABI conformance fixture (tests/compat)"
+    },
+    {
+      "path": "usr/local/compat/tsample",
+      "file": "work/compat/tsample",
+      "comment": "ABI conformance fixture (tests/compat)"
+    },
+    {
       "path": "usr/local/compat/passwd",
       "file": "work/compat/passwd",
       "comment": "ABI conformance fixture (tests/compat)"
@@ -1518,6 +1563,11 @@
     {
       "path": "usr/local/compat/bootstrap_probe",
       "file": "work/compat/bootstrap_probe",
+      "comment": "ABI conformance fixture (tests/compat)"
+    },
+    {
+      "path": "usr/local/compat/spawnprobe",
+      "file": "work/compat/spawnprobe",
       "comment": "ABI conformance fixture (tests/compat)"
     },
     {
@@ -9123,6 +9173,11 @@
     {
       "path": "Applications/Utilities/Screenshot.app/Contents/Resources/icon.png",
       "file": "work/icons/com.ravynos.Screenshot.png",
+      "comment": "generated app icon (make_app_icons.py)"
+    },
+    {
+      "path": "Applications/Utilities/Activity Monitor.app/Activity_Monitor.app/Contents/Resources/icon.png",
+      "file": "work/icons/com.ravynos.ActivityMonitor.png",
       "comment": "generated app icon (make_app_icons.py)"
     },
     {
