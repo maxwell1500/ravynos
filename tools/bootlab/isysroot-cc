@@ -119,8 +119,24 @@ overlay_for() {
         done
         ( cd "$src" && find . -type f -print ) | while read -r rel; do
             b="${rel##*/}"
+            # jmp_buf must always come from the SDK.  Kernel trees declare
+            #     typedef struct jmp_buf { ... } jmp_buf_t;
+            # so "jmp_buf" is a struct tag, not the SDK's int array, and
+            # libxpc/mpack.c fails with "must use 'struct' tag".
+            case "$rel" in
+            ./machine/setjmp.h|./i386/setjmp.h) continue ;;
+            esac
             case "$src" in
             */Kernel/xnu/EXTERNAL_HEADERS)
+                # jmp_buf must come from the SDK too.  The kernel's
+                # machine/setjmp.h + i386/setjmp.h declare
+                #     typedef struct jmp_buf { ... } jmp_buf_t;
+                # so "jmp_buf" is a struct tag, not the SDK's int array, and
+                # every C file that includes <setjmp.h> (libxpc/mpack.c) fails
+                # with "must use 'struct' tag to refer to type 'jmp_buf'".
+                case "$rel" in
+                ./machine/setjmp.h|./i386/setjmp.h) continue ;;
+                esac
                 # The Availability* family must come from the SDK, not here.
                 case "$b" in Availability*) continue ;; esac
                 # Drop the whole mach-o/ directory, for the same reason and by
