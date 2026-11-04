@@ -434,6 +434,32 @@ generate_mig() {
     run_mig internal    -header "$WORK/gen/internal.h" -sheader "$WORK/gen/internalServer.h"
 }
 
+# The checked-in *Server.c dispatchers build the MIG reply header from the
+# request's remote port.  That is not the reply port: the kernel (and
+# mig_reply_setup) reply to the request's LOCAL port.  With the wrong header
+# launchd's replies fail with MACH_SEND_INVALID_HEADER (0x10000010), which is
+# what Firefox saw as "reply send failed".  These files are mig output and are
+# gitignored, so the correction is applied here, idempotently.
+patch_mig_reply_headers() {
+    python3 - "$SRCDIR" <<'PY'
+import glob, re, sys
+pat = re.compile(
+    r"OutHeadP->msgh_bits = MACH_MSGH_BITS\(MACH_MSGH_BITS_REPLY\(InHeadP->msgh_bits\), 0\);\n"
+    r"\s*OutHeadP->msgh_remote_port = InHeadP->msgh_reply_port;\n"
+    r"(?:\s*/\*[^\n]*\*/\n)?"
+    r"\s*OutHeadP->msgh_size = \(mach_msg_size_t\)sizeof\(mig_reply_error_t\);\n"
+    r"\s*OutHeadP->msgh_local_port = MACH_PORT_NULL;\n"
+    r"\s*OutHeadP->msgh_id = InHeadP->msgh_id \+ 100;\n"
+    r"\s*OutHeadP->msgh_reserved = 0;")
+for path in glob.glob(sys.argv[1] + "/*Server.c"):
+    text = open(path).read()
+    new, n = pat.subn("mig_reply_setup(InHeadP, OutHeadP);\n\tOutHeadP->msgh_reserved = 0;", text)
+    if n:
+        open(path, "w").write(new)
+        print("  patched %s (%d)" % (path, n))
+PY
+}
+
 # --------------------------------------------------------------------- compile
 compile_one() {
     local src="$1" extra="${2:-}"
@@ -551,6 +577,7 @@ verify_one() {
 require_sdk
 mkdir -p "$WORK"
 make_mig_shim
+patch_mig_reply_headers
 make_compat
 make_force_compat
 generate_mig
