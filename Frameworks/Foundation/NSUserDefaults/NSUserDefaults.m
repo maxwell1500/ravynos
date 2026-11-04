@@ -133,6 +133,14 @@ NSString * const NSUserDefaultsDidChangeNotification=@"NSUserDefaultsDidChangeNo
    return self;
 }
 
+-initWithSuiteName:(NSString *)suiteName {
+   /* The suite-specific persistent domain is not modelled here; the
+    * standard domains still answer, which is enough for clients that use
+    * a suite name to partition their own keys. */
+   (void)suiteName;
+   return [self init];
+}
+
 -initWithUser:(NSString *)user {
    NSUnimplementedMethod();
    return nil;

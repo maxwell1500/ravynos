@@ -1745,6 +1745,26 @@ static BOOL _allowsAutomaticWindowTabbing = YES;
    return point;
 }
 
+-(NSPoint)convertPointToScreen:(NSPoint)point {
+   return [self convertBaseToScreen:point];
+}
+
+-(NSPoint)convertPointFromScreen:(NSPoint)point {
+   return [self convertScreenToBase:point];
+}
+
+-(NSRect)convertRectToScreen:(NSRect)rect {
+   NSPoint origin=[self convertBaseToScreen:rect.origin];
+
+   return NSMakeRect(origin.x, origin.y, rect.size.width, rect.size.height);
+}
+
+-(NSRect)convertRectFromScreen:(NSRect)rect {
+   NSPoint origin=[self convertScreenToBase:rect.origin];
+
+   return NSMakeRect(origin.x, origin.y, rect.size.width, rect.size.height);
+}
+
 -(NSRect)frameRectForContentRect:(NSRect)contentRect {
    NSRect result=CGOutsetRectForNativeWindowBorder(contentRect,[self styleMask]);
     

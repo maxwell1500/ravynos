@@ -24,6 +24,22 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
    return [[NSDisplay currentDisplay] mouseLocation];
 }
 
++(BOOL)isSwipeTrackingFromScrollEventsEnabled {
+   return NO;
+}
+
++(void)setSwipeTrackingFromScrollEventsEnabled:(BOOL)flag {
+   (void)flag;
+}
+
++(BOOL)isMouseCoalescingEnabled {
+   return YES;
+}
+
++(void)setMouseCoalescingEnabled:(BOOL)flag {
+   (void)flag;
+}
+
 +(NSUInteger)modifierFlags {
    return [[NSDisplay currentDisplay] currentModifierFlags];
 }

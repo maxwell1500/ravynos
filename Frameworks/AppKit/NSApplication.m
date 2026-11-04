@@ -969,6 +969,16 @@ static NSMenuItem *itemWithTag(NSMenu *root, int tag) {
 	return _isHidden;
 }
 
+static BOOL sFullKeyboardAccessEnabled = NO;
+
+-(BOOL)isFullKeyboardAccessEnabled {
+   return sFullKeyboardAccessEnabled;
+}
+
+-(void)setFullKeyboardAccessEnabled:(BOOL)flag {
+   sFullKeyboardAccessEnabled = flag;
+}
+
 -(BOOL)isRunning {
    return _isRunning;
 }
