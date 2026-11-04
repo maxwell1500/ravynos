@@ -745,23 +745,13 @@ extern int _CFRuntimeRegisterObjCClass(CFTypeID typeID, uintptr_t cls);
 static void
 ravyn_ensure_array_bridge(void)
 {
-    static Class arrayClass = Nil;
+    static int registered = 0;
 
-    if (arrayClass == Nil) {
-        arrayClass = objc_allocateClassPair([NSObject class], "RavynCFArray", 0);
-        class_addMethod(arrayClass, @selector(count),
-            class_getMethodImplementation(arrayClass, @selector(count)),
-            "Q@:");
-        class_addMethod(arrayClass, @selector(objectAtIndex:),
-            class_getMethodImplementation(arrayClass, @selector(objectAtIndex:)),
-            "@@:Q");
-        class_addMethod(arrayClass,
-            @selector(countByEnumeratingWithState:objects:count:),
-            class_getMethodImplementation(arrayClass,
-                @selector(countByEnumeratingWithState:objects:count:)),
-            "Q@:^@Q");
-        objc_registerClassPair(arrayClass);
-        _CFRuntimeRegisterObjCClass(kNSCFTypeArray, (uintptr_t)arrayClass);
+    if (!registered) {
+        registered = 1;
+        /* RavynCFArray is a compiled class; no runtime class creation. */
+        _CFRuntimeRegisterObjCClass(kNSCFTypeArray,
+            (uintptr_t)[RavynCFArray class]);
     }
 }
 
