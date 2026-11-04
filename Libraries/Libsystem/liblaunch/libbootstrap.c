@@ -28,6 +28,10 @@
 #include "vproc_priv.h"
 
 #include <mach/mach.h>
+#include <mach/task_special_ports.h>
+#include <mach/message.h>
+#include <sys/types.h>
+#include <stdio.h>
 #include <mach/mach_port.h>
 #include <sys/types.h>
 #include <sys/syslog.h>
@@ -133,12 +137,63 @@ bootstrap_create_service(mach_port_t bp, name_t service_name, mach_port_t *sp)
 	return bootstrap_look_up(bp, service_name, sp);
 }
 
+/*
+ * Symbols Firefox and its content process bind from libSystem on macOS.
+ * audit_token_to_pid() reads the pid word of the audit token; the sandbox
+ * entry point is the Phase 4.3d accept-and-log no-op, with the profile
+ * named on stderr so the audit trail shows what would have been confined.
+ */
+pid_t
+audit_token_to_pid(audit_token_t atoken)
+{
+	return (pid_t)atoken.val[5];
+}
+
+int
+sandbox_init_with_parameters(const char *profile, uint64_t flags,
+    const char *const parameters[], char **errorbuf)
+{
+	(void)flags;
+	(void)parameters;
+	if (errorbuf != NULL) {
+		*errorbuf = NULL;
+	}
+	fprintf(stderr, "[sandbox] profile applied as no-op: %s\n",
+	    profile ? profile : "(null)");
+	return 0;
+}
+
+/*
+ * libSystem does not initialize bootstrap_port for ordinary processes.
+ * Firefox passes the global (still MACH_PORT_NULL) to bootstrap_check_in()
+ * and bootstrap_look_up(); resolve it from the task's bootstrap special
+ * port on first use instead of failing the child-process handshake.
+ */
+static mach_port_t
+ravyn_bootstrap_port(mach_port_t bp)
+{
+	if (MACH_PORT_VALID(bp)) {
+		return bp;
+	}
+
+	mach_port_t resolved = MACH_PORT_NULL;
+
+	if (task_get_special_port(mach_task_self(),
+	    TASK_BOOTSTRAP_PORT, &resolved) == KERN_SUCCESS) {
+		bootstrap_port = resolved;
+		return resolved;
+	}
+
+	return bp;
+}
+
 kern_return_t
 bootstrap_check_in(mach_port_t bp, const name_t service_name, mach_port_t *sp)
 {
 	uuid_t junk;
 	(void)bzero(junk, sizeof(junk));
-	return vproc_mig_check_in2(bp, (char *)service_name, sp, junk, 0);
+	return vproc_mig_check_in2(ravyn_bootstrap_port(bp),
+	    (char *)service_name, sp, junk, 0);
 }
 
 kern_return_t
@@ -189,6 +244,7 @@ bootstrap_look_up(mach_port_t bp, const name_t service_name, mach_port_t *sp)
 kern_return_t
 bootstrap_look_up2(mach_port_t bp, const name_t service_name, mach_port_t *sp, pid_t target_pid, uint64_t flags)
 {
+	bp = ravyn_bootstrap_port(bp);
 	uuid_t instance_id;
 	return bootstrap_look_up3(bp, service_name, sp, target_pid, instance_id, flags);
 }
