@@ -71,6 +71,7 @@ static bool CGSizeEqualToSize(CGSize a, CGSize b) {
     return a.width == b.width && a.height == b.height;
 }
 
+#ifndef CGGEOMETRY_BUILDING_EXPORTS
 static inline CGFloat CGRectGetMinX(CGRect rect) {
     return rect.origin.x;
 }
@@ -103,6 +104,16 @@ static inline CGFloat CGRectGetHeight(CGRect rect) {
     return rect.size.height;
 }
 
+#else
+COREGRAPHICS_EXPORT CGFloat CGRectGetMinX(CGRect rect);
+COREGRAPHICS_EXPORT CGFloat CGRectGetMaxX(CGRect rect);
+COREGRAPHICS_EXPORT CGFloat CGRectGetMidX(CGRect rect);
+COREGRAPHICS_EXPORT CGFloat CGRectGetMinY(CGRect rect);
+COREGRAPHICS_EXPORT CGFloat CGRectGetMaxY(CGRect rect);
+COREGRAPHICS_EXPORT CGFloat CGRectGetMidY(CGRect rect);
+COREGRAPHICS_EXPORT CGFloat CGRectGetWidth(CGRect rect);
+COREGRAPHICS_EXPORT CGFloat CGRectGetHeight(CGRect rect);
+#endif
 static inline bool CGRectContainsPoint(CGRect rect, CGPoint point) {
     return (point.x >= CGRectGetMinX(rect) && point.x <= CGRectGetMaxX(rect)) && (point.y >= CGRectGetMinY(rect) && point.y <= CGRectGetMaxY(rect));
 }
@@ -125,9 +136,13 @@ static inline CGRect CGRectOffset(CGRect rect, CGFloat dx, CGFloat dy) {
     return rect;
 }
 
+#ifndef CGGEOMETRY_BUILDING_EXPORTS
 static inline bool CGRectIsEmpty(CGRect rect) {
     return ((rect.size.width == 0) && (rect.size.height == 0)) ? TRUE : FALSE;
 }
+#else
+COREGRAPHICS_EXPORT bool CGRectIsEmpty(CGRect rect);
+#endif
 
 static inline bool CGRectIntersectsRect(CGRect a, CGRect b) {
     if(b.origin.x > a.origin.x + a.size.width)
@@ -160,9 +175,15 @@ COREGRAPHICS_EXPORT CGRect CGRectUnion(CGRect a, CGRect b);
 COREGRAPHICS_EXPORT CGRect CGRectIntersection(CGRect a, CGRect b);
 COREGRAPHICS_EXPORT CGRect CGRectIntegral(CGRect rect);
 
+#ifndef CGGEOMETRY_BUILDING_EXPORTS
 static inline bool CGRectContainsRect(CGRect a, CGRect b) {
     return (CGRectGetMinX(b) >= CGRectGetMinX(a) &&
         CGRectGetMaxX(b) <= CGRectGetMaxX(a) &&
         CGRectGetMinY(b) >= CGRectGetMinY(a) &&
         CGRectGetMaxY(b) <= CGRectGetMaxY(a));
 }
+#else
+COREGRAPHICS_EXPORT bool CGRectContainsRect(CGRect a, CGRect b);
+#endif
+
+COREGRAPHICS_EXPORT CGRect CGRectStandardize(CGRect rect);

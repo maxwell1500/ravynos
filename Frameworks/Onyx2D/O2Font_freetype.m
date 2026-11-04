@@ -1,6 +1,9 @@
 #import <Onyx2D/O2Font_freetype.h>
 #ifdef FREETYPE_PRESENT
 #import <Onyx2D/O2Encoding.h>
+#import <CoreFoundation/CoreFoundation.h>
+#include <stdlib.h>
+#include FT_TRUETYPE_TABLES_H
 
 @implementation O2Font_freetype
 
@@ -39,6 +42,13 @@ FT_Library freeTypeLibrary;
    if(!(_face->face_flags&FT_FACE_FLAG_SCALABLE))
     NSLog(@"FreeType font face is not scalable");
 
+   if (_name == nil) {
+    const char *ps = FT_Get_Postscript_Name(_face);
+    if (ps != NULL)
+     _name = [[NSString alloc] initWithUTF8String:ps];
+    else if (_face->family_name != NULL)
+     _name = [[NSString alloc] initWithUTF8String:_face->family_name];
+   }
    _unitsPerEm=(float)_face->units_per_EM;
    _ascent=_face->ascender;
    _descent=_face->descender;
@@ -107,6 +117,13 @@ FT_Library freeTypeLibrary;
    if(!(_face->face_flags&FT_FACE_FLAG_SCALABLE))
     NSLog(@"FreeType font face is not scalable");
     
+   if (_name == nil) {
+    const char *ps = FT_Get_Postscript_Name(_face);
+    if (ps != NULL)
+     _name = [[NSString alloc] initWithUTF8String:ps];
+    else if (_face->family_name != NULL)
+     _name = [[NSString alloc] initWithUTF8String:_face->family_name];
+   }
    _unitsPerEm=(float)_face->units_per_EM;
    _ascent=_face->ascender;
    _descent=_face->descender;
@@ -156,6 +173,23 @@ FT_Face O2FontFreeTypeFace(O2Font_freetype *self) {
    }
 }
 
+-(NSData *)copyTableForTag:(uint32_t)tag {
+   FT_ULong length = 0;
+   if (_face == NULL)
+    return nil;
+   if (FT_Load_Sfnt_Table(_face, (FT_ULong)tag, 0, NULL, &length) != 0 || length == 0)
+    return nil;
+   void *bytes = malloc(length);
+   if (bytes == NULL)
+    return nil;
+   if (FT_Load_Sfnt_Table(_face, (FT_ULong)tag, 0, (FT_Byte *)bytes, &length) != 0) {
+    free(bytes);
+    return nil;
+   }
+   CFDataRef data = CFDataCreate(NULL, (const UInt8 *)bytes, (CFIndex)length);
+   free(bytes);
+   return (NSData *)data;
+}
 -(O2Glyph)glyphWithGlyphName:(NSString *)name {
    return FT_Get_Name_Index(_face,(char *)[name cString]);
 }

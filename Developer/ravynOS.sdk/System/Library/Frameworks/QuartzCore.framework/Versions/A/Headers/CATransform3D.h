@@ -11,3 +11,4 @@ typedef struct {
 } CATransform3D;
 
 CA_EXPORT const CATransform3D CATransform3DIdentity;
+CA_EXPORT CATransform3D CATransform3DMakeScale(CGFloat sx, CGFloat sy, CGFloat sz);

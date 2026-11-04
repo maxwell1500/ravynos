@@ -18,7 +18,10 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 #warning MAX is already defined, MAX(a, b) may not not behave as expected.
 #endif
 
+#define CGGEOMETRY_BUILDING_EXPORTS 1
 #import <CoreGraphics/CGGeometry.h>
+#import <CoreGraphics/CGAffineTransform.h>
+#import <CoreFoundation/CoreFoundation.h>
 
 const CGRect CGRectZero={{0,0},{0,0}};
 const CGRect CGRectNull={{INFINITY,INFINITY},{0,0}};
@@ -68,4 +71,101 @@ CGRect CGRectUnion(CGRect a, CGRect b) {
 	float maxX = MAX(CGRectGetMaxX(a), CGRectGetMaxX(b));
 	float maxY = MAX(CGRectGetMaxY(a), CGRectGetMaxY(b));
 	return CGRectMake(minX, minY, maxX - minX, maxY - minY);
+}
+
+CGRect CGRectStandardize(CGRect rect) {
+	if (rect.size.width < 0) {
+		rect.origin.x += rect.size.width;
+		rect.size.width = -rect.size.width;
+	}
+	if (rect.size.height < 0) {
+		rect.origin.y += rect.size.height;
+		rect.size.height = -rect.size.height;
+	}
+	return rect;
+}
+
+CGFloat CGRectGetMinX(CGRect rect) {
+	rect = CGRectStandardize(rect);
+	return rect.origin.x;
+}
+
+CGFloat CGRectGetMaxX(CGRect rect) {
+	rect = CGRectStandardize(rect);
+	return rect.origin.x + rect.size.width;
+}
+
+CGFloat CGRectGetMidX(CGRect rect) {
+	rect = CGRectStandardize(rect);
+	return rect.origin.x + (rect.size.width * 0.5);
+}
+
+CGFloat CGRectGetMinY(CGRect rect) {
+	rect = CGRectStandardize(rect);
+	return rect.origin.y;
+}
+
+CGFloat CGRectGetMaxY(CGRect rect) {
+	rect = CGRectStandardize(rect);
+	return rect.origin.y + rect.size.height;
+}
+
+CGFloat CGRectGetMidY(CGRect rect) {
+	rect = CGRectStandardize(rect);
+	return rect.origin.y + (rect.size.height * 0.5);
+}
+
+CGFloat CGRectGetWidth(CGRect rect) {
+	return rect.size.width < 0 ? -rect.size.width : rect.size.width;
+}
+
+CGFloat CGRectGetHeight(CGRect rect) {
+	return rect.size.height < 0 ? -rect.size.height : rect.size.height;
+}
+
+bool CGRectIsEmpty(CGRect rect) {
+	if (CGRectIsNull(rect))
+		return true;
+	rect = CGRectStandardize(rect);
+	return (rect.size.width <= 0 || rect.size.height <= 0);
+}
+
+bool CGRectContainsRect(CGRect a, CGRect b) {
+	if (CGRectIsEmpty(b))
+		return true;
+	if (CGRectIsEmpty(a))
+		return false;
+	return (CGRectGetMinX(b) >= CGRectGetMinX(a) &&
+	    CGRectGetMaxX(b) <= CGRectGetMaxX(a) &&
+	    CGRectGetMinY(b) >= CGRectGetMinY(a) &&
+	    CGRectGetMaxY(b) <= CGRectGetMaxY(a));
+}
+
+CGRect CGRectApplyAffineTransform(CGRect rect, CGAffineTransform t) {
+	rect = CGRectStandardize(rect);
+	CGPoint p1 = CGPointApplyAffineTransform(CGPointMake(rect.origin.x, rect.origin.y), t);
+	CGPoint p2 = CGPointApplyAffineTransform(CGPointMake(rect.origin.x + rect.size.width, rect.origin.y), t);
+	CGPoint p3 = CGPointApplyAffineTransform(CGPointMake(rect.origin.x, rect.origin.y + rect.size.height), t);
+	CGPoint p4 = CGPointApplyAffineTransform(CGPointMake(rect.origin.x + rect.size.width, rect.origin.y + rect.size.height), t);
+	CGFloat minX = MIN(MIN(p1.x, p2.x), MIN(p3.x, p4.x));
+	CGFloat maxX = MAX(MAX(p1.x, p2.x), MAX(p3.x, p4.x));
+	CGFloat minY = MIN(MIN(p1.y, p2.y), MIN(p3.y, p4.y));
+	CGFloat maxY = MAX(MAX(p1.y, p2.y), MAX(p3.y, p4.y));
+	return CGRectMake(minX, minY, maxX - minX, maxY - minY);
+}
+
+bool CGRectMakeWithDictionaryRepresentation(CFDictionaryRef dict, CGRect *rect) {
+	if (dict == NULL || rect == NULL)
+		return false;
+	CFNumberRef nx = CFDictionaryGetValue(dict, CFSTR("X"));
+	CFNumberRef ny = CFDictionaryGetValue(dict, CFSTR("Y"));
+	CFNumberRef nw = CFDictionaryGetValue(dict, CFSTR("Width"));
+	CFNumberRef nh = CFDictionaryGetValue(dict, CFSTR("Height"));
+	double x = 0, y = 0, w = 0, h = 0;
+	if (nx) CFNumberGetValue(nx, kCFNumberDoubleType, &x);
+	if (ny) CFNumberGetValue(ny, kCFNumberDoubleType, &y);
+	if (nw) CFNumberGetValue(nw, kCFNumberDoubleType, &w);
+	if (nh) CFNumberGetValue(nh, kCFNumberDoubleType, &h);
+	*rect = CGRectMake(x, y, w, h);
+	return (nx != NULL && ny != NULL && nw != NULL && nh != NULL);
 }

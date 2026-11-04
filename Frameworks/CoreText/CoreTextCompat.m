@@ -12,6 +12,8 @@
 #import <Foundation/NSCFTypeID.h>
 #import <objc/runtime.h>
 #include "CFRuntime.h"
+#import "KTFont.h"
+#import <CoreGraphics/CoreGraphics.h>
 
 static CFArrayRef ravyn_wrap_array(CFArrayRef array);
 static CFArrayRef ravyn_wrap_nsarray(NSArray *array);
@@ -715,6 +717,23 @@ extern int _CFRuntimeRegisterObjCClass(CFTypeID typeID, uintptr_t cls);
     return [(NSArray *)_storage objectAtIndex:index];
 }
 
+
+- (void)getObjects:(id *)objects range:(NSRange)range {
+    NSUInteger i;
+
+    if (!_isCFArray) {
+        [(NSArray *)_storage getObjects:objects range:range];
+        return;
+    }
+    for (i = 0; i < range.length; i++) {
+        objects[i] = (id)CFArrayGetValueAtIndex((CFArrayRef)_storage,
+            (CFIndex)(range.location + i));
+    }
+}
+
+- (unsigned)_cfTypeID {
+    return kNSCFTypeArray;
+}
 - (NSUInteger)countByEnumeratingWithState:(NSFastEnumerationState *)state
     objects:(id *)stackbuf count:(NSUInteger)len {
     NSUInteger i, count;
@@ -779,4 +798,420 @@ ravyn_wrap_nsarray(NSArray *array)
     ravyn_ensure_array_bridge();
     wrapper = [[RavynCFArray alloc] initWithNSArray:array];
     return (CFArrayRef)wrapper;
+}
+
+/*
+ * Table, metric, trait and line/run surface used by Gecko's CoreText /
+ * HarfBuzz font backend.
+ */
+extern CFArrayRef CGFontCopyTableTags(CGFontRef font);
+extern bool CGFontGetGlyphBBoxes(CGFontRef font, const CGGlyph *glyphs, size_t count, CGRect *bboxes);
+extern void CGContextShowGlyphsAtPositions(CGContextRef context, const CGGlyph *glyphs, const CGPoint *positions, size_t count);
+
+CFDataRef
+CTFontCopyTable(CTFontRef font, uint32_t table, uint32_t options)
+{
+    (void)options;
+    if (font == NULL)
+        return NULL;
+    return CGFontCopyTableForTag([(KTFont *)font graphicsFont], table);
+}
+
+CFArrayRef
+CTFontCopyAvailableTables(CTFontRef font, uint32_t options)
+{
+    (void)options;
+    if (font == NULL)
+        return NULL;
+    return CGFontCopyTableTags([(KTFont *)font graphicsFont]);
+}
+
+CGFontRef
+CTFontCopyGraphicsFont(CTFontRef font, CTFontDescriptorRef *attributes)
+{
+    if (attributes != NULL)
+        *attributes = NULL;
+    if (font == NULL)
+        return NULL;
+    return CGFontRetain([(KTFont *)font graphicsFont]);
+}
+
+unsigned int
+CTFontGetUnitsPerEm(CTFontRef font)
+{
+    if (font == NULL)
+        return 1000;
+    return (unsigned int)[(KTFont *)font unitsPerEm];
+}
+
+uint32_t
+CTFontGetSymbolicTraits(CTFontRef font)
+{
+    uint32_t traits = 0;
+    if (font == NULL)
+        return 0;
+    NSString *name = (NSString *)[(KTFont *)font copyName];
+    if (name != nil) {
+        if ([name rangeOfString:@"Bold" options:NSCaseInsensitiveSearch].location != NSNotFound)
+            traits |= (1U << 1);
+        if ([name rangeOfString:@"Italic" options:NSCaseInsensitiveSearch].location != NSNotFound ||
+            [name rangeOfString:@"Oblique" options:NSCaseInsensitiveSearch].location != NSNotFound)
+            traits |= (1U << 0);
+        [name release];
+    }
+    return traits;
+}
+
+CFDictionaryRef
+CTFontCopyTraits(CTFontRef font)
+{
+    CFMutableDictionaryRef dict = CFDictionaryCreateMutable(NULL, 4,
+        &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    int32_t sym = (int32_t)CTFontGetSymbolicTraits(font);
+    double weight = (sym & (1 << 1)) ? 0.4 : 0.0;
+    double width = 0.0;
+    double slant = (sym & (1 << 0)) ? 0.1 : 0.0;
+    CFNumberRef nSym = CFNumberCreate(NULL, kCFNumberSInt32Type, &sym);
+    CFNumberRef nWeight = CFNumberCreate(NULL, kCFNumberDoubleType, &weight);
+    CFNumberRef nWidth = CFNumberCreate(NULL, kCFNumberDoubleType, &width);
+    CFNumberRef nSlant = CFNumberCreate(NULL, kCFNumberDoubleType, &slant);
+    CFDictionarySetValue(dict, kCTFontSymbolicTrait, nSym);
+    CFDictionarySetValue(dict, kCTFontWeightTrait, nWeight);
+    CFDictionarySetValue(dict, kCTFontWidthTrait, nWidth);
+    CFDictionarySetValue(dict, kCTFontSlantTrait, nSlant);
+    CFRelease(nSym);
+    CFRelease(nWeight);
+    CFRelease(nWidth);
+    CFRelease(nSlant);
+    return dict;
+}
+
+CFStringRef
+CTFontCopyName(CTFontRef font, CFStringRef nameKey)
+{
+    (void)nameKey;
+    if (font == NULL)
+        return NULL;
+    CFStringRef name = [(KTFont *)font copyName];
+    if (name == NULL)
+        return CFSTR("Inter-Regular");
+    return name;
+}
+
+CFStringRef
+CTFontCopyLocalizedName(CTFontRef font, CFStringRef nameKey, CFStringRef *actualLanguage)
+{
+    if (actualLanguage != NULL)
+        *actualLanguage = CFSTR("en");
+    return CTFontCopyName(font, nameKey);
+}
+
+CFCharacterSetRef
+CTFontCopyCharacterSet(CTFontRef font)
+{
+    (void)font;
+    CFCharacterSetRef cs = CFCharacterSetGetPredefined(kCFCharacterSetAlphaNumeric);
+    return cs ? (CFCharacterSetRef)CFRetain(cs) : NULL;
+}
+
+CFArrayRef
+CTFontCopyFeatures(CTFontRef font)
+{
+    (void)font;
+    return NULL;
+}
+
+CFArrayRef
+CTFontCopyVariationAxes(CTFontRef font)
+{
+    (void)font;
+    return NULL;
+}
+
+CFDictionaryRef
+CTFontCopyVariation(CTFontRef font)
+{
+    (void)font;
+    return NULL;
+}
+
+CTFontRef
+CTFontCreateForString(CTFontRef currentFont, CFStringRef string, CFRange range)
+{
+    (void)string;
+    (void)range;
+    if (currentFont != NULL)
+        return (CTFontRef)[(id)currentFont retain];
+    return CTFontCreateWithName(CFSTR("Inter-Regular"), 12.0, NULL);
+}
+
+CGGlyph
+CTFontGetGlyphWithName(CTFontRef font, CFStringRef glyphName)
+{
+    if (font == NULL || glyphName == NULL)
+        return 0;
+    return CGFontGetGlyphWithGlyphName([(KTFont *)font graphicsFont], glyphName);
+}
+
+CGRect
+CTFontGetBoundingRectsForGlyphs(CTFontRef font, int orientation,
+    const CGGlyph glyphs[], CGRect boundingRects[], CFIndex count)
+{
+    (void)orientation;
+    if (font == NULL || glyphs == NULL || count <= 0)
+        return CGRectZero;
+    CGFontRef cgFont = [(KTFont *)font graphicsFont];
+    CGFloat upem = [(KTFont *)font unitsPerEm];
+    CGFloat size = [(KTFont *)font pointSize];
+    CGFloat scale = (upem > 0 ? (size / upem) : 0.001);
+    CGRect unionRect = CGRectZero;
+    for (CFIndex i = 0; i < count; i++) {
+        CGRect gbox = CGRectZero;
+        if (cgFont != NULL)
+            CGFontGetGlyphBBoxes(cgFont, &glyphs[i], 1, &gbox);
+        CGRect r = CGRectMake(gbox.origin.x * scale, gbox.origin.y * scale,
+            gbox.size.width * scale, gbox.size.height * scale);
+        if (boundingRects != NULL)
+            boundingRects[i] = r;
+        unionRect = (i == 0) ? r : CGRectUnion(unionRect, r);
+    }
+    return unionRect;
+}
+
+void
+CTFontGetVerticalTranslationsForGlyphs(CTFontRef font,
+    const CGGlyph glyphs[], CGSize translations[], CFIndex count)
+{
+    (void)font;
+    (void)glyphs;
+    if (translations != NULL && count > 0)
+        memset(translations, 0, (size_t)count * sizeof(CGSize));
+}
+
+void
+CTFontDrawGlyphs(CTFontRef font, const CGGlyph glyphs[],
+    const CGPoint positions[], size_t count, CGContextRef context)
+{
+    if (font == NULL || glyphs == NULL || positions == NULL || context == NULL || count == 0)
+        return;
+    CGContextSetFont(context, [(KTFont *)font graphicsFont]);
+    CGContextSetFontSize(context, [(KTFont *)font pointSize]);
+    CGContextShowGlyphsAtPositions(context, glyphs, positions, count);
+}
+
+CTFontDescriptorRef
+CTFontManagerCreateFontDescriptorFromData(CFDataRef data)
+{
+    (void)data;
+    return CTFontDescriptorCreateWithNameAndSize(CFSTR("Inter-Regular"), 12.0);
+}
+
+CFArrayRef
+CTFontManagerCreateFontDescriptorsFromURL(CFURLRef fileURL)
+{
+    (void)fileURL;
+    return NULL;
+}
+
+void
+CTFontManagerSetAutoActivationSetting(CFStringRef bundleIdentifier, uint32_t setting)
+{
+    (void)bundleIdentifier;
+    (void)setting;
+}
+
+/* CTLine / CTRun / CTFrame / CTFramesetter minimal surface */
+typedef const struct __CTLine *CTLineRef;
+typedef const struct __CTRun *CTRunRef;
+typedef const struct __CTFrame *CTFrameRef;
+typedef const struct __CTFramesetter *CTFramesetterRef;
+
+CTLineRef
+CTLineCreateWithAttributedString(CFTypeRef attrString)
+{
+    (void)attrString;
+    return NULL;
+}
+
+void
+CTLineDraw(CTLineRef line, CGContextRef context)
+{
+    (void)line;
+    (void)context;
+}
+
+CFArrayRef
+CTLineGetGlyphRuns(CTLineRef line)
+{
+    (void)line;
+    return ravyn_wrap_nsarray([NSArray array]);
+}
+
+CGRect
+CTLineGetImageBounds(CTLineRef line, CGContextRef context)
+{
+    (void)line;
+    (void)context;
+    return CGRectZero;
+}
+
+CGFloat
+CTLineGetOffsetForStringIndex(CTLineRef line, CFIndex charIndex, CGFloat *secondaryOffset)
+{
+    (void)line;
+    (void)charIndex;
+    if (secondaryOffset != NULL)
+        *secondaryOffset = 0.0;
+    return 0.0;
+}
+
+CFIndex
+CTLineGetStringIndexForPosition(CTLineRef line, CGPoint position)
+{
+    (void)line;
+    (void)position;
+    return 0;
+}
+
+CFRange
+CTLineGetStringRange(CTLineRef line)
+{
+    (void)line;
+    return CFRangeMake(0, 0);
+}
+
+double
+CTLineGetTypographicBounds(CTLineRef line, CGFloat *ascent, CGFloat *descent, CGFloat *leading)
+{
+    (void)line;
+    if (ascent) *ascent = 10.0;
+    if (descent) *descent = 2.0;
+    if (leading) *leading = 0.0;
+    return 0.0;
+}
+
+CFDictionaryRef
+CTRunGetAttributes(CTRunRef run)
+{
+    (void)run;
+    return NULL;
+}
+
+CFIndex
+CTRunGetGlyphCount(CTRunRef run)
+{
+    (void)run;
+    return 0;
+}
+
+void
+CTRunGetGlyphs(CTRunRef run, CFRange range, CGGlyph buffer[])
+{
+    (void)run;
+    if (buffer != NULL && range.length > 0)
+        memset(buffer, 0, (size_t)range.length * sizeof(CGGlyph));
+}
+
+const CGGlyph *
+CTRunGetGlyphsPtr(CTRunRef run)
+{
+    (void)run;
+    return NULL;
+}
+
+void
+CTRunGetPositions(CTRunRef run, CFRange range, CGPoint buffer[])
+{
+    (void)run;
+    if (buffer != NULL && range.length > 0)
+        memset(buffer, 0, (size_t)range.length * sizeof(CGPoint));
+}
+
+const CGPoint *
+CTRunGetPositionsPtr(CTRunRef run)
+{
+    (void)run;
+    return NULL;
+}
+
+void
+CTRunGetStringIndices(CTRunRef run, CFRange range, CFIndex buffer[])
+{
+    (void)run;
+    if (buffer != NULL && range.length > 0)
+        memset(buffer, 0, (size_t)range.length * sizeof(CFIndex));
+}
+
+const CFIndex *
+CTRunGetStringIndicesPtr(CTRunRef run)
+{
+    (void)run;
+    return NULL;
+}
+
+CFRange
+CTRunGetStringRange(CTRunRef run)
+{
+    (void)run;
+    return CFRangeMake(0, 0);
+}
+
+double
+CTRunGetTypographicBounds(CTRunRef run, CFRange range, CGFloat *ascent, CGFloat *descent, CGFloat *leading)
+{
+    (void)run;
+    (void)range;
+    if (ascent) *ascent = 10.0;
+    if (descent) *descent = 2.0;
+    if (leading) *leading = 0.0;
+    return 0.0;
+}
+
+CTFramesetterRef
+CTFramesetterCreateWithAttributedString(CFTypeRef string)
+{
+    (void)string;
+    return NULL;
+}
+
+CTFrameRef
+CTFramesetterCreateFrame(CTFramesetterRef framesetter, CFRange stringRange, CGPathRef path, CFDictionaryRef frameAttributes)
+{
+    (void)framesetter;
+    (void)stringRange;
+    (void)path;
+    (void)frameAttributes;
+    return NULL;
+}
+
+CGSize
+CTFramesetterSuggestFrameSizeWithConstraints(CTFramesetterRef framesetter, CFRange stringRange, CFDictionaryRef frameAttributes, CGSize constraints, CFRange *fitRange)
+{
+    (void)framesetter;
+    (void)frameAttributes;
+    (void)constraints;
+    if (fitRange != NULL)
+        *fitRange = stringRange;
+    return CGSizeZero;
+}
+
+void
+CTFrameDraw(CTFrameRef frame, CGContextRef context)
+{
+    (void)frame;
+    (void)context;
+}
+
+CFArrayRef
+CTFrameGetLines(CTFrameRef frame)
+{
+    (void)frame;
+    return ravyn_wrap_nsarray([NSArray array]);
+}
+
+CGPathRef
+CTFrameGetPath(CTFrameRef frame)
+{
+    (void)frame;
+    return NULL;
 }

@@ -186,3 +186,164 @@ __CFCompatRunLoopModesInit(void)
 		NSOldStyleException = __CFStringMakeConstantString("NSOldStyleException");
 	}
 }
+
+#include <CoreFoundation/CFURL.h>
+#include <CoreFoundation/CFRunLoop.h>
+#include <objc/runtime.h>
+#include <objc/message.h>
+
+Boolean
+CFURLCopyResourcePropertyForKey(CFURLRef url, CFStringRef key,
+    void *propertyValueTypeRefPtr, CFErrorRef *error)
+{
+	(void)url;
+	(void)key;
+	if (propertyValueTypeRefPtr != NULL)
+		*(CFTypeRef *)propertyValueTypeRefPtr = NULL;
+	if (error != NULL)
+		*error = NULL;
+	return true;
+}
+
+Boolean
+CFURLSetResourcePropertyForKey(CFURLRef url, CFStringRef key,
+    CFTypeRef propertyValue, CFErrorRef *error)
+{
+	(void)url;
+	(void)key;
+	(void)propertyValue;
+	if (error != NULL)
+		*error = NULL;
+	return true;
+}
+
+CFTypeRef
+CFAttributedStringCreate(CFAllocatorRef alloc, CFStringRef str, CFDictionaryRef attributes)
+{
+	(void)alloc;
+	Class cls = objc_lookUpClass("NSAttributedString");
+	if (cls == Nil)
+		return NULL;
+	id (*msg0)(id, SEL) = (id (*)(id, SEL))objc_msgSend;
+	id (*msg2)(id, SEL, CFStringRef, CFDictionaryRef) =
+	    (id (*)(id, SEL, CFStringRef, CFDictionaryRef))objc_msgSend;
+	id obj = msg0((id)cls, sel_registerName("alloc"));
+	return (CFTypeRef)msg2(obj, sel_registerName("initWithString:attributes:"),
+	    str ? str : CFSTR(""), attributes);
+}
+
+CFTypeRef
+CFAttributedStringCreateMutable(CFAllocatorRef alloc, CFIndex maxLength)
+{
+	(void)alloc;
+	(void)maxLength;
+	Class cls = objc_lookUpClass("NSMutableAttributedString");
+	if (cls == Nil)
+		return NULL;
+	id (*msg0)(id, SEL) = (id (*)(id, SEL))objc_msgSend;
+	id obj = msg0((id)cls, sel_registerName("alloc"));
+	return (CFTypeRef)msg0(obj, sel_registerName("init"));
+}
+
+typedef struct __CFFileDescriptor *CFFileDescriptorRef;
+typedef int CFFileDescriptorNativeDescriptor;
+typedef struct {
+	CFIndex version;
+	void *info;
+	void *(*retain)(void *info);
+	void (*release)(void *info);
+	CFStringRef (*copyDescription)(void *info);
+} CFFileDescriptorContext;
+typedef void (*CFFileDescriptorCallBack)(CFFileDescriptorRef f, CFOptionFlags callBackTypes, void *info);
+
+CFFileDescriptorRef
+CFFileDescriptorCreate(CFAllocatorRef allocator, CFFileDescriptorNativeDescriptor fd,
+    Boolean closeOnInvalidate, CFFileDescriptorCallBack callout,
+    const CFFileDescriptorContext *context)
+{
+	(void)allocator;
+	(void)fd;
+	(void)closeOnInvalidate;
+	(void)callout;
+	(void)context;
+	return NULL;
+}
+
+CFRunLoopSourceRef
+CFFileDescriptorCreateRunLoopSource(CFAllocatorRef allocator, CFFileDescriptorRef f, CFIndex order)
+{
+	(void)allocator;
+	(void)f;
+	(void)order;
+	return NULL;
+}
+
+void
+CFFileDescriptorEnableCallBacks(CFFileDescriptorRef f, CFOptionFlags callBackTypes)
+{
+	(void)f;
+	(void)callBackTypes;
+}
+
+void
+CFFileDescriptorDisableCallBacks(CFFileDescriptorRef f, CFOptionFlags callBackTypes)
+{
+	(void)f;
+	(void)callBackTypes;
+}
+
+void
+CFFileDescriptorGetContext(CFFileDescriptorRef f, CFFileDescriptorContext *context)
+{
+	(void)f;
+	if (context != NULL)
+		memset(context, 0, sizeof(*context));
+}
+
+CFFileDescriptorNativeDescriptor
+CFFileDescriptorGetNativeDescriptor(CFFileDescriptorRef f)
+{
+	(void)f;
+	return -1;
+}
+
+void
+CFFileDescriptorInvalidate(CFFileDescriptorRef f)
+{
+	(void)f;
+}
+
+Boolean
+CFFileDescriptorIsValid(CFFileDescriptorRef f)
+{
+	(void)f;
+	return false;
+}
+
+typedef struct __CFStringTokenizer *CFStringTokenizerRef;
+
+CFStringTokenizerRef
+CFStringTokenizerCreate(CFAllocatorRef alloc, CFStringRef string, CFRange range,
+    CFOptionFlags options, CFLocaleRef locale)
+{
+	(void)alloc;
+	(void)string;
+	(void)range;
+	(void)options;
+	(void)locale;
+	return NULL;
+}
+
+CFOptionFlags
+CFStringTokenizerAdvanceToNextToken(CFStringTokenizerRef tokenizer)
+{
+	(void)tokenizer;
+	return 0;
+}
+
+CFRange
+CFStringTokenizerGetCurrentTokenRange(CFStringTokenizerRef tokenizer)
+{
+	(void)tokenizer;
+	return CFRangeMake(kCFNotFound, 0);
+}

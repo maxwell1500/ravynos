@@ -551,7 +551,7 @@ CFMutableArrayRef CFArrayCreateMutableCopy(CFAllocatorRef allocator, CFIndex cap
 
 CFIndex CFArrayGetCount(CFArrayRef array) {
     if (!array) return 0;
-    CF_OBJC_FUNCDISPATCHV(CFArrayGetTypeID(), CFIndex, (NSArray *)array, count);
+    if (CF_IS_OBJC(CFArrayGetTypeID(), array)) return (CFIndex)[(NSArray *)array count];
     __CFGenericValidateType(array, CFArrayGetTypeID());
     CHECK_FOR_MUTATION(array);
     return __CFArrayGetCount(array);
@@ -590,7 +590,7 @@ Boolean CFArrayContainsValue(CFArrayRef array, CFRange range, const void *value)
 
 const void *CFArrayGetValueAtIndex(CFArrayRef array, CFIndex idx) {
     if (!array) return NULL;
-    CF_OBJC_FUNCDISPATCHV(CFArrayGetTypeID(), const void *, (NSArray *)array, objectAtIndex:idx);
+    if (CF_IS_OBJC(CFArrayGetTypeID(), array)) return (const void *)[(NSArray *)array objectAtIndex:(NSUInteger)idx];
     __CFGenericValidateType(array, CFArrayGetTypeID());
     CFAssert2(0 <= idx && idx < __CFArrayGetCount(array), __kCFLogAssertion, "%s(): index (%d) out of bounds", __PRETTY_FUNCTION__, idx);
     CHECK_FOR_MUTATION(array);
@@ -606,7 +606,10 @@ const void *_CFArrayCheckAndGetValueAtIndex(CFArrayRef array, CFIndex idx) {
 
 
 void CFArrayGetValues(CFArrayRef array, CFRange range, const void **values) {
-    CF_OBJC_FUNCDISPATCHV(CFArrayGetTypeID(), void, (NSArray *)array, getObjects:(id *)values range:NSMakeRange(range.location, range.length));
+    if (CF_IS_OBJC(CFArrayGetTypeID(), array)) {
+        [(NSArray *)array getObjects:(id *)values range:NSMakeRange(range.location, range.length)];
+        return;
+    }
     __CFGenericValidateType(array, CFArrayGetTypeID());
     __CFArrayValidateRange(array, range, __PRETTY_FUNCTION__);
     CFAssert1(NULL != values, __kCFLogAssertion, "%s(): pointer to values may not be NULL", __PRETTY_FUNCTION__);
@@ -690,7 +693,10 @@ CFIndex CFArrayGetLastIndexOfValue(CFArrayRef array, CFRange range, const void *
 }
 
 void CFArrayAppendValue(CFMutableArrayRef array, const void *value) {
-    CF_OBJC_FUNCDISPATCHV(CFArrayGetTypeID(), void, (NSMutableArray *)array, addObject:(id)value);
+    if (CF_IS_OBJC(CFArrayGetTypeID(), array)) {
+        [(NSMutableArray *)array addObject:(id)value];
+        return;
+    }
     
     __CFGenericValidateType(array, CFArrayGetTypeID());
     CFAssert1(__CFArrayGetType(array) != __kCFArrayImmutable, __kCFLogAssertion, "%s(): array is immutable", __PRETTY_FUNCTION__);
@@ -699,7 +705,10 @@ void CFArrayAppendValue(CFMutableArrayRef array, const void *value) {
 }
 
 void CFArraySetValueAtIndex(CFMutableArrayRef array, CFIndex idx, const void *value) {
-    CF_OBJC_FUNCDISPATCHV(CFArrayGetTypeID(), void, (NSMutableArray *)array, setObject:(id)value atIndex:(NSUInteger)idx);
+    if (CF_IS_OBJC(CFArrayGetTypeID(), array)) {
+        [(NSMutableArray *)array setObject:(id)value atIndex:(NSUInteger)idx];
+        return;
+    }
     __CFGenericValidateType(array, CFArrayGetTypeID());
     CFAssert1(__CFArrayGetType(array) != __kCFArrayImmutable, __kCFLogAssertion, "%s(): array is immutable", __PRETTY_FUNCTION__);
     CFAssert2(0 <= idx && idx <= __CFArrayGetCount(array), __kCFLogAssertion, "%s(): index (%d) out of bounds", __PRETTY_FUNCTION__, idx);
@@ -726,7 +735,10 @@ void CFArraySetValueAtIndex(CFMutableArrayRef array, CFIndex idx, const void *va
 }
 
 void CFArrayInsertValueAtIndex(CFMutableArrayRef array, CFIndex idx, const void *value) {
-    CF_OBJC_FUNCDISPATCHV(CFArrayGetTypeID(), void, (NSMutableArray *)array, insertObject:(id)value atIndex:(NSUInteger)idx);
+    if (CF_IS_OBJC(CFArrayGetTypeID(), array)) {
+        [(NSMutableArray *)array insertObject:(id)value atIndex:(NSUInteger)idx];
+        return;
+    }
     __CFGenericValidateType(array, CFArrayGetTypeID());
     CFAssert1(__CFArrayGetType(array) != __kCFArrayImmutable, __kCFLogAssertion, "%s(): array is immutable", __PRETTY_FUNCTION__);
     CFAssert2(0 <= idx && idx <= __CFArrayGetCount(array), __kCFLogAssertion, "%s(): index (%d) out of bounds", __PRETTY_FUNCTION__, idx);
@@ -739,7 +751,10 @@ void CFArrayInsertValueAtIndex(CFMutableArrayRef array, CFIndex idx, const void 
 void CFArrayExchangeValuesAtIndices(CFMutableArrayRef array, CFIndex idx1, CFIndex idx2) {
     const void *tmp;
     struct __CFArrayBucket *bucket1, *bucket2;
-    CF_OBJC_FUNCDISPATCHV(CFArrayGetTypeID(), void, (NSMutableArray *)array, exchangeObjectAtIndex:(NSUInteger)idx1 withObjectAtIndex:(NSUInteger)idx2);
+    if (CF_IS_OBJC(CFArrayGetTypeID(), array)) {
+        [(NSMutableArray *)array exchangeObjectAtIndex:(NSUInteger)idx1 withObjectAtIndex:(NSUInteger)idx2];
+        return;
+    }
     __CFGenericValidateType(array, CFArrayGetTypeID());
     CFAssert2(0 <= idx1 && idx1 < __CFArrayGetCount(array), __kCFLogAssertion, "%s(): index #1 (%d) out of bounds", __PRETTY_FUNCTION__, idx1);
     CFAssert2(0 <= idx2 && idx2 < __CFArrayGetCount(array), __kCFLogAssertion, "%s(): index #2 (%d) out of bounds", __PRETTY_FUNCTION__, idx2);
@@ -757,7 +772,10 @@ void CFArrayExchangeValuesAtIndices(CFMutableArrayRef array, CFIndex idx1, CFInd
 }
 
 void CFArrayRemoveValueAtIndex(CFMutableArrayRef array, CFIndex idx) {
-    CF_OBJC_FUNCDISPATCHV(CFArrayGetTypeID(), void, (NSMutableArray *)array, removeObjectAtIndex:(NSUInteger)idx);
+    if (CF_IS_OBJC(CFArrayGetTypeID(), array)) {
+        [(NSMutableArray *)array removeObjectAtIndex:(NSUInteger)idx];
+        return;
+    }
     __CFGenericValidateType(array, CFArrayGetTypeID());
     CFAssert1(__CFArrayGetType(array) != __kCFArrayImmutable, __kCFLogAssertion, "%s(): array is immutable", __PRETTY_FUNCTION__);
     CFAssert2(0 <= idx && idx < __CFArrayGetCount(array), __kCFLogAssertion, "%s(): index (%d) out of bounds", __PRETTY_FUNCTION__, idx);
@@ -766,7 +784,10 @@ void CFArrayRemoveValueAtIndex(CFMutableArrayRef array, CFIndex idx) {
 }
 
 void CFArrayRemoveAllValues(CFMutableArrayRef array) {
-    CF_OBJC_FUNCDISPATCHV(CFArrayGetTypeID(), void, (NSMutableArray *)array, removeAllObjects);
+    if (CF_IS_OBJC(CFArrayGetTypeID(), array)) {
+        [(NSMutableArray *)array removeAllObjects];
+        return;
+    }
     __CFGenericValidateType(array, CFArrayGetTypeID());
     CFAssert1(__CFArrayGetType(array) != __kCFArrayImmutable, __kCFLogAssertion, "%s(): array is immutable", __PRETTY_FUNCTION__);
     CHECK_FOR_MUTATION(array);
@@ -914,7 +935,10 @@ void _CFArraySetCapacity(CFMutableArrayRef array, CFIndex cap) {
 
 
 void CFArrayReplaceValues(CFMutableArrayRef array, CFRange range, const void **newValues, CFIndex newCount) {
-    CF_OBJC_FUNCDISPATCHV(CFArrayGetTypeID(), void, (NSMutableArray *)array, replaceObjectsInRange:NSMakeRange(range.location, range.length) withObjects:(id *)newValues count:(NSUInteger)newCount);
+    if (CF_IS_OBJC(CFArrayGetTypeID(), array)) {
+        [(NSMutableArray *)array replaceObjectsInRange:NSMakeRange(range.location, range.length) withObjects:(id *)newValues count:(NSUInteger)newCount];
+        return;
+    }
     __CFGenericValidateType(array, CFArrayGetTypeID());
     __CFArrayValidateRange(array, range, __PRETTY_FUNCTION__);
     CFAssert1(__CFArrayGetType(array) != __kCFArrayImmutable, __kCFLogAssertion, "%s(): array is immutable", __PRETTY_FUNCTION__);

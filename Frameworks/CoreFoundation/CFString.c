@@ -2233,7 +2233,8 @@ Boolean CFStringGetCString(CFStringRef str, char *buffer, CFIndex bufferSize, CF
 
     if (str != NULL && CF_IS_OBJC(__kCFStringTypeID, str))
         return [(NSString *)str getCString:buffer
-            maxLength:(NSUInteger)bufferSize - 1 encoding:encoding];
+            maxLength:(NSUInteger)bufferSize
+            encoding:CFStringConvertEncodingToNSStringEncoding(encoding)];
 
     __CFAssertIsString(str);
 

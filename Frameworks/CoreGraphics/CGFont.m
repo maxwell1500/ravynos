@@ -7,7 +7,9 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. */
 
 #import <CoreGraphics/CGFont.h>
+#import <CoreGraphics/CGDataProvider.h>
 #import <Onyx2D/O2Font.h>
+#import <CoreFoundation/CoreFoundation.h>
 
 CGFontRef CGFontCreateWithFontName(CFStringRef name) {
    return O2FontCreateWithFontName((NSString *)name);
@@ -79,4 +81,77 @@ CFStringRef CGFontCopyGlyphNameForGlyph(CGFontRef self,CGGlyph glyph) {
 
 CFDataRef CGFontCopyTableForTag(CGFontRef self,uint32_t tag) {
    return (CFDataRef)O2FontCopyTableForTag(self,tag);
+}
+
+CFStringRef CGFontCopyPostScriptName(CGFontRef self) {
+   return CGFontCopyFullName(self);
+}
+
+CGFontRef CGFontCreateWithDataProvider(CGDataProviderRef provider) {
+   return O2FontCreateWithDataProvider((O2DataProviderRef)provider);
+}
+
+CFArrayRef CGFontCopyTableTags(CGFontRef self) {
+   static const uint32_t kKnownTags[] = {
+      0x636d6170, /* 'cmap' */
+      0x68656164, /* 'head' */
+      0x68686561, /* 'hhea' */
+      0x686d7478, /* 'hmtx' */
+      0x6d617870, /* 'maxp' */
+      0x6e616d65, /* 'name' */
+      0x4f532f32, /* 'OS/2' */
+      0x706f7374, /* 'post' */
+      0x676c7966, /* 'glyf' */
+      0x6c6f6361, /* 'loca' */
+      0x43464620, /* 'CFF ' */
+      0x47444546, /* 'GDEF' */
+      0x47504f53, /* 'GPOS' */
+      0x47535542, /* 'GSUB' */
+      0x6b65726e, /* 'kern' */
+   };
+   const void *present[sizeof(kKnownTags) / sizeof(kKnownTags[0])];
+   CFIndex count = 0;
+   if (self != NULL) {
+      for (size_t i = 0; i < sizeof(kKnownTags) / sizeof(kKnownTags[0]); i++) {
+         CFDataRef d = CGFontCopyTableForTag(self, kKnownTags[i]);
+         if (d != NULL) {
+            CFRelease(d);
+            present[count++] = (const void *)(uintptr_t)kKnownTags[i];
+         }
+      }
+   }
+   return CFArrayCreate(NULL, present, count, NULL);
+}
+
+CFArrayRef CGFontCopyVariationAxes(CGFontRef self) {
+   (void)self;
+   return NULL;
+}
+
+CFDictionaryRef CGFontCopyVariations(CGFontRef self) {
+   (void)self;
+   return NULL;
+}
+
+CGFontRef CGFontCreateCopyWithVariations(CGFontRef self, CFDictionaryRef variations) {
+   (void)variations;
+   return CGFontRetain(self);
+}
+
+bool CGFontGetGlyphBBoxes(CGFontRef self, const CGGlyph *glyphs, size_t count, CGRect *bboxes) {
+   if (self == NULL || glyphs == NULL || bboxes == NULL)
+      return false;
+   CGRect fbox = CGFontGetFontBBox(self);
+   int ascent = CGFontGetAscent(self);
+   int descent = CGFontGetDescent(self);
+   for (size_t i = 0; i < count; i++) {
+      int adv = 0;
+      CGFontGetGlyphAdvances(self, &glyphs[i], 1, &adv);
+      bboxes[i] = CGRectMake(0, descent, adv > 0 ? adv : fbox.size.width, ascent - descent);
+   }
+   return true;
+}
+
+CFTypeID CGFontGetTypeID(void) {
+   return 0;
 }
