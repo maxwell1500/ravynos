@@ -25,6 +25,7 @@
  */
 
 #include <CoreFoundation/CoreFoundation.h>
+extern CFMutableDictionaryRef _CFDictionaryCreateMutableObjC(CFAllocatorRef, CFIndex);
 #include <mach/mach.h>
 #include <IOKit/IOKitLib.h>
 #include <IOKit/pwr_mgt/IOPMLib.h>
@@ -344,9 +345,8 @@ kern_return_t IORegistryEntryCreateCFProperties(io_registry_entry_t entry,
     (void)entry;
     (void)options;
     if (properties == NULL) return kIOReturnBadArgument;
-    *properties = CFDictionaryCreateMutable(allocator ? allocator : kCFAllocatorDefault, 0,
-                                           &kCFTypeDictionaryKeyCallBacks,
-                                           &kCFTypeDictionaryValueCallBacks);
+    *properties = _CFDictionaryCreateMutableObjC(
+        allocator ? allocator : kCFAllocatorDefault, 0);
     return *properties ? KERN_SUCCESS : kIOReturnNoMemory;
 }
 

@@ -30,7 +30,10 @@
 #ifndef __COREFOUNDATION_BRIDGING_H__
 #define __COREFOUNDATION_BRIDGING_H__
 
+#import <CoreFoundation/CFDictionary.h>
+
 CF_EXPORT int _CFRuntimeRegisterObjCClass(CFTypeID typeID, uintptr_t cls);
+CF_EXPORT CFMutableDictionaryRef _CFDictionaryCreateMutableObjC(CFAllocatorRef allocator, CFIndex capacity);
 CF_EXPORT void CFSetupFoundationBridging(void);
 
 #endif /* __COREFOUNDATION_BRIDGING_H__ */

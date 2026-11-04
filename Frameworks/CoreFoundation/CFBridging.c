@@ -37,6 +37,33 @@ NSRange NSMakeRange(NSUInteger location, NSUInteger length) {
    return range;
 }
 
+/*
+ * IOKit create functions hand CF collections to clients that then send
+ * Objective-C messages to them (Gecko calls objc_autorelease on the
+ * dictionary from IORegistryEntryCreateCFProperties).  A C CFDictionary
+ * has a CFRuntimeClass in its first word, which is not an ObjC class.
+ * Build the bridged NSMutableDictionary instead.
+ */
+CF_EXPORT CFMutableDictionaryRef
+_CFDictionaryCreateMutableObjC(CFAllocatorRef allocator, CFIndex capacity)
+{
+    Class cls;
+    id (*msg0)(id, SEL);
+    id (*msg1)(id, SEL, unsigned long);
+
+    (void)allocator;
+    cls = objc_lookUpClass("NSMutableDictionary");
+    if (cls == Nil) {
+        return CFDictionaryCreateMutable(allocator ? allocator : kCFAllocatorDefault,
+            capacity, &kCFTypeDictionaryKeyCallBacks,
+            &kCFTypeDictionaryValueCallBacks);
+    }
+    msg0 = (id (*)(id, SEL))objc_msgSend;
+    msg1 = (id (*)(id, SEL, unsigned long))objc_msgSend;
+    return (CFMutableDictionaryRef)msg1(msg0((id)cls, sel_registerName("alloc")),
+        sel_registerName("initWithCapacity:"), (unsigned long)capacity);
+}
+
 CF_EXPORT int _CFRuntimeRegisterObjCClass(CFTypeID typeID, uintptr_t cls)
 {
     if (typeID >= __CFRuntimeClassTableSize)
