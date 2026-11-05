@@ -55,9 +55,11 @@
 
 
 #include <sys/param.h>
+#include <sys/stat.h>
 #include <sys/sysctl.h>
 
 #include <errno.h>
+#include <limits.h>
 #include <paths.h>
 #include <stdlib.h>
 #include <string.h>
@@ -91,15 +93,79 @@ __confstr_init(const struct _libc_functions *funcs)
 	__dirhelper_func = funcs->dirhelper;
 }
 
+/*
+ * There is no dirhelper service in this tree yet, and the libSystem
+ * initializer currently leaves _libc_functions.dirhelper NULL.  confstr()
+ * must still return a real, existing per-user directory: Gecko's macOS
+ * content-process sandbox setup calls confstr(_CS_DARWIN_USER_CACHE_DIR) and
+ * aborts if it fails.  Create the private hierarchy locally, the same way
+ * dirhelper owns /var/folders on macOS.
+ */
+static char *
+ravyn_local_dir(dirhelper_which_t which, char *path, size_t pathlen)
+{
+	static const char *const subdirs[] = { "0", "T", "C" };
+	char base[PATH_MAX];
+	char userbase[PATH_MAX];
+	const char *sub;
+	unsigned uid;
+	int n;
+
+	if ((unsigned)which >= sizeof(subdirs) / sizeof(subdirs[0])) {
+		errno = EINVAL;
+		return NULL;
+	}
+	sub = subdirs[which];
+	uid = (unsigned)getuid();
+	n = snprintf(base, sizeof(base), "/var/folders");
+	if (n < 0 || (size_t)n >= sizeof(base)) {
+		errno = ENAMETOOLONG;
+		goto fail;
+	}
+	if (mkdir(base, 0755) != 0 && errno != EEXIST) {
+		goto fail;
+	}
+	n = snprintf(base, sizeof(base), "/var/folders/ravyn");
+	if (n < 0 || (size_t)n >= sizeof(base)) {
+		errno = ENAMETOOLONG;
+		goto fail;
+	}
+	if (mkdir(base, 0755) != 0 && errno != EEXIST) {
+		goto fail;
+	}
+	n = snprintf(userbase, sizeof(userbase), "%s/%u", base, uid);
+	if (n < 0 || (size_t)n >= sizeof(userbase)) {
+		errno = ENAMETOOLONG;
+		goto fail;
+	}
+	if (mkdir(userbase, 0700) != 0 && errno != EEXIST) {
+		goto fail;
+	}
+	n = snprintf(path, pathlen, "%s/%s", userbase, sub);
+	if (n < 0 || (size_t)n >= pathlen) {
+		errno = ENAMETOOLONG;
+		goto fail;
+	}
+	if (mkdir(path, 0700) != 0 && errno != EEXIST) {
+		goto fail;
+	}
+	return path;
+
+fail:
+	return NULL;
+}
+
 __attribute__((__visibility__("hidden")))
 char *
 __dirhelper(dirhelper_which_t which, char *path, size_t pathlen)
 {
 	if (__dirhelper_func) {
-		return __dirhelper_func(which, path, pathlen);
-	} else {
-		return NULL;
+		char *result = __dirhelper_func(which, path, pathlen);
+		if (result != NULL) {
+			return result;
+		}
 	}
+	return ravyn_local_dir(which, path, pathlen);
 }
 #else // !__DARWIN_UNIX03
 __attribute__((__visibility__("hidden")))

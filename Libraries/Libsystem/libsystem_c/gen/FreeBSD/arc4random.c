@@ -54,24 +54,31 @@ __FBSDID("$FreeBSD: src/lib/libc/gen/arc4random.c,v 1.25 2008/09/09 09:46:36 ach
 #include "libc_private.h"
 
 #if defined(__APPLE__) && !defined(VARIANT_STATIC)
-#include <corecrypto/ccrng.h>
 
-static struct ccrng_state *rng;
-
+/*
+ * The tree's corecrypto ccrng() state is initialized without entropy, so
+ * using it here gives every process the same stream.  That breaks anything
+ * that relies on unguessable names, including Mojo's port-name generator.
+ * Pull fresh kernel entropy for each request instead.  getentropy() is
+ * limited to 256 bytes per call, so loop for larger buffers.
+ */
 static void
-arc4_init(void)
+arc4_random_bytes(void *buf, size_t buf_size)
 {
-	int err;
+	uint8_t *p = (uint8_t *)buf;
 
-	if (rng != NULL) return;
+	while (buf_size != 0) {
+		size_t chunk = buf_size > 256 ? 256 : buf_size;
 
-	rng = ccrng(&err);
-	if (rng == NULL) {
+		if (getentropy(p, chunk) != 0) {
 #if OS_CRASH_ENABLE_EXPERIMENTAL_LIBTRACE
-		os_crash("arc4random: unable to get ccrng() handle (%d)", err);
+			os_crash("arc4random: getentropy failed");
 #else
-		os_crash("arc4random: unable to get ccrng() handle");
+			abort();
 #endif
+		}
+		p += chunk;
+		buf_size -= chunk;
 	}
 }
 
@@ -94,25 +101,37 @@ arc4random(void)
 void
 arc4random_buf(void *buf, size_t buf_size)
 {
-	arc4_init();
-	ccrng_generate(rng, buf_size, buf);
+	if (buf_size != 0) {
+		arc4_random_bytes(buf, buf_size);
+	}
 }
 
 void
 arc4random_stir(void)
 {
-	/* NOP */
+	/* Fresh entropy is fetched for every request; nothing to stir. */
 }
 
 uint32_t
 arc4random_uniform(uint32_t upper_bound)
 {
-	uint64_t rand;
+	uint32_t r;
+	uint32_t min;
 
-	arc4_init();
-	ccrng_uniform(rng, upper_bound, &rand);
+	if (upper_bound < 2) {
+		return 0;
+	}
 
-	return (uint32_t)rand;
+	/*
+	 * Rejection sampling avoids the modulo bias that a plain
+	 * arc4random() % upper_bound would introduce.
+	 */
+	min = (uint32_t)(-upper_bound) % upper_bound;
+	do {
+		r = arc4random();
+	} while (r < min);
+
+	return r % upper_bound;
 }
 
 __private_extern__ void

@@ -28,9 +28,12 @@
 
 #include <TargetConditionals.h>	// for TARGET_OS_*
 
+#include <limits.h>
 #include <stddef.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <sys/stat.h>
 #include <corecrypto/cc_priv.h>
 #include <libc_private.h>
 #include <pthread.h>
@@ -159,14 +162,73 @@ enum init_func {
 #define _libSystem_ktrace_init_func(what) \
 	_libSystem_ktrace1(ARIADNE_LIFECYCLE_libsystem_init | DBG_FUNC_NONE, INIT_##what)
 
+/*
+ * Per-user private directories used by confstr(_CS_DARWIN_USER_*).
+ *
+ * macOS serves these from /var/folders through the dirhelper service.  There
+ * is no dirhelper daemon in this tree yet, so create the equivalent private
+ * hierarchy locally.  Every directory is owned and writable by the caller's
+ * uid; failure to create one is reported to confstr as an error rather than
+ * returning a path that does not exist.
+ */
+char *
+_dirhelper(int which, char *path, size_t pathlen)
+{
+	static const char *const subdirs[] = { "0", "T", "C" };
+	char base[PATH_MAX];
+	char uidbase[PATH_MAX];
+	const char *sub;
+	uid_t uid;
+	int n;
+
+	if (which < 0 || (size_t)which >= sizeof(subdirs) / sizeof(subdirs[0])) {
+		errno = EINVAL;
+		return NULL;
+	}
+	sub = subdirs[which];
+	uid = getuid();
+
+	n = snprintf(base, sizeof(base), "/var/folders");
+	if (n < 0 || (size_t)n >= sizeof(base)) {
+		errno = ENAMETOOLONG;
+		return NULL;
+	}
+	if (mkdir(base, 0755) != 0 && errno != EEXIST) {
+		return NULL;
+	}
+	n = snprintf(base, sizeof(base), "/var/folders/ravyn");
+	if (n < 0 || (size_t)n >= sizeof(base)) {
+		errno = ENAMETOOLONG;
+		return NULL;
+	}
+	if (mkdir(base, 0755) != 0 && errno != EEXIST) {
+		return NULL;
+	}
+	n = snprintf(uidbase, sizeof(uidbase), "%s/%u", base, (unsigned)uid);
+	if (n < 0 || (size_t)n >= sizeof(uidbase)) {
+		errno = ENAMETOOLONG;
+		return NULL;
+	}
+	if (mkdir(uidbase, 0700) != 0 && errno != EEXIST) {
+		return NULL;
+	}
+	n = snprintf(path, pathlen, "%s/%s", uidbase, sub);
+	if (n < 0 || (size_t)n >= pathlen) {
+		errno = ENAMETOOLONG;
+		return NULL;
+	}
+	if (mkdir(path, 0700) != 0 && errno != EEXIST) {
+		return NULL;
+	}
+	return path;
+}
+
 static const struct _libc_functions libc_funcs = {
 	.version = 1,
 	.atfork_prepare = libSystem_atfork_prepare,
 	.atfork_parent = libSystem_atfork_parent,
 	.atfork_child = libSystem_atfork_child,
-#if defined(HAVE_SYSTEM_CORESERVICES)
 	.dirhelper = _dirhelper,
-#endif
 };
 
 

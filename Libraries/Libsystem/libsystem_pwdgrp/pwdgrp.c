@@ -968,7 +968,7 @@ user_from_uid(uid_t uid, int nouser)
 	return buf;
 }
 
-const char *
+char *
 group_from_gid(gid_t gid, int nogroup)
 {
 	struct group *gr;
