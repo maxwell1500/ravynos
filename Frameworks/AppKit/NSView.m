@@ -2154,6 +2154,72 @@ static NSGraphicsContext *graphicsContextForView(NSView *view){
    [opaque displayRectIgnoringOpacity:rect];
 }
 
+extern unsigned char _CFIsCFInstance(const void *cf);
+extern unsigned char _CFIsObjCType(const void *cf);
+extern size_t IOSurfaceGetWidth(void *surface);
+extern size_t IOSurfaceGetHeight(void *surface);
+extern size_t IOSurfaceGetBytesPerRow(void *surface);
+extern void *IOSurfaceGetBaseAddress(void *surface);
+
+static CGImageRef createImageForLayerContents(id contents) {
+   const void *cf = (const void *)contents;
+
+   if(contents == nil)
+    return NULL;
+   if(_CFIsCFInstance(cf))
+    return CGImageRetain((CGImageRef)contents);
+   if(_CFIsObjCType(cf))
+    return NULL;
+
+   /* Opaque IOSurfaceRef: wrap its pixels in a CGImage for this draw pass. */
+   size_t width = IOSurfaceGetWidth((void *)contents);
+   size_t height = IOSurfaceGetHeight((void *)contents);
+   size_t rowBytes = IOSurfaceGetBytesPerRow((void *)contents);
+   void *base = IOSurfaceGetBaseAddress((void *)contents);
+   if(width == 0 || height == 0 || rowBytes == 0 || base == NULL)
+    return NULL;
+
+   CGDataProviderRef provider = CGDataProviderCreateWithData(NULL, base, rowBytes * height, NULL);
+   if(provider == NULL)
+    return NULL;
+   CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
+   CGImageRef image = CGImageCreate(width, height, 8, 32, rowBytes, space,
+       kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little,
+       provider, NULL, true, kCGRenderingIntentDefault);
+   CGColorSpaceRelease(space);
+   CGDataProviderRelease(provider);
+   return image;
+}
+
+-(void)_renderLayer:(CALayer *)layer inContext:(CGContextRef)context {
+   if(layer == nil)
+    return;
+
+   CGRect bounds = [layer bounds];
+   CGPoint position = [layer position];
+   CGPoint anchor = [layer anchorPoint];
+
+   CGContextSaveGState(context);
+   CGContextTranslateCTM(context, position.x - anchor.x * bounds.size.width,
+                         position.y - anchor.y * bounds.size.height);
+   CGContextClipToRect(context, bounds);
+
+   id contents = [layer contents];
+   CGImageRef image = createImageForLayerContents(contents);
+   if(image != NULL) {
+      CGContextDrawImage(context, bounds, image);
+      CGImageRelease(image);
+   } else if(contents != nil && _CFIsObjCType((const void *)contents) &&
+             [contents respondsToSelector:@selector(drawInRect:)]) {
+      [(id)contents drawInRect:bounds];
+   }
+
+   for(CALayer *child in [layer sublayers])
+    [self _renderLayer:child inContext:context];
+
+   CGContextRestoreGState(context);
+}
+
 -(void)displayRectIgnoringOpacity:(NSRect)rect {
    NSRect visibleRect=[self visibleRect];
 
@@ -2187,6 +2253,11 @@ static NSGraphicsContext *graphicsContextForView(NSView *view){
 		   [self updateLayer];
       else
 		   [self drawRect:rect];
+
+      /* A layer-backed view renders its layer tree instead of drawRect:.
+       * Only the topmost layer is traversed; subviews are part of that tree. */
+      if(_layer != nil)
+       [self _renderLayer:_layer inContext:graphicsPort];
 
       [self unlockFocus];
 

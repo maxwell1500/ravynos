@@ -594,6 +594,7 @@ LDFLAGS+= \
 	  -F${OBJTOP}/Frameworks/CoreText -framework CoreText \
 	  -F${OBJTOP}/Frameworks/Onyx2D -framework Onyx2D \
 	  -F${OBJTOP}/Frameworks/QuartzCore -framework QuartzCore \
+	  -F${OBJTOP}/Frameworks/IOSurface -framework IOSurface \
 	  -F${OBJTOP}/Frameworks/CoreData -framework CoreData \
 	  -L${RAVYN_SDKROOT}/usr/lib -lfontconfig -lexpat -lobjc -lm
 

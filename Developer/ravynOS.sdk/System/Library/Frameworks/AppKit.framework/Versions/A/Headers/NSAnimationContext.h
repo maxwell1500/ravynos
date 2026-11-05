@@ -9,6 +9,7 @@
 #import <Foundation/NSDate.h>
 
 @interface NSAnimationContext : NSObject <NSCopying> {
+    NSTimeInterval _duration;
 }
 
 + (void)beginGrouping;

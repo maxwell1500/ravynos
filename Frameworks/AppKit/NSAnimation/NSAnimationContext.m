@@ -7,32 +7,44 @@
  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. */
 
 #import "NSAnimationContext.h"
-#import <AppKit/NSRaise.h>
+#import <Foundation/NSMutableArray.h>
+#import <Foundation/NSZone.h>
+
+static NSMutableArray *sGroupingStack = nil;
 
 @implementation NSAnimationContext
 
 -(id)copyWithZone:(NSZone *)zone {
-    return self;
+    NSAnimationContext *copy=[[NSAnimationContext allocWithZone:zone] init];
+    copy->_duration=_duration;
+    return copy;
 }
 
 +(void)beginGrouping {
-    NSUnimplementedMethod();
+    if(sGroupingStack==nil)
+        sGroupingStack=[[NSMutableArray alloc] init];
+    NSAnimationContext *context=[[NSAnimationContext alloc] init];
+    if([sGroupingStack count]>0)
+        context->_duration=[[sGroupingStack lastObject] duration];
+    [sGroupingStack addObject:context];
+    [context release];
 }
 +(void)endGrouping {
-    NSUnimplementedMethod();
+    if([sGroupingStack count]>0)
+        [sGroupingStack removeLastObject];
 }
 
 +(NSAnimationContext*)currentContext  {
-    NSUnimplementedMethod();
+    if([sGroupingStack count]>0)
+        return [sGroupingStack lastObject];
     return nil;
 }
 
 -(void)setDuration:(NSTimeInterval)duration {
-    NSUnimplementedMethod();
+    _duration=duration;
 }
 -(NSTimeInterval)duration {
-    NSUnimplementedMethod();
-    return 0;
+    return _duration;
 }
 
 @end
