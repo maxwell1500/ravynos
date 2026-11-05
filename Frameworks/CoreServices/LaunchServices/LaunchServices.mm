@@ -1258,6 +1258,21 @@ extern "C" CFURLRef LSCopyDefaultApplicationURLForURL(CFURLRef inURL, LSRolesMas
     return NULL;
 }
 
+/* Pre-10.6 MIME handler lookup.  There is no MIME handler registry yet, so
+ * return the honest answer instead of aborting the process on a missing
+ * symbol.  Firefox calls this while initializing the browser window. */
+extern "C" CFURLRef LSCopyApplicationForMIMEType(CFStringRef inMIMEType, LSRolesMask inRoleMask, CFErrorRef *outError)
+{
+    static int logged = 0;
+    if (!logged) {
+        logged = 1;
+        fprintf(stderr, "[compat] LaunchServices: LSCopyApplicationForMIMEType has no handler registry; returning NULL\n");
+    }
+    if (outError)
+        *outError = NULL;
+    return NULL;
+}
+
 /* 10.6+: default application for a content type. */
 extern "C" CFURLRef LSCopyDefaultApplicationURLForContentType(CFStringRef inContentType, LSRolesMask inRoleMask, CFErrorRef *outError)
 {

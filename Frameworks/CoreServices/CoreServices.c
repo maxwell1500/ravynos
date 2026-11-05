@@ -49,6 +49,18 @@ CFURLRef LSCopyDefaultApplicationURLForURL(CFURLRef inURL, uint32_t inRoleMask, 
     return NULL;
 }
 
+CFURLRef LSCopyApplicationForMIMEType(CFStringRef inMIMEType, uint32_t inRoleMask, CFErrorRef *outError)
+{
+    static int logged = 0;
+    if (!logged) {
+        logged = 1;
+        fprintf(stderr, "[compat] CoreServices: LSCopyApplicationForMIMEType has no handler registry; returning NULL\n");
+    }
+    if (outError)
+        *outError = NULL;
+    return NULL;
+}
+
 CFURLRef LSCopyDefaultApplicationURLForContentType(CFStringRef inContentType, uint32_t inRoleMask, CFErrorRef *outError)
 {
     if (outError)
