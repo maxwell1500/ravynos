@@ -21,6 +21,7 @@ typedef O2Color *O2ColorRef;
     O2ColorSpaceRef _colorSpace;
     unsigned _numberOfComponents;
     O2Float *_components;
+    CGFloat *_cgComponents;
     O2Pattern *_pattern;
 }
 
@@ -41,6 +42,7 @@ BOOL O2ColorEqualToColor(O2ColorRef self, O2ColorRef other);
 O2ColorSpaceRef O2ColorGetColorSpace(O2ColorRef self);
 size_t O2ColorGetNumberOfComponents(O2ColorRef self);
 const O2Float *O2ColorGetComponents(O2ColorRef self);
+const CGFloat *O2ColorGetCGComponents(O2ColorRef self);
 O2Float O2ColorGetAlpha(O2ColorRef self);
 
 O2PatternRef O2ColorGetPattern(O2ColorRef self);

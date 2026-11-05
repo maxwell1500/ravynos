@@ -31,6 +31,17 @@ NSString * const kCAFilterTrilinear=@"trilinear";
    _context=context;
    [_sublayers makeObjectsPerformSelector:@selector(_setContext:) withObject:context];
 }
+#else
+
+-(CALayerContext *)_context {
+   return _context;
+}
+
+-(void)_setContext:(CALayerContext *)context {
+   _context=context;
+   [_sublayers makeObjectsPerformSelector:@selector(_setContext:) withObject:context];
+}
+
 #endif
 
 static NSString * const kCAGravityResizeDefault = @"resize";
@@ -217,9 +228,28 @@ static NSString * const kCAGravityResizeDefault = @"resize";
    return _contents;
 }
 
+extern unsigned char _CFIsCFInstance(const void *cf);
+extern unsigned char _CFIsObjCType(const void *cf);
 -(void)setContents:(id)value {
-   value=[value retain];
-   [_contents release];
+   if(value==_contents)
+    return;
+
+   if(_contentsKind==1)
+    [_contents release];
+   else if(_contentsKind==2)
+    CFRelease((const void *)_contents);
+
+   if(value!=nil && _CFIsObjCType((const void *)value)) {
+    [value retain];
+    _contentsKind=1;
+   } else if(value!=nil && _CFIsCFInstance((const void *)value)) {
+    CFRetain((const void *)value);
+    _contentsKind=2;
+   } else {
+    /* IOSurfaceRef is not an Objective-C object and not a CFRuntime
+     * instance in this tree; keep the pointer without ObjC messaging. */
+    _contentsKind=3;
+   }
    _contents=value;
 }
 
@@ -269,6 +299,7 @@ static NSString * const kCAGravityResizeDefault = @"resize";
    _opacity=1.0;
    _opaque=YES;
    _contents=nil;
+   _contentsKind=0;
    _transform=CATransform3DIdentity;
    _sublayerTransform=CATransform3DIdentity;
    _minificationFilter=kCAFilterLinear;

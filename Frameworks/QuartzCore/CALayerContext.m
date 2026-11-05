@@ -125,8 +125,16 @@
 }
 #endif
 
+-(void)setFrame:(CGRect)rect {
+   _frame=rect;
+}
+
 -(void)render {
+#if defined(__linux__)
    [self renderLayer:_layer];
+#endif
+   /* macOS has no OpenGL CARenderer in this tree yet.  Layer contents are
+    * composited by the AppKit layer path; do not send an undefined selector. */
 }
 
 -(void)timer:(NSTimer *)timer {

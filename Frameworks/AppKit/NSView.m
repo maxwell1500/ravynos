@@ -1562,6 +1562,14 @@ static inline void buildTransformsIfNeeded(NSView *self) {
    // do nothing
 }
 
+-(BOOL)wantsUpdateLayer {
+   return NO;
+}
+
+-(void)updateLayer {
+   /* Subclasses that return YES from -wantsUpdateLayer override this. */
+}
+
 -(BOOL)wantsLayer {
    return _wantsLayer;
 }
@@ -2175,6 +2183,8 @@ static NSGraphicsContext *graphicsContextForView(NSView *view){
 		   [[NSColor yellowColor] set];
 		   NSRectFill(rect);
 	   }
+      else if ([self wantsUpdateLayer])
+		   [self updateLayer];
       else
 		   [self drawRect:rect];
 

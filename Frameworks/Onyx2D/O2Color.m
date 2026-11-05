@@ -94,6 +94,8 @@ O2ColorRef O2ColorCreateWithPattern(O2ColorSpaceRef colorSpace,O2PatternRef patt
    [_colorSpace release];
    [_pattern release];
    NSZoneFree([self zone],_components);
+   if(_cgComponents != NULL)
+    NSZoneFree([self zone],_cgComponents);
    [super dealloc];
 }
 
@@ -130,6 +132,17 @@ size_t O2ColorGetNumberOfComponents(O2ColorRef self) {
 
 const O2Float *O2ColorGetComponents(O2ColorRef self) {
    return self->_components;
+}
+
+const CGFloat *O2ColorGetCGComponents(O2ColorRef self) {
+   unsigned i;
+
+   if(self->_cgComponents == NULL) {
+    self->_cgComponents = NSZoneMalloc([self zone], sizeof(CGFloat) * self->_numberOfComponents);
+    for(i = 0; i < self->_numberOfComponents; i++)
+     self->_cgComponents[i] = (CGFloat)self->_components[i];
+   }
+   return self->_cgComponents;
 }
 
 O2Float O2ColorGetAlpha(O2ColorRef self) {

@@ -59,7 +59,7 @@ size_t CGColorGetNumberOfComponents(CGColorRef self) {
 }
 
 const CGFloat *CGColorGetComponents(CGColorRef self) {
-   return O2ColorGetComponents(self);
+   return O2ColorGetCGComponents(self);
 }
 
 CGFloat CGColorGetAlpha(CGColorRef self) {

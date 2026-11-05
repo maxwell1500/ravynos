@@ -27,9 +27,7 @@ CA_EXPORT NSString *const kCAFilterNearest;
 CA_EXPORT NSString *const kCAFilterTrilinear;
 
 @interface CALayer : NSObject {
-#if defined(__linux__)
      CALayerContext *_context;
-#endif
     CALayer *_superlayer;
     NSArray *_sublayers;
     id _delegate;
@@ -39,6 +37,7 @@ CA_EXPORT NSString *const kCAFilterTrilinear;
     float _opacity;
     BOOL _opaque;
     id _contents;
+    int _contentsKind;
     CATransform3D _transform;
     CATransform3D _sublayerTransform;
     NSString *_minificationFilter;
