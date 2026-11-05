@@ -212,6 +212,17 @@ daemon:*:1:1::0:0:System Services:/var/db:/usr/sbin/nologin
 ravyn:*:501:20::0:0:ravynOS User:/Users/ravyn:/bin/sh
 """
 
+ETC_HOSTS = """127.0.0.1\tlocalhost
+::1\tlocalhost
+"""
+
+ETC_RESOLV_CONF = """# ravynOS /etc/resolv.conf
+# QEMU SLIRP DNS gateway and public fallbacks
+nameserver 10.0.2.3
+nameserver 1.1.1.1
+nameserver 8.8.8.8
+"""
+
 ETC_GROUP = """wheel:*:0:root,ravyn
 daemon:*:1:
 tty:*:4:
@@ -1143,6 +1154,17 @@ def main():
         "text": ETC_GROUP,
         "comment": "group database; wheel is the admin group",
     })
+    entries.append({
+        "path": "etc/hosts",
+        "text": ETC_HOSTS,
+        "comment": "hosts file for loopback resolution",
+    })
+    entries.append({
+        "path": "etc/resolv.conf",
+        "text": ETC_RESOLV_CONF,
+        "comment": "DNS resolver configuration (QEMU SLIRP 10.0.2.3 + public fallbacks)",
+    })
+
 
     # 11c. LaunchServices' SQL schema lives in its framework resources; the
     #      scanner reads InitDB.sql (and DBSchema_3_4.sql for upgrades) with
