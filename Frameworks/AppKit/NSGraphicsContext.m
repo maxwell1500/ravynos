@@ -100,6 +100,10 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
    return [[[self alloc] initWithGraphicsPort:context flipped:flipped] autorelease];
 }
 
++(NSGraphicsContext *)graphicsContextWithCGContext:(CGContextRef)context flipped:(BOOL)flipped {
+   return [self graphicsContextWithGraphicsPort:context flipped:flipped];
+}
+
 +(NSGraphicsContext *)graphicsContextWithBitmapImageRep:(NSBitmapImageRep *)imageRep {
    return [[[self alloc] initWithBitmapImageRep:imageRep] autorelease];
 }
@@ -179,6 +183,10 @@ NSMutableArray *NSCurrentFocusStack() {
 }
 
 -(CGContextRef)graphicsPort {
+   return _graphicsPort;
+}
+
+-(CGContextRef)CGContext {
    return _graphicsPort;
 }
 

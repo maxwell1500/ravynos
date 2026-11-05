@@ -22,7 +22,7 @@ HEADERS= \
         include/khrplatform.h
 RESOURCES=      Info.plist
 
-CFLAGS+= ${FMWK_CFLAGS} -I${SRCTOP}/Frameworks -I${.CURDIR}/include
+CFLAGS+= ${FMWK_CFLAGS} -I${SRCTOP}/Frameworks -I${.CURDIR} -I${.CURDIR}/include
 CFLAGS+= -I${SRCTOP}/Frameworks/Foundation/Headers
 LDFLAGS+=
 

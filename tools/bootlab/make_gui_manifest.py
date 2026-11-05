@@ -410,6 +410,18 @@ def expand_closure(exes, staged, entries, closure, seen):
                 "comment": "dylib closure; " + origin,
             })
             closure.append((inst, src, "staged"))
+            if ".framework/Versions/" in inst:
+                marker = ".framework/Versions/"
+                base_fw = inst.split(marker, 1)[0]
+                fw_name = base_fw.rsplit("/", 1)[-1]
+                unversioned = base_fw + ".framework/" + fw_name
+                if unversioned not in seen and unversioned.lstrip("/") not in staged:
+                    seen.add(unversioned)
+                    entries.append({
+                        "path": unversioned.lstrip("/"),
+                        "file": src,
+                        "comment": "framework unversioned alias; " + origin,
+                    })
             queue.append(apath)
 
 
@@ -1061,12 +1073,19 @@ def main():
         if not os.path.isfile(src):
             closure.append((rel, src, "MISSING"))
             continue
+        top_rel = "System/Library/Frameworks/%s.framework/%s" % (fw, fw)
         entries.append({
             "path": rel,
             "file": manifest_source(os.path.realpath(src)),
             "comment": "%s from the repo SDK" % fw,
         })
+        entries.append({
+            "path": top_rel,
+            "file": manifest_source(os.path.realpath(src)),
+            "comment": "%s unversioned alias from the repo SDK" % fw,
+        })
         closure.append((rel, src, "staged"))
+        closure.append((top_rel, src, "staged"))
 
     # Private frameworks that a stock bundle links by absolute path.  dyld
     # names the next one it cannot find; these are the two Firefox's XUL

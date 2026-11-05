@@ -1097,3 +1097,55 @@ initialized `_cgComponents = NULL`, and defaulted fallback content background to
 safe 0.92 gray (`49791d625e`). The Firefox window now renders clean macOS light gray
 `[235, 235, 235]` at 1024x768 with titlebar, traffic-light controls, and zero green
 artifacts.
+
+### NSOpenGL and CGL implementation (2026-11-05)
+
+Firefox ESR XUL loaded `OpenGL.framework` dynamically and probed graphics capabilities
+via `-[NSOpenGLPixelFormat initWithAttributes:]`, crashing with `unrecognized selector`
+because `NSOpenGL/` classes (`NSOpenGLContext`, `NSOpenGLPixelFormat`, `NSOpenGLDrawable`,
+`NSOpenGLPixelBuffer`, `NSOpenGLView`) were missing from `Frameworks/AppKit/Makefile` `SRCS`
+and replaced by empty placeholders in `AppKitClasses.m`. In addition, `Frameworks/OpenGL/OpenGL.c`
+was an empty stub exporting only `_OpenGL`.
+
+Implemented the full CGL subsystem in `Frameworks/OpenGL/OpenGL.c` (`CGLChoosePixelFormat`,
+`CGLCreateContext`, `CGLDescribePixelFormat`, `CGLRetainContext`, `CGLReleaseContext`,
+`CGLLockContext`, `CGLUnlockContext`, `CGLSetParameter`, `CGLGetParameter`, `CGLFlushDrawable`,
+`CGLGetCurrentContext`, `CGLSetCurrentContext`, `CGLEnable`, `CGLDisable`, `CGLSetVirtualScreen`,
+`CGLTexImageIOSurface2D`, `CGLCreatePBuffer`, etc.) reporting honest software rasterizer
+capabilities (`accelerated = 0`). Added `NSOpenGL/*.m` to AppKit `SRCS`, removed empty placeholders
+from `AppKitClasses.m`, and ensured `build-libraries.sh` keeps `Versions/C/AppKit` in sync with
+`Versions/A/AppKit`.
+
+### NSGraphicsContext graphicsContextWithCGContext:flipped: (2026-11-05)
+
+When WebRender detected the software rasterizer, it cleanly fell back to Software WebRender
+(`[GFX1-]: Fallback WR to SW-WR`) and attempted to create a drawing context via
+`+[NSGraphicsContext graphicsContextWithCGContext:flipped:]`. AppKit only had the legacy
+`graphicsContextWithGraphicsPort:flipped:`. Implemented `graphicsContextWithCGContext:flipped:`
+and `-CGContext` on `NSGraphicsContext` in `Frameworks/AppKit/NSGraphicsContext.m`.
+
+### NSResponder userActivity (2026-11-05)
+
+Firefox's `ToolbarWindow` (a subclass of `NSWindow` -> `NSResponder`) was queried for the macOS
+10.10+ Handoff property `userActivity`, aborting with unrecognized selector. Implemented
+`-userActivity`, `-setUserActivity:`, and `-updateUserActivityState:` on `NSResponder` backed
+by an `NSMapTable`.
+
+### Onyx2D font resolution in child processes (2026-11-05)
+
+`plugin-container` content processes crashed in `O2FontCreateWithFontName_platform` with
+`rdi->[0]=0x434f4e44` when `[name isEqualToString:]` was messaged on a `CFStringRef` in a
+process without Foundation toll-free bridging initialized. Fixed `pathStringForFontName` in
+`Frameworks/Onyx2D/O2Font_ttf.m` to extract C strings safely via `CFStringGetCStringPtr` /
+`CFStringGetCString` and compare with `strcasecmp`/`strncasecmp`, falling back to
+`NimbusSans-Regular.ttf` if a requested face is absent.
+
+### CALayer contents IOSurfaceRef vs CGImageRef resolution (2026-11-05)
+
+`createImageForLayerContents` in `Frameworks/AppKit/NSView.m` checked `_CFIsCFInstance(cf)`
+to retain a `CGImageRef`. In this tree, `CGImageRef` is an `O2Image` (Objective-C object)
+while `IOSurfaceRef` is a CoreFoundation type. The check mistakenly treated `IOSurfaceRef`
+as an already-wrapped `CGImageRef`, bypassing `IOSurfaceGetBaseAddress` and passing raw
+`IOSurfaceRef` to `CGContextDrawImage`. Fixed check to `[contents isKindOfClass:[O2Image class]]`
+so `IOSurfaceRef` is correctly wrapped into a `CGImageRef`. Firefox browser UI elements,
+tabs, URL bar, navigation bar, and start page logo now render visibly.

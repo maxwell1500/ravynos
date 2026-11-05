@@ -132,6 +132,11 @@ SRCS= \
     NSModalSessionX.m \
     NSMutableAttributedString.m \
     NSMutableParagraphStyle.m \
+    NSOpenGL/NSOpenGLContext.m \
+    NSOpenGL/NSOpenGLDrawable.m \
+    NSOpenGL/NSOpenGLPixelBuffer.m \
+    NSOpenGL/NSOpenGLPixelFormat.m \
+    NSOpenGL/NSOpenGLView.m \
     NSOpenPanel.m \
     NSOutlineView.m \
     NSPDFImageRep.m \

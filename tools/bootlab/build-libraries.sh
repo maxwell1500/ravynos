@@ -1022,6 +1022,16 @@ if [ "${1:-}" = "--frameworks" ]; then
         else
             echo "--- staging: $name UPDATED    $before -> $after"
         fi
+        if [ "$name" = "AppKit" ]; then
+            mkdir -p "$REPO_SDK/System/Library/Frameworks/AppKit.framework/Versions/C"
+            cp -fp "$REPO_SDK/System/Library/Frameworks/AppKit.framework/Versions/A/AppKit" \
+                   "$REPO_SDK/System/Library/Frameworks/AppKit.framework/Versions/C/AppKit"
+            if [ -d "$REPO_SDK/System/Library/Frameworks/AppKit.framework/Versions/A/Headers" ]; then
+                mkdir -p "$REPO_SDK/System/Library/Frameworks/AppKit.framework/Versions/C/Headers"
+                cp -Rfp "$REPO_SDK/System/Library/Frameworks/AppKit.framework/Versions/A/Headers/." \
+                        "$REPO_SDK/System/Library/Frameworks/AppKit.framework/Versions/C/Headers/"
+            fi
+        fi
     done
     python3 "$HERE/sync_sdk.py" || rc=1
     exit $rc

@@ -131,17 +131,6 @@ static NSAppearance *sCurrentAppearance = nil;
 @implementation NSLayoutConstraint
 @end
 
-@interface NSOpenGLContext : NSObject
-@end
-
-@implementation NSOpenGLContext
-@end
-
-@interface NSOpenGLPixelFormat : NSObject
-@end
-
-@implementation NSOpenGLPixelFormat
-@end
 
 @interface NSPasteboardItem : NSObject
 @end

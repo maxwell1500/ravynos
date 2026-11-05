@@ -1,5 +1,5 @@
-
-#ifdef __clang__
+#ifndef _CGLTYPES_H_
+#define _CGLTYPES_H_
 #define CGL_DLLEXPORT
 #define CGL_DLLIMPORT
 #else
@@ -116,6 +116,10 @@ typedef enum {
 
 } CGLContextParameter;
 
-typedef struct _CGLContextObj *CGLContextObj;
-typedef struct _CGLPixelFormatObj *CGLPixelFormatObj;
-typedef struct _CGLPBufferObj *CGLPBufferObj;
+typedef struct _CGLContextObject *CGLContextObj;
+typedef struct _CGLPixelFormatObject *CGLPixelFormatObj;
+typedef struct _CGLPBufferObject *CGLPBufferObj;
+typedef struct _CGLContextObject _CGLContextObj;
+typedef struct _CGLPixelFormatObject _CGLPixelFormatObj;
+typedef struct _CGLPBufferObject _CGLPBufferObj;
+#endif /* _CGLTYPES_H_ */

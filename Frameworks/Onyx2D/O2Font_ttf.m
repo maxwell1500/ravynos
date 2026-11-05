@@ -6,6 +6,8 @@
 #import <Foundation/Foundation.h>
 #import <Foundation/NSData.h>
 #include <string.h>
+#include <strings.h>
+#import <CoreFoundation/CoreFoundation.h>
 
 #ifdef FREETYPE_PRESENT
 #import <ft2build.h>
@@ -95,25 +97,47 @@ static NSString *pathStringForFontName(NSString *name) {
    if(name == nil)
       return nil;
 
-   for(int i = 0; knownFonts[i].name != NULL; i++)
-      if([name isEqualToString:[NSString stringWithUTF8String:knownFonts[i].name]])
-         return [NSString stringWithUTF8String:knownFonts[i].path];
+   char cName[256];
+   cName[0] = '\0';
+   const char *ptr = NULL;
 
-   /* Accept a family name by falling through to the first matching style. */
+   /* Safely extract C string whether name is an NSString or CFStringRef */
+   if (CFGetTypeID((CFTypeRef)name) == CFStringGetTypeID()) {
+       ptr = CFStringGetCStringPtr((CFStringRef)name, kCFStringEncodingUTF8);
+       if (ptr == NULL && CFStringGetCString((CFStringRef)name, cName, sizeof(cName), kCFStringEncodingUTF8)) {
+           ptr = cName;
+       }
+   } else if ([name respondsToSelector:@selector(UTF8String)]) {
+       ptr = [name UTF8String];
+   }
+
+   if (ptr == NULL || ptr[0] == '\0')
+       return nil;
+
    for(int i = 0; knownFonts[i].name != NULL; i++) {
-      NSString *known = [NSString stringWithUTF8String:knownFonts[i].name];
-      if([known hasPrefix:[NSString stringWithFormat:@"%@-", name]])
+      if(strcasecmp(ptr, knownFonts[i].name) == 0)
          return [NSString stringWithUTF8String:knownFonts[i].path];
    }
 
+   /* Accept a family name by falling through to the first matching style. */
+   size_t nlen = strlen(ptr);
+   for(int i = 0; knownFonts[i].name != NULL; i++) {
+      if(strncasecmp(knownFonts[i].name, ptr, nlen) == 0 && knownFonts[i].name[nlen] == '-')
+         return [NSString stringWithUTF8String:knownFonts[i].path];
+   }
+
+   NSString *nsName = [NSString stringWithUTF8String:ptr];
+   if(nsName == nil)
+      return nil;
+
    ensureCollections();
-   NSString *dyn = [sFontPathByName objectForKey:name];
+   NSString *dyn = [sFontPathByName objectForKey:nsName];
    if(dyn != nil)
       return dyn;
 
    [O2Font_ttf loadAllFontsInDirectories];
 
-   return [sFontPathByName objectForKey:name];
+   return [sFontPathByName objectForKey:nsName];
 }
 
 NSArray *O2FontKnownFontNames(void) {
@@ -336,8 +360,7 @@ O2FontRef O2FontCreateWithFontName_platform(NSString *name) {
 
    NSString *path = pathStringForFontName(name);
    if(path == nil)
-    return NULL;
-
+    path = @"/System/Library/Fonts/TTF/NimbusSans-Regular.ttf";
    /* File-based face creation: the memory-provider path never returns on this
     * target even though the same file parses in ~0.1ms on the host. */
    return [[O2Font_freetype alloc] initWithFilename:[path UTF8String]];

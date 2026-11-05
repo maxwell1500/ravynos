@@ -29,7 +29,33 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
    }
    return self;
 }
+static NSMapTable *sUserActivityByResponder = NULL;
 
+-(void)dealloc {
+   if (sUserActivityByResponder != NULL) {
+      NSMapRemove(sUserActivityByResponder, self);
+   }
+   [super dealloc];
+}
+
+-(NSUserActivity *)userActivity {
+   if (sUserActivityByResponder == NULL)
+      return nil;
+   return (NSUserActivity *)NSMapGet(sUserActivityByResponder, self);
+}
+
+-(void)setUserActivity:(NSUserActivity *)activity {
+   if (sUserActivityByResponder == NULL)
+      sUserActivityByResponder = NSCreateMapTable(NSNonRetainedObjectMapKeyCallBacks, NSObjectMapValueCallBacks, 0);
+   if (activity != nil)
+      NSMapInsert(sUserActivityByResponder, self, activity);
+   else
+      NSMapRemove(sUserActivityByResponder, self);
+}
+
+-(void)updateUserActivityState:(NSUserActivity *)activity {
+   (void)activity;
+}
 -(NSResponder *)nextResponder {
    return _nextResponder;
 }

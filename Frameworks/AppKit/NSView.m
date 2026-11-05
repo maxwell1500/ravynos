@@ -28,6 +28,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 #import <AppKit/NSPasteboard.h>
 #import <AppKit/NSObject+BindingSupport.h>
 #import <Onyx2D/O2Context.h>
+#import <Onyx2D/O2Image.h>
 #import <AppKit/NSRaise.h>
 #import <AppKit/NSViewBackingLayer.h>
 #import <CoreGraphics/CGWindow.h>
@@ -2172,10 +2173,8 @@ static CGImageRef createImageForLayerContents(id contents) {
 
    if(contents == nil)
     return NULL;
-   if(_CFIsCFInstance(cf))
+   if([contents isKindOfClass:[O2Image class]])
     return CGImageRetain((CGImageRef)contents);
-   if(_CFIsObjCType(cf))
-    return NULL;
 
    /* Opaque IOSurfaceRef: wrap its pixels in a CGImage for this draw pass. */
    size_t width = IOSurfaceGetWidth((void *)contents);

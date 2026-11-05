@@ -9,7 +9,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 #import <Foundation/Foundation.h>
 #import <AppKit/NSEvent.h>
 
-@class NSMenu, NSUndoManager;
+@class NSMenu, NSUndoManager, NSUserActivity;
 
 @interface NSResponder : NSObject <NSCoding> {
     id _nextResponder;
@@ -22,6 +22,10 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 - (void)setNextResponder:(NSResponder *)responder;
 - (void)setMenu:(NSMenu *)menu;
+
+- (NSUserActivity *)userActivity;
+- (void)setUserActivity:(NSUserActivity *)activity;
+- (void)updateUserActivityState:(NSUserActivity *)activity;
 
 - validRequestorForSendType:(NSString *)sendType returnType:(NSString *)returnType;
 
