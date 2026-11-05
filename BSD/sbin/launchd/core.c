@@ -3648,17 +3648,46 @@ static void
 job_write_crash_report(job_t j, int sig)
 {
 	char path[1024];
+	time_t now = time(NULL);
+	struct tm tm_buf;
+	char time_str[64];
 	FILE *f;
 
+	localtime_r(&now, &tm_buf);
+	strftime(time_str, sizeof(time_str), "%Y-%m-%d-%H%M%S", &tm_buf);
+
+	const char *dirs[] = {
+		"/var/log/DiagnosticReports",
+		"/Users/ravyn/Library/Logs/DiagnosticReports",
+		NULL
+	};
+
+	mkdir("/Users", 0755);
+	mkdir("/Users/ravyn", 0755);
+	mkdir("/Users/ravyn/Library", 0755);
+	mkdir("/Users/ravyn/Library/Logs", 0755);
+	mkdir("/Users/ravyn/Library/Logs/DiagnosticReports", 0755);
 	mkdir("/var/log/DiagnosticReports", 0755);
-	snprintf(path, sizeof(path), "/var/log/DiagnosticReports/%s-%d.crash",
-	    j->label, (int)j->p);
-	f = fopen(path, "w");
-	if (f == NULL)
-		return;
-	fprintf(f, "Process: %s\nPID: %d\nSignal: %d (%s)\nTime: %ld\n",
-	    j->label, (int)j->p, sig, strsignal(sig), (long)time(NULL));
-	fclose(f);
+
+	for (int i = 0; dirs[i] != NULL; i++) {
+		snprintf(path, sizeof(path), "%s/%s-%s.crash",
+		    dirs[i], j->label, time_str);
+		f = fopen(path, "w");
+		if (f != NULL) {
+			fprintf(f, "Process:         %s [%d]\n", j->label, (int)j->p);
+			fprintf(f, "Path:            %s\n", j->prog ? j->prog : j->label);
+			fprintf(f, "Identifier:      %s\n", j->label);
+			fprintf(f, "Date/Time:       %ld\n", (long)now);
+			fprintf(f, "OS Version:      ravynOS 0.7.0 (Darwin 24.3.0)\n");
+			fprintf(f, "Report Version:  12\n\n");
+			fprintf(f, "Exception Type:  EXC_BAD_ACCESS (SIG%s)\n", strsignal(sig));
+			fprintf(f, "Termination Signal: %d (%s)\n", sig, strsignal(sig));
+			fclose(f);
+		}
+	}
+
+	syslog(LOG_ERR, "ReportCrash: Process %s [%d] crashed: %s",
+	    j->label, (int)j->p, strsignal(sig));
 }
 
 void

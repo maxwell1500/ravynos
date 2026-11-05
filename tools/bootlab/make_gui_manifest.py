@@ -846,6 +846,18 @@ def main():
         else:
             closure.append((dstpath, src, "MISSING"))
 
+    # 6o3. ReportCrash: crash reporter for Phase 7.2.
+    rc_src = os.path.join(BUILD_SRC, "BSD", "libexec", "ReportCrash", "ReportCrash")
+    rc_work = os.path.join(HERE, "work", "ReportCrash")
+    if os.path.isfile(rc_src):
+        shutil.copy2(rc_src, rc_work)
+        entries.append({
+            "path": "usr/libexec/ReportCrash",
+            "file": os.path.relpath(rc_work, HERE),
+            "comment": "crash reporter (BSD/libexec/ReportCrash)",
+        })
+    else:
+        closure.append(("usr/libexec/ReportCrash", rc_src, "MISSING"))
     # 6p. login: console crypt(3) verifier with AUDIT action=login.
     lg_src = os.path.join(BUILD_SRC, "BSD", "bin", "login", "login")
     lg_work = os.path.join(HERE, "work", "login")
