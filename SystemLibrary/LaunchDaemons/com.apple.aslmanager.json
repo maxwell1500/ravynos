@@ -1,0 +1,11 @@
+{
+  "Label": "com.apple.aslmanager",
+  "ProgramArguments": [
+    "/usr/sbin/aslmanager"
+  ],
+  "MachServices": {
+    "com.apple.aslmanager": true
+  },
+  "EnableTransactions": true,
+  "POSIXSpawnType": "Interactive"
+}

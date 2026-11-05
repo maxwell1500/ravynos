@@ -50,7 +50,7 @@
 #include <utmpx.h>
 #include <asl_private.h>
 
-#if !TARGET_OS_IPHONE
+#if !TARGET_OS_IPHONE && defined(HAVE_QUARANTINE)
 #include <quarantine.h>
 #endif
 #include "daemon.h"
@@ -484,7 +484,7 @@ main(int argc, const char *argv[])
 	/* Set I/O policy */
 	setiopolicy_np(IOPOL_TYPE_DISK, IOPOL_SCOPE_PROCESS, IOPOL_PASSIVE);
 
-#if !TARGET_OS_IPHONE
+#if !TARGET_OS_IPHONE && defined(HAVE_QUARANTINE)
 	/* Set Quarantine */
 	qtn_proc_t qp = qtn_proc_alloc();
 	qtn_proc_set_identifier(qp, "com.apple.syslogd");

@@ -887,7 +887,7 @@ launch_msg_internal(launch_data_t d)
 	size_t nfds = 0;
 	kern_return_t kr;
 
-	requestCnt = 1024 * 1024;
+	requestCnt = 64 * 1024;
 	mig_allocate(&request, requestCnt);
 	if(!request)
 		goto out_bad;
@@ -898,13 +898,13 @@ launch_msg_internal(launch_data_t d)
 	if (!sz) {
 		goto out_bad;
 	}
-
+	requestCnt = (mach_msg_type_number_t)sz;
 	if (nout_fds) {
 		if (nout_fds > 128) {
 			goto out_bad;
 		}
 
-		request_fdsCnt = nout_fds * sizeof(sizeof(out_fds[0]));
+		request_fdsCnt = nout_fds * sizeof(out_fds[0]);
 		mig_allocate((vm_address_t *)&request_fds, request_fdsCnt);
 		if (!request_fds) {
 			goto out_bad;

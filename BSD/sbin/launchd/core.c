@@ -12056,7 +12056,7 @@ job_mig_ipc_request(job_t j, vm_offset_t request,
 		}
 	}
 
-	*replyCnt = 10 * 1024 * 1024;
+	*replyCnt = 64 * 1024;
 	mig_allocate(reply, *replyCnt);
 	if (!*reply) {
 		LOG_USER_FAIL();
@@ -12069,6 +12069,7 @@ job_mig_ipc_request(job_t j, vm_offset_t request,
 		job_log(j, LOG_ERR, "Could not pack legacy IPC reply.");
 		LOG_USER_FAIL();
 	}
+	*replyCnt = (mach_msg_type_number_t)sz;
 
 	if (nout_fds) {
 		if (nout_fds > 128) {

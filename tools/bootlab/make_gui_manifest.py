@@ -72,6 +72,7 @@ DIRS = [
     "private/tmp",
     "var",
     "var/log",
+    "var/log/asl",
     "var/run",
     "var/tmp",
     "tmp",
@@ -590,7 +591,9 @@ def main():
     # 6e. The launchd jobs of the services the image starts on boot: the
     #     pasteboard daemon and the in-guest daily driver self test.
     for job in ("com.ravynos.pasteboardd.json",
-                "com.ravynos.dailydrivertest.json"):
+                "com.ravynos.dailydrivertest.json",
+                "com.apple.syslogd.json",
+                "com.apple.aslmanager.json"):
         job_src = os.path.join(REPO, "SystemLibrary", "LaunchDaemons", job)
         job_dst = "System/Library/LaunchDaemons/" + job
         if os.path.isfile(job_src):
@@ -826,6 +829,22 @@ def main():
         })
     else:
         closure.append(("bin/df", df_src, "MISSING"))
+
+    # 6o2. syslogd and aslmanager: system logging and ASL data store.
+    for tool, srcpath, dstpath in (
+            ("syslogd", ("BSD", "usr.sbin", "syslogd", "syslogd"), "usr/sbin/syslogd"),
+            ("aslmanager", ("BSD", "usr.sbin", "aslmanager", "aslmanager"), "usr/sbin/aslmanager")):
+        src = os.path.join(BUILD_SRC, *srcpath)
+        work = os.path.join(HERE, "work", tool)
+        if os.path.isfile(src):
+            shutil.copy2(src, work)
+            entries.append({
+                "path": dstpath,
+                "file": os.path.relpath(work, HERE),
+                "comment": "%s (BSD/%s)" % (tool, "/".join(srcpath[:-1])),
+            })
+        else:
+            closure.append((dstpath, src, "MISSING"))
 
     # 6p. login: console crypt(3) verifier with AUDIT action=login.
     lg_src = os.path.join(BUILD_SRC, "BSD", "bin", "login", "login")
@@ -1183,6 +1202,20 @@ def main():
         "text": ETC_RESOLV_CONF,
         "comment": "DNS resolver configuration (QEMU SLIRP 10.0.2.3 + public fallbacks)",
     })
+    asl_conf_src = os.path.join(REPO, "BSD", "usr.sbin", "syslogd", "asl.conf.osx")
+    if os.path.isfile(asl_conf_src):
+        entries.append({
+            "path": "etc/asl.conf",
+            "file": manifest_source(os.path.realpath(asl_conf_src)),
+            "comment": "syslogd and aslmanager configuration",
+        })
+    syslog_conf_src = os.path.join(REPO, "BSD", "usr.sbin", "syslogd", "syslog.conf")
+    if os.path.isfile(syslog_conf_src):
+        entries.append({
+            "path": "etc/syslog.conf",
+            "file": manifest_source(os.path.realpath(syslog_conf_src)),
+            "comment": "syslog configuration",
+        })
 
 
     # 11c. LaunchServices' SQL schema lives in its framework resources; the

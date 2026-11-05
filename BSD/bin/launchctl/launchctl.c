@@ -193,6 +193,7 @@ create_socket(json_t *json)
 		strncpy(envkey, "/tmp/launchd_XXXXXXXXXX", sizeof(envkey));
 		char *path = mktemp(envkey);
 		strncpy(sun.sun_path, path, sizeof(sun.sun_path));
+		sun.sun_len = SUN_LEN(&sun);
 
 		strncpy(envkey, json_string_value(val), sizeof(envkey));
 
@@ -253,6 +254,7 @@ create_socket(json_t *json)
 		sun.sun_family = AF_UNIX;
 
 		strncpy(sun.sun_path, json_string_value(val), sizeof(sun.sun_path));
+		sun.sun_len = SUN_LEN(&sun);
 
 		if ((sfd = socket(AF_UNIX, st, 0)) == -1)
 			errx(EX_OSERR, "socket(): %s", strerror(errno));
