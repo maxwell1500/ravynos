@@ -1041,3 +1041,41 @@ name/size constructors, family matching, and the PostScript-name list are
 now implemented.  The family array is an ObjC wrapper registered as the
 ObjC class for `kNSCFTypeArray` so Gecko can both use CFArray accessors and
 fast-enumerate it.
+### Content-process sandbox dirs and arc4random entropy (2026-11-04)
+
+`confstr(_CS_DARWIN_USER_CACHE_DIR)` failed in Gecko content-process startup
+because libSystem initializer left `_dirhelper` NULL, leading to "Sandbox
+initialization failed". Implemented fallback and private `/var/folders/ravyn/<uid>/{0,T,C}`
+hierarchy (`2fcbf27899`).
+`arc4random` previously used unseeded `ccrng()`, so every subprocess generated
+identical pseudorandom sequences, causing Mojo IPC to abort with `ERROR_PORT_EXISTS`.
+Replaced with `getentropy()` kernel entropy in `Libraries/Libsystem/libsystem_c/gen/FreeBSD/arc4random.c`.
+
+### Missing LaunchServices MIME lookup (2026-11-04)
+
+dyld aborted Firefox on startup with `Symbol not found: _LSCopyApplicationForMIMEType`.
+Implemented in `Frameworks/CoreServices/LaunchServices/LaunchServices.mm` and
+`Frameworks/CoreServices/CoreServices.c` (`6cd3a3cbdc`).
+
+### WindowServer full-scene refresh on window visibility (2026-11-04)
+
+Firefox created its main window at 1024x768 at (4, 308) in state `NORMAL`, but
+damaged-region compositing alone excluded the newly shown window from scanout.
+Added `markFullSceneDirty` when a window becomes visible (`c8200a03e8`).
+
+### Gecko layer-backed view updates and QuartzCore ABI (2026-11-04)
+
+Gecko's `PixelHostingView` returns `YES` from `wantsUpdateLayer` and expects
+`updateLayer` / `updateRootCALayer` instead of `drawRect:`. Implemented
+`wantsUpdateLayer` handling in `Frameworks/AppKit/NSView.m`, added macOS methods
+to `CALayerContext`, and made `CALayer.contents` type-aware so raw `IOSurfaceRef`
+is not messaged as ObjC (`d42a36aa16`).
+Fixed `CGColorGetComponents` ABI mismatch between Onyx2D (`float`) and CoreGraphics (`CGFloat/double`).
+
+### NSAnimationContext and CALayer rendering (2026-11-04)
+
+Gecko layer transactions call `[NSAnimationContext beginGrouping]`, `endGrouping`,
+and read `currentContext`, which previously raised `NSUnimplementedMethod`.
+Implemented the transaction grouping stack in `Frameworks/AppKit/NSAnimation/NSAnimationContext.m` (`5c748c2c10`).
+Added recursive `_renderLayer:` in `NSView.m` mapping IOSurface contents to CGImage
+with allocation bounds checking (`31d07bda42`).
