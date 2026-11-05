@@ -18,6 +18,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
    _pattern=[pattern retain];
    _numberOfComponents=O2ColorSpaceGetNumberOfComponents(_colorSpace)+1;
    _components=NSZoneMalloc([self zone],sizeof(O2Float)*_numberOfComponents);
+   _cgComponents=NULL;
    for(i=0;i<_numberOfComponents;i++)
     _components[i]=components[i];
     
@@ -31,6 +32,7 @@ O2ColorRef O2ColorInitWithColorSpace(O2ColorRef self,O2ColorSpaceRef colorSpace,
    self->_pattern=nil;
    self->_numberOfComponents=O2ColorSpaceGetNumberOfComponents(self->_colorSpace)+1;
    self->_components=NSZoneMalloc([self zone],sizeof(O2Float)*self->_numberOfComponents);
+   self->_cgComponents=NULL;
    for(i=0;i<self->_numberOfComponents;i++)
     self->_components[i]=components[i];
     

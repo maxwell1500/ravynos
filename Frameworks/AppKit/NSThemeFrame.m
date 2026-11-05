@@ -178,7 +178,7 @@ static O2Image *wsZoom, *wsZoomUp, *wsZoomDown;
     // 2. Fill content bounds with window background color
     NSRect bounds = [NSWindow contentRectForFrameRect:[self bounds]
         styleMask:[[self window] styleMask]];
-    CGFloat r, g, b, a;
+    CGFloat r = 0.92f, g = 0.92f, b = 0.92f, a = 1.0f;
     [[[self window] backgroundColor] getRed:&r green:&g blue:&b alpha:&a];
     O2ContextSetRGBFillColor(_context, r, g, b, a);
     O2ContextFillRect(_context, bounds);

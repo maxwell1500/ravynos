@@ -19,23 +19,37 @@ void CGColorRelease(CGColorRef self) {
 }
 
 CGColorRef CGColorCreate(CGColorSpaceRef colorSpace,const CGFloat *components) {
-   return O2ColorCreate(colorSpace,components);
+   if(colorSpace == NULL || components == NULL)
+      return NULL;
+   size_t count = O2ColorSpaceGetNumberOfComponents(colorSpace) + 1;
+   O2Float fltComps[count];
+   for(size_t i = 0; i < count; i++)
+      fltComps[i] = (O2Float)components[i];
+   return O2ColorCreate(colorSpace, fltComps);
 }
 
 CGColorRef CGColorCreateGenericGray(CGFloat gray,CGFloat a) {
-   return O2ColorCreateGenericGray(gray,a);
+   return O2ColorCreateGenericGray((O2Float)gray, (O2Float)a);
 }
 
 CGColorRef CGColorCreateGenericRGB(CGFloat r,CGFloat g,CGFloat b,CGFloat a) {
-    return O2ColorCreateGenericRGB(r,g,b,a);
+   return O2ColorCreateGenericRGB((O2Float)r, (O2Float)g, (O2Float)b, (O2Float)a);
 }
 
 CGColorRef CGColorCreateGenericCMYK(CGFloat c,CGFloat m,CGFloat y,CGFloat k,CGFloat a) {
-   return O2ColorCreateGenericCMYK(c,m,y,k,a);
+   return O2ColorCreateGenericCMYK((O2Float)c, (O2Float)m, (O2Float)y, (O2Float)k, (O2Float)a);
 }
 
 CGColorRef CGColorCreateWithPattern(CGColorSpaceRef colorSpace,CGPatternRef pattern,const CGFloat *components) {
-   return O2ColorCreateWithPattern(colorSpace,pattern,components);
+   if(colorSpace == NULL)
+      return NULL;
+   size_t count = O2ColorSpaceGetNumberOfComponents(colorSpace) + 1;
+   O2Float fltComps[count];
+   if(components != NULL) {
+      for(size_t i = 0; i < count; i++)
+         fltComps[i] = (O2Float)components[i];
+   }
+   return O2ColorCreateWithPattern(colorSpace, pattern, components ? fltComps : NULL);
 }
 
 CGColorRef CGColorCreateCopy(CGColorRef self) {
@@ -43,7 +57,7 @@ CGColorRef CGColorCreateCopy(CGColorRef self) {
 }
 
 CGColorRef CGColorCreateCopyWithAlpha(CGColorRef self,CGFloat a) {
-   return O2ColorCreateCopyWithAlpha(self,a);
+   return O2ColorCreateCopyWithAlpha(self, (O2Float)a);
 }
 
 bool CGColorEqualToColor(CGColorRef self,CGColorRef other) {
