@@ -1079,3 +1079,21 @@ and read `currentContext`, which previously raised `NSUnimplementedMethod`.
 Implemented the transaction grouping stack in `Frameworks/AppKit/NSAnimation/NSAnimationContext.m` (`5c748c2c10`).
 Added recursive `_renderLayer:` in `NSView.m` mapping IOSurface contents to CGImage
 with allocation bounds checking (`31d07bda42`).
+### CGColorCreate double/float conversion and window background color (2026-11-04)
+
+Firefox and Filer window interiors rendered as solid green `(0, 255, 0)` on
+screen. Root-cause trace showed:
+1. `CGColorCreate` in `CoreGraphics` passed incoming `const CGFloat *` (doubles)
+   directly to `Onyx2D`'s `O2ColorCreate` (expecting `const float *`).
+2. The lower and upper 32-bit halves of `double 0.92` (macOS standard window
+   background gray) were read as two floats: `-151996493463552.0` (red) and
+   `1.855` (green).
+3. Clamping by `O2ContextSetRGBFillColor` mapped this to `(r=0, g=1, b=0, a=1)`,
+   turning window backgrounds pure green.
+4. `O2Color` also left `_cgComponents` uninitialized in `O2ColorInitWithColorSpace`.
+
+Fixed `CGColorCreate` to convert `CGFloat` to `O2Float` before passing to `O2Color`,
+initialized `_cgComponents = NULL`, and defaulted fallback content background to
+safe 0.92 gray (`49791d625e`). The Firefox window now renders clean macOS light gray
+`[235, 235, 235]` at 1024x768 with titlebar, traffic-light controls, and zero green
+artifacts.
