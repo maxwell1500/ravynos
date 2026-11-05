@@ -74,7 +74,7 @@ CA_EXPORT NSString *const kCAFilterTrilinear;
 @property CGRect contentsRect;
 @property BOOL opaque;
 @property(retain) id contents;
-//@property CATransform3D transform;
+@property CATransform3D transform;
 @property CATransform3D sublayerTransform;
 
 @property(copy) NSString *minificationFilter;

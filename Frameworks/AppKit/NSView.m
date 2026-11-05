@@ -154,10 +154,14 @@ NSString * const NSViewFocusDidChangeNotification=@"NSViewFocusDidChangeNotifica
 }
 
 
-static BOOL NSViewLayersEnabled=NO;
+static BOOL NSViewLayersEnabled=YES;
 
 +(void)initialize {
-   NSViewLayersEnabled=[[NSUserDefaults standardUserDefaults] boolForKey:@"NSViewLayersEnabled"];
+   NSNumber *layers=[[NSUserDefaults standardUserDefaults] objectForKey:@"NSViewLayersEnabled"];
+   if(layers!=nil)
+    NSViewLayersEnabled=[layers boolValue];
+   else
+    NSViewLayersEnabled=YES;
 }
 
 +(NSView *)focusView {
@@ -2207,7 +2211,16 @@ static CGImageRef createImageForLayerContents(id contents) {
    CGContextSaveGState(context);
    CGContextTranslateCTM(context, position.x - anchor.x * bounds.size.width,
                          position.y - anchor.y * bounds.size.height);
-   CGContextClipToRect(context, bounds);
+
+   CATransform3D tr = [layer transform];
+   if(tr.m11 != 1.0f || tr.m12 != 0.0f || tr.m21 != 0.0f || tr.m22 != 1.0f ||
+      tr.m41 != 0.0f || tr.m42 != 0.0f) {
+      CGAffineTransform affine = CGAffineTransformMake(tr.m11, tr.m12, tr.m21, tr.m22, tr.m41, tr.m42);
+      CGContextConcatCTM(context, affine);
+   }
+
+   if([layer masksToBounds] && !CGRectIsEmpty(bounds))
+      CGContextClipToRect(context, bounds);
 
    id contents = [layer contents];
    CGImageRef image = createImageForLayerContents(contents);
