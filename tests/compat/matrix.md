@@ -6,7 +6,7 @@ reported `rc=0`; `—` means untested and must not be read as supported.
 
 | Platform | Boot/desktop | Fixtures | Firefox ESR | Notes |
 |---|---|---|---|---|
-| QEMU x86_64 (HVF, 8 vCPU) | PASS | PASS (12) | FAIL | `-CreateProfile` stalls on a corrupt CFURL; see `firefox-blockers.md` |
+| QEMU x86_64 (HVF, 8 vCPU) | PASS | PASS (16) | PROGRESS | CGL/NSOpenGL implemented; window composites; SW-WR active; see `firefox-blockers.md` |
 | Penryn 2008 (MacBook5,1 / MacBookPro5,x) | — | — | — | no hardware run yet |
 | Nehalem 2009 (MacBookPro6,x) | — | — | — | no hardware run yet |
 | Sandy Bridge 2011 (MacBookPro8,x) | — | — | — | no hardware run yet |
@@ -21,7 +21,8 @@ reported `rc=0`; `—` means untested and must not be read as supported.
 - **Boot/desktop** — `RAVYNOS_DESKTOP_READY`, zero `CORPSE`, Filer present,
   every prelinked kext started.
 - **Fixtures** — `posix`, `malloczone`, `autorelease`, `backup`, `passwd`,
-  `accounts`, `cocoa`, `launch`, `pasteboard`, `net`, `icmp`, `tcp`.
+  `accounts`, `cocoa`, `launch`, `pasteboard`, `net`, `icmp`, `tcp`,
+  `dmesg`, `sandbox`, `perms`, `spinkill`.
 - **Firefox ESR** — unmodified 115.15.0esr opens `https://example.com`,
   renders text/images, two tabs, 30-minute soak.
 
