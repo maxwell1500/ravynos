@@ -2159,6 +2159,8 @@ extern unsigned char _CFIsObjCType(const void *cf);
 extern size_t IOSurfaceGetWidth(void *surface);
 extern size_t IOSurfaceGetHeight(void *surface);
 extern size_t IOSurfaceGetBytesPerRow(void *surface);
+extern size_t IOSurfaceGetAllocSize(void *surface);
+extern uint32_t IOSurfaceGetPixelFormat(void *surface);
 extern void *IOSurfaceGetBaseAddress(void *surface);
 
 static CGImageRef createImageForLayerContents(id contents) {
@@ -2175,8 +2177,11 @@ static CGImageRef createImageForLayerContents(id contents) {
    size_t width = IOSurfaceGetWidth((void *)contents);
    size_t height = IOSurfaceGetHeight((void *)contents);
    size_t rowBytes = IOSurfaceGetBytesPerRow((void *)contents);
+   size_t allocSize = IOSurfaceGetAllocSize((void *)contents);
    void *base = IOSurfaceGetBaseAddress((void *)contents);
    if(width == 0 || height == 0 || rowBytes == 0 || base == NULL)
+    return NULL;
+   if(allocSize == 0 || rowBytes > allocSize || height > allocSize / rowBytes)
     return NULL;
 
    CGDataProviderRef provider = CGDataProviderCreateWithData(NULL, base, rowBytes * height, NULL);
