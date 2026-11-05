@@ -725,6 +725,12 @@ static struct kinfo_proc *_procForPID(pid_t pid) {
             curApp = app;
             curWindow = winrec;
         }
+        /* A hidden window has nothing in the scanout.  The per-window damage
+         * rect is in AppKit's bottom-left coordinate space; when the window is
+         * shown after a resize or a move, relying on that rect can leave the
+         * entire window out of the composited frame.  Repaint the whole scene
+         * on a visibility transition: it happens once per show, not per frame. */
+        [self markFullSceneDirty];
     }
 
     /* The client flushes its window (this very RPC) right after it drew, so
