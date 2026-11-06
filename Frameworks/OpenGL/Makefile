@@ -4,7 +4,7 @@ MK_WERROR = no
 .include "../framework.common.mk"
 
 MK_INSTALLLIB= no
-SRCS=	OpenGL.c
+SRCS=	OpenGL.c GLCore.c
 HEADERS= \
 	include/CGLCurrent.h \
 	include/CGLTypes.h \

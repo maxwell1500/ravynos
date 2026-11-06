@@ -792,41 +792,6 @@ void glOrtho(GLdouble left, GLdouble right, GLdouble bottom, GLdouble top,
     (void)left; (void)right; (void)bottom; (void)top; (void)nearVal; (void)farVal;
 }
 
-const GLubyte *glGetString(GLenum name)
-{
-    switch (name) {
-    case 0x1F00: return (const GLubyte *)"ravynOS";
-    case 0x1F01: return (const GLubyte *)"ravynOS Software Rasterizer";
-    case 0x1F02: return (const GLubyte *)"2.1 ravynOS";
-    case 0x1F03: return (const GLubyte *)"GL_ARB_texture_rectangle";
-    case 0x8B8C: return (const GLubyte *)"1.20";
-    default: return (const GLubyte *)"";
-    }
-}
-
-void glGetIntegerv(GLenum pname, GLint *params)
-{
-    if (!params)
-        return;
-    switch (pname) {
-    case 0x0D33: *params = 4096; break;
-    case 0x8073: *params = 1; break;
-    default: *params = 0; break;
-    }
-}
-
-void glClear(GLbitfield mask)
-{
-    (void)mask;
-}
-
-void glFlush(void)
-{
-}
-
-void glFinish(void)
-{
-}
 
 void OpenGL(void)
 {

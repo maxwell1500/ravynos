@@ -1149,3 +1149,47 @@ as an already-wrapped `CGImageRef`, bypassing `IOSurfaceGetBaseAddress` and pass
 `IOSurfaceRef` to `CGContextDrawImage`. Fixed check to `[contents isKindOfClass:[O2Image class]]`
 so `IOSurfaceRef` is correctly wrapped into a `CGImageRef`. Firefox browser UI elements,
 tabs, URL bar, navigation bar, and start page logo now render visibly.
+
+### OpenGL GL2.0/ES2 entry points (2026-11-06)
+
+XUL imports the whole GL 2.0/ES2 entry-point set, and a symbol the dylib does not
+export leaves an unresolved lazy-binding slot whose first call jumps nowhere. The
+run before this fix died exactly there: `Can''t find symbol ''glUniform1i''` and
+friends — 116 names collected from the boot log — followed by
+`CORPSE: pid 4 etype 10 subcode 11 code 10/11 … fault 0x00000000000003f8`.
+`Frameworks/OpenGL/OpenGL.c` exported eight `gl*` names.
+
+Added `Frameworks/OpenGL/GLCore.c` with all 116, as the contract of a pre-shader
+software driver rather than an empty imitation: object identity (`glGen*`/`glDelete*`/
+`glIs*`), client data (`glBufferData`/`glBufferSubData`, the texture upload paths) and
+state (viewport, scissor, blend, depth, stencil, pixel store, per-attribute) are real
+bookkeeping the matching `glGet*v` queries read back; GLSL is reported unavailable —
+`glGetString(GL_VERSION)` is "1.1", `GL_EXTENSIONS` is empty, `glCreateShader`/
+`glCreateProgram` hand back no object and set `GL_INVALID_OPERATION`, so compile/link
+status queries are `GL_FALSE` and every attribute/uniform lookup is -1; raster
+operations (`glDrawArrays`, `glDrawElements`, `glClear`, `glReadPixels`, `glCopyTex*`)
+set `GL_INVALID_OPERATION` and log one line naming themselves, because this tree
+composites through AppKit/Onyx2D and has no GL framebuffer to draw into. The old
+`glGetString` in `OpenGL.c` claimed "2.1 ravynOS" with GLSL "1.20" and is gone with it.
+`Frameworks/OpenGL/include/CGLTypes.h` had a mangled include guard — its
+`#ifndef _CGLTYPES_H_` was merged onto the `CGL_DLLEXPORT` block, leaving the trailing
+`#endif` unmatched — which had been failing the framework build; the guards are repaired
+in source and staged into both header copies.
+
+Measured after: `nm` on the built `OpenGL.framework/Versions/A/OpenGL` shows 128
+`_gl*` exports and 0 of the 116 names still missing; the next Firefox boot has 0
+`Can''t find symbol` lines and no CORPSE.
+
+### NSWindow standardWindowButton: (2026-11-06)
+
+`-[ToolbarWindow standardWindowButton:] unimplemented in Frameworks/AppKit/NSWindow.m
+at 1601` appears 42 times in one Firefox launch: Gecko's chrome asks the window for its
+titlebar controls, and the accessor answered `NSUnimplementedMethod(); return nil`.
+`NSThemeFrame` already lays out and hit-tests the same three rects — `-_updateControlRects`
+computes them and `-mouseDown:` routes a click to `performClose:`/`performMiniaturize:`/
+`performZoom:` — so `-standardWindowButton:` now returns real cached `NSButton`s at that
+same geometry (ivars `_standardCloseButton`, `_standardMiniaturizeButton`,
+`_standardZoomButton` in `Frameworks/AppKit/NSWindow.h`), returning nil for a borderless
+mask and for the toolbar/document-icon cases, which belong to chrome this window server
+does not draw. The class factory `+standardWindowButton:forStyleMask:` builds a fresh
+control at the standard 14 px diameter instead of answering nil.
