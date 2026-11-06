@@ -1,0 +1,13 @@
+{
+  "Label": "com.apple.backupd-auto",
+  "ProgramArguments": [
+    "/usr/bin/tmutil",
+    "backup",
+    "/Users",
+    "/var/backups"
+  ],
+  "StartCalendarInterval": {
+    "Hour": 2,
+    "Minute": 0
+  }
+}

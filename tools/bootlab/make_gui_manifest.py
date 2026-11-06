@@ -593,7 +593,8 @@ def main():
     for job in ("com.ravynos.pasteboardd.json",
                 "com.ravynos.dailydrivertest.json",
                 "com.apple.syslogd.json",
-                "com.apple.aslmanager.json"):
+                "com.apple.aslmanager.json",
+                "com.apple.backupd-auto.json"):
         job_src = os.path.join(REPO, "SystemLibrary", "LaunchDaemons", job)
         job_dst = "System/Library/LaunchDaemons/" + job
         if os.path.isfile(job_src):
