@@ -6,7 +6,7 @@ reported `rc=0`; `—` means untested and must not be read as supported.
 
 | Platform | Boot/desktop | Fixtures | Firefox ESR | Notes |
 |---|---|---|---|---|
-| QEMU x86_64 (HVF, 8 vCPU) | PASS | PASS (16) | PROGRESS | CGL/NSOpenGL implemented; window composites; SW-WR active; see `firefox-blockers.md` |
+| QEMU x86_64 (HVF, 8 vCPU) | PASS | PASS (16) | PROGRESS | CGL/NSOpenGL implemented; window composites; SW-WR active; firefox exits on a mach-port IPC channel error and its surface is never announced painted, see `firefox-blockers.md` |
 | Penryn 2008 (MacBook5,1 / MacBookPro5,x) | — | — | — | no hardware run yet |
 | Nehalem 2009 (MacBookPro6,x) | — | — | — | no hardware run yet |
 | Sandy Bridge 2011 (MacBookPro8,x) | — | — | — | no hardware run yet |

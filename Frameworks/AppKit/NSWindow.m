@@ -331,9 +331,18 @@ static BOOL _allowsAutomaticWindowTabbing = YES;
    NSUnimplementedMethod();
 }
 
-+(NSButton *)standardWindowButton:(NSWindowButton)button forStyleMask:(unsigned)styleMask {
-   NSUnimplementedMethod();
-   return nil;
+/* Class entry point: build a fresh control at the standard diameter for
+ * the requested style mask. A borderless mask has no titlebar, so there
+ * is nothing to place. */
++(NSButton *)standardWindowButton:(NSWindowButton)requested forStyleMask:(unsigned)styleMask {
+   static const float controlDiameter = 14;
+   NSButton *control;
+
+   if (styleMask == NSBorderlessWindowMask)
+      return nil;
+   control = [[NSButton alloc] initWithFrame:
+       NSMakeRect(0, 0, controlDiameter, controlDiameter)];
+   return control;
 }
 
 +(void)menuChanged:(NSMenu *)menu {
@@ -863,7 +872,7 @@ static BOOL _allowsAutomaticWindowTabbing = YES;
 }
 
 -(NSWindowDepth)depthLimit {
-   return 0;
+   return _depthLimit;
 }
 
 -(NSSize)resizeIncrements {
@@ -1490,7 +1499,10 @@ static BOOL _allowsAutomaticWindowTabbing = YES;
 }
 
 -(void)setDepthLimit:(NSWindowDepth)value {
-   NSUnimplementedMethod();
+   /* This window server presents every window it is handed, so there is no
+    * depth at which windows stop appearing; the request is remembered so a
+    * client that reads back -depthLimit sees the value it asked for. */
+   _depthLimit=value;
 }
 
 -(void)setDisplaysWhenScreenProfileChanges:(BOOL)value {
@@ -1597,9 +1609,55 @@ static BOOL _allowsAutomaticWindowTabbing = YES;
     return _firstResponder;
 }
 
+/* The three titlebar controls.  NSThemeFrame lays out and hit-tests the
+ * same rects in its -_updateControlRects and -mouseDown:, so these objects
+ * describe the layout that is actually drawn: a client that asks the window
+ * for its controls (Gecko's chrome asks four dozen times a launch) gets the
+ * real button back, and the button's press/state machine is shared rather
+ * than rebuilt per ask. The values mirror NSThemeFrame.m's file-local
+ * NSWindowTitleHeight/NSWindowControlDiameter/NSWindowControlSpacing. */
 -(NSButton *)standardWindowButton:(NSWindowButton)value {
-   NSUnimplementedMethod();
-   return nil;
+   static const float titleHeight = 32;
+   static const float controlDiameter = 14;
+   static const float controlSpacing = 10;
+   NSRect rect;
+
+   if (_styleMask == NSBorderlessWindowMask)
+      return nil;		/* a borderless window has no titlebar to hold them */
+
+   switch (value) {
+   case NSWindowCloseButton:
+      if (_standardCloseButton == nil) {
+         rect = NSMakeRect(controlSpacing,
+             _frame.size.height - titleHeight / 2 - controlDiameter / 2,
+             controlDiameter, controlDiameter);
+         _standardCloseButton = [[NSButton alloc] initWithFrame:rect];
+      }
+      return _standardCloseButton;
+
+   case NSWindowMiniaturizeButton:
+      if (_standardMiniaturizeButton == nil) {
+         rect = NSMakeRect(controlSpacing + controlSpacing + controlDiameter,
+             _frame.size.height - titleHeight / 2 - controlDiameter / 2,
+             controlDiameter, controlDiameter);
+         _standardMiniaturizeButton = [[NSButton alloc] initWithFrame:rect];
+      }
+      return _standardMiniaturizeButton;
+
+   case NSWindowZoomButton:
+      if (_standardZoomButton == nil) {
+         rect = NSMakeRect(controlSpacing + 2 * (controlSpacing + controlDiameter),
+             _frame.size.height - titleHeight / 2 - controlDiameter / 2,
+             controlDiameter, controlDiameter);
+         _standardZoomButton = [[NSButton alloc] initWithFrame:rect];
+      }
+      return _standardZoomButton;
+
+   default:
+      /* The toolbar and document-icon controls belong to window chrome this
+       * window server does not draw, so there is no button to report. */
+      return nil;
+   }
 }
 
 -(NSButtonCell *)defaultButtonCell {

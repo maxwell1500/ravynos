@@ -13,7 +13,11 @@ typedef int NSNotificationSuspensionBehavior;
 
 FOUNDATION_EXPORT NSString *const NSLocalNotificationCenterType;
 
-@interface NSDistributedNotificationCenter : NSNotificationCenter
+@interface NSDistributedNotificationCenter : NSNotificationCenter {
+    /* Whether posting through this center is suppressed.  A suspended center
+     * keeps its observers so that they are reached again when posting resumes. */
+    BOOL _suspended;
+}
 
 + (NSDistributedNotificationCenter *)defaultCenter;
 

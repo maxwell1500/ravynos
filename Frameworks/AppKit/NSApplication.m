@@ -2143,11 +2143,22 @@ static int _tagAllMenus(NSMenu *menu, int tag) {
 }
 
 -(NSMenu *)servicesMenu {
-   return [[NSApp mainMenu] _menuWithName:@"_NSServicesMenu"];
+   return (_servicesMenu!=nil)? _servicesMenu :
+      [[NSApp mainMenu] _menuWithName:@"_NSServicesMenu"];
 }
 
 -(void)setServicesMenu:(NSMenu *)menu {
-   NSUnimplementedMethod();
+   /* The Menu framework installs the application's services menu here; keep
+    * the client's object so that -servicesMenu, and a right-click that asks
+    * for the services context, hand back that same menu. */
+   if(menu!=_servicesMenu)
+   {
+      if(_servicesMenu!=nil)
+	 [_servicesMenu release];
+      if(menu!=nil)
+	 [menu retain];
+      _servicesMenu=menu;
+   }
 }
 
 -servicesProvider {

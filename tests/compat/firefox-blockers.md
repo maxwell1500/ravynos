@@ -1193,3 +1193,58 @@ same geometry (ivars `_standardCloseButton`, `_standardMiniaturizeButton`,
 mask and for the toolbar/document-icon cases, which belong to chrome this window server
 does not draw. The class factory `+standardWindowButton:forStyleMask:` builds a fresh
 control at the standard 14 px diameter instead of answering nil.
+
+### The 640 MiB boot: paint is gated by the mach IPC channel, not by Cairo (2026-11-06)
+
+The image had to grow: with the frameworks carrying the new code,
+`mkimage.py --size-mib 512` refuses with `RuntimeError: image full` out of
+`fat32img.py:491` — the staged tree needs 145960 clusters and 512 MiB caps lower.
+`--size-mib 640` builds (`geometry: 640 MiB spf=1274 max_cluster=163005`), self-verifies
+(`verify OK: 1994 files, 2596 tree entries, all content hashes match`), and the guest
+still boots to `RAVYNOS_DESKTOP_READY`, so the larger geometry is not a regression.
+
+Measured in that boot (`tools/bootlab/work/interactive_serial.log`, 3265 lines):
+
+- `Can''t find symbol`: 0 — the GL gap is closed and no lazy-binding slot is left
+  dangling. `unimplemented`: 4 lines, all `setShowsToolbarButton:`
+  (`NSWindow.m:1494`), so the notification-center and services-menu gaps are gone.
+- Firefox windows follow the whole life cycle — `CREATE … level=4 frame=0,0 0x0`,
+  `FRONT`, then the 1024x768 main window moves `frame=0,288` →
+  `frame=-1024,1080` (offscreen) → `frame=4,308`, and all seven windows are
+  `DESTROY`ed at exit — yet `PAINTED app=org.mozilla.firefox`: 0. The window server
+  announces a window only when its shared surface (`/win_<pid>_<n>`, mapped by
+  `WindowServer.m:562-576`) has content or the client flushed it while `NORMAL`, and
+  neither happened for firefox.
+- `Exiting due to channel error.` ×2 — Gecko's IPC channel to its child process never
+  receives, and firefox exits through that path before it paints. The run ends there;
+  the only other exit is the `runas` watchdog (`-t 300` armed:
+  `watchdog: target 4 alive=1`, `SIGABRT pid 4 -> 0`, `SIGKILL pid 4 -> 0 errno=60`).
+- The cairo-blit suspicion is closed by measurement: `nm -u XUL` imports no cairo or
+  backing-store symbol (cairo is vendored into the Gecko library), and the run has no
+  missing symbol at all, so the blit never reached a failing lookup.
+- The crash record resolves to the kernel, not to a graphics framework:
+  `CORPSE: pid 4 etype 10 subcode 6 code 10/6 crashed_tid 352` with no name; the
+  faulting `rip 0x103c842d2` sits in `libsystem_kernel.dylib`
+  (`ripvma 0x103c38000-0x103c8e000 objsize 0x9a000`), and `nm -n` puts file offset
+  0x4c2d2 inside `___psynch_cvwait+0xa` (symbol `___psynch_cvwait` at 0x4c2c8). The
+  same rip recurs for tids 570/578/608/613/618 with `fault 0x0` and `rax 0x104`, and
+  the frames below it are `___psynch_cvwait+0xa`, `_mach_msg2+0xfd`,
+  `_mach_msg_overwrite+0x40a`, `_mach_msg+0x57`, then CoreGraphics/AppKit/XUL. The
+  threads that die are the ones parked in a mach-port receive.
+- Foundation owns a second, provable gap on the same path: inside
+  `-[NSApplication machServiceLoop:]` the log carries
+  `propertyListFromData: error while decoding plist content : *** Parse error at
+  position 40, line 2. src=*nil*. EOF expected. Next token is <.`, followed by
+  `-[NSMutableArray_concrete addObject:] nil object` and `menuForApp: not a
+  dictionary`. The window server relays its menu payload as an XML plist and
+  Foundation answered it with the vintage ASCII reader — `+propertyListFromData:`
+  has to sniff the leading `<`, and that failure is what makes
+  `populateMenu:withServiceEntries:forDisplay:` and the app-side menu machinery come
+  back empty.
+- `[compat] CoreText: CTFontManagerRegisterFontsForURLs is not implemented` is our
+  own CoreText shim logging once per font-registration attempt.
+
+So the remaining firefox gap is the mach-port reply machinery (kernel
+`Kernel/Extensions/pthread` + port replies) plus Foundation''s XML plist reader. The
+screenshot harness reports no firefox window because nothing was ever announced
+painted.

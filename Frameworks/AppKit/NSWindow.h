@@ -123,6 +123,12 @@ APPKIT_EXPORT NSString *const NSWindowDidEndLiveResizeNotification;
     NSUInteger _collectionBehavior;
     id _appearance;
 
+    /* The three titlebar controls, vended by -standardWindowButton: and
+     * cached so repeated asks hand back the same objects. */
+    NSButton *_standardCloseButton;
+    NSButton *_standardMiniaturizeButton;
+    NSButton *_standardZoomButton;
+
     NSString *shmPath;
     NSString *bundleID;
     void *buffer;
@@ -131,6 +137,7 @@ APPKIT_EXPORT NSString *const NSWindowDidEndLiveResizeNotification;
     NSRect _frame;
     NSUInteger _styleMask;
     NSBackingStoreType _backingType;
+    NSWindowDepth _depthLimit;
     NSInteger _level;
 
     NSSize _minSize;

@@ -16,46 +16,52 @@ NSString * const NSLocalNotificationCenterType=@"NSLocalNotificationCenterType";
    return [self notificationCenterForType:NSLocalNotificationCenterType];
 }
 
+/* One center per notification-domain name, remembered for the life of the
+ * process: an observer registered through a center has to stay reachable
+ * until something posts that notification, so the same object is handed
+ * back to every asker. */
 +(NSDistributedNotificationCenter *)notificationCenterForType:(NSString *)type {
-   NSUnimplementedMethod();
-   return nil;
+   static NSMutableDictionary *centers=nil;
+   NSDistributedNotificationCenter *center;
+
+   if(type==nil)
+      type=NSLocalNotificationCenterType;
+
+   @synchronized(self)
+   {
+      if(centers==nil)
+	 centers=[[NSMutableDictionary allocWithZone:[self zone]] init];
+
+      center=[centers objectForKey:type];
+      if(center==nil)
+      {
+	 center=[[self alloc] init];
+	 [centers setObject:center forKey:type];
+      }
+   }
+   return center;
 }
 
 -(BOOL)suspended {
-   NSUnimplementedMethod();
-   return NO;
+   return _suspended;
 }
 
 -(void)setSuspended:(BOOL)value {
-   NSUnimplementedMethod();
+   _suspended=value;
 }
 
--(void)addObserver:observer selector:(SEL)selector name:(NSString *)name object:(NSString *)object {
-   NSUnimplementedMethod();
+-(void)addObserver:observer selector:(SEL)selector name:(NSString *)name
+   object:(NSString *)object suspensionBehavior:(NSNotificationSuspensionBehavior)behavior {
+   /* Our notification machinery reaches observers when a notification is
+    * posted, and has no per-observer policy about being held back while the
+    * center is suspended, so this is the one registration. */
+   [super addObserver:observer selector:selector name:name object:object];
 }
 
--(void)addObserver:observer selector:(SEL)selector name:(NSString *)name object:(NSString *)object suspensionBehavior:(NSNotificationSuspensionBehavior)behavior {
-   NSUnimplementedMethod();
-}
-
--(void)removeObserver:observer name:(NSString *)name object:(NSString *)object {
-   NSUnimplementedMethod();
-}
-
--(void)postNotificationName:(NSString *)name object:(NSString *)object {
-   NSUnimplementedMethod();
-}
-
--(void)postNotificationName:(NSString *)name object:(NSString *)object userInfo:(NSDictionary *)userInfo {
-   NSUnimplementedMethod();
-}
-
--(void)postNotificationName:(NSString *)name object:(NSString *)object userInfo:(NSDictionary *)userInfo deliverImmediately:(BOOL)immediately {
-   NSUnimplementedMethod();
-}
-
--(void)postNotificationName:(NSString *)name object:(NSString *)object userInfo:(NSDictionary *)userInfo options:(NSUInteger)options {
-   NSUnimplementedMethod();
-}
+/* -addObserver:observer selector:name:object:, -removeObserver:... and
+ * -postNotificationName:... come from NSNotificationCenter, which keeps a
+ * name -> observer registry and hands a posted notification to whatever
+ * observers registered for that name. That is the delivery these centers
+ * need, so they are inherited rather than restated here. */
 
 @end
