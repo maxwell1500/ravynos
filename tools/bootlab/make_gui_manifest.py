@@ -633,6 +633,7 @@ def main():
         ("pasteboard", "usr/local/compat/pasteboard"),
         ("malloczone", "usr/local/compat/malloczone"),
         ("autorelease", "usr/local/compat/autorelease"),
+        ("plist", "usr/local/compat/plist"),
         ("backup", "usr/local/compat/backup"),
         ("sandbox", "usr/local/compat/sandbox"),
         ("perms", "usr/local/compat/perms"),

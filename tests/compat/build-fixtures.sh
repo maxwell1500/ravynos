@@ -73,6 +73,10 @@ echo "building autorelease fixture ($TARGET)"
 "$CC" -target "$TARGET" -isysroot "$SDK" -O1 -Wall \
     -o "$OUT/autorelease" "$HERE/autorelease.m" -framework Foundation
 
+echo "building plist fixture ($TARGET)"
+"$CC" -target "$TARGET" -isysroot "$SDK" -O1 -Wall \
+    -o "$OUT/plist" "$HERE/plist.m" -framework Foundation
+
 echo "building perms fixture ($TARGET)"
 "$CC" -target "$TARGET" -isysroot "$SDK" -O1 -Wall \
     -o "$OUT/perms" "$HERE/perms.c"

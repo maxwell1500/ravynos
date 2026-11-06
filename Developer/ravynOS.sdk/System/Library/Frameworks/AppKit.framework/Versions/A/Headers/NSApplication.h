@@ -104,6 +104,7 @@ typedef NS_ENUM(NSInteger, NSApplicationActivationPolicy) {
     NSWindow *_mainWindow;
     NSMenu *_mainMenu;
     NSMenu *_windowsMenu;
+    NSMenu *_servicesMenu;
     mach_port_t _wsReplyPort;
     mach_port_t _wsSvcPort;
 

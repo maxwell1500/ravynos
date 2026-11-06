@@ -1248,3 +1248,70 @@ So the remaining firefox gap is the mach-port reply machinery (kernel
 `Kernel/Extensions/pthread` + port replies) plus Foundation''s XML plist reader. The
 screenshot harness reports no firefox window because nothing was ever announced
 painted.
+
+### What the menu channel actually carries (2026-11-06, read the wire both ends)
+
+The claim above that "the window server relays its menu payload as an XML
+plist" was too generous.  Reading both ends: AppKit produces the keyed-plist
+blob (`Frameworks/AppKit/NSApplication.m:1167` writes
+`CODE_MENU_FOR_APP`), and the window server keeps those bytes and hands them
+back unchanged - it stashes `dataWithBytes:msg.msg.data length:msg.msg.len`
+(`CoreServices/WindowServer/WindowServer.m:2908`) and replays them with
+`memcpy(menuMsg.data, [blob bytes], [blob length])` and
+`menuMsg.len = [blob length]` (`:2876`, `:2877`).  So the bytes that reach
+`-[NSKeyedUnarchiver initForReadingWithData:]` are the ones AppKit wrote, and
+the log line about a *vintage* parse error means they arrived changed or
+truncated, not that some other component invented a different encoding.  The
+owner is still our side: either the message buffer loses payload bytes on the
+way through the port copy, or our keyed reader is being handed the wrong
+length.  `NSKeyedUnarchiver.m:45` was changed in the same sitting so a payload
+without a `$top` no longer raises `-addObject:nil` and instead decodes to
+nothing, which is what `machServiceLoop:` already reports honestly as
+`menuForApp: not a dictionary`.
+
+### The plist codecs: what the plist fixture proved (2026-11-06)
+
+A fixture of its own was added (`tests/compat/plist.m`, compiled with Apple's
+headers and run only in the guest, since running it on the host would exercise
+Apple's Foundation and say nothing about ours). It took the gate from sixteen
+fixtures to seventeen and named four defects in our own plist chain:
+
+- **The format enum is part of the ABI.** `NSPropertyListFormat` used to take
+  its numbers from declaration order, which made OpenStep 0, XML 1 and Binary
+  2. Apple's headers map the same names onto the CoreFoundation constants
+  numbered 1, 100 and 200 (`CFPropertyList.h:72` in the SDK the fixtures and
+  stock apps build against), and a stock binary asks for XML by passing 100.
+  Our dispatch fell through and answered nothing - measured as
+  `plist: FAIL no XML plist output`. The numbers are now written out in both
+  header copies (`Frameworks/Foundation/Headers/Foundation/NSPropertyList.h:30`
+  and the framework's `Versions/C/Headers` twin).
+- **`isValidForFormat:` was a stub that answered no.** Callers use it to decide
+  whether to do plist work at all (`NSURL+SOSPlistStore.m:26`,
+  `SFSignInAnalytics.m:123`), so it was silently disabling that work. It now
+  asks the matching writer for the graph and answers yes only if the writer
+  produced bytes; the binary format answers no until a binary writer exists,
+  which is honest about the gap we still carry.
+- **A root element that is not a wrapper is the value.** The old code read the
+  children of whatever the root was, so a document whose root is the value
+  itself (`<dict>` at the root) came back as that dict's last string -
+  measured as `plist: FAIL bare dict not a dictionary`.
+- **The vintage writer dropped the byte type.** Anything that was not a string,
+  array or dictionary went through `[plist description]` and got quoted, so an
+  `NSData` item was persisted as the STRING `"<72617679 6E2D636F ...>"` and
+  came back a String. `-[NSPasteboard stringForType:]` (AppKit
+  `NSPasteboard.m:385`) then read `bytes` off that String and aborted the
+  process: `objc[93]: -[NSCFString bytes]: unrecognized selector sent to
+  instance 0x7fa618c0e210`. `NSPropertyListWriter_vintage.m:210` now writes
+  the unquoted hex literal that `NSPropertyListReader_vintage.m:440` reads
+  back, and the fixture round-trips the clipboard graph in both syntaxes.
+
+One consequence worth spelling out: the enum fix only reaches a caller once
+that caller's framework is recompiled. The AppKit binary in the image still
+asked with the old numbers, so the persisted clipboard file (`/tmp/ravynos_pboard_NSGeneralPboard.plist`,
+dumped into the harness log between the two pasteboard execs) stayed in
+vintage syntax until AppKit was rebuilt. With AppKit rebuilt the file is an
+XML plist with a base64 `<data>` block and both pasteboard execs exit 0.
+
+Gate on 2026-11-06 after this round: `verify_compat.py --boot-timeout 60`
+reports 17/17 fixtures, `plist: 0 failures`, `PASS pasteboard`, and the whole
+run exits 0.

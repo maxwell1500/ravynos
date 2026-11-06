@@ -42,7 +42,15 @@ NSString* NSInvalidUnarchiveOperationException=@"NSInvalidUnarchiveOperationExce
    _propertyList=[[NSPropertyListReader propertyListFromData:data] retain];
    _objects=[[_propertyList objectForKey:@"$objects"] retain];
    _plistStack=[NSMutableArray new];
-   [_plistStack addObject:[_propertyList objectForKey:@"$top"]];
+  // The stack carries the graph roots only.  The window-server menu channel
+  // (NSApplication.m:577, machServiceLoop) hands us payloads that are not
+  // keyed plists at all; when the property-list reader returned nil, pushing
+  // that nil raised "-[NSMutableArray addObject:] nil object" and the
+  // service loop turned it into "menuForApp: not a dictionary".  An empty
+  // stack says the same thing without the raise: decoding yields nothing.
+  id top=[_propertyList objectForKey:@"$top"];
+  if(top != nil)
+    [_plistStack addObject:top];
    _uidToObject=NSCreateMapTable(NSIntMapKeyCallBacks,NSNonOwnedPointerMapValueCallBacks,0);
    _objectToUid=NSCreateMapTable(NSNonOwnedPointerMapKeyCallBacks,NSIntMapValueCallBacks,0);
    _classVersions=NSCreateMapTable(NSObjectMapKeyCallBacks,NSIntMapValueCallBacks,0);

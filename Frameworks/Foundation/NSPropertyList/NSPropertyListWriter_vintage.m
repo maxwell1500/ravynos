@@ -165,15 +165,51 @@ static NSInteger keySort(id key1, id key2, void *context)
    [_data appendBytes:"}" length:1];
 }
 
+-(void)encodeData:(NSData *)data {
+   const unsigned char *raw=(const unsigned char *)[data bytes];
+   NSUInteger length=[data length];
+   NSUInteger i;
+   NSInteger bufLen=0;
+   char *charBuf;
+   const char hex[]="0123456789ABCDEF";
+
+   /*
+    * Bytes get an unquoted hex literal - <72617679 6E2D636F ...> - which is
+    * what NSPropertyListReader_vintage.m:440 reads back (it skips whitespace
+    * between nibbles at :455).  Everything outside the three container types
+    * used to fall through to [plist description] and get quoted: the guest
+    * pasteboard fixture showed the clipboard item written as the STRING
+    * "<72617679 6E2D636F 6D706174 2D706173 7465>", read back as a String, and
+    * -[NSPasteboard stringForType:] (AppKit NSPasteboard.m:385) then aborted
+    * the process with "objc[93]: -[NSCFString bytes]: unrecognized selector
+    * sent to instance" on 2026-11-06.
+    */
+   [_data appendBytes:"<" length:1];
+
+   charBuf=NSZoneMalloc(NULL,2*length+(length/4)+2);
+   for(i=0;i<length;i++){
+      charBuf[bufLen++]=hex[(raw[i]>>4)&0x0F];
+      charBuf[bufLen++]=hex[raw[i]&0x0F];
+      if((i%4)==3 && i+1<length)
+         charBuf[bufLen++]=' ';
+   }
+   [_data appendBytes:charBuf length:bufLen];
+   NSZoneFree(NULL,charBuf);
+
+   [_data appendBytes:">" length:1];
+}
+
 -(void)encodePropertyList:plist escape:(BOOL)escape indent:(NSInteger)indent {
    if([plist isKindOfClass:objc_lookUpClass("NSString")])
-    [self encodeString:plist escape:escape];
+      [self encodeString:plist escape:escape];
    else if([plist isKindOfClass:objc_lookUpClass("NSArray")])
-    [self encodeArray:plist indent:indent];
+      [self encodeArray:plist indent:indent];
    else if([plist isKindOfClass:objc_lookUpClass("NSDictionary")])
-    [self encodeDictionary:plist indent:indent];
+      [self encodeDictionary:plist indent:indent];
+   else if([plist isKindOfClass:objc_lookUpClass("NSData")])
+      [self encodeData:plist];
    else
-    [self encodeString:[plist description] escape:escape];
+      [self encodeString:[plist description] escape:escape];
 }
 
 -(void)encodePropertyList:plist indent:(NSInteger)indent {

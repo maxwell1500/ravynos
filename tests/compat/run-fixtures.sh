@@ -211,12 +211,24 @@ run_fixture sandbox /usr/local/compat/sandbox
 run_fixture perms /usr/local/compat/perms
 run_fixture spinkill /usr/local/compat/spinkill
 
+# The property-list codecs AppKit uses for the window-server menu channel
+# must round-trip: NSApplication.m:1160 serializes the menus with
+# NSKeyedArchiver and the service loop at NSApplication.m:577 reads them
+# back with NSKeyedUnarchiver.
+run_fixture plist /usr/local/compat/plist
+
 # Pasteboard: a string written by one process must be visible to another.
 # The writer and reader are separate execs, so nothing but the pasteboard
 # server can carry the value between them.
 echo "--- pasteboard: write" >> "$LOG"
 /usr/local/compat/pasteboard write >> "$LOG" 2>&1
 pb_write=$?
+# The reader failure names a byte position, so the record has to carry the
+# bytes the tokenizer choked over.
+for f in /tmp/ravynos_pboard_*.plist; do
+    echo "--- pboard file: $f" >> "$LOG"
+    cat "$f" >> "$LOG" 2>&1
+done
 echo "--- pasteboard: read" >> "$LOG"
 /usr/local/compat/pasteboard read >> "$LOG" 2>&1
 pb_read=$?

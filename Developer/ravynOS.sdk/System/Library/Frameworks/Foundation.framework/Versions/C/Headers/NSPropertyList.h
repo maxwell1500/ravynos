@@ -10,15 +10,26 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 @class NSData;
 
 typedef enum {
-    NSPropertyListImmutable,
+    NSPropertyListImmutable = 1,
     NSPropertyListMutableContainers,
     NSPropertyListMutableContainersAndLeaves,
 } NSPropertyListMutabilityOptions;
 
+/*
+ * The integer values are part of the ABI.  Apple's own header maps these
+ * names onto the CoreFoundation constants (CFPropertyList.h:72 in the same
+ * SDK: kCFPropertyListOpenStepFormat = 1, kCFPropertyListXMLFormat_v1_0 = 100,
+ * kCFPropertyListBinaryFormat_v1_0 = 200), and a stock binary built with that
+ * header passes 100 when it wants an XML plist.  Our source used to number
+ * them 0, 1, 2 by declaration order, so the plist fixture - compiled against
+ * Apple's header, asking for XML - fell through our dispatch and got nothing
+ * back ("plist: FAIL no XML plist output", 2026-11-06).  Writing the numbers
+ * out is what keeps that contract visible.
+ */
 typedef enum {
-    NSPropertyListOpenStepFormat,
-    NSPropertyListXMLFormat_v1_0,
-    NSPropertyListBinaryFormat_v1_0,
+    NSPropertyListOpenStepFormat = 1,
+    NSPropertyListXMLFormat_v1_0 = 100,
+    NSPropertyListBinaryFormat_v1_0 = 200,
 } NSPropertyListFormat;
 
 @interface NSPropertyListSerialization : NSObject

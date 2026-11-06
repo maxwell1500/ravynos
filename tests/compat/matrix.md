@@ -20,9 +20,9 @@ reported `rc=0`; `—` means untested and must not be read as supported.
 
 - **Boot/desktop** — `RAVYNOS_DESKTOP_READY`, zero `CORPSE`, Filer present,
   every prelinked kext started.
-- **Fixtures** — `posix`, `malloczone`, `autorelease`, `backup`, `passwd`,
-  `accounts`, `cocoa`, `launch`, `pasteboard`, `net`, `icmp`, `tcp`,
-  `dmesg`, `sandbox`, `perms`, `spinkill`.
+- **Fixtures** — `posix`, `malloczone`, `autorelease`, `plist`, `backup`,
+  `passwd`, `accounts`, `cocoa`, `launch`, `pasteboard`, `net`, `icmp`,
+  `tcp`, `dmesg`, `sandbox`, `perms`, `spinkill`.
 - **Firefox ESR** — unmodified 115.15.0esr opens `https://example.com`,
   renders text/images, two tabs, 30-minute soak.
 

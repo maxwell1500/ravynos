@@ -213,23 +213,51 @@ NSDate* NSDateFromPlistString(NSString* string)
 }
 
 +(NSObject *)propertyListFromDocument:(NSOldXMLDocument *)document {
-   NSOldXMLElement *root=[document rootElement];
+  NSOldXMLElement *root=[document rootElement];
 
-   return [self propertyListFromContentsOfElement:root];
+  if(root == nil)
+    return nil;
+
+  /*
+   * A plist document either wraps its value in <plist> (what our writers
+   * emit and what the Apple DTD declares) or puts the value element at the
+   * root.  Reading the value element's children as the value, which the old
+   * code did for every root, made a bare <dict> come back as its last
+   * string; the plist fixture measured that on 2026-11-06 as
+   * "plist: FAIL bare dict not a dictionary".
+   */
+  NSString *name=[root name];
+
+  if([name isEqualToString:@"plist"] || [name isEqualToString:@"document"])
+    return [self propertyListFromContentsOfElement:root];
+
+  return [self propertyListFromElement:root];
 }
 
 +(NSObject *)propertyListFromData:(NSData *)data {
    id result=nil;
 
-   NS_DURING
+   @try{
     NSOldXMLDocument *document=[NSOldXMLReader documentWithData:data];
 
-    if(document!=nil){
-     result=[self propertyListFromDocument:document];
-    }
-   NS_HANDLER
-
-   NS_ENDHANDLER
+    if(document!=nil)
+      result=[self propertyListFromDocument:document];
+   }
+   /*
+    * The tokenizer raises NSParseException for anything it cannot read -
+    * including the OpenStep plists and the plain-text clipboard files that
+    * belong to the other two readers.  Answering nil here is what lets
+    * +[NSPropertyListSerialization propertyListFromData:...] (NSPropertyList.m:65)
+    * try the binary and vintage readers next.  NS_DURING/NS_HANDLER could not
+    * catch it: the raise leaves through the same path the @catch above
+    * catches, and the pasteboard fixture showed the raise escaping to
+    * -[NSPasteboard _load] (AppKit NSPasteboard.m:255) and killing the
+    * process on 2026-11-06 ("FAIL pasteboard", "Unexpected character < in
+    * Tag, position=48").
+    */
+   @catch(NSException *e){
+    result=nil;
+   }
 
    return result;
 }
