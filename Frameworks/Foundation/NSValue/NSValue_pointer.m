@@ -39,6 +39,37 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 -(void *)pointerValue {
    return (void *)_pointer;
 }
+-(NSUInteger)unsignedIntegerValue {
+   return (NSUInteger)_pointer;
+}
+
+-(NSInteger)integerValue {
+   return (NSInteger)_pointer;
+}
+
+-(uint64_t)unsignedLongLongValue {
+   return (uint64_t)(uintptr_t)_pointer;
+}
+
+-(int64_t)longLongValue {
+   return (int64_t)(intptr_t)_pointer;
+}
+
+-(unsigned long)unsignedLongValue {
+   return (unsigned long)(uintptr_t)_pointer;
+}
+
+-(long)longValue {
+   return (long)(intptr_t)_pointer;
+}
+
+-(unsigned int)unsignedIntValue {
+   return (unsigned int)(uintptr_t)_pointer;
+}
+
+-(int)intValue {
+   return (int)(intptr_t)_pointer;
+}
 
 -(NSString *)description
 {

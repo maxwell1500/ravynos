@@ -191,17 +191,14 @@ static NSTimer *_periodicTimer=nil;
 }
 
 -(short)subtype {
-   [NSException raise:NSInternalInconsistencyException format:@"No event subtype in %@",[self class]];
    return 0;
 }
 
 -(NSInteger)data1 {
-   [NSException raise:NSInternalInconsistencyException format:@"No event data1 in %@",[self class]];
    return 0;
 }
 
 -(NSInteger)data2 {
-   [NSException raise:NSInternalInconsistencyException format:@"No event data2 in %@",[self class]];
    return 0;
 }
 
