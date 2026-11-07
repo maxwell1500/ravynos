@@ -76,14 +76,28 @@ DIRS = [
     "var/run",
     "var/tmp",
     "tmp",
-    # Account homes.  /etc/passwd named /Users/ravyn but the directory never
-    # existed, so the first login had no home to enter; the ravynos account
-    # gets the same skeleton.
+    # Account homes. /etc/passwd named /root and /Users/ravyn; ensure
+    # both home directories and standard Library folders exist.
+    "root",
+    "root/Library",
+    "root/Library/Application Support",
+    "root/Library/Application Support/Firefox",
+    "root/Library/Application Support/Firefox/Profiles",
+    "root/Library/Application Support/Firefox/Profiles/default",
+    "root/Library/Preferences",
+    "Library/Application Support",
+    "Library/Application Support/Mozilla",
+    "Library/Preferences",
     "Users",
     "Users/ravyn",
     "Users/ravyn/Desktop",
+    "Users/ravyn/Library",
+    "Users/ravyn/Library/Application Support",
+    "Users/ravyn/Library/Application Support/Firefox",
+    "Users/ravyn/Library/Application Support/Firefox/Profiles",
+    "Users/ravyn/Library/Application Support/Firefox/Profiles/default",
+    "Users/ravyn/Library/Preferences",
 ]
-
 # The Dock/Filer LaunchAgents exec bundles that APPS below stages (from the
 # build tree first).  They used to be listed here as well, which staged the
 # same bundle twice from two different sources.
@@ -548,6 +562,25 @@ def main():
             })
         else:
             closure.append((ff_job_dst, ff_job, "MISSING"))
+        ff_profiles_ini = "[Profile0]\nName=default\nIsRelative=1\nPath=Profiles/default\nDefault=1\n\n[General]\nStartWithLastProfile=1\nVersion=2\n"
+        ff_user_js = 'user_pref("gfx.webrender.software", true);\nuser_pref("layers.acceleration.disabled", true);\nuser_pref("browser.startup.homepage_override.mstone", "ignore");\nuser_pref("startup.homepage_welcome_url", "");\nuser_pref("startup.homepage_override_url", "");\nuser_pref("browser.aboutwelcome.enabled", false);\nuser_pref("browser.newtabpage.enabled", false);\nuser_pref("browser.shell.checkDefaultBrowser", false);\nuser_pref("datareporting.policy.dataSubmissionEnabled", false);\nuser_pref("toolkit.telemetry.reportingpolicy.firstRun", false);\nuser_pref("network.dns.disableIPv6", true);\n'
+        ff_plist = '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n<dict>\n    <key>EnterprisePoliciesEnabled</key>\n    <true/>\n    <key>Preferences</key>\n    <dict>\n        <key>gfx.webrender.software</key>\n        <true/>\n        <key>layers.acceleration.disabled</key>\n        <true/>\n        <key>network.dns.disableIPv6</key>\n        <true/>\n    </dict>\n</dict>\n</plist>\n'
+        for base_user in ("root", "Users/ravyn"):
+            entries.append({
+                "path": f"{base_user}/Library/Application Support/Firefox/profiles.ini",
+                "text": ff_profiles_ini,
+                "comment": "default Firefox profiles.ini",
+            })
+            entries.append({
+                "path": f"{base_user}/Library/Application Support/Firefox/Profiles/default/user.js",
+                "text": ff_user_js,
+                "comment": "default Firefox user.js",
+            })
+        entries.append({
+            "path": "Library/Preferences/org.mozilla.firefox.plist",
+            "text": ff_plist,
+            "comment": "system-wide Firefox preferences",
+        })
     elif os.environ.get("RAVYN_FIREFOX") == "1":
         closure.append(("Applications/Firefox.app", firefox_root, "MISSING"))
     else:

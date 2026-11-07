@@ -30,6 +30,48 @@
 
 #import <Foundation/Foundation.h>
 #import <Foundation/NSPlatform.h>
+#include <mach/mach.h>
+#include <servers/bootstrap.h>
+
+typedef struct {
+    mach_msg_header_t header;
+    char bundleID[128];
+    unsigned int code;
+    unsigned int pid;
+    unsigned char data[128*1024];
+    unsigned int len;
+} WsOpenMessage;
+
+static BOOL _openBundleViaWindowServer(NSString *bundlePath) {
+    mach_port_t port = MACH_PORT_NULL;
+    if(bootstrap_port == MACH_PORT_NULL)
+        task_get_special_port(mach_task_self(), TASK_BOOTSTRAP_PORT, &bootstrap_port);
+    kern_return_t bkr = bootstrap_look_up(bootstrap_port, "com.ravynos.WindowServer", &port);
+    if(bkr != KERN_SUCCESS) {
+        fprintf(stderr, "[open] bootstrap_look_up(com.ravynos.WindowServer) failed: 0x%x\n", bkr);
+        return NO;
+    }
+    WsOpenMessage *msg = (WsOpenMessage *)calloc(1, sizeof(WsOpenMessage));
+    if(!msg) return NO;
+    msg->header.msgh_remote_port = port;
+    msg->header.msgh_bits = MACH_MSGH_BITS_SET(MACH_MSG_TYPE_COPY_SEND, 0, 0, 0);
+    msg->header.msgh_id = 90211; /* MSG_ID_INLINE */
+    msg->header.msgh_size = sizeof(WsOpenMessage);
+    strncpy(msg->bundleID, "usr.bin.open", sizeof(msg->bundleID) - 1);
+    msg->code = 15; /* CODE_OPEN_BUNDLE */
+    msg->pid = getpid();
+    const char *p = [bundlePath UTF8String];
+    if(p) {
+        strncpy((char *)msg->data, p, sizeof(msg->data) - 1);
+        msg->len = (unsigned int)strlen((char *)msg->data) + 1;
+    }
+    kern_return_t kr = mach_msg((mach_msg_header_t *)msg, MACH_SEND_MSG | MACH_SEND_TIMEOUT,
+                                sizeof(WsOpenMessage), 0, MACH_PORT_NULL, 2000, MACH_PORT_NULL);
+    fprintf(stderr, "[open] sent CODE_OPEN_BUNDLE for %s to WS rc=0x%x\n", p ? p : "(null)", kr);
+    free(msg);
+    mach_port_deallocate(mach_task_self(), port);
+    return (kr == MACH_MSG_SUCCESS);
+}
 #import <LaunchServices/LaunchServices.h>
 #import "LaunchServices_private.h"
 
@@ -204,16 +246,29 @@ int main(int argc, const char **argv)
             return LSOpenFromURLSpec(&spec, NULL);
         }
     }
+    /* When launching an .app bundle directly with no custom pipes, prefer
+     * WindowServer bundle launch so the child inherits the full desktop session. */
+    if(!stdinPipe && !stdoutPipe && !stderrPipe && !spec.appURL) {
+        for(NSURL *u in itemURLs) {
+            if([[u pathExtension] isEqualToString:@"app"]) {
+                if(_openBundleViaWindowServer([u path]))
+                    return 0;
+            }
+        }
+    }
 
-    close(0);
-    close(1);
-    close(2);
-    if(stdinPipe)
+    if(stdinPipe) {
+        close(0);
         openInputPipe(stdinPipe);
-    if(stdoutPipe)
+    }
+    if(stdoutPipe) {
+        close(1);
         openOutputPipe(stdoutPipe, 1);
-    if(stderrPipe)
+    }
+    if(stderrPipe) {
+        close(2);
         openOutputPipe(stderrPipe, 2);
+    }
 
     spec.itemURLs = (CFArrayRef)itemURLs;
     spec.taskArgs = (CFArrayRef)taskArgs;

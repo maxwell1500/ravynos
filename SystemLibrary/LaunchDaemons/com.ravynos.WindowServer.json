@@ -1,7 +1,10 @@
 {
 	"EnvironmentVariables": {
                 "ASL_DISABLE": "1",
-                "LANG": "C.UTF-8"
+                "LANG": "C.UTF-8",
+                "HOME": "/root",
+                "TMPDIR": "/tmp",
+                "PATH": "/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin"
 	},
 	"Label": "com.ravynos.WindowServer",
 	"MachServices": {
@@ -10,6 +13,8 @@
 	"ProgramArguments": [
 		"/System/Library/CoreServices/WindowServer.app/Contents/ravynOS/WindowServer"
 	],
+	"StandardOutPath": "/dev/console",
+	"StandardErrorPath": "/dev/console",
 	"KeepAlive": true,
 	"RunAtLoad": true
 }

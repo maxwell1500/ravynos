@@ -96,13 +96,6 @@ OSStatus LSCopyItemInfoForURL(CFURLRef inURL, uint32_t inWhichInfo, void *outIte
     return -10814; /* kLSApplicationNotFoundErr */
 }
 
-OSStatus LSOpenCFURLRef(CFURLRef inURL, CFURLRef *outLaunchedURL)
-{
-    if (outLaunchedURL)
-        *outLaunchedURL = NULL;
-    return -10814; /* kLSApplicationNotFoundErr */
-}
-
 OSStatus LSOpenFSRef(const void *inRef, void *outLaunchedRef)
 {
     return -10814; /* kLSApplicationNotFoundErr */
@@ -110,13 +103,6 @@ OSStatus LSOpenFSRef(const void *inRef, void *outLaunchedRef)
 
 OSStatus LSOpenFromRefSpec(const void *inLaunchSpec, void *outLaunchedRef)
 {
-    return -10814; /* kLSApplicationNotFoundErr */
-}
-
-OSStatus LSOpenFromURLSpec(const void *inLaunchSpec, CFURLRef *outLaunchedURL)
-{
-    if (outLaunchedURL)
-        *outLaunchedURL = NULL;
     return -10814; /* kLSApplicationNotFoundErr */
 }
 

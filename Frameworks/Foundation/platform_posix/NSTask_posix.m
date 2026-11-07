@@ -166,9 +166,7 @@ void childSignalHandler(int sig) {
             }
             dup2(fd, STDIN_FILENO);
         }
-        else {
-            close(STDIN_FILENO);
-        }
+        /* Inherit standardInput if not specified */
         if ([standardOutput isKindOfClass:[NSFileHandle class]] || [standardOutput isKindOfClass:[NSPipe class]]) {
             int fd = -1;
 
@@ -179,9 +177,7 @@ void childSignalHandler(int sig) {
             }
             dup2(fd, STDOUT_FILENO);
         }
-        else {
-            close(STDOUT_FILENO);
-        }
+        /* Inherit standardOutput if not specified */
         if ([standardError isKindOfClass:[NSFileHandle class]] || [standardError isKindOfClass:[NSPipe class]]) {
             int fd = -1;
 
@@ -192,9 +188,7 @@ void childSignalHandler(int sig) {
             }
             dup2(fd, STDERR_FILENO);
         }
-        else {
-            close(STDERR_FILENO);
-        }
+        /* Inherit standardError if not specified */
         
         for (i = 3; i < getdtablesize(); i++) {
             close(i);

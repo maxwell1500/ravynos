@@ -239,5 +239,10 @@ else
     report pasteboard 1
 fi
 run_fixture cocoa /usr/local/compat/CocoaProbe.app/Contents/MacOS/CocoaProbe
+if test -d /Applications/Firefox.app; then
+    echo "--- launch: open /Applications/Firefox.app" >> "$LOG"
+    /usr/bin/open /Applications/Firefox.app >> "$LOG" 2>&1
+    echo "open Firefox rc=$?" >> "$LOG"
+fi
 
 echo "compat: fixtures done" >> "$LOG"

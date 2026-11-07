@@ -1277,32 +1277,47 @@ static pthread_mutex_t _pendingLock = PTHREAD_MUTEX_INITIALIZER;
         }
         return;
     }
+    /* In child: redirect stdout and stderr to /dev/console so child logs
+     * reach the console instead of failing on closed descriptors. */
+    int cons = open("/dev/console", O_WRONLY);
+    if(cons >= 0) {
+        dup2(cons, 1);
+        dup2(cons, 2);
+        if(cons > 2)
+            close(cons);
+    }
+    fprintf(stderr, "[WS child %d] execve %s\n", (int)getpid(), item.path);
 
     char idbuf[192];
     snprintf(idbuf, sizeof(idbuf), "RAVYN_BUNDLE_ID=%s", item.bundleID);
 
-    /* argv: the bundle name followed by the bundle's own launch arguments
-     * (Info.plist RAVYNLaunchArguments), so an app that needs flags gets
-     * them: Chrome dies without --no-sandbox on this kernel. */
+    /* argv: executable path followed by bundle launch arguments */
     char *argv[24];
     int ac = 0;
-    argv[ac++] = item.name;
+    argv[ac++] = item.path;
     for(int i = 0; i < item.argc && ac < 23; i++)
         argv[ac++] = item.args[i];
     argv[ac] = NULL;
 
-    /* Environment: everything WindowServer itself has (HOME, PATH, TMPDIR
-     * from launchd) plus the bundle id.  The old one-variable environment
-     * left children with no HOME and no TMPDIR. */
+    /* Environment: WindowServer environment with HOME, TMPDIR, and PATH guaranteed */
     static char *envp[128];
     int ec = 0;
     extern char **environ;
-    for(char **e = environ; e && *e && ec < 125; e++)
+    int has_home = 0, has_tmp = 0, has_path = 0;
+    for(char **e = environ; e && *e && ec < 120; e++) {
+        if(strncmp(*e, "HOME=", 5) == 0) has_home = 1;
+        if(strncmp(*e, "TMPDIR=", 7) == 0) has_tmp = 1;
+        if(strncmp(*e, "PATH=", 5) == 0) has_path = 1;
         envp[ec++] = *e;
+    }
+    if(!has_home) envp[ec++] = "HOME=/root";
+    if(!has_tmp) envp[ec++] = "TMPDIR=/tmp";
+    if(!has_path) envp[ec++] = "PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin";
     envp[ec++] = idbuf;
     envp[ec] = NULL;
 
     execve(item.path, argv, envp);
+    fprintf(stderr, "[WS child %d] execve %s failed: errno=%d\n", (int)getpid(), item.path, errno);
     _exit(1);
 }
 
