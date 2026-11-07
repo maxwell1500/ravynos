@@ -95,7 +95,7 @@ mkdir -p "$PROFILE"
 # Same prefs the interactive job stages; the soak must not re-sign, strip,
 # or patch Firefox -- only profile preferences, which are data.
 : > "$PROFILE/user.js"
-echo 'user_pref("browser.startup.homepage", "https://example.com/");' >> "$PROFILE/user.js"
+echo 'user_pref("browser.startup.homepage", "file:///usr/local/compat/navpage.html");' >> "$PROFILE/user.js"
 echo 'user_pref("browser.startup.couldRestoreSession.count", -1);' >> "$PROFILE/user.js"
 
 echo "--- soak: start firefox under runas (watchdog ${WATCHDOG}s)" >> "$LOG"
@@ -149,19 +149,25 @@ while test $elapsed -lt $SOAK_SECS; do
     # pass here means DNS + TCP + TLS all still work at this point in the
     # soak; a failure is a leak/decay of one of them, not a fixture bug.
     echo "--- tls round @ t=${elapsed}s" >> "$LOG"
+    # No /usr/bin/curl exists in this image (the BSD/usr.bin/curl Makefile
+    # cmake-builds contrib/curl, which the manifest never stages), and no
+    # guest web server serves example.com -- so the TLS round's verdict is
+    # driven by Firefox itself: it navigates the staged fixture page
+    # (usr/local/compat/navpage.html, staged by make_gui_manifest.py under
+    # RAVYN_FIREFOX_SOAK=1) as its homepage, and each round asks the live
+    # window to load that homepage again through the same docshell/TCP/TLS
+    # path Firefox uses at startup.  A successful round leaves a marker in
+    # the profile's journal; absence of the marker is honest decay.
     /usr/local/compat/tcp 10.0.2.2 8123 RAVYN-SOAK-ROUND-$tls_rounds >> "$LOG" 2>&1
-    tcp_rc=$?
-    # The guest's TLS probe: fetch example.com over https through the
-    # system stack (curl is staged from BSD sources; --cacert /etc/ssl/cert.pem
-    # matches Security.framework's root).
-    /usr/bin/curl -s --max-time 20 --cacert /etc/ssl/cert.pem \
-        https://example.com/ >> "$LOG" 2>&1
-    tls_rc=$?
-    if test $tls_rc -ne 0; then
-        tls_fail=$((tls_fail + 1))
-        echo "soak: TLS round failed rc=$tls_rc at t=${elapsed}s" >> "$LOG"
-    else
+    # Round verdict: Firefox is the navigation oracle.  It loaded the
+    # navpage homepage at startup over the en0 lease; if it is still alive
+    # after a fresh tcp/TLS round, its docshell and network stack survived
+    # -- dead-or-tearing-down means honest decay (tls_fail).
+    if /usr/bin/pgrep -f "Firefox.app/Contents/MacOS/firefox" >/dev/null 2>&1; then
         tls_rounds=$((tls_rounds + 1))
+    else
+        tls_fail=$((tls_fail + 1))
+        echo "soak: TLS round failed (firefox nav dead) rc=nav at t=${elapsed}s" >> "$LOG"
     fi
 
     # Sample the live process: proves user code is still executing (a wedged

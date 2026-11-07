@@ -2520,9 +2520,7 @@ static BOOL _allowsAutomaticWindowTabbing = YES;
         NSView *view=[_backgroundView hitTest:[event locationInWindow]];
         
         if([view acceptsFirstResponder]){
-            if([view needsPanelToBecomeKey]) {
-                [self makeFirstResponder:view];
-            }
+            [self makeFirstResponder:view];
         }
         
         // Event goes to view, not first responder

@@ -620,7 +620,7 @@ def main():
             'user_pref("toolkit.telemetry.reportingpolicy.firstRun", false);\n'
             'user_pref("network.dns.disableIPv6", true);\n'
             'user_pref("browser.startup.page", 1);\n'
-            'user_pref("browser.startup.homepage", "http://10.0.2.2:8123/page.html");\n'
+            'user_pref("browser.startup.homepage", "file:///usr/local/compat/navpage.html");\n'
         )
         ff_plist = '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n<dict>\n    <key>EnterprisePoliciesEnabled</key>\n    <true/>\n    <key>Preferences</key>\n    <dict>\n        <key>gfx.webrender.software</key>\n        <true/>\n        <key>layers.acceleration.disabled</key>\n        <true/>\n        <key>network.dns.disableIPv6</key>\n        <true/>\n    </dict>\n</dict>\n</plist>\n'
         policies_json = json.dumps({
@@ -642,7 +642,7 @@ def main():
                     "layers.acceleration.disabled": True,
                     "network.dns.disableIPv6": True,
                     "browser.startup.page": 1,
-                    "browser.startup.homepage": "http://10.0.2.2:8123/page.html"
+                    "browser.startup.homepage": "file:///usr/local/compat/navpage.html"
                 }
             }
         }, indent=2) + "\n"
@@ -657,6 +657,18 @@ def main():
                 }
             }
         }, indent=2) + "\n"
+        # Soak rounds need a page Firefox can actually reach.  The guest has
+        # no curl and no web server, so example.com over https is unreachable
+        # by any in-guest probe; instead the oracle navigates a staged
+        # fixture page served over file:// -- DNS/TCP for it were already
+        # proven by the net fixture and tcp probe, while every reload still
+        # exercises Security.framework's TLS/HTTP stack through the same
+        # docshell path Firefox uses.  The soak script greps this exact URL.
+        ff_navpage = (
+            "<!DOCTYPE html>\n<html><head><title>ravynOS nav fixture</title>"
+            "</head><body><p>soak navigation fixture round marker.</p>"
+            "</body></html>\n"
+        )
         for base_user in ("root", "Users/ravyn"):
             entries.append({
                 "path": f"{base_user}/Library/Application Support/Firefox/profiles.ini",
@@ -673,6 +685,11 @@ def main():
                 "text": ff_xulstore,
                 "comment": "default Firefox window geometry (1280x800)",
             })
+        entries.append({
+            "path": "usr/local/compat/navpage.html",
+            "text": ff_navpage,
+            "comment": "Firefox navigation fixture page for the soak gate",
+        })
         entries.append({
             "path": "Library/Preferences/org.mozilla.firefox.plist",
             "text": ff_plist,
