@@ -398,7 +398,7 @@ APPKIT_EXPORT NSString *const NSWindowDidEndLiveResizeNotification;
 - (int)gState;
 - (NSScreen *)screen;
 - (NSScreen *)deepestScreen;
-- (NSColorSpace *)colorSpace;
+- (CGFloat)backingScaleFactor;
 - (void)setColorSpace:(NSColorSpace *)newColorSpace;
 - (BOOL)isOnActiveSpace;
 - (NSWindowSharingType)sharingType;

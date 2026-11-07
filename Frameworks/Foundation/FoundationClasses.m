@@ -13,59 +13,158 @@
  */
 #import <Foundation/Foundation.h>
 
-@interface NSAppleEventDescriptor : NSObject
-@end
-
 @implementation NSAppleEventDescriptor
++ (NSAppleEventDescriptor *)nullDescriptor {
+	static NSAppleEventDescriptor *nullDesc = nil;
+	if (nullDesc == nil) {
+		nullDesc = [[self alloc] init];
+		nullDesc->_descType = 0x6E756C6C;
+	}
+	return nullDesc;
+}
+
++ (NSAppleEventDescriptor *)descriptorWithDescriptorType:(DescType)descType data:(NSData *)data {
+	NSAppleEventDescriptor *d = [[[self alloc] init] autorelease];
+	d->_descType = descType;
+	d->_data = [data copy];
+	return d;
+}
+
++ (NSAppleEventDescriptor *)appleEventWithEventClass:(AEEventClass)eventClass
+                                            eventID:(AEEventID)eventID
+                                   targetDescriptor:(NSAppleEventDescriptor *)targetDescriptor
+                                           returnID:(AEReturnID)returnID
+                                      transactionID:(AETransactionID)transactionID
+{
+	(void)targetDescriptor;
+	NSAppleEventDescriptor *d = [[[self alloc] init] autorelease];
+	d->_descType = 0x61657674;
+	d->_eventClass = eventClass;
+	d->_eventID = eventID;
+	d->_returnID = returnID;
+	d->_transactionID = transactionID;
+	return d;
+}
+
+- (DescType)descriptorType { return _descType; }
+- (NSData *)data { return _data ? _data : [NSData data]; }
+- (AEEventClass)eventClass { return _eventClass; }
+- (AEEventID)eventID { return _eventID; }
+- (AEReturnID)returnID { return _returnID; }
+- (AETransactionID)transactionID { return _transactionID; }
+- (NSAppleEventDescriptor *)paramDescriptorForKeyword:(AEKeyword)keyword { (void)keyword; return nil; }
+- (void)setParamDescriptor:(NSAppleEventDescriptor *)descriptor forKeyword:(AEKeyword)keyword { (void)descriptor; (void)keyword; }
+- (void)removeParamDescriptorForKeyword:(AEKeyword)keyword { (void)keyword; }
+- (NSAppleEventDescriptor *)attributeDescriptorForKeyword:(AEKeyword)keyword { (void)keyword; return nil; }
+- (void)setAttributeDescriptor:(NSAppleEventDescriptor *)descriptor forKeyword:(AEKeyword)keyword { (void)descriptor; (void)keyword; }
+- (unsigned int)numberOfItems { return 0; }
+- (NSAppleEventDescriptor *)descriptorAtIndex:(NSInteger)index { (void)index; return nil; }
+- (NSString *)stringValue { return @""; }
+- (int32_t)int32Value { return 0; }
+- (unsigned int)enumCodeValue { return 0; }
+- (unsigned int)typeCodeValue { return 0; }
+
+- (void)dealloc {
+	[_data release];
+	[super dealloc];
+}
 @end
 
-@interface NSAppleEventManager : NSObject
-+ (NSAppleEventManager *)sharedAppleEventManager;
-- (void)setEventHandler:(id)handler andSelector:(SEL)handleSelector
-    forEventClass:(unsigned int)eventClass andEventID:(unsigned int)eventID;
-- (void)removeEventHandlerForEventClass:(unsigned int)eventClass
-    andEventID:(unsigned int)eventID;
-- (NSAppleEventDescriptor *)currentAppleEvent;
-- (NSAppleEventDescriptor *)currentReplyAppleEvent;
+@interface _NSAppleEventHandlerEntry : NSObject {
+@public
+	id handler;
+	SEL selector;
+	BOOL dispatched;
+}
+@end
+
+@implementation _NSAppleEventHandlerEntry
 @end
 
 @implementation NSAppleEventManager
 + (NSAppleEventManager *)sharedAppleEventManager
 {
 	static NSAppleEventManager *shared;
-	static BOOL noted;
-
 	if (shared == nil)
 		shared = [[self alloc] init];
-	if (!noted) {
-		noted = YES;
-		NSLog(@"[compat] Foundation: NSAppleEventManager exists; handler "
-		    "registration is recorded but Apple Events are not dispatched");
-	}
 	return (shared);
 }
 
+- (id)init {
+	self = [super init];
+	if (self) {
+		_handlers = [[NSMutableDictionary alloc] init];
+	}
+	return self;
+}
+
 - (void)setEventHandler:(id)handler andSelector:(SEL)handleSelector
-    forEventClass:(unsigned int)eventClass andEventID:(unsigned int)eventID
+    forEventClass:(AEEventClass)eventClass andEventID:(AEEventID)eventID
 {
-	/* Recorded nowhere: WindowServer does not deliver Apple Events in this
-	 * tree yet.  The registration itself must not fail, or applications
-	 * abort before their first window (Firefox did). */
-	(void)handler;
-	(void)handleSelector;
-	(void)eventClass;
-	(void)eventID;
+	char cls[5] = { (char)(eventClass >> 24), (char)(eventClass >> 16),
+	                (char)(eventClass >> 8), (char)eventClass, 0 };
+	char idstr[5] = { (char)(eventID >> 24), (char)(eventID >> 16),
+	                  (char)(eventID >> 8), (char)eventID, 0 };
+	NSLog(@"[NSAppleEventManager] register handler %p sel=%s for class='%s' id='%s'",
+	      handler, sel_getName(handleSelector), cls, idstr);
+
+	_NSAppleEventHandlerEntry *entry = [[_NSAppleEventHandlerEntry alloc] init];
+	entry->handler = handler;
+	entry->selector = handleSelector;
+	entry->dispatched = NO;
+	NSNumber *key = [NSNumber numberWithUnsignedLongLong:(((uint64_t)eventClass) << 32) | (uint64_t)eventID];
+	[_handlers setObject:entry forKey:key];
+	[entry release];
+
+	if (eventClass == kCoreEventClass && eventID == kAEOpenApplication) {
+		[self performSelector:@selector(_dispatchPendingOApp:)
+		           withObject:key
+		           afterDelay:0.0];
+	}
 }
 
-- (void)removeEventHandlerForEventClass:(unsigned int)eventClass
-    andEventID:(unsigned int)eventID
-{
-	(void)eventClass;
-	(void)eventID;
+- (void)_dispatchPendingOApp:(NSNumber *)key {
+	_NSAppleEventHandlerEntry *entry = [_handlers objectForKey:key];
+	if (entry != nil && !entry->dispatched) {
+		[self dispatchAppleEventForClass:kCoreEventClass id:kAEOpenApplication];
+	}
 }
 
-- (NSAppleEventDescriptor *)currentAppleEvent { return (nil); }
-- (NSAppleEventDescriptor *)currentReplyAppleEvent { return (nil); }
+- (void)removeEventHandlerForEventClass:(AEEventClass)eventClass
+    andEventID:(AEEventID)eventID
+{
+	NSNumber *key = [NSNumber numberWithUnsignedLongLong:(((uint64_t)eventClass) << 32) | (uint64_t)eventID];
+	[_handlers removeObjectForKey:key];
+}
+
+- (void)dispatchAppleEventForClass:(AEEventClass)eventClass id:(AEEventID)eventID {
+	NSNumber *key = [NSNumber numberWithUnsignedLongLong:(((uint64_t)eventClass) << 32) | (uint64_t)eventID];
+	_NSAppleEventHandlerEntry *entry = [_handlers objectForKey:key];
+	if (entry != nil && entry->handler != nil && entry->selector != NULL) {
+		if (entry->dispatched) {
+			NSLog(@"[NSAppleEventManager] event 0x%08x:0x%08x already dispatched to %p",
+			      eventClass, eventID, entry->handler);
+			return;
+		}
+		entry->dispatched = YES;
+		char cls[5] = { (char)(eventClass >> 24), (char)(eventClass >> 16),
+		                (char)(eventClass >> 8), (char)eventClass, 0 };
+		char idstr[5] = { (char)(eventID >> 24), (char)(eventID >> 16),
+		                  (char)(eventID >> 8), (char)eventID, 0 };
+		NSLog(@"[NSAppleEventManager] dispatching '%s':'%s' to %p sel=%s",
+		      cls, idstr, entry->handler, sel_getName(entry->selector));
+		NSAppleEventDescriptor *evt = [NSAppleEventDescriptor appleEventWithEventClass:eventClass
+		                                                                       eventID:eventID
+		                                                              targetDescriptor:nil
+		                                                                      returnID:0
+		                                                                 transactionID:0];
+		NSAppleEventDescriptor *reply = [NSAppleEventDescriptor nullDescriptor];
+		[entry->handler performSelector:entry->selector withObject:evt withObject:reply];
+	}
+}
+
+- (NSAppleEventDescriptor *)currentAppleEvent { return [NSAppleEventDescriptor nullDescriptor]; }
+- (NSAppleEventDescriptor *)currentReplyAppleEvent { return [NSAppleEventDescriptor nullDescriptor]; }
 @end
 
 @interface NSProgress : NSObject

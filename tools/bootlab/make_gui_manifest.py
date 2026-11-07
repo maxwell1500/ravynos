@@ -563,8 +563,56 @@ def main():
         else:
             closure.append((ff_job_dst, ff_job, "MISSING"))
         ff_profiles_ini = "[Profile0]\nName=default\nIsRelative=1\nPath=Profiles/default\nDefault=1\n\n[General]\nStartWithLastProfile=1\nVersion=2\n"
-        ff_user_js = 'user_pref("gfx.webrender.software", true);\nuser_pref("layers.acceleration.disabled", true);\nuser_pref("browser.startup.homepage_override.mstone", "ignore");\nuser_pref("startup.homepage_welcome_url", "");\nuser_pref("startup.homepage_override_url", "");\nuser_pref("browser.aboutwelcome.enabled", false);\nuser_pref("browser.newtabpage.enabled", false);\nuser_pref("browser.shell.checkDefaultBrowser", false);\nuser_pref("datareporting.policy.dataSubmissionEnabled", false);\nuser_pref("toolkit.telemetry.reportingpolicy.firstRun", false);\nuser_pref("network.dns.disableIPv6", true);\n'
+        ff_user_js = (
+            'user_pref("gfx.webrender.software", true);\n'
+            'user_pref("layers.acceleration.disabled", true);\n'
+            'user_pref("browser.startup.homepage_override.mstone", "ignore");\n'
+            'user_pref("startup.homepage_welcome_url", "");\n'
+            'user_pref("startup.homepage_override_url", "");\n'
+            'user_pref("browser.aboutwelcome.enabled", false);\n'
+            'user_pref("browser.newtabpage.enabled", false);\n'
+            'user_pref("browser.shell.checkDefaultBrowser", false);\n'
+            'user_pref("datareporting.policy.dataSubmissionEnabled", false);\n'
+            'user_pref("toolkit.telemetry.reportingpolicy.firstRun", false);\n'
+            'user_pref("network.dns.disableIPv6", true);\n'
+            'user_pref("browser.startup.page", 1);\n'
+            'user_pref("browser.startup.homepage", "http://10.0.2.2:8123/page.html");\n'
+        )
         ff_plist = '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0">\n<dict>\n    <key>EnterprisePoliciesEnabled</key>\n    <true/>\n    <key>Preferences</key>\n    <dict>\n        <key>gfx.webrender.software</key>\n        <true/>\n        <key>layers.acceleration.disabled</key>\n        <true/>\n        <key>network.dns.disableIPv6</key>\n        <true/>\n    </dict>\n</dict>\n</plist>\n'
+        policies_json = json.dumps({
+            "policies": {
+                "DisableAppUpdate": True,
+                "DontCheckDefaultBrowser": True,
+                "OverrideFirstRunPage": "",
+                "OverridePostUpdatePage": "",
+                "Preferences": {
+                    "browser.aboutwelcome.enabled": False,
+                    "browser.newtabpage.enabled": False,
+                    "browser.startup.homepage_override.mstone": "ignore",
+                    "startup.homepage_welcome_url": "",
+                    "startup.homepage_override_url": "",
+                    "browser.shell.checkDefaultBrowser": False,
+                    "datareporting.policy.dataSubmissionEnabled": False,
+                    "toolkit.telemetry.reportingpolicy.firstRun": False,
+                    "gfx.webrender.software": True,
+                    "layers.acceleration.disabled": True,
+                    "network.dns.disableIPv6": True,
+                    "browser.startup.page": 1,
+                    "browser.startup.homepage": "http://10.0.2.2:8123/page.html"
+                }
+            }
+        }, indent=2) + "\n"
+        ff_xulstore = json.dumps({
+            "chrome://browser/content/browser.xhtml": {
+                "main-window": {
+                    "screenX": "80",
+                    "screenY": "80",
+                    "width": "1280",
+                    "height": "800",
+                    "sizemode": "normal"
+                }
+            }
+        }, indent=2) + "\n"
         for base_user in ("root", "Users/ravyn"):
             entries.append({
                 "path": f"{base_user}/Library/Application Support/Firefox/profiles.ini",
@@ -576,10 +624,20 @@ def main():
                 "text": ff_user_js,
                 "comment": "default Firefox user.js",
             })
+            entries.append({
+                "path": f"{base_user}/Library/Application Support/Firefox/Profiles/default/xulstore.json",
+                "text": ff_xulstore,
+                "comment": "default Firefox window geometry (1280x800)",
+            })
         entries.append({
             "path": "Library/Preferences/org.mozilla.firefox.plist",
             "text": ff_plist,
             "comment": "system-wide Firefox preferences",
+        })
+        entries.append({
+            "path": "Library/Application Support/Mozilla/policies.json",
+            "text": policies_json,
+            "comment": "system-wide Firefox enterprise policies",
         })
     elif os.environ.get("RAVYN_FIREFOX") == "1":
         closure.append(("Applications/Firefox.app", firefox_root, "MISSING"))

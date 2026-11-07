@@ -68,6 +68,7 @@
 #endif
 
 #import <Foundation/FoundationErrors.h>
+#import <Foundation/NSAppleEventManager.h>
 #import <Foundation/NSAffineTransform.h>
 #import <Foundation/NSArchiver.h>
 #import <Foundation/NSArray.h>

@@ -1455,6 +1455,8 @@ static int _tagAllMenus(NSMenu *menu, int tag) {
        [_delegate applicationDidFinishLaunching:
            [NSNotification notificationWithName:NSApplicationDidFinishLaunchingNotification object:self]];
 
+   [[NSAppleEventManager sharedAppleEventManager] dispatchAppleEventForClass:kCoreEventClass id:kAEOpenApplication];
+
    [pool release];
 }
 

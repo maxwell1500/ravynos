@@ -1127,6 +1127,12 @@ static BOOL _allowsAutomaticWindowTabbing = YES;
     BOOL didSize=NSEqualSizes(newFrame.size,_frame.size)?NO:YES;
     BOOL didMove=NSEqualPoints(newFrame.origin,_frame.origin)?NO:YES;
    
+    if (([self styleMask] & NSTitledWindowMask) && _level == NSNormalWindowLevel && newFrame.size.width > 0 && newFrame.size.height > 0) {
+        newFrame = [self constrainFrameRect:newFrame toScreen:[self screen] ? [self screen] : [NSScreen mainScreen]];
+        didSize=NSEqualSizes(newFrame.size,_frame.size)?NO:YES;
+        didMove=NSEqualPoints(newFrame.origin,_frame.origin)?NO:YES;
+    }
+
     _frame=newFrame;
     _makeSureIsOnAScreen=YES;
 
@@ -1708,6 +1714,11 @@ static BOOL _allowsAutomaticWindowTabbing = YES;
    return 0;
 }
 
+-(CGFloat)backingScaleFactor {
+   NSScreen *s = [self screen];
+   return s ? [s backingScaleFactor] : 1.0;
+}
+
 -(NSColorSpace *)colorSpace {
    NSUnimplementedMethod();
    return nil;
@@ -1853,7 +1864,7 @@ static BOOL _allowsAutomaticWindowTabbing = YES;
 }
 
 -(NSRect)constrainFrameRect:(NSRect)rect toScreen:(NSScreen *)screen {
-   if ( !screen) return rect;
+   if (!screen) return rect;
 
    /* Only titled windows have a titlebar to keep on screen; borderless
     * windows (Dock, menus, desktop, loading screen) set their own frames. */
@@ -1862,18 +1873,24 @@ static BOOL _allowsAutomaticWindowTabbing = YES;
 
    NSRect visRect = [screen visibleFrame];
 
-   /* Keep the titlebar reachable: never above the menu bar, never so low that
-    * it disappears under the Dock. */
+   /* For resizable titled main windows that are too small to be usable,
+    * expand them to a standard desktop size (1100x700). */
+   if (([self styleMask] & NSResizableWindowMask) && _level == NSNormalWindowLevel) {
+       if (rect.size.width < 800 && rect.size.width > 0) rect.size.width = 1100;
+       if (rect.size.height < 500 && rect.size.height > 0) rect.size.height = 700;
+   }
+
+   /* Keep the titlebar reachable: never above the menu bar, never below visible area. */
    if (NSMaxY(rect) > NSMaxY(visRect))
     rect.origin.y = NSMaxY(visRect) - rect.size.height;
-   if (NSMaxY(rect) < NSMinY(visRect) + 50.0f)
-    rect.origin.y = NSMinY(visRect) + 50.0f - rect.size.height;
+   if (rect.origin.y < NSMinY(visRect))
+    rect.origin.y = NSMinY(visRect);
 
-   /* Keep at least 60px of the titlebar horizontally on screen. */
-   if (NSMaxX(rect) < NSMinX(visRect) + 60.0f)
-    rect.origin.x = NSMinX(visRect) + 60.0f - rect.size.width;
-   if (NSMinX(rect) > NSMaxX(visRect) - 60.0f)
-    rect.origin.x = NSMaxX(visRect) - 60.0f;
+   /* Keep window horizontally on screen. */
+   if (rect.origin.x < NSMinX(visRect))
+    rect.origin.x = NSMinX(visRect);
+   if (NSMaxX(rect) > NSMaxX(visRect) && rect.size.width <= visRect.size.width)
+    rect.origin.x = NSMaxX(visRect) - rect.size.width;
 
    return rect;
 }

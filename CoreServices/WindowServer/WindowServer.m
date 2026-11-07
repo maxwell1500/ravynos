@@ -1313,9 +1313,10 @@ static pthread_mutex_t _pendingLock = PTHREAD_MUTEX_INITIALIZER;
     if(!has_home) envp[ec++] = "HOME=/root";
     if(!has_tmp) envp[ec++] = "TMPDIR=/tmp";
     if(!has_path) envp[ec++] = "PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin";
+    envp[ec++] = "MOZ_LEGACY_PROFILES=1";
+    envp[ec++] = "RAVYN_DYLD_IMAGES=1";
     envp[ec++] = idbuf;
     envp[ec] = NULL;
-
     execve(item.path, argv, envp);
     fprintf(stderr, "[WS child %d] execve %s failed: errno=%d\n", (int)getpid(), item.path, errno);
     _exit(1);
