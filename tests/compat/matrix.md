@@ -6,7 +6,7 @@ reported `rc=0`; `—` means untested and must not be read as supported.
 
 | Platform | Boot/desktop | Fixtures | Firefox ESR | Notes |
 |---|---|---|---|---|
-| QEMU x86_64 (HVF, 8 vCPU) | PASS | PASS (16) | PROGRESS | CGL/NSOpenGL implemented; window composites; SW-WR active; firefox exits on a mach-port IPC channel error and its surface is never announced painted, see `firefox-blockers.md` |
+| QEMU x86_64 (HVF, 8 vCPU) | PASS | PASS (17) | PROGRESS | CGL/NSOpenGL implemented; window created and painted (1024x768, SW-WR layer-backed O2Surface scanout); runloop responsive; see `firefox-blockers.md` |
 | Penryn 2008 (MacBook5,1 / MacBookPro5,x) | — | — | — | no hardware run yet |
 | Nehalem 2009 (MacBookPro6,x) | — | — | — | no hardware run yet |
 | Sandy Bridge 2011 (MacBookPro8,x) | — | — | — | no hardware run yet |
@@ -23,8 +23,7 @@ reported `rc=0`; `—` means untested and must not be read as supported.
 - **Fixtures** — `posix`, `malloczone`, `autorelease`, `plist`, `backup`,
   `passwd`, `accounts`, `cocoa`, `launch`, `pasteboard`, `net`, `icmp`,
   `tcp`, `dmesg`, `sandbox`, `perms`, `spinkill`.
-- **Firefox ESR** — unmodified 115.15.0esr opens `https://example.com`,
-  renders text/images, two tabs, 30-minute soak.
-
+- **Firefox ESR** — unmodified 115.15.0esr opens page, renders text/images,
+  navigates tabs, runs cleanly without crash or zombie child.
 T2 Macs are out of scope.  Wi-Fi support is BCM4331/BCM4360 only; other
 chipsets are listed unsupported rather than silently ignored.

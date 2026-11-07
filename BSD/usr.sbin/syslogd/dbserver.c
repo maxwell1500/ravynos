@@ -1366,6 +1366,59 @@ __asl_server_query_2
 
 	return __asl_server_query_internal(server, request, requestCnt, startid, count, QUERY_DURATION_UNLIMITED, direction, reply, replyCnt, lastid, status, &token);
 }
+kern_return_t
+__asl_server_query
+(
+	mach_port_t server,
+	caddr_t request,
+	mach_msg_type_number_t requestCnt,
+	uint64_t startid,
+	int count,
+	int flags,
+	caddr_t *reply,
+	mach_msg_type_number_t *replyCnt,
+	uint64_t *lastid,
+	int *status,
+	security_token_t *token
+)
+{
+	if (status) *status = -1;
+	return KERN_FAILURE;
+}
+
+kern_return_t
+__asl_server_query_timeout
+(
+	mach_port_t server,
+	caddr_t request,
+	mach_msg_type_number_t requestCnt,
+	uint64_t startid,
+	int count,
+	int flags,
+	caddr_t *reply,
+	mach_msg_type_number_t *replyCnt,
+	uint64_t *lastid,
+	int *status,
+	audit_token_t token
+)
+{
+	if (status) *status = -1;
+	return KERN_FAILURE;
+}
+
+kern_return_t
+__asl_server_prune
+(
+	mach_port_t server,
+	caddr_t request,
+	mach_msg_type_number_t requestCnt,
+	int *status,
+	security_token_t *token
+)
+{
+	if (status) *status = -1;
+	return KERN_FAILURE;
+}
 
 kern_return_t
 __asl_server_match
