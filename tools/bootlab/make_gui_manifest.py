@@ -270,8 +270,20 @@ ETC_RC = """#!/bin/sh
 # phase, so this script reports that it ran and returns success.  Add rc-time
 # setup here if ravynOS ever needs it; keep the exit status 0 so the System
 # session completes and the agent scan (Dock, Filer) runs.
+# Network bring-up.  The e1000 driver attaches en0 at boot but the link has
+# no address, so nothing can send a packet (the compat fixture had to seed
+# an address itself).  Give it one unconditionally first -- under QEMU's
+# SLIRP, 10.0.2.15/24 is inside the host network QEMU exports (10.0.2.0/24)
+# and doubles as the DHCP broadcast target for dhclient's DISCOVER.  Then
+# ask dhclient for the real SLIRP lease: it overwrites the address via
+# SIOCAIFADDR and rewrites /etc/resolv.conf from the server's DNS options,
+# which is what Firefox needs to resolve example.com.  dhclient failing
+# (no OFFER) must not fail the System session: the seed address stays
+# usable and /etc/resolv.conf ships with the SLIRP nameserver already.
+ifconfig en0 up
+ifconfig en0 10.0.2.15 netmask 255.255.255.0
+dhclient en0 || echo "-=- dhclient: no lease, kept seed address -=-"
 echo "-=- rc complete -=-"
-exit 0
 """
 
 
@@ -544,8 +556,13 @@ def main():
     #     every file written after boot is zero bytes (measured: SYSTEM.LOG,
     #     WS-APPS.LOG and COMPAT.LOG all existed with size 0 on a 1 GiB
     #     image).  Until that is fixed, a normal build must not carry it.
+    # Opt-in knob: RAVYN_FIREFOX=1 stages the oracle.  The soak build also
+    # accepts RAVYN_FIREFOX_SOAK=1 so the 30-minute gate can flip just the
+    # runas timeout (60s -> long) without restaging anything else; see
+    # ff_soak_secs below.
     firefox_root = os.path.join(REPO, "tests", "apps", "Firefox ESR.app")
-    if os.environ.get("RAVYN_FIREFOX") == "1" and os.path.isdir(firefox_root):
+    if (os.environ.get("RAVYN_FIREFOX") == "1" or
+            os.environ.get("RAVYN_FIREFOX_SOAK") == "1") and os.path.isdir(firefox_root):
         n_ff = stage_bundle(
             entries, firefox_root, "Applications/Firefox.app",
             "unmodified Firefox ESR (Mozilla build, compatibility oracle)")
@@ -562,6 +579,33 @@ def main():
             })
         else:
             closure.append((ff_job_dst, ff_job, "MISSING"))
+        # The interactive variant of the same job.  RunAtLoad is false here:
+        # the triage job above carries it and both would start Firefox at
+        # boot, which is not what an interactive session wants.  The
+        # operator starts this one after login with
+        # launchctl load -w /System/Library/LaunchDaemons/
+        # com.ravynos.firefoxtest.interactive.json (the same job shape
+        # launchd already accepts for the triage job).  Its command line is
+        # identical, which also gives the session its network bring-up:
+        # ifconfig en0 10.0.2.15 netmask 255.255.255.0 up plus dhclient
+        # en0 against QEMU's SLIRP DHCP gateway -- exactly the sequence
+        # tests/compat/run-fixtures.sh proves end to end, and the only way
+        # en0 gets an address (and /etc/resolv.conf a nameserver) before
+        # Firefox resolves example.com.
+        ff_job_int = os.path.join(REPO, "SystemLibrary", "LaunchDaemons",
+                                  "com.ravynos.firefoxtest.interactive.json")
+        ff_job_int_dst = ("System/Library/LaunchDaemons/"
+                          "com.ravynos.firefoxtest.interactive.json")
+        if os.path.isfile(ff_job_int):
+            entries.append({
+                "path": ff_job_int_dst,
+                "file": os.path.relpath(ff_job_int, HERE),
+                "comment": ("launchd job that starts Firefox on demand for "
+                            "the interactive session (load -w after login; "
+                            "brings up en0 before launching)"),
+            })
+        else:
+            closure.append((ff_job_int_dst, ff_job_int, "MISSING"))
         ff_profiles_ini = "[Profile0]\nName=default\nIsRelative=1\nPath=Profiles/default\nDefault=1\n\n[General]\nStartWithLastProfile=1\nVersion=2\n"
         ff_user_js = (
             'user_pref("gfx.webrender.software", true);\n'
@@ -639,7 +683,8 @@ def main():
             "text": policies_json,
             "comment": "system-wide Firefox enterprise policies",
         })
-    elif os.environ.get("RAVYN_FIREFOX") == "1":
+    elif (os.environ.get("RAVYN_FIREFOX") == "1" or
+            os.environ.get("RAVYN_FIREFOX_SOAK") == "1"):
         closure.append(("Applications/Firefox.app", firefox_root, "MISSING"))
     else:
         closure.append(("Applications/Firefox.app", firefox_root,
@@ -736,6 +781,9 @@ def main():
         ("spawnprobe", "usr/local/compat/spawnprobe"),
         ("runas", "usr/local/compat/runas"),
         ("run-fixtures.sh", "usr/local/compat/run-fixtures.sh"),
+        # The soak runner is a script like run-fixtures.sh, staged straight
+        # from tests/compat by the same special case below.
+        ("run-fixtures-soak.sh", "usr/local/compat/run-fixtures-soak.sh"),
         ("CocoaProbe.app/Contents/MacOS/CocoaProbe",
          "usr/local/compat/CocoaProbe.app/Contents/MacOS/CocoaProbe"),
         ("CocoaProbe.app/Contents/Info.plist",
@@ -746,7 +794,10 @@ def main():
         # from tests/compat.  Copying work/compat/run-fixtures.sh shipped a
         # stale runner once already (an added ping step never ran, and the net
         # fixture still reported success because the old checks passed).
-        if src_rel == "run-fixtures.sh":
+        if src_rel == "run-fixtures.sh" or src_rel == "run-fixtures-soak.sh":
+            # Guest runners are scripts, not build products: stage them
+            # straight from tests/compat so a stale work/ copy can never
+            # ship (the ping-step regression this guard prevents).
             src = os.path.join(REPO, "tests", "compat", src_rel)
         else:
             src = os.path.join(HERE, "work", "compat", src_rel)
@@ -770,6 +821,25 @@ def main():
         })
     else:
         closure.append((compat_job_dst, compat_job, "MISSING"))
+    # The 30-minute soak variant of the same fixtures.  RunAtLoad is false:
+    # the boot-time job above already runs the quick pass, and both must not
+    # fire at load.  The operator starts it after login with
+    # launchctl load -w /System/Library/LaunchDaemons/
+    # com.ravynos.compat-soak.json; its only difference from the boot-time
+    # job is that it execs /usr/local/compat/run-fixtures-soak.sh, which
+    # repeats the fixture set with a long-lived Firefox under the runas
+    # watchdog (see tests/compat/run-fixtures-soak.sh).
+    soak_job = os.path.join(REPO, "SystemLibrary", "LaunchDaemons",
+                            "com.ravynos.compat-soak.json")
+    soak_job_dst = "System/Library/LaunchDaemons/com.ravynos.compat-soak.json"
+    if os.path.isfile(soak_job):
+        entries.append({
+            "path": soak_job_dst,
+            "file": os.path.relpath(soak_job, HERE),
+            "comment": "launchd job for the 30-minute Firefox soak (load -w after login)",
+        })
+    else:
+        closure.append((soak_job_dst, soak_job, "MISSING"))
 
     # 6g. Network configuration tools, built from the tree's BSD sources by
     #     tools/bootlab/build-libraries.sh --bsd.  Without them a driver can

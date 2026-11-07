@@ -91,6 +91,12 @@ NSString * const NSApplicationDidChangeScreenParametersNotification=@"NSApplicat
 -initWithOwner:owner;
 @end
 
+@interface NSApplication(private)
+-(NSData *)_menuArchiveForTransmission:(NSMenu *)menuCopy ceiling:(NSUInteger)ceiling;
+-(void)_menuDropSubmenuAt:(int)index inMenu:(NSMenu *)menuCopy;
+-(void)_menuEnumerateAndChange:(NSMenu *)menu;
+@end
+
 @implementation NSApplication
 
 -(NSInteger)userInterfaceLayoutDirection {
@@ -422,12 +428,21 @@ static NSMenuItem *itemWithTag(NSMenu *root, int tag) {
                                 break;
                             }
                             memcpy(&me, msg.data, msg.len);
+                            /* The kernel-side keyboard path only fills chars[0..1];
+                             * the trailing bytes (and the word before x) arrive as
+                             * garbage, so terminate both strings before they are
+                             * handed to initWithUTF8String:. */
+                            me.chars[7] = '\0';
+                            me.charsIg[7] = '\0';
                             NSWindow *window = (me.windowID == 0)
                                 ? [self mainWindow]
                                 : [self windowWithWindowNumber:me.windowID];
-                            // translate screen to window coords
+                            /* WindowServer pointer coordinates are top-down (scanout
+                             * row 0 at the top of the screen), while Cocoa window frames
+                             * are bottom-up.  Convert before hit-testing so clicks land
+                             * on the right view instead of producing negative y. */
                             me.x -= [window frame].origin.x;
-                            me.y -= [window frame].origin.y;
+                            me.y = [window frame].size.height - (me.y - [window frame].origin.y);
                             switch(me.code) {
                                 case NSKeyUp:
                                 case NSKeyDown: {
@@ -1152,6 +1167,41 @@ static int _tagAllMenus(NSMenu *menu, int tag) {
     }
 }
 
+/* The archived menu must fit the inline Mach message payload.  Stripping
+ * images and delegates in _menuEnumerateAndChange covers the common case,
+ * but a deep menu tree -- Firefox's menulist carries dozens of submenus
+ * whose own items still carry their TIFF icons -- has overflowed 131072
+ * bytes before: the old code clamped with MIN() and WindowServer received
+ * a plist truncated mid-document, which SystemUIServer then rejected with
+ * an NSParseError.  Never transmit a partial buffer: archive, measure,
+ * and if over the ceiling drop whole top-level submenus (the heaviest
+ * first) until it fits; if even the bare titles do not fit, send nothing.
+ * The caller's Message instance provides the ceiling via sizeof(msg.data)
+ * so the helper never depends on the struct layout being default-
+ * constructible. */
+-(NSData *)_menuArchiveForTransmission:(NSMenu *)menuCopy ceiling:(NSUInteger)ceiling {
+    NSDictionary *dict = [NSDictionary
+        dictionaryWithObjects:@[menuCopy]
+        forKeys:@[@"MainMenu"]];
+    NSData *d = [NSKeyedArchiver archivedDataWithRootObject:dict];
+    if([d length] > ceiling) {
+        [d release];
+        return nil;
+    }
+    return d;
+}
+
+-(void)_menuDropSubmenuAt:(int)index inMenu:(NSMenu *)menuCopy {
+    NSMenuItem *item = [menuCopy itemAtIndex:index];
+    if(item == nil)
+        return;
+    /* Prune the branch: drop its submenu, then re-apply the strip pass so
+     * this item's own image and the items of every remaining submenu lose
+     * their delegates/targets again. */
+    [item setSubmenu:nil];
+    [self _menuEnumerateAndChange:menuCopy];
+}
+
 -(void)sendMenusToWindowServer {
     if(_mainMenu == nil)
         return;
@@ -1160,11 +1210,43 @@ static int _tagAllMenus(NSMenu *menu, int tag) {
     NSMenu *menuCopy = [_mainMenu copy];
     [self _menuEnumerateAndChange:menuCopy];
 
-    NSDictionary *dict = [NSDictionary
-        dictionaryWithObjects:@[menuCopy]
-        forKeys:@[@"MainMenu"]];
-
-    NSData *d = [NSKeyedArchiver archivedDataWithRootObject:dict];
+    /* Shrink loop: try as-is; on overflow drop the largest remaining
+     * top-level submenu and retry.  Measuring each candidate costs one
+     * archive pass per dropped branch, which is fine at menu-update rates
+     * (a handful of sends per app lifetime). */
+    /* The inline Mach message's fixed-size payload is the ceiling; measure
+     * it from a zeroed Message so the check follows the struct definition
+     * without hardcoding 131072. */
+    Message probe = {0};
+    NSUInteger menuCeiling = sizeof(probe.data);
+    NSData *d = [self _menuArchiveForTransmission:menuCopy ceiling:menuCeiling];
+    while(d == nil) {
+        /* Largest branch first: pick the top-level submenu with the most
+         * items and drop it. */
+        int heaviest = -1, heaviestCount = 0;
+        NSArray *items = [menuCopy itemArray];
+        for(int i = 0; i < (int)[items count]; i++) {
+            NSMenuItem *item = [menuCopy itemAtIndex:i];
+            if([item hasSubmenu]) {
+                NSMenu *sub = [item submenu];
+                NSArray *subItems = (sub != nil) ? [sub itemArray] : nil;
+                int n = (subItems != nil) ? (int)[subItems count] : 0;
+                if(n > heaviestCount) {
+                    heaviestCount = n;
+                    heaviest = i;
+                }
+            }
+        }
+        if(heaviest < 0)
+            break;   /* nothing left to prune: cannot fit */
+        [self _menuDropSubmenuAt:heaviest inMenu:menuCopy];
+        d = [self _menuArchiveForTransmission:menuCopy ceiling:menuCeiling];
+    }
+    if(d == nil) {
+        NSLog(@"Menus too large to transmit even stripped; sending none");
+        [menuCopy release];
+        return;
+    }
 
     Message msg = {0};
     msg.header.msgh_remote_port = _wsSvcPort;
@@ -1174,9 +1256,10 @@ static int _tagAllMenus(NSMenu *menu, int tag) {
     msg.code = CODE_MENU_FOR_APP;
     msg.pid = getpid();
     strncpy(msg.bundleID, [bundleID UTF8String], sizeof(msg.bundleID));
-    int len = MIN([d length], sizeof(msg.data));
+    int len = (int)[d length];
     memcpy(msg.data, [d bytes], len);
     msg.len = len;
+    [d release];
 
     if(mach_msg((mach_msg_header_t *)&msg, MACH_SEND_MSG|MACH_SEND_TIMEOUT, sizeof(msg), 0, MACH_PORT_NULL,
             1000 /* ms timeout */, MACH_PORT_NULL) != MACH_MSG_SUCCESS)

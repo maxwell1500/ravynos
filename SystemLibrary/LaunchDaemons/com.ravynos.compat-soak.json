@@ -1,0 +1,15 @@
+{
+ "EnvironmentVariables": {
+  "ASL_DISABLE": "1",
+  "LANG": "C.UTF-8"
+ },
+ "Label": "com.ravynos.compat-soak",
+ "ProgramArguments": [
+  "/bin/sh",
+  "/usr/local/compat/run-fixtures-soak.sh"
+ ],
+ "StandardOutPath": "/var/log/compat-soak.log",
+ "StandardErrorPath": "/var/log/compat-soak.log",
+ "RunAtLoad": false,
+ "KeepAlive": false
+}
