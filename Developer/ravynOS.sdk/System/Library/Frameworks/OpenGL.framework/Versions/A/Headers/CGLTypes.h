@@ -1,5 +1,7 @@
 #ifndef _CGLTYPES_H_
 #define _CGLTYPES_H_
+
+#ifndef CGL_DLLEXPORT
 #define CGL_DLLEXPORT
 #define CGL_DLLIMPORT
 #else

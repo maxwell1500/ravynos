@@ -40,22 +40,34 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
     if ( !string) return;
     const char *utf8 = [string UTF8String];
     size_t len = strlen(utf8);
-    
-    if (utf8 && len > 0) {
-        // FIXME: to match Cocoa, the string should be escaped HTML-style
-        // (e.g. '>' --> "&gt;") instead of using CDATA
-        BOOL addCDATA = ([string rangeOfString:@"<"].location != NSNotFound ||
-                         [string rangeOfString:@">"].location != NSNotFound ||
-                         [string rangeOfString:@"&"].location != NSNotFound ||
-                         [string rangeOfString:@"\'"].location != NSNotFound ||
-                         [string rangeOfString:@"\""].location != NSNotFound
-                        );
+    size_t i;
 
-        if (addCDATA) [_data appendBytes:"<![CDATA[" length:9];
-        [_data appendBytes:utf8 length:len];
-        if (addCDATA) [_data appendBytes:"]]>" length:3];
+    /* The old FIXME above said to escape HTML-style instead of hiding the
+     * text in a CDATA section, and that is what the reader already speaks:
+     * NSOldXMLReader.m:51-:55 carry "&" "<" ">" "'" "\"" under the names
+     * amp, lt, gt, apos and quot, and its tokenizer turns &name; back into
+     * those characters (STATE_EntityRef_Name, :332).  Nothing in the reader
+     * round-trips a CDATA section - the measured guest log said so: the
+     * clipboard and the menu payload, both full of strings with < and &,
+     * came back as "Unexpected character < in Tag" and left
+     * -[NSApplication machServiceLoop:] reporting
+     * "menuForApp: not a dictionary".  Escaping here, per byte, is legal
+     * because every byte of an escape is ASCII and every non-ASCII UTF-8
+     * byte is above 0x7F. */
+    if (utf8 && len > 0) {
+        for (i = 0; i < len; i++){
+            char ch = utf8[i];
+            if (ch == '&')
+                [_data appendBytes:"&amp;" length:5];
+            else if (ch == '<')
+                [_data appendBytes:"&lt;" length:4];
+            else if (ch == '>')
+                [_data appendBytes:"&gt;" length:4];
+            else
+                [_data appendBytes:(const char[]){ch, '\0'} length:1];
+            }
+        }
     }
-}
 
 -(void)encodeString:(NSString *)string indent:(NSInteger)indent
 {

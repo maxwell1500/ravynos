@@ -28,19 +28,37 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
     @try {
         result=[NSPropertyListReader_binary1 propertyListFromData:data];
-        if(result==nil)
-            result=[NSPropertyListReader_xml1 propertyListFromData:data];
-        if(result==nil)
-            result=[NSPropertyListReader_vintage propertyListFromData:data];
-        
-    }
+        }
     @catch (NSException *exception) {
-        // Don't use NSLog here as we might be called from some early NSLog, when formating the timestamp...
-        fprintf(stderr, "propertyListFromData: error while decoding plist content : %s\n", [[exception description] UTF8String]);
+        // Not NSLog: this can be reached from the boot-time path where the
+        // log machinery is not up yet.
+        fprintf(stderr, "propertyListFromData: the binary reader refused the content : %s\n",
+            [[exception description] UTF8String]);
         result = nil;
-    }
-    @finally {
-    }
+        }
+
+    if(result==nil){
+      @try {
+        result=[NSPropertyListReader_xml1 propertyListFromData:data];
+        }
+      @catch (NSException *exception) {
+        fprintf(stderr, "propertyListFromData: the XML reader refused the content : %s\n",
+            [[exception description] UTF8String]);
+        result = nil;
+        }
+      }
+
+    if(result==nil){
+      @try {
+        result=[NSPropertyListReader_vintage propertyListFromData:data];
+        }
+      @catch (NSException *exception) {
+        fprintf(stderr, "propertyListFromData: the old Mac reader refused the content : %s\n",
+            [[exception description] UTF8String]);
+        result = nil;
+        }
+      }
+
    return result;
 }
 

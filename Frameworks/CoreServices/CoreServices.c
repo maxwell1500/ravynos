@@ -60,10 +60,72 @@ CFURLRef LSCopyApplicationForMIMEType(CFStringRef inMIMEType, uint32_t inRoleMas
         *outError = NULL;
     return NULL;
 }
-
 CFURLRef LSCopyDefaultApplicationURLForContentType(CFStringRef inContentType, uint32_t inRoleMask, CFErrorRef *outError)
 {
     if (outError)
         *outError = NULL;
     return NULL;
+}
+
+/* Pre-10.15 LaunchServices application lookups used by Gecko / XUL.
+ * In ravynOS, default handlers are not in a system database, so report the
+ * honest result: kLSApplicationNotFoundErr (-10814). */
+OSStatus LSGetApplicationForInfo(OSType inType, OSType inCreator, CFStringRef inExtension, uint32_t inRoleMask, void *outAppRef, CFURLRef *outAppURL)
+{
+    if (outAppURL)
+        *outAppURL = NULL;
+    return -10814; /* kLSApplicationNotFoundErr */
+}
+
+OSStatus LSGetApplicationForItem(void *inItemRef, uint32_t inRoleMask, void *outAppRef, CFURLRef *outAppURL)
+{
+    if (outAppURL)
+        *outAppURL = NULL;
+    return -10814; /* kLSApplicationNotFoundErr */
+}
+
+OSStatus LSCopyItemAttribute(CFURLRef inItemURL, uint32_t whichInfo, CFStringRef inAttributeName, CFTypeRef *outValue)
+{
+    if (outValue)
+        *outValue = NULL;
+    return -10814; /* kLSApplicationNotFoundErr */
+}
+
+OSStatus LSCopyItemInfoForURL(CFURLRef inURL, uint32_t inWhichInfo, void *outItemInfo)
+{
+    return -10814; /* kLSApplicationNotFoundErr */
+}
+
+OSStatus LSOpenCFURLRef(CFURLRef inURL, CFURLRef *outLaunchedURL)
+{
+    if (outLaunchedURL)
+        *outLaunchedURL = NULL;
+    return -10814; /* kLSApplicationNotFoundErr */
+}
+
+OSStatus LSOpenFSRef(const void *inRef, void *outLaunchedRef)
+{
+    return -10814; /* kLSApplicationNotFoundErr */
+}
+
+OSStatus LSOpenFromRefSpec(const void *inLaunchSpec, void *outLaunchedRef)
+{
+    return -10814; /* kLSApplicationNotFoundErr */
+}
+
+OSStatus LSOpenFromURLSpec(const void *inLaunchSpec, CFURLRef *outLaunchedURL)
+{
+    if (outLaunchedURL)
+        *outLaunchedURL = NULL;
+    return -10814; /* kLSApplicationNotFoundErr */
+}
+
+OSStatus LSSetDefaultHandlerForURLScheme(CFStringRef inURLScheme, CFStringRef inHandlerBundleID)
+{
+    return 0; /* noErr */
+}
+
+OSStatus LSSetDefaultRoleHandlerForContentType(CFStringRef inContentType, uint32_t inRole, CFStringRef inHandlerBundleID)
+{
+    return 0; /* noErr */
 }

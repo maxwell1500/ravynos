@@ -118,9 +118,7 @@ static NSString * const kCAGravityResizeDefault = @"resize";
    [_sublayers release];
    _sublayers=sublayers;
    [_sublayers makeObjectsPerformSelector:@selector(_setSuperLayer:) withObject:self];
-#if defined(__linux__)
    [_sublayers makeObjectsPerformSelector:@selector(_setContext:) withObject:_context];
-#endif
 }
 
 -(id)delegate {
@@ -251,6 +249,7 @@ extern unsigned char _CFIsObjCType(const void *cf);
     _contentsKind=3;
    }
    _contents=value;
+   [[_context valueForKey:@"view"] setNeedsDisplay:YES];
 }
 
 -(CATransform3D)transform {
@@ -329,6 +328,8 @@ extern unsigned char _CFIsObjCType(const void *cf);
 
 -(void)addSublayer:(CALayer *)layer {
    [self setSublayers:[_sublayers arrayByAddingObject:layer]];
+   [layer _setContext:_context];
+   [[_context valueForKey:@"view"] setNeedsDisplay:YES];
 }
 
 -(void)replaceSublayer:(CALayer *)layer with:(CALayer *)other {
@@ -360,6 +361,10 @@ extern unsigned char _CFIsObjCType(const void *cf);
 }
 
 -(void)displayIfNeeded {
+   if(_needsDisplay){
+    _needsDisplay=NO;
+    [self display];
+   }
 }
 
 -(void)drawInContext:(CGContextRef)context {
@@ -379,10 +384,12 @@ extern unsigned char _CFIsObjCType(const void *cf);
 
 -(void)setNeedsDisplay {
    _needsDisplay=YES;
+   [[_context valueForKey:@"view"] setNeedsDisplay:YES];
 }
 
 -(void)setNeedsDisplayInRect:(CGRect)rect {
    _needsDisplay=YES;
+   [[_context valueForKey:@"view"] setNeedsDisplay:YES];
 }
 
 -(void)addAnimation:(CAAnimation *)animation forKey:(NSString *)key {

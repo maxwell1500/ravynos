@@ -160,7 +160,7 @@ enum {
 
 + (NSPoint)mouseLocation;
 + (NSUInteger)modifierFlags;
-
++ (NSUInteger)pressedMouseButtons;
 - initWithType:(NSEventType)type location:(NSPoint)location modifierFlags:(unsigned)modifierFlags window:(NSWindow *)window;
 
 // FIXME: get rid of

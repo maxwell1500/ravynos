@@ -15,6 +15,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 #import <Foundation/NSException.h>
 #import <Foundation/NSStringUTF8.h>
 #include <string.h>
+#include <stdio.h>
 
 enum {
    STATE_content,
@@ -114,15 +115,24 @@ enum {
 
 -(void)charRef:(NSString *)charRef {
    [[_stack lastObject] addContent:charRef];
-}
+   }
 
 -(void)entityRef:(NSString *)entityRef {
    NSOldXMLElement *element=[_stack lastObject];
-   NSString   *contents=[_entityRefContents objectForKey:self];
+   NSString   *contents=[_entityRefContents objectForKey:entityRef];
 
+   // Asking the table for the reader itself rather than for the name is
+   // what made every escape vanish, and worse, it asked our string
+   // machinery to hash and compare an object that is not a string:
+   // measured as a segfault whose faulting load sits inside CoreFoundation,
+   // reached through -[NSMutableDictionary_CF objectForKey:] from here.
+   // An entity this table does not know is kept as the text it was, so the
+   // string still round-trips and nothing is invented.
    if(contents!=nil)
     [element addContent:contents];
-}
+   else
+    [element addContent:[NSString stringWithFormat:@"&%@;",entityRef]];
+   }
 
 -(void)sTag:(NSString *)sTag {
    [_stack addObject:[NSOldXMLElement elementWithName:sTag]];
@@ -272,12 +282,13 @@ static inline BOOL codeIsNameContinue(uint8_t code){
      case STATE_CharRef:
       if(code=='x'){
        _state=STATE_CharRef_hex;
-       rangeAction=advanceLocationToCurrent;
+       rangeAction=extendLength; // the x is consumed, read the first digit next
       }
       else if(code>='0' && code<='9'){
        _charRef=code-'0';
        _state=STATE_CharRef_decimal;
-       rangeAction=advanceLocationToCurrent;
+       // Same here: the first digit was read above, so advance past it.
+       rangeAction=extendLength;
       }
       else {
        [self unexpectedIn:@"CharRef"];
@@ -315,7 +326,7 @@ static inline BOOL codeIsNameContinue(uint8_t code){
        _state=STATE_CharRef_decimal;
      }
       else if(code==';'){
-       [self charRef:[NSString stringWithCharacters:&_charRef length:1]];
+      [self charRef:[NSString stringWithCharacters:&_charRef length:1]];
        _state=STATE_content;
        rangeAction=advanceLocationToNext;
       }

@@ -21,6 +21,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 #import <Foundation/NSCalendarDate.h>
 #import <Foundation/NSScanner.h>
 
+#include <stdio.h>
 NSDate* NSDateFromPlistString(NSString* string)
 {
 	NSScanner* sc=[NSScanner scannerWithString:string];
@@ -212,36 +213,35 @@ NSDate* NSDateFromPlistString(NSString* string)
    return result;
 }
 
-+(NSObject *)propertyListFromDocument:(NSOldXMLDocument *)document {
-  NSOldXMLElement *root=[document rootElement];
+ +(NSObject *)propertyListFromDocument:(NSOldXMLDocument *)document {
+   NSOldXMLElement *root=[document rootElement];
 
-  if(root == nil)
-    return nil;
+   if(root == nil)
+     return nil;
 
-  /*
-   * A plist document either wraps its value in <plist> (what our writers
-   * emit and what the Apple DTD declares) or puts the value element at the
-   * root.  Reading the value element's children as the value, which the old
-   * code did for every root, made a bare <dict> come back as its last
-   * string; the plist fixture measured that on 2026-11-06 as
-   * "plist: FAIL bare dict not a dictionary".
-   */
-  NSString *name=[root name];
+   /*
+    * A plist document either wraps its value in <plist> (what our writers
+    * emit and what the Apple DTD declares) or puts the value element at the
+    * root.  Reading the value element's children as the value, which the old
+    * code did for every root, made a bare <dict> come back as its last
+    * string; the plist fixture measured that on 2026-11-06 as
+    * "plist: FAIL bare dict not a dictionary".
+    */
+   NSString *name=[root name];
+   if([name isEqualToString:@"plist"] || [name isEqualToString:@"document"])
+     return [self propertyListFromContentsOfElement:root];
 
-  if([name isEqualToString:@"plist"] || [name isEqualToString:@"document"])
-    return [self propertyListFromContentsOfElement:root];
-
-  return [self propertyListFromElement:root];
-}
+   return [self propertyListFromElement:root];
+ }
 
 +(NSObject *)propertyListFromData:(NSData *)data {
    id result=nil;
 
-   @try{
-    NSOldXMLDocument *document=[NSOldXMLReader documentWithData:data];
+    @try{
+      NSOldXMLDocument *document=[NSOldXMLReader documentWithData:data];
 
-    if(document!=nil)
-      result=[self propertyListFromDocument:document];
+      if(document!=nil)
+        result=[self propertyListFromDocument:document];
    }
    /*
     * The tokenizer raises NSParseException for anything it cannot read -
@@ -256,7 +256,14 @@ NSDate* NSDateFromPlistString(NSString* string)
     * Tag, position=48").
     */
    @catch(NSException *e){
-    result=nil;
+     // A payload that starts with '<' is this reader's to read: when it
+     // refuses one, that is our parse gap, so name it here rather than
+     // hiding it behind the vintage reader's complaint about the same
+     // bytes.
+     if(data!=nil && [data length]>0 && ((const uint8_t *)[data bytes])[0]=='<')
+        fprintf(stderr, "the XML plist reader refused the content : %s\n",
+          [[e description] UTF8String]);
+     result=nil;
    }
 
    return result;

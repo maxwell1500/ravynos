@@ -1490,8 +1490,7 @@ static BOOL _allowsAutomaticWindowTabbing = YES;
 }
 
 -(void)setShowsToolbarButton:(BOOL)value {
-  _showsToolbarButton=value;
-   NSUnimplementedMethod();
+   _showsToolbarButton=value;
 }
 
 -(void)setContentResizeIncrements:(NSSize)value {

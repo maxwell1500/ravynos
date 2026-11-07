@@ -1596,8 +1596,12 @@ static inline void buildTransformsIfNeeded(NSView *self) {
 
 -(void)_createLayerContextIfNeeded {
    if([_superview layer]==nil){
-    _layerContext=[[CALayerContext alloc] initWithFrame:[self frame]];
+    if(_layerContext==nil)
+     _layerContext=[[CALayerContext alloc] initWithFrame:[self frame]];
+    else
+     [_layerContext setFrame:[self frame]];
     [_layerContext setLayer:_layer];
+    [_layerContext setValue:self forKey:@"view"];
    }
 }
 
@@ -1893,20 +1897,12 @@ static void clearNeedsDisplay(NSView *self){
 }
 
 static NSGraphicsContext *graphicsContextForView(NSView *view){
-   if(view->_layer!=nil){
-    NSRect             frame=[view frame];
-    size_t             width=frame.size.width;
-    size_t             height=frame.size.height;
-    CGColorSpaceRef    colorSpace=CGColorSpaceCreateDeviceRGB();
-    CGContextRef       context=CGBitmapContextCreate(NULL,width,height,8,0,colorSpace,kCGImageAlphaPremultipliedFirst|kCGBitmapByteOrder32Host);
-    NSGraphicsContext *result=[NSGraphicsContext graphicsContextWithGraphicsPort:context flipped:NO];
-    
-    CGColorSpaceRelease(colorSpace);
-    CGContextRelease(context);
-    
-    return result;
-   }
-   
+   /* On ravynOS, CALayerContext has no separate OpenGL CARenderer; layer-backed
+    * views composite their CALayer tree directly into the window's O2Surface
+    * during displayRectIgnoringOpacity:.  Allocating a throwaway bitmap context
+    * whenever view->_layer != nil drew both drawRect: and _renderLayer: into a
+    * buffer that was never blitted to the window surface, leaving every
+    * layer-backed window (including Firefox's ChildView) completely transparent. */
    if([view window] != nil)
       return [[view window] graphicsContext];
    return [NSGraphicsContext currentContext];
@@ -1923,10 +1919,7 @@ static NSGraphicsContext *graphicsContextForView(NSView *view){
     CGContextSaveGState(graphicsPort);
     CGContextResetClip(graphicsPort);
     
-    if(_layer!=nil)
-     CGContextSetCTM(graphicsPort,[self transformToLayer]);
-    else
-     CGContextSetCTM(graphicsPort,[self transformToWindow]);
+    CGContextSetCTM(graphicsPort,[self transformToWindow]);
      
     CGContextClipToRect(graphicsPort,[self visibleRect]);
 
@@ -1958,11 +1951,10 @@ static NSGraphicsContext *graphicsContextForView(NSView *view){
    NSGraphicsContext *graphicsContext=[NSGraphicsContext currentContext];
    CGContextRef       context=[graphicsContext graphicsPort];
    
-   if(_layer!=nil){
-    CGImageRef image=CGBitmapContextCreateImage(context);
-    
-    [_layer setContents:image];
-   }
+   /* Do not overwrite [_layer contents] with a snapshot of the window surface:
+    * layer-hosting views (like Firefox's ChildView) store their own IOSurface
+    * or CGImage in [_layer contents] or sublayers, and _renderLayer:inContext:
+    * composites that tree directly into the window context. */
    
    CGContextRestoreGState(context);
 
@@ -2173,7 +2165,12 @@ static CGImageRef createImageForLayerContents(id contents) {
 
    if(contents == nil)
     return NULL;
-   if([contents isKindOfClass:[O2Image class]])
+   /* An IOSurfaceRef is a raw struct __IOSurface * whose first 4 bytes are
+    * surf->id (starting at 1000 = 0x3e8), not an Objective-C isa pointer.
+    * Messaging it directly faults in objc_msgSend's isa fast path (measured on
+    * Firefox pid 4: rdi->[0] = 0x3e9, fault 0x3f8, rsi = "isKindOfClass:",
+    * rdx = _OBJC_CLASS_$_O2Image). Guard with _CFIsObjCType first. */
+   if(_CFIsObjCType(cf) && [contents isKindOfClass:[O2Image class]])
     return CGImageRetain((CGImageRef)contents);
 
    /* Opaque IOSurfaceRef: wrap its pixels in a CGImage for this draw pass. */
@@ -2203,6 +2200,8 @@ static CGImageRef createImageForLayerContents(id contents) {
    if(layer == nil)
     return;
 
+   [layer displayIfNeeded];
+
    CGRect bounds = [layer bounds];
    CGPoint position = [layer position];
    CGPoint anchor = [layer anchorPoint];
@@ -2229,6 +2228,8 @@ static CGImageRef createImageForLayerContents(id contents) {
    } else if(contents != nil && _CFIsObjCType((const void *)contents) &&
              [contents respondsToSelector:@selector(drawInRect:)]) {
       [(id)contents drawInRect:bounds];
+   } else {
+      [layer drawInContext:context];
    }
 
    for(CALayer *child in [layer sublayers])

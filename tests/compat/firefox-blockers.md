@@ -1315,3 +1315,39 @@ XML plist with a base64 `<data>` block and both pasteboard execs exit 0.
 Gate on 2026-11-06 after this round: `verify_compat.py --boot-timeout 60`
 reports 17/17 fixtures, `plist: 0 failures`, `PASS pasteboard`, and the whole
 run exits 0.
+
+### 2026-11-07 — Window painted: layer composite, NSUserActivity, CoreServices exports, and watchdog resolution
+
+Boot evidence from `ffrun14` measured the browser window painting to the screen:
+```text
+[WS] CREATE app=org.mozilla.firefox win=296540160 level=4 frame=4,308 1024x768
+[WS] PAINTED app=org.mozilla.firefox win=296540160
+[WS] MARK wrote org.mozilla.firefox
+```
+
+#### 1. Why Firefox previously appeared "stuck" or transparent
+- **AppKit layer compositing buffer disconnection:** In `Frameworks/AppKit/NSView.m`, `graphicsContextForView` allocated a transient `CGBitmapContextCreate` on every redraw for layer-backed views (`_layer != nil`). `drawRect:` and `_renderLayer:inContext:` rendered into that scratch context rather than the window's `O2Surface`, leaving the window transparent. Furthermore, `unlockFocus` replaced `[_layer contents]` with a rasterized snapshot of that scratch buffer, clobbering Gecko's actual `IOSurfaceRef` backing.
+- `graphicsContextForView` now returns `[[view window] graphicsContext]`, and `_renderLayer:` preserves `[_layer contents]`.
+- **`createImageForLayerContents` fault on `IOSurfaceRef`:** Gecko layer contents contain an `IOSurfaceRef`, a raw `struct __IOSurface *` whose first field is `surf->id` (0x3e9 = 1001). Messaging it with `[contents isKindOfClass:[O2Image class]]` faulted at `0x3f8` in `objc_msgSend`. Guarding with `_CFIsObjCType` resolves the fault.
+- **CALayer tree invalidation:** `-[CALayer setContents:]`, `-[CALayer addSublayer:]`, and `-[CALayer setNeedsDisplay]` now notify their host view to trigger display updates, and `_renderLayer:inContext:` traverses child sublayers with `displayIfNeeded` and `drawInContext:`.
+- **Unimplemented `setShowsToolbarButton:`:** `-[NSWindow setShowsToolbarButton:]` was stubbed with `_showsToolbarButton = value;`.
+
+#### 2. Resolving the crash blockers
+- **`NSUserActivity` stub:** Firefox called `-[NSUserActivity initWithActivityType:]`, which aborted the main process because `NSUserActivity` was an empty `@interface` in `FoundationClasses.m`. Implemented `initWithActivityType:`, property storage, and lifecycle stubs (`becomeCurrent`, `resignCurrent`, `invalidate`).
+- **Missing LaunchServices exports in CoreServices:** Gecko helper processes died on `_LSGetApplicationForInfo`. Exported `LSGetApplicationForInfo`, `LSGetApplicationForItem`, `LSCopyItemAttribute`, `LSCopyItemInfoForURL`, `LSOpenCFURLRef`, `LSOpenFSRef`, `LSOpenFromRefSpec`, `LSOpenFromURLSpec`, `LSSetDefaultHandlerForURLScheme`, `LSSetDefaultRoleHandlerForContentType` in `Frameworks/CoreServices/CoreServices.c`.
+- **`+[NSEvent pressedMouseButtons]`:** Implemented in `Frameworks/AppKit/NSEvent.subproj/NSEvent.m`.
+
+#### 3. Root cause of `Exiting due to channel error.`
+- The previous belief that `Exiting due to channel error.` indicated a kernel Mach IPC breakdown was disproven by timing and watchdog analysis.
+- The `SystemLibrary/LaunchDaemons/com.ravynos.firefoxtest.json` test harness runs Firefox under `/usr/local/compat/runas -t 300 0 0`.
+- Firefox successfully painted its 1024x768 window (`win=296540160`) and sat responsiveness in its `CFRunLoop` (`-[NSApplication nextEventMatchingMask:untilDate:inMode:dequeue:]`).
+- At exactly 300 seconds, the `runas` watchdog timed out and sent `SIGABRT` to pid 4:
+  `[runas] watchdog: target 4 alive=1`
+  `[runas] watchdog: SIGABRT pid 4 -> 0`
+- The termination of parent pid 4 closed the IPC sockets/ports to its spawned `plugin-container` child processes, which then logged `Exiting due to channel error.` as they handled the parent socket closure. The mach IPC channel itself functioned properly throughout execution.
+
+#### 4. Menu payload truncation
+- `[WS] MENU bundle=org.mozilla.firefox len=131072 relayed to SUI`:
+- Mach inline messages use a fixed buffer `unsigned char data[128*1024]` (131,072 bytes). An XML-formatted keyed archive of a full browser menu with hundreds of items exceeded 128 KiB and was sliced at byte 131,072.
+- A truncated XML payload causes `NSPropertyListReader_xml1` to reject the incomplete document; `NSPropertyListReader` falls back to `NSPropertyListReader_vintage`, which reports `Parse error at position 40, line 2. EOF expected. Next token is <.` and leaves `menuForApp: not a dictionary`.
+- Stripping item images in `-[NSApplication _menuEnumerateAndChange:]` brings typical menu updates down to ~29 KiB, safely under the 128 KiB message threshold.

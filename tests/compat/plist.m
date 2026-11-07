@@ -310,13 +310,37 @@ tryXMLText(NSString *xml, const char *label, NSString *expectKey,
 
 	 id value = [((NSDictionary *)back) objectForKey:expectKey];
 
-	if(value == nil || (expectValue != nil &&
-		![value isEqualToString:expectValue])){
-	 fprintf(stderr, "plist: FAIL %s key %s value lost\n", label,
-		 [expectKey UTF8String]);
+	if(value == nil){
+	 fprintf(stderr, "plist: FAIL %s key %s has no value\n", label,
+		[expectKey UTF8String]);
 	 g_failures++;
 	 return;
-	}
+		}
+
+	if(expectValue != nil && ![value isEqualToString:expectValue]){
+	 /* Show what the codecs actually produced, so a decoding gap can be
+	 * read rather than guessed at; the value in these cases is short. */
+	 NSString *shown = [value isKindOfClass:[NSString class]] ?
+		(NSString *)value : [value description];
+	 fprintf(stderr, "plist: FAIL %s decoded %s wanted %s\n", label,
+		[shown UTF8String], [expectValue UTF8String]);
+	 if([value isKindOfClass:[NSString class]] &&
+		[value length] != [expectValue length]){
+	  /* The unit dump says whether a numeric reference turned into one
+	  * wrong code unit or into a run of them. */
+	  char units[128];
+	  NSUInteger n = [value length], written = 0;
+	  for(NSUInteger i = 0; i < n && written + 6 < sizeof units; i++)
+		written += (NSUInteger)snprintf(units + written, sizeof(units) - written,
+		" %x", (unsigned)[value characterAtIndex:i]);
+	  units[written] = '\0';
+	  fprintf(stderr, "plist: %s units %lu/%lu:%s\n", label,
+		(unsigned long)n, (unsigned long)[expectValue length], units);
+		}
+	 g_failures++;
+	 return;
+		}
+
 fprintf(stderr, "plist: case %s ok\n", label);
 }
 
@@ -460,6 +484,15 @@ main(void)
 		"<integer>7</integer><string>s</string><true/><string>t</string>"
 		"</array></plist>",
 		"mixed array with self-closing true");
+	 tryXMLText(@"<dict><key>probe</key><string>a &amp; b &#65; c &lt;@&gt;</string></dict>",
+		"bare dict with entities", @"probe", @"a & b A c <@>");
+
+	 tryXMLText(@"<dict><key>probe</key><string>&#65;</string></dict>",
+		"lone numeric reference", @"probe", @"A");
+	 tryXMLText(@"<dict><key>probe</key><string>a&#65;b</string></dict>",
+		"numeric reference inside text", @"probe", @"aAb");
+	 tryXMLText(@"<dict><key>probe</key><string>a&amp;b</string></dict>",
+		"named reference inside text", @"probe", @"a&b");
 
 	 /* The graph AppKit's pasteboard keeps on disk: NSPasteboard.m:274
 	 * writes it with the XML writer and _load at :255 reads it back with
@@ -498,6 +531,40 @@ main(void)
 		}
 	 else
 	 fail("open step pasteboard graph: the writer answered nothing");
+
+	 /* Stock apps put XML-significant characters in plists: menu labels,
+	 * window titles and preferences carry & and <, which is exactly what
+	 * the measured menu payload was carrying when the tokenizer complained
+	 * "Unexpected character < in Tag" and AppKit answered
+	 * "menuForApp: not a dictionary".  Both the key and the value have to
+	 * come back unchanged. */
+	 NSString *tricky = @"AT&T <tag> \"quoted\" 'single'";
+	 NSDictionary *escaped = [NSDictionary dictionaryWithObject:tricky forKey:@"a & b < c"];
+	 NSData *escapedXML = [NSPropertyListSerialization dataFromPropertyList:escaped
+		/* the writer decides the escaping; the reader has to undo it */
+		 format:NSPropertyListXMLFormat_v1_0 errorDescription:NULL];
+
+	if(escapedXML != nil){
+	 fprintf(stderr, "plist: escaped payload %lu bytes\n",
+		(unsigned long)escapedXML.length);
+	 dumpHead(escapedXML, 200);
+	 id again = [NSPropertyListSerialization propertyListFromData:escapedXML
+		 mutabilityOption:NSPropertyListMutableContainers
+		 format:NULL errorDescription:NULL];
+	 id value = (again != nil) ? [again objectForKey:@"a & b < c"] : nil;
+
+	 if(again == nil || ![again isKindOfClass:[NSDictionary class]] ||
+		[again count] != 1 || value == nil ||
+		![value isKindOfClass:[NSString class]] ||
+		![value isEqualToString:tricky]){
+	  fprintf(stderr, "plist: FAIL the escaping changed the string or the key\n");
+	  g_failures++;
+		}
+	 else
+	 fprintf(stderr, "plist: case escaping round trip ok\n");
+		}
+	 else
+	 fail("escaping round trip: the writer answered nothing");
 
 
 	 fprintf(stderr, "plist: %d failures\n", g_failures);

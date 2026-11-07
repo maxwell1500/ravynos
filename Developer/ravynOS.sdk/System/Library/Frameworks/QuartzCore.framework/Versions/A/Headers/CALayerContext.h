@@ -19,6 +19,7 @@
     NSMutableArray *_deleteTextureIds;
 
     NSTimer *_timer;
+    id _view;
 }
 
 - initWithFrame:(CGRect)rect;

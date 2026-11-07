@@ -44,6 +44,11 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
    return [[NSDisplay currentDisplay] currentModifierFlags];
 }
 
++(NSUInteger)pressedMouseButtons {
+   /* Bit 0 is primary/left, bit 1 is right, bit 2 is other.
+    * Default to 0 when no buttons are down. */
+   return 0;
+}
 -initWithType:(NSEventType)type location:(NSPoint)location modifierFlags:(unsigned)modifierFlags window:(NSWindow *)window {
    _type=type;
    _timestamp=[NSDate timeIntervalSinceReferenceDate];

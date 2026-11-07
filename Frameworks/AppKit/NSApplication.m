@@ -1138,8 +1138,15 @@ static int _tagAllMenus(NSMenu *menu, int tag) {
     for(int i = 0; i < [items count]; ++i) {
         NSMenuItem *item = [[items objectAtIndex:i] copy];
         [item setTarget:nil];
+        /* SystemUIServer only renders menu titles and key equivalents in the
+         * menu bar. Stripping item images keeps the archived menu under the
+         * 128 KiB inline Mach message limit (Firefox's third menu update had
+         * TIFF-encoded icons that overflowed 131072 bytes and truncated the
+         * XML plist mid-document). */
+        [item setImage:nil];
         [menu removeItemAtIndex:i];
         [menu insertItem:item atIndex:i];
+        [item release];
         if([item hasSubmenu])
             [self _menuEnumerateAndChange:[item submenu]];
     }
