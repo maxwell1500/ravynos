@@ -564,6 +564,11 @@ static BOOL _allowsAutomaticWindowTabbing = YES;
             if(fstat(shmfd, &st) != 0 || st.st_size < bufsize)
                 ftruncate(shmfd, bufsize);
             buffer = mmap(NULL, bufsize, PROT_WRITE|PROT_READ, MAP_SHARED|MAP_NOCORE, shmfd, 0);
+            for(int retry = 0; (buffer == MAP_FAILED || buffer == NULL) && retry < 5; retry++) {
+                usleep(2000);
+                ftruncate(shmfd, bufsize);
+                buffer = mmap(NULL, bufsize, PROT_WRITE|PROT_READ, MAP_SHARED|MAP_NOCORE, shmfd, 0);
+            }
             close(shmfd);
         } else {
             buffer = NULL;

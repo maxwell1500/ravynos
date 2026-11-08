@@ -381,9 +381,8 @@ kern_return_t _windowServerRPC(void *data, size_t len, void *replyBuf, int *repl
     // FIXME: should this be reverse order to find sub bundles?
     for(int i = [comps count] - 1; i >= 0; --i) {
         if([[comps objectAtIndex:i] hasSuffix:@"app"] == YES) {
-            NSString *newpath = [NSString stringWithFormat:@"/%@",
-            [NSString pathWithComponents:
-                [comps subarrayWithRange:NSMakeRange(0,i+1)]]];
+            NSString *newpath = [NSString pathWithComponents:
+                [comps subarrayWithRange:NSMakeRange(0,i+1)]];
             NSBundle *b = [NSBundle bundleWithModulePath:newpath];
             if([[b bundlePath] isEqualToString:_path])
                 return YES;

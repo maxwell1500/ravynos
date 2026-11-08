@@ -245,6 +245,7 @@ static NSDate *filerDateFromStat(struct stat *st, BOOL created) {
         [self registerForDraggedTypes:@[NSFilenamesPboardType, NSPasteboardTypeFileURL]];
 
         [_places addObject:[PlaceItem itemWithTitle:@"Root (/)" path:@"/"]];
+        [_places addObject:[PlaceItem itemWithTitle:@"Applications" path:@"/Applications"]];
         [_places addObject:[PlaceItem itemWithTitle:@"System" path:@"/System"]];
         [_places addObject:[PlaceItem itemWithTitle:@"CoreServices" path:@"/System/Library/CoreServices"]];
         [_places addObject:[PlaceItem itemWithTitle:@"Frameworks" path:@"/System/Library/Frameworks"]];
@@ -1549,8 +1550,8 @@ for(NSInteger i = 0; i < (NSInteger)[_items count]; i++) {
     BOOL shift = (mods & NSShiftKeyMask) != 0;
     BOOL opt = (mods & NSAlternateKeyMask) != 0;
 
+    if(cmd && (c == NSDownArrowFunctionKey || [chars isEqualToString:@"o"])) { [self ctxOpen:nil]; return; }
     if(cmd && c == NSUpArrowFunctionKey) { [self goUp]; return; }
-    if(cmd && [chars isEqualToString:@"["]) { [self goBack]; return; }
     if(cmd && [chars isEqualToString:@"]"]) { [self goForward]; return; }
     if(cmd && shift && ([chars isEqualToString:@"N"])) { [self createNewFolder]; return; }
     if(c == '\r' || c == '\n') { if(_selectedIndex >= 0) [self beginInlineRenameAtIndex:_selectedIndex]; return; }
@@ -1751,7 +1752,7 @@ for(NSInteger i = 0; i < (NSInteger)[_items count]; i++) {
 - (void)goBack:(id)sender { [[self activeBrowserView] goBack]; }
 - (void)goForward:(id)sender { [[self activeBrowserView] goForward]; }
 - (void)goUp:(id)sender { [[self activeBrowserView] goUp]; }
-
+- (void)openSelected:(id)sender { [[self activeBrowserView] ctxOpen:sender]; }
 - (void)applicationDidFinishLaunching:(NSNotification *)aNotification {
     _windows = [NSMutableArray new];
     self.currentPath = @"/";
@@ -1768,8 +1769,8 @@ for(NSInteger i = 0; i < (NSInteger)[_items count]; i++) {
 
     NSMenuItem *fileMenuItem = [NSMenuItem new];
     NSMenu *fileMenu = [[NSMenu alloc] initWithTitle:@"File"];
+    [fileMenu addItemWithTitle:@"Open" action:@selector(openSelected:) keyEquivalent:@"o"];
     [fileMenu addItemWithTitle:@"New Window" action:@selector(newWindow:) keyEquivalent:@"n"];
-    [fileMenu addItem:[NSMenuItem separatorItem]];
     [fileMenu addItemWithTitle:@"New Folder" action:@selector(ctxNewFolder:) keyEquivalent:@"N"];
     [[fileMenu itemAtIndex:[fileMenu numberOfItems]-1] setKeyEquivalentModifierMask:NSCommandKeyMask | NSShiftKeyMask];
     [fileMenu addItemWithTitle:@"Close Window" action:@selector(performClose:) keyEquivalent:@"w"];
