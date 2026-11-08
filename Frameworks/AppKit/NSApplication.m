@@ -1185,7 +1185,6 @@ static int _tagAllMenus(NSMenu *menu, int tag) {
         forKeys:@[@"MainMenu"]];
     NSData *d = [NSKeyedArchiver archivedDataWithRootObject:dict];
     if([d length] > ceiling) {
-        [d release];
         return nil;
     }
     return d;
@@ -1259,7 +1258,6 @@ static int _tagAllMenus(NSMenu *menu, int tag) {
     int len = (int)[d length];
     memcpy(msg.data, [d bytes], len);
     msg.len = len;
-    [d release];
 
     if(mach_msg((mach_msg_header_t *)&msg, MACH_SEND_MSG|MACH_SEND_TIMEOUT, sizeof(msg), 0, MACH_PORT_NULL,
             1000 /* ms timeout */, MACH_PORT_NULL) != MACH_MSG_SUCCESS)
