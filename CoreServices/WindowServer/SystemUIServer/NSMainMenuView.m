@@ -164,9 +164,8 @@ enum {
    NSArray * items = [[self menu] itemArray];
    
    // Construct a new array of just the visible items
-   if( _visibleArray == NULL )
-      _visibleArray = [[NSMutableArray init] alloc];
-	
+   if( _visibleArray == nil )
+      _visibleArray = [NSMutableArray new];
    [_visibleArray removeAllObjects];
    
    int i;
@@ -482,8 +481,12 @@ const float kMouseMovementThreshold = .001f;
                     
                     // Which item is the cursor on top of?
                     unsigned itemIndex=[checkView itemIndexAtPoint:checkPoint];
-
-                    MENUDEBUG(@"found an item index: %u", itemIndex);
+                    NSArray *debItems = [[checkView menu] itemArray];
+                    fprintf(stderr, "[SUI] checkPoint=(%g,%g) itemIndex=%u count=%lu item=%s hasSub=%d\n",
+                            checkPoint.x, checkPoint.y, itemIndex,
+                            (unsigned long)[debItems count],
+                            (itemIndex < [debItems count]) ? [[[debItems objectAtIndex:itemIndex] title] UTF8String] : "(none)",
+                            (itemIndex < [debItems count]) ? [[debItems objectAtIndex:itemIndex] hasSubmenu] : 0);
 
                     // If it's not the currently selected item
                     if(itemIndex!=[checkView selectedItemIndex]){

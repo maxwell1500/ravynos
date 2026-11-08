@@ -3396,9 +3396,11 @@ static pthread_mutex_t _pendingLock = PTHREAD_MUTEX_INITIALIZER;
             break;
         }
         case NSLeftMouseDown: {
+            fprintf(stderr, "[WS] click at (%d,%d) win=%u app=%s\n",
+                    (int)pos.x, (int)pos.y, (unsigned)window.number,
+                    [[app bundleID] UTF8String] ?: "(nil)");
             if(window == nil)
                 return YES;
-
             if(window.level >= 0 && window.level < kCGNumReservedWindowLevels) {
                 pthread_mutex_lock(&renderLock);
                 [_windows[window.level] removeObject:window];

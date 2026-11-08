@@ -111,7 +111,7 @@
     [menu setDelegate:self];
     for(int i = 0; i < [items count]; ++i) {
         NSMenuItem *item = [items objectAtIndex:i];
-        if([item isSeparatorItem] || [item isHidden] || ![item isEnabled])
+        if([item isSeparatorItem] || [item isHidden])
             continue;
         [item setTarget:self];
         [item setAction:@selector(clicked:)];
