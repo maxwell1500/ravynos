@@ -319,6 +319,7 @@ extern unsigned char _CFIsObjCType(const void *cf);
    _bounds=CGRectZero;
    _opacity=1.0;
    _opaque=YES;
+   _contentsRect=CGRectMake(0,0,1,1);
    _contents=nil;
    _contentsKind=0;
    _transform=CATransform3DIdentity;

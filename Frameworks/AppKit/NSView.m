@@ -883,6 +883,10 @@ static inline void buildTransformsIfNeeded(NSView *self) {
         CGPoint anchor = [_layer anchorPoint];
         [_layer setBounds:CGRectMake(0, 0, _bounds.size.width, _bounds.size.height)];
         [_layer setPosition:CGPointMake(_bounds.size.width * anchor.x, _bounds.size.height * anchor.y)];
+        for(CALayer *sub in [_layer sublayers]) {
+            [sub setBounds:CGRectMake(0, 0, _bounds.size.width, _bounds.size.height)];
+            [sub setPosition:CGPointMake(_bounds.size.width * anchor.x, _bounds.size.height * anchor.y)];
+        }
     }
    invalidateTransform(self);
 
@@ -2225,7 +2229,44 @@ static CGImageRef createImageForLayerContents(id contents) {
    id contents = [layer contents];
    CGImageRef image = createImageForLayerContents(contents);
    if(image != NULL) {
-      CGContextDrawImage(context, bounds, image);
+      if(CGRectIsEmpty(bounds))
+         bounds = CGRectMake(0, 0, CGImageGetWidth(image), CGImageGetHeight(image));
+
+      size_t iw = CGImageGetWidth(image);
+      size_t ih = CGImageGetHeight(image);
+      CGRect cr = [layer contentsRect];
+      size_t cropW = iw;
+      size_t cropH = ih;
+      size_t cropX = 0;
+      size_t cropY = 0;
+
+      if(cr.size.width > 0 && cr.size.height > 0 && (cr.size.width < 0.999f || cr.size.height < 0.999f || cr.origin.x > 0.001f || cr.origin.y > 0.001f)) {
+         cropX = (size_t)(cr.origin.x * iw);
+         cropY = (size_t)(cr.origin.y * ih);
+         cropW = (size_t)(cr.size.width * iw);
+         cropH = (size_t)(cr.size.height * ih);
+      } else if(iw > (size_t)bounds.size.width && (size_t)bounds.size.width > 0) {
+         cropW = (size_t)bounds.size.width;
+         cropH = MIN(ih, (size_t)bounds.size.height);
+      }
+
+      if(cropW < iw || cropH < ih || cropX > 0 || cropY > 0) {
+         CGImageRef cropped = CGImageCreateWithImageInRect(image, CGRectMake(cropX, cropY, cropW, cropH));
+         if(cropped != NULL) {
+            CGImageRelease(image);
+            image = cropped;
+         }
+      }
+
+      if([self isFlipped]) {
+         CGContextSaveGState(context);
+         CGContextTranslateCTM(context, bounds.origin.x, bounds.origin.y + bounds.size.height);
+         CGContextScaleCTM(context, 1.0, -1.0);
+         CGContextDrawImage(context, CGRectMake(0, 0, bounds.size.width, bounds.size.height), image);
+         CGContextRestoreGState(context);
+      } else {
+         CGContextDrawImage(context, bounds, image);
+      }
       CGImageRelease(image);
    } else if(contents != nil && _CFIsObjCType((const void *)contents) &&
              [contents respondsToSelector:@selector(drawInRect:)]) {

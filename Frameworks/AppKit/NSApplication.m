@@ -229,8 +229,13 @@ static NSMenuItem *itemWithTag(NSMenu *root, int tag) {
 
     if(active == 1 && windowID != 0) {
         NSWindow *win = [self windowWithWindowNumber:windowID];
-        if(win)
+        if(win) {
             [win _showForActivation];
+            if([win canBecomeKeyWindow])
+                [win makeKeyWindow];
+            if([win canBecomeMainWindow])
+                [win makeMainWindow];
+        }
     }
     if(active && !_isActive)
         [[NSNotificationCenter defaultCenter]
@@ -1535,9 +1540,6 @@ static int _tagAllMenus(NSMenu *menu, int tag) {
 
    write(2,"[NSApp] finishLaunching: posting didFinish\n",43);
    [[NSNotificationCenter defaultCenter] postNotificationName:NSApplicationDidFinishLaunchingNotification object:self];
-   if(_delegate && [_delegate respondsToSelector:@selector(applicationDidFinishLaunching:)])
-       [_delegate applicationDidFinishLaunching:
-           [NSNotification notificationWithName:NSApplicationDidFinishLaunchingNotification object:self]];
 
    [[NSAppleEventManager sharedAppleEventManager] dispatchAppleEventForClass:kCoreEventClass id:kAEOpenApplication];
 }

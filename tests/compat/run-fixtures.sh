@@ -29,10 +29,14 @@ run_fixture() {
     report "$name" "$rc"
 }
 
+if /usr/sbin/sysctl -n kern.bootargs 2>/dev/null | grep -q 'nofleet\|interactive'; then
+    echo "compat: interactive boot detected; skipping automated fixtures." >> "$LOG"
+    exit 0
+fi
+
 # The pid makes every boot's report distinct, so the host can prove it read
-# this boot's run rather than the previous one left on the disk image.
+# this boot's report rather than the previous one left on the disk image.
 echo "compat: fixtures start pid=$$" >> "$LOG"
-# uname is not in this image yet (staged in phase 7); keep the line honest
 # without turning a missing tool into a missing fixture.
 echo "compat: uname: $(uname -a 2>/dev/null || echo unavailable)" >> "$LOG"
 

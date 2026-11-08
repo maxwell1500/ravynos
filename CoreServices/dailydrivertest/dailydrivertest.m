@@ -354,8 +354,18 @@ int main(int argc, char **argv) {
         if(argc > 1)
             return _childMain(argc, argv);
 
-        [report appendString:@"ravynOS daily driver self test\n"];
+        {
+            char kbootargs[1024] = {0};
+            size_t kbootlen = sizeof(kbootargs) - 1;
+            if(sysctlbyname("kern.bootargs", kbootargs, &kbootlen, NULL, 0) == 0) {
+                if(strstr(kbootargs, "nofleet") != NULL || strstr(kbootargs, "interactive") != NULL) {
+                    fprintf(stderr, "[ddtest] interactive boot (%s); skipping automated self-test.\n", kbootargs);
+                    return 0;
+                }
+            }
+        }
 
+        [report appendString:@"ravynOS daily driver self test\n"];
         /* 1. both service names, one port */
         childOut = _runChild("ports", NULL);
         _say(report, [NSString stringWithFormat:

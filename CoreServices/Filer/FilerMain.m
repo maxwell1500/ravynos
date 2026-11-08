@@ -16,7 +16,7 @@
 #include <errno.h>
 #include <string.h>
 #include <stdlib.h>
-
+#include <execinfo.h>
 typedef enum {
     FilerViewModeIcons   = 0,
     FilerViewModeList    = 1,
@@ -1249,12 +1249,12 @@ for(NSInteger i = 0; i < (NSInteger)[_items count]; i++) {
         CGFloat dx = loc.x - _dragOrigin.x;
         CGFloat dy = loc.y - _dragOrigin.y;
 
-        if(dx * dx + dy * dy >= 25.0) {
+        if(dx * dx + dy * dy >= 144.0) {
+            _dragOriginValid = NO;
             [self beginDragOutWithEvent:event];
             return;
         }
     }
-
     if(_marqueeActive) {
         NSPoint loc = [self convertPoint:[event locationInWindow] fromView:nil];
         float x = (_marqueeStart.x < loc.x) ? _marqueeStart.x : loc.x;
@@ -1552,9 +1552,10 @@ for(NSInteger i = 0; i < (NSInteger)[_items count]; i++) {
 
     if(cmd && (c == NSDownArrowFunctionKey || [chars isEqualToString:@"o"])) { [self ctxOpen:nil]; return; }
     if(cmd && c == NSUpArrowFunctionKey) { [self goUp]; return; }
+    if(cmd && [chars isEqualToString:@"["]) { [self goBack]; return; }
     if(cmd && [chars isEqualToString:@"]"]) { [self goForward]; return; }
     if(cmd && shift && ([chars isEqualToString:@"N"])) { [self createNewFolder]; return; }
-    if(c == '\r' || c == '\n') { if(_selectedIndex >= 0) [self beginInlineRenameAtIndex:_selectedIndex]; return; }
+    if(c == '\r' || c == '\n') { if(_selectedIndex >= 0) [self ctxOpen:nil]; return; }
     if(cmd && [chars isEqualToString:@"d"]) { [self duplicateSelected]; return; }
     if(cmd && shift && (c == 0x7F || c == 0x08)) { [self emptyTrash]; return; }
     if(cmd && (c == 0x7F || c == 0x08)) { [self moveSelectedToTrash]; return; }
@@ -1718,6 +1719,8 @@ for(NSInteger i = 0; i < (NSInteger)[_items count]; i++) {
 - (void)goUp:(id)sender;
 @end
 
+static BOOL _filerDidFinishLaunching = NO;
+
 @implementation FilerAppDelegate
 - (NSWindow *)createWindowWithPath:(NSString *)path {
     _windowCount++;
@@ -1738,7 +1741,7 @@ for(NSInteger i = 0; i < (NSInteger)[_items count]; i++) {
     [_windows addObject:win];
     return win;
 }
-- (void)newWindow:(id)sender { [self createWindowWithPath:self.currentPath ?: @"/"]; }
+- (void)newWindow:(id)sender { [self createWindowWithPath:[[self activeBrowserView] currentPath] ?: self.currentPath ?: @"/"]; }
 - (FileBrowserView *)activeBrowserView {
     NSWindow *keyWin = [NSApp keyWindow];
     if(!keyWin && [_windows count] > 0) keyWin = [_windows lastObject];
@@ -1753,6 +1756,36 @@ for(NSInteger i = 0; i < (NSInteger)[_items count]; i++) {
 - (void)goForward:(id)sender { [[self activeBrowserView] goForward]; }
 - (void)goUp:(id)sender { [[self activeBrowserView] goUp]; }
 - (void)openSelected:(id)sender { [[self activeBrowserView] ctxOpen:sender]; }
+- (void)goApplications:(id)sender { [[self activeBrowserView] loadPath:@"/Applications" addToHistory:YES]; }
+- (void)goUtilities:(id)sender { [[self activeBrowserView] loadPath:@"/Applications/Utilities" addToHistory:YES]; }
+- (void)goComputer:(id)sender { [[self activeBrowserView] loadPath:@"/" addToHistory:YES]; }
+- (void)goHome:(id)sender { [[self activeBrowserView] loadPath:NSHomeDirectory() ?: @"/root" addToHistory:YES]; }
+- (void)ctxNewFolder:(id)sender { [[self activeBrowserView] createNewFolder]; }
+- (void)performClose:(id)sender { [[NSApp keyWindow] ?: ([_windows count] > 0 ? [_windows lastObject] : nil) performClose:sender]; }
+- (BOOL)application:(NSApplication *)sender openFile:(NSString *)filename {
+    if(!filename || [filename length] == 0) return NO;
+    BOOL isDir = NO;
+    if([[NSFileManager defaultManager] fileExistsAtPath:filename isDirectory:&isDir]) {
+        if([filename hasSuffix:@".app"] || [filename hasSuffix:@".APP"]) {
+            filerOpenBundle(filename);
+            return YES;
+        }
+        if(isDir) {
+            FileBrowserView *bv = [self activeBrowserView];
+            if(bv) {
+                [bv loadPath:filename addToHistory:YES];
+                [[bv window] makeKeyAndOrderFront:nil];
+            } else {
+                [self createWindowWithPath:filename];
+            }
+            return YES;
+        }
+    }
+    return NO;
+}
+- (void)application:(NSApplication *)sender openFiles:(NSArray *)filenames {
+    for(NSString *fn in filenames) [self application:sender openFile:fn];
+}
 - (void)applicationDidFinishLaunching:(NSNotification *)aNotification {
     _windows = [NSMutableArray new];
     self.currentPath = @"/";
@@ -1803,17 +1836,25 @@ for(NSInteger i = 0; i < (NSInteger)[_items count]; i++) {
     [[goMenu itemAtIndex:[goMenu numberOfItems]-1] setKeyEquivalentModifierMask:NSCommandKeyMask];
     [goMenu addItemWithTitle:@"Enclosing Folder" action:@selector(goUp:) keyEquivalent:@"Up"];
     [[goMenu itemAtIndex:[goMenu numberOfItems]-1] setKeyEquivalentModifierMask:NSCommandKeyMask];
+    [goMenu addItem:[NSMenuItem separatorItem]];
+    [goMenu addItemWithTitle:@"Applications" action:@selector(goApplications:) keyEquivalent:@"A"];
+    [[goMenu itemAtIndex:[goMenu numberOfItems]-1] setKeyEquivalentModifierMask:NSCommandKeyMask | NSShiftKeyMask];
+    [goMenu addItemWithTitle:@"Utilities" action:@selector(goUtilities:) keyEquivalent:@"U"];
+    [[goMenu itemAtIndex:[goMenu numberOfItems]-1] setKeyEquivalentModifierMask:NSCommandKeyMask | NSShiftKeyMask];
+    [goMenu addItemWithTitle:@"Computer" action:@selector(goComputer:) keyEquivalent:@"C"];
+    [[goMenu itemAtIndex:[goMenu numberOfItems]-1] setKeyEquivalentModifierMask:NSCommandKeyMask | NSShiftKeyMask];
+    [goMenu addItemWithTitle:@"Home" action:@selector(goHome:) keyEquivalent:@"H"];
+    [[goMenu itemAtIndex:[goMenu numberOfItems]-1] setKeyEquivalentModifierMask:NSCommandKeyMask | NSShiftKeyMask];
     [goMenuItem setTitle:@"Go"]; [goMenuItem setSubmenu:goMenu];
     [mainMenu addItem:goMenuItem];
 
     [NSApp setMainMenu:mainMenu];
     // target wiring
     for(NSMenuItem *mi in [fileMenu itemArray]) [mi setTarget:self];
-    for(NSMenuItem *mi in [editMenu itemArray]) [mi setTarget:[self activeBrowserView]];
     for(NSMenuItem *mi in [viewMenu itemArray]) [mi setTarget:self];
     for(NSMenuItem *mi in [goMenu itemArray]) [mi setTarget:self];
-
     [self createWindowWithPath:self.currentPath];
+    _filerDidFinishLaunching = YES;
 }
 
 - (BOOL)windowShouldClose:(id)sender { return YES; }
@@ -1823,7 +1864,7 @@ for(NSInteger i = 0; i < (NSInteger)[_items count]; i++) {
 }
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)sender { return NO; }
 - (void)applicationDidBecomeActive:(NSNotification *)notification {
-    if ([_windows count] == 0) [self newWindow:nil];
+    if (_filerDidFinishLaunching && [_windows count] == 0) [self newWindow:nil];
 }
 @end
 

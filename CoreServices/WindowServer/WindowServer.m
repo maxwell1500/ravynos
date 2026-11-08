@@ -1314,6 +1314,8 @@ static pthread_mutex_t _pendingLock = PTHREAD_MUTEX_INITIALIZER;
     if(!has_tmp) envp[ec++] = "TMPDIR=/tmp";
     if(!has_path) envp[ec++] = "PATH=/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin";
     envp[ec++] = "MOZ_LEGACY_PROFILES=1";
+    envp[ec++] = "MOZ_FORCE_DISABLE_E10S=1";
+    envp[ec++] = "MOZ_DISABLE_CONTENT_SANDBOX=1";
     envp[ec++] = "RAVYN_DYLD_IMAGES=1";
     envp[ec++] = idbuf;
     envp[ec] = NULL;
@@ -2632,13 +2634,14 @@ static pthread_mutex_t _pendingLock = PTHREAD_MUTEX_INITIALIZER;
             NSArray *wins = [app windows];
             WSWindowRecord *restore = nil;
             BOOL visWindows = NO;
-            for(int x = 0; x < [wins count]; ++x) {
-                winrec = [wins objectAtIndex:x];
-                if(winrec.state != MINIMIZED && winrec.state != HIDDEN && winrec.state != CLOSED) {
+            for(int x = (int)[wins count] - 1; x >= 0; --x) {
+                WSWindowRecord *w = [wins objectAtIndex:x];
+                if(w.state != MINIMIZED && w.state != HIDDEN && w.state != CLOSED) {
+                    winrec = w;
                     visWindows = YES;
                     break;
-                } else if(winrec.state == MINIMIZED)
-                    restore = winrec;
+                } else if(w.state == MINIMIZED && restore == nil)
+                    restore = w;
             }
             if(!visWindows) {
                 winrec = nil;
@@ -2651,12 +2654,14 @@ static pthread_mutex_t _pendingLock = PTHREAD_MUTEX_INITIALIZER;
             }
         }
 
-        if(winrec != nil)
+        if(winrec != nil) {
+            winrec.state = NORMAL;
+            [self bringWindowToFront:winrec];
             [self markDamageRect:NSInsetRect(winrec.geometry, -16, -16)];
+        }
 
         curApp = app;
         [self switchFromApp:oldApp toWindow:winrec];
-
         // now tell Dock and the app about the window state changes
         if(winrec != nil) {
             data->windowID = winrec.number;
@@ -3369,14 +3374,13 @@ static pthread_mutex_t _pendingLock = PTHREAD_MUTEX_INITIALIZER;
 
                 if(newW < 200) newW = 200;
                 if(newH < 100) newH = 100;
-
                 if((int)newW != (int)resizeWindow.geometry.size.width ||
                    (int)newH != (int)resizeWindow.geometry.size.height ||
                    (int)newOriginY != (int)resizeWindow.geometry.origin.y) {
-                    [self resizeWindowSurface:resizeWindow width:(int)newW height:(int)newH];
+                    NSRect oldResizeGeom = resizeWindow.geometry;
                     resizeWindow.geometry = NSMakeRect(newOriginX, newOriginY, newW, newH);
                     resizeWindow.frame = resizeWindow.geometry;
-                    [self updateClientWindowState:resizeWindow];
+                    [self markDamageRect:NSInsetRect(NSUnionRect(oldResizeGeom, resizeWindow.geometry), -16, -16)];
                 }
                 return YES;
             }
@@ -3400,18 +3404,16 @@ static pthread_mutex_t _pendingLock = PTHREAD_MUTEX_INITIALIZER;
                 [_windows[window.level] removeObject:window];
                 [_windows[window.level] addObject:window];
                 pthread_mutex_unlock(&renderLock);
-                [self draw];
+                [self markDamageRect:NSInsetRect(window.geometry, -16, -16)];
             }
 
-            if(app != nil && ![app skipSwitcher] && app != curApp) {
-                [self deactivateApp:curApp];
-                curApp = app;
-                curWindow = window;
-                [self activateApp:curApp];
-            } else if(app == curApp && window != curWindow) {
-                curWindow = window;
+            if(app != nil && ![app skipSwitcher]) {
+                if(app != curApp || window != curWindow) {
+                    WSAppRecord *oldApp = curApp;
+                    curApp = app;
+                    [self switchFromApp:oldApp toWindow:window];
+                }
             }
-
             // Check for window border/corner resize (NSResizableWindowMask = 8)
             if((window.styleMask & 8) != 0 && window.state == NORMAL) {
                 NSRect f = window.frame;
@@ -3445,8 +3447,12 @@ static pthread_mutex_t _pendingLock = PTHREAD_MUTEX_INITIALIZER;
         case NSLeftMouseUp: {
             if(inResize) {
                 if(resizeWindow != nil) {
+                    int finalW = (int)resizeWindow.geometry.size.width;
+                    int finalH = (int)resizeWindow.geometry.size.height;
+                    [self resizeWindowSurface:resizeWindow width:finalW height:finalH];
                     resizeWindow.frame = resizeWindow.geometry;
                     [self updateClientWindowState:resizeWindow];
+                    [self markDamageRect:NSInsetRect(resizeWindow.geometry, -16, -16)];
                     [self draw];
                 }
                 inResize = NO;
@@ -3459,7 +3465,6 @@ static pthread_mutex_t _pendingLock = PTHREAD_MUTEX_INITIALIZER;
                     sDragWindow.frame = sDragWindow.geometry;
                     [self updateClientWindowState:sDragWindow];
                     [self markDamageRect:NSInsetRect(sDragWindow.geometry, -16, -16)];
-                    [self draw];
                 }
                 sInDrag = NO;
                 sDragWindow = nil;
@@ -3739,9 +3744,6 @@ static pthread_mutex_t _pendingLock = PTHREAD_MUTEX_INITIALIZER;
             break;
         }
     }
-
-    if(curApp == oldApp)
-        return;
 
     // Inform the now-active app of its status
     data.windowID = (curWindow == nil) ? 0 : curWindow.number;

@@ -558,20 +558,26 @@ static BOOL _allowsAutomaticWindowTabbing = YES;
             return nil;
         }
         bufsize = (int)((size_t)4 * (size_t)w * (size_t)h);
-        int shmfd = shm_open([shmPath UTF8String], O_RDWR | O_CREAT, 0666);
-        if(shmfd >= 0) {
-            struct stat st;
-            if(fstat(shmfd, &st) != 0 || st.st_size < bufsize)
-                ftruncate(shmfd, bufsize);
-            buffer = mmap(NULL, bufsize, PROT_WRITE|PROT_READ, MAP_SHARED|MAP_NOCORE, shmfd, 0);
-            for(int retry = 0; (buffer == MAP_FAILED || buffer == NULL) && retry < 5; retry++) {
-                usleep(2000);
+        buffer = NULL;
+        for(int retry = 0; (buffer == MAP_FAILED || buffer == NULL) && retry < 10; retry++) {
+            int shmfd = shm_open([shmPath UTF8String], O_RDWR, 0666);
+            if(shmfd >= 0) {
+                struct stat st;
+                if(fstat(shmfd, &st) == 0 && st.st_size >= bufsize) {
+                    buffer = mmap(NULL, bufsize, PROT_WRITE|PROT_READ, MAP_SHARED|MAP_NOCORE, shmfd, 0);
+                }
+                close(shmfd);
+            }
+            if(buffer == MAP_FAILED || buffer == NULL)
+                usleep(5000);
+        }
+        if(buffer == MAP_FAILED || buffer == NULL) {
+            int shmfd = shm_open([shmPath UTF8String], O_RDWR | O_CREAT, 0666);
+            if(shmfd >= 0) {
                 ftruncate(shmfd, bufsize);
                 buffer = mmap(NULL, bufsize, PROT_WRITE|PROT_READ, MAP_SHARED|MAP_NOCORE, shmfd, 0);
+                close(shmfd);
             }
-            close(shmfd);
-        } else {
-            buffer = NULL;
         }
         if(buffer == MAP_FAILED || buffer == NULL) {
             /* Never build a surface over a failed mapping -- the first draw
@@ -3472,13 +3478,15 @@ static BOOL _allowsAutomaticWindowTabbing = YES;
 
     if(_styleMask != data->style)
         [self setStyleMask:data->style];
-    BOOL didSize = !NSEqualSizes(geom.size, _frame.size);
-    if(!NSEqualPoints(geom.origin, _frame.origin) || didSize) {
-        /* A pure move changes no window contents: skip the full-window
-         * redisplay so dragging stays fluid. */
-        [self setFrame:geom display:didSize animate:NO tellWS:NO];
-        if(didSize)
-            [_backgroundView displayIfNeeded];
+    if(geom.size.width > 0 && geom.size.height > 0) {
+        BOOL didSize = !NSEqualSizes(geom.size, _frame.size);
+        if(!NSEqualPoints(geom.origin, _frame.origin) || didSize) {
+            /* A pure move changes no window contents: skip the full-window
+             * redisplay so dragging stays fluid. */
+            [self setFrame:geom display:didSize animate:NO tellWS:NO];
+            if(didSize)
+                [self display];
+        }
     }
 }
 

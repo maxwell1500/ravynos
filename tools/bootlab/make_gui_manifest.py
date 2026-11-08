@@ -617,6 +617,9 @@ def main():
             'user_pref("browser.newtabpage.enabled", false);\n'
             'user_pref("browser.tabs.remote.autostart", false);\n'
             'user_pref("browser.tabs.remote.autostart.2", false);\n'
+            'user_pref("fission.autostart", false);\n'
+            'user_pref("dom.ipc.processCount", 1);\n'
+            'user_pref("security.sandbox.content.level", 0);\n'
             'user_pref("datareporting.policy.dataSubmissionEnabled", false);\n'
             'user_pref("toolkit.telemetry.reportingpolicy.firstRun", false);\n'
             'user_pref("network.dns.disableIPv6", true);\n'
@@ -634,6 +637,9 @@ def main():
                     "browser.aboutwelcome.enabled": False,
                     "browser.newtabpage.enabled": False,
                     "browser.tabs.remote.autostart": False,
+                    "fission.autostart": False,
+                    "dom.ipc.processCount": 1,
+                    "security.sandbox.content.level": 0,
                     "startup.homepage_welcome_url": "",
                     "startup.homepage_override_url": "",
                     "browser.shell.checkDefaultBrowser": False,

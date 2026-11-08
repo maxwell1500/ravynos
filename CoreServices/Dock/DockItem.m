@@ -371,6 +371,8 @@ kern_return_t _windowServerRPC(void *data, size_t len, void *replyBuf, int *repl
 // YES if bundle and path is within bundle
 // NO otherwise
 -(BOOL)hasPath:(NSString *)path {
+    if(!path || [path length] == 0)
+        return NO;
     if([path isEqualToString:_execPath] || [path isEqualToString:_path])
         return YES;
 
@@ -378,13 +380,11 @@ kern_return_t _windowServerRPC(void *data, size_t len, void *replyBuf, int *repl
         return NO;
 
     NSArray *comps = [path pathComponents];
-    // FIXME: should this be reverse order to find sub bundles?
-    for(int i = [comps count] - 1; i >= 0; --i) {
-        if([[comps objectAtIndex:i] hasSuffix:@"app"] == YES) {
+    for(int i = (int)[comps count] - 1; i >= 0; --i) {
+        if([[comps objectAtIndex:i] hasSuffix:@".app"] || [[comps objectAtIndex:i] hasSuffix:@".APP"]) {
             NSString *newpath = [NSString pathWithComponents:
-                [comps subarrayWithRange:NSMakeRange(0,i+1)]];
-            NSBundle *b = [NSBundle bundleWithModulePath:newpath];
-            if([[b bundlePath] isEqualToString:_path])
+                [comps subarrayWithRange:NSMakeRange(0, i + 1)]];
+            if([newpath isEqualToString:_path])
                 return YES;
         }
     }
