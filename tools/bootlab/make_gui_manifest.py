@@ -615,7 +615,8 @@ def main():
             'user_pref("startup.homepage_override_url", "");\n'
             'user_pref("browser.aboutwelcome.enabled", false);\n'
             'user_pref("browser.newtabpage.enabled", false);\n'
-            'user_pref("browser.shell.checkDefaultBrowser", false);\n'
+            'user_pref("browser.tabs.remote.autostart", false);\n'
+            'user_pref("browser.tabs.remote.autostart.2", false);\n'
             'user_pref("datareporting.policy.dataSubmissionEnabled", false);\n'
             'user_pref("toolkit.telemetry.reportingpolicy.firstRun", false);\n'
             'user_pref("network.dns.disableIPv6", true);\n'
@@ -632,7 +633,7 @@ def main():
                 "Preferences": {
                     "browser.aboutwelcome.enabled": False,
                     "browser.newtabpage.enabled": False,
-                    "browser.startup.homepage_override.mstone": "ignore",
+                    "browser.tabs.remote.autostart": False,
                     "startup.homepage_welcome_url": "",
                     "startup.homepage_override_url": "",
                     "browser.shell.checkDefaultBrowser": False,

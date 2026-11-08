@@ -879,7 +879,11 @@ static inline void buildTransformsIfNeeded(NSView *self) {
         layerFrame=[_superview convertRect:layerFrame toView:nil];
     
     [_layerContext setFrame:layerFrame];
-       
+    if(_layer != nil) {
+        CGPoint anchor = [_layer anchorPoint];
+        [_layer setBounds:CGRectMake(0, 0, _bounds.size.width, _bounds.size.height)];
+        [_layer setPosition:CGPointMake(_bounds.size.width * anchor.x, _bounds.size.height * anchor.y)];
+    }
    invalidateTransform(self);
 
    if(_postsNotificationOnFrameChange)
@@ -2208,10 +2212,6 @@ static CGImageRef createImageForLayerContents(id contents) {
 
   CGContextTranslateCTM(context, position.x - anchor.x * bounds.size.width,
                         position.y - anchor.y * bounds.size.height);
-  if(layer == _layer && [self isFlipped]) {
-    CGContextTranslateCTM(context, 0, bounds.size.height);
-    CGContextScaleCTM(context, 1.0f, -1.0f);
-  }
    CATransform3D tr = [layer transform];
    if(tr.m11 != 1.0f || tr.m12 != 0.0f || tr.m21 != 0.0f || tr.m22 != 1.0f ||
       tr.m41 != 0.0f || tr.m42 != 0.0f) {

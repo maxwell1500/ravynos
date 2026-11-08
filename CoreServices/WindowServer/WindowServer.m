@@ -2966,7 +2966,10 @@ static pthread_mutex_t _pendingLock = PTHREAD_MUTEX_INITIALIZER;
                                       length:msg.msg.len
                                     withCode:msg.msg.code
                                       toPort:[curApp port]];
-
+                        fprintf(stderr, "[WS] ITEM_CLICKED item=%d relayed to app=%s\n",
+                                (msg.msg.len >= sizeof(int)) ? *(int*)msg.msg.data : -1,
+                                [[curApp bundleID] UTF8String] ? [[curApp bundleID] UTF8String] : "(nil)");
+                        break;
                     }
                     case CODE_ADD_RECENT_ITEM:
                         // FIXME: pass to SystemUIServer

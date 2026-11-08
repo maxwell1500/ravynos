@@ -189,15 +189,16 @@ kern_return_t _windowServerRPC(void *data, size_t len, void *replyBuf, int *repl
             break;
         }
         default: {
-            for(int i = 0; i < [_items count]; ++i) {
-                DockItem *win = [_items objectAtIndex:i];
-                if([win type] != DIT_WINDOW)
-                    continue;
-                if([win dockWindowID] == windowID) {
+            NSMutableArray *toRemove = [NSMutableArray array];
+            for(DockItem *win in _items) {
+                if([win type] == DIT_WINDOW && [win dockWindowID] == windowID) {
                     [app removeWindow:windowID];
-                    [_items removeObject:win];
-                    [self relocate];
+                    [toRemove addObject:win];
                 }
+            }
+            if([toRemove count] > 0) {
+                [_items removeObjectsInArray:toRemove];
+                [self relocate];
             }
         }
     }
@@ -249,15 +250,13 @@ kern_return_t _windowServerRPC(void *data, size_t len, void *replyBuf, int *repl
         [_items removeObjectIdenticalTo:item];
     }
 
-    int count = [_items count];
-    for(int i = 0; i < count; ) {
-        DockItem *d = [_items objectAtIndex:i];
-        if([d type] == DIT_WINDOW && [d app] == item) {
-            [_items removeObject:d];
-            --count;
-        } else
-            ++i;
+    NSMutableArray *toRemove = [NSMutableArray array];
+    for(DockItem *d in _items) {
+        if([d type] == DIT_WINDOW && [d app] == item)
+            [toRemove addObject:d];
     }
+    if([toRemove count] > 0)
+        [_items removeObjectsInArray:toRemove];
     [self relocate];
 }
 
