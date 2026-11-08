@@ -44,6 +44,16 @@ NSString * const kCAFilterTrilinear=@"trilinear";
 
 #endif
 
+/* Firefox's layer-hosting ChildView installs its WebRender IOSurface as
+ * CALayer.contents. A CALayer is a plain ObjC object, so self-recursive
+ * selector calls only resolve against this implementation's own interface;
+ * declare the propagation helper before first use or setContents: below
+ * compiles to an unresolvable message. */
+-(void)_setNeedsDisplayOfSublayers {
+   for(CALayer *child in _sublayers)
+    [child setNeedsDisplay];
+}
+
 static NSString * const kCAGravityResizeDefault = @"resize";
 
 -(NSString *)contentsGravity {
@@ -249,7 +259,19 @@ extern unsigned char _CFIsObjCType(const void *cf);
     _contentsKind=3;
    }
    _contents=value;
-   [[_context valueForKey:@"view"] setNeedsDisplay:YES];
+  CALayerContext *viewContext=_context;
+  if(viewContext!=nil){
+   id view=[viewContext valueForKey:@"view"];
+   if(view != nil)
+    [view setNeedsDisplay:YES];
+  }
+  /* WebRender hands Firefox a new IOSurfaceRef (or mutates the existing one)
+   * per frame. The hosting view flag alone is not enough: sublayers of a
+   * layer-hosting tree carry their own _needsDisplay, and AppKit's paint
+   * path (_renderLayer: in NSView.m) consults it per layer before drawing.
+   * Mark the whole subtree dirty on every contents swap. */
+  [self setNeedsDisplay];
+  [self _setNeedsDisplayOfSublayers];
 }
 
 -(CATransform3D)transform {
@@ -384,12 +406,22 @@ extern unsigned char _CFIsObjCType(const void *cf);
 
 -(void)setNeedsDisplay {
    _needsDisplay=YES;
-   [[_context valueForKey:@"view"] setNeedsDisplay:YES];
+   CALayerContext *viewContext=_context;
+   if(viewContext!=nil){
+    id view=[viewContext valueForKey:@"view"];
+    if(view != nil)
+     [view setNeedsDisplay:YES];
+   }
 }
 
 -(void)setNeedsDisplayInRect:(CGRect)rect {
    _needsDisplay=YES;
-   [[_context valueForKey:@"view"] setNeedsDisplay:YES];
+   CALayerContext *viewContext=_context;
+   if(viewContext!=nil){
+    id view=[viewContext valueForKey:@"view"];
+    if(view != nil)
+     [view setNeedsDisplay:YES];
+   }
 }
 
 -(void)addAnimation:(CAAnimation *)animation forKey:(NSString *)key {

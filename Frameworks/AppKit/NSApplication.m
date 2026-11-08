@@ -1532,15 +1532,16 @@ static int _tagAllMenus(NSMenu *menu, int tag) {
        [controller newDocument: self];
    }
    
+   [pool release];
+   pool = nil;
+
    write(2,"[NSApp] finishLaunching: posting didFinish\n",43);
-    [[NSNotificationCenter defaultCenter] postNotificationName:NSApplicationDidFinishLaunchingNotification object:self];
+   [[NSNotificationCenter defaultCenter] postNotificationName:NSApplicationDidFinishLaunchingNotification object:self];
    if(_delegate && [_delegate respondsToSelector:@selector(applicationDidFinishLaunching:)])
        [_delegate applicationDidFinishLaunching:
            [NSNotification notificationWithName:NSApplicationDidFinishLaunchingNotification object:self]];
 
    [[NSAppleEventManager sharedAppleEventManager] dispatchAppleEventForClass:kCoreEventClass id:kAEOpenApplication];
-
-   [pool release];
 }
 
 -(void)_checkForReleasedWindows {

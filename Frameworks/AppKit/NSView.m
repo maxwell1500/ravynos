@@ -2196,31 +2196,22 @@ static CGImageRef createImageForLayerContents(id contents) {
    return image;
 }
 
+
 -(void)_renderLayer:(CALayer *)layer inContext:(CGContextRef)context {
    if(layer == nil)
     return;
-
+   CGContextSaveGState(context);
    [layer displayIfNeeded];
    CGRect bounds = [layer bounds];
    CGPoint position = [layer position];
    CGPoint anchor = [layer anchorPoint];
 
-  /* AppKit's view context is already positioned at the view origin by
-   * lockFocus (transformToWindow maps view bounds to that frame). CALayer
-   * position/frame coordinates are layer-space (y-up), while a flipped NSView
-   * has its drawing context y-down; converting requires inverting y about the
-   * view height. When the root hosting layer sits at position (0,0) with the
-   * default anchor (0.5,0.5), this shift was pushing the entire IOSurface up by
-   * half its height (e.g. -350px for a 700px window). */
+  CGContextTranslateCTM(context, position.x - anchor.x * bounds.size.width,
+                        position.y - anchor.y * bounds.size.height);
   if(layer == _layer && [self isFlipped]) {
-    CGFloat viewHeight = bounds.size.height;
-    CGContextTranslateCTM(context, position.x - anchor.x * bounds.size.width,
-                          viewHeight - (position.y - anchor.y * bounds.size.height));
-  } else {
-    CGContextTranslateCTM(context, position.x - anchor.x * bounds.size.width,
-                          position.y - anchor.y * bounds.size.height);
+    CGContextTranslateCTM(context, 0, bounds.size.height);
+    CGContextScaleCTM(context, 1.0f, -1.0f);
   }
-
    CATransform3D tr = [layer transform];
    if(tr.m11 != 1.0f || tr.m12 != 0.0f || tr.m21 != 0.0f || tr.m22 != 1.0f ||
       tr.m41 != 0.0f || tr.m42 != 0.0f) {
@@ -2284,7 +2275,13 @@ static CGImageRef createImageForLayerContents(id contents) {
 		   [self drawRect:rect];
 
       /* A layer-backed view renders its layer tree instead of drawRect:.
-       * Only the topmost layer is traversed; subviews are part of that tree. */
+       * Only the topmost layer is traversed; subviews are part of that tree.
+       * Firefox's layer-hosting ChildView carries the WebRender IOSurface in
+       * CALayer.contents, and Gecko only repaints when it sees the view's
+       * needsDisplay flag flip (setContents: + setNeedsDisplay: propagate it).
+       * When neither the view nor the layer tree is dirty there is nothing
+       * new to paint — skipping also stops us from re-submitting identical
+       * pixels every frame. */
       if(_layer != nil)
        [self _renderLayer:_layer inContext:graphicsPort];
 

@@ -2192,9 +2192,13 @@ static BOOL _allowsAutomaticWindowTabbing = YES;
     [self flushWindow];
 }
 
--(void)displayIfNeeded {   if([self isVisible] && ![self isMiniaturized] && [self viewsNeedDisplay]){
+-(void)displayIfNeeded {
+   if(![self isVisible] || [self isMiniaturized]) {
+       _viewsNeedDisplay = NO;
+       return;
+   }
+   if([self viewsNeedDisplay]){
     NSAutoreleasePool *pool=[NSAutoreleasePool new];
-
 	if ([NSGraphicsContext quartzDebuggingIsEnabled] == YES) {
 
 		// Show all the views getting redrawn
@@ -2387,11 +2391,9 @@ static BOOL _allowsAutomaticWindowTabbing = YES;
 
 -(void)orderWindow:(NSWindowOrderingMode)place relativeTo:(int)relativeTo {
 // The move notifications are sent under unknown conditions around orderFront: in the Apple AppKit, we do them all the time here until it's figured out. I suspect it is a side effect of off-screen windows being at off-screen coordinates (as opposed to just being hidden)
-
    [self postNotificationName:NSWindowWillMoveNotification];
 
    switch(place){
-    case NSWindowAbove:
      [self update];
 
      _isVisible=YES;

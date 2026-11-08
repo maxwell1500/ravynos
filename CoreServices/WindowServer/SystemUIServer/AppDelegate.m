@@ -42,6 +42,7 @@
     menuBar = [[MenuBarWindow alloc] initWithFrame:[mainDisplay frame]];
     [menuBar setDelegate:self];
     [[menuBar contentView] setNeedsDisplay:YES];
+    [menuBar orderFront:nil];
 
     NSNotificationCenter *defaultCenter = [NSNotificationCenter defaultCenter];
     [defaultCenter addObserver:self selector:@selector(menuDidUpdate:)
