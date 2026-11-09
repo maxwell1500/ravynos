@@ -90,6 +90,10 @@ O2FontRef O2FontCreateWithDataProvider(O2DataProviderRef provider);
  * name -> path table): initialising it here is what crashed
  * SystemUIServer inside FcConfigMessage. */
 NSArray *O2FontKnownFontNames(void);
+/* Register one font file so O2FontCreateWithFontName() resolves its
+ * PostScript name.  Returns YES when the face was added.  Used by
+ * CoreText's CTFontManagerRegisterFontsForURLs. */
+BOOL O2FontRegisterFontAtPath(NSString *path);
 O2FontRef O2FontRetain(O2FontRef self);
 void O2FontRelease(O2FontRef self);
 

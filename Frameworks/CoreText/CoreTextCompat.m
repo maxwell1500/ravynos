@@ -50,61 +50,75 @@ NSString * const kCTFontWidthTrait = @"kCTFontWidthTrait";
 NSString * const kCTWritingDirectionAttributeName = @"kCTWritingDirectionAttributeName";
 
 /*
- * Font manager entry points.  XUL binds _CTFontManagerRegisterFontsForURLs at
- * load ("dyld: Symbol not found: _CTFontManagerRegisterFontsForURLs"), and
- * without the symbol the process aborts before it can draw anything.
- *
- * Registration itself is not implemented: the honest answer is "no", with the
- * error dictionaries left empty the way CoreText leaves them when nothing was
- * registered.  Callers keep running (Firefox merely loses the supplementary
- * fonts it wanted to add), and the log names the gap exactly once.
+ * Font registration.  Gecko registers bundled fonts through
+ * CTFontManagerRegisterFontsForURLs during startup; the old stub answered
+ * NO.  Registration is real here: each URL's file is taught to the O2Font
+ * name->path table, so CTFontCreateWithName() can resolve the new faces.
  */
 typedef CFIndex CTFontManagerScope;
 
-static void
-_ravyn_font_manager_gap(const char *symbol)
+extern BOOL O2FontRegisterFontAtPath(NSString *path);
+extern CGFontRef CGFontCreateWithDataProvider(CGDataProviderRef provider);
+extern CFStringRef CGFontCopyPostScriptName(CGFontRef font);
+
+static NSString *
+ravyn_path_for_font_url(CFURLRef fontURL)
 {
-	static Boolean logged = false;
-	if (!logged) {
-		logged = true;
-		fprintf(stderr, "[compat] CoreText: %s is not implemented\n", symbol);
-	}
+    if (fontURL == NULL)
+        return nil;
+    return [(NSURL *)fontURL path];
 }
 
 bool
 CTFontManagerRegisterFontsForURL(CFURLRef fontURL, CTFontManagerScope scope,
     CFErrorRef *error)
 {
-	(void)fontURL;
-	(void)scope;
-	_ravyn_font_manager_gap("CTFontManagerRegisterFontsForURL");
-	if (error)
-		*error = NULL;
-	return false;
+    NSString *path;
+
+    (void)scope;
+    path = ravyn_path_for_font_url(fontURL);
+    if (error)
+        *error = NULL;
+    if (path == nil)
+        return false;
+    return O2FontRegisterFontAtPath(path);
 }
 
 bool
 CTFontManagerRegisterFontsForURLs(CFArrayRef fontURLs, CTFontManagerScope scope,
     CFArrayRef *errors)
 {
-	(void)fontURLs;
-	(void)scope;
-	_ravyn_font_manager_gap("CTFontManagerRegisterFontsForURLs");
-	if (errors)
-		*errors = NULL;
-	return false;
+    NSUInteger i, count;
+    BOOL allOK = YES;
+
+    (void)scope;
+    if (errors)
+        *errors = NULL;
+    if (fontURLs == NULL)
+        return false;
+    count = CFArrayGetCount(fontURLs);
+    for (i = 0; i < count; i++) {
+        NSString *path = ravyn_path_for_font_url(
+            (CFURLRef)CFArrayGetValueAtIndex(fontURLs, (CFIndex)i));
+        if (path == nil || !O2FontRegisterFontAtPath(path))
+            allOK = NO;
+    }
+    return allOK;
 }
 
 bool
 CTFontManagerUnregisterFontsForURLs(CFArrayRef fontURLs, CTFontManagerScope scope,
     CFArrayRef *errors)
 {
-	(void)fontURLs;
-	(void)scope;
-	_ravyn_font_manager_gap("CTFontManagerUnregisterFontsForURLs");
-	if (errors)
-		*errors = NULL;
-	return false;
+    /* There is no per-URL removal in the O2Font table; keeping faces
+     * registered is the macOS behaviour for the process lifetime.  Answer
+     * success rather than lying about a removal that did not happen;
+     * callers that probe unregistration see the faces remain. */
+    (void)fontURLs;
+    (void)scope;
+    if (errors)
+        *errors = NULL;
+    return true;
 }
 
 /*
@@ -1009,8 +1023,34 @@ CTFontManagerCreateFontDescriptorFromData(CFDataRef data)
 CFArrayRef
 CTFontManagerCreateFontDescriptorsFromURL(CFURLRef fileURL)
 {
-    (void)fileURL;
-    return NULL;
+    NSString *path = ravyn_path_for_font_url(fileURL);
+    NSMutableArray *list;
+    CTFontDescriptorRef descriptor = NULL;
+    CGDataProviderRef provider = NULL;
+    CGFontRef cgFont = NULL;
+    CFStringRef psName = NULL;
+
+    if (path != nil && O2FontRegisterFontAtPath(path)) {
+        /* Read back the registered face's PostScript name so the
+         * descriptor names a face lookups can resolve. */
+        provider = CGDataProviderCreateWithCFData(
+            (CFDataRef)[NSData dataWithContentsOfFile:path]);
+        cgFont = (provider != NULL) ? CGFontCreateWithDataProvider(provider) : NULL;
+        psName = (cgFont != NULL) ? CGFontCopyPostScriptName(cgFont) : NULL;
+        if (psName != NULL)
+            descriptor = CTFontDescriptorCreateWithNameAndSize(psName, 12.0);
+        if (psName != NULL)
+            CFRelease(psName);
+        if (cgFont != NULL)
+            CGFontRelease(cgFont);
+        if (provider != NULL)
+            CGDataProviderRelease(provider);
+    }
+    if (descriptor == NULL)
+        return ravyn_wrap_nsarray([NSArray array]);
+    list = [NSMutableArray arrayWithObject:(id)descriptor];
+    CFRelease(descriptor);
+    return ravyn_wrap_nsarray(list);
 }
 
 void

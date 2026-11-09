@@ -61,6 +61,12 @@ BOOL CTFontGetGlyphsForCharacters(CTFontRef self,const unichar *characters,CGGly
    return YES;
 }
 
+CGGlyph CTFontGetGlyphForCharacter(CTFontRef self, unichar character) {
+   CGGlyph glyph = CGNullGlyph;
+   [self getGlyphs:&glyph forCharacters:&character length:1];
+   return glyph;
+}
+
 CGRect CTFontGetBoundingBox(CTFontRef self) {
    return [self boundingRect];
 }

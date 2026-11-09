@@ -153,6 +153,10 @@ NSArray *O2FontKnownFontNames(void) {
    return result;
 }
 
+BOOL O2FontRegisterFontAtPath(NSString *path) {
+   return [O2Font_ttf registerFontFileAtPath:path];
+}
+
 @implementation O2Font_ttf
 
 -initWithDataProvider:(O2DataProviderRef)provider {

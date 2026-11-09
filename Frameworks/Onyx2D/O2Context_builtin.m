@@ -28,6 +28,8 @@
 #import <Onyx2D/O2Surface.h>
 #import <Onyx2D/O2Exceptions.h>
 #import <Onyx2D/O2GraphicsState.h>
+#import <Onyx2D/O2Font.h>
+#import <Onyx2D/O2Font_freetype.h>
 #import "VGPath.h"
 #import <Onyx2D/O2Paint_image.h>
 #import <Onyx2D/O2Paint_color.h>
@@ -341,14 +343,123 @@ ONYX2D_STATIC O2Paint *paintFromColor(O2Context_builtin *self,O2ColorRef color,O
 }
 
 -(void)showGlyphs:(const O2Glyph *)glyphs advances:(const O2Size *)advances count:(unsigned)count {
-#if 0
-   O2FontRef font=O2ContextCurrentGState(self)->_font;
-   int i;
-   
-   for(i=0;i<count;i++){
-    O2Glyph    glyph=glyphs[i];
-    O2ImageRef stencil;
+#ifdef FREETYPE_PRESENT
+   O2Font *font = O2GStateFont(O2ContextCurrentGState(self));
+   O2Float pointSize = O2GStatePointSize(O2ContextCurrentGState(self));
+   O2Float unitsPerEm;
+   FT_Face face;
+   O2Size *myAdvances = NULL;
+   NSPoint origin;
+   unsigned i;
+   O2AffineTransform Tm;
+
+   if (font == nil || glyphs == NULL || ![font isKindOfClass:[O2Font_freetype class]])
+      return;
+   face = O2FontFreeTypeFace((O2Font_freetype *)font);
+   if (face == NULL)
+      return;
+   unitsPerEm = (O2Float)O2FontGetUnitsPerEm(font);
+   if (unitsPerEm <= 0 || pointSize <= 0)
+      return;
+
+   if (advances == NULL) {
+      myAdvances = NSZoneMalloc(NULL, sizeof(O2Size) * count);
+      O2ContextGetDefaultAdvances(self, glyphs, myAdvances, count);
+      advances = myAdvances;
    }
+
+   Tm = O2ContextGetTextMatrix(self);
+   origin.x = (O2Float)Tm.tx;
+   origin.y = (O2Float)Tm.ty;
+
+   for (i = 0; i < count; i++) {
+      O2Glyph glyph = glyphs[i];
+      FT_GlyphSlot slot;
+      FT_Outline *outline;
+      O2Float scale = pointSize / unitsPerEm;
+      /* User-space glyph origin: the text matrix x/y is the baseline
+       * origin for the running pen; outline points are font units,
+       * y-up from that baseline. */
+      float glyphOX = origin.x;
+      float glyphOY = origin.y;
+
+      if (FT_Load_Glyph(face, (FT_UInt)glyph, FT_LOAD_DEFAULT) == 0) {
+         slot = face->glyph;
+         outline = &slot->outline;
+         if (outline->n_points > 0) {
+            int c, p, start;
+
+            O2ContextBeginPath(self);
+            for (c = 0; c < outline->n_contours; c++) {
+               int end = outline->contours[c];
+               int first = (c == 0) ? 0 : outline->contours[c - 1] + 1;
+
+               /* Move to the first on-curve point, else the midpoint of
+                * the first two off-curve points, else the first point. */
+               start = first;
+               while ((outline->tags[start] & FT_CURVE_TAG_ON) == 0) {
+                  if (outline->tags[start + 1] & FT_CURVE_TAG_ON) {
+                     O2ContextMoveToPoint(self,
+                        glyphOX + outline->points[start].x * scale,
+                        glyphOY + outline->points[start].y * scale);
+                     start++;
+                     break;
+                  }
+                  /* Two off-curve points: quad through their midpoint. */
+                  O2ContextMoveToPoint(self,
+                     glyphOX + (outline->points[start].x + outline->points[start + 1].x) * 0.5f * scale,
+                     glyphOY + (outline->points[start].y + outline->points[start + 1].y) * 0.5f * scale);
+                  start += 2;
+                  break;
+               }
+               if (start == first)
+                  O2ContextMoveToPoint(self,
+                     glyphOX + outline->points[first].x * scale,
+                     glyphOY + outline->points[first].y * scale);
+
+               for (p = first; p <= end; p++) {
+                  if (p == first)
+                     continue;
+                  if (outline->tags[p] & FT_CURVE_TAG_ON) {
+                     O2ContextAddLineToPoint(self,
+                        glyphOX + outline->points[p].x * scale,
+                        glyphOY + outline->points[p].y * scale);
+                  } else if (outline->tags[p + 1] & FT_CURVE_TAG_ON) {
+                     O2ContextAddQuadCurveToPoint(self,
+                        glyphOX + outline->points[p].x * scale,
+                        glyphOY + outline->points[p].y * scale,
+                        glyphOX + outline->points[p + 1].x * scale,
+                        glyphOY + outline->points[p + 1].y * scale);
+                     p++;
+                  } else {
+                     O2ContextAddQuadCurveToPoint(self,
+                        glyphOX + outline->points[p].x * scale,
+                        glyphOY + outline->points[p].y * scale,
+                        glyphOX + (outline->points[p].x + outline->points[p + 1].x) * 0.5f * scale,
+                        glyphOY + (outline->points[p].y + outline->points[p + 1].y) * 0.5f * scale);
+                     /* Keep p so the implied point joins the next
+                      * off-curve pair naturally. */
+                  }
+               }
+               O2ContextClosePath(self);
+            }
+            O2ContextFillPath(self);
+         }
+      }
+
+      if (i + 1 < count) {
+         O2Size step = advances[i];
+         origin.x += step.width;
+         origin.y += step.height;
+      }
+   }
+
+   if (myAdvances != NULL)
+      NSZoneFree(NULL, myAdvances);
+#else
+   (void)glyphs;
+   (void)advances;
+   (void)count;
 #endif
 }
 

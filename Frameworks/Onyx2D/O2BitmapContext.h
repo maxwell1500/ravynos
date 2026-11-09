@@ -16,6 +16,7 @@ typedef void (*O2BitmapContextReleaseDataCallback)(void *userInfo, void *data);
 #import <Onyx2D/O2Image.h>
 
 @interface O2BitmapContext : O2Context {
+@public
     O2Surface *_surface;
 }
 

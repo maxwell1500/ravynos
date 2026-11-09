@@ -34,5 +34,6 @@ COREGRAPHICS_EXPORT bool CGFontGetGlyphAdvances(CGFontRef self, const CGGlyph *g
 
 COREGRAPHICS_EXPORT CGGlyph CGFontGetGlyphWithGlyphName(CGFontRef self, CFStringRef name);
 COREGRAPHICS_EXPORT CFStringRef CGFontCopyGlyphNameForGlyph(CGFontRef self, CGGlyph glyph);
+COREGRAPHICS_EXPORT bool CGFontGetGlyphsForUnicodeString(CGFontRef self, const uint16_t *unicode, CGGlyph *glyphs, size_t count);
 
 COREGRAPHICS_EXPORT CFDataRef CGFontCopyTableForTag(CGFontRef self, uint32_t tag);

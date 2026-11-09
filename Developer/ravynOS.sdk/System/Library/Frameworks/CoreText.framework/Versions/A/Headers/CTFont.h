@@ -60,6 +60,7 @@ CORETEXT_EXPORT CFStringRef CTFontCopyDisplayName(CTFontRef self);
 CORETEXT_EXPORT CGFloat CTFontGetSize(CTFontRef self);
 CORETEXT_EXPORT size_t CTFontGetGlyphCount(CTFontRef self);
 CORETEXT_EXPORT BOOL CTFontGetGlyphsForCharacters(CTFontRef self, const unichar *characters, CGGlyph *glyphs, size_t count);
+CORETEXT_EXPORT CGGlyph CTFontGetGlyphForCharacter(CTFontRef self, unichar character);
 CORETEXT_EXPORT CGRect CTFontGetBoundingBox(CTFontRef self);
 CORETEXT_EXPORT void CTFontGetAdvancesForGlyphs(CTFontRef self, int orientation, const CGGlyph *glyphs, CGSize *advances, size_t count);
 CORETEXT_EXPORT CGFloat CTFontGetUnderlinePosition(CTFontRef self);

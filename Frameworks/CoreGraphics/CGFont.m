@@ -75,6 +75,15 @@ CGGlyph   CGFontGetGlyphWithGlyphName(CGFontRef self,CFStringRef name) {
    return O2FontGetGlyphWithGlyphName(self,name);
 }
 
+bool      CGFontGetGlyphsForUnicodeString(CGFontRef self,const uint16_t *unicode,CGGlyph *glyphs,size_t count) {
+   if (self == NULL || unicode == NULL || glyphs == NULL || count == 0)
+      return false;
+   if (![(id)self respondsToSelector:@selector(getGlyphsForCodePoints:::)])
+      return false;
+   [(id)self getGlyphsForCodePoints:(uint16_t *)unicode :glyphs :(int)count];
+   return true;
+}
+
 CFStringRef CGFontCopyGlyphNameForGlyph(CGFontRef self,CGGlyph glyph) {
    return (CFStringRef)O2FontCopyGlyphNameForGlyph(self,glyph);
 }

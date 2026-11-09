@@ -79,6 +79,7 @@ typedef void (*O2WriteCoverage_argb8u)(O2Surface *surface, O2Surface *mask, O2Pa
     void (*_blendFunction)();
     void (*_writeCoverageFunction)();
 
+@public
     int _vpx, _vpy, _vpwidth, _vpheight;
 
     int _edgeCount;
