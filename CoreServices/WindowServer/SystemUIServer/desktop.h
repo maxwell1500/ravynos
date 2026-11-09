@@ -65,7 +65,6 @@ extern const NSString *NSApplicationDidQuitNotification;
 - (MenuView *)initWithFrame:(NSRect)frame;
 - (void)setMenu:(NSMenu *)menu;
 - (void)aboutThisComputer:(id)sender;
-- (void)performSleep:(id)sender;
 - (void)performRestart:(id)sender;
 - (void)performShutDown:(id)sender;
 - (void)performLogout:(id)sender;

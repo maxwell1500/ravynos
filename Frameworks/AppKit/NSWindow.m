@@ -2885,11 +2885,6 @@ static BOOL _allowsAutomaticWindowTabbing = YES;
    }
 }
 
--(void)_hideMenuViewIfNeeded {
-}
-
--(void)_showMenuViewIfNeeded {
-}
 
 -(void)showWindowWithoutActivation {
     _isVisible = YES;

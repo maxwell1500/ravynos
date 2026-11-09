@@ -85,7 +85,6 @@ static void setItemTargets(NSMenuItem *item, id target) {
     [[sysMenu addItemWithTitle:@"Force Quit..." action:@selector(forceQuit:)
         keyEquivalent:@""] setTarget:self];
     [sysMenu addItem:[NSMenuItem separatorItem]];
-    [[sysMenu addItemWithTitle:@"Sleep" action:@selector(performSleep:) keyEquivalent:@""] setTarget:self];
     [[sysMenu addItemWithTitle:@"Restart..." action:@selector(performRestart:) keyEquivalent:@""] setTarget:self];
     [[sysMenu addItemWithTitle:@"Shut Down..." action:@selector(performShutDown:) keyEquivalent:@""] setTarget:self];
     [sysMenu addItem:[NSMenuItem separatorItem]];
@@ -154,9 +153,6 @@ static void setItemTargets(NSMenuItem *item, id target) {
     [aboutWindow makeKeyAndOrderFront:nil];
 }
 
-- (void)performSleep:(id)sender {
-    NSLog(@"not implemented yet");
-}
 
 - (void)performRestart:(id)sender {
     int rc = NSRunAlertPanel(@"Confirm Restart", 

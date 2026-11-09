@@ -1893,7 +1893,6 @@ static int _tagAllMenus(NSMenu *menu, int tag) {
 
    [_modalStack addObject:session];
 
-   [window _hideMenuViewIfNeeded];
    if(![window isVisible]){
     [window center];
    }
@@ -1959,7 +1958,6 @@ static int _tagAllMenus(NSMenu *menu, int tag) {
         [self postEvent:requeue atStart:YES];
     }
     
-    [[session modalWindow] _showMenuViewIfNeeded];
     [_modalStack removeLastObject];
 }
 

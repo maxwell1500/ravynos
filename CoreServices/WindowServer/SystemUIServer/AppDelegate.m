@@ -128,7 +128,6 @@
     fprintf(stderr, "[SUI] menuDidUpdate bundle=%s pid=%u items=%d\n",
         bundleID ? [bundleID UTF8String] : "(nil)", pid, (int)[[mainMenu itemArray] count]);
     [self _menuEnumerateAndChange:mainMenu];
-
     [menuBar setMenu:mainMenu forApp:bundleID];
 }
 

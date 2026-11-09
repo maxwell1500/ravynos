@@ -282,7 +282,7 @@ enum {
 -(unsigned)itemIndexAtPoint:(NSPoint)point {
    NSInteger    result=NSNotFound;
    NSRect        bounds=[self bounds];
-   NSArray      *items=[[self menu] itemArray];
+   NSArray *items=[self visibleItemArray];
    unsigned      i,count=[items count];
    NSRect        previousBorderRect=NSMakeRect(0,0,0,0);
    BOOL          overflow=NO;
@@ -312,7 +312,7 @@ enum {
 -(void)positionBranchForSelectedItem:(NSMenuWindow *)branch screen:(NSScreen *)screen {
    NSRect        branchFrame=[branch frame];
    NSRect        screenVisible=[screen visibleFrame];
-   NSArray      *items=[[self menu] itemArray];
+   NSArray *items=[self visibleItemArray];
    unsigned      i,count=[items count];
    NSRect        previousBorderRect=NSMakeRect(0,0,0,0);
    NSRect        itemRect=NSZeroRect;
@@ -818,7 +818,7 @@ const float kMouseMovementThreshold = .001f;
 					item=[activeView itemAtSelectedIndex];
 					if([event type]==NSLeftMouseUp){
 						MENUDEBUG(@"mouseUp on item: %@", item);
-						if(item == nil || ([viewStack count]<=2) || [item isEnabled]) {
+						if(item == nil || ![item hasSubmenu]) {
 							MENUDEBUG(@"mouse up - exiting because of many possible reasons...");
 							state=STATE_EXIT;
 						} else {
