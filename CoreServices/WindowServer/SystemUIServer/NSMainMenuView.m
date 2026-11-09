@@ -161,22 +161,11 @@ enum {
 
 -(NSArray *)visibleItemArray
 {
-   NSArray * items = [[self menu] itemArray];
-   
-   // Construct a new array of just the visible items
-   if( _visibleArray == nil )
-      _visibleArray = [NSMutableArray new];
-   [_visibleArray removeAllObjects];
-   
-   int i;
-   for( i = 0; i < [items count]; i++ )
-   {
-      NSMenuItem *item = [items objectAtIndex: i];
-	  if( ![item isHidden] )
-	     [_visibleArray addObject: item];
-   }
-   
-   return _visibleArray;
+   // The archived snapshot's hidden flags are stale: Gecko marks items
+   // hidden until validateMenuItem runs on open, so filtering here leaves
+   // drawRect (which draws itemArray) and hit-testing empty. Treat all items
+   // as visible so draw, hit, and select share one index space.
+   return [[self menu] itemArray];
 }
 
 -(NSImage *)overflowImage {

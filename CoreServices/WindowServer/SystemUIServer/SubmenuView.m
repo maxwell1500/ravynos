@@ -77,20 +77,9 @@ static NSRect boundsToTitleAreaRect(NSRect rect){
 }
 
 -(NSArray *)visibleItemArray {
-    NSArray *items = [[self menu] itemArray];
-   
-    // Construct a new array of just the visible items
-    if(_visibleArray == nil)
-        _visibleArray = [NSMutableArray new];
-    [_visibleArray removeAllObjects];
-   
-    for(int i = 0; i < [items count]; ++i) {
-        NSMenuItem *item = [items objectAtIndex:i];
-        if(![item isHidden])
-	     [_visibleArray addObject:item];
-    }
-
-    return _visibleArray;
+   // Same stale-snapshot reason as NSMainMenuView: Gecko validates items
+   // hidden pre-open, so filtering draws a blank branch and hits nothing.
+   return [[self menu] itemArray];
 }
 
 -(float)heightOfMenuItem:(NSMenuItem *)item {
