@@ -36,6 +36,50 @@
 #include <stdarg.h>
 #include <unistd.h>
 #include <cstddef>
+
+extern "C" Boolean _CFIsCFInstance(CFTypeRef cf);
+
+/* Messaging a C-CF instance is undefined behavior on this tree: its _cfisa
+ * is the CFRuntimeClass record, and objc_msgSend reads that struct's fields
+ * as cache/bits (init=NULL for CFString, finalize=___CFStringDeallocate),
+ * so a message can dispatch into class realization over garbage method
+ * lists and release a function pointer (measured SIGBUS when Gecko called
+ * LSCopyAllHandlersForURLScheme with a runtime-created CFString; constant
+ * strings from CFSTR are safe because their isa is a real objc class).
+ * Extract the characters with the CF API and build a Foundation string;
+ * only then use NSString messaging. */
+static NSString *LSSafeNSStringFromCFString(CFStringRef cf)
+{
+    if (cf == NULL)
+        return nil;
+    if (_CFIsCFInstance((CFTypeRef)cf) || CFGetTypeID((CFTypeRef)cf) != CFStringGetTypeID()) {
+        /* C-CF instance (or not a string at all): copy out via CF only. */
+        CFStringRef src = (CFGetTypeID((CFTypeRef)cf) == CFStringGetTypeID())
+            ? cf : CFURLGetString((CFURLRef)cf);
+        if (src == NULL)
+            return nil;
+        CFIndex len = CFStringGetLength(src);
+        unichar *buf = (unichar *)NSZoneMalloc(NULL, (NSUInteger)len * sizeof(unichar));
+        CFStringGetCharacters(src, CFRangeMake(0, len), buf);
+        return [[NSString alloc] initWithCharactersNoCopy:buf length:(NSUInteger)len freeWhenDone:YES];
+    }
+    /* objc-bridged string (CFSTR constant or Foundation NSCFString): safe */
+    return (__bridge NSString *)cf;
+}
+
+/* A CFURL created by CF at runtime is also a C-CF instance: its _cfisa is
+ * the CFRuntimeClass record and -scheme/-pathExtension messages on it
+ * dispatch the same way.  Rebuild a Foundation NSURL from the CF string. */
+static NSURL *LSSafeNSURLFromCFURL(CFURLRef cfurl)
+{
+    if (cfurl == NULL)
+        return nil;
+    if (_CFIsCFInstance((CFTypeRef)cfurl)) {
+        NSString *s = LSSafeNSStringFromCFString(CFURLGetString(cfurl));
+        return (s != nil) ? [NSURL URLWithString:s] : nil;
+    }
+    return (__bridge NSURL *)cfurl;
+}
 #ifdef _REWRITE_ME_
 #include <QDBusConnection>
 #include <QDBusInterface>
@@ -354,6 +398,10 @@ static BOOL _LSInitializeDatabase()
 	}
     }
     sqlite3_close(pDB);
+    /* A fresh database has no application rows yet; scan now so the first
+     * lookup in this boot already sees handlers (measured: without this,
+     * every boot from a fresh image had an empty registry). */
+    _LSEnsureDatabasePopulated();
     return true;
 }
 
@@ -395,7 +443,39 @@ BOOL LSFindRecordInDatabase(const NSURL *appURL, LSAppRecord **appRecord)
     sqlite3_close(pDB);
     return (rc == SQLITE_ROW) ? true : false;
 }
-
+/* Scan every registered app for one claiming inScheme in CFBundleURLTypes.
+ * Order follows the row order the database hands back; good enough for a
+ * first default. */
+static BOOL _acceptsThing(NSArray *things, NSString *aThing);
+static NSArray *LSFindAppsForURLScheme(NSString *inScheme) {
+    NSMutableArray *found = [NSMutableArray array];
+    sqlite3 *pDB = 0;
+    if(sqlite3_open([[LaunchServices database] UTF8String], &pDB) != SQLITE_OK) {
+        sqlite3_close(pDB);
+        return found;
+    }
+    sqlite3_stmt *stmt = NULL;
+    if(sqlite3_prepare_v2(pDB, "SELECT apprecord FROM applications", -1, &stmt, NULL) != SQLITE_OK) {
+        sqlite3_close(pDB);
+        return found;
+    }
+    while(sqlite3_step(stmt) == SQLITE_ROW) {
+        NSData *blob = [[NSData alloc]
+            initWithBytes:sqlite3_column_blob(stmt, 0)
+            length:sqlite3_column_bytes(stmt, 0)];
+        LSAppRecord *rec = [NSKeyedUnarchiver unarchiveObjectWithData:blob];
+        if(rec == nil) continue;
+        for(NSDictionary *type in [rec URLSchemes]) {
+            if(_acceptsThing([type objectForKey:(__bridge NSString *)kCFBundleURLSchemesKey], inScheme)) {
+                [found addObject:[rec URL]];
+                break;
+            }
+        }
+    }
+    sqlite3_finalize(stmt);
+    sqlite3_close(pDB);
+    return found;
+}
 BOOL LSFindRecordInDatabaseByBundleID(const NSString *bundleID, LSAppRecord **appRecord)
 {
     sqlite3 *pDB = 0;
@@ -827,7 +907,30 @@ static OSStatus _LSOpenAllWithSpecifiedApp(const LSLaunchURLSpec *inLaunchSpec, 
     const NSURL *appURL = (__bridge NSURL *)inLaunchSpec->appURL;
     if([appURL isFileURL] == NO)
         return kLSDataErr;
-
+    /* inLaunchSpec->itemURLs is a CFArrayRef that may be a raw CF object;
+     * messaging it as NSArray crashes (measured: -objectEnumerator/-count
+     * return garbage that dies in retain). Copy the elements into a real
+     * NSArray once with the CF API and use that below. */
+    NSMutableArray *realItems = [NSMutableArray array];
+    CFArrayRef cfItems = inLaunchSpec->itemURLs;
+    if(cfItems != NULL) {
+        CFIndex cfCount = CFArrayGetCount(cfItems);
+        for(CFIndex cfIdx = 0; cfIdx < cfCount; cfIdx++) {
+            /* [LSNIL] A NULL element here crashed Downloads.app at startup
+             * (measured: -[NSMutableArray_concrete addObject:] nil object,
+             * corpse pid 201, wm suite section 10).  macOS would never
+             * hand such an array to a consumer; skip the NULL and say so,
+             * because the producer of the NULL is still unidentified. */
+            CFURLRef item = (CFURLRef)CFArrayGetValueAtIndex(cfItems, cfIdx);
+            if(item == NULL) {
+                fprintf(stdout, "[LSNIL] itemURLs[%ld] of %ld is NULL "
+                        "(app=%s)\n", (long)cfIdx, (long)cfCount,
+                        [appURL.path fileSystemRepresentation] ?: "?");
+                continue;
+            }
+            [realItems addObject:(__bridge id)item];
+        }
+    }
     // Launch app and pass all itemURLs to it
     // FIXME: use GURL or odoc events instead of passing on cmd line
     NSFileManager *fm = [NSFileManager defaultManager];
@@ -852,9 +955,9 @@ static OSStatus _LSOpenAllWithSpecifiedApp(const LSLaunchURLSpec *inLaunchSpec, 
          * but never arrives at the server's receive port, so waiting for it
          * to spawn the app silently launched nothing.  Spawn it here, and
          * leave the WindowServer routing to the document case. */
-        if([(__bridge NSArray *)inLaunchSpec->itemURLs count] > 0 &&
+        if([realItems count] > 0 &&
            _LSOpenDocumentsWithWindowServer(appPath,
-                                            (__bridge NSArray *)inLaunchSpec->itemURLs))
+                                            realItems))
             return 0;
 
         NSMutableArray *args = [NSMutableArray new];
@@ -862,7 +965,7 @@ static OSStatus _LSOpenAllWithSpecifiedApp(const LSLaunchURLSpec *inLaunchSpec, 
             [args addObjectsFromArray:(__bridge NSArray *)inLaunchSpec->taskArgs];
         else
             [args addObjectsFromArray:[[app infoDictionary] objectForKey:@"ProgramArguments"]];
-        [args addObjectsFromArray:_LSCleanFileURLs((__bridge NSArray *)inLaunchSpec->itemURLs)];
+        [args addObjectsFromArray:_LSCleanFileURLs(realItems)];
         NSTask *task = [NSTask new];
         [task setEnvironment:(__bridge NSDictionary *)inLaunchSpec->taskEnv];
         [task setArguments:args];
@@ -888,7 +991,7 @@ static OSStatus _LSOpenAllWithSpecifiedApp(const LSLaunchURLSpec *inLaunchSpec, 
 
         // Just open the app unless there are itemURLs
         // Otherwise, launch the app with each one
-        if([(__bridge NSArray *)inLaunchSpec->itemURLs count] == 0) {
+        if([realItems count] == 0) {
             for(int i=0; i<[args count]; ++i) {
                 if([[args objectAtIndex:i] caseInsensitiveCompare:@"%U"] == NSOrderedSame ||
                     [[args objectAtIndex:i] caseInsensitiveCompare:@"%F"] == NSOrderedSame) {
@@ -904,7 +1007,7 @@ static OSStatus _LSOpenAllWithSpecifiedApp(const LSLaunchURLSpec *inLaunchSpec, 
             return 0;
         }
 
-        NSEnumerator *items = [_LSCleanFileURLs((__bridge NSArray *)inLaunchSpec->itemURLs) objectEnumerator];
+        NSEnumerator *items = [_LSCleanFileURLs(realItems) objectEnumerator];
         BOOL found = NO;
 
         while(NSURL *item = [items nextObject]) {
@@ -987,7 +1090,7 @@ OSStatus LSOpenCFURLRef(CFURLRef inURL, CFURLRef _Nullable *outLaunchedURL)
 {
     LSLaunchURLSpec spec;
     memset(&spec, 0, sizeof(spec));
-    spec.itemURLs = CFArrayCreate(NULL, (const void **)&inURL, 1, NULL);
+    spec.itemURLs = CFArrayCreate(NULL, (const void **)&inURL, 1, &kCFTypeArrayCallBacks);
     spec.launchFlags = kLSLaunchDefaults;
     OSStatus rc = LSOpenFromURLSpec(&spec, outLaunchedURL);
     CFRelease(spec.itemURLs);
@@ -1031,10 +1134,41 @@ OSStatus LSOpenFromURLSpec(const LSLaunchURLSpec *inLaunchSpec, CFURLRef _Nullab
     // because file permissions are not reliable. e.g. Samba shares often have
     // execute permission on non-executable files.
 
-    NSEnumerator *items = [(__bridge id)(inLaunchSpec->itemURLs) objectEnumerator];
-    NSURL *item;
-
-    while(item = [items nextObject]) {
+    /* NOTE: enumerate with the CF API, not -objectEnumerator: the CFArray
+     * arriving here is toll-free bridged but our -objectEnumerator path
+     * does not survive the bridge (measured: it returns a bad pointer
+     * that crashes in retain). */
+    CFArrayRef cfItems = inLaunchSpec->itemURLs;
+    CFIndex nItems = cfItems != NULL ? CFArrayGetCount(cfItems) : 0;
+    for(CFIndex itemIdx = 0; itemIdx < nItems; itemIdx++) {
+        /* Non-file URL with a registered handler: launch the handler with
+         * the URL as its open item (e.g. open http://... fronts Firefox).
+         * The item may be a C-CF URL created by the caller (Gecko) — its
+         * _cfisa is the CFRuntimeClass record, so messaging it dispatches
+         * garbage; rebuild a Foundation NSURL first. */
+        NSURL *item = LSSafeNSURLFromCFURL((CFURLRef)CFArrayGetValueAtIndex(cfItems, itemIdx));
+        NSString *scheme = [[item scheme] lowercaseString];
+        if(scheme != nil && ![scheme isEqualToString:@"file"]) {
+            NSArray *handlers = LSFindAppsForURLScheme(scheme);
+            NSURL *handler = [handlers firstObject];
+            if(handler != nil) {
+                LSLaunchURLSpec spec;
+                memset(&spec, 0, sizeof(spec));
+                spec.appURL = (__bridge_retained CFURLRef)handler;
+                const void *itemPtr = (__bridge const void *)item;
+                spec.itemURLs = CFArrayCreate(NULL, &itemPtr, 1, &kCFTypeArrayCallBacks);
+                spec.launchFlags = inLaunchSpec->launchFlags;
+                spec.taskArgs = taskArgs;
+                spec.taskEnv = taskEnv;
+                _LSOpenAllWithSpecifiedApp(&spec, NULL);
+                CFRelease(spec.appURL);
+                CFRelease(spec.itemURLs);
+                continue;
+            }
+            if(!(inLaunchSpec->launchFlags & kLSALaunchTaskEnvIsValid))
+                CFRelease(taskEnv);
+            return kLSApplicationNotFoundErr;
+        }
         if(LSIsNSBundle((__bridge CFURLRef)item)) {
             LSLaunchURLSpec spec;
             memset(&spec, 0, sizeof(spec));
@@ -1169,7 +1303,7 @@ OSStatus LSCanURLAcceptURL(CFURLRef inItemURL, CFURLRef inTargetURL, LSRolesMask
     *outAcceptsItem = NO;
     _LSInitializeDatabase();
 
-    NSURL *appURL = (__bridge NSURL *)inTargetURL;
+    NSURL *appURL = LSSafeNSURLFromCFURL(inTargetURL);
     if([appURL isFileURL] == NO)
         return kLSDataErr;
 
@@ -1177,8 +1311,9 @@ OSStatus LSCanURLAcceptURL(CFURLRef inItemURL, CFURLRef inTargetURL, LSRolesMask
     if(LSFindRecordInDatabase(appURL, &appRecord) == NO)
         return kLSApplicationNotFoundErr;
 
-    if([[(__bridge NSURL *)inItemURL scheme] isEqualToString:@"file"]) {
-        NSString *ext = [(__bridge NSURL *)inItemURL pathExtension];
+    NSURL *itemURL = LSSafeNSURLFromCFURL(inItemURL);
+    if([[itemURL scheme] isEqualToString:@"file"]) {
+        NSString *ext = [itemURL pathExtension];
         CFStringRef uti = UTTypeCreatePreferredIdentifierForTag(kUTTagClassFilenameExtension,
 		(__bridge CFStringRef)ext, NULL);
 
@@ -1202,7 +1337,7 @@ OSStatus LSCanURLAcceptURL(CFURLRef inItemURL, CFURLRef inTargetURL, LSRolesMask
         }
         CFRelease(uti);
     } else {
-        NSString *itemScheme = [(__bridge NSURL *)inItemURL scheme];
+        NSString *itemScheme = [itemURL scheme];
         NSEnumerator *appSchemes = [[appRecord URLSchemes] objectEnumerator];
         NSDictionary *appScheme;
 
@@ -1227,35 +1362,41 @@ OSStatus LSCanURLAcceptURL(CFURLRef inItemURL, CFURLRef inTargetURL, LSRolesMask
  */
 extern "C" CFArrayRef LSCopyAllHandlersForURLScheme(CFStringRef inURLScheme)
 {
-    static int logged = 0;
-    if (!logged) {
-        logged = 1;
-        fprintf(stderr, "[compat] LaunchServices: LSCopyAllHandlersForURLScheme has no handler registry; returning empty\n");
-    }
-    return CFArrayCreate(kCFAllocatorDefault, NULL, 0, &kCFTypeArrayCallBacks);
+    _LSInitializeDatabase();
+    NSString *scheme = [LSSafeNSStringFromCFString(inURLScheme) lowercaseString];
+    NSArray *apps = LSFindAppsForURLScheme(scheme);
+    return (__bridge_retained CFArrayRef)[apps copy];
 }
 
 extern "C" CFStringRef LSCopyDefaultHandlerForURLScheme(CFStringRef inURLScheme)
 {
-    static int logged = 0;
-    if (!logged) {
-        logged = 1;
-        fprintf(stderr, "[compat] LaunchServices: LSCopyDefaultHandlerForURLScheme has no handler registry; returning NULL\n");
+    _LSInitializeDatabase();
+    NSString *scheme = [LSSafeNSStringFromCFString(inURLScheme) lowercaseString];
+    NSArray *apps = LSFindAppsForURLScheme(scheme);
+    NSURL *handlerURL = [apps firstObject];
+    if(handlerURL == nil) {
+        fprintf(stderr, "[compat] LaunchServices: no handler for URL scheme %s\n",
+                [scheme UTF8String]);
+        return NULL;
     }
-    return NULL;
+    NSString *bid = nil;
+    LSAppRecord *rec = nil;
+    if(LSFindRecordInDatabase(handlerURL, &rec)) bid = [rec name];
+    NSURL *retURL = (bid != nil ? nil : handlerURL);
+    NSString *retStr = (bid != nil ? bid : nil);
+    return (__bridge_retained CFStringRef)(retStr != nil ? retStr : [retURL absoluteString]);
 }
 
 /* 10.6+: default application for a URL (scheme handler lookup). */
 extern "C" CFURLRef LSCopyDefaultApplicationURLForURL(CFURLRef inURL, LSRolesMask inRoleMask, CFErrorRef *outError)
 {
-    static int logged = 0;
-    if (!logged) {
-        logged = 1;
-        fprintf(stderr, "[compat] LaunchServices: LSCopyDefaultApplicationURLForURL has no handler registry; returning NULL\n");
-    }
-    if (outError)
-        *outError = NULL;
-    return NULL;
+    _LSInitializeDatabase();
+    NSString *scheme = [[LSSafeNSURLFromCFURL(inURL) scheme] lowercaseString];
+    NSArray *apps = LSFindAppsForURLScheme(scheme);
+    NSURL *handlerURL = [apps firstObject];
+    if(handlerURL != nil && outError) *outError = NULL;
+    if(handlerURL == nil && outError) *outError = NULL;
+    return (__bridge_retained CFURLRef)handlerURL;
 }
 
 /* Pre-10.6 MIME handler lookup.  There is no MIME handler registry yet, so

@@ -25,6 +25,7 @@
 #include <mach/message.h>
 #import "Dock.h"
 #import "DockItem.h"
+#import <objc/runtime.h>
 #import "DockTileData.h"
 #import "WindowServer/message.h"
 #import "WindowServer/rpc.h"
@@ -549,11 +550,23 @@ view does not need to draw the application or custom string badges.
 }
 
 -(void)openApp:(id)sender {
+/* [DOCKTI] bounded: names which openApp path a tile click took, because
+ * "tile click did not restore the window" has three distinct causes and
+ * only the guest knows which fired. */
+static int _dockTileTraceCount = 0;
     if(_type == DIT_WINDOW) {
+        if(_dockTileTraceCount < 20) {
+            _dockTileTraceCount++;
+            NSLog(@"[DOCKTI] openApp DIT_WINDOW win=%d", (int)[self dockWindowID]);
+        }
         [self activateWindow:sender];
         return;
     }
     if(![self isRunning]) {
+        if(_dockTileTraceCount < 20) {
+            _dockTileTraceCount++;
+            NSLog(@"[DOCKTI] openApp launch path=%@", _path);
+        }
         [self _launchBundle];
     } else {
         struct {
@@ -573,6 +586,10 @@ view does not need to draw the application or custom string badges.
 
         strncpy(data.buf, [[self bundleIdentifier] UTF8String], sizeof(data.buf));
         data.win.base.len += strlen(data.buf);
+        if(_dockTileTraceCount < 20) {
+            _dockTileTraceCount++;
+            NSLog(@"[DOCKTI] openApp activate bundle=%s", data.buf);
+        }
         _windowServerRPC(&data, sizeof(data), NULL, NULL);
     }
 }
