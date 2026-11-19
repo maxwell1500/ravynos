@@ -351,11 +351,20 @@ void CFPreferencesSetMultiple(CFDictionaryRef keysToSet, CFArrayRef keysToRemove
     if(keys) CFAllocatorDeallocate(alloc, keys);
 }
 
-/* A value is forced when a managed configuration profile overrides it.
- * There is no managed-preferences domain in this tree, so nothing is. */
+/* A value is forced when a managed/system-wide preference overrides it
+ * in /Library/Preferences/<bundleID>.plist (AnyUser, CurrentHost). */
 Boolean CFPreferencesAppValueIsForced(CFStringRef key, CFStringRef appName) {
-    (void)key;
-    (void)appName;
+    if (!key || !appName) return false;
+    if (appName == kCFPreferencesCurrentApplication || CFEqual(appName, kCFPreferencesCurrentApplication)) {
+        CFBundleRef mainBundle = CFBundleGetMainBundle();
+        appName = mainBundle ? CFBundleGetIdentifier(mainBundle) : NULL;
+        if (!appName) return false;
+    }
+    CFTypeRef val = CFPreferencesCopyValue(key, appName, kCFPreferencesAnyUser, kCFPreferencesCurrentHost);
+    if (val) {
+        CFRelease(val);
+        return true;
+    }
     return false;
 }
 

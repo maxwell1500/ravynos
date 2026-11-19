@@ -80,6 +80,7 @@ CF_PRIVATE void __CFOAInitializeNSObject(void);  // from NSObject.m
 typedef char * SEL;
 #endif
 extern id objc_msgSend(id, SEL, ...);
+extern Boolean _objc_isKnownClassPtr(const void *ptr); /* objc4 */
 
 /*
  * An object whose first word is NULL cannot be an Objective-C object: no
@@ -599,7 +600,10 @@ CFTypeRef CFRetain(CFTypeRef cf) {
         return (CFTypeRef)objc_msgSend((id)cf, @selector(retain));
     }
     CFTYPE_OBJC_FUNCDISPATCH0(CFTypeRef, (id)cf, retain);
-    if ((((const CFRuntimeBase *)cf)->_cfinfo[CF_INFO_BITS] == 0) && (*(const uintptr_t *)cf != 0)) {
+    /* See CFRelease: gate the ObjC dispatch on a runtime-known class. */
+    if ((((const CFRuntimeBase *)cf)->_cfinfo[CF_INFO_BITS] == 0) &&
+        (*(const uintptr_t *)cf != 0) &&
+        _objc_isKnownClassPtr((const void *)*(const uintptr_t *)cf)) {
         return (CFTypeRef)objc_msgSend((id)cf, @selector(retain));
     }
     if (cf) __CFGenericAssertIsCF(cf);
@@ -620,8 +624,22 @@ void CFRelease(CFTypeRef cf) {
         return;
     }
     CFTYPE_OBJC_FUNCDISPATCH0(void, (id)cf, release);
-    if ((((const CFRuntimeBase *)cf)->_cfinfo[CF_INFO_BITS] == 0) && (*(const uintptr_t *)cf != 0)) {
+    /* Only dispatch to ObjC when the "isa" word is a class the runtime
+     * actually knows.  Without this, a C-CF static instance (isa = the
+     * CFRuntimeClass record) or stack/function-pointer garbage reached
+     * objc_msgSend and dispatched garbage (measured SIGBUS on ___CFStringDeallocate
+     * from WebRender's CFRelease of an invalid font).  Unknown pointers
+     * are ignored: their lifetime is not ours to run. */
+    if ((((const CFRuntimeBase *)cf)->_cfinfo[CF_INFO_BITS] == 0) &&
+        (*(const uintptr_t *)cf != 0) &&
+        _objc_isKnownClassPtr((const void *)*(const uintptr_t *)cf)) {
         objc_msgSend((id)cf, @selector(release));
+        return;
+    }
+    if (((const CFRuntimeBase *)cf)->_cfinfo[CF_INFO_BITS] == 0 &&
+        *(const uintptr_t *)cf != 0) {
+        /* Not a runtime-known class and not plain CF: leave the pointer
+         * alone rather than run CF lifetime on foreign memory. */
         return;
     }
     if (cf) __CFGenericAssertIsCF(cf);
