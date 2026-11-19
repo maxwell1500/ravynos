@@ -489,6 +489,22 @@ for a in "$@"; do
         *.s|*.S) asminput=yes ;;
     esac
 done
+# The guest libSystem exports plain _close/_accept/... and none of the
+# $UNIX2003 aliases.  The -I to Kernel/xnu/bsd shadows the SDK's sys/cdefs.h
+# with xnu's copy, whose product table (the only place that defines
+# __DARWIN_ONLY_UNIX_CONFORMANCE) is gated on -DXNU_PLATFORM_* flags
+# userland builds never pass, so the macro stays undefined, the
+# #if __DARWIN_UNIX03 branch below it selects "$UNIX2003", and frameworks so
+# built abort every guest process at load ("Symbol not found:
+# _writev$UNIX2003", CoreFoundation rebuild 2026-11-18; the committed
+# known-good binary carries 0 $UNIX2003 imports, a fresh one 31).  Define
+# exactly what xnu's MacOSX/x86_64 branch would: plain libc names, stat
+# layout and $INODE64 untouched (NOT __DARWIN_UNIX03=0, which strips
+# st_birthtimespec and breaks NSFileManager).
+if [ "$asminput" = no ]; then
+    case " $* " in *"__DARWIN_ONLY_UNIX_CONFORMANCE"*) ;; *)
+        out="$out -D__DARWIN_ONLY_UNIX_CONFORMANCE=1" ;; esac
+fi
 
 # Gated to non-assembler runs, mirroring the guard the stdint.h/stddef.h
 # force-includes above already use. Without the gate this fires on

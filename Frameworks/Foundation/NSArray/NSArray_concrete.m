@@ -8,6 +8,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 #import "NSArray_concrete.h"
 #import <Foundation/NSRaise.h>
 #import <Foundation/NSRaiseException.h>
+#include <stdio.h>
 
 @implementation NSArray_concrete
 
@@ -27,10 +28,19 @@ NSArray *NSArray_concreteNewWithCount(NSZone *zone,id **objects,NSUInteger count
 NSArray *NSArray_concreteNew(NSZone *zone,id *objects,NSUInteger count) {
    NSArray_concrete *self=newWithCount(zone,count);
    NSUInteger         i;
+   extern int _objc_isKnownClassPtr(const void *ptr); /* objc4 */
 
    self->_count=count;
-   for(i=0;i<count;i++)
-    self->_objects[i]=[objects[i] retain];
+   for(i=0;i<count;i++) {
+    id o=objects[i];
+    /* [NSARR] The retain CAS died writing code bytes as an isa word
+     * (measured: &___CFStringDeallocate).  Print the culprit before the
+     * same CAS runs, so serial carries the pointer the CORPSE cannot. */
+    if(o!=NULL && (uintptr_t)o > 0xffff && !_objc_isKnownClassPtr(*(void **)o))
+     fprintf(stdout,"[NSARR] retain of non-object %p first=%p\n",
+             (void *)o,*(void **)o);
+    self->_objects[i]=[o retain];
+   }
 
    return self;
 }
