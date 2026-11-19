@@ -25,6 +25,48 @@ NSArray *NSArray_concreteNewWithCount(NSZone *zone,id **objects,NSUInteger count
    return self;
 }
 
+#import <mach-o/loader.h>
+#import <mach-o/dyld.h>
+
+/* True when ptr lies inside a loaded image's data (non-executable)
+ * segment -- i.e. where legitimate class objects live.  The exec-range
+ * cache rebuilds when dyld's image count changes; until then an empty
+ * cache reports "not image data", which errs toward printing. */
+static int _isaIsImageData(uintptr_t ptr)
+{
+    static struct { uintptr_t start,end; } ranges[512]; /* all data segs; Firefox alone loads >96 */
+    static uint32_t nranges, lastImageCount=(uint32_t)-1;
+    uint32_t n=_dyld_image_count();
+
+    if(n!=lastImageCount) {
+        uint32_t i,r=0;
+        for(i=0;i<n && r<512;i++) {
+            const struct mach_header *h=_dyld_get_image_header(i);
+            const struct load_command *lc=(const void *)((char *)h+sizeof(struct mach_header_64));
+            const struct segment_command_64 *seg;
+            uint32_t c;
+            for(c=0;c<h->ncmds;c++) {
+                if(lc->cmd==LC_SEGMENT_64) {
+                    seg=(const void *)lc;
+                    if(!(seg->initprot & VM_PROT_EXECUTE) &&
+                       seg->filesize>0 && (seg->initprot & VM_PROT_READ)) {
+                        ranges[r].start=(uintptr_t)seg->vmaddr+
+                                        _dyld_get_image_vmaddr_slide(i);
+                        ranges[r].end=ranges[r].start+seg->vmsize;
+                        if(++r>=512) break;
+                    }
+                    lc=(const void *)((char *)lc+lc->cmdsize);
+                } else lc=(const void *)((char *)lc+lc->cmdsize);
+            }
+        }
+        nranges=r; lastImageCount=n;
+    }
+    {   uint32_t i;
+        for(i=0;i<nranges;i++)
+            if(ptr>=ranges[i].start && ptr<ranges[i].end) return true;
+    }
+    return false;
+}
 NSArray *NSArray_concreteNew(NSZone *zone,id *objects,NSUInteger count) {
    NSArray_concrete *self=newWithCount(zone,count);
    NSUInteger         i;
@@ -35,10 +77,48 @@ NSArray *NSArray_concreteNew(NSZone *zone,id *objects,NSUInteger count) {
     id o=objects[i];
     /* [NSARR] The retain CAS died writing code bytes as an isa word
      * (measured: &___CFStringDeallocate).  Print the culprit before the
-     * same CAS runs, so serial carries the pointer the CORPSE cannot. */
-    if(o!=NULL && (uintptr_t)o > 0xffff && !_objc_isKnownClassPtr(*(void **)o))
+     * same CAS runs, so serial carries the pointer the CORPSE cannot.
+     * Non-pointer isas (magic 0x001d8..., Firefox uses them) and any
+     * class the runtime registered are normal and stay silent; a real
+     * class object lives in an image's data segment, so print only when
+     * the isa is NOT image-backed data -- an executable-range pointer
+     * (code bytes) or plain garbage.  A dedupe ring was tried instead and
+     * flooded (154k lines/one session: >8 unknown isas interleave and
+     * every eviction reprints). */
+    if(o!=NULL && (uintptr_t)o > 0xffff) {
+     uintptr_t isa=*(uintptr_t *)o & 0x00007ffffffffff8ULL;
+    if(!_objc_isKnownClassPtr((void *)isa) && !_isaIsImageData(isa)) {
+     static int named;
+     if(named<3){
+      /* dladdr is unimplemented in the guest libdyld (returns 0,
+       * measured), so name the caller by walking dyld's image list. */
+      uintptr_t ra=(uintptr_t)__builtin_return_address(0);
+      uint32_t ni=_dyld_image_count(),ki;
+      for(ki=0;ki<ni;ki++){
+       const struct mach_header *h=_dyld_get_image_header(ki);
+       const struct load_command *lc=(const void *)((char *)h+sizeof(struct mach_header_64));
+       const struct segment_command_64 *seg;
+       uint32_t c;
+       for(c=0;c<h->ncmds;c++,lc=(const void *)((char *)lc+lc->cmdsize))
+        if(lc->cmd==LC_SEGMENT_64){
+         seg=(const void *)lc;
+         uintptr_t s=(uintptr_t)seg->vmaddr+_dyld_get_image_vmaddr_slide(ki);
+         if(ra>=s && ra<s+seg->vmsize){
+          fprintf(stdout,"[NSARR] caller=%p off=+0x%llx img=%s\n",
+                  (void *)ra,(unsigned long long)(ra-s),
+                  _dyld_get_image_name(ki));
+          goto named_done;
+         }
+        }
+      }
+      fprintf(stdout,"[NSARR] caller=%p img=?\n",(void *)ra);
+named_done:
+      named++;
+     }
      fprintf(stdout,"[NSARR] retain of non-object %p first=%p\n",
-             (void *)o,*(void **)o);
+             (void *)o,(void *)isa);
+    }
+    }
     self->_objects[i]=[o retain];
    }
 
