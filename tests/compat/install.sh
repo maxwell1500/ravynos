@@ -26,10 +26,11 @@ STAGE="$ROOT/tools/bootlab/work/compat"
 [ -x "$OUT/runas" ] || { echo "missing $OUT/runas -- run build-fixtures.sh" >&2; exit 1; }
 [ -x "$OUT/passwd" ] || { echo "missing $OUT/passwd -- run build-fixtures.sh" >&2; exit 1; }
 [ -x "$OUT/bootstrap_probe" ] || { echo "missing $OUT/bootstrap_probe -- run build-fixtures.sh" >&2; exit 1; }
+[ -x "$OUT/download" ] || { echo "missing $OUT/download -- run build-fixtures.sh" >&2; exit 1; }
 [ -x "$OUT/CocoaProbe.app/Contents/MacOS/CocoaProbe" ] || {
     echo "missing CocoaProbe -- run build-fixtures.sh" >&2; exit 1; }
 
-for f in "$OUT/posix" "$OUT/tcp" "$OUT/malloczone" "$OUT/autorelease" "$OUT/backup" "$OUT/sandbox" "$OUT/perms" "$OUT/spinkill" "$OUT/runas" "$OUT/passwd" "$OUT/bootstrap_probe" "$OUT/CocoaProbe.app/Contents/MacOS/CocoaProbe"; do
+for f in "$OUT/posix" "$OUT/tcp" "$OUT/dnstest" "$OUT/openurl" "$OUT/download" "$OUT/malloczone" "$OUT/autorelease" "$OUT/backup" "$OUT/sandbox" "$OUT/perms" "$OUT/spinkill" "$OUT/runas" "$OUT/passwd" "$OUT/bootstrap_probe" "$OUT/CocoaProbe.app/Contents/MacOS/CocoaProbe"; do
     if ! file "$f" | grep -q "Mach-O 64-bit executable x86_64"; then
         echo "$f is not an x86_64 Mach-O executable" >&2
         exit 1
@@ -40,6 +41,10 @@ rm -rf "$STAGE"
 mkdir -p "$STAGE/CocoaProbe.app/Contents/MacOS"
 cp -p "$OUT/posix" "$STAGE/posix"
 cp -p "$OUT/tcp" "$STAGE/tcp"
+cp -p "$OUT/dnstest" "$STAGE/dnstest"
+cp -p "$OUT/openurl" "$STAGE/openurl"
+cp -p "$OUT/download" "$STAGE/download"
+cp -p "$OUT/homechain" "$STAGE/homechain"
 cp -p "$OUT/pasteboard" "$STAGE/pasteboard"
 cp -p "$OUT/malloczone" "$STAGE/malloczone"
 cp -p "$OUT/autorelease" "$STAGE/autorelease"
@@ -50,9 +55,14 @@ cp -p "$OUT/perms" "$STAGE/perms"
 cp -p "$OUT/spinkill" "$STAGE/spinkill"
 cp -p "$OUT/tdump" "$STAGE/tdump"
 cp -p "$OUT/tsample" "$STAGE/tsample"
+cp -p "$OUT/screeninfo" "$STAGE/screeninfo"
+cp -p "$OUT/layertest" "$STAGE/layertest"
 cp -p "$OUT/runas" "$STAGE/runas"
 cp -p "$OUT/passwd" "$STAGE/passwd"
 cp -p "$OUT/bootstrap_probe" "$STAGE/bootstrap_probe"
+cp -p "$OUT/foundation" "$STAGE/foundation"
+cp -p "$OUT/filemmap" "$STAGE/filemmap"
+cp -p "$OUT/mousetest" "$STAGE/mousetest"
 cp -p "$OUT/spawnprobe" "$STAGE/spawnprobe"
 cp -p "$OUT/CocoaProbe.app/Contents/MacOS/CocoaProbe" \
       "$STAGE/CocoaProbe.app/Contents/MacOS/CocoaProbe"

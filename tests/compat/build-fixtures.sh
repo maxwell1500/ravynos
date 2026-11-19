@@ -27,6 +27,26 @@ echo "building posix fixture ($TARGET)"
 "$CC" -target "$TARGET" -isysroot "$SDK" -O1 -Wall -Wextra \
     -o "$OUT/posix" "$HERE/posix.c"
 
+# Foundation correctness (Phase 1): NSFileManager modern API, NSDecimalNumber,
+# NSInvocation and NSProcessInfo.
+echo "building foundation fixture ($TARGET)"
+"$CC" -target "$TARGET" -isysroot "$SDK" -O1 -Wall -Wextra \
+    -framework Foundation -o "$OUT/foundation" "$HERE/foundation.m"
+
+# File-backed mmap: Firefox renders glyphs from a mapped font file, so an
+# mmap that serves stale or zero pages would look exactly like a text
+# rendering bug.  The probe compares mmap bytes against pread().
+echo "building filemmap fixture ($TARGET)"
+"$CC" -target "$TARGET" -isysroot "$SDK" -O1 -Wall -Wextra \
+    -o "$OUT/filemmap" "$HERE/filemmap.c"
+
+# PS/2 mouse delivery: the WS cursor must move under injected motion; this
+# probe separates "no packets reach /dev/mouse" from "the consumer drops
+# them" by counting bytes on the device itself.
+echo "building mousetest fixture ($TARGET)"
+"$CC" -target "$TARGET" -isysroot "$SDK" -O1 -Wall -Wextra \
+    -o "$OUT/mousetest" "$HERE/mousetest.c"
+
 # The zone-dispatch fixture: free() must return each pointer to the zone that
 # owns it, even when another registered zone claims everything.
 echo "building malloczone fixture ($TARGET)"
@@ -45,6 +65,14 @@ echo "building spawn rendezvous probe ($TARGET)"
 echo "building passwd fixture ($TARGET)"
 "$CC" -target "$TARGET" -isysroot "$SDK" -O1 -Wall \
     -o "$OUT/passwd" "$HERE/passwd.c"
+
+echo "building layertest fixture ($TARGET)"
+"$CC" -target "$TARGET" -isysroot "$SDK" -O1 -Wall -framework Cocoa -framework QuartzCore \
+    -o "$OUT/layertest" "$HERE/layertest.m"
+
+echo "building screeninfo fixture ($TARGET)"
+"$CC" -target "$TARGET" -isysroot "$SDK" -O1 -Wall -framework Cocoa -framework ApplicationServices \
+    -o "$OUT/screeninfo" "$HERE/screeninfo.m"
 
 echo "building tsample fixture ($TARGET)"
 "$CC" -target "$TARGET" -isysroot "$SDK" -O1 -Wall \
@@ -88,11 +116,44 @@ echo "building sandbox fixture ($TARGET)"
 echo "building tcp fixture ($TARGET)"
 "$CC" -target "$TARGET" -isysroot "$SDK" -O1 -Wall -Wextra \
     -o "$OUT/tcp" "$HERE/tcp.c"
+echo "building dnstest fixture ($TARGET)"
+"$CC" -target "$TARGET" -isysroot "$SDK" -O1 -Wall -Wextra \
+    -o "$OUT/dnstest" "$HERE/dnstest.c"
+
+# printf conversion set: %zu and %g were printing "<UNSUPPORTED-CONVERSION>"
+# in WindowServer and Dock diagnostics.
+echo "building printfprobe fixture ($TARGET)"
+"$CC" -target "$TARGET" -isysroot "$SDK" -O1 -Wall -Wextra \
+    -o "$OUT/printfprobe" "$HERE/printfprobe.c"
+
 
 echo "building cocoa fixture ($TARGET)"
 "$CC" -target "$TARGET" -isysroot "$SDK" -O1 -Wall \
     -o "$OUT/CocoaProbe.app/Contents/MacOS/CocoaProbe" "$HERE/cocoa.m" \
     -framework Cocoa
+
+echo "building openurl fixture ($TARGET)"
+"$CC" -target "$TARGET" -isysroot "$SDK" -O1 -Wall \
+    -o "$OUT/openurl" "$HERE/openurl.m" \
+    -framework Cocoa
+
+echo "building download fixture ($TARGET)"
+"$CC" -target "$TARGET" -isysroot "$SDK" -O1 -Wall \
+    -o "$OUT/download" "$HERE/download.m" -framework Foundation
+
+
+echo "building homechain fixture ($TARGET)"
+# NSPlatform exists only in the guest Foundation; leave it undefined and let
+# the guest's dynamic lookup bind it at load, like the SDK frameworks do.
+"$CC" -target "$TARGET" -isysroot "$SDK" -O1 -Wall \
+    -Wl,-undefined,dynamic_lookup \
+    -o "$OUT/homechain" "$HERE/homechain.m" -framework Foundation
+# Click routing oracle: proves which view (not just which window) receives a
+# press, so a click that lands on the wrong control is distinguishable from
+# one that never reaches the app.
+echo "building clickprobe fixture ($TARGET)"
+"$CC" -target "$TARGET" -isysroot "$SDK" -O1 -Wall \
+    -o "$OUT/clickprobe" "$HERE/clickprobe.m" -framework Cocoa
 
 cat > "$OUT/CocoaProbe.app/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>

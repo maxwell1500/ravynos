@@ -741,6 +741,8 @@ static void _LSCheckAndHandleLaunchFlags(NSTask *task, LSLaunchFlags launchFlags
     if(getenv("__LAUNCHD_FD") != NULL)
         _launchd = strtoul(getenv("__LAUNCHD_FD"), NULL, 10);
 
+    BOOL directLaunch = NO;   /* set when launchd is unreachable */
+
     if(launchFlags & kLSLaunchNewInstance) {
         // FIXME: launch new instance of app
     }
@@ -800,20 +802,33 @@ static void _LSCheckAndHandleLaunchFlags(NSTask *task, LSLaunchFlags launchFlags
         launch_data_t response = launch_msg(request);
 
         launch_data_free(request);
-        err = launch_data_get_errno(response);
+        /* launch_msg can answer NULL (measured: Downloads.app inherits
+         * __LAUNCHD_FD from its parent, takes this path, and the dead
+         * launchd socket made launch_msg return NULL; the unguarded
+         * launch_data_get_errno then faulted at NULL+8, corpse pid 198,
+         * subcode 11).  Treat a NULL answer as "launchd unreachable" and
+         * fall through to the plain exec below instead. */
+        if(response == NULL) {
+            err = ENOTCONN;
+            directLaunch = YES;
+        } else {
+            err = launch_data_get_errno(response);
 
-        switch(err) {
-            case EEXIST:	/* identical job exists - start it */
-                request = launch_data_alloc(LAUNCH_DATA_DICTIONARY);
-                launch_data_dict_insert(request, launch_data_new_string(label),
-                    LAUNCH_KEY_STARTJOB);
-                launch_msg(request);
-                launch_data_free(request);
-                break;
-            default: break;
+            switch(err) {
+                case EEXIST:	/* identical job exists - start it */
+                    request = launch_data_alloc(LAUNCH_DATA_DICTIONARY);
+                    launch_data_dict_insert(request, launch_data_new_string(label),
+                        LAUNCH_KEY_STARTJOB);
+                    launch_msg(request);
+                    launch_data_free(request);
+                    break;
+                default: break;
+            }
+            launch_data_free(response);
         }
         free(label);
-    } else {
+    }
+    if(!_launchd || directLaunch) {
         [task setStandardInput:[[NSFileHandle alloc] initWithFileDescriptor:0]];
         [task setStandardOutput:[[NSFileHandle alloc] initWithFileDescriptor:1]];
         [task setStandardError:[[NSFileHandle alloc] initWithFileDescriptor:2]];
@@ -1113,6 +1128,16 @@ OSStatus LSOpenFromURLSpec(const LSLaunchURLSpec *inLaunchSpec, CFURLRef _Nullab
         taskArgs = inLaunchSpec->taskArgs;
 
     if(inLaunchSpec->appURL) {
+        /* [LSIN] The crash family here prints '+[Object path]:
+         * unrecognized selector' -- name the receiver before the flow
+         * splits, so the failing object is known from the log. */
+        static int lsinTrace;
+        if(lsinTrace++ < 10)
+            NSLog(@"[LSIN] appURL=%p isFile=%d items=%ld",
+                  inLaunchSpec->appURL,
+                  [(__bridge NSURL *)inLaunchSpec->appURL isFileURL],
+                  (long)(inLaunchSpec->itemURLs ?
+                         CFArrayGetCount(inLaunchSpec->itemURLs) : -1));
         // We are launching this specific application which must be a file URL
         // Guard against bad data in inLaunchSpec :)
         LSLaunchURLSpec spec;

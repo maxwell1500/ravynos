@@ -33,7 +33,19 @@
     NSURL *url = [NSURL fileURLWithPath:
         [[[NSPlatform currentPlatform] homeDirectory]
         stringByAppendingPathComponent:@"Downloads"]];
+    /* [DLURL] This one-shot app crashed twice via LSOpenFromURLSpec
+     * ([LSNIL] itemURLs[0] of 1 is NULL) while the identical chain in the
+     * homechain fixture measured healthy in the same boot.  Print each
+     * link from inside the failing process until the nil is named. */
     NSArray *urls = [NSArray arrayWithObject:url];
+    /* [DLURL] This one-shot app crashed via LSOpenFromURLSpec
+     * (nil/'Object' items measured by [LSNIL] and the abort log) while the
+     * identical chain in the homechain fixture measured healthy.  Print the
+     * addresses so the over-release or storage bug is named exactly. */
+    NSLog(@"[DLURL] home=%@ url=%@ at=%p urls=%p",
+          [[NSPlatform currentPlatform] homeDirectory], url, url, urls);
+    if ([urls count] == 1)
+        NSLog(@"[DLURL] urls[0]=%p", [urls objectAtIndex:0]);
     NSURL *app = [NSURL fileURLWithPath:
         @"/System/Library/CoreServices/Filer.app"];
 
