@@ -113,6 +113,20 @@ extern Boolean _objc_isKnownClassPtr(const void *ptr); /* objc4 */
  * registered bridge class), rather than a C CF instance whose first word is
  * the CF class? */
 static bool _CFIsRegisteredObjCClass(uintptr_t isa);
+
+static bool
+_CFIsRegisteredObjCClass(uintptr_t isa)
+{
+    CFIndex i;
+    if (isa == 0)
+        return false;
+    isa = __CFMaskIsa(isa);
+    for (i = 0; i < __CFRuntimeClassTableSize; i++) {
+        if (__CFRuntimeObjCClassTable[i] == isa)
+            return true;
+    }
+    return false;
+}
 extern CFRuntimeClass *__CFRuntimeClassTable[];
 
 /* True only for a C-allocated CF instance: its first word is one of the
@@ -137,24 +151,30 @@ _CFIsCFInstance(CFTypeRef cf)
     return false;
 }
 
+
+
 CF_EXPORT Boolean
 _CFIsObjCType(CFTypeRef cf)
 {
-    return cf != NULL && _CFIsRegisteredObjCClass(*(const uintptr_t *)cf);
-}
-
-static bool
-_CFIsRegisteredObjCClass(uintptr_t isa)
-{
-    CFIndex i;
+    /* "Is this pointer an ObjC object, i.e. safe to objc_msgSend?" --
+     * not "is it an instance of a registered bridge class" (the old
+     * walk of __CFRuntimeObjCClassTable, which answered false for
+     * everything but NSCFString/NSArray and sent plain CGImage/O2Image
+     * layer contents down the raw IOSurfaceRef path in
+     * createImageForLayerContents, measured as LAYER-FAIL
+     * tile_pixels=0 with contents non-nil, img=0x0).
+     * An ObjC instance's isa is a runtime-known class; a C CF
+     * instance's isa is a CFRuntimeClass record (not a class), and a
+     * raw IOSurfaceRef's first word is a small surface id -- both
+     * correctly answer false, which is the guard CALayer.m and
+     * NSView.m rely on before messaging. */
+    if (cf == NULL)
+        return false;
+    uintptr_t isa = *(const uintptr_t *)cf;
     if (isa == 0)
         return false;
     isa = __CFMaskIsa(isa);
-    for (i = 0; i < __CFRuntimeClassTableSize; i++) {
-        if (__CFRuntimeObjCClassTable[i] == isa)
-            return true;
-    }
-    return false;
+    return _objc_isKnownClassPtr((const void *)isa);
 }
 
 bool __CFOASafe = false;
