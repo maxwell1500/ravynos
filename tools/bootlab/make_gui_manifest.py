@@ -158,6 +158,23 @@ ALIASES = [
      "Applications/System Preferences.app"),
 ]
 
+
+def bsd_build_path(*parts):
+    """Locate a cross-built BSD program.
+
+    build-libraries.sh --bsd keeps MAKEOBJDIRPREFIX per directory, so programs
+    land in BSD/x86_64.i386/<tree>/<name>/<name>; older builds used
+    BSD/<tree>/<name>/<name>.  Accept either so a stale preference cannot turn
+    a built command into a MISSING entry.
+    """
+    legacy = os.path.join(BUILD_SRC, "BSD", *parts)
+    if os.path.isfile(legacy):
+        return legacy
+    arch = os.path.join(BUILD_SRC, "BSD", "x86_64.i386", *parts)
+    if os.path.isfile(arch):
+        return arch
+    return legacy
+
 # Plain executables the image ships (no bundle around them).
 BINARIES = [
     ("CoreServices/pasteboardd", "pasteboardd",
@@ -165,6 +182,10 @@ BINARIES = [
     ("CoreServices/dailydrivertest", "dailydrivertest",
      "System/Library/CoreServices/dailydrivertest"),
     ("BSD/bin/open", "open", "usr/bin/open"),
+    # pkill and pgrep are one binary that selects its mode from argv[0];
+    # the build tree has no pgrep file, so stage the same program twice.
+    ("BSD/bin/pkill", "pkill", "usr/bin/pkill"),
+    ("BSD/bin/pkill", "pkill", "usr/bin/pgrep"),
     # MacPorts' mportinit runs `exec id -u`; BSD/usr.bin/id ships only a
     # Makefile and man pages in this tree, so id.c was written here.  The
     # Makefile's LINKS lines make groups(1) and whoami(1) the same binary.
@@ -229,6 +250,7 @@ ravyn:*:501:20::0:0:ravynOS User:/Users/ravyn:/bin/sh
 
 ETC_HOSTS = """127.0.0.1\tlocalhost
 ::1\tlocalhost
+10.0.2.2\tfixture.test
 """
 
 ETC_RESOLV_CONF = """# ravynOS /etc/resolv.conf
@@ -254,6 +276,8 @@ DOCK_PREFS = """{
 \tLocation = 0;
 \tOpacity = 0.85;
 \ttilesize = 64;
+\tautohide = 0;
+\tmagnification = 0;
 }
 """
 
@@ -608,7 +632,7 @@ def main():
             closure.append((ff_job_int_dst, ff_job_int, "MISSING"))
         ff_profiles_ini = "[Profile0]\nName=default\nIsRelative=1\nPath=Profiles/default\nDefault=1\n\n[General]\nStartWithLastProfile=1\nVersion=2\n"
         ff_user_js = (
-            'user_pref("gfx.webrender.software", true);\n'
+            'user_pref("gfx.webrender.software", false);\n'
             'user_pref("layers.acceleration.disabled", true);\n'
             'user_pref("browser.startup.homepage_override.mstone", "ignore");\n'
             'user_pref("startup.homepage_welcome_url", "");\n'
@@ -632,7 +656,9 @@ def main():
                 "DisableAppUpdate": True,
                 "DontCheckDefaultBrowser": True,
                 "OverrideFirstRunPage": "",
-                "OverridePostUpdatePage": "",
+                "Certificates": {
+                    "Install": ["/usr/local/compat/fixture-ca.pem"]
+                },
                 "Preferences": {
                     "browser.aboutwelcome.enabled": False,
                     "browser.newtabpage.enabled": False,
@@ -645,7 +671,7 @@ def main():
                     "browser.shell.checkDefaultBrowser": False,
                     "datareporting.policy.dataSubmissionEnabled": False,
                     "toolkit.telemetry.reportingpolicy.firstRun": False,
-                    "gfx.webrender.software": True,
+                    "gfx.webrender.software": False,
                     "layers.acceleration.disabled": True,
                     "network.dns.disableIPv6": True,
                     "browser.startup.page": 1,
@@ -673,7 +699,14 @@ def main():
         # docshell path Firefox uses.  The soak script greps this exact URL.
         ff_navpage = (
             "<!DOCTYPE html>\n<html><head><title>ravynOS nav fixture</title>"
-            "</head><body><p>soak navigation fixture round marker.</p>"
+            "</head><body>"
+            "<div style=\"width:160px;height:90px;background:#0000ff\">blue box</div>"
+            "<p style=\"font-size:48px;color:#ff0000\">BIG RED TEXT</p>"
+            "<p>soak navigation fixture round marker.</p>"
+            "<p style=\"font-family:-apple-system;font-size:20px\">apple system probe</p>"
+            "<p style=\"font-family:Inter;font-size:20px\">inter family probe</p>"
+            "<p><input id=\"probe\" autofocus size=\"30\" "
+            "style=\"font-size:20px\" placeholder=\"typing probe\"></p>"
             "</body></html>\n"
         )
         for base_user in ("root", "Users/ravyn"):
@@ -696,6 +729,39 @@ def main():
             "path": "usr/local/compat/navpage.html",
             "text": ff_navpage,
             "comment": "Firefox navigation fixture page for the soak gate",
+        })
+        # §4.1 numeric-IP HTTP fixture page: identical content, served by the
+        # host on 127.0.0.1:8123 and reached as http://10.0.2.2:8123/ through
+        # SLIRP. The launchd job below navigates here, not to file://.
+        entries.append({
+            "path": "usr/local/compat/http-index.html",
+            "text": ff_navpage.replace("ravynOS nav fixture",
+                                       "ravynOS HTTP fixture RAVYN-HTTP-OK"),
+            "comment": "host-served copy of the nav page (python http.server root)",
+        })
+        # §4.3 fixture CA for the Certificates.Install enterprise policy.
+        entries.append({
+            "path": "usr/local/compat/fixture-ca.pem",
+            "file": "/tmp/fixture-ca-entry.pem",
+            "comment": "fixture CA cert installed into Firefox via policy",
+        })
+        # §4.5 Foundation download fixture: exact bytes over numeric-IP HTTP.
+        entries.append({
+            "path": "usr/local/compat/download.m",
+            "text": (
+                '#import <Foundation/Foundation.h>\n'
+                'int main(void) {\n'
+                '    @autoreleasepool {\n'
+                '        NSURL *u = [NSURL URLWithString:@"http://10.0.2.2:8123/marker.txt"];\n'
+                '        NSData *d = [NSData dataWithContentsOfURL:u];\n'
+                '        NSString *s = [[[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding] autorelease];\n'
+                '        if ([s hasPrefix:@"RAVYN-TCP-OK"]) { printf("DOWNLOAD-OK\\n"); return 0; }\n'
+                '        printf("DOWNLOAD-FAIL: %s\\n", [s UTF8String] ?: "(nil)");\n'
+                '        return 1;\n'
+                '    }\n'
+                '}\n'
+            ),
+            "comment": "§4.5 download fixture (numeric-IP HTTP byte check)",
         })
         entries.append({
             "path": "Library/Preferences/org.mozilla.firefox.plist",
@@ -727,11 +793,16 @@ def main():
 
     # 6d. Plain executables: the pasteboard daemon and the open(1) tool.
     for build_rel, binary, install_path in BINARIES:
-        build_root = os.path.join(BUILD_SRC, build_rel, binary)
-        repo_root = os.path.join(REPO, build_rel, binary)
+        cands = [os.path.join(BUILD_SRC, build_rel, binary)]
+        if build_rel.startswith("BSD/"):
+            # build-libraries.sh --bsd writes per-tree objects under
+            # BSD/x86_64.i386; check that layout before the legacy one.
+            cands.insert(0, os.path.join(BUILD_SRC, "BSD", "x86_64.i386",
+                                        build_rel[4:], binary))
+        cands.append(os.path.join(REPO, build_rel, binary))
         # The build tree is the only current source; an in-repo copy is
         # untracked output of an earlier build.
-        src = build_root if os.path.isfile(build_root) else repo_root
+        src = next((c for c in cands if os.path.isfile(c)), cands[-1])
         if not os.path.isfile(src):
             closure.append((install_path, build_rel, "MISSING"))
             continue
@@ -754,7 +825,8 @@ def main():
                 "com.ravynos.dailydrivertest.json",
                 "com.apple.syslogd.json",
                 "com.apple.aslmanager.json",
-                "com.apple.backupd-auto.json"):
+                "com.apple.backupd-auto.json",
+                "com.ravynos.downloadprobe.json"):
         job_src = os.path.join(REPO, "SystemLibrary", "LaunchDaemons", job)
         job_dst = "System/Library/LaunchDaemons/" + job
         if os.path.isfile(job_src):
@@ -790,6 +862,9 @@ def main():
     compat_files = [
         ("posix", "usr/local/compat/posix"),
         ("tcp", "usr/local/compat/tcp"),
+        ("dnstest", "usr/local/compat/dnstest"),
+        ("openurl", "usr/local/compat/openurl"),
+        ("download", "usr/local/compat/download"),
         ("pasteboard", "usr/local/compat/pasteboard"),
         ("malloczone", "usr/local/compat/malloczone"),
         ("autorelease", "usr/local/compat/autorelease"),
@@ -798,10 +873,17 @@ def main():
         ("sandbox", "usr/local/compat/sandbox"),
         ("perms", "usr/local/compat/perms"),
         ("spinkill", "usr/local/compat/spinkill"),
+        ("homechain", "usr/local/compat/homechain"),
         ("tdump", "usr/local/compat/tdump"),
+        ("printfprobe", "usr/local/compat/printfprobe"),
+        ("screeninfo", "usr/local/compat/screeninfo"),
+        ("layertest", "usr/local/compat/layertest"),
         ("tsample", "usr/local/compat/tsample"),
         ("passwd", "usr/local/compat/passwd"),
         ("bootstrap_probe", "usr/local/compat/bootstrap_probe"),
+        ("foundation", "usr/local/compat/foundation"),
+        ("filemmap", "usr/local/compat/filemmap"),
+        ("mousetest", "usr/local/compat/mousetest"),
         ("spawnprobe", "usr/local/compat/spawnprobe"),
         ("runas", "usr/local/compat/runas"),
         ("run-fixtures.sh", "usr/local/compat/run-fixtures.sh"),
@@ -870,10 +952,10 @@ def main():
     #     attach an interface but nothing can give it an address.
     for tool in ("ifconfig", "dhclient", "ping", "grep"):
         if tool == "grep":
-            src = os.path.join(BUILD_SRC, "BSD", "usr.bin", tool, tool)
+            src = bsd_build_path("usr.bin", tool, tool)
             dst_path = "usr/bin/" + tool
         else:
-            src = os.path.join(BUILD_SRC, "BSD", "sbin", tool, tool)
+            src = bsd_build_path("sbin", tool, tool)
             dst_path = "sbin/" + tool
         dst_work = os.path.join(HERE, "work", tool)
         if os.path.isfile(src):
@@ -890,7 +972,7 @@ def main():
     #     the four names a regular Unix system provides; it edits
     #     /etc/master.passwd, /etc/passwd and /etc/group under a lock and
     #     creates home directories.  Built with build-libraries.sh --bsd.
-    um_src = os.path.join(BUILD_SRC, "BSD", "usr.sbin", "usermgmt", "usermgmt")
+    um_src = bsd_build_path("usr.sbin", "usermgmt", "usermgmt")
     for name, dst_path in (("useradd", "usr/sbin/useradd"),
                            ("usermod", "usr/sbin/usermod"),
                            ("userdel", "usr/sbin/userdel"),
@@ -911,7 +993,7 @@ def main():
 
     # 6i. su: the same crypt()/master.passwd path loginwindow uses, with
     #     AUDIT lines in /var/log/secure.
-    su_src = os.path.join(BUILD_SRC, "BSD", "usr.bin", "su", "su")
+    su_src = bsd_build_path("usr.bin", "su", "su")
     su_work = os.path.join(HERE, "work", "su")
     if os.path.isfile(su_src):
         shutil.copy2(su_src, su_work)
@@ -924,7 +1006,7 @@ def main():
         closure.append(("usr/bin/su", su_src, "MISSING"))
 
     # 6j. netstat: interface and route summary from the BSD routing sysctl.
-    ns_src = os.path.join(BUILD_SRC, "BSD", "usr.bin", "netstat", "netstat")
+    ns_src = bsd_build_path("usr.bin", "netstat", "netstat")
     ns_work = os.path.join(HERE, "work", "netstat")
     if os.path.isfile(ns_src):
         shutil.copy2(ns_src, ns_work)
@@ -937,7 +1019,7 @@ def main():
         closure.append(("usr/bin/netstat", ns_src, "MISSING"))
 
     # 6k. route: PF_ROUTE client for get/add/delete.
-    rt_src = os.path.join(BUILD_SRC, "BSD", "usr.bin", "route", "route")
+    rt_src = bsd_build_path("usr.bin", "route", "route")
     rt_work = os.path.join(HERE, "work", "route")
     if os.path.isfile(rt_src):
         shutil.copy2(rt_src, rt_work)
@@ -950,7 +1032,7 @@ def main():
         closure.append(("usr/bin/route", rt_src, "MISSING"))
 
     # 6l. tmutil: verified tree copy/restore used by the backup gate.
-    tm_src = os.path.join(BUILD_SRC, "BSD", "usr.sbin", "tmutil", "tmutil")
+    tm_src = bsd_build_path("usr.sbin", "tmutil", "tmutil")
     tm_work = os.path.join(HERE, "work", "tmutil")
     if os.path.isfile(tm_src):
         shutil.copy2(tm_src, tm_work)
@@ -963,7 +1045,7 @@ def main():
         closure.append(("usr/bin/tmutil", tm_src, "MISSING"))
 
     # 6l. dmesg: kernel message buffer through proc_info(KERNMSGBUF).
-    dm_src = os.path.join(BUILD_SRC, "BSD", "usr.sbin", "dmesg", "dmesg")
+    dm_src = bsd_build_path("usr.sbin", "dmesg", "dmesg")
     dm_work = os.path.join(HERE, "work", "dmesg")
     if os.path.isfile(dm_src):
         shutil.copy2(dm_src, dm_work)
@@ -976,7 +1058,7 @@ def main():
         closure.append(("usr/sbin/dmesg", dm_src, "MISSING"))
 
     # 6m. sysctl: kernel MIB reader used by the observability gate.
-    sc_src = os.path.join(BUILD_SRC, "BSD", "usr.sbin", "sysctl", "sysctl")
+    sc_src = bsd_build_path("usr.sbin", "sysctl", "sysctl")
     sc_work = os.path.join(HERE, "work", "sysctl")
     if os.path.isfile(sc_src):
         shutil.copy2(sc_src, sc_work)
@@ -992,7 +1074,7 @@ def main():
     for tool, srcpath, dstpath in (
             ("ps", ("BSD", "bin", "ps", "ps"), "bin/ps"),
             ("uname", ("BSD", "usr.bin", "uname", "uname"), "usr/bin/uname")):
-        src = os.path.join(BUILD_SRC, *srcpath)
+        src = bsd_build_path(*srcpath[1:])
         work = os.path.join(HERE, "work", tool)
         if os.path.isfile(src):
             shutil.copy2(src, work)
@@ -1005,7 +1087,7 @@ def main():
             closure.append((dstpath, src, "MISSING"))
 
     # 6o. df: mounted filesystem usage from getmntinfo.
-    df_src = os.path.join(BUILD_SRC, "BSD", "bin", "df", "df")
+    df_src = bsd_build_path("bin", "df", "df")
     df_work = os.path.join(HERE, "work", "df")
     if os.path.isfile(df_src):
         shutil.copy2(df_src, df_work)
@@ -1021,7 +1103,7 @@ def main():
     for tool, srcpath, dstpath in (
             ("syslogd", ("BSD", "usr.sbin", "syslogd", "syslogd"), "usr/sbin/syslogd"),
             ("aslmanager", ("BSD", "usr.sbin", "aslmanager", "aslmanager"), "usr/sbin/aslmanager")):
-        src = os.path.join(BUILD_SRC, *srcpath)
+        src = bsd_build_path(*srcpath[1:])
         work = os.path.join(HERE, "work", tool)
         if os.path.isfile(src):
             shutil.copy2(src, work)
@@ -1034,7 +1116,7 @@ def main():
             closure.append((dstpath, src, "MISSING"))
 
     # 6o3. ReportCrash: crash reporter for Phase 7.2.
-    rc_src = os.path.join(BUILD_SRC, "BSD", "libexec", "ReportCrash", "ReportCrash")
+    rc_src = bsd_build_path("libexec", "ReportCrash", "ReportCrash")
     rc_work = os.path.join(HERE, "work", "ReportCrash")
     if os.path.isfile(rc_src):
         shutil.copy2(rc_src, rc_work)
@@ -1046,7 +1128,7 @@ def main():
     else:
         closure.append(("usr/libexec/ReportCrash", rc_src, "MISSING"))
     # 6p. login: console crypt(3) verifier with AUDIT action=login.
-    lg_src = os.path.join(BUILD_SRC, "BSD", "bin", "login", "login")
+    lg_src = bsd_build_path("bin", "login", "login")
     lg_work = os.path.join(HERE, "work", "login")
     if os.path.isfile(lg_src):
         shutil.copy2(lg_src, lg_work)
@@ -1059,7 +1141,7 @@ def main():
         closure.append(("usr/bin/login", lg_src, "MISSING"))
 
     # 6q. mount: read-only mount table view.
-    mt_src = os.path.join(BUILD_SRC, "BSD", "sbin", "mount", "mount")
+    mt_src = bsd_build_path("sbin", "mount", "mount")
     mt_work = os.path.join(HERE, "work", "mount")
     if os.path.isfile(mt_src):
         shutil.copy2(mt_src, mt_work)
@@ -1072,7 +1154,7 @@ def main():
         closure.append(("sbin/mount", mt_src, "MISSING"))
 
     # 6r. kill: local signal table (libc has no sig2str).
-    kl_src = os.path.join(BUILD_SRC, "BSD", "bin", "kill", "kill")
+    kl_src = bsd_build_path("bin", "kill", "kill")
     kl_work = os.path.join(HERE, "work", "kill")
     if os.path.isfile(kl_src):
         shutil.copy2(kl_src, kl_work)
@@ -1345,6 +1427,41 @@ def main():
         "comment": "system rc, run by launchctl's System session after LaunchDaemons",
     })
 
+    # 10b. fontconfig system configuration.  cairo clients (Firefox's bundled
+    #      cairo, linked against the staged libfontconfig.1.dylib) resolve
+    #      families through FcFontList; with no /etc/fonts/fonts.conf in the
+    #      image fontconfig finds zero faces, WebRender's glyph rasterizer
+    #      receives unresolved fonts, and content-process text renders as
+    #      solid fills / missing glyphs.  Ship the repo's fonts.conf (its
+    #      <dir> list already names /System/Library/Fonts, where section 8
+    #      stages the TTFs) plus the conf.d fragments the CoreText Makefile
+    #      installs, as regular files.
+    fc_src = os.path.join(REPO, "Frameworks", "CoreText", "fontconfig")
+    entries.append({
+        "path": "etc/fonts/fonts.conf",
+        "file": os.path.relpath(os.path.join(fc_src, "fonts.conf"), HERE),
+        "comment": "fontconfig system config (searches /System/Library/Fonts)",
+    })
+    for conf_name in [
+        "10-hinting-medium.conf", "10-scale-bitmap-fonts.conf",
+        "10-sub-pixel-bgr.conf", "10-yes-antialias.conf",
+        "11-lcdfilter-default.conf", "20-unhint-small-vera.conf",
+        "25-unhint-nonlatin.conf", "30-metric-aliases.conf",
+        "35-lang-normalize.conf", "40-nonlatin.conf",
+        "45-generic.conf", "45-latin.conf", "48-spacing.conf",
+        "49-sansserif.conf", "50-user.conf", "51-local.conf",
+        "60-generic.conf", "60-latin.conf", "65-fonts-persian.conf",
+        "65-khmer.conf", "65-nonlatin.conf", "69-unifont.conf",
+        "70-yes-bitmaps.conf", "80-delicious.conf", "90-synthetic.conf",
+    ]:
+        conf_path = os.path.join(fc_src, "conf.d", conf_name)
+        if os.path.isfile(conf_path):
+            entries.append({
+                "path": "etc/fonts/conf.d/" + conf_name,
+                "file": os.path.relpath(conf_path, HERE),
+                "comment": "fontconfig conf.d fragment",
+            })
+
     # 11. The Dock's preferences and the desktop wallpapers.  The image is
     #     reused between builds and the Dock rewrites its preferences at every
     #     launch, so a stale tile list and a wallpaper path that no longer
@@ -1545,6 +1662,37 @@ def main():
             n_tree += n_root
         if n_tree:
             closure.append((tree_name, tree_root, "staged %d files" % n_tree))
+
+    # 6i. BSD command tree.  BSD/bin, BSD/usr.bin, BSD/sbin and BSD/usr.sbin
+    #     are cross-built by `build-libraries.sh --bsd` into a per-directory
+    #     object tree; stage everything they produced.  Paths already staged
+    #     by the explicit rules above win, so this only adds commands the
+    #     image did not have (cp, mv, dd, find, sed, ...).
+    obj_root = os.path.join(BUILD_SRC, "BSD", "x86_64.i386")
+    staged_paths = set(e["path"] for e in entries)
+    n_bsd = 0
+    for tree, dst in (("bin", "bin"), ("usr.bin", "usr/bin"),
+                      ("sbin", "sbin"), ("usr.sbin", "usr/sbin")):
+        obj_tree = os.path.join(obj_root, tree)
+        if not os.path.isdir(obj_tree):
+            continue
+        for name in sorted(os.listdir(obj_tree)):
+            exe = os.path.join(obj_tree, name, name)
+            dst_path = dst + "/" + name
+            if dst_path in staged_paths:
+                continue
+            if not (os.path.isfile(exe) and os.access(exe, os.X_OK)):
+                continue
+            work = os.path.join(HERE, "work", name)
+            shutil.copy2(exe, work)
+            entries.append({
+                "path": dst_path,
+                "file": os.path.relpath(work, HERE),
+                "comment": "%s (built from BSD/%s/%s)" % (name, tree, name),
+            })
+            staged_paths.add(dst_path)
+            n_bsd += 1
+    closure.append(("bsd-commands", obj_root, "staged %d commands" % n_bsd))
 
     # Dedupe: collapse benign duplicates (same path, same file) to one entry.
     # A genuine conflict (same path, DIFFERENT file) is a real error and exits.
