@@ -24,6 +24,7 @@
 #import <CoreFoundation/CoreFoundation.h>
 #import <CoreGraphics/CoreGraphicsExport.h>
 #import <CoreGraphics/CGError.h>
+#import <CoreGraphics/CGGeometry.h>
 
 #define CGEventMaskBit(eventType) eventType
 #define kCGAnyInputEventType (~(CGEventType)0)
@@ -285,6 +286,10 @@ COREGRAPHICS_EXPORT CGEventSourceStateID CGEventSourceGetSourceStateID(CGEventSo
 COREGRAPHICS_EXPORT bool CGEventSourceButtonState(CGEventSourceStateID stateID, CGMouseButton button);
 COREGRAPHICS_EXPORT bool CGEventSourceKeyState(CGEventSourceStateID stateID, CGKeyCode key);
 COREGRAPHICS_EXPORT CGEventFlags CGEventSourceFlagsState(CGEventSourceStateID stateID);
+/* ravynOS: AppKit publishes the modifier state of the event it just
+ * delivered so Carbon's GetCurrentEventKeyModifiers() (and anything else
+ * polling CGEventSourceFlagsState) sees the same state as NSEvent. */
+COREGRAPHICS_EXPORT void RavynCGEventSourceSetCurrentFlags(CGEventFlags flags);
 COREGRAPHICS_EXPORT CFTimeInterval CGEventSourceSecondsSinceLastEventType(CGEventSourceStateID stateID, CGEventType eventType);
 COREGRAPHICS_EXPORT uint32_t CGEventSourceCounterForEventType(CGEventSourceStateID stateID, CGEventType eventType);
 COREGRAPHICS_EXPORT int64_t CGEventSourceGetUserData(CGEventSourceRef source);

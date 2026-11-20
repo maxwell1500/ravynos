@@ -9,6 +9,8 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 #import <CoreGraphics/CGImage.h>
 #import <Foundation/NSString.h>
 #import <Onyx2D/O2Image.h>
+#import <stdio.h>
+#include <unistd.h>
 
 CGImageRef CGImageRetain(CGImageRef image) {
    return O2ImageRetain(image);

@@ -9,7 +9,11 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 #import <CoreGraphics/CGFont.h>
 #import <CoreGraphics/CGDataProvider.h>
 #import <Onyx2D/O2Font.h>
+#import <Onyx2D/O2Font_freetype.h>
+#import <freetype/freetype.h>
+#import <freetype/ftoutln.h>
 #import <CoreFoundation/CoreFoundation.h>
+#import <unistd.h>
 
 CGFontRef CGFontCreateWithFontName(CFStringRef name) {
    return O2FontCreateWithFontName((NSString *)name);
@@ -25,6 +29,10 @@ void      CGFontRelease(CGFontRef self) {
 
 CFStringRef CGFontCopyFullName(CGFontRef self) {
    return (CFStringRef)O2FontCopyFullName(self);
+}
+
+CFStringRef CGFontCopyFamilyName(CGFontRef self) {
+   return (CFStringRef)O2FontCopyFamilyName(self);
 }
 
 int       CGFontGetUnitsPerEm(CGFontRef self) {
@@ -150,13 +158,22 @@ CGFontRef CGFontCreateCopyWithVariations(CGFontRef self, CFDictionaryRef variati
 bool CGFontGetGlyphBBoxes(CGFontRef self, const CGGlyph *glyphs, size_t count, CGRect *bboxes) {
    if (self == NULL || glyphs == NULL || bboxes == NULL)
       return false;
-   CGRect fbox = CGFontGetFontBBox(self);
-   int ascent = CGFontGetAscent(self);
-   int descent = CGFontGetDescent(self);
+   /* Real glyph ink boxes in font units (consumers scale by point/em).
+    * The old fill-the-cell version (0,descent,advance,ascent-descent)
+    * made every glyph mask cover its whole cell: text runs painted as
+    * one solid bar. */
+   FT_Face ftface = O2FontFreeTypeFace((O2Font_freetype *)self);
+   if (ftface == NULL)
+      return false;
    for (size_t i = 0; i < count; i++) {
-      int adv = 0;
-      CGFontGetGlyphAdvances(self, &glyphs[i], 1, &adv);
-      bboxes[i] = CGRectMake(0, descent, adv > 0 ? adv : fbox.size.width, ascent - descent);
+      if (FT_Load_Glyph(ftface, (FT_UInt)glyphs[i], FT_LOAD_NO_SCALE) != 0) {
+         bboxes[i] = CGRectMake(0, 0, 0, 0);
+         continue;
+      }
+      FT_BBox cbox;
+      FT_Outline_Get_CBox(&ftface->glyph->outline, &cbox);
+      bboxes[i] = CGRectMake(cbox.xMin, cbox.yMin,
+                             cbox.xMax - cbox.xMin, cbox.yMax - cbox.yMin);
    }
    return true;
 }

@@ -162,7 +162,14 @@ bool CGEventSourceButtonState(CGEventSourceStateID stateID, CGMouseButton button
 bool CGEventSourceKeyState(CGEventSourceStateID stateID, CGKeyCode key) {
 }
 
+static CGEventFlags CGEventSourceCurrentFlags = 0;
+
+void RavynCGEventSourceSetCurrentFlags(CGEventFlags flags) {
+    CGEventSourceCurrentFlags = flags;
+}
+
 CGEventFlags CGEventSourceFlagsState(CGEventSourceStateID stateID) {
+    return CGEventSourceCurrentFlags;
 }
 
 CFTimeInterval CGEventSourceSecondsSinceLastEventType(CGEventSourceStateID stateID, CGEventType eventType) {

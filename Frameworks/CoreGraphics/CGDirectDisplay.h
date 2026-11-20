@@ -26,6 +26,7 @@
 #import <CoreGraphics/CoreGraphicsExport.h>
 #import <CoreGraphics/CGError.h>
 #import <CoreGraphics/CGGeometry.h>
+ #include <mach/boolean.h>
 #import <CoreGraphics/CGContext.h>
 #import <CoreGraphics/CGWindow.h>
 #import <CoreGraphics/CGColorSpace.h>

@@ -78,177 +78,157 @@ CGDirectDisplayID CGMainDisplayID(void) {
     return kCGNullDirectDisplay;
 }
 
-CGError CGGetDisplayList(uint32_t code, uint32_t maxDisplays, CGDirectDisplayID *displays, uint32_t *displayCount) {
-    struct wsRPCBase data = { code, 0 };
-    int replyLen = sizeof(data) + sizeof(CGDirectDisplayID)*maxDisplays;
+// Copy the display-id list out of an RPC reply.
+//
+// The four enumeration calls (list, active list, mask, rect) were each doing
+// this inline, each with the same defect: *countOut was set to the number of
+// ids that fitted in the caller's array rather than the number that exist, so
+// the documented "how many displays are there?" call
+// CGGetActiveDisplayList(0, NULL, &n) answered 0.  Apple sets the real count
+// and returns kCGErrorRangeCheck when the caller's array was too small; do the
+// same, in one place.
+//
+// `found` comes from the reply's own length and is reported as-is (a count-only
+// query asks for no ids at all, so the buffer cannot bound it); only the copy
+// is bounded, by both the caller's array and the bytes that actually arrived.
+static CGError __cgCopyDisplayList(const uint8_t *replyBuf, int replyLen,
+                                   uint32_t maxDisplays, CGDirectDisplayID *displays,
+                                   uint32_t *countOut) {
+    if(replyBuf == NULL || countOut == NULL || replyLen < (int)sizeof(struct wsRPCBase))
+        return kCGErrorFailure;
+
+    const struct wsRPCBase *base = (const struct wsRPCBase *)replyBuf;
+    const uint32_t *list = (const uint32_t *)(replyBuf + sizeof(struct wsRPCBase));
+    int avail = (replyLen - (int)sizeof(struct wsRPCBase)) / (int)sizeof(CGDirectDisplayID);
+    int found = (int)(base->len / sizeof(CGDirectDisplayID));
+    if(found < 0)
+        found = 0;
+
+    int copy = found;
+    if(displays == NULL)
+        copy = 0;
+    else {
+        if((int)maxDisplays < copy)
+            copy = (int)maxDisplays;
+        if(copy > avail)
+            copy = avail;
+    }
+
+    for(int i = 0; i < copy; i++)
+        displays[i] = list[i];
+    *countOut = found;
+
+    return (copy < found) ? kCGErrorRangeCheck : kCGErrorSuccess;
+}
+
+// Send one display-list request and copy the answer.
+//
+// The receive buffer cannot be sized from maxDisplays: WindowServer always
+// replies with its whole list, and _windowServerRPC rejects a reply larger than
+// the buffer the caller offered (it reports replyLen = -1).  A count-only query
+// -- maxDisplays 0, displays NULL -- therefore received nothing and reported
+// failure.  Ask for a small fixed capacity instead; extra ids are harmless.
+static CGError __cgDisplayListRPC(struct wsRPCSimple *req, size_t reqLen,
+                                  uint32_t maxDisplays, CGDirectDisplayID *displays,
+                                  uint32_t *countOut) {
+    uint32_t cap = maxDisplays ? maxDisplays : 16;
+    int replyLen = (int)sizeof(struct wsRPCBase) + (int)sizeof(CGDirectDisplayID)*cap;
     uint8_t *replyBuf = (uint8_t *)malloc(replyLen);
 
     if(replyBuf == NULL)
         return kCGErrorFailure;
 
-    _windowServerRPC(&data, sizeof(data), replyBuf, &replyLen);
-    if(replyLen < 0) {
-        free(replyBuf);
-        return kCGErrorFailure;
-    }
-
-    memcpy(&data, replyBuf, sizeof(data));
-    uint32_t *list = (uint32_t *)(replyBuf + sizeof(data));
-
-    int count = data.len / sizeof(CGDirectDisplayID);
-    if(maxDisplays < count)
-        count = maxDisplays;
-
-    if(displays != NULL) {
-        for(int i = 0; i < count; i++) 
-            displays[i] = list[i];
-    }
-    *displayCount = count;
-
+    kern_return_t ret = _windowServerRPC(req, reqLen, replyBuf, &replyLen);
+    CGError err = (ret == KERN_SUCCESS)
+        ? __cgCopyDisplayList(replyBuf, replyLen, maxDisplays, displays, countOut)
+        : kCGErrorFailure;
     free(replyBuf);
-    return kCGErrorSuccess;
+    return err;
+}
+
+static CGError __cgDisplayListRequest(uint32_t code, uint32_t maxDisplays,
+                                       CGDirectDisplayID *displays, uint32_t *displayCount) {
+    struct wsRPCSimple req;
+    memset(&req, 0, sizeof(req));
+    req.base.code = code;
+    return __cgDisplayListRPC(&req, sizeof(req), maxDisplays, displays, displayCount);
+}
+
+CGError CGGetDisplayList(uint32_t code, uint32_t maxDisplays, CGDirectDisplayID *displays, uint32_t *displayCount) {
+    return __cgDisplayListRequest(code, maxDisplays, displays, displayCount);
 }
 
 CGError CGGetOnlineDisplayList(uint32_t maxDisplays, CGDirectDisplayID *onlineDisplays, uint32_t *displayCount) {
-    return CGGetDisplayList(kCGGetOnlineDisplayList, maxDisplays, onlineDisplays, displayCount);
+    return __cgDisplayListRequest(kCGGetOnlineDisplayList, maxDisplays, onlineDisplays, displayCount);
 }
 
 CGError CGGetActiveDisplayList(uint32_t maxDisplays, CGDirectDisplayID *activeDisplays, uint32_t *displayCount) {
-    return CGGetDisplayList(kCGGetActiveDisplayList, maxDisplays, activeDisplays, displayCount);
+    return __cgDisplayListRequest(kCGGetActiveDisplayList, maxDisplays, activeDisplays, displayCount);
 }
 
 CGError CGGetDisplaysWithOpenGLDisplayMask(CGOpenGLDisplayMask mask, uint32_t maxDisplays, CGDirectDisplayID *displays, uint32_t *matchingDisplayCount) {
-    struct wsRPCSimple data = { kCGGetDisplaysWithOpenGLDisplayMask, sizeof(CGOpenGLDisplayMask), mask };
-    int replyLen = sizeof(struct wsRPCBase) + sizeof(CGDirectDisplayID)*maxDisplays;
-    uint8_t *replyBuf = (uint8_t *)malloc(replyLen);
-
-    if(replyBuf == NULL)
-        return kCGErrorFailure;
-
-    _windowServerRPC(&data, sizeof(data), replyBuf, &replyLen);
-    if(replyLen < 0) {
-        free(replyBuf);
-        return kCGErrorFailure;
-    }
-
-    struct wsRPCBase *base = (struct wsRPCBase *)replyBuf;
-    uint32_t *list = (uint32_t *)(replyBuf + sizeof(struct wsRPCBase));
-
-    int count = base->len / sizeof(CGDirectDisplayID);
-    if(maxDisplays < count)
-        count = maxDisplays;
-
-    if(displays != NULL) {
-        for(int i = 0; i < count; i++) 
-            displays[i] = list[i];
-    }
-    *matchingDisplayCount = count;
-
-    free(replyBuf);
-    return kCGErrorSuccess;
+    struct wsRPCSimple req;
+    memset(&req, 0, sizeof(req));
+    req.base.code = kCGGetDisplaysWithOpenGLDisplayMask;
+    req.base.len = sizeof(CGOpenGLDisplayMask);
+    req.val1 = mask;
+    return __cgDisplayListRPC(&req, sizeof(req), maxDisplays, displays, matchingDisplayCount);
 }
 
 CGError CGGetDisplaysWithPoint(CGPoint point, uint32_t maxDisplays, CGDirectDisplayID *displays, uint32_t *matchingDisplayCount) {
-    struct wsRPCSimple data = { kCGGetDisplaysWithPoint, 8 };
-    data.val1 = (uint32_t)point.x;
-    data.val2 = (uint32_t)point.y;
-
-    int replyLen = sizeof(struct wsRPCBase) + sizeof(CGDirectDisplayID)*maxDisplays;
-    uint8_t *replyBuf = (uint8_t *)malloc(replyLen);
-
-    if(replyBuf == NULL)
-        return kCGErrorFailure;
-
-    _windowServerRPC(&data, sizeof(data), replyBuf, &replyLen);
-    if(replyLen < 0) {
-        free(replyBuf);
-        return kCGErrorFailure;
-    }
-
-    struct wsRPCBase *base = (struct wsRPCBase *)replyBuf;
-    uint32_t *list = (uint32_t *)(replyBuf + sizeof(struct wsRPCBase));
-
-    int count = base->len / sizeof(CGDirectDisplayID);
-    if(maxDisplays == 0)
-        displays = NULL;
-    else if(maxDisplays < count && displays != NULL)
-        count = maxDisplays;
-
-    if(displays != NULL) {
-        for(int i = 0; i < count; i++) 
-            displays[i] = list[i];
-    }
-    *matchingDisplayCount = count;
-
-    free(replyBuf);
-    return kCGErrorSuccess;
+    struct wsRPCSimple req;
+    memset(&req, 0, sizeof(req));
+    req.base.code = kCGGetDisplaysWithPoint;
+    req.base.len = 8;
+    req.val1 = (uint32_t)point.x;
+    req.val2 = (uint32_t)point.y;
+    return __cgDisplayListRPC(&req, sizeof(req), maxDisplays, displays, matchingDisplayCount);
 }
 
 CGError CGGetDisplaysWithRect(CGRect rect, uint32_t maxDisplays, CGDirectDisplayID *displays, uint32_t *matchingDisplayCount) {
-    struct wsRPCSimple data = { kCGGetDisplaysWithPoint, 16 };
-    data.val1 = (uint32_t)rect.origin.x;
-    data.val2 = (uint32_t)rect.origin.y;
-    data.val3 = (uint32_t)rect.size.width;
-    data.val4 = (uint32_t)rect.size.height;
-
-    int replyLen = sizeof(struct wsRPCBase) + sizeof(CGDirectDisplayID)*maxDisplays;
-    uint8_t *replyBuf = (uint8_t *)malloc(replyLen);
-
-    if(replyBuf == NULL)
-        return kCGErrorFailure;
-
-    _windowServerRPC(&data, sizeof(data), replyBuf, &replyLen);
-    if(replyLen < 0) {
-        free(replyBuf);
-        return kCGErrorFailure;
-    }
-
-    struct wsRPCBase *base = (struct wsRPCBase *)replyBuf;
-    uint32_t *list = (uint32_t *)(replyBuf + sizeof(struct wsRPCBase));
-
-    int count = base->len / sizeof(CGDirectDisplayID);
-    if(maxDisplays == 0)
-        displays = NULL;
-    else if(maxDisplays < count && displays != NULL)
-        count = maxDisplays;
-
-    if(displays != NULL) {
-        for(int i = 0; i < count; i++) 
-            displays[i] = list[i];
-    }
-    *matchingDisplayCount = count;
-
-    free(replyBuf);
-    return kCGErrorSuccess;
+    /* kCGGetDisplaysWithRect, not ...WithPoint: this asked the server the wrong
+     * question and received the ids of the display containing the origin,
+     * whatever the rect was. */
+    struct wsRPCSimple req;
+    memset(&req, 0, sizeof(req));
+    req.base.code = kCGGetDisplaysWithRect;
+    req.base.len = 16;
+    req.val1 = (uint32_t)rect.origin.x;
+    req.val2 = (uint32_t)rect.origin.y;
+    req.val3 = (uint32_t)rect.size.width;
+    req.val4 = (uint32_t)rect.size.height;
+    return __cgDisplayListRPC(&req, sizeof(req), maxDisplays, displays, matchingDisplayCount);
 }
 
+/* Dropped in the display-list rewrite but still exported ABI: Gecko links
+ * both and dyld aborts the whole browser at load when either is missing
+ * (measured: web_check fell from 692395 px to 60 after the rebuild). */
 CGDirectDisplayID CGOpenGLDisplayMaskToDisplayID(CGOpenGLDisplayMask mask) {
-    uint32_t display;
-    int32_t len = sizeof(display);
-
-    struct wsRPCSimple data = { kCGOpenGLDisplayMaskToDisplayID, 4 };
-    data.val1 = mask;
-
-    _windowServerRPC(&data, sizeof(data), &display, &len);
-    if(len < 0)
+    struct wsRPCSimple req;
+    memset(&req, 0, sizeof(req));
+    req.base.code = kCGOpenGLDisplayMaskToDisplayID;
+    req.base.len = 4;
+    req.val1 = mask;
+    struct wsRPCSimple rep;
+    int len = sizeof(rep);
+    if(_windowServerRPC(&req, sizeof(req), &rep, &len) != KERN_SUCCESS || len < (int)sizeof(rep))
         return kCGNullDirectDisplay;
-    return display;
+    return rep.val1;
 }
 
 CGOpenGLDisplayMask CGDisplayIDToOpenGLDisplayMask(CGDirectDisplayID display) {
-    uint32_t mask;
-    int32_t len = sizeof(mask);
-
-    struct wsRPCSimple data = { kCGDisplayIDToOpenGLDisplayMask, 4 };
-    data.val1 = display;
-
-    _windowServerRPC(&data, sizeof(data), &mask, &len);
-    if(len < 0)
+    struct wsRPCSimple req;
+    memset(&req, 0, sizeof(req));
+    req.base.code = kCGDisplayIDToOpenGLDisplayMask;
+    req.base.len = 4;
+    req.val1 = display;
+    struct wsRPCSimple rep;
+    int len = sizeof(rep);
+    if(_windowServerRPC(&req, sizeof(req), &rep, &len) != KERN_SUCCESS || len < (int)sizeof(rep))
         return 0;
-    return mask;
+    return rep.val1;
 }
 
-// Capturing and Releasing Displays
 CGError CGDisplayCapture(CGDirectDisplayID display) {
     return CGDisplayCaptureWithOptions(display, kCGCaptureNoOptions);
 }
@@ -1241,10 +1221,20 @@ kern_return_t _windowServerRPC(void *data, size_t len, void *replyBuf, int *repl
     // OK, we seem to have ports set up... do the RPC. This is a blocking call until WS responds.
     PortMessage msg = {0};
     msg.header.msgh_remote_port = wsPort;
-    msg.header.msgh_bits = MACH_MSGH_BITS_SET(MACH_MSG_TYPE_COPY_SEND, 0, 0, MACH_MSGH_BITS_COMPLEX);
-    msg.header.msgh_id = MSG_ID_RPC;
-    msg.header.msgh_size = sizeof(msg);
+    /* MACH_MSGH_BITS_COMPLEX must describe the message that is actually
+     * sent: a complex message with a zero descriptor count is rejected by the
+     * kernel, and the rejection is invisible to the caller (the retry loop
+     * below only distinguishes "no reply" from "sent").  Fire-and-forget
+     * RPCs -- window destroy above all -- carry no descriptor, so they were
+     * never delivered at all. */
     msg.msgh_descriptor_count = (replyBuf == NULL) ? 0 : 1;
+    msg.header.msgh_bits = MACH_MSGH_BITS_SET(MACH_MSG_TYPE_COPY_SEND, 0, 0,
+        msg.msgh_descriptor_count ? MACH_MSGH_BITS_COMPLEX : 0);
+    msg.header.msgh_id = MSG_ID_RPC;
+    /* Keep the full-struct size: the receiver reads `len` at its fixed
+     * offset after the 128K data buffer, so a short message would leave that
+     * field untransmitted. */
+    msg.header.msgh_size = sizeof(msg);
     if(msg.msgh_descriptor_count) {
         msg.descriptor.type = MACH_MSG_PORT_DESCRIPTOR;
         msg.descriptor.name = replyPort;
@@ -1288,6 +1278,18 @@ kern_return_t _windowServerRPC(void *data, size_t len, void *replyBuf, int *repl
 
     kern_return_t ret = KERN_SUCCESS;
     int replyArrived = 0, sendAccepted = 0;
+    /* A fire-and-forget request still needs the retry: the first send can be
+     * refused while WindowServer's RPC thread is busy rendering, and a single
+     * attempt then loses the request outright (measured: a window destroy
+     * that never arrived).  What it does not need is the ten second reply
+     * timeout -- there is no reply -- so the retry budget is shortened and
+     * the six attempts together stay under two seconds. */
+    /* Measured: with a 300 ms budget the send reports MACH_MSG_SUCCESS yet
+     * the message never arrives; with 3 s it does arrive, after several
+     * attempts.  The kernel's queue-full path returns success early, so the
+     * long timeout is what actually makes delivery happen.  Until that is
+     * fixed in the message layer, keep the budget that works. */
+    int sendTimeout = (replyBuf == NULL || replyLen == NULL) ? 3000 : 0;
     /* QEMU TCG makes WindowServer's single-threaded service loop slow, and its
      * reply can be dropped when the client's port queue is momentarily full.
      * A single failed attempt used to leave AppKit with a nil window while the
@@ -1302,7 +1304,7 @@ kern_return_t _windowServerRPC(void *data, size_t len, void *replyBuf, int *repl
         }
         ret = mach_msg((mach_msg_header_t *)&msg, MACH_SEND_MSG | MACH_SEND_TIMEOUT | flags,
                 sizeof(msg), sizeof(msg), replyPort,
-                (flags & MACH_RCV_MSG) ? 8000 : 3000, MACH_PORT_NULL);
+                (flags & MACH_RCV_MSG) ? 8000 : sendTimeout, MACH_PORT_NULL);
         if(ret == MACH_MSG_SUCCESS) {
             replyArrived = 1;
             break;
