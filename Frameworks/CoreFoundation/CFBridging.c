@@ -24,6 +24,9 @@
 #include "CFBridging.h"
 #include "CFInternal.h"
 #include <Foundation/NSCFTypeID.h>
+extern Boolean __CFInitialized; /* defined in CFRuntime.c */
+void _CFCompletePendingBridging(void);
+extern int __CFPendingBridging;
 
 #define DEBUG 0
 #if DEBUG
@@ -76,4 +79,32 @@ CF_EXPORT int _CFRuntimeRegisterObjCClass(CFTypeID typeID, uintptr_t cls)
 CF_EXPORT void CFSetupFoundationBridging(void)
 {
     _CFRuntimeRegisterObjCClass(kNSCFTypeString, (uintptr_t)objc_lookUpClass("NSCFString"));
+    /* The array bridge class: every Foundation array (concrete,
+     * placeholder, mutable) is an NSArray, and CF_IS_OBJC walks
+     * superclasses, so registering NSArray covers them all.  Without
+     * this registration CFArrayGetValueAtIndex read CF-layout buckets
+     * out of an ObjC array and returned garbage (measured: NULL in one
+     * boot, a stale Object instance in another). */
+    /* Registering needs CFArrayGetTypeID(), which registers a runtime
+     * class -- but libmain's constructor in the Foundation image calls
+     * this function, and the guest dyld runs image initializers in
+     * load order, so in processes whose executable lists Foundation
+     * before CoreFoundation (WindowServer) that registration would run
+     * before __CFInitialize and corrupt the fixed class-table layout
+     * (every WS instance died at boot until this was deferred).  When
+     * CF is not initialized yet, defer to __CFInitialize's tail, where
+     * the canonical table is in place and NSArray is installed. */
+    if (__CFInitialized)
+        _CFCompletePendingBridging();
+    else
+        __CFPendingBridging = 1;
+}
+
+int __CFPendingBridging = 0;
+
+void _CFCompletePendingBridging(void)
+{
+    __CFPendingBridging = 0;
+    _CFRuntimeRegisterObjCClass(CFArrayGetTypeID(),
+        (uintptr_t)objc_lookUpClass("NSArray"));
 }

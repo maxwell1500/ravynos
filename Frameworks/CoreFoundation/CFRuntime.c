@@ -315,6 +315,8 @@ Boolean _CFIsObjC(CFTypeID typeID, void *obj) {
 }
 
 CFTypeID _CFRuntimeRegisterClass(const CFRuntimeClass * const cls) {
+
+
 // className must be pure ASCII string, non-null
     if ((cls->version & _kCFRuntimeCustomRefCount) && !cls->refcount) {
        CFLog(kCFLogLevelWarning, CFSTR("*** _CFRuntimeRegisterClass() given inconsistent class '%s'.  Program will crash soon."), cls->className);
@@ -472,6 +474,7 @@ void _CFRuntimeSetInstanceTypeID(CFTypeRef cf, CFTypeID newTypeID) {
     uint32_t *cfinfop = (uint32_t *)&(((CFRuntimeBase *)cf)->_cfinfo);
     CFTypeID currTypeID = (*cfinfop >> 8) & 0x03FF; // mask up to 0x0FFF
     CFRuntimeClass *newcfClass = __CFRuntimeClassTable[newTypeID];
+
     Boolean newCustomRC = (newcfClass->version & _kCFRuntimeCustomRefCount);
     CFRuntimeClass *currcfClass = __CFRuntimeClassTable[currTypeID];
     Boolean currCustomRC = (currcfClass->version & _kCFRuntimeCustomRefCount);
@@ -1030,6 +1033,9 @@ static
 CF_EXPORT
 #endif
 void __CFInitialize(void) {
+extern int __CFPendingBridging;           /* defined in CFBridging.c */
+extern void _CFCompletePendingBridging(void);
+
 
     if (!__CFInitialized && !__CFInitializing) {
         __CFInitializing = 1;
@@ -1091,8 +1097,22 @@ void __CFInitialize(void) {
 #endif
 
 
+        /* The guest dyld runs image initializers in load order, and some
+         * executables (WindowServer) list Foundation before CoreFoundation,
+         * so a constructor can call into CF -- and register a class --
+         * before this initializer runs (the typeID tables below hard-code
+         * index positions, so the layout must be exactly canonical).
+         * The memset must take the counter with it: a pre-init registration
+         * left a NULL hole at the wiped slot while Not A Type / CFType /
+         * allocator shifted up one, and the first
+         * _CFRuntimeSetInstanceTypeID on a zeroed instance read typeID 0
+         * and faulted on the hole (measured: every WindowServer instance
+         * died at boot, 30-158 corpses per boot).  See CFBridging.c for
+         * the deferral that keeps the bridge registration out of that
+         * window in the first place. */
         memset(__CFRuntimeClassTable, 0, sizeof(__CFRuntimeClassTable));
         memset(__CFRuntimeObjCClassTable, 0, sizeof(__CFRuntimeObjCClassTable));
+        __CFRuntimeClassTableCount = 0;
 
 
         /* Here so that two runtime classes get indices 0, 1. */
@@ -1251,6 +1271,12 @@ void __CFInitialize(void) {
         __CFProphylacticAutofsAccess = false;
         __CFInitializing = 0;
         __CFInitialized = 1;
+        /* A process whose constructor order ran Foundation's libmain
+         * before this initializer deferred a bridge registration
+         * (CFBridging.c); the class table is canonical now, and the
+         * NSArray class is already installed, so complete it. */
+        if (__CFPendingBridging)
+            _CFCompletePendingBridging();
     }
 }
 

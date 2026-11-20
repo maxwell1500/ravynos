@@ -596,9 +596,40 @@ static inline uintptr_t __CFMaskIsa(uintptr_t raw) {
 #endif
     return raw;
 }
+/* Bridge-class matching must walk the ObjC superclass chain: concrete
+   Foundation containers (NSArray_concrete, NSMutableArray_concrete, ...)
+   are subclasses of the registered bridge class, and the old exact-isa
+   match never fired for them, so CF code read CF-layout buckets out of
+   ObjC storage (measured: CFArrayGetValueAtIndex returned NULL in one
+   boot and a stale Object in another, from an NSMutableArray_concrete).
+   C-allocated CF instances carry the plain CFRuntimeClass record as
+   their isa (see __CFISAForTypeID); that is NOT an ObjC class object,
+   so match it first and take the C path without touching the runtime.
+   class_getSuperclass is declared here because this header is included
+   by plain C files that must not import objc/runtime.h. */
+#ifndef _OBJC_RUNTIME_H
+extern void *class_getSuperclass(void *cls);
+#endif
+static inline Boolean __CFIsObjCBridgedClass(CFTypeID typeID, uintptr_t isa) {
+    uintptr_t bridge = __CFRuntimeObjCClassTable[typeID];
+    if (bridge == 0 || isa == 0)
+        return false;
+    if (isa == bridge)
+        return true;
+    if (isa == (uintptr_t)_CFRuntimeGetClassWithTypeID(typeID))
+        return false;
+    uintptr_t cls = isa;
+    /* shortcut: real class chains are shallow; 16 is a hard stop */
+    for (int i = 0; i < 16 && cls != 0; i++) {
+        cls = (uintptr_t)class_getSuperclass((void *)cls);
+        if (cls == bridge)
+            return true;
+    }
+    return false;
+}
 #define CF_IS_OBJC(typeID, obj) (obj && (*(uintptr_t *)obj) \
     && (typeID < __CFRuntimeClassTableSize) \
-    && (__CFMaskIsa(*(uintptr_t *)obj) == __CFRuntimeObjCClassTable[typeID]))
+    && __CFIsObjCBridgedClass(typeID, __CFMaskIsa(*(uintptr_t *)obj)))
 /* C-allocated CF instances must always get the CF class isa, never the
    bridged ObjC class: CF_IS_OBJC then distinguishes real ObjC objects
    (isa == bridge class) from C structs, and CFURLCopyAbsoluteURL etc.
