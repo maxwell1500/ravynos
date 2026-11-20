@@ -74,7 +74,15 @@
 #if !PRIVATE
 
 #include <stdint.h>
+/* A bare compiler probe (Onyx2D/tiff CMakeScratch) runs with no sysroot
+ * include path at all, so <mach/mach_types.h> may be unreachable even in
+ * real builds' wrapper.  Fall back to the ABI type directly; mach_msg_size_t
+ * is a 32-bit natural_t everywhere this SDK supports. */
+#if __has_include(<mach/mach_types.h>)
 #include <mach/mach_types.h>     /* mach_msg_size_t */
+#else
+typedef uint32_t mach_msg_size_t;
+#endif
 
 struct mach_msg_aux_header {
 	mach_msg_size_t   msgdh_size;
