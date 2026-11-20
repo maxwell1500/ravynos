@@ -76,6 +76,21 @@ CF_EXPORT int _CFRuntimeRegisterObjCClass(CFTypeID typeID, uintptr_t cls)
     return 0;
 }
 
+/* Registers the bridge class AND opts the typeID into the ObjC
+ * superclass-chain walk of CF_IS_OBJC: for containers whose concrete
+ * Foundation classes are subclasses (NSArray_concrete and friends),
+ * the exact-isa match alone never fires.  Exact-only registration
+ * (above) stays the default -- widening the walk to the string bridge
+ * made every NSString subclass dispatch compare: into XUL and Firefox
+ * faulted inside CFStringCompare. */
+CF_EXPORT int _CFRuntimeRegisterObjCClassHierarchy(CFTypeID typeID, uintptr_t cls)
+{
+    int rc = _CFRuntimeRegisterObjCClass(typeID, cls);
+    if (rc == 0 && typeID < __CFRuntimeClassTableSize)
+        __CFRuntimeObjCClassWalkTable[typeID] = 1;
+    return rc;
+}
+
 CF_EXPORT void CFSetupFoundationBridging(void)
 {
     _CFRuntimeRegisterObjCClass(kNSCFTypeString, (uintptr_t)objc_lookUpClass("NSCFString"));
@@ -105,6 +120,6 @@ int __CFPendingBridging = 0;
 void _CFCompletePendingBridging(void)
 {
     __CFPendingBridging = 0;
-    _CFRuntimeRegisterObjCClass(CFArrayGetTypeID(),
+    _CFRuntimeRegisterObjCClassHierarchy(CFArrayGetTypeID(),
         (uintptr_t)objc_lookUpClass("NSArray"));
 }

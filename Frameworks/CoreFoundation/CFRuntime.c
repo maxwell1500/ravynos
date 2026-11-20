@@ -288,6 +288,7 @@ CF_PRIVATE CFRuntimeClass * __CFRuntimeClassTable[__CFRuntimeClassTableSize] = {
 CF_PRIVATE int32_t __CFRuntimeClassTableCount = 0;
 
 CF_PRIVATE uintptr_t __CFRuntimeObjCClassTable[__CFRuntimeClassTableSize] = {0};
+CF_PRIVATE uint8_t __CFRuntimeObjCClassWalkTable[__CFRuntimeClassTableSize] = {0};
 
 #if !defined(__CFObjCIsCollectable)
 bool (*__CFObjCIsCollectable)(void *) = NULL;

@@ -596,12 +596,19 @@ static inline uintptr_t __CFMaskIsa(uintptr_t raw) {
 #endif
     return raw;
 }
-/* Bridge-class matching must walk the ObjC superclass chain: concrete
-   Foundation containers (NSArray_concrete, NSMutableArray_concrete, ...)
-   are subclasses of the registered bridge class, and the old exact-isa
-   match never fired for them, so CF code read CF-layout buckets out of
-   ObjC storage (measured: CFArrayGetValueAtIndex returned NULL in one
-   boot and a stale Object in another, from an NSMutableArray_concrete).
+/* Bridge-class matching: exact-isa match against the registered bridge
+   class, plus -- only for typeIDs registered via
+   _CFRuntimeRegisterObjCClassHierarchy -- an ObjC superclass-chain walk:
+   concrete Foundation containers (NSArray_concrete,
+   NSMutableArray_concrete, ...) are subclasses of the registered bridge
+   class, and the exact match never fired for them, so CF code read
+   CF-layout buckets out of ObjC storage (measured: CFArrayGetValueAtIndex
+   returned NULL in one boot and a stale Object in another, from an
+   NSMutableArray_concrete).  The walk must stay opt-in per typeID:
+   widening it to the string bridge (registered exact, matching only
+   NSCFString) made every NSString subclass dispatch compare: into
+   XUL/Gecko code and Firefox faulted inside CFStringCompare (measured,
+   corpse pid 4 on a RAVYN_FIREFOX image, 2026-11-20).
    C-allocated CF instances carry the plain CFRuntimeClass record as
    their isa (see __CFISAForTypeID); that is NOT an ObjC class object,
    so match it first and take the C path without touching the runtime.
@@ -610,6 +617,7 @@ static inline uintptr_t __CFMaskIsa(uintptr_t raw) {
 #ifndef _OBJC_RUNTIME_H
 extern void *class_getSuperclass(void *cls);
 #endif
+extern uint8_t __CFRuntimeObjCClassWalkTable[__CFRuntimeClassTableSize];
 static inline Boolean __CFIsObjCBridgedClass(CFTypeID typeID, uintptr_t isa) {
     uintptr_t bridge = __CFRuntimeObjCClassTable[typeID];
     if (bridge == 0 || isa == 0)
@@ -617,6 +625,8 @@ static inline Boolean __CFIsObjCBridgedClass(CFTypeID typeID, uintptr_t isa) {
     if (isa == bridge)
         return true;
     if (isa == (uintptr_t)_CFRuntimeGetClassWithTypeID(typeID))
+        return false;
+    if (!__CFRuntimeObjCClassWalkTable[typeID])
         return false;
     uintptr_t cls = isa;
     /* shortcut: real class chains are shallow; 16 is a hard stop */
