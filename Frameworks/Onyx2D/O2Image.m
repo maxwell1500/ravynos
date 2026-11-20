@@ -93,12 +93,12 @@ ONYX2D_STATIC BOOL initFunctionsForRGBColorSpace(O2Image *self,size_t bitsPerCom
 			   switch(bitmapInfo&kO2BitmapByteOrderMask){
 				   case kO2BitmapByteOrder16Little:
 				   case kO2BitmapByteOrder32Little:
-					   self->_read_argb8u=O2ImageRead_ABGR8888_to_argb8u;
+					   self->_read_argb8u=O2ImageRead_RGBA8888_to_argb8u;
 					   return YES;
-					   
+
 				   case kO2BitmapByteOrder16Big:
 				   case kO2BitmapByteOrder32Big:
-					   self->_read_argb8u=O2ImageRead_RGBA8888_to_argb8u;
+					   self->_read_argb8u=O2ImageRead_ABGR8888_to_argb8u;
 					   return YES;
 			   }
 			   return YES;
@@ -112,15 +112,22 @@ ONYX2D_STATIC BOOL initFunctionsForRGBColorSpace(O2Image *self,size_t bitsPerCom
           
          case kO2ImageAlphaLast:
          case kO2ImageAlphaPremultipliedLast:
+          /* Apple byte order says how the PIXEL VALUE is stored: alpha-last
+           * value 0xAABBGGRR, so 32Little gives memory bytes R,G,B,A (the
+           * RGBA8888 reader) and 32Big gives A,B,G,R.  These were swapped,
+           * which rotated every channel one byte over -- measured: a magenta
+           * kCGImageAlphaPremultipliedLast tile sampled as (a=253,r=0) and
+           * composited to nothing, and with it every CALayer contents image
+           * (Gecko tiles, layertest). */
           switch(bitmapInfo&kO2BitmapByteOrderMask){
            case kO2BitmapByteOrder16Little:
            case kO2BitmapByteOrder32Little:
-            self->_read_argb8u=O2ImageRead_ABGR8888_to_argb8u;
+            self->_read_argb8u=O2ImageRead_RGBA8888_to_argb8u;
             return YES;
 
            case kO2BitmapByteOrder16Big:
            case kO2BitmapByteOrder32Big:
-            self->_read_argb8u=O2ImageRead_RGBA8888_to_argb8u;
+            self->_read_argb8u=O2ImageRead_ABGR8888_to_argb8u;
             return YES;
           }
           break;
@@ -141,12 +148,12 @@ ONYX2D_STATIC BOOL initFunctionsForRGBColorSpace(O2Image *self,size_t bitsPerCom
           switch(bitmapInfo&kO2BitmapByteOrderMask){
            case kO2BitmapByteOrder16Little:
            case kO2BitmapByteOrder32Little:
-            self->_read_argb8u=O2ImageRead_ABGR8888_to_argb8u;
+            self->_read_argb8u=O2ImageRead_RGBA8888_to_argb8u;
             return YES;
 
            case kO2BitmapByteOrder16Big:
            case kO2BitmapByteOrder32Big:
-            self->_read_argb8u=O2ImageRead_RGBA8888_to_argb8u;
+            self->_read_argb8u=O2ImageRead_ABGR8888_to_argb8u;
             return YES;
           }
           break;
