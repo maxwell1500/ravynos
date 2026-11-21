@@ -947,7 +947,9 @@ si_module_static_search(void)
 		 * 1) cache
 		 * 2) DirectoryService/OpenDirectory (where available)
 		 * 3) flat file
-		 * 4) mDNSResponder
+		 * 4) unicast DNS from /etc/resolv.conf (this system has no
+		 *    mDNSResponder daemon, so "mdns" alone cannot resolve)
+		 * 5) mDNSResponder
 		 */
 
 		const char * const modules[] =
@@ -960,8 +962,9 @@ si_module_static_search(void)
 #ifdef DS_AVAILABLE
 			"ds",
 #endif
-			"mdns",
 			"file",
+			"dns",
+			"mdns",
 		};
 
 		int count = sizeof(modules) / sizeof(char *);

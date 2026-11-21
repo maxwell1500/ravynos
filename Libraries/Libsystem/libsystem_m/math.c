@@ -77,6 +77,79 @@ bool islessequal(double __x, double __y) { return __builtin_islessequal(__x, __y
 bool islessgreater(double __x, double __y) { return __builtin_islessgreater(__x, __y); }
 bool isunordered(double __x, double __y) { return __builtin_isunordered(__x, __y); }
 
+/* The SDK ships no <fenv.h>, but Firefox is compiled against the macOS
+ * x86_64 fenv_t layout.  Keep that layout and implement the two calls it
+ * makes, rather than returning success without touching MXCSR. */
+#if defined(__x86_64__) || defined(__i386__)
+#ifndef _RAVYN_FENV_T_DEFINED
+#define _RAVYN_FENV_T_DEFINED
+typedef struct {
+	unsigned short __control;
+	unsigned short __status;
+	unsigned int __mxcsr;
+	char __reserved[8];
+} fenv_t;
+#endif
+
+struct ravyn_x87_env {
+	unsigned short control;
+	unsigned short r1;
+	unsigned short status;
+	unsigned short r2;
+	unsigned short tag;
+	unsigned short r3;
+	unsigned int ip;
+	unsigned short cs;
+	unsigned short opcode;
+	unsigned int data;
+	unsigned short ds;
+	unsigned short r4;
+} __attribute__((packed));
+
+int fegetenv(fenv_t *env)
+{
+	unsigned short cw, sw;
+	unsigned int mxcsr;
+
+	if (env == NULL)
+		return -1;
+	__asm__ __volatile__("fnstcw %0" : "=m"(cw));
+	__asm__ __volatile__("fnstsw %0" : "=m"(sw));
+	__asm__ __volatile__("stmxcsr %0" : "=m"(mxcsr));
+	env->__control = cw;
+	env->__status = sw;
+	env->__mxcsr = mxcsr;
+	for (unsigned i = 0; i < sizeof(env->__reserved); i++)
+		env->__reserved[i] = 0;
+	return 0;
+}
+
+int fesetenv(const fenv_t *env)
+{
+	struct ravyn_x87_env x87;
+
+	if (env == NULL)
+		return -1;
+	x87.control = env->__control;
+	x87.r1 = 0;
+	x87.status = env->__status;
+	x87.r2 = 0;
+	x87.tag = 0xffff;	/* all x87 registers empty */
+	x87.r3 = 0;
+	x87.ip = 0;
+	x87.cs = 0;
+	x87.opcode = 0;
+	x87.data = 0;
+	x87.ds = 0;
+	x87.r4 = 0;
+	__asm__ __volatile__("fldenv %0" : : "m"(x87));
+	__asm__ __volatile__("ldmxcsr %0" : : "m"(env->__mxcsr));
+	return 0;
+}
+#endif
+
+float __exp10f(float x) { return powf(10.0f, x); }
+
 double sqrt(double x);
 float sqrtf(float x);
 long double sqrtl(long double x);

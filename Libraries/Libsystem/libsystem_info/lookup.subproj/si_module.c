@@ -81,6 +81,7 @@ static si_async_workunit_t *si_async_worklist = NULL;
 si_mod_t *si_module_static_search(void);
 si_mod_t *si_module_static_cache(void);
 si_mod_t *si_module_static_file(void);
+si_mod_t *si_module_static_dns(void);
 #ifdef MUSER_AVAILABLE
 si_mod_t *si_module_static_muser(void);
 #endif
@@ -191,6 +192,7 @@ si_module_with_name(const char *name)
 #ifdef DS_AVAILABLE
 		{ "ds", si_module_static_ds, NULL },
 #endif
+		{ "dns", si_module_static_dns, NULL },
 		{ "mdns", si_module_static_mdns, NULL },
 		{ NULL, NULL },
 	};

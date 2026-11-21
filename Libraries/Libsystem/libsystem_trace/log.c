@@ -65,6 +65,8 @@ os_log_create(const char* subsystem, const char* category)
     if (!log)
         return (os_log_t)NULL;
 
+    _libtrace_init_once();
+
     if (_CFStringCreateWithCString) {
         log->subsystem = (void*)_CFStringCreateWithCString(NULL,
             subsystem, kCFStringEncodingUTF8);
@@ -78,7 +80,17 @@ os_log_create(const char* subsystem, const char* category)
     log->sink_type = OS_LOG_SINK_TYPE_FD;
     log->sink_dest = STDOUT_FILENO;
 
-    os_retain(log);
+    /*
+     * No os_retain() here.  os_log_t is an os_object in Apple's runtime, but
+     * these structs are plain calloc'd memory: os_retain() goes straight to
+     * libdispatch's _os_object_retain(), which reads an isa out of our offset
+     * 0x20 and dereferences whatever it finds.  Every process that logged
+     * therefore died in libobjc inside the logger, which is why logging
+     * appeared to crash random applications.
+     *
+     * The object lives for the life of the process, which is what callers
+     * expect anyway; there is no os_log_release() in this library.
+     */
     return log;
 }
 
@@ -339,7 +351,11 @@ void __os_log_impl(void* dso,
 
     /* This _should_ be identical to the NSObject layout */
     struct os_log_s* s = (struct os_log_s*)log;
-    fprintf(stderr, "[%s] %s.%s(%p): ", _typeToStr(type), s->subsystem, s->category, dso);
+    if (s == NULL || s->subsystem == NULL)
+        s = &_os_log_default;
+    fprintf(stderr, "[%s] %s.%s(%p): ", _typeToStr(type),
+            s->subsystem != NULL ? s->subsystem : "com.apple.default",
+            s->category != NULL ? s->category : "default", dso);
     fputs(format, stderr);
     //vfprintf(stderr, format, args); // FIXME
     fputc('\n', stderr);

@@ -221,6 +221,10 @@ SRCS += \
 	stackshot.c \
 	sfi.c \
 	posix_sem_obsolete.c \
+	posix_timer.c \
+	posix_mqueue.c \
+	sig2str.c \
+	sigaltstack.c \
 	pid_shutdown_networking.c \
 	coalition.c \
 	fs_snapshot.c \

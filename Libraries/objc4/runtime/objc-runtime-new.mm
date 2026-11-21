@@ -36,6 +36,7 @@
 #include "objc-zalloc.h"
 #include <Block.h>
 #include <objc/message.h>
+#include <atomic>
 #include <mach/shared_region.h>
 
 #define newprotocol(p) ((protocol_t *)p)
@@ -6338,6 +6339,73 @@ Class gdb_class_getClass(Class cls)
     if(!className || !strlen(className)) return Nil;
     Class rCls = look_up_class(className, NO, NO);
     return rCls;
+}
+
+/* Pointer-identity check against the realized class list, without ever
+ * dereferencing the candidate.  CF's fallback lifetime path used to
+ * objc_msgSend any pointer whose "isa" word was nonzero, and Gecko's
+ * WebRender threads hand CFRelease stack garbage and function pointers;
+ * msgSend on those crashed (measured: ___CFStringDeallocate as "isa").
+ * A sorted snapshot rebuilt whenever objc_getClassList's count changes
+ * makes the check O(log n) with no dereference of the candidate.
+ * Rebuilds swap the snapshot atomically; superseded buffers are left
+ * allocated on purpose (a concurrent reader may still be searching the
+ * old one, and rebuilds happen only when new classes are registered). */
+static Class * volatile g_knownClassPtrs = NULL;
+static volatile int g_knownClassPtrsCount = 0;
+static int g_lastClassListCount = -1;
+static std::atomic<bool> g_knownClassPtrsBusy(false);
+
+/* C linkage is required: CoreFoundation declares this `extern Boolean
+ * _objc_isKnownClassPtr(const void*)` from a C file, so the reference is
+ * the unmangled `__objc_isKnownClassPtr`.  A plain C++ definition exported
+ * the mangled __Z21_objc_isKnownClassPtrPKv, dyld's flat lookup missed it,
+ * and every CF-linked process died at load with "Symbol not found:
+ * __objc_isKnownClassPtr ... Expected in: flat namespace". */
+extern "C" BOOL _objc_isKnownClassPtr(const void *ptr)
+{
+    for (;;) {
+        int n = objc_getClassList(NULL, 0);
+        if (n != g_lastClassListCount) {
+            bool expected = false;
+            if (!g_knownClassPtrsBusy.compare_exchange_strong(expected, true))
+                return NO; /* another thread is rebuilding; treat as unknown */
+            n = objc_getClassList(NULL, 0);
+            if (n != g_lastClassListCount) {
+                Class *buffer = (Class *)malloc(sizeof(Class) * (n > 0 ? n : 1));
+                if (buffer != NULL) {
+                    int got = objc_getClassList(buffer, n);
+                    /* insertion sort by pointer; class counts are small (~1e3) */
+                    for (int i = 1; i < got; i++) {
+                        Class key = buffer[i];
+                        int j = i - 1;
+                        while (j >= 0 && buffer[j] > key) {
+                            buffer[j + 1] = buffer[j];
+                            j--;
+                        }
+                        buffer[j + 1] = key;
+                    }
+                    /* publish, then forget the old buffer (small, rare leak) */
+                    g_knownClassPtrs = buffer;
+                    g_knownClassPtrsCount = got;
+                    g_lastClassListCount = n;
+                }
+            }
+            g_knownClassPtrsBusy.store(false);
+        }
+
+        const Class *snapshot = g_knownClassPtrs;
+        const int count = g_knownClassPtrsCount;
+        BOOL found = NO;
+        int lo = 0, hi = count - 1;
+        while (lo <= hi) {
+            int mid = (lo + hi) / 2;
+            if (snapshot[mid] == (Class)ptr) { found = YES; break; }
+            if (snapshot[mid] < (Class)ptr) lo = mid + 1;
+            else hi = mid - 1;
+        }
+        if (snapshot == g_knownClassPtrs) return found; /* not swapped mid-search */
+    }
 }
 
 Class gdb_object_getClass(id obj)

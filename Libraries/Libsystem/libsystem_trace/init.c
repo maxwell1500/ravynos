@@ -31,6 +31,7 @@
 
 #include <stdio.h>
 #include <dlfcn.h>
+#include <pthread.h>
 #include <CoreFoundation/CFString.h>
 #include <CoreFoundation/CFData.h>
 #include "init.h"
@@ -55,7 +56,19 @@ void _libtrace_init(void)
         _CFDataGetTypeID = dlsym(cf_handle, "CFDataGetTypeID");
         _CFDataGetBytePtr = dlsym(cf_handle, "CFDataGetBytePtr");
     }
-    printf("initialized libsystem_trace: cf_handle=%p, pfunc=%p\n", cf_handle, _CFStringCreateWithCString);
+}
+
+/*
+ * Nothing called _libtrace_init(), so every process that logged got
+ * "Missing CFStringCreateWithCString!" and no subsystem/category on its
+ * os_log objects.  Bind lazily instead of from a dylib constructor: the first
+ * log call is far away from dyld lock recursion, and CoreFoundation is always
+ * fully initialised by then.
+ */
+void _libtrace_init_once(void)
+{
+    static pthread_once_t once = PTHREAD_ONCE_INIT;
+    pthread_once(&once, _libtrace_init);
 }
 
 

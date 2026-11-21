@@ -13,6 +13,7 @@ SRCS = 	./dns.subproj/herror.c \
 	./gen.subproj/rthdr.c \
 	./gen.subproj/vars.c \
 	./lookup.subproj/cache_module.c \
+	./lookup.subproj/dns_module.c \
 	./lookup.subproj/ds_module.c \
 	./lookup.subproj/file_module.c \
 	./lookup.subproj/ils.c \

@@ -39,6 +39,7 @@ extern "C" {
 #endif
 
 extern void _libtrace_init(void);
+extern void _libtrace_init_once(void);
 extern CFStringRef (*_CFStringCreateWithCString)(CFAllocatorRef, const char*, CFStringEncoding);
 extern CFTypeID (*_CFGetTypeID)(CFTypeRef);
 extern CFTypeID (*_CFDataGetTypeID)(void);

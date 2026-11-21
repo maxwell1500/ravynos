@@ -1,0 +1,12 @@
+{
+ "Label": "com.ravynos.downloadprobe",
+ "ProgramArguments": [
+  "/bin/sh",
+  "-c",
+  "sleep 120; /sbin/ifconfig en0 10.0.2.15 netmask 255.255.255.0 up; /sbin/dhclient en0; echo '[downloadprobe] start'; /usr/local/compat/download; echo \"[downloadprobe] rc=$?\"; echo '[openurlprobe] start'; /usr/local/compat/openurl http://10.0.2.2:8123/http-index.html; echo \"[openurlprobe] rc=$?\""
+ ],
+ "RunAtLoad": true,
+ "KeepAlive": false,
+ "StandardErrorPath": "/dev/console",
+ "StandardOutPath": "/dev/console"
+}
