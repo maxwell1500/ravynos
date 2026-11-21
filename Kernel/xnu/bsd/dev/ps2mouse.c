@@ -331,6 +331,8 @@ ps2mouse_read(__unused dev_t dev, struct uio *uio, __unused int ioflag)
 		lck_mtx_unlock(&mouse_lock);
 		return 0;
 	}
+	{ static int rn = 0;
+	  if (rn < 80) { rn++; printf("[PS2RD] n=%d avail=%d\n", (int)chunk, (int)available); } }
 
 	for (size_t i = 0; i < chunk; i++) {
 		temp_buf[i] = mouse_ring[mouse_tail];
@@ -354,6 +356,8 @@ ps2mouse_select(__unused dev_t dev, int which, __unused void *wql, __unused stru
 
 	int ready = (mouse_head != mouse_tail) ? 1 : 0;
 	lck_mtx_unlock(&mouse_lock);
+	{ static int sn = 0;
+	  if (ready && sn < 80) { sn++; printf("[PS2SEL] ready=1\n"); } }
 
 	return ready;
 }

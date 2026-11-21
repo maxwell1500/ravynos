@@ -382,6 +382,10 @@ typedef struct {
 #define EfiLoaderData 2
 #define EfiConventionalMemory 7
 
+/* pexpert/pexpert/i386/boot.h:142-144 */
+#define kBootArgsFlagCSRActiveConfig    (1 << 3)
+#define kBootArgsFlagCSRConfigMode      (1 << 4)
+
 /* ------------------------------------------------------------------ */
 /* build-time configuration                                            */
 /* ------------------------------------------------------------------ */
@@ -467,7 +471,7 @@ static u8 *dt_str(u8 *p, const char *name, const char *val)
 static const char DEFAULT_CMDLINE[] =
 	"-v serial=3 debug=0x14e keepsyms=1 slide=0 kcsuffix=development "
 	"rd=disk0s1 rootdev=disk0s1 npci=0x2000 dart=0 -no_compat_check "
-	"cpus=1 quiet_boot=1";
+	"cpus=1 quiet_boot=1 csrdata=0x77";
 
 /*
  * The kernel's processor count comes from the "cpus=" token in the command
@@ -1843,7 +1847,17 @@ efi_main(EFI_HANDLE ImageHandle, EFI_SYSTEM_TABLE *ST)
 		A->Version  = 2;
 		A->efiMode  = 64;                 /* kBootArgsEfiMode64 */
 		A->debugMode = 0;
-		A->flags = 0;
+		A->flags = kBootArgsFlagCSRActiveConfig | kBootArgsFlagCSRConfigMode;
+		/* SIP disabled: dyld's dyld3::BootArgs::contains() only honors
+		 * boot-args (force_dyld2=1) on an "internal install", which on
+		 * x86 is csr_check(CSR_ALLOW_APPLE_INTERNAL)==0.  Without this
+		 * the closure builder binds every flat-lookup lazy symbol it
+		 * cannot see to __dyld_missing_symbol_abort, which killed
+		 * CoreFoundation at load with "Symbol not found:
+		 * __objc_isKnownClassPtr ... Expected in: flat namespace".  0x77
+		 * = UNTRUSTED_KEXTS|UNRESTRICTED_FS|DEV_TOOLS|UNAUTHENTICATED_ROOT
+		 * (CSR_ALLOW_APPLE_INTERNAL is not in CSR_VALID_FLAGS). */
+		A->csrActiveConfig = 0x77;
 		A->kaddr = (u32)base;
 		/* physfree = PAGE_ROUND(kaddr + ksize).  It must cover our handoff
 		 * block, the kernel image, and every runtime VA we just assigned,
