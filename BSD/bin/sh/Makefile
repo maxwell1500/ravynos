@@ -31,7 +31,7 @@ SRCS =  bltin/echo.c \
 	shims.c
 
 CFLAGS = --sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSION_MIN} \
-	-DSHELL -I${.CURDIR} -I${.OBJDIR} -I${.CURDIR}/../../lib/libedit/src \
+	-DSHELL -I${.CURDIR} -I${ROOT_SOURCE_DIR}/BSD/compat/include -I${.OBJDIR} -I${.CURDIR}/../../lib/libedit/src \
         -Wno-nullability-completeness
 
 LDFLAGS = --sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSION_MIN} \
@@ -43,6 +43,12 @@ to-sysroot: ${PROG}
 	mkdir -p ${SYSROOT_DIR}/bin
 	cp -f ${PROG} ${SYSROOT_DIR}/bin/
 
+
+# Generated headers must exist before any object is compiled; without this the
+# first object (arith_yylex.c) fails on a missing syntax.h.  The object-list
+# dependency does not work: bsd.prog.mk defines ${OBJS} after this file is
+# read, so the generators run as a prerequisite of 'all' instead.
+HOST_CC?=	/usr/bin/cc
 
 builtins.c builtins.h: ${.CURDIR}/mkbuiltins ${SRCS:N*builtins.*}
 	${.CURDIR}/mkbuiltins ${.CURDIR}
@@ -70,3 +76,8 @@ mknodes: ${.CURDIR}/mknodes.c
 
 
 .include <bsd.prog.mk>
+
+# ${OBJS} only exists after bsd.prog.mk is read.  Every object needs the
+# generated headers: without this dependency the first object compiled is
+# arith_yylex.c and it fails on a missing syntax.h.
+${OBJS}:	builtins.h nodes.h syntax.h token.h

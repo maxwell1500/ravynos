@@ -3,10 +3,12 @@
 PROG= launchctl
 MAN= launchctl.1
 
-BASE_INCLUDE= -I${.CURDIR}/../../include/apple
+# The SDK already ships sys/resource.h with rusage_info; the in-tree copy
+# redefines it and dies under -Werror. Only the mach headers below are needed.
+BASE_INCLUDE=
 
 CFLAGS+= ${BASE_INCLUDE} -fblocks
-CFLAGS+= -I${.CURDIR}/../../lib/liblaunch
+CFLAGS+= -I${.CURDIR}/../../lib/liblaunch -I${ROOT_SOURCE_DIR}/Libraries/Libsystem/liblaunch -I${ROOT_SOURCE_DIR}/BSD/lib/libutil
 CFLAGS+= -I${.CURDIR}/../../include/mach
 LDFLAGS+= -llaunch -ldispatch
 LDFLAGS+= -pthread
@@ -21,3 +23,6 @@ LDFLAGS+= -ljansson
 SRCS= launchctl.c
 
 .include <bsd.prog.mk>
+
+# liblaunch ships in /usr/lib/system on ravynOS, not /usr/lib.
+LDFLAGS+=	-L${RAVYN_SDKROOT}/usr/lib/system

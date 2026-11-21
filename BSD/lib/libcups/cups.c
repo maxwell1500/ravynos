@@ -372,6 +372,26 @@ void httpClose(http_t *http)
     (void)http;
 }
 
+int httpAddrPort(http_addr_t *addr)
+{
+    (void)addr;
+    return 0;
+}
+
+http_addr_t *httpGetAddress(http_t *http)
+{
+    (void)http;
+    return NULL;
+}
+
+const char *httpGetHostname(http_t *http, char *s, int slen)
+{
+    (void)http;
+    if (s != NULL && slen > 0)
+        s[0] = '\0';
+    return NULL;
+}
+
 /* ---------------------------------------------------------------- CUPS API */
 
 static char g_server[] = "localhost";
@@ -401,6 +421,48 @@ void cupsFreeDests(int num_dests, cups_dest_t *dests)
         cupsFreeOptions(dests[i].num_options, dests[i].options);
     }
     free(dests);
+}
+
+http_t *cupsConnectDest(cups_dest_t *dest, unsigned flags, int msec,
+                        int *cancel, char *resource, size_t resourcesize,
+                        cups_dest_cb_t cb, void *user_data)
+{
+    (void)dest; (void)flags; (void)msec; (void)cancel; (void)cb;
+    (void)user_data;
+    if (resource != NULL && resourcesize > 0)
+        resource[0] = '\0';
+    return NULL;        /* no scheduler, so no destination connection */
+}
+
+int cupsGetDestMediaCount(http_t *http, cups_dest_t *dest,
+                          cups_dest_info_t *dinfo, unsigned flags)
+{
+    (void)http; (void)dest; (void)dinfo; (void)flags;
+    return 0;           /* no PPD/media database */
+}
+
+int cupsGetDestMediaByIndex(http_t *http, cups_dest_t *dest,
+                            cups_dest_info_t *dinfo, int n, unsigned flags,
+                            cups_size_t *size)
+{
+    (void)http; (void)dest; (void)dinfo; (void)n; (void)flags; (void)size;
+    return 0;
+}
+
+int cupsGetDestMediaDefault(http_t *http, cups_dest_t *dest,
+                            cups_dest_info_t *dinfo, unsigned flags,
+                            cups_size_t *size)
+{
+    (void)http; (void)dest; (void)dinfo; (void)flags; (void)size;
+    return 0;
+}
+
+const char *cupsLocalizeDestMedia(http_t *http, cups_dest_t *dest,
+                                  cups_dest_info_t *dinfo, unsigned flags,
+                                  cups_size_t *size)
+{
+    (void)http; (void)dest; (void)dinfo; (void)flags; (void)size;
+    return NULL;
 }
 
 cups_dest_t *cupsGetDest(const char *name, const char *instance,

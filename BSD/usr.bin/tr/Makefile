@@ -1,3 +1,4 @@
+MK_MAN=	no
 # PROVENANCE: tr here is a FRESH implementation written against the POSIX
 # specification for tr(1), not a port of FreeBSD tr. See the header comment
 # in tr.c, which is the authoritative statement; that header also records the

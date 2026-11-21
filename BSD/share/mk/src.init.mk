@@ -32,6 +32,11 @@ LIBADD+= egacy
 .endif
 .endif
 
+# Libraries that live in this tree's BSD/lib but are not in the trimmed
+# src.libnames.mk list.  Without these, any program with LIBADD= util (dd) or
+# LIBADD= termcapw (csh) fails validation before it reaches the compiler.
+LOCAL_LIBRARIES+= util crypt termcapw edit archive
+
 .endif
 
 .endif	# !target(__<src.init.mk>__)

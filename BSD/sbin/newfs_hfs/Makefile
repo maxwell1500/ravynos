@@ -1,7 +1,7 @@
 SUBDIR = 
 MK_WERROR = no
 
-PROG = fsck_hfs
+PROG = newfs_hfs
 SRCS =  hfs_endian.c makehfs.c newfs_hfs.c
 MAN = newfs_hfs.8
 

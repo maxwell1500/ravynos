@@ -17,6 +17,11 @@ SRCS =	getmntopts.c \
 	realhostname.c \
 	reexec_to_match_kernel.c \
 	trimdomain.c \
+	strtonum.c \
+	utility.c \
+	cfmakesane.c \
+	login_tty.c \
+	md5.c \
 	tzlink.c \
 	wipefs.cpp \
 	ExtentManager.cpp
@@ -33,7 +38,7 @@ MAN = getmntopts.3 \
 
 
 CFLAGS = -ObjC --sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSION_MIN} \
-        -I${.CURDIR} -I${ROOT_SOURCE_DIR}/Kernel/xnu/libsyscall/wrappers/spawn \
+        -I${.CURDIR} -I${ROOT_SOURCE_DIR}/BSD/compat/include -I${ROOT_SOURCE_DIR}/Kernel/xnu/libsyscall/wrappers/spawn \
         -I${ROOT_SOURCE_DIR}/Kernel/xnu/libkern ${CFLAGS.${.TARGET}}
 CXXFLAGS = -ObjC++ --sysroot=${RAVYN_SDKROOT} -mmacos-version-min=${MACOS_VERSION_MIN} \
         -I${.CURDIR} -I${ROOT_SOURCE_DIR}/Kernel/xnu/libsyscall/wrappers/spawn \

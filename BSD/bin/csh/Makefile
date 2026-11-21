@@ -5,6 +5,10 @@
 
 .include <src.opts.mk>
 
+# BSD/contrib/tcsh/nls was not imported into this tree; the catalog rules cd
+# into directories that do not exist, so build without catalogs.
+MK_NLS_CATALOGS= no
+
 PACKAGE=	csh
 
 CONFGROUPS=	ETC ROOT
@@ -107,11 +111,13 @@ iconv.h: ${.CURDIR}/iconv_stub.h
 
 NLSNAME= tcsh
 
+.if ${MK_NLS_CATALOGS} != "no"
 .for catalog in ${CATALOGS}
 NLS+=		${catalog:C/.*://}
 NLSSRCDIR_${catalog:C/.*://}= ${TCSHDIR}/nls/${catalog:C/:.*//}
 NLSSRCFILES_${catalog:C/.*://}!= cd ${NLSSRCDIR_${catalog:C/.*://}}; echo charset set[0-9]*
 .endfor
+.endif
 
 csh.1: tcsh.man
 	cat ${.ALLSRC} > ${.TARGET}

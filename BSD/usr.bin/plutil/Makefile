@@ -1,3 +1,4 @@
+MK_MAN=	no
 PROG = plutil
 SRCS = plutil.m
 MAN =

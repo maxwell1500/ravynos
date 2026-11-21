@@ -72,7 +72,17 @@ typedef struct {
 } cups_dests_t;
 
 typedef struct _cups_dest_info_s cups_dest_info_t;
+typedef cups_dest_info_t cups_dinfo_t;
 typedef struct _ppd_file_s ppd_file_t;
+typedef struct http_addr_s http_addr_t;
+
+typedef struct cups_size_s {
+    char media[128];
+    int width, length, bottom, left, right, top;
+} cups_size_t;
+
+typedef int (*cups_dest_cb_t)(void *user_data, unsigned flags,
+                              cups_dest_t *dest);
 
 extern int cupsGetDests(cups_dest_t **dests);
 extern int cupsGetDests2(http_t *http, cups_dest_t **dests);
@@ -87,6 +97,21 @@ extern void cupsFreeDestInfo(cups_dest_info_t *dinfo);
 extern int cupsCheckDestSupported(http_t *http, cups_dest_t *dest,
                                   cups_dest_info_t *dinfo, const char *option,
                                   const char *value);
+extern http_t *cupsConnectDest(cups_dest_t *dest, unsigned flags, int msec,
+                               int *cancel, char *resource,
+                               size_t resourcesize, cups_dest_cb_t cb,
+                               void *user_data);
+extern int cupsGetDestMediaCount(http_t *http, cups_dest_t *dest,
+                                 cups_dest_info_t *dinfo, unsigned flags);
+extern int cupsGetDestMediaByIndex(http_t *http, cups_dest_t *dest,
+                                   cups_dest_info_t *dinfo, int n,
+                                   unsigned flags, cups_size_t *size);
+extern int cupsGetDestMediaDefault(http_t *http, cups_dest_t *dest,
+                                   cups_dest_info_t *dinfo, unsigned flags,
+                                   cups_size_t *size);
+extern const char *cupsLocalizeDestMedia(http_t *http, cups_dest_t *dest,
+                                         cups_dest_info_t *dinfo,
+                                         unsigned flags, cups_size_t *size);
 extern char *cupsFindDestDefault(http_t *http, cups_dest_t *dest,
                                  cups_dest_info_t *dinfo, const char *option);
 extern char *cupsFindDestSupported(http_t *http, cups_dest_t *dest,
@@ -112,6 +137,9 @@ extern const char *cupsUserAgent(void);
 extern http_t *httpConnect2(const char *host, int port, void *addr, int family,
                             int encryption, int blocking, int msec, int *cancel);
 extern void httpClose(http_t *http);
+extern int httpAddrPort(http_addr_t *addr);
+extern http_addr_t *httpGetAddress(http_t *http);
+extern const char *httpGetHostname(http_t *http, char *s, int slen);
 
 extern ipp_t *ippNew(void);
 extern ipp_t *ippNewRequest(int operation);

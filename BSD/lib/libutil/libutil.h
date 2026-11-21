@@ -93,3 +93,5 @@ __END_DECLS
 #define	HN_AUTOSCALE		0x20
 
 #endif /* !_LIBUTIL_H_ */
+
+int login_tty(int);

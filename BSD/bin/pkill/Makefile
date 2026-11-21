@@ -5,7 +5,8 @@
 PACKAGE=runtime
 PROG=	pkill
 
-LIBADD=	kvm jail
+LIBADD=
+SRCS=	pkill_proc.c
 
 LINKS=	${BINDIR}/pkill ${BINDIR}/pgrep
 MLINKS=	pkill.1 pgrep.1

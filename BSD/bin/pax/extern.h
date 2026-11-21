@@ -38,6 +38,7 @@
  */
 
 #include <sys/cdefs.h>
+#include <signal.h>	/* sigset_t: the macOS sys/cdefs.h does not pull it in */
 
 /*
  * ar_io.c

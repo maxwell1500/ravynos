@@ -1,5 +1,7 @@
+MK_MAN=	no
 
 PROG =	sort
+LIBADD =	util
 SRCS =	bwstring.c coll.c file.c mem.c radixsort.c sort.c vsort.c
 
 sort.1: sort.1.in

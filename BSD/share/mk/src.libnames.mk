@@ -22,6 +22,13 @@ _LIBRARIES=	\
 		${_INTERNALLIBS} \
 		${LOCAL_LIBRARIES}
 
+# This tree's src.libnames.mk is a trimmed copy: the libraries below live in
+# BSD/lib but are absent from the list, so LIBADD= util (dd) or termcapw
+# (csh) fails validation before the compiler runs.
+.if empty(_LIBRARIES:Mutil)
+_LIBRARIES+=	util crypt termcapw edit archive pam iconv
+.endif
+
 .if ${MK_KERBEROS} != "no" && ${MK_MITKRB5} != "no"
 _LIBRARIES+= \
 		kadm5clnt_mit \

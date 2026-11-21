@@ -1,3 +1,4 @@
+MK_MAN=	no
 PROG = defaults
 SRCS = defaults.m
 MAN =

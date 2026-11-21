@@ -315,7 +315,7 @@ create_socket(json_t *json)
 
 		if ((val = json_object_get(json, LAUNCH_JOBSOCKETKEY_SERVICENAME))) {
 			if (json_typeof(val) == JSON_INTEGER) {
-				sprintf(servnbuf, "%ld", json_integer_value(val));
+				sprintf(servnbuf, "%lld", (long long)json_integer_value(val));
 				serv = servnbuf;
 			} else
 				serv = json_string_value(val);
@@ -590,6 +590,8 @@ do_single_user_mode(bool sflag)
  * Start a session and allocate a controlling terminal.
  * Only called by children of init after forking.
  */
+static void setctty(const char *, int) __attribute__((unused));
+
 static void
 setctty(const char *name, int flags)
 {
@@ -812,7 +814,7 @@ cmd_bslist(int argc, char * const argv[])
     kr = bootstrap_info(bp,
         &svc_names, &svc_name_cnt,
         &svr_names, &svr_name_cnt,
-        &svc_active, &act_cnt, 0);
+        (bootstrap_status_array_t *)&svc_active, &act_cnt, 0);
     if(kr != KERN_SUCCESS) {
         printf("%s\n", bootstrap_strerror(kr));
         return -1;
@@ -965,7 +967,7 @@ cmd_list(int argc, char * const argv[])
         pid_t pid = json_integer_value(json_object_get(job, "PID"));
         asprintf(&pidstr, "%u", pid);
 		printf("%-8s %-8ld %s\n", pid == 0 ? "-" : pidstr,
-                json_integer_value(
+                (long)json_integer_value(
                 json_object_get(job, "LastExitStatus")), key);
         free(pidstr);
 	}

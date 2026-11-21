@@ -2,6 +2,7 @@
 
 PACKAGE=runtime
 PROG=	expr
+LIBADD=	util
 SRCS=	expr.y
 YFLAGS=
 

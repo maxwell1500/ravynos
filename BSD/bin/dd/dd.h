@@ -33,6 +33,8 @@
  * SUCH DAMAGE.
  */
 
+#include <time.h>	/* struct timespec: macOS sys/time.h does not define it */
+
 /* Input/output stream state. */
 typedef struct {
 	u_char		*db;		/* buffer address */

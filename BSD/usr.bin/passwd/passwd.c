@@ -109,6 +109,7 @@ main(int argc, char *argv[])
 		errx(1, "permission denied");
 
 	/* check where the user's from */
+#ifdef _PWF_SOURCE
 	switch (pwd->pw_fields & _PWF_SOURCE) {
 	case _PWF_FILES:
 		fprintf(stderr, "Changing local password for %s\n",
@@ -123,6 +124,10 @@ main(int argc, char *argv[])
 		errx(1, 
 	  "Sorry, `passwd' can only change passwords for local or NIS users.");
 	}
+#else
+	/* Darwin's struct passwd has no pw_fields/database source bits. */
+	fprintf(stderr, "Changing password for %s\n", pwd->pw_name);
+#endif
 
 #define pam_check(func) do { \
 	if (pam_err != PAM_SUCCESS) { \
@@ -148,10 +153,17 @@ main(int argc, char *argv[])
 	pam_check("pam_set_item");
 
 	/* set YP domain and host */
+#ifdef HAVE_PAM_SET_DATA
 	pam_err = pam_set_data(pamh, "yp_domain", yp_domain, NULL);
 	pam_check("pam_set_data");
 	pam_err = pam_set_data(pamh, "yp_server", yp_host, NULL);
 	pam_check("pam_set_data");
+#else
+	/* This libpam has no pam_set_data(3); there is no NIS here either, so
+	 * the domain and host module data have no consumer. */
+	(void)yp_domain;
+	(void)yp_host;
+#endif
 
 	/* set new password */
 	pam_err = pam_chauthtok(pamh, 0);

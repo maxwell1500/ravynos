@@ -1,3 +1,4 @@
+MK_MAN=	no
 PROG = dscl
 SRCS = dscl.c
 MAN =

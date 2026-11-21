@@ -1,3 +1,4 @@
+MK_MAN=	no
 # PROVENANCE: wc here is a FRESH implementation written against the POSIX
 # specification for wc(1), not a port of FreeBSD wc. See the header comment
 # in wc.c, which is the authoritative statement; this Makefile deliberately
