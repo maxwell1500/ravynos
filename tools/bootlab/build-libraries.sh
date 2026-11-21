@@ -305,8 +305,11 @@ export LD="ld"
 # Homebrew's bison is keg-only (never on PATH); point the Makefiles' ${BISON}
 # at it when it is present. Unset falls back to the Makefile default "bison".
 for b in /usr/local/opt/bison/bin/bison /opt/homebrew/opt/bison/bin/bison; do
-    [ -x "$b" ] && export BISON="$b" && break
+    [ -x "$b" ] && export BISON="$b" && export YACC="$b" && break
 done
+# /usr/bin/yacc on a Command Line Tools-only host is a stub that invokes
+# bison and fails; sys.mk defaults ${YACC} to "yacc", so point it at the real
+# implementation whenever one is available.
 
 # ---------------------------------------------------------------------------
 # SDK header synchronization
@@ -583,6 +586,59 @@ fi
 # already has them.
 CDEFS_TAIL='
 /* --- BEGIN ravynOS cdefs shim (tools/bootlab/build-libraries.sh) --- */
+/* FreeBSD source in this tree annotates structures and functions with the
+ * BSD spellings; the macOS cdefs this SDK carries defines none of them, so
+ * they parse as implicit function declarations ("expected parameter
+ * declarator" from `} __aligned(8);`). */
+#ifndef __aligned
+#define __aligned(x) __attribute__((__aligned__(x)))
+#endif
+#ifndef __packed
+#define __packed __attribute__((__packed__))
+#endif
+#ifndef __unused
+#define __unused __attribute__((__unused__))
+#endif
+#ifndef __used
+#define __used __attribute__((__used__))
+#endif
+#ifndef __dead2
+#define __dead2 __attribute__((__noreturn__))
+#endif
+#ifndef __pure2
+#define __pure2 __attribute__((__const__))
+#endif
+#ifndef __printflike
+#define __printflike(fmtarg, firstvararg) \
+	__attribute__((__format__(__printf__, fmtarg, firstvararg)))
+#endif
+#ifndef __scanflike
+#define __scanflike(fmtarg, firstvararg) \
+	__attribute__((__format__(__scanf__, fmtarg, firstvararg)))
+#endif
+#ifndef __predict_true
+#define __predict_true(exp) __builtin_expect((exp) != 0, 1)
+#endif
+#ifndef __predict_false
+#define __predict_false(exp) __builtin_expect((exp) != 0, 0)
+#endif
+#ifndef __restrict
+#define __restrict restrict
+#endif
+#ifndef __weak_reference
+#define __weak_reference(sym, alias) \
+	__asm__(".weak_reference " #sym)
+#endif
+#ifndef nitems
+#define nitems(x) (sizeof(x) / sizeof((x)[0]))
+#endif
+#ifndef __unreachable
+#define __unreachable() __builtin_unreachable()
+#endif
+#ifndef __arraycount
+#define __arraycount(x) nitems(x)
+#endif
+
 #ifndef __stateful_pure
 #define __stateful_pure __attribute__((__pure__))
 #endif
@@ -945,11 +1001,15 @@ if [ "${1:-}" = "--frameworks" ]; then
     #     Without it clang silently takes <AppKit/NSColor.h> from the host
     #     macOS SDK and then mixes host and ravynOS AppKit headers.
     APPKIT_HDRS="$BUILD$ROOT/Frameworks/AppKit/Headers/AppKit"
-    if [ ! -d "$APPKIT_HDRS" ]; then
-        mkdir -p "$APPKIT_HDRS"
-        find "$ROOT/Frameworks/AppKit" -name '*.h' \
-            -exec cp -f {} "$APPKIT_HDRS/" \;
-    fi
+    # Refresh, do not merely create.  This used to copy only when the
+    # directory was absent, so an edited AppKit header was never seen again:
+    # a clean NV_EVENT change still failed to compile with "undeclared
+    # identifier" because clang read last month's flat tree while the
+    # framework's own Versions/A/Headers was up to date.  cp is cheap next to
+    # the compile it gates.
+    mkdir -p "$APPKIT_HDRS"
+    find "$ROOT/Frameworks/AppKit" -name '*.h' \
+        -exec cp -f {} "$APPKIT_HDRS/" \;
     for d in "${DIRS[@]}"; do
         if [ -d "$ROOT/Frameworks/$d" ]; then
             base="$ROOT/Frameworks/$d"
@@ -1026,6 +1086,17 @@ if [ "${1:-}" = "--frameworks" ]; then
             mkdir -p "$REPO_SDK/System/Library/Frameworks/AppKit.framework/Versions/C"
             cp -fp "$REPO_SDK/System/Library/Frameworks/AppKit.framework/Versions/A/AppKit" \
                    "$REPO_SDK/System/Library/Frameworks/AppKit.framework/Versions/C/AppKit"
+            # The framework's own name must resolve to the same binary.  On
+            # macOS AppKit.framework/AppKit is a symlink to Versions/Current/
+            # AppKit; here it was a stale copy left from an earlier build, so
+            # a stock binary that links the canonical
+            # AppKit.framework/Versions/C/AppKit (or the top-level name) ran
+            # against a framework older than the tree.  Measured: Firefox
+            # loaded a copy from two days before the current build and could
+            # not create a window, while the in-tree apps -- which link
+            # Versions/A -- were fine.
+            cp -fp "$REPO_SDK/System/Library/Frameworks/AppKit.framework/Versions/A/AppKit" \
+                   "$REPO_SDK/System/Library/Frameworks/AppKit.framework/AppKit"
             if [ -d "$REPO_SDK/System/Library/Frameworks/AppKit.framework/Versions/A/Headers" ]; then
                 mkdir -p "$REPO_SDK/System/Library/Frameworks/AppKit.framework/Versions/C/Headers"
                 cp -Rfp "$REPO_SDK/System/Library/Frameworks/AppKit.framework/Versions/A/Headers/." \
@@ -1279,7 +1350,11 @@ elif [ "${1:-}" = "--bsd" ]; then
             continue
         fi
         echo "=== building ${base#$ROOT/} ==="
-        ( cd "$ROOT" && MAKEOBJDIR="$BUILD$base" \
+        # MAKEOBJDIRPREFIX, not MAKEOBJDIR: a single fixed MAKEOBJDIR makes every
+        # subdirectory build into the same directory, where object names collide
+        # (printf.o from a different source) and a program output collides with a
+        # subdirectory of the same name ("llvm-objcopy: Is a directory").
+        ( cd "$ROOT" && MAKEOBJDIRPREFIX="$BUILD" \
           "$BMAKE" -C "$base" -m "$MKMODULES" "${BMAKE_TARGET:-all}" ) || rc=1
     done
     exit $rc

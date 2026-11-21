@@ -112,12 +112,29 @@
     "private/tmp",
     "var",
     "var/log",
+    "var/log/asl",
     "var/run",
     "var/tmp",
     "tmp",
+    "root",
+    "root/Library",
+    "root/Library/Application Support",
+    "root/Library/Application Support/Firefox",
+    "root/Library/Application Support/Firefox/Profiles",
+    "root/Library/Application Support/Firefox/Profiles/default",
+    "root/Library/Preferences",
+    "Library/Application Support",
+    "Library/Application Support/Mozilla",
+    "Library/Preferences",
     "Users",
     "Users/ravyn",
-    "Users/ravyn/Desktop"
+    "Users/ravyn/Desktop",
+    "Users/ravyn/Library",
+    "Users/ravyn/Library/Application Support",
+    "Users/ravyn/Library/Application Support/Firefox",
+    "Users/ravyn/Library/Application Support/Firefox/Profiles",
+    "Users/ravyn/Library/Application Support/Firefox/Profiles/default",
+    "Users/ravyn/Library/Preferences"
   ],
   "files": [
     {
@@ -771,9 +788,19 @@
       "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
     },
     {
+      "path": "System/Library/Frameworks/CoreText.framework/CoreText",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/CoreText.framework/Versions/A/CoreText",
+      "comment": "framework unversioned alias; repo-built, staged from the in-repo ravynOS SDK"
+    },
+    {
       "path": "System/Library/Frameworks/AppKit.framework/Versions/A/AppKit",
       "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/AppKit.framework/Versions/A/AppKit",
       "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
+    },
+    {
+      "path": "System/Library/Frameworks/AppKit.framework/AppKit",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/AppKit.framework/Versions/A/AppKit",
+      "comment": "framework unversioned alias; repo-built, staged from the in-repo ravynOS SDK"
     },
     {
       "path": "System/Library/Frameworks/Foundation.framework/Versions/C/Foundation",
@@ -781,9 +808,19 @@
       "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
     },
     {
+      "path": "System/Library/Frameworks/Foundation.framework/Foundation",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/Foundation.framework/Versions/C/Foundation",
+      "comment": "framework unversioned alias; repo-built, staged from the in-repo ravynOS SDK"
+    },
+    {
       "path": "System/Library/Frameworks/CoreGraphics.framework/Versions/A/CoreGraphics",
       "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/CoreGraphics.framework/Versions/A/CoreGraphics",
       "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
+    },
+    {
+      "path": "System/Library/Frameworks/CoreGraphics.framework/CoreGraphics",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/CoreGraphics.framework/Versions/A/CoreGraphics",
+      "comment": "framework unversioned alias; repo-built, staged from the in-repo ravynOS SDK"
     },
     {
       "path": "System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
@@ -791,9 +828,19 @@
       "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
     },
     {
+      "path": "System/Library/Frameworks/CoreFoundation.framework/CoreFoundation",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/CoreFoundation.framework/Versions/A/CoreFoundation",
+      "comment": "framework unversioned alias; repo-built, staged from the in-repo ravynOS SDK"
+    },
+    {
       "path": "System/Library/Frameworks/Onyx2D.framework/Versions/A/Onyx2D",
       "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/Onyx2D.framework/Versions/A/Onyx2D",
       "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
+    },
+    {
+      "path": "System/Library/Frameworks/Onyx2D.framework/Onyx2D",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/Onyx2D.framework/Versions/A/Onyx2D",
+      "comment": "framework unversioned alias; repo-built, staged from the in-repo ravynOS SDK"
     },
     {
       "path": "usr/lib/system/libutil.dylib",
@@ -811,9 +858,49 @@
       "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
     },
     {
+      "path": "System/Library/Frameworks/QuartzCore.framework/QuartzCore",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/QuartzCore.framework/Versions/A/QuartzCore",
+      "comment": "framework unversioned alias; repo-built, staged from the in-repo ravynOS SDK"
+    },
+    {
+      "path": "System/Library/Frameworks/IOSurface.framework/Versions/A/IOSurface",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/IOSurface.framework/Versions/A/IOSurface",
+      "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
+    },
+    {
+      "path": "System/Library/Frameworks/IOSurface.framework/IOSurface",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/IOSurface.framework/Versions/A/IOSurface",
+      "comment": "framework unversioned alias; repo-built, staged from the in-repo ravynOS SDK"
+    },
+    {
       "path": "System/Library/Frameworks/CoreData.framework/Versions/A/CoreData",
       "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/CoreData.framework/Versions/A/CoreData",
       "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
+    },
+    {
+      "path": "System/Library/Frameworks/CoreData.framework/CoreData",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/CoreData.framework/Versions/A/CoreData",
+      "comment": "framework unversioned alias; repo-built, staged from the in-repo ravynOS SDK"
+    },
+    {
+      "path": "System/Library/Frameworks/LaunchServices.framework/Versions/A/LaunchServices",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/LaunchServices.framework/Versions/A/LaunchServices",
+      "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
+    },
+    {
+      "path": "System/Library/Frameworks/LaunchServices.framework/LaunchServices",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/LaunchServices.framework/Versions/A/LaunchServices",
+      "comment": "framework unversioned alias; repo-built, staged from the in-repo ravynOS SDK"
+    },
+    {
+      "path": "System/Library/Frameworks/OpenGL.framework/Versions/A/OpenGL",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/OpenGL.framework/Versions/A/OpenGL",
+      "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
+    },
+    {
+      "path": "System/Library/Frameworks/OpenGL.framework/OpenGL",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/OpenGL.framework/Versions/A/OpenGL",
+      "comment": "framework unversioned alias; repo-built, staged from the in-repo ravynOS SDK"
     },
     {
       "path": "usr/lib/libfontconfig.dylib",
@@ -826,6 +913,11 @@
       "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
     },
     {
+      "path": "usr/lib/libffi.dylib",
+      "file": "../../Developer/ravynOS.sdk/usr/lib/libffi.dylib",
+      "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
+    },
+    {
       "path": "usr/lib/libicucore.A.dylib",
       "file": "../../Developer/ravynOS.sdk/usr/lib/libicucore.A.dylib",
       "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
@@ -833,6 +925,11 @@
     {
       "path": "usr/lib/libz.1.dylib",
       "file": "../../Developer/ravynOS.sdk/usr/lib/libz.1.dylib",
+      "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
+    },
+    {
+      "path": "usr/lib/libsqlite3.dylib",
+      "file": "../../Developer/ravynOS.sdk/usr/lib/libsqlite3.dylib",
       "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
     },
     {
@@ -879,16 +976,6 @@
       "path": "System/Library/CoreServices/Filer.app/Contents/ravynOS/Filer.full",
       "file": "work/CoreServices_Filer_Filer.app/Contents/ravynOS/Filer.full",
       "comment": "Filer.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/CoreServices_Filer_Filer.app)"
-    },
-    {
-      "path": "System/Library/Frameworks/LaunchServices.framework/Versions/A/LaunchServices",
-      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/LaunchServices.framework/Versions/A/LaunchServices",
-      "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
-    },
-    {
-      "path": "usr/lib/libsqlite3.dylib",
-      "file": "../../Developer/ravynOS.sdk/usr/lib/libsqlite3.dylib",
-      "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
     },
     {
       "path": "System/Library/CoreServices/Dock.app/Dock",
@@ -1471,6 +1558,16 @@
       "comment": "open (built from BSD/bin/open)"
     },
     {
+      "path": "usr/bin/pkill",
+      "file": "work/BSD_bin_pkill_pkill",
+      "comment": "pkill (built from BSD/bin/pkill)"
+    },
+    {
+      "path": "usr/bin/pgrep",
+      "file": "work/BSD_bin_pkill_pkill",
+      "comment": "pkill (built from BSD/bin/pkill)"
+    },
+    {
       "path": "usr/bin/id",
       "file": "work/BSD_usr.bin_id_id",
       "comment": "id (built from BSD/usr.bin/id)"
@@ -1496,6 +1593,26 @@
       "comment": "launchd job of the daily driver services"
     },
     {
+      "path": "System/Library/LaunchDaemons/com.apple.syslogd.json",
+      "file": "../../SystemLibrary/LaunchDaemons/com.apple.syslogd.json",
+      "comment": "launchd job of the daily driver services"
+    },
+    {
+      "path": "System/Library/LaunchDaemons/com.apple.aslmanager.json",
+      "file": "../../SystemLibrary/LaunchDaemons/com.apple.aslmanager.json",
+      "comment": "launchd job of the daily driver services"
+    },
+    {
+      "path": "System/Library/LaunchDaemons/com.apple.backupd-auto.json",
+      "file": "../../SystemLibrary/LaunchDaemons/com.apple.backupd-auto.json",
+      "comment": "launchd job of the daily driver services"
+    },
+    {
+      "path": "System/Library/LaunchDaemons/com.ravynos.downloadprobe.json",
+      "file": "../../SystemLibrary/LaunchDaemons/com.ravynos.downloadprobe.json",
+      "comment": "launchd job of the daily driver services"
+    },
+    {
       "path": "System/Library/CoreServices/SystemVersion.plist",
       "file": "../../SystemLibrary/SystemVersion.plist",
       "comment": "compatibility ProductVersion read by stock apps"
@@ -1511,6 +1628,21 @@
       "comment": "ABI conformance fixture (tests/compat)"
     },
     {
+      "path": "usr/local/compat/dnstest",
+      "file": "work/compat/dnstest",
+      "comment": "ABI conformance fixture (tests/compat)"
+    },
+    {
+      "path": "usr/local/compat/openurl",
+      "file": "work/compat/openurl",
+      "comment": "ABI conformance fixture (tests/compat)"
+    },
+    {
+      "path": "usr/local/compat/download",
+      "file": "work/compat/download",
+      "comment": "ABI conformance fixture (tests/compat)"
+    },
+    {
       "path": "usr/local/compat/pasteboard",
       "file": "work/compat/pasteboard",
       "comment": "ABI conformance fixture (tests/compat)"
@@ -1523,6 +1655,11 @@
     {
       "path": "usr/local/compat/autorelease",
       "file": "work/compat/autorelease",
+      "comment": "ABI conformance fixture (tests/compat)"
+    },
+    {
+      "path": "usr/local/compat/plist",
+      "file": "work/compat/plist",
       "comment": "ABI conformance fixture (tests/compat)"
     },
     {
@@ -1546,8 +1683,28 @@
       "comment": "ABI conformance fixture (tests/compat)"
     },
     {
+      "path": "usr/local/compat/homechain",
+      "file": "work/compat/homechain",
+      "comment": "ABI conformance fixture (tests/compat)"
+    },
+    {
       "path": "usr/local/compat/tdump",
       "file": "work/compat/tdump",
+      "comment": "ABI conformance fixture (tests/compat)"
+    },
+    {
+      "path": "usr/local/compat/printfprobe",
+      "file": "work/compat/printfprobe",
+      "comment": "ABI conformance fixture (tests/compat)"
+    },
+    {
+      "path": "usr/local/compat/screeninfo",
+      "file": "work/compat/screeninfo",
+      "comment": "ABI conformance fixture (tests/compat)"
+    },
+    {
+      "path": "usr/local/compat/layertest",
+      "file": "work/compat/layertest",
       "comment": "ABI conformance fixture (tests/compat)"
     },
     {
@@ -1566,6 +1723,21 @@
       "comment": "ABI conformance fixture (tests/compat)"
     },
     {
+      "path": "usr/local/compat/foundation",
+      "file": "work/compat/foundation",
+      "comment": "ABI conformance fixture (tests/compat)"
+    },
+    {
+      "path": "usr/local/compat/filemmap",
+      "file": "work/compat/filemmap",
+      "comment": "ABI conformance fixture (tests/compat)"
+    },
+    {
+      "path": "usr/local/compat/mousetest",
+      "file": "work/compat/mousetest",
+      "comment": "ABI conformance fixture (tests/compat)"
+    },
+    {
       "path": "usr/local/compat/spawnprobe",
       "file": "work/compat/spawnprobe",
       "comment": "ABI conformance fixture (tests/compat)"
@@ -1578,6 +1750,11 @@
     {
       "path": "usr/local/compat/run-fixtures.sh",
       "file": "../../tests/compat/run-fixtures.sh",
+      "comment": "ABI conformance fixture (tests/compat)"
+    },
+    {
+      "path": "usr/local/compat/run-fixtures-soak.sh",
+      "file": "../../tests/compat/run-fixtures-soak.sh",
       "comment": "ABI conformance fixture (tests/compat)"
     },
     {
@@ -1594,6 +1771,11 @@
       "path": "System/Library/LaunchDaemons/com.ravynos.compat.json",
       "file": "../../SystemLibrary/LaunchDaemons/com.ravynos.compat.json",
       "comment": "launchd job that runs the ABI conformance fixtures"
+    },
+    {
+      "path": "System/Library/LaunchDaemons/com.ravynos.compat-soak.json",
+      "file": "../../SystemLibrary/LaunchDaemons/com.ravynos.compat-soak.json",
+      "comment": "launchd job for the 30-minute Firefox soak (load -w after login)"
     },
     {
       "path": "sbin/ifconfig",
@@ -1694,6 +1876,21 @@
       "path": "bin/df",
       "file": "work/df",
       "comment": "filesystem usage (BSD/bin/df)"
+    },
+    {
+      "path": "usr/sbin/syslogd",
+      "file": "work/syslogd",
+      "comment": "syslogd (BSD/BSD/usr.sbin/syslogd)"
+    },
+    {
+      "path": "usr/sbin/aslmanager",
+      "file": "work/aslmanager",
+      "comment": "aslmanager (BSD/BSD/usr.sbin/aslmanager)"
+    },
+    {
+      "path": "usr/libexec/ReportCrash",
+      "file": "work/ReportCrash",
+      "comment": "crash reporter (BSD/libexec/ReportCrash)"
     },
     {
       "path": "usr/bin/login",
@@ -1799,11 +1996,6 @@
       "path": "usr/lib/libcharset.1.dylib",
       "file": "../../Developer/ravynOS.sdk/usr/lib/libcharset.1.dylib",
       "comment": "libcharset, companion of libiconv"
-    },
-    {
-      "path": "usr/lib/libffi.dylib",
-      "file": "../../Developer/ravynOS.sdk/usr/lib/libffi.dylib",
-      "comment": "libffi, recorded by scripting runtimes"
     },
     {
       "path": "System/Library/Frameworks/OpenDirectory.framework/Versions/A/OpenDirectory",
@@ -1964,6 +2156,16 @@
       "path": "System/Library/Extensions/corecrypto.kext/Contents/Info.plist",
       "file": "work/Extensions/corecrypto.kext/Contents/Info.plist",
       "comment": "Kernel extension bundle: corecrypto.kext"
+    },
+    {
+      "path": "System/Library/Extensions/msdosfs.kext/Contents/Info.plist",
+      "file": "work/Extensions/msdosfs.kext/Contents/Info.plist",
+      "comment": "Kernel extension bundle: msdosfs.kext"
+    },
+    {
+      "path": "System/Library/Extensions/msdosfs.kext/Contents/MacOS/msdosfs",
+      "file": "work/Extensions/msdosfs.kext/Contents/MacOS/msdosfs",
+      "comment": "Kernel extension bundle: msdosfs.kext"
     },
     {
       "path": "System/Library/Extensions/IONetworkFamily.kext/Contents/Info.plist",
@@ -8981,14 +9183,14 @@
       "comment": "font from the repo's SystemLibrary/Fonts"
     },
     {
-      "path": "System/Library/Frameworks/IOSurface.framework/Versions/A/IOSurface",
-      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/IOSurface.framework/Versions/A/IOSurface",
-      "comment": "IOSurface from the repo SDK"
-    },
-    {
       "path": "System/Library/Frameworks/AudioToolbox.framework/Versions/A/AudioToolbox",
       "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/AudioToolbox.framework/Versions/A/AudioToolbox",
       "comment": "AudioToolbox from the repo SDK"
+    },
+    {
+      "path": "System/Library/Frameworks/AudioToolbox.framework/AudioToolbox",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/AudioToolbox.framework/Versions/A/AudioToolbox",
+      "comment": "AudioToolbox unversioned alias from the repo SDK"
     },
     {
       "path": "System/Library/Frameworks/AudioUnit.framework/Versions/A/AudioUnit",
@@ -8996,9 +9198,19 @@
       "comment": "AudioUnit from the repo SDK"
     },
     {
+      "path": "System/Library/Frameworks/AudioUnit.framework/AudioUnit",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/AudioUnit.framework/Versions/A/AudioUnit",
+      "comment": "AudioUnit unversioned alias from the repo SDK"
+    },
+    {
       "path": "System/Library/Frameworks/CoreAudio.framework/Versions/A/CoreAudio",
       "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/CoreAudio.framework/Versions/A/CoreAudio",
       "comment": "CoreAudio from the repo SDK"
+    },
+    {
+      "path": "System/Library/Frameworks/CoreAudio.framework/CoreAudio",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/CoreAudio.framework/Versions/A/CoreAudio",
+      "comment": "CoreAudio unversioned alias from the repo SDK"
     },
     {
       "path": "System/Library/Frameworks/CoreMIDI.framework/Versions/A/CoreMIDI",
@@ -9006,9 +9218,19 @@
       "comment": "CoreMIDI from the repo SDK"
     },
     {
+      "path": "System/Library/Frameworks/CoreMIDI.framework/CoreMIDI",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/CoreMIDI.framework/Versions/A/CoreMIDI",
+      "comment": "CoreMIDI unversioned alias from the repo SDK"
+    },
+    {
       "path": "System/Library/Frameworks/CoreMedia.framework/Versions/A/CoreMedia",
       "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/CoreMedia.framework/Versions/A/CoreMedia",
       "comment": "CoreMedia from the repo SDK"
+    },
+    {
+      "path": "System/Library/Frameworks/CoreMedia.framework/CoreMedia",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/CoreMedia.framework/Versions/A/CoreMedia",
+      "comment": "CoreMedia unversioned alias from the repo SDK"
     },
     {
       "path": "System/Library/Frameworks/VideoToolbox.framework/Versions/A/VideoToolbox",
@@ -9016,9 +9238,19 @@
       "comment": "VideoToolbox from the repo SDK"
     },
     {
+      "path": "System/Library/Frameworks/VideoToolbox.framework/VideoToolbox",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/VideoToolbox.framework/Versions/A/VideoToolbox",
+      "comment": "VideoToolbox unversioned alias from the repo SDK"
+    },
+    {
       "path": "System/Library/Frameworks/AVFoundation.framework/Versions/A/AVFoundation",
       "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/AVFoundation.framework/Versions/A/AVFoundation",
       "comment": "AVFoundation from the repo SDK"
+    },
+    {
+      "path": "System/Library/Frameworks/AVFoundation.framework/AVFoundation",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/AVFoundation.framework/Versions/A/AVFoundation",
+      "comment": "AVFoundation unversioned alias from the repo SDK"
     },
     {
       "path": "System/Library/Frameworks/Carbon.framework/Versions/A/Carbon",
@@ -9026,9 +9258,9 @@
       "comment": "Carbon from the repo SDK"
     },
     {
-      "path": "System/Library/Frameworks/OpenGL.framework/Versions/A/OpenGL",
-      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/OpenGL.framework/Versions/A/OpenGL",
-      "comment": "OpenGL from the repo SDK"
+      "path": "System/Library/Frameworks/Carbon.framework/Carbon",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/Carbon.framework/Versions/A/Carbon",
+      "comment": "Carbon unversioned alias from the repo SDK"
     },
     {
       "path": "System/Library/Frameworks/ServiceManagement.framework/Versions/A/ServiceManagement",
@@ -9036,9 +9268,19 @@
       "comment": "ServiceManagement from the repo SDK"
     },
     {
+      "path": "System/Library/Frameworks/ServiceManagement.framework/ServiceManagement",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/ServiceManagement.framework/Versions/A/ServiceManagement",
+      "comment": "ServiceManagement unversioned alias from the repo SDK"
+    },
+    {
       "path": "System/Library/Frameworks/ImageIO.framework/Versions/A/ImageIO",
       "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/ImageIO.framework/Versions/A/ImageIO",
       "comment": "ImageIO from the repo SDK"
+    },
+    {
+      "path": "System/Library/Frameworks/ImageIO.framework/ImageIO",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/ImageIO.framework/Versions/A/ImageIO",
+      "comment": "ImageIO unversioned alias from the repo SDK"
     },
     {
       "path": "System/Library/Frameworks/AddressBook.framework/Versions/A/AddressBook",
@@ -9046,9 +9288,19 @@
       "comment": "AddressBook from the repo SDK"
     },
     {
+      "path": "System/Library/Frameworks/AddressBook.framework/AddressBook",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/AddressBook.framework/Versions/A/AddressBook",
+      "comment": "AddressBook unversioned alias from the repo SDK"
+    },
+    {
       "path": "System/Library/Frameworks/CoreLocation.framework/Versions/A/CoreLocation",
       "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/CoreLocation.framework/Versions/A/CoreLocation",
       "comment": "CoreLocation from the repo SDK"
+    },
+    {
+      "path": "System/Library/Frameworks/CoreLocation.framework/CoreLocation",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/CoreLocation.framework/Versions/A/CoreLocation",
+      "comment": "CoreLocation unversioned alias from the repo SDK"
     },
     {
       "path": "System/Library/Frameworks/LocalAuthentication.framework/Versions/A/LocalAuthentication",
@@ -9056,9 +9308,19 @@
       "comment": "LocalAuthentication from the repo SDK"
     },
     {
+      "path": "System/Library/Frameworks/LocalAuthentication.framework/LocalAuthentication",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/LocalAuthentication.framework/Versions/A/LocalAuthentication",
+      "comment": "LocalAuthentication unversioned alias from the repo SDK"
+    },
+    {
       "path": "System/Library/Frameworks/MediaPlayer.framework/Versions/A/MediaPlayer",
       "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/MediaPlayer.framework/Versions/A/MediaPlayer",
       "comment": "MediaPlayer from the repo SDK"
+    },
+    {
+      "path": "System/Library/Frameworks/MediaPlayer.framework/MediaPlayer",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/MediaPlayer.framework/Versions/A/MediaPlayer",
+      "comment": "MediaPlayer unversioned alias from the repo SDK"
     },
     {
       "path": "System/Library/Frameworks/Metal.framework/Versions/A/Metal",
@@ -9066,9 +9328,19 @@
       "comment": "Metal from the repo SDK"
     },
     {
+      "path": "System/Library/Frameworks/Metal.framework/Metal",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/Metal.framework/Versions/A/Metal",
+      "comment": "Metal unversioned alias from the repo SDK"
+    },
+    {
       "path": "System/Library/Frameworks/Vision.framework/Versions/A/Vision",
       "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/Vision.framework/Versions/A/Vision",
       "comment": "Vision from the repo SDK"
+    },
+    {
+      "path": "System/Library/Frameworks/Vision.framework/Vision",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/Vision.framework/Versions/A/Vision",
+      "comment": "Vision unversioned alias from the repo SDK"
     },
     {
       "path": "System/Library/PrivateFrameworks/CoreUI.framework/Versions/A/CoreUI",
@@ -9087,12 +9359,142 @@
     },
     {
       "path": "etc/rc",
-      "text": "#!/bin/sh\n# ravynOS /etc/rc\n#\n# launchctl's System session runs this once the LaunchDaemons are loaded\n# (BSD/bin/launchctl/launchctl.c: runcom() -> execl(/bin/sh, \"sh\", \"/etc/rc\")).\n# It is the BSD \"runcom\" phase: post-daemon system configuration.\n#\n# On ravynOS the root is a pre-built image: the filesystems are already\n# mounted, there is no fsck, and hostname/network/console settings are applied\n# by launchd or compiled in.  There is genuinely nothing to configure at this\n# phase, so this script reports that it ran and returns success.  Add rc-time\n# setup here if ravynOS ever needs it; keep the exit status 0 so the System\n# session completes and the agent scan (Dock, Filer) runs.\necho \"-=- rc complete -=-\"\nexit 0\n",
+      "text": "#!/bin/sh\n# ravynOS /etc/rc\n#\n# launchctl's System session runs this once the LaunchDaemons are loaded\n# (BSD/bin/launchctl/launchctl.c: runcom() -> execl(/bin/sh, \"sh\", \"/etc/rc\")).\n# It is the BSD \"runcom\" phase: post-daemon system configuration.\n#\n# On ravynOS the root is a pre-built image: the filesystems are already\n# mounted, there is no fsck, and hostname/network/console settings are applied\n# by launchd or compiled in.  There is genuinely nothing to configure at this\n# phase, so this script reports that it ran and returns success.  Add rc-time\n# setup here if ravynOS ever needs it; keep the exit status 0 so the System\n# session completes and the agent scan (Dock, Filer) runs.\n# Network bring-up.  The e1000 driver attaches en0 at boot but the link has\n# no address, so nothing can send a packet (the compat fixture had to seed\n# an address itself).  Give it one unconditionally first -- under QEMU's\n# SLIRP, 10.0.2.15/24 is inside the host network QEMU exports (10.0.2.0/24)\n# and doubles as the DHCP broadcast target for dhclient's DISCOVER.  Then\n# ask dhclient for the real SLIRP lease: it overwrites the address via\n# SIOCAIFADDR and rewrites /etc/resolv.conf from the server's DNS options,\n# which is what Firefox needs to resolve example.com.  dhclient failing\n# (no OFFER) must not fail the System session: the seed address stays\n# usable and /etc/resolv.conf ships with the SLIRP nameserver already.\nifconfig en0 up\nifconfig en0 10.0.2.15 netmask 255.255.255.0\ndhclient en0 || echo \"-=- dhclient: no lease, kept seed address -=-\"\necho \"-=- rc complete -=-\"\n",
       "comment": "system rc, run by launchctl's System session after LaunchDaemons"
     },
     {
+      "path": "etc/fonts/fonts.conf",
+      "file": "../../Frameworks/CoreText/fontconfig/fonts.conf",
+      "comment": "fontconfig system config (searches /System/Library/Fonts)"
+    },
+    {
+      "path": "etc/fonts/conf.d/10-hinting-medium.conf",
+      "file": "../../Frameworks/CoreText/fontconfig/conf.d/10-hinting-medium.conf",
+      "comment": "fontconfig conf.d fragment"
+    },
+    {
+      "path": "etc/fonts/conf.d/10-scale-bitmap-fonts.conf",
+      "file": "../../Frameworks/CoreText/fontconfig/conf.d/10-scale-bitmap-fonts.conf",
+      "comment": "fontconfig conf.d fragment"
+    },
+    {
+      "path": "etc/fonts/conf.d/10-sub-pixel-bgr.conf",
+      "file": "../../Frameworks/CoreText/fontconfig/conf.d/10-sub-pixel-bgr.conf",
+      "comment": "fontconfig conf.d fragment"
+    },
+    {
+      "path": "etc/fonts/conf.d/10-yes-antialias.conf",
+      "file": "../../Frameworks/CoreText/fontconfig/conf.d/10-yes-antialias.conf",
+      "comment": "fontconfig conf.d fragment"
+    },
+    {
+      "path": "etc/fonts/conf.d/11-lcdfilter-default.conf",
+      "file": "../../Frameworks/CoreText/fontconfig/conf.d/11-lcdfilter-default.conf",
+      "comment": "fontconfig conf.d fragment"
+    },
+    {
+      "path": "etc/fonts/conf.d/20-unhint-small-vera.conf",
+      "file": "../../Frameworks/CoreText/fontconfig/conf.d/20-unhint-small-vera.conf",
+      "comment": "fontconfig conf.d fragment"
+    },
+    {
+      "path": "etc/fonts/conf.d/25-unhint-nonlatin.conf",
+      "file": "../../Frameworks/CoreText/fontconfig/conf.d/25-unhint-nonlatin.conf",
+      "comment": "fontconfig conf.d fragment"
+    },
+    {
+      "path": "etc/fonts/conf.d/30-metric-aliases.conf",
+      "file": "../../Frameworks/CoreText/fontconfig/conf.d/30-metric-aliases.conf",
+      "comment": "fontconfig conf.d fragment"
+    },
+    {
+      "path": "etc/fonts/conf.d/35-lang-normalize.conf",
+      "file": "../../Frameworks/CoreText/fontconfig/conf.d/35-lang-normalize.conf",
+      "comment": "fontconfig conf.d fragment"
+    },
+    {
+      "path": "etc/fonts/conf.d/40-nonlatin.conf",
+      "file": "../../Frameworks/CoreText/fontconfig/conf.d/40-nonlatin.conf",
+      "comment": "fontconfig conf.d fragment"
+    },
+    {
+      "path": "etc/fonts/conf.d/45-generic.conf",
+      "file": "../../Frameworks/CoreText/fontconfig/conf.d/45-generic.conf",
+      "comment": "fontconfig conf.d fragment"
+    },
+    {
+      "path": "etc/fonts/conf.d/45-latin.conf",
+      "file": "../../Frameworks/CoreText/fontconfig/conf.d/45-latin.conf",
+      "comment": "fontconfig conf.d fragment"
+    },
+    {
+      "path": "etc/fonts/conf.d/48-spacing.conf",
+      "file": "../../Frameworks/CoreText/fontconfig/conf.d/48-spacing.conf",
+      "comment": "fontconfig conf.d fragment"
+    },
+    {
+      "path": "etc/fonts/conf.d/49-sansserif.conf",
+      "file": "../../Frameworks/CoreText/fontconfig/conf.d/49-sansserif.conf",
+      "comment": "fontconfig conf.d fragment"
+    },
+    {
+      "path": "etc/fonts/conf.d/50-user.conf",
+      "file": "../../Frameworks/CoreText/fontconfig/conf.d/50-user.conf",
+      "comment": "fontconfig conf.d fragment"
+    },
+    {
+      "path": "etc/fonts/conf.d/51-local.conf",
+      "file": "../../Frameworks/CoreText/fontconfig/conf.d/51-local.conf",
+      "comment": "fontconfig conf.d fragment"
+    },
+    {
+      "path": "etc/fonts/conf.d/60-generic.conf",
+      "file": "../../Frameworks/CoreText/fontconfig/conf.d/60-generic.conf",
+      "comment": "fontconfig conf.d fragment"
+    },
+    {
+      "path": "etc/fonts/conf.d/60-latin.conf",
+      "file": "../../Frameworks/CoreText/fontconfig/conf.d/60-latin.conf",
+      "comment": "fontconfig conf.d fragment"
+    },
+    {
+      "path": "etc/fonts/conf.d/65-fonts-persian.conf",
+      "file": "../../Frameworks/CoreText/fontconfig/conf.d/65-fonts-persian.conf",
+      "comment": "fontconfig conf.d fragment"
+    },
+    {
+      "path": "etc/fonts/conf.d/65-khmer.conf",
+      "file": "../../Frameworks/CoreText/fontconfig/conf.d/65-khmer.conf",
+      "comment": "fontconfig conf.d fragment"
+    },
+    {
+      "path": "etc/fonts/conf.d/65-nonlatin.conf",
+      "file": "../../Frameworks/CoreText/fontconfig/conf.d/65-nonlatin.conf",
+      "comment": "fontconfig conf.d fragment"
+    },
+    {
+      "path": "etc/fonts/conf.d/69-unifont.conf",
+      "file": "../../Frameworks/CoreText/fontconfig/conf.d/69-unifont.conf",
+      "comment": "fontconfig conf.d fragment"
+    },
+    {
+      "path": "etc/fonts/conf.d/70-yes-bitmaps.conf",
+      "file": "../../Frameworks/CoreText/fontconfig/conf.d/70-yes-bitmaps.conf",
+      "comment": "fontconfig conf.d fragment"
+    },
+    {
+      "path": "etc/fonts/conf.d/80-delicious.conf",
+      "file": "../../Frameworks/CoreText/fontconfig/conf.d/80-delicious.conf",
+      "comment": "fontconfig conf.d fragment"
+    },
+    {
+      "path": "etc/fonts/conf.d/90-synthetic.conf",
+      "file": "../../Frameworks/CoreText/fontconfig/conf.d/90-synthetic.conf",
+      "comment": "fontconfig conf.d fragment"
+    },
+    {
       "path": "Library/Preferences/Dock.plist",
-      "text": "{\n\tLocation = 0;\n\tOpacity = 0.85;\n\ttilesize = 64;\n}\n",
+      "text": "{\n\tLocation = 0;\n\tOpacity = 0.85;\n\ttilesize = 64;\n\tautohide = 0;\n\tmagnification = 0;\n}\n",
       "comment": "Dock preferences (the Dock fills in the tile list and wallpaper)"
     },
     {
@@ -9124,6 +9526,26 @@
       "path": "etc/group",
       "text": "wheel:*:0:root,ravyn\ndaemon:*:1:\ntty:*:4:\nstaff:*:20:ravyn\nnogroup:*:65533:\nnobody:*:65534:\n",
       "comment": "group database; wheel is the admin group"
+    },
+    {
+      "path": "etc/hosts",
+      "text": "127.0.0.1\tlocalhost\n::1\tlocalhost\n10.0.2.2\tfixture.test\n",
+      "comment": "hosts file for loopback resolution"
+    },
+    {
+      "path": "etc/resolv.conf",
+      "text": "# ravynOS /etc/resolv.conf\n# QEMU SLIRP DNS gateway and public fallbacks\nnameserver 10.0.2.3\nnameserver 1.1.1.1\nnameserver 8.8.8.8\n",
+      "comment": "DNS resolver configuration (QEMU SLIRP 10.0.2.3 + public fallbacks)"
+    },
+    {
+      "path": "etc/asl.conf",
+      "file": "../../BSD/usr.sbin/syslogd/asl.conf.osx",
+      "comment": "syslogd and aslmanager configuration"
+    },
+    {
+      "path": "etc/syslog.conf",
+      "file": "../../BSD/usr.sbin/syslogd/syslog.conf",
+      "comment": "syslog configuration"
     },
     {
       "path": "System/Library/Frameworks/LaunchServices.framework/Versions/A/Resources/InitDB.sql",
@@ -9256,9 +9678,19 @@
       "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
     },
     {
+      "path": "System/Library/Frameworks/Cocoa.framework/Cocoa",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/Cocoa.framework/Versions/A/Cocoa",
+      "comment": "framework unversioned alias; repo-built, staged from the in-repo ravynOS SDK"
+    },
+    {
       "path": "System/Library/Frameworks/Security.framework/Versions/A/Security",
       "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/Security.framework/Versions/A/Security",
       "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
+    },
+    {
+      "path": "System/Library/Frameworks/Security.framework/Security",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/Security.framework/Versions/A/Security",
+      "comment": "framework unversioned alias; repo-built, staged from the in-repo ravynOS SDK"
     },
     {
       "path": "System/Library/Frameworks/IOKit.framework/Versions/A/IOKit",
@@ -9266,9 +9698,19 @@
       "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
     },
     {
+      "path": "System/Library/Frameworks/IOKit.framework/IOKit",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/IOKit.framework/Versions/A/IOKit",
+      "comment": "framework unversioned alias; repo-built, staged from the in-repo ravynOS SDK"
+    },
+    {
       "path": "System/Library/Frameworks/CoreVideo.framework/Versions/A/CoreVideo",
       "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/CoreVideo.framework/Versions/A/CoreVideo",
       "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
+    },
+    {
+      "path": "System/Library/Frameworks/CoreVideo.framework/CoreVideo",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/CoreVideo.framework/Versions/A/CoreVideo",
+      "comment": "framework unversioned alias; repo-built, staged from the in-repo ravynOS SDK"
     },
     {
       "path": "System/Library/Frameworks/SystemConfiguration.framework/Versions/A/SystemConfiguration",
@@ -9276,14 +9718,29 @@
       "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
     },
     {
+      "path": "System/Library/Frameworks/SystemConfiguration.framework/SystemConfiguration",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/SystemConfiguration.framework/Versions/A/SystemConfiguration",
+      "comment": "framework unversioned alias; repo-built, staged from the in-repo ravynOS SDK"
+    },
+    {
       "path": "System/Library/Frameworks/CoreServices.framework/Versions/A/CoreServices",
       "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/CoreServices.framework/Versions/A/CoreServices",
       "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
     },
     {
+      "path": "System/Library/Frameworks/CoreServices.framework/CoreServices",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/CoreServices.framework/Versions/A/CoreServices",
+      "comment": "framework unversioned alias; repo-built, staged from the in-repo ravynOS SDK"
+    },
+    {
       "path": "System/Library/Frameworks/ApplicationServices.framework/Versions/A/ApplicationServices",
       "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/ApplicationServices.framework/Versions/A/ApplicationServices",
       "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
+    },
+    {
+      "path": "System/Library/Frameworks/ApplicationServices.framework/ApplicationServices",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/ApplicationServices.framework/Versions/A/ApplicationServices",
+      "comment": "framework unversioned alias; repo-built, staged from the in-repo ravynOS SDK"
     },
     {
       "path": "usr/lib/libobjc.A.dylib",
@@ -9299,6 +9756,411 @@
       "path": "System/Library/Frameworks/CFNetwork.framework/Versions/A/CFNetwork",
       "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/CFNetwork.framework/Versions/A/CFNetwork",
       "comment": "dylib closure; repo-built, staged from the in-repo ravynOS SDK"
+    },
+    {
+      "path": "System/Library/Frameworks/CFNetwork.framework/CFNetwork",
+      "file": "../../Developer/ravynOS.sdk/System/Library/Frameworks/CFNetwork.framework/Versions/A/CFNetwork",
+      "comment": "framework unversioned alias; repo-built, staged from the in-repo ravynOS SDK"
+    },
+    {
+      "path": "bin/cpdup",
+      "file": "work/cpdup",
+      "comment": "cpdup (built from BSD/bin/cpdup)"
+    },
+    {
+      "path": "bin/date",
+      "file": "work/date",
+      "comment": "date (built from BSD/bin/date)"
+    },
+    {
+      "path": "bin/dd",
+      "file": "work/dd",
+      "comment": "dd (built from BSD/bin/dd)"
+    },
+    {
+      "path": "bin/ed",
+      "file": "work/ed",
+      "comment": "ed (built from BSD/bin/ed)"
+    },
+    {
+      "path": "bin/expr",
+      "file": "work/expr",
+      "comment": "expr (built from BSD/bin/expr)"
+    },
+    {
+      "path": "bin/hostname",
+      "file": "work/hostname",
+      "comment": "hostname (built from BSD/bin/hostname)"
+    },
+    {
+      "path": "bin/ln",
+      "file": "work/ln",
+      "comment": "ln (built from BSD/bin/ln)"
+    },
+    {
+      "path": "bin/login",
+      "file": "work/login",
+      "comment": "login (built from BSD/bin/login)"
+    },
+    {
+      "path": "bin/nproc",
+      "file": "work/nproc",
+      "comment": "nproc (built from BSD/bin/nproc)"
+    },
+    {
+      "path": "bin/open",
+      "file": "work/open",
+      "comment": "open (built from BSD/bin/open)"
+    },
+    {
+      "path": "bin/pax",
+      "file": "work/pax",
+      "comment": "pax (built from BSD/bin/pax)"
+    },
+    {
+      "path": "bin/pkill",
+      "file": "work/pkill",
+      "comment": "pkill (built from BSD/bin/pkill)"
+    },
+    {
+      "path": "bin/pwait",
+      "file": "work/pwait",
+      "comment": "pwait (built from BSD/bin/pwait)"
+    },
+    {
+      "path": "bin/pwd",
+      "file": "work/pwd",
+      "comment": "pwd (built from BSD/bin/pwd)"
+    },
+    {
+      "path": "bin/realpath",
+      "file": "work/realpath",
+      "comment": "realpath (built from BSD/bin/realpath)"
+    },
+    {
+      "path": "bin/rmdir",
+      "file": "work/rmdir",
+      "comment": "rmdir (built from BSD/bin/rmdir)"
+    },
+    {
+      "path": "bin/stty",
+      "file": "work/stty",
+      "comment": "stty (built from BSD/bin/stty)"
+    },
+    {
+      "path": "usr/bin/apply",
+      "file": "work/apply",
+      "comment": "apply (built from BSD/usr.bin/apply)"
+    },
+    {
+      "path": "usr/bin/basename",
+      "file": "work/basename",
+      "comment": "basename (built from BSD/usr.bin/basename)"
+    },
+    {
+      "path": "usr/bin/chgrp",
+      "file": "work/chgrp",
+      "comment": "chgrp (built from BSD/usr.bin/chgrp)"
+    },
+    {
+      "path": "usr/bin/chmod",
+      "file": "work/chmod",
+      "comment": "chmod (built from BSD/usr.bin/chmod)"
+    },
+    {
+      "path": "usr/bin/chown",
+      "file": "work/chown",
+      "comment": "chown (built from BSD/usr.bin/chown)"
+    },
+    {
+      "path": "usr/bin/chroot",
+      "file": "work/chroot",
+      "comment": "chroot (built from BSD/usr.bin/chroot)"
+    },
+    {
+      "path": "usr/bin/cksum",
+      "file": "work/cksum",
+      "comment": "cksum (built from BSD/usr.bin/cksum)"
+    },
+    {
+      "path": "usr/bin/cmp",
+      "file": "work/cmp",
+      "comment": "cmp (built from BSD/usr.bin/cmp)"
+    },
+    {
+      "path": "usr/bin/comm",
+      "file": "work/comm",
+      "comment": "comm (built from BSD/usr.bin/comm)"
+    },
+    {
+      "path": "usr/bin/cut",
+      "file": "work/cut",
+      "comment": "cut (built from BSD/usr.bin/cut)"
+    },
+    {
+      "path": "usr/bin/date",
+      "file": "work/date",
+      "comment": "date (built from BSD/usr.bin/date)"
+    },
+    {
+      "path": "usr/bin/defaults",
+      "file": "work/defaults",
+      "comment": "defaults (built from BSD/usr.bin/defaults)"
+    },
+    {
+      "path": "usr/bin/diff",
+      "file": "work/diff",
+      "comment": "diff (built from BSD/usr.bin/diff)"
+    },
+    {
+      "path": "usr/bin/dirname",
+      "file": "work/dirname",
+      "comment": "dirname (built from BSD/usr.bin/dirname)"
+    },
+    {
+      "path": "usr/bin/dscl",
+      "file": "work/dscl",
+      "comment": "dscl (built from BSD/usr.bin/dscl)"
+    },
+    {
+      "path": "usr/bin/du",
+      "file": "work/du",
+      "comment": "du (built from BSD/usr.bin/du)"
+    },
+    {
+      "path": "usr/bin/env",
+      "file": "work/env",
+      "comment": "env (built from BSD/usr.bin/env)"
+    },
+    {
+      "path": "usr/bin/false",
+      "file": "work/false",
+      "comment": "false (built from BSD/usr.bin/false)"
+    },
+    {
+      "path": "usr/bin/file",
+      "file": "work/file",
+      "comment": "file (built from BSD/usr.bin/file)"
+    },
+    {
+      "path": "usr/bin/find",
+      "file": "work/find",
+      "comment": "find (built from BSD/usr.bin/find)"
+    },
+    {
+      "path": "usr/bin/getconf",
+      "file": "work/getconf",
+      "comment": "getconf (built from BSD/usr.bin/getconf)"
+    },
+    {
+      "path": "usr/bin/getopt",
+      "file": "work/getopt",
+      "comment": "getopt (built from BSD/usr.bin/getopt)"
+    },
+    {
+      "path": "usr/bin/head",
+      "file": "work/head",
+      "comment": "head (built from BSD/usr.bin/head)"
+    },
+    {
+      "path": "usr/bin/iconv",
+      "file": "work/iconv",
+      "comment": "iconv (built from BSD/usr.bin/iconv)"
+    },
+    {
+      "path": "usr/bin/join",
+      "file": "work/join",
+      "comment": "join (built from BSD/usr.bin/join)"
+    },
+    {
+      "path": "usr/bin/kill",
+      "file": "work/kill",
+      "comment": "kill (built from BSD/usr.bin/kill)"
+    },
+    {
+      "path": "usr/bin/killall",
+      "file": "work/killall",
+      "comment": "killall (built from BSD/usr.bin/killall)"
+    },
+    {
+      "path": "usr/bin/logger",
+      "file": "work/logger",
+      "comment": "logger (built from BSD/usr.bin/logger)"
+    },
+    {
+      "path": "usr/bin/mkfifo",
+      "file": "work/mkfifo",
+      "comment": "mkfifo (built from BSD/usr.bin/mkfifo)"
+    },
+    {
+      "path": "usr/bin/mktemp",
+      "file": "work/mktemp",
+      "comment": "mktemp (built from BSD/usr.bin/mktemp)"
+    },
+    {
+      "path": "usr/bin/more",
+      "file": "work/more",
+      "comment": "more (built from BSD/usr.bin/more)"
+    },
+    {
+      "path": "usr/bin/nice",
+      "file": "work/nice",
+      "comment": "nice (built from BSD/usr.bin/nice)"
+    },
+    {
+      "path": "usr/bin/nohup",
+      "file": "work/nohup",
+      "comment": "nohup (built from BSD/usr.bin/nohup)"
+    },
+    {
+      "path": "usr/bin/paste",
+      "file": "work/paste",
+      "comment": "paste (built from BSD/usr.bin/paste)"
+    },
+    {
+      "path": "usr/bin/patch",
+      "file": "work/patch",
+      "comment": "patch (built from BSD/usr.bin/patch)"
+    },
+    {
+      "path": "usr/bin/plutil",
+      "file": "work/plutil",
+      "comment": "plutil (built from BSD/usr.bin/plutil)"
+    },
+    {
+      "path": "usr/bin/printf",
+      "file": "work/printf",
+      "comment": "printf (built from BSD/usr.bin/printf)"
+    },
+    {
+      "path": "usr/bin/sed",
+      "file": "work/sed",
+      "comment": "sed (built from BSD/usr.bin/sed)"
+    },
+    {
+      "path": "usr/bin/seq",
+      "file": "work/seq",
+      "comment": "seq (built from BSD/usr.bin/seq)"
+    },
+    {
+      "path": "usr/bin/sort",
+      "file": "work/sort",
+      "comment": "sort (built from BSD/usr.bin/sort)"
+    },
+    {
+      "path": "usr/bin/split",
+      "file": "work/split",
+      "comment": "split (built from BSD/usr.bin/split)"
+    },
+    {
+      "path": "usr/bin/stat",
+      "file": "work/stat",
+      "comment": "stat (built from BSD/usr.bin/stat)"
+    },
+    {
+      "path": "usr/bin/strings",
+      "file": "work/strings",
+      "comment": "strings (built from BSD/usr.bin/strings)"
+    },
+    {
+      "path": "usr/bin/strip",
+      "file": "work/strip",
+      "comment": "strip (built from BSD/usr.bin/strip)"
+    },
+    {
+      "path": "usr/bin/sw_vers",
+      "file": "work/sw_vers",
+      "comment": "sw_vers (built from BSD/usr.bin/sw_vers)"
+    },
+    {
+      "path": "usr/bin/tail",
+      "file": "work/tail",
+      "comment": "tail (built from BSD/usr.bin/tail)"
+    },
+    {
+      "path": "usr/bin/tee",
+      "file": "work/tee",
+      "comment": "tee (built from BSD/usr.bin/tee)"
+    },
+    {
+      "path": "usr/bin/time",
+      "file": "work/time",
+      "comment": "time (built from BSD/usr.bin/time)"
+    },
+    {
+      "path": "usr/bin/touch",
+      "file": "work/touch",
+      "comment": "touch (built from BSD/usr.bin/touch)"
+    },
+    {
+      "path": "usr/bin/tr",
+      "file": "work/tr",
+      "comment": "tr (built from BSD/usr.bin/tr)"
+    },
+    {
+      "path": "usr/bin/true",
+      "file": "work/true",
+      "comment": "true (built from BSD/usr.bin/true)"
+    },
+    {
+      "path": "usr/bin/tty",
+      "file": "work/tty",
+      "comment": "tty (built from BSD/usr.bin/tty)"
+    },
+    {
+      "path": "usr/bin/uniq",
+      "file": "work/uniq",
+      "comment": "uniq (built from BSD/usr.bin/uniq)"
+    },
+    {
+      "path": "usr/bin/users",
+      "file": "work/users",
+      "comment": "users (built from BSD/usr.bin/users)"
+    },
+    {
+      "path": "usr/bin/uuidgen",
+      "file": "work/uuidgen",
+      "comment": "uuidgen (built from BSD/usr.bin/uuidgen)"
+    },
+    {
+      "path": "usr/bin/wc",
+      "file": "work/wc",
+      "comment": "wc (built from BSD/usr.bin/wc)"
+    },
+    {
+      "path": "usr/bin/whereis",
+      "file": "work/whereis",
+      "comment": "whereis (built from BSD/usr.bin/whereis)"
+    },
+    {
+      "path": "usr/bin/which",
+      "file": "work/which",
+      "comment": "which (built from BSD/usr.bin/which)"
+    },
+    {
+      "path": "usr/bin/xargs",
+      "file": "work/xargs",
+      "comment": "xargs (built from BSD/usr.bin/xargs)"
+    },
+    {
+      "path": "usr/bin/yes",
+      "file": "work/yes",
+      "comment": "yes (built from BSD/usr.bin/yes)"
+    },
+    {
+      "path": "sbin/mount_hfs",
+      "file": "work/mount_hfs",
+      "comment": "mount_hfs (built from BSD/sbin/mount_hfs)"
+    },
+    {
+      "path": "usr/sbin/tmutil",
+      "file": "work/tmutil",
+      "comment": "tmutil (built from BSD/usr.sbin/tmutil)"
+    },
+    {
+      "path": "usr/sbin/usermgmt",
+      "file": "work/usermgmt",
+      "comment": "usermgmt (built from BSD/usr.sbin/usermgmt)"
     }
   ]
 }

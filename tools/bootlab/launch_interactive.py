@@ -39,7 +39,13 @@ parser = argparse.ArgumentParser(description="Launch interactive ravynOS desktop
 parser.add_argument("--accel", choices=("auto", "tcg", "hvf", "kvm"), default="auto", help="QEMU accelerator; auto prefers HVF on macOS when available")
 parser.add_argument("--cpus", type=int, default=None, help="number of CPU cores to expose to the kernel and QEMU (default: all host CPUs when accelerated, 1 under TCG, where extra vCPUs measured slower)")
 parser.add_argument("--mem", type=int, default=8192, help="memory in MB (default: 8192 MB = 8 GB)")
+parser.add_argument("--img", default=None, help="disk image (default: work/boot.img)")
+parser.add_argument("--fixtures", action="store_true",
+                    help="boot for the conformance fixtures: suppress the app fleet, "
+                         "but do NOT mark the boot interactive (the fixture runner skips interactive boots)")
 args = parser.parse_args()
+if args.img:
+    IMG = os.path.abspath(args.img)
 
 accels = supported_accels()
 if args.accel == "auto":
@@ -171,7 +177,8 @@ boot_cmd = (
     "fs0:\\System\\Library\\CoreServices\\boot.efi -v serial=3 "
     "debug=0x14e keepsyms=1 slide=0 kcsuffix=development "
     "rd=disk0s1 rootdev=disk0s1 dart=0 kextlog=0x1f "
-    f"-no_compat_check cpus={cpus} nofleet=1 interactive=1"
+    f"-no_compat_check cpus={cpus} nofleet=1"
+    + ("" if args.fixtures else " interactive=1")
     + ((" " + os.environ["RAVYN_BOOT_ARGS"]) if os.environ.get("RAVYN_BOOT_ARGS") else "")
     + "\r\n"
 )

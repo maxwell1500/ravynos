@@ -1067,7 +1067,16 @@ def main():
     universe = {}        # symbol -> providing staged path
     dangling_aliases = []  # (path, alias, target)
     for p in sorted(closure):
-        for name in nodes[p].defined_globals():
+        try:
+            defined = nodes[p].defined_globals()
+        except Exception as exc:                          # noqa: BLE001
+            # A truncated or corrupt symbol table must name the file and
+            # fail the gate; an uncaught struct.error hides which disk byte
+            # range was bad and turns a verdict into a traceback.
+            errors.append((p, "symbol table unreadable: %s" % exc))
+            print("  !! %s: symbol table unreadable: %s" % (p, exc))
+            continue
+        for name in defined:
             universe.setdefault(name, p)
     # N_INDR aliases are published only if their target is published.  Adding
     # them before targets resolve would let a dylib vouch for a symbol the
@@ -1234,7 +1243,12 @@ def main():
         #     initializer walk never sees the libSystemInitialized gate.
         if (node.filetype in (MH_DYLINKER, MH_KEXT_BUNDLE)
                 or "libSystem" in os.path.basename(p)
-                or p.startswith("System/Library/Extensions/")):
+                or p.startswith("System/Library/Extensions/")
+                # BootKernelExtensions and the kernel are loaded by boot.efi
+                # and the kernel loader, never by dyld's ImageLoaderMachO, so
+                # dyld's libSystem-initializer gate cannot apply to them.
+                or p.startswith("System/Library/Kernels/")
+                or p.startswith("System/Library/KernelCollections/")):
             continue
         if not node.libsystem_linked():
             no_libsystem.append((p, inits,

@@ -131,6 +131,44 @@ main(int argc, char **argv)
 		printf("  tid %llu rip 0x%016llx %s+0x%llx\n",
 		    (unsigned long long)tid, (unsigned long long)state.__rip,
 		    where, (unsigned long long)off);
+
+		/* Where the thread is, not just how far in.  A single PC says "in
+		 * libsystem_kernel"; the frame chain says which call it is waiting in,
+		 * which is the difference between "idle" and "blocked on a syscall we
+		 * never answer".  Frame-pointer walk: [rbp] = caller's rbp,
+		 * [rbp+8] = return address.  Bounded and read-only. */
+		if (state.__rbp != 0) {
+			uint64_t fp = state.__rbp;
+			for (int f = 0; f < 12 && fp != 0; f++) {
+				uint64_t frame[2];
+				if (read_mem(task, fp, frame, sizeof(frame)) != 0)
+					break;
+				uint64_t ra = frame[1];
+				if (ra == 0)
+					break;
+				const char *fwhere = "?";
+				int fb = -1;
+				for (int k = 0; k < nimages; k++) {
+					if (bases[k] <= ra && (fb < 0 || bases[k] > bases[fb]))
+						fb = k;
+				}
+				if (fb >= 0) {
+					memset(path, 0, sizeof(path));
+					if (read_mem(task,
+					    (uint64_t)(uintptr_t)images[fb].imageFilePath,
+					    path, sizeof(path) - 1) == 0) {
+						const char *slash = strrchr(path, '/');
+						fwhere = slash ? slash + 1 : path;
+					}
+					printf("      #%d 0x%016llx %s+0x%llx\n", f,
+					    (unsigned long long)ra, fwhere,
+					    (unsigned long long)(ra - bases[fb]));
+				}
+				if (frame[0] <= fp)	/* chain must climb */
+					break;
+				fp = frame[0];
+			}
+		}
 	}
 
 out:

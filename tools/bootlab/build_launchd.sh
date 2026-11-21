@@ -513,9 +513,10 @@ compile_openbsm() {
 # compile_openbsm() above and linked in as ordinary objects; and any future
 # real libbsm.dylib, which would be preferred over those objects.
 link_it() {
-    local extra=""
-    [ -f "$SDK/usr/lib/libbsm.dylib" ] && extra="-lbsm"
-    "${CC[@]}" "${LDFLAGS_COMMON[@]}" $extra -o "$OUT" "${OBJS[@]}" \
+    # Link the vendored OpenBSM objects, never a libbsm.dylib: the SDK gained
+    # one later, but the cpmv image does not stage it, so preferring it turns
+    # a self-contained binary into one that cannot start.
+    "${CC[@]}" "${LDFLAGS_COMMON[@]}" -o "$OUT" "${OBJS[@]}" \
         2> "$WORK/link.log" \
         || { echo "--- link errors ---" >&2; cat "$WORK/link.log" >&2
              die "link failed"; }

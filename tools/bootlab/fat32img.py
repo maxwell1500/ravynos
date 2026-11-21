@@ -203,10 +203,14 @@ class Fat32Img:
         return ch
 
     def read_clusters(self, start, size=0):
-        buf = b""
+        # Join once instead of `buf += chunk`: the latter is quadratic in the
+        # file size and turned the 360 MB Firefox bundle's verification pass
+        # into a 15-minute CPU burn with no output.
+        chunks = []
         for c in self.chain(start):
             self.f.seek(self.geom.data_off + (c - 2) * self.geom.cl)
-            buf += self.f.read(self.geom.cl)
+            chunks.append(self.f.read(self.geom.cl))
+        buf = b"".join(chunks)
         return buf[:size] if size else buf
 
     def listdir(self, start_clus):

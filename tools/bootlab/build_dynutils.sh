@@ -87,6 +87,7 @@ srcs_for() {
 }
 
 CFLAGS_COMMON=(-c -arch x86_64 -isysroot "$SDK" -mmacos-version-min=15.0
+               -I "$REPO/BSD/compat/include"
                -fno-builtin -std=gnu11 -fPIC -D__unused= -Wall
                -Wno-unused-parameter -Wno-incompatible-function-pointer-types
                # NOTE: -DSHELL is NOT here.  It is added for `sh` alone, below:
@@ -210,7 +211,7 @@ build_one() {
     # no argument at all, which is what the other eight need, and unlike an
     # empty array it does not trip `set -u` in bash 3.2.
     local extra=""
-    [ "$u" = "sh" ] && extra="-ledit"
+    [ "$u" = "sh" ] && extra="$REPO/BSD/lib/libedit/libedit.dylib"
     # launchctl's Makefile links these.  -ljansson resolves against the
     # libjansson.dylib built by BSD/lib/libjansson into the SDK.
     [ "$u" = "launchctl" ] && extra="-llaunch -ldispatch -lutil -ljansson"

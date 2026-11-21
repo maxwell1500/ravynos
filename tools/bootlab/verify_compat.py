@@ -18,6 +18,7 @@ import atexit
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -26,7 +27,9 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 WORK = os.path.join(HERE, "work")
 FIXTURES = ("posix", "malloczone", "autorelease", "plist", "backup", "passwd", "accounts", "cocoa", "launch",
-            "pasteboard", "net", "icmp", "tcp", "dmesg", "sandbox", "perms", "spinkill")
+            "pasteboard", "net", "icmp", "tcp", "dns", "dns_external", "download", "openurl",
+            "foundation", "dmesg", "sandbox", "perms", "spinkill", "printf",
+            "screeninfo")
 TCP_PORT = 8123
 TCP_MARKER = "RAVYN-TCP-OK"
 
@@ -57,6 +60,104 @@ def kill_guest(proc):
             pass
 
 
+
+WEB_BG = (0, 160, 192)          # background of the served http-index.html
+
+
+def page_pixels(dump_path):
+    """How many pixels of a screendump match the test page's background.
+
+    The page is one flat colour precisely so that "did the browser render it"
+    is arithmetic, not image understanding."""
+    try:
+        with open(dump_path, "rb") as f:
+            data = f.read()
+    except OSError:
+        return 0
+    fields = []
+    i = 2
+    while len(fields) < 3:
+        while i < len(data) and data[i:i+1].isspace():
+            i += 1
+        if data[i:i+1] == b"#":
+            while data[i:i+1] != b"\n":
+                i += 1
+            continue
+        j = i
+        while j < len(data) and not data[j:j+1].isspace():
+            j += 1
+        fields.append(int(data[i:j]))
+        i = j
+    if len(fields) != 3 or not data.startswith(b"P6"):
+        return 0
+    w, h, _ = fields
+    buf = data[i + 1:i + 1 + w * h * 3]
+    page_pixels.last_bbox = None
+    n = 0
+    x0 = y0 = 10 ** 6
+    x1 = y1 = -1
+    for k in range(0, len(buf) - 2, 3):
+        if (abs(buf[k] - WEB_BG[0]) <= 20 and abs(buf[k + 1] - WEB_BG[1]) <= 20
+                and abs(buf[k + 2] - WEB_BG[2]) <= 20):
+            n += 1
+            px = (k // 3) % w
+            py = (k // 3) // w
+            x0, x1 = min(x0, px), max(x1, px)
+            y0, y1 = min(y0, py), max(y1, py)
+    page_pixels.last_bbox = (x0, y0, x1, y1) if n else None
+    return n
+
+
+class Monitor:
+    """Just enough of the QEMU human monitor to take a screendump."""
+
+    def __init__(self, path):
+        for _ in range(60):
+            if os.path.exists(path):
+                try:
+                    self.s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                    self.s.connect(path)
+                    self.s.settimeout(2.0)
+                    return
+                except OSError:
+                    pass
+            time.sleep(0.5)
+        self.s = None
+
+    def cmd(self, line, wait=1.0):
+        if self.s is None:
+            return None
+        try:
+            self.s.sendall((line + "\n").encode())
+        except OSError:
+            return None
+        time.sleep(wait)
+        try:
+            return self.s.recv(65536)
+        except OSError:
+            return None
+
+
+def firefox_rendered_page(monitor_path, out_dir):
+    """Wait for the browser to paint the test page; return the best pixel
+    count seen.  openurl hands the URL over during the fixture run, so the
+    page arrives some seconds later and the first dump can be too early."""
+    mon = Monitor(monitor_path)
+    best = 0
+    box = None
+    for i in range(20):
+        p = os.path.join(out_dir, "web_%d.ppm" % i)
+        mon.cmd("screendump %s" % p, wait=1.5)
+        n = page_pixels(p)
+        if n > best:
+            best, box = n, page_pixels.last_bbox
+        if n >= 500:
+            break
+        time.sleep(8)
+    page_pixels.last_bbox = box
+    return best
+
+
 def read_report(img):
     sys.path.insert(0, HERE)
     from fat32img import Fat32Img
@@ -78,6 +179,14 @@ def start_tcp_server():
     root = tempfile.mkdtemp(prefix="ravyn-tcp-")
     with open(os.path.join(root, "marker.txt"), "w") as f:
         f.write(TCP_MARKER + "\n")
+    # A page for the browser to load (plan 3.4).  It is deliberately a solid
+    # colour with nothing else on it, so "did the page render" is a single
+    # pixel test on a screendump rather than a text-recognition exercise.
+    with open(os.path.join(root, "http-index.html"), "w") as f:
+        f.write("<!doctype html><html><head><title>ravynOS</title></head>"
+                "<body style='margin:0;background:#00a0c0'>"
+                "<h1 style='color:#ffffff;font:48px sans-serif;margin:40px'>"
+                "ravynOS web test</h1></body></html>\n")
     proc = subprocess.Popen(
         [sys.executable, "-m", "http.server", str(TCP_PORT),
          "--bind", "127.0.0.1", "--directory", root],
@@ -117,7 +226,8 @@ def main() -> int:
     start_tcp_server()
     proc = subprocess.Popen(
         [sys.executable, os.path.join(HERE, "launch_interactive.py"),
-         "--accel", "hvf", "--cpus", "8", "--mem", "8192"],
+         "--img", os.path.abspath(args.img),
+         "--accel", "hvf", "--cpus", "8", "--mem", "8192", "--fixtures"],
         cwd=HERE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     deadline = time.time() + args.boot_timeout
@@ -154,6 +264,14 @@ def main() -> int:
                 break
             time.sleep(2)
 
+    # Before the guest goes away: did the browser actually paint the page that
+    # the openurl fixture asked for?  The fixture only proves the URL was
+    # accepted; this is the only evidence that a web page rendered (plan 3.4).
+    web_px = 0
+    if desktop:
+        web_px = firefox_rendered_page(os.path.join(WORK, "interactive_monitor.sock"),
+                                       WORK)
+
     kill_guest(proc)
 
     report = None
@@ -178,6 +296,16 @@ def main() -> int:
 
     failures = 0
     lines = report.splitlines()
+    # A fixture may record a defect that is known and open rather than pass or
+    # fail: "FIXTURE <name> KNOWN-CRASH".  It is reported, loudly, but it does
+    # not turn every other result into a failure -- an always-red gate stops
+    # being a gate.
+    known = []
+    for m in re.finditer(r"^FIXTURE (\w+) KNOWN-CRASH(?: \((.*)\))?", report, re.M):
+        known.append((m.group(1), m.group(2) or "known crash"))
+    for name, why in known:
+        print("KNOWN %-10s %s" % (name, why))
+
     for name in FIXTURES:
         if ("FIXTURE %s rc=0" % name) in lines:
             print("PASS %s" % name)
@@ -192,6 +320,14 @@ def main() -> int:
         if m and m.group(1) not in FIXTURES and m.group(2) != "0":
             print("FAIL unknown fixture %s rc=%s" % (m.group(1), m.group(2)))
             failures += 1
+
+    # Reported separately: the fixtures are a stock-binary ABI suite, the page
+    # render is plan 3.4.  Folding one into the other made a green suite look
+    # red, or a red browser look like an ABI regression.
+    print("%s firefox rendered the test page   %d px bbox=%s"
+          % ("PASS" if web_px >= 500 else "FAIL", web_px,
+             getattr(page_pixels, "last_bbox", None)))
+    print("web_check: %s" % ("PASS" if web_px >= 500 else "FAIL"))
 
     print("compat_check: %s" % ("PASS" if failures == 0 else "FAIL"))
     return 0 if failures == 0 else 1

@@ -290,6 +290,11 @@
     {
       "path": "hello.txt",
       "asset": "hello.txt"
+    },
+    {
+      "path": "usr/lib/libobjc.dylib",
+      "file": "../../Libraries/objc4/libobjc.A.dylib",
+      "comment": "dyld asks for this path (libsystem_trace/libdispatch install name); same binary as /usr/lib/system/libobjc.dylib"
     }
   ]
 }

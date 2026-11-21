@@ -52,33 +52,14 @@ mkdir -p "$LOGDIR"
 
 # KNOWN BLOCKERS -- components that do not build, each for a documented reason
 # that is not a regression. The driver reports them separately from unexpected
-# failures so that a red build is distinguishable from a broken one. Without
-# this, "N failed" is unreadable: a nuisance gate and a real regression look
-# identical, and people learn to ignore it.
+# failures so that a red build is distinguishable from a broken one.
 #
-#   libsystem_kernel  mach half needs a userspace-appropriate signature for
-#                    _kernelrpc_* in the generated internal headers (a
-#                    provenance question, not a missing declaration); syscall
-#                    half generates 454 stubs + SYS.h correctly but will not
-#                    assemble under the host toolchain.
-#   libsystem_trace   lck_spin_t is unsourceable: Kernel/xnu/libkern/lck.h does
-#                    not exist anywhere in the tree.
-#   dyld              stalled on a libc++/C-library include-ordering conflict
-#                    plus a three-way deadlock in its own Makefile.
-#   libSystem.B       a CONSEQUENCE of libsystem_trace: its link rule requires
-#                    every reexport target, and reports
-#                    "*** missing required libs *** system_trace".
-#   dynamic_userland  the boot gate for dylib-linked userland. Everything above
-#                    is a BUILD verdict; nothing above BOOTS anything, so a
-#                    green build here once coexisted with a boot that died in
-#                    dyld. Staged as a known blocker so its fault signature
-#                    appears in the standard run and any CHANGE is visible.
-#
-#                    The runner is `run.sh dynamic`: a static exec-runner as
-#                    PID 1 that execve()s the dylib-linked /bin/echo. It is a
-#                    separate instrument from `run.sh full`, which cannot
-#                    reach this path at all.
-KNOWN_BLOCKERS="libsystem_kernel dyld dynamic_userland"
+# There are none left.  libsystem_kernel, libsystem_trace, Libsystem and dyld
+# all build, libSystem.B.dylib links with every reexport target present, and
+# `run_dynamic_gate.sh` passes: a static PID 1 execve()s the dylib-linked
+# /bin/echo and dyld reaches main() (signature RAVYN-DYNAMIC-USERLAND-OK,
+# 2026-11-11).  A failure here is a regression, not a known state.
+KNOWN_BLOCKERS=""
 
 pass=0; fail=0; skipped=0; blocked=0
 declare -a FAILED=()
