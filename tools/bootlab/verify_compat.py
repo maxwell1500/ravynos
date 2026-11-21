@@ -20,6 +20,7 @@ import re
 import shutil
 import socket
 import subprocess
+import signal
 import sys
 import tempfile
 import time
@@ -37,18 +38,21 @@ TCP_MARKER = "RAVYN-TCP-OK"
 
 
 def kill_guest(proc):
+    # The old code swept every qemu-system-x86_64 on the host here; that
+    # killed unrelated guests (e.g. an interactive session).  We own the
+    # whole session group instead (Popen start_new_session=True below):
+    # the wrapper is launch_interactive.py, whose finally-block teardown
+    # only runs on KeyboardInterrupt -- a plain SIGTERM to the wrapper
+    # orphaned the QEMU child, which kept drawing on screen for hours.
     if proc is not None:
         try:
-            proc.terminate()
+            os.killpg(proc.pid, signal.SIGTERM)
             proc.wait(timeout=10)
         except Exception:                       # noqa: BLE001
             try:
-                proc.kill()
+                os.killpg(proc.pid, signal.SIGKILL)
             except Exception:                   # noqa: BLE001
                 pass
-    # The old code swept every qemu-system-x86_64 on the host here; that
-    # killed unrelated guests (e.g. an interactive session). proc above is
-    # the only process we own.
 
 
 
@@ -226,7 +230,10 @@ def main() -> int:
         [sys.executable, os.path.join(HERE, "launch_interactive.py"),
          "--img", os.path.abspath(args.img),
          "--accel", "hvf", "--cpus", "8", "--mem", "8192", "--fixtures"],
-        cwd=HERE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        cwd=HERE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        # Own session: kill_guest must be able to reap the QEMU grandchild
+        # (the wrapper's finally-block teardown does not run on SIGTERM).
+        start_new_session=True)
 
     deadline = time.time() + args.boot_timeout
     desktop = False
