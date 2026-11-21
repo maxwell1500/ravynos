@@ -110,6 +110,12 @@ class SerialSniffer:
                 self._line(line.decode("latin1", "replace"))
 
     def _line(self, s):
+        # The guest console ends every line \r\r\n; $-anchored regexes (the
+        # fork line) never matched with the trailing CRs in place, so the
+        # section-10 launch check read forks=[] while the log showed the
+        # Dock forking apps.  Measured: replaying a full serial log through
+        # this parser yielded 0 forks; with the strip, all of them.
+        s = s.rstrip("\r")
         m = RE_EV.search(s)
         if m:
             g = [int(v) for v in m.groups()[:8]]
@@ -1433,6 +1439,18 @@ def main():
         # belonged to an already-running app, so the click was a reopen, not
         # a launch.  Walk up to three tiles of the Dock strip, giving each a
         # bounded window to fork, instead of betting the check on one tile.
+        # The Terminal-typed checks below (ifconfig/dhclient/dscl/Chrome/
+        # pasteboard) belong to the daily-driver image: they type
+        # "sh /bin/test.sh", a fixture only that image stages
+        # (manifest_chrome.json), together with the Chrome bundle.  On
+        # any other image they fail on the missing script, not on the
+        # desktop.  Probe the image instead of guessing.
+        downstream_img = False
+        try:
+            from fat32img import Fat32Img
+            downstream_img = Fat32Img(img).read_path("bin/test.sh") is not None
+        except Exception:
+            pass
         _, sframes, _, _ = sniffer.snapshot()
         strip = [x for x in sframes if x["app"] == "com.ravynos.Dock"
                  and 200 < x["fw"] < 1800 and 0 < x["fh"] < 200]
@@ -1483,10 +1501,14 @@ def main():
             # means anything when the tile that was clicked launched Terminal.
             # Whatever tile sits under the pointer is the user's arrangement,
             # so a different app is a skip, not a failure.
-            if tw and not (term and "Terminal" in term[0]["path"]):
+            if tw and not downstream_img:
+                print("   (image stages no bin/test.sh; Terminal-typed "
+                      "downstream checks skipped)", flush=True)
+            elif tw and not (term and "Terminal" in term[0]["path"]):
                 print("   (launched %s; Terminal-dependent checks skipped)"
                       % (term[0]["path"] if term else "nothing"), flush=True)
-            if tw and term and "Terminal" in term[0]["path"]:
+            if downstream_img and tw and term and \
+                    "Terminal" in term[0]["path"]:
                 tx, ty, twid, th = (tw[-1]["fx"], tw[-1]["fy"],
                                     tw[-1]["fw"], tw[-1]["fh"])
                 # Focus the content area. The window is not hittable until the
