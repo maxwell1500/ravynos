@@ -220,3 +220,4 @@ Scratch from a standalone host compile, not part of any build system.
 
 # The host probe bundle is produced by build.sh from the sources beside it.
 /tools/bootlab/host-macos-app/MacOSIntakeProbe.app/
+tests/apps/
