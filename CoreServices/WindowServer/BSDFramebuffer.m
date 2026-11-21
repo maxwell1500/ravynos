@@ -40,9 +40,12 @@
 
 static int minInt(int a, int b) { return a < b ? a : b; }
 static int maxInt(int a, int b) { return a > b ? a : b; }
-static void blitRows(uint8_t *dst, const uint8_t *src, size_t stride, int bpp, int width, int height, int x0, int x1, int y0, int y1)
+static void blitRows(uint8_t *dst, size_t dstStride, const uint8_t *src,
+    size_t srcStride, int bpp, int width, int height, int x0, int x1, int y0,
+    int y1)
 {
-    if(!dst || !src || stride <= 0 || bpp <= 0 || width <= 0 || height <= 0)
+    if(!dst || !src || dstStride == 0 || srcStride == 0 ||
+       bpp <= 0 || width <= 0 || height <= 0)
         return;
     if(x0 < 0) x0 = 0;
     if(y0 < 0) y0 = 0;
@@ -50,10 +53,16 @@ static void blitRows(uint8_t *dst, const uint8_t *src, size_t stride, int bpp, i
     if(y1 > height) y1 = height;
     if(x1 <= x0 || y1 <= y0)
         return;
+    size_t rowEnd = (size_t)x1 * bpp;
+    /* The capture context is allocated width*4 while the scanout may be
+     * padded to a larger line width; neither the row source nor the row
+     * destination may be indexed with the other's stride. */
+    if(dstStride < rowEnd || srcStride < rowEnd)
+        return;
     size_t rowBytes = (size_t)(x1 - x0) * bpp;
     for(int y = y0; y < y1; ++y) {
-        uint8_t *d = dst + (size_t)y * stride + (size_t)x0 * bpp;
-        const uint8_t *s = src + (size_t)y * stride + (size_t)x0 * bpp;
+        uint8_t *d = dst + (size_t)y * dstStride + (size_t)x0 * bpp;
+        const uint8_t *s = src + (size_t)y * srcStride + (size_t)x0 * bpp;
         memcpy(d, s, rowBytes);
     }
 }
@@ -214,7 +223,20 @@ static void blitRows(uint8_t *dst, const uint8_t *src, size_t stride, int bpp, i
     write(2, "[WS] fb clear starting\n", 23);
     O2ContextSetRGBFillColor(activeCtx, 0.15, 0.25, 0.35, 1);
     O2ContextFillRect(activeCtx, (O2Rect)NSMakeRect(0, 0, width, height));
-    memcpy(data, pixels, size);
+    if(data != NULL && pixels != NULL && stride > 0 && height > 0) {
+        size_t srcStride = _captured ?
+            O2ImageGetBytesPerRow((O2ImageRef)[captureCtx surface]) :
+            (size_t)stride;
+        size_t fbBytes = (size_t)stride * (size_t)height;
+        size_t rowBytes = (size_t)width * 4;
+        if(srcStride < rowBytes)
+            rowBytes = srcStride;
+        for(int y = 0; y < height; ++y)
+            memcpy((uint8_t *)data + (size_t)y * stride,
+                   (uint8_t *)pixels + (size_t)y * srcStride, rowBytes);
+        if(size > fbBytes)
+            memset((uint8_t *)data + fbBytes, 0, size - fbBytes);
+    }
     write(2, "[WS] fb clear finished\n", 23);
 }
 
@@ -247,14 +269,20 @@ static void blitRows(uint8_t *dst, const uint8_t *src, size_t stride, int bpp, i
      * WS-space rect maps to scanout rows [height - y1, height - y0).  Blitting
      * the unflipped range too only duplicated rows for a sub-rect (it was a
      * no-op for the full-screen draw, where both ranges coincide). */
-    blitRows((uint8_t *)data, (const uint8_t *)pixels, stride, bpp, width, height, x0, x1, height - y1, height - y0);
+    size_t srcStride = _captured ?
+        O2ImageGetBytesPerRow((O2ImageRef)[captureCtx surface]) :
+        (size_t)stride;
+    blitRows((uint8_t *)data, (size_t)stride, (const uint8_t *)pixels,
+             srcStride, bpp, width, height, x0, x1, height - y1, height - y0);
 }
 
 - (void)drawWithCursor:(O2Image *)cursor inRect:(O2Rect)rect {
     O2ContextDrawImage(ctx2, NSMakeRect(0,0,width,height), [captureCtx surface]);
     O2ContextSetBlendMode(ctx2, kCGBlendModeNormal);
     O2ContextDrawImage(ctx2, rect, cursor);
-    memcpy(data, ctx2Pixels, size); // FIXME: this is slooowwww
+    /* size is rounded up to a page; the O2Context allocation is exactly
+     * stride*height, so copying size read past its end. */
+    memcpy(data, ctx2Pixels, (size_t)stride * (size_t)height); // FIXME: this is slooowwww
 }
 
 // return the context for drawing, i.e. the back buffer

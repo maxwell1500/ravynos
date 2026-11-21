@@ -23,6 +23,7 @@
  */
 
 #import <AppKit/AppKit.h>
+#import <objc/runtime.h>
 #import <AppKit/NSRaise.h>
 #import <CoreGraphics/CGWindowLevel.h>
 #import "Dock.h"
@@ -366,8 +367,14 @@ kern_return_t _windowServerRPC(void *data, size_t len, void *replyBuf, int *repl
         [shared setObject:[NSNumber numberWithInt:_tileSize] forKey:INFOKEY_TILESIZE];
         [shared setObject:[NSNumber numberWithInt:(int)_location] forKey:INFOKEY_LOCATION];
         [shared setObject:[NSNumber numberWithFloat:_alpha] forKey:INFOKEY_OPACITY];
-        [shared setObject:[NSNumber numberWithBool:_autohide] forKey:INFOKEY_AUTOHIDE];
-        [shared setObject:[NSNumber numberWithBool:_magnification] forKey:INFOKEY_MAGNIFICATION];
+        /* Written as integers, not as NSNumber booleans: a boolean here came
+         * back as 96 in the file, and `[[... ] boolValue]` on 96 is YES, so the
+         * Dock hid itself off the bottom of the screen (y = -60, 20 px of tray
+         * visible) on every boot. */
+        [shared setObject:[NSNumber numberWithInt:(_autohide ? 1 : 0)]
+                   forKey:INFOKEY_AUTOHIDE];
+        [shared setObject:[NSNumber numberWithInt:(_magnification ? 1 : 0)]
+                   forKey:INFOKEY_MAGNIFICATION];
 
         if(![[NSFileManager defaultManager] fileExistsAtPath:@"/Library/Preferences"])
             [[NSFileManager defaultManager] createDirectoryAtPath:@"/Library/Preferences"

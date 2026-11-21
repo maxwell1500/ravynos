@@ -362,6 +362,16 @@ int main(int argc, char **argv) {
                     fprintf(stderr, "[ddtest] interactive boot (%s); skipping automated self-test.\n", kbootargs);
                     return 0;
                 }
+                /* A single-CPU guest used to run this self test (and then the
+                 * whole application fleet) on every ordinary boot, so the
+                 * desktop came up buried under TextEdit, Calculator, Preview,
+                 * Font Book, Terminal, Activity Monitor, Disk Utility and
+                 * Screenshot windows.  Running tests is something the factory
+                 * asks for, not something the user's session does. */
+                if(strstr(kbootargs, "ddtest=1") == NULL) {
+                    fprintf(stderr, "[ddtest] not requested (ddtest=1); skipping automated self-test.\n");
+                    return 0;
+                }
             }
         }
 

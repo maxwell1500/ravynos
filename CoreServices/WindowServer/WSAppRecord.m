@@ -37,31 +37,44 @@ extern pthread_mutex_t renderLock;
     return self;
 }
 
+/* The RPC thread mutates _windows while the render thread walks it.  Every
+ * access that is not already documented as render-thread-only takes the
+ * server's renderLock: a torn NSMutableArray read is a use-after-free. */
 -(void)addWindow:(WSWindowRecord *)window {
+    pthread_mutex_lock(&renderLock);
     [_windows addObject:window];
+    pthread_mutex_unlock(&renderLock);
 }
 
 -(WSWindowRecord *)removeWindowWithID:(int)number {
+    WSWindowRecord *found = nil;
+
+    pthread_mutex_lock(&renderLock);
     for(int i = 0; i < [_windows count]; i++) {
         WSWindowRecord *r = [_windows objectAtIndex:i];
         if(r.number == number) {
-            pthread_mutex_lock(&renderLock);
+            found = r;
             [_windows removeObjectAtIndex:i];
-            pthread_mutex_unlock(&renderLock);
-            return r;
+            break;
         }
     }
-    return nil;
+    pthread_mutex_unlock(&renderLock);
+    return found;
 }
 
 -(WSWindowRecord *)windowWithID:(int)number {
+    WSWindowRecord *found = nil;
+
+    pthread_mutex_lock(&renderLock);
     for(int i = 0; i < [_windows count]; i++) {
         WSWindowRecord *r = [_windows objectAtIndex:i];
         if(r.number == number) {
-            return r;
+            found = r;
+            break;
         }
     }
-    return nil;
+    pthread_mutex_unlock(&renderLock);
+    return found;
 }
 
 -(NSMutableArray *)windows {

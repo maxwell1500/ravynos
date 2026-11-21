@@ -21,6 +21,7 @@
  */
 
 #import <AppKit/AppKit.h>
+#include <stdio.h>
 #import <CoreGraphics/CGWindowLevel.h>
 #import "Dock.h"
 #import "DesktopWindow.h"

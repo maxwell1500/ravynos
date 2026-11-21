@@ -51,6 +51,7 @@ double clipTo(double val, double min, double max);
     BOOL altDown;
     BOOL capsLockOn;
     BOOL cmdDown;
+    uint32_t lastMods;      /* modifier flags last delivered via NSFlagsChanged */
     uint8_t packetBuf[4];   /* flags, dx, dy, dz: /dev/mouse emits 4-byte records */
     int packetBytes;
     /* Live input preferences, re-read on CODE_PREFS_CHANGED. */
@@ -58,6 +59,16 @@ double clipTo(double val, double min, double max);
     BOOL naturalScrolling;
     BOOL swapCmdOpt;
     int capsLockAction; /* 0 Caps Lock, 1 Control, 2 Escape, 3 No Action */
+
+    /* Key autorepeat: the PS/2 controller reports only make/break, so the
+     * server synthesises repeats while a key is held. */
+    struct mach_event repeatEvent;
+    int lastMake;
+    BOOL keyHeld;
+    BOOL repeatStarted;
+    double lastKeyTime;
+    double repeatDelaySeconds;
+    double repeatIntervalSeconds;
 #endif
     struct xkb_context *xkbCtx;
     struct xkb_keymap *xkb_keymap;

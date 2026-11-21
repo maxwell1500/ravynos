@@ -21,6 +21,7 @@
  */
 
 #import <unistd.h>
+#import <fcntl.h>
 #import <sys/sysctl.h>
 #import "common.h"
 #import "WindowServer.h"
@@ -59,6 +60,14 @@ static void crashHandler(int sig) {
 }
 
 int main(int argc, const char *argv[]) {
+    /* The tracer writes to stderr, which is the system console, and the
+     * console is shared with every application that prints.  A blocking write
+     * to a console that nobody is draining stops the WindowServer inside a
+     * trace call: input stops, and the only symptom is that clicks land tens
+     * of seconds late.  Make the trace channel lossy instead of blocking --
+     * a dropped diagnostic line is cheaper than a frozen desktop. */
+    fcntl(STDERR_FILENO, F_SETFL,
+          fcntl(STDERR_FILENO, F_GETFL, 0) | O_NONBLOCK);
     write(2, "[WS] main entered\n", 18);
     bootstrap_init();
     write(2, "[WS] bootstrap_init done\n", 25);

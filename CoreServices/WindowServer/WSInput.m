@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <math.h>
+#include <sys/time.h>
 #import "common.h"
 #import "message.h"
 #import "WSInput.h"
@@ -85,6 +86,122 @@ static unichar kbd_arrowsym(uint8_t make) {
     }
 }
 
+
+/* AT scan code (set 1) to macOS virtual key code.  Cocoa apps match key
+ * equivalents and command keys on NSEvent.keyCode, which is Apple's layout
+ * independent virtual code -- not the PC scan code.  Handing Gecko or any
+ * other Cocoa app a scan code makes Space read as Caps Lock and Ctrl+L as
+ * Ctrl+';': the app ignores every shortcut and typed text never becomes a
+ * command.  Extended (0xE0-prefixed) keys share make codes with plain ones,
+ * so the prefix decides which entry applies. */
+static uint8_t kbd_macos_keycode(uint8_t make, BOOL extended) {
+    if(extended) {
+        switch(make) {
+            case 0x1C: return 0x4C; /* keypad Enter */
+            case 0x1D: return 0x3E; /* right control */
+            case 0x35: return 0x4B; /* keypad / */
+            case 0x38: return 0x3D; /* right option */
+            case 0x47: return 0x73; /* home */
+            case 0x48: return 0x7E; /* up */
+            case 0x49: return 0x74; /* page up */
+            case 0x4B: return 0x7B; /* left */
+            case 0x4D: return 0x7C; /* right */
+            case 0x4F: return 0x77; /* end */
+            case 0x50: return 0x7D; /* down */
+            case 0x51: return 0x79; /* page down */
+            case 0x52: return 0x72; /* insert / help */
+            case 0x53: return 0x75; /* forward delete */
+            case 0x5B: return 0x37; /* left command */
+            case 0x5C: return 0x36; /* right command */
+            case 0x5D: return 0x6F; /* menu / F12 on some boards */
+            default: break;
+        }
+    }
+    switch(make) {
+        case 0x01: return 0x35; /* escape */
+        case 0x02: return 0x12; /* 1 */
+        case 0x03: return 0x13; /* 2 */
+        case 0x04: return 0x14; /* 3 */
+        case 0x05: return 0x15; /* 4 */
+        case 0x06: return 0x17; /* 5 */
+        case 0x07: return 0x16; /* 6 */
+        case 0x08: return 0x1A; /* 7 */
+        case 0x09: return 0x1C; /* 8 */
+        case 0x0A: return 0x19; /* 9 */
+        case 0x0B: return 0x1D; /* 0 */
+        case 0x0C: return 0x1B; /* minus */
+        case 0x0D: return 0x18; /* equal */
+        case 0x0E: return 0x33; /* backspace */
+        case 0x0F: return 0x30; /* tab */
+        case 0x10: return 0x0C; /* q */
+        case 0x11: return 0x0D; /* w */
+        case 0x12: return 0x0E; /* e */
+        case 0x13: return 0x0F; /* r */
+        case 0x14: return 0x11; /* t */
+        case 0x15: return 0x10; /* y */
+        case 0x16: return 0x20; /* u */
+        case 0x17: return 0x22; /* i */
+        case 0x18: return 0x1F; /* o */
+        case 0x19: return 0x23; /* p */
+        case 0x1A: return 0x21; /* left bracket */
+        case 0x1B: return 0x1E; /* right bracket */
+        case 0x1C: return 0x24; /* return */
+        case 0x1D: return 0x3B; /* left control */
+        case 0x1E: return 0x00; /* a */
+        case 0x1F: return 0x01; /* s */
+        case 0x20: return 0x02; /* d */
+        case 0x21: return 0x03; /* f */
+        case 0x22: return 0x05; /* g */
+        case 0x23: return 0x04; /* h */
+        case 0x24: return 0x26; /* j */
+        case 0x25: return 0x28; /* k */
+        case 0x26: return 0x25; /* l */
+        case 0x27: return 0x29; /* semicolon */
+        case 0x28: return 0x27; /* quote */
+        case 0x29: return 0x32; /* backtick */
+        case 0x2A: return 0x38; /* left shift */
+        case 0x2B: return 0x2A; /* backslash */
+        case 0x2C: return 0x06; /* z */
+        case 0x2D: return 0x07; /* x */
+        case 0x2E: return 0x08; /* c */
+        case 0x2F: return 0x09; /* v */
+        case 0x30: return 0x0B; /* b */
+        case 0x31: return 0x2D; /* n */
+        case 0x32: return 0x2E; /* m */
+        case 0x33: return 0x2B; /* comma */
+        case 0x34: return 0x2F; /* period */
+        case 0x35: return 0x2C; /* slash */
+        case 0x36: return 0x3C; /* right shift */
+        case 0x37: return 0x43; /* keypad * */
+        case 0x38: return 0x3A; /* left option */
+        case 0x39: return 0x31; /* space */
+        case 0x3A: return 0x39; /* caps lock */
+        case 0x3B: return 0x7A; /* F1 */
+        case 0x3C: return 0x78; /* F2 */
+        case 0x3D: return 0x63; /* F3 */
+        case 0x3E: return 0x76; /* F4 */
+        case 0x3F: return 0x60; /* F5 */
+        case 0x40: return 0x61; /* F6 */
+        case 0x41: return 0x62; /* F7 */
+        case 0x42: return 0x64; /* F8 */
+        case 0x43: return 0x65; /* F9 */
+        case 0x44: return 0x6D; /* F10 */
+        case 0x47: return 0x73; /* home */
+        case 0x48: return 0x7E; /* up */
+        case 0x49: return 0x74; /* page up */
+        case 0x4B: return 0x7B; /* left */
+        case 0x4D: return 0x7C; /* right */
+        case 0x4F: return 0x77; /* end */
+        case 0x50: return 0x7D; /* down */
+        case 0x51: return 0x79; /* page down */
+        case 0x52: return 0x72; /* insert / help */
+        case 0x53: return 0x75; /* delete */
+        case 0x57: return 0x67; /* F11 */
+        case 0x58: return 0x6F; /* F12 */
+        default: return 0xFF; /* no Cocoa equivalent */
+    }
+}
+
 /* Encode one BMP code point as UTF-8 into out (must hold 4 bytes), NUL-filled */
 static void ws_unichar_to_utf8(unichar ch, char *out) {
     memset(out, 0, 4);
@@ -152,6 +269,12 @@ static void ws_unichar_to_utf8(unichar ch, char *out) {
     xkb_keymap = NULL;
 #endif
 
+#if !defined(__linux__)
+    repeatDelaySeconds = 0.5;
+    repeatIntervalSeconds = 0.033;
+    lastMake = 0;
+    keyHeld = NO;
+#endif
     return self;
 }
 
@@ -333,8 +456,10 @@ static void ws_unichar_to_utf8(unichar ch, char *out) {
             me.dx = libinput_event_pointer_get_dx_unaccelerated(pe);
             me.dy = (-1) * libinput_event_pointer_get_dy_unaccelerated(pe); // our origin is lower left
             me.mods = [self modifierFlagsForState:xkb_state];
-            pointerX = clipTo(pointerX + me.dx, geometry.origin.x, geometry.size.width);
-            pointerY = clipTo(pointerY + me.dy, geometry.origin.y, geometry.size.height);
+            pointerX = clipTo(pointerX + me.dx, geometry.origin.x,
+                              geometry.origin.x + geometry.size.width);
+            pointerY = clipTo(pointerY + me.dy, geometry.origin.y,
+                              geometry.origin.y + geometry.size.height);
             me.x = pointerX;
             me.y = pointerY;
             if(logLevel >= WS_INFO)
@@ -374,9 +499,16 @@ static void ws_unichar_to_utf8(unichar ch, char *out) {
                 me.code = (state == 1) ? NSLeftMouseDown : NSLeftMouseUp;
             else if(button == BTN_RIGHT)
                 me.code = (state == 1) ? NSRightMouseDown : NSRightMouseUp;
+            else if(button == BTN_MIDDLE)
+                me.code = (state == 1) ? NSOtherMouseDown : NSOtherMouseUp;
             else
                 return;
-            buttonDown[button == BTN_LEFT ? 0 : 1] = (BOOL)state;
+            if(button == BTN_LEFT)
+                buttonDown[0] = (BOOL)state;
+            else if(button == BTN_RIGHT)
+                buttonDown[1] = (BOOL)state;
+            else
+                buttonDown[2] = (BOOL)state;
             me.mods = [self modifierFlagsForState:xkb_state];
             me.x = pointerX;
             me.y = pointerY;
@@ -437,6 +569,36 @@ static void ws_unichar_to_utf8(unichar ch, char *out) {
     return kbdFd;
 }
 
+/* Current device-independent modifier flags, as NSEvent expects them. */
+-(uint32_t)currentModifierFlags {
+    return (shiftDown ? NSShiftKeyMask : 0)
+        | (ctrlDown ? NSControlKeyMask : 0)
+        | ((swapCmdOpt ? cmdDown : altDown) ? NSAlternateKeyMask : 0)
+        | ((swapCmdOpt ? altDown : cmdDown) ? NSCommandKeyMask : 0)
+        | (capsLockOn ? NSAlphaShiftKeyMask : 0);
+}
+
+/* Deliver a flags-changed transition when the modifier state actually moves.
+ * Apps (Gecko's ChildView in particular) track Cmd/Shift from flagsChanged:
+ * carrying the bits only on the next key event leaves shortcut handling, menu
+ * tracking and drag modifiers stale until an unrelated key is pressed. */
+-(void)sendFlagsChanged:(uint16_t)keycode target:(NSObject *)target {
+    struct mach_event me;
+    uint32_t mods = [self currentModifierFlags];
+
+    if(mods == lastMods)
+        return;
+    lastMods = mods;
+
+    memset(&me, 0, sizeof(me));
+    me.code = NSFlagsChanged;
+    me.keycode = keycode;
+    me.mods = mods;
+    me.x = pointerX;
+    me.y = pointerY;
+    [target sendEventToApp:&me];
+}
+
 /*
  * Translate one raw AT scan code (set 1) into an NSEvent and hand it to the
  * WindowServer for delivery to the focused window's app.
@@ -452,25 +614,32 @@ static void ws_unichar_to_utf8(unichar ch, char *out) {
 
     BOOL released = (code & 0x80) ? YES : NO;
     uint8_t make = code & 0x7F;
+    /* kbdExtended is cleared below before the key is forwarded, so the
+     * prefix has to be captured while it still describes this byte. */
+    BOOL extendedKey = kbdExtended;
 
     switch(make) {
         case 0x2A: // L shift
         case 0x36: // R shift
             shiftDown = !released;
             kbdExtended = NO;
+            [self sendFlagsChanged:kbd_macos_keycode(make, extendedKey) target:target];
             return;
         case 0x1D: // ctrl (L, or R when 0xE0-prefixed)
             ctrlDown = !released;
             kbdExtended = NO;
+            [self sendFlagsChanged:kbd_macos_keycode(make, extendedKey) target:target];
             return;
         case 0x38: // alt (L, or R when 0xE0-prefixed)
             altDown = !released;
             kbdExtended = NO;
+            [self sendFlagsChanged:kbd_macos_keycode(make, extendedKey) target:target];
             return;
         case 0x5B: // L GUI / Command
         case 0x5C: // R GUI / Command
             cmdDown = !released;
             kbdExtended = NO;
+            [self sendFlagsChanged:kbd_macos_keycode(make, extendedKey) target:target];
             return;
         case 0x3A: // caps lock
             /* The Keyboard pane may remap Caps Lock.  Remap 0 toggles the
@@ -480,6 +649,7 @@ static void ws_unichar_to_utf8(unichar ch, char *out) {
                 if(!released)
                     capsLockOn = !capsLockOn;
                 kbdExtended = NO;
+                [self sendFlagsChanged:kbd_macos_keycode(make, extendedKey) target:target];
                 return;
             }
             if(capsLockAction == 3) { /* No Action */
@@ -489,6 +659,7 @@ static void ws_unichar_to_utf8(unichar ch, char *out) {
             if(capsLockAction == 1) {
                 ctrlDown = !released;
                 kbdExtended = NO;
+                [self sendFlagsChanged:kbd_macos_keycode(make, extendedKey) target:target];
                 return;
             }
             /* Escape */
@@ -518,7 +689,7 @@ static void ws_unichar_to_utf8(unichar ch, char *out) {
     }
 
     me.code = released ? NSKeyUp : NSKeyDown;
-    me.keycode = make;
+    me.keycode = kbd_macos_keycode(make, extendedKey);
     me.repeat = 0;
     me.x = pointerX;
     me.y = pointerY;
@@ -554,7 +725,53 @@ static void ws_unichar_to_utf8(unichar ch, char *out) {
         }
     }
 
+    /* Remember the last key for autorepeat.  Modifiers never repeat. */
+    if(make != 0x2a && make != 0x36 && make != 0x1d && make != 0x38 &&
+       make != 0x3a && make != 0x46 && make != 0x45) {
+        if(released) {
+            if(make == lastMake) {
+                keyHeld = NO;
+                repeatStarted = NO;
+            }
+        } else {
+            keyHeld = YES;
+            repeatStarted = NO;
+            lastMake = make;
+            lastKeyTime = [self now];
+            repeatEvent = me;
+        }
+    }
+
     [target sendEventToApp:&me];
+}
+
+-(double)now {
+    struct timeval tv;
+
+    gettimeofday(&tv, NULL);
+    return (double)tv.tv_sec + (double)tv.tv_usec / 1000000.0;
+}
+
+-(void)checkKeyRepeat:(id)target {
+    double now;
+
+    if(!keyHeld)
+        return;
+
+    now = [self now];
+    if(!repeatStarted) {
+        if(now - lastKeyTime < repeatDelaySeconds)
+            return;
+        repeatStarted = YES;
+    } else if(now - lastKeyTime < repeatIntervalSeconds)
+        return;
+
+    repeatEvent.code = NSKeyDown;
+    repeatEvent.repeat = 1;
+    repeatEvent.mods = [self modifierFlagsForState:xkb_state];
+    [target sendEventToApp:&repeatEvent];
+
+    lastKeyTime = now;
 }
 
 -(int)runKeyboard:(NSObject *)target {
@@ -566,8 +783,6 @@ static void ws_unichar_to_utf8(unichar ch, char *out) {
     ssize_t n;
     while((n = read(kbdFd, buf, sizeof(buf))) > 0) {
         for(ssize_t i = 0; i < n; i++) {
-            char kb[64]; int kn = snprintf(kb, sizeof(kb), "[KBD] byte 0x%02x\n", buf[i]);
-            if(kn>0) write(2, kb, kn);
             [self processKeyByte:buf[i] target:target];
         }
         bytes += (int)n;
@@ -577,6 +792,8 @@ static void ws_unichar_to_utf8(unichar ch, char *out) {
 
 -(int)run:(id)target {
     int events = [self runKeyboard:target];
+
+    [self checkKeyRepeat:target];
 
     if(mouseFd < 0)
         return events;
@@ -618,19 +835,56 @@ static void ws_unichar_to_utf8(unichar ch, char *out) {
                 if (scale > 5.0f)
                     scale = 5.0f;
             }
-            int dx = (int)roundf(rawDx * scale);
-            int dy = (int)roundf(rawDy * scale);
+            /* Carry the sub-pixel remainder between packets.  Rounding each
+             * packet on its own throws away up to half a pixel every time,
+             * and because the scale is 2.5 that error dominates the smallest
+             * possible movement: one count became 3 px, two counts 5 px, so
+             * the pointer could only land on a coarse lattice and a 14 px
+             * control could not be aimed at reliably.  With the remainder
+             * carried, N counts always move N*scale pixels and the pointer
+             * reaches any position the caller asks for. */
+            static float remainX = 0.0f, remainY = 0.0f;
+            float wantX = rawDx * scale + remainX;
+            float wantY = rawDy * scale + remainY;
+            int dx = (int)roundf(wantX);
+            int dy = (int)roundf(wantY);
+            remainX = wantX - (float)dx;
+            remainY = wantY - (float)dy;
+            /* At a screen edge the motion is clipped, so the remainder must
+             * not be carried: otherwise reversing direction would suddenly
+             * jump by everything that was swallowed while pinned. */
+            if(pointerX + dx <= geometry.origin.x ||
+               pointerX + dx >= geometry.origin.x + geometry.size.width)
+                remainX = 0.0f;
+            if(pointerY + dy <= geometry.origin.y ||
+               pointerY + dy >= geometry.origin.y + geometry.size.height)
+                remainY = 0.0f;
 
             BOOL leftBtn = (b0 & 0x01) ? YES : NO;
             BOOL rightBtn = (b0 & 0x02) ? YES : NO;
+            /* Bit 2 is the middle button in every PS/2 mouse packet, but
+             * the decoder ignored it, so a three-button mouse produced no
+             * middle click at all on this path. */
+            BOOL middleBtn = (b0 & 0x04) ? YES : NO;
 
-            pointerX = clipTo(pointerX + dx, geometry.origin.x, geometry.size.width);
-            pointerY = clipTo(pointerY + dy, geometry.origin.y, geometry.size.height);
+            pointerX = clipTo(pointerX + dx, geometry.origin.x,
+                              geometry.origin.x + geometry.size.width);
+            /* No %f here: this tree's printf has no float conversion and
+             * substituting one shifts every later argument. */
+            { static int np = 0;
+              if(np < 60) { ++np;
+                fprintf(stderr, "[WSInput] raw=%d,%d scale100=%d "
+                        "d=%d,%d ptr=%d,%d\n",
+                        rawDx, rawDy, (int)(scale * 100.0f), dx, dy,
+                        (int)pointerX, (int)pointerY); } }
+            pointerY = clipTo(pointerY + dy, geometry.origin.y,
+                              geometry.origin.y + geometry.size.height);
 
             BOOL leftEdge = (leftBtn != buttonDown[0]);
             BOOL rightEdge = (rightBtn != buttonDown[1]);
+            BOOL middleEdge = (middleBtn != buttonDown[2]);
 
-            if(leftEdge || rightEdge) {
+            if(leftEdge || rightEdge || middleEdge) {
                 /* Flush any accumulated motion before the button state change */
                 if(accumDx != 0 || accumDy != 0) {
                     struct mach_event me;
@@ -644,6 +898,8 @@ static void ws_unichar_to_utf8(unichar ch, char *out) {
                         me.code = NSLeftMouseDragged;
                     else if (buttonDown[1])
                         me.code = NSRightMouseDragged;
+                    else if (buttonDown[2])
+                        me.code = NSOtherMouseDragged;
                     else
                         me.code = NSMouseMoved;
                     [target sendEventToApp:&me];
@@ -674,6 +930,17 @@ static void ws_unichar_to_utf8(unichar ch, char *out) {
                     [target sendEventToApp:&me];
                     ++events;
                 }
+                if(middleEdge) {
+                    buttonDown[2] = middleBtn;
+                    struct mach_event me;
+                    memset(&me, 0, sizeof(struct mach_event));
+                    me.x = pointerX;
+                    me.y = pointerY;
+                    me.code = middleBtn ? NSOtherMouseDown : NSOtherMouseUp;
+                    me.mods = [self modifierFlagsForState:xkb_state];
+                    [target sendEventToApp:&me];
+                    ++events;
+                }
             } else {
                 accumDx += dx;
                 accumDy += dy;
@@ -694,6 +961,8 @@ static void ws_unichar_to_utf8(unichar ch, char *out) {
                         me.code = NSLeftMouseDragged;
                     else if (buttonDown[1])
                         me.code = NSRightMouseDragged;
+                    else if (buttonDown[2])
+                        me.code = NSOtherMouseDragged;
                     else
                         me.code = NSMouseMoved;
                     [target sendEventToApp:&me];
@@ -735,6 +1004,8 @@ static void ws_unichar_to_utf8(unichar ch, char *out) {
             me.code = NSLeftMouseDragged;
         else if (buttonDown[1])
             me.code = NSRightMouseDragged;
+        else if (buttonDown[2])
+            me.code = NSOtherMouseDragged;
         else
             me.code = NSMouseMoved;
         [target sendEventToApp:&me];
