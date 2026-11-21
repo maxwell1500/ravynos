@@ -61,7 +61,14 @@ def kill_guest(proc):
 
 
 
-WEB_BG = (0, 160, 192)          # background of the served http-index.html
+WEB_BG = (127, 63, 191)        # background of the served http-index.html
+# Measured 2026-11-21: with the page at #00a0c0 the teal desktop
+# wallpaper matched the +-20 tolerance, and web_check PASSed at
+# 34950 px on a screendump with NO Firefox window at all -- the
+# false positive masked a real regression (Firefox again never
+# opens a browser window, plan item 32).  A magenta/violet page
+# colour cannot appear in the wallpaper, so a count > threshold
+# can only be a rendered page.
 
 
 def page_pixels(dump_path):
@@ -184,7 +191,7 @@ def start_tcp_server():
     # pixel test on a screendump rather than a text-recognition exercise.
     with open(os.path.join(root, "http-index.html"), "w") as f:
         f.write("<!doctype html><html><head><title>ravynOS</title></head>"
-                "<body style='margin:0;background:#00a0c0'>"
+                "<body style='margin:0;background:#7f3fbf'>"
                 "<h1 style='color:#ffffff;font:48px sans-serif;margin:40px'>"
                 "ravynOS web test</h1></body></html>\n")
     proc = subprocess.Popen(
