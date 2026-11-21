@@ -159,7 +159,7 @@ LDFLAGS = -Wl,-dylib -fexceptions -Wl,-init,___CFInitialize \
 #   ld: file is empty in
 #     .../Libraries/llvm_target/compiler-rt/lib/ravynos/libclang_rt.osx.a
 CLANGRT_OSX_A =${ROOT_BINARY_DIR}${ROOT_SOURCE_DIR}/Libraries/llvm_target/compiler-rt/lib/ravynos/libclang_rt.osx.a
-CLANGRT_OSX_A !=test -s ${CLANGRT_OSX_A} && echo ${CLANGRT_OSX_A}
+CLANGRT_OSX_A !=test -s ${CLANGRT_OSX_A} && echo ${CLANGRT_OSX_A} || true
 .if !empty(CLANGRT_OSX_A)
 LDFLAGS += ${CLANGRT_OSX_A}
 .endif
