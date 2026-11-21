@@ -320,6 +320,13 @@ APPKIT_EXPORT void NSAccessibilityPostNotification(
     id element,
     NSString *notification);
 
+APPKIT_EXPORT void NSAccessibilityPostNotificationWithUserInfo(
+    id element,
+    NSString *notification,
+    NSDictionary *userInfo);
+
+APPKIT_EXPORT NSString *NSAccessibilityActionDescription(NSString *action);
+
 APPKIT_EXPORT NSString *const NSAccessibilityRoleDescription(
     NSString *role,
     NSString *subrole);

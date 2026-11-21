@@ -8,6 +8,7 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. */
 
 #import <AppKit/NSView.h>
+#import "NSTextView.subproj/NSTextInputClient.h"
 #import <AppKit/NSApplication.h>
 #import <AppKit/NSEvent.h>
 #import <AppKit/NSWindow-Private.h>
@@ -34,6 +35,8 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 #import <CoreGraphics/CGWindow.h>
 #include <unistd.h>
 #include <stdio.h>
+#include <dlfcn.h>
+#include <objc/runtime.h>
 #import <QuartzCore/CALayerContext.h>
 #import <QuartzCore/CATransaction.h>
 
@@ -291,6 +294,7 @@ static BOOL NSViewLayersEnabled=YES;
 		NSZoneFree(NULL, _rectsBeingRedrawn);
 	}
    [_layer release];
+   [_inputContext release];
    
    [_layerContext invalidate];
    [_layerContext release];
@@ -880,13 +884,17 @@ static inline void buildTransformsIfNeeded(NSView *self) {
     
     [_layerContext setFrame:layerFrame];
     if(_layer != nil) {
+        /* CALayer.position is expressed in the *superlayer's* coordinate
+         * space.  This used to compute it from the view's own bounds size and
+         * nothing else, so every layer-backed view that was not at the origin
+         * of an identically sized parent drew its content offset from where
+         * the view actually was -- by its own width and height rather than by
+         * its frame origin.  The anchor point offsets within the layer; the
+         * view's frame origin places the layer. */
         CGPoint anchor = [_layer anchorPoint];
         [_layer setBounds:CGRectMake(0, 0, _bounds.size.width, _bounds.size.height)];
-        [_layer setPosition:CGPointMake(_bounds.size.width * anchor.x, _bounds.size.height * anchor.y)];
-        for(CALayer *sub in [_layer sublayers]) {
-            [sub setBounds:CGRectMake(0, 0, _bounds.size.width, _bounds.size.height)];
-            [sub setPosition:CGPointMake(_bounds.size.width * anchor.x, _bounds.size.height * anchor.y)];
-        }
+        [_layer setPosition:CGPointMake(_frame.origin.x + _bounds.size.width * anchor.x,
+                                        _frame.origin.y + _bounds.size.height * anchor.y)];
     }
    invalidateTransform(self);
 
@@ -1287,8 +1295,10 @@ static inline void buildTransformsIfNeeded(NSView *self) {
 }
 
 -(NSTextInputContext *)inputContext {
-   NSUnimplementedMethod();
-   return nil;
+   if(_inputContext==nil)
+    _inputContext=[[NSTextInputContext alloc] initWithClient:self];
+
+   return _inputContext;
 }
 
 -(void)registerForDraggedTypes:(NSArray *)types {
@@ -2196,8 +2206,39 @@ static CGImageRef createImageForLayerContents(id contents) {
    if(provider == NULL)
     return NULL;
    CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
-   CGImageRef image = CGImageCreate(width, height, 8, 32, rowBytes, space,
-       kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little,
+   /* Default to the WR path's 8-bit BGRA; adjust if the surface declares
+    * another format so chrome layers with a different pixel layout composite. */
+   uint32_t pixfmt = IOSurfaceGetPixelFormat((void *)contents);
+   CGImageAlphaInfo alpha = kCGImageAlphaPremultipliedFirst;
+   CGBitmapInfo order = kCGBitmapByteOrder32Little;
+   int bpp = 32;
+   if(pixfmt == 'l8  ' || pixfmt == 'L008') { bpp = 8; alpha = kCGImageAlphaNone; order = 0; }
+   else if(pixfmt == 0 && width * 4 != rowBytes) { bpp = 8; alpha = kCGImageAlphaNone; order = 0; }
+   /* Bounded trace: is there anything *in* the surface?  A blank window with
+    * layers full of pixels is our compositing; layers full of zeros is the
+    * client's renderer.  Sample a diagonal and report the colours. */
+   {
+       static struct { void *surf; } seen[16];
+       static int nseen = 0;
+       int known = 0;
+       for(int i = 0; i < nseen; i++)
+           if(seen[i].surf == (void *)contents) known = 1;
+       if(!known && nseen < 16) {
+           seen[nseen++].surf = (void *)contents;
+           fprintf(stderr, "[NSSURF] pid=%d surf=%p %zux%zu bpp=%d row=%zu px=",
+                   (int)getpid(), (void *)contents, width, height, bpp, rowBytes);
+           for(int k = 1; k <= 6; k++) {
+               size_t y = (height * (size_t)k) / 8;
+               size_t x = (width * (size_t)k) / 8;
+               const unsigned char *q = (const unsigned char *)base + y * rowBytes + x * (size_t)(bpp / 8);
+               fprintf(stderr, "%02x%02x%02x%02x ", q[0], q[1], q[2], q[3]);
+           }
+           fprintf(stderr, "\n");
+       }
+   }
+
+   CGImageRef image = CGImageCreate(width, height, 8, bpp, rowBytes, space,
+       alpha | order,
        provider, NULL, true, kCGRenderingIntentDefault);
    CGColorSpaceRelease(space);
    CGDataProviderRelease(provider);
@@ -2228,10 +2269,24 @@ static CGImageRef createImageForLayerContents(id contents) {
 
    id contents = [layer contents];
    CGImageRef image = createImageForLayerContents(contents);
+   /* Bounded trace: a blank window is either "no contents" (the client never
+    * gave us pixels) or "contents we failed to wrap".  Both look like white on
+    * screen; this says which, and with what surface size. */
+   {
+       static int traced = 0;
+       static int layers = 0;
+       layers++;
+       if(traced < 10 || (contents != nil && traced < 40)) {
+           traced++;
+           fprintf(stderr, "[NSREND] pid=%d n=%d %s bounds=%g,%g %gx%g contents=%p nil=%d img=%p\n",
+                   (int)getpid(), layers, object_getClassName(layer),
+                   bounds.origin.x, bounds.origin.y, bounds.size.width, bounds.size.height,
+                   (void *)contents, contents == nil ? 1 : 0, (void *)image);
+       }
+   }
    if(image != NULL) {
       if(CGRectIsEmpty(bounds))
          bounds = CGRectMake(0, 0, CGImageGetWidth(image), CGImageGetHeight(image));
-
       size_t iw = CGImageGetWidth(image);
       size_t ih = CGImageGetHeight(image);
       CGRect cr = [layer contentsRect];
@@ -2245,7 +2300,10 @@ static CGImageRef createImageForLayerContents(id contents) {
          cropY = (size_t)(cr.origin.y * ih);
          cropW = (size_t)(cr.size.width * iw);
          cropH = (size_t)(cr.size.height * ih);
-      } else if(iw > (size_t)bounds.size.width && (size_t)bounds.size.width > 0) {
+      } else if((!_CFIsObjCType((const void *)contents) || [layer masksToBounds] ||
+                 ([layer contentsGravity] != nil && ![[layer contentsGravity] isEqualToString:@"resize"])) &&
+                iw > (size_t)bounds.size.width && (size_t)bounds.size.width > 0) {
+         /* Clipped / IOSurface / non-resize layer larger than bounds: crop to bounds. */
          cropW = (size_t)bounds.size.width;
          cropH = MIN(ih, (size_t)bounds.size.height);
       }
@@ -2256,6 +2314,22 @@ static CGImageRef createImageForLayerContents(id contents) {
             CGImageRelease(image);
             image = cropped;
          }
+      }
+
+      /* Bounded trace: where each layer image lands.  A blank window can also
+       * mean "we drew the right pixels in the wrong place", which looks exactly
+       * like an empty client surface on a screendump. */
+      {
+          static int placed = 0;
+          if(placed < 24) {
+              placed++;
+              CGAffineTransform ctm = CGContextGetCTM(context);
+              fprintf(stderr, "[NSPLACE] pid=%d %s img=%zux%zu dst=%g,%g %gx%g ctm=%g,%g,%g,%g,%g,%g flipped=%d\n",
+                      (int)getpid(), object_getClassName(layer),
+                      CGImageGetWidth(image), CGImageGetHeight(image),
+                      bounds.origin.x, bounds.origin.y, bounds.size.width, bounds.size.height,
+                      ctm.a, ctm.b, ctm.c, ctm.d, ctm.tx, ctm.ty, (int)[self isFlipped]);
+          }
       }
 
       if([self isFlipped]) {
@@ -2285,6 +2359,24 @@ static CGImageRef createImageForLayerContents(id contents) {
    NSRect visibleRect=[self visibleRect];
 
    rect=NSIntersectionRect(rect,visibleRect);
+
+   /* Bounded trace on the first draws of each process: a window that is on
+    * screen and blank is either a view that is never asked to draw, or one
+    * that draws nothing.  This separates the two, and visibleRect/canDraw say
+    * why when the answer is "never". */
+   {
+       static int traced = 0;
+       if(traced < 8) {
+           traced++;
+           fprintf(stderr, "[NSDRAW] pid=%d %s rect=%d,%d %dx%d vis=%d,%d %dx%d canDraw=%d\n",
+                   (int)getpid(), object_getClassName(self),
+                   (int)rect.origin.x, (int)rect.origin.y,
+                   (int)rect.size.width, (int)rect.size.height,
+                   (int)visibleRect.origin.x, (int)visibleRect.origin.y,
+                   (int)visibleRect.size.width, (int)visibleRect.size.height,
+                   (int)[self canDraw]);
+       }
+   }
 
    if(NSIsEmptyRect(rect))
     return;
@@ -2580,7 +2672,14 @@ static CGImageRef createImageForLayerContents(id contents) {
 }
 
 -(void)rightMouseDown:(NSEvent *)event {
-   [NSMenu popUpContextMenu:[self menuForEvent:event] withEvent:event forView:self];
+   NSMenu *menu = [self menuForEvent:event];
+   if(menu == nil || [[menu itemArray] count] == 0) {
+      /* No menu to show: forward up the responder chain (NSWindow, NSApp)
+       * instead of dropping the click. */
+      [super rightMouseDown:event];
+      return;
+   }
+   [NSMenu popUpContextMenu:menu withEvent:event forView:self];
 }
 
 

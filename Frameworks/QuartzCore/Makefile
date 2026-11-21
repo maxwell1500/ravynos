@@ -76,7 +76,14 @@ CFLAGS+= ${FMWK_CFLAGS} -I${.CURDIR:H} \
 
 
 
-LDFLAGS+= ${FMWK_LDFLAGS} -Wl,-all_load
+# CALayer.m retains and releases CFType contents, so this framework needs
+# CoreFoundation at link time.  It had been getting away without it only
+# because the built framework predated that code: relinking fails with
+# "undefined dynamic_lookup cannot be used to find '_CFRelease' in dylib in
+# dyld shared cache".
+LDFLAGS+= ${FMWK_LDFLAGS} -Wl,-all_load \
+	-F${OBJTOP}/Frameworks/CoreFoundation -F${OBJTOP}/Frameworks/CoreGraphics \
+	-framework CoreFoundation -framework CoreGraphics
 
 
 

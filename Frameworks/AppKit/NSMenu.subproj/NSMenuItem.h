@@ -68,6 +68,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 - (NSMenu *)submenu;
 
 - (BOOL)isSeparatorItem;
+- (NSString *)menuItemTitle;
 - (BOOL)isEnabled;
 - (BOOL)isHidden;
 

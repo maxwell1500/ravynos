@@ -2718,6 +2718,65 @@ NSString * const NSOldSelectedCharacterRange=@"NSOldSelectedCharacterRange";
     [self scrollRangeToVisible:[self selectedRange]];
 }
 
+/* NSTextInputClient (10.5+) -- Gecko and other modern text clients call these
+ * instead of the legacy two-method NSTextInput protocol.  There is no inline
+ * composition (IME) support yet, so marked text is committed immediately. */
+
+-(void)insertText:(id)string replacementRange:(NSRange)replacementRange {
+    if(replacementRange.location!=NSNotFound)
+        [self setSelectedRange:replacementRange];
+
+    [self insertText:string];
+}
+
+-(void)setMarkedText:(id)string selectedRange:(NSRange)selectedRange replacementRange:(NSRange)replacementRange {
+    [self insertText:string replacementRange:replacementRange];
+}
+
+-(void)unmarkText {
+}
+
+-(BOOL)hasMarkedText {
+    return NO;
+}
+
+-(NSRange)markedRange {
+    return NSMakeRange(NSNotFound,0);
+}
+
+-(NSAttributedString *)attributedSubstringForProposedRange:(NSRange)range actualRange:(NSRangePointer)actualRange {
+    if(actualRange!=NULL)
+        *actualRange=NSMakeRange(NSNotFound,0);
+
+    return nil;
+}
+
+-(NSArray *)validAttributesForMarkedText {
+    return [NSArray array];
+}
+
+-(NSRect)firstRectForCharacterRange:(NSRange)range actualRange:(NSRangePointer)actualRange {
+    NSLayoutManager *layoutManager=[self layoutManager];
+    NSRange glyphRange=[layoutManager glyphRangeForCharacterRange:range actualCharacterRange:actualRange];
+    NSRect rect=[layoutManager boundingRectForGlyphRange:glyphRange inTextContainer:[self textContainer]];
+    NSRect inWindow=[self convertRect:rect toView:nil];
+    NSRect onScreen;
+
+    onScreen.origin=[self.window convertBaseToScreen:inWindow.origin];
+    onScreen.size=inWindow.size;
+
+    return onScreen;
+}
+
+-(NSUInteger)characterIndexForPoint:(NSPoint)point {
+    NSPoint inView=[self.window convertScreenToBase:point];
+
+    inView=[self convertPoint:inView fromView:nil];
+
+    return [[self layoutManager] characterIndexForGlyphAtIndex:
+        [[self layoutManager] glyphIndexForPoint:inView inTextContainer:[self textContainer]]];
+}
+
 -(void)keyDown:(NSEvent *)event {
     if([event type]==NSKeyDown && [self isEditable]) {
         _processingKeyEvent = YES;
@@ -2922,11 +2981,6 @@ NSString * const NSOldSelectedCharacterRange=@"NSOldSelectedCharacterRange";
 
 -(void)cleanUpAfterDragOperation {
     NSUnimplementedMethod();
-}
-
--(NSUInteger)characterIndexForPoint:(NSPoint)point {
-    NSUnimplementedMethod();
-    return 0;
 }
 
 -(void)_setFieldEditorUndoManager:(NSUndoManager *)undoManager

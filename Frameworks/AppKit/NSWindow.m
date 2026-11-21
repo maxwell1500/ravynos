@@ -26,6 +26,7 @@
 #include <errno.h>
 #include <unistd.h>
 #include <stdio.h>
+#include <time.h>
 #include <sys/types.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -40,6 +41,7 @@
 #import <AppKit/NSScreen.h>
 #import <AppKit/NSEvent.h>
 #import <AppKit/NSEvent_CoreGraphics.h>
+#import <objc/runtime.h>
 #import <AppKit/NSColor.h>
 #import <ApplicationServices/ApplicationServices.h>
 #import <AppKit/NSGraphics.h>
@@ -374,13 +376,43 @@ static BOOL _allowsAutomaticWindowTabbing = YES;
     _number = (int)self;
     _styleMask=styleMask;
     _frame=[self frameRectForContentRect:contentRect];    _frame=[self constrainFrameRect: _frame toScreen: [NSScreen mainScreen]];    _level=NSNormalWindowLevel;
+    /* A new NSWindow is not on screen until it is ordered in, so the server
+     * record starts HIDDEN.  Creating it NORMAL put a full-screen, normal
+     * level window in front of everything for as long as it took the client to
+     * fix the level up (the Dock's desktop window is the extreme case: it
+     * swallowed every click on the screen until its setLevel: arrived).  It
+     * also made windows flash before the app had drawn them. */
     struct wsRPCWindow data = {
         { kWSWindowCreate, sizeof(struct wsRPCWindow) - sizeof(struct wsRPCBase) },
         _number, _frame.origin.x, _frame.origin.y,
-        _frame.size.width, _frame.size.height, _styleMask, 0, {'\0'}, _level
+        _frame.size.width, _frame.size.height, _styleMask, HIDDEN, {'\0'}, _level
     };
     struct wsRPCSimple reply = {0};
-    int len = sizeof(reply);    kern_return_t ret = _windowServerRPC(&data, sizeof(data), &reply, &len);    if(ret != KERN_SUCCESS)
+    int len = sizeof(reply);    kern_return_t ret = _windowServerRPC(&data, sizeof(data), &reply, &len);
+    /* Bounded trace: a window that a client asks for and never gets is the
+     * hardest kind of failure to see from outside -- there is no record at all
+     * unless the server logs a CREATE, and a nil return here is silent. */
+    fprintf(stderr, "[NSWIN] pid=%d style=0x%x asked=%dx%d rc=%d frame=%d,%d %dx%d\n",
+            (int)getpid(), (unsigned)styleMask,
+            (int)contentRect.size.width, (int)contentRect.size.height, (int)ret,
+            (int)_frame.origin.x, (int)_frame.origin.y,
+            (int)_frame.size.width, (int)_frame.size.height);
+    /* The size an application asks for is its own business, but a *tiny* one is
+     * worth seeing exactly: print the four doubles as the callee received them,
+     * and who called.  A plausible fraction (3.0) means the caller computed it;
+     * denormals or junk mean a getter above us handed back something it should
+     * not have. */
+    {
+        uint64_t raw[4];
+        memcpy(raw, &contentRect, sizeof(raw));
+        fprintf(stderr, "[NSRAWC] pid=%d caller=%p rect=(%g,%g,%g,%g) bits=%llx,%llx,%llx,%llx\n",
+                (int)getpid(), __builtin_return_address(0),
+                contentRect.origin.x, contentRect.origin.y,
+                contentRect.size.width, contentRect.size.height,
+                (unsigned long long)raw[0], (unsigned long long)raw[1],
+                (unsigned long long)raw[2], (unsigned long long)raw[3]);
+    }
+    if(ret != KERN_SUCCESS)
         return nil;
 
     _preferredScreen = screen;
@@ -696,6 +728,15 @@ static BOOL _allowsAutomaticWindowTabbing = YES;
    return _title;
 }
 
+-(NSView *)titlebarContainerView {
+   /* Gecko fullscreen-titlebar tracker: back the content view area. */
+   return _contentView;
+}
+
+-(NSView *)titlebarView {
+   return nil;
+}
+
 -(NSString *)representedFilename {
    return _representedFilename;
 }
@@ -710,7 +751,15 @@ static BOOL _allowsAutomaticWindowTabbing = YES;
 }
 -(void)setLevel:(NSInteger)value {
     _level = value;
-    [self _updateWSState];
+    BOOL ok = [self _updateWSState];
+    /* Stamped so it can be lined up with the server's own records: the Dock's
+     * windows must not sit at normal level, and on some boots the server has
+     * been seen holding one at level 4 for the whole session. */
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    fprintf(stderr, "[NSLEVEL] t=%ld win=%u -> %ld visible=%d rc=%d\n",
+            (long)ts.tv_sec * 1000L + ts.tv_nsec / 1000000L,
+            (unsigned)(uintptr_t)self, (long)value, (int)_isVisible, (int)ok);
 }
 
 -(NSRect)frame {
@@ -1154,7 +1203,7 @@ static BOOL _allowsAutomaticWindowTabbing = YES;
      * maps the old, smaller object with the new, larger length, the mmap
      * fails, and the first draw crashes. */
     if(tellWS)
-        [self _updateWSState];
+        [self _updateWSStateWithGeometry:YES];
 
     /* A 0x0 frame is an initialization placeholder, not a user-visible
      * resize; posting delegate notifications for it calls back into
@@ -1326,6 +1375,7 @@ static BOOL _allowsAutomaticWindowTabbing = YES;
 -(void)setContentView:(NSView *)view {
    view=[view retain];
    [view setFrame:[_contentView frame]];
+   [view setAutoresizingMask:NSViewWidthSizable|NSViewHeightSizable];
 
    [_contentView removeFromSuperview];
    [_contentView release];
@@ -1884,12 +1934,12 @@ static BOOL _allowsAutomaticWindowTabbing = YES;
 
    NSRect visRect = [screen visibleFrame];
 
-   /* For resizable titled main windows that are too small to be usable,
-    * expand them to a standard desktop size (1100x700). */
-   if (([self styleMask] & NSResizableWindowMask) && _level == NSNormalWindowLevel) {
-       if (rect.size.width < 800 && rect.size.width > 0) rect.size.width = 1100;
-       if (rect.size.height < 500 && rect.size.height > 0) rect.size.height = 700;
-   }
+   /* No minimum size of our own.  This used to force any resizable titled
+    * window at normal level up to 1100x700, which is not what macOS does and
+    * cannot be right: an application that asks for a 400x300 window gets a
+    * frame its content was never laid out for, and can never shrink one
+    * either.  A zero request is the caller saying "no size"; anything else is
+    * the caller's decision, constrained only to stay on the screen below. */
 
    /* Keep the titlebar reachable: never above the menu bar, never below visible area. */
    if (NSMaxY(rect) > NSMaxY(visRect))
@@ -1975,6 +2025,37 @@ static BOOL _allowsAutomaticWindowTabbing = YES;
    return NO;
 }
 
+/* The first view in the tree that will accept key focus.  macOS leaves a
+ * window's first responder as the window itself until something claims it,
+ * and its key view loop normally supplies the content view; a custom view
+ * with no loop (Gecko's widget view, for one) never gets focus that way, so
+ * keyDown lands on the window and is lost. */
+static NSView *ravynDeepestAcceptingView(NSView *view) {
+   if (view == nil)
+      return nil;
+   NSView *best = [view acceptsFirstResponder] ? view : nil;
+   NSArray *subviews = [view subviews];
+   NSUInteger i, count = [subviews count];
+   for (i = 0; i < count; i++) {
+      NSView *found = ravynDeepestAcceptingView([subviews objectAtIndex:i]);
+      if (found != nil)
+         best = found;
+   }
+   return best;
+}
+
+/* A responder that only inherits -keyDown: from NSResponder swallows the
+ * event: NSResponder's default interprets it into insertText:/doCommandBy-
+ * Selector: and this AppKit neither bubbles the event up the responder chain
+ * nor implements those, so the keystroke disappears.  A view that overrides
+ * -keyDown: (Gecko's content view, a text view) is the one that wants it. */
+static IMP ravynPlainKeyDownIMP(void) {
+   static IMP plain = NULL;
+   if (plain == NULL)
+      plain = class_getMethodImplementation([NSResponder class], @selector(keyDown:));
+   return plain;
+}
+
 -(void)makeKeyWindow {
     if(!_hasBeenOnScreen){
         _hasBeenOnScreen=YES;
@@ -1989,8 +2070,13 @@ static BOOL _allowsAutomaticWindowTabbing = YES;
             if ([self autorecalculatesKeyViewLoop]) {
                 [self recalculateKeyViewLoop];
             }
-            if([self firstResponder]==self)
-                [self makeFirstResponder:[_contentView nextValidKeyView]];
+            if([self firstResponder]==self) {
+                NSView *firstResponder = [_contentView nextValidKeyView];
+                if(firstResponder==nil || [firstResponder methodForSelector:@selector(keyDown:)] == ravynPlainKeyDownIMP())
+                    firstResponder = ravynDeepestAcceptingView(_contentView);
+                if(firstResponder!=nil)
+                    [self makeFirstResponder:firstResponder];
+            }
         }
     }
 }
@@ -2365,7 +2451,41 @@ static BOOL _allowsAutomaticWindowTabbing = YES;
    }
 }
 
--(void)close {   
+-(void)close {
+    { static int n = 0;
+      if(n < 20) { ++n;
+        fprintf(stderr, "[NSCLOSE] close entered win=%u visible=%d\n",
+                (unsigned)_number, (int)_isVisible); } }
+    /* Destroy the server-side window first.  It used to come last, after
+     * -orderOut:, the child-window fan-out and NSWindowWillCloseNotification,
+     * and on a measured close click the notification fan-out never returned:
+     * the window went HIDDEN, no destroy ever reached the server, and the
+     * next state flush re-shown it as NORMAL.  A close has to be atomic from
+     * the server's point of view -- once the request is out, nothing that a
+     * delegate does afterwards can leave a live orphan window behind. */
+    unsigned number = _number;
+    struct wsRPCWindow data;
+    memset(&data, 0, sizeof(data));
+    data.base.code = kWSWindowDestroy;
+    data.base.len = sizeof(struct wsRPCWindow) - sizeof(struct wsRPCBase);
+    data.windowID = number;
+    data.x = _frame.origin.x;
+    data.y = _frame.origin.y;
+    data.w = _frame.size.width;
+    data.h = _frame.size.height;
+    data.style = _styleMask;
+    data.level = _level;
+    kern_return_t rc = _windowServerRPC(&data, sizeof(data), NULL, NULL);
+    { static int n = 0;
+      if(n < 20) { ++n;
+        fprintf(stderr, "[NSCLOSE] close win=%u sent destroy rc=%d\n",
+                number, (int)rc); } }
+
+    /* The window no longer exists on the server; every later state flush has
+     * to be a no-op rather than a resurrection. */
+    _number = 0;
+    _isVisible = NO;
+
     [self orderOut:nil];
 
     [_childWindows makeObjectsPerformSelector:@selector(_parentWindowDidClose:) withObject:self];
@@ -2373,12 +2493,6 @@ static BOOL _allowsAutomaticWindowTabbing = YES;
 
     [self postNotificationName:NSWindowWillCloseNotification];
 
-    struct wsRPCWindow data = {
-        { kWSWindowDestroy, sizeof(struct wsRPCWindow) - sizeof(struct wsRPCBase) },
-        _number, _frame.origin.x, _frame.origin.y,
-        _frame.size.width, _frame.size.height, _styleMask, 0, {'\0'}, _level
-    };
-    _windowServerRPC(&data, sizeof(data), NULL, NULL);
     [NSApp _removeWindow:self];
     if(_releaseWhenClosed)
         [self autorelease];
@@ -2574,6 +2688,20 @@ static BOOL _allowsAutomaticWindowTabbing = YES;
      [[_backgroundView hitTest:_mouseDownLocationInWindow] rightMouseDragged:event];
      break;
 
+    case NSOtherMouseDown:
+      _mouseDownLocationInWindow=[event locationInWindow];
+     [[_backgroundView hitTest:[event locationInWindow]] otherMouseDown:event];
+     break;
+
+    case NSOtherMouseUp:
+     [[_backgroundView hitTest:_mouseDownLocationInWindow] otherMouseUp:event];
+     _mouseDownLocationInWindow=NSMakePoint(NAN,NAN);
+     break;
+
+    case NSOtherMouseDragged:
+     [[_backgroundView hitTest:_mouseDownLocationInWindow] otherMouseDragged:event];
+     break;
+
     case NSMouseEntered:
      [[_backgroundView hitTest:[event locationInWindow]] mouseEntered:event];
      break;
@@ -2582,9 +2710,21 @@ static BOOL _allowsAutomaticWindowTabbing = YES;
      [[_backgroundView hitTest:[event locationInWindow]] mouseExited:event];
      break;
 
-    case NSKeyDown:
-     [_firstResponder keyDown:event];
+    case NSKeyDown: {
+     NSResponder *target = _firstResponder;
+     /* Redirect to a view that actually implements -keyDown: when focus
+      * landed on a plain view (one that only has NSResponder's default).
+      * Gecko attaches its content view after the window becomes key and only
+      * re-claims focus on a click, so without this every keystroke is lost
+      * until the user clicks the page. */
+     if(target != nil && [target methodForSelector:@selector(keyDown:)] == ravynPlainKeyDownIMP()) {
+      NSView *better = ravynDeepestAcceptingView(_contentView);
+      if(better != nil && [better methodForSelector:@selector(keyDown:)] != ravynPlainKeyDownIMP())
+       target = better;
+     }
+     [target keyDown:event];
      break;
+    }
 
     case NSKeyUp:
      [_firstResponder keyUp:event];
@@ -2737,9 +2877,23 @@ static BOOL _allowsAutomaticWindowTabbing = YES;
 
 -(void)performClose:sender 
 {
+  /* Bounded trace: a close click that reaches -mouseDown: on the right
+   * control rect still has three silent early returns below, and each one
+   * looks identical from the outside ("nothing happened"). */
+  { static int n = 0;
+    if(n < 20) { ++n;
+      fprintf(stderr, "[NSCLOSE] performClose win=%u delegate=%s controller=%p\n",
+              (unsigned)_number,
+              _delegate ? class_getName([_delegate class]) : "(nil)",
+              (void *)_windowController); } }
+
   if([_delegate respondsToSelector:@selector(windowShouldClose:)])
     {
-      if(![_delegate windowShouldClose:self])
+      BOOL should = [_delegate windowShouldClose:self];
+      { static int n = 0;
+        if(n < 20) { ++n;
+          fprintf(stderr, "[NSCLOSE] delegate windowShouldClose=%d\n", (int)should); } }
+      if(!should)
         return;
     }
   else if ([self respondsToSelector:@selector(windowShouldClose:)])
@@ -2748,7 +2902,11 @@ static BOOL _allowsAutomaticWindowTabbing = YES;
         return;
     }
   
-  NSDocument * document = [_windowController document];
+  NSDocument * document = _windowController ? [_windowController document] : nil;
+  { static int n = 0;
+    if(n < 20) { ++n;
+      fprintf(stderr, "[NSCLOSE] document=%p modal=%d\n",
+              (void *)document, (int)([NSApp modalWindow] == self)); } }
   if (document)
     {
       [document shouldCloseWindowController:_windowController 
@@ -2801,6 +2959,21 @@ static BOOL _allowsAutomaticWindowTabbing = YES;
 
 -(void)zoom:sender {
 	NSRect zoomedFrame = [self zoomedFrame];
+	{ static int n = 0;
+	  if(n < 12) { ++n;
+	    NSScreen *sc = [self screen];
+	    NSRect vis = sc ? [sc visibleFrame] : NSZeroRect;
+	    NSRect sfr = sc ? [sc frame] : NSZeroRect;
+	    fprintf(stderr, "[ZOOM] win=%d zoomed=%d saved=%d,%d %dx%d "
+	            "zoomtarget=%d,%d %dx%d screen=%dx%d vis=%d,%d %dx%d\n",
+	            (int)_number, (int)_isZoomed,
+	            (int)_savedFrame.origin.x, (int)_savedFrame.origin.y,
+	            (int)_savedFrame.size.width, (int)_savedFrame.size.height,
+	            (int)zoomedFrame.origin.x, (int)zoomedFrame.origin.y,
+	            (int)zoomedFrame.size.width, (int)zoomedFrame.size.height,
+	            (int)sfr.size.width, (int)sfr.size.height,
+	            (int)vis.origin.x, (int)vis.origin.y,
+	            (int)vis.size.width, (int)vis.size.height); } }
 	if (_isZoomed || NSEqualRects(_frame, zoomedFrame)) {
 		if (!NSEqualRects(_savedFrame, NSZeroRect) && !NSEqualRects(_savedFrame, zoomedFrame))
 			zoomedFrame = _savedFrame;
@@ -3510,12 +3683,28 @@ static BOOL _allowsAutomaticWindowTabbing = YES;
 }
 
 
--(BOOL)_updateWSState {
+/* The geometry a client sends with a state-only update is a snapshot of
+ * _frame, which lags behind a WindowServer-initiated move or resize until the
+ * queued processStateUpdate: runs.  Sending it would move the window back to
+ * where it was before the user dragged it, so a state-only update sends a
+ * zero-sized frame and the server treats that as "geometry unchanged". */
+-(BOOL)_updateWSStateWithGeometry:(BOOL)withGeometry {
+    /* A window that has been destroyed has no server-side record to talk to;
+     * sending updates for it used to log "No matching app for
+     * rpcWindowModifyState" and, worse, re-show a window that -close had
+     * just removed. */
+    if(_number == 0)
+        return NO;
     struct wsRPCWindow data = {
         { kWSWindowModifyState, sizeof(struct wsRPCWindow) - sizeof(struct wsRPCBase) },
-        _number, _frame.origin.x, _frame.origin.y,
-        _frame.size.width, _frame.size.height, _styleMask, 0, {'\0'}, _level
+        _number, 0, 0, 0, 0, _styleMask, 0, {'\0'}, _level
     };
+    if(withGeometry) {
+        data.x = _frame.origin.x;
+        data.y = _frame.origin.y;
+        data.w = _frame.size.width;
+        data.h = _frame.size.height;
+    }
     if(_title) {
         const char *ts = [_title UTF8String];
         if(ts)
@@ -3529,6 +3718,10 @@ static BOOL _allowsAutomaticWindowTabbing = YES;
         data.state = HIDDEN;
     int len = sizeof(data);
     return _windowServerRPC(&data, len, &data, &len) == KERN_SUCCESS;
+}
+
+-(BOOL)_updateWSState {
+    return [self _updateWSStateWithGeometry:NO];
 }
 
 @end
@@ -3559,6 +3752,15 @@ CGRect CGOutsetRectForNativeWindowBorder(CGRect frame,unsigned styleMask) {
 void CGNativeBorderFrameWidthsForStyle(unsigned styleMask,CGFloat *top,CGFloat *left,
                                        CGFloat *bottom,CGFloat *right)
 {
+    /* 0x8000 is NSFullSizeContentViewWindowMask on macOS: the content view
+     * covers the titlebar band, so there is no 32px titlebar inset. */
+    if(styleMask & 0x8000) {
+        *top=0;
+        *left=2;
+        *bottom=3;
+        *right=2;
+        return;
+    }
     switch(styleMask & 0x0FFF) {
         case NSBorderlessWindowMask:
             *top=0;

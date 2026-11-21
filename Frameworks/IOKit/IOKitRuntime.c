@@ -1003,3 +1003,86 @@ void IOHIDManagerRegisterInputValueCallback(IOHIDManagerRef manager,
                                             void *context) {
     (void)manager; (void)callback; (void)context;
 }
+
+/* ------------------------------------------------------------------ */
+/* IOHID device/element/value accessors                                */
+/* ------------------------------------------------------------------ */
+/* The manager is NULL here, so these accessors are reached only when a
+ * caller hands in an object it obtained elsewhere.  They still must exist:
+ * Gecko records them against IOKit at link time, and a missing symbol is a
+ * dyld failure at process start, not a runtime "HID unavailable". */
+typedef struct __IOHIDElement *IOHIDElementRef;
+typedef uint32_t IOHIDElementType;
+
+CFArrayRef IOHIDDeviceCopyMatchingElements(IOHIDDeviceRef device,
+                                           CFDictionaryRef matching,
+                                           IOOptionBits options) {
+    (void)device; (void)options;
+    if (matching != NULL) CFRelease(matching);
+    return CFArrayCreate(kCFAllocatorDefault, NULL, 0, &kCFTypeArrayCallBacks);
+}
+
+CFTypeRef IOHIDDeviceGetProperty(IOHIDDeviceRef device, CFStringRef key) {
+    (void)device; (void)key;
+    return NULL;
+}
+
+void IOHIDDeviceRegisterInputReportCallback(IOHIDDeviceRef device,
+                                            uint8_t *report,
+                                            CFIndex reportLength,
+                                            IOHIDReportCallback callback,
+                                            void *context) {
+    (void)device; (void)report; (void)reportLength; (void)callback; (void)context;
+}
+
+IOReturn IOHIDDeviceSetReport(IOHIDDeviceRef device, IOHIDReportType type,
+                              CFIndex reportID, const uint8_t *report,
+                              CFIndex reportLength) {
+    (void)device; (void)type; (void)reportID; (void)report; (void)reportLength;
+    return kIOReturnNotReady;
+}
+
+IOHIDDeviceRef IOHIDElementGetDevice(IOHIDElementRef element) {
+    (void)element;
+    return NULL;
+}
+
+CFIndex IOHIDElementGetLogicalMax(IOHIDElementRef element) {
+    (void)element;
+    return 0;
+}
+
+CFIndex IOHIDElementGetLogicalMin(IOHIDElementRef element) {
+    (void)element;
+    return 0;
+}
+
+IOHIDElementType IOHIDElementGetType(IOHIDElementRef element) {
+    (void)element;
+    return 0;
+}
+
+uint32_t IOHIDElementGetUsage(IOHIDElementRef element) {
+    (void)element;
+    return 0;
+}
+
+uint32_t IOHIDElementGetUsagePage(IOHIDElementRef element) {
+    (void)element;
+    return 0;
+}
+
+IOHIDElementRef IOHIDValueGetElement(IOHIDValueRef value) {
+    (void)value;
+    return NULL;
+}
+
+CFIndex IOHIDValueGetIntegerValue(IOHIDValueRef value) {
+    (void)value;
+    return 0;
+}
+
+CFIndex IOHIDValueGetLength(IOHIDValueRef value) {
+    (void)value;
+    return 0;
+}

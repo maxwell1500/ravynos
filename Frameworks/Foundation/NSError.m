@@ -20,6 +20,7 @@ NSString * const NSCocoaErrorDomain=@"NSCocoaErrorDomain";
 
 NSString * const NSUnderlyingErrorKey=@"NSUnderlyingErrorKey";
 NSString * const NSLocalizedDescriptionKey=@"NSLocalizedDescriptionKey";
+NSString * const NSFilePathErrorKey=@"NSFilePathErrorKey";
 NSString * const NSLocalizedFailureReasonErrorKey=@"NSLocalizedFailureReasonErrorKey";
 NSString * const NSLocalizedRecoveryOptionsErrorKey=@"NSLocalizedRecoveryOptionsErrorKey";
 NSString * const NSLocalizedRecoverySuggestionErrorKey=@"NSLocalizedRecoverySuggestionErrorKey";

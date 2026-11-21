@@ -256,3 +256,150 @@ Boolean HIShapeIsEmpty(HIShapeRef inShape) {
     (void)inShape;
     return true;
 }
+
+/* ------------------------------------------------------------------ */
+/* Accessibility text markers (HIServices)                             */
+/* ------------------------------------------------------------------ */
+
+typedef struct __AXTextMarker *AXTextMarkerRef;
+typedef struct __AXTextMarkerRange *AXTextMarkerRangeRef;
+
+AXTextMarkerRef AXTextMarkerCreate(CFAllocatorRef allocator,
+    const UInt8 *bytes, CFIndex length) {
+    (void)allocator; (void)bytes; (void)length;
+    return NULL;    /* no accessibility server to own a marker */
+}
+
+CFIndex AXTextMarkerGetLength(AXTextMarkerRef marker) {
+    (void)marker;
+    return 0;
+}
+
+const UInt8 *AXTextMarkerGetBytePtr(AXTextMarkerRef marker) {
+    (void)marker;
+    return NULL;
+}
+
+CFTypeID AXTextMarkerRangeGetTypeID(void) {
+    return 0;
+}
+
+AXTextMarkerRangeRef AXTextMarkerRangeCreate(CFAllocatorRef allocator,
+    AXTextMarkerRef startMarker, AXTextMarkerRef endMarker) {
+    (void)allocator; (void)startMarker; (void)endMarker;
+    return NULL;
+}
+
+AXTextMarkerRef AXTextMarkerRangeCopyStartMarker(AXTextMarkerRangeRef range) {
+    (void)range;
+    return NULL;
+}
+
+AXTextMarkerRef AXTextMarkerRangeCopyEndMarker(AXTextMarkerRangeRef range) {
+    (void)range;
+    return NULL;
+}
+
+/* ------------------------------------------------------------------ */
+/* Printing sessions beyond creation                                   */
+/* ------------------------------------------------------------------ */
+
+OSStatus PMRetain(void *object) {
+    (void)object;
+    return 0;
+}
+
+OSStatus PMSessionError(void *session) {
+    (void)session;
+    return -50;
+}
+
+OSStatus PMSessionBeginCGDocumentNoDialog(void *session, void *settings,
+    void *pageFormat) {
+    (void)session; (void)settings; (void)pageFormat;
+    return -50;     /* no session was ever created */
+}
+
+OSStatus PMSessionEndDocumentNoDialog(void *session) {
+    (void)session;
+    return -50;
+}
+
+OSStatus PMSessionBeginPageNoDialog(void *session, void *pageFormat,
+    const void *pageFrame) {
+    (void)session; (void)pageFormat; (void)pageFrame;
+    return -50;
+}
+
+OSStatus PMSessionEndPageNoDialog(void *session) {
+    (void)session;
+    return -50;
+}
+
+OSStatus PMSessionGetCGGraphicsContext(void *session, CGContextRef *context) {
+    (void)session;
+    if (context != NULL)
+        *context = NULL;
+    return -50;
+}
+
+OSStatus PMSessionGetDestinationType(void *session, void *settings,
+    int *destinationType) {
+    (void)session; (void)settings;
+    if (destinationType != NULL)
+        *destinationType = 0;
+    return -50;
+}
+
+OSStatus PMSetFirstPage(void *settings, UInt32 first, Boolean lock) {
+    (void)settings; (void)first; (void)lock;
+    return -50;
+}
+
+OSStatus PMSetLastPage(void *settings, UInt32 last, Boolean lock) {
+    (void)settings; (void)last; (void)lock;
+    return -50;
+}
+
+OSStatus PMPrintSettingsSetJobName(void *settings, CFStringRef name) {
+    (void)settings; (void)name;
+    return -50;
+}
+
+OSStatus PMGetAdjustedPaperRect(void *pageFormat, CGRect *paperRect) {
+    (void)pageFormat;
+    if (paperRect != NULL)
+        *paperRect = CGRectZero;
+    return -50;
+}
+
+/* ------------------------------------------------------------------ */
+/* Pasteboard and Universal Access                                     */
+/* ------------------------------------------------------------------ */
+
+typedef struct __Pasteboard *PasteboardRef;
+typedef uint32_t PasteboardSyncFlags;
+
+OSStatus PasteboardCreate(CFStringRef name, PasteboardRef *pasteboard) {
+    (void)name;
+    if (pasteboard != NULL)
+        *pasteboard = NULL;
+    return -50;     /* no pasteboard server */
+}
+
+PasteboardSyncFlags PasteboardSynchronize(PasteboardRef pasteboard) {
+    (void)pasteboard;
+    return 0;
+}
+
+OSStatus PasteboardCopyPasteLocation(PasteboardRef pasteboard,
+    CFURLRef *location) {
+    (void)pasteboard;
+    if (location != NULL)
+        *location = NULL;
+    return -50;
+}
+
+Boolean UAZoomEnabled(void) {
+    return false;   /* zoom is a WindowServer feature that does not exist */
+}

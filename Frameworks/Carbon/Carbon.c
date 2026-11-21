@@ -23,6 +23,7 @@
 #include <stdio.h>
 
 #include <CoreFoundation/CoreFoundation.h>
+#include <CoreGraphics/CGEvent.h>
 
 static void
 carbon_unimplemented(const char *name)
@@ -71,10 +72,31 @@ EnableSecureEventInput(void)
 	carbon_unimplemented("EnableSecureEventInput");
 }
 
-void
+/*
+ * Real signature: UInt32 GetCurrentEventKeyModifiers(void).  Returning void
+ * left the caller's eax as whatever the previous call happened to leave
+ * there, so Gecko saw random shortcut modifiers.  The state comes from the
+ * event AppKit last delivered into this process; Carbon modifier bits are
+ * not the same values as CGEventFlags/NSEvent modifier flags.
+ */
+unsigned int
 GetCurrentEventKeyModifiers(void)
 {
-	carbon_unimplemented("GetCurrentEventKeyModifiers");
+	CGEventFlags flags = CGEventSourceFlagsState(kCGEventSourceStateCombinedSessionState);
+	unsigned int result = 0;
+
+	if (flags & kCGEventFlagMaskCommand)
+		result |= 0x0100; /* cmdKey */
+	if (flags & kCGEventFlagMaskShift)
+		result |= 0x0200; /* shiftKey */
+	if (flags & kCGEventFlagMaskAlphaShift)
+		result |= 0x0400; /* alphaLock */
+	if (flags & kCGEventFlagMaskAlternate)
+		result |= 0x0800; /* optionKey */
+	if (flags & kCGEventFlagMaskControl)
+		result |= 0x1000; /* controlKey */
+
+	return result;
 }
 
 void

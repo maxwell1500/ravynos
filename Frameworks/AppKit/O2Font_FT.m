@@ -7,7 +7,9 @@
  
  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. */
 #import "O2Font_FT.h"
+#include <stdio.h>
 #import <Onyx2D/O2Font_freetype.h>
+#include <freetype2/freetype/tttables.h>
 
 O2FontRef O2FontCreateWithFontName_platform(NSString *name) {
     return [[O2Font_FT alloc] initWithFontName:name];
@@ -127,6 +129,24 @@ FcConfig *O2FontSharedFontConfig() {
 
 -(FT_Face)face {
    return _face;
+}
+
+-(NSData *)copyTableForTag:(uint32_t)tag {
+   FT_ULong length = 0;
+   if (_face == NULL)
+      return nil;
+   if (FT_Load_Sfnt_Table(_face, (FT_ULong)tag, 0, NULL, &length) != 0 || length == 0)
+      return nil;
+   void *bytes = malloc(length);
+   if (bytes == NULL)
+      return nil;
+   if (FT_Load_Sfnt_Table(_face, (FT_ULong)tag, 0, (FT_Byte *)bytes, &length) != 0) {
+      free(bytes);
+      return nil;
+   }
+   NSData *data = [NSData dataWithBytes:bytes length:(NSUInteger)length];
+   free(bytes);
+   return data;
 }
 
 -(O2Glyph)glyphWithGlyphName:(NSString *)name {

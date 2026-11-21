@@ -323,6 +323,32 @@ void NSAccessibilityPostNotification (
 ) {
 }
 
+void NSAccessibilityPostNotificationWithUserInfo (
+   id element,
+   NSString *notification,
+   NSDictionary *userInfo
+) {
+   (void)userInfo;
+   NSAccessibilityPostNotification(element, notification);
+}
+
+NSString *NSAccessibilityActionDescription (
+   NSString *action
+) {
+   /* No localizable action database exists; returning the action name is the
+    * documented fallback and keeps callers from receiving nil. */
+   return action;
+}
+
+/* Focus rings are drawn by the control itself; the graphics-state entry point
+ * has no separate state to set.  It must still exist: AppKit clients call it
+ * while drawing every focused control. */
+typedef int NSFocusRingPlacement;
+
+void NSSetFocusRingStyle(NSFocusRingPlacement placement) {
+   (void)placement;
+}
+
 
 NSString * NSAccessibilityRoleDescription (
    NSString *role,

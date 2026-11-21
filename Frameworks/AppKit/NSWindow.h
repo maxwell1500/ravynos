@@ -388,6 +388,13 @@ APPKIT_EXPORT NSString *const NSWindowDidEndLiveResizeNotification;
 - (NSResponder *)firstResponder;
 
 - (NSButton *)standardWindowButton:(NSWindowButton)value;
+/* 10.10+ titlebar appearance; also backs Gecko's fullscreen tracking. */
+- (BOOL)titlebarAppearsTransparent;
+-(void)setTitlebarAppearsTransparent:(BOOL)flag;
+-(NSInteger)titleVisibility;
+-(void)setTitleVisibility:(NSInteger)visibility;
+-(NSView *)titlebarContainerView;
+-(NSView *)titlebarView;
 - (NSButtonCell *)defaultButtonCell;
 - (NSWindow *)attachedSheet;
 

@@ -16,6 +16,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 #import <CFNetwork/CFSocketStream.h>
 #import <Foundation/NSRaiseException.h>
 #import "NSOutputStream_socket.h"
+#include <errno.h>
 
 @implementation NSOutputStream_socket
 
@@ -160,7 +161,9 @@ static BOOL socketHasSpaceAvailable(NSSocket *socket){
 
    if(sslHandler==nil){
     [_inputSource setSelectEventMask:[_inputSource selectEventMask]|NSSelectWriteEvent];
-    return [_socket write:buffer maxLength:length];
+    NSInteger sent=[_socket write:buffer maxLength:length];
+    if(sent<0)
+    return sent;
    }
    else {
 

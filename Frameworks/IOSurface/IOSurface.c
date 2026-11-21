@@ -9,6 +9,7 @@
 #include <unistd.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 
 struct __IOSurface {
     uint32_t id;
@@ -82,7 +83,13 @@ IOSurfaceRef IOSurfaceCreate(CFDictionaryRef properties) {
         surf->allocSize = surf->bytesPerRow * surf->height;
     if (surf->allocSize == 0)
         surf->allocSize = 4096;
-
+    /* cairo (Firefox libxul.so) requests IOSurfacePixelFormat = 4 ("Metal")
+     * for the WebRender pool and blits the rasterized DrawBuf through
+     * IOSurfaceGetBaseAddress; honoring 4 or returning 0 leaves cairo's
+     * format dispatch unable to blit (measured: fmt stayed 0, pool stayed
+     * opaque zero, content glyphs solid black). Pin the CPU format cairo
+     * reads back for ARGB and accept Metal/GL requests as CPU-backed here. */
+    surf->pixelFormat = 5; /* kCPUSurfaceFormat: cairo reads it back verbatim */
     surf->address = mmap(NULL, surf->allocSize, PROT_READ | PROT_WRITE, MAP_ANON | MAP_SHARED, -1, 0);
     if (surf->address == MAP_FAILED || surf->address == NULL)
         surf->address = malloc(surf->allocSize);

@@ -168,12 +168,6 @@ static NSAppearance *sCurrentAppearance = nil;
 @implementation NSSpeechSynthesizer
 @end
 
-@interface NSTextInputContext : NSObject
-@end
-
-@implementation NSTextInputContext
-@end
-
 @interface NSTitlebarAccessoryViewController : NSViewController {
     BOOL _accessoryHidden;
     NSInteger _layoutAttribute;

@@ -13,6 +13,169 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 #import <sys/param.h>
 #include <string.h>
 #import <objc/message.h>
+#import <objc/runtime.h>
+
+
+#ifdef HAVE_LIBFFI
+#include <ffi.h>
+#include <stdlib.h>
+
+typedef struct NSFFIAllocation {
+    void *pointer;
+    struct NSFFIAllocation *next;
+} NSFFIAllocation;
+
+static void *NSFFIAllocate(NSFFIAllocation **list,size_t size) {
+    void *pointer=calloc(1,size);
+    NSFFIAllocation *node=malloc(sizeof(NSFFIAllocation));
+
+    node->pointer=pointer;
+    node->next=*list;
+    *list=node;
+
+    return pointer;
+}
+
+static void NSFFIFreeAllocations(NSFFIAllocation *list) {
+    while(list!=NULL){
+        NSFFIAllocation *next=list->next;
+
+        free(list->pointer);
+        free(list);
+        list=next;
+    }
+}
+
+static ffi_type *NSFFITypeForEncoding(const char *type,NSFFIAllocation **allocations);
+
+static ffi_type *NSFFIBlobTypeForEncoding(const char *type,NSFFIAllocation **allocations) {
+    NSUInteger size=0,alignment=0;
+
+    NSGetSizeAndAlignment(type,&size,&alignment);
+
+    if(size==0)
+        return &ffi_type_pointer;
+
+    ffi_type **elements=NSFFIAllocate(allocations,sizeof(ffi_type*)*(size+1));
+    ffi_type *result=NSFFIAllocate(allocations,sizeof(ffi_type));
+    NSUInteger i;
+
+    for(i=0;i<size;i++)
+        elements[i]=&ffi_type_uint8;
+    elements[size]=NULL;
+
+    result->size=0;
+    result->alignment=0;
+    result->type=FFI_TYPE_STRUCT;
+    result->elements=elements;
+
+    return result;
+}
+
+static ffi_type *NSFFIAggregateTypeForEncoding(const char *type,NSFFIAllocation **allocations) {
+    NSUInteger capacity=8,count=0,size=0,alignment=0;
+    ffi_type **elements=NSFFIAllocate(allocations,sizeof(ffi_type*)*(capacity+1));
+    ffi_type *result=NSFFIAllocate(allocations,sizeof(ffi_type));
+    const char *cursor=type+1;
+
+    while(*cursor!='\0' && *cursor!='=' && *cursor!='}' && *cursor!=')')
+        cursor++;
+
+    if(*cursor=='=')
+        cursor++;
+
+    while(*cursor!='\0' && *cursor!='}' && *cursor!=')'){
+        const char *next;
+
+        if(count+1>=capacity){
+            ffi_type **grown=NSFFIAllocate(allocations,sizeof(ffi_type*)*(capacity*2+1));
+
+            memcpy(grown,elements,sizeof(ffi_type*)*(count+1));
+            elements=grown;
+            capacity*=2;
+        }
+
+        elements[count++]=NSFFITypeForEncoding(cursor,allocations);
+
+        next=NSGetSizeAndAlignment(cursor,&size,&alignment);
+        if(next==NULL || next<=cursor)
+            break;
+        cursor=next;
+    }
+
+    elements[count]=NULL;
+
+    result->size=0;
+    result->alignment=0;
+    result->type=FFI_TYPE_STRUCT;
+    result->elements=elements;
+
+    return result;
+}
+
+static ffi_type *NSFFIArrayTypeForEncoding(const char *type,NSFFIAllocation **allocations) {
+    const char *cursor=type+1;
+    long count=0;
+    ffi_type *element;
+    ffi_type **elements;
+    ffi_type *result;
+    long i;
+
+    while(*cursor>='0' && *cursor<='9'){
+        count=count*10+(*cursor-'0');
+        cursor++;
+    }
+
+    element=NSFFITypeForEncoding(cursor,allocations);
+    elements=NSFFIAllocate(allocations,sizeof(ffi_type*)*(count+1));
+    result=NSFFIAllocate(allocations,sizeof(ffi_type));
+
+    for(i=0;i<count;i++)
+        elements[i]=element;
+    elements[count]=NULL;
+
+    result->size=0;
+    result->alignment=0;
+    result->type=FFI_TYPE_STRUCT;
+    result->elements=elements;
+
+    return result;
+}
+
+static ffi_type *NSFFITypeForEncoding(const char *type,NSFFIAllocation **allocations) {
+    while(*type=='r' || *type=='n' || *type=='N' || *type=='o' ||
+          *type=='O' || *type=='R' || *type=='V')
+        type++;
+
+    switch(*type){
+     case _C_VOID: return &ffi_type_void;
+     case _C_CHR: return &ffi_type_sint8;
+     case _C_UCHR: return &ffi_type_uint8;
+     case _C_BOOL: return &ffi_type_uint8;
+     case _C_SHT: return &ffi_type_sint16;
+     case _C_USHT: return &ffi_type_uint16;
+     case _C_INT: return &ffi_type_sint32;
+     case _C_UINT: return &ffi_type_uint32;
+     case _C_LNG: return &ffi_type_sint64;
+     case _C_ULNG: return &ffi_type_uint64;
+     case _C_LNG_LNG: return &ffi_type_sint64;
+     case _C_ULNG_LNG: return &ffi_type_uint64;
+     case _C_FLT: return &ffi_type_float;
+     case _C_DBL: return &ffi_type_double;
+     case 'D': return &ffi_type_longdouble;
+     case _C_PTR: return &ffi_type_pointer;
+     case _C_CHARPTR: return &ffi_type_pointer;
+     case _C_ATOM: return &ffi_type_pointer;
+     case _C_ID: return &ffi_type_pointer;
+     case _C_CLASS: return &ffi_type_pointer;
+     case _C_SEL: return &ffi_type_pointer;
+     case _C_STRUCT_B: return NSFFIAggregateTypeForEncoding(type,allocations);
+     case _C_UNION_B: return NSFFIBlobTypeForEncoding(type,allocations);
+     case _C_ARY_B: return NSFFIArrayTypeForEncoding(type,allocations);
+     default: return NSFFIBlobTypeForEncoding(type,allocations);
+    }
+}
+#endif /* HAVE_LIBFFI */
 
 @implementation NSInvocation
 
@@ -322,155 +485,39 @@ static void byteCopy(void *src,void *dst,NSUInteger length){
 
 - (void)invoke
 {
-#if 1
-#warning [invoke] is a stub until objc_msgSendv is replaced
-#else
-    const char *returnType = [_signature methodReturnType];
-    void *msgSendv = objc_msgSendv;
+#ifdef HAVE_LIBFFI
+    NSMethodSignature *signature=_signature;
+    NSUInteger argumentCount=[signature numberOfArguments];
+    NSFFIAllocation *allocations=NULL;
+    ffi_type *returnType=NSFFITypeForEncoding([signature methodReturnType],&allocations);
+    ffi_type *argumentTypes[argumentCount];
+    void     *argumentValues[argumentCount];
+    ffi_cif   cif;
+    NSUInteger i;
 
-    switch (returnType[0]) {
-        case 'r':
-        case 'n':
-        case 'N':
-        case 'o':
-        case 'O':
-        case 'R':
-        case 'V':
-            returnType++;
-            break;
+    for(i=0;i<argumentCount;i++){
+        argumentTypes[i]=NSFFITypeForEncoding([signature getArgumentTypeAtIndex:i],&allocations);
+        argumentValues[i]=_argumentFrame+_argumentOffsets[i];
     }
 
-    switch (returnType[0]) {
-        case _C_CHR:
-        case _C_UCHR:
-            {
-                char (*function)() = msgSendv;
-                char value = function([self target], [self selector], _argumentFrameSize, _argumentFrame);
-
-                [self setReturnValue:&value];
-            }
-            break;
-
-        case _C_SHT:
-        case _C_USHT:
-            {
-                short (*function)() = msgSendv;
-                short value = function([self target], [self selector], _argumentFrameSize, _argumentFrame);
-
-                [self setReturnValue:&value];
-            }
-            break;
-
-        case _C_INT:
-        case _C_UINT:
-            {
-                int (*function)() = msgSendv;
-                int value = function([self target], [self selector], _argumentFrameSize, _argumentFrame);
-
-                [self setReturnValue:&value];
-            }
-            break;
-
-        case _C_LNG:
-        case _C_ULNG:
-            {
-                long (*function)() = msgSendv;
-                long value = function([self target], [self selector], _argumentFrameSize, _argumentFrame);
-
-                [self setReturnValue:&value];
-            }
-            break;
-
-        case _C_LNG_LNG:
-        case _C_ULNG_LNG:
-            {
-                long long (*function)() = msgSendv;
-                long long value = function([self target], [self selector], _argumentFrameSize, _argumentFrame);
-
-                [self setReturnValue:&value];
-            }
-            break;
-
-        case _C_FLT:
-            {
-                float (*function)() = msgSendv;
-                float value = function([self target], [self selector], _argumentFrameSize, _argumentFrame);
-
-                [self setReturnValue:&value];
-            }
-            break;
-
-        case _C_DBL:
-            {
-                double (*function)() = msgSendv;
-                double value = function([self target], [self selector], _argumentFrameSize, _argumentFrame);
-
-                [self setReturnValue:&value];
-            }
-            break;
-
-        case _C_VOID:
-            {
-                void (*function)() = msgSendv;
-
-                function([self target], [self selector], _argumentFrameSize, _argumentFrame);
-            }
-            break;
-
-        case _C_CHARPTR:
-        case _C_ID:
-        case _C_CLASS:
-        case _C_SEL:
-            {
-                void *(*function)() = msgSendv;
-                void *value=function([self target], [self selector], _argumentFrameSize, _argumentFrame);
-
-                [self setReturnValue:&value];
-            }
-            break;
-
-        default:
-            {
-                NSUInteger size, alignment;
-
-                NSGetSizeAndAlignment(returnType, &size, &alignment);
-                if (size <= sizeof(long)) {
-                    long (*function)() = msgSendv;
-                    long value = function([self target], [self selector], _argumentFrameSize, _argumentFrame);
-
-                    [self setReturnValue:&value];
-                } else if (size <= sizeof(long long)) {
-                    long long (*function)() = msgSendv;
-                    long long value = function([self target], [self selector], _argumentFrameSize, _argumentFrame);
-
-                    [self setReturnValue:&value];
-                } else {
-#ifdef __clang__
-// see http://llvm.org/bugs/show_bug.cgi?id=9254
-                    @throw @"NSInvocation: current implementation of struct returning invocation is not supported by Clang.";
-#else
-                    struct structReturn {
-                        char *result;;
-                    } (*function)() = (struct structReturn (*)())msgSendv; // should be msgSend_stret
-                    struct structReturn value;
-
-			value.result = calloc(size, sizeof(char));
-
-// FIX internal compiler error on windows/linux/bsd
-#if !defined(WIN32) && !defined(BSD) && !defined(LINUX)
-                    value = function([self target], [self selector], _argumentFrameSize, _argumentFrame);
-#else
-                    if (function) {/*avoid compiler warning*/}
-#endif
-
-                    [self setReturnValue:&value];
-			free(value.result);
-#endif
-                }
-            }
-            break;
+    if(ffi_prep_cif(&cif,FFI_DEFAULT_ABI,(unsigned)argumentCount,returnType,argumentTypes)!=FFI_OK){
+        NSFFIFreeAllocations(allocations);
+        [NSException raise:NSInvalidArgumentException
+                    format:@"-[NSInvocation invoke] cannot build a call frame for %@",signature];
+        return;
     }
-#endif /* 1 */
+
+    {
+        id target=[self target];
+        IMP imp=class_getMethodImplementation(object_getClass(target),[self selector]);
+
+        ffi_call(&cif,FFI_FN(imp),_returnValue,argumentValues);
+    }
+
+    NSFFIFreeAllocations(allocations);
+#else
+    NSInvalidAbstractInvocation();
+#endif
 }
 
 

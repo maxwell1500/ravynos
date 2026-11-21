@@ -24,6 +24,7 @@ enum {
 - initWithUIFontType:(CTFontUIFontType)uiFontType size:(CGFloat)size language:(NSString *)language;
 
 - (CFStringRef)copyName;
+- (CFStringRef)copyFamilyName;
 - (CGFontRef)graphicsFont;
 - (CGFloat)unitsPerEm;
 - (CGFloat)pointSize;

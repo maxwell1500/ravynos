@@ -10,6 +10,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 #import <Foundation/NSException.h>
 #import <Foundation/NSString.h>
+#include <string.h>
 
 static inline void _NSInvalidAbstractInvocation(SEL selector, id object, const char *file, int line) {
     [NSException raise:NSInvalidArgumentException
@@ -17,12 +18,34 @@ static inline void _NSInvalidAbstractInvocation(SEL selector, id object, const c
                 sel_getName(selector), [object class], sel_getName(selector), file, line];
 }
 
+/* Log once per selector/function instead of on every call.  AppKit's stubs
+ * are hit in hot paths (layout, drawing, event routing), so repeating the
+ * same line hundreds of times per frame buried real diagnostics. */
+static inline BOOL _NSUnimplementedShouldLog(const char *key) {
+    static const char *logged[128];
+    static int loggedCount=0;
+    int i;
+
+    for (i=0;i<loggedCount;i++)
+        if (logged[i]==key || strcmp(logged[i],key)==0)
+            return NO;
+
+    if (loggedCount<128)
+        logged[loggedCount++]=key;
+
+    return YES;
+}
+
 static inline void _NSUnimplementedMethod(SEL selector, id object, const char *file, int line) {
-    NSLog(@"-[%@ %s] unimplemented in %s at %d", [object class], sel_getName(selector), file, line);
+    const char *name=sel_getName(selector);
+
+    if (_NSUnimplementedShouldLog(name))
+        NSLog(@"-[%@ %s] unimplemented in %s at %d", [object class], name, file, line);
 }
 
 static inline void _NSUnimplementedFunction(const char *function, const char *file, int line) {
-    NSLog(@"%s() unimplemented in %s at %d", function, file, line);
+    if (_NSUnimplementedShouldLog(function))
+        NSLog(@"%s() unimplemented in %s at %d", function, file, line);
 }
 
 #define NSInvalidAbstractInvocation() \

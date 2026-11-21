@@ -350,7 +350,11 @@ CXXFLAGS = -DTARGET_OS_BRIDGE=0 ${CFLAGS:N*-std=*}
 LDFLAGS = --sysroot=${RAVYN_SDKROOT} -Wl,-current_version,1677.104.0 \
 	-Wl,-compatibility_version,300.0.0 -Xlinker -reexport-lobjc \
 	-F${RAVYN_SDKROOT}/System/Library/Frameworks -framework CoreFoundation \
-	-lSystem
+	-lSystem -lffi
+
+# NSInvocation -invoke calls through libffi, and libffi is staged in the
+# image as /usr/lib/libffi.dylib (tools/bootlab/make_gui_manifest.py).
+CFLAGS += -DHAVE_LIBFFI
 
 .for file in NSProcessInfo NSStringsFileParser NSData NSNumberFormatter
 CFLAGS.${file}.o = -I${.CURDIR}/NSString

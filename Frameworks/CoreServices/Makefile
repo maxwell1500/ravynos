@@ -4,7 +4,7 @@ FRAMEWORK = CoreServices
 # binary that recorded a higher one, so it has to match at least.
 FMWK_COMPAT_VERSION = 1.0.0
 FMWK_VERSION = A
-SRCS = CoreServices.c LSSymbols.c FileManagerCompat.c
+SRCS = CoreServices.c LSSymbols.c FileManagerCompat.c CoreServicesCompat.c
 HEADERS = CoreServices.h 
 
 RESOURCES=Info.plist English.lproj
@@ -23,7 +23,9 @@ SUBDIR =
 fmwk-install-hook:
 	mkdir -p ${RAVYN_SDKROOT}/System/Library/Frameworks \
 	  ${SYSROOT_DIR}/System/Library/Frameworks
+	rm -rf ${RAVYN_SDKROOT}/System/Library/Frameworks/${FRAMEWORK}.framework
 	cp -Rf ${.OBJDIR}/${FRAMEWORK}.framework ${RAVYN_SDKROOT}/System/Library/Frameworks
+	rm -rf ${SYSROOT_DIR}/System/Library/Frameworks/${FRAMEWORK}.framework
 	cp -Rf ${.OBJDIR}/${FRAMEWORK}.framework ${SYSROOT_DIR}/System/Library/Frameworks
 
 #SUBDIR = LaunchServices

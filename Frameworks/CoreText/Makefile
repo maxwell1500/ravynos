@@ -12,6 +12,8 @@ LDFLAGS+= -F${OBJTOP}/Frameworks/Onyx2D -framework Onyx2D \
 	-Wl,-rpath,/System/Library/Frameworks/CoreGraphics.framework/Versions/A \
 	-F${OBJTOP}/Frameworks/Foundation -framework Foundation \
 	-Wl,-rpath,/System/Library/Frameworks/Foundation.framework/Versions/A \
+ 	-F${OBJTOP}/Frameworks/CoreFoundation -framework CoreFoundation \
+ 	-Wl,-rpath,/System/Library/Frameworks/CoreFoundation.framework/Versions/A \
 	-lobjc
 WARNS= 1
 MK_WERROR= no

@@ -31,6 +31,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 #import <AppKit/NSWorkspace.h>
 #import <AppKit/NSDockTile.h>
 #import <CoreGraphics/CGWindow.h>
+#import <CoreGraphics/CGEvent.h>
 #import <AppKit/NSRaise.h>
 #import <AppKit/NSSpellChecker.h>
 #import <AppKit/NSStatusItem.h>
@@ -226,15 +227,25 @@ static NSMenuItem *itemWithTag(NSMenu *root, int tag) {
     int windowID = [[dict objectForKey:@"WindowID"] intValue];
     NSString *bundleID = [dict objectForKey:@"BundleID"];
     NSNumber *pidNum = [dict objectForKey:@"PID"];
+    { FILE *af = fopen("/dev/console", "w");
+      if (af) { fprintf(af, "[APPACT] pid=%d active=%d winID=%d isActive=%d keyWin=%p nwins=%u\n",
+            (int)getpid(), active, windowID, (int)_isActive, (void *)[self keyWindow],
+            (unsigned)[_windows count]);
+        fclose(af); } }
 
     if(active == 1 && windowID != 0) {
         NSWindow *win = [self windowWithWindowNumber:windowID];
         if(win) {
             [win _showForActivation];
+            /* Being told the app is active must also register the window as
+             * the key window.  Cocoa clients such as Gecko ignore keyboard
+             * events while -isKeyWindow returns NO, and only -becomeKeyWindow
+             * records that state; -makeKeyWindow alone just sets up the first
+             * responder and leaves NSApp.keyWindow nil. */
             if([win canBecomeKeyWindow])
-                [win makeKeyWindow];
-            if([win canBecomeMainWindow])
-                [win makeMainWindow];
+                [win becomeKeyWindow];
+            if([win canBecomeMainWindow] && ![win isMainWindow])
+                [win becomeMainWindow];
         }
     }
     if(active && !_isActive)
@@ -341,6 +352,12 @@ static NSMenuItem *itemWithTag(NSMenu *root, int tag) {
         if(result != MACH_MSG_SUCCESS)
             NSLog(@"mach_msg receive error 0x%x", result);
         else {
+            { static int rn = 0;
+              if (rn < 120) { rn++;
+                FILE *rf = fopen("/dev/console", "w");
+                if (rf) { fprintf(rf, "[APPRCV] id=%u code=%u len=%u\n",
+                      (unsigned)msg.header.msgh_id, (unsigned)msg.code,
+                      (unsigned)msg.len); fclose(rf); } } }
             switch(msg.header.msgh_id) {
                 case MSG_ID_INLINE:
                     switch(msg.code) {
@@ -442,15 +459,27 @@ static NSMenuItem *itemWithTag(NSMenu *root, int tag) {
                             NSWindow *window = (me.windowID == 0)
                                 ? [self mainWindow]
                                 : [self windowWithWindowNumber:me.windowID];
-                            /* WindowServer pointer coordinates are top-down (scanout
-                             * row 0 at the top of the screen), while Cocoa window frames
-                             * are bottom-up.  Convert before hit-testing so clicks land
-                             * on the right view instead of producing negative y. */
+                            /* The WindowServer addresses windows by the number
+                             * the app minted, but a key event is aimed at the
+                             * focused window regardless: falling back to the
+                             * key window keeps input alive when a window (a
+                             * private or replaced one) is not in the registry,
+                             * instead of turning the event into a no-op. */
+                            if(window == nil && (me.code == NSKeyDown || me.code == NSKeyUp)) {
+                                window = [self keyWindow];
+                                if(window == nil)
+                                    window = [self mainWindow];
+                            }
+                            /* WindowServer pointer coordinates are already bottom-up
+                             * Cocoa screen coordinates; subtract window frame origin
+                             * to convert to window-local bottom-up coordinates. */
                             me.x -= [window frame].origin.x;
-                            me.y = [window frame].size.height - (me.y - [window frame].origin.y);
+                            me.y -= [window frame].origin.y;
+                            [_display setCurrentModifierFlags:me.mods];
                             switch(me.code) {
                                 case NSKeyUp:
-                                case NSKeyDown: {
+                                case NSKeyDown:
+                                case NSFlagsChanged: {
                                     NSEvent *e = [NSEvent keyEventWithType:me.code
                                                   location:NSMakePoint(me.x, me.y)
                                              modifierFlags:me.mods
@@ -488,6 +517,11 @@ static NSMenuItem *itemWithTag(NSMenu *root, int tag) {
                                     break;
                                 }
                                 case NSLeftMouseDown: {
+                                    { static int np = 0;
+                                      if(np < 40) { ++np;
+                                        fprintf(stderr, "[APPPOST] pid=%d display=%p down win=%d loc=%d,%d\n",
+                                                (int)getpid(), (void *)_display,
+                                                (int)me.windowID, (int)me.x, (int)me.y); } }
                                     clock_gettime(CLOCK_MONOTONIC, &ts);
                                     NSTimeInterval now = ts.tv_sec + ts.tv_nsec/1000000000.0;
                                     if((now - lastClickTime) > [_display doubleClickInterval])
@@ -558,12 +592,25 @@ static NSMenuItem *itemWithTag(NSMenu *root, int tag) {
                                     [_display postEvent:e atStart:NO];
                                     break;
                                 }
-                                case NSRightMouseDragged: {
+                                case NSRightMouseDragged:
+                                case NSOtherMouseDragged: {
                                     NSEvent *e = [NSEvent mouseEventWithType:me.code
                                                     location:NSMakePoint(me.x, me.y)
                                                modifierFlags:me.mods
                                                       window:window
                                                   clickCount:0
+                                                      deltaX:me.dx
+                                                      deltaY:me.dy];
+                                    [_display postEvent:e atStart:NO];
+                                    break;
+                                }
+                                case NSOtherMouseDown:
+                                case NSOtherMouseUp: {
+                                    NSEvent *e = [NSEvent mouseEventWithType:me.code
+                                                    location:NSMakePoint(me.x, me.y)
+                                               modifierFlags:me.mods
+                                                      window:window
+                                                  clickCount:1
                                                       deltaX:me.dx
                                                       deltaY:me.dy];
                                     [_display postEvent:e atStart:NO];
@@ -1126,8 +1173,14 @@ static int _tagAllMenus(NSMenu *menu, int tag) {
    [_mainMenu autorelease];
    _mainMenu=[menu retain];
 
-   // ensure we have an "Apple" (application) menu
-   if([_mainMenu _menuWithName:@"NSAppleMenu"] == nil) {
+   /* Ensure we have an application menu.  The test is structural: on macOS
+    * the app menu is simply the first item of the main menu, and Cocoa apps
+    * (Firefox, Terminal) build it themselves with their own internal name.
+    * Looking only for the name "NSAppleMenu" prepended a second app-named
+    * menu to those apps, so the menu bar showed the app name twice. */
+   NSMenuItem *firstMenu = ([_mainMenu numberOfItems] > 0) ? [_mainMenu itemAtIndex:0] : nil;
+   if([_mainMenu _menuWithName:@"NSAppleMenu"] == nil &&
+      (firstMenu == nil || [firstMenu submenu] == nil)) {
      NSString *appName = [[NSProcessInfo processInfo] processName];
      NSMenuItem *appleMenuItem = [[NSMenuItem new] retain];
      [appleMenuItem setTitle:appName];
@@ -1195,6 +1248,22 @@ static int _tagAllMenus(NSMenu *menu, int tag) {
     return d;
 }
 
+static BOOL _menuDropDeepestNestedSubmenu(NSMenu *menu, int depth) {
+    NSArray *items = [menu itemArray];
+    for(int i = 0; i < (int)[items count]; i++) {
+        NSMenuItem *item = [items objectAtIndex:i];
+        if([item hasSubmenu]) {
+            if(depth >= 1) {
+                [item setSubmenu:nil];
+                return YES;
+            }
+            if(_menuDropDeepestNestedSubmenu([item submenu], depth + 1))
+                return YES;
+        }
+    }
+    return NO;
+}
+
 -(void)_menuDropSubmenuAt:(int)index inMenu:(NSMenu *)menuCopy {
     NSMenuItem *item = [menuCopy itemAtIndex:index];
     if(item == nil)
@@ -1224,6 +1293,12 @@ static int _tagAllMenus(NSMenu *menu, int tag) {
     Message probe = {0};
     NSUInteger menuCeiling = sizeof(probe.data);
     NSData *d = [self _menuArchiveForTransmission:menuCopy ceiling:menuCeiling];
+    /* First strip nested (depth >= 2) submenus one by one so all top-level
+     * menus keep their primary dropdown items. Only if that still exceeds
+     * menuCeiling do we fall back to dropping whole top-level branches. */
+    while(d == nil && _menuDropDeepestNestedSubmenu(menuCopy, 0)) {
+        d = [self _menuArchiveForTransmission:menuCopy ceiling:menuCeiling];
+    }
     while(d == nil) {
         /* Largest branch first: pick the top-level submenu with the most
          * items and drop it. */
@@ -1474,13 +1549,25 @@ static int _tagAllMenus(NSMenu *menu, int tag) {
 }
 
 -(void)finishLaunching {
+   /* Launch happens once.  Measured on the Dock: applicationWillFinishLaunching:
+    * ran twice, so the Dock built two desktop windows -- and the second one, a
+    * 1920x1080 window, sat in front of every application until its level was
+    * fixed up, swallowing clicks.  Guarding here (rather than only in -run)
+    * makes every entry point idempotent. */
+   static BOOL finished = NO;
+   if(finished)
+       return;
+   finished = YES;
+
    NSAutoreleasePool *pool=[NSAutoreleasePool new];
    BOOL               needsUntitled=YES;
 
-    [[NSNotificationCenter defaultCenter] postNotificationName: NSApplicationWillFinishLaunchingNotification object:self];
-   if(_delegate && [_delegate respondsToSelector:@selector(applicationWillFinishLaunching:)])
-       [_delegate applicationWillFinishLaunching:
-           [NSNotification notificationWithName:NSApplicationWillFinishLaunchingNotification object:self]];
+   /* The delegate is invoked by this notification, not beside it:
+    * -setDelegate: registers the delegate as an observer of exactly this name
+    * (-registerDelegate), so posting it here *and* calling the delegate
+    * directly ran -applicationWillFinishLaunching: twice.  Measured on the
+    * Dock, that built two desktop windows and a second poll timer. */
+   [[NSNotificationCenter defaultCenter] postNotificationName: NSApplicationWillFinishLaunchingNotification object:self];
 
    write(2,"[NSApp] finishLaunching: willFinish posted\n",43);
 	// Load the application icon if we have one
@@ -1597,9 +1684,19 @@ static int _tagAllMenus(NSMenu *menu, int tag) {
 
   _isRunning=YES;
 
+  /* Where a process stops pumping events is invisible from the outside: the
+   * WindowServer can log the aim, the queue can log the arrival, and the app
+   * can be busy repainting throughout, all while no iteration of this loop
+   * ever completes.  Two markers (entered / launched) locate that stall. */
+  { static int n = 0;
+    if(n < 1) { ++n;
+      const char *bid = getenv("RAVYN_BUNDLE_ID");
+      fprintf(stderr, "[NSAPPRUN] entered bundle=%s\n", bid ? bid : "(nil)"); } }
+
   if (!didlaunch) {
     didlaunch = YES;
     [self finishLaunching];
+    fprintf(stderr, "[NSAPPRUN] finishLaunching returned\n");
   }
 
    do {
@@ -1608,6 +1705,24 @@ static int _tagAllMenus(NSMenu *menu, int tag) {
     NSEvent           *event;
 
     event=[self nextEventMatchingMask:NSAnyEventMask untilDate:[NSDate distantFuture] inMode:NSDefaultRunLoopMode dequeue:YES];
+
+    /* A click that the WindowServer routed to this window but that the
+     * application never dispatched is invisible from both ends: the server
+     * logged the aim, the view logged nothing.  This pair of traces closes
+     * that gap -- [APPPOST] is the event entering the queue, [APPDISP] the
+     * event leaving it for a window. */
+    if(event != nil) {
+        static int nd = 0;
+        if(nd < 80) {
+            ++nd;
+            fprintf(stderr, "[APPDISP] pid=%d display=%p q=%d type=%d win=%d loc=%d,%d\n",
+                    (int)getpid(), (void *)_display,
+                    (int)[_display queueLength],
+                    (int)[event type], (int)[event windowNumber],
+                    (int)[event locationInWindow].x,
+                    (int)[event locationInWindow].y);
+        }
+    }
 
     /* NS_DURING is not used: its setjmp-based prologue never returns on this
      * platform, so it would freeze the event loop. Exceptions are unsupported

@@ -10,6 +10,27 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 #import <Foundation/NSException.h>
 #import <Foundation/NSString.h>
+#include <string.h>
+
+/* Both stubs below are called from hundreds of places; logging every call
+ * floods system.log and buries real diagnostics.  Log the first occurrence of
+ * a given selector/function per translation unit and stay silent afterwards.
+ * Each stub's implementation lives in exactly one translation unit, so this
+ * is "once per unimplemented method" in practice. */
+static inline BOOL _NSUnimplementedShouldLog(const char *key) {
+    static const char *logged[128];
+    static int loggedCount=0;
+    int i;
+
+    for (i=0;i<loggedCount;i++)
+        if (logged[i]==key || strcmp(logged[i],key)==0)
+            return NO;
+
+    if (loggedCount<128)
+        logged[loggedCount++]=key;
+
+    return YES;
+}
 
 static inline void _NSInvalidAbstractInvocation(SEL selector, id object, const char *file, int line) {
     [NSException raise:NSInvalidArgumentException
@@ -18,11 +39,15 @@ static inline void _NSInvalidAbstractInvocation(SEL selector, id object, const c
 }
 
 static inline void _NSUnimplementedMethod(SEL selector, id object, const char *file, int line) {
-    NSLog(@"-[%@ %s] unimplemented in %s at %d", [object class], sel_getName(selector), file, line);
+    const char *name=sel_getName(selector);
+
+    if (_NSUnimplementedShouldLog(name))
+        NSLog(@"-[%@ %s] unimplemented in %s at %d", [object class], name, file, line);
 }
 
 static inline void _NSUnimplementedFunction(const char *function, const char *file, int line) {
-    NSLog(@"%s() unimplemented in %s at %d", function, file, line);
+    if (_NSUnimplementedShouldLog(function))
+        NSLog(@"%s() unimplemented in %s at %d", function, file, line);
 }
 
 #define NSInvalidAbstractInvocation() \

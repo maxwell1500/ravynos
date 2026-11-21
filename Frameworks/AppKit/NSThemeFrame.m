@@ -22,6 +22,9 @@
  */
 
 #import <AppKit/NSThemeFrame.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <objc/runtime.h>
 #import <AppKit/NSWindow.h>
 #import <AppKit/NSWindow-Private.h>
 #import <AppKit/NSGraphics.h>
@@ -127,6 +130,20 @@ static O2Image *wsZoom, *wsZoomUp, *wsZoomDown;
     static BOOL inRect = NO;
 
     pointer = point;
+    {
+        static int n = 0;
+        if(n < 60) {
+            ++n;
+            fprintf(stderr, "[THEME] hitTest %d,%d bounds=%dx%d flipped=%d "
+                    "controls=%.0f..%.0f,%.0f..%.0f -> %s\n",
+                    (int)point.x, (int)point.y,
+                    (int)[self bounds].size.width, (int)[self bounds].size.height,
+                    (int)[self isFlipped],
+                    controls.origin.x, NSMaxX(controls),
+                    controls.origin.y, NSMaxY(controls),
+                    object_getClassName([super hitTest:point]));
+        }
+    }
     if(NSPointInRect(pointer, controls)) {
         if(!inRect) {
             [self setNeedsDisplay:YES]; // highlight controls if mouse has gone into them
@@ -160,11 +177,22 @@ static O2Image *wsZoom, *wsZoomUp, *wsZoomDown;
         O2ContextFillRect(_context, [self bounds]);
         return;
     }
-
     // 1. Draw outer rounded window frame & titlebar background
+    NSRect bounds = [NSWindow contentRectForFrameRect:[self bounds]
+        styleMask:[[self window] styleMask]];
+    BOOL transparentTitlebar = [window titlebarAppearsTransparent]
+        && (([window styleMask] & 0x8000) != 0);
     BOOL active = [[self window] isKeyWindow] || [[self window] isMainWindow];
     BOOL dark = NSThemeFrameDarkMode();
     float radius = NSWindowCornerRadius;
+    if(transparentTitlebar) {
+        // Full-size content: no titlebar band, fill whole frame with bg.
+        CGFloat r = 0.92f, g = 0.92f, b = 0.92f, a = 1.0f;
+        [[[self window] backgroundColor] getRed:&r green:&g blue:&b alpha:&a];
+        O2ContextSetRGBFillColor(_context, r, g, b, a);
+        buildWindowFramePath(_context, _frame, radius);
+        O2ContextFillPath(_context);
+    } else {
     O2ContextSetGrayFillColor(_context,
         dark ? (active ? 0.18f : 0.24f) : (active ? 0.86f : 0.925f), 1.0);
     buildWindowFramePath(_context, _frame, radius);
@@ -174,22 +202,17 @@ static O2Image *wsZoom, *wsZoomUp, *wsZoomDown;
     O2ContextSetLineWidth(_context, 1.0);
     buildWindowFramePath(_context, _frame, radius);
     O2ContextStrokePath(_context);
+    }
 
-    // 2. Fill content bounds with window background color
-    NSRect bounds = [NSWindow contentRectForFrameRect:[self bounds]
-        styleMask:[[self window] styleMask]];
-    CGFloat r = 0.92f, g = 0.92f, b = 0.92f, a = 1.0f;
-    [[[self window] backgroundColor] getRed:&r green:&g blue:&b alpha:&a];
-    O2ContextSetRGBFillColor(_context, r, g, b, a);
-    O2ContextFillRect(_context, bounds);
-
-    // 3. Stroke 1px horizontal separator line between titlebar and content
+    // 3. Separator (opaque titlebar only; transparent has no band)
+    if(!transparentTitlebar) {
     O2ContextSetGrayStrokeColor(_context, dark ? 0.30f : 0.70, 1.0);
     O2ContextSetLineWidth(_context, 1.0);
     O2ContextBeginPath(_context);
     O2ContextMoveToPoint(_context, 0, NSMaxY(bounds));
     O2ContextAddLineToPoint(_context, _frame.size.width, NSMaxY(bounds));
     O2ContextStrokePath(_context);
+    }
 
     // 4. Traffic light window controls
     [self _updateControlRects];
@@ -219,7 +242,8 @@ static O2Image *wsZoom, *wsZoomUp, *wsZoomDown;
             NSInsetRect(_closeButtonRect, 4.5f, 4.5f));
     }
 
-    // 5. Window title text
+    // 5. Window title text (opaque titlebar only)
+    if(!transparentTitlebar) {
     NSString *title = [[self window] title];
     if([title length] > 0) {
         NSFont *font = [NSFont boldSystemFontOfSize:13] ?: [NSFont systemFontOfSize:13];
@@ -237,6 +261,7 @@ static O2Image *wsZoom, *wsZoomUp, *wsZoomDown;
             float ty = _frame.size.height - NSWindowTitleHeight / 2.0 - titleSize.height / 2.0 + 1.0;
             [title drawAtPoint:NSMakePoint(tx, ty) withAttributes:attrs];
         }
+    }
     }
 }
 
@@ -271,6 +296,16 @@ static O2Image *wsZoom, *wsZoomUp, *wsZoomDown;
     [self _updateControlRects];
     NSPoint pos = [event locationInWindow];
 
+    fprintf(stderr, "[THEME] mouseDown pos=%d,%d click=%d h=%d close=%d..%d,%d..%d "
+            "mini=%d..%d zoom=%d..%d bounds=%d,%d %dx%d\n",
+            (int)pos.x, (int)pos.y, (int)[event clickCount],
+            (int)_frame.size.height,
+            (int)_closeButtonRect.origin.x, (int)NSMaxX(_closeButtonRect),
+            (int)_closeButtonRect.origin.y, (int)NSMaxY(_closeButtonRect),
+            (int)_miniButtonRect.origin.x, (int)NSMaxX(_miniButtonRect),
+            (int)_zoomButtonRect.origin.x, (int)NSMaxX(_zoomButtonRect),
+            (int)[self bounds].origin.x, (int)[self bounds].origin.y,
+            (int)[self bounds].size.width, (int)[self bounds].size.height);
     if(NSPointInRect(pos, _closeButtonRect))
         [[self window] performClose:self];
     else if(NSPointInRect(pos, _miniButtonRect))

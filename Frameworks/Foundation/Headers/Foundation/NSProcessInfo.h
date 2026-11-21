@@ -10,11 +10,18 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 @class NSArray, NSDictionary, NSLock;
 
+/* Values are part of the ABI: an application compiled against the Apple SDK
+ * compares -operatingSystem against NSMACHOperatingSystem == 5.  Dropping
+ * NSHPUXOperatingSystem here shifted every later value down by one and made
+ * that comparison fail for every such application. */
 enum {
     NSWindowsNTOperatingSystem = 1,
     NSWindows95OperatingSystem,
     NSSolarisOperatingSystem,
+    NSHPUXOperatingSystem,
     NSMACHOperatingSystem,
+    NSSunOSOperatingSystem,
+    NSOSF1OperatingSystem
 };
 
 @interface NSProcessInfo : NSObject {

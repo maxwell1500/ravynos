@@ -73,10 +73,11 @@ enum {
     NSURLCacheStoragePolicy cachePolicy=NSURLCacheStorageNotAllowed;
    
     if([[_request HTTPMethod] isEqualToString:@"GET"]){
-     if([[url scheme] isEqualToString:@"http"])
-      cachePolicy=NSURLCacheStorageAllowed;
-     else if([[url scheme] isEqualToString:@"https"])
-      cachePolicy=NSURLCacheStorageAllowedInMemoryOnly;
+     /* Memory-only: the disk-cache store path copies a CF UUID string and
+        SIGBUSes on it (objc_release/objc messaging on read-only CF
+        instances).  Keep caching but keep it in memory until CF-object
+        release handling is fixed. */
+     cachePolicy=NSURLCacheStorageAllowedInMemoryOnly;
 }
 
     [_client URLProtocol:self didReceiveResponse:response cacheStoragePolicy:cachePolicy];
@@ -484,6 +485,8 @@ NSLog(@"parse error %d",__LINE__);
 		}
 
 -(void)startLoading {
+   [_inputStream open];
+   [_outputStream open];
    [self loadOutputQueue];
 		}
 
@@ -544,7 +547,7 @@ NSLog(@"parse error %d",__LINE__);
     }
 }
 
--(void)outputStream:(NSOutputStream *)stream handleEvent:(NSStreamEvent)streamEvent 
+-(void)outputStream:(NSOutputStream *)stream handleEvent:(NSStreamEvent)streamEvent
 {
 	if(streamEvent==NSStreamEventHasSpaceAvailable) {
      if([_outputQueue count]==0){
@@ -643,8 +646,6 @@ NSLog(@"parse error %d",__LINE__);
     
 	[_inputStream retain];
 	[_outputStream retain];
-	[_inputStream open];
-	[_outputStream open];
 
    _data=[NSMutableData new];
    _range=NSMakeRange(0,0);
@@ -671,14 +672,16 @@ NSLog(@"parse error %d",__LINE__);
 }
 
 -(void)scheduleInRunLoop:(NSRunLoop *)runLoop forMode:(NSString *)mode {
+   if (![_modes containsObject:mode]) [_modes addObject:mode];
    [_inputStream scheduleInRunLoop:runLoop forMode:mode];
    [_outputStream scheduleInRunLoop:runLoop forMode:mode];
-   [[NSRunLoop currentRunLoop] addTimer:_timeout forMode:mode];
+   [runLoop addTimer:_timeout forMode:mode];
 }
 
 -(void)unscheduleFromRunLoop:(NSRunLoop *)runLoop forMode:(NSString *)mode {
    [_inputStream removeFromRunLoop:runLoop forMode:mode];
    [_outputStream removeFromRunLoop:runLoop forMode:mode];
+   [_modes removeObject:mode];
 //  FIXME: no official way to remove timer
 }
 

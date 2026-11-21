@@ -18,6 +18,8 @@ FOUNDATION_EXPORT NSString *const NSDecimalNumberExactnessException;
 @end
 
 @interface NSDecimalNumber : NSNumber {
+    /* Internal representation; -decimalValue converts to the ABI type. */
+    NSDecimalValue _decimal;
 }
 
 - initWithDecimal:(NSDecimal)decimal;

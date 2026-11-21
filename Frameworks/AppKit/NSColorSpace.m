@@ -7,6 +7,8 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. */
 
 #import <AppKit/NSColorSpace.h>
+/* NSCalibratedWhiteColorSpace / NSCalibratedRGBColorSpace live in NSGraphics.h. */
+#import <AppKit/NSGraphics.h>
 
 @implementation NSColorSpace
 
@@ -18,6 +20,25 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
    
    return result;
 }
+
+ +(NSColorSpace *)sRGBColorSpace {
+    return [self deviceRGBColorSpace];
+ }
+
+ +(NSColorSpace *)genericRGBColorSpace {
+    return [self deviceRGBColorSpace];
+ }
+
+ +(NSColorSpace *)deviceGrayColorSpace {
+    CGColorSpaceRef gray=CGColorSpaceCreateDeviceGray();
+    NSColorSpace   *result=[[[self alloc] initWithCGColorSpace:gray] autorelease];
+    CGColorSpaceRelease(gray);
+    return result;
+ }
+
+ +(NSColorSpace *)genericGrayColorSpace {
+    return [self deviceGrayColorSpace];
+ }
 
 -initWithCGColorSpace:(CGColorSpaceRef)cgColorSpace {
    _cgColorSpace=CGColorSpaceRetain(cgColorSpace);
@@ -32,5 +53,11 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 -(CGColorSpaceRef)CGColorSpace {
    return _cgColorSpace;
 }
+
+ -(NSString *)colorSpaceName {
+    if(_cgColorSpace != NULL && CGColorSpaceGetModel(_cgColorSpace) == kCGColorSpaceModelMonochrome)
+       return NSCalibratedWhiteColorSpace;
+    return NSCalibratedRGBColorSpace;
+ }
 
 @end

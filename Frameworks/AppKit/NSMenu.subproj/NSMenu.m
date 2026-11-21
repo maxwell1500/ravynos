@@ -10,8 +10,10 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 #import <AppKit/NSMenuItem.h>
 #import <AppKit/NSApplication.h>
 #import <AppKit/NSWindow.h>
+#import <AppKit/NSPopUpWindow.h>
 #import <AppKit/NSEvent.h>
 #import <AppKit/NSRaise.h>
+#include <stdio.h>
 #import <Foundation/NSKeyedArchiver.h>
 
 @implementation NSMenu
@@ -25,29 +27,62 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 }
 
 +(void)popUpContextMenu:(NSMenu *)menu withEvent:(NSEvent *)event forView:(NSView *)view {
-#if 0
+   if(menu == nil || event == nil)
+      return;
+
    [menu update];
-   if([[menu itemArray] count]>0){
-    NSPoint       point=[event locationInWindow];
-    NSWindow     *window=[event window];
-    NSMenuWindow *menuWindow=[[NSMenuWindow alloc] initWithMenu:menu];
-    NSMenuView   *menuView=[menuWindow menuView];
-    NSMenuItem   *item;
-    
-    [menuWindow setReleasedWhenClosed:YES];
-    [menuWindow setFrameTopLeftPoint:[window convertBaseToScreen:point]];
-    [menuWindow orderFront:nil];
+   if([[menu itemArray] count] == 0)
+      return;
 
-    item=[menuView trackForEvent:event];
- 
-    [menuWindow close];
+   NSWindow *hostWindow = [event window] != nil ? [event window] : [view window];
+   NSPoint location = [event locationInWindow];
+   NSPoint screenPoint = hostWindow != nil
+       ? [hostWindow convertBaseToScreen:location] : location;
 
-    if(item!=nil)
-     [NSApp sendAction:[item action] to:[item target] from:item];
+   /* NSPopUpWindow already knows how to host a menu view and track the mouse
+    * and keyboard until the user picks or dismisses; tracking re-sizes the
+    * frame so the menu's top-left lands on the click point, which is where a
+    * context menu belongs.  Gecko calls this on every right click, so an
+    * unimplemented stub here killed the browser. */
+   NSPopUpWindow *popup = [[NSPopUpWindow alloc] initWithFrame:NSMakeRect(screenPoint.x, screenPoint.y, 10, 10)];
+   [popup setMenu:menu];
+   [popup setPullsDown:NO];
+
+   int index = [popup runTrackingWithEvent:event];
+
+   [popup close]; /* releaseWhenClosed */
+
+   if(index >= 0 && index < (int)[[menu itemArray] count]) {
+      NSMenuItem *item = [[menu itemArray] objectAtIndex:index];
+      [NSApp sendAction:[item action] to:[item target] from:item];
    }
-#else
-   NSUnimplementedMethod();
-#endif
+}
+
+-(NSInteger)popUpMenuPositioningItem:(NSMenuItem *)item atLocation:(NSPoint)location inView:(NSView *)view {
+   /* Gecko's context-menu path. Route through the shared NSPopUpWindow driver:
+    * synthesize the event the tracking loop expects and run the same path as
+    * +popUpContextMenu:withEvent:forView:. Returns the selected index, or -1. */
+   if(view == nil || [[self itemArray] count] == 0)
+      return -1;
+   [self update];
+   NSWindow *hostWindow = [view window];
+   NSInteger index = (item != nil) ? [[self itemArray] indexOfObject:item] : 0;
+   if(index == NSNotFound) index = 0;
+   NSEvent *event = [NSEvent mouseEventWithType:NSRightMouseDown
+       location:location modifierFlags:0 timestamp:0
+       windowNumber:hostWindow != nil ? [hostWindow windowNumber] : 0
+       context:nil eventNumber:0 clickCount:1 pressure:1.0];
+   NSPopUpWindow *popup = [[NSPopUpWindow alloc] initWithFrame:NSMakeRect(location.x, location.y, 10, 10)];
+   [popup setMenu:self];
+   [popup setPullsDown:NO];
+   if(index >= 0) [popup selectItemAtIndex:index];
+   int picked = [popup runTrackingWithEvent:event];
+   [popup close];
+   if(picked >= 0 && picked < (int)[[self itemArray] count]) {
+      NSMenuItem *chosen = [[self itemArray] objectAtIndex:picked];
+      [NSApp sendAction:[chosen action] to:[chosen target] from:chosen];
+   }
+   return picked;
 }
 
 -(void)encodeWithCoder:(NSCoder *)coder {
@@ -388,6 +423,14 @@ BOOL itemIsEnabled(NSMenuItem *item) {
     int       i,count=[_itemArray count];
     NSString *characters=[event charactersIgnoringModifiers];
     unsigned  modifiers=[event modifierFlags];
+    /* Bounded trace for the Command-key path: "Command-N opens no window" has
+     * three possible causes -- the event never arrives with the Command flag,
+     * the key does not match an item, or the item is disabled -- and one line
+     * per Command event tells them apart.  Ten lines per process, off unless
+     * the mask is set, so it cannot flood the console. */
+    static int sKeyEquivHits = 0;
+    int        traceEvent = (modifiers & (NSCommandKeyMask|NSAlternateKeyMask)) != 0
+                            && sKeyEquivHits < 10;
     
     if (_autoenablesItems)
         [self update];
@@ -397,6 +440,11 @@ BOOL itemIsEnabled(NSMenuItem *item) {
         unsigned    itemModifiers=[item keyEquivalentModifierMask]&(NSCommandKeyMask|NSAlternateKeyMask);
         NSString *key=[item keyEquivalent];
         
+        if(traceEvent)
+            fprintf(stderr, "[NSEQ] chars=\"%s\" mods=0x%x item=\"%s\" itemMods=0x%x enabled=%d\n",
+                    characters ? [characters UTF8String] : "(nil)", modifiers,
+                    key ? [key UTF8String] : "(nil)", itemModifiers,
+                    (int)itemIsEnabled(item));
         if((modifiers&(NSCommandKeyMask|NSAlternateKeyMask))==itemModifiers){
             
             if([key isEqualToString:characters]){
@@ -412,7 +460,9 @@ BOOL itemIsEnabled(NSMenuItem *item) {
         if([[item submenu] performKeyEquivalent:event])
             return YES;
     }
-    
+    if(traceEvent)
+        sKeyEquivHits++;
+
     return NO;
 }
 
@@ -464,6 +514,11 @@ BOOL itemIsEnabled(NSMenuItem *item) {
 
 -(void)setDBusItemID:(int)itemID {
     _DBusItemID=itemID;
+}
+
+-(void)populateMenu:(NSMenu *)menu withServiceEntries:(BOOL)services forDisplay:(BOOL)display {
+   /* Gecko services-menu probe: no Services registry yet; resolve to no-op. */
+   (void)menu; (void)services; (void)display;
 }
 
 

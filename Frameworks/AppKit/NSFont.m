@@ -196,7 +196,8 @@ static NSLock *_cacheLock=nil;
         NSString *name=(NSString *)CTFontCopyFullName(ctFont);
         size=CTFontGetSize(ctFont);
         
-        result=[NSFont fontWithName:name size:size];
+        if (name != nil)
+            result=[NSFont fontWithName:name size:size];
         
         [ctFont release];
         [name release];

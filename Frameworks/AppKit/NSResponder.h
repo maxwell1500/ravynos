@@ -60,6 +60,9 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 - (void)rightMouseUp:(NSEvent *)event;
 - (void)rightMouseDown:(NSEvent *)event;
 - (void)rightMouseDragged:(NSEvent *)event;
+- (void)otherMouseDown:(NSEvent *)event;
+- (void)otherMouseUp:(NSEvent *)event;
+- (void)otherMouseDragged:(NSEvent *)event;
 
 @end
 

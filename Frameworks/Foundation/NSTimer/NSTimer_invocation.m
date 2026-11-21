@@ -37,6 +37,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 
 -(void)invalidate {
+   if (!_isValid && _invocation == nil) return;
    _isValid=NO;
    [_invocation release];
    _invocation=nil;

@@ -1,0 +1,5 @@
+framework module Carbon {
+    umbrella header "Carbon.h"
+    export *
+    module * { export * }
+}

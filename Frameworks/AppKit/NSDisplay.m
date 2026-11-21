@@ -20,6 +20,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE. */
 
 #import <AppKit/NSDisplay.h>
+#import <CoreGraphics/CGEvent.h>
 #import "WindowServer/rpc.h"
 
 extern kern_return_t _windowServerRPC(void *data, size_t len, void *replyBuf, int *replyLen);
@@ -28,6 +29,7 @@ extern kern_return_t _windowServerRPC(void *data, size_t len, void *replyBuf, in
 #import <AppKit/NSPasteboard.h>
 #import <AppKit/NSDraggingManager.h>
 #include <unistd.h>
+#include <pthread.h>
 #include <stdio.h>
 #import <AppKit/NSRaise.h>
 #import <AppKit/NSColorList.h>
@@ -52,7 +54,21 @@ extern kern_return_t _windowServerRPC(void *data, size_t len, void *replyBuf, in
 }
 
 +(NSDisplay *)currentDisplay {
-   return NSThreadSharedInstance(@"NSDisplay");
+   /* There is one display for the process, not one per thread.  This used to
+    * return NSThreadSharedInstance, which is keyed by the *current* thread, so
+    * the mach service thread that calls -postEvent: and the main thread that
+    * drains the queue could hold two different NSDisplay objects, each with its
+    * own _eventQueue.  Events then accumulated in a queue nothing drained:
+    * measured as [NSPOST] q=1..9 with no matching [APPDISP], and as a menu bar
+    * that posted every click and dispatched none. */
+   static NSDisplay *shared = nil;
+   if(shared == nil) {
+      @synchronized([NSDisplay class]) {
+         if(shared == nil)
+            shared = [[NSDisplay alloc] init];
+      }
+   }
+   return shared;
 }
 
 -init {
@@ -184,38 +200,12 @@ extern kern_return_t _windowServerRPC(void *data, size_t len, void *replyBuf, in
    /* Drawn by the WindowServer from its pointer position. */
 }
 
--(NSEvent *)nextEventMatchingMask:(unsigned)mask untilDate:(NSDate *)untilDate inMode:(NSString *)mode dequeue:(BOOL)dequeue {
-    NSEvent *result=nil;
-    if([_eventQueue count])
-        untilDate=[NSDate date];
-    else {
-        /* The pipe wake-up (NSSelectInputSource -> NSRunLoop) does not reliably
-         * return on ravynOS, and blocking forever here starves every client of
-         * key, mouse and redraw events.  Bound the wait instead: the mach service
-         * thread posts events and pokes us through _machEventPipe, so a short
-         * poll keeps the queue live without depending on that select path. */
-        NSDate *bounded=[NSDate dateWithTimeIntervalSinceNow:0.05];
-        untilDate=[untilDate earlierDate:bounded];
-    }
-    [[NSRunLoop currentRunLoop] limitDateForMode:mode];
-    int pipeFd = [NSApp machEventPipeReadFd];
-    if(pipeFd >= 0) {
-        struct pollfd pfd;
-        pfd.fd = pipeFd;
-        pfd.events = POLLIN;
-        NSTimeInterval waitFor = [untilDate timeIntervalSinceNow];
-        if(waitFor < 0)
-            waitFor = 0;
-        if(waitFor > 0.25)
-            waitFor = 0.25;
-        poll(&pfd, 1, (int)(waitFor * 1000));
-    }
-    [NSApp _drainPipe]; // if there are events, read one at a time
-    [[NSRunLoop currentRunLoop] removeInputSource:[NSApp inputSource] forMode:mode];
+-(NSEvent *)_dequeueEventMatchingMask:(unsigned)mask dequeue:(BOOL)dequeue {
+   NSEvent *result=nil;
 
-    @synchronized(_eventQueue) {
+   @synchronized(_eventQueue) {
     while(result==nil && [_eventQueue count]>0) {
-        NSEvent *check=[_eventQueue objectAtIndex:0];    
+        NSEvent *check=[_eventQueue objectAtIndex:0];
         NSEventType headType=[check type];
         if((headType==NSMouseMoved || headType==NSLeftMouseDragged || headType==NSRightMouseDragged) && [_eventQueue count]>1){
             pointerPos=[check locationInWindow];
@@ -223,7 +213,12 @@ extern kern_return_t _windowServerRPC(void *data, size_t len, void *replyBuf, in
             continue;
         }
     if(!(NSEventMaskFromType([check type])&mask)) {
+         /* Menu tracking calls with a narrow mask; parking (not dropping)
+          * non-matching events preserves button-up/flags/key-up/wheel. */
          [_eventQueue removeObjectAtIndex:0];
+         [_eventQueue addObject:check];
+         if([_eventQueue count] > 1024) [_eventQueue removeObjectAtIndex:0];
+         continue;
     }
     else {
          result=[[check retain] autorelease];
@@ -237,11 +232,57 @@ extern kern_return_t _windowServerRPC(void *data, size_t len, void *replyBuf, in
         }
        }
    }
+   }
+
+   return result;
+}
+
+-(NSEvent *)nextEventMatchingMask:(unsigned)mask untilDate:(NSDate *)untilDate inMode:(NSString *)mode dequeue:(BOOL)dequeue {
+    NSEvent *result;
+
+    /* Look in the queue first.  This used to happen after the wait below, and
+     * in between sat -[NSRunLoop removeInputSource:forMode:] and
+     * -limitDateForMode:, both of which mutate the run loop.  Measured on a
+     * boot where the menu bar posted every click and dispatched none: the loop
+     * reported "enter q=9" with the events already queued, then never took a
+     * single event for the rest of the run -- it was stuck in the run-loop
+     * calls with work waiting.  Nothing needs the run loop to hand back an
+     * event that is already in the queue. */
+    result=[self _dequeueEventMatchingMask:mask dequeue:dequeue];
+    if(result!=nil)
+        return result;
+
+    if(untilDate==nil || [untilDate timeIntervalSinceNow] > 0) {
+        /* The pipe wake-up (NSSelectInputSource -> NSRunLoop) does not reliably
+         * return on ravynOS, and blocking forever here starves every client of
+         * key, mouse and redraw events.  Bound the wait instead: the mach service
+         * thread posts events and pokes us through _machEventPipe, so a short
+         * poll keeps the queue live without depending on that select path. */
+        NSTimeInterval waitFor = 0.05;
+        if(untilDate!=nil)
+            waitFor = [untilDate timeIntervalSinceNow];
+        if(waitFor > 0.25)
+            waitFor = 0.25;
+        if(waitFor > 0) {
+            int pipeFd = [NSApp machEventPipeReadFd];
+            if(pipeFd >= 0) {
+                struct pollfd pfd;
+                pfd.fd = pipeFd;
+                pfd.events = POLLIN;
+                poll(&pfd, 1, (int)(waitFor * 1000));
+            }
+        }
+        [NSApp _drainPipe]; // if there are events, read one at a time
+        result=[self _dequeueEventMatchingMask:mask dequeue:dequeue];
+        if(result!=nil)
+            return result;
     }
-    if(result==nil){
-     result=[[[NSEvent alloc] initWithType:NSAppKitSystem location:NSMakePoint(0,0) modifierFlags:0 window:nil] autorelease];
-    }
-   
+
+    /* Nothing waiting: give the loop a turn so timers and observers still run,
+     * then return the system event as before. */
+    [[NSRunLoop currentRunLoop] limitDateForMode:mode];
+
+    result=[[[NSEvent alloc] initWithType:NSAppKitSystem location:NSMakePoint(0,0) modifierFlags:0 window:nil] autorelease];
     return result;
 }
 
@@ -263,6 +304,12 @@ extern kern_return_t _windowServerRPC(void *data, size_t len, void *replyBuf, in
    }
 }
 
+-(NSUInteger)queueLength {
+   NSUInteger n;
+   @synchronized(_eventQueue) { n = [_eventQueue count]; }
+   return n;
+}
+
 -(void)postEvent:(NSEvent *)event atStart:(BOOL)atStart {
    /* Called from the NSApplication mach service thread while the main thread
     * drains the same queue in -nextEventMatchingMask:.  NSMutableArray is not
@@ -273,6 +320,11 @@ extern kern_return_t _windowServerRPC(void *data, size_t len, void *replyBuf, in
      [_eventQueue insertObject:event atIndex:0];
     else
      [_eventQueue addObject:event];
+    { static int n = 0;
+      if(n < 40) { ++n;
+        fprintf(stderr, "[NSPOST] pid=%d display=%p type=%d win=%d q=%d\n",
+                (int)getpid(), (void *)self, (int)[event type],
+                (int)[event windowNumber], (int)[_eventQueue count]); } }
    }
 }
 
@@ -420,9 +472,18 @@ extern kern_return_t _windowServerRPC(void *data, size_t len, void *replyBuf, in
     return pointerPos;
 }
 
+/* Live modifier state of the last event delivered to this app.  NSEvent's
+ * +modifierFlags and drag-time code read this without an event in hand, so a
+ * stub returning 0 made every modifier look released outside -keyDown:. */
+static NSUInteger sCurrentModifierFlags = 0;
+
 -(NSUInteger)currentModifierFlags {
-   NSUnimplementedMethod();
-   return 0;
+   return sCurrentModifierFlags;
+}
+
+-(void)setCurrentModifierFlags:(NSUInteger)flags {
+   sCurrentModifierFlags = flags;
+   RavynCGEventSourceSetCurrentFlags((CGEventFlags)flags);
 }
 
 @end

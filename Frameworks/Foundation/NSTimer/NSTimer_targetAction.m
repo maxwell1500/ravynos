@@ -51,6 +51,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 
 -(void)invalidate {
+   if (!_isValid && _target == nil && _userInfo == nil) return;
    _isValid=NO;
    [_userInfo release];
    _userInfo=nil;

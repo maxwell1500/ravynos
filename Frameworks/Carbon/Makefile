@@ -8,7 +8,8 @@ FMWK_VERSION = A
 SRCS = Carbon.c
 
 CFLAGS = -I${.CURDIR} -I${RAVYN_SDKROOT}/usr/include -I${ROOT_SOURCE_DIR}/Frameworks
-LDFLAGS = -lSystem
+LDFLAGS = -F${OBJTOP}/Frameworks/CoreGraphics -framework CoreGraphics \
+	  -Wl,-rpath,/System/Library/Frameworks/CoreGraphics.framework/Versions/A -lSystem
 
 # The in-repo SDK is an install product, not a source tree. Copy the bundle
 # into every SDK that is configured; the empty-string guard keeps a manual

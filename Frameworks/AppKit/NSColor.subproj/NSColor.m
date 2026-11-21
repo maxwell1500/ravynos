@@ -348,6 +348,94 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
    return [NSColor colorWithSRGBRed:0.686 green:0.322 blue:0.871 alpha:1.0];
 }
 
+ +(NSColor *)labelColor {
+    return [NSColor blackColor];
+ }
+
+ +(NSColor *)secondaryLabelColor {
+    return [NSColor colorWithCalibratedWhite:0.0 alpha:0.60];
+ }
+
+ +(NSColor *)tertiaryLabelColor {
+    return [NSColor colorWithCalibratedWhite:0.0 alpha:0.35];
+ }
+
+ +(NSColor *)quaternaryLabelColor {
+    return [NSColor colorWithCalibratedWhite:0.0 alpha:0.20];
+ }
+
+ +(NSColor *)placeholderTextColor {
+    return [NSColor colorWithCalibratedWhite:0.0 alpha:0.35];
+ }
+
+ +(NSColor *)separatorColor {
+    return [NSColor colorWithCalibratedWhite:0.0 alpha:0.12];
+ }
+
+ +(NSColor *)selectedContentBackgroundColor {
+    return [NSColor colorWithSRGBRed:0.0 green:0.478 blue:1.0 alpha:1.0];
+ }
+
+ +(NSColor *)unemphasizedSelectedContentBackgroundColor {
+    return [NSColor colorWithCalibratedWhite:0.86 alpha:1.0];
+ }
+
+ +(NSColor *)unemphasizedSelectedTextBackgroundColor {
+    return [NSColor colorWithCalibratedWhite:0.86 alpha:1.0];
+ }
+
+ +(NSColor *)unemphasizedSelectedTextColor {
+    return [NSColor blackColor];
+ }
+
+ +(NSColor *)underPageBackgroundColor {
+    return [NSColor colorWithCalibratedWhite:0.92 alpha:1.0];
+ }
+
+ +(NSColor *)findHighlightColor {
+    return [NSColor colorWithSRGBRed:1.0 green:0.95 blue:0.0 alpha:1.0];
+ }
+
+ +(NSColor *)systemBlueColor {
+    return [NSColor colorWithSRGBRed:0.0 green:0.478 blue:1.0 alpha:1.0];
+ }
+
+ +(NSColor *)systemGrayColor {
+    return [NSColor colorWithSRGBRed:0.557 green:0.557 blue:0.576 alpha:1.0];
+ }
+
+ +(NSColor *)systemRedColor {
+    return [NSColor colorWithSRGBRed:1.0 green:0.231 blue:0.188 alpha:1.0];
+ }
+
+ +(NSColor *)systemGreenColor {
+    return [NSColor colorWithSRGBRed:0.204 green:0.780 blue:0.349 alpha:1.0];
+ }
+
+ +(NSColor *)systemYellowColor {
+    return [NSColor colorWithSRGBRed:1.0 green:0.800 blue:0.0 alpha:1.0];
+ }
+
+ +(NSColor *)systemOrangeColor {
+    return [NSColor colorWithSRGBRed:1.0 green:0.584 blue:0.0 alpha:1.0];
+ }
+
+ +(NSColor *)systemPinkColor {
+    return [NSColor colorWithSRGBRed:1.0 green:0.176 blue:0.333 alpha:1.0];
+ }
+
+ +(NSColor *)systemTealColor {
+    return [NSColor colorWithSRGBRed:0.353 green:0.784 blue:0.980 alpha:1.0];
+ }
+
+ +(NSColor *)systemIndigoColor {
+    return [NSColor colorWithSRGBRed:0.345 green:0.337 blue:0.839 alpha:1.0];
+ }
+
+ +(NSColor *)systemBrownColor {
+    return [NSColor colorWithSRGBRed:0.635 green:0.518 blue:0.369 alpha:1.0];
+ }
+
 +(NSColor *)windowBackgroundColor {
    return [NSColor colorWithCatalogName:@"System" colorName:@"windowBackgroundColor"];
 }
@@ -690,6 +778,13 @@ static void releasePatternInfo(void *info){
    //NSLog(@"Warning, ignoring differences between color space %@ and %@", colorSpace, [self colorSpaceName]);
    return self;
 }
+
+ -(NSColor *)colorUsingColorSpace:(NSColorSpace *)space {
+    NSString *name = [space colorSpaceName];
+    if(name == nil)
+       name = NSCalibratedRGBColorSpace;
+    return [self colorUsingColorSpaceName:name device:nil];
+ }
 
 -(NSColor *)blendedColorWithFraction:(CGFloat)fraction ofColor:(NSColor *)color {
    NSColor *primary=[color colorUsingColorSpaceName:NSCalibratedRGBColorSpace];

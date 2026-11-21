@@ -129,6 +129,11 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
    return _title;
 }
 
+-(NSString *)menuItemTitle {
+   /* Gecko queries this on context-menu items; same as title. */
+   return _title;
+}
+
 -(NSAttributedString *)attributedTitle {
    return _atitle;
 }

@@ -18,6 +18,8 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 #endif
 #import <objc/runtime.h>
 #include <unistd.h>
+#include <sys/types.h>
+#include <sys/sysctl.h>
 #import "NSDarwinString.h"
 #import "NSString_cString.h"
 
@@ -52,28 +54,39 @@ const char * const *NSProcessInfoArgv=NULL;
 }
 
 -(NSUInteger)processorCount {
-   NSUnimplementedMethod();
-   return 0;
+   long count = sysconf(_SC_NPROCESSORS_CONF);
+
+   return count > 0 ? (NSUInteger)count : 1;
 }
 
 -(NSUInteger)activeProcessorCount {
-   NSUnimplementedMethod();
-   return 0;
+   long count = sysconf(_SC_NPROCESSORS_ONLN);
+
+   return count > 0 ? (NSUInteger)count : 1;
 }
 
 -(uint64_t)physicalMemory {
-   NSUnimplementedMethod();
-   return 0;
+   uint64_t memory = 0;
+   size_t   size = sizeof(memory);
+
+   if (sysctlbyname("hw.physmem", &memory, &size, NULL, 0) != 0 &&
+       sysctlbyname("hw.memsize", &memory, &size, NULL, 0) != 0) {
+       long pages = sysconf(_SC_PHYS_PAGES);
+       long pageSize = sysconf(_SC_PAGE_SIZE);
+
+       if (pages > 0 && pageSize > 0)
+           memory = (uint64_t)pages * (uint64_t)pageSize;
+   }
+
+   return memory;
 }
 
 -(NSUInteger)operatingSystem {
-   NSUnimplementedMethod();
-   return 0;
+   return NSMACHOperatingSystem;
 }
 
 -(NSString *)operatingSystemName {
-   NSUnimplementedMethod();
-   return 0;
+   return @"NSMACHOperatingSystem";
 }
 
 /* The ABI target is macOS 10.13.6 (Firefox ESR 115's minimum).  The

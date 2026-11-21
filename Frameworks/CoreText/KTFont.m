@@ -2,12 +2,16 @@
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
 
-The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. */
 #import "KTFont.h"
 #import <Onyx2D/O2Exceptions.h>
 #import <Foundation/NSArray.h>
+#import <Onyx2D/O2Font_freetype.h>
+#import <CoreGraphics/CoreGraphics.h>
+#include <stdlib.h>
+#include <stdio.h>
 
 @implementation KTFont
 
@@ -30,6 +34,9 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 -(CFStringRef)copyName {
    return CGFontCopyFullName(_font);
+}
+-(CFStringRef)copyFamilyName {
+   return CGFontCopyFamilyName(_font);
 }
 -(CGFontRef)graphicsFont {
    return _font;
@@ -113,7 +120,8 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 }
 
 -(void)getGlyphs:(CGGlyph *)glyphs forCharacters:(const unichar *)characters length:(unsigned)length {
-   if (_font != NULL && [(id)_font respondsToSelector:@selector(getGlyphsForCodePoints:::)]) {
+   BOOL rp = (_font != NULL) && [(id)_font respondsToSelector:@selector(getGlyphsForCodePoints:::)];
+   if (rp) {
     [(id)_font getGlyphsForCodePoints:(uint16_t *)characters :glyphs :(int)length];
     return;
    }
@@ -139,10 +147,98 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
    }
 }
 
--(CGPathRef)createPathForGlyph:(CGGlyph)glyph transform:(CGAffineTransform *)xform {
-   (void)glyph;
-   (void)xform;
+CGPathRef
+ravyn_glyph_path(id fontref, int upem, double size, CGGlyph glyph)
+{
+#ifdef FREETYPE_PRESENT
+   FT_Face face = O2FontFreeTypeFace((O2Font_freetype *)fontref);
+   if (face == NULL || upem <= 0)
+      return NULL;
+   /* Deterministic point space: set the size before every load.  A face
+    * someone else sized returns 26.6 fixed-point pixels, a fresh face
+    * returns font units — derive nothing from the previous state. */
+   if (size <= 0)
+      size = (double)upem;
+   if (FT_Set_Char_Size(face, 0, (FT_F26Dot6)(size * 64.0), 72, 72) != 0)
+      return NULL;
+   if (FT_Load_Glyph(face, (FT_UInt)glyph, FT_LOAD_DEFAULT) != 0)
+      return NULL;
+   FT_Outline *outline = &face->glyph->outline;
+   (void)face; (void)size; (void)upem;
+   if (outline->n_points == 0 || outline->n_contours <= 0)
+      return NULL;
+   /* Points are 26.6 fixed-point pixels, y-up, baseline at origin —
+    * the space CTFontCreatePathForGlyph returns on macOS. */
+   const CGFloat scale = 1.0 / 64.0;
+   CGMutablePathRef path = CGPathCreateMutable();
+   for (int c = 0; c < outline->n_contours; c++) {
+      int end = outline->contours[c];
+      int first = (c == 0) ? 0 : outline->contours[c - 1] + 1;
+      if (end < first)
+         continue;
+      int start = first;
+      BOOL moved = NO;
+      CGFloat curx = outline->points[first].x * scale;
+      CGFloat cury = outline->points[first].y * scale;
+      while ((outline->tags[start] & FT_CURVE_TAG_ON) == 0 && start + 1 <= end) {
+         if (outline->tags[start + 1] & FT_CURVE_TAG_ON) {
+            CGPathMoveToPoint(path, NULL,
+               outline->points[start].x * scale, outline->points[start].y * scale);
+            start++;
+            moved = YES;
+            curx = outline->points[start].x * scale;
+            cury = outline->points[start].y * scale;
+            break;
+         }
+         CGPathMoveToPoint(path, NULL,
+            (outline->points[start].x + outline->points[start + 1].x) * 0.5 * scale,
+            (outline->points[start].y + outline->points[start + 1].y) * 0.5 * scale);
+         start += 2;
+         moved = YES;
+         curx = outline->points[start - 1].x * scale;
+         cury = outline->points[start - 1].y * scale;
+         break;
+      }
+      if (!moved) {
+         CGPathMoveToPoint(path, NULL, curx, cury);
+      }
+      for (int p = first + 1; p <= end; p++) {
+         CGFloat ex, ey;
+         if (outline->tags[p] & FT_CURVE_TAG_ON) {
+            CGPathAddLineToPoint(path, NULL,
+               outline->points[p].x * scale, outline->points[p].y * scale);
+            curx = outline->points[p].x * scale;
+            cury = outline->points[p].y * scale;
+            continue;
+         }
+         /* Quadratic with control points[p]: elevate to cubic. */
+         CGFloat ctrlx = outline->points[p].x * scale;
+         CGFloat ctrly = outline->points[p].y * scale;
+         if (p + 1 <= end && (outline->tags[p + 1] & FT_CURVE_TAG_ON)) {
+            ex = outline->points[p + 1].x * scale;
+            ey = outline->points[p + 1].y * scale;
+            p++;
+         } else {
+            int wrap = (p + 1 > end) ? first : p + 1;
+            ex = (outline->points[p].x + outline->points[wrap].x) * 0.5 * scale;
+            ey = (outline->points[p].y + outline->points[wrap].y) * 0.5 * scale;
+         }
+         CGPathAddCurveToPoint(path, NULL,
+            curx + (2.0 / 3.0) * (ctrlx - curx), cury + (2.0 / 3.0) * (ctrly - cury),
+            ex + (2.0 / 3.0) * (ctrlx - ex), ey + (2.0 / 3.0) * (ctrly - ey),
+            ex, ey);
+         curx = ex;
+         cury = ey;
+      }
+   }
+   return (CGPathRef)path;
+#else
    return NULL;
+#endif
+}
+
+-(CGPathRef)createPathForGlyph:(CGGlyph)glyph transform:(CGAffineTransform *)xform {
+   return ravyn_glyph_path(_font, (int)_unitsPerEm, (double)_size, glyph);
 }
 
 @end

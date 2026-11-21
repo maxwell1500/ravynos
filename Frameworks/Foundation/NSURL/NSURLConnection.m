@@ -50,7 +50,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
     return nil;
    }
 
-   NSString *mode=@"NSURLConnectionRequestMode";
+   NSString *mode=(NSString *)NSDefaultRunLoopMode;
    
     [connection scheduleInRunLoop:[NSRunLoop currentRunLoop] forMode:mode];
 
@@ -176,7 +176,6 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 }
 
 -(void)URLProtocol:(NSURLProtocol *)urlProtocol didLoadData:(NSData *)data {
-
 #if DEBUG
     NSString *str = [[[NSString alloc] initWithData: data encoding: NSUTF8StringEncoding] autorelease];
 	NSLog(@"didLoadData: %@", str);

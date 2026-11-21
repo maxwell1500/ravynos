@@ -124,6 +124,7 @@ APPKIT_EXPORT NSString *const NSViewFocusDidChangeNotification;
     NSDictionary *_animations;
 
     CALayerContext *_layerContext;
+    NSTextInputContext *_inputContext;
     id __remove;
 }
 

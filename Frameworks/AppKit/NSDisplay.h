@@ -61,6 +61,7 @@ SOFTWARE. */
 - (void)discardEventsMatchingMask:(unsigned)mask beforeEvent:(NSEvent *)event;
 
 - (void)postEvent:(NSEvent *)event atStart:(BOOL)atStart;
+- (NSUInteger)queueLength;
 
 - (BOOL)containsAndRemovePeriodicEvents;
 
@@ -83,5 +84,6 @@ SOFTWARE. */
 
 - (NSPoint)mouseLocation;
 - (NSUInteger)currentModifierFlags;
+- (void)setCurrentModifierFlags:(NSUInteger)flags;
 
 @end

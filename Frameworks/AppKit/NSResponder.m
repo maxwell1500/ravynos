@@ -15,6 +15,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 #import <Foundation/NSKeyedArchiver.h>
 #import <AppKit/NSGraphics.h>
 #import <AppKit/NSRaise.h>
+#import "NSTextView.subproj/NSTextInputClient.h"
 
 @implementation NSResponder
 
@@ -88,6 +89,18 @@ static NSMapTable *sUserActivityByResponder = NULL;
     }
     else
         [_nextResponder doCommandBySelector:selector];
+}
+
+/* Default text insertion.  A responder that adopts NSTextInputClient (Gecko's
+ * content view, NSTextView, field editors) gets the string through the modern
+ * entry point; otherwise hand it down the chain.  Before this existed,
+ * -interpretKeyEvents: found no -insertText: on the receiver and dropped every
+ * printable key. */
+-(void)insertText:(id)string {
+    if([self conformsToProtocol:@protocol(NSTextInputClient)])
+        [self insertText:string replacementRange:NSMakeRange(NSNotFound,0)];
+    else if([_nextResponder respondsToSelector:@selector(insertText:)])
+        [_nextResponder insertText:string];
 }
 
 -(void)interpretKeyEvents:(NSArray *)events {
@@ -274,6 +287,18 @@ static NSMapTable *sUserActivityByResponder = NULL;
 }
 
 -(void)rightMouseDragged:(NSEvent *)event {
+   [_nextResponder performSelector:_cmd withObject:event];
+}
+
+-(void)otherMouseDown:(NSEvent *)event {
+   [_nextResponder performSelector:_cmd withObject:event];
+}
+
+-(void)otherMouseUp:(NSEvent *)event {
+   [_nextResponder performSelector:_cmd withObject:event];
+}
+
+-(void)otherMouseDragged:(NSEvent *)event {
    [_nextResponder performSelector:_cmd withObject:event];
 }
 

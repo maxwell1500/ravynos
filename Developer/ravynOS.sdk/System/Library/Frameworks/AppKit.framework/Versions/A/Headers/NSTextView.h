@@ -15,6 +15,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 #import <AppKit/NSText.h>
 #import <AppKit/NSTextInput.h>
+#import "NSTextInputClient.h"
 #import <AppKit/NSDragging.h>
 #import <AppKit/NSParagraphStyle.h>
 #import <Foundation/NSTextCheckingResult.h>
@@ -51,7 +52,7 @@ APPKIT_EXPORT NSString *const NSOldSelectedCharacterRange;
 
 @class NSUndoTyping;
 
-@interface NSTextView : NSText <NSTextInput> {
+@interface NSTextView : NSText <NSTextInput, NSTextInputClient> {
     NSTextStorage *_textStorage;
     NSTextContainer *_textContainer;
     NSSize _textContainerInset;

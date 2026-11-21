@@ -226,8 +226,8 @@ static const float kMenuInitialClickThreshold = .3f;
 
 -(NSRect)rectForItemAtIndex:(NSInteger)index {
 	NSRect result = [[[self _cachedItemRects] objectAtIndex: index] rectValue];
-    // Be sure we cover the full view width
-    result.size.width = _cellSize.width; //self.bounds.size.width;
+    // Cover the full view width (initWithFrame cached the 10px tracking size).
+    result.size.width = self.bounds.size.width;
     return result;
 }
 

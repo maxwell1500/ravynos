@@ -29,15 +29,25 @@
 #include <limits.h>
 #include <sys/types.h>
 
-typedef enum NSComparisonResult {
+/*
+ * NSComparisonResult is an NSInteger, not an int: it is returned *by value*
+ * by -compare: and friends, and a stock application compiled against Apple's
+ * headers reads the full 64-bit register.  Declaring it as a plain enum made
+ * every such call return 32 bits, so "ascending" (-1) arrived as 0x00000000FFFF
+ * FFFF and comparisons against NSOrderedAscending were never true.
+ */
+#include <Foundation/NSObjCRuntime.h>
+
+typedef NSInteger NSComparisonResult;
+
+enum {
     NSOrderedAscending = -1,
     NSOrderedSame = 0,
     NSOrderedDescending = 1
-} NSComparisonResult;
+};
 
 #define NSNotFound NSIntegerMax
 
-#include <Foundation/NSObjCRuntime.h>
 #include <objc/NSObject.h>
 
 @interface NSObject (Foundation)
@@ -60,8 +70,14 @@ typedef enum NSComparisonResult {
 - (void)encodeWithCoder:(NSCoder *)coder;
 @end
 
+#ifdef __cplusplus
+extern "C" {
+#endif
 void NSLog(NSString *format,...);
 void NSLogv(NSString *format,va_list arguments);
+#ifdef __cplusplus
+}
+#endif
 
 #define NS_RETURNS_INNER_POINTER __attribute__((objc_returns_inner_pointer))
 #endif

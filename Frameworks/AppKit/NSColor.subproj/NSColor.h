@@ -12,6 +12,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 @class NSImage;
 @class NSPasteboard;
+@class NSColorSpace;
 
 @interface NSColor : NSObject <NSCopying, NSCoding>
 
@@ -53,6 +54,28 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 + (NSColor *)selectedMenuItemColor;
 + (NSColor *)selectedMenuItemTextColor;
+ + (NSColor *)labelColor;
+ + (NSColor *)secondaryLabelColor;
+ + (NSColor *)tertiaryLabelColor;
+ + (NSColor *)quaternaryLabelColor;
+ + (NSColor *)placeholderTextColor;
+ + (NSColor *)separatorColor;
+ + (NSColor *)selectedContentBackgroundColor;
+ + (NSColor *)unemphasizedSelectedContentBackgroundColor;
+ + (NSColor *)unemphasizedSelectedTextBackgroundColor;
+ + (NSColor *)unemphasizedSelectedTextColor;
+ + (NSColor *)underPageBackgroundColor;
+ + (NSColor *)findHighlightColor;
+ + (NSColor *)systemBlueColor;
+ + (NSColor *)systemGrayColor;
+ + (NSColor *)systemRedColor;
+ + (NSColor *)systemGreenColor;
+ + (NSColor *)systemYellowColor;
+ + (NSColor *)systemOrangeColor;
+ + (NSColor *)systemPinkColor;
+ + (NSColor *)systemTealColor;
+ + (NSColor *)systemIndigoColor;
+ + (NSColor *)systemBrownColor;
 
 // private
 + (NSColor *)mainMenuBarColor;
@@ -122,6 +145,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 - (NSColor *)colorUsingColorSpaceName:(NSString *)colorSpace;
 - (NSColor *)colorUsingColorSpaceName:(NSString *)colorSpace device:(NSDictionary *)device;
+ - (NSColor *)colorUsingColorSpace:(NSColorSpace *)space;
 
 - (NSColor *)blendedColorWithFraction:(CGFloat)fraction ofColor:(NSColor *)color;
 

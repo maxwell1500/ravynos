@@ -24,6 +24,8 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/param.h>
+#include <sys/mount.h>
+#include <sys/time.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <pwd.h>
@@ -31,6 +33,9 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 #include <time.h>
 #include <dirent.h>
 #include <errno.h>
+#include <string.h>
+
+static void _NSFileManagerSetPOSIXError(NSError **error,NSString *path);
 
 @implementation NSFileManager(posix)
 
@@ -225,22 +230,35 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
      */
 
     BOOL isDirectory;
-    
-//TODO fill error
-    
-    if ([self fileExistsAtPath:srcPath isDirectory:&isDirectory] == NO)
-        return NO;
-    if ([self fileExistsAtPath:dstPath isDirectory:&isDirectory] == YES)
-        return NO;
-    
-    if ([self copyPath:srcPath toPath:dstPath handler:nil] == NO) {
-        [self removeFileAtPath:dstPath handler:nil];
+
+    if ([self fileExistsAtPath:srcPath isDirectory:&isDirectory] == NO) {
+        _NSFileManagerSetPOSIXError(error, srcPath);
         return NO;
     }
-    
-    // not much we can do if this fails
-    [self removeFileAtPath:srcPath handler:nil];
-    
+    if ([self fileExistsAtPath:dstPath isDirectory:&isDirectory] == YES) {
+        errno = EEXIST;
+        _NSFileManagerSetPOSIXError(error, dstPath);
+        return NO;
+    }
+
+    /* rename(2) is atomic and preserves everything; copy/remove is only the
+     * cross-device fallback. */
+    if (rename([srcPath fileSystemRepresentation],
+               [dstPath fileSystemRepresentation]) == 0)
+        return YES;
+    if (errno != EXDEV) {
+        _NSFileManagerSetPOSIXError(error, srcPath);
+        return NO;
+    }
+
+    if ([self copyItemAtPath:srcPath toPath:dstPath error:error] == NO) {
+        [self removeItemAtPath:dstPath error:NULL];
+        return NO;
+    }
+    if ([self removeItemAtPath:srcPath error:error] == NO) {
+        [self removeItemAtPath:dstPath error:NULL];
+        return NO;
+    }
     return YES;
 }
 
@@ -256,99 +274,111 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 -(BOOL)copyItemAtPath:(NSString *)fromPath toPath:(NSString *)toPath error:(NSError **)error
 {
-    BOOL isDirectory;
-    
-    if(![self fileExistsAtPath:fromPath isDirectory:&isDirectory]) {
-        if (error != NULL) {
-            //TODO set error
-        }
-        return NO;
-    }    
-    
-    if (!isDirectory){
-        int r, w;
-        char buf[4096];
-        size_t count;
-        
-        if ((w = open([toPath fileSystemRepresentation], O_WRONLY|O_CREAT, FOUNDATION_FILE_MODE)) == -1) {
-            if (error != NULL) {
-                //TODO set error
-            }
-            return NO;
-        }
-        if ((r = open([fromPath fileSystemRepresentation], O_RDONLY)) == -1) {
-            if (error != NULL) {
-                //TODO set error
-            }
-            close(w);
-            return NO;
+    struct stat st;
+    const char *src = [fromPath fileSystemRepresentation];
+    const char *dst = [toPath fileSystemRepresentation];
 
-        }
-        
-        while ((count = read(r, &buf, sizeof(buf))) > 0) {
-            if (count == -1) 
-                break;
-            
-            if (write(w, &buf, count) != count) {
-                count = -1;
-                break;
-            }
-        }
-        
-        close(w);
-        close(r);
-        
-        if (count == -1) {
-            if (error != NULL) {
-                //TODO set error
-            }
-            return NO;
-        }
-        else
-            return YES;
+    if (lstat(src, &st) != 0) {
+        _NSFileManagerSetPOSIXError(error, fromPath);
+        return NO;
     }
-    else {
-        NSArray *files;
-        NSInteger      i,count;
-        
-        if (mkdir([toPath fileSystemRepresentation], FOUNDATION_DIR_MODE) != 0) {
-            if (error != NULL) {
-                //TODO set error
-            }
+
+    if (S_ISLNK(st.st_mode)) {
+        char target[MAXPATHLEN + 1];
+        ssize_t len = readlink(src, target, MAXPATHLEN);
+
+        if (len < 0 || len >= MAXPATHLEN) {
+            _NSFileManagerSetPOSIXError(error, fromPath);
             return NO;
         }
-        
-        //if (chdir([dest fileSystemRepresentation]) != 0)
-        //    return [self _errorHandler:handler src:src dest:dest operation:@"copyPath: chdir(subdir)"];
-        
-        files = [self directoryContentsAtPath:fromPath];
-        count = [files count];
-        
-        for(i=0;i<count;i++){
-            NSString *name=[files objectAtIndex:i];
-            NSString *subsrc, *subdst;
-            
-            if ([name isEqualToString:@"."] || [name isEqualToString:@".."])
+        target[len] = '\0';
+        if (symlink(target, dst) != 0) {
+            _NSFileManagerSetPOSIXError(error, toPath);
+            return NO;
+        }
+        return YES;
+    }
+
+    if (S_ISDIR(st.st_mode)) {
+        DIR *dir;
+        struct dirent *ent;
+
+        if (mkdir(dst, st.st_mode & 07777) != 0 && errno != EEXIST) {
+            _NSFileManagerSetPOSIXError(error, toPath);
+            return NO;
+        }
+        if ((dir = opendir(src)) == NULL) {
+            _NSFileManagerSetPOSIXError(error, fromPath);
+            return NO;
+        }
+        while ((ent = readdir(dir)) != NULL) {
+            NSString *name, *subsrc, *subdst;
+
+            if (strcmp(ent->d_name, ".") == 0 ||
+                strcmp(ent->d_name, "..") == 0)
                 continue;
-            
-            subsrc=[fromPath stringByAppendingPathComponent:name];
-            subdst=[toPath stringByAppendingPathComponent:name];
-            
-            if([self copyItemAtPath:subsrc toPath:subdst error:error] == NO) {
-                if (error != NULL) {
-                    //TODO set error
-                }
+            name = [NSString stringWithCString:ent->d_name
+                                      encoding:NSUTF8StringEncoding];
+            subsrc = [fromPath stringByAppendingPathComponent:name];
+            subdst = [toPath stringByAppendingPathComponent:name];
+            if (![self copyItemAtPath:subsrc toPath:subdst error:error]) {
+                closedir(dir);
                 return NO;
             }
         }
-        
-        //if (chdir("..") != 0)
-        //    return [self _errorHandler:handler src:src dest:dest operation:@"copyPath: chdir(..)"];
+        closedir(dir);
+        return YES;
     }
-    
-    return YES;
 
+    if (S_ISREG(st.st_mode)) {
+        int in, out;
+        char buf[65536];
+        ssize_t n;
+
+        if ((in = open(src, O_RDONLY)) == -1) {
+            _NSFileManagerSetPOSIXError(error, fromPath);
+            return NO;
+        }
+        if ((out = open(dst, O_WRONLY | O_CREAT | O_TRUNC,
+                        st.st_mode & 07777)) == -1) {
+            _NSFileManagerSetPOSIXError(error, toPath);
+            close(in);
+            return NO;
+        }
+        while ((n = read(in, buf, sizeof(buf))) > 0) {
+            ssize_t off = 0;
+
+            while (off < n) {
+                ssize_t w = write(out, buf + off, (size_t)(n - off));
+
+                if (w <= 0) {
+                    _NSFileManagerSetPOSIXError(error, toPath);
+                    close(in);
+                    close(out);
+                    return NO;
+                }
+                off += w;
+            }
+        }
+        if (n < 0) {
+            _NSFileManagerSetPOSIXError(error, fromPath);
+            close(in);
+            close(out);
+            return NO;
+        }
+        fchmod(out, st.st_mode & 07777);
+        close(in);
+        close(out);
+        return YES;
+    }
+
+    /* Device nodes and sockets are recreated by their owning subsystem, not
+     * copied; report the failure instead of silently succeeding. */
+    errno = ENOTSUP;
+    _NSFileManagerSetPOSIXError(error, fromPath);
+    return NO;
 }
+
 -(NSString *)currentDirectoryPath {
     char  path[MAXPATHLEN+1];
 
@@ -390,6 +420,8 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
                forKey:NSFileSize];
     [result setObject:[NSDate dateWithTimeIntervalSince1970:statBuf.st_mtime]
                forKey:NSFileModificationDate];
+    [result setObject:[NSDate dateWithTimeIntervalSince1970:statBuf.st_birthtimespec.tv_sec]
+               forKey:NSFileCreationDate];
 
     // User/group names don't always exist for the IDs in the filesystem.
     // If we don't check for NULLs, we'll segfault.
@@ -449,33 +481,231 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
     return (symlink([otherPath fileSystemRepresentation], [path fileSystemRepresentation]) == 0);
 }
 
--(BOOL)setAttributes:(NSDictionary *)attributes ofItemAtPath:(NSString *)path error:(NSError **)error
-{
-    if (error != NULL) {
-        //TODO set error
-    }
-    
-    return NO;
-}
 
 -(const char *)fileSystemRepresentationWithPath:(NSString *)path {
     return [path cStringUsingEncoding:NSUTF8StringEncoding];
 }
 
 -(NSString *)destinationOfSymbolicLinkAtPath:(NSString *)path error:(NSError **)error {
-    char destination[MAXPATHLEN+1];
-    ssize_t bytes;
+   char destination[MAXPATHLEN+1];
+   ssize_t bytes;
 
-    bytes = readlink([path fileSystemRepresentation], destination, MAXPATHLEN);
+   bytes = readlink([path fileSystemRepresentation], destination, MAXPATHLEN);
 
-    if (bytes == -1) {
+   if (bytes == -1) {
         //TODO fill error
+        return nil;
+   }
+
+   destination[bytes] = 0;
+
+   return [NSString stringWithCString:destination encoding:NSUTF8StringEncoding];
+}
+
+/* --- Cocoa-modern API ---
+ * The base class returns nil/NO for all of these, which made every
+ * -attributesOfItemAtPath: / -linkItemAtPath: / -changeCurrentDirectoryPath:
+ * caller silently fail. */
+
+static void _NSFileManagerSetPOSIXError(NSError **error,NSString *path) {
+    if (error == NULL)
+        return;
+
+    int err = errno;
+    NSDictionary *userInfo = [NSDictionary dictionaryWithObjectsAndKeys:
+        [NSString stringWithUTF8String:strerror(err)], NSLocalizedDescriptionKey,
+        path, NSFilePathErrorKey,
+        nil];
+
+    *error = [NSError errorWithDomain:NSPOSIXErrorDomain code:err userInfo:userInfo];
+}
+
+-(NSDictionary *)attributesOfItemAtPath:(NSString *)path error:(NSError **)error {
+    NSDictionary *result = [self fileAttributesAtPath:path traverseLink:NO];
+
+    if (result == nil)
+        _NSFileManagerSetPOSIXError(error,path);
+
+    return result;
+}
+
+-(NSDictionary *)attributesOfFileSystemForPath:(NSString *)path error:(NSError **)error {
+    struct statfs fs;
+    struct stat st;
+
+    if (statfs([path fileSystemRepresentation], &fs) != 0) {
+        _NSFileManagerSetPOSIXError(error,path);
         return nil;
     }
 
-    destination[bytes] = 0;
+    NSMutableDictionary *result = [NSMutableDictionary dictionary];
 
-    return [NSString stringWithCString:destination encoding:NSUTF8StringEncoding];
+    [result setObject:[NSNumber numberWithUnsignedLongLong:(unsigned long long)fs.f_blocks * fs.f_bsize]
+               forKey:NSFileSystemSize];
+    [result setObject:[NSNumber numberWithUnsignedLongLong:(unsigned long long)fs.f_bfree * fs.f_bsize]
+               forKey:NSFileSystemFreeSize];
+
+    if (stat([path fileSystemRepresentation], &st) == 0)
+        [result setObject:[NSNumber numberWithUnsignedLongLong:(unsigned long long)st.st_dev]
+                   forKey:NSFileSystemNumber];
+
+    return result;
+}
+
+-(BOOL)changeCurrentDirectoryPath:(NSString *)path {
+    if (chdir([path fileSystemRepresentation]) != 0) {
+        return NO;
+    }
+    return YES;
+}
+
+-(BOOL)contentsEqualAtPath:(NSString *)path1 andPath:(NSString *)path2 {
+    BOOL isDirectory1 = NO, isDirectory2 = NO;
+
+    if (![self fileExistsAtPath:path1 isDirectory:&isDirectory1] ||
+        ![self fileExistsAtPath:path2 isDirectory:&isDirectory2])
+        return NO;
+
+    if (isDirectory1 != isDirectory2)
+        return NO;
+
+    if (!isDirectory1) {
+        NSData *a = [NSData dataWithContentsOfFile:path1];
+        NSData *b = [NSData dataWithContentsOfFile:path2];
+
+        if (a == nil || b == nil)
+            return NO;
+
+        return [a isEqualToData:b];
+    }
+
+    NSArray *subpaths1 = [self subpathsAtPath:path1];
+    NSArray *subpaths2 = [self subpathsAtPath:path2];
+
+    if (![subpaths1 isEqualToArray:subpaths2])
+        return NO;
+
+    NSInteger i, count = [subpaths1 count];
+
+    for (i = 0; i < count; i++) {
+        NSString *sub = [subpaths1 objectAtIndex:i];
+        NSString *sub1 = [path1 stringByAppendingPathComponent:sub];
+        NSString *sub2 = [path2 stringByAppendingPathComponent:sub];
+
+        if (![self contentsEqualAtPath:sub1 andPath:sub2])
+            return NO;
+    }
+
+    return YES;
+}
+
+-(BOOL)isDeletableFileAtPath:(NSString *)path {
+    /* Deletion permission comes from the parent directory, not the item. */
+    NSString *parent = [path stringByDeletingLastPathComponent];
+
+    if ([parent length] == 0)
+        parent = @".";
+
+    return access([parent fileSystemRepresentation], W_OK|X_OK) == 0;
+}
+
+-(BOOL)linkItemAtPath:(NSString *)fromPath toPath:(NSString *)toPath error:(NSError **)error {
+    if (link([fromPath fileSystemRepresentation], [toPath fileSystemRepresentation]) != 0) {
+        _NSFileManagerSetPOSIXError(error,fromPath);
+        return NO;
+    }
+    return YES;
+}
+
+-(BOOL)createSymbolicLinkAtPath:(NSString *)path withDestinationPath:(NSString *)destPath error:(NSError **)error {
+    if (symlink([destPath fileSystemRepresentation], [path fileSystemRepresentation]) != 0) {
+        _NSFileManagerSetPOSIXError(error,path);
+        return NO;
+    }
+    return YES;
+}
+
+-(NSArray *)subpathsOfDirectoryAtPath:(NSString *)path error:(NSError **)error {
+    struct stat st;
+
+    if (lstat([path fileSystemRepresentation], &st) != 0) {
+        _NSFileManagerSetPOSIXError(error,path);
+        return nil;
+    }
+
+    return [self subpathsAtPath:path];
+}
+
+-(NSString *)stringWithFileSystemRepresentation:(const char *)string length:(NSUInteger)length {
+    return [[[NSString alloc] initWithBytes:string length:length encoding:NSUTF8StringEncoding] autorelease];
+}
+
+-(BOOL)setAttributes:(NSDictionary *)attributes ofItemAtPath:(NSString *)path error:(NSError **)error {
+    NSString *modeString = [attributes objectForKey:NSFilePosixPermissions];
+    NSString *owner = [attributes objectForKey:NSFileOwnerAccountName];
+    NSString *group = [attributes objectForKey:NSFileGroupOwnerAccountName];
+    NSDate *modificationDate = [attributes objectForKey:NSFileModificationDate];
+
+    if (modeString != nil) {
+        mode_t mode = (mode_t)[modeString unsignedLongValue];
+
+        if (chmod([path fileSystemRepresentation], mode) != 0) {
+            _NSFileManagerSetPOSIXError(error,path);
+            return NO;
+        }
+    }
+
+    if (owner != nil || group != nil) {
+        uid_t uid = (uid_t)-1;
+        gid_t gid = (gid_t)-1;
+
+        if (owner != nil) {
+            struct passwd *pwd = getpwnam([owner UTF8String]);
+
+            if (pwd == NULL) {
+                _NSFileManagerSetPOSIXError(error,path);
+                return NO;
+            }
+            uid = pwd->pw_uid;
+        }
+
+        if (group != nil) {
+            struct group *grp = getgrnam([group UTF8String]);
+
+            if (grp == NULL) {
+                _NSFileManagerSetPOSIXError(error,path);
+                return NO;
+            }
+            gid = grp->gr_gid;
+        }
+
+        if (chown([path fileSystemRepresentation], uid, gid) != 0) {
+            _NSFileManagerSetPOSIXError(error,path);
+            return NO;
+        }
+    }
+
+    if (modificationDate != nil) {
+        struct timeval times[2];
+        struct stat st;
+
+        if (stat([path fileSystemRepresentation], &st) != 0) {
+            _NSFileManagerSetPOSIXError(error,path);
+            return NO;
+        }
+
+        times[0].tv_sec = st.st_atime;
+        times[0].tv_usec = 0;
+        times[1].tv_sec = (time_t)[modificationDate timeIntervalSince1970];
+        times[1].tv_usec = 0;
+
+        if (utimes([path fileSystemRepresentation], times) != 0) {
+            _NSFileManagerSetPOSIXError(error,path);
+            return NO;
+        }
+    }
+
+    return YES;
 }
 
 @end

@@ -221,6 +221,7 @@ SRCS= \
     NSTextView.subproj/NSTextTab.m \
     NSTextView.subproj/NSTextView.m \
     NSTextView.subproj/NSTextViewSharedData.m \
+    NSTextView.subproj/NSTextInputContext.m \
     NSTextView.subproj/NSTypesetter.m \
     NSTextView.subproj/NSTypesetter_concrete.m \
     NSTextView.subproj/NSUndoTextOperation.m \
@@ -488,6 +489,7 @@ HEADERS= \
     NSTextView.subproj/NSSecureTextView.h \
     NSTextView.subproj/NSTextContainer.h \
     NSTextView.subproj/NSTextInput.h \
+    NSTextView.subproj/NSTextInputClient.h \
     NSTextView.subproj/NSTextStorage.h \
     NSTextView.subproj/NSTextStorage_concrete.h \
     NSTextView.subproj/NSTextTab.h \
@@ -583,6 +585,7 @@ RESOURCES=Info.plist en.lproj de.lproj fr.lproj \
 CFLAGS+= -I${.CURDIR:H} -I${BUILDROOT}/usr/include -I/sys \
 	 -F${OBJTOP}/Frameworks/OpenGL -framework OpenGL -I${MAKEOBJDIR}/Headers -I${.CURDIR:H}/Foundation/Headers \
          -I${.CURDIR} -I${MAKEOBJDIR} -I${ROOT_SOURCE_DIR}/CoreServices \
+         -I${ROOT_SOURCE_DIR}/Frameworks/CoreServices/LaunchServices \
 	 -I${ROOT_SOURCE_DIR}/Frameworks/Onyx2D/freetype/include \
 	 -I${ROOT_SOURCE_DIR}/Frameworks/CoreText/fontconfig/include \
 	 -I${ROOT_SOURCE_DIR}/Frameworks/CoreText/fontconfig/fontconfig \
@@ -601,6 +604,7 @@ LDFLAGS+= \
 	  -F${OBJTOP}/Frameworks/QuartzCore -framework QuartzCore \
 	  -F${OBJTOP}/Frameworks/IOSurface -framework IOSurface \
 	  -F${OBJTOP}/Frameworks/CoreData -framework CoreData \
+	  -F${RAVYN_SDKROOT}/System/Library/Frameworks -framework LaunchServices -framework OpenGL \
 	  -L${RAVYN_SDKROOT}/usr/lib -lfontconfig -lexpat -lobjc -lm
 
 DIRS= \

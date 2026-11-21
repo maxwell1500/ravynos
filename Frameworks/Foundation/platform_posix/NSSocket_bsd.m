@@ -173,7 +173,8 @@ static inline void byteZero(void *vsrc,size_t size){
     try.sin_family=AF_INET;
     try.sin_port=htons(portNumber);
 
-    if(connect(_descriptor,(struct sockaddr *)&try,(socklen_t)sizeof(try))==0){
+    int connectResult=connect(_descriptor,(struct sockaddr *)&try,(socklen_t)sizeof(try));
+    if(connectResult==0){
      if(!block){
       if((error=[self setOperationWouldBlock:YES])!=nil)
        return error;

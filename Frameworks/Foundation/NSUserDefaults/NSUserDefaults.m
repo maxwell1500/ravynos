@@ -55,13 +55,22 @@ NSString * const NSUserDefaultsDidChangeNotification=@"NSUserDefaultsDidChangeNo
 
     key=[key substringFromIndex:1];
 
-    NS_DURING
-     if((pval=[val propertyList])==nil)
+    /* Only parse values that actually look like a property list.  Launch
+     * arguments such as "-no-remote -foreground" pair a key with the next
+     * flag; feeding "-foreground" to the vintage reader raises a
+     * NSParseErrorException (logged even though it is caught here). */
+    unichar first = [val length] ? [val characterAtIndex:0] : 0;
+    if(first=='<' || first=='(' || first=='{' || first=='"' || first=='[') {
+     NS_DURING
+      pval=[val propertyList];
+      if(pval==nil)
+       pval=val;
+     NS_HANDLER
       pval=val;
-      
-    NS_HANDLER
+     NS_ENDHANDLER
+    }
+    else
      pval=val;
-    NS_ENDHANDLER
 
     [reg setObject:pval forKey:key];
    }
@@ -93,6 +102,14 @@ NSString * const NSUserDefaultsDidChangeNotification=@"NSUserDefaultsDidChangeNo
    NSPersistantDomain *domain = [[[NSPlatform currentPlatform] persistantDomainClass] persistantDomainWithName:name];
    if(domain)
       [_domains setObject:domain forKey:name];
+
+   NSString *bundleId = [[NSBundle mainBundle] bundleIdentifier];
+   if(bundleId != nil && [bundleId length] > 0) {
+      NSString *sysPath = [NSString stringWithFormat:@"/Library/Preferences/%@.plist", bundleId];
+      NSDictionary *sysPlist = [NSDictionary dictionaryWithContentsOfFile:sysPath];
+      if(sysPlist != nil)
+         [_domains setObject:sysPlist forKey:@"SystemApplication"];
+   }
 }
 
 -init {
@@ -100,6 +117,7 @@ NSString * const NSUserDefaultsDidChangeNotification=@"NSUserDefaultsDidChangeNo
    _searchList=[[NSArray allocWithZone:NULL] initWithObjects:
       NSArgumentDomain,
       [[NSProcessInfo processInfo] processName],
+      @"SystemApplication",
       NSGlobalDomain,
       NSRegistrationDomain,
      @"Foundation",

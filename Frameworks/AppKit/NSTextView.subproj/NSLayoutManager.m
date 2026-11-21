@@ -1316,6 +1316,12 @@ static inline void _appendRectToCache(NSLayoutManager *self,NSRect rect){
 #endif
     
 	CGContextRef context=NSCurrentGraphicsPort();
+	/* Default a nil run color to opaque black instead of inheriting whatever
+	 * fill the caller last used (frequently transparent for Gecko text). */
+	if (color != nil)
+		[color set];
+	else
+		[[NSColor blackColor] set];
 	CGGlyph     *cgGlyphs=(CGGlyph *)glyphs;
 	int          cgGlyphsLength=length/2;
     CGSize advances[cgGlyphsLength];

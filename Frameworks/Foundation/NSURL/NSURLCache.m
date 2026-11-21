@@ -20,7 +20,8 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 #import <Foundation/NSMutableSet.h>
 #import <Foundation/NSSortDescriptor.h>
 #import <Foundation/NSURL.h>
-#import <CoreFoundation/CFUUID.h>
+#import <Foundation/NSPrivateDecls.h>
+ #import <CoreFoundation/CFUUID.h>
 
 @interface NSHTTPURLResponse(private)
 -initWithURL:(NSURL *)url statusCode:(NSInteger)statusCode headers:(NSDictionary *)headers;
@@ -130,11 +131,19 @@ static NSURLCache *shared=nil;
 
 -(NSString *)nextFileForDiskCache {
    CFUUIDRef uuid=CFUUIDCreate(NULL);
-   NSString *result=[(NSString *)CFUUIDCreateString(NULL,uuid) autorelease];
-   
+   if (uuid == NULL) return nil;
+   CFStringRef cfstr=CFUUIDCreateString(NULL,uuid);
    CFRelease(uuid);
-
-   return result;
+   if (cfstr == NULL) return nil;
+   // Extract via CF APIs only — the CF instance has no ObjC isa and lives in
+   // read-only memory: messaging or objc-releasing it SIGBUSes (measured in
+   // -initWithString: and objc_release).
+   CFIndex length=CFStringGetLength(cfstr);
+   unichar *buffer=NSZoneMalloc(NULL,(NSUInteger)length*sizeof(unichar));
+   CFStringGetCharacters(cfstr,CFRangeMake(0,length),buffer);
+   CFRelease(cfstr);
+   NSString *result=[[NSString alloc] initWithCharactersNoCopy:buffer length:(NSUInteger)length freeWhenDone:YES];
+   return [result autorelease];
 }
 
 -(void)reduceDiskCacheForSize:(NSUInteger)chunk {
@@ -193,9 +202,10 @@ static NSURLCache *shared=nil;
    NSData        *data=[cachedResponse data];
    
    [self reduceDiskCacheForSize:[data length]];
-   
+   if ([data length] == 0) return;
    [properties setObject:[NSString stringWithFormat:@"%d",[data length]] forKey:@"size"];
    NSString *file=[self nextFileForDiskCache];
+   if (file == nil) return;
    [properties setObject:file forKey:@"file"];
    [properties setObject:[NSString stringWithFormat:@"%f",[[NSDate date] timeIntervalSinceReferenceDate]] forKey:@"lastAccess"];
    // duplicative but makes cache purging simpler

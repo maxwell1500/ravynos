@@ -116,11 +116,16 @@
 	[_handlers setObject:entry forKey:key];
 	[entry release];
 
-	if (eventClass == kCoreEventClass && eventID == kAEOpenApplication) {
-		[self performSelector:@selector(_dispatchPendingOApp:)
-		           withObject:key
-		           afterDelay:0.0];
-	}
+	/*
+	 * Do not schedule the OpenApplication delivery here.  Firefox registers
+	 * this handler while XRE_main is still bringing up XPCOM, before
+	 * NSApplication has a running event loop.  Scheduling a zero-delay
+	 * perform at that point creates a timer on the main run loop that is
+	 * serviced while the process is still single-threaded inside startup;
+	 * the handler then re-enters Gecko and the process deadlocks before
+	 * -[NSApplication finishLaunching].  The event is delivered when the
+	 * application explicitly dispatches it after the run loop exists.
+	 */
 }
 
 - (void)_dispatchPendingOApp:(NSNumber *)key {

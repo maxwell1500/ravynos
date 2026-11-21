@@ -68,6 +68,7 @@ fmwk-install-hook:
 .for dir in ${RAVYN_SDKROOT} ${SYSROOT_DIR} ${RAVYN_REPO_SDKROOT}
 	@if [ -n "${dir}" ]; then \
 		mkdir -p "${dir}/System/Library/Frameworks" && \
+		rm -rf "${dir}/System/Library/Frameworks/${FRAMEWORK}.framework"; \
 		cp -Rfp ${.OBJDIR}/${FRAMEWORK}.framework "${dir}/System/Library/Frameworks/"; \
 	fi
 .endfor

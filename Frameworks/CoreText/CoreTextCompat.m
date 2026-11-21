@@ -6,7 +6,18 @@
  * contents inside the application, so each is a real NSString with the
  * documented name; behaviour behind them is CoreText's own.
  */
+extern int CFDataGetBytePtrIsOK(void);/*
+ * CoreText attribute and option keys, plus the font-variation axis keys.
+ *
+ * XUL binds kCT* at load ("Symbol not found: _kCTFontAttributeName",
+ * "Expected in: CoreText").  These are dictionary keys compared by pointer or
+ * contents inside the application, so each is a real NSString with the
+ * documented name; behaviour behind them is CoreText's own.
+ */
 #import <Foundation/Foundation.h>
+#import <stdio.h>
+#import <unistd.h>
+#include <string.h>
 #import <Onyx2D/O2Font.h>
 #import <CoreText/CTFont.h>
 #import <Foundation/NSCFTypeID.h>
@@ -58,15 +69,36 @@ NSString * const kCTWritingDirectionAttributeName = @"kCTWritingDirectionAttribu
 typedef CFIndex CTFontManagerScope;
 
 extern BOOL O2FontRegisterFontAtPath(NSString *path);
+extern Boolean ravyn_is_ours(id self);
+
+extern CGFontRef CGFontCreateWithFontName(CFStringRef name);
+extern int CGFontGetUnitsPerEm(CGFontRef self);
+extern CGGlyph CGFontGetGlyphWithGlyphName(CGFontRef self,CFStringRef name);
+
+static CGFontRef
+ravyn_compat_cg_get(void)
+{
+    static CGFontRef cg = NULL;
+    if (cg == NULL)
+        cg = CGFontCreateWithFontName(CFSTR("Inter-Regular"));
+    return cg;
+}
 extern CGFontRef CGFontCreateWithDataProvider(CGDataProviderRef provider);
 extern CFStringRef CGFontCopyPostScriptName(CGFontRef font);
+
 
 static NSString *
 ravyn_path_for_font_url(CFURLRef fontURL)
 {
     if (fontURL == NULL)
         return nil;
-    return [(NSURL *)fontURL path];
+    char buf[1024];
+    if (CFURLGetFileSystemRepresentation((CFURLRef)fontURL, true, buf, sizeof buf))
+        return [NSString stringWithUTF8String:buf];
+    CFStringRef cs = CFURLGetString((CFURLRef)fontURL);
+    if (cs != NULL && CFStringGetCString(cs, buf, sizeof buf, kCFStringEncodingUTF8))
+        return [NSString stringWithUTF8String:buf];
+    return nil;
 }
 
 bool
@@ -381,17 +413,20 @@ CTFontCreateWithName(CFStringRef name, CGFloat size,
     CGFontRef cgFont;
     KTFont *font;
 
-    (void)matrix;
-    if (name == NULL) {
-        return NULL;
-    }
-    cgFont = CGFontCreateWithFontName(name);
-    if (cgFont == NULL) {
-        return NULL;
-    }
-    font = [[KTFont alloc] initWithFont:cgFont size:size];
-    CGFontRelease(cgFont);
-    return (CTFontRef)font;
+     (void)matrix;
+     if (name == NULL) {
+         return NULL;
+     }
+     if (size <= 0.0) {
+         size = 12.0;
+     }
+     cgFont = CGFontCreateWithFontName(name);
+     if (cgFont == NULL) {
+         return NULL;
+     }
+     font = [[KTFont alloc] initWithFont:cgFont size:size];
+     CGFontRelease(cgFont);
+     return (CTFontRef)font;
 }
 
 CTFontRef
@@ -493,10 +528,17 @@ CTFontCopyFontDescriptor(CTFontRef font)
     size = CTFontGetSize(font);
     attributes = CFDictionaryCreateMutable(NULL, 2,
         &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-    if (name != NULL) {
-        CFDictionarySetValue(attributes, kCTFontNameAttribute, name);
-        CFRelease(name);
-    }
+     if (name != NULL) {
+         CFDictionarySetValue(attributes, kCTFontNameAttribute, name);
+         CFRelease(name);
+     }
+     {
+         CFStringRef family = CTFontCopyFamilyName(font);
+         if (family != NULL) {
+             CFDictionarySetValue(attributes, kCTFontFamilyNameAttribute, family);
+             CFRelease(family);
+         }
+     }
     number = CFNumberCreate(NULL, kCFNumberDoubleType, &size);
     CFDictionarySetValue(attributes, kCTFontSizeAttribute, number);
     CFRelease(number);
@@ -826,8 +868,13 @@ CFDataRef
 CTFontCopyTable(CTFontRef font, uint32_t table, uint32_t options)
 {
     (void)options;
-    if (font == NULL)
-        return NULL;
+    if (font == NULL || !ravyn_is_ours(font)) {
+        extern CGFontRef ravyn_compat_cg_get(void);
+        extern CFDataRef CGFontCopyTableForTag(CGFontRef font,uint32_t tag);
+        CGFontRef cg = ravyn_compat_cg_get();
+        CFDataRef d = cg ? CGFontCopyTableForTag(cg,table) : NULL;
+        return d;
+    }
     return CGFontCopyTableForTag([(KTFont *)font graphicsFont], table);
 }
 
@@ -835,8 +882,12 @@ CFArrayRef
 CTFontCopyAvailableTables(CTFontRef font, uint32_t options)
 {
     (void)options;
-    if (font == NULL)
-        return NULL;
+    if (font == NULL || !ravyn_is_ours(font)) {
+        extern CGFontRef ravyn_compat_cg_get(void);
+        extern CFArrayRef CGFontCopyTableTags(CGFontRef font);
+        CGFontRef cg = ravyn_compat_cg_get();
+        return cg ? CGFontCopyTableTags(cg) : NULL;
+    }
     return CGFontCopyTableTags([(KTFont *)font graphicsFont]);
 }
 
@@ -845,7 +896,7 @@ CTFontCopyGraphicsFont(CTFontRef font, CTFontDescriptorRef *attributes)
 {
     if (attributes != NULL)
         *attributes = NULL;
-    if (font == NULL)
+    if (font == NULL || ![(KTFont *)font isKindOfClass:[KTFont class]])
         return NULL;
     return CGFontRetain([(KTFont *)font graphicsFont]);
 }
@@ -855,6 +906,10 @@ CTFontGetUnitsPerEm(CTFontRef font)
 {
     if (font == NULL)
         return 1000;
+    if (!ravyn_is_ours(font)) {
+        CGFontRef cg = ravyn_compat_cg_get();
+        return cg ? (unsigned int)CGFontGetUnitsPerEm(cg) : 1000u;
+    }
     return (unsigned int)[(KTFont *)font unitsPerEm];
 }
 
@@ -863,6 +918,8 @@ CTFontGetSymbolicTraits(CTFontRef font)
 {
     uint32_t traits = 0;
     if (font == NULL)
+        return 0;
+    if (!ravyn_is_ours(font))
         return 0;
     NSString *name = (NSString *)[(KTFont *)font copyName];
     if (name != nil) {
@@ -906,6 +963,8 @@ CTFontCopyName(CTFontRef font, CFStringRef nameKey)
     (void)nameKey;
     if (font == NULL)
         return NULL;
+    if (!ravyn_is_ours(font))
+        return CFStringCreateCopy(NULL,CFSTR("Inter-Regular"));
     CFStringRef name = [(KTFont *)font copyName];
     if (name == NULL)
         return CFSTR("Inter-Regular");
@@ -964,6 +1023,10 @@ CTFontGetGlyphWithName(CTFontRef font, CFStringRef glyphName)
 {
     if (font == NULL || glyphName == NULL)
         return 0;
+    if (!ravyn_is_ours(font)) {
+        CGFontRef cg = ravyn_compat_cg_get();
+        return cg ? CGFontGetGlyphWithGlyphName(cg,glyphName) : 0;
+    }
     return CGFontGetGlyphWithGlyphName([(KTFont *)font graphicsFont], glyphName);
 }
 
@@ -974,6 +1037,12 @@ CTFontGetBoundingRectsForGlyphs(CTFontRef font, int orientation,
     (void)orientation;
     if (font == NULL || glyphs == NULL || count <= 0)
         return CGRectZero;
+    if (![(KTFont *)font isKindOfClass:[KTFont class]]) {
+        for (CFIndex zz = 0; zz < count; zz++)
+            if (boundingRects != NULL)
+                boundingRects[zz] = CGRectZero;
+        return CGRectZero;
+    }
     CGFontRef cgFont = [(KTFont *)font graphicsFont];
     CGFloat upem = [(KTFont *)font unitsPerEm];
     CGFloat size = [(KTFont *)font pointSize];
@@ -1002,15 +1071,42 @@ CTFontGetVerticalTranslationsForGlyphs(CTFontRef font,
         memset(translations, 0, (size_t)count * sizeof(CGSize));
 }
 
+static void ravyn_pathProbeApply(void *info, const CGPathElement *element) {
+    int *p = (int *)info;
+    if (*p < 12) p[1 + *p] = (int)element->type;
+    (*p)++;
+}
+
 void
 CTFontDrawGlyphs(CTFontRef font, const CGGlyph glyphs[],
     const CGPoint positions[], size_t count, CGContextRef context)
 {
+    size_t i;
     if (font == NULL || glyphs == NULL || positions == NULL || context == NULL || count == 0)
         return;
-    CGContextSetFont(context, [(KTFont *)font graphicsFont]);
-    CGContextSetFontSize(context, [(KTFont *)font pointSize]);
-    CGContextShowGlyphsAtPositions(context, glyphs, positions, count);
+    /* CoreText applies the text matrix to every glyph origin and outline.
+     * WebRender sets a non-identity text matrix for fractionally positioned
+     * glyphs (its chrome text), pre-inverting the origin so that CoreText's
+     * application of the matrix lands the glyph on the tile.  Ignoring the
+     * matrix draws those glyphs somewhere off the cell, which shows up as
+     * completely missing UI text while identity-matrix page text renders. */
+    CGContextSaveGState(context);
+    CGContextConcatCTM(context, CGContextGetTextMatrix(context));
+
+    for (i = 0; i < count; i++) {
+        CGPathRef path = CTFontCreatePathForGlyph(font, glyphs[i],
+            (const CGAffineTransform *)NULL);
+        if (path == NULL)
+            continue;   /* blank glyph (e.g. space): nothing to fill */
+        CGContextSaveGState(context);
+        CGContextTranslateCTM(context, positions[i].x, positions[i].y);
+        CGContextAddPath(context, path);
+        CGContextDrawPath(context, kCGPathFill);
+        CGContextRestoreGState(context);
+        CGPathRelease(path);
+    }
+
+    CGContextRestoreGState(context);
 }
 
 CTFontDescriptorRef

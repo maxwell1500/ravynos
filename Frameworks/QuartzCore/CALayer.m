@@ -315,8 +315,8 @@ extern unsigned char _CFIsObjCType(const void *cf);
    _sublayers=[NSArray new];
    _delegate=nil;
    _anchorPoint=CGPointMake(0.5,0.5);
-   _position=CGPointZero;
-   _bounds=CGRectZero;
+   _position=CGPointMake(0,0);   /* not the CGPointZero dylib constant: it cannot be resolved when this framework is cross-linked with -undefined dynamic_lookup */
+   _bounds=CGRectMake(0,0,0,0);
    _opacity=1.0;
    _opaque=YES;
    _contentsRect=CGRectMake(0,0,1,1);

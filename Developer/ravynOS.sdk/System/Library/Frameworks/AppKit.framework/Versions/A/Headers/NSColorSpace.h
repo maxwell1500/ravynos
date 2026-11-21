@@ -13,10 +13,14 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
     CGColorSpaceRef _cgColorSpace;
 }
 
-+ (NSColorSpace *)deviceRGBColorSpace;
+ + (NSColorSpace *)deviceRGBColorSpace;
+ + (NSColorSpace *)sRGBColorSpace;
+ + (NSColorSpace *)genericRGBColorSpace;
+ + (NSColorSpace *)genericGrayColorSpace;
+ + (NSColorSpace *)deviceGrayColorSpace;
 
-- initWithCGColorSpace:(CGColorSpaceRef)cgColorSpace;
+ - initWithCGColorSpace:(CGColorSpaceRef)cgColorSpace;
 
-- (CGColorSpaceRef)CGColorSpace;
-
+ - (CGColorSpaceRef)CGColorSpace;
+ - (NSString *)colorSpaceName;
 @end
