@@ -890,10 +890,14 @@ def main():
         # The soak runner is a script like run-fixtures.sh, staged straight
         # from tests/compat by the same special case below.
         ("run-fixtures-soak.sh", "usr/local/compat/run-fixtures-soak.sh"),
+        # Apps live in /Applications: WindowServer's bundle-launch gate
+        # (trustedLaunchPath) refuses to exec client-named paths outside
+        # /Applications and /System/Library, so the probe must not be an
+        # exception to it.
         ("CocoaProbe.app/Contents/MacOS/CocoaProbe",
-         "usr/local/compat/CocoaProbe.app/Contents/MacOS/CocoaProbe"),
+         "Applications/CocoaProbe.app/Contents/MacOS/CocoaProbe"),
         ("CocoaProbe.app/Contents/Info.plist",
-         "usr/local/compat/CocoaProbe.app/Contents/Info.plist"),
+         "Applications/CocoaProbe.app/Contents/Info.plist"),
     ]
     for src_rel, dst in compat_files:
         # The guest runner is a script, not a build product: stage it straight

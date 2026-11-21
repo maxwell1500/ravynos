@@ -53,6 +53,7 @@ job_t job_find(jobmgr_t jm, const char *label);
 job_t job_find_by_service_port(mach_port_t p);
 bool job_ack_port_destruction(mach_port_t p);
 bool job_is_anonymous(job_t j);
+uid_t job_get_uid(job_t j);
 launch_data_t job_export(job_t j);
 void job_stop(job_t j);
 void job_checkin(job_t j);

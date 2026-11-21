@@ -1,14 +1,17 @@
 #import <Onyx2D/O2Font_freetype.h>
+#import <CoreGraphics/CGPath.h>
 #ifdef FREETYPE_PRESENT
 #import <Onyx2D/O2Encoding.h>
 #import <CoreFoundation/CoreFoundation.h>
 #include <stdlib.h>
+#include <ft2build.h>
+#include FT_FREETYPE_H
 #include FT_TRUETYPE_TABLES_H
+
 
 @implementation O2Font_freetype
 
 FT_Library freeTypeLibrary;
-
 +(void)initialize {
   if(self==[O2Font_freetype class]){
    int error = FT_Init_FreeType(&freeTypeLibrary);
@@ -159,6 +162,118 @@ FT_Face O2FontFreeTypeFace(O2Font_freetype *self) {
    return self->_face;
 }
 
+#ifdef FREETYPE_PRESENT
+CGPathRef
+O2Font_freetypeCreatePath(FT_Face face, int upem, double size, CGGlyph glyph, const CGAffineTransform *xform)
+{
+   if (face == NULL || upem <= 0)
+      return NULL;
+   if (size <= 0)
+      size = (double)upem;
+   if (FT_Set_Char_Size(face, 0, (FT_F26Dot6)(size * 64.0), 72, 72) != 0)
+      return NULL;
+   if (FT_Load_Glyph(face, (FT_UInt)glyph, FT_LOAD_DEFAULT) != 0)
+      return NULL;
+   {
+      FT_Outline *outline = &face->glyph->outline;
+      const CGFloat scale = 1.0 / 64.0;
+      CGMutablePathRef path;
+      int c;
+
+      if (outline->n_points == 0 || outline->n_contours <= 0)
+         return NULL;
+      path = CGPathCreateMutable();
+      for (c = 0; c < outline->n_contours; c++) {
+         int first = (c == 0) ? 0 : outline->contours[c - 1] + 1;
+         int end = outline->contours[c];
+         int n, i, startIdx;
+
+         if (end < first || end >= outline->n_points)
+            continue;
+         n = end - first + 1;
+         if (n <= 0)
+            continue;
+
+         startIdx = first;
+         while (startIdx <= end && (outline->tags[startIdx] & FT_CURVE_TAG_ON) == 0)
+            startIdx++;
+         if (startIdx > end) {
+            /* All off-curve: start at midpoint of last and first. */
+            CGFloat startX = (outline->points[end].x + outline->points[first].x) * 0.5 * scale;
+            CGFloat startY = (outline->points[end].y + outline->points[first].y) * 0.5 * scale;
+            CGFloat curX = startX, curY = startY;
+            CGPathMoveToPoint(path, xform, startX, startY);
+            for (i = 0; i < n; i++) {
+               int idx = first + i;
+               int next = first + ((i + 1) % n);
+               CGFloat cx = outline->points[idx].x * scale;
+               CGFloat cy = outline->points[idx].y * scale;
+               CGFloat nx = outline->points[next].x * scale;
+               CGFloat ny = outline->points[next].y * scale;
+               CGFloat mx = (cx + nx) * 0.5;
+               CGFloat my = (cy + ny) * 0.5;
+               CGPathAddCurveToPoint(path, xform,
+                  curX + (2.0 / 3.0) * (cx - curX), curY + (2.0 / 3.0) * (cy - curY),
+                  mx + (2.0 / 3.0) * (cx - mx), my + (2.0 / 3.0) * (cy - my),
+                  mx, my);
+               curX = mx; curY = my;
+            }
+            CGPathCloseSubpath(path);
+            continue;
+         }
+
+         {
+            int firstOn = startIdx;
+            CGFloat sx = outline->points[firstOn].x * scale;
+            CGFloat sy = outline->points[firstOn].y * scale;
+            BOOL haveCtrl = NO;
+            CGFloat ctrlX = 0, ctrlY = 0;
+            CGFloat curX = sx, curY = sy;
+
+            CGPathMoveToPoint(path, xform, sx, sy);
+            for (i = 1; i <= n; i++) {
+               int idx = first + ((firstOn - first + i) % n);
+               BOOL on = (outline->tags[idx] & FT_CURVE_TAG_ON) != 0;
+               CGFloat px = outline->points[idx].x * scale;
+               CGFloat py = outline->points[idx].y * scale;
+               if (on) {
+                  if (haveCtrl) {
+                     CGPathAddCurveToPoint(path, xform,
+                        curX + (2.0 / 3.0) * (ctrlX - curX), curY + (2.0 / 3.0) * (ctrlY - curY),
+                        px + (2.0 / 3.0) * (ctrlX - px), py + (2.0 / 3.0) * (ctrlY - py),
+                        px, py);
+                     haveCtrl = NO;
+                  } else {
+                     CGPathAddLineToPoint(path, xform, px, py);
+                  }
+                  curX = px; curY = py;
+               } else if (haveCtrl) {
+                  CGFloat midX = (ctrlX + px) * 0.5;
+                  CGFloat midY = (ctrlY + py) * 0.5;
+                  CGPathAddCurveToPoint(path, xform,
+                     curX + (2.0 / 3.0) * (ctrlX - curX), curY + (2.0 / 3.0) * (ctrlY - curY),
+                     midX + (2.0 / 3.0) * (ctrlX - midX), midY + (2.0 / 3.0) * (ctrlY - midY),
+                     midX, midY);
+                  curX = midX; curY = midY;
+                  ctrlX = px; ctrlY = py;
+               } else {
+                  ctrlX = px; ctrlY = py;
+                  haveCtrl = YES;
+               }
+            }
+            if (haveCtrl) {
+               CGPathAddCurveToPoint(path, xform,
+                  curX + (2.0 / 3.0) * (ctrlX - curX), curY + (2.0 / 3.0) * (ctrlY - curY),
+                  sx + (2.0 / 3.0) * (ctrlX - sx), sy + (2.0 / 3.0) * (ctrlY - sy),
+                  sx, sy);
+            }
+            CGPathCloseSubpath(path);
+         }
+      }
+      return (CGPathRef)path;
+   }
+}
+#endif
 -(void)fetchAdvances {
    O2Glyph glyph;
 
@@ -194,7 +309,7 @@ FT_Face O2FontFreeTypeFace(O2Font_freetype *self) {
    return FT_Get_Name_Index(_face,(char *)[name cString]);
 }
 
--(void)getGlyphsForCodePoints:(uint16_t *)codes:(O2Glyph *)glyphs:(int)length {
+-(void)getGlyphsForCodePoints:(uint16_t *)codes :(O2Glyph *)glyphs :(int)length {
    int i;
    
    for(i=0;i<length;i++)

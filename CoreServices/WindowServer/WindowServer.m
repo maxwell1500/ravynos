@@ -408,6 +408,7 @@ static long WSNow_ms(void) {
 
     displays = [NSMutableArray new];
     apps = [NSMutableDictionary new];
+    pidApps = [NSMutableDictionary new];
 
     for(int i = 0; i < kCGNumReservedWindowLevels; ++i)
         _windows[i] = [NSMutableArray new];
@@ -1252,6 +1253,24 @@ static pthread_mutex_t _pendingLock = PTHREAD_MUTEX_INITIALIZER;
     return YES;
 }
 
+/* WindowServer runs as root, so a client-supplied bundle path is untrusted
+ * input: any app could otherwise ask the root server to exec an arbitrary
+ * file.  Only root-owned, non-group/world-writable executables inside
+ * /Applications or /System/Library may be spawned. */
+static BOOL trustedLaunchPath(const char *exe) {
+    if(!(strncmp(exe, "/Applications/", 14) == 0 ||
+         strncmp(exe, "/System/Library/", 16) == 0))
+        return NO;
+    struct stat st;
+    if(stat(exe, &st) != 0)
+        return NO;
+    if(st.st_uid != 0)
+        return NO;
+    if(st.st_mode & (S_IWGRP | S_IWOTH))
+        return NO;
+    return YES;
+}
+
 /* Queue a bundle launch.  The spawn itself happens in the main loop, with
  * no registry lock held: a child forked from a locked section inherits the
  * locked mutex and never completes its launch handshake. */
@@ -1269,6 +1288,10 @@ static pthread_mutex_t _pendingLock = PTHREAD_MUTEX_INITIALIZER;
     }
     if(![self resolveBundleExecutable:bundlePath into:exe size:sizeof(exe)]) {
         fprintf(stderr, "[WS] open bundle: no executable for %s\n", [bundlePath UTF8String]);
+        return;
+    }
+    if(!trustedLaunchPath(exe)) {
+        fprintf(stderr, "[WS] open bundle: REFUSED untrusted path %s\n", exe);
         return;
     }
 
@@ -2634,9 +2657,11 @@ static pthread_mutex_t _pendingLock = PTHREAD_MUTEX_INITIALIZER;
     struct wsRPCSimple data;
     int ret = kCGErrorFailure;
 
-    WSAppRecord *app = [apps objectForKey:[NSString stringWithCString:msg->bundleID]];
-    if(app == nil || ![app isKindOfClass:[WSAppRecord class]])
-        app = [self findAppByPID:msg->pid];
+    WSAppRecord *app = [self findAppByPID:msg->pid];
+    if(app == nil)
+        app = [apps objectForKey:[NSString stringWithCString:msg->bundleID]];
+    if(app != nil && ![app isKindOfClass:[WSAppRecord class]])
+        app = nil;
     if(app) {
         ret = kCGErrorSuccess;
         [app mouseCursorConnected:((struct wsRPCSimple *)msg->data)->val1];
@@ -2685,9 +2710,11 @@ static pthread_mutex_t _pendingLock = PTHREAD_MUTEX_INITIALIZER;
 
     if(msg->len == sizeof(struct wsRPCWindow)) {
         struct wsRPCWindow *data = (struct wsRPCWindow*)msg->data;
-        WSAppRecord *app = [apps objectForKey:[NSString stringWithCString:msg->bundleID]];
-        if(app == nil || ![app isKindOfClass:[WSAppRecord class]])
-            app = [self findAppByPID:msg->pid];
+        WSAppRecord *app = [self findAppByPID:msg->pid];
+        if(app == nil)
+            app = [apps objectForKey:[NSString stringWithCString:msg->bundleID]];
+        if(app != nil && ![app isKindOfClass:[WSAppRecord class]])
+            app = nil;
         if(app != nil) {
             if([self windowCreate:data forApp:app] != 0)
                 reply.val1 = kWSErrorSuccess;
@@ -2703,9 +2730,11 @@ static pthread_mutex_t _pendingLock = PTHREAD_MUTEX_INITIALIZER;
 
     if(msg->len == sizeof(struct wsRPCWindow)) {
         struct wsRPCWindow *data = (struct wsRPCWindow*)msg->data;
-        WSAppRecord *app = [apps objectForKey:[NSString stringWithCString:msg->bundleID]];
-        if(app == nil || ![app isKindOfClass:[WSAppRecord class]])
-            app = [self findAppByPID:msg->pid];
+        WSAppRecord *app = [self findAppByPID:msg->pid];
+        if(app == nil)
+            app = [apps objectForKey:[NSString stringWithCString:msg->bundleID]];
+        if(app != nil && ![app isKindOfClass:[WSAppRecord class]])
+            app = nil;
         if(app != nil) {
             [self windowModify:data forApp:app];
             reply.val1 = kWSErrorSuccess;
@@ -2719,9 +2748,11 @@ static pthread_mutex_t _pendingLock = PTHREAD_MUTEX_INITIALIZER;
 -(void)rpcWindowDestroy:(PortMessage *)msg {
     if(msg->len == sizeof(struct wsRPCWindow)) {
         struct wsRPCWindow *data = (struct wsRPCWindow*)msg->data;
-        WSAppRecord *app = [apps objectForKey:[NSString stringWithCString:msg->bundleID]];
-        if(app == nil || ![app isKindOfClass:[WSAppRecord class]])
-            app = [self findAppByPID:msg->pid];
+        WSAppRecord *app = [self findAppByPID:msg->pid];
+        if(app == nil)
+            app = [apps objectForKey:[NSString stringWithCString:msg->bundleID]];
+        if(app != nil && ![app isKindOfClass:[WSAppRecord class]])
+            app = nil;
         if(app != nil) {
             WSWindowRecord *winrec = [app removeWindowWithID:data->windowID];
             [self removeWindowFromAllLevels:winrec];
@@ -2963,22 +2994,25 @@ static pthread_mutex_t _pendingLock = PTHREAD_MUTEX_INITIALIZER;
                 NSString *bundleID = [NSString stringWithCString:msg.portMsg.bundleID];                if(logLevel >= WS_INFO)
                     NSLog(@"Port registration received from %@ pid %u for port %u", bundleID, pid, port);
                 pthread_mutex_lock(&appsLock);
-                WSAppRecord *rec = [apps objectForKey:bundleID];
+                NSString *pidKey = [[NSString alloc] initWithFormat:@"%d", (int)pid];
+                WSAppRecord *rec = [pidApps objectForKey:pidKey];
                 if(!rec) {
                     rec = [WSAppRecord new];
                     rec.bundleID = bundleID;
-                    rec.port = port;
                     if([bundleID isEqualToString:@"com.ravynos.SystemUIServer"] ||
                             [bundleID isEqualToString:@"com.ravynos.Dock"])
                         [rec skipSwitcher:YES];
-                } else if(port != MACH_PORT_NULL && port != MACH_PORT_DEAD) {
-                    rec.port = port;
+                    [pidApps setObject:rec forKey:pidKey];
                 }
+                /* One record per pid: a second instance of the same bundle
+                 * must not steal the first's port (the old code overwrote
+                 * rec.pid/rec.port on the shared bundle-keyed record). */
+                if(port != MACH_PORT_NULL && port != MACH_PORT_DEAD)
+                    rec.port = port;
                 rec.pid = pid;
                 rec.path = _pathForPID(pid);
-                if(port != rec.port && logLevel >= WS_WARNING)
-                    NSLog(@"Port registration received for %@ pid %u when already registered (%u -> %u)",
-                            rec.bundleID, pid, rec.port, port);
+                /* Bundle-keyed lookups (Dock activation, menu sync) target
+                 * the newest instance. */
                 [apps setObject:rec forKey:bundleID];
                 pthread_mutex_unlock(&appsLock);
 
@@ -3448,7 +3482,13 @@ static pthread_mutex_t _pendingLock = PTHREAD_MUTEX_INITIALIZER;
                         }
                     }
                     pthread_mutex_lock(&appsLock);
-                    [apps removeObjectForKey:deadBundleID];
+                    /* Remove exactly the record of the pid that died.  The
+                     * bundle-keyed entry goes only if it still points at
+                     * this record -- with two live instances it points at
+                     * the newer one and must survive. */
+                    [pidApps removeObjectForKey:[[NSString alloc] initWithFormat:@"%d", (int)out[i].ident]];
+                    if([apps objectForKey:deadBundleID] == app)
+                        [apps removeObjectForKey:deadBundleID];
                     WSAppRecord *sysui = [apps objectForKey:@"com.ravynos.SystemUIServer"];
                     mach_port_t sysuiPort = (sysui != nil && [sysui isKindOfClass:[WSAppRecord class]])
                         ? [sysui port] : MACH_PORT_NULL;
@@ -3881,7 +3921,7 @@ static pthread_mutex_t _pendingLock = PTHREAD_MUTEX_INITIALIZER;
 /* Returns an unowned pointer. The caller must hold appsLock, and must not use
  * the pointer after unlocking. */
 - (WSAppRecord *)findAppByPID:(unsigned int)pid {
-    NSEnumerator *apprecs = [apps objectEnumerator];
+    NSEnumerator *apprecs = [pidApps objectEnumerator];
     id record;
     while((record = [apprecs nextObject]) != nil) {
         if(![record isKindOfClass:[WSAppRecord class]])
@@ -3953,7 +3993,9 @@ static pthread_mutex_t _pendingLock = PTHREAD_MUTEX_INITIALIZER;
 
     WSAppRecord *app;
     NSMutableArray *viableApps = [NSMutableArray new];
-    NSArray *list = [apps allValues];
+    pthread_mutex_lock(&appsLock);
+    NSArray *list = [[apps allValues] copy];   /* records retained by the copy */
+    pthread_mutex_unlock(&appsLock);
     for(int i = 0; i < [list count]; ++i) {
         id obj = [list objectAtIndex:i];
         if(![obj isKindOfClass:[WSAppRecord class]])

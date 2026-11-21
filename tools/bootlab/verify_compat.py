@@ -34,13 +34,6 @@ TCP_PORT = 8123
 TCP_MARKER = "RAVYN-TCP-OK"
 
 
-def qemu_pids():
-    try:
-        out = subprocess.run(["pgrep", "-f", "qemu-system-x86_64"],
-                             capture_output=True, text=True).stdout
-    except OSError:
-        return []
-    return [int(x) for x in out.split()]
 
 
 def kill_guest(proc):
@@ -53,11 +46,9 @@ def kill_guest(proc):
                 proc.kill()
             except Exception:                   # noqa: BLE001
                 pass
-    for pid in qemu_pids():
-        try:
-            os.kill(pid, 15)
-        except OSError:
-            pass
+    # The old code swept every qemu-system-x86_64 on the host here; that
+    # killed unrelated guests (e.g. an interactive session). proc above is
+    # the only process we own.
 
 
 
@@ -302,13 +293,17 @@ def main() -> int:
     print(report)
 
     failures = 0
-    lines = report.splitlines()
+    # The guest appends (never truncates) compat.log so earlier boots stay
+    # readable; judge THIS boot only: everything after the last boot banner.
+    # Pre-banner images have no banner, so fall back to the whole report.
+    boots = report.split("=== compat boot ")
+    section, lines = boots[-1], boots[-1].splitlines()
     # A fixture may record a defect that is known and open rather than pass or
     # fail: "FIXTURE <name> KNOWN-CRASH".  It is reported, loudly, but it does
     # not turn every other result into a failure -- an always-red gate stops
     # being a gate.
     known = []
-    for m in re.finditer(r"^FIXTURE (\w+) KNOWN-CRASH(?: \((.*)\))?", report, re.M):
+    for m in re.finditer(r"^FIXTURE (\w+) KNOWN-CRASH(?: \((.*)\))?", section, re.M):
         known.append((m.group(1), m.group(2) or "known crash"))
     for name, why in known:
         print("KNOWN %-10s %s" % (name, why))

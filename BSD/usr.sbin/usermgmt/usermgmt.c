@@ -9,10 +9,11 @@
  *   groupadd [-g gid] name
  *
  * It edits the flat databases this system uses (/etc/master.passwd,
- * /etc/passwd, /etc/group) under an exclusive lock, replaces each file
- * atomically, and creates the home directory with the skeleton a Unix login
- * expects.  It deliberately does not use PAM: the in-tree passwd(1) links
- * against PAM, which this tree does not build, so it cannot run at all.
+ * /etc/passwd, /etc/group) under an exclusive flock(2) on /etc/master.passwd,
+ * replaces each file atomically, and creates the home directory with the
+ * skeleton a Unix login expects.  It deliberately does not use PAM: the
+ * in-tree passwd(1) links against PAM, which this tree does not build, so it
+ * cannot run at all.
  *
  * Passwords are hashed with crypt(3), the same call WindowServer's login
  * window verifies with.  This libcrypt is DES, so a password longer than
@@ -123,7 +124,7 @@ read_file(const char *path)
  * account database with no password file at all.
  */
 static int
-write_file(const char *path, const char *text)
+write_file(const char *path, const char *text, mode_t mode)
 {
 	char tmp[PATH_MAX];
 	int fd, len = (int)strlen(text);
@@ -132,14 +133,14 @@ write_file(const char *path, const char *text)
 	fd = mkstemp(tmp);
 	if (fd >= 0) {
 		if (write(fd, text, len) == len && fsync(fd) == 0 &&
-		    fchmod(fd, 0644) == 0 && close(fd) == 0 &&
+		    fchmod(fd, mode) == 0 && close(fd) == 0 &&
 		    rename(tmp, path) == 0)
 			return (0);
 		unlink(tmp);
 		close(fd);
 	}
 
-	fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+	fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, mode);
 	if (fd < 0)
 		return (-1);
 	if (write(fd, text, len) != len) {
@@ -147,6 +148,27 @@ write_file(const char *path, const char *text)
 		return (-1);
 	}
 	return (close(fd));
+}
+
+static int
+lock_accounts(void)
+{
+	int fd = open(MASTERPASSWD, O_RDWR | O_CREAT, 0600);
+
+	if (fd < 0)
+		return (-1);
+	if (flock(fd, LOCK_EX) != 0) {
+		close(fd);
+		return (-1);
+	}
+	return (fd);
+}
+
+static void
+unlock_accounts(int fd)
+{
+	if (fd >= 0)
+		close(fd);
 }
 
 static char **
@@ -475,6 +497,10 @@ cmd_useradd(int argc, char **argv)
 	if (getuid() != 0)
 		errx(1, "must be run as root");
 
+	int lockfd = lock_accounts();
+	if (lockfd < 0)
+		err(1, "cannot lock %s", MASTERPASSWD);
+
 	char *mtext = read_file(MASTERPASSWD);
 	char *ptext = read_file(PASSWDFILE);
 	char *gtext = read_file(GROUPFILE);
@@ -530,10 +556,11 @@ cmd_useradd(int argc, char **argv)
 	char *newm = join_lines(mlines, mn);
 	char *newp = join_lines(plines, pn);
 	char *newg = join_lines(glines, gn);
-	if (write_file(MASTERPASSWD, newm) != 0 ||
-	    write_file(PASSWDFILE, newp) != 0 ||
-	    write_file(GROUPFILE, newg) != 0)
+	if (write_file(MASTERPASSWD, newm, 0600) != 0 ||
+	    write_file(PASSWDFILE, newp, 0644) != 0 ||
+	    write_file(GROUPFILE, newg, 0644) != 0)
 		err(1, "cannot update the account database");
+	unlock_accounts(lockfd);
 
 	if (create_home && make_home(home, uid, gid) != 0)
 		err(1, "cannot create home directory %s", home);
@@ -615,6 +642,10 @@ cmd_usermod(int argc, char **argv)
 	gid_t gid = 0;
 	if (newgid != NULL && lookup_gid(newgid, &gid) != 0)
 		errx(1, "no such group: %s", newgid);
+
+	int lockfd = lock_accounts();
+	if (lockfd < 0)
+		err(1, "cannot lock %s", MASTERPASSWD);
 
 	char *mtext = read_file(MASTERPASSWD);
 	char *ptext = read_file(PASSWDFILE);
@@ -721,10 +752,11 @@ cmd_usermod(int argc, char **argv)
 		}
 	}
 
-	if (write_file(MASTERPASSWD, join_lines(mlines, mn)) != 0 ||
-	    write_file(PASSWDFILE, join_lines(plines, pn)) != 0 ||
-	    write_file(GROUPFILE, join_lines(glines, gn)) != 0)
+	if (write_file(MASTERPASSWD, join_lines(mlines, mn), 0600) != 0 ||
+	    write_file(PASSWDFILE, join_lines(plines, pn), 0644) != 0 ||
+	    write_file(GROUPFILE, join_lines(glines, gn), 0644) != 0)
 		err(1, "cannot update the account database");
+	unlock_accounts(lockfd);
 
 	audit(newname ? newname : name, "usermod", 1);
 	printf("usermod: modified user %s\n", newname ? newname : name);
@@ -753,6 +785,10 @@ cmd_userdel(int argc, char **argv)
 	const char *name = argv[0];
 	if (getuid() != 0)
 		errx(1, "must be run as root");
+
+	int lockfd = lock_accounts();
+	if (lockfd < 0)
+		err(1, "cannot lock %s", MASTERPASSWD);
 
 	char *mtext = read_file(MASTERPASSWD);
 	char *ptext = read_file(PASSWDFILE);
@@ -800,10 +836,11 @@ cmd_userdel(int argc, char **argv)
 
 	group_del_member(glines, gn, name);
 
-	if (write_file(MASTERPASSWD, join_lines(mlines, mn)) != 0 ||
-	    write_file(PASSWDFILE, join_lines(plines, pn)) != 0 ||
-	    write_file(GROUPFILE, join_lines(glines, gn)) != 0)
+	if (write_file(MASTERPASSWD, join_lines(mlines, mn), 0600) != 0 ||
+	    write_file(PASSWDFILE, join_lines(plines, pn), 0644) != 0 ||
+	    write_file(GROUPFILE, join_lines(glines, gn), 0644) != 0)
 		err(1, "cannot update the account database");
+	unlock_accounts(lockfd);
 
 	if (remove_home && home[0] != '\0') {
 		if (strncmp(home, HOME_ROOT "/", strlen(HOME_ROOT "/")) != 0)
@@ -928,7 +965,7 @@ cmd_passwd(int argc, char **argv)
 		mlines[i] = line;
 	}
 
-	if (write_file(MASTERPASSWD, join_lines(mlines, mn)) != 0)
+	if (write_file(MASTERPASSWD, join_lines(mlines, mn), 0600) != 0)
 		err(1, "cannot update %s", MASTERPASSWD);
 
 	audit(name, "passwd", 1);
@@ -981,7 +1018,7 @@ cmd_groupadd(int argc, char **argv)
 	glines[gn++] = line;
 	glines[gn] = NULL;
 
-	if (write_file(GROUPFILE, join_lines(glines, gn)) != 0)
+	if (write_file(GROUPFILE, join_lines(glines, gn), 0644) != 0)
 		err(1, "cannot update %s", GROUPFILE);
 
 	printf("groupadd: added group %s (gid %u)\n", name, (unsigned)gid);
@@ -1051,7 +1088,7 @@ cmd_groupmod(int argc, char **argv)
 	}
 
 	glines[found] = join_fields(gfields, 4);
-	if (write_file(GROUPFILE, join_lines(glines, gn)) != 0)
+	if (write_file(GROUPFILE, join_lines(glines, gn), 0644) != 0)
 		err(1, "cannot update %s", GROUPFILE);
 
 	printf("groupmod: modified group %s\n", newname ? newname : name);
@@ -1099,7 +1136,7 @@ cmd_groupdel(int argc, char **argv)
 	if (!found)
 		errx(1, "no such group: %s", name);
 
-	if (write_file(GROUPFILE, join_lines(glines, out)) != 0)
+	if (write_file(GROUPFILE, join_lines(glines, out), 0644) != 0)
 		err(1, "cannot update %s", GROUPFILE);
 
 	printf("groupdel: removed group %s\n", name);

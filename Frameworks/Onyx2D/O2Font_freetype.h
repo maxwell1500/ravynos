@@ -1,8 +1,9 @@
 #import <Onyx2D/O2Font.h>
+#import <CoreGraphics/CGPath.h>
+#import <CoreGraphics/CGFont.h>
 #import "O2Defines_FreeType.h"
 
 #ifdef FREETYPE_PRESENT
-
 #include <ft2build.h>
 #include FT_FREETYPE_H
 
@@ -26,6 +27,7 @@
 - (FT_Face)face;
 
 FT_Face O2FontFreeTypeFace(O2Font_freetype *self);
+CGPathRef O2Font_freetypeCreatePath(FT_Face face, int upem, double size, CGGlyph glyph, const CGAffineTransform *xform);
 
 @end
 

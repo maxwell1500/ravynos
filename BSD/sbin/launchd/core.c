@@ -7750,6 +7750,16 @@ bool job_is_god(job_t j)
 	return j->embedded_god;
 }
 
+/* Declared in core.h, used by ipc.c to gate privileged MIG commands. */
+bool job_is_anonymous(job_t j)
+{
+	return j ? j->anonymous : false;
+}
+
+uid_t job_get_uid(job_t j)
+{
+	return j ? j->mach_uid : (uid_t)-1;
+}
 bool
 job_ack_port_destruction(mach_port_t p)
 {

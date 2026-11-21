@@ -519,7 +519,12 @@ ipc_process_command(launch_data_t data, const char *cmd, void *context)
 #if TARGET_OS_EMBEDDED
 	bool allow_privileged_ops = (!ctx->j || job_is_god(ctx->j));
 #else
-	bool allow_privileged_ops = true;
+	/* Over MIG every request resolves to the sender's own job
+	 * (job_mig_intran2), so ctx->j is never NULL here.  Privileged ops are
+	 * allowed only for real (plist-loaded, uid-0) launchd jobs: an
+	 * anonymous job is any userland process that talked to us, and a
+	 * job with a UserName must not be able to submit root work. */
+	bool allow_privileged_ops = (!ctx->j || (!job_is_anonymous(ctx->j) && job_get_uid(ctx->j) == 0));
 #endif
 
 	if (ctx->resp)

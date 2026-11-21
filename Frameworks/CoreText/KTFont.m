@@ -152,93 +152,21 @@ ravyn_glyph_path(id fontref, int upem, double size, CGGlyph glyph)
 {
 #ifdef FREETYPE_PRESENT
    FT_Face face = O2FontFreeTypeFace((O2Font_freetype *)fontref);
-   if (face == NULL || upem <= 0)
-      return NULL;
-   /* Deterministic point space: set the size before every load.  A face
-    * someone else sized returns 26.6 fixed-point pixels, a fresh face
-    * returns font units — derive nothing from the previous state. */
-   if (size <= 0)
-      size = (double)upem;
-   if (FT_Set_Char_Size(face, 0, (FT_F26Dot6)(size * 64.0), 72, 72) != 0)
-      return NULL;
-   if (FT_Load_Glyph(face, (FT_UInt)glyph, FT_LOAD_DEFAULT) != 0)
-      return NULL;
-   FT_Outline *outline = &face->glyph->outline;
-   (void)face; (void)size; (void)upem;
-   if (outline->n_points == 0 || outline->n_contours <= 0)
-      return NULL;
-   /* Points are 26.6 fixed-point pixels, y-up, baseline at origin —
-    * the space CTFontCreatePathForGlyph returns on macOS. */
-   const CGFloat scale = 1.0 / 64.0;
-   CGMutablePathRef path = CGPathCreateMutable();
-   for (int c = 0; c < outline->n_contours; c++) {
-      int end = outline->contours[c];
-      int first = (c == 0) ? 0 : outline->contours[c - 1] + 1;
-      if (end < first)
-         continue;
-      int start = first;
-      BOOL moved = NO;
-      CGFloat curx = outline->points[first].x * scale;
-      CGFloat cury = outline->points[first].y * scale;
-      while ((outline->tags[start] & FT_CURVE_TAG_ON) == 0 && start + 1 <= end) {
-         if (outline->tags[start + 1] & FT_CURVE_TAG_ON) {
-            CGPathMoveToPoint(path, NULL,
-               outline->points[start].x * scale, outline->points[start].y * scale);
-            start++;
-            moved = YES;
-            curx = outline->points[start].x * scale;
-            cury = outline->points[start].y * scale;
-            break;
-         }
-         CGPathMoveToPoint(path, NULL,
-            (outline->points[start].x + outline->points[start + 1].x) * 0.5 * scale,
-            (outline->points[start].y + outline->points[start + 1].y) * 0.5 * scale);
-         start += 2;
-         moved = YES;
-         curx = outline->points[start - 1].x * scale;
-         cury = outline->points[start - 1].y * scale;
-         break;
-      }
-      if (!moved) {
-         CGPathMoveToPoint(path, NULL, curx, cury);
-      }
-      for (int p = first + 1; p <= end; p++) {
-         CGFloat ex, ey;
-         if (outline->tags[p] & FT_CURVE_TAG_ON) {
-            CGPathAddLineToPoint(path, NULL,
-               outline->points[p].x * scale, outline->points[p].y * scale);
-            curx = outline->points[p].x * scale;
-            cury = outline->points[p].y * scale;
-            continue;
-         }
-         /* Quadratic with control points[p]: elevate to cubic. */
-         CGFloat ctrlx = outline->points[p].x * scale;
-         CGFloat ctrly = outline->points[p].y * scale;
-         if (p + 1 <= end && (outline->tags[p + 1] & FT_CURVE_TAG_ON)) {
-            ex = outline->points[p + 1].x * scale;
-            ey = outline->points[p + 1].y * scale;
-            p++;
-         } else {
-            int wrap = (p + 1 > end) ? first : p + 1;
-            ex = (outline->points[p].x + outline->points[wrap].x) * 0.5 * scale;
-            ey = (outline->points[p].y + outline->points[wrap].y) * 0.5 * scale;
-         }
-         CGPathAddCurveToPoint(path, NULL,
-            curx + (2.0 / 3.0) * (ctrlx - curx), cury + (2.0 / 3.0) * (ctrly - cury),
-            ex + (2.0 / 3.0) * (ctrlx - ex), ey + (2.0 / 3.0) * (ctrly - ey),
-            ex, ey);
-         curx = ex;
-         cury = ey;
-      }
-   }
-   return (CGPathRef)path;
+   return O2Font_freetypeCreatePath(face, upem, size, glyph, NULL);
 #else
+   (void)fontref; (void)upem; (void)size; (void)glyph;
    return NULL;
 #endif
 }
 
 -(CGPathRef)createPathForGlyph:(CGGlyph)glyph transform:(CGAffineTransform *)xform {
-   return ravyn_glyph_path(_font, (int)_unitsPerEm, (double)_size, glyph);
+#ifdef FREETYPE_PRESENT
+   FT_Face face = O2FontFreeTypeFace((O2Font_freetype *)_font);
+   return O2Font_freetypeCreatePath(face, (int)_unitsPerEm, (double)_size, glyph, xform);
+#else
+   (void)glyph; (void)xform;
+   return NULL;
+#endif
 }
 
 @end

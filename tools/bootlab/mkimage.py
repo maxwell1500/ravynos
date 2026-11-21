@@ -204,7 +204,13 @@ def main():
         parent = mkdirs(os.path.dirname(path))
         from fat32img import Node
         parent.children.append(Node(os.path.basename(path), False, data))
-        expected[path.lower()] = data
+        key = path.lower()
+        if key in expected:
+            # A duplicate would append a second FAT entry with the same name
+            # while `expected` kept only the last content -- the read-back
+            # verify passes whenever contents match, so the image drifts.
+            sys.exit("duplicate manifest path %s" % path)
+        expected[key] = data
 
     def read_asset(rel):
         p = os.path.join(HERE, "assets", rel)

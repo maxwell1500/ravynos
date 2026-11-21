@@ -11,7 +11,9 @@
 # never look like a pass.
 
 LOG=/var/log/compat.log
-: > "$LOG"
+# Append, never truncate: the previous boot's diagnostics must survive this
+# boot (verify_compat reads this file across boots of the same image).
+echo "=== compat boot $(date) ===" >> "$LOG"
 
 # Sample the browser *while it starts*, not only at the end.  Firefox is
 # launched by its own launchd job at boot and creates (or fails to create) its
@@ -123,9 +125,9 @@ fi
 # question from whether bundle launch works at all.
 # NB: the image ships test(1) but not [ as a separate binary, so this script
 # uses `test`.
-echo "--- launch: open /usr/local/compat/CocoaProbe.app" >> "$LOG"
+echo "--- launch: open /Applications/CocoaProbe.app" >> "$LOG"
 rm -f /tmp/ravyn-compat-launched /tmp/ravyn-compat-entered-main
-/usr/bin/open /usr/local/compat/CocoaProbe.app >> "$LOG" 2>&1
+/usr/bin/open /Applications/CocoaProbe.app >> "$LOG" 2>&1
 open_rc=$?
 i=0
 while test $i -lt 10; do
@@ -329,7 +331,7 @@ else
     echo "pasteboard write=$pb_write read=$pb_read" >> "$LOG"
     report pasteboard 1
 fi
-run_fixture cocoa /usr/local/compat/CocoaProbe.app/Contents/MacOS/CocoaProbe
+run_fixture cocoa /Applications/CocoaProbe.app/Contents/MacOS/CocoaProbe
 
 # Click routing oracle.  Opt-in: it puts a window on the screen and waits for
 # injected clicks, so a boot that is being driven by the WM harness must not

@@ -77,8 +77,13 @@ extern pthread_mutex_t renderLock;
     return found;
 }
 
--(NSMutableArray *)windows {
-    return _windows;
+/* A copy, taken under renderLock: callers walk the result after unlocking,
+ * and the RPC thread may mutate the live array underneath them. */
+-(NSArray *)windows {
+    pthread_mutex_lock(&renderLock);
+    NSArray *copy = [_windows copy];
+    pthread_mutex_unlock(&renderLock);
+    return copy;
 }
 
 -(void)removeAllWindows {

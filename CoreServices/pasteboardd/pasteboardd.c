@@ -360,8 +360,6 @@ int main(int argc, char **argv) {
             break;
         }
 
-        if (MACH_MSGH_BITS_REMOTE(msg->header.msgh_bits) == MACH_MSG_TYPE_COPY_SEND)
-            mach_port_deallocate(mach_task_self(), msg->header.msgh_remote_port);
 
         b = boardFor(msg->board, 1);
         if (b) {
@@ -383,6 +381,12 @@ int main(int argc, char **argv) {
         msg->changeCount = b ? b->changeCount : 0;
         mach_msg((mach_msg_header_t *)msg, MACH_SEND_MSG, sizeof(PBoardMessage),
                  0, MACH_PORT_NULL, MACH_MSG_TIMEOUT_NONE, MACH_PORT_NULL);
+        /* The send consumes one right; drop any remainder so the client's
+         * reply port (copied into us at receive) does not leak.  The old
+         * COPY_SEND-before-handle check never fired (kernel normalizes the
+         * local bits) and leaked one send right per request. */
+        if (msg->header.msgh_remote_port != MACH_PORT_NULL)
+            mach_port_deallocate(mach_task_self(), msg->header.msgh_remote_port);
         free(msg);
     }
 

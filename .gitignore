@@ -128,6 +128,11 @@ Scratch from a standalone host compile, not part of any build system.
 /Frameworks/**/*.dylib
 /Frameworks/**/*.so
 
+# CoreServices programs build in place too (bmake via build-libraries.sh --bsd).
+/CoreServices/pasteboardd/.depend*
+/CoreServices/pasteboardd/pasteboardd
+/CoreServices/pasteboardd/pasteboardd.*
+
 # Frameworks_build is the CMake build output directory for the Frameworks.
 /Frameworks_build/
 

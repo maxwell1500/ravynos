@@ -7,6 +7,7 @@ The above copyright notice and this permission notice shall be included in all c
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE. */
 #import <Onyx2D/O2Font.h>
 #import <Onyx2D/O2Exceptions.h>
+#import <Onyx2D/O2Font_freetype.h>
 #import "O2Encoding.h"
 
 @implementation O2Font
@@ -426,6 +427,21 @@ O2FontPlatformType O2FontGetPlatformType(O2Font *self) {
 
 CFStringRef O2FontCopyFullName(O2FontRef self) {
    return self ? (CFStringRef)[self->_name copy] : (CFStringRef)@"System";
+}
+
+/* CGFont.m calls this; nothing defined it, so any process reaching
+ * CGFontCopyFamilyName aborted with dyld "Symbol not found".  Family is the
+ * FreeType face's family name when we have one; otherwise the font's full
+ * name is the best answer this layer has. */
+CFStringRef O2FontCopyFamilyName(O2FontRef self) {
+   if(self == nil)
+      return (CFStringRef)@"System";
+   if([self isKindOfClass:[O2Font_freetype class]]) {
+      FT_Face face = O2FontFreeTypeFace((O2Font_freetype *)self);
+      if(face != NULL && face->family_name != NULL)
+         return (CFStringRef)[[NSString alloc] initWithUTF8String:face->family_name];
+   }
+   return (CFStringRef)[self->_name copy];
 }
 int       O2FontGetUnitsPerEm(O2FontRef self) {
    return self ? self->_unitsPerEm : 1000;

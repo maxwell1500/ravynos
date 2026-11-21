@@ -72,7 +72,8 @@ extern pthread_mutex_t renderLock;
     int cursorHideCount;
 
     NSMutableArray *displays;
-    NSMutableDictionary *apps;          // key is CFBundleID
+    NSMutableDictionary *apps;          // key is CFBundleID, newest instance wins
+    NSMutableDictionary *pidApps;       // key is pid string: every live instance
     NSMutableArray *_windows[kCGNumReservedWindowLevels];
     WSAppRecord *curApp;
     WSWindowRecord *curWindow;

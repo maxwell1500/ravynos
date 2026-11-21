@@ -1758,12 +1758,12 @@
       "comment": "ABI conformance fixture (tests/compat)"
     },
     {
-      "path": "usr/local/compat/CocoaProbe.app/Contents/MacOS/CocoaProbe",
+      "path": "Applications/CocoaProbe.app/Contents/MacOS/CocoaProbe",
       "file": "work/compat/CocoaProbe.app/Contents/MacOS/CocoaProbe",
       "comment": "ABI conformance fixture (tests/compat)"
     },
     {
-      "path": "usr/local/compat/CocoaProbe.app/Contents/Info.plist",
+      "path": "Applications/CocoaProbe.app/Contents/Info.plist",
       "file": "work/compat/CocoaProbe.app/Contents/Info.plist",
       "comment": "ABI conformance fixture (tests/compat)"
     },

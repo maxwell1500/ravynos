@@ -335,6 +335,9 @@ extern unsigned char _CFIsObjCType(const void *cf);
    [_animations release];
    [_minificationFilter release];
    [_magnificationFilter release];
+   [self setContents:nil];
+   [_contentsGravity release];
+   [_textureId release];
    [super dealloc];
 }
 

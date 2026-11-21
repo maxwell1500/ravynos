@@ -714,12 +714,12 @@ CTFontManagerCopyAvailablePostScriptNames(void)
  * arrays returned by CoreText (font family names, matching descriptors), and
  * a C CFArray does not respond to countByEnumeratingWithState:.  This wrapper
  * is an ObjC object registered as the ObjC class for kNSCFTypeArray: CFArray
- * API calls dispatch to -count/-objectAtIndex: (CFArray.c already has that
- * dispatch), and fast enumeration walks the inner C array.
+ * is an ObjC NSArray subclass: CoreFoundation's CFArray hierarchy walk
+ * reaches it through NSArray, so CF_IS_OBJC dispatches to our overrides
+ * without overwriting the NSArray bridge slot.
  */
-extern int _CFRuntimeRegisterObjCClass(CFTypeID typeID, uintptr_t cls);
 
-@interface RavynCFArray : NSObject <NSFastEnumeration> {
+@interface RavynCFArray : NSArray <NSFastEnumeration> {
     id _storage;
     BOOL _isCFArray;
 }
@@ -820,14 +820,6 @@ extern int _CFRuntimeRegisterObjCClass(CFTypeID typeID, uintptr_t cls);
 static void
 ravyn_ensure_array_bridge(void)
 {
-    static int registered = 0;
-
-    if (!registered) {
-        registered = 1;
-        /* RavynCFArray is a compiled class; no runtime class creation. */
-        _CFRuntimeRegisterObjCClass(kNSCFTypeArray,
-            (uintptr_t)[RavynCFArray class]);
-    }
 }
 
 static CFArrayRef

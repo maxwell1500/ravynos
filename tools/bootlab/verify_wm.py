@@ -742,13 +742,19 @@ def main():
     # A fixed settle was not enough: Filer's window can stay hidden for tens
     # of seconds after mbw-up while the app finishes launching, and every
     # check that begins before its first visible frame is measuring a desktop
-    # with no window on it.  Wait for the compositor to report the window,
-    # with a bound so a real failure still fails instead of hanging.
-    end = time.time() + 120.0
+    # with no window on it.  Wait for the compositor to report the window.
+    # 120s was too short when the compat fixture suite is also running (the
+    # CocoaProbe open test forks an AppKit process at boot and competes for
+    # the single TCG vCPU), and the loop used to fall through silently:
+    # "Filer window is up" printed even when the marker never came.
+    end = time.time() + 420.0
     while time.time() < end and not sniffer.text_has("PRESENT front=com.ravynos.Filer"):
         if proc.poll() is not None:
             sys.exit("qemu exited while waiting for the Filer window")
         time.sleep(1.0)
+    if not sniffer.text_has("PRESENT front=com.ravynos.Filer"):
+        proc.terminate()
+        sys.exit("Filer window never became PRESENT (waited 420s after mbw-up)")
     print("   Filer window is up; starting checks", flush=True)
     time.sleep(1.0)
     res = Results()

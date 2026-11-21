@@ -118,20 +118,38 @@ size_t CTFontGetGlyphCount(CTFontRef self) {
 }
 
 BOOL CTFontGetGlyphsForCharacters(CTFontRef self,const unichar *characters,CGGlyph *glyphs,size_t count) {
-   /* cairo mac backend passes CFCharBuffer = CFArray of 1-char CFStrings;
-    * legacy callers pass unichar arrays. CFString slots are heap pointers,
-    * always above any unicode scalar on this VM. */
+   /* cairo mac backend passes CFCharBuffer = array of 1-char CFString
+    * pointers; legacy callers pass unichar arrays.  Only sniff when we
+    * can read a pointer slot without overreading (count >= 4, so count*2
+    * >= sizeof(void*)) and the slots look like CFStrings on the heap.
+    * count < 4 cannot be safely sniffed; treat as unichar. */
    unichar stackbuf[64];
    const unichar *ucs = characters;
-   const void **slots = (const void **)(uintptr_t)characters;
-   if (characters != NULL && count > 0 && count <= 64 &&
-       (uintptr_t)slots[0] > 0x110000 && (uintptr_t)slots[0] < 0xFFFF0000) {
-      /* cairo's indexed-glyph sentinel (unichar)-1 must not be mistaken
-       * for a CFString pointer. */
+   Boolean isCFCharBuffer = NO;
+   if (characters != NULL && count >= 4 && count <= 64) {
+      const void * const *slots = (const void * const *)(uintptr_t)characters;
+      size_t safe = (count * sizeof(unichar)) / sizeof(void *);
+      size_t i;
+      uintptr_t p0 = (uintptr_t)slots[0];
+      if (p0 >= 0x100000000ULL && p0 < 0x800000000000ULL && (p0 & 0x7) == 0) {
+         isCFCharBuffer = YES;
+         for (i = 1; i < safe && i < count; i++) {
+            uintptr_t pi = (uintptr_t)slots[i];
+            if (pi < 0x100000000ULL || pi >= 0x800000000000ULL || (pi & 0x7) != 0) {
+               isCFCharBuffer = NO;
+               break;
+            }
+         }
+         if (isCFCharBuffer &&
+             CFGetTypeID((CFTypeRef)slots[0]) != CFStringGetTypeID())
+            isCFCharBuffer = NO;
+      }
+   }
+   if (isCFCharBuffer) {
+      const void * const *slots = (const void * const *)(uintptr_t)characters;
       size_t i;
       for (i = 0; i < count; i++)
-         stackbuf[i] = CFStringGetCharacterAtIndex(
-             (CFStringRef)slots[i], 0);
+         stackbuf[i] = CFStringGetCharacterAtIndex((CFStringRef)slots[i], 0);
       ucs = stackbuf;
    }
    if (glyphs != NULL && count > 0) {
@@ -139,11 +157,17 @@ BOOL CTFontGetGlyphsForCharacters(CTFontRef self,const unichar *characters,CGGly
       for (zi = 0; zi < count; zi++)
          glyphs[zi] = CGNullGlyph;
       [self getGlyphs:glyphs forCharacters:ucs length:count];
-      if (glyphs[0] == CGNullGlyph) {
-        extern CGFontRef ravyn_fb_cg_get(void);
-        CGFontRef sfg = ravyn_fb_cg_get();
-        if (sfg != NULL)
-          CGFontGetGlyphsForUnicodeString(sfg,(const uint16_t *)ucs,glyphs,count);
+      {
+         CGFontRef sfg = NULL;
+         for (zi = 0; zi < count; zi++) {
+            if (glyphs[zi] != CGNullGlyph)
+               continue;
+            if (sfg == NULL)
+               sfg = ravyn_fb_cg_get();
+            if (sfg != NULL)
+               CGFontGetGlyphsForUnicodeString(sfg, (const uint16_t *)(ucs + zi),
+                  glyphs + zi, 1);
+         }
       }
    }
    // FIXME: change getGlyphs: to return a BOOL
@@ -269,7 +293,7 @@ CGPathRef CTFontCreatePathForGlyph(CTFontRef self,CGGlyph glyph,CGAffineTransfor
       extern CGPathRef ravyn_glyph_path(id fontref,int upem,double size,CGGlyph glyph);
       CGFontRef cg = ravyn_fb_cg_get();
       if (cg != NULL)
-         rr = ravyn_glyph_path(cg, CGFontGetUnitsPerEm(cg), 16.0, glyph);
+         rr = ravyn_glyph_path((id)cg, CGFontGetUnitsPerEm(cg), 16.0, glyph);
    } else
       rr = (CGPathRef)[self createPathForGlyph:glyph transform:xform];
    return rr;
