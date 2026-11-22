@@ -10,6 +10,12 @@ import argparse
 import threading
 import sys
 import time
+import signal
+
+# The finally-block teardown (kill QEMU, cleanup) only runs from
+# KeyboardInterrupt; plain SIGTERM killed the interpreter and orphaned a
+# still-running guest.  Route SIGTERM to the same handler as SIGINT.
+signal.signal(signal.SIGTERM, signal.default_int_handler)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -141,20 +147,30 @@ accum_lock = threading.Lock()
 # qemu dropped the overflow, and the log lost whatever happened during the
 # gap -- including, in one case, most of /etc/rc's output.
 def _serial_reader():
-    while True:
-        try:
-            c = serial_sock.recv(4096)
-        except BlockingIOError:
-            time.sleep(0.005)
-            continue
-        except Exception:
-            break
-        if not c:
-            break
-        log_f.write(c)
+    # If this thread dies, the serial log silently freezes while the guest
+    # keeps running -- a whole afternoon was spent chasing a "wedged" guest
+    # that was only a dead reader.  So every exit path is loud.
+    reason = "EOF from QEMU"
+    try:
+        while True:
+            try:
+                c = serial_sock.recv(4096)
+            except BlockingIOError:
+                time.sleep(0.005)
+                continue
+            except Exception as e:                 # noqa: BLE001
+                reason = "recv error: %r" % (e,)
+                break
+            if not c:
+                break
+            log_f.write(c)
+            log_f.flush()
+            with accum_lock:
+                accum.extend(c)
+    finally:
+        log_f.write(("\n[serial reader died: %s]\n" % reason).encode("ascii"))
         log_f.flush()
-        with accum_lock:
-            accum.extend(c)
+        print("[serial reader died: %s]" % reason, file=sys.stderr, flush=True)
 
 threading.Thread(target=_serial_reader, daemon=True).start()
 
