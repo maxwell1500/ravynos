@@ -816,8 +816,12 @@ def main():
 
         if args.only_menu:
             evs, frames, _, _ = sniffer.snapshot()
+            # Only records with a real rectangle: the newest trace line for
+            # the bar can be a MODIFY with frame=0,0 0x0 (state-only update),
+            # and aiming at (0,0) clicks the Dock's backdrop window instead
+            # (measured: "menu bar frame: 0,0 0x0", click routed to the Dock).
             bar = [x for x in frames if x["app"] == "com.ravynos.SystemUIServer"
-                   and x["fh"] <= 40]
+                   and 0 < x["fh"] <= 40 and x["fw"] > 0]
             b = bar[-1] if bar else None
             if b is None:
                 raise SystemExit("no menu bar window in the trace")
@@ -827,7 +831,10 @@ def main():
             # The leftmost item is the application menu; x inside it, y at the
             # bar's vertical centre.
             g.click_at(b["fx"] + 25, b["fy"] + b["fh"] // 2)
-            end = time.time() + 25.0
+            # Measured: the dropdown's first sizeForMenuItems: call takes
+            # 36-39 s of guest time (font metrics on first use), so a 25 s
+            # window reported "never completes" while it was merely slow.
+            end = time.time() + 150.0
             new = []
             opened = False
             while time.time() < end:
@@ -1423,7 +1430,10 @@ def main():
         nd = len(sniffer.snapshot()[2])
         nfr = len(sniffer.snapshot()[1])
         g.click_at(20, 1069)            # Apple menu in the menu bar strip
-        end = time.time() + 8.0
+        # Measured (SuiDropdownProbe): the first dropdown spends 36-39 s of
+        # guest time inside sizeForMenuItems: before its window is created;
+        # an 8 s window reported "no dropdown" while one was on its way.
+        end = time.time() + 150.0
         dropdowns = []
         while time.time() < end:
             time.sleep(0.5)
