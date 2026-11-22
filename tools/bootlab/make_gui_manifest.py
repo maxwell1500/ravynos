@@ -861,6 +861,7 @@ def main():
     #     stale fixture is refused instead of being run silently.
     compat_files = [
         ("dictkeys", "usr/local/compat/dictkeys"),
+        ("rcvtimeo", "usr/local/compat/rcvtimeo"),
         ("posix", "usr/local/compat/posix"),
         ("tcp", "usr/local/compat/tcp"),
         ("dnstest", "usr/local/compat/dnstest"),

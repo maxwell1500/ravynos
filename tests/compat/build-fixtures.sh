@@ -58,6 +58,15 @@ echo "building bootstrap probe ($TARGET)"
 "$CC" -target "$TARGET" -isysroot "$SDK" -O1 -Wall \
     -o "$OUT/bootstrap_probe" "$HERE/bootstrap_probe.c"
 
+echo "building rcvtimeo fixture ($TARGET)"
+"$CC" -target "$TARGET" -isysroot "$SDK" -O1 -Wall \
+    -o "$OUT/rcvtimeo" "$HERE/rcvtimeo.c"
+
+echo "building dictkeys fixture ($TARGET)"
+"$CC" -target "$TARGET" -isysroot "$SDK" -O1 -Wall \
+    -Wno-deprecated-declarations \
+    -framework Foundation -o "$OUT/dictkeys" "$HERE/dictkeys.m"
+
 echo "building spawn rendezvous probe ($TARGET)"
 "$CC" -target "$TARGET" -isysroot "$SDK" -O1 -Wall \
     -o "$OUT/spawnprobe" "$HERE/spawnprobe.c"

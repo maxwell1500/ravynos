@@ -49,7 +49,7 @@ RE_EV = re.compile(
     r"frame=(-?\d+),(-?\d+) (\d+)x(\d+) app=(\S+)")
 RE_FRAME = re.compile(
     r"\[WS\] (?:t=\d+ )?(CREATE|MODIFY) app=(\S+) win=(\d+) level=(-?\d+) "
-    r"(?:style=0x[0-9a-f]+ )?"
+    r"(?:style=0x[0-9a-f]+ )?(?:state=\d+ )?"
     r"frame=(-?\d+),(-?\d+) (\d+)x(\d+)")
 RE_DESTROY = re.compile(r"\[WS\] DESTROY win=(\d+) app=(\S+)")
 RE_CLICK = re.compile(r"\[WS\] click at \((-?\d+),(-?\d+)\)")

@@ -217,9 +217,16 @@ report dns_external $?
 
 # openURL: NSWorkspace must route http to Firefox via the LS scheme registry.
 # The host server log proves the navigation left the guest; Firefox fronts.
-echo "--- openurl: NSWorkspace openURL http" >> "$LOG"
-/usr/local/compat/openurl http://10.0.2.2:8123/http-index.html >> "$LOG" 2>&1
-report openurl $?
+# The http handler test needs Firefox (the only app claiming http/https).
+# A default image does not stage it (RAVYN_FIREFOX=1 is opt-in), and an
+# absent handler on such an image is correct behaviour, not a failure.
+if [ -d /Applications/Firefox.app ]; then
+    echo "--- openurl: NSWorkspace openURL http" >> "$LOG"
+    /usr/local/compat/openurl http://10.0.2.2:8123/http-index.html >> "$LOG" 2>&1
+    report openurl $?
+else
+    echo "FIXTURE openurl SKIP no-firefox-staged" >> "$LOG"
+fi
 
 # layertest: a known image pushed through CALayer must reach the screen.  This
 # is the only check of the layer compositing path every current window uses;
@@ -277,6 +284,8 @@ run_fixture foundation /usr/local/compat/foundation
 # authenticates.  Runs as root, which is when shadow entries are visible.
 run_fixture passwd /usr/local/compat/passwd
 run_fixture dictkeys /usr/local/compat/dictkeys
+# SO_RCVTIMEO must bound a blocking recvfrom (measured in ms), not hang.
+run_fixture rcvtimeo /usr/local/compat/rcvtimeo
 # Names the nil link of Downloads.app's URL chain (LSNIL trace): which of
 # homeDirectory / stringByAppendingPathComponent / fileURLWithPath went nil.
 run_fixture homechain /usr/local/compat/homechain

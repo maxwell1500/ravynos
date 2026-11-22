@@ -145,13 +145,14 @@ static O2Image *wsZoom, *wsZoomUp, *wsZoomDown;
         }
     }
     if(NSPointInRect(pointer, controls)) {
-        if(!inRect) {
-            [self setNeedsDisplay:YES]; // highlight controls if mouse has gone into them
-            inRect = YES;
-        }
+        fprintf(stderr, "[THEME] hit-controls %d,%d bounds=%dx%d\n",
+            (int)pointer.x, (int)pointer.y,
+            (int)[self bounds].size.width, (int)[self bounds].size.height);
+        [self setNeedsDisplay:YES]; // highlight controls if mouse has gone into them
+        inRect = YES;
     } else if(inRect) { // we left the control zone
-            [self setNeedsDisplay:YES];
-            inRect = NO;
+        [self setNeedsDisplay:YES];
+        inRect = NO;
     }
 
     return [super hitTest:point];
@@ -288,6 +289,10 @@ static O2Image *wsZoom, *wsZoomUp, *wsZoomDown;
    
    contentFrame.size.height-=toolbarFrame.size.height;
    [contentView setFrame:contentFrame];
+   fprintf(stderr, "[THEME] resizeSubviews old=%dx%d content=%d,%d %dx%d\n",
+       (int)oldSize.width, (int)oldSize.height,
+       (int)contentFrame.origin.x, (int)contentFrame.origin.y,
+       (int)contentFrame.size.width, (int)contentFrame.size.height);
 }
 
 -(void)mouseDown:(NSEvent *)event {

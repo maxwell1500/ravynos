@@ -30,7 +30,7 @@ WORK = os.path.join(HERE, "work")
 FIXTURES = ("posix", "malloczone", "autorelease", "plist", "backup", "passwd", "accounts", "cocoa", "launch",
             "pasteboard", "net", "icmp", "tcp", "dns", "dns_external", "download", "openurl",
             "foundation", "dmesg", "sandbox", "perms", "spinkill", "printf",
-            "screeninfo", "dictkeys")
+            "screeninfo", "dictkeys", "rcvtimeo")
 TCP_PORT = 8123
 TCP_MARKER = "RAVYN-TCP-OK"
 
@@ -315,9 +315,13 @@ def main() -> int:
     for name, why in known:
         print("KNOWN %-10s %s" % (name, why))
 
+    no_firefox = any("FIXTURE openurl SKIP no-firefox-staged" in ln
+                     for ln in lines)
     for name in FIXTURES:
         if ("FIXTURE %s rc=0" % name) in lines:
             print("PASS %s" % name)
+        elif name == "openurl" and no_firefox:
+            print("SKIP openurl  no Firefox staged (set RAVYN_FIREFOX=1)")
         else:
             print("FAIL %s" % name)
             failures += 1
@@ -332,11 +336,16 @@ def main() -> int:
 
     # Reported separately: the fixtures are a stock-binary ABI suite, the page
     # render is plan 3.4.  Folding one into the other made a green suite look
-    # red, or a red browser look like an ABI regression.
-    print("%s firefox rendered the test page   %d px bbox=%s"
-          % ("PASS" if web_px >= 500 else "FAIL", web_px,
-             getattr(page_pixels, "last_bbox", None)))
-    print("web_check: %s" % ("PASS" if web_px >= 500 else "FAIL"))
+    # red, or a red browser look like an ABI regression.  A Firefox-less image
+    # cannot render the page at all -- that is the opt-in RAVYN_FIREFOX knob,
+    # not a regression.
+    if no_firefox:
+        print("SKIP firefox rendered the test page   no Firefox staged")
+    else:
+        print("%s firefox rendered the test page   %d px bbox=%s"
+              % ("PASS" if web_px >= 500 else "FAIL", web_px,
+                 getattr(page_pixels, "last_bbox", None)))
+        print("web_check: %s" % ("PASS" if web_px >= 500 else "FAIL"))
 
     print("compat_check: %s" % ("PASS" if failures == 0 else "FAIL"))
     return 0 if failures == 0 else 1

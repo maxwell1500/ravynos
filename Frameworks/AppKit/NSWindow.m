@@ -373,7 +373,16 @@ static BOOL _allowsAutomaticWindowTabbing = YES;
     NSRect backgroundFrame;
     NSRect contentViewFrame;
 
-    _number = (int)self;
+    /* WindowServer routes drag events by matching windowID against every
+     * app's windows with no pid namespace, so a number minted from the
+     * object address collides across processes (no ASLR: two apps' first
+     * window sits at the same address and drags went to the wrong app).
+     * pid<<16 | per-process sequence is unique system-wide and opaque to
+     * every consumer. */
+    {
+        static int seq = 0;
+        _number = (int)(((getpid() & 0xffff) << 16) | (seq++ & 0xffff));
+    }
     _styleMask=styleMask;
     _frame=[self frameRectForContentRect:contentRect];    _frame=[self constrainFrameRect: _frame toScreen: [NSScreen mainScreen]];    _level=NSNormalWindowLevel;
     /* A new NSWindow is not on screen until it is ordered in, so the server

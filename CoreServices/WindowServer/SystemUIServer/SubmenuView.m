@@ -135,7 +135,7 @@ static NSRect boundsToTitleAreaRect(NSRect rect){
     float totalHeight = 0;
     NSSize gutterSize = [[self graphicsStyle] menuItemGutterSize];
     NSSize rightArrowSize = [[self graphicsStyle] menuItemBranchArrowSize];
-    NSSize separatorSize = [[self graphicsStyle] menuItemSeparatorSize];
+    fprintf(stderr, "[SUI] sv-size begin items=%d\n", (int)[items count]);
 	
     for(int i = 0; i < [items count]; ++i) {
         NSMenuItem *item = [items objectAtIndex:i];
@@ -147,11 +147,14 @@ static NSRect boundsToTitleAreaRect(NSRect rect){
             float titleAndIconWidth = 0;
 			
             size = [self sizeForMenuItemImage:item];
+            fprintf(stderr, "[SUI] sv-size item %d img=%dx%d\n", i, (int)size.width, (int)size.height);
             height = MAX(height, size.height);
             if ((titleAndIconWidth = size.width) > 0.0f)
                 anItemHasAnImage = YES;
 
             size = [[self graphicsStyle] menuItemTextSize:[item title]];
+            fprintf(stderr, "[SUI] sv-size item %d text=%dx%d\n", i,
+                (int)size.width, (int)size.height);
             titleAndIconWidth += size.width;
             maxTitleWidth = MAX(maxTitleWidth, titleAndIconWidth);
             height = MAX(height, size.height);

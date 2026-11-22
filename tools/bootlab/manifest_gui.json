@@ -1623,6 +1623,11 @@
       "comment": "ABI conformance fixture (tests/compat)"
     },
     {
+      "path": "usr/local/compat/rcvtimeo",
+      "file": "work/compat/rcvtimeo",
+      "comment": "ABI conformance fixture (tests/compat)"
+    },
+    {
       "path": "usr/local/compat/posix",
       "file": "work/compat/posix",
       "comment": "ABI conformance fixture (tests/compat)"

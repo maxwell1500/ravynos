@@ -1756,6 +1756,12 @@ static BOOL _menuDropDeepestNestedSubmenu(NSMenu *menu, int depth) {
         return;
    if([event type]==NSKeyDown){
     unsigned modifierFlags=[event modifierFlags];
+    static int nKeys = 0;
+    if(nKeys < 20) {
+        nKeys++;
+        fprintf(stderr, "[NSApp] keyDown chars=\"%s\" mods=0x%x window=%p\n",
+            [[event characters] UTF8String], modifierFlags, [event window]);
+    }
 
     if(modifierFlags&(NSCommandKeyMask|NSAlternateKeyMask))
      if([self _performKeyEquivalent:event])
