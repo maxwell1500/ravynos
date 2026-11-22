@@ -2996,6 +2996,24 @@ static BOOL trustedLaunchPath(const char *exe) {
                 pthread_mutex_lock(&appsLock);
                 NSString *pidKey = [[NSString alloc] initWithFormat:@"%d", (int)pid];
                 WSAppRecord *rec = [pidApps objectForKey:pidKey];
+                if(rec && ![rec isKindOfClass:[WSAppRecord class]])
+                    rec = nil;
+                if(rec && ![rec.bundleID isEqualToString:bundleID]) {
+                    /* The pid was recycled: this record belongs to a process
+                     * that died without an exit-watched reap (the login
+                     * child and LoadingWindow are deliberately never passed
+                     * to watchForProcessExit:, and the kernel reassigns
+                     * the lowest free pid, so desktop forks land on them).
+                     * Reusing the record keeps the dead app's bundleID, and
+                     * every later RPC from the new process is then resolved
+                     * to the old app -- measured as Filer's windows created
+                     * under com.ravynos.Dock, leaving Filer's own app record
+                     * windowless and the desktop bare.  Drop it and make a
+                     * fresh identity instead. */
+                    if([apps objectForKey:rec.bundleID] == rec)
+                        [apps removeObjectForKey:rec.bundleID];
+                    rec = nil;
+                }
                 if(!rec) {
                     rec = [WSAppRecord new];
                     rec.bundleID = bundleID;
@@ -3004,6 +3022,9 @@ static BOOL trustedLaunchPath(const char *exe) {
                         [rec skipSwitcher:YES];
                     [pidApps setObject:rec forKey:pidKey];
                 }
+                fprintf(stderr, "[WS] t=%ld REGISTER bundle=%s pid=%u%s\n",
+                    WSNow_ms(), [bundleID UTF8String], pid,
+                    (port != MACH_PORT_NULL && port != MACH_PORT_DEAD) ? "" : " (port dead)");
                 /* One record per pid: a second instance of the same bundle
                  * must not steal the first's port (the old code overwrote
                  * rec.pid/rec.port on the shared bundle-keyed record). */
@@ -3096,7 +3117,7 @@ static BOOL trustedLaunchPath(const char *exe) {
                     }
                 }
 
-                [self watchForProcessExit:pid];
+                [self watchForProcessExit:pid record:rec];
 
                 // A newly-launched app becomes the active one
                 if(![rec skipSwitcher]) {
@@ -3440,7 +3461,6 @@ static BOOL trustedLaunchPath(const char *exe) {
 - (void)processKernelQueue {
     struct kevent out[128];
     int count = kevent(_kq, NULL, 0, out, 128, NULL);
-
     for(int i = 0; i < count; ++i) {
         switch(out[i].filter) {
             case EVFILT_PROC:
@@ -3453,7 +3473,14 @@ static BOOL trustedLaunchPath(const char *exe) {
                      * cannot produce a kevent here and their status is safe. */
                     while(waitpid((pid_t)out[i].ident, NULL, WNOHANG) < 0 && errno == EINTR) { }
 
-                    //NSLog(@"PID %lu exited", out[i].ident);
+                    /* The event's udata is the record that existed when the
+                     * watch was registered.  A queued NOTE_EXIT can be
+                     * processed after the kernel has recycled its pid into a
+                     * live app; udata mismatch means this event belongs to a
+                     * dead predecessor, and "the pid's current record" must
+                     * survive (see watchForProcessExit:record:). */
+                    WSAppRecord *eventRec = (__bridge WSAppRecord *)out[i].udata;
+
                     /* findAppByPID returns an unowned pointer, so everything we
                      * need is copied BEFORE removing the app from the dictionary:
                      * removeObjectForKey: releases the record, leaving any later
@@ -3467,10 +3494,27 @@ static BOOL trustedLaunchPath(const char *exe) {
                     NSArray *deadWins = [app.windows copy];
                     pthread_mutex_unlock(&appsLock);
 
+                    if(eventRec != nil && app != eventRec) {
+                        /* Stale event for a pid's previous owner. */
+                        fprintf(stderr, "[WS] t=%ld APP-EXIT pid=%u STALE (now %s) - record kept\n",
+                            WSNow_ms(), (unsigned)out[i].ident,
+                            app ? [app.bundleID UTF8String] : "(none)");
+                        break;
+                    }
+                    if(app == nil && eventRec != nil) {
+                        /* The record was already removed by something else;
+                         * nothing to do. */
+                        break;
+                    }
+
                     if(!found) {
                         NSLog(@"PID %u exited, but no matching app record", out[i].ident);
                         break;
                     }
+
+                    fprintf(stderr, "[WS] t=%ld APP-EXIT pid=%u bundle=%s\n",
+                        WSNow_ms(), (unsigned)out[i].ident,
+                        app ? [app.bundleID UTF8String] : "(nil)");
 
                     if(wasCurrent) {
                         [self switchApp];
@@ -3913,8 +3957,24 @@ static BOOL trustedLaunchPath(const char *exe) {
 }
 
 - (void)watchForProcessExit:(unsigned int)pid {
+    [self watchForProcessExit:pid record:nil];
+}
+
+/* `record` (the app's own record, set when registration adds the watch)
+ * rides along in udata so the reap can tell which process the event was
+ * for.  A queued NOTE_EXIT can outlive its process and be processed after
+ * the kernel has recycled the pid into a new app (the login child is
+ * killed at auth, the reap thread can be busy, and the desktop forks then
+ * land on its pid); reaping "whatever has this pid now" deleted the new
+ * owner's record and left Filer windowless.  Events whose udata does not
+ * match the pid's current record belong to a dead predecessor: reap the
+ * zombie, keep the record.  shortcut: a freed record's address can in
+ * principle be recycled onto a new record with the same pid; rarer than
+ * the pid race this fixes, and harmless unless it happens in the same
+ * instant. */
+- (void)watchForProcessExit:(unsigned int)pid record:(WSAppRecord *)record {
     struct kevent kev[1];
-    EV_SET(kev, pid, EVFILT_PROC, EV_ADD|EV_ONESHOT, NOTE_EXIT, 0, NULL);
+    EV_SET(kev, pid, EVFILT_PROC, EV_ADD|EV_ONESHOT, NOTE_EXIT, 0, (__bridge void *)record);
     kevent(_kq, kev, 1, NULL, 0, NULL);
 }
 

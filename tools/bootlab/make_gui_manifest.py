@@ -860,6 +860,7 @@ def main():
     #     the closure gate compares the staged binary with its source and a
     #     stale fixture is refused instead of being run silently.
     compat_files = [
+        ("dictkeys", "usr/local/compat/dictkeys"),
         ("posix", "usr/local/compat/posix"),
         ("tcp", "usr/local/compat/tcp"),
         ("dnstest", "usr/local/compat/dnstest"),

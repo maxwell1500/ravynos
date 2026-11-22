@@ -144,8 +144,34 @@ static void objectReleaseCallBack(CFAllocatorRef allocator,const void *value) {
    [(id)value release];
 }
 
+/* Key hash/equal must dispatch the key object's own methods.  The CF
+ * callbacks (CFHash/CFEqual) only recognize CF-layout strings; every other
+ * concrete Foundation string class (unicodePtr, constant strings) falls
+ * into the CF type machinery, which reads the isa as a type ID -- the
+ * same wrong value for every instance of the class -- so ALL such keys
+ * hashed alike and compared equal and a dictionary keyed by
+ * [[NSString alloc] initWithFormat:@"%d", pid] held exactly one entry
+ * (measured: guest dictkeys fixture; WindowServer's per-pid app registry
+ * collapsed to a single record and the desktop booted windowless).
+ * Real ObjC keys use -hash/-isEqual:; C CF values keep CF semantics. */
+static CFHashCode objcKeyHash(const void *value)
+{
+   if (value != NULL && ravyn_value_is_objc(value))
+    return (CFHashCode)[(id)value hash];
+   return CFHash(value);
+}
+
+static Boolean objcKeyEqual(const void *a, const void *b)
+{
+   if (a == b)
+    return true;
+   if (a != NULL && b != NULL && ravyn_value_is_objc(a) && ravyn_value_is_objc(b))
+    return [(id)a isEqual:(id)b] ? true : false;
+   return CFEqual(a, b);
+}
+
 static CFDictionaryKeyCallBacks objectKeyCallBacks={
- 0,objectCopyCallBack,objectReleaseCallBack,CFCopyDescription,CFEqual,CFHash,
+ 0,objectCopyCallBack,objectReleaseCallBack,CFCopyDescription,objcKeyEqual,objcKeyHash,
 };
 
 static CFDictionaryValueCallBacks objectValueCallbacks={

@@ -104,6 +104,7 @@ extern pthread_mutex_t renderLock;
 -(BOOL)sendEventToApp:(struct mach_event *)event;
 -(BOOL)sendInlineData:(void *)data length:(int)length withCode:(int)code toPort:(mach_port_t)port;
 -(BOOL)sendInlineData:(void *)data length:(int)length withCode:(int)code toPort:(mach_port_t)port timeout:(mach_msg_timeout_t)timeoutMs;
+-(void)watchForProcessExit:(unsigned int)pid record:(WSAppRecord *)record;
 -(void)watchForProcessExit:(unsigned int)pid;
 -(WSAppRecord *)findAppByPID:(unsigned int)pid;
 -(void)signalQuit;

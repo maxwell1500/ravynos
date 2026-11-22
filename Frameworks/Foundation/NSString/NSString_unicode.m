@@ -83,8 +83,11 @@ char *NSUnicodeToUnicode(const unichar *characters,NSUInteger length,NSUInteger 
     memcpy(buffer, _unicode+loc, len*sizeof(unichar));
 }
 
+/* CF's canonical NSString hash (see NSString_unicodePtr.m). */
+extern NSUInteger CFStringHashNSString(id str);
+
 -(NSUInteger)hash {
-   return NSStringHashUnicode(_unicode,MIN(_length,NSHashStringLength));
+   return CFStringHashNSString(self);
 }
 
 @end

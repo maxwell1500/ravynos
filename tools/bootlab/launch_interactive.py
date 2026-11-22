@@ -16,6 +16,7 @@ import signal
 # KeyboardInterrupt; plain SIGTERM killed the interpreter and orphaned a
 # still-running guest.  Route SIGTERM to the same handler as SIGINT.
 signal.signal(signal.SIGTERM, signal.default_int_handler)
+signal.signal(signal.SIGHUP, signal.default_int_handler)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 

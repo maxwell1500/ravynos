@@ -137,14 +137,13 @@ static inline NSUInteger lengthInUnicode(NSConstantString *self){
    }
 }
 
--(NSUInteger)hash {
-   NSUInteger length=lengthInUnicode(self);
+/* CF's canonical NSString hash (see NSString_unicodePtr.m): a constant
+ * string used as a dictionary key must land in the same bucket as an
+ * equal NSCFString/unicodePtr key. */
+extern NSUInteger CFStringHashNSString(id str);
 
-   if(storageIsASCII(self))
-    return NSStringHashASCII(_bytes,MIN(length,NSHashStringLength));
-   else {
-    return NSStringHashUnicode(_bytes,MIN(length,NSHashStringLength));
-   }
+-(NSUInteger)hash {
+   return CFStringHashNSString(self);
 }
 
 @end

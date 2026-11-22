@@ -91,6 +91,21 @@ extern Boolean _objc_isKnownClassPtr(const void *ptr); /* objc4 */
  * CFRetain/CFRelease sent -retain/-release to a pointer with isa 0 --
  * faulting at objc_msgSend+0x1d (0x18(%r10)) when Firefox parsed a plist
  * boolean with no Foundation loaded.
+ *
+ * The fast path reads the object's SECOND word as a CF type ID -- valid
+ * only for CF-layout objects (word 1 is _cfisa).  A GNUstep-layout object
+ * (NSString_unicodePtr and every other concrete Foundation string) keeps
+ * an ivar there, so the fast path never fires; the object then fell into
+ * the CF type machinery, which read the isa as a type ID -- the SAME
+ * wrong value for every instance of the class, so CFHash/CFEqual made all
+ * such strings hash alike and compare equal, and any dictionary keyed by
+ * [[NSString alloc] initWithFormat:@"%d", pid] held exactly one entry
+ * (measured: the guest dictkeys fixture; WindowServer's per-pid app
+ * registry collapsed to one record and the desktop booted windowless).
+ * Widening this macro to a bridge-class scan regressed the plist and
+ * pasteboard fixtures, so the fix lives one level up: the map table's
+ * key callbacks dispatch the key's own -hash/-isEqual: (see
+ * NSMutableDictionary_mapTable.m objcKeyHash/objcKeyEqual).
  */
 #define CFTYPE_IS_OBJC(obj) (obj && *(uintptr_t *)obj != 0 && *(uintptr_t *)obj == \
     __CFRuntimeObjCClassTable[(*((uintptr_t *)obj+1) & 0xff00) >> 8])

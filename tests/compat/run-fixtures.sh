@@ -276,7 +276,7 @@ run_fixture foundation /usr/local/compat/foundation
 # stored hash must verify with crypt(3), which is how the login window
 # authenticates.  Runs as root, which is when shadow entries are visible.
 run_fixture passwd /usr/local/compat/passwd
-
+run_fixture dictkeys /usr/local/compat/dictkeys
 # Names the nil link of Downloads.app's URL chain (LSNIL trace): which of
 # homeDirectory / stringByAppendingPathComponent / fileURLWithPath went nil.
 run_fixture homechain /usr/local/compat/homechain

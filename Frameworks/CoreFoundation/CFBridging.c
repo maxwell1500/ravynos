@@ -94,15 +94,9 @@ CF_EXPORT int _CFRuntimeRegisterObjCClassHierarchy(CFTypeID typeID, uintptr_t cl
 CF_EXPORT void CFSetupFoundationBridging(void)
 {
     _CFRuntimeRegisterObjCClass(kNSCFTypeString, (uintptr_t)objc_lookUpClass("NSCFString"));
-    /* The array bridge class: every Foundation array (concrete,
-     * placeholder, mutable) is an NSArray, and CF_IS_OBJC walks
-     * superclasses, so registering NSArray covers them all.  Without
-     * this registration CFArrayGetValueAtIndex read CF-layout buckets
-     * out of an ObjC array and returned garbage (measured: NULL in one
-     * boot, a stale Object instance in another). */
-    /* Registering needs CFArrayGetTypeID(), which registers a runtime
-     * class -- but libmain's constructor in the Foundation image calls
-     * this function, and the guest dyld runs image initializers in
+    /* The array bridge needs CFArrayGetTypeID(), which registers a
+     * runtime class -- but libmain's constructor in the Foundation image
+     * calls this function, and the guest dyld runs image initializers in
      * load order, so in processes whose executable lists Foundation
      * before CoreFoundation (WindowServer) that registration would run
      * before __CFInitialize and corrupt the fixed class-table layout
@@ -120,6 +114,10 @@ int __CFPendingBridging = 0;
 void _CFCompletePendingBridging(void)
 {
     __CFPendingBridging = 0;
+    _CFRuntimeRegisterObjCClass(kNSCFTypeString, (uintptr_t)objc_lookUpClass("NSCFString"));
+    /* Array bridge: CF_IS_OBJC walks superclasses, so registering NSArray
+     * covers every Foundation array; without it CFArrayGetValueAtIndex read
+     * CF-layout buckets out of an ObjC array (measured: garbage). */
     _CFRuntimeRegisterObjCClassHierarchy(CFArrayGetTypeID(),
         (uintptr_t)objc_lookUpClass("NSArray"));
 }

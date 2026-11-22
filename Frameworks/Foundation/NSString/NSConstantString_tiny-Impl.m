@@ -100,13 +100,11 @@ static inline char characterAt(NSConstantString_tiny *self, NSUInteger location)
     buffer[i]=characterAt(self, loc+i);
 }
 
--(NSUInteger)hash {
-   NSUInteger length=extractLength(self);
+/* CF's canonical NSString hash (see NSString_unicodePtr.m). */
+extern NSUInteger CFStringHashNSString(id str);
 
-   char buffer[9];
-   for(int i=0; i<length; i++)
-    buffer[i] = characterAt(self, i);
-   return NSStringHashASCII(buffer,MIN(length,NSHashStringLength));
+-(NSUInteger)hash {
+   return CFStringHashNSString(self);
 }
 
 @end

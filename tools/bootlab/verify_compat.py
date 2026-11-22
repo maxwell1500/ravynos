@@ -30,7 +30,7 @@ WORK = os.path.join(HERE, "work")
 FIXTURES = ("posix", "malloczone", "autorelease", "plist", "backup", "passwd", "accounts", "cocoa", "launch",
             "pasteboard", "net", "icmp", "tcp", "dns", "dns_external", "download", "openurl",
             "foundation", "dmesg", "sandbox", "perms", "spinkill", "printf",
-            "screeninfo")
+            "screeninfo", "dictkeys")
 TCP_PORT = 8123
 TCP_MARKER = "RAVYN-TCP-OK"
 

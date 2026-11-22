@@ -91,8 +91,14 @@ NSString *NSString_unicodePtrNew(NSZone *zone,const unichar *unicode,NSUInteger 
     buffer[i]=_unicode[loc+i];
 }
 
+/* CF's canonical NSString hash (the one NSCFString's -hash uses), so the
+ * same text hashes identically no matter which concrete string class
+ * holds it -- otherwise cross-class dictionary lookups probe the wrong
+ * bucket. */
+extern NSUInteger CFStringHashNSString(id str);
+
 -(NSUInteger)hash {
-   return NSStringHashUnicode(_unicode,MIN(_length,NSHashStringLength));
+   return CFStringHashNSString(self);
 }
 
 @end

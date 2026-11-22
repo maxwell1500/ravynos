@@ -108,8 +108,11 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
    [string getCharacters:_unicode+loc range:NSMakeRange(0,otherlength)];
 }
 
+/* CF's canonical NSString hash (see NSString_unicodePtr.m). */
+extern NSUInteger CFStringHashNSString(id str);
+
 -(NSUInteger)hash {
-   return NSStringHashUnicode(_unicode,MIN(_length,NSHashStringLength));
+   return CFStringHashNSString(self);
 }
 
 static inline NSUInteger roundCapacityUp(NSUInteger capacity){

@@ -1618,6 +1618,11 @@
       "comment": "compatibility ProductVersion read by stock apps"
     },
     {
+      "path": "usr/local/compat/dictkeys",
+      "file": "work/compat/dictkeys",
+      "comment": "ABI conformance fixture (tests/compat)"
+    },
+    {
       "path": "usr/local/compat/posix",
       "file": "work/compat/posix",
       "comment": "ABI conformance fixture (tests/compat)"
