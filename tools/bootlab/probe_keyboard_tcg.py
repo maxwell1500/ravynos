@@ -150,7 +150,9 @@ t_end = time.time() + 5
 while time.time() < t_end:
     pump_serial()
     time.sleep(0.2)
-for k in ("n", "n", "a", "meta_l-n"):
+import os as _os
+KEYS = (_os.environ.get("PROBE_KEYS") or "n,n,a,meta_l-n").split(",")
+for k in KEYS:
     mon.sendall(("sendkey " + k + "\n").encode())
     t_end = time.time() + 3
     while time.time() < t_end:
