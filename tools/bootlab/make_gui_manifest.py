@@ -576,10 +576,13 @@ def main():
     #      absent the closure records MISSING rather than silently skipping,
     #      because Phase 4's gate cannot run without it.
     #     Opt-in: the bundle is 367 MB, which does not fit the 512 MiB
-    #     template, and a grown image currently exposes a guest bug where
-    #     every file written after boot is zero bytes (measured: SYSTEM.LOG,
-    #     WS-APPS.LOG and COMPAT.LOG all existed with size 0 on a 1 GiB
-    #     image).  Until that is fixed, a normal build must not carry it.
+    #     template, so it needs --size-mib 1024.  The old "grown image writes
+    #     zero-byte files" guest bug is FIXED (ahci_block.c now reads the
+    #     real GPT partition length instead of the 512 MiB constant, so
+    #     msdosfs no longer clamps pm_maxcluster to 130047): a 1 GiB
+    #     RAVYN_FIREFOX image completed a full compat run with the report
+    #     written post-boot (measured 2026-11-22, 104 PASS incl. openurl).
+    #     The knob stays opt-in because of the build time and image size.
     # Opt-in knob: RAVYN_FIREFOX=1 stages the oracle.  The soak build also
     # accepts RAVYN_FIREFOX_SOAK=1 so the 30-minute gate can flip just the
     # runas timeout (60s -> long) without restaging anything else; see
@@ -742,7 +745,7 @@ def main():
         # §4.3 fixture CA for the Certificates.Install enterprise policy.
         entries.append({
             "path": "usr/local/compat/fixture-ca.pem",
-            "file": "/tmp/fixture-ca-entry.pem",
+            "file": "assets/fixture-ca.pem",
             "comment": "fixture CA cert installed into Firefox via policy",
         })
         # §4.5 Foundation download fixture: exact bytes over numeric-IP HTTP.

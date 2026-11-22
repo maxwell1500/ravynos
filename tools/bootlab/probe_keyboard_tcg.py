@@ -120,7 +120,36 @@ if not booted:
 print("TCG desktop up; settling 30s")
 time.sleep(30)
 mark = os.path.getsize(out_log)
+# A few pointer moves and one click, like verify_wm's calibration, to test
+# whether mouse traffic interferes with keyboard scancode delivery.
+print("click-and-move phase before sendkeys")
+for dx, dy in ((100, 0), (0, 100), (-100, 0), (0, -100)):
+    mon.sendall(("mouse_move %d %d\n" % (dx, dy)).encode())
+    t_end = time.time() + 0.4
+    while time.time() < t_end:
+        pump_serial()
+        time.sleep(0.1)
+mon.sendall(b"mouse_button 1\n")
+time.sleep(0.3)
+pump_serial()
+mon.sendall(b"mouse_button 0\n")
+t_end = time.time() + 2
+while time.time() < t_end:
+    pump_serial()
+    time.sleep(0.2)
 
+print("flood phase: 200 mouse_move commands, like verify_wm's calibration")
+for i in range(200):
+    mon.sendall(("mouse_move %d %d\n" % (3 if i % 2 else -3,
+                                         2 if i % 2 else -2)).encode())
+    t_end = time.time() + 0.05
+    while time.time() < t_end:
+        pump_serial()
+        time.sleep(0.01)
+t_end = time.time() + 5
+while time.time() < t_end:
+    pump_serial()
+    time.sleep(0.2)
 for k in ("n", "n", "a", "meta_l-n"):
     mon.sendall(("sendkey " + k + "\n").encode())
     t_end = time.time() + 3

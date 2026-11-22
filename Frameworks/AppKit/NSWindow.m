@@ -2652,12 +2652,28 @@ static IMP ravynPlainKeyDownIMP(void) {
    switch([event type]){
 
     case NSLeftMouseDown:{
+        /* Loc/bounds at dispatch: after a zoom, clicks aimed at the
+         * titlebar controls stopped reaching NSThemeFrame.mouseDown (no
+         * [THEME] hit-controls) while the same click on the unzoomed window
+         * worked -- this line is the coordinate evidence for why. */
+        static int nDown = 0;
+        if(nDown < 40) {
+            nDown++;
+            fprintf(stderr, "[NSWIN] mouseDown loc=%.0f,%.0f frame=%.0f,%.0f %.0fx%.0f "
+                "bg=%dx%d content=%.0f,%.0f %.0fx%.0f\n",
+                [event locationInWindow].x, [event locationInWindow].y,
+                _frame.origin.x, _frame.origin.y, _frame.size.width, _frame.size.height,
+                (int)[_backgroundView bounds].size.width,
+                (int)[_backgroundView bounds].size.height,
+                _contentView.frame.origin.x, _contentView.frame.origin.y,
+                _contentView.frame.size.width, _contentView.frame.size.height);
+        }
         NSView *view=[_backgroundView hitTest:[event locationInWindow]];
-        
+
         if([view acceptsFirstResponder]){
             [self makeFirstResponder:view];
         }
-        
+
         // Event goes to view, not first responder
         [view mouseDown:event];
         _mouseDownLocationInWindow=[event locationInWindow];
@@ -3741,10 +3757,15 @@ void CGNativeBorderFrameWidthsForStyle(unsigned styleMask,CGFloat *top,CGFloat *
 CGRect CGInsetRectForNativeWindowBorder(CGRect frame,unsigned styleMask) {
     CGFloat top, left, bottom, right;
     CGNativeBorderFrameWidthsForStyle(styleMask, &top, &left, &bottom, &right);
+    /* Both sides of each axis: the old form subtracted only right/top after
+     * shifting by left/bottom, so the content rect kept (left+bottom) px of
+     * window area that belongs to the border -- measured after zoom, where
+     * the content view claimed 3 px of the titlebar band and the traffic
+     * lights stopped hit-testing ([THEME] mouseDown never fired). */
     frame.origin.x += left;
     frame.origin.y += bottom;
-    frame.size.width -= right;
-    frame.size.height -= top;
+    frame.size.width -= (left + right);
+    frame.size.height -= (top + bottom);
     return frame;
 }
 
@@ -3753,8 +3774,8 @@ CGRect CGOutsetRectForNativeWindowBorder(CGRect frame,unsigned styleMask) {
     CGNativeBorderFrameWidthsForStyle(styleMask, &top, &left, &bottom, &right);
     frame.origin.x -= left;
     frame.origin.y -= bottom;
-    frame.size.width += right;
-    frame.size.height += top;
+    frame.size.width += (left + right);
+    frame.size.height += (top + bottom);
     return frame;
 }
 

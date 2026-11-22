@@ -893,8 +893,28 @@ def main():
             g.click_at(f["fx"] + f["fw"] // 2, f["fy"] + f["fh"] - 16)
             time.sleep(1.0)
             before = set(x["win"] for x in fr)
-            g.hmp.cmd("sendkey meta_l-n", wait=0.2)
-            time.sleep(3.0)
+            # One sendkey has measured unreliable (delivered in isolation
+            # probes, lost in this branch): three spaced attempts with a
+            # delivery count decide between "flaky single injection" and
+            # "this window state never dispatches keys".
+            with g.ser.lock:
+                n0 = g.ser.total
+            for attempt in range(3):
+                g.hmp.cmd("sendkey meta_l-n", wait=0.2)
+                time.sleep(4.0)
+                with g.ser.lock:
+                    chunk, _ = g.ser.bytes_since(n0)
+                raw = chunk.decode("latin1", "replace")
+                ws = raw.count("[WS] key send")
+                app = raw.count("[NSApp] keyDown")
+                print("   attempt %d: [WS] key send=%d [NSApp] keyDown=%d"
+                      % (attempt + 1, ws, app), flush=True)
+                evs, frames, destroys, _ = sniffer.snapshot()
+                dead = set(d["win"] for d in destroys)
+                fl = [x for x in frames if x["app"] == "com.ravynos.Filer"
+                      and x["fw"] > 0 and x["win"] not in dead]
+                if set(x["win"] for x in fl) - before:
+                    break
             evs, frames, destroys, _ = sniffer.snapshot()
             dead = set(d["win"] for d in destroys)
             fl = [x for x in frames if x["app"] == "com.ravynos.Filer"

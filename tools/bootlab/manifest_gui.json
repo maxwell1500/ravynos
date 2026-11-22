@@ -1483,6 +1483,626 @@
       "comment": "AppStore.app bundle file (staged from /Users/max/Projects/ravynos/tools/bootlab/work/Applications_AppStore_AppStore.app)"
     },
     {
+      "path": "Applications/Firefox.app/Contents/CodeResources",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/CodeResources",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Info.plist",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Info.plist",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/PkgInfo",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/PkgInfo",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Library/LaunchServices/org.mozilla.updater",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Library/LaunchServices/org.mozilla.updater",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/MacOS/XUL",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/MacOS/XUL",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/MacOS/firefox",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/MacOS/firefox",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/MacOS/firefox-bin",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/MacOS/firefox-bin",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/MacOS/libfreebl3.dylib",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/MacOS/libfreebl3.dylib",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/MacOS/libipcclientcerts.dylib",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/MacOS/libipcclientcerts.dylib",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/MacOS/liblgpllibs.dylib",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/MacOS/liblgpllibs.dylib",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/MacOS/libmozavcodec.dylib",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/MacOS/libmozavcodec.dylib",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/MacOS/libmozavutil.dylib",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/MacOS/libmozavutil.dylib",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/MacOS/libmozglue.dylib",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/MacOS/libmozglue.dylib",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/MacOS/libnss3.dylib",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/MacOS/libnss3.dylib",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/MacOS/libnssckbi.dylib",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/MacOS/libnssckbi.dylib",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/MacOS/libosclientcerts.dylib",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/MacOS/libosclientcerts.dylib",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/MacOS/libsoftokn3.dylib",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/MacOS/libsoftokn3.dylib",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/MacOS/minidump-analyzer",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/MacOS/minidump-analyzer",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/MacOS/pingsender",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/MacOS/pingsender",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/MacOS/crashreporter.app/Contents/Info.plist",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/MacOS/crashreporter.app/Contents/Info.plist",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/MacOS/crashreporter.app/Contents/PkgInfo",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/MacOS/crashreporter.app/Contents/PkgInfo",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/MacOS/crashreporter.app/Contents/MacOS/crashreporter",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/MacOS/crashreporter.app/Contents/MacOS/crashreporter",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/MacOS/crashreporter.app/Contents/Resources/crashreporter.icns",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/MacOS/crashreporter.app/Contents/Resources/crashreporter.icns",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/MacOS/crashreporter.app/Contents/Resources/crashreporter.ini",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/MacOS/crashreporter.app/Contents/Resources/crashreporter.ini",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/MacOS/crashreporter.app/Contents/Resources/English.lproj/InfoPlist.strings",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/MacOS/crashreporter.app/Contents/Resources/English.lproj/InfoPlist.strings",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/MacOS/crashreporter.app/Contents/Resources/English.lproj/MainMenu.nib/classes.nib",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/MacOS/crashreporter.app/Contents/Resources/English.lproj/MainMenu.nib/classes.nib",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/MacOS/crashreporter.app/Contents/Resources/English.lproj/MainMenu.nib/info.nib",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/MacOS/crashreporter.app/Contents/Resources/English.lproj/MainMenu.nib/info.nib",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/MacOS/crashreporter.app/Contents/Resources/English.lproj/MainMenu.nib/keyedobjects.nib",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/MacOS/crashreporter.app/Contents/Resources/English.lproj/MainMenu.nib/keyedobjects.nib",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/MacOS/crashreporter.app/Contents/Resources/English.lproj/MainMenuRTL.nib/classes.nib",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/MacOS/crashreporter.app/Contents/Resources/English.lproj/MainMenuRTL.nib/classes.nib",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/MacOS/crashreporter.app/Contents/Resources/English.lproj/MainMenuRTL.nib/info.nib",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/MacOS/crashreporter.app/Contents/Resources/English.lproj/MainMenuRTL.nib/info.nib",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/MacOS/crashreporter.app/Contents/Resources/English.lproj/MainMenuRTL.nib/keyedobjects.nib",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/MacOS/crashreporter.app/Contents/Resources/English.lproj/MainMenuRTL.nib/keyedobjects.nib",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/MacOS/crashreporter.app/Contents/_CodeSignature/CodeResources",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/MacOS/crashreporter.app/Contents/_CodeSignature/CodeResources",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/Info.plist",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/MacOS/plugin-container.app/Contents/Info.plist",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/PkgInfo",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/MacOS/plugin-container.app/Contents/PkgInfo",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/MacOS/plugin-container.app/Contents/MacOS/plugin-container",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/Resources/plugin-container.sig",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/MacOS/plugin-container.app/Contents/Resources/plugin-container.sig",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/Resources/English.lproj/InfoPlist.strings",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/MacOS/plugin-container.app/Contents/Resources/English.lproj/InfoPlist.strings",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/MacOS/plugin-container.app/Contents/_CodeSignature/CodeResources",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/MacOS/plugin-container.app/Contents/_CodeSignature/CodeResources",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/MacOS/updater.app/Contents/Info.plist",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/MacOS/updater.app/Contents/Info.plist",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/MacOS/updater.app/Contents/PkgInfo",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/MacOS/updater.app/Contents/PkgInfo",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/MacOS/updater.app/Contents/MacOS/org.mozilla.updater",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/MacOS/updater.app/Contents/MacOS/org.mozilla.updater",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/MacOS/updater.app/Contents/Resources/updater.icns",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/MacOS/updater.app/Contents/Resources/updater.icns",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/MacOS/updater.app/Contents/Resources/English.lproj/InfoPlist.strings",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/MacOS/updater.app/Contents/Resources/English.lproj/InfoPlist.strings",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/MacOS/updater.app/Contents/Resources/English.lproj/MainMenu.nib/classes.nib",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/MacOS/updater.app/Contents/Resources/English.lproj/MainMenu.nib/classes.nib",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/MacOS/updater.app/Contents/Resources/English.lproj/MainMenu.nib/info.nib",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/MacOS/updater.app/Contents/Resources/English.lproj/MainMenu.nib/info.nib",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/MacOS/updater.app/Contents/Resources/English.lproj/MainMenu.nib/keyedobjects.nib",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/MacOS/updater.app/Contents/Resources/English.lproj/MainMenu.nib/keyedobjects.nib",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/MacOS/updater.app/Contents/_CodeSignature/CodeResources",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/MacOS/updater.app/Contents/_CodeSignature/CodeResources",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/XUL.sig",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/XUL.sig",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/application.ini",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/application.ini",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/dependentlibs.list",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/dependentlibs.list",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/document.icns",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/document.icns",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/firefox-bin.sig",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/firefox-bin.sig",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/firefox.icns",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/firefox.icns",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/firefox.sig",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/firefox.sig",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/omni.ja",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/omni.ja",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/platform.ini",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/platform.ini",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/precomplete",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/precomplete",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/removed-files",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/removed-files",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/update-settings.ini",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/update-settings.ini",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/updater.ini",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/updater.ini",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/browser/crashreporter-override.ini",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/browser/crashreporter-override.ini",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/browser/omni.ja",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/browser/omni.ja",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/browser/features/formautofill@mozilla.org.xpi",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/browser/features/formautofill@mozilla.org.xpi",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/browser/features/pictureinpicture@mozilla.org.xpi",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/browser/features/pictureinpicture@mozilla.org.xpi",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/browser/features/screenshots@mozilla.org.xpi",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/browser/features/screenshots@mozilla.org.xpi",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/browser/features/webcompat-reporter@mozilla.org.xpi",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/browser/features/webcompat-reporter@mozilla.org.xpi",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/browser/features/webcompat@mozilla.org.xpi",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/browser/features/webcompat@mozilla.org.xpi",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/defaults/pref/channel-prefs.js",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/defaults/pref/channel-prefs.js",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/en.lproj/InfoPlist.strings",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/en.lproj/InfoPlist.strings",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/gmp-clearkey/0.1/libclearkey.dylib",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/gmp-clearkey/0.1/libclearkey.dylib",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/gmp-clearkey/0.1/libclearkey.dylib.sig",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/gmp-clearkey/0.1/libclearkey.dylib.sig",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/gmp-clearkey/0.1/manifest.json",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/gmp-clearkey/0.1/manifest.json",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/res/MainMenu.nib/classes.nib",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/res/MainMenu.nib/classes.nib",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/res/MainMenu.nib/info.nib",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/res/MainMenu.nib/info.nib",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/res/MainMenu.nib/keyedobjects.nib",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/res/MainMenu.nib/keyedobjects.nib",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/res/cursors/arrowN.png",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/res/cursors/arrowN.png",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/res/cursors/arrowN@2x.png",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/res/cursors/arrowN@2x.png",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/res/cursors/arrowS.png",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/res/cursors/arrowS.png",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/res/cursors/arrowS@2x.png",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/res/cursors/arrowS@2x.png",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/res/cursors/cell.png",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/res/cursors/cell.png",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/res/cursors/cell@2x.png",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/res/cursors/cell@2x.png",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/res/cursors/colResize.png",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/res/cursors/colResize.png",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/res/cursors/colResize@2x.png",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/res/cursors/colResize@2x.png",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/res/cursors/help.png",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/res/cursors/help.png",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/res/cursors/help@2x.png",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/res/cursors/help@2x.png",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/res/cursors/move.png",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/res/cursors/move.png",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/res/cursors/move@2x.png",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/res/cursors/move@2x.png",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/res/cursors/rowResize.png",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/res/cursors/rowResize.png",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/res/cursors/rowResize@2x.png",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/res/cursors/rowResize@2x.png",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/res/cursors/sizeNE.png",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/res/cursors/sizeNE.png",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/res/cursors/sizeNE@2x.png",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/res/cursors/sizeNE@2x.png",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/res/cursors/sizeNESW.png",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/res/cursors/sizeNESW.png",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/res/cursors/sizeNESW@2x.png",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/res/cursors/sizeNESW@2x.png",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/res/cursors/sizeNS.png",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/res/cursors/sizeNS.png",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/res/cursors/sizeNS@2x.png",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/res/cursors/sizeNS@2x.png",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/res/cursors/sizeNW.png",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/res/cursors/sizeNW.png",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/res/cursors/sizeNW@2x.png",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/res/cursors/sizeNW@2x.png",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/res/cursors/sizeNWSE.png",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/res/cursors/sizeNWSE.png",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/res/cursors/sizeNWSE@2x.png",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/res/cursors/sizeNWSE@2x.png",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/res/cursors/sizeSE.png",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/res/cursors/sizeSE.png",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/res/cursors/sizeSE@2x.png",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/res/cursors/sizeSE@2x.png",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/res/cursors/sizeSW.png",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/res/cursors/sizeSW.png",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/res/cursors/sizeSW@2x.png",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/res/cursors/sizeSW@2x.png",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/res/cursors/vtIBeam.png",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/res/cursors/vtIBeam.png",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/res/cursors/vtIBeam@2x.png",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/res/cursors/vtIBeam@2x.png",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/res/cursors/zoomIn.png",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/res/cursors/zoomIn.png",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/res/cursors/zoomIn@2x.png",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/res/cursors/zoomIn@2x.png",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/res/cursors/zoomOut.png",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/res/cursors/zoomOut.png",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/Resources/res/cursors/zoomOut@2x.png",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/Resources/res/cursors/zoomOut@2x.png",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "Applications/Firefox.app/Contents/_CodeSignature/CodeResources",
+      "file": "../../tests/apps/Firefox ESR.app/Contents/_CodeSignature/CodeResources",
+      "comment": "unmodified Firefox ESR (Mozilla build, compatibility oracle)"
+    },
+    {
+      "path": "System/Library/LaunchDaemons/com.ravynos.firefoxtest.json",
+      "file": "../../SystemLibrary/LaunchDaemons/com.ravynos.firefoxtest.json",
+      "comment": "launchd job that starts Firefox for triage"
+    },
+    {
+      "path": "System/Library/LaunchDaemons/com.ravynos.firefoxtest.interactive.json",
+      "file": "../../SystemLibrary/LaunchDaemons/com.ravynos.firefoxtest.interactive.json",
+      "comment": "launchd job that starts Firefox on demand for the interactive session (load -w after login; brings up en0 before launching)"
+    },
+    {
+      "path": "root/Library/Application Support/Firefox/profiles.ini",
+      "text": "[Profile0]\nName=default\nIsRelative=1\nPath=Profiles/default\nDefault=1\n\n[General]\nStartWithLastProfile=1\nVersion=2\n",
+      "comment": "default Firefox profiles.ini"
+    },
+    {
+      "path": "root/Library/Application Support/Firefox/Profiles/default/user.js",
+      "text": "user_pref(\"gfx.webrender.software\", false);\nuser_pref(\"layers.acceleration.disabled\", true);\nuser_pref(\"browser.startup.homepage_override.mstone\", \"ignore\");\nuser_pref(\"startup.homepage_welcome_url\", \"\");\nuser_pref(\"startup.homepage_override_url\", \"\");\nuser_pref(\"browser.aboutwelcome.enabled\", false);\nuser_pref(\"browser.newtabpage.enabled\", false);\nuser_pref(\"browser.tabs.remote.autostart\", false);\nuser_pref(\"browser.tabs.remote.autostart.2\", false);\nuser_pref(\"fission.autostart\", false);\nuser_pref(\"dom.ipc.processCount\", 1);\nuser_pref(\"security.sandbox.content.level\", 0);\nuser_pref(\"datareporting.policy.dataSubmissionEnabled\", false);\nuser_pref(\"toolkit.telemetry.reportingpolicy.firstRun\", false);\nuser_pref(\"network.dns.disableIPv6\", true);\nuser_pref(\"browser.startup.page\", 1);\nuser_pref(\"browser.startup.homepage\", \"file:///usr/local/compat/navpage.html\");\n",
+      "comment": "default Firefox user.js"
+    },
+    {
+      "path": "root/Library/Application Support/Firefox/Profiles/default/xulstore.json",
+      "text": "{\n  \"chrome://browser/content/browser.xhtml\": {\n    \"main-window\": {\n      \"screenX\": \"80\",\n      \"screenY\": \"80\",\n      \"width\": \"1280\",\n      \"height\": \"800\",\n      \"sizemode\": \"normal\"\n    }\n  }\n}\n",
+      "comment": "default Firefox window geometry (1280x800)"
+    },
+    {
+      "path": "Users/ravyn/Library/Application Support/Firefox/profiles.ini",
+      "text": "[Profile0]\nName=default\nIsRelative=1\nPath=Profiles/default\nDefault=1\n\n[General]\nStartWithLastProfile=1\nVersion=2\n",
+      "comment": "default Firefox profiles.ini"
+    },
+    {
+      "path": "Users/ravyn/Library/Application Support/Firefox/Profiles/default/user.js",
+      "text": "user_pref(\"gfx.webrender.software\", false);\nuser_pref(\"layers.acceleration.disabled\", true);\nuser_pref(\"browser.startup.homepage_override.mstone\", \"ignore\");\nuser_pref(\"startup.homepage_welcome_url\", \"\");\nuser_pref(\"startup.homepage_override_url\", \"\");\nuser_pref(\"browser.aboutwelcome.enabled\", false);\nuser_pref(\"browser.newtabpage.enabled\", false);\nuser_pref(\"browser.tabs.remote.autostart\", false);\nuser_pref(\"browser.tabs.remote.autostart.2\", false);\nuser_pref(\"fission.autostart\", false);\nuser_pref(\"dom.ipc.processCount\", 1);\nuser_pref(\"security.sandbox.content.level\", 0);\nuser_pref(\"datareporting.policy.dataSubmissionEnabled\", false);\nuser_pref(\"toolkit.telemetry.reportingpolicy.firstRun\", false);\nuser_pref(\"network.dns.disableIPv6\", true);\nuser_pref(\"browser.startup.page\", 1);\nuser_pref(\"browser.startup.homepage\", \"file:///usr/local/compat/navpage.html\");\n",
+      "comment": "default Firefox user.js"
+    },
+    {
+      "path": "Users/ravyn/Library/Application Support/Firefox/Profiles/default/xulstore.json",
+      "text": "{\n  \"chrome://browser/content/browser.xhtml\": {\n    \"main-window\": {\n      \"screenX\": \"80\",\n      \"screenY\": \"80\",\n      \"width\": \"1280\",\n      \"height\": \"800\",\n      \"sizemode\": \"normal\"\n    }\n  }\n}\n",
+      "comment": "default Firefox window geometry (1280x800)"
+    },
+    {
+      "path": "usr/local/compat/navpage.html",
+      "text": "<!DOCTYPE html>\n<html><head><title>ravynOS nav fixture</title></head><body><div style=\"width:160px;height:90px;background:#0000ff\">blue box</div><p style=\"font-size:48px;color:#ff0000\">BIG RED TEXT</p><p>soak navigation fixture round marker.</p><p style=\"font-family:-apple-system;font-size:20px\">apple system probe</p><p style=\"font-family:Inter;font-size:20px\">inter family probe</p><p><input id=\"probe\" autofocus size=\"30\" style=\"font-size:20px\" placeholder=\"typing probe\"></p></body></html>\n",
+      "comment": "Firefox navigation fixture page for the soak gate"
+    },
+    {
+      "path": "usr/local/compat/http-index.html",
+      "text": "<!DOCTYPE html>\n<html><head><title>ravynOS HTTP fixture RAVYN-HTTP-OK</title></head><body><div style=\"width:160px;height:90px;background:#0000ff\">blue box</div><p style=\"font-size:48px;color:#ff0000\">BIG RED TEXT</p><p>soak navigation fixture round marker.</p><p style=\"font-family:-apple-system;font-size:20px\">apple system probe</p><p style=\"font-family:Inter;font-size:20px\">inter family probe</p><p><input id=\"probe\" autofocus size=\"30\" style=\"font-size:20px\" placeholder=\"typing probe\"></p></body></html>\n",
+      "comment": "host-served copy of the nav page (python http.server root)"
+    },
+    {
+      "path": "usr/local/compat/fixture-ca.pem",
+      "file": "assets/fixture-ca.pem",
+      "comment": "fixture CA cert installed into Firefox via policy"
+    },
+    {
+      "path": "usr/local/compat/download.m",
+      "text": "#import <Foundation/Foundation.h>\nint main(void) {\n    @autoreleasepool {\n        NSURL *u = [NSURL URLWithString:@\"http://10.0.2.2:8123/marker.txt\"];\n        NSData *d = [NSData dataWithContentsOfURL:u];\n        NSString *s = [[[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding] autorelease];\n        if ([s hasPrefix:@\"RAVYN-TCP-OK\"]) { printf(\"DOWNLOAD-OK\\n\"); return 0; }\n        printf(\"DOWNLOAD-FAIL: %s\\n\", [s UTF8String] ?: \"(nil)\");\n        return 1;\n    }\n}\n",
+      "comment": "\u00a74.5 download fixture (numeric-IP HTTP byte check)"
+    },
+    {
+      "path": "Library/Preferences/org.mozilla.firefox.plist",
+      "text": "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n    <key>EnterprisePoliciesEnabled</key>\n    <true/>\n    <key>Preferences</key>\n    <dict>\n        <key>gfx.webrender.software</key>\n        <true/>\n        <key>layers.acceleration.disabled</key>\n        <true/>\n        <key>network.dns.disableIPv6</key>\n        <true/>\n    </dict>\n</dict>\n</plist>\n",
+      "comment": "system-wide Firefox preferences"
+    },
+    {
+      "path": "Library/Application Support/Mozilla/policies.json",
+      "text": "{\n  \"policies\": {\n    \"DisableAppUpdate\": true,\n    \"DontCheckDefaultBrowser\": true,\n    \"OverrideFirstRunPage\": \"\",\n    \"Certificates\": {\n      \"Install\": [\n        \"/usr/local/compat/fixture-ca.pem\"\n      ]\n    },\n    \"Preferences\": {\n      \"browser.aboutwelcome.enabled\": false,\n      \"browser.newtabpage.enabled\": false,\n      \"browser.tabs.remote.autostart\": false,\n      \"fission.autostart\": false,\n      \"dom.ipc.processCount\": 1,\n      \"security.sandbox.content.level\": 0,\n      \"startup.homepage_welcome_url\": \"\",\n      \"startup.homepage_override_url\": \"\",\n      \"browser.shell.checkDefaultBrowser\": false,\n      \"datareporting.policy.dataSubmissionEnabled\": false,\n      \"toolkit.telemetry.reportingpolicy.firstRun\": false,\n      \"gfx.webrender.software\": false,\n      \"layers.acceleration.disabled\": true,\n      \"network.dns.disableIPv6\": true,\n      \"browser.startup.page\": 1,\n      \"browser.startup.homepage\": \"file:///usr/local/compat/navpage.html\"\n    }\n  }\n}\n",
+      "comment": "system-wide Firefox enterprise policies"
+    },
+    {
       "path": "System/Library/CoreServices/Finder.app/Filer",
       "file": "work/CoreServices_Filer_Filer.app/Contents/ravynOS/Filer",
       "comment": "Filer bundle staged at its canonical macOS path"

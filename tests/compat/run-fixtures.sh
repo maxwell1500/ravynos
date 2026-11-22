@@ -220,7 +220,9 @@ report dns_external $?
 # The http handler test needs Firefox (the only app claiming http/https).
 # A default image does not stage it (RAVYN_FIREFOX=1 is opt-in), and an
 # absent handler on such an image is correct behaviour, not a failure.
-if [ -d /Applications/Firefox.app ]; then
+# NB: the guest /bin/sh has no `[' builtin, so the check uses ls
+# (measured: "run-fixtures.sh: [: not found" silently skipped the test).
+if ls -d /Applications/Firefox.app >/dev/null 2>&1; then
     echo "--- openurl: NSWorkspace openURL http" >> "$LOG"
     /usr/local/compat/openurl http://10.0.2.2:8123/http-index.html >> "$LOG" 2>&1
     report openurl $?
